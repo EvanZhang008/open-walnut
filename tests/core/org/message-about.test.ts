@@ -124,7 +124,7 @@ describe('the web', () => {
   const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
   it('draws the tasks under a reply in Main\'s or a lead\'s chat, and the line never prints', () => {
     expect(read('web/src/components/sessions/SessionPanel.tsx')).toMatch(/<MessageAboutContext\.Provider value=\{sessionTask\?\.org_role === 'main' \|\| sessionTask\?\.org_role === 'lead'\}>/)
-    expect(read('web/src/components/sessions/SessionMessage.tsx')).toMatch(/<MessageAbout ids=\{aboutIds\} \/>/)
+    expect(read('web/src/components/sessions/SessionMessage.tsx')).toMatch(/<MessageAboutFold ids=\{aboutIds\} msgId=\{message\.msgId\} \/>/)
     expect(read('src/lib/turn-end-marker.ts')).toMatch(/stripAboutTag\(stripInternalLines\(text, streaming\), streaming\)/)
     expect(read('web/src/types/session.ts')).toMatch(/about\?: string\[\];/)
   })

@@ -6,7 +6,7 @@
  * The pills read as the task's live name and status like every other pill.
  */
 import { createContext } from 'react';
-import { StepIcon } from './StepIcon';
+import { FoldRow } from './TurnFolds';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { readAboutTag } from '@open-walnut/message-about';
 import { useTaskTitle } from '@/components/transfer/TransferLinks';
@@ -43,13 +43,10 @@ export function MessageAboutFold({ ids, msgId }: { ids: readonly string[]; msgId
   if (!ids.length) return null;
   const words = `About ${ids.length} ${ids.length === 1 ? 'task' : 'tasks'}`;
   return (
-    <div className="tool-run-row process-fold msg-about-fold" data-testid="msg-about" data-ids={ids.join(',')} data-open={open ? 'true' : 'false'}>
-      <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
-        <span className="tool-run-label">{words}</span>
-      </button>
+    <FoldRow open={open} onToggle={() => setOpen((o) => !o)} testId="msg-about" className="msg-about-fold" attrs={{ 'data-ids': ids.join(',') }}
+      head={<span className="tool-run-label">{words}</span>}>
       {open && <div className="msg-about-pills msg-about-fold-pills">{ids.map((id) => <AboutPill key={id} id={id} />)}</div>}
-    </div>
+    </FoldRow>
   );
 }
 

@@ -96,15 +96,34 @@ export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed
   // "Thinking" is the thinking row's own word, never a second line's (thinking-once.spec).
   const label = lead && phrase === EMPTY_FOLD_PHRASE ? '' : phrase;
   return (
-    <div className="tool-run-row process-fold" data-testid={testId} data-fold-id={foldId} data-open={open ? 'true' : 'false'} {...(running ? { 'data-running': 'true' } : {})} {...(findMembers ? { 'data-find-members': findMembers } : {})}>
-      <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
-        <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+    <FoldRow open={open} onToggle={toggle} testId={testId} attrs={{ 'data-fold-id': foldId, ...(running ? { 'data-running': 'true' } : {}), ...(findMembers ? { 'data-find-members': findMembers } : {}) }}
+      head={<>
         {lead && <span className="tool-run-lead" data-testid="turn-fold-lead">{lead}{label && <span className="tool-run-sep" aria-hidden="true"> · </span>}</span>}
         {label && <span className="tool-run-label" title={lead ? `${lead} · ${label}` : label}>{label}</span>}
         {failedWords && <span className="tool-run-fail">{failedWords}</span>}
         {running && <span className="tool-run-live-dot" />}
-      </button>
+      </>}>
       {open && <div className="process-fold-body"><InFoldBody.Provider value><InStepList.Provider value>{children}</InStepList.Provider></InFoldBody.Provider></div>}
+    </FoldRow>
+  );
+}
+
+/**
+ * The one folded line of the transcript: the small chevron and grey words, the whole row the
+ * button, what it holds under it when open. A turn's steps (ProcessFoldRow) and the tasks a
+ * reply is about (message-about.tsx) both draw it, so they look and click alike.
+ */
+export function FoldRow({ open, onToggle, testId, className, attrs, head, children }: {
+  open: boolean; onToggle: () => void; testId: string; className?: string;
+  attrs?: Record<string, string>; head: ReactNode; children?: ReactNode;
+}) {
+  return (
+    <div className={`tool-run-row process-fold${className ? ` ${className}` : ''}`} data-testid={testId} data-open={open ? 'true' : 'false'} {...attrs}>
+      <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={onToggle}>
+        <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        {head}
+      </button>
+      {children}
     </div>
   );
 }
