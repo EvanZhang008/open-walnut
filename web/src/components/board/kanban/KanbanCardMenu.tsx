@@ -11,7 +11,8 @@
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { ICON_CHECK, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import '@/styles/pick-and-nav.css';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { BoardLane } from '../../../../../src/core/boards/board-lanes';
@@ -160,12 +161,11 @@ export function KanbanCardMenu({ card, anchor, triggerRef, lanes, api, onEdit, o
             const current = l.id === card.lane;
             return (
               <button
-                key={l.id} type="button" role="menuitemradio" aria-checked={current} className="task-kebab-item"
+                key={l.id} type="button" role="menuitemradio" aria-checked={current} className="task-kebab-item wn-pick-row"
                 data-testid="kanban-card-move-lane" data-lane-id={l.id}
                 aria-disabled={current || ro ? true : undefined} title={ro ? READ_ONLY_TITLE : current ? 'The card is in this lane' : undefined}
                 onClick={() => { if (current || ro) return; pick(() => { void api.moveCard(card.taskId, l.id, { index: 0, reason: 'menu' }); }); }}
               >
-                <span className="kanban-menu-check" aria-hidden="true">{current ? ICON_CHECK : null}</span>
                 <span>{l.name}</span>
               </button>
             );

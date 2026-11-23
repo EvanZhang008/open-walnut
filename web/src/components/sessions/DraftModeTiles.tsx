@@ -5,7 +5,7 @@
  *   [ >_  Start task / A coding session ]   [ (Walnut)  Quick chat / Ask Walnut, no task ]
  *
  * The shared tabs' tile variant (TabList tiles, choice-controls.css): the chosen one has the
- * accent border, ring, fill and a check in its corner; the other is grey (its icon too). Both keep
+ * accent border and fill, no check (a pick is shown by colour); the other is grey (its icon too). Both keep
  * the same border width, so a switch moves nothing; arrows move between them as in every tab strip. Quick chat puts its
  * one block (QuickChatBlock) where the Project + Where row stands, at the same height.
  */
@@ -27,7 +27,6 @@ export function DraftModeTiles({ walnut, onPick }: { walnut: boolean; onPick: (w
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => { if (!on) onPick(isWalnut); }}
       >
-        <span className="draft-v6-tile-check" aria-hidden="true">{ICONS.ICON_CHECK}</span>
         <span className={`draft-v6-tile-icon${isWalnut ? ' is-walnut' : ' is-term'}`} aria-hidden="true">
           {isWalnut ? <WalnutIcon size={58} className="draft-v6-tile-walnut" /> : ICONS.ICON_TERMINAL}
         </span>

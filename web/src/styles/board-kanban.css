@@ -324,10 +324,11 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .board-kanban .kanban-card-actions .kanban-icon-btn::after { content: ''; position: absolute; inset: -2px; }
 .kanban-card-prompt, .kanban-card-editor, .kanban-card-composer-host { cursor: default; }
 
-/* Menus (portalled to body): the check column and the flyout chevron. */
-.kanban-menu .kanban-menu-check { display: inline-flex; width: 14px; justify-content: center; }
+/* Menus (portalled to body): the flyout chevron. */
 .kanban-menu .kanban-menu-chevron { margin-left: auto; display: inline-flex; }
-.kanban-menu .task-kebab-item[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+.kanban-menu .task-kebab-item[aria-disabled="true"]:not([aria-checked="true"]) { opacity: 0.55; cursor: default; }
+/* The card's own lane is the Picked row: its name coloured, not dimmed like a lane it cannot go to. */
+.kanban-menu .task-kebab-item[aria-checked="true"] { cursor: default; }
 .kanban-menu .task-kebab-item { width: 100%; }
 
 /* ── The narrow card detail (it replaces the board) ── */

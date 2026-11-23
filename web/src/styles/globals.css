@@ -404,30 +404,17 @@ textarea::placeholder { max-width: 100%; }
   padding: 8px;
 }
 
+/* Each row is the shared Nav item (.wn-nav-item, pick-and-nav.css): its size, type and padding,
+   the current page (aria-current="page"), an open pane (aria-pressed="true") and the hover fill. */
 .sidebar-link {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  color: var(--fg-muted);
   transition: color 0.15s, background 0.15s;
-  font-size: 14px;
-  font-weight: 500;
-  border-radius: var(--radius-sm); /* shape: a row of the open sidebar; the collapsed rail draws circles (home-navigation.css) */
   margin-bottom: 2px;
 }
 
-/* The current page and an open pane are the shared Nav item (.wn-nav-item, pick-and-nav.css:
-   aria-current="page" and aria-pressed="true"); hover is only the pointer's neutral fill. */
-.sidebar-link:hover:not([aria-current='page']):not([aria-pressed='true']) {
-  color: var(--fg);
-  background: var(--bg-hover);
-}
-
 .sidebar-link svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
 }
 
@@ -448,10 +435,10 @@ textarea::placeholder { max-width: 100%; }
 }
 
 /* Plugin-app entries: a plugin-supplied icon sits where an inline SVG would,
-   so it must match the 18px svg box exactly or the labels stop aligning. */
+   so it must match the 16px svg box exactly or the labels stop aligning. */
 .sidebar-app-icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   border-radius: var(--radius-xs);
   object-fit: contain;
@@ -9166,7 +9153,6 @@ body.walnut-dragging {
    .vd-active rules above set border-color at equal specificity, so a border
    cursor is invisible exactly on hovered/selected rows (source order decides). */
 .vd-cat.vd-cursor { outline: 2px solid var(--accent); outline-offset: 1px; }
-.vd-cat-check { margin-right: 6px; font-size: var(--font-size-xs); flex-shrink: 0; }
 .vd-cat-name {
   overflow: hidden;
   text-overflow: ellipsis; /* meta: a choice chip in a two-column grid of fixed width; its title shows the whole label */
@@ -26960,22 +26946,12 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   gap: 2px;
 }
 
-/* The selected section is the shared Nav item (.wn-nav-item[aria-current='page'],
-   pick-and-nav.css): a rounded, inset row, the rail's current-page look. */
+/* Each section is the shared Nav item (.wn-nav-item, pick-and-nav.css): its size, type, padding,
+   hover and the selected section's look. */
 .nfc-rail-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   width: 100%;
-  padding: 6px 8px;
-  text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-sm); /* shape: a row of the notification rail */
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
 }
-
-.nfc-rail-btn:hover:not([aria-current='page']) { background: var(--bg-hover); color: var(--fg); }
 
 /* .wn-title on the element: a label never cuts, the rail takes its width. */
 .nfc-rail-name { min-width: 0; }
@@ -27001,12 +26977,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .nfc-rail-dot.nfc-warn { background: var(--warning); }
 
 /* Second-level rail entries: the error categories under the Errors button.
-   Indented + smaller so they read as children; the count is quiet text, not a
-   badge — the parent's badge already carries the section total, and a column of
-   pills would out-shout the sections themselves. */
+   Indented so they read as children (the Nav item's one type size); the count is quiet
+   text, not a badge: the parent's badge already carries the section total, and a column
+   of pills would out-shout the sections themselves. */
 .nfc-rail-btn.nfc-rail-sub {
-  padding: 4px 8px 4px 16px;
-  font-size: var(--font-size-sm);
+  padding-left: 20px;
 }
 
 .nfc-rail-subcount {
@@ -27056,15 +27031,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
     width: auto;
     flex: 0 0 auto;
     border-left: none;
-    padding: 9px 10px;
     white-space: nowrap;
   }
-  /* A sideways strip: the selected section keeps the Nav item look (a rounded fill, no
-     underline), so the rail reads the same at every width. */
-  /* The horizontal strip has no "under" to indent into — the sub-entries sit
-     inline after Errors (the strip scrolls), so only the smaller type remains. */
+  /* A sideways strip: every section keeps the Nav item row (its height, type, padding and the
+     selected section's rounded fill), so the rail reads the same at every width. The strip has
+     no "under" to indent into: the sub-entries sit inline after Errors (the strip scrolls). */
   .nfc-rail-btn.nfc-rail-sub {
-    padding: 9px 8px;
+    padding-left: 10px;
   }
 }
 
@@ -28647,8 +28620,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   flex: 0 0 14px;
   color: var(--fg-muted);
 }
-
-.wn-context-menu-check { color: var(--accent); }
 
 .wn-context-menu-label {
   flex: 1;

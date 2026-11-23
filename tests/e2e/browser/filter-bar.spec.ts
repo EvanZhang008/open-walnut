@@ -359,9 +359,10 @@ test.describe('Mia: menu layout and words', () => {
     await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('title', 'Hide tasks that start later. Tasks with no start date stay.')
     await expect(filterValue(page, 'date', 'Any date')).toHaveAttribute('title', 'Show every task, including ones that start later.')
     await expect(filterValue(page, 'date', 'this-week')).toHaveAttribute('title', 'Hide only tasks that start more than 7 days from now.')
-    // Single-select: a bare tick slot, no square and no Only.
-    await expect(filterPage(page, 'date').locator('.fb-check-box, .fb-only')).toHaveCount(0)
-    await expect(filterValue(page, 'date', 'Available now').locator('.fb-check svg')).toHaveCount(1)
+    // Single-select: a Picked row (its name coloured), no tick, no square and no Only.
+    await expect(filterPage(page, 'date').locator('.fb-check, .fb-only')).toHaveCount(0)
+    await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('aria-pressed', 'true')
+    await expect(filterValue(page, 'date', 'Available now')).toHaveClass(/wn-pick-row/)
     // A pick closes the menu and hands focus back to Display.
     await filterValue(page, 'date', 'Any date').click()
     await expect(filterMenu(page)).toHaveCount(0)

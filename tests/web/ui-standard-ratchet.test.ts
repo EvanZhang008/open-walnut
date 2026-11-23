@@ -51,6 +51,8 @@ const BASELINE = path.join(__dirname, 'ui-standard-baseline.json');
 const FAMILY_HOME = 'components/actions/ask-card.css';
 /** The one home of the choice controls (standard.md, "Choice controls"). */
 const CHOICE_HOME = 'styles/choice-controls.css';
+/** The one home of the Picked row, the Nav item and the Option card (standard.md, "Choice controls"). */
+const PICK_HOME = 'styles/pick-and-nav.css';
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
 
 function current(): Counts {
@@ -62,6 +64,8 @@ function current(): Counts {
   // switch (standard.md, "Choice controls").
   delete c.ownControl[CHOICE_HOME];
   delete c.pillRadius[CHOICE_HOME];
+  // The shared rows' home draws the Nav item's row and the Option card for every list that uses them.
+  delete c.ownControl[PICK_HOME];
   // The family's own stylesheet draws `.btn` and its slots.
   delete c.restyledBtn[FAMILY_CSS];
   return c;

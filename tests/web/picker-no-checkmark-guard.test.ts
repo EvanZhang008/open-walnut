@@ -6,7 +6,8 @@
  * This reads every web component (and the plugins' web code) and fails when one draws a
  * checkmark beside a selectable row again: a glyph or ICON_CHECK switched on a condition, a lone
  * glyph in a span, an element whose class ends in "-check", or the retired PickMark
- * (`wn-pick-mark`). An on/off toggle is a switch. A real checkbox, and a mark that says a step is
+ * (`wn-pick-mark`), or a stylesheet that shows a "-check" element on a selected row. An on/off
+ * setting is a switch, or in a menu a row coloured like a pick. A real checkbox, and a mark that says a step is
  * done, are listed below with why.
  */
 import fs from 'node:fs'
@@ -27,32 +28,9 @@ const ALLOWED: Record<string, RegExp[]> = {
   'web/src/components/common/PermissionFixDialog.tsx': [/permission-granted-check/],
   // A copy button's "copied" mark: a finished step.
   'web/src/components/common/CopyButton.tsx': [/copied \? ICON_CHECK : ICON_COPY/],
-  // Multi-select lists, where each row is a checkbox of its own (aria-pressed / menuitemcheckbox).
+  // A checklist's checkbox square (fb-check-box, drawn only for multi-select rows; a single-select
+  // row is a Picked row).
   'web/src/components/tasks/FilterValueList.tsx': [/on \? ICON_CHECK : sel === 'mixed'/],
-  'web/src/components/tasks/FilterBar.tsx': [/inc\.on && <span className="fb-check"/],
-  'web/src/components/tasks/ViewDropdown.tsx': [/selected\.includes\(o\.value\) && <span className="vd-cat-check"/],
-  'web/src/components/board/kanban/KanbanLaneMenu.tsx': [/checked \? ICON_CHECK : null/],
-}
-
-/**
- * Single-pick rows that still draw a check from before the Picked row existed. Each must move to
- * `wn-pick-row` + ARIA; this list may only shrink (the last test fails when an entry no longer
- * matches, so remove it then).
- */
-const NOT_YET_MOVED: Record<string, RegExp> = {
-  // The shared context menu's menuitemradio rows (and its menuitemcheckbox rows, one span).
-  'web/src/components/common/ContextMenu.tsx': /row\.checked \? ICON_CHECK : null/,
-  // The display menu's saved views (one current view).
-  'web/src/components/tasks/DisplaySections.tsx': /v\.id === active \? ICON_CHECK : null/,
-  // The card menu's "Move to lane" (menuitemradio).
-  'web/src/components/board/kanban/KanbanCardMenu.tsx': /current \? ICON_CHECK : null/,
-  // The filter search's hits (a selected view or value).
-  'web/src/components/tasks/FilterSearchResults.tsx': /[vh]\.selected \? ICON_CHECK : null/,
-  // The new-task draft's Where and Project menus (draft v6): the current place and project.
-  'web/src/components/sessions/DraftWhereRow.tsx': /draft-v6-check/,
-  'web/src/components/sessions/DraftWhereMenu.tsx': /draft-v6-check/,
-  'web/src/components/sessions/DraftProjectMenu.tsx': /draft-v6-check/,
-  'web/src/components/sessions/DraftLowerRow.tsx': /current \? ICONS\.ICON_CHECK :/,
 }
 
 const SELECTION_MARK = [
@@ -65,6 +43,22 @@ const SELECTION_MARK = [
   /wn-pick-mark/, // the retired PickMark's class
   /\bPickMark\b/, // the retired PickMark component
 ]
+
+/** A rule that styles an element named "-check" under a selected, checked, pressed or current row. */
+const SHOWN_CHECK = /\[aria-(selected|checked|pressed|current)=['"]true['"]\][^{,]*\.[a-z0-9-]*-check\b/
+/** Real checkboxes drawn in CSS: each line says what it is. */
+const ALLOWED_CSS = [
+  // The calendar list's checkbox squares (show or hide each calendar; several at once).
+  /\.cal-cals-row\[aria-checked='true'\] \.cal-cals-check/,
+]
+
+function cssFiles(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    if (e.name === 'node_modules' || e.name === 'dist') return []
+    const full = path.join(dir, e.name)
+    return e.isDirectory() ? cssFiles(full) : /\.css$/.test(e.name) ? [full] : []
+  })
+}
 
 function files(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -83,7 +77,6 @@ function marks(): string[] {
       fs.readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
         if (!SELECTION_MARK.some((re) => re.test(line))) return
         if (ALLOWED[rel]?.some((re) => re.test(line))) return
-        if (NOT_YET_MOVED[rel]?.test(line)) return
         found.push(`${rel}:${i + 1}: ${line.trim()}`)
       })
     }
@@ -134,14 +127,37 @@ describe('pickers show the current item by colour', () => {
     expect(css).not.toMatch(/\.wn-pick-mark/)
     // No colour-only pick of a picker's own left in the composer pickers' stylesheet.
     expect(read('web/src/styles/composer-controls.css')).not.toMatch(/\.picker-row-current/)
+    // The menus that drew a check now mark their rows for colour.
+    for (const [f, re] of [
+      ['web/src/components/common/ContextMenu.tsx', /row\.checked !== undefined \? ' wn-pick-row'/],
+      ['web/src/components/tasks/DisplaySections.tsx', /className="dm-view wn-pick-row"/],
+      ['web/src/components/board/kanban/KanbanCardMenu.tsx', /className="task-kebab-item wn-pick-row"/],
+      ['web/src/components/board/kanban/KanbanLaneMenu.tsx', /' wn-pick-row'/],
+      ['web/src/components/tasks/FilterSearchResults.tsx', /fb-hit wn-pick-row/],
+      ['web/src/components/tasks/FilterValueList.tsx', /' wn-pick-row'/],
+      ['web/src/components/sessions/DraftWhereMenu.tsx', /draft-v6-wm-row wn-pick-row/],
+      ['web/src/components/sessions/DraftWhereRow.tsx', /draft-v6-option wn-pick-row/],
+      ['web/src/components/sessions/DraftProjectMenu.tsx', /draft-v6-option wn-pick-row/],
+    ] as const) expect(read(f), f).toMatch(re)
     // An on/off toggle is a switch.
     expect(read('web/src/components/workspaces/DraftWorkspaceRow.tsx')).toContain('<ToggleSwitch')
   })
 
-  it('the not-yet-moved list only shrinks', () => {
-    for (const [rel, re] of Object.entries(NOT_YET_MOVED)) {
-      const text = fs.existsSync(path.join(ROOT, rel)) ? fs.readFileSync(path.join(ROOT, rel), 'utf8') : ''
-      expect(re.test(text), `${rel} no longer draws its check: remove it from NOT_YET_MOVED`).toBe(true)
+  it('no stylesheet shows a check on a selected row', () => {
+    // A check that is always in the markup and shown by CSS on the selected state (the draft's
+    // mode tiles had one) reads as a pick mark too.
+    const found: string[] = []
+    for (const dir of [...DIRS, 'web/src/styles']) {
+      if (!fs.existsSync(path.join(ROOT, dir))) continue
+      for (const file of cssFiles(path.join(ROOT, dir))) {
+        const rel = path.relative(ROOT, file)
+        fs.readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+          if (!SHOWN_CHECK.test(line)) return
+          if (ALLOWED_CSS.some((re) => re.test(line))) return
+          found.push(`${rel}:${i + 1}: ${line.trim()}`)
+        })
+      }
     }
+    expect(found, 'a selected row is coloured (wn-pick-row), not given a check by its stylesheet').toEqual([])
   })
 })

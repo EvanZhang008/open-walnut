@@ -237,10 +237,10 @@ test('search ranking: a value picked more often leads its hits; ties keep the li
   expect(await attrs(projectHits, 'data-filter-value')).toEqual(['Home', 'Garden'])
   // A click toggles a hit; the menu stays open.
   await hitFor('Home').click()
-  await expect(hitFor('Home')).toHaveClass(/is-selected/)
+  await expect(hitFor('Home')).toHaveAttribute('aria-current', 'true')
   await expect(filterChip(page, 'project').locator('.fb-chip-val')).toHaveText('Home')
   await hitFor('Home').click()
-  await expect(hitFor('Home')).not.toHaveClass(/is-selected/)
+  await expect(hitFor('Home')).not.toHaveAttribute('aria-current', 'true')
   await expect(filterChip(page, 'project')).toHaveCount(0)
   await expect(filterMenu(page)).toBeVisible()
   // Its own click counted: Home has three uses now and still leads.

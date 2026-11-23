@@ -32,7 +32,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useMemo, type ReactNode }
 import { createPortal } from 'react-dom';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { TaskPhase } from '@open-walnut/core';
-import { ICON_CHECK, ICON_CLOSE, ICON_SLIDERS } from '../common/Icons';
+import { ICON_CLOSE, ICON_SLIDERS } from '../common/Icons';
 import '@/styles/view-menu-choices.css';
 import { log } from '@/utils/log';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -578,7 +578,6 @@ function ChipGroup<T extends string>({ label, options, selected, onToggle }: {
             onClick={() => onToggle(o.value)}
             title={o.label}
           >
-            {selected.includes(o.value) && <span className="vd-cat-check" aria-hidden>{ICON_CHECK}</span>}
             {o.icon && <span className="vd-cat-icon" aria-hidden>{o.icon}</span>}
             <span className="vd-cat-name">{o.label}</span>
           </button>

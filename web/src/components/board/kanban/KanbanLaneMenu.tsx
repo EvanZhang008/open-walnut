@@ -10,7 +10,7 @@
 import { MenuHeading } from '@/components/common/MenuHeading';
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { ICON_CHECK } from '@/components/common/Icons';
+import '@/styles/pick-and-nav.css';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { LANE_KINDS, LANE_KIND_LABELS, type BoardLane, type BoardLaneKind } from '../../../../../src/core/boards/board-lanes';
@@ -54,23 +54,24 @@ interface RowProps {
   label: string;
   blocked?: string;
   checked?: boolean;
+  /** One of a set (the lane's kind): a menuitemradio; else an on/off row, a menuitemcheckbox. */
+  radio?: boolean;
   danger?: boolean;
   onPick(): void;
 }
 
-function Row({ testId, label, blocked, checked, danger, onPick }: RowProps): ReactNode {
+function Row({ testId, label, blocked, checked, radio, danger, onPick }: RowProps): ReactNode {
   return (
     <button
       type="button"
-      role={checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
-      className={`kanban-menu-row${danger ? ' is-danger' : ''}`}
+      role={checked === undefined ? 'menuitem' : radio ? 'menuitemradio' : 'menuitemcheckbox'}
+      className={`kanban-menu-row${checked === undefined ? '' : ' wn-pick-row'}${danger ? ' is-danger' : ''}`}
       data-testid={testId}
       aria-disabled={blocked ? true : undefined}
       aria-checked={checked}
       title={blocked || undefined}
       onClick={() => { if (!blocked) onPick(); }}
     >
-      <span className="kanban-menu-check" aria-hidden>{checked ? ICON_CHECK : null}</span>
       <span className="kanban-menu-label">{label}</span>
     </button>
   );
@@ -127,6 +128,7 @@ export function KanbanLaneMenu(p: KanbanLaneMenuProps) {
           testId={`kanban-lane-menu-kind-${kind}`}
           label={LANE_KIND_LABELS[kind]}
           checked={lane.kind === kind}
+          radio
           blocked={ro || kindBlocked(lanes, lane.id, kind)}
           onPick={pick(() => { if (lane.kind !== kind) p.onKind(kind); })}
         />

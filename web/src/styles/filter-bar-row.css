@@ -107,7 +107,6 @@
   color: var(--fg-secondary);
 }
 .fb-toggle[aria-pressed='true'] { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent-text); }
-.fb-toggle .fb-check { width: 12px; height: 12px; }
 /* The tail: count, then Clear, at the top right, outside the chip box. */
 .fb-row-tail { flex: none; display: inline-flex; align-items: center; gap: 2px; height: 24px; margin-left: auto; }
 .fb-clear { height: 24px; }

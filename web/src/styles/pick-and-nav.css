@@ -5,17 +5,27 @@
  */
 
 /* ── Picked row: the current value in a menu or a list of options ─────────────────────────────
-   The pick is the row's name in --accent-text at weight 500, the same in every menu; no check mark
+   The pick is the row's name in --accent-text at weight 500, the same in every menu, for a one-of
+   pick (menuitemradio, option, radio) and an on/off row of a menu (menuitemcheckbox) alike; no check mark
    (the user, 2026-11-14: "just show the name, and colour the selected one"), never orange, never a
    fill. A fill on a row is only the pointer or the keyboard highlight. In a browse list
    (data-pick="browse": the model picker's Provider column) aria-selected is the row being browsed,
    drawn with the highlight fill, and the row holding the current value is aria-current. */
-.wn-pick-row:is([role='menuitemradio'], [role='option'], [role='radio'])[aria-checked='true'],
+.wn-pick-row:is([role='menuitemradio'], [role='menuitemcheckbox'], [role='option'], [role='radio'])[aria-checked='true'],
 .wn-pick-row[role='option'][aria-selected='true']:not([data-pick='browse']),
 .wn-pick-row[aria-pressed='true'],
 .wn-pick-row[aria-current='true'] {
   color: var(--accent-text);
   font-weight: 500;
+}
+
+/* A row whose name sits in an element with a colour of its own marks that element `wn-pick-name`,
+   so the pick reaches the name; the row's second line keeps its muted colour. */
+.wn-pick-row:is([role='menuitemradio'], [role='menuitemcheckbox'], [role='option'], [role='radio'])[aria-checked='true'] .wn-pick-name,
+.wn-pick-row[role='option'][aria-selected='true']:not([data-pick='browse']) .wn-pick-name,
+.wn-pick-row[aria-pressed='true'] .wn-pick-name,
+.wn-pick-row[aria-current='true'] .wn-pick-name {
+  color: var(--accent-text);
 }
 
 /* The keyboard highlight of a suggestion list (the slash menu, a combobox): the row the arrows are
@@ -25,12 +35,41 @@
 }
 
 /* ── Nav item: the current page, and a pane that is open ────────────────────────────────────────
+   One row for every nav list (the sidebar, Settings, Notifications): 32 px tall, 10 px in, 13 px
+   text at 400 in --fg-secondary, 8 px from its icon; the current page the same row at 500. A
+   list may indent a row (a sub-level) or draw it as a round key (a collapsed rail, the phone's
+   drawer), never its own type size or padding.
    The page you are on is `aria-current="page"`: the accent-subtle fill and accent-text. A key that
    opens a pane beside it (the task panel) is `aria-pressed="true"`: a quiet neutral fill, so the
    page and the open pane never read as the same state. */
+.wn-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm); /* shape: a row of a nav list; a collapsed rail draws circles */
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  line-height: 18px;
+  font-weight: 400;
+  color: var(--fg-secondary);
+  text-align: left;
+  text-decoration: none;
+}
+
+.wn-nav-item:hover:not([aria-current='page']):not([aria-pressed='true']) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
 .wn-nav-item[aria-current='page'] {
   background: var(--accent-subtle);
   color: var(--accent-text);
+  font-weight: 500;
 }
 
 .wn-nav-item[aria-pressed='true']:not([aria-current='page']) {

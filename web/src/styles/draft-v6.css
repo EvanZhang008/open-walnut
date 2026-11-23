@@ -39,20 +39,6 @@
 }
 /* A tile is the shared tabs' tile variant (TabList tiles, choice-controls.css); here only its width. */
 .draft-v6-tile { width: min(164px, calc((100cqw - 48px) / 2)); }
-.draft-v6-tile-check {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 20px;
-  height: 20px;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--on-accent);
-}
-.draft-v6-tile[aria-selected='true'] .draft-v6-tile-check { display: inline-flex; }
 .draft-v6-tile-icon {
   width: 58px;
   height: 58px;
@@ -317,7 +303,6 @@
 .draft-v6-place-ic { display: inline-flex; flex: none; }
 .draft-v6-place-ic.is-git { color: var(--success); }
 .draft-v6-place-ic.is-box { color: var(--warning); }
-.draft-v6-place-ic.is-now { color: var(--accent); }
 /* The isolation chip reads at the row's size (it is today's small session chip elsewhere). */
 .draft-v6-lower .draft-workspace-auto { font-size: var(--font-size-md); }
 .draft-v6-lower-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 12px; }

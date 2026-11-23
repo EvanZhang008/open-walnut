@@ -46,16 +46,15 @@ test('F04 + F15: Status rows carry one selected signal; single-select rows keep 
   await expect(complete).toHaveAttribute('aria-pressed', 'true')
   expect(Math.abs((await box(complete)).width - w0)).toBeLessThanOrEqual(1)
   expect(Math.abs((await labelX(complete)) - x0)).toBeLessThanOrEqual(1)
-  // Date rows are single-select: a bare tick slot the same width as the square, symmetric padding.
+  // Date rows are single-select Picked rows: no tick slot (the pick is the name's colour),
+  // symmetric padding, every label at the same x whichever row is picked.
   await openFilterPage(page, 'date')
   const anyDate = filterValue(page, 'date', 'Any date')
-  await expect(anyDate.locator('.fb-check')).toHaveCount(1)
-  await expect(anyDate.locator('.fb-check-box')).toHaveCount(0)
+  await expect(anyDate.locator('.fb-check')).toHaveCount(0)
   await expect(anyDate.locator('svg')).toHaveCount(0)
   const pad = await anyDate.evaluate((el) => { const cs = getComputedStyle(el); return [cs.paddingLeft, cs.paddingRight] })
   expect(pad[0]).toBe(pad[1])
-  expect(Math.abs((await labelX(anyDate)) - x0)).toBeLessThanOrEqual(1)
-  expect(Math.abs((await labelX(filterValue(page, 'date', 'Available now'))) - x0)).toBeLessThanOrEqual(1)
+  expect(Math.abs((await labelX(anyDate)) - (await labelX(filterValue(page, 'date', 'Available now'))))).toBeLessThanOrEqual(1)
 })
 
 test('F05: Collapse all projects only where the view draws project groups', async ({ page }) => {

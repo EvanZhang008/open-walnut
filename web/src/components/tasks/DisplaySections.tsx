@@ -6,7 +6,7 @@
  */
 import { EmptyState } from '@/components/common/EmptyState';
 import { useRef, type KeyboardEvent, type ReactNode } from 'react';
-import { ICON_CHECK } from '../common/Icons';
+import '@/styles/pick-and-nav.css';
 import { DisclosureChevron } from '@/components/controls';
 import { TAB_BAR_HIDDEN_TABS_KEY, useNavigationList } from '@/hooks/useNavigationPreference';
 import type { DisplayMenuProps } from './filter-bar-types';
@@ -187,13 +187,12 @@ export function DisplayViewsPage({ views, active, query, onPick, onBack, onExitT
     <button
       key={v.id}
       type="button"
-      className="dm-view"
+      className="dm-view wn-pick-row"
       data-view-option={v.id}
       aria-pressed={v.id === active}
       title={v.title}
       onClick={() => onPick(v.id)}
     >
-      <span className="fb-check" aria-hidden="true">{v.id === active ? ICON_CHECK : null}</span>
       <span className="dm-view-label">{v.label}</span>
     </button>
   );

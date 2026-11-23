@@ -27,12 +27,10 @@
 }
 
 /* A sub-page's row (Phones & Cloud > Tailscale): indented under its parent's
-   row, with a smaller tile, as macOS nests a sidebar item. The 56px icon rail
-   keeps every tile centred. */
+   row, with a smaller tile, as macOS nests a sidebar item; the Nav item's one height and
+   type size (pick-and-nav.css). The 56px icon rail keeps every tile centred. */
 .settings-container .settings-nav-item.settings-nav-subitem {
   padding-left: 30px;
-  min-height: 28px;
-  font-size: var(--font-size-md);
 }
 .settings-container .settings-nav-subitem .settings-pane-tile {
   transform: scale(0.85);

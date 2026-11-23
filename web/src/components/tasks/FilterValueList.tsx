@@ -8,6 +8,7 @@
 import { EmptyState } from '@/components/common/EmptyState';
 import { useLayoutEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { ICON_CHECK } from '../common/Icons';
+import '@/styles/pick-and-nav.css';
 import type { TaskPhase } from '@open-walnut/core';
 import {
   DEFAULT_VALUE,
@@ -150,17 +151,19 @@ function ValueRow({ value, label, title, sel, locked, multi, child, isDefault, m
     <div className={`fb-opt${on ? ' is-selected' : ''}${sel === 'mixed' ? ' is-mixed' : ''}${missing ? ' is-missing' : ''}${child ? ' is-child' : ''}`}>
       <button
         type="button"
-        className="fb-opt-body"
+        className={`fb-opt-body${multi ? '' : ' wn-pick-row'}`}
         {...attrs}
         aria-pressed={sel}
         aria-disabled={locked || undefined}
         title={locked ? STATUS_LAST_VALUE_TITLE : title}
         onClick={() => { if (!locked) onPick(value, pickMode); }}
       >
-        {/* Checklist rows draw a square; single-select rows a plain tick in the same slot. */}
-        <span className={`fb-check${multi ? ' fb-check-box' : ''}`} aria-hidden="true">
-          {on ? ICON_CHECK : sel === 'mixed' ? <span className="fb-check-dash" /> : null}
-        </span>
+        {/* Checklist rows draw a checkbox; a single-select row is a Picked row, its name coloured. */}
+        {multi && (
+          <span className="fb-check fb-check-box" aria-hidden="true">
+            {on ? ICON_CHECK : sel === 'mixed' ? <span className="fb-check-dash" /> : null}
+          </span>
+        )}
         <span className="fb-opt-label">{label}</span>
         {isDefault && <span className="fb-opt-default">{DEFAULT_TAG}</span>}
         {count !== undefined && <span className={`tp-count${count === 0 ? ' is-zero' : ''}`}>{count}</span>}

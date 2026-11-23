@@ -7,7 +7,7 @@
  * handles clicks (a click toggles a filter hit, so it can be removed too).
  */
 import { EmptyState } from '@/components/common/EmptyState';
-import { ICON_CHECK } from '../common/Icons';
+import '@/styles/pick-and-nav.css';
 import { pickValue } from './filter-bar-model';
 import type { FilterSearchHit } from './filter-bar-search';
 import type { FilterBarController, FilterState } from './filter-bar-types';
@@ -60,6 +60,8 @@ export function FilterSearchResults({
           id: searchHitId(i),
           role: 'option' as const,
           'aria-selected': active,
+          // A browse list (Picked row): aria-selected is the arrows' row, aria-current a value that is on.
+          'data-pick': 'browse',
           onPointerMove: () => { if (!active) onActiveIndexChange(i); },
         };
         if (item.kind === 'view') {
@@ -69,13 +71,13 @@ export function FilterSearchResults({
               key={`view:${v.id}`}
               {...common}
               data-view-option={v.id}
-              className={`fb-hit${active ? ' is-active' : ''}${v.selected ? ' is-selected' : ''}`}
+              aria-current={v.selected ? 'true' : undefined}
+              className={`fb-hit wn-pick-row${active ? ' is-active' : ''}`}
               onClick={() => onPickView(v.id)}
             >
               <span className="fb-item-icon" aria-hidden="true">{ICON_VIEW}</span>
               <span className="fb-hit-dim">View</span>
-              <span className="fb-hit-value">{v.label}</span>
-              <span className="fb-item-check" aria-hidden="true">{v.selected ? ICON_CHECK : null}</span>
+              <span className="fb-hit-value wn-pick-name">{v.label}</span>
             </div>
           );
         }
@@ -86,15 +88,15 @@ export function FilterSearchResults({
             {...common}
             data-filter-dim={h.dim}
             data-filter-value={h.valueLabel}
-            className={`fb-hit${active ? ' is-active' : ''}${h.selected ? ' is-selected' : ''}`}
+            aria-current={h.selected ? 'true' : undefined}
+            className={`fb-hit wn-pick-row${active ? ' is-active' : ''}`}
             onClick={() => w.write((s) => pickValue(s, h.dim, h.value, clickMode(h.dim)), 'search')}
           >
             <span className="fb-item-icon" aria-hidden="true">{dimIcon(h.dim)}</span>
             {/* `Blocked  Blocked` would say it twice: the values name the property themselves. */}
             {h.dim !== 'blocked' && <span className="fb-hit-dim">{h.dimLabel}</span>}
-            <span className="fb-hit-value">{h.valueLabel}</span>
+            <span className="fb-hit-value wn-pick-name">{h.valueLabel}</span>
             {alreadyOnIndex === i && h.selected && <span className="fb-hit-note">Already on</span>}
-            <span className="fb-item-check" aria-hidden="true">{h.selected ? ICON_CHECK : null}</span>
           </div>
         );
       })}

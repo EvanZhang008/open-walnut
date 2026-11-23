@@ -34,14 +34,13 @@ export function DraftProjectMenu({ where, onDone, onCustomizeWalnut }: { where: 
     const current = r.name.toLowerCase() === where.project.toLowerCase();
     const kind = r.startSource ? whereKindOf(r.startSource) : 'folder';
     return (
-      <button key={`${group}:${r.name}`} type="button" role="option" aria-selected={current} className={`draft-v6-option${current ? ' is-current' : ''}`}
+      <button key={`${group}:${r.name}`} type="button" role="option" aria-selected={current} className="draft-v6-option wn-pick-row"
         data-testid={`draft-v6-project-${r.name}`} onClick={() => pick(r.name)}>
         <span className={`draft-v6-project-icon is-${kind}`}><WhereIcon kind={kind} size={14} /></span>
         <span className="draft-v6-option-text">
-          <span className="draft-v6-option-name wn-title">{projectDisplayName(r.name)}</span>
+          <span className="draft-v6-option-name wn-title wn-pick-name">{projectDisplayName(r.name)}</span>
           <span className="draft-v6-option-line">{autoWhat(r).words} · {where.hostName(ownHostOf(r))}</span>
         </span>
-        {current && <span className="draft-v6-check">{ICONS.ICON_CHECK}</span>}
       </button>
     );
   };
@@ -67,13 +66,12 @@ export function DraftProjectMenu({ where, onDone, onCustomizeWalnut }: { where: 
         {all.map((r) => row(r, 'all'))}
         {inboxShown && (
           <button type="button" role="option" aria-selected={isInboxProject(where.project)}
-            className={`draft-v6-option${isInboxProject(where.project) ? ' is-current' : ''}`} data-testid="draft-v6-project-none" onClick={() => pick('')}>
+            className="draft-v6-option wn-pick-row" data-testid="draft-v6-project-none" onClick={() => pick('')}>
             <span className="draft-v6-project-icon is-home"><WhereIcon kind="home" size={14} /></span>
             <span className="draft-v6-option-text">
-              <span className="draft-v6-option-name wn-title">No project</span>{/* empty-state-ok: an option's name */}
+              <span className="draft-v6-option-name wn-title wn-pick-name">No project</span>{/* empty-state-ok: an option's name */}
               <span className="draft-v6-option-line">The Inbox · works in a folder you pick</span>
             </span>
-            {isInboxProject(where.project) && <span className="draft-v6-check">{ICONS.ICON_CHECK}</span>}
           </button>
         )}
         {!all.length && !inboxShown && <EmptyState size="row" title="No matching project" />}
@@ -82,7 +80,7 @@ export function DraftProjectMenu({ where, onDone, onCustomizeWalnut }: { where: 
             title="Open a session in Walnut's own source code to change or fix Walnut" onClick={() => { onDone(); onCustomizeWalnut(); }}>
             <span className="draft-v6-project-icon"><span aria-hidden="true">{ICONS.ICON_SLIDERS}</span></span>
             <span className="draft-v6-option-text">
-              <span className="draft-v6-option-name wn-title">Customize Walnut</span>
+              <span className="draft-v6-option-name wn-title wn-pick-name">Customize Walnut</span>
               <span className="draft-v6-option-line">A session in Walnut's own code, to change or fix it</span>
             </span>
           </button>

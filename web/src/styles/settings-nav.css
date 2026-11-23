@@ -108,42 +108,17 @@
   color: var(--fg-muted);
 }
 
+/* Each row is the shared Nav item (.wn-nav-item, pick-and-nav.css): its size, type, padding, hover
+   and the current section's look. */
 .settings-container .settings-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  box-sizing: border-box;
   width: 100%;
-  min-height: 32px;
   margin: 0;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  font-size: var(--font-size-md);
-  line-height: 18px;
-  font-weight: 400;
-  text-align: left;
-  text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
   /* No fade: the active highlight moves in one frame, as in macOS (N18). */
   transition: none;
   /* Scrolled into view with room for its group label above it (N19). */
   scroll-margin-block: 28px;
-}
-
-/* Every row but the current section: the current one is the shared Nav item
-   (.wn-nav-item[aria-current='page'], pick-and-nav.css), never a solid block of its own. */
-.settings-container .settings-nav-item:not([aria-current='page']) {
-  background: none;
-  color: var(--fg);
-}
-
-/* Hover is the pointer's alone: it never covers the current section's look. */
-.settings-container .settings-nav-item:hover:not([aria-current='page']) {
-  background: var(--bg-hover);
-  color: var(--fg);
 }
 
 .settings-container .settings-nav-item.is-highlighted {

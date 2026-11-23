@@ -66,8 +66,6 @@
 .fb-item-icon svg { width: 14px; height: 14px; }
 .fb-item-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .fb-item-chevron { display: inline-flex; flex: none; color: var(--fg-muted); }
-.fb-item-check { display: inline-flex; flex: none; width: 12px; justify-content: center; color: var(--accent-text); }
-.fb-item-check svg { width: 12px; height: 12px; }
 
 /* Group title on page one: small, muted, sentence case; its action (Clear) at the right. */
 .fb-group { display: flex; flex-direction: column; }
@@ -216,7 +214,6 @@ html :is(.fb-group-title, .fb-layout-title).wn-menu-heading { padding: 4px 8px 2
 .fb-search-results { display: flex; flex-direction: column; }
 .fb-hit-dim { flex: none; color: var(--tp-muted); font-size: var(--font-size-sm); }
 .fb-hit-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.fb-hit.is-selected .fb-hit-value { color: var(--accent-text); }
 .fb-hit-note { flex: none; color: var(--tp-muted); font-size: var(--font-size-xs); }
 
 /* ── Text buttons: Clear in the Filter title, Reset in a page head ── */
@@ -278,10 +275,8 @@ html :is(.fb-group-title, .fb-layout-title).wn-menu-heading { padding: 4px 8px 2
 }
 
 /* ── Dark theme: selected text stays >= 4.5:1 (accent-text is the bare accent there) ── */
-:root[data-theme='dark'] .fb-hit.is-selected .fb-hit-value,
 :root[data-theme='dark'] .fb-toggle[aria-pressed='true'] { color: var(--fg); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .fb-hit.is-selected .fb-hit-value,
   :root:not([data-theme]) .fb-toggle[aria-pressed='true'] { color: var(--fg); }
 }
 

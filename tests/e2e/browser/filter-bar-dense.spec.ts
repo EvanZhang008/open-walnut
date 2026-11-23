@@ -118,8 +118,8 @@ test.describe('Owner: dense board', () => {
     await expect(hits.first().locator('.fb-item-icon svg')).toHaveCount(1)
     await search.press('Enter')
     await expect(filterChip(page, 'project')).toContainText('Project 21')
-    await expect(hits.first()).toHaveClass(/is-selected/)
-    await expect(hits.first().locator('.fb-item-check svg')).toHaveCount(1)
+    await expect(hits.first()).toHaveAttribute('aria-current', 'true')
+    await expect(hits.first().locator('svg')).toHaveCount(1) // its property icon alone, no check
     // A click toggles: the pointer can take a hit back off, and put it on again.
     await hits.first().click()
     await expect(filterChip(page, 'project')).toHaveCount(0)
@@ -161,13 +161,13 @@ test.describe('Owner: dense board', () => {
     await expect(hits.first().locator('.fb-hit-value')).toHaveText('Recent')
     await expect(hits.first().locator('.fb-item-icon svg')).toHaveCount(1)
     await expect(page.locator('.fb-search-results .fb-hit[data-filter-dim="time"]').first()).toBeVisible()
-    // The view in use carries the check.
+    // The view in use is the Picked row (aria-current, its name coloured).
     await search.fill('all')
-    await expect(page.locator('.fb-search-results .fb-hit[data-view-option="all"]')).toHaveClass(/is-selected/)
+    await expect(page.locator('.fb-search-results .fb-hit[data-view-option="all"]')).toHaveAttribute('aria-current', 'true')
     await search.fill('pinned')
     const pinned = page.locator('.fb-search-results .fb-hit[data-view-option="pinned"]')
     await expect(pinned).toBeVisible()
-    await expect(pinned).not.toHaveClass(/is-selected/)
+    await expect(pinned).not.toHaveAttribute('aria-current', 'true')
     const index = await hits.evaluateAll((els) => els.findIndex((e) => e.getAttribute('data-view-option') === 'pinned'))
     for (let i = 0; i < index; i++) await search.press('ArrowDown')
     await expect(pinned).toHaveAttribute('aria-selected', 'true')

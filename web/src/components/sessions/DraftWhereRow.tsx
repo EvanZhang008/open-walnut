@@ -254,14 +254,13 @@ function HostMenu({ where, onDone }: { where: DraftWhere; onDone: () => void }) 
       {where.hosts.map((h) => {
         const current = h.key === where.hostKey;
         return (
-          <button key={h.key} type="button" role="option" aria-selected={current} className={`draft-v6-option${current ? ' is-current' : ''}`}
+          <button key={h.key} type="button" role="option" aria-selected={current} className="draft-v6-option wn-pick-row"
             data-testid={`draft-v6-host-${h.key}`} title={h.title} onClick={() => { where.pickHost(h.key); onDone(); }}>
             {h.local ? <span className="draft-v6-dot is-on" aria-hidden="true" /> : <HostStatusDot host={h.key} label={h.name} className="draft-v6-host-dot" />}
             <span className="draft-v6-option-text">
-              <span className="draft-v6-option-name wn-title">{h.name}</span>
+              <span className="draft-v6-option-name wn-title wn-pick-name">{h.name}</span>
               <span className="draft-v6-option-line">{hostLine(h.local, h.connected)}</span>
             </span>
-            {current && <span className="draft-v6-check">{ICONS.ICON_CHECK}</span>}
           </button>
         );
       })}

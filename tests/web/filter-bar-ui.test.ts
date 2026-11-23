@@ -282,12 +282,12 @@ describe('FilterValuesPage: the second page', () => {
     expect(doc.querySelectorAll('[role="checkbox"], .fb-val-add').length).toBe(0)
   })
 
-  it('single-select rows draw a bare tick slot, no count and no Only', () => {
+  it('single-select rows are Picked rows (colour, no tick), no count and no Only', () => {
     const doc = page(controller(), 'date')
-    expect(doc.querySelectorAll('.fb-check').length).toBe(4)
-    expect(doc.querySelectorAll('.fb-check-box').length).toBe(0)
+    expect(doc.querySelectorAll('.fb-check').length).toBe(0)
+    expect(doc.querySelectorAll('.fb-opt-body.wn-pick-row').length).toBe(4)
     expect(doc.querySelectorAll('.fb-only, .tp-count').length).toBe(0)
-    expect(doc.querySelector('[data-date-value="now"] .fb-check svg')).not.toBeNull()
+    expect(doc.querySelector('[data-date-value="now"]')?.getAttribute('aria-pressed')).toBe('true')
     expect(opt(doc, 'Available now')?.getAttribute('title')).toBe('Hide tasks that start later. Tasks with no start date stay.')
     const blocked = page(controller(), 'blocked')
     expect(labels(blocked)).toEqual(['Any', 'Blocked', 'Not blocked'])
@@ -558,22 +558,23 @@ describe('FilterSearchResults: the first page while the search box has text', ()
     expect(pinned.querySelector('.fb-hit-dim')?.textContent).toBe('View')
     expect(pinned.querySelector('.fb-hit-value')?.textContent).toBe('Pinned')
     expect(pinned.querySelector('.fb-item-icon svg')).not.toBeNull()
-    expect(pinned.className).not.toContain('is-selected')
-    expect(pinned.querySelector('.fb-item-check svg')).toBeNull()
+    expect(pinned.hasAttribute('aria-current')).toBe(false)
+    expect(pinned.querySelector('svg.check, .fb-item-check')).toBeNull()
     const current = doc.querySelector('.fb-hit[data-view-option="tasks"]')!
-    expect(current.className).toContain('is-selected')
-    expect(current.querySelector('.fb-item-check svg')).not.toBeNull()
+    expect(current.className).toContain('wn-pick-row')
+    expect(current.getAttribute('aria-current')).toBe('true')
     expect(doc.querySelector('.fb-pin-hint, [data-testid="fb-empty"]')).toBeNull()
   })
 
-  it('a selected hit carries is-selected and a check at the right; Blocked hits name no property', () => {
+  it('a selected hit is a Picked row (aria-current, its value coloured, no check); Blocked hits name no property', () => {
     const c = controller({ state: withState({ projects: ['Garden'] }) })
     const garden = results(c, 'gard').querySelector('[role="option"]')!
-    expect(garden.className).toContain('is-selected')
-    expect(garden.querySelector('.fb-item-check svg')).not.toBeNull()
+    expect(garden.getAttribute('aria-current')).toBe('true')
+    expect(garden.getAttribute('data-pick')).toBe('browse')
+    expect(garden.querySelector('.fb-hit-value')?.className).toContain('wn-pick-name')
+    expect(garden.querySelectorAll('svg').length).toBe(1) // its property icon alone
     const home = results(c, 'home').querySelector('[role="option"]')!
-    expect(home.className).not.toContain('is-selected')
-    expect(home.querySelector('.fb-item-check svg')).toBeNull()
+    expect(home.hasAttribute('aria-current')).toBe(false)
     const blocked = Array.from(results(c, 'blocked').querySelectorAll('[role="option"][data-filter-dim="blocked"]'))
     expect(blocked.map((h) => h.getAttribute('data-filter-value'))).toEqual(['Blocked', 'Not blocked'])
     for (const h of blocked) expect(h.querySelector('.fb-hit-dim')).toBeNull()

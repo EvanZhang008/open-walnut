@@ -11,7 +11,7 @@
 /* The Layout section is named by its heading: no rule above it (standard.md, Big menus). */
 .dm-section.dm-order { border-top: 0; margin-top: 0; padding-top: 0; }
 
-/* View rows on the View page: the check slot, then the name (the same rhythm as .fb-opt-body). */
+/* View rows on the View page: Picked rows (pick-and-nav.css), the name alone (the rhythm of .fb-opt-body). */
 .dm-view {
   display: flex;
   align-items: center;
@@ -30,8 +30,7 @@
   box-sizing: border-box;
 }
 .dm-view:hover { background: var(--bg-hover); }
-/* Selected: the accent check alone; no tinted band, so one list never reads as two. */
-.dm-view[aria-pressed='true'] { color: var(--fg); }
+/* Selected: the name in --accent-text (the Picked row); no tinted band, so one list never reads as two. */
 .dm-view-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Setting rows: name on the left, its control on the right. */

@@ -166,9 +166,9 @@ function RecentChip({ kind, label, current, onClick, title }: { kind: WhereKind;
   return (
     <button type="button" className="btn btn-sm draft-v6-place" aria-pressed={current} title={current ? `${title ?? label}: in use now` : title ?? label}
       data-fit="chip" data-testid="draft-v6-recent-chip" onMouseDown={(e) => e.preventDefault()} onClick={onClick}>
-      {/* The family's one look: the place in use shows a check, never a colour of its own. */}
-      <span className={`draft-v6-place-ic is-${current ? 'now' : kind}`} aria-hidden="true">
-        {current ? ICONS.ICON_CHECK : <WhereIcon kind={kind} size={13} />}
+      {/* The place in use is the button family's pressed look (aria-pressed); it keeps its own icon, no check. */}
+      <span className={`draft-v6-place-ic is-${kind}`} aria-hidden="true">
+        <WhereIcon kind={kind} size={13} />
       </span>
       {label}
     </button>

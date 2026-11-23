@@ -2,8 +2,7 @@
    /tasks filter panel (ViewDropdown), its chips and toolbar, and the tab bar's menu
    button. Icons come from Icons.tsx at 12 to 14px; these rules size them to the text
    they sit in. Existing tokens only. */
-.vd-cat-check, .vd-cat-icon { display: inline-flex; align-items: center; }
-.vd-cat-check svg { width: 10px; height: 10px; }
+.vd-cat-icon { display: inline-flex; align-items: center; }
 .vd-cat-icon { margin-right: 4px; flex-shrink: 0; }
 .vd-cat-icon svg { width: 11px; height: 11px; }
 .vd-sc-x, .vd-search-clear { display: inline-flex; align-items: center; justify-content: center; }

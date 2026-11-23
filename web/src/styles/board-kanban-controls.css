@@ -169,7 +169,6 @@
 .kanban-menu-row:hover:not([aria-disabled="true"]), .kanban-changes-row:hover, .kanban-changes-row:focus-visible { background: var(--bg-hover); }
 .kanban-menu-row[aria-disabled="true"] { color: var(--fg-muted); cursor: default; }
 .kanban-menu-row.is-danger:not([aria-disabled="true"]) { color: var(--kc-red); }
-.kanban-menu-check { display: inline-flex; width: 14px; flex: 0 0 auto; color: var(--accent); }
 .kanban-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
 /* The shared .wn-menu-heading, its words over the rows' words (past the check column). */
 html .kanban-menu-group.wn-menu-heading { padding-left: 28px; }

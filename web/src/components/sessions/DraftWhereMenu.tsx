@@ -8,7 +8,6 @@
  * search starts from the field's click each time.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import * as ICONS from '@/components/common/Icons';
 import { SearchField } from '@/components/common/SearchField';
 import { badge } from '@/components/common/badge';
 import { projectDisplayName } from '@/utils/project-display';
@@ -98,7 +97,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
     }
   };
   const rowProps = (id: string) => ({
-    className: `draft-v6-wm-row${id === activeId ? ' is-active' : ''}`,
+    className: `draft-v6-wm-row wn-pick-row${id === activeId ? ' is-active' : ''}`,
     onMouseEnter: () => { const i = pickables.findIndex((p) => p.id === id); if (i >= 0) setActive(i); },
   });
 
@@ -158,10 +157,10 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
                 onClick={() => { where.pickAuto(hostKey); onClose(); }}>
                 <span className="draft-v6-wm-ico"><WhereIcon kind="auto" size={15} /></span>
                 <span className="draft-v6-wm-text">
-                  <span className="draft-v6-wm-name"><Title>Auto · {where.what.words} on {hostName}</Title>{recommended && <span className={`${badge('accent')} draft-v6-tag is-rec`}><span>recommended</span></span>}</span>
+                  <span className="draft-v6-wm-name wn-pick-name"><Title>Auto · {where.what.words} on {hostName}</Title>{recommended && <span className={`${badge('accent')} draft-v6-tag is-rec`}><span>recommended</span></span>}</span>
                   <span className="draft-v6-wm-line">{autoLine}</span>
                 </span>
-                <span className="draft-v6-wm-right">{where.autoCurrent && <span className="draft-v6-check">{ICONS.ICON_CHECK}</span>}</span>
+                <span className="draft-v6-wm-right" />
               </div>
             )}
             {where.project && v.ok && where.ps.source && (
@@ -195,7 +194,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
                   onClick={() => pickables.find((p) => p.id === 'use')?.pick()}>
                   <span className="draft-v6-wm-ico">/</span>
                   <span className="draft-v6-wm-text">
-                    <span className="draft-v6-wm-name" title={typed.use.path}><Title>Use this path</Title><code>{shownPath(typed.use.path, undefined, 2)}</code></span>
+                    <span className="draft-v6-wm-name wn-pick-name" title={typed.use.path}><Title>Use this path</Title><code>{shownPath(typed.use.path, undefined, 2)}</code></span>
                     <span className="draft-v6-wm-line">{pathUseLine(typed.use.path, hostKey, where, homeOf(hostKey), typed.use.validity)}</span>
                   </span>
                 </div>
@@ -253,11 +252,11 @@ function FolderRow({ id, rowProps, onPick, name, path, project, at, current }: {
     <div {...rowProps(id)} role="option" aria-selected={!!current} data-testid="draft-v6-folder-row" data-name={name} onClick={onPick}>
       <span className="draft-v6-wm-ico"><WhereIcon kind="folder" size={15} /></span>
       <span className="draft-v6-wm-text">
-        <span className="draft-v6-wm-name"><Title>{name}</Title>{project && <span className={`${badge()} draft-v6-tag`}><span>{projectDisplayName(project)}</span></span>}</span>
+        <span className="draft-v6-wm-name wn-pick-name"><Title>{name}</Title>{project && <span className={`${badge()} draft-v6-tag`}><span>{projectDisplayName(project)}</span></span>}</span>
         <span className="draft-v6-wm-line is-path">{path}</span>
       </span>
       <span className="draft-v6-wm-right">
-        {current ? <span className="draft-v6-check">{ICONS.ICON_CHECK}</span> : at ? <span className="draft-v6-wm-time">{timeAgo(at, { long: true })}</span> : null}
+        {at ? <span className="draft-v6-wm-time">{timeAgo(at, { long: true })}</span> : null}
       </span>
     </div>
   );

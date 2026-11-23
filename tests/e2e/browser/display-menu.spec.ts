@@ -153,9 +153,10 @@ test('one menu: the filter rows, then the display rows; the View page lists the 
   expect(titles.every((t) => t !== '')).toBe(true)
   for (const key of layers.first) expect(await viewChoice(page, key).getAttribute('title')).not.toMatch(TIER_WORDS)
   await expect(viewChoice(page, 'tasks')).toHaveAttribute('title', 'Projects: every task grouped by project, with filters applied')
-  // The current view is pressed, checked and takes focus.
+  // The current view is pressed, its name coloured (a Picked row, no check), and takes focus.
   await expect(viewChoice(page, 'all')).toHaveAttribute('aria-pressed', 'true')
-  await expect(viewChoice(page, 'all').locator('.fb-check svg')).toHaveCount(1)
+  await expect(viewChoice(page, 'all')).toHaveClass(/wn-pick-row/)
+  await expect(viewChoice(page, 'all').locator('svg')).toHaveCount(0)
   await expect(viewChoice(page, 'all')).toBeFocused()
   await menu.screenshot({ path: `${SHOTS}/display-views-page.png` })
   // Back returns to page one with focus on the View row.
@@ -587,7 +588,7 @@ test('keyboard reaches every Display control, with a visible ring and readable c
     await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
     const selected = viewChoice(page, 'pinned')
     await expect(selected).toHaveAttribute('aria-pressed', 'true')
-    await expect(selected.locator('.fb-check svg')).toHaveCount(1)
+    await expect(selected.locator('svg')).toHaveCount(0)
     expect(await contrastOf(selected.locator('.dm-view-label'))).toBeGreaterThanOrEqual(4.5)
     expect(await contrastOf(viewChoice(page, 'all').locator('.dm-view-label'))).toBeGreaterThanOrEqual(4.5)
     await displayMenu(page).screenshot({ path: `${SHOTS}/display-menu-${theme}-focus.png` })

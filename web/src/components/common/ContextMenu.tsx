@@ -37,7 +37,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
-import { ICON_CHECK } from './Icons';
+import '@/styles/pick-and-nav.css';
 import '@/styles/context-menu-setting.css';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useMoreBelow } from '@/hooks/useMoreBelow';
@@ -633,7 +633,7 @@ export function ContextMenu({
                 // A tabindex makes the row mouse-focusable in Safari; a press focuses it only without a
                 // scroll (utils/menu-press-focus.ts), or WebKit moves a cut row from under the click.
                 tabIndex={-1}
-                className={`wn-context-menu-item${row.value !== undefined ? ' setting' : ''}${row.danger ? ' danger' : ''}${focusIndex === index ? ' focused' : ''}`}
+                className={`wn-context-menu-item${row.checked !== undefined ? ' wn-pick-row' : ''}${row.value !== undefined ? ' setting' : ''}${row.danger ? ' danger' : ''}${focusIndex === index ? ' focused' : ''}`}
                 aria-haspopup={row.value !== undefined ? 'true' : undefined}
                 disabled={row.disabled}
                 title={row.title}
@@ -647,9 +647,8 @@ export function ContextMenu({
                   if (!row.keepOpen) onClose();
                 }}
               >
-                {row.checked !== undefined
-                  ? <span className="wn-context-menu-icon wn-context-menu-check" aria-hidden="true">{row.checked ? ICON_CHECK : null}</span>
-                  : row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
+                {/* A radio or on/off row shows its state by colour (a Picked row), never a check. */}
+                {row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
                 <span className="wn-context-menu-label">{row.ai && aiMark()}{row.label}</span>
                 {row.value !== undefined && (
                   <span className="wn-context-menu-value">

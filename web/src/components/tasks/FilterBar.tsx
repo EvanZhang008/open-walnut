@@ -17,7 +17,6 @@
  */
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
-import { ICON_CHECK } from '../common/Icons';
 import '@/styles/filter-bar-row.css';
 import type { FilterBarController, FilterChip, FilterDim } from './filter-bar-types';
 import { FilterChipMenu } from './FilterChipMenu';
@@ -278,7 +277,6 @@ export function FilterBar({ controller: c }: FilterBarProps) {
         )}
         {inc && (
           <button type="button" className="fb-toggle" tabIndex={0} aria-pressed={inc.on} onClick={inc.toggle}>
-            {inc.on && <span className="fb-check" aria-hidden="true">{ICON_CHECK}</span>}
             <span>{`Include completed (${inc.count})`}</span>
           </button>
         )}

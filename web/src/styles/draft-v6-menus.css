@@ -25,11 +25,11 @@
   cursor: pointer;
 }
 .draft-v6-menu-list .draft-v6-option { width: 100%; margin: 0; }
-.draft-v6-option:hover, .draft-v6-option.is-current { background: var(--bg-hover); }
+/* The current option is a Picked row (pick-and-nav.css): its name coloured, no fill, no check. */
+.draft-v6-option:hover { background: var(--bg-hover); }
 .draft-v6-option-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .draft-v6-option-name { font-weight: 500; }
 .draft-v6-option-line { font-size: var(--font-size-sm); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.draft-v6-check { flex: none; display: inline-flex; color: var(--accent); }
 
 /* The Where menu: search, a list that fades out at its bottom edge, the keys. */
 .draft-v6-wm { display: flex; flex-direction: column; height: 100%; min-height: 0; }
