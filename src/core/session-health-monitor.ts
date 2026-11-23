@@ -1560,7 +1560,9 @@ export class SessionHealthMonitor {
         const { applySessionPhase, ownWorkWakes, sessionErrorPhase, standingRoutineWaits } = await import('./phase.js')
         const parks = await standingRoutineWaits(session.taskId)
         // Its own work runs outside and its watch wakes it (watches:"own"): still at work, nothing to hand back.
-        if (!parks && await ownWorkWakes(session.taskId)) return session.claudeSessionId
+        // The record as it was before this stop: when its last turn ended (sessionWorkEndedAtMs).
+        const { sessionWorkEndedAtMs } = await import('./task-wait-wake.js')
+        if (!parks && await ownWorkWakes(session.taskId, sessionWorkEndedAtMs(session))) return session.claudeSessionId
         if (parks) {
           // What the session:error edge would have cleared: a fire turn or an interrupted wait
           // left from the reaped turn must not reshape the next hand-back.
@@ -2386,7 +2388,9 @@ export class SessionHealthMonitor {
         // Its own work runs outside and its watch wakes it (watches:"own"): no session needs to live
         // for that, so a quiet In Progress is no drift (2026-11-19: two tasks moved off Waiting onto
         // their own test-results watch were handed back 10 minutes later).
-        const ownRuns = !dead.some((s) => s.process_status === 'error') && await (await import('./phase.js')).ownWorkWakes(taskId)
+        const { allEndedAtMs, sessionWorkEndedAtMs } = await import('./task-wait-wake.js')
+        const ownRuns = !dead.some((s) => s.process_status === 'error')
+          && await (await import('./phase.js')).ownWorkWakes(taskId, allEndedAtMs(dead.map((s) => sessionWorkEndedAtMs(s))))
         if (!allRemoteUnreachable && !ownRuns) {
           // All primary sessions dead + stuck at IN_PROGRESS → the work was
           // handed back whether or not a result event survived. NEED_ACTION

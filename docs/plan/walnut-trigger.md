@@ -66,7 +66,10 @@ The script receives on stdin one JSON object: `{"state": <last state or null>, "
  "input": "free text the AI receives with the prompt this run",   // optional, max 8 KB
  "state": {"cursor": "2026-09-11T10:00:00Z"}}                      // optional; stored verbatim, fed to the next check
 {"fire": false, "state": {...}}
+{"fire": false, "idle": true}                                     // optional: nothing it watches is in flight now
 ```
+
+`idle` (`checkIdleOf` in `src/providers/trigger-check-core.ts`): `"idle": true` on a quiet run (`fire:false`, or `fire:true` whose items are all seen; never a fire, never one the budget holds back) says nothing the trigger watches is in flight; it is not sent while an earlier fire still waits for its ack (`pendingFires`). The daemon sends it on that run's `trigger.checked` event only, never in the host's state file (an older daemon's snapshot check would refuse an unknown field, as for `fault`); the server keeps it on the job's `lastCheck.idle` until the next check or fire replaces it. A `watches:"own"` trigger counts as the task's own work going on (Working, and an idle reap leaves the task In Progress) unless its latest check said idle and ran after the task's sessions last did work (`sessionWorkEndedAtMs`; an unknown time never honours it, so a request queued by the turn that just ended is never read as idle by a check from before it) (`ownWorkInFlight` in `src/core/task-wait-wake.ts`; ratchet `tests/core/own-work-in-flight-ratchet.test.ts`). A non-boolean `idle` is dropped with a warning; an older daemon drops the field, so its triggers read as before.
 
 `input` and `state` point in opposite directions and are never merged: `state` is the script talking to its next run, `input` is the script talking to the AI this run. Non-zero exit, timeout, no JSON on the last line, or stdout over 64 KB is a check error.
 

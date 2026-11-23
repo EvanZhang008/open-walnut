@@ -976,13 +976,16 @@ export async function standingRoutineWaits(taskId: string): Promise<boolean> {
   }
 }
 
-/** An armed trigger of the task watches its own work (watches:"own"): it wakes the task when that
- *  work's result comes, so an idle reap of its session leaves it In Progress. Never throws. */
-export async function ownWorkWakes(taskId: string): Promise<boolean> {
+/** An armed trigger of the task watches its own work (watches:"own") while that work is in flight:
+ *  it wakes the task when the work's result comes, so an idle reap of its session leaves it In
+ *  Progress. A watch whose latest check, run after `workEndedMs` (when the task's sessions last did
+ *  work: sessionWorkEndedAtMs; undefined when unknown), said nothing is in flight wakes nothing
+ *  (ownWorkInFlight). Never throws. */
+export async function ownWorkWakes(taskId: string, workEndedMs: number | undefined): Promise<boolean> {
   try {
     const { triggersWatching } = await import('./task-wait-until.js')
-    const { triggerWatchesOwnWork } = await import('./task-wait-wake.js')
-    return (await triggersWatching(taskId)).some((t) => t.state === 'armed' && triggerWatchesOwnWork(t))
+    const { ownWorkInFlight } = await import('./task-wait-wake.js')
+    return (await triggersWatching(taskId)).some((t) => t.state === 'armed' && ownWorkInFlight(t, workEndedMs))
   } catch {
     return false
   }
@@ -995,6 +998,13 @@ async function endedByIdleReap(sessionId: string): Promise<boolean> {
   if (live) return live.teardownReason === 'idle_timeout'
   const { getSessionByClaudeId } = await import('./session-tracker.js')
   return (await getSessionByClaudeId(sessionId).catch(() => null))?.status_reason === 'idle_timeout'
+}
+
+/** When this session last did work (task-wait-wake.ts sessionWorkEndedAtMs), undefined when unknown. */
+async function sessionWorkEndedAt(sessionId: string): Promise<number | undefined> {
+  const { getSessionByClaudeId } = await import('./session-tracker.js')
+  const { sessionWorkEndedAtMs } = await import('./task-wait-wake.js')
+  return sessionWorkEndedAtMs(await getSessionByClaudeId(sessionId).catch(() => null))
 }
 
 async function sessionEndedInError(sessionId: string | undefined): Promise<boolean> {
@@ -1030,7 +1040,7 @@ export async function handBackTaskOnSessionEnd(
     const reaped = !isMainAgentTask(task) && await endedByIdleReap(sessionId) && !(await sessionEndedInError(sessionId))
     // Its own work runs outside and its watch wakes it (watches:"own"): a reap of its quiet session
     // hands nothing back, it is still at work (2026-11-18 review: a 45-minute CI run read Needs you).
-    if (reaped && task.phase === 'IN_PROGRESS' && await ownWorkWakes(taskId)) return false
+    if (reaped && task.phase === 'IN_PROGRESS' && await ownWorkWakes(taskId, await sessionWorkEndedAt(sessionId))) return false
     const parks = reaped && await standingRoutineWaits(taskId)
     const res = await applySessionPhase(taskId, 'reconciler', source, {
       sessionId,

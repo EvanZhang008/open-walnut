@@ -10101,7 +10101,10 @@ async function runTrigger(entry) {
     }
     var quiet = { outcome: 'quiet' };
     if (decision.kind === 'quiet') quiet.reason = decision.reason;
-    sendTriggerEvent(entry.home, 'trigger.checked', entry.state.lastCheck);
+    // The idle mark rides the event only, never the state file (trigger-check-core.ts TriggerCheckedEvent.idle).
+    // An older sidecar has no checkIdleOf and its parse keeps no idle: the event goes without it.
+    var idle = typeof triggerCheckCore.checkIdleOf === 'function' && triggerCheckCore.checkIdleOf(output, decision, entry.state);
+    sendTriggerEvent(entry.home, 'trigger.checked', idle ? Object.assign({}, entry.state.lastCheck, { idle: true }) : entry.state.lastCheck);
     return quiet;
   } finally {
     entry.running = false;

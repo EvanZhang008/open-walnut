@@ -43,7 +43,7 @@ import { isQuietTurn } from './sessions/quiet-turn.js';
 import { workspaceHoldAsk } from './workspaces/decisions.js';
 import { orgEnabledCached } from './org/org-enabled.js';
 import { decisionAnswered } from './human-inbox/open-decision.js';
-import { triggerWatchesOwnWork } from './task-wait-wake.js';
+import { allEndedAtMs, ownWorkInFlight, sessionWorkEndedAtMs, triggerWatchesOwnWork } from './task-wait-wake.js';
 import { keepsThreads, threadsForEveryTask } from './org/keeps-threads.js';
 import { heldLetterIds, holdsLettersNow, isLetterThread, lettersAsThreadsNow } from './human-inbox/letter-threads.js';
 import { briefOffNow, setBriefOff } from './org/brief-off.js';
@@ -129,6 +129,9 @@ export interface StatusFacts {
     outliving?: OutlivingSource[];
     /** Walnut retries its failed turn by itself at this time (session-auto-continue.ts, ISO). */
     autoRetryAt?: string;
+    /** When it last did work (task-wait-wake.ts sessionWorkEndedAtMs, ms; Infinity while a turn
+     *  runs), for an own-work watch's idle mark. Absent when its record says nothing. */
+    workEndedAt?: number;
   }>;
   /** Task id -> subject of its newest unanswered action_required letter. */
   letters: Map<string, string>;
@@ -145,8 +148,9 @@ export interface StatusFacts {
   choices: Map<string, ChoiceFact[]>;
   /** Session id -> target task ids it waits on for a reply. */
   requestsFrom: Map<string, string[]>;
-  /** Task id -> armed triggers that deliver into it; `fires` and `firedAtMs` (its newest fire) where read. */
-  triggers: Map<string, { id: string; name: string; fires?: number; firedAtMs?: number; ownWork?: true }[]>;
+  /** Task id -> armed triggers that deliver into it; `fires` and `firedAtMs` (its newest fire) where read;
+   *  `lastCheck.idle` when a watch of its own work last said nothing is in flight (ownWorkInFlight). */
+  triggers: Map<string, { id: string; name: string; fires?: number; firedAtMs?: number; ownWork?: true; lastCheck?: { idle: true; atMs: number } }[]>;
   /** Task id -> enabled scheduled routines that run in its session, with their next run. */
   schedules: Map<string, { name: string; nextAt?: string }[]>;
   /** Task id -> when an armed trigger of it last ran its check (ISO, to CHECK_STAMP_MS), absent
@@ -506,7 +510,7 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
         list.push({ name: job.name, ...(typeof next === 'number' ? { nextAt: new Date(next).toISOString() } : {}) });
       } else if (!schedules && job.check && triggerRunState(job) === 'armed') {
         const firedAtMs = lastFireAtMs(job);
-        list.push({ id: job.id, name: wakeWordsOf(job), fires: job.state?.fireCount ?? 0, ...(firedAtMs !== undefined ? { firedAtMs } : {}), ...(job.ownWork ? { ownWork: true as const } : {}) });
+        list.push({ id: job.id, name: wakeWordsOf(job), fires: job.state?.fireCount ?? 0, ...(firedAtMs !== undefined ? { firedAtMs } : {}), ...(job.ownWork ? { ownWork: true as const } : {}), ...(job.ownWork && job.state?.lastCheck?.idle === true ? { lastCheck: { idle: true as const, atMs: job.state.lastCheck.atMs } } : {}) });
       } else continue;
       out.set(target, list);
     }
@@ -589,6 +593,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
         ...(rec.pendingPermission?.requestId ? { prompt: promptItem(rec.claudeSessionId, rec.pendingPermission) } : {}),
         taskId: rec.taskId, archived: rec.archived, startedAt: rec.startedAt,
         ...(rec.humanInputAt ? { humanInputAt: rec.humanInputAt } : {}),
+        ...(sessionWorkEndedAtMs(rec) !== undefined ? { workEndedAt: sessionWorkEndedAtMs(rec) } : {}),
       });
     }
   }, undefined));
@@ -738,7 +743,10 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     // carried is over, and the task reads stopped or stuck, so its lead hears (org/lead-waits.ts).
     triggers: liveTriggers.filter((t) => !triggerWatchesOwnWork(t)).map((t) => t.name),
     // A watch of its own work (watches:"own") is that work going on: Working, never "A watch" to wait on.
-    ownWorkTriggers: liveTriggers.filter(triggerWatchesOwnWork).map((t) => t.name),
+    // Only while the work is in flight: one whose latest check said nothing is (`"idle": true`) is
+    // in neither list, no work of its own and no wait outside (ownWorkInFlight).
+    // The idle mark counts only from a check after its sessions last worked (ownWorkInFlight).
+    ownWorkTriggers: liveTriggers.filter((t) => ownWorkInFlight(t, allEndedAtMs(own.map(([, s]) => s.workEndedAt)))).map((t) => t.name),
     schedules: facts.schedules.get(task.id) ?? [],
     waitUntil: task.wait_until ?? null,
     hasLeader: !!task.parent_task_id,

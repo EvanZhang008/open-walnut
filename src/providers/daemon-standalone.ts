@@ -178,6 +178,7 @@ import {
   clampTimeoutSeconds,
   coerceHostState,
   decideCheck,
+  checkIdleOf,
   emptyHostState,
   fireDueOnHost,
   markHostDelivered,
@@ -8882,7 +8883,8 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
       return { outcome: 'fired' }
     }
     const reason = decision.kind === 'quiet' ? decision.reason : undefined
-    sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck! })
+    // `idle` rides the event only, never the state file (trigger-check-core.ts TriggerCheckedEvent.idle).
+    sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck!, ...(checkIdleOf(output, decision, entry.state) ? { idle: true } : {}) })
     return { outcome: 'quiet', ...(reason ? { reason } : {}) }
   } finally {
     entry.running = false

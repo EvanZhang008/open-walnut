@@ -290,6 +290,8 @@ export async function applyTriggerChecked(
       ...(killedAtLimit ? { killedAtLimit: true } : {}),
       limitSeconds: limitS,
       ...(fault ? { fault } : {}),
+      // Nothing it watches is in flight (trigger-check-core.ts checkIdleOf); only a quiet run says so.
+      ...(event.outcome === 'quiet' && event.idle === true ? { idle: true as const } : {}),
     };
     // The audit line rides the write lastCheck already does, so recent activity
     // costs no extra persist. Fires are appended in applyTriggerFired instead:

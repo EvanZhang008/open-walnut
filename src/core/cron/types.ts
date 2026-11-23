@@ -133,6 +133,13 @@ export type TriggerLastCheck = {
   limitSeconds?: number;
   /** An error the machine caused, not the check (trigger-check-core.ts MACHINE_FAULT_KINDS): not counted. */
   fault?: MachineFaultKind;
+  /**
+   * A quiet check whose script said nothing it watches is in flight now (`"idle": true`,
+   * trigger-check-core.ts checkIdleOf). A watch of the task's own work counts as that work going on
+   * only while its latest check did not say this (task-wait-wake.ts ownWorkInFlight). Absent from
+   * an older daemon's reports, which keep the old reading.
+   */
+  idle?: true;
 };
 
 // ── Executor (routines layer) ──

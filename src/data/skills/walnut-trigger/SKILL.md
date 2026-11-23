@@ -157,6 +157,7 @@ The script reads ONE JSON object on stdin and prints ONE JSON object as the
 stdin :  {"state": <what you printed last run, or null>, "lastFireAt": "<ISO>|null", "now": "<ISO>"}
 stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input": "...", "state": {"cursor": "..."}}
          {"fire": false, "state": {"cursor": "..."}}
+         {"fire": false, "idle": true}
 ```
 
 - **`items` vs a bare fire.** With `items`, the daemon dedups on `id`: only ids it
@@ -169,6 +170,15 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
   reporting is forgotten after 30 days. Something that changed gets a new id. In `input`, a line about an already-delivered item is dropped when it
   holds the item's `id` or its `title` (24+ characters, a leading `[tag]` aside),
   so write each item's line with its id or its title in it.
+- **`idle` (optional).** `"idle": true` says nothing of what the trigger watches
+  is in flight now: no build, run or request of the task's own is still going,
+  and nothing waits to be read. A `watches:"own"` trigger reads as your work
+  going on (Working) while it is armed; a check that prints `idle` when nothing
+  of yours is queued, running or unread lets the task read as it really is
+  (2026-11-23: a task read Working with its session idle and its queue empty).
+  Only a quiet run counts it (`fire: false`, or every item already delivered): a
+  fire, or one the fire budget holds back, is never idle. Leave it out while the
+  work runs. An older daemon ignores it.
 - **`input` vs `state`.** `input` is the script talking to the AI **this run**
   (max 8 KB, free text). `state` is the script talking to its **next run** (a
   cursor, stored verbatim, handed back on stdin). They are never merged, and
@@ -383,7 +393,9 @@ a 20-minute trigger on a session's own acceptance run woke it four times for
 nothing). When your own work runs outside this session (CI, a deploy or land
 queue, a test run on another host), arm its trigger with `"watches":"own"` and
 no `wait`: it never parks the task, and its fire brings you back. The session
-goes idle by itself; the task stays out of Waiting and reads Working. Say so in
+goes idle by itself; the task stays out of Waiting and reads Working while the
+work is in flight (its check prints `"idle": true` once nothing of yours runs or
+waits to be read, see the contract). Say so in
 your status report, which Walnut asks for in a question of its own right after
 your turn (never write its lines in a reply): working, with what runs now, or
 waiting on your own work (the build of my change), never on something outside.

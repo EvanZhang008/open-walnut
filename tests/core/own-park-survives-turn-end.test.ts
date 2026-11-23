@@ -28,6 +28,8 @@ import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { awaitsUserDecision, decisionAnswered } from '../../src/core/human-inbox/open-decision.js'
 import { noteRestoredPark } from '../../src/core/task-wait-resume.js'
+import { statusInputOf, type StatusFacts } from '../../src/core/user-status-sync.js'
+import type { Task } from '../../src/core/types.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -130,7 +132,67 @@ describe('a watch of its own work reads Working, never "A watch" to wait on', ()
   it('the status facts keep an own-work trigger out of the watches a task waits on', () => {
     const src = fss.readFileSync(path.join(ROOT, 'src/core/user-status-sync.ts'), 'utf8')
     expect(src).toMatch(/triggers: liveTriggers\.filter\(\(t\) => !triggerWatchesOwnWork\(t\)\)/)
-    expect(src).toMatch(/ownWorkTriggers: liveTriggers\.filter\(triggerWatchesOwnWork\)/)
+    expect(src).toMatch(/ownWorkTriggers: liveTriggers\.filter\(\(t\) => ownWorkInFlight\(t, /)
+  })
+})
+
+// 2026-11-23, the user: "I don't even know if they are actually working or stopped". A task read
+// Working with its session idle and nothing of its own in flight: the Mac queue arms a "Mac queue
+// results of <task>" watch (watches:"own") for every task that ever used the queue, and it stays
+// armed until the task completes. A watch of its own work is that work going on only while the work
+// is in flight: its check says when nothing is (`"idle": true`, trigger-check-core.ts checkIdleOf).
+describe('an own-work watch reads Working only while the work is in flight', () => {
+  const T = Date.now()
+  const SID = 'own-idle-session'
+  const stale: StatusReport = { state: 'working', at: iso(T - 3_600_000), now: 'Waiting for the main test rerun' }
+  const task = { id: 'own-idle', title: 'Fix the flaky spec', phase: 'IN_PROGRESS', phase_changed_at: iso(T - 60_000), status_report: stale, session_id: SID } as unknown as Task
+  // Its last turn ended ten minutes ago (sessionWorkEndedAtMs); `session` overrides what the record says.
+  const ENDED = T - 600_000
+  const facts = (trigger: Record<string, unknown>, session: Record<string, unknown> = { workEndedAt: ENDED }) => ({
+    sessions: new Map([[SID, { processStatus: 'idle', startedAt: iso(T - 7_200_000), ...session }]]),
+    letters: new Map(), choices: new Map(), requestsFrom: new Map(), schedules: new Map(), titles: new Map(),
+    sessionsOf: new Map([[task.id, [SID]]]),
+    triggers: new Map([[task.id, [{ id: 'job-1', name: 'Mac queue results of Fix the flaky spec', fires: 3, ownWork: true, ...trigger }]]]),
+  }) as unknown as StatusFacts
+
+  it('a watch whose latest check said idle is no work of its own and no wait outside', () => {
+    const input = statusInputOf(task, facts({ lastCheck: { idle: true, atMs: T - 60_000 } }), T)
+    expect(input.ownWorkTriggers).toEqual([])
+    expect(input.triggers).toEqual([])
+    const s = deriveUserStatus(input, T)
+    expect(s.state).not.toBe('working')
+    expect(s.carriesOn).toBeUndefined()
+  })
+
+  it('a watch whose check did not say idle still reads Working, an older daemon\'s included', () => {
+    for (const trigger of [{}, { lastCheck: {} }]) {
+      const input = statusInputOf(task, facts(trigger), T)
+      expect(input.ownWorkTriggers, JSON.stringify(trigger)).toEqual(['Mac queue results of Fix the flaky spec'])
+      expect(input.triggers).toEqual([])
+      expect(deriveUserStatus(input, T)).toMatchObject({ state: 'working', carriesOn: 'watch' })
+    }
+  })
+
+  // Review 2026-11-23: a session queues a Mac request and ends its turn while the watch's last check
+  // (from before the request) still says idle. Until the next check sees the request, the task
+  // would read "It stopped, and nothing will wake it" and its lead would be nudged.
+  it('an idle mark from a check before its last turn ended, or with that time unknown, still reads Working', () => {
+    const before = { lastCheck: { idle: true, atMs: ENDED - 30_000 } }
+    for (const [why, f] of [
+      ['check before the turn end', facts(before)],
+      ['turn end unknown', facts({ lastCheck: { idle: true, atMs: T - 60_000 } }, {})],
+      ['a turn running now', facts({ lastCheck: { idle: true, atMs: T - 60_000 } }, { workEndedAt: Number.POSITIVE_INFINITY })],
+    ] as const) {
+      const input = statusInputOf(task, f, T)
+      expect(input.ownWorkTriggers, why).toEqual(['Mac queue results of Fix the flaky spec'])
+      expect(deriveUserStatus(input, T).state, why).toBe('working')
+    }
+  })
+
+  it('an outside watch never takes the idle mark: it is a wait whatever its check said', () => {
+    const input = statusInputOf(task, facts({ ownWork: undefined, name: 'A colleague\'s review', lastCheck: { idle: true, atMs: T - 60_000 } }), T)
+    expect(input.triggers).toEqual(['A colleague\'s review'])
+    expect(input.ownWorkTriggers).toEqual([])
   })
 })
 

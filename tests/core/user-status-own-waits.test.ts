@@ -93,3 +93,34 @@ describe('a handed-back worker that waits on a task of its own reads Waiting on 
     expect(facts.openWorkers?.get('p')).toBe(4)
   })
 })
+
+// 2026-11-23, the user: "I don't even know if they are actually working or stopped". A task whose
+// own CLI sat idle read Working ("its own work goes on") only because its report said working while
+// its subtasks ran: the work going on is its team's. It reads Waiting on them, the same with its CLI
+// idle or stopped, in progress or parked; with no subtask at work, its idle CLI still carries it.
+describe('a task whose own session is idle while its subtasks work reads Waiting on them, never Working', () => {
+  const at = new Date(NOW - 60_000).toISOString()
+  const working = { state: 'working', at, now: 'Driving the team' } as never
+  const base = (over: Partial<UserStatusInput>): UserStatusInput => ({
+    hasSession: true, processStatus: 'idle', phaseChangedAt: new Date(NOW - 600_000).toISOString(),
+    report: working, openWorkers: 3, workersAtWork: ['A', 'B', 'C'], ...over,
+  })
+  it('in progress or parked, its CLI idle or stopped: waiting on its subtasks, its own words kept', () => {
+    for (const phase of ['IN_PROGRESS', 'WAITING', 'NEED_ACTION'] as const) {
+      for (const processStatus of ['idle', 'stopped'] as const) {
+        const s = deriveUserStatus(base({ phase, processStatus }), NOW)
+        expect(s, `${phase} ${processStatus}`).toMatchObject({ state: 'waiting', kind: 'task', now: 'Driving the team' })
+        expect(s.carriesOn, `${phase} ${processStatus}`).toBeUndefined()
+        expect(s.waitingOn, `${phase} ${processStatus}`).toMatch(/Its workers \(3 open\)|Its subtasks at work: A, B, C/)
+      }
+    }
+  })
+  it('parked with no report, it names its subtasks at work, not "a message"', () => {
+    expect(deriveUserStatus(base({ phase: 'WAITING', report: null }), NOW)).toMatchObject({ state: 'waiting', kind: 'task', waitingOn: 'Its subtasks at work: A, B, C' })
+  })
+  it('with no subtask at work, its idle CLI and its working report still read Working, as before', () => {
+    expect(deriveUserStatus(base({ phase: 'IN_PROGRESS', openWorkers: 0, workersAtWork: [] }), NOW)).toMatchObject({ state: 'working', carriesOn: 'process' })
+    // A turn running is Working whatever its team does.
+    expect(deriveUserStatus(base({ phase: 'IN_PROGRESS', processStatus: 'running' }), NOW).state).toBe('working')
+  })
+})

@@ -6,8 +6,9 @@
  * A trigger is a routine whose `check` is a shell command the daemon runs on a
  * cadence. The command reads `{state, lastFireAt, now}` on stdin and prints ONE
  * JSON object as the last line of stdout: `{"fire": bool, "items"?: [{id,...}],
- * "input"?: string, "state"?: any}`. `state` is the script talking to its next
+ * "input"?: string, "state"?: any, "idle"?: true}`. `state` is the script talking to its next
  * run; `input` is the script talking to the AI this run. They are never merged.
+ * `idle` says nothing of what it watches is in flight now (checkIdleOf).
  *
  * Everything here is pure except `runCheckProcess`, and nothing here knows about
  * WebSockets, files, or the server: the daemon wires persistence and events
@@ -199,6 +200,11 @@ export interface TriggerCheckOutput {
   state?: unknown;
   hasState: boolean;
   /**
+   * The script printed `"idle": true`: nothing of what it watches is in flight now (no build,
+   * run or request of the task's own still going). Only a quiet run reports it (checkIdleOf).
+   */
+  idle?: true;
+  /**
    * Contract slips the daemon repaired instead of failing the run: an over-long
    * id it shortened, an item it dropped. The run still counts as a good one.
    */
@@ -346,6 +352,13 @@ export interface TriggerCheckedEvent {
    * check would call a field it does not know corrupt).
    */
   fault?: MachineFaultKind;
+  /**
+   * A quiet run whose script said nothing it watches is in flight now (checkIdleOf): a watch of
+   * the task's own work then no longer reads as that work going on (user-status-sync.ts). Sent on
+   * the event only, never kept in the host's state file, like `fault`: an older daemon's snapshot
+   * check would call a field it does not know corrupt. An older daemon never sends it.
+   */
+  idle?: true;
   /** Latest host status sent again at configure, not a new check. */
   replay?: true;
 }
@@ -671,6 +684,10 @@ export function parseCheckStdout(stdout: string): ParsedCheck {
     }
   }
 
+  // Advisory, so a wrong value never fails the run: it is dropped with a warning.
+  if (r.idle !== undefined && typeof r.idle !== 'boolean') warn('"idle" must be true or false; it was ignored');
+  const idle = r.idle === true;
+
   const hasState = Object.prototype.hasOwnProperty.call(r, 'state');
   if (hasState) {
     let size = 0;
@@ -692,6 +709,7 @@ export function parseCheckStdout(stdout: string): ParsedCheck {
       ...(input !== undefined ? { input } : {}),
       ...(hasState ? { state: r.state ?? null } : {}),
       hasState,
+      ...(idle ? { idle: true as const } : {}),
       ...(warnings.length ? { warnings: boundedWarnings(warnings) } : {}),
     },
     inputTruncated,
@@ -812,6 +830,19 @@ export function inputForNewItems(input: string, newItems: readonly TriggerItem[]
 export function newItemsOf(items: TriggerItem[] | undefined, state: TriggerHostState): TriggerItem[] {
   if (!items) return [];
   return items.filter((it) => !(it.id in state.seen));
+}
+
+/**
+ * Whether a run reports its watch idle: the script printed `"idle": true`, the run is quiet because
+ * nothing is new (fire:false, or every item already delivered), and no earlier fire still waits for
+ * its ack (`pendingFires`: until the server took it, its wake is owed). A fire is news, and a fire
+ * the budget held back (rate-limited) still owes the task a wake, so neither is idle. Pure.
+ */
+export function checkIdleOf(
+  output: Pick<TriggerCheckOutput, 'idle'>, decision: CheckDecision, state: Pick<TriggerHostState, 'pendingFires'>,
+): boolean {
+  return output.idle === true && decision.kind === 'quiet' && decision.reason !== 'rate-limited'
+    && (state.pendingFires?.length ?? 0) === 0;
 }
 
 /**

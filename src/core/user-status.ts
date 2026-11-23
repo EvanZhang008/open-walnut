@@ -884,7 +884,11 @@ function ownWork(input: UserStatusInput, report: StatusReport | null, w: ReturnT
   if (!report) return null;
   const own = report.state === 'working' || (report.state === 'waiting' && report.waiting_kind === 'own');
   if (!own || input.processStatus === 'error') return null;
-  const carriesOn: UserStatus['carriesOn'] | null = input.processStatus === 'idle' ? 'process'
+  // An idle CLI whose subtasks are at work: what goes on is its team's work, not its own (2026-11-23,
+  // the user: "I don't even know if they are actually working or stopped"). It reads as waiting on
+  // its workers below, as it does once its CLI stops, never Working on a process that does nothing.
+  const teamWorks = (input.workersAtWork ?? []).some((t) => clean(t));
+  const carriesOn: UserStatus['carriesOn'] | null = input.processStatus === 'idle' && !teamWorks ? 'process'
     : (input.triggers ?? []).some((t) => clean(t)) ? 'watch'
       : input.phase === 'WAITING' && input.waitUntil && Date.parse(input.waitUntil) > nowMs ? 'clock' : null;
   if (!carriesOn) return null;
@@ -1502,6 +1506,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (wake) return wake;
   if (report?.state === 'done') return doneStatus(input, w);
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });
+  // Parked while its subtasks are at work: on them, never "a message" (replies were read above).
+  const team = awaitedTask(input, w);
+  if (team) return team;
   if (input.phase === 'WAITING') return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });
   return strip({ state: fallbackUserState(input.phase), ...w });
 }

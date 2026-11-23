@@ -20,7 +20,7 @@ export interface WatchingTrigger {
   /** triggerRunState: armed | paused | stopped. */
   state: string;
   fires: number;
-  lastCheck?: { atMs?: number; outcome?: string; reason?: string; items?: number; error?: string };
+  lastCheck?: { atMs?: number; outcome?: string; reason?: string; items?: number; error?: string; idle?: boolean };
   /** It watches the task's ask of the user or one of its letters (trigger_create `watches`,
    *  sessions/recheck-watch.ts): a wait on the user, so it never holds a park (outside-wait.ts). */
   watchesUser?: boolean;
@@ -37,9 +37,66 @@ export function triggerHoldsPark(t: Partial<Pick<WatchingTrigger, 'watchesUser' 
   return !t.watchesUser && !t.ownWork;
 }
 
-/** Whether a trigger watches the task's own work (watches:"own"). Pure. */
+/** Whether a trigger watches the task's own work (watches:"own"): what kind of watch it is, never
+ *  whether that work goes on now (ownWorkInFlight). Pure. */
 export function triggerWatchesOwnWork(t: Partial<Pick<WatchingTrigger, 'ownWork'>>): boolean {
   return t.ownWork === true;
+}
+
+/**
+ * Whether a watch of the task's own work stands for that work going on now: it watches its own work
+ * and its latest check did not say, after the task's sessions last worked, that nothing is in flight
+ * (`"idle": true`, trigger-check-core.ts checkIdleOf). 2026-11-23, the user, of a task that read
+ * Working with its session idle and its queue empty: "I don't even know if they are actually working
+ * or stopped". The Mac queue arms one such watch for every task that ever used the queue, and it
+ * stays armed until the task completes.
+ *
+ * `workEndedMs` is when the task's sessions last did work (sessionWorkEndedAtMs, allEndedAtMs): an
+ * idle mark from a check before it may predate what that work started (a session queues a request,
+ * then ends its turn before the next check), so it counts only when the check ran after it, and
+ * never when that time is unknown. A watch whose check never says idle (an older daemon, a script
+ * that does not know the field) reads as before. Every reader that lets an own-work watch read
+ * Working, or keep a task In Progress, asks this (tests/core/own-work-in-flight-ratchet.test.ts). Pure.
+ */
+export function ownWorkInFlight(
+  t: Partial<Pick<WatchingTrigger, 'ownWork'>> & { lastCheck?: { idle?: boolean; atMs?: number } },
+  workEndedMs: number | undefined,
+): boolean {
+  if (!triggerWatchesOwnWork(t)) return false;
+  const at = t.lastCheck?.atMs;
+  const idleSince = t.lastCheck?.idle === true && typeof at === 'number' && typeof workEndedMs === 'number' && at > workEndedMs;
+  return !idleSince;
+}
+
+/** The session-record fields sessionWorkEndedAtMs reads (SessionRecord). */
+export interface WorkClockRecord {
+  process_status?: string;
+  /** Newest first (session-tracker.ts keeps the last ten moves). */
+  status_history?: readonly { timestamp: string; process_status: string }[];
+  lastActiveAt?: string;
+}
+
+/**
+ * When a session last did work, for ownWorkInFlight: Infinity while a turn runs; else the move out of
+ * its latest `running` (its turn's end, an idle reap after it changes nothing); else, with no turn in
+ * its kept history, its lastActiveAt (every record write moves it, so it errs late: the idle mark
+ * waits a check longer). Undefined when the record says nothing. Pure.
+ */
+export function sessionWorkEndedAtMs(rec: WorkClockRecord | null | undefined): number | undefined {
+  if (!rec) return undefined;
+  if (rec.process_status === 'running') return Number.POSITIVE_INFINITY;
+  const h = rec.status_history ?? [];
+  const ran = h.findIndex((m) => m.process_status === 'running');
+  const end = ran > 0 ? Date.parse(h[ran - 1]!.timestamp) : NaN;
+  if (Number.isFinite(end)) return end;
+  const active = Date.parse(rec.lastActiveAt ?? '');
+  return Number.isFinite(active) ? active : undefined;
+}
+
+/** The latest of several sessions' work ends, or undefined when there are none or any is unknown. Pure. */
+export function allEndedAtMs(ends: readonly (number | undefined)[]): number | undefined {
+  if (!ends.length || ends.some((e) => typeof e !== 'number')) return undefined;
+  return Math.max(...(ends as number[]));
 }
 
 const MAX_LISTED = 5;
