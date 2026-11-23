@@ -16,7 +16,7 @@ import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
 import type { PermitPair } from './channel.js'
-import { leaderPermitNumberForHosts } from './leader-permit.js'
+import { leaderPermitNumberForHosts, setLeaderPermitReader } from './leader-permit.js'
 
 let active: LeaderSide | null = null
 let standing: ((hostKey: string) => LeaderStanding) | null = null
@@ -88,6 +88,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     import('./door-wire.js'),
   ])
   const ownMachine = permitHolderId() ?? ''
+  setLeaderPermitReader(currentLeaderPermit)
   const standingNow = (hostKey: string): LeaderStanding => {
     const permit = currentLeaderPermit()
     return {
@@ -248,6 +249,6 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     side.stop()
     setHostJudgeProbe(null)
     remote.setRemoteJudgedCaller(null)
-    if (active === side) { active = null; standing = null; pushDoors = null }
+    if (active === side) { active = null; standing = null; pushDoors = null; setLeaderPermitReader(null) }
   }
 }

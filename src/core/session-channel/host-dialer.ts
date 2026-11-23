@@ -10,7 +10,7 @@
  *      (comparePermit) is not below the highest this host has seen (its fact log's, and the
  *      credential's); who holds the write permission (`holder`) is not checked, only the pair; any
  *      mismatch closes the socket and the next try waits its backoff;
- *   3. answers with its own proof (auth), then attaches the session channel (HostChannel.attach) on
+ *   3. answers with its own proof (auth) and, once the door says it passed (`linked`), attaches the session channel (HostChannel.attach) on
  *      the same socket, keeps the door list the door tells it (a `doors` frame) under the same
  *      standing rule (updateHostCredentialDoors), and answers the leader's call frames on allowed
  *      prefixes only (door-calls.ts).
@@ -132,10 +132,12 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
       const close = (why: string): void => { try { ws.close(1000, why.slice(0, 100)) } catch { ws.terminate() } }
       current = { close: () => close('stopping') }
       let welcomed = false
+      let linked = false
+      let holder = ''
       let welcomePair: PermitPair | null = null
       let linkedAt = 0
       let handlers: ReturnType<HostChannel['attach']> | null = null
-      const welcomeTimer = setTimeout(() => { if (!welcomed) { say('warn', 'host door: no welcome in time', { door: url }); close('no_welcome') } }, o.welcomeTimeoutMs ?? 15_000)
+      const welcomeTimer = setTimeout(() => { if (!linked) { say('warn', 'host door: no welcome in time', { door: url }); close('no_welcome') } }, o.welcomeTimeoutMs ?? 15_000)
       welcomeTimer.unref?.()
       ws.on('unexpected-response', (_req, res) => {
         const status = res.statusCode ?? 0
@@ -156,16 +158,24 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
           if (!isDoorFrame(frame) || frame.op !== 'welcome') { close('expected_welcome'); return }
           const why = welcomeRefusal(frame, cred, machineId, nonce)
           if (why) { say('warn', 'host door: the door did not prove it is this host\'s leader; closed', { door: url, why }); close(why); return }
-          const channel = o.channel()
-          if (!channel) { close('no_channel'); return }
+          if (!o.channel()) { close('no_channel'); return }
           welcomed = true
           welcomePair = { permitNumber: frame.permitNumber, epoch: frame.epoch }
           const auth: DoorFrame = { ch: 'door', op: 'auth', keyId: doorKeyId(cred.verifyKey), proof: hostDoorProof(cred.verifyKey, { nonceH: nonce, nonceD: frame.nonce, walnutId: o.walnutId, machineId }) }
           ws.send(JSON.stringify(auth))
+          holder = frame.holder
+          return
+        }
+        if (!linked) {
+          // Nothing but the auth goes before the door said it passed (its pre-auth cap counts raw bytes).
+          if (!isDoorFrame(frame) || frame.op !== 'linked') { close('expected_linked'); return }
+          const channel = o.channel()
+          if (!channel) { close('no_channel'); return }
+          linked = true
           linkedAt = Date.now()
           clearTimeout(welcomeTimer)
           up = true
-          say('info', 'host door: linked to the leader\'s door', { door: url, holder: frame.holder })
+          say('info', 'host door: linked to the leader\'s door', { door: url, holder })
           handlers = channel.attach({
             send: (f) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(f)) },
             close: (why) => close(why ?? 'closed'),
@@ -181,7 +191,7 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
         clearTimeout(welcomeTimer)
         handlers?.onClose()
         current = null
-        if (welcomed) {
+        if (linked) {
           up = false
           // A link that held a while starts the backoff over.
           if (Date.now() - linkedAt >= 60_000) attempt = 0

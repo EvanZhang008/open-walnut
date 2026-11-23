@@ -13,7 +13,10 @@
  *      its grace)
  *   4. auth: the host's proof (constant time); until it passed nothing but the hello and the auth
  *      is taken from the socket and nothing but the welcome is sent to it, within AUTH_TIMEOUT_MS
- *      and PRE_AUTH_MAX_BYTES; at most PENDING_PER_MACHINE sockets of one machine wait at once
+ *      and PRE_AUTH_MAX_BYTES (counted on the raw socket, so a large frame is cut before it is
+ *      assembled); at most PRE_AUTH_PER_ADDRESS unauthenticated sockets per address and
+ *      PRE_AUTH_TOTAL in all (more answer 429), and at most PENDING_PER_MACHINE of one machine from
+ *      one address waiting for their auth (a newer one is refused, never the one waiting)
  *   5. linkDoorSocket: the door list is told, and the socket is handed to the leader side
  *      (leader-side.ts adopt) under the record's host key; host calls ride it as call/reply frames
  *      (leader-links.ts ChannelSocket.call). Another listener that authenticates its own way (the
@@ -41,8 +44,11 @@ export const DOOR_RECHECK_MS = 60_000
 export const AUTH_TIMEOUT_MS = 10_000
 /** Bytes a socket may send before its auth passed (the hello and the auth are a few hundred). */
 export const PRE_AUTH_MAX_BYTES = 8 * 1024
-/** Sockets of one machine that may wait for their auth at once; a newer one closes the oldest. */
+/** Sockets of one machine from one address that may wait for their auth at once; a newer one is refused. */
 export const PENDING_PER_MACHINE = 2
+/** Unauthenticated sockets one address may hold at once, and all addresses together; more answer 429. */
+export const PRE_AUTH_PER_ADDRESS = 4
+export const PRE_AUTH_TOTAL = 64
 const MAX_PAYLOAD = 64 * 1024 * 1024
 
 export interface HostDoorDeps {
@@ -56,6 +62,9 @@ export interface HostDoorDeps {
   adopt(hostKey: string, sock: ChannelSocket): boolean
   recheckMs?: number
   authTimeoutMs?: number
+  /** Tests: other caps than PRE_AUTH_PER_ADDRESS and PRE_AUTH_TOTAL. */
+  preAuthPerAddress?: number
+  preAuthTotal?: number
   now?: () => number
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
 }
@@ -67,6 +76,11 @@ let deps: HostDoorDeps | null = null
 let wss: WebSocketServer | null = null
 /** Sockets by the credential's device name (host-<machineId>): waiting for their auth, and linked. */
 const pending = new Map<string, WebSocket[]>()
+/** The address each waiting socket came from. */
+const pendingIp = new WeakMap<WebSocket, string>()
+/** Unauthenticated sockets now, by address and in all. */
+const preAuthByIp = new Map<string, number>()
+let preAuthTotal = 0
 const live = new Map<string, Set<WebSocket>>()
 /** The linked ones, with their host key. */
 const linkedSockets = new Map<WebSocket, string>()
@@ -104,13 +118,41 @@ export async function handleHostDoorUpgrade(request: IncomingMessage, socket: Du
   if (!deps || !wss || socket.destroyed) return refuse(socket, 503)
   const d = deps
   const ip = check.ip
-  wss.handleUpgrade(request, socket, head, (ws) => handshakeDoorSocket(ws, ip, d))
+  if ((preAuthByIp.get(ip) ?? 0) >= (d.preAuthPerAddress ?? PRE_AUTH_PER_ADDRESS) || preAuthTotal >= (d.preAuthTotal ?? PRE_AUTH_TOTAL)) return refuse(socket, 429)
+  // One unauthenticated slot, given back at the auth or the close.
+  preAuthByIp.set(ip, (preAuthByIp.get(ip) ?? 0) + 1)
+  preAuthTotal++
+  let held = true
+  let raw = head.length
+  const release = (): void => {
+    if (!held) return
+    held = false
+    socket.off('data', count)
+    preAuthTotal--
+    const n = (preAuthByIp.get(ip) ?? 1) - 1
+    if (n > 0) preAuthByIp.set(ip, n)
+    else preAuthByIp.delete(ip)
+  }
+  // Raw bytes before the auth, before ws assembles a message from them: past the cap the socket is
+  // cut (a 60 MB frame is never buffered, only the first few KB of it).
+  function count(chunk: Buffer): void {
+    raw += chunk.length
+    if (raw <= PRE_AUTH_MAX_BYTES) return
+    release()
+    void failAuth(ip)
+    d.log('warn', 'host door: an unauthenticated socket sent more than its handshake; cut', { bytes: raw })
+    socket.destroy()
+  }
+  socket.once('close', release)
+  if (raw > PRE_AUTH_MAX_BYTES) { release(); socket.destroy(); return }
+  socket.prependListener('data', count)
+  wss.handleUpgrade(request, socket, head, (ws) => handshakeDoorSocket(ws, ip, d, release))
 }
 
 const closeWs = (ws: WebSocket, code: number, why: string): void => { try { ws.close(code, why.slice(0, 100)) } catch { ws.terminate() } }
 
 /** One door socket's handshake (the header, 2 to 4): its hello, the welcome, its auth, then linkDoorSocket. */
-export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps): void {
+export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps, authed: () => void = () => {}): void {
   const now = d.now ?? Date.now
   let phase: 'hello' | 'looking' | 'auth' | 'done' = 'hello'
   let bytes = 0
@@ -121,7 +163,11 @@ export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps):
   let walnutId = ''
   const nonceD = doorSecret()
   const close = (code: number, why: string): void => { phase = 'done'; closeWs(ws, code, why) }
-  const fail = (why: string, guess?: string): void => { void failAuth(ip, guess); close(DOOR_CLOSE.mismatch, why) }
+  const fail = (why: string, guess?: string): void => {
+    void failAuth(ip, guess)
+    d.log('info', 'host door: closed a socket before its auth', { why })
+    close(DOOR_CLOSE.mismatch, why)
+  }
   const timer = setTimeout(() => { if (phase !== 'done') fail('no_auth') }, d.authTimeoutMs ?? AUTH_TIMEOUT_MS)
   timer.unref?.()
   const unpend = (): void => {
@@ -169,10 +215,12 @@ export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps):
     if (!standing) return close(1013, 'not_serving')
     hello = f
     name = hostCredentialName(f.machineId)
-    // A few sockets of one machine may wait for their auth; a newer one closes the oldest.
-    const list = [...(pending.get(name) ?? []), ws]
-    while (list.length > PENDING_PER_MACHINE) closeWs(list.shift()!, DOOR_CLOSE.replaced, 'replaced')
-    pending.set(name, list)
+    // A few sockets of one machine from one address may wait for their auth; a newer one is refused
+    // (never the one waiting: a stranger who knows the machine id cannot evict the host's handshake).
+    const list = pending.get(name) ?? []
+    if (list.filter((x) => pendingIp.get(x) === ip).length >= PENDING_PER_MACHINE) return close(1013, 'busy')
+    pendingIp.set(ws, ip)
+    pending.set(name, [...list, ws])
     const { permitNumber, epoch } = standing.pair
     const fields = { nonceH: f.nonce, nonceD, walnutId, machineId: f.machineId, permitNumber, epoch }
     const welcome: DoorFrame = {
@@ -195,8 +243,11 @@ export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps):
     clearTimeout(timer)
     unpend()
     ws.off('message', onMessage)
+    authed()
     void import('../../web/middleware/auth-rate-limit.js').then((m) => m.clearAuthFailures(ip)).catch(() => {})
     d.log('info', 'host door: a host dialed in', { host: hostKey, which: key.which })
+    // The host sends nothing more before it heard this (the raw pre-auth cap counts its bytes).
+    try { ws.send(JSON.stringify({ ch: 'door', op: 'linked' } satisfies DoorFrame)) } catch { return }
     linkDoorSocket(ws, { hostKey, name, recheck: () => stillStands(h.machineId, hostKey, key.keyId, d) }, d)
   }
 }

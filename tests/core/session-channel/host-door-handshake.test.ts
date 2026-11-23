@@ -6,7 +6,10 @@
  *   limited (failed proofs count), 503 when its check throws; a welcome with one proof per key the
  *   host may hold; 4001 on another Walnut, a wrong host proof or any frame before the auth (nothing
  *   adopted, nothing forwarded); 4004 for a machine it keeps no credential for; a pre-auth byte cap
- *   and timeout; at most PENDING_PER_MACHINE sockets of one machine waiting
+ *   counted on the raw socket (a large frame is cut before ws assembles it) and a timeout; at most
+ *   PRE_AUTH_PER_ADDRESS unauthenticated sockets per address and PRE_AUTH_TOTAL in all (429 above);
+ *   at most PENDING_PER_MACHINE sockets of one machine from one address waiting (a newer one is
+ *   refused, the waiting ones stay)
  *
  *   the host's dialer (host-dialer.ts): links on a good proof of its own key and a standing not
  *   below what it has seen (holder unchecked); closes on a bad proof, a lower standing or another
@@ -17,6 +20,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import http from 'node:http'
+import net from 'node:net'
+import crypto from 'node:crypto'
 import path from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -27,7 +32,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { _resetAuthRateLimitForTesting } from '../../../src/web/middleware/auth-rate-limit.js'
 import { mintHostCredential } from '../../../src/core/session-channel/host-credentials.js'
-import { PENDING_PER_MACHINE, PRE_AUTH_MAX_BYTES, handleHostDoorUpgrade, startHostDoor, verifyHostDoorUpgrade } from '../../../src/core/session-channel/host-door.js'
+import { PENDING_PER_MACHINE, PRE_AUTH_MAX_BYTES, PRE_AUTH_PER_ADDRESS, handleHostDoorUpgrade, startHostDoor, verifyHostDoorUpgrade } from '../../../src/core/session-channel/host-door.js'
 import { doorKeyId, doorUrlRefusal, leaderDoorProof } from '../../../src/core/session-channel/door-wire.js'
 import { startHostDialer, type HostDialer } from '../../../src/core/session-channel/host-dialer.js'
 import type { HostCredential } from '../../../src/core/session-channel/host-credential-file.js'
@@ -46,6 +51,7 @@ let fakeDoor: WebSocketServer | null = null
 let adopted: Array<{ hostKey: string; sock: ChannelSocket }> = []
 let standing: PermitPair = { permitNumber: 0, epoch: 3 }
 let verifyThrows = false
+let logs: string[] = []
 
 beforeEach(async () => {
   _resetDeviceAuthForTesting()
@@ -56,6 +62,7 @@ beforeEach(async () => {
   adopted = []
   standing = { permitNumber: 0, epoch: 3 }
   verifyThrows = false
+  logs = []
 })
 afterEach(async () => {
   dialer?.stop(); dialer = null
@@ -69,14 +76,14 @@ afterEach(async () => {
 })
 
 /** The leader's real door on a loopback port. */
-async function leaderDoor(o: { authTimeoutMs?: number } = {}): Promise<string> {
+async function leaderDoor(o: { authTimeoutMs?: number; preAuthPerAddress?: number; preAuthTotal?: number } = {}): Promise<string> {
   stopDoor = await startHostDoor({
     walnutId: async () => WALNUT,
     standing: () => ({ pair: standing, holder: 'leader-machine' }),
     configured: () => true,
     adopt: (hostKey, sock) => { adopted.push({ hostKey, sock }); return true },
-    authTimeoutMs: o.authTimeoutMs,
-    log: () => {},
+    authTimeoutMs: o.authTimeoutMs, preAuthPerAddress: o.preAuthPerAddress, preAuthTotal: o.preAuthTotal,
+    log: (_l, msg) => { logs.push(msg) },
   })
   server = http.createServer()
   server.on('upgrade', (req, socket, head) => {
@@ -126,8 +133,10 @@ describe('the leader\'s door', () => {
     await new Promise((r) => setTimeout(r, 100))
     expect(adopted).toHaveLength(0)
     c.ws.close()
-    await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })
+    const good = await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })
     await vi.waitFor(() => expect(adopted.map((a) => a.hostKey)).toEqual(['devbox']))
+    // The door says the auth passed before anything else.
+    await vi.waitFor(() => expect(good.frames[0]).toEqual({ ch: 'door', op: 'linked' }))
   })
 
   it('closes 4001 on another Walnut, 4004 for a machine it keeps no credential for', async () => {
@@ -158,7 +167,8 @@ describe('the leader\'s door', () => {
     await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
     const big = await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, auth: 'none' })
     big.ws.send('x'.repeat(PRE_AUTH_MAX_BYTES))
-    expect(await big.closed).toBe(4001)
+    // Cut on the raw socket (no close frame).
+    expect(await big.closed).toBe(1006)
     const slow = await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, auth: 'none' })
     expect(await slow.closed).toBe(4001)
     // No hello at all.
@@ -167,15 +177,72 @@ describe('the leader\'s door', () => {
     expect(adopted).toHaveLength(0)
   })
 
-  it(`keeps at most ${PENDING_PER_MACHINE} sockets of one machine waiting for their auth: a newer one closes the oldest`, async () => {
+  it(`keeps at most ${PENDING_PER_MACHINE} sockets of one machine from one address waiting: a newer one is refused, the waiting ones stay`, async () => {
     const url = await leaderDoor()
     const { verifyKey } = await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
     const waiting = []
-    for (let i = 0; i <= PENDING_PER_MACHINE; i++) waiting.push(await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, auth: 'none' }))
-    expect(await waiting[0]!.closed).toBe(4000)
-    // The host's own dial still gets in.
+    for (let i = 0; i < PENDING_PER_MACHINE; i++) waiting.push(await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, auth: 'none' }))
+    const newcomer = await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })
+    expect(newcomer.code).toBe(1013)
+    await new Promise((r) => setTimeout(r, 100))
+    for (const w of waiting) expect(w.ws.readyState).toBe(WebSocket.OPEN)
+    // Once they went, the host's own dial gets in.
+    for (const w of waiting) { w.ws.close(); await w.closed }
     await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })
     await vi.waitFor(() => expect(adopted).toHaveLength(1))
+  })
+
+  it('cuts a large frame before its auth on the raw socket, before the frame is complete', async () => {
+    const url = await leaderDoor()
+    const port = Number(new URL(url.replace('ws:', 'http:')).port)
+    for (const declared of [16 * 1024, 60 * 1024 * 1024]) {
+      logs = []
+      // A raw client: the upgrade by hand, then one masked text frame declaring `declared` bytes, of
+      // which only 9 KB are sent. It can never be a whole message, so only a cut on the raw bytes
+      // closes it (the auth timer is 10 s).
+      const sock = net.connect(port, '127.0.0.1')
+      const closed = new Promise<boolean>((r) => sock.on('close', () => r(true)))
+      sock.on('error', () => {})
+      await new Promise<void>((r) => sock.on('connect', () => r()))
+      sock.write(`GET /host-door HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\n\r\n`)
+      const answer = await new Promise<string>((r) => sock.once('data', (b: Buffer) => r(b.toString('latin1'))))
+      expect(answer.startsWith('HTTP/1.1 101')).toBe(true)
+      const header = declared < 65_536
+        ? Buffer.from([0x81, 0x80 | 126, declared >> 8, declared & 0xff])
+        : Buffer.concat([Buffer.from([0x81, 0x80 | 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(declared)); return b })()])
+      sock.write(Buffer.concat([header, Buffer.from([1, 2, 3, 4]), Buffer.alloc(9 * 1024, 0x61)]))
+      const started = Date.now()
+      expect(await closed).toBe(true)
+      expect(Date.now() - started).toBeLessThan(5_000)
+      expect(logs).toContain('host door: an unauthenticated socket sent more than its handshake; cut')
+      // The handshake never saw a message of it.
+      expect(logs).not.toContain('host door: closed a socket before its auth')
+    }
+    expect(adopted).toHaveLength(0)
+  })
+
+  it(`lets one address hold at most ${PRE_AUTH_PER_ADDRESS} unauthenticated sockets, and all of them a total, answering 429 above`, async () => {
+    const url = await leaderDoor()
+    const open: WebSocket[] = []
+    for (let i = 0; i < PRE_AUTH_PER_ADDRESS; i++) {
+      const ws = new WebSocket(url)
+      await new Promise<void>((r) => ws.on('open', () => r()))
+      open.push(ws)
+    }
+    expect(await upgradeStatus(url)).toBe(429)
+    // A slot comes back when one closes (or authenticates).
+    await new Promise<void>((r) => { open[0]!.on('close', () => r()); open[0]!.close() })
+    await vi.waitFor(async () => expect(await upgradeStatus(url)).toBe(101))
+    for (const ws of open) ws.close()
+    stopDoor?.(); stopDoor = null
+    server?.closeAllConnections?.()
+    await new Promise<void>((r) => server!.close(() => r()))
+    server = null
+    const small = await leaderDoor({ preAuthPerAddress: 10, preAuthTotal: 2 })
+    const two = [new WebSocket(small), new WebSocket(small)]
+    await Promise.all(two.map((ws) => new Promise<void>((r) => ws.on('open', () => r()))))
+    expect(await upgradeStatus(small)).toBe(429)
+    for (const ws of two) ws.close()
   })
 
   it('answers 429 once the address is rate limited (failed proofs count), and 503 when its check throws', async () => {
@@ -226,7 +293,7 @@ describe('the host\'s dialer', () => {
           ws.send(JSON.stringify({ ch: 'door', op: 'welcome', nonce: nonceD, ...o.welcome!(f, nonceD) }))
           return
         }
-        if (f.op === 'auth') out.auths.push(f)
+        if (f.op === 'auth') { out.auths.push(f); ws.send(JSON.stringify({ ch: 'door', op: 'linked' })) }
       })
       ws.on('close', (code) => { if (code === 1000) out.closedByHost++ })
     })

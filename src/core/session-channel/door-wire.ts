@@ -5,7 +5,9 @@
  *
  * No reusable secret ever crosses the wire: the host and the leader share a key S (the leader's
  * record, the host's credential file), and each proves it holds S with an HMAC over both sides'
- * fresh nonces. A fake door learns nothing it can use at the real one, on any transport.
+ * fresh nonces, so the handshake proves both ends and a fake door learns nothing it can replay at
+ * the real one. The stream after it is not bound to the handshake: against a live relay in the
+ * middle it relies on the transport (TLS for wss://, or loopback for ws://).
  *
  *   GET /host-door          WebSocket upgrade carrying no secret; refused 429 while the address is
  *                           rate limited, 503 when the door cannot check right now
@@ -20,6 +22,7 @@
  *         longer configured), DOOR_CLOSE.mismatch on a wrong Walnut, machine or proof. Until the auth
  *         passed nothing but the hello and the auth is taken from the socket, and nothing but the
  *         welcome is sent to it. Then:
+ *   door -> host  linked    {ch:'door', op:'linked'}  (the auth passed: only now does the host send more)
  *   door -> host  doors     {ch:'door', op:'doors', doors}  (the leader's session.host_door_urls, kept
  *                           under the standing rule, host-credential-file.ts updateHostCredentialDoors)
  *   then the session channel's own frames (channel.ts) on the same socket, and:
@@ -49,6 +52,7 @@ export type DoorFrame =
   | { ch: 'door'; op: 'hello'; v: 2; walnutId: string; machineId: string; nonce: string }
   | { ch: 'door'; op: 'welcome'; walnutId: string; holder: string; permitNumber: number; epoch: number; nonce: string; proofs: DoorKeyProof[] }
   | { ch: 'door'; op: 'auth'; keyId: string; proof: string }
+  | { ch: 'door'; op: 'linked' }
   | { ch: 'door'; op: 'doors'; doors: string[] }
   | { ch: 'door'; op: 'call'; id: string; method: string; path: string; body: unknown }
   | { ch: 'door'; op: 'reply'; id: string; status: number; body: unknown }

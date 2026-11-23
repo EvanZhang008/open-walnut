@@ -3,20 +3,20 @@
  * (src/core/session-channel/leader-permit.ts): 0 with no permit running, the record's number with
  * one, and no other file of the session channel reads a permit record's number itself.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { PermitRuntime } from '../../../src/core/leader/switch/runtime.js'
 
-let permit: { runtime: PermitRuntime; machine: string; trial: boolean } | null = null
-vi.mock('../../../src/core/leader/switch/boot.js', () => ({ currentLeaderPermit: () => permit }))
-const setCurrentLeaderPermit = (p: typeof permit): void => { permit = p }
+import { leaderPermitNumberForHosts, setLeaderPermitReader } from '../../../src/core/session-channel/leader-permit.js'
 
-import { leaderPermitNumberForHosts } from '../../../src/core/session-channel/leader-permit.js'
+let permit: { runtime: PermitRuntime; machine: string; trial: boolean } | null = null
+const setCurrentLeaderPermit = (p: typeof permit): void => { permit = p }
 
 const DIR = path.resolve(__dirname, '../../../src/core/session-channel')
 
-afterEach(() => { setCurrentLeaderPermit(null) })
+beforeEach(() => { setLeaderPermitReader(() => permit) })
+afterEach(() => { setCurrentLeaderPermit(null); setLeaderPermitReader(null) })
 
 describe('leaderPermitNumberForHosts', () => {
   it('is 0 with no permit running, and the record\'s number with one', () => {
@@ -26,6 +26,10 @@ describe('leaderPermitNumberForHosts', () => {
     expect(leaderPermitNumberForHosts()).toBe(7)
     const none = { status: () => ({ record: null }) } as unknown as PermitRuntime
     setCurrentLeaderPermit({ runtime: none, machine: 'm1', trial: false })
+    expect(leaderPermitNumberForHosts()).toBe(0)
+    // No reader handed (the leader side not on): 0.
+    setLeaderPermitReader(null)
+    setCurrentLeaderPermit({ runtime, machine: 'm1', trial: false })
     expect(leaderPermitNumberForHosts()).toBe(0)
   })
 

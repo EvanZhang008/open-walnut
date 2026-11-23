@@ -23,6 +23,7 @@ import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH, HOST_DOOR_CAP, cleanDoorUrls, do
 import { credentialDue, dropHostCredential, hostCredentialOf, hostCredentials, mintHostCredential } from './host-credentials.js'
 import { requestOverStream, type HostCallAnswer } from './leader-links.js'
 import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js'
+import { foundHostUnadopted, type FoundFlags } from '../hosts/found-hosts.js'
 import type { Duplex } from 'node:stream'
 import type { PermitPair } from './channel.js'
 
@@ -168,9 +169,12 @@ export function setRevokeStandbySync(fn: (() => Promise<unknown>) | null): void 
 }
 
 /**
- * Revoke `machineId`'s door credential: the record goes (its hashes tombstoned), its live door
- * sockets in this process close at once (host-door.ts), and one standby batch runs before this
- * resolves. True when there was one.
+ * Revoke `machineId`'s door credential: the record goes, its door sockets in this process close at
+ * once (host-door.ts), and one standby batch runs before this resolves. True when there was one.
+ *
+ * For a host still in the config this is a rotation, not a ban: its key is dead at once, and the
+ * next check of its link issues it a new one. To cut a host off, remove it from the config
+ * (revokeHostsGone, below): then nothing is issued to it and the door lets it in no more.
  */
 export async function revokeHostCredential(machineId: string): Promise<boolean> {
   const gone = await dropHostCredential(machineId)
@@ -193,7 +197,11 @@ export async function revokeHostsGone(configured: ReadonlySet<string>): Promise<
   return out
 }
 
-/** The host keys of this leader's config a credential may be issued to: every host not turned off. */
-export function configuredHostKeys(hosts: Record<string, { enabled?: boolean } | null | undefined> | undefined): Set<string> {
-  return new Set(Object.entries(hosts ?? {}).filter(([, h]) => !!h && h.enabled !== false).map(([k]) => k))
+/**
+ * The host keys of this leader's config a credential may be issued to: a host not turned off, and,
+ * for a host found in ~/.ssh/config, only once the person said yes to it (found-hosts.ts
+ * foundHostUnadopted, the rule the follower default and the host status use).
+ */
+export function configuredHostKeys(hosts: Record<string, ({ enabled?: boolean } & FoundFlags) | null | undefined> | undefined): Set<string> {
+  return new Set(Object.entries(hosts ?? {}).filter(([, h]) => !!h && h.enabled !== false && !foundHostUnadopted(h)).map(([k]) => k))
 }

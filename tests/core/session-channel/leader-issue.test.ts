@@ -18,7 +18,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-leader-is
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { doorKeysOf, hostCredentialOf } from '../../../src/core/session-channel/host-credentials.js'
-import { issueOnce, startCredentialIssuer, type IssuerDeps } from '../../../src/core/session-channel/leader-issue.js'
+import { configuredHostKeys, issueOnce, startCredentialIssuer, type IssuerDeps } from '../../../src/core/session-channel/leader-issue.js'
 import { answerCredentialRoute, answerDoorsRoute, readHostCredential } from '../../../src/core/session-channel/host-credential-file.js'
 import { setMachineIdHomeForTest } from '../../../src/core/machine-id.js'
 import { setOutwardDoorChecker } from '../../../src/core/leader/switch/doors.js'
@@ -156,5 +156,20 @@ describe('issuing a host its door credential', () => {
     expect(await hostCredentialOf(MACHINE)).toEqual(first)
     expect(await issueOnce(deps({ logs }), 'devbox', MACHINE, [DOOR])).toBe('held')
     expect(await hostCredentialOf(MACHINE)).toEqual(first)
+  })
+
+  it('counts as configured only a host that is on and, when found in ~/.ssh/config, has the person\'s yes', () => {
+    const keys = configuredHostKeys({
+      devbox: { enabled: true },
+      plain: {},
+      off: { enabled: false },
+      'found-asked': { discovered: true, connect: 'ask' },
+      'found-not-now': { discovered: true, connect: 'not_now', enabled: false },
+      'found-undecided': { discovered: true },
+      'found-walnut-yes': { discovered: true, connect: 'yes', connect_by: 'walnut' },
+      'found-person-yes': { discovered: true, connect: 'yes' },
+      gone: null,
+    } as never)
+    expect([...keys].sort()).toEqual(['devbox', 'found-person-yes', 'plain'])
   })
 })
