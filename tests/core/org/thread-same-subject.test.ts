@@ -5,7 +5,7 @@
  * Chinese test data is written with \u escapes.
  */
 import { describe, expect, it } from 'vitest'
-import { copyRefusal, sameSubjectCandidates, sameSubjectRefusal, strongMatch, subjectWords, type TreeThreads } from '../../../src/core/org/thread-same-subject.js'
+import { copyRefusal, reasonCoversTask, sameSubjectCandidates, sameSubjectRefusal, strongMatch, subjectWords, type TreeThreads } from '../../../src/core/org/thread-same-subject.js'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
 
 const NOW = Date.parse('2026-11-23T08:00:00Z')
@@ -78,7 +78,17 @@ describe('one subject is one thread', () => {
     const text = copyRefusal({ id: 'child-1', title: 'Ops review' }, [thread('th-f1', 'Delivery failed twice: a security test'), thread('th-f2', 'Leader change throttled')])
     expect(text).toContain('"Ops review" (child-1) keeps its own Threads')
     expect(text).toContain('th-f1')
-    expect(text).toContain('separate_reason')
+    expect(text).toContain('separate_reason that names child-1')
+  })
+
+  it('a separate_reason lets a thread naming a task below through only when it is about that task (11-23 [copy])', () => {
+    const id = 'f00dcafe-1234-5678-9abc-def012345678'
+    // The lead's reason was about another card of its own, not the subtask's threads.
+    expect(reasonCoversTask('A review of the gate change only; the latch decision is a separate card', id)).toBe(false)
+    expect(reasonCoversTask(`Not the subject of ${id}: it asks about the budget, which that task does not hold`, id)).toBe(true)
+    expect(reasonCoversTask('f00dcafe holds the build; this asks about the release date', id)).toBe(true)
+    expect(reasonCoversTask('f00dcafe', id)).toBe(false)
+    expect(reasonCoversTask(undefined, id)).toBe(false)
   })
 
 })

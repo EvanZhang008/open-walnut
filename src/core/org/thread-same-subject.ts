@@ -154,7 +154,19 @@ export function copyRefusal(below: Pick<Task, 'id' | 'title'>, theirs: readonly 
   return `One subject is kept by one task: "${below.title}" (${below.id}) keeps its own Threads (${named.join('; ')}${more}). The user `
     + 'reads them there, and each that waits on him also on your Threads, named by that task. Do not open a copy on yours: '
     + `have that task write its thread (task_send ${below.id}), or say where it stands in your chat reply. If yours is a subject `
-    + 'none of its threads covers, call thread_create again with separate_reason saying how it differs.';
+    + `none of its threads covers, call thread_create again with a separate_reason that names ${below.id} and says how yours differs from its threads.`;
+}
+
+/**
+ * A separate_reason lets a thread that names a task below through only when it is about that task:
+ * it names the task (its id, or the first 8 characters of it) and says something (10 characters or
+ * more). 2026-11-23, the thread monitor's [copy]: a lead opened a card asking him to review its
+ * subtask's change, naming the subtask, which kept the subject in its own threads, with a
+ * separate_reason about another card of its own ("the design-rule decision is a separate card"). Pure.
+ */
+export function reasonCoversTask(reason: unknown, taskId: string): boolean {
+  if (typeof reason !== 'string' || reason.trim().length < 10) return false;
+  return reason.includes(taskId) || reason.includes(taskId.slice(0, 8));
 }
 
 /**
@@ -164,7 +176,10 @@ export function copyRefusal(below: Pick<Task, 'id' | 'title'>, theirs: readonly 
  * as replaced (`supersedes`). The user's own opens are never asked.
  */
 export async function refuseSameSubjectThread(taskId: string, title: string, by: ThreadWriter, input: { separate_reason?: unknown; supersedes?: readonly string[]; tasks?: readonly string[] }): Promise<void> {
-  if (by === 'human' || (typeof input.separate_reason === 'string' && input.separate_reason.trim().length >= 10)) return;
+  if (by === 'human') return;
+  const reasoned = typeof input.separate_reason === 'string' && input.separate_reason.trim().length >= 10;
+  // Nothing named below and a reason given: no tree to read.
+  if (reasoned && !input.tasks?.length) return;
   const tree = await treeOpenThreads(taskId);
   const { ThreadError } = await import('./threads-model.js');
   // It names a task below that keeps open threads: that task does the work, so it keeps the subject,
@@ -172,13 +187,14 @@ export async function refuseSameSubjectThread(taskId: string, title: string, by:
   // that share a word: in his data 5 of the 12 copies shared none with the subtask's threads (the
   // subtask's findings reported as the leader's own), review 2026-11-23. Its threads nearest the title first.
   const named = new Set(input.tasks ?? []);
-  const below = tree.find((b) => b.task.id !== taskId && b.below && named.has(b.task.id));
+  const below = tree.find((b) => b.task.id !== taskId && b.below && named.has(b.task.id) && !reasonCoversTask(input.separate_reason, b.task.id));
   if (below) {
     const near = sameSubjectCandidates(title, [below], Date.now()).map((c) => c.id);
     const open = below.threads.filter((t) => !t.closed);
     const rank = (t: OrgThread) => { const i = near.indexOf(t.id); return i < 0 ? near.length : i; };
     throw new ThreadError('same_subject', 409, copyRefusal(below.task, [...open].sort((a, b) => rank(a) - rank(b))));
   }
+  if (reasoned) return;
   // A thread it says this one replaces (thread-supersede.ts) is that subject's end, not a repeat of it.
   const replaced = new Set(input.supersedes ?? []);
   const candidates = sameSubjectCandidates(title, tree, Date.now()).filter((c) => !replaced.has(c.id));

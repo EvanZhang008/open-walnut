@@ -66,8 +66,9 @@ describe('thread_create on a subject a task of the team already follows', () => 
     const text = JSON.stringify(await res.json())
     expect(text).toContain('same_subject')
     expect(text).toContain('keeps its own Threads')
-    // A subject none of its threads covers opens with the reason said.
-    expect((await open({ title: 'Approve the vendor contract', tasks: [workerId], separate_reason: 'The contract is the lead\'s own call, not the review\'s work.' })).status).toBe(201)
+    // A reason about something else does not open it (2026-11-23 [copy]); one that names the task and says how it differs does.
+    expect((await open({ title: 'Approve the vendor contract', tasks: [workerId], separate_reason: 'The contract is a separate card from my budget one.' })).status).toBe(409)
+    expect((await open({ title: 'Approve the vendor contract', tasks: [workerId], separate_reason: `The contract is the lead's own call, not the work of ${workerId}.` })).status).toBe(201)
   })
 
   it('a first post or summary that only points elsewhere is refused', async () => {
