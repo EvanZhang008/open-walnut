@@ -116,7 +116,11 @@ describe('an Org node\'s header and its Tasks agree, before and after its sessio
       expect(v.keepsThreads).toBe(true)
       expect(v.pills.needs, 'a node that keeps Threads draws no Needs you pill').toBeUndefined()
       expect(v.sections.needs, 'the worker\'s ask is in its Tasks').toBe(1)
-      expect(v.pills).toMatchObject({ working: 1, notstarted: 1 })
+      // Working and waiting only (2430d9d476, the user's "xx working, yy waiting"): what nobody
+      // started stays in its own Tasks section, never a count in the header.
+      expect(v.pills).toMatchObject({ working: 1 })
+      expect(v.pills.notstarted, 'no "not started" count in the header').toBeUndefined()
+      expect(v.tabs.notstarted, 'the task nobody started is still in Tasks').toBe(1)
       expectAgree(v)
     }
   })
