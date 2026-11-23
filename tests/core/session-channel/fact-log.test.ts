@@ -3,12 +3,12 @@
  * after a crash, the inline cap, compaction, and the size it keeps for 10 busy sessions while the
  * leader is away for 24 hours.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { FactLog, compactRecords, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
+import { FACT_FLUSH_MS, FactLog, compactRecords, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
 
 let dir = ''
 beforeEach(async () => { dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fact-log-')) })
@@ -104,6 +104,25 @@ describe('appending', () => {
     await expect(FactLog.open({ dir, walnutId: '../evil' })).rejects.toThrow(/bad walnut id/)
     const log = await open()
     expect(() => log.append('../s', 'session:result', {})).toThrow(/bad session id/)
+    await log.close()
+  })
+  it('by default gathers the appends of 50 ms into one write: a busy host costs its leader one transaction per window, not per tool call', async () => {
+    expect(FACT_FLUSH_MS).toBe(50)
+    const log = await FactLog.open({ dir, walnutId: 'w1', durable: false })
+    const batches: number[][] = []
+    log.onDurable((r) => batches.push(r.map((x) => x.seq)))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      log.append('s1', 'session:tool-use', { i: 1 })
+      // Async: a window that closed takes its batch in the microtasks after its timer.
+      await vi.advanceTimersByTimeAsync(40)
+      log.append('s1', 'session:tool-result', { i: 1 })
+      await vi.advanceTimersByTimeAsync(20)
+    } finally {
+      vi.useRealTimers()
+    }
+    await log.flush()
+    expect(batches).toEqual([[1, 2]])
     await log.close()
   })
 })

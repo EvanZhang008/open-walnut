@@ -76,6 +76,12 @@ export interface FactLogOptions {
 interface LogState { v: 1; logId: string; acked: number; permit: number; permitNumber?: number; sseq: Record<string, number> }
 
 const SAFE_ID = /^[A-Za-z0-9_.-]{1,128}$/
+/**
+ * How long appends gather before one write, one fdatasync and one facts frame. Each frame is one
+ * SQLite transaction on the leader (session-tracker.ts applyHostChannelBatch), so the window sets
+ * the leader's commit rate for a busy host; 50 ms keeps a fact's way to the leader well inside 1 s.
+ */
+export const FACT_FLUSH_MS = 50
 
 export class FactLog {
   private state: LogState
@@ -100,7 +106,7 @@ export class FactLog {
   static async open(opts: FactLogOptions): Promise<FactLog> {
     if (!SAFE_ID.test(opts.walnutId)) throw new Error(`fact log: bad walnut id ${JSON.stringify(opts.walnutId)}`)
     const o = {
-      now: Date.now, flushMs: 15, durable: true, inlineCap: 16 * 1024, compactBytes: 8 * 1024 * 1024, ...opts,
+      now: Date.now, flushMs: FACT_FLUSH_MS, durable: true, inlineCap: 16 * 1024, compactBytes: 8 * 1024 * 1024, ...opts,
     }
     await fsp.mkdir(o.dir, { recursive: true, mode: 0o700 })
     const file = path.join(o.dir, `facts-${o.walnutId}.ndjson`)

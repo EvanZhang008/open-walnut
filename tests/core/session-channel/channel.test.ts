@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { FactLog, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
+import { FACT_FLUSH_MS, FactLog, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
 import { HostChannel, attachLeaderChannel, comparePermit, permitOfResume, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from '../../../src/core/session-channel/channel.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
@@ -253,7 +253,7 @@ describe('readers', () => {
 
 describe('latency', () => {
   it('a fact is applied on the leader within 1 s of the host writing it (durable, live link)', async () => {
-    const { log, host } = await hostOf({ durable: true, flushMs: 15 })
+    const { log, host } = await hostOf({ durable: true, flushMs: FACT_FLUSH_MS })
     const leader = new Leader()
     const l = connect(host, leader)
     await tick(10)
