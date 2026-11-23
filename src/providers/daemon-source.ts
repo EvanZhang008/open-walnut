@@ -2093,6 +2093,12 @@ function servedWalnutOf(home) {
   try { return hostServers.walnutOf(home); } catch (e) { return undefined; }
 }
 
+// The data dir of every server this daemon runs for a leader (twin of daemon-standalone.ts
+// serverDataHomes; this twin is never a host's one service, so it has no data dir of its own).
+function serverDataHomes() {
+  try { return hostServers.dataDirs(); } catch (e) { return []; }
+}
+
 // The Walnut a home names wherever a session's owner is looked up or compared here: by its
 // first home (walnut-scope-core.ts canonical), and the data dir of a server this daemon runs
 // for a leader as that leader's Walnut (host-server-core.ts walnutOf). Twin of
@@ -2203,6 +2209,9 @@ var servedWalnuts = (__CREATE_SERVED_WALNUTS__)({
   fs: fs, file: SERVES_FILE,
   // What a server computes for its own home (daemon-shared.ts walnutKeyOf): where the Walnut is now.
   keyOf: function (value) { return walnutScope.pathKeyOf(walnutScope.whereNow(value)); },
+  // A server this daemon runs for a leader is that leader's Walnut (twin of daemon-standalone.ts).
+  walnutOf: function (home) { return servedWalnutOf(home); },
+  followerHomes: function () { return serverDataHomes(); },
   version: DAEMON_VERSION, twin: 'source', capabilities: function () { return daemonCapabilities(); }, now: function () { return Date.now(); },
   // Whether this twin can have a pty (bun's, pty-stream-v1): asked at write time, PTY_SPAWN is set further down.
   pty: function () { return !!PTY_SPAWN; },
@@ -17928,6 +17937,8 @@ async function startDaemon() {
     servedWalnuts.write();
     // The servers an earlier daemon kept running here (twin of daemon-standalone.ts).
     try { hostServers.boot(); } catch (err) { logMsg('warn', 'host server: boot failed', { error: err.message }); }
+    // Their specs read: the record drops the key an older build filed their data dirs under (twin of daemon-standalone.ts).
+    servedWalnuts.write();
     // The plugin jobs an earlier daemon ran here (twin of daemon-standalone.ts).
     try { pluginJobs.boot(); } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: err.message }); }
     hostVitals.start();

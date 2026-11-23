@@ -7,7 +7,14 @@
  * reads it back. A server decides from it whether another Walnut shares this daemon
  * (daemon-shared.ts), so the record is checked against what the server parses.
  *
- * MACHINE SAFETY: HOME and the daemon dir are temp paths; every process is killed after.
+ * And a server the daemon runs for a leader (`server.configure`) is that leader's Walnut: its
+ * own-sessions link pushes `turns.configure` / `workspace.configure` naming its data dir (as a
+ * host replica does), which never reads as another Walnut sharing the daemon, and a key an older
+ * build filed that data dir under is dropped when the daemon starts (2026-11-23: a leader kept an
+ * old daemon for four hours for "another Walnut" that was its own replica).
+ *
+ * MACHINE SAFETY: HOME and the daemon dir are temp paths; every process is killed after (the
+ * placeholder server by the pid it writes).
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
@@ -36,6 +43,11 @@ const TWINS: Array<{ name: string; twin: 'source' | 'binary'; command: () => [st
 let proc: ChildProcess | null = null
 const sockets: WebSocket[] = []
 let rpcId = 1
+/** Placeholder servers the daemons started (they outlive a daemon by design). */
+const serverPids = new Set<number>()
+afterAll(() => {
+  for (const pid of serverPids) { if (pid > 1) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } } }
+})
 afterEach(async () => {
   for (const s of sockets.splice(0)) { try { s.close() } catch { /* closed */ } }
   await stop()
@@ -59,7 +71,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<number> 
     WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
-  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'OPEN_WALNUT_HOME']) delete env[k]
   const [cmd, args] = twin.command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise<number>((resolve, reject) => {
@@ -164,4 +176,57 @@ describe.each(TWINS)('$name', (twin) => {
     const again = await rpc(await open(port2), { cmd: 'hello' })
     expect(Object.keys((again.served as { walnuts: Record<string, number> }).walnuts).sort()).toEqual([walnutKeyOf(HOME_A), '-'].sort())
   }, 90_000)
+
+  it('a server it runs for a leader is that leader\'s Walnut: its data dir is never another Walnut sharing it', async () => {
+    const dir = path.join(root, 'f-' + twin.name.replace(/\W+/g, '-'))
+    const servesFile = path.join(dir, 'daemon', 'daemon.serves.json')
+    const HOME_A = '/fixture/marina-home'
+    const WALNUT_A = 'wmarinaserved01'
+    // The layout a leader writes for its server on a host: <host root>/walnuts/<walnut id>/data.
+    const data = path.join(dir, 'host-root', 'walnuts', WALNUT_A, 'data')
+    const walnutsIn = () => Object.keys(JSON.parse(fs.readFileSync(servesFile, 'utf8')).walnuts as Record<string, number>).sort()
+    let port = await boot(twin, dir)
+
+    const leader = await open(port)
+    expect((await rpc(leader, { cmd: 'hello' })).ok).toBe(true)
+    expect((await rpc(leader, { cmd: 'leader.configure', home: HOME_A, walnutId: WALNUT_A, backup: true })).ok).toBe(true)
+    const pidFile = path.join(dir, 'placeholder.pid')
+    const spec = {
+      v: 1, home: HOME_A, walnutId: WALNUT_A, command: process.execPath,
+      args: ['-e', `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1 << 30)`],
+      cwd: dir, env: { OPEN_WALNUT_HOME: data }, log: path.join(dir, 'placeholder.log'), port: 41_207 + (twin.twin === 'binary' ? 1 : 0),
+      settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
+    }
+    const configured = await rpc(leader, { cmd: 'server.configure', home: HOME_A, spec })
+    expect(configured.ok, JSON.stringify(configured)).toBe(true)
+    await until(() => fs.existsSync(pidFile) && /^\d+$/.test(fs.readFileSync(pidFile, 'utf8')), 20_000)
+    serverPids.add(Number(fs.readFileSync(pidFile, 'utf8')))
+
+    // That server's own-sessions link (a host replica's session runner): a hello that binds no
+    // Walnut, then the two settings its sessions run under, named by its data dir.
+    const own = await open(port)
+    expect((await rpc(own, { cmd: 'hello', run: 'fixture-replica-run' })).ok).toBe(true)
+    expect((await rpc(own, { cmd: 'turns.configure', home: data, enabled: false, keep: 5 })).ok).toBe(true)
+    await rpc(own, { cmd: 'workspace.configure', home: data + '/', config: { providers: [] } })
+    const walnuts = ((await rpc(own, { cmd: 'hello', run: 'fixture-replica-run' })).served as { walnuts: Record<string, number> }).walnuts
+    expect(Object.keys(walnuts), 'its data dir is filed under its leader').toEqual([walnutKeyOf(HOME_A)])
+    await until(() => fs.existsSync(servesFile) && walnutsIn().length > 0)
+    expect(walnutsIn()).toEqual([walnutKeyOf(HOME_A)])
+    // The leader on another build reads only itself: the daemon is not kept for "another Walnut".
+    const rec = parseServes(fs.readFileSync(servesFile, 'utf8'))
+    expect(sharedDaemonVerdict({ ourKey: walnutKeyOf(HOME_A), runningVersion: rec!.version, running: rec, now: Date.now() }))
+      .toMatchObject({ keep: false, why: 'only this Walnut uses it' })
+
+    // An older build filed the data dir under its own key: the next start drops it from the file,
+    // with no socket connected (the leader may read the file before it connects).
+    for (const s of sockets.splice(0)) s.close()
+    await stop()
+    const stale = JSON.parse(fs.readFileSync(servesFile, 'utf8'))
+    stale.walnuts[walnutKeyOf(data)] = Date.now()
+    fs.writeFileSync(servesFile, JSON.stringify(stale))
+    port = await boot(twin, dir)
+    await until(() => { try { return walnutsIn().join() === walnutKeyOf(HOME_A) } catch { return false } })
+    const again = await rpc(await open(port), { cmd: 'hello' })
+    expect(Object.keys((again.served as { walnuts: Record<string, number> }).walnuts)).toEqual([walnutKeyOf(HOME_A)])
+  }, 120_000)
 })

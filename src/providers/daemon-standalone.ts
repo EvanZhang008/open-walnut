@@ -580,6 +580,16 @@ function servedWalnutOf(home: string): string | undefined {
   try { return hostServers.walnutOf(home) } catch { return undefined }
 }
 
+/** The data dir of every server this daemon runs for a leader, the service's own included (served-walnuts-core.ts). */
+function serverDataHomes(): string[] {
+  let out: string[] = []
+  // The supervisor is made further down: none before it is.
+  try { out = hostServers.dataDirs() } catch { out = [] }
+  // The host's one Walnut service runs its own server on OPEN_WALNUT_HOME (host-server-core.ts self.dataHome).
+  const own = daemonEnv.OPEN_WALNUT_HOME
+  return own ? [...out, own] : out
+}
+
 /**
  * The Walnut a home names wherever a session's owner is looked up or compared here: by its
  * first home (walnut-scope-core.ts canonical), and the data dir of a server this daemon runs
@@ -695,6 +705,10 @@ const servedWalnuts = createServedWalnuts({
   fs, file: SERVES_FILE,
   // What a server computes for its own home (daemon-shared.ts walnutKeyOf): where the Walnut is now.
   keyOf: (value) => walnutScope.pathKeyOf(walnutScope.whereNow(value)),
+  // A server this daemon runs for a leader is that leader's Walnut, never another one sharing
+  // this daemon: its data dir is filed under the leader's key, and an older build's key of it dropped.
+  walnutOf: (home) => servedWalnutOf(home),
+  followerHomes: () => serverDataHomes(),
   version: DAEMON_VERSION, twin: 'binary', capabilities: () => helloCapabilities(), now: () => Date.now(),
   // Bun's own pty is built into the bun this twin runs on (pty-stream-v1).
   pty: () => true,
@@ -15557,6 +15571,8 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // that the port file they connect through is written.
   // A host server connects through the port file; a runtime with no door starts none.
   if (DOOR) { try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) } }
+  // Their specs read: the record drops the key an older build filed their data dirs under. Mirror daemon-source.ts.
+  servedWalnuts.write()
   // The plugin jobs an earlier daemon ran here (plugin-jobs-core.ts): adopt, schedule or start them.
   try { pluginJobs.boot() } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: (err as Error).message }) }
   hostVitals.start()

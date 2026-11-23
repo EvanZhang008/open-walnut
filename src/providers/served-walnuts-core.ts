@@ -7,8 +7,18 @@
  * (`leader.configure`, `host.slice`) or a named push, and `-` for a server older than
  * walnut-scope-v1 that pushes with no home. A bridge, follower, lane or probe socket is
  * never a server's, so the cloud companion, a host replica and a read-only test server are
- * not noted. `daemon.serves.json` holds the running daemon's version, its capabilities
- * and when each Walnut was last seen; it survives a daemon restart (the new daemon reads
+ * not noted.
+ *
+ * A server this daemon runs for a leader is that leader's Walnut, not another one
+ * (2026-11-23: a host's replica pushed `turns.configure` naming its own data dir from its
+ * own-sessions link, so its leader read "another Walnut uses it" and kept an old daemon for
+ * four hours). So a home is filed under the Walnut it is (`walnutOf`: a server's data dir is
+ * its leader's), and a key an older build filed such a data dir under (`followerHomes`) is
+ * dropped from the record. Every note goes through `keyFor`, so no call site can skip it
+ * (tests/providers/served-walnuts-follower-guard.test.ts).
+ *
+ * `daemon.serves.json` holds the running daemon's version, its capabilities and when each
+ * Walnut was last seen; it survives a daemon restart (the new daemon reads
  * it back), so a server deciding whether to replace this daemon knows another Walnut
  * still uses it (daemon-shared.ts). The hello carries the same `walnuts`.
  *
@@ -26,6 +36,14 @@ export interface ServedWalnutsDeps {
    * walnutKeyOf): of the home a Walnut speaks from now, never its alias target.
    */
   keyOf: (home: string) => string
+  /**
+   * The Walnut a home is when it is not one of its own (host-server-core.ts walnutOf): the
+   * data dir of a server this daemon runs for a leader names that leader's home. undefined
+   * for any other home.
+   */
+  walnutOf?: (home: string) => string | undefined
+  /** The data dirs of the servers this daemon runs (their OPEN_WALNUT_HOME), mapped or not by walnutOf. */
+  followerHomes?: () => string[]
   /** This daemon's version and its capabilities as its hello says them. */
   version: string
   /** 'binary' (daemon-standalone.ts, compiled or run by bun) or 'source' (daemon-source.ts). */
@@ -69,7 +87,37 @@ export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
     }
   } catch { /* none yet */ }
 
+  // One Walnut whatever slashes its dir is written with (daemon-shared.ts walnutKeyOf).
+  const tidy = (home: string): string => home.replace(/\/+/g, '/').replace(/(.)\/$/, '$1')
+  function walnutOf(home: string): string | undefined {
+    let w: string | undefined
+    try { w = deps.walnutOf ? deps.walnutOf(home) : undefined } catch { w = undefined }
+    return typeof w === 'string' && w ? tidy(w) : undefined
+  }
+  // The key of the Walnut a home is: a server's data dir here is its leader's Walnut.
+  function keyFor(home: string): string {
+    if (!home) return '-'
+    const h = tidy(home)
+    return deps.keyOf(walnutOf(h) ?? h)
+  }
+  /** Drops the key a server's data dir was filed under by an older build; true when one went. */
+  function prune(): boolean {
+    let homes: string[] = []
+    try { homes = deps.followerHomes ? deps.followerHomes() : [] } catch { homes = [] }
+    let dropped = false
+    for (const raw of homes) {
+      if (typeof raw !== 'string' || !raw) continue
+      const own = deps.keyOf(tidy(raw))
+      if (!(own in seen) || own === keyFor(raw)) continue
+      delete seen[own]
+      delete written[own]
+      dropped = true
+    }
+    return dropped
+  }
+
   function write(): void {
+    prune()
     const cutoff = deps.now() - KEEP_MS
     for (const k of Object.keys(seen)) if (seen[k]! <= cutoff) { delete seen[k]; delete written[k] }
     for (const k of Object.keys(seen)) written[k] = seen[k]!
@@ -85,9 +133,6 @@ export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
     }
   }
 
-  // One Walnut whatever slashes its dir is written with (daemon-shared.ts walnutKeyOf).
-  const keyFor = (home: string): string => (home ? deps.keyOf(home.replace(/\/+/g, '/').replace(/(.)\/$/, '$1')) : '-')
-
   return {
     note(home) {
       const key = keyFor(home)
@@ -97,6 +142,8 @@ export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
       if (before === undefined || now - before >= REWRITE_MS) write()
     },
     recent(windowMs = KEEP_MS) {
+      // A record read back from an older build loses its follower's key here and in the file.
+      if (prune()) write()
       const cutoff = deps.now() - windowMs
       const out: Record<string, number> = {}
       for (const [k, at] of Object.entries(seen)) if (at > cutoff) out[k] = at

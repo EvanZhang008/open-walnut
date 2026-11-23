@@ -1,7 +1,8 @@
 /**
  * served-walnuts-core.ts on its own: the record a daemon keeps of the Walnuts it serves.
  * Writes when a Walnut is new or seen again after 10 minutes (not on every push), drops
- * a Walnut not seen for a week, and ignores a hand-edited or torn file.
+ * a Walnut not seen for a week, and ignores a hand-edited or torn file. A server this daemon
+ * runs for a leader (its data dir) is that leader's Walnut, never another one sharing it.
  */
 import { afterAll, describe, expect, it } from 'vitest'
 import crypto from 'node:crypto'
@@ -58,5 +59,68 @@ describe('served walnuts record', () => {
     const file = path.join(root, 'torn.json')
     fs.writeFileSync(file, '{"walnuts":{')
     expect(make(file, { now: 1 }, { n: 0 }).recent()).toEqual({})
+  })
+})
+
+describe('a server this daemon runs for a leader', () => {
+  // 2026-11-23: a host's replica pushed turns.configure naming its own data dir, so the record
+  // held a second key and the leader kept an old daemon for "another Walnut" for four hours.
+  const LEADER = '/fixture/marina-home'
+  const DATA = '/home/u/.open-walnut-host/data'
+  const OTHER = '/fixture/acme-home'
+  function withFollower(file: string, clock: { now: number }, homes: () => string[] = () => [DATA]) {
+    return createServedWalnuts({
+      fs, file, keyOf, version: 'v1', twin: 'binary', capabilities: () => [], now: () => clock.now,
+      walnutOf: (h) => (h === DATA ? LEADER : undefined), followerHomes: homes,
+    })
+  }
+
+  it('files its data dir under its leader\'s key, whatever slashes it is written with', () => {
+    const file = path.join(root, 'follower-note.json')
+    const clock = { now: 5_000_000 }
+    const s = withFollower(file, clock)
+    s.note(LEADER)
+    s.note(DATA)
+    s.note(DATA + '/')
+    s.note('/home/u//.open-walnut-host/data')
+    expect(Object.keys(s.recent())).toEqual([keyOf(LEADER)])
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).walnuts)).toEqual([keyOf(LEADER)])
+    expect(s.knows(DATA)).toBe(true)
+    // Another Walnut is still another one.
+    s.note(OTHER)
+    expect(Object.keys(s.recent()).sort()).toEqual([keyOf(LEADER), keyOf(OTHER)].sort())
+  })
+
+  it('drops the key an older build filed its data dir under, in the record and in the file', () => {
+    const file = path.join(root, 'follower-stale.json')
+    const now = 9_000_000
+    fs.writeFileSync(file, JSON.stringify({ walnuts: { [keyOf(LEADER)]: now - 1000, [keyOf(DATA)]: now - 500, [keyOf(OTHER)]: now - 200 } }))
+    // Before the daemon read its specs, the key stays (it cannot tell yet).
+    let homes: string[] = []
+    const s = withFollower(file, { now }, () => homes)
+    expect(Object.keys(s.recent()).sort()).toEqual([keyOf(LEADER), keyOf(DATA), keyOf(OTHER)].sort())
+    homes = [DATA]
+    expect(Object.keys(s.recent()).sort()).toEqual([keyOf(LEADER), keyOf(OTHER)].sort())
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).walnuts).sort()).toEqual([keyOf(LEADER), keyOf(OTHER)].sort())
+  })
+
+  it('a data dir walnutOf does not map (no spec for it, a refused dir) keeps its own key', () => {
+    const file = path.join(root, 'follower-unmapped.json')
+    const s = createServedWalnuts({
+      fs, file, keyOf, version: 'v1', twin: 'binary', capabilities: () => [], now: () => 1_000,
+      walnutOf: () => undefined, followerHomes: () => [OTHER],
+    })
+    s.note(OTHER)
+    expect(Object.keys(s.recent())).toEqual([keyOf(OTHER)])
+  })
+
+  it('a lookup that throws (the supervisor not made yet) files the home as it is', () => {
+    const file = path.join(root, 'follower-throws.json')
+    const s = createServedWalnuts({
+      fs, file, keyOf, version: 'v1', twin: 'binary', capabilities: () => [], now: () => 1_000,
+      walnutOf: () => { throw new ReferenceError('hostServers is not defined') }, followerHomes: () => { throw new ReferenceError('x') },
+    })
+    s.note(DATA)
+    expect(Object.keys(s.recent())).toEqual([keyOf(DATA)])
   })
 })
