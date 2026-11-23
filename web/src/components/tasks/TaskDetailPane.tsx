@@ -22,7 +22,7 @@ import { keptLine, syncStanding } from './private-task-model';
 import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { resolveSessionRecordStatus, sessionStatusStore } from '@/stores/session-status-store';
 import { timeAgo } from '@/utils/time';
-import { taskStatusLabel } from '@/utils/session-status';
+import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { CopyableId } from '../common/CopyableId';
 import { DatePicker } from '../common/DatePicker';
 import { PluginFieldPills } from './PluginFieldPicker';
@@ -304,7 +304,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
           <Fact label="Start"><DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" bare /></Fact>
           <Fact label="Due"><DatePicker date={task.due_date} onChange={handleDateChange} label="Due" bare /></Fact>
           {task.phase === 'WAITING' && task.wait_until && (
-            <Fact label="Waiting until" testId="task-detail-wait-until">{formatWaitUntil(task.wait_until)}</Fact>
+            <Fact label={taskUserState(task) === 'working' ? 'Checks back' : 'Waiting until'} testId="task-detail-wait-until">{formatWaitUntil(task.wait_until)}</Fact>
           )}
           {/* Plugin facts (walnut.ui.slot 'task.meta'), e.g. the time this task took. */}
           <PluginSlots

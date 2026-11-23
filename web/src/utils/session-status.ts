@@ -146,9 +146,29 @@ export function taskStatusLabel(task: Pick<Task, 'phase' | 'status' | 'user_stat
   const us = task.user_status;
   const isSnoozed = us ? !!us.snoozed : snoozed;
   if (!isSnoozed && us?.limit) return LIMITED_LABEL;
-  // Not started means no session (2026-11-16): a TODO with one is not, as on the server.
-  if (!isSnoozed && (us ? us.kind === 'not-started' : task.phase === 'TODO' && !task.session_id)) return NOT_STARTED_LABEL;
+  if (!isSnoozed && notStarted(task)) return NOT_STARTED_LABEL;
   return stateWord('waiting', isSnoozed);
+}
+
+/** Not started means no session (2026-11-16): a TODO with one is not, as on the server. */
+function notStarted(task: Pick<Task, 'phase' | 'user_status'> & Partial<Pick<Task, 'session_id'>>): boolean {
+  return task.user_status ? task.user_status.kind === 'not-started' : task.phase === 'TODO' && !task.session_id;
+}
+
+/**
+ * The status option a status control shows as the task's (its icon, its picked option): the one
+ * its label names (taskStatusLabel), never the bare phase. 2026-11-23, the user, on a task parked
+ * on its four workers that read "Status: Working" beside a lit Waiting option: "Waiting 就是
+ * waiting，working 就是 working。有 sub agent，它也就是 working 啊". Picking an option still
+ * writes that phase.
+ */
+export function taskStatusPhase(task: Pick<Task, 'phase' | 'status' | 'user_status'> & Partial<Pick<Task, 'session_id'>>, snoozed = false): TaskPhase {
+  const state = shownState(taskUserState(task, snoozed));
+  if (state === 'done') return 'COMPLETE';
+  if (state === 'needs') return 'NEED_ACTION';
+  if (state === 'working') return 'IN_PROGRESS';
+  const us = task.user_status;
+  return !(us ? us.snoozed : snoozed) && !us?.limit && notStarted(task) ? 'TODO' : 'WAITING';
 }
 
 // ── Colors ──

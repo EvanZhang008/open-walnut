@@ -133,7 +133,7 @@ import { observeRowFit } from '@/utils/row-fit';
 import { observeMetaLineFit } from '@/utils/meta-line-fit';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { formatWaitUntil } from './TaskStatusControl';
-import { untilWords } from '../common/date-time-pick';
+import { checksBackWords, parkClockWords, untilWords } from '../common/date-time-pick';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { type SortBy, type GroupBy } from './ViewDropdown';
 import {
@@ -1301,7 +1301,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
             }}
             aria-label={isDone ? 'Reopen' : 'Mark complete'}
-            title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
+            title={isDone ? 'Done: click to reopen' : taskUserState(task) === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
           >
             {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
           </button>
@@ -1340,9 +1340,11 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             <span
               className="badge badge-long todo-item-due-pill todo-item-wait-pill"
               data-testid="task-row-wait-until"
-              title={`Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}
+              title={taskUserState(task) === 'working'
+                ? `Working; it ${checksBackWords(formatWaitUntil(task.wait_until))}, or sooner when something happens`
+                : `Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}
             >
-              <span>{untilWords(formatWaitUntil(task.wait_until))}</span>
+              <span>{parkClockWords(taskUserState(task) === 'working', formatWaitUntil(task.wait_until))}</span>
             </span>
           )}
           {!!task.is_blocked && !isDone && (
@@ -2310,7 +2312,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen' : 'Mark complete'}
-        title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
+        title={isDone ? 'Done: click to reopen' : taskUserState(task) === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>

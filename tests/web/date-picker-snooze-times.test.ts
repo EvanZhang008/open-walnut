@@ -9,7 +9,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tomorrowTimePills } from '../../web/src/components/common/DatePicker';
-import { dateTimeWords, hourPickerMin, localDateTimeIso, parseClock, snoozeWhenWords, timeTarget, untilWords } from '../../web/src/components/common/date-time-pick';
+import { dateTimeWords, hourPickerMin, localDateTimeIso, parkClockWords, parseClock, snoozeWhenWords, timeTarget, untilWords } from '../../web/src/components/common/date-time-pick';
 
 const ORIGINAL_TZ = process.env.TZ;
 afterEach(() => { process.env.TZ = ORIGINAL_TZ; });
@@ -157,8 +157,12 @@ describe("a Home row's until words", () => {
     const read = (rel: string) => fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src', rel), 'utf8');
     const rows = read('components/tasks/StatusSections.tsx');
     expect(rows).toMatch(/\{untilWords\(snoozedUntil\)\}/);
-    expect(rows).toMatch(/\{untilWords\(twoLine \? formatWaitUntil/);
-    expect(read('components/tasks/TodoPanel.tsx')).toMatch(/\{untilWords\(formatWaitUntil\(task\.wait_until\)\)\}/);
+    // A parked task's clock: parkClockWords, which reads untilWords while it waits and "checks back"
+    // while it reads Working (2026-11-23: "Waiting 就是 waiting，working 就是 working").
+    expect(rows).toMatch(/\{parkClockWords\(taskUserState\(task\) === 'working', twoLine \? formatWaitUntil/);
+    expect(read('components/tasks/TodoPanel.tsx')).toMatch(/\{parkClockWords\(taskUserState\(task\) === 'working', formatWaitUntil\(task\.wait_until\)\)\}/);
+    expect(parkClockWords(false, 'Today 1:30 AM')).toBe(untilWords('Today 1:30 AM'));
+    expect(parkClockWords(true, 'Today 1:30 AM')).toBe('checks back today 1:30 AM');
     // A wait's clock is the snooze's words, not a second 24-hour format.
     expect(read('components/tasks/TaskStatusControl.tsx')).toMatch(/snoozeWhenWords\(iso\) \?\? formatDraftDate\(iso\)/);
   });

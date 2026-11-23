@@ -102,6 +102,20 @@ export function untilWords(when: string): string {
   return `until ${midSentence(when)}`;
 }
 
+/**
+ * A parked task's clock while its work runs (it reads Working: its workers, its own build): "checks
+ * back today 3:08 AM", never "until", which says Waiting (2026-11-23, the user: "Waiting 就是
+ * waiting，working 就是 working"). WaitingChip and the task menu say the same.
+ */
+export function checksBackWords(when: string): string {
+  return `checks back ${midSentence(when)}`;
+}
+
+/** A Home row's clock pill on a parked task: "checks back" while it reads Working, else untilWords. */
+export function parkClockWords(working: boolean, when: string): string {
+  return working ? checksBackWords(when) : untilWords(when);
+}
+
 /** A time's words inside a sentence: "Checks again today 1:30 AM", never "again Today". */
 export function midSentence(when: string): string {
   return when.replace(/^(Today|Tomorrow)\b/, (day) => day.toLowerCase());

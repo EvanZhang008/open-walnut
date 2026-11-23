@@ -183,7 +183,7 @@ import { engineCaps } from '@/utils/engine-capabilities';
 import { EngineSwitchLine, useEngineSwitchPick } from './EngineSwitch';
 import type { SessionEffort } from '@open-walnut/core';
 import { minimizeHandler } from './panel-minimize';
-import { taskNeedsAction } from '@/utils/session-status';
+import { taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills, sessionModeLabel } from './SessionControlPills';
 import { PermissionModeMenu } from './PermissionModeMenu';
 import { useNotifications } from '@/contexts/notifications';
@@ -4421,7 +4421,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             isStreaming={pageStreaming(threads.stack.api.currentKey)}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
             placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth
-              ? (unread ? 'New reply above, not read yet' : sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
+              ? (unread ? 'New reply above, not read yet' : sessionTask && taskUserState(sessionTask) === 'waiting' ? 'Message: moves it to Working' : 'Message')
               // A desktop says it in the line above the box (composer-prompt-warning), once.
               // The red box of an unread reply says what it means (input-box.css). Otherwise the
               // box is empty: the user found the long hint ugly (2026-11-23, "remove this too ugly").

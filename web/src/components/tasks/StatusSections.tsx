@@ -37,7 +37,7 @@ import { RowProjectName } from './RowProjectName';
 import { isPhoneLayout, phonePhaseAttrs } from './phone-row-behavior';
 import { formatWaitUntil } from './TaskStatusControl';
 import { formatStartDateDisplay } from '../common/DatePicker';
-import { snoozeWhenWords, untilWords } from '../common/date-time-pick';
+import { checksBackWords, parkClockWords, snoozeWhenWords, untilWords } from '../common/date-time-pick';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { recentActivityTime, recentActivityTitle } from './recent-activity-time';
 import {
@@ -287,10 +287,12 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
     <span
       className="badge badge-long todo-item-due-pill todo-item-wait-pill"
       data-testid="task-row-wait-until"
-      title={`${!twoLine && reasonText ? `${reasonText}. ` : ''}Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}
+      title={`${!twoLine && reasonText ? `${reasonText}. ` : ''}${taskUserState(task) === 'working'
+        ? `Working; it ${checksBackWords(formatWaitUntil(task.wait_until))}, or sooner when something happens`
+        : `Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}`}
     >
       {/* One line (a project's folds) is narrow: a time today needs no "Today", the title keeps the room. */}
-      <span>{untilWords(twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^Today /, ''))}</span>
+      <span>{parkClockWords(taskUserState(task) === 'working', twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^Today /, ''))}</span>
     </span>
   ) : null;
   // What it asks, line by line with its answers (ActionNeeded): its Needs you line would say the same.

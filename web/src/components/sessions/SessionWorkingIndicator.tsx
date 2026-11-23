@@ -4,6 +4,11 @@ import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { backgroundAgentsOnly, backgroundRunningLabel } from './background-ledger';
+import { useMemo } from 'react';
+import { useTaskListSelect } from '@/contexts/TasksContext';
+import { useOpenTask } from '@/hooks/useOpenTask';
+import { Chip } from '@/components/controls';
+import { workersWorkingLabel, workersWorkingOf, type WorkingWorker } from './workers-working';
 import '@/styles/session-working.css';
 
 /**
@@ -17,7 +22,9 @@ import '@/styles/session-working.css';
  *  - only subagents running (the turn itself is waiting on them): "2 subagents are
  *    working… ›";
  *  - the turn over, background work still going: one quiet "1 command still running
- *    in the background ›" line in the working line's place.
+ *    in the background ›" line in the working line's place;
+ *  - the turn over, its task's workers (subtasks) at work: "3 workers are working…" with
+ *    each worker, which opens it (workers-working.ts).
  *
  * Every one opens the Background tasks panel; the session's ⋮ menu opens it too, also
  * after everything finished.
@@ -31,6 +38,7 @@ export function SessionWorkingIndicator({ sessionId, working }: {
   const foregroundActive = useForegroundActive(sessionId);
   const { tasks, running } = useBackgroundRunning(sessionId);
   const agents = backgroundAgentsOnly(tasks);
+  const workers = useWorkersWorking(sessionId, !working && status?.process_status !== 'running');
   const backgroundOnly = status?.process_status === 'running' && !status.archived
     && !status.pendingPermissionTool && foregroundActive === false && agents.length > 0;
 
@@ -69,8 +77,9 @@ export function SessionWorkingIndicator({ sessionId, working }: {
       </div>
     );
   }
-  if (!label) return null;
-  return (
+  const workersRow = workers.length ? <WorkersWorkingRow workers={workers} /> : null;
+  if (!label) return workersRow;
+  const backgroundRow = (
     <button
       type="button"
       className="session-working-indicator session-background-working session-background-after"
@@ -81,5 +90,27 @@ export function SessionWorkingIndicator({ sessionId, working }: {
       <span className="session-working-label">{label} still running in the background</span>
       <span aria-hidden="true">›</span>
     </button>
+  );
+  return workersRow ? <>{workersRow}{backgroundRow}</> : backgroundRow;
+}
+
+/** The task's workers at work, kept as one string in the list's select so it re-renders only on a change. */
+function useWorkersWorking(sessionId: string, active: boolean): WorkingWorker[] {
+  const key = useTaskListSelect(({ tasks }) => (active ? JSON.stringify(workersWorkingOf(tasks, sessionId)) : '[]')) ?? '[]';
+  return useMemo(() => JSON.parse(key) as WorkingWorker[], [key]);
+}
+
+function WorkersWorkingRow({ workers }: { workers: WorkingWorker[] }) {
+  const openTask = useOpenTask();
+  // The working line's own row and label; each worker is a one-shot chip (pressed undefined) that opens it.
+  return (
+    <div className="session-working-row" data-testid="session-workers-working">
+      <span className="session-working-label">{workersWorkingLabel(workers.length)}</span>
+      {workers.map((w) => (
+        <Chip key={w.id} pressed={undefined} title={`Open ${w.title}`} trailing={<span aria-hidden="true">›</span>} onClick={() => openTask(w.id)}>
+          {w.title}
+        </Chip>
+      ))}
+    </div>
   );
 }

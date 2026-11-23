@@ -40,7 +40,7 @@ import { requestWaitUntil, WAIT_UNTIL_MENU_LABEL, WAIT_UNTIL_TITLE } from '@/uti
 import { formatDraftDate } from '@/components/sessions/draft-decisions';
 import { snoozeWhenWords } from '@/components/common/date-time-pick';
 import { log } from '@/utils/log';
-import { PHASE_LABELS, taskStatusLabel } from '@/utils/session-status';
+import { PHASE_LABELS, taskStatusLabel, taskStatusPhase } from '@/utils/session-status';
 import '@/styles/task-status.css';
 
 export const STATUS_OPTIONS: { value: TaskPhase; label: string; icon: ReactNode }[] = [
@@ -122,10 +122,12 @@ export function waitUntilFromPick(pick: string): string {
  * the task prop carries the server's default (the plain-PATCH fallback has no
  * optimistic copy) the label says what that default will be.
  */
-function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait_until'>; onSet: (waitUntil: string) => void }) {
+function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait_until' | 'status' | 'user_status' | 'session_id'>; onSet: (waitUntil: string) => void }) {
   const [open, setOpen] = useState(false);
   const until = formatWaitUntil(task.wait_until);
-  const noClockLabel = task.phase === 'WAITING' ? 'Until: no time limit' : `Until: ${DEFAULT_WAIT_LABEL} (default)`;
+  // Its clock's word follows the state it reads: a parked task at work checks back, it does not wait until.
+  const word = taskStatusPhase(task) === 'IN_PROGRESS' && task.phase === 'WAITING' ? 'Checks back' : 'Until';
+  const noClockLabel = task.phase === 'WAITING' ? `${word}: no time limit` : `Until: ${DEFAULT_WAIT_LABEL} (default)`;
   return (
     <div className={`task-status-until${open ? ' open' : ''}`} data-testid="task-status-until">
       <div className="task-status-until-head">
@@ -140,7 +142,7 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait
         >
           <span className="task-status-until-icon" aria-hidden="true">{ICONS.ICON_CALENDAR}</span>
           <span className="task-status-until-label">
-            {until ? <>Until: <b>{until}</b></> : noClockLabel}
+            {until ? <>{word}: <b>{until}</b></> : noClockLabel}
           </span>
           <DisclosureChevron open={open} />
         </button>
@@ -174,7 +176,7 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait
  * then moves anywhere but Waiting.
  */
 function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil, quiet = false }: {
-  task: Pick<Task, 'id' | 'phase' | 'wait_until'>;
+  task: Pick<Task, 'id' | 'phase' | 'wait_until' | 'status' | 'user_status' | 'session_id'>;
   /** A pick other than Waiting: the caller writes it and closes. */
   onPick: (phase: TaskPhase) => void;
   /** Waiting picked: the caller writes it and stays open for the until row. */
@@ -200,14 +202,15 @@ function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil, quiet = fa
   );
 }
 
-function StatusPills({ task, onPick, quiet = false }: { task: Pick<Task, 'id' | 'phase'>; onPick: (phase: TaskPhase) => void; quiet?: boolean }) {
+function StatusPills({ task, onPick, quiet = false }: { task: Pick<Task, 'id' | 'phase' | 'status' | 'user_status' | 'session_id'>; onPick: (phase: TaskPhase) => void; quiet?: boolean }) {
+  const shown = taskStatusPhase(task);
   return (
     <ChipGroup className="task-status-options" role="radiogroup" aria-label="Status">
       {STATUS_OPTIONS.map((o) => (
         <Chip
           key={o.value}
           role="radio"
-          pressed={task.phase === o.value}
+          pressed={shown === o.value}
           className={`task-status-pill task-status-pill-${o.value.toLowerCase()}`}
           data-phase={o.value}
           leading={quiet ? undefined : <span className="task-status-pill-icon" aria-hidden="true">{o.icon}</span>}
@@ -258,8 +261,11 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
   const setPhase = useSetPhase(onSetPhase);
   const setWaitUntil = useSetWaitUntil(onSetWaitUntil);
   const [open, setOpen] = useState(false);
-  const option = STATUS_OPTIONS.find((o) => o.value === task.phase);
+  const shown = taskStatusPhase(task);
+  const option = STATUS_OPTIONS.find((o) => o.value === shown);
+  // A parked task's clock: "until" while it reads Waiting, "checks back" while its work runs (WaitingChip).
   const until = task.phase === 'WAITING' ? formatWaitUntil(task.wait_until) : '';
+  const untilWord = shown === 'IN_PROGRESS' ? 'checks back' : 'until';
   return (
     <>
       {/* The date rows' shape under its own classes: `.task-kebab-date*` means a date. No rule above
@@ -276,7 +282,7 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
           <span className="task-kebab-icon">{option?.icon ?? ICONS.ICON_PHASE_TODO}</span>
           <span className="task-kebab-status-value">
             Status: <b>{taskStatusLabel(task)}</b>
-            {until ? <span className="task-kebab-status-until"> · until {until}</span> : null}
+            {until ? <span className="task-kebab-status-until"> · {untilWord} {until}</span> : null}
           </span>
           <DisclosureChevron open={open} />
         </button>
@@ -284,7 +290,7 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
           <div className="task-kebab-status">
             <StatusOptions
               task={task}
-              onPick={(phase) => { if (phase !== task.phase) setPhase(task.id, phase); afterAction(); }}
+              onPick={(phase) => { if (phase !== task.phase && phase !== shown) setPhase(task.id, phase); afterAction(); }}
               onPickWaiting={() => { if (task.phase !== 'WAITING') setPhase(task.id, 'WAITING'); }}
               onSetWaitUntil={(waitUntil) => { setWaitUntil(task.id, waitUntil); afterAction(); }}
             />
@@ -316,14 +322,15 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
     },
   });
 
-  const option = STATUS_OPTIONS.find((o) => o.value === task.phase);
+  const shown = taskStatusPhase(task);
+  const option = STATUS_OPTIONS.find((o) => o.value === shown);
   return (
     <>
       <button
         ref={btnRef}
         type="button"
         className="badge-phase task-status-badge"
-        data-phase={task.phase?.toLowerCase()}
+        data-phase={shown.toLowerCase()}
         aria-haspopup="menu"
         aria-expanded={open}
         title="Change status"
@@ -345,7 +352,7 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
             <StatusOptions
               task={task}
               quiet={quiet}
-              onPick={(phase) => { if (phase !== task.phase) setPhase(task.id, phase); close(); }}
+              onPick={(phase) => { if (phase !== task.phase && phase !== shown) setPhase(task.id, phase); close(); }}
               onPickWaiting={() => { if (task.phase !== 'WAITING') setPhase(task.id, 'WAITING'); }}
               onSetWaitUntil={(waitUntil) => { setWaitUntil(task.id, waitUntil); close(); }}
             />

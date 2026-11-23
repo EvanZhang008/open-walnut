@@ -29,7 +29,7 @@
  * ones apart). A row's state group is still on it, so a blocked worker stays red
  * inside its section.
  */
-import { midSentence } from '@/components/common/date-time-pick';
+import { checksBackWords, midSentence } from '@/components/common/date-time-pick';
 import { matchIdRef, refNamesId } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
 import { projectIdentity } from '@/utils/project-display';
@@ -365,9 +365,10 @@ export function describeTask(
   else if (reason === 'board') now = running ? `${board} · ${activityText(live?.activity)}` : board;
   else if (running) now = activityText(live?.activity);
   else if (task.phase === 'WAITING') {
-    now = task.wait_until
-      ? `Until ${midSentence((opts.formatWaitUntil ?? ((iso: string) => new Date(iso).toLocaleString()))(task.wait_until))}`
-      : 'Until something happens';
+    const when = task.wait_until ? (opts.formatWaitUntil ?? ((iso: string) => new Date(iso).toLocaleString()))(task.wait_until) : '';
+    // Parked while its work runs (its workers, its own build): Working, and its clock checks back.
+    if (taskUserState(task) === 'working') now = when ? `${USER_STATE_LABELS.working}, ${checksBackWords(when)}` : USER_STATE_LABELS.working;
+    else now = when ? `Until ${midSentence(when)}` : 'Until something happens';
   } else if (!hasSession && task.phase === 'TODO') now = 'Not started';
 
   const group: OverviewGroupId = reason ? 'needs' : running ? 'running' : 'open';

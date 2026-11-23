@@ -15,7 +15,7 @@ import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { PhoneConfirmSheet } from '@/components/common/PhoneConfirmSheet';
 import { ChevronRightIcon } from '@/components/common/PhoneIcons';
-import { PHASE_LABELS, phasePickerChoices, resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
+import { PHASE_LABELS, phasePickerChoices, resolveTaskSessionId, taskStatusLabel, taskStatusPhase } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
 import { log } from '@/utils/log';
 
@@ -41,7 +41,9 @@ export function PhonePhaseSheet({ task, onSetPhase }: PhonePhaseSheetProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const status = useSessionStatus(resolveTaskSessionId(task));
   const alive = sessionIsAlive(status ?? task.session_status);
-  const current = task.status === 'done' ? 'COMPLETE' : (task.phase ?? 'TODO');
+  // The option its label names (taskStatusPhase), never the bare phase: a task parked on its running
+  // workers reads Working, so Working is its current option, not Waiting.
+  const current = taskStatusPhase(task);
   const choices = phasePickerChoices(current);
   const pendingRef = useRef<string | null>(null);
 

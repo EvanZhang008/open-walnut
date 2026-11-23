@@ -240,14 +240,6 @@ export function GroupChip({ groupId, tier, label, path, leafId, project, showPro
   );
 }
 
-const PHASE_ICON: Record<string, ReactNode> = {
-  TODO: ICONS.ICON_PHASE_TODO,
-  WAITING: ICONS.ICON_PHASE_WAITING,
-  IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
-  NEED_ACTION: ICONS.ICON_PHASE_NEED_ACTION,
-  COMPLETE: ICONS.ICON_PHASE_COMPLETE,
-};
-
 // ── SortableTierCard — unified draggable card for any tier ──
 // Wrapped in React.memo (invariant #4) to prevent re-render cascades during drag.
 // Without memo, every RAF tick from bumpDragTick would re-render all cards in all tiers,
@@ -432,7 +424,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen' : 'Mark complete'}
-        title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
+        title={isDone ? 'Done: click to reopen' : taskUserState(task) === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>

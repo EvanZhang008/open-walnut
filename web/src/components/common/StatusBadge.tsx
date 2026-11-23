@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Task, TaskStatus, TaskPhase } from '@open-walnut/core';
-import { PHASE_LABELS, taskStatusLabel } from '@/utils/session-status';
+import { PHASE_LABELS, taskStatusLabel, taskStatusPhase } from '@/utils/session-status';
 import { phaseIcon } from './Icons';
 
 interface StatusBadgeProps {
@@ -34,7 +34,7 @@ export function StatusBadge({ status, phase, task }: StatusBadgeProps) {
   if (phase) {
     return (
       <span className="state-word">
-        {phaseSymbols[phase] ?? '?'} {task ? taskStatusLabel(task) : (PHASE_LABELS[phase] ?? phase)}
+        {phaseSymbols[task ? taskStatusPhase(task) : phase] ?? '?'} {task ? taskStatusLabel(task) : (PHASE_LABELS[phase] ?? phase)}
       </span>
     );
   }

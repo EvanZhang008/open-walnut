@@ -10,13 +10,13 @@ import {
   displayedSummary, laneById, placeCard, summaryHash,
   type BoardCard, type BoardCardWriter, type BoardKanbanSeenCard, type BoardLane, type BoardTeamEntry,
 } from '../../../../../src/core/boards/board-lanes';
-import { deriveDisplayStatus, resolveTaskSessionId } from '@/utils/session-status';
+import { deriveDisplayStatus, resolveTaskSessionId, taskUserState } from '@/utils/session-status';
+import { checksBackWords } from '@/components/common/date-time-pick';
 import { taskTextSource, type AgentTextSource } from '@/utils/agent-text-source';
 import type { ProcessStatus } from '@/types/session';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf, storedUserState } from '@open-walnut/user-status';
 import type { BoardSignal, LiveStatus } from '../board-overview-model';
-import type { KanbanPromptRequest } from './kanban-contract';
-import { STALE_AFTER_MS } from './kanban-contract';
+import { STALE_AFTER_MS, type KanbanPromptRequest } from './kanban-contract';
 import { absoluteText, agoText, clockText, durationText, latestIso } from './kanban-time';
 import { cardChange, cutTitle, footOf, writerLead, writerText, type KanbanCardChange, type KanbanFootChange } from './kanban-changes-model';
 import type { TaskThreadState } from '@open-walnut/thread-groups';
@@ -351,6 +351,8 @@ function quietStatus(
     return { text, tone: 'green', kind: 'running', tooltip: text };
   }
   if (task.phase === 'WAITING') {
+    const at = task.wait_until; // Parked while its work runs (its workers, its build): Working, its clock checks back.
+    if (taskUserState(task) === 'working') return { text: `${USER_STATE_LABELS.working}${at ? ` · ${checksBackWords(fmt(at))}` : ''}`, tone: 'green', kind: 'running', tooltip: at ? `${USER_STATE_LABELS.working} · ${checksBackWords(fmt(at))}\n${absoluteText(at)}` : USER_STATE_LABELS.working };
     if (task.wait_until) {
       const text = `Waiting until ${fmt(task.wait_until)}`;
       return { text, tone: 'violet', kind: 'waiting-until', tooltip: `${text}\n${absoluteText(task.wait_until)}` };
