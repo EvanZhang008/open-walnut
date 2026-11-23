@@ -18,13 +18,15 @@ walnut_tsc_done() { # $1 = the repo root; 0 when web/ of its HEAD, unchanged, pa
 # pending/ (2026-11-23: a main written by a land on top of another gets its web/ check on another
 # machine a few minutes after it lands, and the deploy that began meanwhile ran its own, 10 minutes
 # at a load of 40). walnut_tsc_wait waits for that check's record, at most WALNUT_TSC_DONE_WAIT_SECS
-# (300): 0 once the record is there (skip), 1 when nothing is pending for the commit, the pending
-# mark goes (that check failed or was given up) or the wait runs out (check here as before). A
-# pending mark older than WALNUT_TSC_PENDING_MAX_SECS (900) is no longer believed.
+# (600, about what this check takes on a busy Mac): 0 once the record is there (skip), 1 when
+# nothing is pending for the commit, the pending mark goes (that check failed or was given up) or
+# the wait runs out (check here as before). A pending mark older than WALNUT_TSC_PENDING_MAX_SECS
+# (1800) is no longer believed. 2026-11-23: at a load of 70 the other machine's result came 8
+# minutes into the deploy, after a 300 s wait had given up.
 walnut_tsc_wait() { # $1 = the repo root
-  local root=$1 head pend at now start=$SECONDS wait="${WALNUT_TSC_DONE_WAIT_SECS:-300}" max="${WALNUT_TSC_PENDING_MAX_SECS:-900}" poll="${WALNUT_TSC_DONE_POLL_SECS:-5}"
-  [[ "$wait" =~ ^[0-9]+$ ]] || wait=300
-  [[ "$max" =~ ^[0-9]+$ ]] || max=900
+  local root=$1 head pend at now start=$SECONDS wait="${WALNUT_TSC_DONE_WAIT_SECS:-600}" max="${WALNUT_TSC_PENDING_MAX_SECS:-1800}" poll="${WALNUT_TSC_DONE_POLL_SECS:-5}"
+  [[ "$wait" =~ ^[0-9]+$ ]] || wait=600
+  [[ "$max" =~ ^[0-9]+$ ]] || max=1800
   [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
   head=$(git -C "$root" rev-parse HEAD 2>/dev/null) || return 1
   [[ "$head" =~ ^[0-9a-f]{40}$ ]] || return 1
