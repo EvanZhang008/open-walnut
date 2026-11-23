@@ -447,3 +447,24 @@ test('a right-click on an Org row opens Walnut\'s menu, kept short: open it, mov
   await expect(movedB).toHaveCount(0)
   expect((await project(request, B))?.vp).toBeUndefined()
 })
+
+test('a chart taller than the window scrolls: no part of the tree is squeezed onto another', async ({ page }) => {
+  // 2026-11-23: at 480x640 the Founder and CEO cards lay on each other and the stems between
+  // them were gone (the tree is a scrolling flex column whose parts could shrink). Every part
+  // of the tree, cards, stems and the VP grid alike, keeps its own height and its own place.
+  // The window shrinks once the chart is open (at 480 wide the sidebar that opens it folds away).
+  const sheet = await openChart(page)
+  await page.setViewportSize({ width: 480, height: 640 })
+  const tree = sheet.locator('.oc-tree')
+  await expect(tree.locator('[data-testid="org-chart-vp"]').first()).toBeVisible()
+  const parts = await tree.evaluate((el) => [...el.children].map((c) => {
+    const r = c.getBoundingClientRect()
+    return { cls: c.className, top: r.top, bottom: r.bottom, height: r.height, needs: (c as HTMLElement).scrollHeight }
+  }))
+  expect(await tree.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+  for (const [i, p] of parts.entries()) {
+    expect(p.height, `${p.cls} is squeezed`).toBeGreaterThanOrEqual(p.needs - 1)
+    if (i > 0) expect(p.top, `${p.cls} lies on ${parts[i - 1]!.cls}`).toBeGreaterThanOrEqual(parts[i - 1]!.bottom - 0.5)
+  }
+  for (const stem of parts.filter((p) => p.cls.includes('oc-stem'))) expect(stem.height).toBeGreaterThan(10)
+})

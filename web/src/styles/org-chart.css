@@ -50,6 +50,9 @@
   overflow-y: auto;
   padding: 16px 4px 8px;
 }
+/* The tree scrolls when taller than the sheet: none of its parts gives up height to fit (a
+ * squeezed column laid the Founder and CEO cards on each other and hid the stems, 2026-11-23). */
+.oc-tree > * { flex-shrink: 0; }
 .oc-stem { width: 2px; height: 18px; background: var(--border); }
 
 /* A card: avatar, name + role chip + how many it has open, what it is doing, the quiet dot. */
