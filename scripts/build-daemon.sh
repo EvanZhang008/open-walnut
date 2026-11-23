@@ -79,6 +79,8 @@ SOURCES=(
   src/providers/acp-worker/worker-main.ts
   src/providers/acp-worker/journal.ts
   src/providers/acp-worker/protocol.ts
+  src/providers/acp-worker/executor-error.ts
+  src/providers/acp-worker/adapter-env.ts
   src/providers/codex-app-server/rpc.ts
   src/providers/codex-app-server/launch.ts
   src/providers/codex-app-server/controls.ts

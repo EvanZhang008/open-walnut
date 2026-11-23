@@ -99,6 +99,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/acp-worker/worker-main.ts',
   'src/providers/acp-worker/journal.ts',
   'src/providers/acp-worker/protocol.ts',
+  'src/providers/acp-worker/executor-error.ts',
+  'src/providers/acp-worker/adapter-env.ts',
   // The client the worker runs for `codex app-server` (a direct Codex session).
   'src/providers/codex-app-server/rpc.ts',
   'src/providers/codex-app-server/launch.ts',
