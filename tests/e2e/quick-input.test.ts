@@ -154,6 +154,20 @@ describe('POST /api/v1/quick/main', () => {
     await updateSessionRecord(sid, { process_status: 'idle' } as never)
     starts.length = 0
 
+    // Main waiting on the user's answer to a prompt: held, nothing queued. Checked before any send
+    // reaches Main: a queued send is delivered for real by the mock CLI, whose turn then ends and
+    // stops the session, and a stopped session's prompt is gone.
+    await updateSessionRecord(sid, { pendingPermission: { toolName: 'AskUserQuestion' } } as never)
+    const held = await (await post('/quick/main', { text: 'Second thought' })).json() as Record<string, unknown>
+    expect(held).toMatchObject({ taskId: mainId, sessionId: sid, held: true })
+    expect(await getQueue(sid)).toHaveLength(0)
+    // follow on a held Main: one held line and the stream ends.
+    const heldFollow = lines(await (await post('/quick/main', { text: 'Third', follow: true })).text())
+    expect(heldFollow).toEqual([expect.objectContaining({ type: 'held', sessionId: sid })])
+    expect(await getQueue(sid)).toHaveLength(0)
+    expect(starts).toHaveLength(0)
+    await updateSessionRecord(sid, { pendingPermission: null } as never)
+
     const sent = await (await post('/quick/main', { text: 'What needs me today?' })).json() as Record<string, unknown>
     expect(sent).toMatchObject({ taskId: mainId, sessionId: sid, started: false })
     expect(typeof sent.messageId).toBe('string')
@@ -163,16 +177,7 @@ describe('POST /api/v1/quick/main', () => {
     expect(queued?.message.startsWith('What needs me today?')).toBe(true)
     expect(queued?.sentBy).toBe('person')
 
-    await updateSessionRecord(sid, { pendingPermission: { toolName: 'AskUserQuestion' } } as never)
-    const held = await (await post('/quick/main', { text: 'Second thought' })).json() as Record<string, unknown>
-    expect(held).toMatchObject({ taskId: mainId, sessionId: sid, held: true })
-    expect((await getQueue(sid)).some((m) => m.message === 'Second thought')).toBe(false)
-    // follow on a held Main: one held line and the stream ends.
-    const heldFollow = lines(await (await post('/quick/main', { text: 'Third', follow: true })).text())
-    expect(heldFollow).toEqual([expect.objectContaining({ type: 'held', sessionId: sid })])
-
     // The row loses its pointer: the task's own session is still found, nothing is started again.
-    await updateSessionRecord(sid, { pendingPermission: null } as never)
     await updateTaskRaw(mainId, { session_ids: [] } as never)
     expect(await (await fetch(`http://localhost:${port}/api/v1/quick/main`)).json()).toEqual({ taskId: mainId, sessionId: sid })
 
@@ -293,6 +298,17 @@ describe('POST /api/v1/quick/task-message', () => {
     await updateTaskRaw(taskId, { session_id: sid } as never)
     await updateSessionRecord(sid, { process_status: 'idle' } as never)
     starts.length = 0
+
+    // A task waiting on the user's answer to a prompt: held, nothing queued, nothing started.
+    // Checked before any send reaches this session: a queued send is delivered for real by the
+    // mock CLI, whose turn then ends and stops it, and a stopped session's prompt is gone.
+    await updateSessionRecord(sid, { pendingPermission: { toolName: 'AskUserQuestion' } } as never)
+    const held = await (await post('/quick/task-message', { taskId, text: 'Never mind' })).json() as Record<string, unknown>
+    expect(held).toMatchObject({ taskId, sessionId: sid, held: true })
+    expect(await getQueue(sid)).toHaveLength(0)
+    expect(starts).toHaveLength(0)
+    await updateSessionRecord(sid, { pendingPermission: null } as never)
+
     const sent = await (await post('/quick/task-message', { taskId, text: 'Also ask about parking' })).json() as Record<string, unknown>
     expect(sent).toMatchObject({ taskId, sessionId: sid, started: false })
     expect(sent).not.toHaveProperty('midTurn')
@@ -312,13 +328,6 @@ describe('POST /api/v1/quick/task-message', () => {
     expect(shotRow!.message.indexOf(shotPath!)).toBeLessThan(shotRow!.message.indexOf('See this error'))
     expect((await post('/quick/task-message', { taskId, images: [{ data: png, mediaType: 'image/png' }] })).status).toBe(200)
     expect((await post('/quick/task-message', { taskId, text: ' ', images: [{ data: png, mediaType: 'text/html' }] })).status).toBe(400)
-
-    // A task waiting on the user's answer to a prompt: held, nothing queued.
-    await updateSessionRecord(sid, { pendingPermission: { toolName: 'AskUserQuestion' } } as never)
-    const held = await (await post('/quick/task-message', { taskId, text: 'Never mind' })).json() as Record<string, unknown>
-    expect(held).toMatchObject({ taskId, held: true })
-    expect((await getQueue(sid)).some((m) => m.message.startsWith('Never mind'))).toBe(false)
-    await updateSessionRecord(sid, { pendingPermission: null } as never)
 
     // Only the exact id the launcher listed: a prefix or an unknown id reaches no task.
     expect((await post('/quick/task-message', { taskId: taskId.slice(0, 6), text: 'x' })).status).toBe(404)
