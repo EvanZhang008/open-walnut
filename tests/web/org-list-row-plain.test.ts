@@ -54,6 +54,8 @@ describe('an Org list row draws its avatar, its name and at most one red dot', (
   it('shows only the name: no time, no line, no count, even on a row full of news', () => {
     const html = drawRow(row())
     expect(shownText(html)).toBe('Orchard')
+    // One line, a long name too: cut, whole on hover (2026-11-23, the user: the watch rows should be slim).
+    expect(html).toMatch(/<span class="org-channel-name wn-meta">/)
     expect(html).not.toMatch(/org-channel-(?:time|latest|tail|led|pin)|org-badge|badge-count|is-unread|is-main|org-state-dot|task-state-icon/)
   })
 
@@ -126,7 +128,7 @@ describe('every row of the Org list goes through OrgListRow', () => {
     const tags = [...jsx.matchAll(/<([a-zA-Z]+)\b/g)].map((m) => m[1])
     expect(tags).toEqual(['button', 'span', 'span'])
     expect(jsx).toContain('{avatar}')
-    expect(jsx).toContain('className="org-channel-name wn-title">{name}</span>')
+    expect(jsx).toContain('className="org-channel-name wn-meta">{name}</span>')
   })
 
   it('the CEO row is flat like the others, and the dot is round', () => {

@@ -74,11 +74,14 @@
 .org-channel:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .org-channel.is-selected { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .org-channel:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* The name wraps (.wn-title) rather than cut. */
-.org-channel-name {
+/* Every row is one line, a long name too (2026-11-23, the user on two router rows of two lines: the
+   watch rows should at least be slim): it is cut (.wn-meta) and shows whole in place on hover
+   (utils/truncation-peek.ts). */
+.org-channel .org-channel-name {
   flex: 1 1 auto;
+}
+.org-channel-name {
   min-width: 0;
-  overflow-wrap: break-word;
   font-weight: 600;
   font-size: var(--font-size-md);
   line-height: 20px;

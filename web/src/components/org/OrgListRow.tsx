@@ -65,7 +65,7 @@ export function OrgListRow({ avatar, name, dot, selected = false, className = ''
   return (
     <button type="button" role="option" aria-selected={selected} {...button} className={`org-channel${selected ? ' is-selected' : ''}${className ? ` ${className}` : ''}`}>
       {avatar}
-      <span className="org-channel-name wn-title">{name}</span>
+      <span className="org-channel-name wn-meta">{name}</span>
       {dot ? <span className="org-channel-dot" role="img" aria-label={dot} data-testid="org-channel-dot" /> : null}
     </button>
   );
