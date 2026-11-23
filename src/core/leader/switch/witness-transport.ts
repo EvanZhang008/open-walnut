@@ -28,8 +28,8 @@
  * is not the leader yet has no such link: the daemon opens a stream to a host's service
  * only for a server that has spoken for a leader home (providers/daemon-standalone.ts
  * streamTarget), and a host's service follows the OLD leader's data dir path. Such a process (a
- * candidate) reaches its witnesses by ways a and b; a host-dialed door registers a reach once it
- * carries witness calls (the C5a door: allowDoorCallPrefix(WITNESS_PREFIX)), tried before the daemon link.
+ * candidate) reaches its witnesses by ways a and b; the host-dialed door is a registered reach
+ * (reachDialedHosts: the host allowed WITNESS_PREFIX on it), tried before the daemon link.
  */
 import { DEFAULT_PERMIT_PARAMS, type PermitParams, type PermitReply, type PermitRequest, type PermitTransport } from '../permit/types.js'
 import { serveLocalWitness, witnessDirEmpty } from './local-witnesses.js'
@@ -240,11 +240,23 @@ const reaches: HostCall[] = []
 /**
  * Register a way to reach a host that is tried before the daemon link: the host-dialed door of the
  * leader (or of a candidate) holds a socket the host opened, and answers `host-api` calls on it.
- * Returns how to remove it. Nothing registers one until that door exists.
+ * Returns how to remove it.
  */
 export function addWitnessReach(reach: HostCall): () => void {
   reaches.push(reach)
   return () => { const i = reaches.indexOf(reach); if (i >= 0) reaches.splice(i, 1) }
+}
+
+/**
+ * Way c over this server's own door (session-channel/host-door.ts): a host that dialed it answers the
+ * witness route on that socket as call frames (it allowed `/host-api/witness/`, replica/leader-door.ts),
+ * so a door-only host's witness (the old leader's machine after a switch) is reached with no daemon
+ * link. `host` names the socket by host key or by the machine id of its credential. The permit's boot
+ * registers it (boot.ts); returns the undo.
+ */
+export async function reachDialedHosts(): Promise<() => void> {
+  const { dialedHostCall } = await import('../../session-channel/host-door.js')
+  return addWitnessReach((host, path, body, timeoutMs) => dialedHostCall(host)?.('POST', path, body, timeoutMs) ?? null)
 }
 
 let configModule: Promise<typeof import('../../config-manager.js')> | null = null
@@ -316,7 +328,11 @@ export function hostLinkCall(o: { timeoutMs?: number; daemonLink?: boolean | (()
         if (!body.walnutId) body = { ...body, walnutId: await thisWalnutId() }
         for (const reach of reaches) {
           const p = reach(host, path, body, timeoutMs)
-          if (p) { done(await p); return }
+          if (!p) continue
+          // A reach that broke (its socket went, no reply in time) or a host that did not allow the
+          // route on it (an older service: 403 not_callable) is no answer: the next way is tried.
+          const r = await p.catch(() => null)
+          if (r && !(r.status === 403 && (r.body as { error?: unknown } | null)?.error === 'not_callable')) { done(r); return }
         }
         if (!o.daemonLink) { done(null); return }
         // A function is asked per call: the leader runtime answers true only while it is `leading`.

@@ -592,6 +592,109 @@ Tests: `tests/core/home-move.test.ts`, `tests/core/leader/switch/moved-home.test
 job set and copy, all the new leader's, nothing keyed by the new path, a fire in delivery at the
 aliasing moment taken once by the new leader with the old socket refused, and the switch back.
 
+#### The old machine as a host, and the steps around the stop
+
+After a switch between machines the old machine goes on as a host of the new leader. Where the new
+leader can dial the old machine's daemon, it is an ordinary host (the declared move above). Where
+it cannot (the old machine is a Mac behind NAT and the host network was not told), the old machine
+is a door host: its own Walnut service dials the new leader's door with a machine credential. The
+old leader's server prepares both while it still leads. Each step is a named hook in
+`src/core/leader/switch/host-follow.ts` that the switch flow calls; none runs by itself.
+
+| When | Hook | What it does |
+|---|---|---|
+| before the handover record | `prepareOldMachineAsHost({walnutId, machineId, hostKey, doors, standing?})` | behind the outward door `host-credential`: mints this machine's door credential (`mintHostCredential`). The record goes into `auth.json` (leader data, so the final batch carries it to the new leader) and the host side into this machine's state dir (`writeHostCredentialFile`). Bad doors or another machine id: nothing is minted. A refused host side takes the record back |
+| before the handover record | `pushNewLeaderDoors(doors)` | every host hears the new leader's doors (`pushHostDoors`) under this leader's standing |
+| before the handover record | `configureOldMachineHostService({home, walnutId, hostKey, port, ...})` | `server.configure` on this machine's own daemon: the ordinary host replica spec (`src/core/host-server/replica-run.ts`, the program and environment the host-server manager sends any host, with the settings of a host that carries no tunnel), under this home. Its record is `local/leader-switch/host-service.json` (machine data) |
+| last, right before the handover record | `announceSwitchStop(commitWindowMs)` | the restart heartbeat goes now with `restartingMs` = the commit window, capped at 5 minutes, and the regular heartbeats stop, so the companion's backup lead waits. It must go before the record: from then on this machine may not act, and the outward door `companion-upload` refuses every heartbeat (a notice sent at the stop never left, measured). `withdrawSwitchStop()` when the handover does not happen after all. A hint, not a safety argument: the hosts' fences decide |
+| after the handover record, before the stop | `retellNetMembers()` | the host network's member lists again: the record now names the new holder, handed from this machine, so every host and this machine's own walnut-net let the new leader in (below) |
+| after the handover record, before the stop | `dropOwnDaemonDuties({home})` | this machine's daemon drops this Walnut's trigger set (`triggers.configure` with the empty set) and its bridge (`bridge.configure {enabled: false}`); the server pushes its own bridge no more until it exits (`src/core/leader/own-bridge-hold.ts`). |
+| a handover that did not happen, while this server leads on (refused, or cancelled before the stop) | `undoHandoverHostSteps({home, walnutId, machineId})` | every step above taken back as a restart's boot would: the host service and its record, this machine's credential (the record and the host side), the bridge hold with the trigger set and bridge pushed again (`restoreOwnDaemonDuties`), the restart notice withdrawn and the heartbeats back (`withdrawSwitchStop`) |
+| this home's own boot as the leader | `removeSwitchHostService({home})` (`src/web/server.ts`, after the permit boot) | the host service a handover left on this machine's daemon goes (a rollback), and so does one an earlier leader left there for this Walnut in a home a switch promoted (a switch back). A home that took no part in a switch is not touched |
+
+A rollback's restart pushes the trigger set and the bridge again: every boot's link to its own
+daemon pushes both.
+
+**The permit number hosts are told** (`leaderPermitNumberForHosts()`,
+`src/core/session-channel/leader-permit.ts`): the running permit's record number; with the permit
+off after it was on, or still waiting for its record, the highest number this Walnut ever told a
+host, kept in `cache/leader-permit-number.json` (leader data: the standby copy carries it). A host
+that saw `(n, e)` never sees `(0, e')` from the same Walnut.
+
+**The host network's member lists follow the permit** (`src/core/net/net-mac.ts`, `netLeadOf`). With
+no permit running the lists are by role, byte for byte as before: the Mac dials every host and lets
+none in, each host lets in the Mac. Under a running permit with a record, the machine of this server
+dials every other member (the old Mac too), and the machines let in the record's holder and, during
+a handover, the machine it is handed from. So during the handover every host and the old leader's own
+walnut-net let the new leader in, and after its record stands the hosts let in the new leader only.
+A machine that the record names neither way gives no list (`not_permit_holder`). A leader on a machine
+already on the companion's list never takes the Mac's place on it. Not checked on real machines.
+
+**Its witness over the door** (way c over call frames): a host's service allows
+`/host-api/witness/` on the socket it dialed into its leader's door (`src/replica/leader-door.ts`), and
+the leader's permit boot registers the dialed sockets as a reach (`reachDialedHosts`,
+`witness-transport.ts`), tried before the daemon link. The caller is the leader that proved the
+machine's credential: the record is the credential's Walnut, never the one the body names
+(`tests/core/leader/switch/witness-dialed-door.test.ts`).
+
+**The companion and the phone follow** (`tests/e2e/leader-switch-companion-follow-live-e2e.test.ts`,
+real servers and daemons, the companion test cluster; one test second stands for ten product
+seconds: takeover window 6 s for 60 s, commit window 30 s for 300 s, B late 36 s for 6 minutes).
+Measured on 2026-11-23:
+
+- The restart notice reached the companion (`restartingMs` 30 000), and the backup claimed the
+  dev box 29.9 s after A's stop, not after the takeover window.
+- Never two primaries: the dev box's book went primary (epoch 1), backup (2), primary (3), one
+  record the whole time (B's home an alias of A's). The backup stepped back the moment B claimed.
+- The backup claims with the host's epoch + 1 and no permit number (the permit was at 3, its
+  handover 6, B's commit 7). While it led it made no outward connection, fetch or send, and wrote
+  no leader data: the companion only rebuildable files, the host only machine data.
+- A brought back is refused (`walnut_home_busy`, `movedTo` B's home) and moves nothing.
+- The phone's token paired while A led got B's answer through the companion 112 ms after B took
+  the dev box back. Exactly one `__local__` bridge, B's, for 120 s (120 samples, 0 `replaced`).
+  Without the drop of A's bridge the two daemons replace each other about once a second.
+- The session channel's permit pair is not reached in that cluster (its host runs no service); the
+  pair rule is `tests/e2e/host-judge-leader-move-e2e.test.ts`'s.
+
+#### What does not work on a host reached only through a door
+
+A door host has no daemon link from the leader: the leader reaches only its Walnut service, by call
+frames on the socket the host dialed (`src/core/session-channel/door-calls.ts`, prefixes
+`/host-api/sessions/` and `/host-api/witness/`). Everything that is a daemon command needs the
+daemon link (`link(host)`, `src/core/hosts/link.ts`).
+
+| Feature | Through the door | Why |
+|---|---|---|
+| Session start, send, interrupt, allowlisted calls, drops (host-judged) | works | `/host-api/sessions/*` on the call frames, with `session.host_runs_sessions` on and the host's `session-judge-v1` |
+| Session facts and rows | works | the session channel runs on the same socket |
+| The host's witness of the write permission | works | `/host-api/witness/*` on the call frames (above) |
+| Start prechecks (make the folder, check the cwd, the task dir, cancel an unconfirmed start) | no | `ensure-cwd.ts`, `cwd-check.ts`, `task-dir-place.ts`, `task-start.ts` send daemon commands before the start call |
+| Session start or resume of a session that is not host-judged | no | `remote-session-manager.ts` and `bridgeResume` are daemon commands |
+| `host_exec` and its read, stop, list, pinned | no | `host-exec.ts`, `host-exec-jobs.ts`: `exec.run` and its job state live in the daemon |
+| `host_copy` | no | `host-copy.ts` relays chunks with `fs.readRange` and `fs.writePart` on both ends |
+| `host_http` | no | `host-http.ts`: `http.request` runs on the host's daemon |
+| `host_mcp_*` | no | `host-mcp.ts`: `mcp.*` daemon commands and their result polling |
+| `host_daemon_update` | no | `host-daemon-update.ts`; the credential route is never callable through the door either |
+| Triggers placed on the host (arm, test, fire claim, ack) | no | `triggers.configure` from `DaemonConnection`; the daemon keeps the last set it armed and fires into live sessions from its offline copy, and cannot tell the leader |
+| Plugin jobs placed on the host | no | `plugin-jobs/manager.ts`: `jobs.configure`, `jobs.status`, uploads |
+| A standby copy to the host | no | `standby/runner.ts`, `remote-transport.ts`: `fs.writePart`, `exec.run`, `fs.readRange` |
+| File browser, diffs, images and media from the host | no | `daemon-file-reader.ts`, `routes/files.ts`, `routes/media-v1.ts`: `fs.*` daemon commands |
+| Terminal, web preview, port forward, embedded editor | no | the PTY stream and `port-stream-v1` ride the daemon link |
+| `walnut` tool calls from sessions on the host (task_create, task_send, ...) | no | the daemon's `gateway-request` goes to the leader's `DaemonConnection`; without one the host answers from its offline copy and journals writes |
+| Draining that offline journal | no | `offline.drain`, `offline.ack`, `offline.blob` are leader-initiated daemon commands: writes wait in `tmp/offline-host` |
+| Read copy pushes (`host.slice`), hooks, turns, bridge and workspace pushes, `leader.configure` | no | daemon pushes; the offline copy goes stale, and governance hooks come from `hooks.configure` |
+| Copies of notes, memory and skills for the host | no | `host-replica-sync.ts` pushes to daemons |
+| Usage scans and budgets | no | `usage/collection.ts`, `usage/session-budget.ts`: `usage.*` |
+| Host facts, load, vitals, the Fleet page, the host profile | no | `host.facts`, `host.load`, `host.vitals` |
+| The user's browser through the extension | works | the extension talks to the leader over HTTP (`browser-control/hub.ts`); the host's browser facts do not (they come from `host.facts`) |
+| The leader's own claim on the host's leader book | unknown | `leader.configure` and `leader.claim` are daemon commands; the door's welcome carries the pair, and whether the book follows it is not designed |
+
+Two quiet effects: a door host's "heard the primary" clock is fed only by a trusted daemon socket, so
+it grows and weakens the host's own check against a companion claim; and writes by sessions on that
+host stay in its offline journal until a daemon link returns. Adding a feature means a
+`/host-api/<name>/` route on the host's service that calls its local daemon, registered with
+`allowDoorCallPrefix` (never the credential or doors routes).
+
 ### What a person sees
 
 | Failure | What happens | What the person sees |
@@ -1054,8 +1157,8 @@ witness, above).
 - **The service role, as tested**: the two call sites and the start hook run against the real mode writer on a scratch install
   root (`tests/core/leader/switch/service-role.test.ts`). Not tested: a compiled leader run of a switched service, the boot
   time at real size, and the Mac half.
-- **Waiting on 5a** (the host-dialed door): its call frames as way c (`allowDoorCallPrefix('/host-api/witness/')` registering an
-  `addWitnessReach`), and moving its proofs onto `src/utils/hmac-proof.ts`. Until then a witness reached only by a `host` cannot
+- **Waiting on 5a** (the host-dialed door): its call frames as way c are [done](#the-old-machine-as-a-host-and-the-steps-around-the-stop);
+  moving its proofs onto `src/utils/hmac-proof.ts` is not. A witness reached only by a `host` with no door socket still cannot
   be set up or read by a server that has not led: it joins after the first lead (above), and the Mac as a first leader (no witness
   of its own, the others only over links) waits for the door. Tests: a real host daemon runtime relays the leader's `follower`/`replica` stream to a real leader door
   with the route on it (`tests/core/leader/switch/witness-twin.test.ts`), and a spy on the link module shows no link before the
@@ -1064,6 +1167,11 @@ witness, above).
   link; on another machine that needs the daemon kind above.
 - **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)):
   no daemon runs in the rehearsal yet, so that runs only in the real-daemon test.
+- **The flow does not call the host hooks yet** ([the steps around the stop](#the-old-machine-as-a-host-and-the-steps-around-the-stop)):
+  each is built and tested alone. Their inputs have no config yet: the new leader's doors for each
+  machine and the new leader's name for the old machine (`leader_switch.machines[]`). The new leader
+  also gets no host row for the old Mac from the member list (a `mac` member becomes no host row,
+  `net-rows.ts`), so the leader-dialed case needs that row in the promoted config.
 - **Operation ids registered at the witnesses before an outward send**: the permit core has
   them (`registerOps`, `beginSend`, `reportOutcome`), no send path calls them yet. For this
   manual switch they add nothing the data does not carry: the old leader is stopped and its

@@ -59,7 +59,7 @@ const ROWS: Array<[string, number, string]> = [
   ['src/core/diagnostics/host-probes.ts', 4, BRANCH],
   ['src/core/diagnostics/local-probes.ts', 1, BRANCH],
   ['src/core/diagnostics/probes.ts', 1, BRANCH],
-  ['src/core/host-server/manager.ts', 1, BRANCH],
+  ['src/core/host-server/replica-run.ts', 1, BRANCH],
   ['src/core/hosts/fleet-refresh.ts', 3, BRANCH],
   ['src/core/hosts/fleet.ts', 3, BRANCH],
   ['src/core/hosts/host-connect-action.ts', 1, BRANCH],

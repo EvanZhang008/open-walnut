@@ -168,6 +168,7 @@ export const NO_PATH_STORES: Readonly<Record<string, string>> = {
   'sync.ms-todo-tokens': 'tokens',
   'sync.jira': 'issue ids',
   'cache.leader-deferred-work': 'host and pid claims',
+  'cache.leader-permit-number': 'a number',
   'cache.status-riding': 'status fields',
   'cache.status-reconcile': 'status fields',
   'cache.task-dir-size-notices': 'task ids and sizes',

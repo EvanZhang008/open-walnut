@@ -14,11 +14,11 @@
  */
 import fs from 'node:fs'
 import http from 'node:http'
-import net from 'node:net'
 import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
-import { homePathClass } from '../../src/core/home-manifest/index.js'
 import { _signalSafetyForTesting, bootMac, macBoot, macEnvOf, waitFor, type ReplicaCluster } from './replica-cluster.js'
+
+export { copyLeaderData, freePort } from './leader-data-copy.js'
 
 const { pin, readPid, signalChild, signalPinned, stillPinned } = _signalSafetyForTesting
 
@@ -30,36 +30,6 @@ export interface StandbyLeader {
   call(method: string, p: string, body?: unknown): Promise<{ status: number; json: any }>
   log(): string
   stop(): Promise<void>
-}
-
-/** A free loopback port now (for a door URL named before its server runs). */
-export async function freePort(): Promise<number> {
-  const s = net.createServer()
-  await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()))
-  const port = (s.address() as net.AddressInfo).port
-  await new Promise<void>((r) => s.close(() => r()))
-  return port
-}
-
-/**
- * Copy the Mac's data dir to `to` as a standby holds it: the files the home manifest classes as
- * leader data (src/core/home-manifest), a store's -wal with its store (sqlite applies it on open),
- * never a machine's own file (the server's instance lock, a socket) or a rebuildable one.
- */
-export function copyLeaderData(from: string, to: string): void {
-  fs.cpSync(from, to, {
-    recursive: true,
-    filter: (src) => {
-      let st: fs.Stats
-      try { st = fs.lstatSync(src) } catch { return false }
-      if (st.isDirectory()) return true
-      if (!st.isFile()) return false
-      // A store's wal-index is its writer's shared memory: a copy of it can name fewer frames than
-      // the -wal holds, and a reader trusts it. Left out, the next open rebuilds it from the -wal.
-      if (src.endsWith('-shm')) return false
-      return homePathClass(path.relative(from, src).split(path.sep).join('/')) === 'leader-data'
-    },
-  })
 }
 
 function request(port: number, method: string, p: string, body?: unknown): Promise<{ status: number; json: any }> {

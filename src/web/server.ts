@@ -1625,6 +1625,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             .then((w) => { if (w.device || w.files.length) log.web.info('leader switch: this home leads: its console from a handover is withdrawn', { device: w.device, files: w.files.length }) })
             .catch((err) => log.web.warn('leader switch: this home\'s old console could not be withdrawn', { error: err instanceof Error ? err.message : String(err) }))
         }
+        // A host service a handover left on this machine's own daemon (a rollback), or one an earlier
+        // leader left here for this Walnut (a switch back), goes (host-follow.ts). In the background:
+        // it waits for this server's link to its own daemon, and the boot does not.
+        void import('../core/leader/switch/host-follow.js')
+          .then((m) => m.removeSwitchHostService({ home: WALNUT_HOME }))
+          .then((r) => {
+            if (!r.ok) log.web.warn('leader switch: a host service a switch left on this machine\'s daemon could not be taken back', { why: r.why })
+            else if (r.removed) log.web.info('leader switch: this home leads: the host service a switch left on this machine\'s daemon is taken back')
+          })
+          .catch((err) => log.web.warn('leader switch: a host service a switch left on this machine\'s daemon could not be taken back', { error: err instanceof Error ? err.message : String(err) }))
       }
     }
     // This process owns the data folder now: read back what earlier servers saw of this

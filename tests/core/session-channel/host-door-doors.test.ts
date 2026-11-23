@@ -38,6 +38,7 @@ import type { ChannelSocket } from '../../../src/core/session-channel/leader-lin
 
 const MACHINE = 'd4'.repeat(16)
 const WALNUT = 'cafebabe'.repeat(4)
+const PEER = { walnutId: WALNUT, machineId: MACHINE }
 const OTHER_DOOR = 'wss://leader.example.test/host-door'
 
 let home = ''
@@ -211,8 +212,9 @@ describe('call frames on a host-dialed link', () => {
     // The session routes are allowed from the start (this host runs none here: its answer says so).
     expect(await call('/host-api/sessions/send')).toMatchObject({ status: 503 })
     // A peer's prefix, once registered.
-    const undo = allowDoorCallPrefix('/host-api/witness/', async (_m, p, b) => ({ status: 200, body: { ok: true, path: p, got: b } }))
-    expect(await call('/host-api/witness/read')).toEqual({ status: 200, body: { ok: true, path: '/host-api/witness/read', got: { walnutId: WALNUT, machineId: MACHINE } } })
+    // It is told who called: the Walnut and machine of the credential the leader proved (never the body's word).
+    const undo = allowDoorCallPrefix('/host-api/witness/', async (_m, p, b, from) => ({ status: 200, body: { ok: true, path: p, got: b, from } }))
+    expect(await sock.call!('POST', '/host-api/witness/read', { walnutId: 'claimed' }, 5_000)).toEqual({ status: 200, body: { ok: true, path: '/host-api/witness/read', got: { walnutId: 'claimed' }, from: PEER } })
     undo()
     expect(await call('/host-api/witness/read')).toMatchObject({ status: 403 })
     // A prefix that would cover a route never callable is refused at registration.
@@ -221,8 +223,8 @@ describe('call frames on a host-dialed link', () => {
     expect(() => allowDoorCallPrefix('/host-api/')).toThrow(/not a door call prefix/)
     // Even a handler registered beside them does not open them.
     allowDoorCallPrefix('/host-api/creds/', async () => ({ status: 200, body: { ok: true } }))
-    expect(await answerDoorCall('POST', '/host-api/credential', {}, null)).toMatchObject({ status: 403 })
-    expect(await answerDoorCall('POST', '/host-api/doors/x', {}, null)).toMatchObject({ status: 403 })
-    expect(await answerDoorCall('POST', '/host-api/sessions/send?x=1', {}, null)).toMatchObject({ status: 403 })
+    expect(await answerDoorCall('POST', '/host-api/credential', {}, null, PEER)).toMatchObject({ status: 403 })
+    expect(await answerDoorCall('POST', '/host-api/doors/x', {}, null, PEER)).toMatchObject({ status: 403 })
+    expect(await answerDoorCall('POST', '/host-api/sessions/send?x=1', {}, null, PEER)).toMatchObject({ status: 403 })
   })
 })

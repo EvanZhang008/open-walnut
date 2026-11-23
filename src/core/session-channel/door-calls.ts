@@ -9,7 +9,14 @@ import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH } from './door-wire.js'
 import { HOST_SESSIONS_PATH } from './host-api.js'
 import type { HostSessionRoutes } from './host-routes.js'
 
-export type DoorCallAnswer = (method: string, path: string, body: unknown) => Promise<{ status: number; body: unknown }>
+/**
+ * Who a call frame comes from: the leader at the other end of this host's dialed socket, which proved
+ * it holds the verify key of this machine's credential for `walnutId` (door-wire.ts; the welcome's
+ * proof), so these two ids are verified, not claimed by the frame.
+ */
+export interface DoorPeer { walnutId: string; machineId: string }
+
+export type DoorCallAnswer = (method: string, path: string, body: unknown, from: DoorPeer) => Promise<{ status: number; body: unknown }>
 
 /** Never reached through a call frame (the exact paths and anything under them). */
 export const NEVER_CALLABLE = [HOST_CREDENTIAL_PATH, HOST_DOORS_PATH] as const
@@ -33,7 +40,7 @@ export function allowDoorCallPrefix(prefix: string, answer?: DoorCallAnswer): ()
 }
 
 /** The answer of one call frame: refused unless its path is plain and under an allowed prefix. */
-export async function answerDoorCall(method: string, path: string, body: unknown, sessions: HostSessionRoutes | null): Promise<{ status: number; body: unknown }> {
+export async function answerDoorCall(method: string, path: string, body: unknown, sessions: HostSessionRoutes | null, from: DoorPeer): Promise<{ status: number; body: unknown }> {
   // A plain absolute path only: no query, fragment, dot segment, empty segment or escape.
   const plain = typeof path === 'string' && path.length <= 512 && /^\/[A-Za-z0-9/_.-]*$/.test(path) && !/\/\.{1,2}(\/|$)|\/\//.test(path)
   if (!plain || neverCallable(path)) return { status: 403, body: { ok: false, error: 'not_callable' } }
@@ -41,7 +48,7 @@ export async function answerDoorCall(method: string, path: string, body: unknown
   for (const p of prefixes.keys()) if (path.startsWith(p) && (!best || p.length > best.length)) best = p
   if (best === null) return { status: 403, body: { ok: false, error: 'not_callable' } }
   const answer = prefixes.get(best)
-  if (answer) return answer(method, path, body)
+  if (answer) return answer(method, path, body, from)
   if (!sessions) return { status: 503, body: { ok: false, error: 'host_runs_sessions_off' } }
   return sessions.call(method, path, body)
 }

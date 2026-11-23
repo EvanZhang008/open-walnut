@@ -12,6 +12,7 @@ import { MockDaemon } from '../helpers/mock-daemon.js'
 import { DaemonConnection, getDaemonPoolStatus } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
 import { WALNUT_HOME } from '../../src/constants.js'
+import { holdOwnBridge } from '../../src/core/leader/own-bridge-hold.js'
 
 // Bridge provisioning normally requires a cloud git remote + a token mint
 // round-trip; stub the derivation so pushBridgeConfig() exercises only the
@@ -64,6 +65,46 @@ describe('DaemonConnection bridge visibility', () => {
     conn = null
     await daemon.stop()
     vi.restoreAllMocks()
+  })
+
+  it('the leader switch\'s hold: this machine\'s own daemon is pushed no bridge while it holds, another host still is', async () => {
+    bridgeConfigMock.payload = { enabled: true, url: 'wss://cloud.example.invalid/bridge', token: 'fixture', hostAlias: 'h-local' }
+    const commands = () => daemon.getCommandHistory().filter((c) => c.cmd === 'bridge.configure').length
+    try {
+      conn = new DaemonConnection('__local__', TARGET)
+      await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+      await waitFor(() => commands() >= 1)
+      const before = commands()
+      holdOwnBridge(true)
+      ;(conn as unknown as { pushBridgeConfig(): void }).pushBridgeConfig()
+      await new Promise((r) => setTimeout(r, 200))
+      expect(commands()).toBe(before)
+      conn.disconnect()
+      conn = new DaemonConnection('bridge-hold-other', TARGET)
+      await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+      await waitFor(() => commands() > before)
+    } finally { holdOwnBridge(false) }
+  })
+
+  it('a push already reading its config when the hold starts sends nothing after it', async () => {
+    bridgeConfigMock.payload = { enabled: true, url: 'wss://cloud.example.invalid/bridge', token: 'fixture', hostAlias: 'h-local' }
+    const commands = () => daemon.getCommandHistory().filter((c) => c.cmd === 'bridge.configure').length
+    try {
+      conn = new DaemonConnection('__local__', TARGET)
+      await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+      await waitFor(() => commands() >= 1)
+      await new Promise((r) => setTimeout(r, 200))
+      const before = commands()
+      let release!: () => void
+      bridgeConfigMock.gate = new Promise<void>((r) => { release = r })
+      ;(conn as unknown as { pushBridgeConfig(): void }).pushBridgeConfig()
+      await new Promise((r) => setTimeout(r, 100))
+      holdOwnBridge(true)
+      release()
+      bridgeConfigMock.gate = null
+      await new Promise((r) => setTimeout(r, 300))
+      expect(commands()).toBe(before)
+    } finally { holdOwnBridge(false) }
   })
 
   it('failed configuration reads never disable a live bridge, and a later explicit disable still applies', async () => {

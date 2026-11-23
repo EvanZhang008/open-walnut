@@ -67,6 +67,7 @@ import {
 } from './install.js'
 import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, heldNotice, updateHold } from './update-hold.js'
 import { requestOver } from './request-over.js'
+import { hostProgramRun, hostServerEnvOf } from './replica-run.js'
 import { FOLLOWER_FLOORS, judgeFollowerRoom, roomProbeScript, type FollowerGateReason } from './eligibility.js'
 import { createTryLater, inWords, type TryLaterKind } from './try-later.js'
 import { FOLLOWER_GATEWAY_CAPABILITY } from '../../providers/follower-gateway-core.js'
@@ -646,35 +647,13 @@ export function createHostServerManager(deps: ManagerDeps) {
       await deps.holdTunnelPort(`host-server:${hostKey}`)
       host.keepStreamLane?.(true)
       const { command, prefix } = install.program
-      const hostServerArgs = [...prefix, 'host-server']
-      const hostServerEnv: Record<string, string> = {
-        OPEN_WALNUT_HOME: install.dataDir,
-        // Its own run dir (logs, scratch): never the host daemon's /tmp/open-walnut.
-        WALNUT_DAEMON_DIR: install.runDir,
-        WALNUT_HOST_SERVER: '1',
-        WALNUT_HOST_SERVER_PORT: String(rec.publicPort),
-        WALNUT_LEADER_HOME: deps.home,
-        WALNUT_WALNUT_ID: await deps.walnutId(),
-        WALNUT_HOST_LABEL: await deps.label(hostKey),
-        WALNUT_NO_AUTO_UPDATE: '1',
-      }
-      const run: Omit<WorkingProgram, 'id' | 'command' | 'cwd' | 'log'> = replica
-        ? {
-            args: [...prefix, 'web', '--replica'],
-            // Its own run dir (hostServerEnv): a replica never writes the daemon's dir or /tmp/open-walnut.
-            // WALNUT_HOST_KEY: this Mac's name for the host, the `host` of the sessions that run there:
-            // the replica reads them and their files itself (replica/self-host.ts, WP6), and the
-            // console tells a session here from one on the Mac (WP7).
-            // WALNUT_CAPABILITIES: the replica answers this host's own `walnut` calls while the Mac
-            // is away (capabilities/host-local-calls.ts), when the daemon can hand them over.
-            env: {
-              ...hostServerEnv, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_KEY: hostKey,
-              ...(host.hasCapability(FOLLOWER_GATEWAY_CAPABILITY) ? { WALNUT_CAPABILITIES: 'host-local-calls' } : {}),
-            },
-            // The daemon runs this by itself after a crash loop (it works while the Mac sleeps).
-            fallback: { args: hostServerArgs, env: hostServerEnv },
-          }
-        : { args: hostServerArgs, env: hostServerEnv }
+      const hostServerEnv = hostServerEnvOf({
+        dataDir: install.dataDir, runDir: install.runDir, port: rec.publicPort, leaderHome: deps.home,
+        walnutId: await deps.walnutId(), label: await deps.label(hostKey),
+      })
+      const run: Omit<WorkingProgram, 'id' | 'command' | 'cwd' | 'log'> = hostProgramRun({
+        prefix, env: hostServerEnv, replica, hostKey, gateway: host.hasCapability(FOLLOWER_GATEWAY_CAPABILITY),
+      })
       if (settings!.program !== 'host-server' && !replica) {
         log.session.info('host server: the host would run the replica, its daemon cannot run it yet', { host: hostKey })
       }

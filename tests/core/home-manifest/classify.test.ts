@@ -228,6 +228,7 @@ describe('the manifest against the backup\'s excluded dirs (src/core/backup/scan
   const KNOWN: Record<string, string> = {
     'cache.applied-ops': 'the offline-merge ledger: in cache/ so git sync skips it',
     'cache.leader-op-outcomes': 'outcomes of outward ops the witnesses reported: in cache/ so git sync skips it',
+    'cache.leader-permit-number': 'the highest permit number this Walnut told its hosts: in cache/ so git sync skips it',
     'cache.leader-deferred-work': 'outward work a closed door held, done once the doors open: in cache/ so git sync skips it',
     'cache.status-riding': 'queue state of what rides the next message: in cache/ so git sync skips it',
     'cache.held-notices': 'queue state of the notes and notices that wait for the next message: in cache/ so git sync skips it',

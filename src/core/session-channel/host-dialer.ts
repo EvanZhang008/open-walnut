@@ -30,7 +30,7 @@
 import { comparePermit, isChannelFrame, type HostChannel, type PermitPair } from './channel.js'
 import { DOOR_CLOSE, doorKeyId, doorSecret, doorUrlRefusal, hostDoorProof, isDoorFrame, leaderDoorProof, proofsEqual, type DoorFrame } from './door-wire.js'
 import { readHostCredential, updateHostCredentialDoors, type HostCredential } from './host-credential-file.js'
-import { answerDoorCall } from './door-calls.js'
+import { answerDoorCall, type DoorPeer } from './door-calls.js'
 import type { HostSessionRoutes } from './host-routes.js'
 
 export interface HostDialerOptions {
@@ -207,7 +207,7 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
           return
         }
         if (isChannelFrame(frame)) { handlers?.onFrame(frame); return }
-        if (isDoorFrame(frame) && frame.op === 'call') void answerCall(ws, frame)
+        if (isDoorFrame(frame) && frame.op === 'call') void answerCall(ws, frame, { walnutId: o.walnutId, machineId })
         if (isDoorFrame(frame) && frame.op === 'doors' && welcomePair) keepDoors(frame.doors, welcomePair)
       })
       ws.on('close', (code) => {
@@ -248,8 +248,8 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
     }, (err: unknown) => say('warn', 'host door: keeping the leader\'s door list failed', { error: err instanceof Error ? err.message : String(err) }))
   }
 
-  async function answerCall(ws: import('#ws').WebSocket, f: Extract<DoorFrame, { op: 'call' }>): Promise<void> {
-    const r = await answerDoorCall(String(f.method), String(f.path), f.body, o.routes()).catch((err: unknown) => ({ status: 500, body: { ok: false, error: err instanceof Error ? err.message : String(err) } }))
+  async function answerCall(ws: import('#ws').WebSocket, f: Extract<DoorFrame, { op: 'call' }>, from: DoorPeer): Promise<void> {
+    const r = await answerDoorCall(String(f.method), String(f.path), f.body, o.routes(), from).catch((err: unknown) => ({ status: 500, body: { ok: false, error: err instanceof Error ? err.message : String(err) } }))
     const reply: DoorFrame = { ch: 'door', op: 'reply', id: String(f.id), status: r.status, body: r.body }
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(reply))
   }

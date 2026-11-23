@@ -147,6 +147,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/hook-errors.log` | rebuildable | no | Hook error log |
 | `~/.open-walnut/cache/applied-ops.sqlite` | leader-data | no | Offline-merge ledger of ops already applied, so none applies twice |
 | `~/.open-walnut/cache/leader-op-outcomes.json` | leader-data | no | Outcomes of outward ops the leader permit's witnesses reported, so none goes out twice |
+| `~/.open-walnut/cache/leader-permit-number.json` | leader-data | no | The highest write-permission number this Walnut told its hosts, so a permit turned off after it was on never tells them 0 |
 | `~/.open-walnut/cache/leader-deferred-work.json` | leader-data | no | Outward work a closed door held back (a list rename, a moved copy, a remote delete, an unsubscribe answer), done once the doors open |
 | `~/.open-walnut/cache/status-riding.json` | leader-data | no | Status lines and turn notices waiting to ride a session's next message |
 | `~/.open-walnut/cache/held-notices.json` | leader-data | no | Notes and notices waiting to ride a session's next message, and what became of each note |

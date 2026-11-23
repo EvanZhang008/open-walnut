@@ -79,6 +79,21 @@ export function startLeaderHeartbeat(): { stop: () => void } {
   return { stop: () => { if (heartbeatTimer) clearInterval(heartbeatTimer); heartbeatTimer = null } }
 }
 
+/** The leader switch's stop: what the restart notice says instead of the grace (setRestartNotice). */
+let nextRestartMs: number | null = null
+
+/**
+ * The restart notice of this process's stop says `ms` (capped at LEADER_RESTART_GRACE_MS, the
+ * field's cap here; the companion caps it again at its own 10 minutes) instead of the grace: the
+ * leader switch sets its commit window before the old leader's stop, so the companion's backup lead
+ * holds off while the new leader commits (core/leader/switch/host-follow.ts). Null: the grace again.
+ * A hint, not a safety argument: the hosts' fences decide who leads them.
+ */
+export function setRestartNotice(ms: number | null): number | null {
+  nextRestartMs = ms === null || !Number.isFinite(ms) || ms <= 0 ? null : Math.min(Math.floor(ms), LEADER_RESTART_GRACE_MS)
+  return nextRestartMs
+}
+
 /**
  * Tell the companion this box is going down for a restart (graceful shutdown),
  * so it waits LEADER_RESTART_GRACE_MS before it would take the lead. Bounded:
@@ -89,7 +104,7 @@ export async function announceLeaderRestart(maxWaitMs = 1_500): Promise<void> {
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
   // WALNUT_LEADER_RESTART_GRACE_MS: the live tests' shorter grace, as WALNUT_LEADER_HEARTBEAT_MS.
   const n = Number(process.env.WALNUT_LEADER_RESTART_GRACE_MS)
-  const grace = Number.isFinite(n) && n >= 1_000 ? Math.floor(n) : LEADER_RESTART_GRACE_MS
+  const grace = nextRestartMs ?? (Number.isFinite(n) && n >= 1_000 ? Math.floor(n) : LEADER_RESTART_GRACE_MS)
   await Promise.race([
     sendLeaderHeartbeat(grace).catch(() => false),
     new Promise((r) => { const t = setTimeout(r, maxWaitMs); t.unref?.() }),

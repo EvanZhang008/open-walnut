@@ -109,6 +109,7 @@ export const OUTWARD_DOORS: readonly OutwardDoor[] = [
   { kind: 'companion-upload', file: 'integrations/cloud-bridge-config.ts', fn: 'adoptOnce', onRefusal: 'offers nothing and keeps the offer for the next mint or start' },
   { kind: 'companion-upload', file: 'integrations/cloud-bridge-config.ts', fn: 'revokeBridgeTokens', onRefusal: 'deletes no companion device and answers every name as failed: the leader tries them again at its next ban read (session-channel/leader-issue.ts)' },
   { kind: 'host-credential', file: 'core/session-channel/leader-issue.ts', fn: 'issueOnce', onRefusal: 'throws before the credential is minted or sent: the host keeps what it holds, and the check runs again at its next link' },
+  { kind: 'host-credential', file: 'core/leader/switch/host-follow.ts', fn: 'prepareOldMachineAsHost', onRefusal: 'answers not ok before the credential is minted: the handover is refused with that reason and this server leads on' },
 ]
 
 export type OutwardDoorChecker = (kind: OutwardDoorKind, opId: string) => void

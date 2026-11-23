@@ -40,6 +40,7 @@ import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
 import { leaderPermitActive, onceOutwardDoorsOpened, outwardDoorRefusal } from '../core/leader/switch/doors.js'
+import { ownBridgeHeld } from '../core/leader/own-bridge-hold.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import { PTY_STREAM_CAPABILITY, ptyStreamMissingSentence } from '../core/hosts/terminal-link.js'
 import { createStreamEndpoint, listenLoopback, spliceStream, type PtyOpenOptions, type PtyStream, type StreamEndpoint } from '../lib/link-stream.js'
@@ -2125,6 +2126,8 @@ export class DaemonConnection {
     // A revoked host gets the bridge turned off, never a machine token (revoked-reach.ts `copy:pushBridgeConfig`).
     const off = this.revokedReach('copy:pushBridgeConfig') !== null
     if (IS_EPHEMERAL || this.ownSessionsOnly) return
+    // The leader switch turned this machine's own bridge off before the stop (own-bridge-hold.ts).
+    if (this.hostKey === '__local__' && ownBridgeHeld()) return
     // In-flight guard: a slow configure RPC + the 5-min re-push tick must not
     // stack overlapping pushes against the same daemon. One asked for meanwhile
     // runs after it, since the one out may have read the config before it changed.
@@ -2143,6 +2146,8 @@ export class DaemonConnection {
         // where it binds the feature relay, and keeps exactly that.
         const payload = this.hasCapability('walnut-scope-v1') || (this.hostKey === '__local__' && this.hasCapability('feature-relay-v1'))
           ? { ...cfg, home: WALNUT_HOME } : cfg
+        // Asked again: a push that started before the hold must not turn the bridge back on after its drop.
+        if (this.hostKey === '__local__' && ownBridgeHeld()) return
         const reply = await this.send('bridge.configure', payload as unknown as Record<string, unknown>)
         if (reply.ok !== true) {
           // Rejected configure — the daemon refused/errored the command. That

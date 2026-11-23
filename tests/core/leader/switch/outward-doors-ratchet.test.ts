@@ -112,7 +112,10 @@ describe('every outward primitive is called only where a door guards it (source)
 
   it('a daemon is armed with triggers and plugin jobs only from the guarded passes', () => {
     // service-set-move-checks.ts dropWalnutScope: a service set move empties this Walnut's sets on the shared daemon.
-    expect(sites(/\.send(?:\?\.)?\('triggers\.configure'/), NEW_SITE).toEqual({ 'providers/daemon-connection.ts': 3, 'providers/service-set-move-checks.ts': 1 })
+    // host-follow.ts sends only the EMPTY set (the old leader's own daemon disarms before the switch's
+    // stop, also once this machine may no longer act): it arms nothing, so it passes no door.
+    expect(sites(/\.send(?:\?\.)?\('triggers\.configure'/), NEW_SITE).toEqual({ 'providers/daemon-connection.ts': 3, 'providers/service-set-move-checks.ts': 1, 'core/leader/switch/host-follow.ts': 1 })
+    expect(code(path.join(SRC, 'core/leader/switch/host-follow.ts'))).toMatch(/\.send\('triggers\.configure', \{ home, config: \{ version: 1, triggers: \[\] \} \}/)
     expect(sites(/\.send(?:\?\.)?\('jobs\.configure'/), NEW_SITE).toEqual({ 'core/plugin-jobs/manager.ts': 1, 'providers/service-set-move-checks.ts': 1 })
   })
 
@@ -184,9 +187,10 @@ describe('every outward primitive is called only where a door guards it (source)
     expect(callSites('adoptOnce'), NEW_SITE).toEqual({ 'integrations/cloud-bridge-config.ts': 1 })
   })
 
-  it('a host is issued its door credential only from issueOnce', () => {
-    // The credential is minted and sent to the host only after the door (session-channel/leader-issue.ts).
-    expect(callSites('mintHostCredential'), NEW_SITE).toEqual({ 'core/session-channel/leader-issue.ts': 1 })
+  it('a host is issued its door credential only from issueOnce, and the old leader\'s machine only from prepareOldMachineAsHost', () => {
+    // The credential is minted and sent to the host only after the door (session-channel/leader-issue.ts);
+    // the leader switch mints the old machine's own after the same door (leader/switch/host-follow.ts).
+    expect(callSites('mintHostCredential'), NEW_SITE).toEqual({ 'core/session-channel/leader-issue.ts': 1, 'core/leader/switch/host-follow.ts': 1 })
     expect(callSites('sendCredential'), NEW_SITE).toEqual({ 'core/session-channel/leader-issue.ts': 1 })
   })
 })
@@ -349,6 +353,7 @@ const PRIMITIVE_OF: Record<string, RegExp | null> = {
   'integrations/cloud-bridge-config.ts#adoptOnce': /\bfetch\(/,
   'integrations/cloud-bridge-config.ts#revokeBridgeTokens': /\bfetch\(/,
   'core/session-channel/leader-issue.ts#issueOnce': /mintHostCredential\(/,
+  'core/leader/switch/host-follow.ts#prepareOldMachineAsHost': /mintHostCredential\(/,
 }
 
 /** A door call that acts: it asks the permission under a kind, and refuses. */

@@ -86,7 +86,7 @@ export function writeLiveMockCli(base: string): string {
   return file
 }
 
-export interface LiveDaemon { name: string; twin: 'source' | 'standalone'; proc: ChildProcess; keeper: Owned; owned: Owned; dir: string; port: number; sock: string; pid: number }
+export interface LiveDaemon { name: string; twin: LiveTwin; proc: ChildProcess; keeper: Owned; owned: Owned; dir: string; port: number; sock: string; pid: number }
 
 /** A mock CLI a daemon runs, by the pid its daemon reported and the mock's path. */
 export interface LiveCli { d: LiveDaemon; sid: string; o: Owned }
@@ -105,11 +105,24 @@ async function waitUntil(fn: () => Promise<boolean> | boolean, ms: number, what:
 }
 
 /**
+ * Which daemon runs: the JS twin on node (`source`), the Bun twin from source (`standalone`), or the
+ * compiled daemon the repo built (`binary`, dist/daemon-binaries, the one a server spawns as its own
+ * local daemon and adopts only when the versions match).
+ */
+export type LiveTwin = 'source' | 'standalone' | 'binary'
+
+/** The compiled daemon of this platform in dist/daemon-binaries, or null when the repo has not built it. */
+export function builtDaemonBinary(repo: string): string | null {
+  const file = path.join(repo, 'dist', 'daemon-binaries', `daemon-${process.platform}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`)
+  return fs.existsSync(file) ? file : null
+}
+
+/**
  * Start a daemon in `<base>/<first two letters of name>` (that dir must be one liveBase checked),
  * with its own HOME and TMPDIR, registered with its proof of ownership. `env`: the daemon's own
  * variables on top of its dirs (timing knobs).
  */
-export async function spawnLiveDaemon(ctx: LiveDaemonCtx, name: string, twin: 'source' | 'standalone', env: Record<string, string> = {}): Promise<LiveDaemon> {
+export async function spawnLiveDaemon(ctx: LiveDaemonCtx, name: string, twin: LiveTwin, env: Record<string, string> = {}): Promise<LiveDaemon> {
   const { procs, base, repo } = ctx
   const dir = path.join(base, name.slice(0, 2))
   fs.mkdirSync(dir)
@@ -132,6 +145,11 @@ export async function spawnLiveDaemon(ctx: LiveDaemonCtx, name: string, twin: 's
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
     daemonArgv = [SOURCE_TWIN.file, script, '--start']
+  } else if (twin === 'binary') {
+    const bin = builtDaemonBinary(repo)
+    if (!bin) throw new Error(`${name}: no built daemon in dist/daemon-binaries`)
+    // A compiled bun reads neither NODE_OPTIONS nor --preload: no connect guard inside it (as for the daemon a server spawns).
+    daemonArgv = [bin, '--start']
   } else {
     if (!ctx.bun) throw new Error(`${name}: the standalone twin needs bun`)
     // Bun does not read NODE_OPTIONS: the connect guard is preloaded by name.

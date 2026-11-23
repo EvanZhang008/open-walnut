@@ -11,6 +11,7 @@ const CACHE_ENTRIES: readonly HomeEntry[] = [
   // Ledgers and queue state that sit in cache/ only so git sync leaves them out: no other copy exists.
   lead('cache.applied-ops', 'cache/applied-ops.sqlite', 'sqlite', 'Offline-merge ledger of ops already applied, so none applies twice'),
   lead('cache.leader-op-outcomes', 'cache/leader-op-outcomes.json', 'file', 'Outcomes of outward ops the leader permit\'s witnesses reported, so none goes out twice'),
+  lead('cache.leader-permit-number', 'cache/leader-permit-number.json', 'file', 'The highest write-permission number this Walnut told its hosts, so a permit turned off after it was on never tells them 0'),
   lead('cache.leader-deferred-work', 'cache/leader-deferred-work.json', 'file', 'Outward work a closed door held back (a list rename, a moved copy, a remote delete, an unsubscribe answer), done once the doors open'),
   lead('cache.status-riding', 'cache/status-riding.json', 'file', 'Status lines and turn notices waiting to ride a session\'s next message'),
   lead('cache.held-notices', 'cache/held-notices.json', 'file', 'Notes and notices waiting to ride a session\'s next message, and what became of each note'),

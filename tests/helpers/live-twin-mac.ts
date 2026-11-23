@@ -24,6 +24,18 @@
  * looks a host's link up (core/hosts/link.ts). `devbox-found` links only once the test allows it
  * (linkBothAliases), and always a few seconds after `devbox`, so the discovered alias pushes last.
  *
+ * A leader switch (TwinOptions.leaderSwitch): the Mac (machine A) and a second leader B (`world.standby`,
+ * machine B: its own HOME, data dir, daemon dir and local daemon) run the write permission on three
+ * witness dirs under the base, as `leader_switch` names them. B boots over a copy of A's leader data made
+ * while A is stopped (leader-data-copy.ts: the same auth.json, so the same Walnut id, and the same
+ * sync/bridge-tokens.json, so the same `bridge-local` token), as a switch's commit start
+ * (WALNUT_LEADER_SWITCH_COMMIT), and reaches the dev box directly (its own network, no proxy). Each
+ * leader's local daemon outlives its server, as the production daemon does (a test server's own
+ * daemon has a parent watchdog and ends with it, local-daemon.ts parentWatchdogEnv): the test starts
+ * it in the leader's daemon dir and the server adopts it. The
+ * leader's boot script answers two hooks of src/core/leader/switch/host-follow.ts on its control port
+ * (dropOwnDaemonDuties, announceSwitchStop), so they run inside the leader's own process.
+ *
  * Isolation and cleanup are tests/e2e/leader-takeover-live-e2e.test.ts's: walls, LiveProcs, fresh
  * auth.json, a refusing `claude` and `ssh` on the servers' PATH, TERM and proven exits only.
  */
@@ -35,9 +47,10 @@ import { execFileSync } from 'node:child_process'
 import { LiveProcs, realProcTable, type Owned } from './live-procs.js'
 import { liveEnv } from './live-isolation.js'
 import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from './live-run.js'
-import { spawnLiveDaemon, startLiveMockSession, stopLiveMockSessions, writeLiveMockCli, type LiveCli, type LiveDaemon, type LiveDaemonCtx } from './live-daemon.js'
+import { builtDaemonBinary, daemonCall, spawnLiveDaemon, startLiveMockSession, stopLiveMockSessions, writeLiveMockCli, type LiveCli, type LiveDaemon, type LiveDaemonCtx } from './live-daemon.js'
 import { startSilentLinkProxy, type SilentLinkProxy } from './silent-link-proxy.js'
 import { testBun } from './bun-runtime.js'
+import { copyLeaderData, freePort } from './leader-data-copy.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 const BUN: string | undefined = testBun()
@@ -69,11 +82,23 @@ export const world = {
   tokens: { mac: '', local: '', keeper: '', found: '', phone: '' },
   companion: blankServer('companion') as LiveServer,
   /** `out`: what the first boot's own lines reported (taskId, and whatever the test's snippet adds). */
-  primary: { ...blankServer('primary'), controlPort: 0, out: {} as Record<string, any> } as LiveServer & { controlPort: number; out: Record<string, any> },
+  primary: { ...blankServer('primary'), controlPort: 0, out: {} as Record<string, any> } as LeaderServer,
+  /** The second leader B of a leader switch (TwinOptions.leaderSwitch); booted by bootStandby. */
+  standby: { ...blankServer('standby'), controlPort: 0, out: {} as Record<string, any> } as LeaderServer,
+  /** The leader switch's places (TwinOptions.leaderSwitch): machine ids, their files and ports, the witness dirs. */
+  leaderSwitch: null as LeaderSwitchPlaces | null,
+  /** The home whose leader the dev box follows now: the Mac's, or B's once B booted. */
+  leaderHome: '',
   devbox: null as unknown as LiveDaemon,
   daemons: [] as LiveDaemon[],
   clis: [] as LiveCli[],
   net: { cloud: null, keeper: null, found: null } as { cloud: SilentLinkProxy | null; keeper: SilentLinkProxy | null; found: SilentLinkProxy | null },
+}
+export type LeaderServer = LiveServer & { controlPort: number; out: Record<string, any> }
+export interface LeaderSwitchPlaces {
+  a: { id: string; idFile: string; port: number }
+  b: { id: string; idFile: string; port: number }
+  witnesses: Array<{ id: string; dir: string }>
 }
 const daemonCtx = (): LiveDaemonCtx => ({ procs: world.procs!, base: world.base, repo: REPO_ROOT, bun: BUN })
 const macNet = (): Array<SilentLinkProxy | null> => [world.net.cloud, world.net.keeper, world.net.found]
@@ -130,6 +155,7 @@ async function startCompanion(): Promise<void> {
   ] }), { mode: 0o600 })
   await bootServer(companion, `
 ${BOOT_HEAD}
+${twinOpts.recordCompanionOutward ? outwardRecorder(companionOutwardLog()) : ''}
 const c = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/constants.ts'))})
 if (c.WALNUT_HOME !== ${JSON.stringify(companion.data)} || !c.CLOUD_MODE) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
 const { startServer, stopServer, armGracefulSignalExit } = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/web/server.ts'))})
@@ -139,12 +165,86 @@ process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.p
 ${BOOT_TAIL}`, serverEnv(companion, { WALNUT_CLOUD_MODE: '1', WALNUT_GIT_HUB_DIR: path.join(world.base, 'hub'), WALNUT_LEADER_TICK_MS: '300', ...twinOpts.companionEnv }), false)
 }
 
+/**
+ * Code a boot script runs first (before the server is imported): every outward connection and fetch
+ * the process makes, and every child it starts, one JSON line each in `file` (`{t, kind, what}`), so a
+ * test can show what a server sent while it led nothing. It records and changes nothing.
+ */
+function outwardRecorder(file: string): string {
+  return `
+{
+  const fs = await import('node:fs')
+  const rec = (kind, what) => { try { fs.appendFileSync(${JSON.stringify(file)}, JSON.stringify({ t: Date.now(), kind, what: String(what).slice(0, 300) }) + '\\n') } catch {} }
+  const net = await import('node:net')
+  const connect = net.Socket.prototype.connect
+  net.Socket.prototype.connect = function (...a) {
+    try {
+      const o = Array.isArray(a[0]) ? a[0][0] : a[0]
+      rec('connect', o && typeof o === 'object' ? (o.path ? 'unix:' + o.path : (o.host ?? 'localhost') + ':' + o.port) : (typeof a[1] === 'string' ? a[1] : 'localhost') + ':' + o)
+    } catch {}
+    return connect.apply(this, a)
+  }
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (input, init) => { try { rec('fetch', (init?.method ?? 'GET') + ' ' + (typeof input === 'string' ? input : input?.url ?? String(input))) } catch {}; return realFetch(input, init) }
+  const cp = (await import('node:child_process')).default
+  for (const fn of ['spawn', 'execFile', 'exec', 'fork', 'spawnSync', 'execFileSync', 'execSync']) {
+    const real = cp[fn]
+    if (typeof real === 'function') { try { cp[fn] = function (...a) { rec('child', fn + ' ' + [a[0], ...(Array.isArray(a[1]) ? a[1] : [])].join(' ')); return real.apply(this, a) } } catch {} }
+  }
+  if (globalThis.Bun?.spawn) { const real = Bun.spawn; try { Bun.spawn = (...a) => { rec('child', 'Bun.spawn ' + JSON.stringify(a[0]?.cmd ?? a[0])); return real(...a) } } catch {} }
+}
+`
+}
+
+/** Where the companion's outward recorder writes (TwinOptions.recordCompanionOutward). */
+export const companionOutwardLog = (): string => path.join(world.base, 'companion-outward.jsonl')
+
+/** The leader switch's section of config.yaml (leader data: B's copy carries it). */
+function leaderSwitchConfig(ls: LeaderSwitchPlaces): string[] {
+  const { primary, standby } = world
+  const machine = (m: LeaderSwitchPlaces['a'], s: LiveServer) => [
+    `    - id: ${m.id}`, `      home: ${s.data}`, `      standby_dir: ${path.join(path.dirname(s.data), 'standby-in')}`, `      port: ${m.port}`,
+  ]
+  return [
+    'experimental:', '  switchable_leader: true',
+    'leader_switch:',
+    '  witnesses:', ...ls.witnesses.flatMap((w) => [`    - id: ${w.id}`, `      dir: ${w.dir}`]),
+    '  machines:', ...machine(ls.a, primary), ...machine(ls.b, standby),
+    '  back_window_hours: 24',
+  ]
+}
+
+/** The places of a leader switch, and the witness dirs set up from nothing (local-witnesses.ts, as `walnut leader witnesses init` does). */
+async function prepareLeaderSwitch(): Promise<void> {
+  const place = async (name: 'a' | 'b') => {
+    const idFile = path.join(world.base, `machine-${name}`, 'machine-id')
+    await fsp.mkdir(path.dirname(idFile), { recursive: true, mode: 0o700 })
+    await fsp.writeFile(idFile, `machine-${name}\n`)
+    return { id: `machine-${name}`, idFile, port: await freePort() }
+  }
+  const witnesses = ['w1', 'w2', 'w3'].map((id) => ({ id, dir: path.join(world.base, 'witnesses', id) }))
+  const { setUpLocalWitnesses } = await import('../../src/core/leader/switch/local-witnesses.js')
+  setUpLocalWitnesses(witnesses)
+  world.leaderSwitch = { a: await place('a'), b: await place('b'), witnesses }
+}
+
+/** A leader's home: a `claude` and an `ssh` that refuse. */
+async function prepareLeaderHome(s: LiveServer, name: 'primary' | 'standby'): Promise<void> {
+  await prepareServer(s, world.base, name)
+  // No ssh reaches anything from here: a row's own dial fails at once, as an unreachable host does.
+  await fsp.writeFile(path.join(s.home, 'bin', 'ssh'), '#!/bin/sh\necho "ssh: disabled in this test" >&2\nexit 255\n', { mode: 0o755 })
+}
+
 /** The Mac's data, once: its companion (through the Mac's network), its machine tokens, both rows of the one machine. */
 async function preparePrimary(): Promise<void> {
   const { primary, tokens } = world
-  await prepareServer(primary, world.base, 'primary')
-  // No ssh reaches anything from here: a row's own dial fails at once, as an unreachable host does.
-  await fsp.writeFile(path.join(primary.home, 'bin', 'ssh'), '#!/bin/sh\necho "ssh: disabled in this test" >&2\nexit 255\n', { mode: 0o755 })
+  await prepareLeaderHome(primary, 'primary')
+  if (twinOpts.leaderSwitch) {
+    // B's places are named in the config A writes (leader data), so B's are known before B exists.
+    world.standby.home = path.join(world.base, 'standby', 'home')
+    world.standby.data = path.join(world.base, 'standby', 'data')
+    await prepareLeaderSwitch()
+  }
   execFileSync('git', ['init', '-q', primary.data], { env: gitEnv() })
   execFileSync('git', ['-C', primary.data, 'remote', 'add', 'cloud', `http://mac:${tokens.mac}@127.0.0.1:${world.net.cloud!.port}/git/data.git`], { env: gitEnv() })
   await fsp.mkdir(path.join(primary.data, 'sync'), { recursive: true })
@@ -154,30 +254,50 @@ async function preparePrimary(): Promise<void> {
     'hosts:',
     `  ${KEEPER}:`, '    hostname: devbox.invalid', '    label: Dev box',
     `  ${FOUND}:`, '    hostname: devbox.invalid', '    discovered: true',
+    ...(world.leaderSwitch ? leaderSwitchConfig(world.leaderSwitch) : []),
     ...(twinOpts.macConfig ?? []), '',
   ].join('\n'))
 }
 
 let firstBootSnippet = ''
 
-/** What a test file changes in the world: lines added to the Mac's config.yaml, the Mac's and the companion's extra env. */
-export interface TwinOptions { macConfig?: string[]; macEnv?: Record<string, string>; companionEnv?: Record<string, string> }
+/**
+ * What a test file changes in the world: lines added to the Mac's config.yaml, the Mac's and the
+ * companion's extra env. `leaderSwitch`: A and B run the write permission (the file's header).
+ * `recordCompanionOutward`: the companion records every outward connection, fetch and child
+ * (companionOutwardLog).
+ */
+export interface TwinOptions { macConfig?: string[]; macEnv?: Record<string, string>; companionEnv?: Record<string, string>; leaderSwitch?: boolean; recordCompanionOutward?: boolean }
+
+/**
+ * A leader's local daemon started by the test in its own dir (`<base>/pm` for the Mac, `<base>/sb` for
+ * B), so it outlives the leader's server as the production daemon does; the server adopts it.
+ */
+async function startSurvivingLocalDaemon(s: LiveServer, name: 'pmlocal' | 'sblocal'): Promise<void> {
+  // The build the server would spawn itself (a server replaces a daemon of another version with its own).
+  if (!builtDaemonBinary(REPO_ROOT)) throw new Error('a leader switch world needs the built daemon (dist/daemon-binaries): run the build first')
+  const twin = 'binary'
+  const d = await spawnLiveDaemon(daemonCtx(), name, twin, { WALNUT_LEADER_TAKEOVER_MS: String(T), WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
+  world.daemons.push(d)
+  s.daemonDir = d.dir
+}
 let twinOpts: TwinOptions = {}
 
 /**
- * Boot the Mac's server. `fresh`: the first boot, which files the task and S's record, then runs
- * the test's own snippet (in scope: `task`, `out`, `src(file)`; what it puts in `out` is reported).
+ * Boot a leader's server (the Mac, or B). `fresh`: the Mac's first boot, which files the task and S's
+ * record, then runs the test's own snippet (in scope: `task`, `out`, `src(file)`; what it puts in
+ * `out` is reported). `links`: the host aliases it dials and their URLs. `env`: on top of the world's.
  */
-async function bootPrimary(fresh: boolean): Promise<void> {
-  const { primary, tokens, net } = world
+async function bootLeader(s: LeaderServer, o: { fresh: boolean; links: Record<string, string>; listenPort?: number; env?: Record<string, string> }): Promise<void> {
+  const { tokens } = world
+  const fresh = o.fresh
   const src = (f: string) => JSON.stringify(path.join(REPO_ROOT, f))
-  const links = { [KEEPER]: `ws://127.0.0.1:${net.keeper!.port}`, [FOUND]: `ws://127.0.0.1:${net.found!.port}` }
-  await bootServer(primary, `
+  await bootServer(s, `
 ${BOOT_HEAD}
 const c = await import(${src('src/constants.ts')})
-if (c.WALNUT_HOME !== ${JSON.stringify(primary.data)} || c.CLOUD_MODE) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
+if (c.WALNUT_HOME !== ${JSON.stringify(s.data)} || c.CLOUD_MODE) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
 const { startServer, stopServer, armGracefulSignalExit } = await import(${src('src/web/server.ts')})
-const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' })
+const server = await startServer({ port: ${o.listenPort ?? 0}, dev: true, bindAddress: '127.0.0.1' })
 const out = {}
 if (${fresh}) {
   const src = (f) => ${JSON.stringify(REPO_ROOT)} + '/' + f
@@ -202,7 +322,7 @@ await awaitLocalDaemonLink({
   write: (line) => process.stderr.write(line + '\\n'),
   exit: (code) => process.exit(code),
 }))
-const links = ${JSON.stringify(links)}
+const links = ${JSON.stringify(o.links)}
 const up = (alias) => dc.getConnectedDaemonConnection(alias) !== null
 // A link up is the alias's own pooled link, where link(host) looks (an ssh row's link is pooled so).
 const dial = async (alias) => {
@@ -218,34 +338,61 @@ const keepLinks = async () => {
   }
   if (!up(${JSON.stringify(KEEPER)})) { keeperUpAt = 0; await dial(${JSON.stringify(KEEPER)}); return }
   if (!keeperUpAt) keeperUpAt = Date.now()
-  if (foundAllowed && !up(${JSON.stringify(FOUND)}) && Date.now() - keeperUpAt > 3_000) await dial(${JSON.stringify(FOUND)})
+  if (foundAllowed && links[${JSON.stringify(FOUND)}] && !up(${JSON.stringify(FOUND)}) && Date.now() - keeperUpAt > 3_000) await dial(${JSON.stringify(FOUND)})
 }
 let keeping = false
 setInterval(() => { if (keeping) return; keeping = true; void keepLinks().finally(() => { keeping = false }) }, 1_000).unref()
 await keepLinks()
 const { createServer } = await import('node:http')
+// The test's hooks into this process (the leader switch's own calls, host-follow.ts).
 const control = createServer((req, res) => {
   if (req.headers.authorization !== ${JSON.stringify(`Bearer ${tokens.local}`)}) { res.writeHead(401).end(); return }
-  if (req.url === '/link-found') foundAllowed = true
   res.setHeader('Content-Type', 'application/json')
+  const url = new URL(req.url ?? '/', 'http://x')
+  if (url.pathname === '/drop-duties' || url.pathname === '/restart-notice') {
+    void import(${src('src/core/leader/switch/host-follow.ts')}).then(async (hf) => {
+      const r = url.pathname === '/drop-duties'
+        ? await hf.dropOwnDaemonDuties({ home: c.WALNUT_HOME })
+        : { restartingMs: await hf.announceSwitchStop(Number(url.searchParams.get('ms'))) }
+      res.end(JSON.stringify(r))
+    }).catch((err) => { res.writeHead(500).end(JSON.stringify({ ok: false, why: String(err) })) })
+    return
+  }
+  if (url.pathname === '/link-found') foundAllowed = true
   res.end(JSON.stringify({ keeper: up(${JSON.stringify(KEEPER)}), found: up(${JSON.stringify(FOUND)}), foundAllowed }))
 })
 await new Promise((r) => control.listen(0, '127.0.0.1', r))
 const addr = server.address()
 process.stdout.write(JSON.stringify({ out, controlPort: control.address().port }) + '\\n')
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
-${BOOT_TAIL}`, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500', ...twinOpts.macEnv }), true, (line) => {
+${BOOT_TAIL}`, serverEnv(s, { WALNUT_LEADER_HEARTBEAT_MS: '500', ...twinOpts.macEnv, ...o.env }), true, (line) => {
     try {
       const j = JSON.parse(line)
-      if (typeof j.controlPort === 'number') { primary.controlPort = j.controlPort; if (fresh) primary.out = j.out ?? {} }
+      if (typeof j.controlPort === 'number') { s.controlPort = j.controlPort; if (fresh) s.out = j.out ?? {} }
     } catch { /* partial */ }
   })
 }
 
-async function control(p: '/links' | '/link-found'): Promise<{ keeper: boolean; found: boolean }> {
-  const res = await fetch(`http://127.0.0.1:${world.primary.controlPort}${p}`, { method: p === '/links' ? 'GET' : 'POST', headers: { Authorization: `Bearer ${world.tokens.local}` }, signal: AbortSignal.timeout(10_000) })
-  return await res.json() as { keeper: boolean; found: boolean }
+/** Boot the Mac's server (machine A with a leader switch), dialing both aliases through the Mac's network. */
+async function bootPrimary(fresh: boolean): Promise<void> {
+  const { net } = world
+  const ls = world.leaderSwitch
+  if (ls && fresh) await startSurvivingLocalDaemon(world.primary, 'pmlocal')
+  await bootLeader(world.primary, {
+    fresh,
+    links: { [KEEPER]: `ws://127.0.0.1:${net.keeper!.port}`, [FOUND]: `ws://127.0.0.1:${net.found!.port}` },
+    ...(ls ? { listenPort: ls.a.port, env: { WALNUT_MACHINE_ID_FILE: ls.a.idFile } } : {}),
+  })
+  world.leaderHome = world.primary.data
 }
+
+/** A hook of the leader switch run inside a leader's own process (host-follow.ts), or the link state. */
+export async function leaderControl(s: LeaderServer, p: '/links' | '/link-found' | '/drop-duties' | `/restart-notice?ms=${number}`): Promise<Record<string, any>> {
+  const res = await fetch(`http://127.0.0.1:${s.controlPort}${p}`, { method: p === '/links' ? 'GET' : 'POST', headers: { Authorization: `Bearer ${world.tokens.local}` }, signal: AbortSignal.timeout(30_000) })
+  return await res.json() as Record<string, any>
+}
+
+const control = (p: '/links' | '/link-found') => leaderControl(world.primary, p) as Promise<{ keeper: boolean; found: boolean }>
 
 /** Both links up, `devbox` first: once the companion knows the daemon as `devbox`, the discovered row links. */
 export async function linkBothAliases(): Promise<void> {
@@ -319,6 +466,57 @@ export async function macHoldsDevboxAgain(): Promise<void> {
   }, 120_000, 'the Mac to take devbox back and the companion to let go')
 }
 
+// ---- a leader switch: A (the Mac) to B (TwinOptions.leaderSwitch) ----------------------------------
+
+/** A command to a leader's own local daemon (its port file in the server's daemon dir), over a plain socket of this test. */
+export async function localDaemonCall(s: LiveServer, payload: Record<string, unknown>, ms = 10_000): Promise<Record<string, any>> {
+  const port = Number(fs.readFileSync(path.join(s.daemonDir, 'daemon.port'), 'utf8').trim())
+  return daemonCall({ name: `${s.name} daemon`, port } as LiveDaemon, payload, ms)
+}
+
+/** TERM of a leader's server alone, its exit proven: its local daemon keeps running (its sessions, its bridge). */
+export async function stopLeaderServer(s: LiveServer): Promise<void> {
+  if (!s.server) throw new Error(`${s.name}: no server registered`)
+  must(await world.procs!.stop(s.server, 30_000), `TERM ${s.server.label}`)
+}
+
+/**
+ * B's data dir, as the switch's final batch and promotion leave it: a copy of A's leader data made
+ * while A is stopped, and the promotion record the switch writes before the commit start
+ * (flow.ts 'commit': state 'promoted', the handover it commits on, the data dir A spoke from on its
+ * hosts). Returns how many files were copied.
+ */
+export async function prepareStandby(o: { switchId: string; handover: number }): Promise<number> {
+  const { primary, standby } = world
+  const ls = world.leaderSwitch
+  if (!ls) throw new Error('prepareStandby: the world has no leader switch (TwinOptions.leaderSwitch)')
+  if (primary.server && !primary.server.exited) throw new Error('prepareStandby: A\'s server still runs; its copy is made while it is stopped')
+  await prepareLeaderHome(standby, 'standby')
+  copyLeaderData(primary.data, standby.data)
+  let files = 0
+  const walk = (d: string): void => { for (const e of fs.readdirSync(d, { withFileTypes: true })) e.isDirectory() ? walk(path.join(d, e.name)) : files++ }
+  walk(standby.data)
+  const { writePromoted } = await import('../../src/core/leader/switch/records.js')
+  writePromoted(standby.data, { switchId: o.switchId, state: 'promoted', from: primary.data, to: ls.b.id, handover: o.handover, fromHomeOnHosts: primary.data, fromFormerHomes: [], at: new Date().toISOString() })
+  return files
+}
+
+/**
+ * Boot B as the switch's commit start (WALNUT_LEADER_SWITCH_COMMIT = the handover's number), on its
+ * config port, its own local daemon, the dev box dialed directly. The dev box follows B's home from here.
+ */
+export async function bootStandby(o: { commitHandover: number }): Promise<void> {
+  const ls = world.leaderSwitch!
+  await startSurvivingLocalDaemon(world.standby, 'sblocal')
+  await bootLeader(world.standby, {
+    fresh: false,
+    links: { [KEEPER]: `ws://127.0.0.1:${world.devbox.port}` },
+    listenPort: ls.b.port,
+    env: { WALNUT_MACHINE_ID_FILE: ls.b.idFile, WALNUT_LEADER_SWITCH_COMMIT: String(o.commitHandover) },
+  })
+  world.leaderHome = world.standby.data
+}
+
 /** The sessions of the read copy the daemon answers from while the Mac is away (offline-host-core.ts). */
 export function sliceSids(d: LiveDaemon): string[] | null {
   const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
@@ -339,7 +537,7 @@ export function sliceSids(d: LiveDaemon): string[] | null {
 export async function setupTwinMac(prefix: string, firstBoot = '', opts: TwinOptions = {}): Promise<void> {
   firstBootSnippet = firstBoot
   twinOpts = opts
-  world.base = await liveBase(prefix, ['prd', 'cod', 'de'])
+  world.base = await liveBase(prefix, ['prd', 'cod', 'de', 'std', 'pm', 'sb'])
   world.procs = new LiveProcs(realProcTable(), world.base)
   world.unhookTerm = resumeOnTerm(world.procs)
   for (const k of Object.keys(world.tokens) as Array<keyof typeof world.tokens>) world.tokens[k] = newToken()
@@ -375,7 +573,9 @@ export async function teardownTwinMac(): Promise<void> {
   if (!procs) return
   try {
     for (const p of macNet()) p?.setMode('pass')
-    await finishLive(procs, world.base, [world.primary, world.companion], () => stopLiveMockSessions(daemonCtx(), world.daemons, world.clis, world.primary.data))
+    const servers = [world.primary, ...(world.standby.data && world.standby.daemonDir ? [world.standby] : []), world.companion]
+    // A host follows the leader's home now: after a switch it refuses the old one (walnut_home_busy).
+    await finishLive(procs, world.base, servers, () => stopLiveMockSessions(daemonCtx(), world.daemons, world.clis, world.leaderHome || world.primary.data))
   } finally {
     for (const p of macNet()) await p?.close()
     world.unhookTerm?.()

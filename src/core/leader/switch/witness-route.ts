@@ -35,16 +35,14 @@ import { PROOF_SECRET_RE, proofsEqual } from '../../../utils/hmac-proof.js'
 const MAX_BODY_BYTES = 4 * 1024 * 1024
 
 /**
- * What the door knows about who is calling. Today the only caller that can reach the route is
- * the host daemon's relayed stream from the leader of the Walnut the service follows
- * (`leader-door`); the Walnut id in the body is checked against the one this service follows.
- *
- * TODO (C5a, host-dialed door): a `host-door` caller is authorized by the SOCKET it arrives on, a socket that
- * passed 5a's handshake (hello v2, welcome, auth: both sides prove the verify key S by challenge-response; the
- * credential record is {machineId, walnutId, hostKey, verifyKey S}). The door then passes the record's own
- * machine and Walnut ids as `verifiedWalnutId`, and the body's claim is not looked at. There is no per-request
- * token and none is to be made: a token on each call would be a replayable credential. Only the body of
- * authorizeWitnessCaller changes when that lands.
+ * What the door knows about who is calling:
+ *   - `leader-door`: the host daemon's relayed stream from the leader of the Walnut the service follows;
+ *     the Walnut id in the body is checked against the one this service follows.
+ *   - `host-door`: a call frame on the socket this host dialed into its leader's door
+ *     (replica/leader-door.ts witnessCallAnswered). That socket passed 5a's handshake (both sides proved
+ *     the verify key S of this machine's credential {machineId, walnutId, hostKey, S}), so the
+ *     credential's own Walnut id is passed as `verifiedWalnutId` and the body's claim is not looked at.
+ *     There is no per-request token: a token on each call would be a replayable credential.
  */
 export type WitnessCaller =
   | { via: 'leader-door'; claimedWalnutId: string }
@@ -145,12 +143,15 @@ export async function serveWitnessCall(pathname: string, body: unknown, caller: 
   if (pathname === WITNESS_REQUEST_PATH) {
     const call = parseWitnessCall(body)
     if (!call) return { status: 400, body: { ok: false, error: 'bad_request' } }
-    const auth = authorizeWitnessCaller(caller(call.walnutId), deps.walnutId())
+    const own = deps.walnutId()
+    const auth = authorizeWitnessCaller(caller(call.walnutId), own)
     if (!auth.ok) return { status: auth.status, body: { ok: false, error: auth.error } }
+    // The record of the Walnut the caller was checked as (this service's own): a host-door caller's body is not looked at.
+    const walnutId = own!
     // No record here: NO_WITNESS_HERE only when the directory holds nothing of a witness (no record, no key), the
     // one answer a setup's evidence may count as `absent`; a key with no record is a 404 like a path this service
     // does not have, which counts as not reached.
-    const place = { id: call.witness, dir: witnessDir(deps.root, call.walnutId, call.witness) }
+    const place = { id: call.witness, dir: witnessDir(deps.root, walnutId, call.witness) }
     try {
       const reply = await serveLocalWitness(place, call.request, deps.params ?? DEFAULT_PERMIT_PARAMS)
       if (!reply) return witnessDirEmpty(place.dir) ? NO_WITNESS_HERE : NOT_FOUND
@@ -163,9 +164,10 @@ export async function serveWitnessCall(pathname: string, body: unknown, caller: 
   if (pathname === WITNESS_SETUP_PATH) {
     const setup = parseWitnessSetup(body)
     if (!setup) return { status: 400, body: { ok: false, error: 'bad_request' } }
-    const auth = authorizeWitnessCaller(caller(setup.walnutId), deps.walnutId())
+    const own = deps.walnutId()
+    const auth = authorizeWitnessCaller(caller(setup.walnutId), own)
     if (!auth.ok) return { status: auth.status, body: { ok: false, error: auth.error } }
-    return setUpMachineWitness(deps.root, setup, deps.log)
+    return setUpMachineWitness(deps.root, { ...setup, walnutId: own! }, deps.log)
   }
   return NOT_FOUND
 }

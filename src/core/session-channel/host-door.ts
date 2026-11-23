@@ -91,6 +91,8 @@ let preAuthTotal = 0
 const live = new Map<string, Set<WebSocket>>()
 /** The linked ones, with their host key. */
 const linkedSockets = new Map<WebSocket, string>()
+/** The newest linked socket of each host key and of each machine (its credential's id): what dialedHostCall reaches. */
+const callable = new Map<string, ChannelSocket>()
 
 /** One failure for `ip`; the same `guess` again within the window counts once (auth-rate-limit.ts). */
 const failAuth = async (ip: string, guess?: string): Promise<void> => {
@@ -321,6 +323,7 @@ export function linkDoorSocket(ws: WebSocket, link: { hostKey: string; name: str
     live.get(name)?.delete(ws)
     if (live.get(name)?.size === 0) live.delete(name)
     linkedSockets.delete(ws)
+    for (const k of callKeys) if (callable.get(k) === sock) callable.delete(k)
     for (const [, p] of calls) { clearTimeout(p.timer); p.reject(new Error('the host-dialed link closed before the host answered')) }
     calls.clear()
     onGone?.()
@@ -350,7 +353,20 @@ export function linkDoorSocket(ws: WebSocket, link: { hostKey: string; name: str
       }
     }),
   }
-  if (!d.adopt(hostKey, sock)) close(1001, 'stopping')
+  // name is host-<machineId> (host-credentials.ts hostCredentialName): a caller may name the machine.
+  const callKeys = [hostKey, `machine:${name.replace(/^host-/, '')}`]
+  if (!d.adopt(hostKey, sock)) { close(1001, 'stopping'); return }
+  if (!closed) for (const k of callKeys) callable.set(k, sock)
+}
+
+/**
+ * A call over the socket `host` dialed into this door (a host key, or the machine id its credential
+ * names), or null when no such socket is linked now. The host answers only the prefixes it allowed
+ * (door-calls.ts); the leader switch's witness calls ride it this way (way c, witness-transport.ts).
+ */
+export function dialedHostCall(host: string): ((method: string, path: string, body: unknown, timeoutMs: number) => Promise<{ status: number; body: unknown }>) | null {
+  const sock = callable.get(host) ?? callable.get(`machine:${host}`)
+  return sock?.call ? (method, path, body, timeoutMs) => sock.call!(method, path, body, timeoutMs) : null
 }
 
 /** Send `doors` to every linked door socket now (a `doors` frame): the host keys told. */
@@ -389,6 +405,7 @@ export async function startHostDoor(d: HostDoorDeps): Promise<() => void> {
     live.clear()
     pending.clear()
     linkedSockets.clear()
+    callable.clear()
     wss?.close()
     wss = null
     if (deps === d) deps = null
