@@ -31,7 +31,7 @@ import { CONSENT_ROWS, COMPARE_ENGINES, JUDGE } from '../../core/stt/compare/eng
 import { BenchFormatError, importBench } from '../../core/stt/compare/import-bench.js'
 import { judgeAgain, runComparison, runProgress, runStatesOf } from '../../core/stt/compare/runner.js'
 import { wordDiff } from '../../core/stt/compare/score.js'
-import { compareFlag, compareSection, deleteCompareData, engineEnabled, elevenLabsKey, uploadAllowed, writeCompareSettings } from '../../core/stt/compare/settings.js'
+import { compareFlag, compareSection, deleteCompareData, engineEnabled, elevenLabsKey, elevenLabsKeyFrom, uploadAllowed, writeCompareSettings } from '../../core/stt/compare/settings.js'
 import { compareStore, validTakeId } from '../../core/stt/compare/store.js'
 import { scoredEngines, summarize } from '../../core/stt/compare/summary.js'
 import { takeAudioPath } from '../../core/stt/compare/takes-source.js'
@@ -131,7 +131,7 @@ async function enginesView() {
       enabled: engineEnabled(config, e.id), allow_upload: uploadAllowed(config, e.id), ...(quota ? { quota } : {}),
     }
   }))
-  return { engines: rows, nightly: section.nightly === true, hasElevenLabsKey: !!elevenLabsKey(config) }
+  return { engines: rows, nightly: section.nightly === true, hasElevenLabsKey: !!elevenLabsKey(config), elevenLabsKeyFrom: elevenLabsKeyFrom(config) }
 }
 
 sttCompareRouter.get('/engines', async (_req: Request, res: Response, next: NextFunction) => {

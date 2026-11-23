@@ -7,6 +7,7 @@
  */
 import { experimentCache } from '../../experimental-cache.js'
 import { removeManagedSecret, resolveSecret, writeManagedSecret } from '../../../model/providers/secret.js'
+import { elevenLabsAccountKey } from '../../elevenlabs-key.js'
 import type { Config } from '../../types.js'
 
 export const compareFlag = experimentCache('stt_compare')
@@ -30,8 +31,15 @@ export function uploadAllowed(config: Config, id: string): boolean {
   return compareSection(config).engines?.[id]?.allow_upload === true
 }
 
+/** A key saved for Voice Accuracy itself, else the user's ElevenLabs key from Settings > Voice. */
 export function elevenLabsKey(config: Config): string | undefined {
-  return resolveSecret(compareSection(config).elevenlabs_api_key)
+  return resolveSecret(compareSection(config).elevenlabs_api_key) || elevenLabsAccountKey(config)
+}
+
+/** Where the key Voice Accuracy uses comes from: saved here, Voice settings' key, or none. */
+export function elevenLabsKeyFrom(config: Config): 'here' | 'voice' | null {
+  if (resolveSecret(compareSection(config).elevenlabs_api_key)) return 'here'
+  return elevenLabsAccountKey(config) ? 'voice' : null
 }
 
 export interface CompareSettingsPatch {

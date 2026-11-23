@@ -94,6 +94,24 @@ describe('/api/stt/compare', () => {
     expect(off.find((e) => e.id === 'haiku-cleanup')!.detail).toMatch(/In use engine's text/)
   })
 
+  it('uses the ElevenLabs key from Voice settings when none is saved here, and says where it came from', async () => {
+    const before = process.env.ELEVENLABS_API_KEY
+    delete process.env.ELEVENLABS_API_KEY
+    try {
+      const none = (await request(app).get('/api/stt/compare/engines')).body
+      expect(none).toMatchObject({ hasElevenLabsKey: false, elevenLabsKeyFrom: null })
+      state.config.tts = { ...(state.config.tts ?? {}), elevenlabs_api_key: 'fake-voice-key-for-tests-0007' }
+      const voice = (await request(app).get('/api/stt/compare/engines')).body
+      expect(voice).toMatchObject({ hasElevenLabsKey: true, elevenLabsKeyFrom: 'voice' })
+      // The engine row no longer asks for a key: only the upload consent stands before it runs.
+      expect((voice.engines as Array<{ id: string; state: string }>).find((e) => e.id === 'elevenlabs-scribe')!.state).toBe('needs-consent')
+      expect(JSON.stringify(voice)).not.toContain('fake-voice-key-for-tests-0007')
+    } finally {
+      delete state.config.tts?.elevenlabs_api_key
+      if (before !== undefined) process.env.ELEVENLABS_API_KEY = before
+    }
+  })
+
   it('settings: consent and switches, and the key kept as a secret file', async () => {
     const res = await request(app).put('/api/stt/compare/settings').send({
       engines: { 'elevenlabs-scribe': { allow_upload: true }, 'whisper-large-v2': { enabled: false } }, nightly: true, elevenlabs_api_key: 'fake-key-for-tests-0003',

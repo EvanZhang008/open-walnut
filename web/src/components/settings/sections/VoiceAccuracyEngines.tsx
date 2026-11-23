@@ -196,7 +196,7 @@ export function VoiceAccuracyEngines({ engines, saveError, save, reload }: Props
                 indent
                 label="ElevenLabs API key"
                 htmlFor="va-elevenlabs-key"
-                help={(
+                help={engines.elevenLabsKeyFrom === 'voice' ? 'Uses your ElevenLabs key from Voice settings. Paste one here to use another.' : (
                   <>
                     {ELEVENLABS_KEY_HINT}
                     <a className="settings-addons-link" href={ELEVENLABS_KEYS_URL} target="_blank" rel="noreferrer" data-testid="va-elevenlabs-key-link">Get a key at ElevenLabs</a>
@@ -211,7 +211,7 @@ export function VoiceAccuracyEngines({ engines, saveError, save, reload }: Props
                       onChange={(v) => { setKey(v); setKeyError(null); }}
                       onEnter={() => void saveKey()}
                       placeholder="Paste a key"
-                      saved={engines.hasElevenLabsKey}
+                      saved={engines.elevenLabsKeyFrom ? engines.elevenLabsKeyFrom === 'here' : engines.hasElevenLabsKey}
                       onRemove={() => save('key', { elevenlabs_api_key: '' })}
                       aria-invalid={!!keyError}
                       data-testid="va-elevenlabs-key"

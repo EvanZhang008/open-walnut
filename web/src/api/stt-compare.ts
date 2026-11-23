@@ -35,7 +35,13 @@ export interface CompareEngineRow {
   quota?: { tier: string; used: number; limit: number; left: number; overage: boolean };
 }
 
-export interface CompareEngines { engines: CompareEngineRow[]; nightly: boolean; hasElevenLabsKey: boolean }
+export interface CompareEngines {
+  engines: CompareEngineRow[];
+  nightly: boolean;
+  hasElevenLabsKey: boolean;
+  /** Where that key comes from: saved here, the key in Settings > Voice, or none (older servers send nothing). */
+  elevenLabsKeyFrom?: 'here' | 'voice' | null;
+}
 
 export interface CompareRates { mixed: number | null; cjk: number | null; latin: number | null; terms: number | null }
 export interface CompareEngineSummary extends CompareRates {

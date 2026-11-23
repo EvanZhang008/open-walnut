@@ -15,7 +15,7 @@
  */
 
 import type { Config } from '../types.js';
-import { resolveSecret } from '../../model/providers/secret.js';
+import { elevenLabsAccountKey } from '../elevenlabs-key.js';
 import { createElevenLabsEngine, ELEVENLABS_DEFAULT_MODEL, ELEVENLABS_DEFAULT_VOICE } from './engine-elevenlabs.js';
 import { TtsError, type TtsAudio, type TtsEngine, type TtsEngineId, type TtsRequest } from './types.js';
 import { registerMemoryHolder } from '../observability/memory-ledger.js';
@@ -46,9 +46,7 @@ export interface TtsStatus {
   byLanguage?: Record<string, TtsEngineId>;
 }
 
-function elevenLabsKey(config: Config): string | undefined {
-  return resolveSecret(config.tts?.elevenlabs_api_key) || process.env.ELEVENLABS_API_KEY || undefined;
-}
+const elevenLabsKey = elevenLabsAccountKey;
 
 /** What each engine can do on this server, and which one is in use. */
 export function ttsStatus(config: Config, facts: LocalVoiceFacts = localVoiceFacts()): TtsStatus {
