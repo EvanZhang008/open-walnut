@@ -4074,7 +4074,8 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   border: 0;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
-  font-size: var(--font-size-md);
+  /* 12.5px before the type scale: the 13px step made a one-line command row 34.5px, over its 34. */
+  font-size: var(--font-size-sm);
 }
 .bg-task-row--compact:last-child { border-bottom: 0; }
 .bg-task-row--compact:hover { background: color-mix(in srgb, var(--fg) 4%, transparent); }
