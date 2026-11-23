@@ -72,6 +72,9 @@ describe('the raw passes of the send framing', () => {
     expect(returns('frameForSource')).toEqual(['return isPersonSource(source) ? text : frameAsWalnut(text, source, automatedLabel());']);
     expect(returns('frameStartText')).toEqual([
       'if (!readsAsPerson(text)) return text;',
+      // A session's start: that task's peer note.
+      'return buildPeerWrapper(text, {',
+      // A plugin job its host's daemon vouched for: its App's job's note (plugins/plugin-caller.ts jobAppSender).
       'return buildPeerWrapper(text, {',
       'if (opts.callerSid?.trim()) return frameAsWalnut(text, `caller:${opts.callerSid.trim()}`);',
       "if (opts.source?.startsWith('automation:')) return buildPeerWrapper(text, {",
