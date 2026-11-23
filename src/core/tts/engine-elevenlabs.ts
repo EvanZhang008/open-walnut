@@ -19,6 +19,8 @@ export interface ElevenLabsConfig {
   apiKey: string;
   model?: string;
   voice?: string;
+  /** The voice for Chinese pieces (a voice tuned for Chinese); unset: `voice` reads every language. */
+  voiceZh?: string;
   /** For tests: the API's address. */
   baseUrl?: string;
   /** For tests: the fetch to use. */
@@ -39,10 +41,12 @@ export function createElevenLabsEngine(cfg: ElevenLabsConfig): TtsEngine {
   const voice = cfg.voice || ELEVENLABS_DEFAULT_VOICE;
   const doFetch = cfg.fetchImpl ?? fetch;
   const base = cfg.baseUrl ?? BASE_URL;
+  const voiceFor = (language?: string) => (cfg.voiceZh && language?.toLowerCase().startsWith('zh') ? cfg.voiceZh : voice);
   return {
     id: 'elevenlabs',
     model,
     voice,
+    voiceFor,
     async synthesize(req: TtsRequest): Promise<TtsAudio> {
       const body: Record<string, unknown> = { text: req.text, model_id: model };
       const code = languageCode(req.language);
@@ -51,7 +55,7 @@ export function createElevenLabsEngine(cfg: ElevenLabsConfig): TtsEngine {
       if (req.nextText) body.next_text = req.nextText;
       let res: Response;
       try {
-        res = await doFetch(`${base}/v1/text-to-speech/${encodeURIComponent(voice)}/stream?output_format=mp3_44100_128`, {
+        res = await doFetch(`${base}/v1/text-to-speech/${encodeURIComponent(voiceFor(req.language))}/stream?output_format=mp3_44100_128`, {
           method: 'POST',
           headers: { 'xi-api-key': cfg.apiKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
           body: JSON.stringify(body),

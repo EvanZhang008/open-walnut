@@ -37,6 +37,8 @@ export interface TtsEngine {
   /** Model and voice, for the status line and the cache key. */
   model: string;
   voice: string;
+  /** The voice a piece in `language` is read with, when it differs by language (default `voice`). */
+  voiceFor?(language?: string): string;
   synthesize(req: TtsRequest): Promise<TtsAudio>;
 }
 

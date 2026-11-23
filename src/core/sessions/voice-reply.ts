@@ -13,6 +13,13 @@
  * (ios-native SpokenText). Detail after it stays on screen. A reply that ignores
  * the shape still works: the phone then reads a trimmed opening of the message.
  *
+ * The web reads the answer as it streams, every message of the turn sentence by
+ * sentence (web/src/voice/stream-reader.ts), so the wording also asks for one short
+ * sentence before any work ("got it, I will look at the build"): the person hears it
+ * within a second or two instead of after the whole turn. Messages between tool calls
+ * stay one short sentence or none, since each is read aloud. The phone reads only the
+ * final message, which keeps the same shape, so the words hold there too.
+ *
  * The one clause about handing work to another task is what makes "tell me when it
  * is done" work for the Walnut agent: a reply request is what wakes it when the
  * other task finishes (session-request-watch), and that wake is a new turn the
@@ -23,11 +30,14 @@ import { composeHinted, renderHintBlock } from '../hints/hint-format.js';
 
 /** The `voice-reply` hint's text (src/core/hints/hint-registry.ts). */
 export const VOICE_REPLY_TEXT =
-  'the user is talking to you by voice and will hear your final message read aloud. '
-  + 'Do the work as usual. Begin your final message with a short spoken answer, said the way you would say it '
+  'the user is talking to you by voice and hears what you write read aloud as it streams. '
+  + 'When the answer needs tools or other work, first write one short sentence in the language they spoke, '
+  + 'before any tool call, saying you heard them and what you will do. '
+  + 'Between tool calls write one short sentence or nothing. '
+  + 'Begin your final message with a short spoken answer, said the way you would say it '
   + 'to them in a conversation: one to three short plain sentences in the language they spoke, saying what you did '
   + 'or found and what you need from them next. '
-  + 'No markdown, code, tables, links, file paths or ids in that answer. '
+  + 'No markdown, code, tables, links, file paths or ids in what is read aloud. '
   + 'Put any detail after it, below a line that holds only ---. '
   + 'When you hand work to another task, ask it for a reply so you can tell them when it is done. '
   + 'This overrides the output style for this reply.';

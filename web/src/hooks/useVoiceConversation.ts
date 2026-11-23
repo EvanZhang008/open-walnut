@@ -6,19 +6,21 @@
  * browser parts and runs the machine's effects: the mic and its voice activity
  * (voice/voice-mic.ts, voice/voice-activity.ts), the final transcription through
  * the same route dictation uses (/api/stt/transcribe), the send (with the
- * `voice-reply` hint, so the session answers with a short spoken part first), and
- * the speaker (voice/voice-speaker.ts, which asks /api/v1/voice for the words and
- * the speech).
+ * `voice-reply` hint, so the session answers with a short spoken part first), the
+ * answer read as it streams (voice/voice-answer.ts, fed the session's stream here),
+ * and the speaker (voice/voice-speaker.ts, which asks /api/v1/voice for the speech
+ * and plays the waiting cue while the turn works).
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { useLeanCallback } from './useLeanCallback';
 import { transcribeAudio, warmupStt } from '../api/stt';
-import { spokenReply, voiceStatus, type SpokenReply, type TtsEngineId } from '../api/voice';
+import { voiceStatus, type TtsEngineId } from '../api/voice';
 import { openVoice, reduceVoice, type VoiceEffect, type VoiceEvent, type VoiceState } from '../voice/conversation-machine';
 import { BARGE_IN_OPTIONS, LISTEN_OPTIONS, VoiceActivity } from '../voice/voice-activity';
 import { VoiceMic } from '../voice/voice-mic';
-import { VoiceSpeaker } from '../voice/voice-speaker';
+import { VoiceAnswer } from '../voice/voice-answer';
+import { VoiceSpeaker, type SpeakOutcome } from '../voice/voice-speaker';
 import { log } from '../utils/log';
 import { useEvent } from './useWebSocket';
 
@@ -50,11 +52,10 @@ export interface VoiceConversation {
   stoppedRun: () => void;
 }
 
-interface SessionResultLike {
-  sessionId?: string;
-  result?: string;
-  isError?: boolean;
-  interrupted?: boolean;
+type Box<T> = { readonly current: T };
+
+function makeAnswer(session: Box<string>, state: Box<VoiceState | null>, gen: Box<number>, dispatch: (event: VoiceEvent) => void): VoiceAnswer {
+  return new VoiceAnswer({ sessionId: () => session.current, state: () => state.current, gen: () => gen.current, dispatch });
 }
 
 export function useVoiceConversation(
@@ -74,7 +75,6 @@ export function useVoiceConversation(
   const micRef = useRef<VoiceMic | null>(null);
   const speakerRef = useRef<VoiceSpeaker | null>(null);
   const activityRef = useRef(new VoiceActivity(LISTEN_OPTIONS));
-  const lastReplyRef = useRef<SpokenReply | null>(null);
   const sendRef = useRef(send);
   sendRef.current = send;
   const listenSinceRef = useRef(0);
@@ -83,10 +83,9 @@ export function useVoiceConversation(
   const genRef = useRef(0);
   /** The mic is off while paused, so the browser's recording mark goes out too; a tap opens it again. */
   const micOpeningRef = useRef<Promise<VoiceMic | null> | null>(null);
-  /** The bar's Stop ended the turn: the next interrupted result is that turn's, never read. */
-  const stoppedRef = useRef(false);
-  /** The last answer read, so a result announced twice is read once. */
-  const lastResultRef = useRef<{ text: string; at: number } | null>(null);
+  /** The speaker's queue this conversation listens to, so its end is reported once. */
+  const drainRef = useRef<Promise<SpeakOutcome> | null>(null);
+  const answerRef = useRef<VoiceAnswer | null>(null);
 
   // One place every event goes through: reduce, keep, run the effects.
   const dispatch = useLeanCallback((event: VoiceEvent) => {
@@ -98,6 +97,9 @@ export function useVoiceConversation(
     if (step.state.phase !== current.phase) log.info('voice', `${current.phase} -> ${step.state.phase}`, { sessionId: sessionRef.current, event: event.type });
     if (step.state.phase === 'paused' && current.phase !== 'paused') closeMic();
     for (const effect of step.effects) runEffect(effect);
+    // The soft cue while the turn works and nothing is said; any speech, a pause or a close stops it.
+    // (Read from the ref: an effect may have dispatched again meanwhile.)
+    speakerRef.current?.waitingCue(stateRef.current?.phase === 'waiting');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -166,27 +168,41 @@ export function useVoiceConversation(
         return;
       }
       case 'send':
-        stoppedRef.current = false;
+        answer().sent();
         void sendRef.current(effect.text).then((ok) => {
           if (!ok && genRef.current === gen) dispatch({ type: 'send-failed', error: 'The message did not go out. Tap and say it again.' });
         }, (err) => { if (genRef.current === gen) dispatch({ type: 'send-failed', error: err instanceof Error ? err.message : String(err) }); });
         return;
-      case 'speak': {
-        const reply = lastReplyRef.current;
+      case 'speak':
+      case 'enqueue': {
+        const reply = answer().wordsFor(effect.text);
         const speaker = speakerRef.current;
-        if (!reply || !speaker) { dispatch({ type: 'speech-done' }); return; }
-        activityRef.current.reset(BARGE_IN_OPTIONS);
-        void speaker.say(reply).then(
-          (outcome) => { if (outcome === 'done' && genRef.current === gen) dispatch({ type: 'speech-done' }); },
-          (err) => { if (genRef.current === gen) dispatch({ type: 'speak-failed', error: `Could not read the answer: ${err instanceof Error ? err.message : String(err)}` }); },
-        );
+        if (!reply || !speaker) { if (effect.type === 'speak' || speaker?.idle) dispatch({ type: 'speech-done' }); return; }
+        if (effect.type === 'speak' || speaker.idle) activityRef.current.reset(BARGE_IN_OPTIONS);
+        watchDrain(effect.type === 'speak' ? speaker.say(reply) : speaker.enqueue(reply), speaker, gen);
         return;
       }
       case 'stop-speaking':
         speakerRef.current?.stop();
         return;
+      case 'mute-turn':
+        answer().mute();
+        return;
     }
   };
+
+  /** The speaker's queue ran out: report it once (a piece added while it played joins the same queue). */
+  const watchDrain = (drain: Promise<SpeakOutcome>, speaker: VoiceSpeaker, gen: number) => {
+    if (drain === drainRef.current) return;
+    drainRef.current = drain;
+    void drain.then(
+      (outcome) => { if (outcome === 'done' && genRef.current === gen && speaker.idle) dispatch({ type: 'speech-done' }); },
+      (err) => { if (genRef.current === gen) dispatch({ type: 'speak-failed', error: `Could not read the answer: ${err instanceof Error ? err.message : String(err)}` }); },
+    );
+  };
+
+  /** The answer reader, made once (over refs, at module level: it holds no render). */
+  const answer = (): VoiceAnswer => (answerRef.current ??= makeAnswer(sessionRef, stateRef, genRef, dispatch));
 
   const stop = useLeanCallback(() => {
     genRef.current++;
@@ -195,6 +211,8 @@ export function useVoiceConversation(
     micRef.current?.close();
     micRef.current = null;
     micOpeningRef.current = null;
+    drainRef.current = null;
+    answerRef.current?.reset();
     void ctxRef.current?.close().catch(() => {});
     ctxRef.current = null;
     stateRef.current = null;
@@ -254,12 +272,15 @@ export function useVoiceConversation(
   const tap = useLeanCallback(() => dispatch({ type: 'tap' }), [dispatch]);
 
   const stoppedRun = useLeanCallback(() => {
-    stoppedRef.current = true;
-    dispatch({ type: 'reply', spoken: null });
+    answer().runStopped();
+    dispatch({ type: 'run-stopped' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
   const replay = useLeanCallback(() => {
-    if (lastReplyRef.current) dispatch({ type: 'replay', spoken: lastReplyRef.current.text });
+    const last = answer().last();
+    if (last) dispatch({ type: 'replay', spoken: last.text });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
   // The mic's loudness drives voice activity while listening and barge-in while speaking.
@@ -287,36 +308,10 @@ export function useVoiceConversation(
     // Runs while the conversation is open; the phase is read from the ref.
   }, [state !== null, dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The session's answer: what to say comes from the server (the same words on every client).
-  useEvent('session:result', (data) => {
-    const ev = data as SessionResultLike;
-    if (!stateRef.current || ev.sessionId !== sessionRef.current) return;
-    // A turn the person stopped from the bar is not read, nor a stopped turn with no words.
-    // Any other answer is, even marked interrupted: a message sent into a busy or restarting
-    // session, or sent again after a stop, comes back so (2026-11-22, the Mac app: the answer
-    // to a voice message was skipped that way and nothing was said).
-    const words = (ev.result ?? '').trim();
-    if (ev.interrupted && (stoppedRef.current || !words)) {
-      stoppedRef.current = false;
-      dispatch({ type: 'reply', spoken: null });
-      return;
-    }
-    const text = ev.isError ? 'Something went wrong. The details are on screen.' : (ev.result ?? '');
-    const now = Date.now();
-    const last = lastResultRef.current;
-    if (last && last.text === text && now - last.at < 60_000) return;
-    lastResultRef.current = { text, at: now };
-    const gen = genRef.current;
-    void spokenReply(text).then((reply) => {
-      if (genRef.current !== gen) return;
-      if (reply) lastReplyRef.current = reply;
-      dispatch({ type: 'reply', spoken: reply?.text ?? null });
-    }, (err) => {
-      if (genRef.current !== gen) return;
-      log.warn('voice', 'spoken text failed', { sessionId: sessionRef.current, error: err instanceof Error ? err.message : String(err) });
-      dispatch({ type: 'reply', spoken: null });
-    });
-  });
+  // The session's answer, read as it streams; what to say comes from the server (the same words on every client).
+  useEvent('session:text-delta', (data) => answer().onDelta(data));
+  useEvent('session:tool-use', (data) => answer().onToolUse(data));
+  useEvent('session:result', (data) => answer().onResult(data));
 
   // Another session, or the page going away: the conversation ends.
   useEffect(() => {

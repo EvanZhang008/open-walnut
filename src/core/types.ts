@@ -2294,8 +2294,10 @@ export interface Config {
     elevenlabs_api_key?: string;
     /** Default: eleven_flash_v2_5 (about 200 ms to first audio, half a credit per character). */
     elevenlabs_model?: string;
-    /** Default: a premade voice that reads Chinese and English. */
+    /** Default: a premade voice that reads Chinese and English. Reads every language that has no voice of its own. */
     elevenlabs_voice_id?: string;
+    /** The voice for Chinese answers (zh*); unset: `elevenlabs_voice_id` reads them too. */
+    elevenlabs_voice_id_zh?: string;
   };
   /** Speech-to-text configuration for voice input */
   stt?: {

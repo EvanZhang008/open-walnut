@@ -64,6 +64,7 @@ export function serverEngine(config: Config, deps: { fetchImpl?: typeof fetch; b
     apiKey: key,
     model: config.tts?.elevenlabs_model,
     voice: config.tts?.elevenlabs_voice_id,
+    voiceZh: config.tts?.elevenlabs_voice_id_zh,
     ...deps,
   });
 }
@@ -81,7 +82,7 @@ registerMemoryHolder({
 });
 
 function cacheKey(engine: TtsEngine, req: TtsRequest): string {
-  return [engine.id, engine.model, engine.voice, req.language ?? '', req.text].join('\u0000');
+  return [engine.id, engine.model, engine.voiceFor?.(req.language) ?? engine.voice, req.language ?? '', req.text].join('\u0000');
 }
 
 function remember(key: string, mime: string, bytes: Uint8Array): void {

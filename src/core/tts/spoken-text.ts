@@ -25,6 +25,9 @@ export interface SpokenText {
   /** `text` split into speakable pieces, in order: a client synthesizes the first
    *  while the next ones are fetched, so the voice starts after one short piece. */
   chunks: string[];
+  /** Only when `truncated`: the line said after the cut (`restOnScreen`), so a client that
+   *  already said the rest of the answer as it streamed can say only this line. */
+  rest?: string;
 }
 
 /** About how long one answer may take to say. */
@@ -43,18 +46,33 @@ export function restOnScreen(language: string): string {
 const CHUNK_SECONDS = 8;
 
 /** nil when nothing speakable is left (a reply that was only code or a table). */
-export function prepareSpokenText(raw: string, budgetSeconds = SPOKEN_BUDGET_SECONDS): SpokenText | null {
+/** `language` (BCP-47): the language it is said in, when the caller knows it better than the text shows. */
+export function prepareSpokenText(raw: string, budgetSeconds = SPOKEN_BUDGET_SECONDS, language?: string): SpokenText | null {
   const { head, cutAtRule } = spokenPart(raw);
   const plainText = plain(head);
   if (!plainText) return null;
-  const language = languageOf(plainText);
+  language ??= languageOf(plainText);
   const { text: capped, cut } = cap(plainText, budgetSeconds);
   // Any cut says the rest is on screen, here and not in the session's words: the phone
   // (ios-native SpokenText) adds its own line at a cut, so a session that said it too
   // would be heard saying it twice there.
   const truncated = cutAtRule || cut;
-  const text = truncated ? `${capped}${language.toLowerCase().startsWith('zh') ? '' : ' '}${restOnScreen(language)}` : capped;
-  return { text, language, truncated, chunks: chunksOf(text) };
+  if (!truncated) return { text: capped, language, truncated, chunks: chunksOf(capped) };
+  const rest = restOnScreen(language);
+  const text = `${capped}${language.toLowerCase().startsWith('zh') ? '' : ' '}${rest}`;
+  return { text, language, truncated, chunks: chunksOf(text), rest };
+}
+
+/**
+ * One part of an answer that is still streaming (web/src/voice/stream-reader.ts picks
+ * the sentences): cleaned like a reply, but with no length budget and no rest line,
+ * since the reader keeps the budget for the whole turn and the rest line is said once,
+ * at the end. Null when nothing in it can be said.
+ */
+export function prepareSpokenPiece(raw: string): SpokenText | null {
+  const text = plain(spokenPart(raw).head);
+  if (!text) return null;
+  return { text, language: languageOf(text), truncated: false, chunks: chunksOf(text) };
 }
 
 /** The text before the first line that holds only `---`, when there is any. */

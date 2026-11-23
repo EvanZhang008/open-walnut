@@ -18,15 +18,22 @@ export interface SpokenReply {
   language: string;
   truncated: boolean;
   chunks: string[];
+  /** Only when truncated: the rest-on-screen line that ends `text`. */
+  rest?: string;
 }
 
 export function voiceStatus(): Promise<VoiceStatus> {
   return apiGet<VoiceStatus>('/api/v1/voice/status', undefined, { timeoutMs: 8000 });
 }
 
-/** What to say for a reply, or null when nothing in it can be said (only code, a table). */
-export async function spokenReply(text: string): Promise<SpokenReply | null> {
-  const res = await apiPost<SpokenReply | { text: null }>('/api/v1/voice/spoken', { text }, { timeoutMs: 8000 });
+/**
+ * What to say for a reply, or null when nothing in it can be said (only code, a table).
+ * `piece`: the text is one part of an answer still streaming (no length budget, no rest line).
+ * `language`: the language it is said in (the rest line follows it), instead of the one detected.
+ */
+export async function spokenReply(text: string, opts: { piece?: boolean; language?: string } = {}): Promise<SpokenReply | null> {
+  const body = { text, ...(opts.piece ? { piece: true } : {}), ...(opts.language ? { language: opts.language } : {}) };
+  const res = await apiPost<SpokenReply | { text: null }>('/api/v1/voice/spoken', body, { timeoutMs: 8000 });
   return res.text === null ? null : res as SpokenReply;
 }
 

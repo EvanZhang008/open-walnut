@@ -75,6 +75,19 @@ describe('ElevenLabs request', () => {
     expect((calls[1]!.body as Record<string, unknown>).language_code).toBe('ja')
   })
 
+  it('reads Chinese pieces with the Chinese voice when one is set, every other language with the default', async () => {
+    const calls: { url: string; body: unknown; key: string | null }[] = []
+    const engine = serverEngine(cfg({ elevenlabs_api_key: 'k', elevenlabs_voice_id: 'voice-main', elevenlabs_voice_id_zh: 'voice-zh' }), { fetchImpl: fakeFetch(calls, () => new Response(new Uint8Array([0]))) })!
+    await engine.synthesize({ text: 'a', language: 'zh-CN' })
+    await engine.synthesize({ text: 'b', language: 'en-US' })
+    await engine.synthesize({ text: 'c' })
+    expect(calls.map((c) => c.url.split('/text-to-speech/')[1]!.split('/')[0])).toEqual(['voice-zh', 'voice-main', 'voice-main'])
+    // Unset: the one voice reads Chinese too.
+    const one: typeof calls = []
+    await serverEngine(cfg({ elevenlabs_api_key: 'k', elevenlabs_voice_id: 'voice-main' }), { fetchImpl: fakeFetch(one, () => new Response(new Uint8Array([0]))) })!.synthesize({ text: 'a', language: 'zh-CN' })
+    expect(one[0]!.url).toContain('/text-to-speech/voice-main/')
+  })
+
   it('turns API failures into sentences with the right status', () => {
     expect(elevenLabsError(401, '{"detail":{"status":"invalid_api_key","message":"Invalid API key"}}')).toMatchObject({ status: 503, code: 'tts_unavailable' })
     expect(elevenLabsError(401, '{"detail":{"status":"quota_exceeded","message":"This request exceeds your quota"}}')).toMatchObject({ code: 'tts_quota' })

@@ -3,14 +3,20 @@
  * every client (the web's voice mode, and the phone's).
  *
  *   GET  /voice/status              → { engine, engines: [{ id, available, reason?, model?, voice? }] }
- *   POST /voice/spoken { text }     → { text, language, truncated, chunks } | { text: null }
+ *   POST /voice/spoken { text, piece?, language? }
+ *                                   → { text, language, truncated, chunks, rest? } | { text: null }
  *   POST /voice/speak  { text, language?, previousText?, nextText? }
  *                                   → 200 audio/mpeg, streamed as the engine makes it
  *
  * `spoken` turns a reply into what is said (src/core/tts/spoken-text.ts: the part
  * before `---`, no code, tables or paths, about 40 seconds at most) and cuts it in
- * pieces; a client then asks `speak` for each piece, the next one while the first
- * plays. With `engine: "device"` the client speaks the pieces with its own system
+ * pieces (`rest`, only when truncated, is the rest-on-screen line it appended); a
+ * client then asks `speak` for each piece, the next one while the first plays.
+ * `piece: true` marks one part of an answer still streaming (the web reads the
+ * answer sentence by sentence as it is written): cleaned the same way, with no
+ * length budget and no rest line. `language` (a BCP-47 tag) says which language the
+ * answer is said in, so the rest line matches what was said (a client reading a
+ * streamed Chinese answer whose detail is English). With `engine: "device"` the client speaks the pieces with its own system
  * voice and never calls `speak`.
  *
  * Errors: `bad_request` (400), `tts_unavailable` (503: no engine on this server, or
@@ -24,7 +30,7 @@
 import { Readable } from 'node:stream'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
-import { prepareSpokenText } from '../../core/tts/spoken-text.js'
+import { prepareSpokenPiece, prepareSpokenText } from '../../core/tts/spoken-text.js'
 import { isTtsError, serverEngine, speak, ttsStatus } from '../../core/tts/index.js'
 
 export const voiceV1Router = Router()
@@ -51,16 +57,24 @@ voiceV1Router.get('/voice/status', async (_req: Request, res: Response, next: Ne
 })
 
 voiceV1Router.post('/voice/spoken', (req: Request, res: Response) => {
-  const text = (req.body ?? {}).text
+  const { text, piece, language } = (req.body ?? {}) as { text?: unknown; piece?: unknown; language?: unknown }
   if (typeof text !== 'string') {
     sendError(res, 400, 'bad_request', 'text (string) is required')
+    return
+  }
+  if (language !== undefined && (typeof language !== 'string' || !/^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8}){0,2}$/.test(language))) {
+    sendError(res, 400, 'bad_request', 'language must be a BCP-47 tag such as zh-CN')
+    return
+  }
+  if (piece !== undefined && typeof piece !== 'boolean') {
+    sendError(res, 400, 'bad_request', 'piece must be a boolean')
     return
   }
   if (text.length > MAX_REPLY_CHARS) {
     sendError(res, 400, 'bad_request', `text is longer than ${MAX_REPLY_CHARS} characters`)
     return
   }
-  const spoken = prepareSpokenText(text)
+  const spoken = piece ? prepareSpokenPiece(text) : prepareSpokenText(text, undefined, language as string | undefined)
   res.json(spoken ?? { text: null })
 })
 

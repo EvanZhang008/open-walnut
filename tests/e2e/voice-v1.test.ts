@@ -63,8 +63,34 @@ describe('/api/v1/voice', () => {
     expect(body.language).toBe('en-US')
     expect(body.truncated).toBe(true)
     expect(body.chunks[0]).toBe('Done.')
+    // The line said after the cut, alone, for a client that already said the rest as it streamed.
+    expect(body.rest).toBe('The rest is on screen.')
+    // Nothing cut: the response is exactly the old one (no rest field).
+    expect(await (await post('/api/v1/voice/spoken', { text: 'All good.' })).json()).toEqual({ text: 'All good.', language: 'en-US', truncated: false, chunks: ['All good.'] })
     expect(await (await post('/api/v1/voice/spoken', { text: '```\nonly code\n```' })).json()).toEqual({ text: null })
     expect((await post('/api/v1/voice/spoken', { text: 42 })).status).toBe(400)
+  })
+
+  it('piece: one part of a streaming answer, cleaned with no budget and no rest line', async () => {
+    const long = 'This sentence is part of a long streaming answer. '.repeat(20)
+    const body = await (await post('/api/v1/voice/spoken', { text: `**Checking** the \`src/app/main.ts\` file now.\n${long}`, piece: true })).json()
+    expect(body.truncated).toBe(false)
+    expect(body.rest).toBeUndefined()
+    expect(body.text.startsWith('Checking the main.ts file now. This sentence')).toBe(true)
+    expect(body.text).not.toContain('The rest is on screen.')
+    // The same text as a reply is capped and says the rest is on screen.
+    const reply = await (await post('/api/v1/voice/spoken', { text: long })).json()
+    expect(reply.truncated).toBe(true)
+    expect(reply.rest).toBe('The rest is on screen.')
+    expect(await (await post('/api/v1/voice/spoken', { text: '```\ncode\n```', piece: true })).json()).toEqual({ text: null })
+    expect((await post('/api/v1/voice/spoken', { text: 'x', piece: 'yes' })).status).toBe(400)
+  })
+
+  it('language: the rest line follows the language the answer was said in', async () => {
+    const body = await (await post('/api/v1/voice/spoken', { text: 'Build passed.\n---\nDetail.', language: 'zh-CN' })).json()
+    expect(body.language).toBe('zh-CN')
+    expect(body.rest).toBe('\u8be6\u60c5\u5728\u5c4f\u5e55\u4e0a\u3002')
+    expect((await post('/api/v1/voice/spoken', { text: 'x', language: 'not a tag!' })).status).toBe(400)
   })
 
   it('with a key, /speak streams the engine audio and caches it', async () => {

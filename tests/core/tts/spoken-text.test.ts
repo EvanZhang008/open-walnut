@@ -4,7 +4,7 @@
  * Non-ASCII test data is written with \u escapes (repo language rule).
  */
 import { describe, expect, it } from 'vitest'
-import { chunksOf, estimatedSeconds, languageOf, plain, prepareSpokenText, REST_ON_SCREEN, sentences, shortenPaths, spokenPart } from '../../../src/core/tts/spoken-text.js'
+import { chunksOf, estimatedSeconds, languageOf, plain, prepareSpokenPiece, prepareSpokenText, REST_ON_SCREEN, sentences, shortenPaths, spokenPart } from '../../../src/core/tts/spoken-text.js'
 
 // "Done, all tests passed." / "Details are on screen." in Chinese.
 const ZH_DONE = '\u597d\u7684\uff0c\u6d4b\u8bd5\u90fd\u901a\u8fc7\u4e86\u3002'
@@ -115,5 +115,27 @@ describe('pieces', () => {
     const chunks = chunksOf(`${Array.from({ length: 6 }, () => clause).join(', ')}.`)
     expect(chunks.length).toBeGreaterThan(1)
     for (const c of chunks.slice(0, -1)) expect(c.endsWith(',')).toBe(true)
+  })
+})
+
+describe('rest line and streaming pieces', () => {
+  it('a cut reply names the line it appended in rest; an uncut one has no rest', () => {
+    const cut = prepareSpokenText('Done.\n\n---\n\nDetail.')!
+    expect(cut.rest).toBe(REST_ON_SCREEN)
+    expect(cut.text.endsWith(cut.rest!)).toBe(true)
+    expect(prepareSpokenText(`${ZH_DONE}\n\n---\n\n| a |`)!.rest).toBe(ZH_DETAIL)
+    expect('rest' in prepareSpokenText('Done.')!).toBe(false)
+  })
+
+  it('a piece is cleaned like a reply with no budget and no rest line', () => {
+    const long = 'We are still reading the log file line by line. '.repeat(30)
+    expect(estimatedSeconds(long)).toBeGreaterThan(40)
+    const piece = prepareSpokenPiece(`**Now** ${long}`)!
+    expect(piece.truncated).toBe(false)
+    expect(piece.rest).toBeUndefined()
+    expect(piece.text.startsWith('Now We are still')).toBe(true)
+    expect(piece.text).not.toContain(REST_ON_SCREEN)
+    expect(prepareSpokenPiece(ZH_DONE)!.language).toBe('zh-CN')
+    expect(prepareSpokenPiece('```\nx\n```')).toBeNull()
   })
 })

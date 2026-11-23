@@ -1,7 +1,8 @@
 /**
  * Voice conversation in a session's composer (experimental `voice_conversation`):
  * Talk opens it listening, a pause sends what was heard with the voice-reply hint,
- * the turn's answer is read aloud piece by piece from /api/v1/voice/speak, talking
+ * the turn's answer is read aloud piece by piece from /api/v1/voice/speak (as it
+ * streams, sentence by sentence, when the text arrives as it is written), talking
  * over it stops it, and Keyboard brings the composer back. A server with no voice
  * falls back to the device's own (speechSynthesis, a no-op in an automated page).
  *
@@ -204,6 +205,65 @@ export function registerVoiceConversationScenarios(): void {
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
     await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(1)
     expect(captured.speaks[0]).toBe('Here is the real answer.')
+  })
+
+  test('the answer is read as it streams: the first sentence before the turn ends, each once; it waits while the turn works', async ({ page }) => {
+    const captured = await setup(page, { serverVoice: true })
+    const column = await openVoice(page)
+    await talkAndPause(page)
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
+
+    // The first sentence, split across two increments, is said before the turn ends.
+    const delta = (text: string, msgId: string) => injectEvent(page, 'session:text-delta', { sessionId: MOCK_SESSION_ID, delta: text, msgId, taskId: '' })
+    await delta('Got it, I will check the ', 'msg-voice-a')
+    await delta('build now. ', 'msg-voice-a')
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
+    await expect.poll(() => captured.speaks[0], { timeout: 20_000 }).toBe('Got it, I will check the build now.')
+    await expect(page.getByTestId('voice-spoken')).toHaveText(/Got it, I will check the build now\.$/)
+
+    // A tool call: the turn still works, so once the voice is done it waits again (the cue), not listening.
+    await injectEvent(page, 'session:tool-use', { sessionId: MOCK_SESSION_ID, toolName: 'Bash', toolUseId: 'tu-voice-1', input: { command: 'ls' }, msgId: 'msg-voice-a', taskId: '' })
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 15_000 })
+    await page.waitForTimeout(500)
+    expect(await phase(page)).toBe('waiting')
+    expect(captured.speaks).toEqual(['Got it, I will check the build now.'])
+
+    // The final message streams, then the turn ends with the same text.
+    const final = 'The build passed. Two warnings remain.\n\n---\n\n| file | warning |\n|---|---|\n| app.ts | unused |'
+    await delta(final, 'msg-voice-b')
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
+    await answer(page, final)
+    // Each sentence once, never the table, and the rest-on-screen line last.
+    await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBe(4)
+    expect(captured.speaks).toEqual(['Got it, I will check the build now.', 'The build passed.', 'Two warnings remain.', 'The rest is on screen.'])
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'listening', { timeout: 20_000 })
+    await expect(page.getByTestId('voice-spoken')).toHaveText(/Got it, I will check the build now\. The build passed\. Two warnings remain\. The rest is on screen\.$/)
+    await page.waitForTimeout(500)
+    expect(captured.speaks).toHaveLength(4)
+
+    // Replay reads the whole turn again.
+    await column.getByTestId('voice-replay').click()
+    await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBe(8)
+    expect(captured.speaks.slice(4)).toEqual(captured.speaks.slice(0, 4))
+  })
+
+  test('talking over a streaming answer mutes the rest of that turn', async ({ page }) => {
+    const captured = await setup(page, { serverVoice: true })
+    await openVoice(page)
+    await talkAndPause(page)
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
+    await injectEvent(page, 'session:text-delta', { sessionId: MOCK_SESSION_ID, delta: 'This is a long first part of the answer. '.repeat(3), msgId: 'msg-voice-c', taskId: '' })
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
+    await micGain(page, LOUD)
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'listening', { timeout: 5_000 })
+    const heardBefore = captured.speaks.length
+    // More of the same turn, and its end: nothing of it is read now.
+    await injectEvent(page, 'session:text-delta', { sessionId: MOCK_SESSION_ID, delta: 'Later words. ', msgId: 'msg-voice-c', taskId: '' })
+    await answer(page, 'This is a long first part of the answer. '.repeat(3) + 'Later words. ')
+    await page.waitForTimeout(800)
+    expect(captured.speaks.slice(heardBefore).join(' ')).not.toContain('Later words')
+    await micGain(page, QUIET)
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
   })
 
   test('a refused microphone says why and keeps the composer', async ({ page }) => {
