@@ -70,15 +70,16 @@
   }
 }
 
-/* ── Tabs: switch between the panels of one view. Underline, 32 px. ── */
-/* The line under the strip is an inset shadow, inside the box the strip scrolls and clips: the
-   selected tab's underline (its own bottom border, painted over the shadow) covers it, and nothing
-   overflows by a pixel to clip the underline or scroll the strip up and down. */
+/* ── Tabs: switch between the panels of one view. A 32 px strip; the picked tab is a capsule in the
+   accent's tint (standard.md, "Shapes"; 2026-11-22, the user, of the 11-19 build's round tabs:
+   "I want to curve like before"). The line under the strip is an inset shadow inside the box the
+   strip scrolls and clips, so nothing overflows by a pixel to scroll the strip up and down. ── */
 .wn-tabs {
   box-sizing: border-box;
   display: flex;
-  align-items: stretch;
-  gap: 12px;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -103,12 +104,11 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
+  height: 26px;
   margin: 0;
-  padding: 0 4px;
+  padding: 0 10px;
   border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
@@ -117,16 +117,18 @@
   line-height: 18px;
   white-space: nowrap;
   cursor: pointer;
-  transition: color 120ms ease-out, border-color 120ms ease-out;
+  transition: color 120ms ease-out, background-color 120ms ease-out;
 }
 
 .wn-tab:hover:not(:disabled):not([aria-disabled='true']) {
   color: var(--fg);
+  background: var(--bg-hover);
 }
 
-.wn-tab[aria-selected='true'] {
-  color: var(--fg);
-  border-bottom-color: var(--accent);
+.wn-tab[aria-selected='true'],
+.wn-tab[aria-selected='true']:hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--accent-text);
+  background: var(--accent-subtle);
 }
 
 .wn-tab:disabled {
@@ -137,7 +139,6 @@
 .wn-tab:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
-  border-radius: var(--choice-radius-box) var(--choice-radius-box) 0 0;
 }
 
 /* Tile tabs (TabList tiles: the new task draft's Start task / Quick chat): large cards with an
