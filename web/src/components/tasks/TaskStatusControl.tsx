@@ -126,7 +126,7 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait
   const [open, setOpen] = useState(false);
   const until = formatWaitUntil(task.wait_until);
   // Its clock's word follows the state it reads: a parked task at work checks back, it does not wait until.
-  const word = taskStatusPhase(task) === 'IN_PROGRESS' && task.phase === 'WAITING' ? 'Checks back' : 'Until';
+  const word = taskStatusPhase(task) === 'IN_PROGRESS' ? 'Checks back' : 'Until';
   const noClockLabel = task.phase === 'WAITING' ? `${word}: no time limit` : `Until: ${DEFAULT_WAIT_LABEL} (default)`;
   return (
     <div className={`task-status-until${open ? ' open' : ''}`} data-testid="task-status-until">

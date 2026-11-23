@@ -153,10 +153,8 @@ const PHASE_READERS: Record<string, number> = {
   'web/src/components/common/Icons.tsx': 1,
   'web/src/components/org/org-answered.ts': 1,
   'web/src/components/org/org-channels-model.ts': 1,
-  'web/src/components/sessions/SessionPanel.tsx': 1,
   'web/src/components/sessions/TaskQuickActions.tsx': 2,
   'web/src/components/tasks/AgentSearchResultRows.tsx': 1,
-  'web/src/components/tasks/FocusSatelliteCards.tsx': 1,
   'web/src/components/tasks/footer-scope.ts': 1,
   'web/src/components/tasks/status-sections.ts': 2,
   'web/src/components/tasks/StatusSections.tsx': 2,
@@ -167,7 +165,7 @@ const PHASE_READERS: Record<string, number> = {
   'web/src/components/tasks/TodoFilterFooter.tsx': 1,
   // The header chip labels the WAITING phase itself (its clock, and that a message ends it).
   'web/src/components/tasks/WaitingChip.tsx': 1,
-  'web/src/components/tasks/TodoPanel.tsx': 9,
+  'web/src/components/tasks/TodoPanel.tsx': 7,
   'web/src/hooks/useTasks.ts': 2,
   // restorePhase writes the remembered phase back: WAITING with its clock, NEED_ACTION as the
   // Undo of a completion (phase writes, not readers).
