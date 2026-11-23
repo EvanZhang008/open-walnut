@@ -252,7 +252,7 @@ describe.each([
         `return ${extract(source, 'createAdoptedSession')};`,
         // The adopt also stamps a cron origin; neither call is what this test is
         // about, so both are stubbed to their "nothing known" answers.
-        { streamFold, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }), budgetStopGroups: new Map() },
+        { streamFold, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }), budgetStopGroups: new Map(), Subscribers: Set },
       )
       sessions.set('session', await adopt('session', entry))
     } else {
@@ -267,6 +267,8 @@ describe.each([
         // Adopting a live CLI locks its stdin FIFO write-only (LIVE_FIFO_MODE); no FIFO here.
         lockLiveFifo: () => true,
         budgetStopGroups: new Map(),
+        // A session's subscriber set (the daemon's Subscribers keeps when it was last watched).
+        Subscribers: Set,
       })
       await reconcile()
     }
