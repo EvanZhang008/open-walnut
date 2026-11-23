@@ -71,12 +71,13 @@ test('only background agents get the clickable tail status, across repeated fore
   await expect(indicator(page)).toHaveCount(0);
   await expect(panel(page).locator('.session-working-label')).toHaveText('Claude Code is working…');
   // The foreground turn runs beside the agent: the working line names it after itself.
-  await expect(backgroundNote(page)).toHaveText(/^·\s*1 subagent running\s*›$/);
+  await expect(backgroundNote(page)).toHaveText(/^·\s*1 subagent running$/);
 
   await ledger(page, [agent('one')], false);
   await inject(page, 'session:result', { result: 'Main reply complete.', isError: false });
   await expect(backgroundNote(page)).toHaveCount(0);
-  await expect(indicator(page)).toHaveText('1 subagent is working…›');
+  await expect(indicator(page)).toHaveText('1 subagent is working…');
+  await expect(indicator(page).locator('.wn-dir-mark svg')).toHaveCount(1);
   await expect(panel(page).locator('.session-working-label')).toHaveCount(1);
   await indicator(page).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${EVIDENCE}/${info.project.name}-one-agent.png` });

@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '@/styles/undo-toast.css';
+import { ICON_CHEVRON_RIGHT } from './Icons';
 import {
   useNotifications, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
@@ -250,7 +251,7 @@ export function NotificationToaster() {
   const openCenter = foldsEphemeral
     ? () => setUnfolded(true)
     : () => window.dispatchEvent(new CustomEvent('notification:open-center'));
-  const moreWords = older === 1 ? '1 more ›' : `${older} more ›`;
+  const moreWords = older === 1 ? '1 more' : `${older} more`;
   // The key runs only the newest Undo: an older toast keeps its button, not the key.
   const keyed = [...toasts].reverse().find((t) => t.actionKeyHint)?.id;
 
@@ -261,7 +262,7 @@ export function NotificationToaster() {
         <NoticeCard
           className="corner-more"
           testId="notification-toaster-more"
-          line={older === 1 ? '1 more notification ›' : `${older} more notifications ›`}
+          line={<>{older === 1 ? '1 more notification' : `${older} more notifications`}<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span></>}
           onOpen={openCenter}
         />
       )}
@@ -411,7 +412,7 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
                 : (more.older === 1 ? '1 more notification in the notification center' : `${more.older} more notifications in the notification center`)}
               onClick={(e) => { e.stopPropagation(); more.open(); }}
             >
-              {more.words}
+              {more.words}<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
             </button>
           )}
           {/* The phone keeps a closed toast to one row: its Details sits in the title row. */}

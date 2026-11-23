@@ -22,7 +22,10 @@
  *  4. ICON_CHEVRON_DOWN / ICON_CHEVRON_UP (the fold and caret directions) outside the shared
  *     components, but for FOLD_ICON_ALLOWED; and a ternary that swaps a chevron icon for another;
  *  5. an inline SVG that draws a chevron by hand (one open two-arm line of equal arms).
- * One known holdout, counted so it only falls: the session timeline's StepIcon chevron.
+ *  6. a typed direction quote (single or double angle quote, an ornament, its entity) drawn alone or
+ *     at the start or end of a run of words or a string, in any class: a direction takes
+ *     ICON_CHEVRON_LEFT / ICON_CHEVRON_RIGHT (one in the middle of a sentence, "Settings > Voice", is prose);
+ *  7. a chevron of the session timeline's own icon set (StepIcon): its folds wear DisclosureChevron.
  * That a picker key wears MenuCaret and carries aria-haspopup is menu-key-mark-guard.test.ts.
  * That every native <summary> wears the same chevron (one rule, choice-controls.css) is
  * summary-mark-guard.test.ts.
@@ -97,6 +100,52 @@ export function findTypedChevronMarks(src: string): number[] {
   const lines = decodeEscapes(stripComments(src)).split('\n')
   return lines.flatMap((l, i) => (TYPED_MARK.some((re) => re.test(l)) ? [i + 1] : []))
 }
+
+/**
+ * Typed direction quotes: the single and double angle quotes and the heavy ornaments, written or as
+ * an HTML entity. A direction (back, previous and next, "Open", "2 more", a crumb before a link)
+ * takes ICON_CHEVRON_LEFT / ICON_CHEVRON_RIGHT of Icons.tsx, whatever class holds it (2026-11-23, the
+ * UI audit: MonthGrid, TopThread, the Org detail's back key and the approvals rows typed one).
+ */
+const DIR = '[\u2039\u203A\u00AB\u00BB\u276E\u276F]'
+const DIR_ENTITY = /&(?:lsaquo|rsaquo|laquo|raquo|#8249|#8250|#171|#187|#x203[9Aa]|#x[Aa][Bb]|#x[Bb][Bb]);/g
+const TYPED_DIRECTION = [
+  // A JSX text that is the mark alone, or a run of words that starts or ends with it:
+  // `>{'<'}</`, `>Open ></`, `{title} ></a>`, `>< Back<`. One in the middle ("Settings > Voice", or
+  // between two words in bold) is prose.
+  new RegExp(`[>}]\\s*(?:\\{\\s*['"\`]\\s*)?${DIR}(?:\\s*['"\`]\\s*\\})?\\s*<\\/`),
+  new RegExp(`[>}][^<>{}]*[^<>{}\\s]\\s*${DIR}\\s*<\\/`),
+  new RegExp(`>\\s*${DIR}\\s+[^<>{}\\s][^<>{}]*<`),
+  // A string that is the mark, or starts or ends with it: '1 more >', `${n} more >`, '< Back'.
+  new RegExp(`(['"\`])\\s*${DIR}(?:\\s[^'"\`\\n]*)?\\1`),
+  new RegExp(`(['"\`])[^'"\`\\n]*\\s${DIR}\\s*\\1`),
+  // CSS `content: '>'` (or its escape).
+  new RegExp(`content\\s*:\\s*['"][^'"]*(?:${DIR}|\\\\0*(?:203[9Aa]|00[AaBb][Bb]|276[EeFf]))`),
+]
+
+/** Line numbers of every typed direction mark; a JSX text may run over lines, so the file is read whole. */
+export function findTypedDirectionMarks(src: string): number[] {
+  const entities: Record<string, string> = { lsaquo: '\u2039', rsaquo: '\u203A', laquo: '\u00AB', raquo: '\u00BB' }
+  const text = decodeEscapes(stripComments(src)).replace(DIR_ENTITY, (m) => {
+    const name = m.slice(1, -1)
+    if (entities[name]) return entities[name]!
+    return String.fromCharCode(name.startsWith('#x') ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10))
+  })
+  const out = new Set<number>()
+  for (const re of TYPED_DIRECTION) {
+    for (const m of text.matchAll(new RegExp(re.source, `${re.flags}g`))) {
+      const at = m.index! + m[0].search(new RegExp(DIR))
+      out.add(text.slice(0, at).split('\n').length)
+    }
+  }
+  return [...out].sort((a, b) => a - b)
+}
+
+/**
+ * The typed direction marks that stay, each file with why it is not a mark (it is words, or a
+ * plugin's text the host does not draw). Keep it short; a new entry needs the same kind of reason.
+ */
+const TYPED_DIRECTION_ALLOWED: Record<string, string> = {}
 
 /**
  * A component or a drawing named like a chevron or caret: `function FoldChevron(`, `const Chevron = (`,
@@ -218,7 +267,26 @@ describe('one chevron: the shared fold and menu caret, never one a file draws it
     expect(findTypedChevronMarks("<span className=\"x\">{p.collapsed ? '\u2039' : '\u203A'}</span>")).toEqual([1])
     expect(findTypedChevronMarks(".x::before { content: '\u203A' / ''; }")).toEqual([1])
     expect(findTypedChevronMarks(String.raw`.x::before { content: '\203A'; }`)).toEqual([1])
-    expect(findTypedChevronMarks("help=\"Set it up in Settings \u203A Voice.\"\n<span className=\"approval-row-open\">Open \u203A</span>")).toEqual([])
+    expect(findTypedChevronMarks("help=\"Set it up in Settings \u203A Voice.\"")).toEqual([])
+    // Typed directions in any class: alone, ending a key's words or a string, starting one, as an entity
+    // or a CSS content, and over lines; the same quote inside prose or a crumb in a sentence is words.
+    expect(findTypedDirectionMarks("<button className=\"dp-month-step\" onClick={f}>\u2039</button>")).toEqual([1])
+    expect(findTypedDirectionMarks("<button className=\"top-thread-step\">{'\u203A'}</button>")).toEqual([1])
+    expect(findTypedDirectionMarks("<span className=\"approval-row-open\" aria-hidden=\"true\">Open \u203A</span>")).toEqual([1])
+    expect(findTypedDirectionMarks("<a href={h}>{a.via.title} \u203A</a>")).toEqual([1])
+    expect(findTypedDirectionMarks("<button>\n  \u2039\n</button>")).toEqual([2])
+    expect(findTypedDirectionMarks("<button>\u2039 Back</button>")).toEqual([1])
+    expect(findTypedDirectionMarks("const more = n === 1 ? '1 more \u203A' : `${n} more \u203A`")).toEqual([1])
+    expect(findTypedDirectionMarks("<button>Next &rsaquo;</button>\n<b>&#8249;</b>\n<i>\u00BB</i>")).toEqual([1, 2, 3])
+    expect(findTypedDirectionMarks(".x::after { content: '\u203A'; }\n.y::after { content: '\\203A'; }")).toEqual([1, 2])
+    expect(findTypedDirectionMarks([
+      "help=\"Set it up in Settings \u203A Voice.\"",
+      "const hint = 'Check this host in Settings \u203A Remote hosts, then retry.'",
+      "<Link to=\"/settings#experimental\">Settings \u203A Experimental</Link>.",
+      "<button onClick={go}>Settings \u203A General</button>",
+      "<b>\u2022\u2022\u2022</b> \u203A <b>Connections</b>",
+      "// a \u203A in a comment",
+    ].join('\n'))).toEqual([])
   })
 
   it('no file but Disclosure.tsx and Icons.tsx defines a chevron or caret component', () => {
@@ -243,15 +311,15 @@ describe('one chevron: the shared fold and menu caret, never one a file draws it
     expect(hits, 'a fold: DisclosureChevron; a menu key: MenuCaret; a direction: ICON_CHEVRON_LEFT/RIGHT (Icons.tsx)').toEqual([])
   })
 
-  // The one chevron still outside the two components: the session timeline's StepIcon "chevron" (its
-  // tool-run, op-card and tool-block folds, with their own --open rotation and sizes in step-rows.css).
-  // Not merged yet; the count only falls, and no other icon set gets a chevron of its own.
-  const STEP_ICON_CHEVRON_USES = 15
-  it('the step rows\' StepIcon chevron only shrinks, and no icon set adds another', () => {
-    const uses = CODE_FILES.flatMap((f) => readFileSync(f, 'utf8').match(/\bname=["{']+chevron["'}]/g) ?? [])
-    expect(uses.length, 'a fold takes DisclosureChevron: lower STEP_ICON_CHEVRON_USES when you move one over').toBeLessThanOrEqual(STEP_ICON_CHEVRON_USES)
+  // The session timeline's folds (tool runs, op cards, tool blocks, the fold line) wore a chevron of
+  // StepIcon's own, with its own rotation and sizes, until 2026-11-23; they wear DisclosureChevron now.
+  // No icon set has a chevron or caret of its own, and nothing asks one for it.
+  it('no icon set draws a chevron of its own (the step rows wear DisclosureChevron)', () => {
+    const uses = CODE_FILES.flatMap((f) => (readFileSync(f, 'utf8').match(/\bname=["{']+(?:chevron|caret)\w*["'}]/g) ?? []).map((m) => `${rel(f)}: ${m}`))
+    expect(uses, 'a fold takes DisclosureChevron (components/controls), a direction ICON_CHEVRON_LEFT/RIGHT').toEqual([])
     const sets = CODE_FILES.filter((f) => !HOMES.has(rel(f)) && /^\s*['"]?(?:chevron|caret)\w*['"]?\s*:\s*\[\s*['"]M/im.test(stripComments(readFileSync(f, 'utf8'))))
-    expect(sets.map(rel)).toEqual(['web/src/components/sessions/StepIcon.tsx'])
+    expect(sets.map(rel)).toEqual([])
+    expect(readFileSync(join(ROOT, 'web/src/components/sessions/StepIcon.tsx'), 'utf8')).not.toMatch(/['"]chevron['"]/)
   })
 
   it("the plugin's mirror draws DisclosureChevron's chevron with the host's class", () => {
@@ -260,11 +328,25 @@ describe('one chevron: the shared fold and menu caret, never one a file draws it
     const mirror = readFileSync(join(ROOT, PLUGIN_MIRROR), 'utf8')
     expect(line(mirror)).toBe(line(host))
     expect(mirror).toContain('wn-disclosure-chevron')
+    // Its direction icons are the host's ICON_CHEVRON_LEFT / ICON_CHEVRON_RIGHT, point for point and stroke.
+    const icons = readFileSync(join(ROOT, 'web/src/components/common/Icons.tsx'), 'utf8')
+    for (const dir of ['LEFT', 'RIGHT']) {
+      const icon = new RegExp(`ICON_CHEVRON_${dir} = <svg[^>]*strokeWidth="([^"]+)"[^>]*><polyline points="([^"]+)"`).exec(icons)!
+      expect(mirror).toContain(`'${icon[2]}'`)
+      expect(mirror).toContain(`strokeWidth="${icon[1]}"`)
+    }
   })
 
   it('no mark is a typed angle chevron (a class named chevron, caret or arrow holding one, a swap, a CSS content)', () => {
     const hits = UI_FILES.flatMap((f) => findTypedChevronMarks(readFileSync(f, 'utf8')).map((line) => lineOf(f, line)))
     expect(hits, 'draw it: DisclosureChevron, MenuCaret or a direction icon of Icons.tsx; in CSS mask --wn-chevron').toEqual([])
+  })
+
+  it('no direction is a typed angle quote, in any class (ICON_CHEVRON_LEFT / ICON_CHEVRON_RIGHT instead)', () => {
+    const hits = UI_FILES.filter((f) => !(rel(f) in TYPED_DIRECTION_ALLOWED))
+      .flatMap((f) => findTypedDirectionMarks(readFileSync(f, 'utf8')).map((line) => lineOf(f, line)))
+    expect(hits, 'a direction beside words: <span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>; a key of its own: the icon alone (a plugin: DirectionMark of fold-chevron.tsx)').toEqual([])
+    for (const f of Object.keys(TYPED_DIRECTION_ALLOWED)) expect(findTypedDirectionMarks(readFileSync(join(ROOT, f), 'utf8')).length, `${f} no longer needs its TYPED_DIRECTION_ALLOWED entry`).toBeGreaterThan(0)
   })
 })
 

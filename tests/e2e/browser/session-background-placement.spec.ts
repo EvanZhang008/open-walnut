@@ -153,7 +153,7 @@ test.describe('Session background work placement', () => {
     const row = panel.locator('.session-working-row');
     await expect(row.locator('.session-working-label')).toHaveText('Claude Code is working…');
     await expect(note).toHaveCount(1);
-    await expect(note).toHaveText(/^·\s*1 command running\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 command running$/);
     await expectNoBarAtTop(panel);
     // The note sits on the working line, after its words and before its clock and token
     // count (2026-11-14, the user: "这个 subagent 再跑 可以放在 那个token数量的前面吗"), on its middle.
@@ -183,7 +183,7 @@ test.describe('Session background work placement', () => {
       command('tests', 'running', 'npm run test:quick'),
       command('status', 'completed', 'git status --short'),
     ]);
-    await expect(note).toHaveText(/^·\s*1 subagent, 1 command running\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 subagent, 1 command running$/);
 
     // 4. The turn ends with both still running: one quiet line in the working line's place.
     await inject(page, SID_BG, 'session:result', { result: 'Started the checks.', isError: false });
@@ -192,7 +192,7 @@ test.describe('Session background work placement', () => {
     await expect(note).toHaveCount(1);
     await expect(note).toHaveClass(/session-background-after/);
     await expect(note.locator('.session-working-label')).toHaveText('1 subagent, 1 command still running in the background');
-    await expect(note).toHaveText(/background\s*›$/);
+    await expect(note).toHaveText(/background$/);
     await expectNoBarAtTop(panel);
     // It is the chat's last line, inside the chat column, its words whole.
     const fit = await note.evaluate(el => {
@@ -301,7 +301,9 @@ test.describe('Session background work placement', () => {
     // The same element before and after the note joins: a remount restarts the clock at 0s.
     await line.evaluate(el => { (el as any).__sameLine = true; });
     await ledger(page, SID_STOP, [command('serve', 'running', 'npm run dev')]);
-    await expect(note).toHaveText(/^·\s*1 command running\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 command running$/);
+    // Its "go there" mark is the shared direction icon (Icons.tsx), not a typed angle quote.
+    await expect(note.locator('.wn-dir-mark svg')).toHaveCount(1);
     expect(await line.evaluate(el => (el as any).__sameLine === true)).toBe(true);
     await ledger(page, SID_STOP, [command('serve', 'completed', 'npm run dev')]);
     await expect(note).toHaveCount(0);

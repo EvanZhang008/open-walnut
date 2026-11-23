@@ -61,7 +61,7 @@ async function thinkingOnScreen(hist: Locator, markers: string[]) {
       ...Array.from(h.querySelectorAll('[data-testid="thought-fold"] > .tool-run-toggle'))
         .filter((line) => visible(line) && ((line.textContent ?? '').trim() !== 'Thinking'
           || !line.firstElementChild?.classList.contains('process-fold-chevron')
-          || !!line.querySelector('[data-step-icon]:not([data-step-icon="chevron"])')))
+          || !!line.querySelector('[data-step-icon]')))
         .map((line) => `fold line: ${(line as HTMLElement).outerHTML.slice(0, 160)}`),
     ];
     return { shown, otherLines, rows, bareRows };

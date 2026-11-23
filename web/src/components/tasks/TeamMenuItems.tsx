@@ -120,6 +120,8 @@ export function TeamMenuItems({ task, afterAction }: {
             >
               <span className="task-kebab-icon" aria-hidden="true">{ICON_PLUS}</span>
               <span>Adopt a worker…</span>
+              {/* A row that opens a picker beside it ends with the one chevron (standard.md, Big menus). */}
+              <DisclosureChevron className="task-kebab-team-pick-chevron" />
             </button>
             {hasWorkers && (
               <button
@@ -133,6 +135,7 @@ export function TeamMenuItems({ task, afterAction }: {
               >
                 <span className="task-kebab-icon" aria-hidden="true">{ICON_MINUS}</span>
                 <span>Release a worker…</span>
+                <DisclosureChevron className="task-kebab-team-pick-chevron" />
               </button>
             )}
             {hasWorkers && !teamStopped && (

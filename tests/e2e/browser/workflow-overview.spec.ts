@@ -324,7 +324,7 @@ test.describe('Background work', () => {
       tasks: [0, 1, 2, 3, 4].map(i => shellTask(i, 'completed')).concat(shellTask(5, 'running')),
     })
     await expect(note.locator('.session-working-label')).toHaveText('1 command still running in the background', { timeout: 30_000 })
-    await expect(note).toHaveText(/background\s*›$/)
+    await expect(note).toHaveText(/background$/)
     // Nothing is pinned at the top of the session for plain background work.
     await expect(panel.locator('.wf-card')).toHaveCount(0)
     await expect(panel.locator('.wf-card--bar')).toHaveCount(0)

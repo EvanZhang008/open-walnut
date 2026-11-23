@@ -120,7 +120,7 @@ function EditDiffView({ filePath, oldString, newString, replaceAll, status, resu
         <span className="edit-diff-filename" title={filePath}>{filename}</span>
         {replaceAll && <span className="edit-diff-replace-all">(replace all)</span>}
         {status === 'calling' && runLive && <span className="chat-tool-block-calling-dot" />}
-        <span className="chat-tool-block-arrow"><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={!collapsed} className="chat-tool-block-arrow" />
         {onViewFile && (
           <span
             className="edit-diff-view-file"
@@ -307,7 +307,7 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
     return (
       <div className="tool-run-row process-fold" data-testid="thought-fold" data-open={open ? 'true' : 'false'} {...(live ? { 'data-running': 'true' } : {})}>
         <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
-          <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+          <DisclosureChevron open={open} className="tool-run-chevron process-fold-chevron" />
           <span className="tool-run-label">Thinking</span>
           {live && <span className="tool-run-live-dot" />}
         </button>
@@ -326,7 +326,7 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
         <span className="tool-run-label">Thinking</span>
         {firstLine && <span className="tool-run-detail" data-find-skip="">{firstLine}</span>}
         {live && <span className="tool-run-live-dot" />}
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="tool-run-chevron" />
       </button>
       {open && (
         <div className="tool-run-body">
@@ -446,7 +446,7 @@ function InjectedContextRow({ text }: { text: string }) {
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
         <span className="tool-run-label">{injectedContextLabel(text)}</span>
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="tool-run-chevron" />
       </button>
       {open && (
         <div className="tool-run-body">
@@ -504,7 +504,7 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
   // Chevron first, as the turn's fold line reads (design 1, 2026-11-11).
   const line = (
     <>
-      <span className={`tool-run-chevron tool-run-chevron--lead${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+      <DisclosureChevron open={open} className="tool-run-chevron tool-run-chevron--lead" />
       <span className="tool-run-label">
         {segments.length === 0 ? phrase : segments.map((seg, i) => (
           <Fragment key={seg.kind}>
@@ -571,7 +571,7 @@ export function SystemLineCollapsible({ variant, message, detail, time, noticeId
           <span className={`tool-run-label${variant === 'error' ? ' tool-run-label--error' : ''}`}>
             {icon ? `${icon} ${message}` : message}
           </span>
-          <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+          <DisclosureChevron open={open} className="tool-run-chevron" />
         </button>
         {open && (
           <div className="tool-run-body">
@@ -646,7 +646,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={toggle}>
         <span className={`tool-run-label${allErrors ? ' tool-run-label--error' : ''}`}>{label}</span>
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="tool-run-chevron" />
       </button>
       {open && <div className="tool-run-body">{lines}</div>}
     </div>
@@ -1059,7 +1059,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
           <span className="chat-tool-block-summary">{inputSummary}</span>
         )}
         {status === 'calling' && runLive && <span className="chat-tool-block-calling-dot" />}
-        <span className="chat-tool-block-arrow"><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="chat-tool-block-arrow" />
         {showViewFile && (
           <span
             className="edit-diff-view-file"

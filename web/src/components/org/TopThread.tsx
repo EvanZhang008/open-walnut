@@ -33,6 +33,7 @@ import type { OrgThreadsState } from './useOrgThreads';
 import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenAsk, hiddenLine, topIndex, topThreads } from './top-thread-model';
 import type { ActionItem } from '@open-walnut/user-status';
 import type { OrgThread } from '@/api/org-threads';
+import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import '@/styles/top-thread.css';
 
 /** The card's blocks of words that scroll inside themselves in the top (top-thread.css). */
@@ -153,15 +154,15 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
   return (
     <div ref={rootRef} className="top-thread" data-testid="top-thread" data-count={n} data-thread-id={t.id}>
       <div className="top-thread-bar">
-        <button type="button" className="top-thread-step" data-testid="top-thread-prev" aria-label="Previous thread" disabled={i === 0} onClick={() => step(i - 1)}>{'‹'}</button>
+        <button type="button" className="top-thread-step" data-testid="top-thread-prev" aria-label="Previous thread" disabled={i === 0} onClick={() => step(i - 1)}>{ICON_CHEVRON_LEFT}</button>
         <span className="top-thread-pos" data-testid="top-thread-pos" title={`${i + 1} of ${threadCountLabel(n)} for you`}>{i + 1} / {n}</span>
-        <button type="button" className="top-thread-step" data-testid="top-thread-next" aria-label="Next thread" disabled={i === n - 1} onClick={() => step(i + 1)}>{'›'}</button>
+        <button type="button" className="top-thread-step" data-testid="top-thread-next" aria-label="Next thread" disabled={i === n - 1} onClick={() => step(i + 1)}>{ICON_CHEVRON_RIGHT}</button>
         {n - i - 1 > 0 && <span className="top-thread-left" data-testid="top-thread-left">{n - i - 1} more</span>}
         {elsewhere.length > 0 && (
           <button type="button" className="btn btn-link btn-sm top-thread-elsewhere" data-testid="top-thread-elsewhere" onClick={() => { if (nextDecision !== undefined) step(nextDecision); }}
             title="A decision of this task is on another thread: show it">
             <i className="top-thread-dot is-needs" aria-hidden="true" />
-            {elsewhere.length === 1 ? `Decision on ${elsewhere[0]! + 1} / ${n}` : `${elsewhere.length} decisions on other threads`} <span aria-hidden="true">{'›'}</span>
+            {elsewhere.length === 1 ? `Decision on ${elsewhere[0]! + 1} / ${n}` : `${elsewhere.length} decisions on other threads`}<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
           </button>
         )}
         {clipped && readWhole && (

@@ -3,7 +3,7 @@ import type { SessionTime, TaskTime, TimePair, TimeTotals } from './api'
 import { formatLane, type TimePage, type TimePaths } from './task-routes'
 import type { TaskTimeStore } from './task-time-store'
 import { dayLabel } from './time-timeline'
-import { FoldChevron } from './fold-chevron'
+import { DirectionMark, FoldChevron } from './fold-chevron'
 
 /**
  * One task's time (or one session's), day by day: where the task detail slot and the
@@ -48,7 +48,7 @@ export function TaskTimePage({ page, store, paths, basePath, navigate }: TaskTim
         <div className="wt-task-head">
           <nav className="wt-crumbs" aria-label="Breadcrumb">
             <button type="button" className="wt-crumb" onClick={() => navigate(basePath)}>Time</button>
-            <span aria-hidden="true">›</span>
+            <DirectionMark dir="right" />
             <span>{page.kind === 'task' ? 'Time on a task' : 'Time in a session'}</span>
           </nav>
           <h1 data-testid="time-task-title">{title}</h1>

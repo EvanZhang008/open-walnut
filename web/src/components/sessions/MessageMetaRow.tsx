@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react';
-import { StepIcon } from './StepIcon';
+import { DisclosureChevron } from '@/components/controls';
 import { CopyMessageButtons } from '@/components/common/CopyMessageButtons';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { useSessionRewindApi } from '@/contexts/SessionRewindContext';
@@ -143,7 +143,7 @@ export const MessageMetaRow = memo(function MessageMetaRow({
           title={walnutAdded.open ? 'Hide what Walnut added to this message' : 'Show what Walnut added to this message'}
         >
           Walnut added {walnutAdded.count}
-          <span className={`tool-run-chevron${walnutAdded.open ? ' tool-run-chevron--open' : ''}`} aria-hidden="true"><StepIcon name="chevron" /></span>
+          <DisclosureChevron open={walnutAdded.open} className="tool-run-chevron" />
         </button>
       )}
     </div>

@@ -39,6 +39,8 @@ export const VIEWS_CSS = `
   font-size: 13px;
   cursor: pointer;
 }
+.wt-tt-nav-btn { display: inline-flex; align-items: center; justify-content: center; }
+.wt-tt-nav-btn .wn-dir-mark { margin: 0; }
 
 .wt-tt-nav-btn:hover:not(:disabled), .wt-tt-nav-reset:hover:not(:disabled) { background: var(--bg-hover); }
 .wt-tt-nav-btn:disabled, .wt-tt-nav-reset:disabled { opacity: 0.4; cursor: default; }

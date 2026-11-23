@@ -202,14 +202,16 @@
   border-bottom: 1px solid var(--border);
 }
 .org-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--accent);
-  font-size: 26px;
-  line-height: 1;
-  padding: 0 4px 2px 0;
+  padding: 0 4px 0 0;
   cursor: pointer;
 }
+.org-back > svg { width: 18px; height: 18px; }
 .org-detail-who { flex: 1 1 8em; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 14px; row-gap: 6px; }
 .org-detail-title {
   margin: 0;

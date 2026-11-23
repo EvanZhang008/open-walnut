@@ -17,6 +17,7 @@ import { useWorkingDirs } from './path-selector/useWorkingDirs';
 import { useLiveDirs } from './path-selector/useLiveDirs';
 import { liveListingPrefix } from './path-selector/input-model';
 import { WhereIcon } from './DraftWhereIcons';
+import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { DraftSourcePackages } from './DraftSourcePackages';
 import type { DraftColumn } from './draft-column';
 import type { DraftRowUpdate, DraftWhere } from './useDraftWhere';
@@ -175,7 +176,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
               <WhereIcon kind="folder" />
               {typed.crumbs.map((c, i) => (
                 <span key={`${i}-${c.label}`} className="draft-v6-crumb-wrap">
-                  {i > 0 && <span className="draft-v6-sep" aria-hidden="true">›</span>}
+                  {i > 0 && <span className="draft-v6-sep" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>}
                   {c.dir ? <button type="button" className="btn btn-link draft-v6-level" onClick={() => { setQuery(`${c.dir === '/' ? '' : c.dir}/`); inputRef.current?.focus(); }}>{c.label}</button>
                     : <span className="draft-v6-crumb">{c.label}</span>}
                 </span>

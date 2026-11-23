@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { StepIcon } from './StepIcon';
+import { DisclosureChevron } from '@/components/controls';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
@@ -146,7 +147,7 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
         {status === 'waiting' && <span className="chat-tool-block-waiting-label">{queued ? 'Queued' : 'Waiting for approval'}</span>}
         {status !== 'waiting' && decision && <span className="chat-tool-block-decision" title={decision}><AnswerText text={callDecisionLabel(decision)} /></span>}
         {status === 'done' && tooLong && <span className="chat-tool-block-decision" data-too-long-answer="" title={tooLong.file}>{TOO_LONG_ANSWER_NOTE}</span>}
-        <span className="chat-tool-block-arrow"><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="chat-tool-block-arrow" />
         <span
           className="bash-tool-expand-btn"
           role="button"

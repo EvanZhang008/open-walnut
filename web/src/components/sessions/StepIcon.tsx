@@ -5,12 +5,14 @@
  * read or edit, a search, a Walnut op, a message sent or received, a subagent,
  * reasoning. The row's state never swaps the icon for a glyph; a failed or denied
  * step colours it (step-rows.css), and only a failure turns it into the alert.
+ * A row's fold mark is not one of these: it is DisclosureChevron (components/controls), as
+ * every other fold in the app (tests/web/disclosure-mark-guard.test.ts).
  */
 import type { SessionEnvelopeKind } from '@open-walnut/history-session-envelope';
 
 export type StepIconName =
   | 'terminal' | 'eye' | 'pen' | 'search' | 'bot' | 'thought' | 'send' | 'reply-out' | 'received'
-  | 'wrench' | 'alert' | 'ban' | 'chevron' | 'message' | 'monitor' | 'clock' | 'plus' | 'walnut'
+  | 'wrench' | 'alert' | 'ban' | 'message' | 'monitor' | 'clock' | 'plus' | 'walnut'
   | 'globe' | 'list' | 'zap' | 'app' | 'bell' | 'question' | 'book';
 
 const PATHS: Record<StepIconName, string[]> = {
@@ -26,7 +28,6 @@ const PATHS: Record<StepIconName, string[]> = {
   wrench: ['M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z'],
   alert: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 8v4', 'M12 16h.01'],
   ban: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M4.93 4.93l14.14 14.14'],
-  chevron: ['M9 18l6-6-6-6'],
   message: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
   monitor: ['M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2', 'M8 21h8', 'M12 17v4'],
   clock: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 6v6l4 2'],

@@ -38,7 +38,7 @@ import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import './approvals.css';
 import { useSnoozedApprovalIds } from './snoozed-approvals';
-import { ICON_CLOSE } from '../common/Icons';
+import { ICON_CHEVRON_RIGHT, ICON_CLOSE } from '../common/Icons';
 
 export function useNow(ms: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -305,7 +305,7 @@ function ApprovalDialog({ s, now, id }: { s: ApprovalsState; now: number; id: st
             {list.length > 0 && (
               <div className="approval-dialog-steps">
                 <span>{list.length === 1 ? '1 more waiting' : `${list.length} more waiting`}</span>
-                <button type="button" className="approval-link" data-testid="approval-dialog-next" onClick={() => openApproval(list[0]!.id)}>Next ›</button>
+                <button type="button" className="approval-link" data-testid="approval-dialog-next" onClick={() => openApproval(list[0]!.id)}>Next<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span></button>
               </div>
             )}
           </>
@@ -450,7 +450,7 @@ export function ApprovalPrompts() {
                 title={`${card.what}: open the request`} onClick={() => openApproval(card.id)}>
                 <NoticeStatus tone="ask" className="approval-kicker">Approve?</NoticeStatus>
                 <span>{waitingWords(waiting.length)}</span>
-                <span className="approval-aside-open" aria-hidden="true">Open ›</span>
+                <span className="approval-aside-open" aria-hidden="true">Open<span className="wn-dir-mark">{ICON_CHEVRON_RIGHT}</span></span>
               </button>
             </NoticeCard>
           )}
@@ -466,7 +466,7 @@ export function ApprovalPrompts() {
                     title={`${card.what}${waiting.length > 1 ? ` (${waitingWords(waiting.length)})` : ''}: open the request`}>
                     <NoticeStatus tone="ask" className="approval-kicker">Approve?</NoticeStatus>
                     <span className="approval-line-what">{card.what}</span>
-                    {phone && <span className="approval-row-open" aria-hidden="true">Open ›</span>}
+                    {phone && <span className="approval-row-open" aria-hidden="true">Open<span className="wn-dir-mark">{ICON_CHEVRON_RIGHT}</span></span>}
                   </button>
                   {/* "+" where the whole card has its "–": the top right corner. */}
                   {!phone && lineFor?.id === card.id && !compact && !summaryInSight && (

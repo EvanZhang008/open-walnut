@@ -13,7 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
-import { ICON_GEAR } from '@/components/common/Icons';
+import { ICON_CHEVRON_RIGHT, ICON_GEAR } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import { ORG_OFF_LINE, orgSwitchTitle, useOrgSwitch } from './useOrgSwitch';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
@@ -88,7 +88,7 @@ export function OrgSettingsMenu() {
           )}
           <button type="button" className="btn btn-link org-settings-all" data-testid="org-settings-all"
             title="What each setting does, and every Org setting"
-            onClick={() => { setOpen(false); navigate('/settings#org'); }}>Open Org settings ›</button>
+            onClick={() => { setOpen(false); navigate('/settings#org'); }}>Open Org settings<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span></button>
         </div>,
         document.body,
       )}

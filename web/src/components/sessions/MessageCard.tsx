@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { taskPath } from '@/utils/task-path';
 import { StepIcon, type StepIconName } from './StepIcon';
+import { DisclosureChevron } from '@/components/controls';
 import { useCutCue } from './cut-cue';
 import '@/styles/provenance-fold.css';
 import '@/styles/step-rows.css';
@@ -104,7 +105,7 @@ export function CardMain({ title, titleCopy, summary, open, onToggle }: {
             line-clamped box (utils/page-find.ts unpaintedHost). */}
         {title && <span className="op-card-title" {...(titleCopy ? { 'data-find-skip': '' } : {})}><span>{title}</span></span>}
         <span className="op-card-more">
-          <span className="op-card-more-chevron" aria-hidden="true"><StepIcon name="chevron" /></span>
+          <DisclosureChevron open={open} className="op-card-more-chevron" />
           <span className="op-card-more-text">{open ? 'Hide details' : 'Details'}</span>
         </span>
       </button>

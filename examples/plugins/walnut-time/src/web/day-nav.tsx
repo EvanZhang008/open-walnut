@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { dayLabel, shiftDate } from './time-timeline'
+import { DirectionMark } from './fold-chevron'
 
 /**
  * `‹ Sat, Aug 23 ›` plus a Today reset — the ONE day switcher, shared by the Overview
@@ -49,7 +50,7 @@ export function DayNav({ date, today, oldest, newest, label, testIds, onDate, ch
         disabled={date <= oldest}
         onClick={() => onDate(shiftDate(date, -1))}
       >
-        ‹
+        <DirectionMark dir="left" />
       </button>
       <span className="wt-tt-nav-date" data-testid={testIds.date}>
         {label ?? dayLabel(date)}
@@ -63,7 +64,7 @@ export function DayNav({ date, today, oldest, newest, label, testIds, onDate, ch
         disabled={date >= newest}
         onClick={() => onDate(shiftDate(date, 1))}
       >
-        ›
+        <DirectionMark dir="right" />
       </button>
       <button
         type="button"

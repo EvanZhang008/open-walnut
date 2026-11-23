@@ -170,7 +170,7 @@ function WhereField({ draft, where, fieldRef, hostRef, narrow, menu, setMenu }: 
         {/* Narrow: the whole field opens Where (the spec); the host part is a button only when wide. */}
         <HostCrumb where={where} hostRef={hostRef} open={menu?.kind === 'host'}
           {...(narrow ? {} : { onClick: () => setMenu(menu?.kind === 'host' ? null : { kind: 'host' }) })} />
-        <span className="draft-v6-sep" aria-hidden="true">›</span>
+        <span className="draft-v6-sep" aria-hidden="true">{ICONS.ICON_CHEVRON_RIGHT}</span>
         {where.autoCurrent ? <AutoValue where={where} off={off} picked={draft.fromProjectInputs} /> : (
           <FolderCrumbs path={shown} narrow={narrow} offHost={where.offHost ? where.hostName(where.hostKey) : null}
             onLevel={(dir) => openWhere(`${dir}/`)} />
@@ -230,7 +230,7 @@ function FolderCrumbs({ path, narrow, offHost, onLevel }: { path: string; narrow
         const last = i === crumbs.length - 1;
         return (
           <span key={`${i}-${c.label}`} className="draft-v6-crumb-wrap">
-            {i > 0 && <span className="draft-v6-sep" aria-hidden="true">›</span>}
+            {i > 0 && <span className="draft-v6-sep" aria-hidden="true">{ICONS.ICON_CHEVRON_RIGHT}</span>}
             {last || !c.dir ? (
               <span className={`draft-v6-crumb${last ? ' is-last' : ''}${c.label === '…' ? ' is-fold' : ''}${c.label === '~' && !last ? ' is-home' : ''}`}>{c.label}</span>
             ) : (

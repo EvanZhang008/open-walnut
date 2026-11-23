@@ -790,6 +790,17 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   --wn-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 3.5 10.5 8 6 12.5'/%3E%3C/svg%3E");
 }
 
+/* A direction beside words ("Open >", "2 more >", "Next >", a crumb before a link): the icon is
+   ICON_CHEVRON_RIGHT or ICON_CHEVRON_LEFT of Icons.tsx, never a typed angle quote
+   (tests/web/disclosure-mark-guard.test.ts); this only seats it on the line, words or flex row. */
+.wn-dir-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-inline-start: 2px;
+}
+
 .wn-disclosure-chevron {
   flex: 0 0 auto;
   display: inline-flex;

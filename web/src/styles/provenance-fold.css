@@ -125,15 +125,7 @@
   color: var(--fg-muted);
 }
 
-.op-card-more-chevron {
-  display: inline-block;
-  transition: transform 120ms ease;
-}
-
-.op-card-main[aria-expanded="true"] .op-card-more-chevron {
-  transform: rotate(90deg);
-}
-
+/* The card's chevron is DisclosureChevron: it turns itself while the card is open. */
 .op-card-main:hover .op-card-more {
   color: var(--fg-secondary);
 }

@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { bashCommandSummary, toolDescription } from '@open-walnut/tool-header-text';
 import { useTurnFold } from './TurnFolds';
 import { StepIcon, toolDisplayName } from './StepIcon';
+import { DisclosureChevron } from '@/components/controls';
 import { toolTarget } from './step-target';
 import { isRuleDenied } from './tool-run-phrase';
 import { thinkingFirstLine } from './SessionMessage';
@@ -26,7 +27,7 @@ export function FoldedWordsRow({ text, foldKey, children }: { text: string; fold
         <StepIcon name="message" className="tool-run-icon" />
         {!open && <span className="tool-run-detail tool-run-detail--words" data-find-skip="">{line}</span>}
         {open && <span className="tool-run-label">Note</span>}
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="tool-run-chevron" />
       </button>
       {open && <div className="tool-run-body">{children}</div>}
     </div>

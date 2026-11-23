@@ -183,7 +183,8 @@
 .draft-v6-host-name { max-width: 14ch; font-size: var(--font-size-md); font-weight: 600; }
 .draft-v6-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
 .draft-v6-dot.is-on { background: var(--success); }
-.draft-v6-sep { flex: none; color: var(--fg-muted); font-weight: 400; }
+/* A crumb separator is the direction icon (Icons.tsx), never a typed angle quote. */
+.draft-v6-sep { flex: none; display: inline-flex; align-items: center; color: var(--fg-muted); }
 .draft-v6-folder-crumbs { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
 .draft-v6-crumb-wrap { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .draft-v6-gone { flex: none; color: var(--warning); }

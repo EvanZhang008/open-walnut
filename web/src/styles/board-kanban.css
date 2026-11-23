@@ -325,7 +325,8 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .kanban-card-prompt, .kanban-card-editor, .kanban-card-composer-host { cursor: default; }
 
 /* Menus (portalled to body): the flyout chevron. */
-.kanban-menu .kanban-menu-chevron { margin-left: auto; display: inline-flex; }
+/* A row that opens a flyout ends with the shared DisclosureChevron (standard.md, Big menus 6). */
+.kanban-menu .kanban-menu-chevron { margin-left: auto; }
 .kanban-menu .task-kebab-item[aria-disabled="true"]:not([aria-checked="true"]) { opacity: 0.55; cursor: default; }
 /* The card's own lane is the Picked row: its name coloured, not dimmed like a lane it cannot go to. */
 .kanban-menu .task-kebab-item[aria-checked="true"] { cursor: default; }

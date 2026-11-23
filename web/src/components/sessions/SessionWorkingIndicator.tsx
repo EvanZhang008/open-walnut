@@ -8,6 +8,7 @@ import { useMemo } from 'react';
 import { useTaskListSelect } from '@/contexts/TasksContext';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { Chip } from '@/components/controls';
+import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { workersWorkingLabel, workersWorkingOf, type WorkingWorker } from './workers-working';
 import '@/styles/session-working.css';
 
@@ -53,7 +54,7 @@ export function SessionWorkingIndicator({ sessionId, working }: {
         <span className="session-working-label">
           {agents.length === 1 ? '1 subagent is working…' : `${agents.length} subagents are working…`}
         </span>
-        <span aria-hidden="true">›</span>
+        <span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
       </button>
     );
   }
@@ -72,7 +73,7 @@ export function SessionWorkingIndicator({ sessionId, working }: {
           title="Open background tasks"
         >
           <span className="session-background-note-sep" aria-hidden="true">·</span>
-          {label} running <span aria-hidden="true">›</span>
+          {label} running<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
         </button> : undefined} />
       </div>
     );
@@ -88,7 +89,7 @@ export function SessionWorkingIndicator({ sessionId, working }: {
       title="Open background tasks"
     >
       <span className="session-working-label">{label} still running in the background</span>
-      <span aria-hidden="true">›</span>
+      <span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
     </button>
   );
   return workersRow ? <>{workersRow}{backgroundRow}</> : backgroundRow;
@@ -107,7 +108,7 @@ function WorkersWorkingRow({ workers }: { workers: WorkingWorker[] }) {
     <div className="session-working-row" data-testid="session-workers-working">
       <span className="session-working-label">{workersWorkingLabel(workers.length)}</span>
       {workers.map((w) => (
-        <Chip key={w.id} pressed={undefined} title={`Open ${w.title}`} trailing={<span aria-hidden="true">›</span>} onClick={() => openTask(w.id)}>
+        <Chip key={w.id} pressed={undefined} title={`Open ${w.title}`} trailing={<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>} onClick={() => openTask(w.id)}>
           {w.title}
         </Chip>
       ))}

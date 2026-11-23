@@ -379,7 +379,7 @@ test('a subtask\'s ask sits under its top-level task in the Task view, once', as
   await detail.getByTestId('org-top-task').click()
   const card = detail.locator(`[data-testid="org-alert"][data-task-id="${sub}"]`)
   await expect(card).toHaveCount(1, { timeout: 30_000 })
-  await expect(card.getByTestId('org-ask-via')).toHaveText(`Parser ${STAMP} ›`)
+  await expect(card.getByTestId('org-ask-via')).toHaveText(`Parser ${STAMP}`)
   // Right after its top-level task's own card.
   const order = await detail.getByTestId('org-alert').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
   expect(order.indexOf(sub)).toBe(order.indexOf(ids.parser) + 1)

@@ -223,7 +223,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
           href={taskPath(a.via.id)}
           aria-label={`Part of ${a.via.title}`}
           onClick={(e) => { e.preventDefault(); onOpen({ ...a, taskId: a.via!.id, title: a.via!.title, source: undefined }); }}
-        >{a.via.title} ›</a>{' '}{link}
+        >{a.via.title}<span className="wn-dir-mark" aria-hidden="true">{ICONS.ICON_CHEVRON_RIGHT}</span></a>{' '}{link}
       </>) : own ? <>{link} <span className="org-ask-own" data-testid="org-ask-own">asks you</span></> : link}</>}
       question={<AgentText compact inline {...askSource} text={summary} shortLinks testId="org-ask-summary" />}
       detail={more ? <AgentText compact inline {...askSource} text={more} shortLinks testId="org-ask-more" /> : undefined}

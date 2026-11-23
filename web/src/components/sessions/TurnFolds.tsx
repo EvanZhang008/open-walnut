@@ -10,7 +10,7 @@
  */
 import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react';
 import { InFoldBody, InStepList } from './fold-body-context';
-import { StepIcon } from './StepIcon';
+import { DisclosureChevron } from '@/components/controls';
 import '@/styles/turn-folds.css';
 import { foldFailureWords, type FoldFailures } from './fold-rows';
 import { EMPTY_FOLD_PHRASE } from './fold-steps';
@@ -120,7 +120,7 @@ export function FoldRow({ open, onToggle, testId, className, attrs, head, childr
   return (
     <div className={`tool-run-row process-fold${className ? ` ${className}` : ''}`} data-testid={testId} data-open={open ? 'true' : 'false'} {...attrs}>
       <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={onToggle}>
-        <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="tool-run-chevron process-fold-chevron" />
         {head}
       </button>
       {children}

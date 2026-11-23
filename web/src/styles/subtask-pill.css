@@ -214,6 +214,9 @@
   font-weight: 500;
   color: var(--fg-secondary);
 }
+/* Adopt and Release open a picker beside the menu: the shared chevron at the row's right edge,
+   pointing at it (aria-haspopup keeps it from turning). */
+.task-kebab-team-pick-chevron { margin-left: auto; }
 .task-kebab-team-leave {
   min-width: 0;
   white-space: nowrap;

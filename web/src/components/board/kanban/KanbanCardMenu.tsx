@@ -11,7 +11,7 @@
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import '@/styles/pick-and-nav.css';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -144,7 +144,7 @@ export function KanbanCardMenu({ card, anchor, triggerRef, lanes, api, onEdit, o
                 }}
               >
                 <span>{it.label}</span>
-                {it.sub && <span className="kanban-menu-chevron" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>}
+                {it.sub && <DisclosureChevron className="kanban-menu-chevron" />}
               </button>
             </div>
           ))}

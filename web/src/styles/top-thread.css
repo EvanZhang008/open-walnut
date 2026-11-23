@@ -62,8 +62,8 @@
 .session-top:is([data-room="min"], [data-room="box"]) .top-thread-list > .org-thread { padding: 6px 8px; gap: 4px; }
 .top-thread-bar { display: flex; align-items: center; gap: 4px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .top-thread-step {
-  all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: var(--radius-full); text-align: center; line-height: 22px;
-  font-size: var(--font-size-lg); color: var(--fg);
+  all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: var(--radius-full);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--fg);
 }
 .top-thread-step:hover:not(:disabled) { background: var(--bg-secondary); }
 .top-thread-step:disabled { cursor: default; color: var(--fg-muted); opacity: 0.5; }
@@ -99,6 +99,6 @@
 
 /* A phone: finger-sized controls. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .top-thread-step { width: 44px; height: 44px; line-height: 44px; }
+  .app-shell-navigation .top-thread-step { width: 44px; height: 44px; }
   .app-shell-navigation .top-thread-hide, .app-shell-navigation .top-thread-line { min-height: 44px; box-sizing: border-box; }
 }

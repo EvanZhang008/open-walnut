@@ -66,6 +66,7 @@ import {
   areaIdWords, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_CHEVRON_LEFT } from '@/components/common/Icons';
 
 export type OrgTab = 'board' | 'team' | 'chat';
 
@@ -487,7 +488,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       {/* On the header rule; its tools take a line of their own under the name before they would
           cut it (org-page.css), so they keep their own wrap instead of the rule's actions group. */}
       <header className="org-detail-head" data-fit-header="">
-        {onBack && <button type="button" className="org-back" onClick={onBack} aria-label="Back to the org">‹</button>}
+        {onBack && <button type="button" className="org-back" onClick={onBack} aria-label="Back to the org">{ICON_CHEVRON_LEFT}</button>}
         {/* No state mark on the avatar, and the projects it leads and its last move only on hover
             (2026-11-22/23, the user: "no fucking the ! mark", "why we need Leads Walnut, Walnut-Idea
             · moved just now???"). */}

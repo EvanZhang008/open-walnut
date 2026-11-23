@@ -5,6 +5,7 @@
  * never uses one. No title tooltips either: each day says its date to a screen reader instead.
  */
 import { useState } from 'react';
+import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from './Icons';
 
 const WEEKDAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -44,9 +45,9 @@ export function MonthGrid({ selected, onPick, min, now = new Date() }: {
   return (
     <div className="dp-month" data-testid="dp-month" data-month={`${view.y}-${String(view.m + 1).padStart(2, '0')}`}>
       <div className="dp-month-head">
-        <button type="button" className="dp-month-step" data-testid="dp-month-prev" aria-label="Previous month" onClick={(e) => { e.stopPropagation(); step(-1); }}>‹</button>
+        <button type="button" className="dp-month-step" data-testid="dp-month-prev" aria-label="Previous month" onClick={(e) => { e.stopPropagation(); step(-1); }}>{ICON_CHEVRON_LEFT}</button>
         <span className="dp-month-name" aria-live="polite">{MONTHS[view.m]} {view.y}</span>
-        <button type="button" className="dp-month-step" data-testid="dp-month-next" aria-label="Next month" onClick={(e) => { e.stopPropagation(); step(1); }}>›</button>
+        <button type="button" className="dp-month-step" data-testid="dp-month-next" aria-label="Next month" onClick={(e) => { e.stopPropagation(); step(1); }}>{ICON_CHEVRON_RIGHT}</button>
       </div>
       <div className="dp-month-grid" role="grid" aria-label={`${MONTHS[view.m]} ${view.y}`}>
         <div className="dp-month-row" role="row">

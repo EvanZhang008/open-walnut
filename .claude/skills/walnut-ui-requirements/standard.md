@@ -239,6 +239,11 @@ Every fold mark is a `DisclosureChevron` and every menu key's caret a `MenuCaret
 triangle or angle quote, never a chevron SVG or component a file draws for itself; a direction (back,
 next, a row that goes somewhere, a sort order) is `ICON_CHEVRON_LEFT` / `ICON_CHEVRON_RIGHT` from
 Icons.tsx (the user, 2026-11-23: "everything should be one"; `tests/web/disclosure-mark-guard.test.ts`).
+Beside words ("Open", "2 more", "Next", a crumb before a link) the icon sits in
+`<span className="wn-dir-mark" aria-hidden="true">`; a typed `‹ ›` (or `« »`) alone, or at the start
+or end of a key's words or a string, fails the guard in any class, and only one inside a sentence
+("Settings › Voice") is prose. The session timeline's folds wear `DisclosureChevron` too, never an
+icon set's own chevron.
 
 Tabs have one other look, `TabList tiles`: large square cards (an icon, a title and a line),
 picked with the accent edge, a ring and a tint, for a choice between two kinds of the same thing at

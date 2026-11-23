@@ -1,4 +1,4 @@
-import { StepIcon } from './StepIcon';
+import { DisclosureChevron } from '@/components/controls';
 import { useRowDisclosure } from './row-disclosure';
 import { AgentText } from '@/components/common/AgentText';
 import type { InjectedBanner } from '@open-walnut/history-injected-banner';
@@ -33,7 +33,7 @@ export function InjectedBannerRow({ banner, disclosureId }: {
         aria-expanded={open}
       >
         <span className="tool-run-label">{banner.label}</span>
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        <DisclosureChevron open={open} className="tool-run-chevron" />
       </button>
       {open && (
         <div className="tool-run-body" data-testid="injected-banner-body">

@@ -10,14 +10,16 @@
  * row that opens more and so ends with DisclosureChevron: standard.md, Big menus 6), and a key whose
  * dialog is not a choice (a side chat drawer, a comment box, a status pill's card).
  *
- * Three checks over web/src, plugin-store and examples/plugins (menu-key-scan.ts reads the AST),
+ * Four checks over web/src, plugin-store and examples/plugins (menu-key-scan.ts reads the AST),
  * each baseline 0:
  *  1. a MenuCaret sits in a key that carries aria-haspopup;
  *  2. a key with aria-haspopup that shows words holds MenuCaret, when what it opens is a list
  *     (menu, listbox, true) or a picker (it shows a `*Picker` / `*Menu` / `*Dropdown`, or hands its
  *     press to the draft menu);
  *  3. a key whose press opens a picker, menu or popover (a toggle of a state the file shows one
- *     under, `toggle*Picker()`, `open*Menu()`, `onOpen*Picker`) carries aria-haspopup.
+ *     under, `toggle*Picker()`, `open*Menu()`, `onOpen*Picker`) carries aria-haspopup;
+ *  4. a menu row that opens more (aria-haspopup) and shows words ends with DisclosureChevron
+ *     (standard.md, Big menus 6), never a direction icon or no mark at all.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -48,7 +50,7 @@ describe('a picker key shows MenuCaret and carries aria-haspopup', () => {
     const draft = '<>\n<button className="composer-model-pill" onClick={() => { setFallbackView(null); setOpen((v) => !v); }}>\n{label}\n</button>\n{open && <ModelPicker onClose={() => setOpen(false)} />}\n</>'
     expect(lines(scanKeys(draft), 'silentOpener')).toEqual([2])
     // Fixed as the composer's pill: aria-haspopup and the caret.
-    expect(scanKeys(draft.replace('onClick', 'aria-haspopup="dialog" aria-expanded={open} onClick').replace('{label}', '{label}<MenuCaret />'))).toEqual({ caretNoPopup: [], popupNoCaret: [], silentOpener: [] })
+    expect(scanKeys(draft.replace('onClick', 'aria-haspopup="dialog" aria-expanded={open} onClick').replace('{label}', '{label}<MenuCaret />'))).toEqual({ caretNoPopup: [], popupNoCaret: [], silentOpener: [], menuRowNoMark: [] })
     // With aria-haspopup but no caret, a picker dialog still needs one.
     expect(lines(scanKeys(draft.replace('onClick', 'aria-haspopup="dialog" onClick')), 'popupNoCaret')).toEqual([2])
     // A handler named by the key, and a toggle call.
@@ -79,6 +81,15 @@ describe('a picker key shows MenuCaret and carries aria-haspopup', () => {
     expect(scanKeys('<><button aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((v) => !v)}>Note</button>{open && <NoteDrawer />}</>').popupNoCaret).toEqual([])
     // A spread naming the popup counts as the attribute.
     expect(scanKeys("<button {...(talk ? { 'aria-haspopup': 'dialog' as const } : {})}>Ask</button>").popupNoCaret).toEqual([])
+
+    // A menu row that opens more ends with DisclosureChevron: the task menu's Adopt row before the fix
+    // (no mark), the board card's Move row before it (a direction icon); a plain row or a fold row is not one.
+    expect(lines(scanKeys("<button className={`task-kebab-item${a ? ' on' : ''}`} aria-haspopup=\"dialog\" aria-expanded={a}>\n<span>Adopt a worker</span>\n</button>"), 'menuRowNoMark')).toEqual([1])
+    expect(lines(scanKeys('<button role="menuitem" className="task-kebab-item" aria-haspopup={it.sub ? "menu" : undefined}><span>{it.label}</span>{it.sub && <span className="x" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>}</button>'), 'menuRowNoMark')).toEqual([1])
+    expect(scanKeys('<button className="task-kebab-item" aria-haspopup="dialog"><span>Adopt a worker</span><DisclosureChevron /></button>').menuRowNoMark).toEqual([])
+    expect(scanKeys('<button role="menuitem" className="chat-plus-menu-item" aria-haspopup="menu"><span>More actions</span><DisclosureChevron className="c" /></button>').menuRowNoMark).toEqual([])
+    expect(scanKeys('<button className="task-kebab-item" onClick={f}><span>Stop the team</span></button>').menuRowNoMark).toEqual([])
+    expect(scanKeys('<button className="composer-model-pill" aria-haspopup="menu">{label}<MenuCaret /></button>').menuRowNoMark).toEqual([])
   })
 
   it('the scan sees the UI it guards', () => {
@@ -102,6 +113,10 @@ describe('a picker key shows MenuCaret and carries aria-haspopup', () => {
 
   it('a key that opens a list or a picker and shows words holds MenuCaret', () => {
     expect(list('popupNoCaret'), 'add <MenuCaret /> (components/controls) after its words; a row inside a menu that opens more ends with DisclosureChevron').toEqual([])
+  })
+
+  it('a menu row that opens more ends with DisclosureChevron (standard.md, Big menus 6)', () => {
+    expect(list('menuRowNoMark'), 'end the row with <DisclosureChevron /> (components/controls); aria-haspopup keeps it pointing at what it opens').toEqual([])
   })
 
   it('a key that opens a picker, menu or popover carries aria-haspopup', () => {

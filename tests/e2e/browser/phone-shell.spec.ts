@@ -169,7 +169,7 @@ test('toasts stay inside the screen at its top, one at a time, with a 44 px clos
   const toasts = page.locator('.notification-toaster .notification-toast')
   await expect(toasts).toHaveCount(1, { timeout: 10_000 })
   // The one waiting its turn is counted, not silent.
-  await expect(page.getByTestId('notification-toaster-more')).toHaveText('1 more ›')
+  await expect(page.getByTestId('notification-toaster-more')).toHaveText('1 more')
   const vp = page.viewportSize()!
   // Measured once its entrance has settled.
   await expect.poll(async () => (await toasts.first().evaluate((el) => el.getAnimations().length))).toBe(0)

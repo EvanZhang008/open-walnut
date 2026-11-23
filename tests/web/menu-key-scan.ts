@@ -13,12 +13,16 @@
  *  - popupNoCaret: a key with aria-haspopup whose body shows words, without MenuCaret;
  *  - silentOpener: a key whose onClick opens a picker or menu (a toggle of an open state that shows a
  *    `*Picker` / `*Menu` / `*Popover`, or a `toggle*Picker()` call) with no aria-haspopup, unless it is
- *    a fold (aria-expanded beside DisclosureChevron).
+ *    a fold (aria-expanded beside DisclosureChevron);
+ *  - menuRowNoMark: a row of a menu (role menuitem, or a class named like a menu's or a kebab's row)
+ *    that opens more (aria-haspopup: a flyout, a picker, a dialog) and shows words, without the one
+ *    DisclosureChevron at its end (standard.md, Big menus 6; 2026-11-23: the task menu's Adopt and
+ *    Release a worker rows opened their pickers with no mark).
  */
 import ts from 'typescript';
 
 export interface Finding { line: number; what: string }
-export interface KeyFindings { caretNoPopup: Finding[]; popupNoCaret: Finding[]; silentOpener: Finding[] }
+export interface KeyFindings { caretNoPopup: Finding[]; popupNoCaret: Finding[]; silentOpener: Finding[]; menuRowNoMark: Finding[] }
 
 type El = ts.JsxElement | ts.JsxSelfClosingElement;
 const opening = (el: El) => (ts.isJsxElement(el) ? el.openingElement : el);
@@ -228,6 +232,8 @@ const LIST_POPUP = /^(?:menu|listbox|tree|grid|true|)$|['"](?:menu|listbox|tree|
  */
 const rowMark = (el: El) => holds(el, /^Disclosure(?:Chevron|Button)$/);
 const inMenu = (el: El) => /^(?:menuitem\w*|option|tab)$/.test(attrText(attr(el, 'role')) ?? '');
+/** A row of a menu: role menuitem, or a class named like a menu's or a kebab's row (`task-kebab-item`, `chat-plus-menu-item`). */
+const menuRow = (el: El) => /^menuitem/.test(attrText(attr(el, 'role')) ?? '') || /\b[\w-]*(?:menu|kebab)[\w-]*-item\b/.test(attrText(attr(el, 'className')) ?? '');
 
 const lineOf = (sf: ts.SourceFile, n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
 const brief = (el: El) => opening(el).getText().replace(/\s+/g, ' ').slice(0, 100);
@@ -242,7 +248,7 @@ function keyAround(n: ts.Node): El | undefined {
 
 export function scanKeys(text: string, fileName = 'x.tsx'): KeyFindings {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const out: KeyFindings = { caretNoPopup: [], popupNoCaret: [], silentOpener: [] };
+  const out: KeyFindings = { caretNoPopup: [], popupNoCaret: [], silentOpener: [], menuRowNoMark: [] };
   const states = shownStates(sf);
   const seen = new Set<El>();
   const visit = (n: ts.Node) => {
@@ -253,6 +259,7 @@ export function scanKeys(text: string, fileName = 'x.tsx'): KeyFindings {
         else if (!hasPopup(key) && !seen.has(key)) { seen.add(key); out.caretNoPopup.push({ line: lineOf(sf, key), what: brief(key) }); }
       } else if (isKey(n) && !/^Disclosure/.test(tagName(n))) {
         const kind = popupKind(n);
+        if (kind !== undefined && menuRow(n) && nodeWords(n) && !rowMark(n) && !holdsCaret(n)) out.menuRowNoMark.push({ line: lineOf(sf, n), what: brief(n) });
         if (kind === undefined) {
           const fold = attr(n, 'aria-expanded') && rowMark(n);
           if (!fold && !inMenu(n) && opens(n, sf, states)) out.silentOpener.push({ line: lineOf(sf, n), what: brief(n) });

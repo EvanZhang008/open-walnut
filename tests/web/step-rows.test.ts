@@ -6,7 +6,8 @@
  * The class is "a row a turn's step renders as": a tool call, a command, a run of
  * calls, reasoning, a runtime line, injected context, a message sent, a message
  * received, the session's own words on the way. Each wears a StepIcon (a 16px line
- * icon) and a StepIcon chevron, never a text glyph such as "✓", "▶", "›" or "→".
+ * icon) and the app's one fold mark, DisclosureChevron, never a text glyph such as
+ * "✓", "▶", "›" or "→" (and never a chevron of StepIcon's own: disclosure-mark-guard).
  * The source scan lists every element of the session timeline that draws a row's
  * icon or chevron, so a new row with a glyph of its own fails here; the renders
  * check each kind as it really draws.
@@ -63,7 +64,12 @@ describe('the fold line says how long the turn worked, then its steps', () => {
   })
   it('the fold line has its chevron first and no rule under it', () => {
     const closed = html(createElement(ProcessFoldRow, { findMembers: undefined, foldId: 'f1', lead: 'Worked for 9s', phrase: 'Ran 1 tool', testId: 'turn-fold' }, 'body'))
-    expect(closed).toMatch(/<button[^>]*class="tool-run-toggle"[^>]*><span class="tool-run-chevron process-fold-chevron"><svg[^>]*data-step-icon="chevron"/)
+    // Its chevron is the shared fold mark, shut (right), the toggle's first child.
+    const toggle = parseHTML(`<html><body>${closed}</body></html>`).document.querySelector('.tool-run-toggle')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    const chev = toggle.firstElementChild!
+    expect([...chev.classList]).toEqual(['wn-disclosure-chevron', 'tool-run-chevron', 'process-fold-chevron'])
+    expect(chev.querySelector('svg polyline')).not.toBeNull()
     expect(closed.replace(/<[^>]+>/g, '')).toContain('Worked for 9s · Ran 1 tool')
     // The steps keep their own span: what the line counts reads the same as before.
     expect(closed).toContain('<span class="tool-run-label" title="Worked for 9s · Ran 1 tool">Ran 1 tool</span>')
@@ -148,8 +154,11 @@ describe('every kind of step is one row with its own line icon', () => {
     const fold = aloneDoc.querySelector('.process-fold[data-testid="thought-fold"]')!
     expect(fold.getAttribute('data-open')).toBe('false')
     expect(fold.textContent).toBe('Thinking')
-    expect(fold.querySelector('.tool-run-toggle')!.firstElementChild!.className).toContain('process-fold-chevron')
-    expect(firstIcon(alone)).toBe('chevron')
+    const aloneChev = fold.querySelector('.tool-run-toggle')!.firstElementChild!
+    expect(aloneChev.classList.contains('process-fold-chevron')).toBe(true)
+    expect(aloneChev.classList.contains('wn-disclosure-chevron')).toBe(true)
+    expect(aloneChev.classList.contains('is-open')).toBe(false)
+    expect(firstIcon(alone)).toBeUndefined()
     expect(alone).not.toContain('data-step-icon="thought"')
     expect(alone).not.toContain('tool-run-row--step')
     expect(alone).not.toContain('tool-run-detail')
@@ -168,18 +177,20 @@ describe('no row of the session timeline draws its icon or chevron as a text gly
   const dir = join(__dirname, '../../web/src/components/sessions')
   const files = readdirSync(dir).filter((f) => f.endsWith('.tsx'))
   // The elements that hold a step row's icon or chevron.
-  const SLOT = /className=\{?[`"'](?:[^`"']*\s)?(tool-run-chevron|chat-tool-block-icon|chat-tool-block-arrow|op-card-more-chevron|provenance-glyph)\b[^>]*>([^<]*)</g
+  // A self-closed tag (`<DisclosureChevron className="tool-run-chevron" />`) holds nothing.
+  const SLOT = /className=\{?[`"'](?:[^`"']*\s)?(tool-run-chevron|chat-tool-block-icon|chat-tool-block-arrow|op-card-more-chevron|provenance-glyph)\b[^>]*?(\/)?>([^<]*)</g
   const found: string[] = []
   for (const f of files) {
     const src = readFileSync(join(dir, f), 'utf8')
     for (const m of src.matchAll(SLOT)) {
-      const inner = m[2]!.trim()
+      if (m[2]) continue
+      const inner = m[3]!.trim()
       // `{icon ? <StepIcon … /> : glyph}` and `{statusIcon}` (a StepIcon) are the icon; text is not.
       if (inner === '' || inner === '{statusIcon}' || inner.startsWith('{icon ?')) continue
       found.push(`${f}: ${m[1]} holds ${JSON.stringify(inner)}`)
     }
   }
-  it('every one holds a StepIcon', () => {
+  it('every one holds a StepIcon or is the shared fold mark', () => {
     expect(found).toEqual([])
   })
   it('the scan sees the rows it guards', () => {

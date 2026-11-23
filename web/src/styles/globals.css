@@ -5167,15 +5167,9 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   color: var(--warning);
 }
 
+/* A run's fold mark is DisclosureChevron (it turns itself); this only keeps it whole in a tight row. */
 .tool-run-chevron {
-  font-size: var(--font-size-lg);
-  line-height: 1;
   flex-shrink: 0;
-  transition: transform 0.15s;
-}
-
-.tool-run-chevron--open {
-  transform: rotate(90deg);
 }
 
 .tool-run-fail {
@@ -12790,8 +12784,9 @@ a.task-kebab-info:hover {
 .dp-month-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 0; }
 .dp-month-name { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg); }
 .dp-month-step {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
   width: 24px; height: 24px; border: none; border-radius: var(--radius-full); background: none;
-  color: var(--fg-secondary); font-size: 16px; line-height: 1; cursor: pointer;
+  color: var(--fg-secondary); cursor: pointer;
 }
 .dp-month-step:hover { background: var(--bg-tertiary); color: var(--fg); }
 .dp-month-grid { display: flex; flex-direction: column; gap: 1px; }

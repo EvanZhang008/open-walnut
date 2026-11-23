@@ -42,7 +42,7 @@ export function ApprovalRows({ list, variant }: { list: readonly Approval[]; var
       <button type="button" className="approval-row" data-testid="approval-summary" aria-label={`${words}. Open them`} onClick={() => openApproval(live[0]!.id)}>
         <span className="approval-row-icon" aria-hidden="true">{ICONS.ICON_ATTENTION}</span>
         <span className="approval-row-what">{words}</span>
-        <span className="approval-row-open" aria-hidden="true">›</span>
+        <span className="approval-row-open wn-dir-mark" aria-hidden="true">{ICONS.ICON_CHEVRON_RIGHT}</span>
       </button>
     </div>
   );

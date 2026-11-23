@@ -12,7 +12,9 @@
 /* ── The fold line: chevron first, the words, nothing under it ── */
 :root .process-fold > .tool-run-toggle { gap: 6px; min-height: 26px; padding: 2px 4px 2px 0; font-size: 14px; border-radius: var(--radius-sm); /* shape: the Worked for line of a turn, a row not a key */ }
 :root .process-fold > .tool-run-toggle .process-fold-chevron { display: inline-flex; color: var(--fg); }
-:root .process-fold > .tool-run-toggle .process-fold-chevron .step-icon { width: 16px; height: 16px; flex-basis: 16px; color: inherit; }
+/* The fold marks of the timeline are DisclosureChevron (12px at rest); the fold line's is full ink at 16px. */
+:root .process-fold > .tool-run-toggle .process-fold-chevron,
+:root .process-fold > .tool-run-toggle .process-fold-chevron > svg { width: 16px; height: 16px; }
 :root .process-fold-body {
   margin-top: 2px;
   padding-left: 0;
@@ -74,9 +76,8 @@
   color: var(--fg-secondary);
 }
 :root .session-history .chat-tool-block .chat-tool-block-arrow { display: inline-flex; margin-left: auto; opacity: 0; transition: opacity .12s, transform .12s; }
-:root .session-history .chat-tool-block .chat-tool-block-arrow .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
 :root .session-history .chat-tool-block > .chat-tool-block-header:hover .chat-tool-block-arrow { opacity: .7; }
-:root .session-history .chat-tool-block--open .chat-tool-block-arrow { opacity: .7; transform: rotate(90deg); }
+:root .session-history .chat-tool-block--open .chat-tool-block-arrow { opacity: .7; }
 /* A call whose line is cut shows its chevron at rest (cut-cue.ts), as a cut card or thought does. */
 :root .session-history .chat-tool-block > .chat-tool-block-header[data-cut="true"] .chat-tool-block-arrow { opacity: 1; color: var(--fg-secondary); }
 :root .session-history .chat-tool-block > .chat-tool-block-body {
@@ -108,10 +109,9 @@
 :root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-label { color: var(--fg-secondary); flex-shrink: 0; }
 :root .session-history .tool-run-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
 :root .session-history .tool-run-chevron { display: inline-flex; align-items: center; }
-:root .session-history .tool-run-chevron .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
 :root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron { margin-left: auto; opacity: 0; }
 :root .session-history .tool-run-row--step > .tool-run-toggle:hover .tool-run-chevron,
-:root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron--open { opacity: .7; }
+:root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron.is-open { opacity: .7; }
 :root .session-history .tool-run-row--step > .tool-run-toggle[data-cut="true"] .tool-run-chevron { opacity: 1; color: var(--fg-secondary); }
 :root .session-history .tool-run-row--step > .tool-run-body { margin: 2px 0 8px 28px; padding: 8px 10px; border-left: none; border-radius: var(--radius-sm); background: var(--bg-secondary); }
 /* A run inside an opened fold is its calls, one row each. */
@@ -159,13 +159,13 @@
 :root .session-history .provenance-card .op-card-more { margin: 0 0 0 auto; flex: 0 0 auto; }
 :root .session-history .provenance-card .op-card-more-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 :root .session-history .provenance-card .op-card-more-chevron { display: inline-flex; opacity: 0; transition: opacity .12s, transform .12s; }
-:root .session-history .provenance-card .op-card-more-chevron .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
 :root .session-history .provenance-card:hover .op-card-more-chevron,
 :root .session-history .provenance-card .op-card-main[aria-expanded="true"] .op-card-more-chevron { opacity: .7; }
 /* A card whose words are cut says so at rest (cut-cue.ts): its chevron in secondary grey,
    full strength, a step larger; the card's hover fill is its hover feedback. */
 :root .session-history .provenance-card[data-cut="true"] .op-card-more-chevron { opacity: 1; color: var(--fg-secondary); }
-:root .session-history .provenance-card[data-cut="true"] .op-card-more-chevron .step-icon { width: 14px; height: 14px; flex-basis: 14px; }
+:root .session-history .provenance-card[data-cut="true"] .op-card-more-chevron,
+:root .session-history .provenance-card[data-cut="true"] .op-card-more-chevron > svg { width: 14px; height: 14px; }
 :root .session-history .provenance-card > .op-card-detail,
 :root .session-history .provenance-card > .provenance-status {
   /* The full width under the row, less its indent; never wider (a long line wraps or ellipses inside). */
@@ -184,7 +184,8 @@
 :root .process-fold > .tool-run-toggle .tool-run-lead { flex-shrink: 0; white-space: nowrap; }
 /* A run's own line (a live turn's commands, a long run) reads like the fold line: chevron first. */
 :root .session-history .tool-run-row:not(.tool-run-row--step) > .tool-run-toggle { gap: 6px; }
-:root .session-history .tool-run-chevron--lead .step-icon { width: 14px; height: 14px; flex-basis: 14px; }
+:root .session-history .tool-run-chevron--lead,
+:root .session-history .tool-run-chevron--lead > svg { width: 14px; height: 14px; }
 
 /* ── One line, or two: every row of the timeline (2026-11-11, the user: "if 1 line just 1
    line, if 2 line just have the title in one and detail or summary in next", "same for all
