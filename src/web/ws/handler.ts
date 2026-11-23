@@ -621,6 +621,15 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
+    // /host-listen (bridge-door): a host that judges its own sessions dialing in with its own machine
+    // token, so this companion listens to its session channel (core/session-channel/listener-door.ts).
+    if (door === '/host-listen') {
+      import('../../core/session-channel/listener-door.js')
+        .then(({ handleHostListenUpgrade }) => handleHostListenUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) }))
+        .catch(() => socket.destroy())
+      return
+    }
+
     // /host-door (a leader door, core/leader-doors.ts; open only on the leader while the experiment
     // host_runs_sessions is on): a host of this leader dialing in. The upgrade carries no secret: a
     // rate-limited address gets 429, then both sides prove the key this leader issued the host in

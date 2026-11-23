@@ -96,6 +96,21 @@ export async function resolveCloudSessionHost(sessionId: string): Promise<CloudS
     };
   }
 
+  // A session its host judges, as that host's listener link told it (session-channel/companion-listener.ts):
+  // also one born while the Mac was away, which no copy has.
+  const { listenedRow } = await import('../session-channel/companion-listener.js');
+  const listened = listenedRow(sessionId);
+  if (listened) {
+    const r = listened.row;
+    return {
+      host: listened.alias,
+      ...(r.host_label ? { hostLabel: r.host_label } : {}),
+      ...(r.cwd ? { cwd: r.cwd } : {}),
+      ...(r.model ? { model: r.model } : {}),
+      ...(r.stopRequest ? { stopRequest: r.stopRequest } : {}),
+    };
+  }
+
   const { readSessionProjection } = await import('../session-projection.js');
   const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId);
   if (row) {

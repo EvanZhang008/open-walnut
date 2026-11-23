@@ -20,4 +20,9 @@ export interface LeaderHeartbeatFrame {
   backup: boolean
   /** Set on the last heartbeat before a planned restart (a deploy). */
   restartingMs?: number
+  /**
+   * The leader's switch host_runs_sessions is on (session-channel/switch.ts): the companion opens
+   * the listener door its hosts dial (session-channel/listener-door.ts). Absent: off.
+   */
+  hostRunsSessions?: true
 }

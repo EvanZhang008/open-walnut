@@ -36,7 +36,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { role } from '../../core/server-role.js'
 import { bus } from '../../core/event-bus.js'
-import { emitSse, attachSse, sseConnCount } from '../sse-channels.js'
+import { attachSse, sseConnCount } from '../sse-channels.js'
+import { emitSessionEventSse, sessionChannelKey as channelKey } from '../session-event-sse.js'
 import { sessionStreamBuffer, budgetSnapshotBlocks } from '../session-stream-buffer.js'
 import { resolveCloudSessionHost, PrimaryUnreachableError } from '../../core/sessions/cloud-session-host.js'
 import { resolveHostOrAnswer } from './cloud-session-send.js'
@@ -51,10 +52,6 @@ const SID_RE = /^[A-Za-z0-9_-]+$/
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } })
-}
-
-function channelKey(sessionId: string): string {
-  return `session:${sessionId}`
 }
 
 // ─── Interest set: which sessions have (or recently had) live SSE conns ─────
@@ -106,9 +103,8 @@ export function resetSessionStreamInterest(): void {
 
 // ─── Bus → SSE mapping (primary box) ────────────────────────────────────────
 //
-// Main lane only: deltas/tools carrying parentToolUseId belong to inline
-// subagents — the phone conversation page renders the primary lane, same as
-// the web UI default.
+// The mapping itself is session-event-sse.ts (the companion's listener of a host's
+// sessions says the host's facts through the same one).
 
 function ensureBusSubscriber(): void {
   // CLOUD_MODE normally has no local session events to map (they arrive from the
@@ -122,90 +118,21 @@ function ensureBusSubscriber(): void {
     const d = event.data as Record<string, unknown>
     const sid = typeof d.sessionId === 'string' ? d.sessionId : undefined
     if (!sid || !interested.has(sid)) return
-    const key = channelKey(sid)
-    switch (event.name) {
-      case 'session:text-delta': {
-        if (d.parentToolUseId) return
-        emitSse(key, 'text-delta', { delta: d.delta ?? '' })
-        return
-      }
-      case 'session:thinking-delta': {
-        if (d.parentToolUseId) return
-        emitSse(key, 'thinking', { delta: d.delta ?? '' })
-        return
-      }
-      case 'session:tool-use': {
-        if (d.parentToolUseId) return
-        const { toolDetail, toolInputPreview } = await import('../../core/tool-summary.js')
-        const input = d.input as Record<string, unknown> | undefined
-        const detail = toolDetail(String(d.toolName ?? ''), input)
-        // Additive: `detail` is the collapsed one-liner (Bash prefers `description`,
-        // so the command itself never reached the phone), `inputPreview` is the same
-        // bounded, masked `key: value` render the history row carries.
-        const inputPreview = toolInputPreview(input)
-        emitSse(key, 'tool', {
-          name: d.toolName ?? '', toolUseId: d.toolUseId ?? '',
-          ...(detail ? { detail } : {}),
-          ...(inputPreview ? { inputPreview } : {}),
-        })
-        return
-      }
-      case 'session:tool-result': {
-        if (d.parentToolUseId) return
-        // Additive: the same bounded, masked <=700-character excerpt the history row
-        // carries, so a finished live row can show its output before the transcript
-        // lands (the phone's drawer used to say "No output" for a tool that had
-        // output). The emitter already caps the bus event at 2000 characters; the
-        // FULL text still only travels via the row's `detailRef` read.
-        const { toolResultPreview } = await import('../../core/tool-summary.js')
-        const resultPreview = toolResultPreview(typeof d.result === 'string' ? d.result : undefined)
-        emitSse(key, 'tool-result', {
-          toolUseId: d.toolUseId ?? '',
-          ...(resultPreview ? { resultPreview } : {}),
-        })
-        return
-      }
-      case 'session:status-changed': {
-        const ps = typeof d.process_status === 'string' ? d.process_status : ''
-        if (!ps) return
-        // Every status event is a whole record stamped with its statusRevision,
-        // and two writers' events can reach the bus out of order (the runner's
-        // echo of an older record landing after the snapshot's newer one). The
-        // web console drops the older one by revision; the phone's frame has no
-        // revision to sort by, so the older one is dropped here.
-        const entry = interested.get(sid)
-        const rev = typeof d.statusRevision === 'number' ? d.statusRevision : undefined
-        if (entry && rev !== undefined) {
-          if (entry.statusRevision !== undefined && rev < entry.statusRevision) return
-          entry.statusRevision = rev
-        }
-        // 'running' from session-runner = a real turn is starting → reset the
-        // replay window. daemon-reconnect's 'running' is a reconciliation
-        // artifact (SSH flap), NOT a turn — treating it as one gave phones
-        // phantom turn boundaries (same guard as server.ts markStreaming).
-        if (ps === 'running' && event.source !== 'daemon-reconnect' && event.source !== 'session-tracker') {
-          emitSse(key, 'turn-start', {}, { reset: true })
-        }
-        emitSse(key, 'status', { processStatus: ps })
-        return
-      }
-      case 'session:result': {
-        emitSse(key, 'turn-end', {})
-        return
-      }
-      case 'session:error': {
-        emitSse(key, 'error', { message: typeof d.error === 'string' ? d.error : 'session error' })
-        return
-      }
-      case 'session:system-event': {
-        // Claude Code's own error reply ("Claude Code: Prompt is too long"), the one system line
-        // the phone draws live: its error line, as the transcript row (`cliError`) reads after the
-        // turn. A new event name, so an older app ignores it (additive). Other notices stay off.
-        if (d.cliError !== true || typeof d.message !== 'string' || !d.message) return
-        emitSse(key, 'cli-error', { message: d.message })
-        return
+    if (event.name === 'session:status-changed') {
+      if (typeof d.process_status !== 'string' || !d.process_status) return
+      // Every status event is a whole record stamped with its statusRevision,
+      // and two writers' events can reach the bus out of order (the runner's
+      // echo of an older record landing after the snapshot's newer one). The
+      // web console drops the older one by revision; the phone's frame has no
+      // revision to sort by, so the older one is dropped here.
+      const entry = interested.get(sid)
+      const rev = typeof d.statusRevision === 'number' ? d.statusRevision : undefined
+      if (entry && rev !== undefined) {
+        if (entry.statusRevision !== undefined && rev < entry.statusRevision) return
+        entry.statusRevision = rev
       }
     }
+    await emitSessionEventSse(sid, event.name, d, event.source)
   }, { global: true, interest: ['session:'] })
 }
 
@@ -285,6 +212,18 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
       : false
 
     if (CLOUD_MODE && !ownedLocally) {
+      // A session its host judges, its host linked to this companion: the host's own facts and
+      // flow say this stream (core/session-channel/companion-listener.ts), never the daemon's
+      // jsonl tail around its judge.
+      const { listenedRow, listenerLinked } = await import('../../core/session-channel/companion-listener.js')
+      const listened = listenedRow(sessionId)
+      if (listened && listenerLinked(listened.alias)) {
+        const processStatus = listened.row.process_status ?? ''
+        attachSse(channelKey(sessionId), req, res, {
+          onAttach: (write) => { write('bridge-online', {}); if (processStatus) write('status', { processStatus }) },
+        })
+        return
+      }
       // Cloud path: attach the daemon's jsonl stream over the bridge, then
       // hook this response onto the session's SSE channel. Whether the bridge
       // is up or not the response is 200 — the client keys off the

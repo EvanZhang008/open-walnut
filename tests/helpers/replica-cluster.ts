@@ -706,9 +706,10 @@ export type SeedMac = (o: { base: string; macData: string; env: Record<string, s
 /**
  * `hostService`: the host runs under its launcher and is switched to its one Walnut service (see
  * the header); the twin is the standalone one, the only one a service holds. `macBootExtra`: code
- * the Mac's boot script runs after its server started, before it reports its port.
+ * the Mac's boot script runs after its server started, before it reports its port. `macEnv`: more
+ * of the Mac's env (a timing knob of a feature under test).
  */
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string; macEnv?: Record<string, string> }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   if (opts.hostService && (opts.twin !== 'standalone' || opts.daemonBuilt)) throw new Error('replica-cluster: a host service runs the standalone twin from source')
   const app: ClusterApp = opts.app ?? 'source'
@@ -865,6 +866,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       ...(opts.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
       // The Mac offers the host its one Walnut service (service-launcher-flag.ts), so the service is the mode it wants there.
       ...(opts.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : {}),
+      ...(opts.macEnv ?? {}),
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
     mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin, extra: opts.macBootExtra, ...(launcher && !link ? { doorPortFile } : {}) }), macBootFile, macEnv, macLog)

@@ -471,6 +471,8 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
       sessions = (await readSessionProjection())?.sessions ?? []
       // Sessions turned off for the box, the Mac away: none of the Mac's are shown (4f).
       if (await (await import('../../replica/away-kind-reads.js')).companionHoldsSessionsBack()) sessions = []
+      // The rows hosts that judge their own sessions told this box (session-channel/companion-host-ops.ts).
+      sessions = await (await import('../../core/session-channel/companion-host-ops.js')).joinListenedRows(sessions as Array<{ id: string }>)
     } else {
       const { buildSessionProjection } = await import('../../core/session-projection.js')
       sessions = (await buildSessionProjection()).sessions

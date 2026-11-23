@@ -28,6 +28,8 @@ export interface LeaderHeartbeat {
   backup?: unknown
   /** The primary is going down for a restart and expects to be back within this. */
   restartingMs?: unknown
+  /** The primary's switch host_runs_sessions is on (protocol.ts LeaderHeartbeatFrame). */
+  hostRunsSessions?: unknown
 }
 
 export interface BackupLeaderDeps {
@@ -50,6 +52,8 @@ export interface BackupLeaderStatus {
   restartingUntil: number | null
   lastDecision: string | null
   takeoverMs: number
+  /** What the primary's last heartbeat said of its switch host_runs_sessions (false before one). */
+  hostRunsSessions: boolean
 }
 
 const WITNESS_TIMEOUT_MS = 5_000
@@ -62,6 +66,7 @@ export function createBackupLeader(deps: BackupLeaderDeps) {
   let walnutId: string | undefined
   let lastHeartbeatAt: number | null = null
   let backupAllowed: boolean | null = null
+  let hostRunsSessions = false
   let restartingUntil: number | null = null
   let lastDecision: string | null = null
   const leading = new Map<string, { epoch: number; since: number }>()
@@ -91,6 +96,7 @@ export function createBackupLeader(deps: BackupLeaderDeps) {
   function noteHeartbeat(hb: LeaderHeartbeat): void {
     lastHeartbeatAt = deps.now()
     backupAllowed = hb.backup === true
+    hostRunsSessions = hb.hostRunsSessions === true
     const ms = typeof hb.restartingMs === 'number' && hb.restartingMs > 0 ? Math.min(hb.restartingMs, MAX_RESTART_MS) : 0
     restartingUntil = ms > 0 ? lastHeartbeatAt + ms : null
     if (typeof hb.walnutId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(hb.walnutId) && hb.walnutId !== walnutId) {
@@ -188,6 +194,7 @@ export function createBackupLeader(deps: BackupLeaderDeps) {
       restartingUntil,
       lastDecision,
       takeoverMs: deps.takeoverMs,
+      hostRunsSessions,
     }
   }
 

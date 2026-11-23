@@ -166,6 +166,18 @@ async function cloudSendOnce(
 ): Promise<void> {
   const projected = await resolveHostOrAnswer(res, sessionId)
   if (!projected) return
+  // A session its host judges, the Mac away: queued on that host under the phone's message id
+  // (a retry is queued once), through its listener link; never the daemon's direct send behind
+  // its judge's back (session-channel/companion-host-ops.ts). Pictures wait for the Mac's path.
+  if (images.length === 0) {
+    const ops = await import('../../core/session-channel/companion-host-ops.js')
+    const operated = await ops.hostOperated(sessionId)
+    if (operated) {
+      const a = await ops.sendViaHost(operated, { text, messageId, timeoutMs: Math.max(1_000, order.answerBy - Date.now()) })
+      res.status(a.status).json(a.body)
+      return
+    }
+  }
   const host = projected.host
   // Every sentence below names the host by the name a person knows it by.
   const hostName = cloudSessionHostName(projected)

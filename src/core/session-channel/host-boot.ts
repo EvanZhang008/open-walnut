@@ -13,6 +13,9 @@
  *                   leader reads of this host's service (replica/front.ts status)
  *   the dialer      the leader's door, with the credential the leader issued over its link
  *                   (host-dialer.ts, host-credential-file.ts), and HOST_DOOR_CAP in the report
+ *   the listener link  the cloud companion's listener door, with the bridge link's own token
+ *                   (companion-dialer.ts): the phone sees and operates these sessions there while
+ *                   the leader is away
  *
  * "Can run sessions": this is a host's one Walnut service (src/binary/service-entry.ts), which holds
  * the host's session runtime in its own process (server-role.ts hasLocalDaemon). While its sessions
@@ -28,6 +31,7 @@ import { HostChannel } from './channel.js'
 import { SESSION_JUDGE_CAP } from './switch.js'
 import { HOST_DOOR_CAP } from './door-wire.js'
 import { startHostDialer, type HostDialer } from './host-dialer.js'
+import { startCompanionDialer, type CompanionDialer } from './companion-dialer.js'
 import { createHostEmitter, type HostEmitter } from './host-emitter.js'
 import { createHostSessionPort, selfOwnApi, StartBundles } from './host-port.js'
 import { createHostSessionRoutes, type HostSessionRoutes } from './host-routes.js'
@@ -48,6 +52,7 @@ export interface HostSessions {
   bundles: StartBundles
   resend: HostResendFamily
   dialer: HostDialer
+  companion: CompanionDialer
 }
 
 let current: HostSessions | null = null
@@ -189,7 +194,13 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     log: say,
   })
   dialerRef = dialer
-  current = { log, gone, channel, emitter, routes, bundles, resend, dialer }
+  const companion = startCompanionDialer({
+    walnutId: o.walnutId, enabled: hostRunsSessionsNow,
+    channel: () => current?.channel ?? null,
+    routes: () => current?.routes ?? null,
+    log: say,
+  })
+  current = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion }
   // The session runner may reach the runtime in this process from now on (the own-sessions link).
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
@@ -202,6 +213,7 @@ export async function stopHostSessions(): Promise<void> {
   if (!c) return
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
   c.dialer.stop()
+  c.companion.stop()
   c.emitter.stop()
   c.resend.stop()
   c.routes.close()

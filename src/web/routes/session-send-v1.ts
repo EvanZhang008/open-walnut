@@ -126,8 +126,12 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
         ? await (await import('../../core/send-queue.js')).sendSeen(sessionId, clientMessageId)
         : false
       if (interrupt && !repeated) {
-        const { callPrimaryControl } = await import('./v1-control-relay.js')
-        const stopped = await callPrimaryControl('interrupt', sessionId, undefined, INTERRUPT_RELAY_TIMEOUT_MS)
+        // A session its host judges, the Mac away: the host stops the turn (session-channel/companion-host-ops.ts).
+        const ops = await import('../../core/session-channel/companion-host-ops.js')
+        const operated = await ops.hostOperated(sessionId)
+        const stopped = operated
+          ? await ops.interruptViaHost(operated, INTERRUPT_RELAY_TIMEOUT_MS).then((a) => (a.status === 200 ? { ok: true as const } : { ok: false as const, failure: { kind: 'error' as const, status: a.status, code: String((a.body.error as { code?: unknown } | undefined)?.code ?? 'bridge_offline'), message: String((a.body.error as { message?: unknown } | undefined)?.message ?? '') } }))
+          : await (await import('./v1-control-relay.js')).callPrimaryControl('interrupt', sessionId, undefined, INTERRUPT_RELAY_TIMEOUT_MS)
         if (!stopped.ok) {
           const f = stopped.failure
           if (f.kind === 'error') sendError(res, f.status, f.code, f.message)

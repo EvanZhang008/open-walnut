@@ -215,6 +215,13 @@ sessionLifecycleV1Router.get('/sessions/:id', async (req: Request, res: Response
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (CLOUD_MODE) {
+      // A session its host judges, the Mac away: the host's own word, as its listener link told it.
+      const ops = await import('../../core/session-channel/companion-host-ops.js')
+      const operated = await ops.hostOperated(sessionId)
+      if (operated) {
+        res.status(200).json(ops.listenedDetail(operated))
+        return
+      }
       // While this companion leads the session's host the Mac is away: the
       // host's answer at once, not after the relay's 10s.
       if (await (await import('./session-stop-v1.js')).leadHostOf(sessionId)) {
@@ -466,6 +473,14 @@ sessionLifecycleV1Router.post('/sessions/:id/interrupt', async (req: Request, re
     if (!sessionId) return
     if (await refuseSessionControl(req, res, sessionId, 'stop')) return
     if (isCompanion()) {
+      // A session its host judges, the Mac away: the host stops its own turn (companion-host-ops.ts).
+      const ops = await import('../../core/session-channel/companion-host-ops.js')
+      const operated = await ops.hostOperated(sessionId)
+      if (operated) {
+        const a = await ops.interruptViaHost(operated)
+        res.status(a.status).json(a.body)
+        return
+      }
       await relayControlAction(res, 'interrupt', sessionId, undefined, 200)
       return
     }
@@ -485,6 +500,14 @@ sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, r
     if (!sessionId) return
     const body = (req.body ?? {}) as Record<string, unknown>
     if (CLOUD_MODE) {
+      // A session its host judges, the Mac away: the host proves the prompt is pending, then answers it.
+      const ops = await import('../../core/session-channel/companion-host-ops.js')
+      const operated = await ops.hostOperated(sessionId)
+      if (operated) {
+        const a = await ops.permissionViaHost(operated, body)
+        res.status(a.status).json(a.body)
+        return
+      }
       // While this companion leads the session's host, that host answers the prompt.
       const lead = await (await import('./session-stop-v1.js')).leadHostOf(sessionId)
       if (lead) {

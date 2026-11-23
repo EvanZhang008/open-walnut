@@ -5,6 +5,8 @@ import { defineCapability, type Entrance } from './manifest.js'
  * socket on /bridge, so the box reaches it with no SSH and while the Mac sleeps.
  * What a bridge socket may ask a daemon is the daemon's own allowlist
  * (BRIDGE_ALLOWED_COMMANDS in the daemon twins), never the full command set.
+ * A host whose own service judges its sessions also dials /host-listen with the same
+ * token, so this box listens to its session channel (session-channel/listener-door.ts).
  * The Mac also writes this box's copies over HTTPS (/bridge/*), which take only its
  * own machine token, and backs its data up to /git/data, which takes a device token
  * (any paired device's, a phone's too) and refuses machine tokens.
@@ -31,6 +33,12 @@ export const bridgeDoor = defineCapability({
       opensWith: "only the paired Mac's own machine token (bridge-local) with more than status-only scope, and only while this box has cloud-exec and the user's cloud.exec.enabled is on; a device token, an API key or another host's token is refused. A probe request learns only whether a machine token is valid (204) and opens nothing",
       verifiedIn: 'src/web/ws/daemon-tunnel.ts',
       check: "cred.kind !== 'machine' || cred.name !== PRIMARY_MACHINE_DEVICE || cred.bridgeScope === 'status-only'",
+    },
+    {
+      path: '/host-listen',
+      opensWith: "a host that runs and judges its own sessions, so the phone sees and operates them while the Mac is away: only that host's own machine token (a bridge-<alias> record, never bridge-local, with more than status-only scope) as Authorization: Bearer or a walnut.bearer. subprotocol entry; its hello must name the alias the token was minted for and the Walnut the Mac's heartbeat names, and the door is open only while that heartbeat says the experiment host_runs_sessions is on. Failures are rate limited per address and a revoked token closes its socket",
+      verifiedIn: 'src/core/session-channel/listener-door.ts',
+      check: "cred.kind !== 'machine' || cred.bridgeScope === 'status-only' || !cred.name.startsWith('bridge-')",
     },
     {
       path: '/bridge/session-stream',

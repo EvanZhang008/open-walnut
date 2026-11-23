@@ -39,11 +39,22 @@
  *         GET /queue?sid=    the host's queue rows of a session (id, status, parkedReason, message)
  *         GET /live          is a leader linked and caught up
  *         GET /dialer        is the host's door dialer linked, and does it hold a door credential (never its token)
+ *         GET /companion     is the host's link to its companion's listener door up
+ *
+ * `companion`: a real cloud companion too (tests/helpers/cloud-box-replica.ts), paired with the Mac
+ * before the Mac boots, as a first bridge push leaves a pairing: the Mac's `cloud` remote and its
+ * cached machine tokens for its own daemon and for the host. The Mac then configures both daemons'
+ * bridges itself (the host's in the runtime its service holds), the Mac's heartbeat names its
+ * Walnut and its switch to the companion every second (the takeover window is WINDOWS.takeoverMs),
+ * and the host's service dials the companion's listener door with its bridge token. `phone(...)`
+ * calls the companion's phone API with the paired phone's token; `phoneStream(sid)` holds a
+ * session's SSE stream open and collects its frames.
  */
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ROOT, startReplicaCluster, waitFor, type ReplicaCluster } from './replica-cluster.js'
+import { ROOT, WINDOWS, startReplicaCluster, waitFor, type ReplicaCluster } from './replica-cluster.js'
+import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from './cloud-box-replica.js'
 
 const url = (f: string) => JSON.stringify('file://' + path.join(ROOT, f))
 
@@ -152,6 +163,7 @@ await serveProbe({
     const held = await cf.readHostCredential(process.env.WALNUT_WALNUT_ID ?? '')
     return { linked: !!boot.hostSessionsRunning()?.dialer.linked(), holds: !!held, doors: held ? held.doors : [] }
   },
+  '/companion': () => ({ linked: !!boot.hostSessionsRunning()?.companion.linked() }),
   '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
 }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
 `
@@ -191,8 +203,15 @@ function getJson(port: number, p: string, method = 'GET', body?: unknown): Promi
   })
 }
 
+/** One SSE stream held open: its frames so far, and its close. */
+export interface PhoneStream { frames: Array<{ event: string; data: any }>; close(): void }
+
 export interface HostJudgeCluster {
   c: ReplicaCluster
+  /** `companion` only: the companion and the phone's calls to it. */
+  companion: CloudBoxReplica | null
+  phone(method: string, p: string, body?: unknown): Promise<{ status: number; json: any }>
+  phoneStream(sid: string): Promise<PhoneStream>
   /** A read of the Mac's probe. */
   mac(p: string): Promise<any>
   /** A read of the replica's probe (the replica that runs now). */
@@ -204,14 +223,82 @@ export interface HostJudgeCluster {
   stop(): Promise<void>
 }
 
-/** `linkProxy`: the Mac's daemon link to the host runs through a proxy the test can cut (replica-cluster.ts cutLink). */
-export async function startHostJudgeCluster(o: { linkProxy?: boolean } = {}): Promise<HostJudgeCluster> {
+/**
+ * A companion for the cluster, paired with the Mac data dir before it boots (see the header).
+ * `backupLeader: false` in the Mac's config keeps the companion from taking the hosts' daemons'
+ * lead while the Mac sleeps, so only the listener path is in play.
+ */
+async function pairCompanion(base: string, macData: string): Promise<CloudBoxReplica> {
+  const box = await startCloudBoxReplica(path.join(base, 'cb'), undefined, {
+    machineOwner: 'mac-primary',
+    env: { WALNUT_LEADER_TAKEOVER_MS: String(WINDOWS.takeoverMs), WALNUT_LEADER_TICK_MS: '500' },
+  })
+  await seedPrimaryPairing(macData, `127.0.0.1:${box.port}`, box.tokens)
+  fs.writeFileSync(path.join(macData, 'sync', 'bridge-tokens.json'), JSON.stringify({ 'bridge-local': box.tokens.primaryMachine, 'bridge-devbox': box.tokens.otherMachine }), { mode: 0o600 })
+  return box
+}
+
+/** An SSE response read as frames (`event:` / `data:` pairs). */
+function readSse(res: http.IncomingMessage, frames: PhoneStream['frames']): void {
+  let buf = ''
+  res.on('data', (b: Buffer) => {
+    buf += b.toString('utf8')
+    let at
+    while ((at = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, at); buf = buf.slice(at + 2)
+      const ev = /^event: (.+)$/m.exec(block)?.[1]
+      const data = /^data: (.*)$/m.exec(block)?.[1]
+      if (ev) { try { frames.push({ event: ev, data: data ? JSON.parse(data) : null }) } catch { frames.push({ event: ev, data }) } }
+    }
+  })
+}
+
+/**
+ * `linkProxy`: the Mac's daemon link to the host runs through a proxy the test can cut (replica-cluster.ts cutLink).
+ * `companion`: a real cloud companion paired with the Mac (see the header).
+ */
+export async function startHostJudgeCluster(o: { linkProxy?: boolean; companion?: boolean } = {}): Promise<HostJudgeCluster> {
+  let companion: CloudBoxReplica | null = null
   const c = await startReplicaCluster({
     twin: 'standalone',
     ...(o.linkProxy ? { linkProxy: true } : {}),
     hostService: { env: hostJudgeServiceEnv, after: hostJudgeServiceProbe() },
     macBootExtra: MAC_PROBE,
-    macConfigExtra: ['experimental:', '  host_runs_sessions: true'],
+    macConfigExtra: ['experimental:', '  host_runs_sessions: true', ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : [])],
+    ...(o.companion ? {
+      macEnv: { WALNUT_LEADER_HEARTBEAT_MS: '1000' },
+      seedMac: async ({ base, macData }: { base: string; macData: string }) => { companion = await pairCompanion(base, macData) },
+    } : {}),
+  }).catch(async (err) => { await (companion as CloudBoxReplica | null)?.stop().catch(() => {}); throw err })
+  const box = companion as CloudBoxReplica | null
+  const phone: HostJudgeCluster['phone'] = async (method, p, body) => {
+    if (!box) throw new Error('host-judge-cluster: phone() needs the companion option')
+    return new Promise((resolve, reject) => {
+      const data = body === undefined ? null : Buffer.from(JSON.stringify(body))
+      const req = http.request({ host: '127.0.0.1', port: box.port, method, path: p, agent: false, timeout: 60_000, headers: { authorization: `Bearer ${box.tokens.phone}`, ...(data ? { 'content-type': 'application/json', 'content-length': String(data.length) } : {}) } }, (res) => {
+        const parts: Buffer[] = []
+        res.on('data', (x: Buffer) => parts.push(x))
+        res.on('end', () => {
+          const text = Buffer.concat(parts).toString('utf8')
+          let json: any
+          try { json = JSON.parse(text) } catch { json = { text } }
+          resolve({ status: res.statusCode ?? 0, json })
+        })
+      })
+      req.on('timeout', () => req.destroy(new Error(`${method} ${p} timed out`)))
+      req.on('error', reject)
+      req.end(data ?? undefined)
+    })
+  }
+  const phoneStream: HostJudgeCluster['phoneStream'] = (sid) => new Promise((resolve, reject) => {
+    if (!box) { reject(new Error('host-judge-cluster: phoneStream() needs the companion option')); return }
+    const frames: PhoneStream['frames'] = []
+    const req = http.get({ host: '127.0.0.1', port: box.port, path: `/api/v1/sessions/${sid}/stream`, agent: false, headers: { authorization: `Bearer ${box.tokens.phone}`, accept: 'text/event-stream' } }, (res) => {
+      if (res.statusCode !== 200) { reject(new Error(`stream ${sid}: ${res.statusCode}`)); res.resume(); return }
+      readSse(res, frames)
+      resolve({ frames, close: () => req.destroy() })
+    })
+    req.on('error', (err) => { if (!frames.length) reject(err) })
   })
   const macProbeFile = path.join(path.dirname(c.macData), 'mac-probe.json')
   const hostProbeFile = () => path.join(c.replicaData, 'cluster-probe.json')
@@ -223,10 +310,13 @@ export async function startHostJudgeCluster(o: { linkProxy?: boolean } = {}): Pr
   }
   const waitHostProbe: HostJudgeCluster['waitHostProbe'] = async (notPid, timeoutMs = 120_000) =>
     waitFor(() => { const h = readFile(hostProbeFile()); return h && h.probe && h.pid !== notPid ? h : null }, timeoutMs, 'the replica\'s probe')
-  let host = await waitHostProbe(undefined, 180_000).catch(async (err) => { await c.stop().catch(() => {}); throw err })
+  let host = await waitHostProbe(undefined, 180_000).catch(async (err) => { await c.stop().catch(() => {}); await box?.stop().catch(() => {}); throw err })
   const ok = (r: { status: number; json: any }, p: string) => { if (r.status !== 200) throw new Error(`probe ${p}: ${r.status} ${JSON.stringify(r.json)}`); return r.json }
   return {
     c,
+    companion: box,
+    phone,
+    phoneStream,
     mac: async (p) => ok(await getJson(macPort(), p), p),
     host: async (p) => {
       const now = readFile(hostProbeFile())
@@ -239,6 +329,6 @@ export async function startHostJudgeCluster(o: { linkProxy?: boolean } = {}): Pr
       return getJson(host.door, p, method, body)
     },
     waitHostProbe: async (notPid, timeoutMs) => { host = await waitHostProbe(notPid, timeoutMs); return host },
-    stop: () => c.stop(),
+    stop: async () => { try { await c.stop() } finally { await box?.stop() } },
   }
 }

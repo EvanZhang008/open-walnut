@@ -107,6 +107,9 @@ export async function leadHostOf(sessionId: string) {
   // Only a box with the backup-leader capability ever leads a host (getBackupLeader says the same).
   if (!hasCapability('backup-leader')) return null
   try {
+    // A session its host judges is that host's to answer, through its listener link (companion-host-ops.ts),
+    // never the daemon's leader.control behind its judge's back.
+    if ((await import('../../core/session-channel/companion-host-ops.js')).listenedSession(sessionId)) return null
     const { getHostSessionControl } = await import('../../core/leader/host-session-control.js')
     const control = getHostSessionControl()
     const target = await control.target(sessionId)
