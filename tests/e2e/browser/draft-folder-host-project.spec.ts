@@ -73,6 +73,7 @@ test('a folder a project owns reads Folder/Host and Project; a new folder reads 
   await expect(draftProjectPill(panel)).not.toHaveClass(/draft-project-chip-new/)
   await expect(draftProjectPill(panel)).toHaveAttribute('title', `Tasks from this folder file under ${OWNER}. Change it in More.`)
   expect(await lastChildClass(panel)).toContain('draft-more-btn')
+  const plainKeyColor = await draftProjectPill(panel).locator('.draft-pill-key').evaluate((el) => getComputedStyle(el).color)
 
   const fresh = freshFolder('notes-lab')
   await draftCwdPill(panel).click()
@@ -84,7 +85,17 @@ test('a folder a project owns reads Folder/Host and Project; a new folder reads 
   await expect(draftProjectPill(panel)).toHaveText(`New project (auto-created): ${name}`)
   await expect(draftProjectPill(panel)).toHaveClass(/draft-project-chip-new/)
   await expect(draftProjectPill(panel)).toHaveAttribute('title', `Starting creates a new project named ${name}. Change it in More.`)
-  expect(await draftProjectPill(panel).evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('dashed')
+  // 79055e7e1a put the chip on the button family: no dashed accent border, its "New project" key
+  // alone takes the accent (--accent-text), unlike an existing project's key.
+  const newKey = await draftProjectPill(panel).locator('.draft-pill-key').evaluate((el) => {
+    const probe = el.appendChild(document.createElement('span'))
+    probe.style.color = 'var(--accent-text)'
+    const accent = getComputedStyle(probe).color
+    probe.remove()
+    return { color: getComputedStyle(el).color, accent }
+  })
+  expect(newKey.color).toBe(newKey.accent)
+  expect(newKey.color).not.toBe(plainKeyColor)
   await draftLaunchBar(panel).screenshot({ path: `${SHOTS}/new-project-chip.png` })
 })
 
