@@ -148,9 +148,10 @@ test('Branch vs the default branch: every file the branch changes since it left 
   await expect(panel.locator('.session-diff-filepane-path')).toHaveText('test/parser.test.ts')
   await expect(panel.locator('.session-diff-main')).toContainText("throw new Error('line numbers')")
   await panel.locator('.session-diff-tree-file', { hasText: 'usage.md' }).click()
-  // The head names the old path once; the body only says nothing else changed (the audit: it said both).
+  // The head names the old path once; the body only says nothing else changed (the audit: it said both),
+  // as the shared empty state's title, which ends with no full stop.
   await expect(panel.locator('.session-diff-filepane-renamed')).toContainText('docs/guide.md')
-  await expect(panel.locator('.session-diff-main')).toContainText('Moved, content unchanged.')
+  await expect(panel.locator('.session-diff-main')).toContainText('Moved, content unchanged')
   // A move with nothing changed has no Markdown to render, and no comment hint without lines.
   await expect(panel.locator('.session-diff-rendered-toggle')).toHaveCount(0)
   await expect(panel.locator('.session-diff-filepane-hint')).toHaveCount(0)

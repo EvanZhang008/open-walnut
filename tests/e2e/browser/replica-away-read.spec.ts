@@ -337,7 +337,8 @@ test('the console reads its copies while the Mac sleeps, and comes back with no 
     // WP10 keeps an edit, a create and a complete on the host (replica-away-write.spec.ts);
     // a delete is still the Mac's.
     await row(page, UNICODE_TITLE).getByRole('button', { name: 'More actions' }).click()
-    await page.locator('.task-kebab-item').filter({ has: page.locator('span', { hasText: /^Delete$/ }) }).first().click()
+    // The row menu's danger row by its test id: its words changed to "Delete task" (8339289e5).
+    await page.getByTestId('task-menu-delete').first().click()
     await expect(page.getByText(NEEDS_MAC, { exact: true }).first()).toBeVisible({ timeout: 15_000 })
     await shot(page, '3-away-needs-mac')
     await backToTasks(page)
