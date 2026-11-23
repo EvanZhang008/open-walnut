@@ -28,6 +28,7 @@ const PROJECT = `Words shown ${STAMP}`
 const made: string[] = []
 const ids: Record<(typeof GUARDED)[number], string> = { approval: '', question: '', permission: '', letter: '', choice: '', ask: '' }
 let approvalSid = ''
+let approvalAsk: { approval: { id: string }; waitToken?: string } | null = null
 let cwd = ''
 
 test.describe.configure({ mode: 'serial' })
@@ -71,7 +72,7 @@ test.beforeAll(async ({ request }) => {
   for (const kind of GUARDED) ids[kind] = await createTask(request, `${kind} ${STAMP}`)
   // An approval its running session asked.
   approvalSid = await startRunningTurn(request, ids.approval)
-  await post(request, '/api/v1/approvals', { what: `Deploy build 1182 to staging ${STAMP}`, cwd, command: 'deploy.sh' }, { 'x-walnut-caller-sid': approvalSid })
+  approvalAsk = await post(request, '/api/v1/approvals', { what: `Deploy build 1182 to staging ${STAMP}`, cwd, command: 'deploy.sh' }, { 'x-walnut-caller-sid': approvalSid })
   // A session's live question and a tool step it waits on (`default`: the fixture's mode would allow it).
   await startSession(request, ids.question, 'status-permission-test:AskUserQuestion', 'default')
   await startSession(request, ids.permission, 'status-permission-test:Bash', 'default')
@@ -102,6 +103,9 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
+  // The asker withdraws its request, or the window's notice corner keeps it over the next spec's
+  // composer (2026-11-23: btw-open-thread-row's "+" key sat under its Deny).
+  if (approvalAsk) await request.post(`/api/v1/approvals/${approvalAsk.approval.id}/cancel`, { data: { token: approvalAsk.waitToken, reason: 'the spec is done' } })
   if (approvalSid) await endRunningTurn(request, approvalSid)
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined

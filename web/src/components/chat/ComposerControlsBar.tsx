@@ -92,14 +92,26 @@ function rowItems(row: Element | null | undefined, selector: string): HTMLElemen
   return Array.from(row.children).filter((el): el is HTMLElement => el instanceof HTMLElement && el.matches(selector));
 }
 
-/** A row that measured more than this many times within BURST_WINDOW_MS is not
- *  settling but flipping: from then on it measures at most once a frame, until a
- *  measure finds the shape it already has. Flipping on every measure would
+/** A row that measured more than this many times with no frame drawn between them
+ *  is not settling but flipping: from then on it measures at most once a frame,
+ *  until a measure finds the shape it already has. Flipping on every measure would
  *  otherwise loop inside one commit until React throws (it stops at 50 nested
  *  updates); a real settle takes under ten steps (a jump from a wide column to a
- *  very tight one: fold, condense, drop the detail, move a pill). */
+ *  very tight one: fold, condense, drop the detail, move a pill). Counted per frame,
+ *  not per 100 ms: on a busy page each commit took 12 ms, so the window never saw 24
+ *  and React stopped the loop first (2026-11-23, btw-open-thread-row.spec.ts). */
 const MAX_MEASURES_PER_BURST = 24;
-const BURST_WINDOW_MS = 100;
+
+/** What a control's detail (`data-condensed-detail`) adds to it: its box plus the room
+ *  before it (the key's flex gap). Its box alone left the gap in the short form, so a row
+ *  with room only without that gap showed the detail, hid it and showed it again on every
+ *  measure (2026-11-23: the model pill took the button family's gap, eeb053ac81). */
+function detailCost(detail: HTMLElement): number {
+  const box = detail.getBoundingClientRect();
+  if (box.width <= 0) return 0;
+  const before = detail.previousElementSibling?.getBoundingClientRect();
+  return before && before.width > 0 ? Math.max(box.width, box.right - before.right) : box.width;
+}
 
 /**
  * The room a flex row of the composer leaves this bar with its direct buttons
@@ -172,16 +184,16 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     onAnchorLost: () => setOpen(false),
   });
 
-  /** Measures in the current burst; while `throttled`, only the one a frame runs (`inFrame`). */
-  const burst = useRef({ start: 0, count: 0, deferred: 0, throttled: false, inFrame: false, warned: false });
+  /** Measures since the last frame (`reset` ends the count at the next one); while
+   *  `throttled`, only the one a frame runs (`inFrame`). */
+  const burst = useRef({ count: 0, reset: 0, deferred: 0, throttled: false, inFrame: false, warned: false });
   const measureRef = useRef<() => void>(() => {});
 
   const measure = useCallback(() => {
     const bar = barRef.current;
     if (!bar || !shownRef.current) return;
     const b = burst.current;
-    const now = performance.now();
-    if (now - b.start > BURST_WINDOW_MS) { b.start = now; b.count = 0; }
+    if (!b.reset) b.reset = requestAnimationFrame(() => { b.reset = 0; b.count = 0; });
     if (!b.throttled && ++b.count > MAX_MEASURES_PER_BURST) {
       b.throttled = true;
       if (!b.warned) {
@@ -215,7 +227,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       // detail. Record the two natural widths apart, so the decision below
       // never depends on which of them happens to be on the row right now.
       const detail = el.querySelector<HTMLElement>('[data-condensed-detail]');
-      const detailW = detail?.getBoundingClientRect().width ?? 0;
+      const detailW = detail ? detailCost(detail) : 0;
       if (detailW > 0) detailWidths.current.set(id, detailW);
       // No detail while the row is showing details = the control has none any
       // more (the percentage went away); a remembered width would still be
@@ -307,7 +319,9 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
   measureRef.current = measure;
   useEffect(() => () => {
     cancelAnimationFrame(burst.current.deferred);
+    cancelAnimationFrame(burst.current.reset);
     burst.current.deferred = 0;
+    burst.current.reset = 0;
   }, []);
 
   useLayoutEffect(() => {
