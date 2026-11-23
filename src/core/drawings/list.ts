@@ -13,6 +13,7 @@ import { isTaskFolder, taskFolderFor, taskIdOfPath, titleOfScenePath, type TaskP
 import { isLargeScene, runCodec } from './scene-codec.js'
 import { DrawingInputError, MAX_SCENE_BYTES, SCENE_EXT } from './scene.js'
 import { isInside, noteAbs, realNotesRoot } from '../notes/note-paths.js'
+import { mapLimit } from '../../utils/map-limit.js'
 
 export interface DrawingListEntry {
   path: string
@@ -110,7 +111,7 @@ export async function listDrawings(input: { taskId?: unknown; sessionId?: unknow
     candidates.push(node.path)
   })
   const root = await realNotesRoot()
-  const entries = await mapBounded(candidates, LIST_CONCURRENCY, async (rel): Promise<DrawingListEntry | null> => {
+  const entries = await mapLimit(candidates, LIST_CONCURRENCY, async (rel): Promise<DrawingListEntry | null> => {
     const abs = noteAbs(rel)
     try {
       const realDir = await fsp.realpath(path.dirname(abs))
@@ -127,18 +128,4 @@ export async function listDrawings(input: { taskId?: unknown; sessionId?: unknow
   return entries
     .filter((e): e is DrawingListEntry => e !== null)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path))
-}
-
-/** `fn` over `items` with at most `limit` running at once, results in input order. */
-async function mapBounded<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length)
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++
-      out[i] = await fn(items[i]!)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return out
 }

@@ -19,7 +19,7 @@ import { log } from '../logging/index.js'
 import { isSessionProcessAlive, isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { bus, EventNames } from './event-bus.js'
 import { runPeriodic, slowTickWarnMs, type PeriodicHandle, type TickContext } from './periodic-task.js'
-import type { SessionRecord, Task, TaskPhase } from './types.js'
+import type { ProcessStatus, SessionRecord, Task, TaskPhase } from './types.js'
 import type { SessionWillReapEvent } from './event-types.js'
 import { emitSessionStatusChanged } from './session-tracker.js'
 import { LIVENESS_PROBE_CONCURRENCY } from './sessions/liveness-concurrency.js'
@@ -34,6 +34,9 @@ import { memoryPressureShedding } from './memory-pressure.js'
 import { ENDED_SESSION_IDLE_TIMEOUT_MS, isEndedSessionCli } from './sessions/ended-session-clis.js'
 import { transcriptLastActivityMs } from './transcript-last-activity.js'
 import { reportGauge } from './health-monitor/gauges.js'
+import { mapLimit } from '../utils/map-limit.js'
+import { readLoopCpuUs } from './stall-recorder-hold.js'
+import os from 'node:os'
 import {
   localIdleExitMs, localLiveLimit, isLocalLiveProcess, mustStay, exitsLast, userHereIn, userHereWindowMs, evictionOrder,
   EVICT_MIN_QUIET_MS,
@@ -78,6 +81,16 @@ const ORPHAN_SWEEP_EVERY_TICKS = 120
 const IDLE_REAP_CONCURRENCY = 4
 /** Liveness probes in flight at once before the liveness loop; the loop's writes stay one at a time and in order. */
 export { LIVENESS_PROBE_CONCURRENCY }
+/**
+ * Daemon round trips in flight at once in the snapshot pull and the stuck-session
+ * reconcile. Both used to run one after another: up to 15 `getState` calls and 5
+ * stream-tail reads a tick, 0.3 to 0.5 s each, so with ~85 live sessions every tick
+ * hit both caps and spent 4 to 5 s waiting in line, and machine load pushed the tick
+ * past its 5 s warn line about 40 times an hour (2026-11-23). The caps per tick stay
+ * the same, so a slow host gets no more calls than before; it only stops costing
+ * one full timeout per session.
+ */
+export const DAEMON_RPC_CONCURRENCY = 4
 /** A tick slower than this logs at warn with its phase breakdown; faster ones at debug. */
 export const SLOW_TICK_WARN_MS = slowTickWarnMs(HEALTH_CHECK_BUDGET_MS)
 /**
@@ -91,6 +104,21 @@ export const IDLE_REAP_RETRY_BACKOFF_MS = 30 * 60_000
 export const LIVE_LIMIT_WARN_MS = 25_000
 
 /**
+ * What a slow tick's line carries besides its phases, so it says whether the tick
+ * waited or was starved: the loop thread's CPU over the tick (all of the server's
+ * work on that thread, the tick's included) and the machine's 1-minute load per
+ * core (past 1, runnable threads queue for a core and every await resumes late;
+ * 2026-11-23 the slow ticks came at loads of 20 to 42 on 14 cores).
+ */
+export function tickLoadFacts(loopCpuT0Us: number): { loopCpuMs: number; load1PerCore: number } {
+  const cores = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length
+  return {
+    loopCpuMs: Math.round((readLoopCpuUs() - loopCpuT0Us) / 1000),
+    load1PerCore: Math.round((os.loadavg()[0] / Math.max(1, cores)) * 100) / 100,
+  }
+}
+
+/**
  * Warm the cycle's liveness memo for `sessions`, LIVENESS_PROBE_CONCURRENCY at a time.
  * Stops starting probes once the tick is over budget (the loop then breaks on its own
  * budget check). A probe that throws is left in the memo for the loop to meet, as
@@ -101,15 +129,10 @@ export async function prefetchLiveness(
   isAlive: (s: SessionRecord) => Promise<boolean>,
   ctx?: TickContext,
 ): Promise<void> {
-  let next = 0
-  const worker = async (): Promise<void> => {
-    while (next < sessions.length) {
-      if (ctx?.overBudget()) return
-      const s = sessions[next++]
-      try { await isAlive(s) } catch { /* the loop sees it */ }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(LIVENESS_PROBE_CONCURRENCY, sessions.length) }, worker))
+  await mapLimit(sessions, LIVENESS_PROBE_CONCURRENCY, async (s) => {
+    if (ctx?.overBudget()) return
+    try { await isAlive(s) } catch { /* the loop sees it */ }
+  })
 }
 
 /** What an idle reap calls. Loaded once per tick, before the reap workers start. */
@@ -372,6 +395,7 @@ export class SessionHealthMonitor {
 
   private async checkInner(ctx: TickContext): Promise<void> {
     const checkT0 = Date.now()
+    const loopCpuT0 = readLoopCpuUs()
     this.tickCount++
     const { listSessions, listSessionsForHealthScan, isTerminalSession, updateSessionRecord } = await import('./session-tracker.js')
 
@@ -511,7 +535,7 @@ export class SessionHealthMonitor {
       if (!ctx.overBudget()) await this.phase('snapshotPull', ctx, undefined, () => this.checkSnapshotPull(sessions, ctx, allSessions))
       const total = Date.now() - checkT0
       const slowLog = total >= SLOW_TICK_WARN_MS ? log.session.warn : log.session.debug
-      if (total > 500) slowLog('health monitor: check() slow (no active sessions)', { totalMs: total, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan })
+      if (total > 500) slowLog('health monitor: check() slow (no active sessions)', { totalMs: total, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan, ...tickLoadFacts(loopCpuT0) })
       return
     }
 
@@ -860,6 +884,7 @@ export class SessionHealthMonitor {
         sessionCount: sessions.length, taskCount: taskMap.size,
         phases: phaseMs,
         slowestPhase: slowest ? `${slowest[0]}=${slowest[1]}ms` : 'none',
+        ...tickLoadFacts(loopCpuT0),
       })
     }
   }
@@ -1733,32 +1758,38 @@ export class SessionHealthMonitor {
         at: Map<string, number>,
         candidateClass: 'live' | 'reexam',
       ): Promise<void> => {
-        let pulled = 0
+        // Pick this tick's pulls first (no I/O), then run them DAEMON_RPC_CONCURRENCY
+        // at a time: the cap bounds how many calls a host gets, the width only how
+        // many wait at once. Each pull is its own session, so their order is free.
+        const picked: { s: SessionRecord; conn: NonNullable<ReturnType<typeof getPooledSnapshotConnection>>; memoryOnly: boolean }[] = []
         for (const s of candidates) {
-          if (ctx?.overBudget()) {
-            abandoned = true
-            log.session.warn('health monitor: checkSnapshotPull abandoned mid-loop (over budget)', {
-              pulled, candidateCount: candidates.length, candidateClass,
-            })
-            break
-          }
           const conn = getPooledSnapshotConnection(s.host)
           if (!conn) continue // no pooled snapshot-capable connection — skip (never dial)
           const memoryOnly = candidateClass === 'reexam'
             && now - Date.parse(s.last_status_change ?? '') > RESCUABLE_STOPPED_WINDOW_MS
           if (memoryOnly && !conn.hasCapability('snapshot-memory-v1')) continue
-          if (pulled >= cap) {
+          if (picked.length >= cap) {
             log.session.info('health monitor: snapshot pull capped this tick', {
               cap, sessionCount: sessions.length,
               candidateCount: candidates.length, candidateClass,
             })
             break
           }
+          picked.push({ s, conn, memoryOnly })
+        }
+        let pulled = 0
+        await mapLimit(picked, DAEMON_RPC_CONCURRENCY, async ({ s, conn, memoryOnly }) => {
+          if (abandoned) return
+          if (ctx?.overBudget()) {
+            abandoned = true
+            log.session.warn('health monitor: checkSnapshotPull abandoned mid-loop (over budget)', {
+              pulled, candidateCount: candidates.length, candidateClass,
+            })
+            return
+          }
           pulled++
           at.set(s.claudeSessionId, now)
           try {
-            // Sequential on purpose: this is a background safety net; parallel
-            // fan-out to a slow host would stack daemon RPCs on the tick budget.
             const canRecoverConnection = await captureSnapshotReadGuard(s.claudeSessionId)
             const resp = await probeWithTimeout(
               conn.send('getState', { sid: s.claudeSessionId, ...(memoryOnly ? { memoryOnly: true } : {}) }),
@@ -1773,7 +1804,7 @@ export class SessionHealthMonitor {
               error: err instanceof Error ? err.message : String(err),
             })
           }
-        }
+        })
       }
 
       await runClass(live, MAX_PULLS_PER_TICK, this.snapshotPullAt, 'live')
@@ -1871,12 +1902,13 @@ export class SessionHealthMonitor {
 
     const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
     const now = Date.now()
-    let attempted = 0
-
+    // Pick this tick's attempts first (no I/O), then read their stream tails
+    // DAEMON_RPC_CONCURRENCY at a time: one after another, 5 tail reads cost 2 to 3 s
+    // of every tick. Each attempt is its own session; reconcileProcessStatus already
+    // runs beside the attach path's own calls, so its writes are conditional per row.
+    const picked: SessionRecord[] = []
     for (const session of sessions) {
-      if (attempted >= MAX_PER_TICK) break
-      // Each attempt reads a stream tail from its host: stop at the budget like the other loops.
-      if (ctx?.overBudget()) break
+      if (picked.length >= MAX_PER_TICK) break
       const recordDebt = session.process_status === 'running'
       // Phase debt (incident 10e7df54): record settled but the linked task never
       // saw the (swallowed) result — stuck IN_PROGRESS with nothing to advance it.
@@ -1901,11 +1933,23 @@ export class SessionHealthMonitor {
       // with a live CLI) would otherwise trigger a full JSONL read every tick.
       const lastAttempt = this.reconcileAttemptAt.get(session.claudeSessionId) ?? 0
       if (now - lastAttempt < RECONCILE_RETRY_MS) continue
+      picked.push(session)
+    }
 
+    // Loaded once, before the workers start: a module still loading when several
+    // workers ask for it is not one they may each await.
+    const { reconcileProcessStatus } = await import('./session-reconcile.js')
+    let runner: { findSessionByClaudeId(id: string): { setProcessStatusFromReconciler(to: ProcessStatus): void } | undefined } | undefined
+    if (picked.length > 0) {
       try {
-        attempted++
+        runner = (await import('../providers/claude-code-session.js')).sessionRunner
+      } catch { /* runner not loaded — sessions are attach-only */ }
+    }
+    await mapLimit(picked, DAEMON_RPC_CONCURRENCY, async (session) => {
+      // Each attempt reads a stream tail from its host: stop at the budget like the other loops.
+      if (ctx?.overBudget()) return
+      try {
         this.reconcileAttemptAt.set(session.claudeSessionId, now)
-        const { reconcileProcessStatus } = await import('./session-reconcile.js')
         const outcome = await reconcileProcessStatus(session, { minAgeMs: ACTIVITY_FRESH_MS })
         if (outcome.converged) {
           this.reconcileAttemptAt.delete(session.claudeSessionId)
@@ -1915,14 +1959,11 @@ export class SessionHealthMonitor {
             taskId: session.taskId,
             to: outcome.to,
             phaseSynced: outcome.phaseSynced ?? false,
-            debt: recordDebt ? 'record' : 'phase',
+            debt: session.process_status === 'running' ? 'record' : 'phase',
           })
           // Sync live CCS instance so in-memory state and DB agree.
-          try {
-            const { sessionRunner } = await import('../providers/claude-code-session.js')
-            const liveSession = sessionRunner.findSessionByClaudeId(session.claudeSessionId)
-            if (liveSession) liveSession.setProcessStatusFromReconciler(outcome.to)
-          } catch { /* runner not loaded — session is attach-only */ }
+          const liveSession = runner?.findSessionByClaudeId(session.claudeSessionId)
+          if (liveSession) liveSession.setProcessStatusFromReconciler(outcome.to)
         }
       } catch (err) {
         log.session.warn('health monitor: reconcile attempt failed', {
@@ -1930,7 +1971,7 @@ export class SessionHealthMonitor {
           error: err instanceof Error ? err.message : String(err),
         })
       }
-    }
+    })
 
     // Drop map entries for sessions no longer in the running set (bounded memory).
     if (this.reconcileAttemptAt.size > 200) {
