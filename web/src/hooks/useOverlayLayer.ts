@@ -87,11 +87,14 @@ export function overlayLayerDepth(): number {
   return stack.length;
 }
 
-function contains(layer: Layer, target: EventTarget | null): boolean {
+function contains(layer: Layer, target: EventTarget | null, path: readonly EventTarget[] = []): boolean {
+  const { refs, exemptSelectors } = layer.opts.current;
+  // The event's composed path first: it holds the layer even when the press landed in a shadow
+  // root, or on a node a render detached before this check ran (contains() says no to both).
+  for (const ref of refs) if (ref.current && path.includes(ref.current)) return true;
   // Duck-typed (not instanceof Node) so the stack logic is unit-testable without a DOM.
   const node = target as (Node & { closest?: Element['closest'] }) | null;
   if (!node || typeof node.nodeType !== 'number') return false;
-  const { refs, exemptSelectors } = layer.opts.current;
   for (const ref of refs) if (ref.current && ref.current.contains(node)) return true;
   const el: Pick<Element, 'closest'> | null = typeof node.closest === 'function'
     ? (node as unknown as Element)
@@ -164,10 +167,11 @@ function isPopoverTrigger(target: EventTarget | null): boolean {
 function onPointerDownCapture(e: PointerEvent): void {
   // A dialog opened over the popover owns the pointer too: pressing in it never closes the popover under it.
   if (stack.length === 0 || dialogAboveTop()) return;
+  const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
   let swallow = false;
   for (let i = stack.length - 1; i >= 0; i -= 1) {
     const layer = stack[i];
-    if (contains(layer, e.target) || layer.opts.current.closeOnOutside === false) break;
+    if (contains(layer, e.target, path) || layer.opts.current.closeOnOutside === false) break;
     // Only a primary press is followed by a click to swallow: a right press (it opens another menu)
     // makes no click, and arming would eat the first click in the menu it opened.
     if (layer.opts.current.passOutsideClick !== true && (e.button ?? 0) === 0) swallow = true;

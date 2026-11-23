@@ -77,6 +77,15 @@ describe('useOverlayLayer stack', () => {
     overlayLayerHandlers.pointerdown(ev({ target: node('x', flyout) }) as unknown as PointerEvent);
     expect(closeMenu).not.toHaveBeenCalled();
   });
+  it('a press whose composed path holds the layer is inside, even on a node no longer in it', () => {
+    const close = layer({ el: menu });
+    // A row a render detached (or a node in a shadow root): contains() says no, the path says yes.
+    const detached = node('row-gone');
+    overlayLayerHandlers.pointerdown(ev({ target: detached, composedPath: () => [detached, menu, body] }) as unknown as PointerEvent);
+    expect(close).not.toHaveBeenCalled();
+    overlayLayerHandlers.pointerdown(ev({ target: detached, composedPath: () => [detached] }) as unknown as PointerEvent);
+    expect(close).toHaveBeenCalledWith('outside');
+  });
   it('an outside press closes every layer above the one that contains it, then swallows one click', () => {
     const closeMenu = layer({ el: menu, exemptSelectors: ['.fb-values-flyout'] });
     const closeFly = layer({ el: flyout });

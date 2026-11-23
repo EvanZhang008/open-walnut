@@ -239,8 +239,12 @@ describe('task row surfaces render the display name (ratchet)', () => {
     const portal = fs.readFileSync(path.join(webSrc, 'components/notes/slash-commands/SlashCommandPortal.tsx'), 'utf8');
     expect(portal).toContain('useTasksContextSafe()');
     expect(portal).toContain('tasks={tasks ?? sharedTasks?.tasks ?? []}');
-    expect(portal).toContain('!e.composedPath().includes(panelRef.current)');
+    // Outside presses close it through the overlay layer, which reads the press's composed path
+    // (a press on a row a render detached still counts as inside), never a bare contains(e.target).
+    expect(portal).toMatch(/useOverlayLayer\(\{[\s\S]*?refs: \[panelRef\]/);
     expect(portal).not.toContain('panelRef.current.contains(e.target');
+    const layer = fs.readFileSync(path.join(webSrc, 'hooks/useOverlayLayer.ts'), 'utf8');
+    expect(layer).toMatch(/path\.includes\(ref\.current\)/);
   });
 
   it('resolves dependency display names without changing the frozen task reference', () => {
