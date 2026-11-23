@@ -389,3 +389,10 @@ html body .va-take-dialog[data-sheet='true'] {
   overflow: visible;
   text-overflow: clip;
 }
+
+/* The recording's title wraps instead of being cut: its date is the whole point of it (the
+   header rule's title cuts with an ellipsis, header-fit.css). */
+.va-take-dialog-head .va-take-dialog-title[data-fit-title] {
+  text-overflow: clip;
+  white-space: normal;
+}
