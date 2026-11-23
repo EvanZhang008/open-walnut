@@ -36,6 +36,9 @@ const MAY_WAIT: Array<[RegExp, string]> = [
   [/^GET \/api\/sessions\/[^/?]+\/slash-commands/, 'the "/" palette, read before it is opened, low priority'],
   [/^GET \/api\/sessions\/[^/?]+\/servers$/, 'the dev servers the session started'],
   [/^GET \/api\/sessions\/git-status\?/, 'the git glance chip'],
+  // useSessionCostPrefetch (1f97d45a47): a low-priority warm-up, so the picker's Cost toggle
+  // has a number when it is opened; the closed pill draws nothing from it.
+  [/^GET \/api\/sessions\/[^/?]+\/cost$/, "the model picker's cost, warmed before the picker opens"],
 ]
 
 test('a chat opened while every shared connection is busy reads its first screen at once', async ({ page }) => {
