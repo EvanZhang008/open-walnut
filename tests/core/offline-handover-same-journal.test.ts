@@ -37,10 +37,11 @@ const held = (seq: number): OfflineRecord => ({
 } as OfflineRecord)
 
 /** A link to the one daemon: reads the shared journal; `loseAcks` drops its acks (the link went). */
-function link(hostKey: string, journal: OfflineRecord[], opts: { loseAcks?: boolean; journalKey?: string } = {}): HandoverConnection {
+function link(hostKey: string, journal: OfflineRecord[], opts: { loseAcks?: boolean; journalKey?: string; aliases?: string[] } = {}): HandoverConnection {
   return {
     hostKey,
     journalKey: opts.journalKey ?? JOURNAL,
+    ...(opts.aliases ? { aliases: opts.aliases } : {}),
     send: async (cmd, params) => {
       if (cmd === 'offline.drain') return { ok: true, records: [...journal], more: false }
       if (cmd === 'offline.ack') {
@@ -68,12 +69,13 @@ describe('two names of one daemon drain its journal as one', () => {
   })
 
   it('a record one name applied, its ack lost, is not run again when the other name drains it', async () => {
-    noteSameJournal(['studio', 'studio-net'])
+    // The names come with the link (HandoverConnection.aliases), as daemon-connection.ts hands them.
+    const both = ['studio', 'studio-net']
     const journal = [held(5296), held(5297)]
-    await runOfflineHandover(link('studio-net', journal, { loseAcks: true })).catch(() => undefined)
+    await runOfflineHandover(link('studio-net', journal, { loseAcks: true, aliases: both })).catch(() => undefined)
     expect(executeOp).toHaveBeenCalledTimes(2)
     expect(journal.map((r) => r.seq)).toEqual([5296, 5297])
-    await runOfflineHandover(link('studio', journal))
+    await runOfflineHandover(link('studio', journal, { aliases: both }))
     // Each held message went out once, and the second drain still acked both.
     expect(executeOp).toHaveBeenCalledTimes(2)
     expect(journal).toEqual([])

@@ -26,7 +26,7 @@ import type { OfflineRecord } from '../providers/offline-host-core.js';
 import { requestOfRow } from './offline-merge/request-row.js';
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
 import { APPLIED_V2_KINDS, RefusedWrite, replayFailure, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
-import { recordRemap } from './offline-merge/ledger.js';
+import { noteSameJournal, recordRemap } from './offline-merge/ledger.js';
 import { endRefusedRun, refusedRunWords } from './offline-merge/apply-session.js';
 import { isCallId, journalCallId } from '../lib/op-call-id.js';
 import { mergeJournalFill, noteJournalFill, readJournalFill, type JournalFill } from './offline-merge/journal-fill.js';
@@ -41,6 +41,8 @@ export interface HandoverConnection {
    * machine), so one drain runs at a time per journal, whichever link starts it. Absent: hostKey.
    */
   journalKey?: string;
+  /** Every host name that reaches this daemon (this link's included): the ledger counts a row any of them recorded. */
+  aliases?: readonly string[];
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
   /**
    * Look at these sessions again as a reconnect does, as if their records did
@@ -140,6 +142,7 @@ export async function waitForOfflineHandovers(maxMs = HANDOVER_WAIT_MS): Promise
  * reconnect in production does the same). Then this call runs its own once that one ends.
  */
 export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverResult> {
+  if (conn.aliases) noteSameJournal(conn.aliases);
   const journal = journalOf(conn);
   const existing = running.get(journal);
   if (existing) {

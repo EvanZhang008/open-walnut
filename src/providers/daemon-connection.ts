@@ -3594,14 +3594,14 @@ export class DaemonConnection {
   private async handoverConnection(): Promise<import('../core/offline-handover.js').HandoverConnection> {
     // One journal per daemon, whichever of its names reaches it: the drain runs once at a time for
     // it (journalKey), and its ledger and remap count a row any of its names recorded
-    // (noteSameJournal). This link still acts as itself (hostKey). 2026-11-23: `newdev` and
+    // (aliases, noteSameJournal). This link still acts as itself (hostKey). 2026-11-23: `newdev` and
     // `clouddev`, one machine, drained its journal each under its own name, twice at once.
     const { keeper, aliases } = await this.daemonNames()
     this.lastJournalKeeper = keeper
-    ;(await import('../core/offline-merge/ledger.js')).noteSameJournal(aliases)
     return {
       hostKey: this.hostKey,
       journalKey: this.journalName(),
+      aliases,
       send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs),
       rescue: async (sessionIds) => {
         void this.recoverDisconnectedSessions(new Set(sessionIds)).catch(() => {})

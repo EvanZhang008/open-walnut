@@ -1176,7 +1176,7 @@ describe('src/providers/daemon-connection.ts keeps the guards where they act', (
     const at = src.indexOf("        return import('../core/offline-handover.js')\n")
     expect(at).toBeGreaterThan(0)
     expect(src.slice(at).split('\n').slice(1, 4)).toEqual([
-      '          .then(({ noteHandoverDue }) => { if (!this.localDialAbandoned()) noteHandoverDue(this.hostKey) })',
+      '          .then(({ noteHandoverDue }) => { if (!this.localDialAbandoned()) noteHandoverDue(this.journalName()) })',
       '          .catch(() => {})',
       '          .finally(() => { if (!this.localDialAbandoned()) this.pushHostSlice() })',
     ])

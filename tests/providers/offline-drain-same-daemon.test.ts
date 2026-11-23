@@ -1,7 +1,7 @@
 /**
  * Two host aliases of ONE daemon drain its one journal as one (daemon-connection.ts
  * handoverConnection): each link names the same journal (journalKey: the daemon's process) and
- * tells the ledger its names are one (noteSameJournal), while it still acts as itself (hostKey:
+ * names every name that reaches that daemon (aliases, which the drain hands the ledger: noteSameJournal), while it still acts as itself (hostKey:
  * the sessions, stops and callers its rows name). The drain side is
  * tests/core/offline-handover-same-journal.test.ts.
  *
@@ -18,13 +18,13 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-offline-drain-same-daemon'))
 
-const drains = vi.hoisted(() => [] as Array<{ hostKey: string; journalKey?: string }>)
+const drains = vi.hoisted(() => [] as Array<{ hostKey: string; journalKey?: string; aliases?: readonly string[] }>)
 vi.mock('../../src/core/offline-handover.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/core/offline-handover.js')>()
   return {
     ...real,
-    runOfflineHandover: vi.fn(async (conn: { hostKey: string; journalKey?: string }) => {
-      drains.push({ hostKey: conn.hostKey, journalKey: conn.journalKey })
+    runOfflineHandover: vi.fn(async (conn: { hostKey: string; journalKey?: string; aliases?: readonly string[] }) => {
+      drains.push({ hostKey: conn.hostKey, journalKey: conn.journalKey, aliases: conn.aliases })
       return { rounds: 0, records: 0, imported: 0, settled: 0, replayed: 0, skipped: 0, failed: 0 }
     }),
   }
@@ -36,7 +36,7 @@ import { updateConfig, getConfig } from '../../src/core/config-manager.js'
 import { linkTarget } from '../../src/core/hosts/link.js'
 import { HOST_PROFILES_DIR } from '../../src/core/hosts/host-profile.js'
 import { __setSshResolverForTest, _resetSameDaemonRecordForTest } from '../../src/core/hosts/same-daemon-record.js'
-import { journalNamesOf, _setLedgerFileForTesting } from '../../src/core/offline-merge/ledger.js'
+import { _setLedgerFileForTesting } from '../../src/core/offline-merge/ledger.js'
 
 const NET_KEY = 'c'.repeat(64)
 
@@ -113,9 +113,8 @@ describe('two aliases of one daemon drain its journal under one name', () => {
       expect(drains[0].journalKey).toBe(`instance:${daemon.instanceId}`)
       // Each link still acts as itself.
       expect([...new Set(drains.map((d) => d.hostKey))].sort()).toEqual(['studio', 'studio-net'])
-      // The ledger counts a row either name recorded.
-      expect([...journalNamesOf('studio')].sort()).toEqual(['studio', 'studio-net'])
-      expect([...journalNamesOf('studio-net')].sort()).toEqual(['studio', 'studio-net'])
+      // Both links name both names, so the ledger counts a row either recorded (noteSameJournal).
+      for (const d of drains.filter((x) => x.journalKey === drains[0].journalKey).slice(-2)) expect([...(d.aliases ?? [])].sort()).toEqual(['studio', 'studio-net'])
     })
   }
 
@@ -124,7 +123,6 @@ describe('two aliases of one daemon drain its journal under one name', () => {
     await lab.start()
     await connect('lab', lab)
     await waitFor(() => drains.length >= 1)
-    expect(drains).toEqual([{ hostKey: 'lab', journalKey: `instance:${lab.instanceId}` }])
-    expect(journalNamesOf('lab')).toEqual(['lab'])
+    expect(drains).toEqual([{ hostKey: 'lab', journalKey: `instance:${lab.instanceId}`, aliases: ['lab'] }])
   })
 })
