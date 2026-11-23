@@ -54,13 +54,13 @@ export interface TargetJobOptions {
   out?: (line: string) => void
   /** This machine (default: LocalSide of the machine the copy's config names for this machine's id). */
   side?: SwitchSide
-  /** Tests: the witnesses as this machine reads them, the notes, the service role, the kill. */
+  /** Tests: the witnesses as this machine reads them, the notes, the service role, where it dies (a test kill point). */
   readWitnesses?: () => Promise<WitnessReading>
   notes?: NotesAccess | null
   setServiceRole?: SetServiceRole
   /** Tests: whether this machine's service can lead (default: its launcher's good version, asked). */
   serviceLeadRefusal?: () => Promise<string | null>
-  kill?: (name: string) => void
+  diesAt?: (name: string) => void
   /** How long the handover may take to show at this machine's majority (default 10 s). */
   handoverSeenMs?: number
 }
@@ -154,7 +154,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
   const self = machineById(settings, s.to)
   if (!self) throw new SwitchRefused(`machine ${s.to} is not in leader_switch.machines`)
   const side = o.side ?? new LocalSide(self)
-  const kill = o.kill ?? ((name: string) => killPoint(s.test?.killAt, name))
+  const diesAt = o.diesAt ?? ((name: string) => killPoint(s.test?.killAt, name))
   const skipLedger = s.test?.skipLedgerRewrite === true
   const save = stepLogger(s, (x) => writeSwitchFile(o.standbyDir, targetStateName(x.id), x), out)
   const notes = o.notes !== undefined ? o.notes : await notesAccessOf(configHome(o.standbyDir, s.targetHome), env).catch(() => null)
@@ -192,7 +192,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
             save('wait-mark', `handover ${s.handover} stands at a majority this machine reaches; waiting for ${s.from}'s final batch`)
             await note('waiting-mark')
           }
-          kill('during-wait-mark')
+          diesAt('during-wait-mark')
           let mark: FinalMark | null = null
           let lastLook = 0
           while (!mark) {
@@ -225,12 +225,12 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           await side.stopServer()
           const r = await promoteCopy({
             switchId: s.id, standbyDir: o.standbyDir, home: s.targetHome, previousHome: s.sourceHome, reverseStandbyDir: s.reverseStandbyDir,
-            ...accountHomes(s), skipLedgerRewrite: skipLedger, afterRename: () => kill('during-promote'),
+            ...accountHomes(s), skipLedgerRewrite: skipLedger, afterRename: () => diesAt('during-promote'),
           })
           s.outcomeUnknown = listUnsettledSends(s.targetHome)
           const moved = r.rewritten.reduce((n, d) => n + d.values, 0)
           save('trial', `copy is the new home${r.movedAside ? ` (what was there is kept at ${r.movedAside})` : ''}; ${r.ledgerRows} ledger rows moved to it; ${moved} old-machine paths rewritten in ${r.rewritten.length} files`)
-          kill('after-promote')
+          diesAt('after-promote')
           break
         }
         case 'trial': {
@@ -250,7 +250,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           await note('trial')
           const started = await side.startServer('trial', 120_000, undefined, s.id)
           if (!started.ok) fail(`the trial start failed: ${started.why}${started.logTail ? `\n${started.logTail.split('\n').slice(-8).join('\n')}` : ''}`)
-          kill('during-trial')
+          diesAt('during-trial')
           const on = await onlineCheck({ side, sourceHome: s.sourceHome, sourceVersion: s.sourceVersion, task: off.task, note: off.note })
           await side.stopServer()
           if (!on.ok) fail(`the trial server's self-check: ${on.problems.join('; ')}`)
@@ -304,7 +304,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
             else fail('the new leader\'s commit did not reach a majority of the witnesses inside the commit window')
           }
           s.commit = committed!.number
-          kill('after-commit-majority')
+          diesAt('after-commit-majority')
           writePromoted(s.targetHome, { switchId: s.id, state: 'led', from: s.sourceHome, ...onHosts, at: new Date().toISOString() })
           appendHistory(s.targetHome, { switchId: s.id, from: s.from, to: s.to, committedAt: new Date().toISOString(), record: s.commit })
           save('role', `record ${s.commit} at a majority: ${s.to} holds the write permission, ${s.from} never acts again`)
@@ -328,7 +328,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           if (!ready) throw new SwitchRefused('committed, but the new leader has not opened its doors (its permission); rerun with --resume')
           s.readyAt ??= new Date().toISOString()
           if (s.stoppedAt) s.downtimeMs = Date.parse(s.readyAt) - Date.parse(s.stoppedAt)
-          kill('after-commit')
+          diesAt('after-commit')
           removeSwitchClaim(s.targetHome, s.id, env)
           save('done', `${s.to} leads${s.downtimeMs !== undefined ? `; downtime ${(s.downtimeMs / 1000).toFixed(1)} s` : ''}`)
           await note('done')

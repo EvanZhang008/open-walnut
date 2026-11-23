@@ -38,11 +38,11 @@ export interface SourceJobOptions {
   startedBy?: StartedBy
   /** This machine (default LocalSide of the home's machine). */
   side?: SwitchSide
-  /** Tests: the witnesses, the notes, the service role, the kill, how long the new leader may take to say it saw the handover. */
+  /** Tests: the witnesses, the notes, the service role, where it dies (a test kill point), how long the new leader may take to say it saw the handover. */
   readWitnesses?: () => Promise<WitnessReading>
   notes?: NotesAccess | null
   setServiceRole?: SetServiceRole
-  kill?: (name: string) => void
+  diesAt?: (name: string) => void
   targetReadyMs?: number
 }
 
@@ -113,7 +113,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
   const pause = Number(env.WALNUT_LEADER_SWITCH_PAUSE_AFTER_FIRST_BATCH_MS)
   const handoverTest = { ...(killAt ? { killAt } : {}), ...(env.WALNUT_LEADER_SWITCH_SKIP_LEDGER_REWRITE === '1' ? { skipLedgerRewrite: true } : {}) }
   const stopTest = { ...(killAt ? { killAt } : {}), ...(pause > 0 ? { pauseAfterFirstBatchMs: pause } : {}) }
-  const kill = o.kill ?? ((name: string) => killPoint(killAt, name))
+  const diesAt = o.diesAt ?? ((name: string) => killPoint(killAt, name))
   // A new switch writes nothing until its preflight passed: a refusal changes nothing on disk.
   let persisted = !!o.resume
   const save = stepLogger(s, (x) => { if (persisted || x.step !== 'preflight') { persisted = true; writeDurableJson(switchStateFile(home), x) } }, out)
@@ -179,7 +179,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
             await sleep(300)
           }
           save('stop-source', `handover record ${s.handover} at a majority; ${s.to} waits for the final batch`)
-          kill('after-handover')
+          diesAt('after-handover')
           break
         }
         case 'stop-source': {
@@ -191,7 +191,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
             const inStop = j?.why === 'this server is in its switch stop already' || (r.status === 0 && alive(running.pid))
             if (!j?.ok && !inStop) fail(`the old leader's server did not take the switch stop: ${j?.why ?? `status ${r.status}`}`)
             if (inStop) out('the old leader\'s server is in its switch stop already; waiting for it to end')
-            kill('during-final-batch')
+            diesAt('during-final-batch')
           }
           if (running) {
             const until = Date.parse(s.commitDeadline ?? new Date(Date.now() + settings.commitWindowMs).toISOString()) + 60_000
@@ -223,7 +223,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
             if (Date.now() > until) fail(`${s.to} did not commit before its deadline (${s.commitDeadline}) and the take-back time`)
             await sleep(500)
           }
-          kill('after-commit-seen')
+          diesAt('after-commit-seen')
           save('hand-off', `record ${s.commit}: ${s.to} leads`)
           break
         }

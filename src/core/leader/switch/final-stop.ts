@@ -21,7 +21,7 @@ import type { SwitchPeer } from './peer.js'
 import { finalMarkName, type FinalMark } from './ticket.js'
 import { finalStopResultFile, writeDurableJson, type FinalStopResult } from './records.js'
 import { machineById, type LeaderSwitchSettings } from './settings.js'
-import type { StartedBy } from './flow.js'
+import { killPoint, type StartedBy } from './flow.js'
 import { hostLeadRefusal, type HostServiceFacts } from './service-role.js'
 
 export interface HandedOverSwitch {
@@ -155,7 +155,7 @@ export async function runFinalBatch(o: { home: string; peer: SwitchPeer; deadlin
     const r = await o.peer.batch(o.home).catch((err: unknown) => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err) }))
     batches++
     if (o.signal.aborted) return { ok: false, why: `the final batch was stopped (${String(o.signal.reason ?? 'a signal')}): no final mark`, batches }
-    if (batches === 1 && o.test?.killAt === 'server-during-final-batch') process.kill(process.pid, 'SIGKILL')
+    if (batches === 1) killPoint(o.test?.killAt, 'server-during-final-batch')
     if (batches === 1 && o.test?.pauseAfterFirstBatchMs) {
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, o.test!.pauseAfterFirstBatchMs)
