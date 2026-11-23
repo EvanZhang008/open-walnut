@@ -107,6 +107,23 @@ struct FocusSpaceBanner: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    /// The name cut at its tail, then `detail` whole. The name asks for only a few points as its
+    /// ideal width, so ViewThatFits takes this line whenever `detail` itself fits (a cut name's
+    /// ideal width is otherwise the whole name, and the line would never count as fitting).
+    private func cutNameLine(_ detail: String) -> some View {
+        HStack(spacing: 0) {
+            Text(focus.name)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(minWidth: 24, idealWidth: 24, maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(-1)
+            Text(" · " + detail)
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+
     /// The banner's words, in one place so they are tested alone.
     static func line(name: String, until: Date?, outside: Int) -> String {
         ([name] + [detail(until: until, outside: outside)]).joined(separator: " · ")
@@ -138,21 +155,18 @@ struct FocusSpaceBanner: View {
             Image(systemName: "scope")
                 .foregroundStyle(Theme.tint)
                 .accessibilityHidden(true)
-            // The longest line that fits: the whole detail, then a short one, then the name cut
-            // to make room for the count, which always shows.
+            // The longest line that fits: the whole detail, then a short one, then the name cut to
+            // keep the count and the until time, then the name cut to keep the count, which always
+            // shows. 2026-11-23 QA: in the board's drawer the short line did not fit beside Leave,
+            // so the banner fell to the count alone and the until time was gone.
             let outside = tasks.focusSpaceOutsideCount
             ViewThatFits(in: .horizontal) {
                 bannerLine(Self.detail(until: focus.untilDate, outside: outside))
                 bannerLine(Self.shortDetail(until: focus.untilDate, outside: outside))
-                HStack(spacing: 0) {
-                    Text(focus.name)
-                        .fontWeight(.semibold)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text(" · " + Self.countOnly(outside: outside))
-                        .lineLimit(1)
-                        .fixedSize()
+                if focus.untilDate != nil {
+                    cutNameLine(Self.shortDetail(until: focus.untilDate, outside: outside))
                 }
+                cutNameLine(Self.countOnly(outside: outside))
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
