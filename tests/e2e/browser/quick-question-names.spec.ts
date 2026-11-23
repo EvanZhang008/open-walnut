@@ -204,7 +204,7 @@ test('task dependency references show current display names and preserve real ti
   const row = page.locator(`.todo-panel [data-task-id="${parent.id}"]`).first()
   await expect(row).toBeVisible()
   await pointAt(page, row.getByRole('button', { name: 'More actions' }))
-  await pointAt(page, page.locator('.task-kebab-menu').getByText('Details', { exact: true }))
+  await pointAt(page, page.locator('.task-kebab-menu').getByText('Task details', { exact: true }))
   const modal = page.locator('.task-detail-modal')
   await expect(modal).toBeVisible()
   await pointAt(page, modal.getByTestId('task-detail-add-dependency'))

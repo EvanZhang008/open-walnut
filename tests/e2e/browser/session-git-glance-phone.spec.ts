@@ -27,7 +27,7 @@ async function openDetail(page: Page): Promise<void> {
   await expect(page.locator(`.main-page-session-column.is-mobile-active .session-panel[data-session-id="${GIT_GLANCE_SESSION}"]`)).toBeVisible({ timeout: 30_000 })
   await gitRead
   await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Task details', { exact: true }).click()
   await expect(page.locator('.task-detail-modal')).toBeVisible({ timeout: 10_000 })
 }
 

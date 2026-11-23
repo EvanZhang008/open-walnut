@@ -244,14 +244,14 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   const header = panel.locator('.session-panel-header')
   await expect(header.locator('.draft-task-menu-btn')).toHaveCount(0)
   await expect(header.locator('button[aria-label="Task settings"]')).toHaveCount(0)
-  // C2: More is the LAST element of the pills row, the button itself.
+  // C2: Task settings is the LAST element of the pills row, the button itself.
   const last = await panel.locator('.draft-composer-bar').evaluate((bar) => {
     const el = bar.lastElementChild as HTMLElement | null
     return el ? { tag: el.tagName, cls: el.className, text: el.textContent?.trim(), label: el.getAttribute('aria-label'), popup: el.getAttribute('aria-haspopup') } : null
   })
   expect(last?.tag).toBe('BUTTON')
   expect(last?.cls).toMatch(/\bdraft-more-btn\b/)
-  expect(last).toMatchObject({ text: 'More', label: 'Task settings', popup: 'dialog' })
+  expect(last).toMatchObject({ text: 'Task settings', label: 'Task settings', popup: 'dialog' })
   // The Focus default nobody decided has no chip.
   await expect(draftDecisionChips(panel)).toHaveCount(0)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/05-plain-draft-more.png` })

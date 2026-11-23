@@ -116,7 +116,7 @@ test('pinning a task shows no toast; deleting it keeps its Undo toast, and the U
     await expect(pinnedRow).toBeVisible()
     await pinnedRow.hover()
     await pinnedRow.getByRole('button', { name: 'More actions' }).click()
-    await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+    await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
     const modal = page.locator('.task-detail-modal')
     await expect(modal).toBeVisible()
     await modal.getByTestId('task-detail-delete').click()

@@ -112,7 +112,7 @@ async function openSessionColumn(page: Page): Promise<Locator> {
   await showMoreUntil(page.locator('.todo-panel'), task)
   await expect(task).toBeVisible({ timeout: 20_000 })
   await task.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Task details', { exact: true }).click()
 
   const detail = page.locator('.task-detail-modal')
   await expect(detail).toBeVisible()

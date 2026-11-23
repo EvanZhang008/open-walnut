@@ -160,7 +160,7 @@ test('two sibling tasks asking the same show one row; their leader answering it 
   // Its details say who answered what for the user, the ask and the answer each as agent text.
   await aCard.hover()
   await aCard.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
   const answered = page.locator('.task-detail-modal').getByTestId('task-detail-answered-for')
   await expect(answered).toContainText(`Orchard lead ${stamp} answered for you "Should the deploy handler wait for the plugin rollout?": Wait up to ten minutes, roll back on timeout.`, { timeout: 15_000 })
   await expect(answered.getByTestId('answered-for-ask')).toHaveText('Should the deploy handler wait for the plugin rollout?')

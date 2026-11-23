@@ -20,6 +20,9 @@ const HELP_MAX = 120
  */
 const SHOWN_WHOLE = new Set(['Chrome, Edge, Brave or Arc'])
 
+/** A label that is a date and time ("Nov 23, 6:41 AM"): the row is a log record, not a setting. */
+const RECORD_LABEL = /^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2}\s?[AP]M$/
+
 /** The panes of Settings: its nav entries, minus the ones that are links to another page (Agents). */
 async function navIds(page: Page): Promise<string[]> {
   return page.$$eval('.settings-nav [data-testid^="settings-nav-"]', (els) => els
@@ -43,7 +46,8 @@ test('every help line in Settings is 120 characters or less', async ({ page }) =
       label: el.closest('.settings-row')?.querySelector('.settings-row-label')?.textContent?.trim() ?? '',
       text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
     })))
-    for (const r of rows) if (r.text.length > HELP_MAX && !SHOWN_WHOLE.has(r.label) && !/\bError:/.test(r.text)) long.push(`${id} > ${r.label}: ${r.text.length} chars: ${r.text.slice(0, 90)}...`)
+    // A row labelled with a time is a record (Suggest accuracy's log), its line the record itself.
+    for (const r of rows) if (r.text.length > HELP_MAX && !SHOWN_WHOLE.has(r.label) && !/\bError:/.test(r.text) && !RECORD_LABEL.test(r.label)) long.push(`${id} > ${r.label}: ${r.text.length} chars: ${r.text.slice(0, 90)}...`)
   }
   expect(long, 'help lines over 120 characters: shorten each, the rest goes on the row\'s hover').toEqual([])
 })

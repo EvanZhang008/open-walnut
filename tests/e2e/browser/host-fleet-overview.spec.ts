@@ -1024,18 +1024,20 @@ test('opening a host\'s Details reads it again, What Walnut knows inside them; c
 })
 
 test('the fixture server answers its own fleet: this computer first', async ({ page }) => {
+  // The fixture server names its own machine as the app does: This Mac on macOS, else This computer.
+  const here = process.platform === 'darwin' ? 'This Mac' : 'This computer'
   await openRemoteHosts(page)
   // A fresh fixture has no cache: the page reads each host once, and This Mac's row lands when its read ends.
   await expect(row(page, '__local__')).toBeVisible({ timeout: 30_000 })
   expect((await aliases(page))[0]).toBe('__local__')
-  await see(row(page, '__local__'), { '.rh-host-name': 'This Mac', 'rh-row-state': /^Online/ })
+  await see(row(page, '__local__'), { '.rh-host-name': here, 'rh-row-state': /^Online/ })
   const mac = await openDetails(page, '__local__')
   for (const part of [mac.getByTestId('host-fleet-spend'), mac.getByTestId('host-fleet-timeline'), mac.locator('[data-row="can"]')]) await expect(part).toBeVisible() // the real server sends capabilities
   await expect(mac.getByTestId('host-fleet-read-age')).toHaveText(/^Read (just now|\d+ min ago)$/, { timeout: 30_000 })
   // Its Overview card leads the cards, named as its row names it, with its Details in place.
   const first = page.getByTestId('hf-dash-card').first()
   await expect(first).toHaveAttribute('data-host', '__local__')
-  await see(first, { '.hf-card-name': 'This Mac', 'host-fleet-read-age': /^Read (just now|\d+ min ago)$/ })
+  await see(first, { '.hf-card-name': here, 'host-fleet-read-age': /^Read (just now|\d+ min ago)$/ })
   for (const part of [first.getByTestId('host-fleet-spend'), first.getByTestId('host-fleet-timeline')]) await expect(part).toBeVisible()
   await first.getByTestId('hf-dash-details-toggle').click()
   await expect(first.locator('[data-row="can"]')).toBeVisible()

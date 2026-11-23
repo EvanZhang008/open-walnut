@@ -20,7 +20,7 @@ async function openSessionFromTaskDetail(page: Page): Promise<void> {
   const task = page.locator('.todo-panel-item', { hasText: 'Question recovery fixture' })
   await expect(task).toBeVisible({ timeout: 15_000 })
   await task.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Task details', { exact: true }).click()
 
   const detail = page.locator('.task-detail-modal')
   await expect(detail).toBeVisible()

@@ -167,7 +167,7 @@ test('the detail pane edits key:value tags and lists the task\'s own dates as hi
   await openHome(page)
   await expect(row(page, id)).toBeVisible({ timeout: 15_000 })
   await row(page, id).getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Task details', { exact: true }).click()
   const detail = page.locator('.todo-detail-pane').filter({ hasText: `Edit my tags ${stamp}` })
   await expect(detail).toBeVisible()
   const editor = detail.locator('.todo-detail-badges [data-testid="tag-editor"]')
@@ -284,7 +284,7 @@ test('a linked tag opens its URL in a new tab, never the row or the detail under
   // In the detail's tag editor the chip links too, beside its remove button, and the detail
   // stays open.
   await row(page, id).getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Task details', { exact: true }).click()
   const detail = page.locator('.todo-detail-pane').filter({ hasText: `Linked ticket run ${stamp}` })
   await expect(detail).toBeVisible()
   const editorChip = detail.locator('[data-testid="tag-editor"] .tag-chip[data-tag="tkt:V2391099522"]')

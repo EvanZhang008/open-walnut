@@ -181,7 +181,7 @@ async function pinTaskToFocus(page: Page, task: Locator): Promise<Locator> {
 
 async function openTaskDetail(page: Page, task: Locator): Promise<Locator> {
   await task.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Task details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
   await expect(modal).toBeVisible()
   return modal

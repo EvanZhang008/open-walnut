@@ -31,7 +31,7 @@ const INSTANT_MS = 700
 /** Real UI route to the popup: the board row's menu, then Details. */
 async function openDetails(page: Page, row: Locator): Promise<Locator> {
   await row.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
   await expect(modal).toBeVisible()
   await expect(modal.locator('.todo-detail-title')).toHaveText(TITLE)

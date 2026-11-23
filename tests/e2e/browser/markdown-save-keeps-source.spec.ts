@@ -177,7 +177,7 @@ test('a task description keeps its own bytes', async ({ page }) => {
       await expect(row).toBeVisible({ timeout: 5_000 })
     }).toPass({ timeout: 40_000 })
     await row.getByRole('button', { name: 'More actions' }).click()
-    await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+    await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
     const modal = page.locator('.task-detail-modal')
     await expect(modal).toBeVisible()
     const editor = modal.getByTestId('task-detail-description').locator('.tiptap')

@@ -264,7 +264,7 @@ async function openTaskDetails(page: import('@playwright/test').Page, taskTitle:
   const todoItem = page.locator('.todo-panel-item', { hasText: taskTitle })
   await expect(todoItem).toBeVisible({ timeout: 5000 })
   await todoItem.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
   await expect(modal).toBeVisible()
   return modal

@@ -128,7 +128,7 @@ async function openDetails(page: Page): Promise<Locator> {
     await expect(row).toBeVisible({ timeout: 5_000 })
   }).toPass({ timeout: 40_000 })
   await row.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
   await expect(modal).toBeVisible()
   return modal
@@ -447,7 +447,7 @@ test.describe('phone layout', () => {
     const row = page.getByRole('button', { name: /Link capture fixture task/ }).first()
     await expect(row).toBeVisible({ timeout: 40_000 })
     await row.getByRole('button', { name: 'More actions' }).click()
-    await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+    await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
     const modal = page.locator('.task-detail-modal')
     await expect(modal).toBeVisible()
     await modal.getByRole('link', { name: 'the permalink' }).click()

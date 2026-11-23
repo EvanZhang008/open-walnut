@@ -63,7 +63,7 @@ async function openDetails(page: Page, taskId: string, title: string): Promise<v
   const row = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 20_000 })
   await row.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByRole('button', { name: 'Details', exact: true }).click()
+  await page.locator('.task-kebab-menu').getByRole('button', { name: 'Task details', exact: true }).click()
   await expect(detail(page)).toBeVisible({ timeout: 20_000 })
   await expect(detail(page).locator('.todo-detail-title')).toContainText(title)
   await page.locator('.todo-search-input').fill('')

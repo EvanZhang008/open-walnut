@@ -373,6 +373,8 @@ test('the header pill grows nothing on hover or focus: the exact numbers are its
   await expect(cell(chip, 'agent-compact')).toHaveText('3h')
   await expect(chip.locator('.wt-pill-icon.is-human')).toHaveCount(1)
   await expect(chip.locator('.wt-pill-icon.is-agent')).toHaveCount(1)
+  // Each lane says whose time it is, in words (icons alone did not).
+  await expect(chip.locator('.wt-pill-name')).toHaveText(['You', 'Agent'])
   // The exact numbers: its tooltip, and its name for a screen reader.
   await expect(chip).toHaveAttribute('title', /You: 50m total[\s\S]*Agent: 3h 02m total[\s\S]*Click for day by day/)
   await expect(chip).toHaveAttribute('aria-label', /You: 50m total.*Agent: 3h 02m total/)
