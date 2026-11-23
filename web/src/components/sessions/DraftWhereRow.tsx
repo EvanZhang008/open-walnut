@@ -181,9 +181,9 @@ function WhereField({ draft, where, fieldRef, hostRef, narrow, menu, setMenu }: 
 }
 
 function AutoValue({ where, off, picked }: { where: DraftWhere; off: boolean; picked?: Record<string, string[]> }) {
-  const host = where.hostName(where.hostKey);
+  const hostName = where.hostName(where.hostKey);
   const count = where.ps.source && where.what.kind === 'box' ? packagesWords(where.ps.source, picked) : '';
-  const words = where.sourceGone ? 'No code source' : off ? `No ${where.what.words.replace(/^New /, '')} on ${host}` : where.what.words;
+  const words = where.sourceGone ? 'No code source' : off ? `No ${where.what.words.replace(/^New /, '')} on ${hostName}` : where.what.words;
   return (
     <span className="draft-v6-auto-value" data-testid="draft-v6-auto">
       <span className={`${badge(off ? 'warning' : 'neutral')} draft-v6-auto-tag`}><WhereIcon kind={off ? 'ban' : 'auto'} size={11} />Auto</span>
@@ -276,7 +276,7 @@ function Parts({ parts }: { parts: LinePart[] }) {
 /** The one line under the row: words, then at most two actions. */
 function WhereLineView({ where, narrow, startError, onPickFolder }: { where: DraftWhere; narrow: boolean; startError?: string; onPickFolder: () => void }) {
   const l = where.line;
-  const host = where.hostName(where.hostKey);
+  const hostName = where.hostName(where.hostKey);
   const act = (label: string, onClick: () => void, testId: string) => (
     <button type="button" className="btn btn-link draft-v6-line-act" data-testid={testId}
       onMouseDown={(e) => e.preventDefault()} onClick={onClick}>{label}</button>
@@ -289,22 +289,22 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
     body = (<>
       <WhereIcon kind="ban" />
       <span className="draft-v6-line-text" data-testid="draft-project-start-error">{startError}</span>
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
+      {act(`Pick a folder on ${hostName}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'no-source') {
     tone = ' is-warn';
     body = (<>
       <WhereIcon kind="ban" />
       <span className="draft-v6-line-text">{l.reason}</span>
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
+      {act(`Pick a folder on ${hostName}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'off-host') {
     tone = ' is-warn';
     body = (<>
       <WhereIcon kind="gone" />
-      <span className="draft-v6-line-text">This folder is on {where.hostName(l.other)}, not on {host}.</span>
+      <span className="draft-v6-line-text">This folder is on {where.hostName(l.other)}, not on {hostName}.</span>
       {act(`Run on ${where.hostName(l.other)}`, () => where.pickHost(l.other), 'draft-v6-line-run')}
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
+      {act(`Pick a folder on ${hostName}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'cannot') {
     tone = ' is-warn';
@@ -312,7 +312,7 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
       <WhereIcon kind="ban" />
       <span className="draft-v6-line-text">{l.reason}</span>
       {act(`Run on ${where.hostName(l.projectHost)}`, () => where.pickAuto(l.projectHost), 'draft-v6-line-run')}
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
+      {act(`Pick a folder on ${hostName}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'last-used') {
     body = (<>
@@ -337,7 +337,7 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
     const anchor = where.ps.source?.anchor ? tildePath(where.ps.source.anchor, knownHomeOf(where.ps.source.host === '__local__' ? null : where.ps.source.host)) : '';
     body = (<>
       <WhereIcon kind="auto" />
-      <span className="draft-v6-line-text">Auto on {host}: {where.what.kind === 'git' ? `a new worktree from ${anchor}` : `a fresh workspace from ${anchor}`}.</span>
+      <span className="draft-v6-line-text">Auto on {hostName}: {where.what.kind === 'git' ? `a new worktree from ${anchor}` : `a fresh workspace from ${anchor}`}.</span>
       {act(`Back to ${where.hostName(l.projectHost)}`, () => where.pickAuto(l.projectHost), 'draft-v6-line-back')}
     </>);
   }

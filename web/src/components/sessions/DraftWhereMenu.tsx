@@ -39,7 +39,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
   const listRef = useRef<HTMLDivElement>(null);
   const { hosts: configured } = useWorkingDirs(true);
   const hostKey = where.hostKey;
-  const host = where.hostName(hostKey);
+  const hostName = where.hostName(hostKey);
   const homeOf = (key: string) => knownHomeOf(draftHostFor(key));
   const pathMode = isPathQuery(query);
   const prefix = pathMode && query !== '~' ? liveListingPrefix(typedPathView(query, undefined).state) : '';
@@ -139,10 +139,10 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
               </div>
             ) : !v.ok ? (
               <div className="draft-v6-wm-row is-disabled draft-v6-auto-row is-cannot" role="option" aria-disabled="true" aria-selected={false} data-testid="draft-v6-auto-row" data-state="cannot"
-                title={`Auto cannot run on ${host}: ${autoLine}`}>
+                title={`Auto cannot run on ${hostName}: ${autoLine}`}>
                 <span className="draft-v6-wm-ico is-ban"><WhereIcon kind="ban" size={15} /></span>
                 <span className="draft-v6-wm-text">
-                  <span className="draft-v6-wm-name is-dim"><Title>Auto · {where.what.words} on {host}</Title></span>
+                  <span className="draft-v6-wm-name is-dim"><Title>Auto · {where.what.words} on {hostName}</Title></span>
                   {/* The reason is read whole: it wraps to a second line, never cut. */}
                   <span className="draft-v6-wm-line is-reason">{autoLine}</span>
                   {/* Under the reason, so title and reason keep the row's whole width in a narrow menu. */}
@@ -157,7 +157,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
                 onClick={() => { where.pickAuto(hostKey); onClose(); }}>
                 <span className="draft-v6-wm-ico"><WhereIcon kind="auto" size={15} /></span>
                 <span className="draft-v6-wm-text">
-                  <span className="draft-v6-wm-name"><Title>Auto · {where.what.words} on {host}</Title>{recommended && <span className={`${badge('accent')} draft-v6-tag is-rec`}>recommended</span>}</span>
+                  <span className="draft-v6-wm-name"><Title>Auto · {where.what.words} on {hostName}</Title>{recommended && <span className={`${badge('accent')} draft-v6-tag is-rec`}><span>recommended</span></span>}</span>
                   <span className="draft-v6-wm-line">{autoLine}</span>
                 </span>
                 <span className="draft-v6-wm-right">{where.autoCurrent && <span className="draft-v6-check">{ICONS.ICON_CHECK}</span>}</span>
@@ -186,7 +186,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
                   <span className="draft-v6-wm-ico">/</span>
                   <span className="draft-v6-wm-text">
                     <span className="draft-v6-wm-name is-dim" title={typed.use.path}><Title>Use this path</Title><code>{shownPath(typed.use.path, undefined, 2)}</code></span>
-                    <span className="draft-v6-wm-line">Folder not found on {host}</span>
+                    <span className="draft-v6-wm-line">Folder not found on {hostName}</span>
                   </span>
                 </div>
               ) : (
@@ -200,12 +200,12 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
                 </div>
               )
             )}
-            {typed.children.length > 0 && <div className="draft-v6-wm-group">{typed.children.length} on {host}</div>}
+            {typed.children.length > 0 && <div className="draft-v6-wm-group">{typed.children.length} on {hostName}</div>}
             {typed.children.map((c) => (
               <FolderRow key={c} id={`child:${c}`} rowProps={rowProps} onPick={() => pickFolder(c, hostKey)} name={c.slice(c.lastIndexOf('/') + 1)}
                 path={shownPath(c, homeOf(hostKey))} project={detectProjectForFolder(c, hostKey, where.rows, { home: homeOf(hostKey) })?.project} />
             ))}
-            {typed.loading && !typed.children.length && <div className="draft-v6-wm-empty">Listing on {host}…</div>}
+            {typed.loading && !typed.children.length && <div className="draft-v6-wm-empty">Listing on {hostName}…</div>}
           </>
         )}
         {homeRows.map((h) => (

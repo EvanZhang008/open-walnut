@@ -206,6 +206,10 @@ const SELF_GATED: Record<string, Role> = {
   'components/board/kanban/KanbanLaneHead.tsx|MicInput data-testid="kanban-lane-rename-input"': LEAVE,
   'components/calendar/CalendarTaskList.tsx|MicInput placeholder="Filter…"': FILTER,
   'components/chat/AskWalnutDrawer.tsx|MicInput data-testid="ask-walnut-search"': FILTER,
+  // The new task draft's Where and Project menus: the words narrow the rows (a typed path checks
+  // that folder); Enter picks the highlighted row, nothing sends the words.
+  'components/sessions/DraftWhereMenu.tsx|MicInput data-testid="draft-v6-where-search"': FILTER,
+  'components/sessions/DraftProjectMenu.tsx|MicInput data-testid="draft-v6-project-search"': FILTER,
   // A drawing's name (the title, a list row): Enter or leaving the box renames it, Escape keeps the old name.
   'components/drawing/DrawingWorkspace.tsx|MicInput aria-label=label': LEAVE,
   // The library catalog's search narrows the list of libraries as the words come; nothing sends them.
