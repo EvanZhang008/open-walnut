@@ -4346,6 +4346,8 @@ export class DaemonConnection {
 
   disconnect(opts: { keepSshMaster?: boolean } = {}): void {
     this._destroyed = true
+    // A direct dial in flight is doomed (dialDirect ends it): nobody joins it from now on.
+    if (this._directDial) { this._abandonedDial = this._directDial; this._directDial = null }
     this._bootStartKeeper?.stop()
     this._netUpdaterInstance?.stop()
     this.setConnected(false)
@@ -7934,6 +7936,14 @@ export class DaemonConnection {
       if (!this._connected) throw new Error(`Connection to ${this.hostKey} is still reconnecting`)
       return
     }
+    // A dial a disconnect() abandoned ends first (with "was closed while it connected"); a caller
+    // after the disconnect then dials fresh instead of joining that doomed dial. Never two dials
+    // at once on one instance: both would set `this.ws`.
+    while (this._abandonedDial) {
+      const old = this._abandonedDial
+      await old.catch(() => {})
+      if (this._abandonedDial === old) this._abandonedDial = null
+    }
     if (this._directDial) return this._directDial
     // A dial after disconnect() clears the destroyed mark, as connect() does: a
     // connected instance still marked destroyed ignored its next socket close and
@@ -7942,8 +7952,9 @@ export class DaemonConnection {
     // Under _connecting, a reconnect timer that fires waits a step (scheduleReconnect).
     this._connecting = true
     const dial: Promise<void> = this.dialDirect(wsUrl).finally(() => {
-      this._connecting = false
       if (this._directDial === dial) this._directDial = null
+      // A dial the disconnect abandoned leaves `_connecting` to the dial after it (disconnect cleared it).
+      if (this._abandonedDial !== dial) this._connecting = false
     })
     this._directDial = dial
     return dial
@@ -7951,6 +7962,8 @@ export class DaemonConnection {
 
   /** The connectDirect dial running now: callers and reconnectNow join it, never dial beside it. */
   private _directDial: Promise<void> | null = null
+  /** The dial a disconnect() came during: it ends on its own, and the next connectDirect waits for that. */
+  private _abandonedDial: Promise<void> | null = null
 
   private async dialDirect(wsUrl: string): Promise<void> {
     this._dialledDirect = true

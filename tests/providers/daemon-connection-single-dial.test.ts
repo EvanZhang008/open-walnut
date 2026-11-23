@@ -229,4 +229,23 @@ describe('DaemonConnection: one connection, one dial', () => {
     await expect(conn.send('ping', {}, 2_000)).resolves.toMatchObject({ ok: true })
     conn.disconnect()
   })
+
+  it('a dial asked for right after a disconnect, while the doomed dial still waits, dials fresh and links', async () => {
+    const daemon = await startDaemon(300, 'replaced')
+    daemons.push(daemon)
+    const conn = new DaemonConnection('devbox', null)
+    const { urls: dials, dialled } = watchDials()
+    const first = conn.connectDirect(daemon.url)
+    const ended = first.then(() => 'connected', (err: Error) => err.message)
+    await dialled(1)
+    await until(() => daemon.sockets.length > 0)
+    conn.disconnect()
+    // Before the doomed dial settles: this caller gets a link of its own, not that dial's error.
+    await conn.connectDirect(daemon.url)
+    expect(await ended).toMatch(/was closed while it connected/)
+    expect(conn.connected).toBe(true)
+    expect(dials).toEqual([daemon.url, daemon.url])
+    await expect(conn.send('ping', {}, 2_000)).resolves.toMatchObject({ ok: true })
+    conn.disconnect()
+  })
 })
