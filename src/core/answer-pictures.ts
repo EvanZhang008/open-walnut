@@ -85,6 +85,20 @@ export async function picturesHeader(names: readonly string[] | undefined): Prom
 }
 
 /**
+ * Which answer of an AskUserQuestion answer set its pictures go in front of: the LAST question the
+ * tool asked that has an answer (the card offers its pictures beside that one), else the last key.
+ * Every path that names an answer's pictures picks with this (the Mac's withAnswerPictures, the
+ * companion's cloud-images.ts withAnswerImagePaths).
+ */
+export function pictureQuestion(answers: Record<string, string>, toolInput: Record<string, unknown> | undefined): string | undefined {
+  const keys = Object.keys(answers);
+  const asked = Array.isArray(toolInput?.questions)
+    ? (toolInput!.questions as Array<{ question?: unknown }>).map((q) => q?.question).filter((q): q is string => typeof q === 'string')
+    : [];
+  return [...asked].reverse().find((q) => q in answers) ?? keys[keys.length - 1];
+}
+
+/**
  * An AskUserQuestion answer set with its pictures in it: the pictures saved, and the images header
  * naming them put in front of the LAST question's answer (the card offers its pictures beside that
  * one), so they reach the model in the same tool result as the words. `prepare` makes the header
@@ -102,10 +116,7 @@ export async function withAnswerPictures(
   const names = await saveAnswerPictures(pictures);
   const header = await picturesHeader(names);
   if (!header) return { answers, pictures: 0 };
-  const asked = Array.isArray(toolInput?.questions)
-    ? (toolInput!.questions as Array<{ question?: unknown }>).map((q) => q?.question).filter((q): q is string => typeof q === 'string')
-    : [];
-  const last = [...asked].reverse().find((q) => q in answers) ?? keys[keys.length - 1];
+  const last = pictureQuestion(answers, toolInput)!;
   const shown = await prepare(header).catch(() => header);
   return { answers: { ...answers, [last]: `${shown}${answers[last]}` }, pictures: header.split('\n').filter((l) => l.startsWith('- ')).length };
 }

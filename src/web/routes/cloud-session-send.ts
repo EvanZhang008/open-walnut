@@ -213,7 +213,7 @@ async function cloudSendOnce(
   }
   // A session its host judges, the Mac away: past the stop gate and the ledger above, it goes
   // through the host's listener link only (session-channel/companion-host-ops.ts hostRoute).
-  if (await sendThroughHost(res, sessionId, text, images, messageId, prior?.state, order.answerBy)) return
+  if (await sendThroughHost(res, sessionId, text, images, messageId, prior?.state, order)) return
   // A relay of an earlier try may sit in the Mac's queue: only the relay may
   // deliver this message from now on, so a bank of it is relay-only too.
   const relayedBefore = prior?.state === 'maybe-relayed'
@@ -482,20 +482,24 @@ async function cloudSendOnce(
  * id later, is queued once there), its outcome recorded in the ledger like a relay's. Its pictures are
  * saved on the host first, as a legacy send's are (companion-host-ops.ts sendViaHost). Never the
  * daemon's direct send behind its judge's back: with its link down, a refusal the phone shows.
+ * ORDER: an earlier send of the session still out (a picture send moving its pictures) keeps this
+ * one off the host, or the newer words would reach the CLI first: a retryable refusal, as nothing
+ * here can hold it behind the earlier one; the phone's retry of the same id goes once that is in.
  * False: not this path.
  */
 async function sendThroughHost(
   res: Response, sessionId: string, text: string, images: SessionImage[], messageId: string,
-  prior: import('../../core/send-queue.js').SendOutcomeState | undefined, answerBy: number,
+  prior: import('../../core/send-queue.js').SendOutcomeState | undefined, order: { behind: boolean; answerBy: number },
 ): Promise<boolean> {
   const ops = await import('../../core/session-channel/companion-host-ops.js')
   const route = await ops.hostRoute(sessionId)
   if (route.kind === 'none') return false
   if (route.kind === 'refuse') { sendError(res, route.status, route.code, route.message); return true }
+  if (order.behind) { sendError(res, 503, 'bridge_offline', 'An earlier message to this session is still on its way; retrying automatically'); return true }
   const queue = await import('../../core/send-queue.js')
   // A direct delivery of it may have run (send-direct-gate.ts): sending it again could run it twice.
   if (prior === 'direct-intent') { sendError(res, 409, 'delivery_unknown', queue.unknownFateMessage('the session\'s host')); return true }
-  const a = await ops.sendViaHost(route.t, { text, messageId, images, timeoutMs: Math.max(1_000, answerBy - Date.now()) })
+  const a = await ops.sendViaHost(route.t, { text, messageId, images, timeoutMs: Math.max(1_000, order.answerBy - Date.now()) })
   if (a.status === 202) await queue.markSendOutcome(sessionId, messageId, 'relayed')
   else if (a.maybeTaken) await queue.markSendOutcome(sessionId, messageId, 'maybe-relayed')
   res.status(a.status).json(a.body)

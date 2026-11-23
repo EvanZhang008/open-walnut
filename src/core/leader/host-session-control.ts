@@ -134,13 +134,13 @@ export function createHostSessionControl(deps: HostControlDeps) {
     }
     const bad = list.findIndex((i) => !i || typeof (i as { data?: unknown }).data !== 'string' || typeof (i as { mediaType?: unknown }).mediaType !== 'string')
     if (bad >= 0) return { ok: false, answer: answer(400, 'image_invalid', `Picture ${bad + 1} of ${list.length} has no picture data (it needs base64 \`data\` and a \`mediaType\`).`) }
-    const { saveImagesViaBridge, withAnswerImagePaths, CloudImageError } = await import('../sessions/cloud-images.js')
+    const { saveImagesViaBridge, withAnswerImagePaths, imageSaveRefusal } = await import('../sessions/cloud-images.js')
     let paths: string[]
     try {
-      paths = await saveImagesViaBridge(t.host, t.row.id, list as Array<{ data: string; mediaType: string }>, undefined, deps.request)
+      paths = await saveImagesViaBridge(t.host, t.row.id, list as Array<{ data: string; mediaType: string }>, t.row.host_label, deps.request)
     } catch (err) {
-      if (err instanceof CloudImageError) return { ok: false, answer: answer(err.code === 'images_need_daemon_upgrade' ? 400 : 502, err.code, err.message) }
-      return { ok: false, answer: answer(503, 'bridge_offline', `Could not reach ${t.host}: ${err instanceof Error ? err.message : String(err)}`) }
+      const r = imageSaveRefusal(err, t.host, t.row.host_label)
+      return { ok: false, answer: answer(r.status, r.code, r.message) }
     }
     return { ok: true, answers: withAnswerImagePaths(answers, paths), pictures: paths.length }
   }

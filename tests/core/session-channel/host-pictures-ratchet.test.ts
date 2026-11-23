@@ -29,6 +29,19 @@ function walk(dir: string): string[] {
 const code = (file: string): string =>
   fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
+/** The argument text of every call `name(...)` in `text`, parentheses balanced. */
+function callArgs(text: string, name: string): string[] {
+  const out: string[] = []
+  for (const m of text.matchAll(new RegExp(`\\b${name}\\(`, 'g'))) {
+    const from = (m.index ?? 0) + m[0].length
+    let depth = 1
+    let at = from
+    for (; at < text.length && depth > 0; at++) depth += text[at] === '(' ? 1 : text[at] === ')' ? -1 : 0
+    out.push(text.slice(from, at - 1))
+  }
+  return out
+}
+
 const HOST_OPS = 'src/core/session-channel/companion-host-ops.ts'
 const routed = walk('src').filter((f) => f !== HOST_OPS && /\bhostRoute\(/.test(code(f))).sort()
 
@@ -44,10 +57,12 @@ describe('pictures for a host-judged session are carried, never refused for want
   })
 
   it('each send through the host hands it the pictures, and each answer the body that holds them', () => {
-    const calls = routed.flatMap((f) => [...code(f).matchAll(/\bsendViaHost\(([^)]*)\)/g)].map((m) => [f, m[1]!] as const))
+    const calls = routed.flatMap((f) => callArgs(code(f), 'sendViaHost').map((a) => [f, a] as const))
     expect(calls.length).toBeGreaterThan(0)
     for (const [f, args] of calls) expect(args, `${f}: sendViaHost(${args})`).toMatch(/\bimages\b/)
-    const answers = routed.flatMap((f) => [...code(f).matchAll(/\bpermissionViaHost\(([^)]*)\)/g)].map((m) => [f, m[1]!] as const))
+    // The scan reads a whole argument list, nested calls included (review round 1, N4).
+    expect(callArgs('f(a, g(b), { c: h(d, e) })', 'f')).toEqual(['a, g(b), { c: h(d, e) }'])
+    const answers = routed.flatMap((f) => callArgs(code(f), 'permissionViaHost').map((a) => [f, a] as const))
     expect(answers.length).toBeGreaterThan(0)
     for (const [f, args] of answers) expect(args, `${f}: permissionViaHost(${args})`).toMatch(/\bbody\b/)
   })
@@ -55,6 +70,7 @@ describe('pictures for a host-judged session are carried, never refused for want
   it('companion-host-ops.ts saves pictures by the one shared loop, before the words go', () => {
     const text = code(HOST_OPS)
     expect(text).toMatch(/\bsaveImagesViaBridge\(/)
+    expect(text.indexOf('picturesOnHost(t, o.images)')).toBeGreaterThan(-1)
     expect(text.indexOf('picturesOnHost(t, o.images)')).toBeLessThan(text.indexOf("'/host-api/sessions/send'"))
   })
 })

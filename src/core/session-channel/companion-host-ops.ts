@@ -14,7 +14,10 @@
  *                   `image.save` over the host's own bridge, the way a phone picture for a session on
  *                   another machine has always gone (sessions/cloud-images.ts): the same folder, names,
  *                   caps and header, so the words reach the CLI exactly as a legacy send's do. Only
- *                   the small words ride the listener link; no picture rides it.
+ *                   the small words ride the listener link; no picture rides it. A host whose link is
+ *                   up but whose bridge is not gets a retryable refusal, never a hold: as a text send
+ *                   whose link is down, the phone's retry ladder carries it (no held-send drain runs
+ *                   through a host's link)
  *   refuse          a session a host claimed, the Mac away, but its link down (or sessions turned
  *                   off for the companion): a clear refusal (hostRoute), never the daemon's direct
  *                   path around its judge
@@ -196,41 +199,81 @@ async function call(t: OperatedSession, path: string, body: unknown, timeoutMs: 
 }
 
 /**
+ * The files a message's pictures were saved as on its host, by session and message id: a retry of
+ * the same id (its answer was lost, ledger `maybe-relayed`) names the same files without moving
+ * the pictures again, so it is a words-only call the host's id-keyed queue dedupes, and it still
+ * reaches the host while the host's bridge is down. Memory only (a restarted companion saves them
+ * again), kept SAVED_PICTURES_MS and at most SAVED_PICTURES_MAX entries.
+ */
+const savedPictures = new Map<string, { paths: string[]; at: number }>()
+const SAVED_PICTURES_MS = 30 * 60_000
+const SAVED_PICTURES_MAX = 500
+/** The host's time to answer a send after its pictures took the window: at least this. */
+export const SEND_AFTER_PICTURES_FLOOR_MS = 3_000
+
+function keptPictures(key: string, count: number, now = Date.now()): string[] | null {
+  for (const [k, v] of savedPictures) if (now - v.at > SAVED_PICTURES_MS) savedPictures.delete(k)
+  const kept = savedPictures.get(key)
+  return kept && kept.paths.length === count ? kept.paths : null
+}
+
+function keepPictures(key: string, paths: string[]): void {
+  savedPictures.delete(key)
+  savedPictures.set(key, { paths, at: Date.now() })
+  while (savedPictures.size > SAVED_PICTURES_MAX) savedPictures.delete(savedPictures.keys().next().value!)
+}
+
+/** Tests only. */
+export function _resetSavedPicturesForTesting(): void {
+  savedPictures.clear()
+}
+
+/**
  * Pictures for a session its host runs, saved on that host before its words go (saveImagesViaBridge:
  * the daemon's narrow `image.save`, its folder, its names and its caps). The bridge is the host's own:
  * its token is bound to the alias the listener link stands for (bridge-registry.ts tokenBoundAlias),
- * so a picture lands only on the session's host. A picture that cannot be saved sends nothing: a
- * reason a retry will not fix is a 400 with its code, as a legacy send answers it; a host whose bridge
- * did not answer is `bridge_offline`, which the phone retries with the same message id.
+ * so a picture lands only on the session's host. A picture that cannot be saved sends nothing
+ * (cloud-images.ts imageSaveRefusal: the legacy codes).
  */
 async function picturesOnHost(t: OperatedSession, images: SessionImage[]): Promise<{ ok: true; paths: string[] } | { ok: false; answer: HostAnswer }> {
-  const [{ saveImagesViaBridge, CloudImageError }, { hostDisplayName }] = await Promise.all([import('../sessions/cloud-images.js'), import('../hosts/host-display-name.js')])
+  const { saveImagesViaBridge, imageSaveRefusal } = await import('../sessions/cloud-images.js')
   try {
     return { ok: true, paths: await saveImagesViaBridge(t.alias, t.row.claudeSessionId, images, t.row.host_label) }
   } catch (err) {
-    if (err instanceof CloudImageError) return { ok: false, answer: v1Error(400, err.code, err.message) }
-    return { ok: false, answer: v1Error(503, 'bridge_offline', `${hostDisplayName(t.alias, t.row.host_label)} could not take the pictures right now; retrying automatically`) }
+    const r = imageSaveRefusal(err, t.alias, t.row.host_label)
+    return { ok: false, answer: v1Error(r.status, r.code, r.message) }
   }
 }
 
 /**
  * A phone's send, queued on the host under the phone's message id (a retry is queued once). Its
- * pictures are saved on the host first and named at the head of the words (withImagePaths), as a
- * legacy send's are; `timeoutMs` is the host's time to answer the send itself, after them.
+ * pictures are saved on the host first (or named again from an earlier try of the same id) and
+ * named at the head of the words (withImagePaths), as a legacy send's are. `timeoutMs` is the
+ * send's window from now; the host's call gets what is left of it after the pictures, never less
+ * than SEND_AFTER_PICTURES_FLOOR_MS.
  */
 export async function sendViaHost(t: OperatedSession, o: { text: string; messageId: string; timeoutMs: number; images?: SessionImage[] }): Promise<HostAnswer> {
   const sid = t.row.claudeSessionId
+  const answerBy = Date.now() + o.timeoutMs
   let text = o.text
+  let timeoutMs = o.timeoutMs
   if (o.images?.length) {
-    const saved = await picturesOnHost(t, o.images)
-    if (!saved.ok) return saved.answer
-    text = (await import('../sessions/cloud-images.js')).withImagePaths(text, saved.paths)
+    const key = `${sid}\u0000${o.messageId}`
+    let paths = keptPictures(key, o.images.length)
+    if (!paths) {
+      const saved = await picturesOnHost(t, o.images)
+      if (!saved.ok) return saved.answer
+      paths = saved.paths
+      keepPictures(key, paths)
+    }
+    text = (await import('../sessions/cloud-images.js')).withImagePaths(text, paths)
+    timeoutMs = Math.max(SEND_AFTER_PICTURES_FLOOR_MS, answerBy - Date.now())
   }
   const body = {
     sessionId: sid, message: text, ...(t.row.taskId ? { taskId: t.row.taskId } : {}),
     queued: [{ id: o.messageId, message: text, sentBy: 'person' as const }], busSource: 'mobile',
   }
-  const r = await call(t, '/host-api/sessions/send', body, o.timeoutMs)
+  const r = await call(t, '/host-api/sessions/send', body, timeoutMs)
   return r.ok ? { status: 202, body: { messageId: o.messageId, viaHost: true } } : r.answer
 }
 
@@ -262,12 +305,18 @@ export async function permissionViaHost(t: OperatedSession, b: Record<string, un
   let given = answers as Record<string, string> | undefined
   let pictures = 0
   if (!acp && allow && given && Object.keys(given).length > 0 && (b.images !== undefined || b.imageRefs !== undefined)) {
+    // The prompt as the host last told it: an answer to one it no longer holds moves no picture
+    // (the host's own proof below stays the authority for every other answer).
+    const held = Array.isArray(t.live?.pendingPermissionRequests) ? t.live!.pendingPermissionRequests as Array<{ requestId?: unknown; input?: unknown }> : null
+    const prompt = held?.find((p) => p?.requestId === requestId)
+    if (held && !prompt) return v1Error(404, 'not_found', 'Permission request not found or already resolved')
     const [{ inlineAnswerPictures }, { withAnswerImagePaths }] = await Promise.all([import('../answer-pictures.js'), import('../sessions/cloud-images.js')])
     const inline = await inlineAnswerPictures(b)
     if (inline.length > 0) {
       const saved = await picturesOnHost(t, inline)
       if (!saved.ok) return saved.answer
-      given = withAnswerImagePaths(given, saved.paths)
+      const input = prompt?.input && typeof prompt.input === 'object' ? prompt.input as Record<string, unknown> : undefined
+      given = withAnswerImagePaths(given, saved.paths, input)
       pictures = saved.paths.length
     }
   }

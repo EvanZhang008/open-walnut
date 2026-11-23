@@ -28,6 +28,8 @@ const k = vi.hoisted(() => ({
   route: { kind: 'none' } as Record<string, unknown>,
   sends: [] as Array<{ text: string; messageId: string; images?: unknown[] }>,
   answer: { status: 202 } as { status: number; maybeTaken?: true },
+  /** A send whose words hold here until released (a picture send still moving its pictures). */
+  gate: null as Promise<void> | null,
 }))
 vi.mock('../../../src/core/session-projection.js', async (orig) => ({
   ...(await orig<object>()),
@@ -42,6 +44,7 @@ vi.mock('../../../src/core/session-channel/companion-host-ops.js', async (orig) 
   // The same answer for a caller that asks only whether the host operates it.
   hostOperated: async () => (k.route.kind === 'operated' ? k.route.t : null),
   sendViaHost: async (_t: unknown, o: { text: string; messageId: string; images?: unknown[] }) => {
+    if (o.images?.length && k.gate) await k.gate
     k.sends.push({ text: o.text, messageId: o.messageId, ...(o.images ? { images: o.images } : {}) })
     return k.answer.status === 202 ? { status: 202, body: { messageId: o.messageId, viaHost: true } }
       : { status: k.answer.status, body: { error: { code: 'bridge_offline', message: 'no answer' } }, ...(k.answer.maybeTaken ? { maybeTaken: true } : {}) }
@@ -68,6 +71,7 @@ beforeEach(async () => {
   k.route = operated
   k.sends.length = 0
   k.answer = { status: 202 }
+  k.gate = null
 })
 
 describe('a send through the host keeps the gates of every other path (M1)', () => {
@@ -115,6 +119,25 @@ describe('never the daemon\'s direct send (M2)', () => {
     expect((await readSendOutcome(SID, 'qm-mobile-b1'))?.state).toBe('relayed')
     expect(directCalls()).toEqual([])
   })
+
+  it('a later send never overtakes a picture send still moving its pictures (review round 1 of land 8, S1)', async () => {
+    const png = { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', mediaType: 'image/png' }
+    let release!: () => void
+    k.gate = new Promise((r) => { release = r })
+    const a = send({ text: 'what is wrong in these?', messageId: 'qm-mobile-o1', images: [png, png, png] }).then((r) => r)
+    await new Promise((r) => setTimeout(r, 200))
+    // B waits for A to its own deadline, then is refused retryable: never queued on the host first.
+    const b = await send({ text: 'also check the log', messageId: 'qm-mobile-o2' })
+    expect(b.status, JSON.stringify(b.body)).toBe(503)
+    expect(b.body.error.code).toBe('bridge_offline')
+    expect(k.sends).toEqual([])
+    expect(await readSendOutcome(SID, 'qm-mobile-o2')).toBeNull()
+    release()
+    expect((await a).status).toBe(202)
+    // The phone's retry of B, once A is in: queued after it.
+    expect((await send({ text: 'also check the log', messageId: 'qm-mobile-o2' })).status).toBe(202)
+    expect(k.sends.map((x) => x.messageId)).toEqual(['qm-mobile-o1', 'qm-mobile-o2'])
+  }, 30_000)
 
   it('the host\'s link down: a 503 bridge_offline, no relay and no direct send', async () => {
     k.route = { kind: 'refuse', status: 503, code: 'bridge_offline', message: 'devbox can\'t be reached right now' }

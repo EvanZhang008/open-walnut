@@ -22,6 +22,7 @@ import { SEND_QUEUE_DIR } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { hostDisplayName } from '../hosts/host-display-name.js';
 import { IMAGES_ATTACHED_LINE, attachmentHeaderBlock } from '../../lib/attachment-headers.js';
+import { pictureQuestion } from '../answer-pictures.js';
 
 export interface SessionImage { data: string; mediaType: string }
 
@@ -79,12 +80,25 @@ export function withImagePaths(text: string, savedPaths: string[]): string {
   return `${attachmentHeaderBlock('images', savedPaths)}${text}`;
 }
 
-/** An answer set with the saved pictures named in front of its LAST answer (the card offers them beside that one). */
-export function withAnswerImagePaths(answers: Record<string, string>, savedPaths: string[]): Record<string, string> {
-  const keys = Object.keys(answers);
-  const last = keys[keys.length - 1];
+/**
+ * An answer set with the saved pictures named in front of the answer the Mac would put them on
+ * (answer-pictures.ts pictureQuestion: the last asked question with an answer, by `toolInput`).
+ */
+export function withAnswerImagePaths(answers: Record<string, string>, savedPaths: string[], toolInput?: Record<string, unknown>): Record<string, string> {
+  const last = pictureQuestion(answers, toolInput);
   if (last === undefined || savedPaths.length === 0) return answers;
   return { ...answers, [last]: withImagePaths(answers[last]!, savedPaths) };
+}
+
+/**
+ * How a picture that could not be saved reads to the phone, the same on every companion path (a
+ * send, a prompt's answer, through the host or while the companion leads it): a CloudImageError is
+ * a 400 with its code (a retry will not fix it), its sentence in the host's own name; anything else
+ * is the host's bridge not answering, a 503 `bridge_offline` the phone retries with the same id.
+ */
+export function imageSaveRefusal(err: unknown, host: string, label?: unknown): { status: number; code: string; message: string } {
+  if (err instanceof CloudImageError) return { status: 400, code: err.code, message: err.message };
+  return { status: 503, code: 'bridge_offline', message: `${hostDisplayName(host, label)} could not take the pictures right now; retrying automatically` };
 }
 
 /**

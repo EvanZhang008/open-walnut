@@ -24,7 +24,7 @@ const k = vi.hoisted(() => ({
   upserts: [] as any[], macHere: false, off: false, copy: [] as Array<Record<string, unknown>>,
   // The host's bridge as the companion's image saves reach it (cloud-images.ts saveImagesViaBridge).
   bridge: [] as Array<[string, string, Record<string, unknown>]>,
-  bridgeAnswer: (_n: number): Record<string, unknown> | Error => ({ ok: true }),
+  bridgeAnswer: (_n: number): Record<string, unknown> | Error | Promise<Record<string, unknown>> => ({ ok: true }),
 }))
 vi.mock('../../../src/web/routes/events-v1.js', () => ({ handleBridgeMobileEvent: (_k: string, row: unknown) => { k.upserts.push(row) } }))
 vi.mock('../../../src/web/ws/bridge-registry.js', async (orig) => ({
@@ -32,7 +32,7 @@ vi.mock('../../../src/web/ws/bridge-registry.js', async (orig) => ({
   bridgeForHost: () => ({ connected: k.macHere }),
   bridgeRequest: async (host: string, cmd: string, params: Record<string, unknown>) => {
     k.bridge.push([host, cmd, params])
-    const a = k.bridgeAnswer(k.bridge.length)
+    const a = await k.bridgeAnswer(k.bridge.length)
     if (a instanceof Error) throw a
     return a
   },
@@ -47,7 +47,7 @@ const upserts = k.upserts
 import { EventEmitter } from 'node:events'
 import { attachSse, closeAllSseChannels } from '../../../src/web/sse-channels.js'
 import { _resetCompanionListenerForTesting, attachHostListener, forgetHostListener, LINK_GRACE_MS, listenedRow, standingRow, standingRows } from '../../../src/core/session-channel/companion-listener.js'
-import { checkMacAway, hostOperated, hostRoute, interruptViaHost, joinListenedRows, listenedDetail, permissionViaHost, sendViaHost, streamedByListener } from '../../../src/core/session-channel/companion-host-ops.js'
+import { _resetSavedPicturesForTesting, checkMacAway, hostOperated, hostRoute, interruptViaHost, joinListenedRows, listenedDetail, permissionViaHost, sendViaHost, streamedByListener } from '../../../src/core/session-channel/companion-host-ops.js'
 
 const WALNUT = 'ab'.repeat(16)
 const row = (sid: string, over: Record<string, unknown> = {}) => ({ claudeSessionId: sid, taskId: 't1', judge: 'host', host: 'devbox', process_status: 'idle', startedAt: 'a', lastActiveAt: 'b', ...over })
@@ -87,6 +87,7 @@ beforeEach(() => {
   closeAllSseChannels()
   sse.length = 0; upserts.length = 0; k.macHere = false; k.off = false; k.copy = []
   k.bridge.length = 0
+  _resetSavedPicturesForTesting()
   k.bridgeAnswer = (n) => ({ ok: true, path: `/home/dev/.walnut/images/mobile/pic-${n}.png` })
   phoneOn(['s1', 'b1', 'zz'])
 })
@@ -283,6 +284,75 @@ describe('pictures for a host\'s session go as a legacy send\'s do (land 8)', ()
     expect(answer(200, { ok: true, value: true }).body.args).toEqual(['r2', false])
     expect((await q).status).toBe(200)
     expect(k.bridge).toHaveLength(2)
+  })
+})
+
+describe('pictures through the host, review round 1 of land 8', () => {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const pics = (n: number) => Array.from({ length: n }, () => ({ data: PNG, mediaType: 'image/png' }))
+  const header = (paths: string[]) => `[Images attached \u2014 use the Read tool to view them]\n${paths.map((p) => `- ${p}`).join('\n')}\n\n`
+  async function operated(live?: Record<string, unknown>) {
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    if (live) l.frame({ ch: 'sf', op: 'facts', recs: [{ seq: 2, sid: 's1', name: 'live', data: { state: live } }] })
+    await settle()
+    const calls = () => l.sent.filter((f) => f.op === 'call')
+    const answer = (status: number, body: unknown) => {
+      const call = calls().pop()
+      l.frame({ ch: 'door', op: 'reply', id: call.id, status, body })
+      return call
+    }
+    return { l, t: listenedRow('s1')!, answer, calls }
+  }
+
+  it('S1: the host\'s call gets what is left of the window after the pictures, with a floor, not a whole window more', async () => {
+    const { t } = await operated()
+    k.bridgeAnswer = (n) => new Promise((r) => setTimeout(() => r({ ok: true, path: `/x/${n}.png` }), 4_000))
+    const started = Date.now()
+    // The host never answers: the send ends at the floor after the pictures (4 s + 3 s), not 4 s + 5 s.
+    const a = await sendViaHost(t, { text: 'slow', messageId: 'qm-mobile-s1', timeoutMs: 5_000, images: pics(1) })
+    const took = Date.now() - started
+    expect(a).toMatchObject({ status: 503, maybeTaken: true })
+    expect(took).toBeGreaterThanOrEqual(6_900)
+    expect(took).toBeLessThan(8_200)
+  }, 20_000)
+
+  it('S2: a retry of an id whose answer was lost names the same files, moves no picture, and reaches the host with its bridge down', async () => {
+    const { t, answer, calls } = await operated()
+    const first = await sendViaHost(t, { text: 'look', messageId: 'qm-mobile-s2', timeoutMs: 50, images: pics(2) })
+    expect(first).toMatchObject({ status: 503, maybeTaken: true })
+    expect(k.bridge).toHaveLength(2)
+    const words = calls()[0].body.message
+    k.bridgeAnswer = () => new Error('bridge for devbox is not connected')
+    const p = sendViaHost(t, { text: 'look', messageId: 'qm-mobile-s2', timeoutMs: 1000, images: pics(2) })
+    await settle()
+    expect(k.bridge).toHaveLength(2)
+    expect(answer(200, { ok: true }).body.message).toBe(words)
+    expect(await p).toEqual({ status: 202, body: { messageId: 'qm-mobile-s2', viaHost: true } })
+    // Another message moves its own pictures.
+    k.bridgeAnswer = (n) => ({ ok: true, path: `/y/${n}.png` })
+    const q = sendViaHost(t, { text: 'more', messageId: 'qm-mobile-s2b', timeoutMs: 1000, images: pics(1) })
+    await settle()
+    answer(200, { ok: true })
+    expect((await q).status).toBe(202)
+    expect(k.bridge).toHaveLength(3)
+  }, 20_000)
+
+  it('N1: an answer\'s pictures go beside the last asked question with an answer, whatever order the phone sent', async () => {
+    const input = { questions: [{ question: 'Which?' }, { question: 'When?' }] }
+    const { t, answer } = await operated({ pendingPermissionRequests: [{ requestId: 'r1', toolName: 'AskUserQuestion', input }] })
+    const p = permissionViaHost(t, { requestId: 'r1', allow: true, answers: { 'When?': 'Friday', 'Which?': 'A' }, images: pics(1) }, 1000)
+    await settle()
+    expect(answer(200, { ok: true, value: true }).body.args[3]).toEqual({ answers: { 'When?': `${header(['/home/dev/.walnut/images/mobile/pic-1.png'])}Friday`, 'Which?': 'A' } })
+    expect((await p).body).toMatchObject({ pictures: 1 })
+  })
+
+  it('N2: an answer with pictures to a prompt the host no longer holds moves no picture', async () => {
+    const { t, calls } = await operated({ pendingPermissionRequests: [{ requestId: 'r9', toolName: 'AskUserQuestion', input: {} }] })
+    const a = await permissionViaHost(t, { requestId: 'r1', allow: true, answers: { 'When?': 'Friday' }, images: pics(2) }, 1000)
+    expect(a.status).toBe(404)
+    expect(k.bridge).toEqual([])
+    expect(calls()).toEqual([])
   })
 })
 
