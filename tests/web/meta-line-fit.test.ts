@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lineOf, titleTooCut, wrapMarks } from '../../web/src/utils/meta-line-fit';
+import { lineOf, wrapMarks } from '../../web/src/utils/meta-line-fit';
 
 const box = (top: number, left: number, height = 16, width = 30) => ({ top, left, height, width });
 
@@ -29,10 +29,3 @@ describe('wrapMarks: the word that opens a wrapped line, and how far its line mo
   });
 });
 
-describe('titleTooCut: a leader title cut below six letters is hidden', () => {
-  it('hides a cut title under three font sizes wide, keeps a whole or wider one', () => {
-    expect(titleTooCut(22, 11, true)).toBe(true);
-    expect(titleTooCut(40, 11, true)).toBe(false);
-    expect(titleTooCut(22, 11, false)).toBe(false);
-  });
-});

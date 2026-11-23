@@ -59,8 +59,6 @@ const NOT_A_ROW: Record<string, string> = {
   // the Leader flyout's heading.
   'components/calendar/CalendarItemPopover.tsx cal-item-title-static': 'the heading of an open popover, not a row; it peeks when hovered itself',
   'components/sessions/SessionBrowserCard.tsx session-browser-tab-label': 'a web page tab of the agent browser, not a task',
-  // The Worker pill's leader name is metadata (`.wn-meta`, text-fit.css), cut only when the row has no room.
-  'components/tasks/SubtaskPill.tsx wn-meta': 'a pill drawn inside a task row, which is marked where the row is built',
 };
 
 describe('a task row whose text is cut off expands as a whole', () => {
@@ -142,12 +140,11 @@ describe('all truncation peeks widen the real row, never taller, never cloned te
     expect(read('components/inbox/LetterEnvelopeRow.tsx')).toContain('className="hib-subject hib-subject-open wn-title"');
     const sites = findTaskTitleSites(WEB_SRC, /\bletter\.subject\b/);
     expect(sites.filter((s) => !s.inRow).map((s) => `${s.file}:${s.line}`)).toEqual([]);
-    const worker = read('components/tasks/SubtaskPill.tsx');
-    expect(worker).toContain('className="task-worker-parent wn-meta"');
     // The acceptance of both: the shared flows in truncation-peek-helpers.ts.
     const browser = path.resolve(__dirname, '../e2e/browser');
     const helpers = fs.readFileSync(path.join(browser, 'truncation-peek-helpers.ts'), 'utf8');
-    expect(helpers).toContain("openInRow(row.locator('.task-worker-parent'))");
+    expect(helpers).toContain("openInRow(row.locator('.status-card-project'))");
+    expect(helpers).toContain('the pill is the word alone');
     expect(helpers).toContain('the metadata stays above the title');
     const acceptance = fs.readFileSync(path.join(browser, 'inbox-card-peek.spec.ts'), 'utf8');
     expect(acceptance).toContain('expectWorkerRowWidens(');

@@ -135,8 +135,9 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
           setOpen((v) => !v);
         }}
       >
+        {/* The word alone (2026-11-23, the user: the leader's name is too long, a worker shows
+            only "Worker"): the hover and the click's team list name the leader. */}
         <span className="task-pill-long">Worker</span>
-        {parentTitle && <span className="task-worker-parent wn-meta" data-testid="worker-parent-title">{parentTitle}</span>}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(

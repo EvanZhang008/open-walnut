@@ -57,15 +57,6 @@
     flex: none;
     max-width: 100%;
   }
-  /* Only names give up letters: the project (above) and the Worker's leader title, which takes
-     what the line leaves, down to its word ("Worker", in a tight column too), and is hidden
-     rather than cut under six letters (meta-line-fit.ts). */
-  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .todo-item-subtask-pill {
-    flex: 1 1 0;
-    min-width: 8ch;
-    max-width: max-content;
-  }
-  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .todo-item-subtask-pill[data-title-cut] { flex: none; min-width: 0; }
   /* On this line the tags are one word, whole: their "·" and the tags stay together on one line
      (the list's tags wrap to lines of their own elsewhere), read grey like the others, and move
      to the next line rather than cut to a fragment ("P5…"). */

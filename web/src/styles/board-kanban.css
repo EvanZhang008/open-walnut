@@ -399,7 +399,7 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
    task's title whole, so the session header's title row stays ONE line, its copy of the title cut,
    and the chat keeps its room (520px, R3-05: the title on a line of its own and the labels on a
    third one left the chat no height under the 280px floor). The title keeps a readable start; the
-   labels give their room back first (the Worker pill cuts its leader's name, `.wn-meta`). Also in
+   labels give their room back first. Also in
    the narrow (`tight`) header, which would put the labels on a line of their own. */
 .kanban-card-detail > .kanban-detail-session .session-panel-header-top { flex-wrap: nowrap; }
 .kanban-card-detail > .kanban-detail-session .session-panel-header-top[data-header-fit]:has(> .session-panel-title-meta)::after { content: none; }

@@ -201,9 +201,10 @@ test('in a zone, unmarked components, rows with twelve texts, a line longer than
   await expectRestored(kbd, kbdBefore, 'keyboard row after Tab')
 })
 
-test('a long worker lead widens the whole row, with the metadata one line above the title', async ({ page, request }, info) => {
+test('a worker row under a long lead says Worker alone and widens whole, with the metadata one line above the title', async ({ page, request }, info) => {
   await expectWorkerRowWidens(page, request, {
-    project: 'Garden Insights',
+    // A project long enough to be cut at both panel widths, so the row has something to open.
+    project: 'Garden Insights Re-Architecture Platform with the complete plan, the inventory of every tool and the planting log',
     lead: 'Garden Re-Architecture As Platform - Platform Lead with the complete plan and the inventory of every tool',
     worker: 'Garden org demo Friday: garden insight end to end, with the complete planting schedule and all the next steps',
   }, info)

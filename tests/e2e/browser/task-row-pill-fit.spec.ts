@@ -13,7 +13,8 @@
  *   - a pill that arrives after the row drew (the triggers load late) is a letter at once;
  *   - folding gives the title real room, and a card's pills never squeeze its title: they go under it;
  *   - widening or narrowing the column flips the rows live, no reload;
- *   - the Worker pill names its leader after the word or letter (2026-11-11: "W · leader"),
+ *   - the Worker pill is the word or letter alone, never its leader's title (2026-11-23, the
+ *     user: the title made it too long; the hover and the click's team list name the leader),
  *     in both column widths.
  * Both surfaces: the Focus/pinned card and the list row.
  */
@@ -69,13 +70,9 @@ async function pillLook(host: Locator, testId: string) {
   return host.getByTestId(testId).first().evaluate((el) => {
     const long = el.querySelector('.task-pill-long') as HTMLElement
     const letter = getComputedStyle(el, '::after').content.replace(/^"|"$/g, '')
-    // The Worker pill also carries its leader's title after the word.
-    const parent = el.querySelector('[data-testid="worker-parent-title"]') as HTMLElement | null
     return {
-      text: (el.textContent ?? '').replace(parent?.textContent ?? '', '').trim(),
-      // Drawn: not hidden, and on the pill's one line (a title too narrow wraps out of sight).
-      parent: parent && getComputedStyle(parent).display !== 'none'
-        && parent.getBoundingClientRect().top < el.getBoundingClientRect().bottom - 2 ? parent.textContent?.trim() ?? '' : '',
+      // Everything the pill says: the Worker pill's is "Worker" alone, no leader title after it.
+      text: (el.textContent ?? '').trim(),
       wordDrawn: getComputedStyle(long).display !== 'none',
       letter: letter === 'none' || letter === 'normal' ? '' : letter,
       borderStyle: getComputedStyle(el).borderTopStyle,
@@ -106,12 +103,10 @@ test.afterEach(async () => {
 interface Fixture {
   lone: string; loneTrigger: string; tagWorker: string; workerTrigger: string
   tagWorkerTrigger: string; leaderTrigger: string; allPaused: string; mixedPaused: string
-  leaderTitle: string
 }
 
 async function seed(project: string, stamp: string, pinned: boolean): Promise<Fixture> {
-  const leaderTitle = `Fit leader ${stamp}`
-  const leader = await createTask(leaderTitle, { project, pinned })
+  const leader = await createTask(`Fit leader ${stamp}`, { project, pinned })
   const mk = (label: string, extra: Record<string, unknown> = {}) =>
     createTask(`Fit ${label} ${stamp}`, { project, pinned, ...extra })
   const lone = await mk('lone worker', { parent_task_id: leader })
@@ -132,7 +127,7 @@ async function seed(project: string, stamp: string, pinned: boolean): Promise<Fi
   await armTrigger(allPaused, `fit ${stamp} ap2`, false)
   await armTrigger(mixedPaused, `fit ${stamp} mp1`)
   await armTrigger(mixedPaused, `fit ${stamp} mp2`, false)
-  return { lone, loneTrigger, tagWorker, workerTrigger, tagWorkerTrigger, leaderTrigger, allPaused, mixedPaused, leaderTitle }
+  return { lone, loneTrigger, tagWorker, workerTrigger, tagWorkerTrigger, leaderTrigger, allPaused, mixedPaused }
 }
 
 async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f: Fixture, shotName: string, browserName: string) {
@@ -149,7 +144,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   await expect(page.locator('.home-navigation-scroll').first()).toHaveAttribute('data-row-fit', 'tight')
 
   // A lone pill is a letter too: the whole column folds, never row by row.
-  expect(await pillLook(row(f.lone), 'subtask-pill'), 'lone Worker @306').toMatchObject({ text: 'Worker', parent: f.leaderTitle, wordDrawn: false, letter: 'W' })
+  expect(await pillLook(row(f.lone), 'subtask-pill'), 'lone Worker @306').toMatchObject({ text: 'Worker', wordDrawn: false, letter: 'W' })
   expect(await pillLook(row(f.loneTrigger), 'task-trigger-pill'), 'lone TRIGGER @306').toMatchObject({ text: 'Trigger', wordDrawn: false, letter: 'T' })
 
   // Every pill the column draws, seeded or not, is a letter with its word hidden. A pull request
@@ -247,7 +242,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   // ── Widening flips the rows live: every word is back, the Leader count too.
   await setColumnWidth(page, 640)
   await expect(page.locator('.home-navigation-scroll').first()).toHaveAttribute('data-row-fit', 'roomy')
-  expect(await pillLook(row(f.tagWorkerTrigger), 'subtask-pill'), 'Worker @640').toMatchObject({ text: 'Worker', parent: f.leaderTitle, wordDrawn: true, letter: '' })
+  expect(await pillLook(row(f.tagWorkerTrigger), 'subtask-pill'), 'Worker @640').toMatchObject({ text: 'Worker', wordDrawn: true, letter: '' })
   expect(await pillLook(row(f.tagWorkerTrigger), 'task-trigger-pill'), 'TRIGGER @640').toMatchObject({ text: 'Trigger', wordDrawn: true, letter: '' })
   expect(await pillLook(row(f.leaderTrigger), 'leader-pill'), 'Leader @640').toMatchObject({ wordDrawn: true, letter: '' })
   expect((await pillLook(row(f.leaderTrigger), 'leader-pill')).text).toMatch(/^Leader · \d+$/)
@@ -335,21 +330,12 @@ test('a trigger arriving or leaving later is a letter at once on a list row', as
 })
 
 /**
- * Every row on the page, seeded or not: no Worker pill shows its leader's title cut to a sliver
- * ("W H…" read as initials), and no line of words starts with a lone "·" where it wrapped
- * (2026-11-22 UI audit at 820 px). Checks the whole column, so a new pill or label is held too.
+ * Every row on the page, seeded or not: no line of words starts with a lone "·" where it wrapped
+ * (2026-11-22 UI audit at 820 px), and every kind on it is its whole word. Checks the whole
+ * column, so a new pill or label is held too.
  */
 async function slivers(page: Page) {
   return page.locator('.home-navigation-scroll').first().evaluate((scroller) => {
-    const cut: string[] = []
-    for (const e of scroller.querySelectorAll<HTMLElement>('[data-testid="worker-parent-title"]')) {
-      const pill = e.parentElement!.getBoundingClientRect(), b = e.getBoundingClientRect()
-      const shown = Math.min(b.right, pill.right) - b.left
-      // Squeezed to nothing is a sliver too: the label's gap still shows ("W  · L").
-      const drawn = getComputedStyle(e).display !== 'none' && b.top < pill.bottom - 2
-      const sixLetters = parseFloat(getComputedStyle(e).fontSize) * 3
-      if (drawn && shown < sixLetters && e.scrollWidth > e.clientWidth + 1) cut.push(`${Math.round(shown)}px ${e.textContent}`)
-    }
     const strayDots: string[] = [], offEdge: string[] = []
     for (const row of scroller.querySelectorAll<HTMLElement>('.todo-item-content[data-search-meta]')) {
       const items = [...row.querySelectorAll<HTMLElement>(':scope > .todo-search-meta-row, :scope > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)')]
@@ -365,10 +351,10 @@ async function slivers(page: Page) {
         if (Math.abs(items[k].left + room - items[0].left) > 3) offEdge.push(`${Math.round(items[k].left + room - items[0].left)}px ${items[k].e.textContent}`)
       }
     }
-    // Only names give up letters (the project, a Worker's leader title): a kind, a tag, a state and
-    // a time on the line are whole.
+    // Only the project name gives up letters: a kind (the Worker pill too, its word alone), a tag,
+    // a state and a time on the line are whole.
     const cutWords: string[] = []
-    for (const el of scroller.querySelectorAll<HTMLElement>('.todo-item-content[data-search-meta] > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill):not(.todo-item-subtask-pill)')) {
+    for (const el of scroller.querySelectorAll<HTMLElement>('.todo-item-content[data-search-meta] > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)')) {
       const inner = [el, ...el.querySelectorAll<HTMLElement>('*')]
       if (el.getBoundingClientRect().width > 0 && inner.some((x) => x.scrollWidth > x.clientWidth + 1)) cutWords.push(el.textContent ?? '')
     }
@@ -380,11 +366,11 @@ async function slivers(page: Page) {
       const after = getComputedStyle(el, '::after').content
       if (!word || getComputedStyle(word).display === 'none' || (after !== 'none' && after !== 'normal')) letters.push(`${el.dataset.short} ${el.textContent}`)
     }
-    return { cut, strayDots, offEdge, cutWords, letters, rows: scroller.querySelectorAll('.todo-item-content[data-search-meta]').length }
+    return { strayDots, offEdge, cutWords, letters, rows: scroller.querySelectorAll('.todo-item-content[data-search-meta]').length }
   })
 }
 
-test('a narrow search column cuts only names, never to a sliver, keeps its kinds as words, and starts no line with "·"', async ({ page }) => {
+test('a narrow search column cuts only the project name, keeps its kinds as whole words, and starts no line with "·"', async ({ page }) => {
   test.setTimeout(180_000)
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const f = await seed(`Pill fit search ${stamp}`, stamp, false)
@@ -400,7 +386,6 @@ test('a narrow search column cuts only names, never to a sliver, keeps its kinds
     await page.waitForTimeout(250)
     const r = await slivers(page)
     expect(r.rows, `search rows @${width}`).toBeGreaterThan(5)
-    expect(r.cut, `leader titles cut to a sliver @${width}`).toEqual([])
     expect(r.strayDots, `lines that start with "·" @${width}`).toEqual([])
     expect(r.offEdge, `wrapped lines off the line above's edge @${width}`).toEqual([])
     expect(r.cutWords, `kinds, tags, states or times cut @${width}`).toEqual([])

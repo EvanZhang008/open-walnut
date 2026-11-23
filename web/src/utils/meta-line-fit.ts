@@ -1,22 +1,17 @@
 /**
- * Two fits of a task list's words that CSS cannot judge on its own (2026-11-22 UI audit at 820 px):
- *
- * - A Worker label's leader title cut to one or two letters ("W H…") reads as initials. A title
- *   that would show fewer than six letters is hidden (`data-title-cut`), so the label is "Worker"
- *   alone and gives its room back to the row.
- * - A search row's second line reads as words joined by "·" (styles/badge.css). In a narrow column
- *   the words run onto a third line, and the word that starts it would open with a lone "·". That
- *   word is marked `data-line-start` (its dot is hidden) and every word of a wrapped line gets
- *   `--wrap-shift`, the hidden dot's room, which badge.css moves the line left by. The room stays
- *   in the layout and the move is a relative one, so no word fits back on the line above once its
- *   dot is gone (which would flip it back and forth).
+ * A fit of a task list's words that CSS cannot judge on its own (2026-11-22 UI audit at 820 px):
+ * a search row's second line reads as words joined by "·" (styles/badge.css). In a narrow column
+ * the words run onto a third line, and the word that starts it would open with a lone "·". That
+ * word is marked `data-line-start` (its dot is hidden) and every word of a wrapped line gets
+ * `--wrap-shift`, the hidden dot's room, which badge.css moves the line left by. The room stays
+ * in the layout and the move is a relative one, so no word fits back on the line above once its
+ * dot is gone (which would flip it back and forth).
  *
  * One observer pair per list, never one per row; a scan is coalesced to one frame, and each pass
  * reads every box before it writes any.
  */
 const SEARCH_ROWS = '.todo-search-results .todo-item-content[data-search-meta]';
 const LINE_ITEMS = ':scope > .todo-search-meta-row, :scope > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)';
-const WORKER_TITLES = '[data-testid="worker-parent-title"]';
 
 interface Box { top: number; left: number; height: number; width: number }
 
@@ -37,27 +32,6 @@ export function lineOf(boxes: Box[]): number[] {
     lines[i] = line;
   });
   return lines;
-}
-
-/** A leader title shown narrower than about six letters of its own type (3.4 font sizes), and cut: hide it. */
-export function titleTooCut(shownWidth: number, fontSizePx: number, cut: boolean): boolean {
-  return cut && shownWidth < fontSizePx * 3.4;
-}
-
-function fitWorkerTitles(root: ParentNode): void {
-  const titles = [...root.querySelectorAll<HTMLElement>(WORKER_TITLES)];
-  // Judge each title as it would be drawn: show them all, then read, then hide the cut ones.
-  // The label carries the mark too, so it stops growing into the room its title gave back.
-  const marked = (el: HTMLElement) => [el, el.parentElement].filter((x): x is HTMLElement => !!x);
-  for (const el of titles) for (const m of marked(el)) if (m.dataset.titleCut) delete m.dataset.titleCut;
-  const cut = titles.map((el) => {
-    // What shows: the title's box as far as its label, which clips it.
-    const r = el.getBoundingClientRect(), label = el.parentElement?.getBoundingClientRect();
-    const w = Math.max(0, Math.min(r.right, label?.right ?? r.right) - r.left);
-    // Squeezed to nothing counts too: its label's gap would still show.
-    return el.getClientRects().length > 0 && titleTooCut(w, parseFloat(getComputedStyle(el).fontSize) || 11, el.scrollWidth > el.clientWidth + 1);
-  });
-  titles.forEach((el, i) => { if (cut[i]) for (const m of marked(el)) m.dataset.titleCut = 'true'; });
 }
 
 /** The room the "·" before an item takes: its width, its margins and its box's gap. */
@@ -86,7 +60,7 @@ export function wrapMarks(boxes: Box[], dotRooms: number[]): { start: boolean; s
   });
 }
 
-function fitLineStarts(root: ParentNode): void {
+export function scanMetaLineFit(root: ParentNode): void {
   const reads = [...root.querySelectorAll<HTMLElement>(SEARCH_ROWS)].map((row) => {
     const items = [...row.querySelectorAll<HTMLElement>(LINE_ITEMS)];
     return { items, marks: wrapMarks(items.map((el) => el.getBoundingClientRect()), items.map(dotRoom)) };
@@ -100,11 +74,6 @@ function fitLineStarts(root: ParentNode): void {
       else if (el.style.getPropertyValue('--wrap-shift')) el.style.removeProperty('--wrap-shift');
     });
   }
-}
-
-export function scanMetaLineFit(root: ParentNode): void {
-  fitWorkerTitles(root);
-  fitLineStarts(root);
 }
 
 /** Keeps the marks current under `el` (the list's scroller); returns the stop function. */

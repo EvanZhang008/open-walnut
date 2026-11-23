@@ -292,10 +292,12 @@ export async function expectInboxCardWhole(page: Page, card: Locator, neighbours
 }
 
 /**
- * A task row whose worker chip names a long lead (shared by the fixture spec and the real-task
- * walk-through): at a wide and a cramped panel, in both themes, the whole row widens with the
- * chip and the title whole on their own lines, the metadata line stays one line above the title,
- * the chip stays beside its Worker label, the row below never moves, and leaving restores it.
+ * A worker's task row under a long lead, in a long project (shared by the fixture spec and the
+ * real-task walk-through): at a wide and a cramped panel, in both themes, its Worker pill is the
+ * word alone (2026-11-23, the user: the lead's title made it too long; the click names the lead),
+ * the whole row widens with its cut project whole on its line and the title whole, the metadata
+ * line stays one line above the title, the pill keeps its size on that line, the row below never
+ * moves, and leaving restores it.
  */
 export async function expectWorkerRowWidens(page: Page, request: APIRequestContext, titles: { project: string; lead: string; worker: string }, info: TestInfo): Promise<void> {
   const { presetPanelDesign, setStatusSectionOpen } = await import('./status-section-helpers')
@@ -329,25 +331,28 @@ export async function expectWorkerRowWidens(page: Page, request: APIRequestConte
         await row.evaluate((el, w) => { const panel = el.closest<HTMLElement>('#home-task-navigation')!; panel.style.width = `${w}px`; panel.style.minWidth = `${w}px`; panel.style.maxWidth = `${w}px`; }, width)
         await row.scrollIntoViewIfNeeded()
         const label = `worker ${theme} ${width}`
+        const pill = row.getByTestId('subtask-pill')
+        // The word alone (a tight column draws its letter, `data-short`, outside the text).
+        expect((await pill.textContent())?.trim(), `${label}: the pill is the word alone`).toBe('Worker')
+        await expect(row, `${label}: the lead's title is nowhere on the row`).not.toContainText(titles.lead)
         const before = (await row.boundingBox())!
-        const chipBefore = (await row.locator('.task-worker-parent').boundingBox())!
+        const pillBefore = (await pill.boundingBox())!
         const metaBefore = (await row.locator('.status-card-meta').boundingBox())!
         const following = await followingOf(row, `worker-${theme}-${width}`)
         const tops = following ? await topsOf([following]) : []
         await row.locator('.todo-pinned-title').hover({ position: { x: 12, y: 6 } })
         const after = await expectWidensInPlace(row, before, { label, theme })
-        await expect.poll(() => openInRow(row.locator('.task-worker-parent'))).toBe(true)
+        await expect.poll(() => openInRow(row.locator('.status-card-project'))).toBe(true)
         // The title shows whole too, whether the wide panel cut it or not.
         await expect.poll(() => fits(row.locator('.todo-pinned-title'))).toBe(true)
         const meta = (await row.locator('.status-card-meta').boundingBox())!
         const title = (await row.locator('.todo-pinned-title').boundingBox())!
-        const chip = (await row.locator('.task-worker-parent').boundingBox())!
-        const workerLabel = (await row.locator('.task-pill-long').boundingBox())!
-        expect(chip.width, `${label}: the chip shows the whole lead`).toBeGreaterThan(chipBefore.width + 40)
+        const pillAfter = (await pill.boundingBox())!
+        expect(Math.abs(pillAfter.width - pillBefore.width), `${label}: the pill keeps its size`).toBeLessThanOrEqual(EXACT)
+        expect(pillAfter.y + pillAfter.height / 2, `${label}: the pill stays on the metadata line`).toBeGreaterThanOrEqual(meta.y)
+        expect(pillAfter.y + pillAfter.height / 2, `${label}: the pill stays on the metadata line`).toBeLessThanOrEqual(meta.y + meta.height)
         expect(Math.abs(meta.height - metaBefore.height), `${label}: the metadata stays one line`).toBeLessThanOrEqual(EXACT)
         expect(meta.y + meta.height, `${label}: the metadata stays above the title`).toBeLessThanOrEqual(title.y + 1)
-        // The compact panel abbreviates Worker to W in a pseudo-element.
-        if (workerLabel) expect(chip.y, `${label}: the chip stays beside its label`).toBeCloseTo(workerLabel.y, 0)
         expect(title.x + title.width, `${label}: the title ends inside the row`).toBeLessThanOrEqual(after.x + after.width + 1)
         const time = await row.locator('.todo-recent-ago').boundingBox()
         if (time) expect(time.x + time.width, `${label}: the time stays inside the row`).toBeLessThanOrEqual(after.x + after.width + 1)
