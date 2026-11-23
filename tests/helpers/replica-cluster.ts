@@ -80,6 +80,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from './source-twin.js'
 import { bunRuntime, testBun } from './bun-runtime.js'
 import { startSilentLinkProxy, type SilentLinkProxy } from './silent-link-proxy.js'
+import { appendOutput, keepClusterBase, noteTimeline, outputFile, startTimeline } from './cluster-keep.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
 export const BUN: string | undefined = testBun()
@@ -247,14 +248,18 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export const sha256 = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 
 export async function waitFor<T>(fn: () => T | Promise<T>, timeoutMs: number, what: string, everyMs = 250): Promise<NonNullable<T>> {
-  const until = Date.now() + timeoutMs
+  const t0 = Date.now()
+  const until = t0 + timeoutMs
   let last: unknown
   for (;;) {
     try {
       const v = await fn()
-      if (v) return v as NonNullable<T>
+      if (v) { noteTimeline('wait', { for: what, ms: Date.now() - t0, ok: true }); return v as NonNullable<T> }
     } catch (err) { last = err }
-    if (Date.now() > until) throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}${last ? ` (${String(last)})` : ''}`)
+    if (Date.now() > until) {
+      noteTimeline('wait', { for: what, ms: Date.now() - t0, ok: false, ...(last ? { last: String(last).slice(0, 300) } : {}) })
+      throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}${last ? ` (${String(last)})` : ''}`)
+    }
     await sleep(everyMs)
   }
 }
@@ -501,7 +506,11 @@ async function startHostLauncher(o: { dir: string; state: string; home: string; 
   let proc: ChildProcess
   const start = (): ChildProcess => {
     const child = spawn(BUN!, [SERVICE_RUNNER, '--service'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-    if (process.env.DEBUG_CLUSTER) child.stderr?.on('data', (b) => process.stderr.write(`[host-entry] ${b}`))
+    noteTimeline('host-entry started', { pid: child.pid })
+    child.once('exit', (code, sig) => noteTimeline('host-entry exited', { pid: child.pid, code, sig }))
+    const kept = outputFile(path.dirname(o.dir), 'host-entry-stderr.log')
+    if (process.env.DEBUG_CLUSTER) child.stderr?.on('data', (b) => { appendOutput(kept, b); process.stderr.write(`[host-entry] ${b}`) })
+    else if (kept) child.stderr?.on('data', (b) => appendOutput(kept, b))
     else child.stderr?.resume()
     // The launcher starts it again after a second (its backoff for an entry that ended).
     child.once('exit', () => { if (!stopped) setTimeout(() => { if (!stopped) proc = start() }, 1_000).unref() })
@@ -698,10 +707,15 @@ export function macEnvOf(o: { base: string; macHome: string; macData: string; ma
 }
 
 /** Boot the Mac child; resolves with its port, pid and the seed's ids. */
-export async function bootMac(script: string, file: string, env: Record<string, string>, logRef: { text: string }): Promise<{ proc: ChildProcess; port: number; pid: number; ids: { board: string; other: string } }> {
+export async function bootMac(script: string, file: string, env: Record<string, string>, logRef: { text: string }, keptAs = 'mac-stderr.log'): Promise<{ proc: ChildProcess; port: number; pid: number; ids: { board: string; other: string } }> {
   fs.writeFileSync(file, script)
   const proc = spawn(HOST_RUNTIME, [file], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const kept = outputFile(path.dirname(file), keptAs)
+  noteTimeline('leader started', { pid: proc.pid, file: path.basename(file) })
+  proc.once('exit', (code, sig) => noteTimeline('leader exited', { pid: proc.pid, file: path.basename(file), code, sig }))
+  proc.stdout!.on('data', (b: Buffer) => appendOutput(kept, b))
   proc.stderr!.on('data', (b: Buffer) => {
+    appendOutput(kept, b)
     logRef.text = (logRef.text + b.toString()).slice(-300_000)
     if (process.env.DEBUG_CLUSTER) process.stderr.write(`[mac] ${b}`)
   })
@@ -748,6 +762,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   }
   // Short: the daemons' unix socket paths must fit in 104 bytes on macOS.
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rcl-'))
+  startTimeline(base)
   const d = {
     bin: path.join(base, 'bin'), macHome: path.join(base, 'mh'), macData: path.join(base, 'mh', 'data'), macDaemon: path.join(base, 'md'),
     hostHome: path.join(base, 'hh'), hostDaemon: path.join(base, 'hd'), hostState: path.join(base, 'hs'), hostRoot: path.join(base, 'hr'), app: path.join(base, 'app'),
@@ -892,6 +907,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     macDaemonPin = await waitFor(() => pin('mac-daemon', readPid(path.join(d.macDaemon, 'daemon.pid')), (c) => / --start(\s|$)/.test(c)), 60_000, 'the Mac\'s own daemon')
   } catch (err) {
     await reap()
+    keepClusterBase(base, 'boot failed')
     if (!process.env.KEEP_REPLICA_CLUSTER) fs.rmSync(base, { recursive: true, force: true })
     throw err
   }
@@ -961,6 +977,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     const e = err instanceof Error ? err : new Error(String(err))
     e.message += `\n--- mac ---\n${macLog.text.slice(-4000)}\n--- replica ---\n${replicaLog().slice(-4000)}`
     await reap()
+    keepClusterBase(base, 'boot failed')
     if (!process.env.KEEP_REPLICA_CLUSTER) fs.rmSync(base, { recursive: true, force: true })
     throw e
   }
@@ -1004,11 +1021,11 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       if (r.status !== 200 || typeof r.json.code !== 'string') throw new Error(`no browser code: ${r.status} ${JSON.stringify(r.json)}`)
       return r.json.code as string
     },
-    sleepMac() { const timing = signalMac('SIGSTOP'); paused = true; return timing },
-    wakeMac() { const timing = signalMac('SIGCONT'); paused = false; return timing },
+    sleepMac() { noteTimeline('sleepMac'); const timing = signalMac('SIGSTOP'); paused = true; return timing },
+    wakeMac() { noteTimeline('wakeMac'); const timing = signalMac('SIGCONT'); paused = false; return timing },
     asleep: () => paused,
-    cutLink() { if (!link) throw new Error('replica-cluster: cutLink needs linkProxy'); link.setMode('drop-hold') },
-    mendLink() { if (!link) throw new Error('replica-cluster: mendLink needs linkProxy'); link.setMode('pass') },
+    cutLink() { if (!link) throw new Error('replica-cluster: cutLink needs linkProxy'); noteTimeline('cutLink'); link.setMode('drop-hold') },
+    mendLink() { if (!link) throw new Error('replica-cluster: mendLink needs linkProxy'); noteTimeline('mendLink'); link.setMode('pass') },
     pauseReplica() { signalReplica('SIGSTOP') },
     resumeReplica() { signalReplica('SIGCONT') },
     async stepReplica(o) {
@@ -1092,6 +1109,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       signalChild(hostProc(), 'SIGTERM')
       // Nothing of this cluster may outlive it (a replica once did).
       const left = await waitFor(() => (running().length === 0 ? true : null), 15_000, 'every process of this cluster to stop').then(() => [], () => running())
+      keepClusterBase(base, 'stopped')
       if (!process.env.KEEP_REPLICA_CLUSTER) fs.rmSync(base, { recursive: true, force: true })
       if (left.length) throw new Error(`replica-cluster: processes still running from ${base}: ${left.map((p) => `${p.name} ${p.pid} ${p.command}`).join('; ')}`)
     },

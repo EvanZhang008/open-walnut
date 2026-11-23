@@ -89,7 +89,7 @@ export async function startStandbyLeader(c: ReplicaCluster, o: { data: string; p
   const env = macEnvOf({ base: c.base, macHome: home, macData: o.data, macDaemon: daemon, hostService: true, extra: o.env })
   const script = macBoot({ macData: o.data, daemonPort: 0, macCwd: home, hostCwd: home, dev: true, hostDaemon: path.join(c.base, 'hd'), plugin: false, seed: false, hostLink: false, port: o.port, ...(o.extra ? { extra: o.extra } : {}) })
   const logRef = { text: '' }
-  const booted = await bootMac(script, path.join(c.base, 'standby-boot.mts'), env, logRef)
+  const booted = await bootMac(script, path.join(c.base, 'standby-boot.mts'), env, logRef, 'standby-stderr.log')
   const proc: ChildProcess = booted.proc
   const daemonPin = await waitFor(() => pin('standby-daemon', readPid(path.join(daemon, 'daemon.pid')), (cmd) => / --start(\s|$)/.test(cmd)), 60_000, 'the standby\'s own daemon').catch(() => null)
   let stopped = false

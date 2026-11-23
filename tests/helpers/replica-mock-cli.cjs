@@ -37,6 +37,11 @@ const flag = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : n
 const sid = flag('--session-id') || flag('--resume') || crypto.randomUUID()
 const THINK_MS = Math.max(0, Number(process.env.MOCK_THINK_MS || 300))
 const out = (o) => process.stdout.write(JSON.stringify(Object.assign({}, o, { session_id: sid })) + '\n')
+// One line per run, start and end, in the run's own HOME (a cluster's throwaway home): what a
+// kept cluster (cluster-keep.ts) shows of each CLI the host started.
+const runLog = (what) => { try { fs.appendFileSync(path.join(os.homedir(), 'mock-cli-runs.log'), JSON.stringify({ at: new Date().toISOString(), pid: process.pid, sid, what, ...(what === 'start' ? { argv: argv.filter((a) => !a.startsWith('{')).slice(0, 40), cwd: process.cwd() } : {}) }) + '\n') } catch { /* no home */ } }
+runLog('start')
+process.on('exit', (code) => runLog(`exit ${code}`))
 
 const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
 const transcript = path.join(configDir, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'), `${sid}.jsonl`)
