@@ -32,12 +32,20 @@ vi.mock('../../../src/constants.js', async (importOriginal) => {
 /** Tasks the test sets (phase, org role); any other task id reads as the real store has it (none: not found). */
 const phases = new Map<string, string>();
 const roles = new Map<string, string>();
+/** Tasks snoozed until a date (their start_date, src/core/snooze.ts). */
+const snoozed = new Map<string, string>();
 vi.mock('../../../src/core/task-manager.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/task-manager.js')>();
   return {
     ...actual,
-    getTask: async (id: string) => (phases.has(id) || roles.has(id)
-      ? { id, phase: phases.get(id) ?? 'IN_PROGRESS', ...(roles.has(id) ? { org_role: roles.get(id) } : {}) } : actual.getTask(id)),
+    getTask: async (id: string) => (phases.has(id) || roles.has(id) || snoozed.has(id)
+      ? {
+        id, phase: phases.get(id) ?? 'IN_PROGRESS',
+        // The derived status a NEED_ACTION task carries (user-status.ts).
+        ...(phases.get(id) === 'NEED_ACTION' ? { user_status: { state: 'needs' } } : {}),
+        ...(snoozed.has(id) ? { start_date: snoozed.get(id) } : {}),
+        ...(roles.has(id) ? { org_role: roles.get(id) } : {}),
+      } : actual.getTask(id)),
   };
 });
 
@@ -71,7 +79,7 @@ import { holdQuietNote } from '../../../src/core/sessions/quiet-notes.js';
 import { DROP_WHY, _clearHeldNotices, heldNoteState, heldNoticeKeys } from '../../../src/core/sessions/held-notices.js';
 import { _resetHeldStoreForTesting, persist } from '../../../src/core/sessions/held-notices-store.js';
 import {
-  DROP_TELL_KEY, HELD_NOTES_SOURCE, NEED_ACTION_WAIT_WHY, QUIET_DELIVERIES_PER_LAP, STOPPED_WAIT_WHY, _resetQuietDelivery,
+  DROP_TELL_KEY, HELD_NOTES_SOURCE, NEED_ACTION_WAIT_WHY, QUIET_DELIVERIES_PER_LAP, SNOOZED_WAIT_WHY, STOPPED_WAIT_WHY, _resetQuietDelivery,
   flushDropTells, startHeldNotices, stopHeldNotices,
 } from '../../../src/core/sessions/held-notices-sweep.js';
 
@@ -109,6 +117,7 @@ beforeEach(async () => {
   _resetSessionTrackerForTesting();
   phases.clear();
   roles.clear();
+  snoozed.clear();
   failHeldSends = 0;
   alive.clear();
   resetQuietTurnsForTest();
@@ -360,6 +369,23 @@ describe('quiet notes past the max hold', () => {
     const [row] = await getQueue(TARGET);
     expect(isQuietRowId(row.id)).toBe(false);
     expect(await heldNoteState('qm-n')).toMatchObject({ state: 'delivered', row: row.id });
+  });
+
+  it('no quiet turn can carry them and the task is snoozed: they wait for the snooze, then go as a normal message', async () => {
+    await target('idle');
+    await updateSessionRecord(TARGET, { pendingPermission: { requestId: 'perm-2', toolName: 'Bash' } });
+    const t0 = Date.now() - 2 * MIN;
+    await taskNote('qm-s', t0, 'FYI: shipped.');
+    snoozed.set('t-target', new Date(Date.now() + 24 * 60 * MIN).toISOString().slice(0, 10));
+    await sweepColdHolds(t0 + COLD_HOLD_MAX_MS);
+    expect(sends).toEqual([]);
+    expect(await heldNoteState('qm-s')).toMatchObject({ state: 'waiting', why: SNOOZED_WAIT_WHY });
+
+    snoozed.delete('t-target');
+    _resetQuietDelivery();
+    await sweepColdHolds(t0 + COLD_HOLD_MAX_MS + MIN);
+    expect(sends).toEqual([{ sessionId: TARGET, source: HELD_NOTES_SOURCE }]);
+    expect((await heldNoteState('qm-s')).state).toBe('delivered');
   });
 
   it('Walnut\'s own wake=false notice never goes on its own; it keeps no lap running', async () => {

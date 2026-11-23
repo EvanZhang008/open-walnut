@@ -291,6 +291,9 @@ export const STOPPED_WAIT_WHY = 'its target\'s session is stopped, and a note th
 /** Why a quiet note to a task that waits on the user waits, when a quiet turn cannot carry it. */
 export const NEED_ACTION_WAIT_WHY = 'its task waits on the user and its session cannot take a quiet turn now, and a normal turn would move '
   + 'the task on the user\'s board: it rides that session\'s next message';
+/** Why a quiet note to a snoozed task waits, when a quiet turn cannot carry it (src/core/snooze.ts). */
+export const SNOOZED_WAIT_WHY = 'its task is snoozed and its session cannot take a quiet turn now, and a normal turn would put it '
+  + 'back on the user\'s board before the snooze ends: it rides that session\'s next message, or goes once the snooze ends';
 const RUNNING_WAIT_WHY = 'its target is running a turn: it rides that turn\'s next message, or goes on its own once the turn ends';
 const ORG_OFF_WAIT_WHY = 'the org is off, and its target (CEO or a VP) takes no background message: it rides its next message';
 
@@ -301,7 +304,8 @@ const QUIET_RETRY_MS = SWEEP_MS;
 const quietRetryAt = new Map<string, number>();
 
 type QuietVerdict =
-  | { act: 'deliver'; rec: SessionRecord; phase?: string }
+  /** `heldForUser`: why a normal turn may not carry them (the task asks the user, or is snoozed): only a quiet turn may. */
+  | { act: 'deliver'; rec: SessionRecord; heldForUser?: string }
   | { act: 'complete' }
   /** `soon`: looked at again the next lap (a turn that runs ends soon). */
   | { act: 'wait'; why: string; soon?: true }
@@ -331,7 +335,10 @@ async function quietVerdict(sid: string): Promise<QuietVerdict> {
   // stopped, never resumed for this). A host's session: its host reports its status.
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
   if (rec.process_status === 'idle' && (rec.host || sessionRunner.holdsLiveSession(sid))) {
-    return { act: 'deliver', rec, ...(task?.phase ? { phase: task.phase } : {}) };
+    // What the user sees (the derived status, user-status.ts) decides, and a snooze holds it off his board.
+    const { snoozedUntil } = await import('../snooze.js');
+    const heldForUser = task?.user_status?.state === 'needs' ? NEED_ACTION_WAIT_WHY : task && snoozedUntil(task) ? SNOOZED_WAIT_WHY : undefined;
+    return { act: 'deliver', rec, ...(heldForUser ? { heldForUser } : {}) };
   }
   return { act: 'wait', why: STOPPED_WAIT_WHY };
 }
@@ -470,8 +477,8 @@ export async function deliverDueQuietNotes(now = Date.now()): Promise<number> {
         continue;
       }
       const quiet = await quietCarries(v.rec, sid);
-      if (!quiet && v.phase === 'NEED_ACTION') {
-        setQuietWaitWhy(sid, NEED_ACTION_WAIT_WHY);
+      if (!quiet && v.heldForUser) {
+        setQuietWaitWhy(sid, v.heldForUser);
         quietRetryAt.set(sid, now + QUIET_RETRY_MS);
         continue;
       }

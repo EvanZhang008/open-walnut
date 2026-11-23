@@ -57,6 +57,7 @@ describe('a working thread he cannot see, while the node\'s own work runs on', (
     expect(nodeCarriesOn({ phase: 'WAITING', wait_until: iso(60 * MIN) } as never, { outliving: [], triggers: 0 }, now)).toBe('wait_until')
     expect(nodeCarriesOn({ phase: 'WAITING', wait_until: iso(-MIN) } as never, { outliving: [], triggers: 0 }, now)).toBeNull()
     expect(nodeCarriesOn(working, { outliving: [], triggers: 0 }, now)).toBeNull()
+    expect(nodeCarriesOn({ user_status: { state: 'waiting', snoozed: { until: '2026-11-25' } } } as never, { outliving: [], triggers: 0 }, now)).toBe('snoozed')
   })
 })
 

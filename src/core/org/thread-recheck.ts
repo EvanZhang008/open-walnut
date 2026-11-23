@@ -116,14 +116,18 @@ export function threadsDueRecheck(
 /**
  * What of the node's own work runs on after its turn and wakes it, or null: a background command or
  * subagent, its agent team, a wakeup or /loop it armed (outliving-work.ts), a trigger that will
- * really wake it (user-status-sync.ts wakingTriggers), or its WAITING clock (wait_until). Pure.
+ * really wake it (user-status-sync.ts wakingTriggers), its WAITING clock (wait_until), or a
+ * snooze the user set. Pure.
  */
 export function nodeCarriesOn(
-  node: Pick<Task, 'phase' | 'wait_until'>, facts: { outliving: readonly string[]; triggers: number }, nowMs: number,
+  node: Pick<Task, 'wait_until' | 'user_status'>, facts: { outliving: readonly string[]; triggers: number }, nowMs: number,
 ): string | null {
   if (facts.outliving.length) return facts.outliving.join(', ');
   if (facts.triggers > 0) return 'trigger';
-  if (node.phase === 'WAITING' && node.wait_until && Date.parse(node.wait_until) > nowMs) return 'wait_until';
+  // A wait_until belongs to WAITING alone (phase.ts setPhase clears it on any move out): its park's clock.
+  if (node.wait_until && Date.parse(node.wait_until) > nowMs) return 'wait_until';
+  // Snoozed by the user (snooze.ts): its threads he cannot see wait with it, never past the backstop.
+  if (node.user_status?.snoozed) return 'snoozed';
   return null;
 }
 

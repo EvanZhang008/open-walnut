@@ -334,7 +334,8 @@ export async function targetWaitsUntil(
     if (!taskId) return null;
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([taskId]).catch(() => []))[0];
-    const until = task?.phase === 'WAITING' && task.wait_until ? Date.parse(task.wait_until) : NaN;
+    // A wait_until belongs to WAITING alone (phase.ts setPhase clears it on any move out): it is the park's clock.
+    const until = task?.wait_until ? Date.parse(task.wait_until) : NaN;
     if (!(Number.isFinite(until) && until > now)) return null;
     // A delivery its queue took back (the process died unread) proves nothing (request-reached.ts).
     const sid = r.toSessionId ?? task?.session_id ?? undefined;
