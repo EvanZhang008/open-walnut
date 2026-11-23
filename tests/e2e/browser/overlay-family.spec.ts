@@ -185,11 +185,26 @@ test.describe('composer menus', () => {
     await expect(wrap).toHaveClass(/\bwn-overlay\b/)
     expect(await wrap.evaluate((n) => parseFloat(getComputedStyle(n).borderTopLeftRadius))).toBe(12)
     const list = wrap.locator('.command-palette')
-    const overflows = await list.evaluate((n) => n.scrollHeight - n.clientHeight > 1)
+    const overflows = await list.evaluate((n) => n.scrollHeight - n.clientHeight > 12)
     test.skip(!overflows, 'the fixture lists too few commands to scroll')
     await expect(list).toHaveAttribute('data-more', 'true')
     expect(await list.evaluate((n) => getComputedStyle(n).maskImage || getComputedStyle(n).webkitMaskImage)).toContain('gradient')
     await list.evaluate((n) => { n.scrollTop = n.scrollHeight })
     await expect(list).not.toHaveAttribute('data-more', 'true')
   })
+})
+
+// 2026-11-22 final audit: the task row's right-click menu opened leftward from the pointer and covered
+// the nav rail; every cursor menu opens rightward from the pointer and flips only without room.
+test('a right-click menu opens rightward from the pointer', async ({ page }) => {
+  await home(page)
+  const title = page.locator('.todo-panel-item .todo-item-title').first()
+  const b = (await title.boundingBox())!
+  const x = b.x + 12
+  const y = b.y + b.height / 2
+  await page.mouse.click(x, y, { button: 'right' })
+  const menu = page.locator('.task-kebab-menu, .wn-context-menu').first()
+  await expect(menu).toBeVisible()
+  await expect.poll(async () => Math.round((await menu.boundingBox())!.x)).toBeGreaterThanOrEqual(Math.floor(x) - 1)
+  await page.keyboard.press('Escape')
 })

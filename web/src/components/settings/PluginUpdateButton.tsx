@@ -9,7 +9,8 @@
  * reason is ALSO shown as a small portalled tip under the button (`.plugin-update-reason`),
  * placed by useMenuPlacement: an overlay, so the row never grows and shrinks under the
  * pointer the way a line in the feedback slot did (N3-14). Overlay rules
- * (web/src/AGENTS.md): portalled to <body>, root stops pointerdown propagation.
+ * (web/src/AGENTS.md): portalled to <body>, root stops pointerdown propagation, and closed as
+ * every overlay is (useOverlayLayer: Escape or a press outside), besides leaving the span.
  *
  * When the row renders NO button (`mode.render === false`) it still renders `UpdateSlot`, an
  * invisible, inert twin of the button, so the actions cluster keeps the width it has while
@@ -21,6 +22,7 @@
 import { type MouseEvent, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement'
+import { useOverlayLayer } from '@/hooks/useOverlayLayer'
 import { plainText, updateDisabledTitle, type UpdateButtonMode } from './plugin-update-view'
 import '@/styles/plugin-updates.css'
 
@@ -65,6 +67,15 @@ export function PluginUpdateButton({ rowId, mode, onClick }: PluginUpdateButtonP
     minHeight: 24,
     gap: 4,
     onAnchorLost: () => setTipOpen(false),
+  })
+  // Focus stays on the span (no trap: Tab moves on and blur closes the tip); a press elsewhere
+  // does what it presses.
+  useOverlayLayer({
+    open: showTip,
+    refs: [wrapRef, tipRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    onClose: () => setTipOpen(false),
   })
 
   if (!mode.render) return <UpdateSlot rowId={rowId} />

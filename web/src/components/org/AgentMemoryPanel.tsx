@@ -23,6 +23,7 @@ import { fetchTask } from '@/api/tasks';
 import { fetchAgentMemory, type AgentMemory } from '@/api/agent-memory';
 import { fetchGlobalMemory, fetchUserMemory } from '@/api/memory';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { log } from '@/utils/log';
@@ -203,7 +204,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       // Typing here must not reach the panel's shortcuts; Escape still reaches useModalOverlay.
-      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+      onKeyDown={keepKeysInside}
     >
       <div
         className="app-modal am-modal wn-dialog"

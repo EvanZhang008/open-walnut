@@ -119,7 +119,7 @@ export function SlashCommandMenu({ query, atBlockStart, onSelect, onClose }: Sla
 
   if (filtered.length === 0) {
     return (
-      <div className="notes-slash-panel wn-overlay wn-menu">
+      <div className="notes-slash-panel wn-menu">
         <EmptyState size="row" title="No matching commands" />
       </div>
     );
@@ -131,7 +131,7 @@ export function SlashCommandMenu({ query, atBlockStart, onSelect, onClose }: Sla
   let lastGroup: SlashCommandGroup | null = null;
 
   return (
-    <div className="notes-slash-panel wn-overlay wn-menu" ref={listRef}>
+    <div className="notes-slash-panel wn-menu" ref={listRef}>
       {filtered.map((cmd, i) => {
         const header = showGroups && cmd.group !== lastGroup
           ? <div key={`g-${cmd.group}`} className="notes-slash-group">{GROUP_LABELS[cmd.group]}</div>

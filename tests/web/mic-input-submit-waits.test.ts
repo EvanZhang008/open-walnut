@@ -64,6 +64,7 @@ vi.mock('@/components/common/MicButton', async () => {
 })
 
 const { MicInput } = await import('../../web/src/components/common/BoxMic')
+const { overlayLayerHandlers } = await import('../../web/src/hooks/useOverlayLayer')
 
 let win: Window & typeof globalThis
 beforeAll(() => {
@@ -97,6 +98,10 @@ beforeAll(() => {
     IS_REACT_ACT_ENVIRONMENT: true,
     requestAnimationFrame: (cb: () => void) => setTimeout(cb, 0),
   })
+  // The overlay stack (the send gate's Esc is a layer on it) listens on the window it found at import,
+  // and there was none then: put its capture listeners on this one.
+  dom.window.addEventListener('keydown', overlayLayerHandlers.keydown as unknown as EventListener, true)
+  dom.window.addEventListener('pointerdown', overlayLayerHandlers.pointerdown as unknown as EventListener, true)
 })
 
 let root: ReturnType<typeof createRoot> | null = null
@@ -136,7 +141,8 @@ async function key(el: Element, k: string, extra: Record<string, unknown> = {}) 
   const atWindow = new Key('keydown', init)
   let stopped = false
   const stop = atWindow.stopPropagation.bind(atWindow)
-  Object.assign(atWindow, { stopPropagation: () => { stopped = true; stop() } })
+  const stopNow = atWindow.stopImmediatePropagation.bind(atWindow)
+  Object.assign(atWindow, { stopPropagation: () => { stopped = true; stop() }, stopImmediatePropagation: () => { stopped = true; stopNow() } })
   const ev = new Key('keydown', init)
   await act(async () => {
     ;(win as unknown as EventTarget).dispatchEvent(atWindow)

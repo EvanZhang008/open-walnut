@@ -232,10 +232,8 @@ export function EventCreateForm({
             value={title}
             maxLength={200}
             onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              onFieldKey(e);
-              if (e.key === 'Escape' && !e.nativeEvent.isComposing) onClose();
-            }}
+            // Escape is the popover's layer (QuickCreatePopover), wherever focus is.
+            onKeyDown={onFieldKey}
           />
         </MicField>
         <CalendarPicker calendars={calendars} value={calendarId} onChange={setCalendarId} />

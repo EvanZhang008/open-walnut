@@ -12,7 +12,6 @@
 /* The Talk to CEO box (components/content/CeoComposer.tsx). */
 .ceo-composer {
   position: fixed;
-  z-index: 10000;
   box-sizing: border-box;
   width: 420px;
   max-width: calc(100vw - 16px);
@@ -21,11 +20,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
   color: var(--fg);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
   font-size: var(--font-size-md);
 }
 .ceo-composer-centered {

@@ -258,7 +258,7 @@
 .ext-relay-pill.is-off .ext-relay-dot { background: none; border: 1.5px solid currentColor; box-sizing: border-box; }
 
 /* The relay panel under the pill (useMenuPlacement places it; solid in both themes). */
-.ext-relay-panel { position: fixed; z-index: 60; left: 8px; width: auto; max-width: 360px; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); font-size: var(--font-size-md); }
+.ext-relay-panel { position: fixed; left: 8px; width: auto; max-width: 360px; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px; font-size: var(--font-size-md); }
 .ext-relay-head { display: flex; align-items: center; gap: 8px; }
 .ext-relay-title { flex: 1; font-weight: 700; font-size: 14px; }
 .ext-relay-agents-row { display: inline-flex; align-items: center; gap: 8px; font-size: var(--font-size-sm); cursor: pointer; }

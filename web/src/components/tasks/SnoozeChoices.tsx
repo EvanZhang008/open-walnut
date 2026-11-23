@@ -7,6 +7,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { DatePicker } from '@/components/common/DatePicker';
 import type { CursorPoint } from './CursorFlyout';
 import { snoozePresets, soonSnoozePresets, todayIso } from './quick-sort-model';
@@ -41,14 +42,24 @@ export function SnoozeRows({ onSnooze, onPickDate, onClear, soon }: {
 }
 
 /** A flyout placed at a viewport point, wearing the project flyout's class so every outside-press
- *  and scroll closer already exempts it. Focus lands on its first button. Its host owns the close
- *  (useCursorFlyout's overlay layer, or the host's own). */
+ *  and scroll closer already exempts it. Focus lands on its first button. It is an overlay layer of
+ *  its own: Escape or a press outside closes it, focus going back to the anchor when it has one.
+ *  A host's layer that opened in the same render sits above it and closes it first (useCursorFlyout
+ *  puts focus back on the row); a flyout opened later from the host's (Pick a date) is the top. */
 function PointFlyout({ point, anchorRef, label, className, onClose, children }: {
   point: CursorPoint; anchorRef: RefObject<HTMLElement | null>; label: string; className?: string;
   onClose: () => void; children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(true, anchorRef, ref, { minHeight: 120, anchorPoint: point, align: 'left', onAnchorLost: onClose });
+  useOverlayLayer({
+    open: true,
+    // The anchor counts as inside: a press on the trigger is the trigger's own toggle.
+    refs: [ref, anchorRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    onClose: (reason) => { onClose(); if (reason === 'escape') anchorRef.current?.focus({ preventScroll: true }); },
+  });
   useEffect(() => { ref.current?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true }); }, [placement !== null]);
   const onKeyDown = (e: KeyboardEvent) => {
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;

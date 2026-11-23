@@ -13,6 +13,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { TransferOptions } from '@/api/transfer';
@@ -197,7 +198,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       // Typing here must not reach the panel's shortcuts; Escape still reaches useModalOverlay.
-      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+      onKeyDown={keepKeysInside}
     >
       <div
         className="app-modal xfer-modal wn-dialog"

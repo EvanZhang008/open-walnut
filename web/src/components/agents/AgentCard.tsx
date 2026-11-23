@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { AgentDefinition } from '@/api/agents';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface AgentCardProps {
   agent: AgentDefinition;
@@ -27,6 +28,14 @@ function badgeInfo(agent: AgentDefinition): { label: string; className: string }
 export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<'delete' | 'reset' | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const close = () => { setConfirmAction(null); setMenuOpen(false); };
+  // The menu and its confirm close as every menu does: Escape (focus back on ⋮) or a press outside.
+  useOverlayLayer({
+    open: menuOpen || confirmAction !== null, refs: [wrapRef], passOutsideClick: true,
+    onClose: (reason) => { close(); if (reason === 'escape') btnRef.current?.focus({ preventScroll: true }); },
+  });
 
   const isOverride = !!agent.overrides_builtin;
   const isBuiltin = agent.source === 'builtin';
@@ -44,44 +53,45 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
           {isBuiltin && <span className="agent-card-lock" title="Built-in: editing saves your own version, and Reset to Default brings the original back">&#128274;</span>}
         </div>
         <div className="agent-card-actions">
-          <div className="agent-menu-wrapper">
+          <div className="agent-menu-wrapper" ref={wrapRef}>
             <button
+              ref={btnRef}
               className="btn btn-sm btn-icon btn-ghost agent-menu-btn"
               onClick={() => { setMenuOpen(!menuOpen); setConfirmAction(null); }}
               title="Actions"
               aria-label="Actions"
               aria-haspopup="menu"
-              aria-expanded={menuOpen}
+              aria-expanded={menuOpen || confirmAction !== null}
             >
               &#8942;
             </button>
             {menuOpen && !confirmAction && (
-              <div className="agent-menu" onMouseLeave={() => setMenuOpen(false)}>
-                <button className="agent-menu-item" onClick={() => { onEdit(agent); setMenuOpen(false); }}>
+              <div className="agent-menu wn-overlay wn-menu" role="menu">
+                <button className="agent-menu-item" role="menuitem" onClick={() => { onEdit(agent); setMenuOpen(false); }}>
                   Edit
                 </button>
-                <button className="agent-menu-item" onClick={() => { onClone(agent); setMenuOpen(false); }}>
+                <button className="agent-menu-item" role="menuitem" onClick={() => { onClone(agent); setMenuOpen(false); }}>
                   Clone
                 </button>
                 {isOverride && onReset && (
-                  <button className="agent-menu-item" onClick={() => setConfirmAction('reset')}>
+                  <button className="agent-menu-item" role="menuitem" onClick={() => setConfirmAction('reset')}>
                     Reset to Default
                   </button>
                 )}
                 {isConfigOnly && (
-                  <button className="agent-menu-item agent-menu-danger" onClick={() => setConfirmAction('delete')}>
+                  <button className="agent-menu-item agent-menu-danger" role="menuitem" onClick={() => setConfirmAction('delete')}>
                     Delete
                   </button>
                 )}
               </div>
             )}
             {confirmAction && (
-              <div className="agent-confirm-popover" onMouseLeave={() => { setConfirmAction(null); setMenuOpen(false); }}>
+              <div className="agent-confirm-popover wn-overlay" role="dialog" aria-label={confirmAction === 'delete' ? 'Delete this agent?' : 'Reset to the built-in version?'}>
                 <p className="agent-confirm-text">
                   {confirmAction === 'delete' ? 'Delete this agent?' : 'Reset to the built-in version?'}
                 </p>
                 <div className="agent-confirm-actions">
-                  <button className="btn btn-sm" onClick={() => { setConfirmAction(null); setMenuOpen(false); }}>
+                  <button className="btn btn-sm" onClick={close}>
                     Cancel
                   </button>
                   <button
@@ -89,8 +99,7 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
                     onClick={() => {
                       if (confirmAction === 'delete') onDelete(agent.id);
                       else if (onReset) onReset(agent.id);
-                      setConfirmAction(null);
-                      setMenuOpen(false);
+                      close();
                     }}
                   >
                     {confirmAction === 'delete' ? 'Delete' : 'Reset'}

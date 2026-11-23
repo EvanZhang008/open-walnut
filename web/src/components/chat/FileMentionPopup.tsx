@@ -32,6 +32,7 @@ import { formatSize } from '@/utils/format';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
+import { useMoreBelow } from '@/hooks/useMoreBelow';
 import { recordRecentFolder, getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
 import { joinPath, parentPath, relativeTo, normalizePath, parseQuery } from './mention-path';
 
@@ -367,6 +368,8 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
 
     // Active list length depends on mode (recents vs current-dir entries).
     const listLen = recentsMode ? recentMatches.length : filtered.length;
+    // Rows past the list's foot fade it, as every capped overlay list does (overlay-family.css).
+    const more = useMoreBelow(listRef, [recentsMode, listLen, browseDir]);
 
     useImperativeHandle(
       ref,
@@ -405,7 +408,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
     const atRoot = browseDir === rootPath;
 
     return (
-      <div className="file-mention-popup">
+      <div className="file-mention-popup wn-overlay">
         <div className="file-mention-toolbar">
           <button
             className="btn btn-icon btn-sm"
@@ -458,7 +461,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
 
         <div className="file-mention-body">
           {recentsMode ? (
-            <div className="file-mention-list file-mention-list-recents" ref={listRef}>
+            <div className="file-mention-list file-mention-list-recents" ref={listRef} data-more={more ? 'true' : undefined}>
               {searchError && (
                 <div className="fmp-error">Nearby results may be incomplete. <button type="button" onMouseDown={(e) => { e.preventDefault(); setRetrySearch((n) => n + 1); }}>Retry</button></div>
               )}
@@ -497,7 +500,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
             </div>
           ) : (
             <>
-              <div className="file-mention-list" ref={listRef}>
+              <div className="file-mention-list" ref={listRef} data-more={more ? 'true' : undefined}>
                 {error && <UnavailableState size="row" title="Couldn't list this folder" detail={error} testId="fmp-list-error" />}
                 {!error && loading && <LoadingState size="row" title="Loading this folder…" />}
                 {!error && !loading && filtered.length === 0 && (

@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 /**
  * NotesChatSwitcher — dropdown selector for the /notes chat column.
@@ -42,20 +43,9 @@ export function NotesChatSwitcher({ sessions, agentChats = [], active, onSelect,
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Light-dismiss: click anywhere outside, or Escape.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  // Light-dismiss through the shared layer: a press outside (the click goes on to what was
+  // pressed) or Escape, which then closes only this menu.
+  useOverlayLayer({ open, onClose: () => setOpen(false), refs: [rootRef], passOutsideClick: true });
 
   const select = useCallback((key: string) => {
     onSelect(key);
@@ -97,7 +87,7 @@ export function NotesChatSwitcher({ sessions, agentChats = [], active, onSelect,
       </button>
 
       {open && (
-        <div className="notes-chat-switcher-menu" role="listbox">
+        <div className="notes-chat-switcher-menu wn-overlay wn-menu" role="listbox">
           {/* Two labeled groups — the kind of chat is stated, never implied. */}
           <div className="notes-chat-switcher-group notes-chat-switcher-group-first">Walnut Agent</div>
           <button

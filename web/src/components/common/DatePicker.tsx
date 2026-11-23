@@ -10,6 +10,7 @@ import { useState, useRef, useEffect, useCallback, type KeyboardEvent as ReactKe
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { MonthGrid } from './MonthGrid';
 import { dateTimeWords, hourPickerMin, localDateTimeIso, parseClock, timeTarget, tomorrowTimePills } from './date-time-pick';
 
@@ -189,7 +190,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
   };
   const onTimeKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     // The field's own keys (typing, arrows move the caret) are not the menu's; Escape still closes it.
-    if (e.key !== 'Escape') e.stopPropagation();
+    keepKeysInside(e);
     if (e.key === 'Enter') { e.preventDefault(); applyTime(); }
   };
 

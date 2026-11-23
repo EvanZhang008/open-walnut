@@ -62,19 +62,13 @@
   background: var(--change-tone, var(--change-quiet));
 }
 
-/* ── The card ── */
+/* ── The card ── (a wn-overlay, ChangePill.tsx: the family draws its surface, frame and layer) */
 .change-card.change-card-popover {
   position: fixed;
-  z-index: 9500;
   box-sizing: border-box;
   width: min(480px, calc(100vw - 16px));
   max-height: min(640px, calc(100vh - 16px));
   padding: 16px 16px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
-  color: var(--fg);
   font-size: var(--font-size-sm);
   line-height: 1.45;
   overflow: auto;

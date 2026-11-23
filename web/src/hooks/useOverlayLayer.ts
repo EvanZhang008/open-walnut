@@ -31,8 +31,8 @@ export interface OverlayLayerOptions {
   refs: readonly RefObject<HTMLElement | null>[];
   /** Selectors of child portals that count as inside (e.g. `.fb-values-flyout`). */
   exemptSelectors?: readonly string[];
-  /** Default true. */
-  closeOnEscape?: boolean;
+  /** Default true. A function is asked when the key is pressed (a field that owns its own Escape). */
+  closeOnEscape?: boolean | (() => boolean);
   /** Default true. False blocks outside dismissal of this layer and every layer below it. */
   closeOnOutside?: boolean;
   /** Runs before closing on Escape; return true to consume the key without closing (e.g. clear a search box). */
@@ -42,6 +42,10 @@ export interface OverlayLayerOptions {
   /** The click after a press that closed this layer goes through (a light confirm, where the
    *  press outside means "do that instead"). Default false: it is swallowed. */
   passOutsideClick?: boolean;
+  /** A surface that shows beside the user's work rather than over it (the selection's quote bar):
+   *  Escape and the stack are still the layer's, but the page's own shortcuts (Cmd+digit, undo,
+   *  single keys) keep working while it is up, so hasOpenOverlayLayer() leaves it out. Default false. */
+  passive?: boolean;
 }
 
 interface Layer {
@@ -77,9 +81,10 @@ let swallowClick = false;
 let swallowTimer: ReturnType<typeof setTimeout> | null = null;
 const SWALLOW_MS = 1000;
 
-/** True while any overlay layer is open (other Escape handlers may check it). */
+/** True while an overlay layer that holds the keyboard is open (a passive one does not): the page's
+ *  shortcuts and other Escape handlers check it. */
 export function hasOpenOverlayLayer(): boolean {
-  return stack.length > 0;
+  return stack.some((layer) => layer.opts.current.passive !== true);
 }
 
 /** Test hook: the number of open layers. */
@@ -150,7 +155,8 @@ function onKeyDownCapture(e: KeyboardEvent): void {
   if (e.key !== 'Escape' || isImeKey(e) || stack.length === 0) return;
   const top = stack[stack.length - 1];
   const opts = top.opts.current;
-  if (opts.closeOnEscape === false) return;
+  const closeOnEscape = opts.closeOnEscape;
+  if (closeOnEscape === false || (typeof closeOnEscape === 'function' && !closeOnEscape())) return;
   e.preventDefault();
   e.stopImmediatePropagation();
   if (opts.onEscape?.(e)) return;

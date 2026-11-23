@@ -39,7 +39,9 @@
   --overlay-row-radius: var(--radius-sm);
   --dialog-radius: var(--radius-lg);
   --overlay-border: var(--border-strong);
-  --overlay-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.08);
+  /* Light enough to lift a menu off the page, not to cover the work under it (2026-11-22 final audit:
+     the Display menu and the Rhythm card read as heavy panels over the list). */
+  --overlay-shadow: 0 6px 20px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
   /* A tooltip is dark in both themes (one step lighter than the page in dark). */
   --tip-bg: #1d1d1f;
   --tip-fg: #fff;
@@ -92,6 +94,11 @@ html .wn-menu-heading {
 html .wn-menu > .wn-menu-heading:first-child {
   padding-top: 4px;
 }
+
+/* A status bubble keeps the family's surface and tells its tone by its border alone (the mic's
+   dead-mic warning, its failed-transcription bubble). */
+html .wn-overlay.wn-tone-warning { border-color: var(--warning); }
+html .wn-overlay.wn-tone-error { border-color: var(--error); }
 
 /* More below the fold (useMoreBelow sets data-more on the scroll box while rows are past its foot and it
    is not scrolled down there): the foot fades, so a list cut by its height cap reads as one that goes

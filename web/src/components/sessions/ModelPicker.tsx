@@ -22,6 +22,7 @@ import { engineCaps, engineLabel } from '@/utils/engine-capabilities';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { isImeKey } from '@/utils/ime-key';
 import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
@@ -1106,7 +1107,7 @@ export function ModelPicker({
                   onChange={(e) => setAcpQuery(e.target.value)}
                   // Escape is the overlay layer's (it clears the query first); the
                   // other keys stay with the filter.
-                  onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+                  onKeyDown={keepKeysInside}
                   spellCheck={false}
                   data-testid="acp-model-filter"
                   // eslint-disable-next-line jsx-a11y/no-autofocus -- a pane
@@ -1227,9 +1228,10 @@ export function ModelPicker({
     </>
   );
 
+  const acpPaneClass = !isAcpPane || !onAcpSwitch ? '' : acpGrouped ? ' model-picker-acp model-picker-acp-grouped' : ' model-picker-acp';
   const panel = (
     <div
-      className={`model-picker${popped ? ' wn-overlay model-picker-popout' : ''}${isAcpPane && onAcpSwitch ? ' model-picker-acp' : ''}${isAcpPane && acpGrouped && onAcpSwitch ? ' model-picker-acp-grouped' : ''}`}
+      className={popped ? `model-picker wn-overlay model-picker-popout${acpPaneClass}` : `model-picker wn-overlay${acpPaneClass}`}
       ref={popRef}
       style={popped ? menuPlacementStyle(placement) : undefined}
       // Portal menus still bubble React events into the host row's drag

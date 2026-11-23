@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { DRAWING_WIDTH, DRAWING_HEIGHT, DRAWING_TEXT_SIZE, drawingPoint, drawingTextLayout, hasDrawing, paintDrawing, paintDrawingItem, type DrawingItem, type DrawingPoint, type DrawingTool } from './drawing-model';
@@ -220,8 +221,10 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
   const keepGate = useSendAfterDictation([textMic], keepTextNow);
   const attachGate = useSendAfterDictation([textMic], () => void attach());
 
+  // Keys stay in the dialog (the composer's shortcuts must not act under it); Esc goes on to the
+  // dialog's close (useModalOverlay), unless a label is being typed: then it drops the label.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    e.stopPropagation();
+    keepKeysInside(e);
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Tab') {
       const controls = [...dialog.current!.querySelectorAll<HTMLElement>('button:not(:disabled), textarea')];
@@ -232,9 +235,7 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
       return;
     }
     if (e.key === 'Escape') {
-      e.preventDefault();
-      if (text) { setText(null); dialog.current?.focus(); }
-      else close();
+      if (text) { e.preventDefault(); e.stopPropagation(); setText(null); dialog.current?.focus(); }
       return;
     }
     if (busy) return;

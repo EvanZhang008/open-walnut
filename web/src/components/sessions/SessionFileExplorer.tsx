@@ -24,6 +24,7 @@ import { usePhoneLayerWithBar } from './phone-session-layer';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
@@ -1508,6 +1509,20 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // tree toggle, ‹ › and the path of what is open.
   const shownPath = selectedFile ?? focusedDir ?? root;
   const pathEditRef = useRef<HTMLDivElement>(null);
+  // The path field and its list of recent folders (a portal, PathSuggestions) are one layer
+  // while the field is open: Escape gives the edit up, list and all. A press outside is the
+  // field's blur, which commits what was typed (onBlur below), so the layer leaves it alone.
+  useOverlayLayer({
+    open: editingPath,
+    refs: [pathEditRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    onClose: (reason) => {
+      if (reason !== 'escape') return;
+      setEditingPath(false);
+      setPathQuery('');
+    },
+  });
   // The crumbs give the file's name the room first: folders drop from the start
   // (the "…" crumb stands for them) while the name would be cut, rather than
   // every segment squeezing down to a letter (measured at a 700px window:
@@ -1556,7 +1571,6 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                 const picked = suggestions[suggestIdx];
                 commitPath(picked ? picked.path : (e.target as HTMLInputElement).value);
               }
-              else if (e.key === 'Escape') { e.preventDefault(); setEditingPath(false); setPathQuery(''); }
             }}
             onBlur={(e) => {
               // Let a suggestion mousedown win over blur-commit.

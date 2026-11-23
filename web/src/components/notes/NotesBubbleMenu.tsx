@@ -18,7 +18,7 @@ import { usePrompt } from '@/hooks/useConfirm';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 import { clippingAncestors } from '@/utils/clip-ancestors';
-import { claimToolbarEscape } from '@/utils/file-card-escape';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useMenuPlacement, menuPlacementStyle, type MenuPlacementOptions } from '@/hooks/useMenuPlacement';
 
 interface NotesBubbleMenuProps {
@@ -72,7 +72,9 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
     const document = editor.view.dom.ownerDocument;
     const host = portalRef.current ?? document.createElement('div');
     portalRef.current = host;
-    if (!host.isConnected) document.body.append(host);
+    // Last in <body> at every show: on the menu layer, the overlay opened last is on top, so the
+    // toolbar sits over a full-screen sheet opened since, and under a dialog opened from it.
+    document.body.append(host);
     return host;
   }, [editor]);
   useEffect(() => () => portalRef.current?.remove(), []);
@@ -81,6 +83,8 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
   // EditorContent has mounted it, and a note opened at once (New note) renders this in that window.
   const editorRef = useMemo(() => editorRefOf(editor), [editor]);
   const [open, setOpen] = useState(false);
+  /** Shown, not only open: off while its passage is scrolled out of view or the route is hidden. */
+  const [visible, setVisible] = useState(true);
   const [anchor, setAnchor] = useState<MenuPlacementOptions['anchorPoint']>(null);
   const passageVisibleRef = useRef(true);
   /** The editor's visible box (its clipping ancestors and the viewport): the menu stays inside it. */
@@ -132,17 +136,25 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
     const visible = passageVisibleRef.current && shownRef.current;
     menu.style.visibility = visible ? 'visible' : 'hidden';
     menu.style.pointerEvents = visible ? style.pointerEvents ?? '' : 'none';
+    setVisible(visible);
   }, []);
   useLayoutEffect(() => { if (shown && open) readAnchor(); }, [shown, open, readAnchor]);
-  // One Escape closes the toolbar and only the toolbar (the selection collapses to its end):
-  // not a card under it, not the sheet around it (utils/file-card-escape.ts).
-  useEffect(() => {
-    if (!open) return;
-    return claimToolbarEscape(
-      () => !editor.isDestroyed && menuRef.current?.style.visibility !== 'hidden' && !editor.state.selection.empty,
-      () => { if (!editor.isDestroyed) editor.commands.setTextSelection(editor.state.selection.to); },
-    );
-  }, [editor, open]);
+  // A layer while it shows: one Escape closes the toolbar and only the toolbar (the selection
+  // collapses to its end), never a card under it or the sheet around it, and a menu or dialog
+  // opened over it takes the key first. A press outside is the editor's: tiptap hides the toolbar
+  // with the selection, and a shift-click must still extend it, so the layer does nothing there.
+  // Tab stays the editor's (list indent).
+  useOverlayLayer({
+    open: open && visible,
+    refs: [menuRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    // It shows whenever text is selected in a note: the page's shortcuts keep working under it.
+    passive: true,
+    onClose: (reason) => {
+      if (reason === 'escape' && !editor.isDestroyed) editor.commands.setTextSelection(editor.state.selection.to);
+    },
+  });
   useLayoutEffect(place, [place, placement, anchor, shown]);
   const options = useMemo(() => ({
     strategy: 'fixed' as const,
@@ -181,7 +193,7 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
       editor={editor}
       pluginKey="notesBubbleMenu"
       shouldShow={shouldShow}
-      className="notes-bubble-menu"
+      className="notes-bubble-menu wn-overlay"
       // Its buttons are chrome, never the note's text (utils/find-doc.ts).
       data-find-skip=""
       ref={menuRef}

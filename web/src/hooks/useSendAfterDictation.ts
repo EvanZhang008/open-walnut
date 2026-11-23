@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { DictationOutcome } from '@/hooks/useSpeechToText';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
 import '@/styles/dictation-wait.css';
 
@@ -144,18 +145,18 @@ export function useSendAfterDictation(mics: ReadonlyArray<ControlRef>, send: () 
     sendRef.current();
   }, [due, setWait]);
 
-  // Esc cancels the wait, before the composer's own Esc handling sees it.
-  useEffect(() => {
-    if (!waiting) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      cancel();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [waiting, cancel]);
+  // Esc cancels the wait, before the composer's own Esc handling sees it: a passive layer on the
+  // overlay stack, so it sits above a selection bar opened before it (which took the key first when
+  // the wait was a window listener of its own, 2026-11-22 review) and leaves the page's shortcuts be.
+  // A press elsewhere is not a cancel: the layer does nothing on it and lets the click through.
+  useOverlayLayer({
+    open: waiting,
+    refs: [],
+    passive: true,
+    trapFocus: false,
+    passOutsideClick: true,
+    onClose: (reason) => { if (reason === 'escape') cancel(); },
+  });
 
   useEffect(() => () => { seq.current += 1; dueRef.current = false; release(); }, [release]);
 

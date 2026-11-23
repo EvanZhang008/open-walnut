@@ -16,7 +16,8 @@ import {
   type PasswordsSection, type PasswordsSort,
 } from './passwords-model'
 import { ItemView, SiteTile } from './ItemView'
-import { ItemEditor, PasswordsPopover } from './ItemEditor'
+import { ItemEditor } from './ItemEditor'
+import { PasswordsPopover } from './PasswordsPopover'
 import { ImportDialog } from './ImportDialog'
 import { GeneratorPanel } from './GeneratorPanel'
 import { AgentActivity } from './AgentActivity'

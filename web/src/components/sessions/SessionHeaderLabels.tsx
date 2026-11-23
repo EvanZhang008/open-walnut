@@ -17,10 +17,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/session-header-labels.css';
-
-/** A body child that only announces (a toast region), never a card or menu over the list. */
-export const LIVE_REGION = '[role="status"], [role="alert"], [role="log"], [aria-live]';
 
 /** How many tags the list shows: each pill of the tag group (anything else counts as one). */
 export function countLabels(list: Element): { count: number; text: string } {
@@ -99,43 +97,21 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    // A tag's own card (its hover card, a picker) is portalled to <body> after this
-    // opened: a click there belongs to it, not outside.
-    // A live region (a toast's status line) mounting there meanwhile is no layer of this
-    // list: counted as one, it swallowed every Escape for as long as it stayed.
-    const before = new Set(Array.from(document.body.children));
-    const isChildPortal = (el: Element) => el.parentElement === document.body && !before.has(el)
-      && !el.matches(LIVE_REGION);
-    const onPointerDown = (e: PointerEvent) => {
-      const t = e.target as Element | null;
-      if (!t || buttonRef.current?.contains(t) || menuRef.current?.contains(t)) return;
-      let top: Element | null = t;
-      while (top && top.parentElement && top.parentElement !== document.body) top = top.parentElement;
-      if (top && isChildPortal(top)) return;
+  // Escape and an outside press close the list through the overlay stack. A tag's own card
+  // (its hover card, a change card) is a layer opened after this one, so it is on top: the
+  // first Escape closes the card, the next one the list, and a press inside the card stays
+  // the card's. A toast's status line on <body> is no layer, so it never takes the key.
+  // The stack listens in the capture phase, so a press on a state pill beside the control
+  // (each stops its own pointerdown) still closes the list.
+  useOverlayLayer({
+    open,
+    refs: [menuRef, buttonRef],
+    passOutsideClick: true,
+    onClose: (reason) => {
       setOpen(false);
-    };
-    // Escape closes one layer at a time: a tag's own card first (it listens too), then
-    // the list, and nothing else (a full-screen panel stays full screen).
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      const childOpen = Array.from(document.body.children).some((el) => isChildPortal(el) && el.getClientRects().length > 0);
-      if (childOpen) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-      buttonRef.current?.focus();
-    };
-    // Capture phase: the state pills beside it stop their own pointerdown, so a press on
-    // one would never reach a bubbling listener and both flyouts would stay open.
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open]);
+      if (reason === 'escape') buttonRef.current?.focus();
+    },
+  });
 
   const { count, text } = labels;
   return (

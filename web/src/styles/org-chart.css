@@ -9,9 +9,14 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  /* The window's width (the VP cards fill as many columns as fit: a width cap cut a column at
+     1512px), and the chart's height: a short chart is a short sheet, centred, and the tree scrolls
+     inside once the sheet reaches the window's height (2026-11-22 audit). */
   flex: 1;
+  align-self: center;
   min-width: 0;
   min-height: 0;
+  max-height: calc(100% - 48px);
   margin: 24px;
   padding: 16px 20px;
   color: var(--fg);
@@ -285,7 +290,7 @@
 .oc-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 @media (max-width: 720px) {
-  .org-sheet { margin: 0; padding: 12px; }
+  .org-sheet { flex: 1; align-self: stretch; max-height: none; margin: 0; padding: 12px; }
   html body .org-sheet { border-radius: 0; }
   .oc-vps { grid-template-columns: minmax(0, 1fr); }
 }

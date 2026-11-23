@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { CommandDef } from '@/api/commands';
 import { stripMarkdown } from '../../../../src/core/boards/board-summary-text';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface CommandCardProps {
   command: CommandDef;
@@ -34,6 +35,14 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const close = () => { setConfirmDelete(false); setMenuOpen(false); };
+  // The menu and its confirm close as every menu does: Escape (focus back on ⋮) or a press outside.
+  useOverlayLayer({
+    open: menuOpen || confirmDelete, refs: [wrapRef], passOutsideClick: true,
+    onClose: (reason) => { close(); if (reason === 'escape') btnRef.current?.focus({ preventScroll: true }); },
+  });
   // Built-in and plugin commands both live outside ~/.open-walnut/commands/ — the API
   // answers 403 for either, so don't offer an Edit/Delete affordance that can only fail.
   const isReadOnly = command.source === 'builtin' || command.source === 'plugin';
@@ -57,32 +66,35 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
         </div>
         {!isReadOnly && (
           <div className="cmd-card-actions">
-            <div className="cmd-menu-wrapper">
+            <div className="cmd-menu-wrapper" ref={wrapRef}>
               <button
+                ref={btnRef}
                 className="btn btn-sm btn-icon cmd-menu-btn"
                 onClick={() => { setMenuOpen(!menuOpen); setConfirmDelete(false); }}
                 title="Actions"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen || confirmDelete}
               >
                 &#8942;
               </button>
               {menuOpen && !confirmDelete && (
-                <div className="cmd-menu" onMouseLeave={() => setMenuOpen(false)}>
-                  <button className="cmd-menu-item" onClick={() => { onEdit(command); setMenuOpen(false); }}>
+                <div className="cmd-menu wn-overlay wn-menu" role="menu">
+                  <button className="cmd-menu-item" role="menuitem" onClick={() => { onEdit(command); setMenuOpen(false); }}>
                     Edit
                   </button>
-                  <button className="cmd-menu-item cmd-menu-danger" onClick={() => setConfirmDelete(true)}>
+                  <button className="cmd-menu-item cmd-menu-danger" role="menuitem" onClick={() => setConfirmDelete(true)}>
                     Delete
                   </button>
                 </div>
               )}
               {confirmDelete && (
-                <div className="cmd-confirm-popover" onMouseLeave={() => { setConfirmDelete(false); setMenuOpen(false); }}>
+                <div className="cmd-confirm-popover wn-overlay" role="dialog" aria-label={`Delete /${command.name}?`}>
                   <p className="cmd-confirm-text">Delete /{command.name}?</p>
                   <div className="cmd-confirm-actions">
-                    <button className="btn btn-sm" onClick={() => { setConfirmDelete(false); setMenuOpen(false); }}>
+                    <button className="btn btn-sm" onClick={close}>
                       Cancel
                     </button>
-                    <button className="btn btn-sm btn-primary btn-danger" onClick={() => { onDelete(command.name); setConfirmDelete(false); setMenuOpen(false); }}>
+                    <button className="btn btn-sm btn-primary btn-danger" onClick={() => { onDelete(command.name); close(); }}>
                       Delete
                     </button>
                   </div>

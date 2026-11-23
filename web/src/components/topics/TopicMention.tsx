@@ -8,17 +8,14 @@
  * every "@Name" the server's own rule names (mentionSpans, topic-mentions.ts) in the drawn text,
  * outside code and links, becomes an empty slot, and each slot gets its chip through a portal. A
  * redraw of the words (a new html) takes the slots away, so a MutationObserver puts them back.
+ * The portals here put chips into the words; the card a chip opens is MentionCard.tsx.
  */
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { MemberRef, Topic } from '@/api/topics';
-import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { useOpenTask } from '@/hooks/useOpenTask';
-import { useOverlayLayer } from '@/hooks/useOverlayLayer';
-import { useTaskListSelect } from '@/contexts/TasksContext';
-import { MemberAvatar, memberTaskId } from './TopicAvatars';
-import { useMemberCandidates } from './member-candidates';
-import { mentionCardFacts, mentionSpans, refKey, shortName } from './topic-model';
+import { MemberAvatar } from './TopicAvatars';
+import { MentionCard } from './MentionCard';
+import { mentionSpans, shortName } from './topic-model';
 
 type Member = Topic['members'][number];
 interface Slot { el: HTMLElement; id: string }
@@ -124,34 +121,3 @@ function MentionChip({ member, written }: { member: Member; written: string }) {
     </>
   );
 }
-
-function MentionCard({ member, anchor, onClose }: { member: Member; anchor: RefObject<HTMLButtonElement | null>; onClose: () => void }) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const placement = useMenuPlacement(true, anchor, cardRef, { preferSide: 'down', align: 'start', minHeight: 120, onAnchorLost: onClose });
-  useOverlayLayer({ open: true, onClose, refs: [cardRef, anchor] });
-  const candidates = useMemberCandidates();
-  const leads = member.ref.kind === 'org' ? candidates.find((c) => refKey(c.ref) === refKey(member.ref))?.hint : undefined;
-  const taskId = useTaskListSelect(({ tasks }) => memberTaskId(member.ref, tasks));
-  const phase = useTaskListSelect(({ tasks }) => (member.ref.kind === 'task' ? tasks.find((t) => t.id === taskId)?.phase : undefined));
-  const facts = mentionCardFacts(member, { ...(leads ? { leads } : {}), ...(phase ? { phase } : {}) });
-  const openTask = useOpenTask();
-  return createPortal(
-    <div ref={cardRef} role="dialog" aria-label={member.name} className="task-kebab-menu topic-mention-card wn-overlay" data-testid="topic-mention-card"
-      style={menuPlacementStyle(placement)} onPointerDown={(e) => e.stopPropagation()}>
-      <div className="topic-mention-card-head">
-        <MemberAvatar who={{ name: member.name, ref: member.ref }} size={40} />
-        <span className="topic-mention-card-names">
-          <span className="topic-mention-card-name">{member.name}</span>
-          <span className="topic-mention-card-kind" data-testid="topic-mention-card-kind">{facts.kind}</span>
-        </span>
-      </div>
-      {facts.line && <p className="topic-mention-card-line">{facts.line}</p>}
-      {facts.opens && taskId && (
-        <button type="button" className="btn btn-sm topic-mention-card-open" data-testid="topic-mention-card-open"
-          onClick={() => { onClose(); openTask(taskId); }}>Open chat</button>
-      )}
-    </div>,
-    document.body,
-  );
-}
-

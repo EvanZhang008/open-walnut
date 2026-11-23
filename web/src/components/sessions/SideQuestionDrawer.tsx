@@ -696,7 +696,7 @@ function SideQuestionDrawerBody({
       {expanded && FullscreenBackdrop}
       {expanded && (
         <div
-          className={`side-question-popover side-question-popover--threads${fullscreenClass}`}
+          className={`side-question-popover side-question-popover--threads wn-overlay${fullscreenClass}`}
           // The popover lives INSIDE the main composer's controls row, so a file
           // dropped on the drawer's composer would keep bubbling and attach to the
           // MAIN composer as well. The inner ChatInput has already handled it here.

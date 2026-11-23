@@ -102,9 +102,8 @@ export function CodeContextMenu({ target, onClose, onCopy, onAsk, onFindReferenc
 
   return createPortal(
     <>
-      {/* code-ctx-backdrop lifts the z-index above fullscreen panels (the
-          shared cal backdrop sits at 999, BELOW .open-walnut-fullscreen /
-          .fv-fullscreen) — otherwise outside-click never reaches it there. */}
+      {/* The backdrop is on the menu layer (var(--z-menu)), over a full-screen panel, so a press
+          outside the menu reaches it there too. */}
       <div
         className="cal-popover-backdrop code-ctx-backdrop"
         onClick={onClose}
@@ -114,9 +113,7 @@ export function CodeContextMenu({ target, onClose, onCopy, onAsk, onFindReferenc
       <div
         className="cal-ctx-menu code-ctx-menu wn-overlay wn-menu"
         ref={menuRef}
-        // The inline zIndex must beat .fv-fullscreen (10000) and
-        // .file-viewer-overlay (9999) — menuPlacementStyle's default 9999 ties
-        // or loses inside those, leaving an invisible menu on a dead click.
+        // Its layer is the family's (wn-overlay, var(--z-menu)), above a full-screen file view.
         style={{ ...menuPlacementStyle(placement) }}
         role="menu"
         data-testid="code-ctx-menu"

@@ -219,55 +219,67 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     if (open && placement) rootRef.current?.focus({ preventScroll: true });
   }, [open, placed]);
 
-  // One overlay layer for the outside press: anywhere outside the root closes it.
-  // The anchor is NOT exempt and the click goes through: a press on "+" closes
-  // this and the click that follows opens the menu, one state flip each (the
-  // composer's textarea takes its caret the same way). Escape and Tab stay the
-  // root's own (below): a row's input, a native select, the filter and the About
-  // overlay each take an Escape before the popover does, which a window-level
-  // Escape would steal from them.
-  useOverlayLayer({
-    open,
-    refs: [rootRef],
-    closeOnEscape: false,
-    trapFocus: false,
-    passOutsideClick: true,
-    onClose: () => {
-      (document.activeElement as HTMLElement | null)?.blur?.();
-      requestAnimationFrame(() => close('outside'));
-    },
-  });
-
   const returnFocusAndClose = useCallback((reason: EngineSettingsCloseReason) => {
     const anchor = anchorRef.current;
     close(reason);
     anchor?.focus({ preventScroll: true });
   }, [anchorRef, close]);
 
+  // One overlay layer for Escape and the outside press. The anchor is NOT exempt and the click
+  // goes through: a press on "+" closes this and the click that follows opens the menu, one state
+  // flip each (the composer's textarea takes its caret the same way). Escape steps out one thing at
+  // a time: the About overlay, a focused native select (its popup, when open, took the key before
+  // the page), the filter's text, and only then the popover. A row's input whose Escape has work of
+  // its own (discard a typed draft, close the "Custom..." box: EngineSettingRows) keeps the key:
+  // `closeOnEscape` is read when the key is pressed, so the layer lets that one through to it. The
+  // layer listens on the window, so a key pressed while focus fell to <body> (a saving row disables
+  // its <fieldset>) still closes it. Tab stays the root's own (visibleFocusable, below).
+  const rowOwnsEscape = (): boolean => {
+    const el = document.activeElement;
+    if (!isTextEntry(el) || !rootRef.current?.contains(el)) return false;
+    if (el.classList.contains('engine-setting-custom')) return true;
+    if (!el.closest('.engine-settings-popover-row')) return false;
+    const committed = committedValueOf(el, (key) => findItem(view, key)?.value);
+    return committed === undefined || el.value !== committed;
+  };
+  useOverlayLayer({
+    open,
+    refs: [rootRef],
+    closeOnEscape: () => !rowOwnsEscape(),
+    trapFocus: false,
+    passOutsideClick: true,
+    onEscape: (e) => {
+      const target = e.target as HTMLElement;
+      if (aboutOpen) { setAboutOpen(false); aboutButtonRef.current?.focus(); return true; }
+      if (target instanceof HTMLSelectElement) { target.blur(); rootRef.current?.focus({ preventScroll: true }); return true; }
+      if (target === filterRef.current && filter) { setFilter(''); return true; }
+      return false;
+    },
+    onClose: (reason) => {
+      if (reason === 'escape') { returnFocusAndClose('escape'); return; }
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      requestAnimationFrame(() => close('outside'));
+    },
+  });
+
   // A saving row disables its <fieldset>; Chromium then drops focus to
   // <body> with no event, and a key pressed there never reaches the root's own
-  // handler. Two answers. (a) Keys pressed while focus is outside the dialog are
-  // handled at the document: Escape closes, Tab re-enters the dialog.
+  // handler. Two answers. (a) Tab pressed while focus is outside the dialog
+  // re-enters it (Escape there is the layer's, above).
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const root = rootRef.current;
       // A dialog opened over the popover (an approval) takes the keys first.
-      if (!root || focusInside(root) || hasActiveModalOverlay()) return;
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        if (aboutOpen) { setAboutOpen(false); aboutButtonRef.current?.focus(); return; }
-        returnFocusAndClose('escape');
-      } else if (e.key === 'Tab') {
-        const stops = visibleFocusable(root);
-        if (stops.length === 0) return;
-        e.preventDefault();
-        (e.shiftKey ? stops[stops.length - 1] : stops[0]).focus();
-      }
+      if (e.key !== 'Tab' || !root || focusInside(root) || hasActiveModalOverlay()) return;
+      const stops = visibleFocusable(root);
+      if (stops.length === 0) return;
+      e.preventDefault();
+      (e.shiftKey ? stops[stops.length - 1] : stops[0]).focus();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open, aboutOpen, returnFocusAndClose]);
+  }, [open]);
 
   // (b) When a save finishes and focus is not on a control, put it on that row's
   // control. "Not on a control" includes the dialog ROOT: WebKit does
@@ -298,29 +310,6 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   }, [savingKeys, open]);
 
   const onRootKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement;
-    if (e.key === 'Escape') {
-      // A row input preventDefaults every Escape, whether or not it had a draft
-      // to discard. Only a real discard uses the key: the input's value
-      // still differs from the committed one here, since the row's reset paints
-      // on the next render. A clean input's Escape is a close request.
-      if (e.defaultPrevented && target.matches('input, select, textarea')) {
-        // The "Custom…" input of a select closes itself on Escape; that is its own step.
-        if (!isTextEntry(target) || target.classList.contains('engine-setting-custom')) return;
-        const committed = committedValueOf(target, (key) => findItem(view, key)?.value);
-        if (committed === undefined || target.value !== committed) return;
-      }
-      e.preventDefault();
-      // The About overlay is the topmost layer: Escape closes it first.
-      if (aboutOpen) { setAboutOpen(false); aboutButtonRef.current?.focus(); return; }
-      // A focused native select: the same key closes its popup when one is open
-      // (that Escape never reaches the page), so without a popup it only steps
-      // out of the control; the popover closes on the next one.
-      if (target instanceof HTMLSelectElement) { target.blur(); rootRef.current?.focus({ preventScroll: true }); return; }
-      if (target === filterRef.current && filter) { setFilter(''); return; }
-      returnFocusAndClose('escape');
-      return;
-    }
     if (e.key !== 'Tab' || !rootRef.current) return;
     const focusable = visibleFocusable(rootRef.current);
     if (focusable.length === 0) return;
@@ -331,7 +320,7 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     } else if (!e.shiftKey && document.activeElement === last) {
       e.preventDefault(); first.focus();
     }
-  }, [filter, aboutOpen, returnFocusAndClose, view]);
+  }, []);
 
   // Opening a settings file in the panel's Files view is leaving the popover.
   const onOpenFilePath = useCallback((path: string) => {

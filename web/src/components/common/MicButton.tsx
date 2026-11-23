@@ -543,7 +543,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       {/* Non-destructive dead-mic warning — shown WHILE recording; recording is never
           auto-stopped, and this clears itself the moment sound is detected again. */}
       {isRecording && silenceWarning && (
-        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning" role="status">
+        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning wn-tone-warning" role="status">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
             <line x1="12" y1="9" x2="12" y2="13" />
@@ -554,7 +554,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       )}
       {/* The live text stopped moving while the take records on: never a silent stop. */}
       {isRecording && !silenceWarning && draftNotice && (
-        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning mic-draft-notice" role="status">
+        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning mic-draft-notice wn-tone-warning" role="status">
           <span>{draftNotice}</span>
         </MicPopover>
       )}
@@ -562,7 +562,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
           Offers Retry when the audio is still held; dismissed by starting a new recording
           (toggleRecording clears error) or clicking ✕. */}
       {showErrorBubble && (
-        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning mic-error-bubble" role="alert" onClose={() => setErrorDismissed(true)}>
+        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning mic-error-bubble wn-tone-error" role="alert" onClose={() => setErrorDismissed(true)}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
@@ -684,7 +684,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                         {retranscribingId === rec.id ? '…' : '⋯'}
                       </button>
                       {actionMenuId === rec.id && (
-                        <div className="mic-history-menu" role="menu">
+                        <div className="mic-history-menu wn-overlay wn-menu" role="menu">
                           {rec.secondary && (
                             <button type="button" className="mic-history-menu-item" title="Compare both engines in a popup"
                               onClick={() => { setActionMenuId(null); setDiffRec(rec); }}>

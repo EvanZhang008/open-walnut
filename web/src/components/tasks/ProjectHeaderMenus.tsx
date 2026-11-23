@@ -28,6 +28,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { useProjectActions } from '@/hooks/useProjectActions';
 import { projectDisplayName } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
@@ -360,7 +361,7 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
           Space too, a pointerdown arms its drag): they stop here. Escape goes on to the dialog's own handler. */}
       {scripts && (
         <span style={{ display: 'contents' }} onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}>
+          onKeyDown={keepKeysInside}>
           <ProjectScriptsDialog project={project} onClose={() => setScripts(false)} />
         </span>
       )}

@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { SearchField } from '@/components/common/SearchField';
 import { addCatalogLibrary, drawingLibraryApi, searchCatalog, tabLibrary, type CatalogItem, type DrawingLibraryApi, type LibraryStore } from './drawing-library';
 import { OutsidePress } from './drawing-overlay';
@@ -40,22 +41,12 @@ export function LibraryBrowser({ onClose, onAdded, api = drawingLibraryApi, stor
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useModalOverlay(onClose);
-  // Escape is this dialog's wherever the focus is. Adding a library opens the editor's Library
-  // panel, which takes the focus; without this, the same Escape also reached the editor's own
-  // document listener (a listener beside the modal's, which stopPropagation does not stop) and
-  // closed the Library panel behind the dialog.
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing || e.keyCode === 229) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      close.current();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  // Escape is this dialog's wherever the focus is: it is also the top overlay layer, whose window
+  // listener takes the key first. Adding a library opens the editor's Library panel, which takes the
+  // focus; without this, the same Escape also reached the editor's own document listener (a listener
+  // beside the modal's, which stopPropagation does not stop) and closed the Library panel behind the
+  // dialog. A press outside is the dialog's own (OutsidePress below), and Tab stays in it.
+  useOverlayLayer({ open: true, refs: [panel], closeOnOutside: false, onClose: (reason) => { if (reason === 'escape') onClose(); } });
 
   const load = () => {
     setError(null);
@@ -88,7 +79,7 @@ export function LibraryBrowser({ onClose, onAdded, api = drawingLibraryApi, stor
       onPointerDown={(e) => { e.stopPropagation(); press.down(outside(e.target)); }}
       onPointerUp={(e) => { if (press.up(outside(e.target))) onClose(); }}
       onPointerCancel={() => press.cancel()}
-      // Keys stay in the dialog (Escape never gets here: the window listener above takes it).
+      // Keys stay in the dialog (Escape never gets here: the overlay layer takes it first).
       onKeyDown={(e) => { e.stopPropagation(); }}>
       <div ref={panel} className="drawing-library-dialog wn-dialog" role="dialog" aria-modal="true" aria-label="Browse libraries">
         <header className="drawing-library-head">

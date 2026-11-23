@@ -59,6 +59,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import {
   canAnchorQuote, captureSelectionQuote, selectionBody, selectionInEditable, selectionVisibleIn,
   targetInEditable, type SelectionQuote,
@@ -243,6 +244,12 @@ function readLiveSelection(
   return { captured, anchor, range, backward: selectionIsBackward(selection) };
 }
 
+/** A text field has the keyboard: its Escape (the composer's @, / and recall lists) is its own. */
+function fieldHasFocus(): boolean {
+  const el = typeof document !== 'undefined' ? document.activeElement : null;
+  return el instanceof HTMLElement && el.matches('textarea, input, select, [contenteditable=""], [contenteditable="true"]');
+}
+
 export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, askMode = 'inline', onQuoteInChat }: QuotePinSelectionBarProps) {
   const [state, setState] = useState<PillState | null>(null);
   /** The Ask here choice (inline or Tree) is open in place of the buttons. */
@@ -277,8 +284,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
    * did nothing at all (measured). Self-clearing: any press elsewhere sets it back.
    */
   const pressedPill = useRef(false);
-  /** The last Esc keydown ended an IME composition (its keyup must not dismiss). */
-  const escComposing = useRef(false);
+  /** The overlay layer took the last Escape keydown: its keyup must not re-read the
+   *  selection that is still there, or the pill would come straight back. */
+  const escTaken = useRef(false);
+  /** The queued evaluate (one frame after a selection event), cancelled with a dismissal. */
+  const evalRaf = useRef(0);
   /** The primary button is down on something other than the pill: a selection
    *  may be being dragged, so no pill until it is released. */
   const selectingRef = useRef(false);
@@ -509,23 +519,13 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
   }, [containerRef, dismiss, held, inPill, holdLastLive]);
 
   useEffect(() => {
-    let raf = 0;
     const schedule = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(evaluate);
+      cancelAnimationFrame(evalRaf.current);
+      evalRaf.current = requestAnimationFrame(evaluate);
     };
-    const onKey = (e: KeyboardEvent) => {
-      // An evaluate still queued from before the Esc (a late selectionchange or
-      // scroll) would read the selection that is still there and put the pill
-      // straight back: cancel it with the dismissal.
-      if (e.key === 'Escape') {
-        // An Esc that cancelled an IME composition is the input method's, not ours.
-        if (escComposing.current) { escComposing.current = false; return; }
-        // The Ask choice is a layer of its own: Esc goes back to the buttons.
-        // Focus goes back to the caret that opened it, as any dropdown's does.
-        if (askPickRef.current) { setAskPick(false); askCaretRef.current?.focus(); return; }
-        cancelAnimationFrame(raf); dismiss(); return;
-      }
+    // A key may move the selection (Shift+arrows). The Escape the layer took is not one.
+    const onKey = () => {
+      if (escTaken.current) { escTaken.current = false; return; }
       schedule();
     };
     // A scroll used to DISMISS the pill outright, which made it unusable for the
@@ -549,8 +549,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
       const container = containerRef.current;
       const t = e.target;
       if (container && t instanceof Node && t !== document && !t.contains(container) && !container.contains(t)) return;
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
+      cancelAnimationFrame(evalRaf.current);
+      evalRaf.current = requestAnimationFrame(() => {
         // Same reason `evaluate` bails on a pill press: a press clears the
         // selection (the guard in main.tsx), which releases the selection freeze,
         // which resizes the timeline and clamps scrollTop — so a scroll can arrive
@@ -632,7 +632,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     window.addEventListener('resize', onResize);
     return () => {
       window.removeEventListener('resize', onResize);
-      cancelAnimationFrame(raf);
+      cancelAnimationFrame(evalRaf.current);
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('pointerup', endSelecting, true);
       document.removeEventListener('pointercancel', endSelecting, true);
@@ -745,22 +745,40 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     dismiss();
   }, [state, dismiss]);
 
-  // While the pill is up, Esc belongs to it (dismissed on keyup above): claim the
-  // keydown so neither the question stack's Esc (the window router) nor
-  // fullscreen's (a document listener that skips a prevented Esc) also acts. The
-  // CAPTURE phase, because fullscreen's bubble listener was registered first and
-  // would otherwise run before this one. One Esc closes one layer.
-  const shown = !!state;
-  useEffect(() => {
-    if (!shown) return;
-    const onDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      escComposing.current = e.isComposing || e.keyCode === 229;
-      if (!escComposing.current) e.preventDefault();
-    };
-    document.addEventListener('keydown', onDown, true);
-    return () => document.removeEventListener('keydown', onDown, true);
-  }, [shown]);
+  // While the pill is up it is an overlay layer: Escape is its own, so neither the
+  // question stack's Escape (the window router) nor fullscreen's also acts (one Escape
+  // closes one layer), and an Escape that ends an IME composition stays the input
+  // method's. The Ask choice goes first: Escape goes back to the buttons, with the
+  // focus on the caret that opened it, as any dropdown's does; the next one dismisses.
+  // A press outside is not the layer's to judge: the selection's own rules decide it
+  // (the pointerdown listener above: a held passage stays for its panel's composer and
+  // mic, a right press is the context menu), so the layer ignores it and the press does
+  // what it pressed. The bar never holds the keyboard (no Tab trap).
+  useOverlayLayer({
+    open: !!state,
+    refs: [pillRef, menuRef],
+    trapFocus: false,
+    // It shows whenever text is selected: the page's shortcuts must keep working under it.
+    passive: true,
+    // Read when the key is pressed: in a field (the composer, with its @, / and recall lists, which
+    // answer Escape in their own onKeyDown), Escape is the field's, as it was before the bar was a layer.
+    closeOnEscape: () => !fieldHasFocus(),
+    passOutsideClick: true,
+    onEscape: () => {
+      escTaken.current = true;
+      if (!askPickRef.current) return false;
+      setAskPick(false);
+      askCaretRef.current?.focus();
+      return true;
+    },
+    onClose: (reason) => {
+      if (reason !== 'escape') return;
+      // An evaluate still queued from before the Escape (a late selectionchange or a
+      // scroll) would read the selection that is still there and put the pill back.
+      cancelAnimationFrame(evalRaf.current);
+      dismiss();
+    },
+  });
 
   // A new passage starts on the buttons, never on the last one's choice.
   const passageId = state ? `${state.msgId}|${state.quote.exact}` : '';

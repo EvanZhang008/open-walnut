@@ -7,6 +7,10 @@
  * kept that Escape from it, and the viewer stayed open (2026-11-20, nightly agent-status-source:
  * a file opened from a row's ask did not close on Escape). Guard:
  * tests/web/keep-keys-inside-guard.test.ts.
+ *
+ * The same holds for a dialog or a field inside an overlay: typing there must not reach the page's
+ * shortcuts or a row's drag sensor, yet Escape goes on to the overlay's close (useModalOverlay,
+ * useOverlayLayer), so an overlay's file holds no Escape test of its own.
  */
 export function keepKeysInside(e: { key: string; stopPropagation(): void }): void {
   if (e.key === 'Escape') return;

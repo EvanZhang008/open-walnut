@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { seeThrough } from './helpers/css-see-through';
+import { members } from './overlay-family-scan';
 
 const WEB = path.resolve(__dirname, '../../web/src');
 
@@ -91,27 +92,11 @@ const INSIDE_AN_OVERLAY: Record<string, { layer: string; paintedBy?: string }> =
   'nfc-rail': { layer: 'notification-panel', paintedBy: 'notification-panel' },
 };
 
-/**
- * Surfaces whose element also carries `wn-overlay` (overlay-family.css): that shared class paints
- * the raised solid surface, so the surface's own rules need no background. Read from the JSX.
- */
-function tsxFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...tsxFiles(full));
-    else if (e.name.endsWith('.tsx')) out.push(full);
-  }
-  return out;
-}
-const OVERLAY_FAMILY = new Set<string>(
-  tsxFiles(WEB).flatMap((file) =>
-    [...fs.readFileSync(file, 'utf8').matchAll(/className=["'`{]([^"'`}]*\bwn-overlay\b[^"'`}]*)/g)]
-      .flatMap((m) => m[1]!.split(/\s+/).filter((c) => /^[a-z][\w-]*$/.test(c) && c !== 'wn-overlay')),
-  ),
-);
-
 const SURFACE = /(?:^|-)(header|toolbar|card|panel|dock|sheet|column|drawer|bar)$/;
+
+/** Classes on the overlay family (written beside wn-overlay, wn-dialog...): the family paints them
+ *  (var(--bg-elevated), overlay-family.css), so they need no background of their own. */
+const FAMILY_MEMBERS = members();
 
 function cssFiles(dir: string): string[] {
   const out: string[] = [];
@@ -221,7 +206,7 @@ function problemsOf(cls: string): string[] {
   if (clear.length && !hits.some(({ rule, pseudo }) => pseudo === 'before' && opaqueBackground(bgOf(rule.body) ?? 'none'))) {
     for (const { rule } of clear) bad.push(`${rule.file}: ${rule.selector.replace(/\s+/g, ' ')} clears its background with no opaque ::before layer`);
   }
-  if (!paints && !OVERLAY_FAMILY.has(cls)) bad.push(`.${cls} paints no opaque background anywhere`);
+  if (!paints && !FAMILY_MEMBERS.has(cls)) bad.push(`.${cls} paints no opaque background anywhere`);
   return bad;
 }
 
@@ -229,7 +214,7 @@ describe('chrome over scrolling content is solid', () => {
   const surfaces = positionedSurfaces();
 
   it('reads the overlay-family cards from the JSX', () => {
-    for (const known of ['task-waiting-card', 'session-web-card']) expect(OVERLAY_FAMILY, known).toContain(known);
+    for (const known of ['task-waiting-card', 'session-web-card']) expect(FAMILY_MEMBERS, known).toContain(known);
   });
 
   it('finds the surfaces the review saw through', () => {

@@ -10,6 +10,7 @@ import type { Task } from '@open-walnut/core';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { AGENTS_IN_BROWSER } from '@/components/settings/sections/browser-labels';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { ownerWord, relayGroups, relayTabName, taskOfOwner, type RelayPillKind, type RelayState, type RelayTab } from './ext-relay-model';
 import { taskHead } from './ext-tasks-model';
 import { taskPageTitle } from './ext-home-model';
@@ -69,21 +70,21 @@ export function RelayPanel({ relay, here, tasks, anchorRef, onClose, settings }:
   const [want, setWant] = useState<boolean | null>(null);
   useEffect(() => { if (relay && want === relay.on) setWant(null); }, [relay, want]);
   const on = want ?? relay?.on ?? false;
-  // A press outside the panel or its pill closes it, as Escape does.
-  useEffect(() => {
-    const down = (e: PointerEvent) => {
-      const el = e.target instanceof Element ? e.target : null;
-      if (el && (ref.current?.contains(el) || anchorRef.current?.contains(el))) return;
+  // One layer of the overlay stack: a press outside the panel or its pill closes it, as Escape does
+  // (Escape gives the focus back to the pill).
+  useOverlayLayer({
+    open: true,
+    refs: [ref, anchorRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    onClose: (reason) => {
       onClose();
-    };
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); anchorRef.current?.focus(); } };
-    window.addEventListener('pointerdown', down, true);
-    window.addEventListener('keydown', key, true);
-    return () => { window.removeEventListener('pointerdown', down, true); window.removeEventListener('keydown', key, true); };
-  }, [onClose, anchorRef]);
+      if (reason === 'escape') anchorRef.current?.focus();
+    },
+  });
   const stop = (t: RelayTab) => toParent({ type: 'relay-release', tab: t.tab });
   return (
-    <div ref={ref} className="ext-relay-panel" role="dialog" aria-label="Browser relay" data-testid="ext-relay-panel"
+    <div ref={ref} className="ext-relay-panel wn-overlay" role="dialog" aria-label="Browser relay" data-testid="ext-relay-panel"
       style={place ? { top: place.top, right: place.right, maxHeight: place.maxHeight } : { visibility: 'hidden' }}
       onPointerDown={(e) => e.stopPropagation()}>
       <div className="ext-relay-head">

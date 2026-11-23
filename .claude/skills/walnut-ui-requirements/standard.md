@@ -355,11 +355,18 @@ and closes through one hook. Its own CSS keeps only its size, padding and conten
 - Menus and popovers stay SOLID: rows were unreadable through WebKit glass (2026-11-04,
   `overlay-glass.css`); only the overlays in `GLASS_OVERLAYS` (`tests/web/overlays-opaque.test.ts`)
   add `wn-glass`, which then owns the material while `wn-overlay` keeps the corner and the layer.
-- Layers come only from the tokens (`--z-raised`, `--z-sticky`, `--z-dock`, `--z-sheet`, `--z-notice`,
-  `--z-modal`, `--z-menu`, `--z-tooltip`, `--z-system`), never a number of its own.
-- `tests/web/overlay-family-ratchet.test.ts` finds every portalled overlay from the source and counts,
-  per file, the ones off the family, without a close hook, with a hand-written Escape, with a frame of
-  their own in CSS, and tooltips without `wn-tip`; the counts only go down.
+- Layers come only from the tokens (`--z-sheet`, `--z-modal`, `--z-menu`, `--z-plugin-dialog`,
+  `--z-tooltip`), never a number of its own.
+- A surface drawn in place (not portalled) that floats over its neighbours is a member too: it wears
+  the family class. A surface beside the user's work rather than over it (the selection's quote bar)
+  is a `passive` layer: Escape is still the layer's, the page's shortcuts keep working under it.
+- A pointer menu opens rightward and down from the pointer, and flips only where the window has no room.
+- A list cut by its height cap fades its foot while rows are below it (`useMoreBelow`, `data-more`).
+- `tests/web/overlay-family-ratchet.test.ts` finds every overlay from the source (portals, nodes put on
+  `<body>` by hand, floating surfaces drawn in place) and counts, per file, the ones off the family,
+  without a close hook, with a hand-written Escape, with a frame of their own (CSS or inline), drawn in
+  place off the family, and tooltips without `wn-tip`; the counts only go down. It also fails on the
+  CSS of a floating surface no component draws any more.
   `tests/e2e/browser/overlay-family.spec.ts` opens a list of them on the page and checks the window
   edges, the corner, the layer, Escape and an outside press.
 

@@ -188,11 +188,13 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
 
   if (!panel) return null;
 
+  // The portal is the overlay (wn-overlay draws the frame and the layer); each panel inside is its
+  // content. It clips them to its corner: a panel paints the raised surface edge to edge.
   return createPortal(
     <div
       ref={panelRef}
-      className="notes-slash-portal"
-      style={{ position: 'fixed', left: coords.left, top: coords.top, zIndex: 'var(--z-menu)' }}
+      className="notes-slash-portal wn-overlay"
+      style={{ position: 'fixed', left: coords.left, top: coords.top, overflow: 'hidden' }}
     >
       {panel}
     </div>,

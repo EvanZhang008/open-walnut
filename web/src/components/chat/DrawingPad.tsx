@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { useExperimental } from '@/hooks/useExperimental';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { DrawingWorkspaceProps } from '@/components/drawing/DrawingWorkspace';
@@ -90,14 +91,12 @@ function DrawingAppDialog({ draftId, taskId, sessionId, onClose, onAttach, canAt
       if (before instanceof HTMLElement && before.isConnected) before.focus();
     };
   }, []);
-  // Keys stay in the dialog: the composer's shortcuts must not act under it. Esc closes it,
-  // except inside the editor, which uses Esc itself (deselect, finish a line, leave a text box).
+  // Keys stay in the dialog: the composer's shortcuts must not act under it. Every key inside the
+  // editor is the editor's, Esc too (deselect, finish a line, leave a text box); elsewhere Esc goes
+  // on to the dialog's close (useModalOverlay).
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
-    if (e.target instanceof Element && e.target.closest('.excalidraw')) return;
-    e.preventDefault();
-    onClose();
+    if (e.target instanceof Element && e.target.closest('.excalidraw')) e.stopPropagation();
+    else keepKeysInside(e);
   };
   return createPortal(
     <div className="drawing-app-overlay wn-scrim" onKeyDown={onKeyDown}

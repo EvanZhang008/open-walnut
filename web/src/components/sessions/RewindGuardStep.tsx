@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import type { RewindGuardFile, RewindGuardResult } from '@/api/session-turns';
 import '@/styles/turn-snapshots.css';
 
@@ -33,6 +34,8 @@ interface RewindGuardStepProps {
 export function RewindGuardStep({ guard, busy, error, onConversationOnly, onRestoreAnyway, onCancel }: RewindGuardStepProps) {
   const files = guard.conflicts;
   const n = files.length;
+  // Escape is Cancel, as the press on the backdrop is: the newest dialog takes the key.
+  useModalOverlay(onCancel);
   return createPortal(
     <div className="app-modal-overlay rewind-dialog-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Files changed since this session wrote them" onMouseDown={onCancel}>
       <div className="app-modal rewind-dialog rewind-guard-dialog wn-dialog" onMouseDown={(e) => e.stopPropagation()}>

@@ -94,7 +94,7 @@ function RawViewDialog({ sessionId }: { sessionId: string }) {
 
   const rows = useMemo(() => rawTurnsOf(state.messages), [state.messages]);
 
-  return (
+  return createPortal(
     <div className="raw-view-backdrop wn-scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) closeSessionRawView(); }}>
       <div className="raw-view wn-dialog" role="dialog" aria-label="Raw input and output" data-testid="session-raw-view">
         <div className="raw-view-bar wn-dialog-head">
@@ -117,7 +117,8 @@ function RawViewDialog({ sessionId }: { sessionId: string }) {
           {rows.map((t, i) => <Turn key={t.key} turn={t} index={i} />)}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -127,5 +128,5 @@ export function SessionRawViewHost() {
     () => openSid,
   );
   if (!sid) return null;
-  return createPortal(<RawViewDialog sessionId={sid} />, document.body);
+  return <RawViewDialog sessionId={sid} />;
 }

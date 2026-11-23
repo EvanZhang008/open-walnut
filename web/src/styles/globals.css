@@ -1118,76 +1118,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   color: var(--fg-muted); border-radius: var(--radius-full);
 }
 .task-phase-icon-btn:hover { background: var(--bg-tertiary); }
-.phase-picker-inline { display: inline-flex; flex-shrink: 0; }
-
-/* Phase picker dropdown */
-.phase-picker-wrapper { position: relative; }
-.phase-picker-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 30;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  padding: 4px;
-  white-space: nowrap;
-}
-.phase-picker-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 8px;
-  font-size: var(--font-size-xs);
-  border: none;
-  background: none;
-  color: var(--fg);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.phase-picker-item:hover { background: var(--accent-subtle); }
-.phase-picker-item.active { font-weight: 600; }
-.phase-picker-icon { width: 16px; text-align: center; font-size: var(--font-size-md); flex-shrink: 0; }
-.phase-picker-check { margin-left: 2px; color: var(--accent); font-size: var(--font-size-xs); }
 .phase-hook-indicator { margin-left: 4px; font-size: var(--font-size-xs); opacity: 0.7; cursor: help; }
-
-/* Priority picker dropdown */
-.priority-picker-wrapper { position: relative; }
-.priority-picker-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 30;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-  min-width: 160px;
-  padding: 4px;
-}
-.priority-picker-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  background: none;
-  font-size: var(--font-size-md);
-  color: var(--fg);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.priority-picker-item:hover { background: var(--accent-subtle); }
-.priority-picker-item.active { font-weight: 600; }
-.priority-picker-icon { width: 22px; text-align: center; font-size: var(--font-size-sm); font-weight: 700; }
-.priority-picker-check { margin-left: auto; color: var(--accent); font-size: var(--font-size-sm); }
 
 
 /* ===== Page Header ===== */
@@ -1674,186 +1605,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 /* Session detail & chat history */
 
 
-.session-fork-popover {
-  /* Rendered in a portal on document.body with fixed coords (see SessionForkButton)
-     so neighbouring session panels can never clip it. z-index sits above the
-     fullscreen panel (9001) and terminal overlay (9999). width + maxHeight are set
-     inline from the JS POPOVER_WIDTH constant (single source for the placement math). */
-  position: fixed;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-  z-index: 10001;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .session-fork-popover { background: #1c1c1e; }
-  .session-fork-input { background: #2c2c2e; }
-}
-
-.session-fork-input {
-  width: 100%;
-  min-height: 48px;
-  max-height: 120px;
-  padding: 8px 10px;
-  font-size: var(--font-size-md);
-  font-family: inherit;
-  color: var(--fg);
-  background: #f5f5f7;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  resize: vertical;
-  outline: none;
-  transition: border-color 0.15s;
-  box-sizing: border-box;
-}
-
-.session-fork-input:focus {
-  border-color: var(--input-focus-edge, var(--border-strong));
-}
-
-.session-fork-input::placeholder {
-  color: var(--fg-muted);
-}
-
-.session-fork-popover-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Drag-over highlight when dropping an image onto the popover. */
-.session-fork-popover.is-drag-over {
-  outline: 2px dashed var(--accent);
-  outline-offset: -4px;
-}
-
-/* Attached-image thumbnails (mirrors ChatInput's .chat-image-previews). */
-.session-fork-image-previews {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.session-fork-image-preview {
-  position: relative;
-  width: 48px;
-  height: 48px;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-}
-.session-fork-image-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.session-fork-image-remove {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  width: 16px;
-  height: 16px;
-  line-height: 14px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  color: var(--on-accent);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.session-fork-image-remove:hover { background: rgba(0, 0, 0, 0.85); }
-
-/* Attach (📎) button, left of the hint in the actions row. */
-.session-fork-attach {
-  padding: 2px 6px;
-  font-size: var(--font-size-md);
-  line-height: 1;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.session-fork-attach:hover:not(:disabled) { background: var(--border); }
-.session-fork-attach:disabled { opacity: 0.4; cursor: default; }
-
-.session-fork-divider-line {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 0;
-}
-
-.session-fork-cli-copy {
-  width: 100%;
-  padding: 6px 12px;
-  font-size: var(--font-size-sm);
-  font-family: inherit;
-  font-weight: 500;
-  border-radius: 6px;
-  cursor: pointer;
-  border: none;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  transition: background 0.15s, color 0.15s;
-  text-align: center;
-}
-.session-fork-cli-copy:hover {
-  background: var(--border);
-  color: var(--fg);
-}
-
-.session-fork-hint {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  margin-right: auto;
-}
-
-.session-fork-cancel,
-.session-fork-submit {
-  padding: 4px 12px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  font-family: inherit;
-  border-radius: 6px;
-  cursor: pointer;
-  border: none;
-  transition: background 0.15s, opacity 0.15s;
-}
-
-.session-fork-cancel {
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-.session-fork-cancel:hover {
-  background: var(--border);
-}
-
-.session-fork-submit {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.session-fork-submit:hover {
-  opacity: 0.85;
-}
-
-.session-fork-submit:disabled,
-.session-fork-cancel:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
 /* The same dashed separator as a stretch left out mid-chat (.session-gap-divider):
    one look for "turns not on screen", above the first turn or between two. */
@@ -6711,16 +6462,12 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 
 /* ── Unified "@" mention palette: ONE panel, Tasks + Files ── */
 .mention-palette {
+  /* Its frame and layer are the overlay family's (wn-overlay), as the slash list's. */
   position: absolute;
   bottom: 100%;
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-  z-index: 50;
   overflow: hidden;
   /* Never past the window's top: the list gives up height first, the tabs and hint bar stay
      (--composer-popover-room, ChatInput's useRoomAbove). */
@@ -6995,12 +6742,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   padding: 6px 9px;
   font-size: var(--font-size-sm);
   line-height: 1.35;
-  color: var(--fg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--warning);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
-  z-index: 2;
   white-space: normal;
   animation: mic-chevron-pop 0.18s ease-out;
 }
@@ -7010,14 +6751,10 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 }
 
 /* The mic is still opening (a slow headset): the same bubble as the dead-mic
-   warning, but a quiet note with no warning colour. */
-.mic-start-hint {
-  border-color: var(--border);
-}
+   warning, but a quiet note with no warning colour (no wn-tone-warning). */
 
 /* Transcription-failure bubble — same anchor as the silence warning, red accents + Retry */
 .mic-error-bubble {
-  border-color: var(--error);
   max-width: 320px;
 }
 .mic-error-bubble svg {
@@ -7401,18 +7138,13 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   position: relative; /* anchors the ⋯ action menu */
 }
 .mic-history-menu {
+  /* Its frame and layer are the overlay family's (wn-overlay wn-menu). */
   position: absolute;
   right: 0;
   top: calc(100% + 3px);
-  z-index: 30;
   display: flex;
   flex-direction: column;
   min-width: 96px;
-  padding: 3px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
 }
 .mic-history-menu-item {
   text-align: left;
@@ -7482,16 +7214,9 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 
 /* Retry dropdown */
 .mic-retry-dropdown {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
+  /* A MicPopover: portalled and placed by it, framed by the overlay family (wn-overlay). */
   min-width: 220px;
   max-width: 280px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
-  z-index: 100;
   padding: 4px 0;
   animation: mic-chevron-pop 0.15s ease-out;
 }
@@ -7585,86 +7310,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 
 /* The panel is a boxless run of settings rows (settings-rows-contents); the
    Engine row is a standard SettingsRow, so no layout rules here (F04). */
-
-/* ── Service Dropdown ── */
-.stt-dropdown-label {
-  font-weight: 600;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--fg-muted);
-}
-.stt-dropdown-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  cursor: pointer;
-  font-size: 0.9rem;
-  transition: border-color 0.15s;
-}
-.stt-dropdown-trigger:hover { border-color: var(--accent); }
-.stt-dropdown-selected { display: flex; align-items: center; gap: 8px; }
-.stt-dropdown-icon { font-size: 1.1rem; }
-.stt-dropdown-chevron { font-size: 0.7rem; color: var(--fg-muted); }
-
-.stt-dropdown-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  margin-top: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: #f5f6f8;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08);
-  padding: 6px;
-  max-height: 340px;
-  overflow-y: auto;
-}
-:root[data-theme="dark"] .stt-dropdown-menu { background: var(--bg-elevated); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .stt-dropdown-menu { background: var(--bg-elevated); }
-}
-.stt-dropdown-group-label {
-  padding: 6px 8px 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-}
-.stt-dropdown-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 4px 0;
-}
-.stt-dropdown-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  font-size: 0.85rem;
-  transition: background 0.1s;
-}
-.stt-dropdown-option:hover { background: var(--bg-secondary); }
-.stt-dropdown-option-active { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.stt-dropdown-option-disabled { opacity: 0.65; }
-.stt-dropdown-option-body { display: flex; flex-direction: column; flex: 1; gap: 1px; }
-.stt-dropdown-option-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
-.stt-dropdown-option-desc { font-size: 0.8rem; color: var(--fg-muted); }
-.stt-dropdown-option-features { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
-.stt-dropdown-check { color: var(--accent); font-weight: bold; flex-shrink: 0; margin-top: 2px; }
 
 /* ── Install Banner ── */
 
@@ -8207,7 +7852,7 @@ img[data-lightbox-src],
 
 .main-page-todo {
   flex-shrink: 0;
-  position: relative;   /* anchor for .todo-launcher-popover */
+  position: relative;
   border-right: 1px solid var(--border);
   /* Same surface as the chat column — the 1px border-right is the divider. */
   background: var(--bg);
@@ -8837,11 +8482,6 @@ body.walnut-dragging {
   color: var(--fg-secondary);
 }
 
-.task-quick-phase-menu {
-  position: fixed;
-  z-index: 9999;
-}
-
 .task-quick-star {
   font-size: var(--font-size-md);
   color: var(--fg-muted);
@@ -9051,7 +8691,7 @@ body.walnut-dragging {
 .vd-panel {
   /* Rendered in a portal on document.body — top/left/width/maxHeight come inline
      from ViewDropdown's placement math (PANEL_WIDTH const), so no ancestor can
-     clip or cover it. z-index matches .session-fork-popover (above overlays). */
+     clip or cover it. */
   position: fixed;
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -11013,52 +10653,6 @@ body.walnut-dragging {
 
 
 
-/* Sprint picker dropdown (its trigger is the button family) */
-.sprint-picker-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 100;
-  min-width: 200px;
-  max-height: 260px;
-  overflow-y: auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-  padding: 4px;
-}
-.sprint-picker-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 6px 10px;
-  font-size: var(--font-size-sm);
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-  text-align: left;
-  gap: 8px;
-}
-.sprint-picker-option:hover {
-  background: var(--hover-bg, rgba(0,0,0,0.04));
-}
-.sprint-picker-active {
-  font-weight: 600;
-  color: var(--accent);
-  background: rgba(0, 122, 255, 0.08);
-}
-.sprint-picker-clear {
-  color: var(--error);
-  font-size: var(--font-size-xs);
-  border-bottom: 1px solid var(--border);
-  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
-  margin-bottom: 2px;
-}
-
 /* ── CopyableId: an id as a quiet reference (theme vars only, no pinned pair) ── */
 .copyable-id {
   display: inline-flex;
@@ -12784,101 +12378,6 @@ body.walnut-dragging {
   color: var(--accent);
 }
 
-/* "More" dropdown — lives at the end of a segment */
-.filter-more-wrapper {
-  position: relative;
-  display: inline-flex;
-}
-
-.filter-segment > .filter-more-wrapper {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-.filter-more-wrapper .filter-more-btn {
-  border-radius: inherit;
-}
-
-.filter-more-btn {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  padding: 4px 8px;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: all 0.12s ease;
-  min-width: 34px;
-}
-
-.filter-more-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-.filter-more-btn.has-active {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.filter-more-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: -1px;
-  z-index: 100;
-  min-width: 180px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-  padding: 4px;
-}
-
-.filter-more-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.1s;
-}
-
-.filter-more-menu-item:hover {
-  background: var(--bg-tertiary);
-}
-
-.filter-more-menu-item.active {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.filter-more-menu-item .filter-more-icon {
-  width: 18px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
-.filter-more-menu-item .filter-more-count {
-  margin-left: auto;
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  font-weight: 600;
-}
-
-.filter-more-menu-item.active .filter-more-count {
-  color: var(--accent);
-}
-
 /* Compact spacing for stacked filter bars */
 .todo-panel-filters .filter-bar:first-child {
   padding-top: 8px;
@@ -13938,72 +13437,10 @@ a.task-kebab-info:hover {
   color: var(--on-accent);
 }
 
-.cron-menu-wrapper {
-  position: relative;
-}
-
-.cron-menu-btn {
-  font-size: 16px;
-  padding: 4px 6px;
-  line-height: 1;
-}
-
-.cron-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 20;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-  min-width: 120px;
-  padding: 4px;
-}
-
-.cron-menu-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 10px;
-  font-size: var(--font-size-md);
-  border-radius: var(--radius-xs);
-  transition: background 0.15s, color 0.15s;
-}
-
-.cron-menu-item:hover {
-  background: var(--accent-subtle);
-  color: var(--fg);
-}
-
-.cron-menu-danger:hover {
-  background: rgba(255, 59, 48, 0.1);
-  color: var(--error);
-}
-
-.cron-confirm-popover {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 20;
-  min-width: 180px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-  padding: 12px;
-}
-
 .cron-confirm-text {
   margin: 0 0 10px;
   font-size: var(--font-size-md);
   color: var(--fg-secondary);
-}
-
-.cron-confirm-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
 }
 
 .cron-job-schedule {
@@ -14284,17 +13721,13 @@ a.task-kebab-info:hover {
   position: relative;
 }
 
+/* The card's menu and its confirm: in place under the button, framed by the
+   overlay family (wn-overlay, wn-menu). */
 .agent-menu {
   position: absolute;
   right: 0;
   top: 100%;
-  z-index: 10;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   min-width: 150px;
-  padding: 4px 0;
 }
 
 .agent-menu-item {
@@ -14321,11 +13754,6 @@ a.task-kebab-info:hover {
   position: absolute;
   right: 0;
   top: 100%;
-  z-index: 10;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   padding: 12px 14px;
   min-width: 180px;
 }
@@ -14870,6 +14298,7 @@ a.task-kebab-info:hover {
 
 /* ===== "@" File Mention Popup (mini VS Code above chat input) ===== */
 .file-mention-popup {
+  /* Its frame and layer are the overlay family's (wn-overlay), as the slash list's. */
   position: absolute;
   bottom: 100%;
   left: 0;
@@ -14877,15 +14306,10 @@ a.task-kebab-info:hover {
   margin-bottom: 4px;
   display: flex;
   flex-direction: column;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
   height: 420px;
   /* Never past the window's top either (--composer-popover-room, ChatInput's useRoomAbove). */
   max-height: min(65vh, var(--composer-popover-room, 65vh));
   overflow: hidden;
-  z-index: 50;
 }
 
 .file-mention-toolbar {
@@ -15039,15 +14463,12 @@ a.task-kebab-info:hover {
 /* ===== Session Path Selector (popover above chat input) ===== */
 
 .session-path-selector {
+  /* Its frame and layer are the overlay family's (wn-overlay). */
   position: absolute;
   bottom: 100%;
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
   /* FIXED height (not max-height): browse mode (long history) and edit mode
      (few live children) must render the SAME panel size — a shrinking panel
      moves the path input + footer under the cursor between interactions. */
@@ -15055,7 +14476,6 @@ a.task-kebab-info:hover {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  z-index: 50;
 }
 
 /* Concept explainer strip — tells new users what a session is (and that a task
@@ -15695,11 +15115,7 @@ a.task-kebab-info:hover {
   bottom: calc(100% + 8px);
   left: 12px;
   right: 12px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-  z-index: 60;
+  /* The frame and the layer are the overlay family's (wn-overlay). */
   /* Two panes: provider rail | model pane. The pane carries the old 12px
      padding; the picker itself just lays the two out. */
   padding: 0;
@@ -16475,7 +15891,8 @@ a.task-kebab-info:hover {
   transform: rotate(180deg);
 }
 
-/* Kebab menu (mirrors cron) */
+/* Kebab menu and its delete confirm: in place under the button, framed by the
+   overlay family (wn-overlay, wn-menu). */
 .cmd-menu-wrapper {
   position: relative;
 }
@@ -16485,13 +15902,7 @@ a.task-kebab-info:hover {
   top: 100%;
   margin-top: 4px;
   min-width: 120px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-  z-index: 50;
   overflow: hidden;
-  animation: cmdMenuFadeIn 0.1s ease;
 }
 .cmd-menu-item {
   display: block;
@@ -16515,7 +15926,6 @@ a.task-kebab-info:hover {
   background: rgba(255, 59, 48, 0.08);
 }
 
-/* Delete confirm popover */
 .cmd-confirm-popover {
   position: absolute;
   right: 0;
@@ -16523,12 +15933,6 @@ a.task-kebab-info:hover {
   margin-top: 4px;
   padding: 12px;
   min-width: 160px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-  z-index: 50;
-  animation: cmdMenuFadeIn 0.1s ease;
 }
 .cmd-confirm-text {
   margin: 0 0 10px;
@@ -16540,10 +15944,6 @@ a.task-kebab-info:hover {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
-}
-@keyframes cmdMenuFadeIn {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 /* Command form */
@@ -17249,7 +16649,6 @@ td.usage-share-col {
 
 /* The recap popover (Latest update) lives in session-recap.css (LatestUpdatePopover.tsx). */
 
-/* Plan popover — based on .session-fork-popover */
 /* Plan chip modal — extra header controls (reuses plan-popup-overlay/container) */
 .plan-popup-header-actions {
   display: flex;
@@ -19257,56 +18656,6 @@ a.tag-chip:hover .tag-chip-value,
 .new-launcher-label { display: block; }
 /* A narrow toolbar folds the label to the plus icon: styles/toolbar-fit.css. */
 
-/* ── Todo-anchored launcher popover ──
-   Card dropping DOWN from the toolbar with a Session | Task tab header;
-   hosts SessionPathSelector / QuickTaskComposer inside the task panel.
-   The wrapper carries the card chrome; the hosted components' own
-   border/shadow/positioning (bottom:100% for the chat input) is neutralized. */
-.todo-launcher-popover {
-  position: absolute;
-  top: 44px;            /* just under the toolbar row */
-  left: 8px;
-  right: 8px;
-  z-index: 200;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-  overflow: hidden;
-}
-.todo-launcher-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 6px 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-.todo-launcher-tab {
-  padding: 6px 14px 7px;
-  border: none;
-  background: none;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  color: var(--fg-muted);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;   /* tab underline sits ON the divider */
-  transition: color 0.15s, border-color 0.15s;
-}
-.todo-launcher-tab:hover { color: var(--fg-secondary); }
-.todo-launcher-tab.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-.todo-launcher-popover .session-path-selector,
-.todo-launcher-popover .quick-task-composer {
-  position: static;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  margin: 0;
-  animation: none;
-}
-
 /* ── Mode Toggle Pill (Execution / Plan) ── */
 
 /* The mode and option triggers are the family's quiet small keys (.btn.btn-sm.btn-ghost). Plan mode
@@ -19799,19 +19148,14 @@ a.tag-chip:hover .tag-chip-value,
   white-space: nowrap;
 }
 .notes-chat-switcher-menu {
+  /* Its frame and layer are the overlay family's (wn-overlay wn-menu). */
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  z-index: 60;
   min-width: 210px;
   max-width: 300px;
   max-height: 320px;
   overflow-y: auto;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
-  padding: 4px;
 }
 .notes-chat-switcher-item {
   display: flex;
@@ -21918,20 +21262,16 @@ a.file-link:hover {
 
 /* Floating popover — detached card above the pill row, spanning the FULL panel
    width (anchored to .session-mode-bar, inset to match its 12px gutters). */
+/* A wn-overlay drawn in place (SideQuestionDrawer.tsx): the family draws its surface and frame. */
 .side-question-popover {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 12px;
   right: 12px;
-  z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
 }
 .side-question-popover-header {
   display: flex;
@@ -24650,76 +23990,22 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 /* ===== iOS Materials Pass ===== */
-/* Frosted-glass chrome for FLOATING surfaces only (popovers, menus, the
-   sidebar/notification slide-outs, the focus dock). Large static panels stay
-   opaque — nothing scrolls behind them and backdrop-filter costs GPU.
-   These rules sit at the END of the file so they win the cascade over the
-   per-menu background/shadow declarations above. */
+/* Chrome for the sidebar, its slide-outs and the focus dock. Large static panels
+   stay opaque: nothing scrolls behind them and backdrop-filter costs GPU. The
+   menus and popovers this pass once gave a 12px corner, a soft shadow and the
+   menu material are on the overlay family now (overlay-family.css owns their
+   frame), so none is listed here. */
 
-/* 1) Consistent popover chrome (all browsers): continuous 12px corners +
-      iOS-soft shadow (low alpha, large blur). */
-.chat-plus-menu,
-.todo-launcher-popover,
-.phase-picker-menu,
-.priority-picker-menu,
-.task-kebab-menu,
-.filter-more-menu,
-.cron-menu,
-.agent-menu,
-.vd-panel,
-.model-picker,
-.session-fork-popover,
-.stt-dropdown-menu,
-.dp-popover {
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-}
-
-/* 2) Frosted glass — only where BOTH backdrop-filter and color-mix are
-      supported; otherwise the original opaque backgrounds above stand. */
+/* Only where BOTH backdrop-filter and color-mix are supported; otherwise the
+   opaque backgrounds above stand. */
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
 
-  /* Popovers & menus — iOS "menu" material. */
-  .chat-plus-menu,
-    .todo-launcher-popover,
-  .phase-picker-menu,
-  .priority-picker-menu,
-  .filter-more-menu,
-  .cron-menu,
-  .agent-menu,
-  .vd-panel,
-  .session-fork-popover,
-  .stt-dropdown-menu,
-  .dp-popover,
+  /* The quick task composer (in place above the chat input) takes the menu
+     material, which overlay-glass.css keeps solid. */
   .quick-task-composer {
     background: var(--glass-bg-menu);
     -webkit-backdrop-filter: var(--glass-blur-menu);
     backdrop-filter: var(--glass-blur-menu);
-  }
-  /* The folder picker stays opaque (its base rule). WebKit limits a backdrop
-     blur to the nearest backdrop root, so inside the draft column the Start
-     Task card behind the picker showed through the 80% glass unblurred
-     (2026-09-30, seen in the Mac app's engine); the path list has to be read.
-     The Switch Model popover stays opaque for the same reason: in WebKit the
-     chat behind it read through its title and its usage-limit rows. So does
-     a task's kebab menu: over the task list, the rows behind it read through
-     its items (2026-11-04, an independent review in WebKit). */
-
-  /* Higher-specificity dark override earlier in the file would otherwise
-     repaint this one opaque. */
-  :root[data-theme="dark"] .stt-dropdown-menu,
-  :root:not([data-theme]) .stt-dropdown-menu {
-    background: var(--glass-bg-menu);
-  }
-
-  /* Inside the launcher popover the selector/composer render as static
-     children — drop their own material so they don't double-blur over the
-     popover's glass. */
-  .todo-launcher-popover .session-path-selector,
-  .todo-launcher-popover .quick-task-composer {
-    background: transparent;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
   }
 
   /* Sidebar + slide-out panels — macOS sidebar material. */
@@ -25920,7 +25206,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-popover-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 999;
+  /* The menu layer, under the popover portalled after it (as .wn-context-backdrop). */
+  z-index: var(--z-menu);
 }
 
 .cal-overflow-popover {
@@ -26548,10 +25835,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* Code context menu (Files viewer + Changed diff) — rides the cal-ctx base.
    overflow-y here is the useMenuPlacement CONTRACT, not cosmetics: the hook
    caps maxHeight, and without a scrollbar the clipped items are unreachable.
-   The menu's z-index is INLINE (10010, set in CodeContextMenu) so it clears
-   .fv-fullscreen (10000) and .file-viewer-overlay (9999); the backdrop must
-   ride just under it — the shared .cal-popover-backdrop sits at 999, which is
-   BELOW fullscreen panels, so outside-click would never reach it there. */
+   The menu and its backdrop are on the menu layer (wn-overlay, and the shared
+   .cal-popover-backdrop is too), over fullscreen panels and viewers, so an
+   outside press reaches the backdrop there. */
 .code-ctx-menu { min-width: 220px; max-width: 340px; overflow-y: auto; }
 .code-ctx-backdrop { z-index: var(--z-menu); } /* the menu's layer, as .wn-context-backdrop */
 .code-ctx-menu button {
@@ -26756,14 +26042,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   /* A fixed height: the panel is the same box whether its list is loading, short or long,
      so it never grows under the pointer when the list lands or shrinks as you type. */
   height: min(52vh, 520px);
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  z-index: 9200;
 }
 
 .session-search-input-row {
@@ -28253,7 +27534,9 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
    Both are portalled to <body> and positioned by useMenuPlacement (fixed
    top/right + a height cap), so they only own their looks here. The files' and
    diffs' selection toolbar (SelectionAskPill, placed by placeToolbar) is the
-   same bar of quiet keys on the same surface. */
+   same bar of quiet keys on the same surface. The pins' frame is the overlay
+   family's (wn-overlay); the toolbar, a pill of the button family, draws the
+   family's frame from its tokens. */
 .quote-pin-pill,
 .quote-pin-popover,
 .session-diff-ask-pill {
@@ -28265,10 +27548,13 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
      scrolls inside the box, never spills out of it. */
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
+}
+.session-diff-ask-pill {
+  background: var(--bg-elevated, var(--card-bg));
+  border: 1px solid var(--overlay-border);
+  /* A pill of keys: round, as the round shape family draws every key. */
   border-radius: var(--radius-full);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--overlay-shadow);
 }
 /* The bar is one row of buttons, never a scrolling strip (its placement is never
    capped below that row). */

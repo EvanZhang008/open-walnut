@@ -169,6 +169,11 @@ const DANGER_LAST_BY_SOURCE: Record<string, (src: string) => string[]> = {
  * big menu of several kinds moves to MEASURED.
  */
 const SHORT_OR_ONE_KIND = new Set([
+  // Joined the overlay family 2026-11-23: an agent or command card's two to four actions, a dictation
+  // row's two actions, the notes chat switcher's chats, the passwords New menu's four item kinds.
+  'components/agents/AgentCard.tsx', 'components/commands/CommandCard.tsx',
+  'components/common/MicButton.tsx', 'components/notes/NotesChatSwitcher.tsx',
+  'components/passwords/PasswordsPopover.tsx',
   'components/board/kanban/KanbanCardMenu.tsx', 'components/board/kanban/KanbanChanges.tsx',
   'components/board/kanban/KanbanLaneMenu.tsx', 'components/calendar/CalendarContextMenu.tsx',
   'components/calendar/CalendarsPopover.tsx', 'components/calendar/EventCreateForm.tsx',
@@ -176,7 +181,7 @@ const SHORT_OR_ONE_KIND = new Set([
   'components/chat/ComposerMoreMenu.tsx', 'components/common/CodeContextMenu.tsx',
   'components/notes/NotesFormatToolbar.tsx',
   'components/notes/slash-commands/SlashCommandMenu.tsx', 'components/notes/TagAutocomplete.tsx',
-  'components/notes/wiki-link/WikiLinkAutocomplete.tsx', 'components/passwords/ItemEditor.tsx',
+  'components/notes/wiki-link/WikiLinkAutocomplete.tsx',
   'components/sessions/DiffComparePicker.tsx', 'components/sessions/DraftTaskMenu.tsx',
   'components/sessions/PermissionModeMenu.tsx',
   'components/sessions/SessionControlPills.tsx', 'components/sessions/SessionFileExplorer.tsx',

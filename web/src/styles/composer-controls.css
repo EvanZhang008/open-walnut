@@ -76,13 +76,6 @@
   vertical-align: bottom;
 }
 
-.session-panel-input .chat-plus-menu {
-  /* The raised surface every menu paints; --bg is pure black in dark, the chat behind it. */
-  background: var(--bg-elevated);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-
 .chat-plus-group > .chat-plus-menu {
   width: max-content;
   /* Wide enough for the longest built-in row ("Snooze until something happens…")

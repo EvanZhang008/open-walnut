@@ -19,7 +19,7 @@ const ROOTS = [
   // (their slide in replaced the session finder's own centring transform, so it opened 280 px off
   // and slid back) and the Ask Walnut drawer with its scrim.
   'mention-palette', 'command-palette-wrap', 'file-mention-popup', 'session-path-selector',
-  'quick-task-composer', 'model-picker', 'question-popover', 'todo-launcher-popover',
+  'quick-task-composer', 'model-picker', 'question-popover',
   'session-search-panel', 'ask-walnut-drawer', 'ask-walnut-scrim',
 ]
 /** Paint-only properties a transition may still carry (a hover colour, a focus ring). */

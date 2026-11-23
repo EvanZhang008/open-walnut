@@ -80,7 +80,7 @@ export function NoteLinkPanel({ notes, onSelect, onBack }: NoteLinkPanelProps) {
   }, [rowCount, selectedIdx, choose, onBack]);
 
   return (
-    <div className="notes-slash-panel notes-task-search wn-overlay" onKeyDown={handleKeyDown}>
+    <div className="notes-slash-panel notes-task-search" onKeyDown={handleKeyDown}>
       <div className="notes-task-search-header">
         <button
           className="notes-task-search-back"

@@ -16,6 +16,7 @@ import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
 import type { CreateSeed } from './QuickCreatePopover';
 import { chipTint } from './item-tint';
+import { DragCursorChip, type DragPointer } from './CalendarGridGhosts';
 import { canAltCopy, useAltCopy } from './alt-copy';
 
 const MAX_CHIPS = 3;
@@ -202,7 +203,7 @@ useOverlayLayer({ passOutsideClick: true, open: overflowDay !== null, refs: [ove
   const [preview, setPreview] = useState<{ itemId: string; overDay: string } | null>(null);
   // Floating chip clone under the cursor — the "in my hand" feedback the cell
   // highlight alone doesn't give.
-  const [dragPointer, setDragPointer] = useState<{ x: number; y: number; title: string; tint: string; copy: boolean } | null>(null);
+  const [dragPointer, setDragPointer] = useState<DragPointer | null>(null);
   const copyable = useLeanCallback((item: CalendarItem) => !!onCopyItem && canAltCopy(item), [onCopyItem]);
   useAltCopy(!!dragPointer, (alt) => {
     const drag = dragRef.current;
@@ -342,21 +343,7 @@ useOverlayLayer({ passOutsideClick: true, open: overflowDay !== null, refs: [ove
           );
         })}
       </div>
-      {dragPointer &&
-        createPortal(
-          <div
-            className={`cal-drag-cursor-chip${dragPointer.copy ? ' cal-move-ghost-copy' : ''}`}
-            data-copy={dragPointer.copy ? 'true' : undefined}
-            style={{
-              left: dragPointer.x + 10,
-              top: dragPointer.y + 12,
-              '--cal-chip-tint': dragPointer.tint,
-            } as React.CSSProperties}
-          >
-            {dragPointer.title}
-          </div>,
-          document.body
-        )}
+      {dragPointer && <DragCursorChip pointer={dragPointer} />}
       {overflowDay &&
         createPortal(
           <>

@@ -66,7 +66,6 @@ function sources(dir: string): string[] {
 const OWNERS: Record<string, 'rules' | 'toolbar' | 'card' | 'field' | 'menu' | 'sheet' | 'forward'> = {
   'utils/file-card-escape.ts': 'rules',
   'components/common/SelectionAskPill.tsx': 'toolbar',
-  'components/notes/NotesBubbleMenu.tsx': 'toolbar',
   'components/common/DocCommentsLayer.tsx': 'card',
   'components/common/DocCommentCard.tsx': 'field',
   'components/common/FileSearchBar.tsx': 'field',
@@ -92,6 +91,9 @@ describe('guard: every Escape owner of the file surfaces, by layer', () => {
       if (OWNERS[f.p] === 'toolbar') expect(f.s, f.p).toMatch(/claimToolbarEscape\(/);
       if (OWNERS[f.p] === 'card') expect(f.s, f.p).toMatch(/claimFileCardEscape\(/);
     }
+    // The format bubble is an overlay layer (useOverlayLayer): the stack gives it the first Escape.
+    const bubble = all.find((x) => x.p === path.join('components', 'notes', 'NotesBubbleMenu.tsx'))!;
+    expect(bubble.s).toMatch(/useOverlayLayer\(/);
     // Every surface that shows a selection toolbar renders one that claims.
     for (const f of all.filter((x) => /<SelectionAskPill\b/.test(x.s))) expect(f.p).toMatch(/FileContentView|SessionDiffView/);
   });

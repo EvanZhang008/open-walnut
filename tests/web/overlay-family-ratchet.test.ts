@@ -16,6 +16,7 @@
  *   - ownFrame: a CSS declaration giving a family member its own background, border, radius,
  *     shadow or z-index (the family class owns them). Phone stylesheets are exempt.
  *   - offTip: a role="tooltip" without wn-tip.
+ *   - inTree: a floating surface drawn in place (not portalled) without a family class.
  * The counts that exist are in overlay-family-baseline.json and only go down. A new file or a
  * higher count fails; a lower count fails too until the baseline is lowered with
  * `OVERLAY_FAMILY_RECORD=1` on this file, so the ratchet stays tight.
@@ -24,13 +25,13 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { walk, scanCss } from './css-scan';
-import { countAll, members, portalRoots, stripComments, ESCAPE_TEST, NOT_OVERLAY, WEB_SRC, type Counts } from './overlay-family-scan';
+import { countAll, floatingClasses, members, portalRoots, stripComments, ESCAPE_TEST, ESCAPE_NOT_A_CLOSE, NOT_OVERLAY, WEB_SRC, type Counts } from './overlay-family-scan';
 
 const BASELINE = path.join(__dirname, 'overlay-family-baseline.json');
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
 const walkTsx = (dir: string) => walk(dir, ['.tsx']);
 const walkCss = (dir: string) => walk(dir, ['.css']);
-const KINDS = ['offFamily', 'noCloseHook', 'handEscape', 'ownFrame', 'offTip'] as const;
+const KINDS = ['offFamily', 'noCloseHook', 'handEscape', 'ownFrame', 'offTip', 'inTree'] as const;
 
 function compare(kind: keyof Counts, now: Record<string, number>, was: Record<string, number>) {
   const grew: string[] = [];
@@ -87,6 +88,13 @@ describe('overlay family: one look and one close for every floating surface', ()
     }
   });
 
+  it('every Escape it lets through is still in its file (a stale allowance would hide a new close)', () => {
+    for (const [file, [count, why]] of Object.entries(ESCAPE_NOT_A_CLOSE)) {
+      const text = stripComments(fs.readFileSync(path.join(WEB_SRC, file), 'utf8'));
+      expect((text.match(ESCAPE_TEST) ?? []).length, `${file}: ${why}`).toBeGreaterThanOrEqual(count);
+    }
+  });
+
   it('every dialog close button draws the one close icon, at the one size', () => {
     // 2026-11-21 review: x, the multiplication sign, &times; and three hand-drawn SVGs closed dialogs side by side.
     const off: string[] = [];
@@ -107,6 +115,14 @@ describe('overlay family: one look and one close for every floating surface', ()
     };
     walk(WEB_SRC);
     expect(off, 'A .wn-dialog-close renders {ICON_CLOSE} from web/src/components/common/Icons.tsx, as a plain btn btn-icon').toEqual([]);
+  });
+
+  it('every floating surface the stylesheets draw is still used (no dead menu CSS)', () => {
+    // 2026-11-22: ten menus and popovers (phase-picker-menu, cron-menu, ...) were gone from the components
+    // and their frames still sat in globals.css, each a second look waiting to come back.
+    const source = walk(WEB_SRC, ['.tsx', '.ts']).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+    const dead = [...floatingClasses()].filter(([cls]) => !new RegExp(`\\b${cls}\\b`).test(source)).map(([cls, css]) => `${css}: .${cls}`);
+    expect(dead, 'Remove the rules of a floating surface no component draws any more').toEqual([]);
   });
 
   it('the "more below" fade is measured in one place, useMoreBelow', () => {
@@ -136,8 +152,7 @@ describe('overlay family: one look and one close for every floating surface', ()
       for (const d of scanCss(path.relative(WEB_SRC, file), fs.readFileSync(file, 'utf8'))) {
         if (d.prop !== 'z-index') continue;
         const cls = d.selectors.flatMap((s) => [...s.matchAll(/\.([\w-]+)/g)].map((m) => m[1]));
-        // A later rule of a co-class lifts a shared backdrop class (`.cal-popover-backdrop.code-ctx-backdrop`).
-        if (cls.some((c) => backdrops.has(c)) && !/var\(--z-menu\)/.test(d.value) && !cls.some((c) => c === 'cal-popover-backdrop')) {
+        if (cls.some((c) => backdrops.has(c)) && !/var\(--z-menu\)/.test(d.value)) {
           off.push(`${path.relative(WEB_SRC, file)}:${d.line} ${d.selectors.join(', ')} { z-index: ${d.value} }`);
         }
       }

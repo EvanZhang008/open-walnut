@@ -564,6 +564,10 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
   // tall menu in a short window scrolls internally instead of being clipped.
   const menuPos = useMenuPlacement(open, btnRef, menuRef, {
     anchorPoint: cursorAnchor,
+    // At the cursor the menu opens rightward from it, as every cursor menu (ContextMenu) does, and
+    // flips back only where the window has no room: opened leftward it covered the nav rail
+    // (2026-11-22 audit). From the button it hangs under it, its right edge at the button's.
+    align: cursorAnchor ? 'left' : 'right',
     // A task row is filtered out from under an open menu often here (the live
     // todo search re-filters as you type); close rather than strand the menu.
     onAnchorLost: closeMenu,

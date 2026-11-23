@@ -51,6 +51,7 @@ import { ICON_FILE, ICON_FOLDER, ICON_MAIL, ICON_NOTE, ICON_PERSON } from '@/com
 import { fetchDirList, type DirEntry } from '@/api/files';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
+import { useMoreBelow } from '@/hooks/useMoreBelow';
 import { formatSize } from '@/utils/format';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { log } from '@/utils/log';
@@ -360,6 +361,8 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     }, [rows, selectedKey]);
 
     const listRef = useRef<HTMLDivElement>(null);
+    // Rows past the list's foot fade it, as every capped overlay list does (overlay-family.css).
+    const more = useMoreBelow(listRef, [rows.length]);
     useEffect(() => {
       const el = listRef.current?.querySelector('[data-selected="true"]');
       el?.scrollIntoView({ block: 'nearest' });
@@ -614,7 +617,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     ) : null;
 
     return (
-      <div className="mention-palette" role="listbox" aria-label="Mention picker">
+      <div className="mention-palette wn-overlay" role="listbox" aria-label="Mention picker">
         {tabs.length > 1 && (
           <TabList className="mention-tabs" aria-label="Sources">
             {tabs.map((id) => {
@@ -639,7 +642,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
             })}
           </TabList>
         )}
-        <div className="mention-list" ref={listRef}>
+        <div className="mention-list" ref={listRef} data-more={more ? 'true' : undefined}>
           {onTasks
             ? entityGroups
             : onAll

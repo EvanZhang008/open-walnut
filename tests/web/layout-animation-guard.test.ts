@@ -133,7 +133,6 @@ const SMALL_BOX: Record<string, string> = {
   'styles/globals.css | .todo-section-tab-label | max-width': BOX,
   'styles/globals.css | .todo-panel-tab | all': CONTROL,
   'styles/globals.css | .todo-panel-toggle-completed | all': CONTROL,
-  'styles/globals.css | .filter-more-btn | all': CONTROL,
   'styles/globals.css | .cron-filter-tab | all': CONTROL,
   'styles/globals.css | .model-picker-rail | width': BOX,
   'styles/globals.css | .cmd-card-content | max-height': ROW,

@@ -65,6 +65,16 @@ describe('useOverlayLayer stack', () => {
     overlayLayerHandlers.keydown(k as unknown as KeyboardEvent);
     expect(k.preventDefault).not.toHaveBeenCalled();
   });
+  it('a passive layer (the selection bar) takes Escape but leaves the page its shortcuts', () => {
+    // 2026-11-22: the quote bar shows whenever text is selected; as a plain layer it switched off
+    // Cmd+digit, undo and the page's single keys for as long as a selection stood.
+    const close = layer({ el: menu, passive: true });
+    expect(hasOpenOverlayLayer()).toBe(false);
+    overlayLayerHandlers.keydown(ev({ key: 'Escape' }) as unknown as KeyboardEvent);
+    expect(close).toHaveBeenCalledWith('escape');
+    layer({ el: flyout });
+    expect(hasOpenOverlayLayer()).toBe(true);
+  });
   it('onEscape can consume the key without closing (clear search first)', () => {
     const close = layer({ el: menu, onEscape: () => true });
     const e = ev({ key: 'Escape' });

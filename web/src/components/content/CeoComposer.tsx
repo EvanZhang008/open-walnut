@@ -19,6 +19,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useDraft } from '@/hooks/useDraft';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { AnswerBox } from '@/components/common/AnswerBox';
@@ -90,25 +91,19 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
     if (!error) el.setSelectionRange(el.value.length, el.value.length);
   }, [sending, error, shown]);
 
-  // Outside a click or Escape closes it (what was typed is kept); a send in flight finishes first.
-  useEffect(() => {
-    const onDown = (e: PointerEvent) => {
-      const target = e.target as Node;
-      // The button it came from closes it itself (a press there toggles it).
-      if (sending || boxRef.current?.contains(target) || req.owner?.contains(target)) return;
-      onClose(false);
-    };
-    // Escape that ends an IME composition is the input method's, not a close.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !sending && !e.isComposing && e.keyCode !== 229) { e.stopPropagation(); onClose(false); }
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [onClose, sending, req.owner]);
+  // One layer of the overlay stack: a press outside or Escape closes it (what was typed is kept),
+  // and a send in flight finishes first. The button it came from closes it itself (a press there toggles it).
+  const ownerRef = useRef<HTMLElement | null>(null);
+  ownerRef.current = req.owner ?? null;
+  useOverlayLayer({
+    open: true,
+    refs: [boxRef, ownerRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    closeOnEscape: !sending,
+    closeOnOutside: !sending,
+    onClose: () => onClose(false),
+  });
 
   const words = note.trim();
   const send = () => {
@@ -130,7 +125,7 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
   return (
     <div
       ref={boxRef}
-      className={`ceo-composer${req.anchor ? '' : ' ceo-composer-centered'}`}
+      className={`ceo-composer wn-overlay${req.anchor ? '' : ' ceo-composer-centered'}`}
       role="dialog"
       aria-label={`Talk to ${who}`}
       data-testid="ceo-composer"

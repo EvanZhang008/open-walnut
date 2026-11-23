@@ -20,6 +20,8 @@ import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { sessionRecordTitle } from '@/stores/entity-label-store';
 import { MicInput } from '@/components/common/BoxMic';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { useMoreBelow } from '@/hooks/useMoreBelow';
 
 interface SessionSearchPanelProps {
   open: boolean;
@@ -54,6 +56,9 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
   const hostName = useHostDisplayLabels();
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  // Rows past the list's foot fade it, as every capped overlay list does (overlay-family.css).
+  const more = useMoreBelow(resultsRef, [open, results.length]);
   // Monotonic request id — a stale slow response must not clobber a newer one.
   const requestSeq = useRef(0);
 
@@ -93,15 +98,20 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
     }
   }, [open]);
 
-  // Outside click closes
-  useEffect(() => {
-    if (!open) return;
-    const onMouseDown = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [open, onClose]);
+  // One layer of the overlay stack: Escape clears the query first and closes when it is empty,
+  // and a press outside closes it (that press still does what it was pressed for).
+  useOverlayLayer({
+    open,
+    refs: [panelRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    onEscape: () => {
+      if (!query) return false;
+      setQuery('');
+      return true;
+    },
+    onClose,
+  });
 
   const openResult = useCallback((sid: string) => {
     onOpenSession(sid);
@@ -109,16 +119,6 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
   }, [onOpenSession, onClose]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      // preventDefault too: browsers act on Escape (cancel fetches, exit
-      // fullscreen, clear <input type=search>) even when propagation stops.
-      e.preventDefault();
-      e.stopPropagation();
-      // First Escape clears the query; second closes the panel.
-      if (query) setQuery('');
-      else onClose();
-      return;
-    }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       // Zero results: keep 0, don't let `length - 1` drive selectedIdx to -1.
@@ -130,12 +130,12 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
       e.preventDefault();
       openResult(results[selectedIdx].claudeSessionId);
     }
-  }, [query, results, selectedIdx, onClose, openResult]);
+  }, [results, selectedIdx, openResult]);
 
   if (!open) return null;
 
   return (
-    <div className="session-search-panel" ref={panelRef}>
+    <div className="session-search-panel wn-overlay" ref={panelRef}>
       <div className="session-search-input-row">
         <span className="session-search-icon">{ICON_SEARCH}</span>
         <MicInput fieldClassName="mic-field-grow" data-no-draft="search"
@@ -154,7 +154,7 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
           {loading && (results.length === 0 || query !== '') && <span className="todo-search-spinner" />}
         </span>
       </div>
-      <div className="session-search-results" role="listbox">
+      <div className="session-search-results" role="listbox" ref={resultsRef} data-more={more ? 'true' : undefined}>
         {!loading && results.length === 0 && (
           query
             ? <EmptyState size="row" role="presentation" title={`No sessions match ‘${query}’`} action={{ label: 'Clear search', onClick: () => setQuery('') }} />

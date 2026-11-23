@@ -6,6 +6,7 @@
  *
  * 2026-11-04: a context menu capped in a short window hid 42% of its items behind a flush-cut border.
  * 2026-11-22 audit: the slash command list cut its last row in half above "Refresh list".
+ * A few pixels over is not more: under 12px below the fold the list reads as ending (no fade).
  *
  * A LAYOUT effect, so the attribute is on the box in the same paint the capped list first appears in,
  * read again on the next few frames and whenever the box resizes or scrolls: the cap often arrives
@@ -13,14 +14,19 @@
  */
 import { useLayoutEffect, useState, type RefObject } from 'react';
 
+/** Pixels below the fold that still read as the list's end, not as more rows. */
+const SLACK = 12;
+
 export function useMoreBelow(ref: RefObject<HTMLElement | null>, deps: readonly unknown[]): boolean {
   const [more, setMore] = useState(false);
   useLayoutEffect(() => {
     const box = ref.current;
     if (!box) return;
+    // Less than SLACK px below is not "more": the fade (22px) would only dim the list's real last
+    // line (2026-11-23 review: a mention palette 4px over its cap faded its closing status line).
     const read = () => {
-      const over = box.scrollHeight - box.clientHeight;
-      setMore(over > 1 && box.scrollTop < over - 1);
+      const left = box.scrollHeight - box.clientHeight - box.scrollTop;
+      setMore(left > SLACK);
     };
     read();
     let frame = 0;

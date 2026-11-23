@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import {
   fetchCommitJobs, fetchCommitPlan, startCommitJob, suggestCommitMessage,
   type CommitJob, type CommitPlan,
@@ -124,7 +125,7 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
       onClick={(e) => e.stopPropagation()}
       // Typing here must not reach the panel's shortcuts; Escape still has to
       // reach useModalOverlay's document listener.
-      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+      onKeyDown={keepKeysInside}
     >
       <div
         className="app-modal scd-modal wn-dialog"

@@ -310,11 +310,7 @@
   align-items: center;
   gap: 1px;
   padding: 3px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow);
-  z-index: 10002;
+  /* Its frame and layer are the overlay family's (wn-overlay). */
 }
 .notes-bubble-actions {
   display: flex;
