@@ -141,16 +141,7 @@ html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; --sp
   :root .session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar > .tree-path-bar {
     border-bottom-color: transparent;
   }
-  /* The composer's card lets the band's one pane of glass through (below): a glass card of its
-     own over the band's glass stacked two tints, and in the Mac app's web view the rows under the
-     card left no trace at all, the card reading as the solid slab it was. Its frame stays. */
-  :root .session-panel.is-glass-chat .session-panel-input:not(.tree-split-input) .chat-input-box {
-    background: transparent;
-  }
-  :root .session-panel.is-glass-chat .session-panel-input:not(.tree-split-input) .chat-input-box::before {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
+  /* The composer's card under the switch: web/src/styles/input-box.css (the input box's one home). */
 }
 :root { --sp-glass-edge: 14px; --sp-scrollbar-w: 6px; }
 .session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar {

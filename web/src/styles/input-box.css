@@ -339,3 +339,18 @@ input[list]::-webkit-list-button { display: none !important; opacity: 0; }
   }
 }
 .mic-field:not(.wn-field) > .mic-field-mic .mic-btn:hover:not(:disabled) { color: var(--fg); background-color: var(--bg-hover); }
+
+/* Experiment chat_glass_edges (web/src/styles/session-scroll-glass.css): the session composer's
+   card lets the band's one pane of glass through. */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  /* A glass card of its
+     own over the band's glass stacked two tints, and in the Mac app's web view the rows under the
+     card left no trace at all, the card reading as the solid slab it was. Its frame stays. */
+  :root .session-panel.is-glass-chat .session-panel-input:not(.tree-split-input) .chat-input-box {
+    background: transparent;
+  }
+  :root .session-panel.is-glass-chat .session-panel-input:not(.tree-split-input) .chat-input-box::before {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
