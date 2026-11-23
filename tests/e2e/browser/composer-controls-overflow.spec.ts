@@ -42,9 +42,20 @@ test('a row with room for the full controls keeps the full model name, however l
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await openControlsSession(page, { narrow: false });
   await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
-  // The row's slack is its spacer. Widening the send group by the spacer less `leftPx`
-  // leaves the row exactly that much room past the full controls, on the real fit path.
-  const slack = await barOf(panel).evaluate((bar) => bar.parentElement!.querySelector('.chat-input-controls-spacer')!.getBoundingClientRect().width);
+  for (const id of ['btw', 'note'] as const) await expect(directControl(panel, id)).toBeVisible();
+  // The row's slack is its spacer plus what Note and btw give back: they fold into "+" before the
+  // model key gives anything up (3c690c324c, the tight-column test below), so the edge where the
+  // key condenses is the room past the full controls once they have folded. Measured on the
+  // spacer alone, the -12 case only caught a two-frame condensed blink before the fold
+  // (2026-11-23). Widening the send group by the slack less `leftPx` leaves the row exactly
+  // that much room past the full controls, on the real fit path.
+  const slack = await barOf(panel).evaluate((bar) => {
+    const row = bar.parentElement!;
+    const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+    const direct = [...row.querySelectorAll<HTMLElement>(':scope > [data-add-control]')]
+      .reduce((px, el) => px + el.getBoundingClientRect().width + gap, 0);
+    return row.querySelector('.chat-input-controls-spacer')!.getBoundingClientRect().width + direct;
+  });
   const send = await panel.locator('.chat-send-group').first().evaluate((el) => el.getBoundingClientRect().width);
   const leaveRoom = async (leftPx: number) => page.evaluate((px) => {
     let style = document.getElementById('pw-send-widen') as HTMLStyleElement | null;
@@ -53,6 +64,7 @@ test('a row with room for the full controls keeps the full model name, however l
   }, Math.floor(send + slack - leftPx));
   const model = controlOf(panel, 'model').locator('button');
   await leaveRoom(4);
+  await expect(barOf(panel)).toHaveAttribute('data-direct-folded', 'true');
   await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
   await expect(model).toContainText('Fable 5.1');
   await expect(model).toContainText('High');
@@ -60,6 +72,7 @@ test('a row with room for the full controls keeps the full model name, however l
   await leaveRoom(-12);
   await expect(barOf(panel)).toHaveClass(/is-condensed/);
   await expect(model).toHaveText(/^Fable\s*45%$/);
+  await expect(barOf(panel)).toHaveAttribute('data-direct-folded', 'true');
   await leaveRoom(4);
   await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
   await expect(model).toContainText('Fable 5.1');

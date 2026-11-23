@@ -83,9 +83,9 @@ export async function openControlsSession(
 /**
  * Column widths that put the controls row in each of its three shapes. The row
  * gets the column's width minus 140px (the mic/send cluster and padding), the
- * condensed pills measure Bypass 56 + gap 4 + "Fable" 37 = 97, and " 45%" adds
- * 28 plus the 2px fit margin: 260px leaves 120px (name only), 220px leaves
- * 80px (the model moves into the "..." menu). The home page's own column count
+ * condensed pills measure Bypass with its menu caret 71 + gap 4 + "Fable" about 41
+ * = 116 (2026-11-23), and " 45%" adds about 27: 260px leaves 120px (name only),
+ * 220px leaves 80px (the model moves into the "..." menu). The home page's own column count
  * is a server setting the fixture does not change, so the tight shapes are
  * reached by clamping the column instead of opening a third one.
  */
