@@ -15268,7 +15268,10 @@ a.task-kebab-info:hover {
 @media (hover: hover) {
   .model-picker-rail:hover :is(.provider-rail-label, .provider-rail-why) { opacity: 1; }
 }
-.model-picker-rail:has(:focus-visible) :is(.provider-rail-label, .provider-rail-why) { opacity: 1; }
+/* Each class written out, not in :is(): a :has() before a last compound that names no element of its
+   own restyles the whole page on every insert (css-has-invalidation-ratchet.test.ts). */
+.model-picker-rail:has(:focus-visible) .provider-rail-label,
+.model-picker-rail:has(:focus-visible) .provider-rail-why { opacity: 1; }
 
 /* A locked engine's mark and name are greyed but still read; its lock badge is not faded at all. */
 .provider-rail-item-locked > .provider-rail-icon > svg:first-child {
