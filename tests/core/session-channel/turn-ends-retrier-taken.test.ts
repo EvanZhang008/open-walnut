@@ -92,3 +92,29 @@ describe('the leader\'s turn-end handler is wrapped', () => {
     expect(src).toMatch(/bus\.subscribe\('main-ai', clearingTurnEndMarks\(/)
   })
 })
+
+describe('round 2, N2 and N3: which mark the handler clears', () => {
+  it('a handler that threw keeps the mark (the boot looks again); a normal return clears it', async () => {
+    const { task } = await tm.addTask({ title: 'Handler threw', project: 'Marina' })
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h3', born: true, seq: 1, patch: row('h3', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h3', edge: 'session:result', seq: 2 }] })
+    await expect(clearingTurnEndMarks(async () => { throw new Error('task ref did not resolve') })({ name: 'session:result', data: { sessionId: 'h3' }, source: 'host-channel' })).rejects.toThrow('task ref')
+    expect(turnEndMarks().map((m) => m.sid)).toEqual(['h3'])
+    await clearingTurnEndMarks(async () => {})({ name: 'session:result', data: { sessionId: 'h3' }, source: 'host-channel' })
+    expect(turnEndMarks()).toEqual([])
+  })
+
+  it('a newer mark committed in the same millisecond the handler began is kept', async () => {
+    const { task } = await tm.addTask({ title: 'Same millisecond', project: 'Marina' })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_900_000_000_000)
+    try {
+      await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h4', born: true, seq: 1, patch: row('h4', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h4', edge: 'session:error', seq: 2 }] })
+      let release!: () => void
+      const gate = new Promise<void>((r) => { release = r })
+      const running = clearingTurnEndMarks(async () => { await gate })({ name: 'session:error', data: { sessionId: 'h4' }, source: 'host-channel' })
+      // The clock has not moved: the newer batch commits in the same millisecond.
+      await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h4', edge: 'session:result', seq: 3 }] })
+      release(); await running
+      expect(turnEndMarks().map((m) => [m.sid, m.edge])).toEqual([['h4', 'session:result']])
+    } finally { now.mockRestore() }
+  })
+})

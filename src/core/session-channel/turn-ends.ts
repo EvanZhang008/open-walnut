@@ -8,8 +8,9 @@
  *
  * So the same transaction keeps a mark per session of its last turn end that moves a phase
  * (turn-end-edge.ts: the edge, and the leader's time of the commit), and the leader's turn-end
- * handler removes it once it ran, whatever it decided (held for a retrier, a quiet turn, the main
- * agent, applied: clearingTurnEndMarks), so a mark that stands means only "the handler never ran".
+ * handler removes it once it returned, whatever it decided (held for a retrier, a quiet turn, the
+ * main agent, applied: clearingTurnEndMarks), so a mark that stands means only "the handler never
+ * ran to its end".
  * A newer turn end of the same session in a later batch replaces its mark, or removes it when it
  * moves no phase (a retrier took it). After the leader's boot, once a host's link has applied what
  * that host's log held at its hello (channel.ts onCaughtUp: the host's rows here are current, so a
@@ -44,10 +45,19 @@ export interface HostTurnEnd { sid: string; edge: TurnEndEdge | null; seq: numbe
 
 export interface TurnEndMark { sid: string; hostId: string; edge: TurnEndEdge; at: number }
 
-/** Inside the channel's apply transaction: keep `sid`'s turn end (the newest one stands; one with no edge only removes the older). */
+/** The last mark's `at` this process wrote: each new one is later, so a mark is named by its `at` alone. */
+let lastMarkAt = 0
+
+/**
+ * Inside the channel's apply transaction: keep `sid`'s turn end (the newest one stands; one with no
+ * edge only removes the older). Its `at` is the commit's time, made later than every mark before it
+ * here, so a handler's clear (by the exact `at` it saw) never takes a newer mark of the same millisecond.
+ */
 export function noteTurnEndIn(handle: DatabaseType, hostId: string, sid: string, edge: TurnEndEdge | null, at: number): void {
-  if (edge === null) prepared(handle, 'DELETE FROM session_turn_ends WHERE claude_session_id = ?').run(sid)
-  else prepared(handle, 'INSERT OR REPLACE INTO session_turn_ends (claude_session_id, host_id, edge, at) VALUES (?, ?, ?, ?)').run(sid, hostId, edge, at)
+  if (edge === null) { prepared(handle, 'DELETE FROM session_turn_ends WHERE claude_session_id = ?').run(sid); return }
+  const unique = Math.max(at, lastMarkAt + 1)
+  lastMarkAt = unique
+  prepared(handle, 'INSERT OR REPLACE INTO session_turn_ends (claude_session_id, host_id, edge, at) VALUES (?, ?, ?, ?)').run(sid, hostId, edge, unique)
 }
 
 /** Every mark (or `hostId`'s, made before `before`), oldest first. */
@@ -59,24 +69,34 @@ export function turnEndMarks(o: { hostId?: string; before?: number } = {}): Turn
     && (o.hostId === undefined || r.hostId === o.hostId) && (o.before === undefined || r.at < o.before))
 }
 
-/** The leader's handler of `sid`'s turn end ran (it began at `startedAt`): its mark goes, not a newer one. */
-export function clearTurnEndMark(sid: string, startedAt: number): void {
-  getDb()?.prepare('DELETE FROM session_turn_ends WHERE claude_session_id = ? AND at <= ?').run(sid, startedAt)
+/** `sid`'s mark now: its `at`, or null when it has none. */
+export function turnEndMarkAt(sid: string): number | null {
+  const row = getDb()?.prepare('SELECT at FROM session_turn_ends WHERE claude_session_id = ?').get(sid) as { at?: number } | undefined
+  return typeof row?.at === 'number' ? row.at : null
+}
+
+/** The leader's handler of `sid`'s turn end ran: the mark it began with (its exact `at`) goes, never a newer one. */
+export function clearTurnEndMark(sid: string, at: number): void {
+  getDb()?.prepare('DELETE FROM session_turn_ends WHERE claude_session_id = ? AND at = ?').run(sid, at)
 }
 
 /**
- * The leader's turn-end handler (web/server.ts), wrapped: after it ran for a host's session:result or
- * session:error, whatever it decided and even when it threw, that session's mark goes (the mark was
- * committed before the fact was said, so before the handler began; a newer turn end's mark stays).
- * Every other event goes straight to the handler.
+ * The leader's turn-end handler (web/server.ts), wrapped: after it returned for a host's
+ * session:result or session:error, whatever it decided, the mark the session had when it began goes
+ * (the mark was committed before the fact was said, so before the handler began; a newer turn end's
+ * mark, always later, stays). A handler that threw may not have written the phase: its mark stays,
+ * and the next boot looks at it. Every other event goes straight to the handler.
  */
 export function clearingTurnEndMarks<E extends { name: string; data: unknown; source?: string }>(handler: (event: E) => Promise<void> | void): (event: E) => Promise<void> | void {
   return (event: E) => {
     if ((event.name !== 'session:result' && event.name !== 'session:error') || event.source !== 'host-channel') return handler(event)
     const sid = (event.data as { sessionId?: unknown } | null)?.sessionId
-    const startedAt = Date.now()
-    const clear = () => { if (typeof sid === 'string' && sid) { try { clearTurnEndMark(sid, startedAt) } catch { /* the boot looks at it again */ } } }
-    return (async () => { try { await handler(event) } finally { clear() } })()
+    let markAt: number | null = null
+    if (typeof sid === 'string' && sid) { try { markAt = turnEndMarkAt(sid) } catch { /* no mark known: nothing to clear */ } }
+    return (async () => {
+      await handler(event)
+      if (markAt !== null) { try { clearTurnEndMark(sid as string, markAt) } catch { /* the boot looks at it again */ } }
+    })()
   }
 }
 
