@@ -81,7 +81,6 @@ const SLOTS: Record<string, Array<{ text: string | RegExp; source: string | RegE
     { text: 'line', source: 'lineSource' },
   ],
   'components/org/OrgTaskRail.tsx': [
-    { text: 'note', source: /^\(noteField \? taskTextSource\(t, noteField\) : \{ unknownSource: true \}\)$/ },
     { text: 'summary', source: 'askSource' },
     { text: 'more', source: 'askSource' },
   ],

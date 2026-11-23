@@ -513,6 +513,8 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
   await error.getByRole('button', { name: 'Retry' }).click()
   await expect(error).toHaveCount(0)
   await expect(pane.getByTestId('board-status')).toBeVisible()
-  // The recovered Status view shows the team: the page-local subtask's row.
+  // The recovered Status view shows the team: the page-local subtask's row, under All open (the
+  // Board opens on Needs you while the seeded lead needs the user).
+  await pane.getByTestId('board-status-filter-open').click()
   await expect(pane.locator(`[data-testid="board-status-row"][data-task-id="${childId}"]`)).toBeVisible({ timeout: 15_000 })
 })

@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { answeredAbove, askKey, foldWords, answeredWords } from '../../src/core/same-ask';
 import {
-  briefCountsLine, buildStatusBoard, filteredRows, isStatusFilter, needsRowLine, statusBrief, statusFilterShown,
+  briefCountsLine, buildStatusBoard, defaultStatusFilter, filteredRows, isStatusFilter, needsRowLine, statusBrief, statusFilterShown,
   sameAskLine, userStatusOf, waitingLine, waitingSentence,
 } from '../../web/src/components/board/board-status-model';
 
@@ -123,6 +123,17 @@ describe('buildStatusBoard', () => {
     expect(statusFilterShown('read')).toBe('needs');
     expect(statusFilterShown('working')).toBe('working');
     expect(isStatusFilter('bogus')).toBe(false);
+  });
+
+  it('a board with no filter picked opens on Needs you, or on All open when nothing needs the user', () => {
+    // 2026-11-23, the user: the Board's "default ... 只受这个 needs you ... 因为其他是没有意义".
+    const asks = buildStatusBoard({ ownerId: 'lead', tasks: team(), now: NOW, doneWindowDays: 7 });
+    expect(asks.groups.needs.length).toBeGreaterThan(0);
+    expect(defaultStatusFilter(asks)).toBe('needs');
+    // The same team with its asks answered: nothing needs him, the board opens on All open.
+    const quiet = buildStatusBoard({ ownerId: 'lead', tasks: team().filter((t) => t.user_status?.state !== 'needs'), now: NOW, doneWindowDays: 7 });
+    expect(quiet.groups.needs.length).toBe(0);
+    expect(defaultStatusFilter(quiet)).toBe('open');
   });
 
   it('a task not derived yet: the phase alone, as an older server meant it', () => {

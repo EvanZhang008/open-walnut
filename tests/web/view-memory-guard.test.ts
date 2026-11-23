@@ -207,7 +207,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/SessionUsageDialog.tsx#panel': 'a panel of the usage dialog',
   'components/tasks/FilterMenu.tsx#page': 'a level of the filter menu',
   'hooks/useReviewSidebar.ts#fullscreen': 'the question review blown up over the chat, an overlay',
-  'components/org/OrgNodeDetail.tsx#focusSection': 'a one-time scroll to the section a header count names, not a choice (the section\'s fold is kept as node.sectionFlips)',
+  'components/org/OrgNodeDetail.tsx#focusSection': 'a one-time scroll to the section a header count names, not a choice (the section\'s fold is kept as node.sectionFlips2)',
   'pages/OrgPage.tsx#chartOpen': 'the org chart, a sheet over the page with a close of its own, opened on one node',
   'pages/MainPage.tsx#triagePanelOpen': 'one triage opened for one task (triageTaskId), a passing panel',
   'hooks/useThreadStack.ts#drawerMode': 'the question drawer, an overlay (per tab by spec C69)',
@@ -219,7 +219,7 @@ const PASSING: Record<string, string> = {
 const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: string }> = [
   { file: 'components/org/OrgNodeDetail.tsx', state: 'topPick', key: /usePageViewOf<OrgTopView>\('org', 'node\.view', row\.key,/, what: 'an Org node\'s Threads / Task / Brief view, per node' },
   { file: 'components/org/OrgNodeDetail.tsx', state: 'taskMode', key: /usePageViewOf<OrgTaskMode>\('org', 'node\.taskMode', row\.key, 'all',/, what: 'an Org node\'s Tasks drawn as All tasks or the Board, per node' },
-  { file: 'components/org/OrgNodeDetail.tsx', state: 'flipped', key: /usePageViewOf<string\[\]>\('org', 'node\.sectionFlips', row\.key,/, what: 'the All tasks sections folded or opened, per node' },
+  { file: 'components/org/OrgNodeDetail.tsx', state: 'flipped', key: /usePageViewOf<string\[\]>\('org', 'node\.sectionFlips2', row\.key,/, what: 'the All tasks sections folded or opened, per node' },
   // 2026-11-06, the user: "and can expand for more detail"; what was opened stays opened.
   { file: 'components/org/OrgChartVp.tsx', state: 'open', key: /usePageViewOf\('org', 'chart\.open', key, false, isBoolean\)/, what: 'an org chart card or project row opened, per card and per row' },
   { file: 'components/org/OrgThreads.tsx', state: 'showClosed', key: /usePageView\('org', 'threads\.showClosed'/, what: 'the week\'s closed threads shown' },
@@ -227,7 +227,7 @@ const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: stri
   { file: 'components/org/OrgThreadsWatching.tsx', state: 'open', key: /usePageView\('org', 'threads\.watchingOpen', true, isBoolean\)/, what: 'the Threads view\'s Watching group folded or open' },
   { file: 'pages/AppsPage.tsx', state: 'kept', key: /usePageView<AppsFilter>\('apps', 'filter'/, what: 'the Apps category chip' },
   // Kept as KeptStatusFilter: a To read chip an older build kept opens as Needs you (statusFilterShown).
-  { file: 'components/board/BoardStatusView.tsx', state: 'kept', key: /usePageViewOf<KeptStatusFilter>\('board', 'statusFilter', ownerId,/, what: 'a board\'s status filter, per board' },
+  { file: 'components/board/BoardStatusView.tsx', state: 'kept', key: /usePageViewOf<KeptStatusFilter \| null>\('board', 'statusFilter2', ownerId,/, what: 'a board\'s status filter, per board' },
   { file: 'components/sessions/SessionFileExplorer.tsx', state: 'showHidden', key: /usePageView\('files', 'showHidden'/, what: 'hidden files shown in the explorer' },
   { file: 'components/sessions/SessionDiffView.tsx', state: 'treeCollapsed', key: /usePageView\('diff', 'treeCollapsed'/, what: 'the diff\'s file tree hidden' },
 ];

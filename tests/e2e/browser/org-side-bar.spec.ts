@@ -294,9 +294,10 @@ test('Tasks as All tasks or Board, kept per node; sections fold by default; an o
   await expect(detail.getByTestId('org-task-mode-all')).toHaveAttribute('aria-checked', 'true')
   await expect(detail.getByTestId('org-task-tabs')).toHaveCount(0)
   await expect(detail.getByTestId('org-rail').getByTestId('org-team')).toHaveCount(0)
-  // One list: each section open or folded by its default (what is in front of the user now open,
-  // what waits and what is done folded). The team's work nobody started is under Not started, folded.
-  const OPEN_BY_DEFAULT = ['watching', 'needs', 'working']
+  // One list: each section open or folded by its default (only what needs the user and what he
+  // watches open; Working folds like what waits and what is done, 2026-11-23). The team's work
+  // nobody started is under Not started, folded.
+  const OPEN_BY_DEFAULT = ['watching', 'needs']
   const sections = detail.getByTestId('org-task-section')
   await expect(taskSection(detail, 'notstarted')).toBeVisible({ timeout: 30_000 })
   for (const tab of await sections.evaluateAll((els) => els.map((e) => e.getAttribute('data-tab') ?? ''))) {
@@ -308,6 +309,21 @@ test('Tasks as All tasks or Board, kept per node; sections fold by default; an o
   await expect(sideWork).toHaveCount(0)
   await openSection(detail, 'notstarted')
   await expect(sideWork).toBeVisible()
+  // A row is its state's circle and its name: no line under it, no time, no avatar (2026-11-23).
+  await expect(sideWork.locator('.org-task-circle')).toHaveAttribute('data-row-mark', 'not-started')
+  await expect(sideWork.locator('.org-task-title')).toHaveText(`Side work ${STAMP}`)
+  await expect(sideWork).toHaveText(`Side work ${STAMP}`)
+  await expect(sideWork.locator('[data-testid="org-task-note"], .org-task-avatar')).toHaveCount(0)
+  await expect(sideWork).not.toHaveAttribute('title', /.*/)
+  // Its circle wears Home's muted tone for work nobody started, never a session's blue.
+  expect(await sideWork.locator('.org-task-circle').evaluate((el) => {
+    const muted = document.createElement('span')
+    muted.style.color = 'var(--fg-muted)'
+    document.body.appendChild(muted)
+    const want = getComputedStyle(muted).color
+    muted.remove()
+    return getComputedStyle(el).color === want
+  }), 'the Not started circle is muted').toBe(true)
   await shot(page, 'all-tasks')
   // Board, kept across a reload; back on All tasks the opened section is still open.
   await detail.getByTestId('org-task-mode-board').click()
@@ -333,7 +349,7 @@ test('Tasks as All tasks or Board, kept per node; sections fold by default; an o
   await expect(plainSections.first()).toBeVisible()
   for (const sec of await plainSections.all()) {
     const tab = await sec.getAttribute('data-tab')
-    await expect(sec).toHaveAttribute('data-open', ['watching', 'needs', 'working'].includes(tab ?? '') ? '1' : '0')
+    await expect(sec).toHaveAttribute('data-open', ['watching', 'needs'].includes(tab ?? '') ? '1' : '0')
   }
   const chat = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.plainSid}"]`)
   await expect(chat).toBeVisible({ timeout: 30_000 })

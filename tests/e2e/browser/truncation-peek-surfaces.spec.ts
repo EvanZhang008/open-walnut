@@ -61,15 +61,10 @@ test('Org rows and Board cards open nothing on hover and show cut text in a nati
         const before = (await row.boundingBox())!
         const next = await followingOf(row, `org-${theme}-${width}`)
         const tops = next ? await topsOf([next]) : []
-        // The title wraps whole; the note is what the row cuts: on hover it stays cut, in a tooltip.
+        // The title wraps whole, and the row is its name alone (no line under it, 2026-11-23).
         const title = row.locator('.org-task-title')
         expect(await title.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis'), `org ${theme} ${width}: the title is whole`).toBe(true)
-        const note = row.getByTestId('org-task-note')
-        await expect(note).toContainText('garden supplier')
-        expect(await note.evaluate((el) => el.scrollWidth > el.clientWidth + 1), `org ${theme} ${width}: the note is cut`).toBe(true)
-        await expectTooltipNotPeek(note, 'the weekend each step of the rebuild is booked for', `org ${theme} ${width}`)
-        await note.hover()
-        expect(await note.evaluate((el) => el.scrollWidth > el.clientWidth + 1), `org ${theme} ${width}: the note stays cut under the pointer`).toBe(true)
+        await expect(row.getByTestId('org-task-note')).toHaveCount(0)
         await page.screenshot({ path: info.outputPath(`org-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)
         expectSameBox((await row.boundingBox())!, before, `org ${theme} ${width}: the row`)

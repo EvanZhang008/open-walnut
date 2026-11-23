@@ -242,6 +242,10 @@ export type StatusFilter = 'open' | StatusChip;
 export type KeptStatusFilter = StatusFilter | 'read';
 export const isStatusFilter = (v: unknown): v is KeptStatusFilter => v === 'open' || v === 'read' || (STATUS_CHIPS as readonly unknown[]).includes(v);
 export const statusFilterShown = (v: KeptStatusFilter): StatusFilter => (v === 'read' ? 'needs' : v);
+/** The filter a board opens on when none was picked: Needs you, the one group that asks something
+ *  of the user (2026-11-23, the user: the Board's "default ... 只受这个 needs you ... 因为其他是没有
+ *  意义"); a board where nothing needs him opens on All open, never on an empty list. */
+export const defaultStatusFilter = (board: StatusBoard): StatusFilter => (board.groups.needs.length > 0 ? 'needs' : 'open');
 
 /** The rows a filter shows, in the table's order: Needs you, Working, Waiting and Not started
  *  (open; not started sort last among the waits), or one group. */

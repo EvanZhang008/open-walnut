@@ -12,13 +12,14 @@
  *            then board"; the Status and Team views it replaces drew the same work twice.
  *   sections Watching (the tasks the user watches, Home's own list, of this node's work), then the home
  *            panel's names with counts: Needs you, Working, Waiting / snoozed, Not started, Completed;
- *            each folds on its heading, kept per node (what waits and what is done start folded)
+ *            each folds on its heading, kept per node (only Needs you and Watching start open)
  *   Needs you  one row per ask, and per result or answer to look at (To read is no tab of its own,
  *              2026-11-03): what to do with it (Decide, Take a look, Review, Can close) and its summary
  *              first, its task and when it was checked, More for the detail, and the answer right
  *              in the row (OrgInlineAnswer); Quote and Snooze small
- *   others   one row per task: its own line (user_status.line, "set by <VP>" when its lead changed it);
- *            Watching's rows wear their own state's dot, and each row's eye watches it or stops (Home's eye)
+ *   others   one row per task, its state's circle and its name (no line under it, no time,
+ *            2026-11-23); Watching's rows wear their own state's circle, and each row's eye
+ *            watches it or stops (Home's eye)
  *   Brief    the letter its lead or Main keeps (OrgBrief)
  *   Threads  the user's own requests to it, one per subject (OrgThreads)
  *
@@ -32,14 +33,12 @@
  */
 import '@/styles/org-rail.css';
 import '@/styles/notice-card.css';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
-import { timeAgo } from '@/utils/time';
 import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
 import { OrgBrief } from './OrgBrief';
-import { NodeAvatar } from './OrgAvatar';
 import { OrgThreads } from './OrgThreads';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgInlineAnswer, type AnswerFailure, type AnswerSettle } from './OrgInlineAnswer';
@@ -49,11 +48,13 @@ import { isBoolean, usePageView } from '@/utils/view-memory';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
-import { ORG_RAIL_TAB_LABELS, TAB_DOT, allTasksSections, sectionCount, sectionOpen, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_RAIL_TAB_LABELS, TAB_DOT, allTasksSections, sectionCount, sectionOpen, stateTab, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { taskUserState } from '@/utils/session-status';
 import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
-import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
+import { askSummary } from './org-ask-form';
 import { isAsk, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
@@ -128,42 +129,49 @@ export function OrgWatchToggle({ task, className = '' }: { task: Task; className
   );
 }
 
-/** A section other than Needs you: one row per task, its own line, when it last moved, its eye. On
- *  Watching each row wears the dot and the line of its own state. */
-function TaskTabList({ tasks, tab, now }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'>; now: number }) {
+/** A section other than Needs you: one row per task, drawn as a Home task row reads (2026-11-23, the
+ *  user: "显示名字 ... 和这个正常的这个啊 task 都要 align ... 就显示一个名字"): the circle Home's row
+ *  wears for its state, the name and its eye. No line under the name, no time (2026-11-23, the
+ *  user: "remve the time also"), no avatar, no hover card. On Watching each row wears the circle of its own state. */
+function TaskTabList({ tasks, tab }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'> }) {
   // A row is a task reference: it opens where the rail is (useOpenTask: beside the page on Org).
   const onOpen = useOpenTask();
   return (
     <ul className="org-task-list" data-testid="org-task-list" data-tab={tab}>
-      {tasks.map((t) => {
-        const own: OrgTaskTab = tab === 'watching' ? stateTab(t) : tab;
-        const note = taskTabNote(t, own);
-        const noteField = taskTabNoteField(t, own);
-        const setBy = own === 'done' ? null : lineSetBy(readStatusLine(t.user_status));
-        const at = own === 'done' ? t.completed_at ?? t.updated_at : t.updated_at;
-        return (
-          <li key={t.id} className="org-task-item">
-            <div role="button" tabIndex={0} className="org-task-row" data-testid="org-task-row" data-peek-row="" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(t.id); } }} title={note ? `${t.title}\n${note}` : t.title}>
-              {own === 'notstarted'
-                ? <span className="org-task-ring" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
-                : <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />}
-              <NodeAvatar taskId={t.id} name={t.title} size={20} className="org-task-avatar" />
-              <span className="org-task-text">
-                <span className="org-task-title wn-title">{orgDisplayTitle(t)}</span>
-                {note && <AgentText compact inline {...(noteField ? taskTextSource(t, noteField) : { unknownSource: true })} text={note} className="org-task-note wn-meta" testId="org-task-note" />}
-              </span>
-              <span className="org-task-side">
-                {at && <span className="org-task-time">{timeAgo(at, { now })}</span>}
-                {setBy && <span className="org-set-by" data-testid="org-set-by">{setBy}</span>}
-              </span>
-            </div>
-            <OrgWatchToggle task={t} />
-            {own === 'waiting' && t.user_status?.answeredFor && t.phase !== 'COMPLETE' && <WithdrawAnswerButton taskId={t.id} compact />}
-          </li>
-        );
-      })}
+      {tasks.map((t) => <TaskTabRow key={t.id} task={t} own={tab === 'watching' ? stateTab(t) : tab} onOpen={onOpen} />)}
     </ul>
   );
+}
+
+const TaskTabRow = memo(function TaskTabRow({ task: t, own, onOpen }: { task: Task; own: OrgTaskTab; onOpen: (id: string) => void }) {
+  // Home's circle and its colour (grey plain, blue with a session, green done): the same shape a
+  // Home row of that section wears (sectionRowIcon), a span here since the row is the button.
+  const circle = useTaskCircle(t);
+  const isDone = own === 'done';
+  const snoozed = !!t.user_status?.snoozed;
+  const state = taskUserState(t);
+  return (
+    <li className="org-task-item">
+      <div role="button" tabIndex={0} className="org-task-row" data-testid="org-task-row" data-peek-row="" data-task-id={t.id} data-state={own} aria-label={orgDisplayTitle(t)} onClick={() => onOpen(t.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(t.id); } }}>
+        <span className={`task-phase-icon-btn org-task-circle ${circle}`} data-row-mark={rowMark(own, snoozed, state)} aria-hidden="true">
+          {ICONS.sectionRowIcon(own, isDone, t.phase, snoozed, state)}
+        </span>
+        <span className={`org-task-title wn-title${isDone ? ' is-done' : ''}`}>{orgDisplayTitle(t)}</span>
+      </div>
+      <OrgWatchToggle task={t} />
+      {own === 'waiting' && t.user_status?.answeredFor && t.phase !== 'COMPLETE' && <WithdrawAnswerButton taskId={t.id} compact />}
+    </li>
+  );
+});
+
+/** The circle's mark, in the words a Home row uses (StatusSections.tsx data-row-mark), so it takes
+ *  the same tone: what waits, sleeps or never started is muted, a result to read is the accent. */
+function rowMark(own: OrgTaskTab, snoozed: boolean, state: string | undefined): string {
+  if (own === 'done') return 'done';
+  if (own === 'waiting') return snoozed ? 'snoozed' : 'waiting';
+  if (own === 'notstarted') return 'not-started';
+  if (own === 'needs') return state === 'read' ? 'needs-read' : 'needs';
+  return 'open';
 }
 
 function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
@@ -291,7 +299,7 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
 }
 
 /** Every task of the node's work in one list, a section per state (allTasksSections). */
-function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, renderAsks, now }: {
+function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, renderAsks }: {
   tabs: OrgTaskTabs;
   alerts: readonly OrgAlertView[];
   approvals: readonly Approval[];
@@ -300,7 +308,6 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
   focus: { tab: OrgRailTab; n: number } | null;
   onFocused: () => void;
   renderAsks: () => ReactNode;
-  now: number;
 }) {
   const sections = useMemo(() => allTasksSections(tabs, alerts, approvals.length), [tabs, alerts, approvals.length]);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -325,7 +332,7 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
               <ApprovalRows list={approvals} variant="org" />
               {sec.alerts.length > 0 && renderAsks()}
             </>) : (
-              <TaskTabList tasks={sec.tasks} tab={sec.tab} now={now} />
+              <TaskTabList tasks={sec.tasks} tab={sec.tab} />
             ))}
           </section>
         );
@@ -465,7 +472,6 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
             <AllTasks
               tabs={tabs} alerts={alerts} approvals={approvals} flipped={flipped} onFlip={onFlip} focus={focus} onFocused={onFocused}
               renderAsks={() => <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} ownId={contact?.id} ownName={title} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} />}
-              now={now}
             />
           )}
         </div>

@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_TASK_TABS, ORG_TASK_TAB_LABELS, TAB_DOT, allTasksSections, isSectionFlips, orgTaskTabs, sectionFor, sectionOpen, stateTab, taskTabNote } from '../../web/src/components/org/org-task-tabs.js'
+import { ORG_RAIL_TABS, ORG_TASK_TABS, ORG_TASK_TAB_LABELS, TAB_DOT, allTasksSections, isSectionFlips, orgTaskTabs, sectionFor, sectionOpen, stateTab } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -89,7 +89,10 @@ describe('the Task view tabs', () => {
   })
 
   it('what is in front of the user opens, what waits or is done folds, and a flip turns one over', () => {
-    expect(ORG_RAIL_TABS.filter((t) => sectionOpen(t, []))).toEqual(['watching', 'needs', 'working'])
+    // Only what needs the user and what he watches open by default; Working folds like the rest
+    // (2026-11-23, the user: "working 是 automatically collapsed ... 只有那个 needs you 是 default 是 show").
+    expect(ORG_RAIL_TABS.filter((t) => sectionOpen(t, []))).toEqual(['watching', 'needs'])
+    expect(sectionOpen('working', ['working'])).toBe(true)
     expect(sectionOpen('done', ['done'])).toBe(true)
     expect(sectionOpen('needs', ['needs'])).toBe(false)
     expect(isSectionFlips(['done', 'waiting'])).toBe(true)
@@ -110,12 +113,8 @@ describe('the Task view tabs', () => {
     // A watched To read row wears Needs you and its line.
     const rd = tasks.find((x) => x.id === 'rd')!
     expect(stateTab(rd)).toBe('needs')
-    expect(taskTabNote(rd, 'needs')).toBe('Can close: The result is ready')
-    expect(taskTabNote(tasks.find((x) => x.id === 'ask')!, 'needs')).toBe('Decide: Pick a layout')
     // Completed within the week only.
     expect(tabs.done.map((x) => x.id)).toEqual(['done1'])
-    expect(taskTabNote(tabs.waiting[0]!, 'waiting')).toBe('Snoozed until 2026-11-02')
-    expect(taskTabNote(tasks.find((x) => x.id === 'run')!, 'working')).toBe('Writing the parser')
   })
 
   it('on Main cover every VP', () => {

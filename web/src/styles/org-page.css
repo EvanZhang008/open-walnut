@@ -108,7 +108,7 @@
 /* An Org avatar picture (OrgAvatar.tsx): the picture is the tile. */
 .org-avatar.is-picture { background: none; }
 .org-avatar.is-picture > img { display: block; width: 100%; height: 100%; -webkit-user-drag: none; user-select: none; }
-.org-leader-avatar, .org-task-avatar { flex: none; margin-right: 2px; }
+.org-leader-avatar { flex: none; margin-right: 2px; }
 .org-state-dot {
   position: absolute;
   right: -2px;

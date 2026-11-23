@@ -68,24 +68,24 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-task-section-count { color: var(--fg-muted); font-weight: 400; }
 .org-task-empty { margin: 0; padding: 8px 12px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 
-/* Working / Waiting / Completed: one row per task, its own line under its name. */
+/* Working / Waiting / Completed: one row per task, as a Home row reads (.todo-pinned-card): its
+   state's circle and its name, nothing else (2026-11-23). */
 .org-task-list { list-style: none; margin: 0; padding: 2px 4px; display: flex; flex-direction: column; }
 .org-task-row {
-  width: 100%; display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+  width: 100%; min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 4px 6px;
   border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-md); text-align: left; cursor: pointer;
 }
 .org-task-row:hover { background: var(--bg-secondary); }
-.org-task-row > i { flex: none; width: 7px; height: 7px; border-radius: 50%; }
-/* Not started: the dashed ring of Home's section, never a filled dot. */
-.org-task-row > .org-task-ring { flex: none; display: inline-flex; color: var(--fg-muted); }
-.org-task-row > .org-task-ring svg { width: 10px; height: 10px; }
-.org-task-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-/* The title wraps in full (.wn-title, text-fit.css); the note is metadata and cuts (.wn-meta). */
-.org-task-note { font-size: var(--font-size-sm); color: var(--fg-secondary); }
-.org-task-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
-.org-task-time { font-size: var(--font-size-xs); color: var(--fg-muted); }
-/* The line was set by its lead or the user, not the task itself. */
-.org-set-by { font-size: var(--font-size-xs); color: color-mix(in srgb, var(--accent) 75%, var(--fg)); white-space: nowrap; }
+/* The circle borrows .task-phase-icon-btn for its colour and size, without its own hover (the row is the button). */
+.org-task-row > .org-task-circle { pointer-events: none; }
+.org-task-row > .org-task-circle svg { width: 12px; height: 12px; }
+/* Home's tones for the circle (status-sections.css): what waits, sleeps or never started is muted,
+   a result to read is the accent. */
+.org-task-row > .org-task-circle:is([data-row-mark="waiting"], [data-row-mark="snoozed"], [data-row-mark="not-started"]) { color: var(--fg-muted); }
+.org-task-row > .org-task-circle[data-row-mark="needs-read"] { color: var(--accent); }
+/* The title wraps in full (.wn-title, text-fit.css); a finished one reads as history, as on Home. */
+.org-task-title { flex: 1; min-width: 0; line-height: 1.3; }
+.org-task-title.is-done { text-decoration: line-through; color: var(--fg-muted); }
 
 /* Needs you: summary first, then its task, then the answer in the row. */
 .org-alerts { display: flex; flex-direction: column; }

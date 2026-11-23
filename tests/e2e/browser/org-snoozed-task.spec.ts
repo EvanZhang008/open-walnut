@@ -86,12 +86,12 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   await expect(needs.locator(`[data-testid="org-alert"][data-task-id="${ids.plain}"]`)).toBeVisible()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.snoozed}"]`)).toHaveCount(0)
 
-  // The snoozed one is under Waiting (folded by default), saying until when.
+  // The snoozed one is under Waiting (folded by default), wearing Home's snooze circle.
   await openSection(detail, 'waiting')
   await expect(taskSection(detail, 'waiting').getByTestId('org-task-section-head')).toContainText('Waiting')
   const snoozedRow = taskRow(detail, ids.snoozed, 'waiting')
   await expect(snoozedRow).toBeVisible()
-  await expect(snoozedRow.getByTestId('org-task-note')).toContainText(`Snoozed until ${later}`)
+  await expect(snoozedRow.locator('.org-task-circle')).toHaveAttribute('data-row-mark', 'snoozed')
   await expect(taskRow(detail, ids.snoozed)).toHaveCount(1)
   if (SHOTS) await detail.screenshot({ path: `${SHOTS}/org-snoozed-team.png` })
 

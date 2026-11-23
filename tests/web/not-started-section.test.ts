@@ -27,7 +27,7 @@ import { ICON_NOT_STARTED, ICON_PHASE_WAITING, ICON_SNOOZE, sectionRowIcon } fro
 import {
   STATUS_CHIPS, buildStatusBoard, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, statusBrief, briefCountsLine,
 } from '../../web/src/components/board/board-status-model';
-import { ORG_RAIL_TABS, ORG_TASK_TAB_LABELS, taskTabNote } from '../../web/src/components/org/org-task-tabs';
+import { ORG_RAIL_TABS, ORG_TASK_TAB_LABELS } from '../../web/src/components/org/org-task-tabs';
 import { locatePlaceSig } from '../../web/src/components/tasks/locate-hold';
 
 let n = 0;
@@ -127,11 +127,9 @@ describe('Not started: the Board and Org Status view', () => {
 });
 
 describe('Not started: the Org node Task view', () => {
-  it('a tab of its own after Waiting, saying only a failed start', () => {
+  it('a tab of its own after Waiting', () => {
     expect(ORG_RAIL_TABS).toEqual(['watching', 'needs', 'working', 'waiting', 'notstarted', 'done']);
     expect(ORG_TASK_TAB_LABELS.notstarted).toBe('Not started');
-    expect(taskTabNote(task({ us: NOT_STARTED[0] }), 'notstarted')).toBe('');
-    expect(taskTabNote(task({ us: NOT_STARTED[2] }), 'notstarted')).toBe('Did not start: the host is offline');
   });
 });
 

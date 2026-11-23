@@ -203,7 +203,7 @@ describe('agent text cannot silently become plain JSX on a new surface', () => {
 
   it('existing derived prose slots cannot regress to plain text', () => {
     const slots: Record<string, string[]> = {
-      'components/org/OrgTaskRail.tsx': ['summary', 'more', 'note'],
+      'components/org/OrgTaskRail.tsx': ['summary', 'more'],
       'components/chat/ChatMessage.tsx': ['ctx.summary', 'ctx.description', 'ctx.note', "ctx.conversation_log ?? ''"],
       'components/sessions/LatestUpdatePopover.tsx': ['overview', 'recap'],
       'components/sessions/SessionRecapTip.tsx': ['recap'],

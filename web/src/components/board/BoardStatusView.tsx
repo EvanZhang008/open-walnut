@@ -32,7 +32,7 @@ import { taskTextSource } from '@/utils/agent-text-source';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
   NOT_STARTED_LABEL, STATUS_CHIPS, briefCountsLine, buildStatusBoard, toLookLine, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, needsRowLine,
-  rowTime, statusBrief, statusFilterShown, waitingLine, sameAskLine, waitingSentence, type KeptStatusFilter, type StatusChip, type StatusFilter, type StatusRow,
+  rowTime, statusBrief, statusFilterShown, defaultStatusFilter, waitingLine, sameAskLine, waitingSentence, type KeptStatusFilter, type StatusChip, type StatusFilter, type StatusRow,
 } from './board-status-model';
 import '@/styles/board-overview.css';
 import '@/styles/board-status.css';
@@ -244,13 +244,15 @@ function TeamStopControl({ owner, ownerId, working }: { owner: Task | undefined;
 
 export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPage, soloExtra }: BoardStatusViewProps) {
   const openTask = useOpenTask();
-  // Each board's filter stays as it was left (utils/view-memory.ts).
-  // A To read chip an older build kept opens as Needs you (statusFilterShown).
-  const [kept, setFilter] = usePageViewOf<KeptStatusFilter>('board', 'statusFilter', ownerId, 'open', isStatusFilter);
-  const filter = statusFilterShown(kept);
   // A minute clock is not needed: the server rewrites a status when it moves, and the
   // "updated" column is read again on every render the task list causes.
   const board = useMemo(() => buildStatusBoard({ ownerId, tasks, now: Date.now(), doneWindowDays: RECENT_COMPLETED_DAYS }), [ownerId, tasks]);
+  // Each board's filter stays as it was left (utils/view-memory.ts); none picked opens on Needs you
+  // (defaultStatusFilter). A To read chip an older build kept opens as Needs you (statusFilterShown).
+  // Kept under a new name since Needs you became the default (2026-11-23): the pick the old default
+  // left (Completed on the user's own board) starts again from Needs you, once.
+  const [kept, setFilter] = usePageViewOf<KeptStatusFilter | null>('board', 'statusFilter2', ownerId, null, isStatusFilter);
+  const filter = kept === null ? defaultStatusFilter(board) : statusFilterShown(kept);
   const brief = statusBrief(board);
   const owner = useMemo(() => tasks.find((t) => t.id === ownerId), [tasks, ownerId]);
   const rows = filteredRows(board, filter);

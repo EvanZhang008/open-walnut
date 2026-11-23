@@ -258,8 +258,10 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   /** All tasks or the Board (2026-11-12, the user: "under tasks, just show all taks, and then board").
    *  A node an older build left on Status or Team reads neither and opens on All tasks. */
   const [taskMode, setTaskMode] = usePageViewOf<OrgTaskMode>('org', 'node.taskMode', row.key, 'all', oneOf(ORG_TASK_MODES));
-  /** The All tasks sections folded or opened against their default, per node. */
-  const [flipped, setFlipped] = usePageViewOf<string[]>('org', 'node.sectionFlips', row.key, [], isSectionFlips);
+  /** The All tasks sections folded or opened against their default, per node. Kept under a new name
+   *  since Working folds by default (2026-11-23): a flip kept against the old default would now open
+   *  Working, so every node starts again from the new default (only Needs you and Watching open). */
+  const [flipped, setFlipped] = usePageViewOf<string[]>('org', 'node.sectionFlips2', row.key, [], isSectionFlips);
   const flipSection = (t: OrgRailTab) => setFlipped((f) => (f.includes(t) ? f.filter((x) => x !== t) : [...f, t]));
   const [focusSection, setFocusSection] = useState<{ tab: OrgRailTab; n: number } | null>(null);
   const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);

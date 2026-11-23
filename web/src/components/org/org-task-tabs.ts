@@ -8,12 +8,10 @@
 import type { Task } from '@open-walnut/core';
 import { projectKey, userStateOf } from '@open-walnut/org-tree';
 import { shownState } from '@open-walnut/user-status';
-import { STATUS_SECTION_LABELS, isNotStarted, isWatched, notStartedReason, sortSectionTasks } from '@/components/tasks/status-sections';
-import { readStatusLine } from './org-ask-form';
-import { askCount, flattenNodes, needsRowText, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { STATUS_SECTION_LABELS, isNotStarted, isWatched, sortSectionTasks } from '@/components/tasks/status-sections';
+import { askCount, flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import type { LayoutSlot } from '@/utils/layout-record';
-import type { TaskTextField } from '@/utils/agent-text-source';
 
 // A task with only a result or an answer to look at (To read) is under Needs you, a card with
 // its line (2026-11-03, the user: "I dont wnat serpeate to read"): no tab of its own. A task nobody
@@ -180,30 +178,6 @@ export function taskRowKey(main: ChannelRow | null, rows: readonly ChannelRow[])
  *  read is under Needs you (shownState). */
 export const stateTab = (task: Task): OrgStateTab => shownState(userStateOf(task));
 
-/** The line under a task in its tab: what it does, or what it waits on, in its status's words. */
-export function taskTabNote(task: Task, tab: OrgTaskTab): string {
-  const s = task.user_status;
-  // The task's own line for the state it is in (user_status.line), when it has one.
-  const own = readStatusLine(s);
-  if (own && tab !== 'done') return own.text;
-  // Under Needs you (a watched row): what to do with it, then what it asks or has to read.
-  if (tab === 'needs') return task.user_status ? needsRowText(task) : '';
-  if (tab === 'working') return s?.now?.trim() ?? '';
-  if (tab === 'waiting') return (s?.waitingOn ?? s?.now ?? '').trim();
-  // The tab says it was never started; a failed start says why.
-  if (tab === 'notstarted') return notStartedReason(task);
-  return '';
-}
-
-/** Which stored words taskTabNote showed, so a path in them opens where those words were written. */
-export function taskTabNoteField(task: Task, tab: OrgTaskTab): TaskTextField | null {
-  const s = task.user_status;
-  if (readStatusLine(s) && tab !== 'done') return 'line';
-  if (tab === 'needs') return 'needs';
-  if (tab === 'working') return 'report';
-  if (tab === 'waiting') return s?.waitingOn != null ? 'waiting' : 'report';
-  return null;
-}
 
 /** The node's own ask first, the rest in their order: every ask the Needs you tab counts is a card. */
 export const ownAskFirst = (alerts: readonly OrgAlertView[], ownId: string | undefined): OrgAlertView[] =>
@@ -218,8 +192,10 @@ export const ownAskFirst = (alerts: readonly OrgAlertView[], ownId: string | und
  * nothing in them are left out.
  */
 export interface OrgTaskSection { tab: OrgRailTab; tasks: Task[]; alerts: OrgAlertView[] }
-/** Open on a node's first look: what is in front of the user now; what waits and what is done fold. */
-export const ORG_SECTION_OPEN_BY_DEFAULT: ReadonlySet<OrgRailTab> = new Set<OrgRailTab>(['watching', 'needs', 'working']);
+/** Open on a node's first look: what needs the user, and the tasks he watches (Home's sticky pair,
+ *  section-fold-rule.ts); Working, what waits and what is done fold (2026-11-23, the user: "working
+ *  是 automatically collapsed，就像其他一样 ... 只有那个 needs you 是 default 是 show"). */
+export const ORG_SECTION_OPEN_BY_DEFAULT: ReadonlySet<OrgRailTab> = new Set<OrgRailTab>(['watching', 'needs']);
 export function allTasksSections(tabs: OrgTaskTabs, alerts: readonly OrgAlertView[], approvals = 0): OrgTaskSection[] {
   const asks = new Set(alerts.map((a) => a.taskId));
   const doneIds = new Set(tabs.done.map((t) => t.id));

@@ -130,6 +130,11 @@ test('Status is the default; its states and counts are the stored status, the Or
   const stored = await pollStored((ts) => ts.every((t) => stateOf(t)) && [team.perm, team.question, team.nested]
     .every((id) => stateOf(ts.find((t) => t.id === id)!) === 'needs'))
   const open = stored.filter((t) => stateOf(t) !== 'done')
+  // With nothing picked it opens on Needs you (2026-11-23, the user: the Board's "default ... 只受这个
+  // needs you"); All open lists every open member.
+  await expect(pane.getByTestId('board-status-filter-needs')).toHaveAttribute('aria-pressed', 'true')
+  await expect(rows(pane)).toHaveCount(3, { timeout: 15_000 })
+  await pane.getByTestId('board-status-filter-open').click()
   await expect(rows(pane)).toHaveCount(open.length, { timeout: 15_000 })
   const shown = await rows(pane).evaluateAll((els) => Object.fromEntries(els.map((e) => [e.getAttribute('data-task-id'), e.getAttribute('data-state')])))
   for (const t of open) expect(shown[t.id], t.id).toBe(stateOf(t))
@@ -305,6 +310,8 @@ test('a task that moves moves its Status row live: completed, it leaves the open
   test.setTimeout(180_000)
   const pane = await openBoard(page)
   await pane.getByTestId('board-view-status').click()
+  // The team's open rows: the Board opens on Needs you while something needs the user.
+  await pane.getByTestId('board-status-filter-open').click()
   const id = team.idle[5]
   const row = pane.locator(`[data-testid="board-status-row"][data-task-id="${id}"]`)
   await expect(row).toHaveAttribute('data-state', 'waiting', { timeout: 30_000 })
