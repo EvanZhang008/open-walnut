@@ -23,6 +23,7 @@ import { RESTART_MARK_NAME } from './daemon-restart-mark.js'
 import { OVER_BUSY_FLAG, OVER_BUSY_PLAIN_MS, OVER_BUSY_WAIT_MS } from './daemon-over-busy.js'
 import { proveStagedBoot } from './daemon-boot-proof.js'
 import { launchdSpawnsJobs } from './daemon-service-launchd.js'
+import { DAEMON_BUSY_WORDS } from './daemon-busy-words.js'
 import { handBackStandIn } from './daemon-service-handback.js'
 import { daemonReady, daemonStays } from './daemon-service-ready.js'
 import { createLauncherControl } from './service-launcher-control.js'
@@ -98,7 +99,7 @@ export const UPDATE_BUSY_WAIT_MS = 30_000
 export function handoverBusy(error: unknown): boolean {
   if (error instanceof DaemonServiceHandoverPendingError) return false
   const text = error instanceof Error ? error.message : String(error)
-  return /must finish first|has active operations; retry after they finish/.test(text)
+  return DAEMON_BUSY_WORDS.test(text)
     || (error as { beforeRequest?: boolean })?.beforeRequest === true
 }
 

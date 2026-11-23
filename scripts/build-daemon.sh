@@ -229,6 +229,7 @@ SOURCES=(
   src/providers/daemon-service-launchd.ts
   src/providers/daemon-service-systemd.ts
   src/providers/daemon-service-artifact.ts
+  src/providers/daemon-busy-words.ts
   src/providers/daemon-service-cli.ts
   src/providers/daemon-over-busy.ts
   src/providers/daemon-service-ready.ts

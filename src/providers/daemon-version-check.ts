@@ -308,6 +308,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-launchd.ts',
   'src/providers/daemon-service-systemd.ts',
   'src/providers/daemon-service-artifact.ts',
+  // The busy words the handover wait of the CLI asks again on.
+  'src/providers/daemon-busy-words.ts',
   'src/providers/daemon-service-cli.ts',
   'src/providers/daemon-over-busy.ts',
   // Whether the service daemon answers and stays (daemonReady, daemonStays), bundled into daemon-service-cli.cjs.

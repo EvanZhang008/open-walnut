@@ -29,6 +29,7 @@
  */
 import { upgradeHoldClock } from './acp-upgrade-hold.js'
 import { log } from '../logging/index.js'
+import { DAEMON_BUSY_WORDS } from './daemon-busy-words.js'
 
 export const EXEC_UPGRADE_HOLD_MAX_MS = 3 * 60 * 60_000
 
@@ -47,7 +48,7 @@ export function execRunsReason(n: unknown): string | null {
  */
 export function daemonBusyRefusal(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error)
-  return /must finish first|has active operations; retry after they finish|Service preparation timed out/.test(text)
+  return DAEMON_BUSY_WORDS.test(text) || /Service preparation timed out/.test(text)
 }
 
 type ListedJob = { running?: unknown; resumable?: unknown; detached?: unknown } | null

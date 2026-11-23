@@ -18,6 +18,7 @@ import { tailSteppedIn, type UpdateTail } from './daemon-update-tail.js'
 import { answerOfRecord, readNetUpdateRecord, type DetachedUpdateHost, type NetUpdateRecord } from './daemon-net-update-io.js'
 import { KeyedUpdateStore } from './daemon-update-store.js'
 import { STAGING } from './daemon-update-staging.js'
+import { DAEMON_BUSY_WORDS } from './daemon-busy-words.js'
 
 /**
  * A runner whose script is there and whose done line is not, this long after its launch,
@@ -93,7 +94,11 @@ export function stageCutByLink(error: unknown, connected: boolean): boolean {
 /**
  * A record read back: did the new build come to serve, and is the build itself at fault (the day's
  * hold)? `nothingDone`: the host held or deferred it before it changed anything (a probation or
- * another runner at work, the install lock, launchd starting no jobs): no failure, asked again.
+ * another runner at work, the install lock, launchd starting no jobs, or a daemon busy on every
+ * try of the runner): no failure, asked again. The busy refusal is the same rule as an answer
+ * that came in time (DAEMON_BUSY_WORDS, daemon-connection.ts): 2026-11-23, a dev host's daemon kept
+ * an ACP worker or a relay through the runner's eight tries, and each read back logged an error
+ * that kept a health alarm on, while the old daemon served untouched.
  */
 export interface RecordVerdict { applied: boolean; buildFailed: boolean; nothingDone: boolean; message: string }
 
@@ -103,9 +108,10 @@ export function judgeUpdateRecord(record: NetUpdateRecord): RecordVerdict {
     judgeServiceUpdate(output, tail)
     return { applied: true, buildFailed: false, nothingDone: false, message: '' }
   } catch (error) {
-    const e = error as Error & { buildFailed?: unknown }
+    const e = error as Error & { buildFailed?: unknown; stopped?: unknown }
     // By name: tests replace daemon-net-update-io.ts, where the class lives, with a double.
-    const nothingDone = e.buildFailed !== true && (e.name === 'NetUpdateHeldError' || String(e.message).includes('update deferred: '))
+    const refusedBusy = DAEMON_BUSY_WORDS.test(String(e.message)) && e.stopped !== true && !tailSteppedIn(record.tail)
+    const nothingDone = e.buildFailed !== true && (e.name === 'NetUpdateHeldError' || String(e.message).includes('update deferred: ') || refusedBusy)
     return { applied: false, buildFailed: e.buildFailed === true, nothingDone, message: e.message }
   }
 }
