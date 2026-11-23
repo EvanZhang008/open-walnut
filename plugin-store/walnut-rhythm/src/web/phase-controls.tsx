@@ -43,7 +43,7 @@ function Button({ op, label, busyLabel, pending, primary, onClick }: {
   return (
     <button
       type="button"
-      className={`rhythm-button${primary ? ' rhythm-primary' : ''}`}
+      className={`btn btn-sm${primary ? ' btn-primary' : ''}`}
       disabled={pending !== null}
       aria-busy={pending === op || undefined}
       data-testid={`rhythm-${op}`}

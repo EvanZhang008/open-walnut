@@ -89,14 +89,14 @@ export function MacCard({ state, onInstall, onOpenPrivacy, onDndSetting, refresh
             </label>
             {setup.step === 'add' && (
               // Stays clickable while watching: a dialog closed by mistake opens again at once.
-              <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-shortcuts-install" onClick={onInstall}>
+              <button type="button" className="btn btn-sm btn-primary" disabled={busy} data-testid="rhythm-shortcuts-install" onClick={onInstall}>
                 {shortcuts.watching ? 'Open again' : 'Add shortcuts'}
               </button>
             )}
             {setup.step === 'access' && (
-              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-dnd-privacy-open" onClick={onOpenPrivacy}>Open Privacy settings</button>
+              <button type="button" className="btn btn-sm" disabled={busy} data-testid="rhythm-dnd-privacy-open" onClick={onOpenPrivacy}>Open Privacy settings</button>
             )}
-            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-shortcuts-check" onClick={refresh}>Check again</button>
+            <button type="button" className="btn btn-sm" disabled={busy} data-testid="rhythm-shortcuts-check" onClick={refresh}>Check again</button>
           </div>
         </div>
         <div className="rhythm-row">
@@ -106,8 +106,8 @@ export function MacCard({ state, onInstall, onOpenPrivacy, onDndSetting, refresh
           </div>
           {mirror.phase === 'unavailable' && mirror.needsAccess && (
             <div className="rhythm-row-actions">
-              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-privacy-open" onClick={onOpenPrivacy}>Open Privacy settings</button>
-              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-mirror-check" onClick={refresh}>Check again</button>
+              <button type="button" className="btn btn-sm" disabled={busy} data-testid="rhythm-privacy-open" onClick={onOpenPrivacy}>Open Privacy settings</button>
+              <button type="button" className="btn btn-sm" disabled={busy} data-testid="rhythm-mirror-check" onClick={refresh}>Check again</button>
             </div>
           )}
         </div>

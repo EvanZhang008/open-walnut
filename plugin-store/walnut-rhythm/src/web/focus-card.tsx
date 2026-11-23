@@ -126,7 +126,7 @@ export function FocusCard({ walnut, store, state, music }: FocusCardProps) {
             {picker.error && (
               <p className="rhythm-error rhythm-pad">
                 {picker.error}{' '}
-                <button type="button" className="rhythm-link-button" onClick={picker.retry}>Try again</button>
+                <button type="button" className="btn btn-sm" onClick={picker.retry}>Try again</button>
               </p>
             )}
           </div>

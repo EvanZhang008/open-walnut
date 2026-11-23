@@ -69,7 +69,7 @@ export function NowPlaying({ store, music, state, compact }: { store: RhythmStor
         {current.kind !== 'none' && (
           <button
             type="button"
-            className="rhythm-button rhythm-pause"
+            className="btn btn-sm rhythm-pause"
             aria-pressed={paused}
             aria-busy={pausing || undefined}
             disabled={pausing}

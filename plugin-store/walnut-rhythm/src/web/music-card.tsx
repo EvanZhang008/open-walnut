@@ -58,7 +58,7 @@ function SpotifyPlaylists({ player, store, spotify }: { player: MusicPlayer; sto
         {spotify.playlists.map((one) => (
           <div key={one.uri} className="rhythm-option rhythm-option-row">
             <span className="rhythm-option-title">{one.name}</span>
-            <button type="button" className="rhythm-link-button" disabled={busy} data-testid={`rhythm-spotify-remove-${one.uri}`} onClick={() => call('spotify_playlist_remove', { uri: one.uri })}>Remove</button>
+            <button type="button" className="btn btn-sm" disabled={busy} data-testid={`rhythm-spotify-remove-${one.uri}`} onClick={() => call('spotify_playlist_remove', { uri: one.uri })}>Remove</button>
           </div>
         ))}
         {spotify.playlists.length === 0 && <p className="rhythm-muted rhythm-pad">No playlists. Paste a playlist link below.</p>}
@@ -76,7 +76,7 @@ function SpotifyPlaylists({ player, store, spotify }: { player: MusicPlayer; sto
           data-testid="rhythm-spotify-link"
           onChange={(event) => setLink(event.currentTarget.value)}
         />
-        <button type="submit" className="rhythm-button" disabled={busy || !link.trim()} data-testid="rhythm-spotify-add">Add</button>
+        <button type="submit" className="btn btn-sm" disabled={busy || !link.trim()} data-testid="rhythm-spotify-add">Add</button>
       </form>
       {message && <p className={message.error ? 'rhythm-error' : 'rhythm-status'} role="status" data-testid="rhythm-spotify-message">{message.text}</p>}
     </div>
@@ -101,7 +101,7 @@ export function MusicCard({ player, store, state, onOpenFolder, busy }: { player
         <div className="rhythm-music-now">
           <button
             type="button"
-            className={`rhythm-music-play${on ? ' rhythm-music-on' : ''}`}
+            className={`btn rhythm-music-play${on ? '' : ' btn-primary'}`}
             aria-pressed={on}
             aria-label={on ? 'Stop the focus music' : `Play ${current?.title ?? 'the focus music'}`}
             disabled={!on && tracks.length === 0}
@@ -179,8 +179,8 @@ export function MusicCard({ player, store, state, onOpenFolder, busy }: { player
         <div className="rhythm-music-folder">
           <span className="rhythm-muted rhythm-music-path" data-testid="rhythm-music-folder" title={listing?.folder}>{listing ? listing.folder : ''}</span>
           <div className="rhythm-actions">
-            <button type="button" className="rhythm-button" disabled={busy || !listing || Boolean(listing.error && !listing.exists)} data-testid="rhythm-music-open-folder" onClick={onOpenFolder}>Open folder</button>
-            <button type="button" className="rhythm-button" disabled={music.loading} data-testid="rhythm-music-refresh" onClick={() => { void player.refresh() }}>Refresh</button>
+            <button type="button" className="btn btn-sm" disabled={busy || !listing || Boolean(listing.error && !listing.exists)} data-testid="rhythm-music-open-folder" onClick={onOpenFolder}>Open folder</button>
+            <button type="button" className="btn btn-sm" disabled={music.loading} data-testid="rhythm-music-refresh" onClick={() => { void player.refresh() }}>Refresh</button>
           </div>
         </div>
       </div></div>

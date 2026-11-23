@@ -14,6 +14,23 @@ import { tokenBreaks, TOKEN_KINDS, type TokenKind } from './ui-token-scan';
 export { TOKEN_KINDS };
 
 export const WEB_SRC = path.join(__dirname, '../../web/src');
+/**
+ * The plugins this repo ships (plugin-store/<id>/src): their pages draw keys in the same console, so
+ * the button counts cover them too (2026-11-23: Rhythm's keys had a family of their own). Their files
+ * are keyed from WEB_SRC (`../../plugin-store/...`), as the rest.
+ */
+export const PLUGIN_SRC = path.join(__dirname, '../../plugin-store');
+/** Every TSX file a key can be written in: the console's and the shipped plugins'. */
+export const keyFiles = (exts: string[] = ['.tsx']): string[] => [...walk(WEB_SRC, exts), ...walk(PLUGIN_SRC, exts)];
+/** A plugin's stylesheet is the template string a `styles.ts` exports: its text, from `= \`` to the last backtick. */
+export function pluginCss(src: string): string {
+  const at = src.indexOf('= `');
+  const end = src.lastIndexOf('`');
+  return at < 0 || end <= at + 3 ? '' : src.slice(at + 3, end);
+}
+/** The shipped plugins' stylesheets: [file, css text]. */
+export const pluginStyles = (): [string, string][] =>
+  walk(PLUGIN_SRC, ['styles.ts']).map((f) => [f, pluginCss(fs.readFileSync(f, 'utf8'))] as [string, string]).filter(([, css]) => css.length > 0);
 
 /** The one home of the console's label (standard.md, "Status labels"). */
 export const LABEL_HOME = 'styles/badge.css';
@@ -46,7 +63,7 @@ function compounds(selector: string): string[] {
  */
 export function btnCompanions(): Set<string> {
   const out = new Set<string>();
-  for (const file of walk(WEB_SRC, ['.tsx', '.ts'])) {
+  for (const file of keyFiles(['.tsx', '.ts'])) {
     const text = fs.readFileSync(file, 'utf8');
     for (const m of text.matchAll(/className=\{?\s*[`'"]([^`'"]*)[`'"]/g)) {
       const words = m[1].replace(/\$\{[^}]*\}/g, ' ').split(/\s+/).filter(Boolean);
@@ -421,7 +438,7 @@ export const buttonTags = (src: string): string[] => openingTags(src, 'button');
 /** Every class written on a `<button>` drawn outside the family (isBareButton), in any quoted piece of its className. */
 export function bareKeyClasses(): Set<string> {
   const out = new Set<string>();
-  for (const file of walk(WEB_SRC, ['.tsx'])) {
+  for (const file of keyFiles()) {
     for (const tag of buttonTags(fs.readFileSync(file, 'utf8'))) {
       if (!isBareButton(tag)) continue;
       const at = tag.search(/\bclassName=/);
@@ -459,10 +476,10 @@ export function countAll(): Counts {
   const fields = fieldClasses();
   const pressables = pressableClasses();
   const bareKeys = bareKeyClasses();
-  for (const file of walk(WEB_SRC, ['.css']).sort()) {
+  const sheets: [string, string][] = [...walk(WEB_SRC, ['.css']).sort().map((f) => [f, fs.readFileSync(f, 'utf8')] as [string, string]), ...pluginStyles()];
+  for (const [file, text] of sheets) {
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
-    const text = fs.readFileSync(file, 'utf8');
     const lines = text.split('\n');
     for (const d of scanCss(rel, text)) {
       const key = d.selectors.join(', ');
@@ -487,7 +504,7 @@ export function countAll(): Counts {
     const n = (fs.readFileSync(file, 'utf8').match(/#(?:007aff|0a84ff)\b/gi) ?? []).length;
     if (n) out.rawAccent[path.relative(WEB_SRC, file)] = n;
   }
-  for (const file of walk(WEB_SRC, ['.tsx']).sort()) {
+  for (const file of keyFiles().sort()) {
     // The choice controls' own buttons (a chip, a disclosure) are their family, not the button one
     // (standard.md, "Choice controls").
     if (path.relative(WEB_SRC, file).startsWith('components/controls/')) continue;

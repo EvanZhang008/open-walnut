@@ -123,7 +123,7 @@ function SettingsBlock({ walnut, navigate }: { walnut: WalnutWebApi; navigate: A
               <span className="rhythm-row-help">This Walnut draws plugin settings under Settings → Plugins.</span>
             </div>
             <div className="rhythm-row-actions">
-              <a className="rhythm-button" href={SETTINGS_PATH} data-testid="rhythm-link-settings" onClick={(event) => { event.preventDefault(); navigate(SETTINGS_PATH) }}>Open</a>
+              <a className="btn btn-sm" href={SETTINGS_PATH} data-testid="rhythm-link-settings" onClick={(event) => { event.preventDefault(); navigate(SETTINGS_PATH) }}>Open</a>
             </div>
           </div>
         </div>
@@ -183,7 +183,7 @@ export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
       <div className="rhythm-root" data-testid="rhythm-app">
         <header><h1>Rhythm</h1></header>
         {error
-          ? <p className="rhythm-error" data-testid="rhythm-load-error">Rhythm could not load its state: {error} <button type="button" className="rhythm-link-button" onClick={refresh}>Try again</button></p>
+          ? <p className="rhythm-error" data-testid="rhythm-load-error">Rhythm could not load its state: {error} <button type="button" className="btn btn-link" onClick={refresh}>Try again</button></p>
           : <p className="rhythm-muted">Loading…</p>}
         {/* The settings have no other home (settingsIn: 'app'), so they stay reachable
             when the state does not load: often a setting is what needs fixing. */}

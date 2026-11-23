@@ -88,10 +88,10 @@ export function GoalRow({ store, goal, compact }: { store: RhythmStore; goal: st
           }}
         />
         <div className="rhythm-goal-buttons">
-          <button type="button" className="rhythm-button rhythm-primary" disabled={busy} aria-busy={busy || undefined} data-testid="rhythm-goal-save" onClick={save}>
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy} aria-busy={busy || undefined} data-testid="rhythm-goal-save" onClick={save}>
             {busy ? 'Saving…' : 'Save goal'}
           </button>
-          <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-goal-cancel" onClick={cancel}>Cancel</button>
+          <button type="button" className="btn btn-sm" disabled={busy} data-testid="rhythm-goal-cancel" onClick={cancel}>Cancel</button>
         </div>
         {error && <p className="rhythm-error" role="status" data-testid="rhythm-goal-error">{error}</p>}
       </div>
@@ -100,7 +100,7 @@ export function GoalRow({ store, goal, compact }: { store: RhythmStore; goal: st
   return (
     <div className="rhythm-goal" data-testid="rhythm-goal-row">
       {!compact && goal && <p className="rhythm-goal-text" data-testid="rhythm-goal-text"><span className="rhythm-goal-label">Goal</span> {goal}</p>}
-      <button type="button" className="rhythm-link-button" data-testid="rhythm-goal-edit" onClick={() => setEditing(true)}>
+      <button type="button" className="btn btn-sm" data-testid="rhythm-goal-edit" onClick={() => setEditing(true)}>
         {goal ? 'Edit goal' : 'Set a goal for this block'}
       </button>
     </div>

@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { btnCompanions } from './ui-standard-scan'
+import { btnCompanions, pluginStyles } from './ui-standard-scan'
 import { scanCss, walk } from './css-scan'
 
 const WEB = path.join(__dirname, '..', '..', 'web', 'src')
@@ -44,10 +44,12 @@ describe('a class beside btn never ties with the family', () => {
     const companions = btnCompanions()
     const props = familyProps()
     const bad: string[] = []
-    for (const file of walk(WEB, ['.css'])) {
+    // The console's stylesheets and the shipped plugins' (a plugin's CSS is the string its styles.ts exports).
+    const sheets: [string, string][] = [...walk(WEB, ['.css']).map((f) => [f, fs.readFileSync(f, 'utf8')] as [string, string]), ...pluginStyles()]
+    for (const [file, text] of sheets) {
       const rel = path.relative(WEB, file)
       if (rel === FAMILY) continue
-      for (const d of scanCss(rel, fs.readFileSync(file, 'utf8'))) {
+      for (const d of scanCss(rel, text)) {
         for (const s of d.selectors) if (ties(s, d.prop, companions, props)) bad.push(`web/src/${rel}:${d.line} ${s} { ${d.prop} }`)
       }
     }

@@ -42,7 +42,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, isSquareKey, isRoundRow, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
+import { pluginCss, pluginStyles, countAll, isSquareKey, isRoundRow, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -152,6 +152,9 @@ describe('UI standard: one look per kind of control', () => {
     expect(isOwnControl('.kanban-icon-btn')).toBe(true);
     expect(isOwnControl('.row .pr-pill:hover')).toBe(true);
     expect(isOwnControl('.card-title')).toBe(false);
+    // A shipped plugin's stylesheet is read from the template string its styles.ts exports.
+    expect(pluginCss('/** `x` */\nexport const CSS = `\n.a { color: red; }\n`\n')).toBe('\n.a { color: red; }\n');
+    expect(pluginStyles().some(([f]) => f.includes('walnut-rhythm'))).toBe(true);
     // A class on a <button> outside the family is a key with its own look, whatever its name.
     expect(isOwnControl('.nfc-card-action')).toBe(false);
     expect(isOwnControl('.nfc-card-action:hover', new Set(['nfc-card-action']))).toBe(true);

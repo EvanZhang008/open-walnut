@@ -67,7 +67,7 @@ export async function activate(walnut: WalnutWebApi) {
       return (
         <div className="rhythm-start-result" data-testid="rhythm-start-spotify-error">
           <p className="rhythm-error" role="status">The block is running. {spotifyError}</p>
-          <button type="button" className="rhythm-button" onClick={() => setSpotifyError(null)}>OK</button>
+          <button type="button" className="btn btn-sm" onClick={() => setSpotifyError(null)}>OK</button>
         </div>
       )
     }

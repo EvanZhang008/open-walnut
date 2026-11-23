@@ -35,7 +35,7 @@ export function DndBlockRow({ store, state }: { store: RhythmStore; state: Rhyth
     <div className="rhythm-dnd-row" data-testid="rhythm-dnd-row" data-status={state.dnd.record?.status ?? 'none'}>
       <p className={view.tone === 'error' ? 'rhythm-error' : 'rhythm-status'} role="status" data-testid="rhythm-dnd-line">{view.text}</p>
       {view.action && (
-        <button type="button" className="rhythm-button" disabled={busy} aria-busy={busy || undefined} data-testid={`rhythm-dnd-${view.action}`} onClick={() => act(view.action === 'on')}>
+        <button type="button" className="btn btn-sm" disabled={busy} aria-busy={busy || undefined} data-testid={`rhythm-dnd-${view.action}`} onClick={() => act(view.action === 'on')}>
           {view.action === 'on' ? 'Turn on Do Not Disturb' : 'Turn off Do Not Disturb'}
         </button>
       )}

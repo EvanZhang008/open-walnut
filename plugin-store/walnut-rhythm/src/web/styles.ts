@@ -85,29 +85,9 @@ export const RHYTHM_CSS = `
 }
 .rhythm-dial-text { font-size: 14px; line-height: 19px; font-weight: 500; padding-top: 5px; overflow-wrap: anywhere; }
 
-/* ── Buttons: the Settings button's size and shape ── */
+/* ── Buttons: every key is the console's button family (.btn, buttons.css): grey btn-sm keys, one
+   btn-primary per card. ── */
 .rhythm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.rhythm-button {
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--card-bg, var(--bg));
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-  line-height: 26px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.rhythm-button:hover:not(:disabled) { background: var(--bg-hover, var(--bg-secondary)); }
-.rhythm-button:disabled { opacity: 0.45; cursor: default; }
-/* White on the accent. The host's --accent-text is the accent AS text (blue on white),
-   never text on blue: using it here painted blue words on a blue button. */
-.rhythm-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
-.rhythm-primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); border-color: var(--accent-hover, var(--accent)); }
-.rhythm-link-button { border: 0; padding: 0; background: none; color: var(--accent); font: inherit; font-size: inherit; cursor: pointer; }
-.rhythm-link-button:hover { text-decoration: underline; }
 
 /* ── Focus block ── */
 .rhythm-two { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 22px; align-items: start; }
@@ -167,26 +147,8 @@ export const RHYTHM_CSS = `
 
 /* ── Focus music ── */
 .rhythm-music-now { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
-.rhythm-music-play {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 16px 0 13px;
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.rhythm-music-play:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
-.rhythm-music-play:disabled { opacity: 0.45; cursor: default; }
-.rhythm-music-play.rhythm-music-on,
-.rhythm-music-play.rhythm-music-on:hover:not(:disabled) { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--accent); }
-.rhythm-button.rhythm-music-on { border-color: var(--accent); color: var(--accent); }
+/* Play / Stop is the family's key: blue while it would start the music, the pressed look while it plays. */
+.rhythm-music-play { gap: 6px; }
 .rhythm-music-copy { display: grid; gap: 2px; min-width: 0; }
 .rhythm-music-title { font-size: 14px; line-height: 19px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rhythm-music-volume { display: grid; gap: 2px; justify-items: start; }
@@ -224,7 +186,7 @@ export const RHYTHM_CSS = `
 .rhythm-star { flex: none; margin-right: 4px; }
 .rhythm-now-head { display: flex; align-items: center; gap: 8px; }
 .rhythm-now-head .rhythm-start-plays { flex: 1; min-width: 0; }
-.rhythm-button.rhythm-pause { flex: none; min-width: 72px; }
+.rhythm-pause { flex: none; min-width: 72px; }
 .rhythm-goal { display: grid; gap: 6px; justify-items: start; font-size: 13px; color: var(--fg); }
 .rhythm-goal p { margin: 0; }
 .rhythm-goal-text { margin: 0; font-size: 13.5px; line-height: 19px; color: var(--fg); font-weight: 500; overflow-wrap: anywhere; }

@@ -100,7 +100,8 @@
     "styles/voice-conversation.css": 1,
     "styles/walnut-agent.css": 5,
     "styles/worker-fold.css": 2,
-    "styles/workspaces.css": 5
+    "styles/workspaces.css": 5,
+    "../../plugin-store/notes-import/src/web/styles.ts": 1
   },
   "rawAccent": {
     "components/apps-page/builtin-apps.ts": 2,
@@ -159,7 +160,8 @@
     "styles/topics.css": 3,
     "styles/unpaired-notice.css": 9,
     "styles/usage-breakdown.css": 24,
-    "styles/walnut-agent.css": 6
+    "styles/walnut-agent.css": 6,
+    "../../plugin-store/notes-import/src/web/styles.ts": 5
   },
   "radiusNotToken": {
     "apps/mail/mail-compose.css": 2,
@@ -255,7 +257,9 @@
     "styles/turn-snapshots.css": 2,
     "styles/unpaired-notice.css": 1,
     "styles/walnut-agent.css": 3,
-    "styles/workspaces.css": 3
+    "styles/workspaces.css": 3,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2,
+    "../../plugin-store/notes-import/src/web/styles.ts": 9
   },
   "pillRadius": {
     "apps/mail/mail-reader.css": 1,
@@ -269,7 +273,9 @@
     "styles/session-commit.css": 1,
     "styles/trigger-picker.css": 1,
     "styles/usage-breakdown.css": 1,
-    "styles/workspaces.css": 2
+    "styles/workspaces.css": 2,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 1,
+    "../../plugin-store/notes-import/src/web/styles.ts": 7
   },
   "fontSizeOffScale": {
     "apps/mail/mail-compose.css": 3,
@@ -348,7 +354,9 @@
     "styles/trigger-picker.css": 1,
     "styles/unpaired-notice.css": 3,
     "styles/walnut-agent.css": 1,
-    "styles/workspaces.css": 1
+    "styles/workspaces.css": 1,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 30,
+    "../../plugin-store/notes-import/src/web/styles.ts": 20
   },
   "shadowLiteral": {
     "apps/mail/mail-reader.css": 1,
@@ -558,9 +566,16 @@
     "styles/voice-history.css": 1,
     "styles/walnut-agent.css": 4,
     "styles/worker-fold.css": 1,
-    "styles/workspaces.css": 8
+    "styles/workspaces.css": 8,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 3,
+    "../../plugin-store/notes-import/src/web/styles.ts": 6
   },
   "bareButton": {
+    "../../plugin-store/notes-import/src/web/app.tsx": 2,
+    "../../plugin-store/notes-import/src/web/connect.tsx": 5,
+    "../../plugin-store/notes-import/src/web/import-panel.tsx": 31,
+    "../../plugin-store/notes-import/src/web/organize-panel.tsx": 13,
+    "../../plugin-store/walnut-drawing/src/narration/NarrationControl.tsx": 5,
     "apps/mail/AddAccountDialog.tsx": 1,
     "apps/mail/MailAccountFolders.tsx": 3,
     "apps/mail/MailAccountsPane.tsx": 3,
@@ -952,7 +967,9 @@
     "styles/thread-stack-chrome.css": 3,
     "styles/thread-stack-page.css": 1,
     "styles/thread-stack.css": 1,
-    "styles/top-thread.css": 1
+    "styles/top-thread.css": 1,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2,
+    "../../plugin-store/notes-import/src/web/styles.ts": 1
   },
   "restyledField": {
     "apps/mail/mail.css": 1,
@@ -963,7 +980,9 @@
     "styles/globals.css": 4,
     "styles/passwords.css": 2,
     "styles/quickbar.css": 2,
-    "styles/unpaired-notice.css": 1
+    "styles/unpaired-notice.css": 1,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 1,
+    "../../plugin-store/notes-import/src/web/styles.ts": 8
   },
   "ownLabel": {
     "apps/mail/mail-compose.css": 3,
@@ -991,13 +1010,18 @@
     "styles/thread-stack.css": 2,
     "styles/todo-search.css": 1,
     "styles/topics.css": 2,
-    "styles/walnut-agent.css": 1
+    "styles/walnut-agent.css": 1,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2,
+    "../../plugin-store/notes-import/src/web/styles.ts": 4
   },
   "cardBg": {
     "styles/board-kanban.css": 1,
     "styles/doc-comments.css": 1,
     "styles/globals.css": 1
   },
-  "squareKey": {},
+  "squareKey": {
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 1,
+    "../../plugin-store/notes-import/src/web/styles.ts": 2
+  },
   "roundRow": {}
 }
