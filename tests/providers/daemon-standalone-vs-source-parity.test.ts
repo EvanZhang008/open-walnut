@@ -3666,8 +3666,10 @@ describe('one CLI per session id parity (cli-owner-v1)', () => {
       expect(wait).toMatch(/pid > 1 && \(signalable\(-pid\) \|\| signalable\(pid\)\)/)
       expect(wait).toMatch(/killProcessGroup\(pid, 'SIGKILL'\)/)
       expect(src).toMatch(/if \(cmd\.strict !== true\) return null/)
-      // The asking Walnut by its first home here (walnut-scope-core.ts canonical), as the journal's owner is.
-      expect(src).toMatch(/if \(owner \? owner === walnutScope\.canonical\(home (?:\?\?|\|\|) ''\) : !journaled && !resume\) return null/)
+      // The asking Walnut by its first home here, as the journal's owner is: walnutOfHome is
+      // walnutScope.canonical, except that a data dir this daemon serves for a leader counts as that
+      // leader's Walnut (host-server-core.ts walnutOf), so a host's own server may restart its own session.
+      expect(src).toMatch(/if \(owner \? owner === walnutOfHome\(home (?:\?\?|\|\|) ''\) : !journaled && !resume\) return null/)
       expect(src).toContain("errorKind === 'session_other_walnut' ? { reason: 'session_other_walnut', code: 'SESSION_NOT_OURS' }")
     }
     expect(readFile(path.join(ROOT, 'src/providers/remote-session-manager.ts'))).toContain('...(IS_EPHEMERAL ? { strict: true } : {}),')
