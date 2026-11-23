@@ -8,25 +8,30 @@
  *
  *   where      every delivery of a queued line runs the runner's processNext (a send of any source,
  *              a redelivery, restart recovery, auto-continue, a retry): it asks here first, so one
- *              place covers them all. A Restart without a message (reinitialize) stays legacy.
- *   at rest    notAtRestReason: no live process the leader holds, no turn, restart, delivery or
- *              start in flight, no pending stop, no running transfer, no line out, and the host's
- *              runtime says no CLI of it runs (no answer is not at rest). A live session is never
- *              handed over. ACP engines (Codex and the rest) stay legacy: a resume of one needs its
- *              runtime and journal on the host, which this path does not move.
- *   claim      the same as a start's (host-judged-runner.ts handStartToHost): in flight, the
- *              leader's row marked the host's, the born row fills it in, and the lost-start rules
- *              when the answer does not come. The host claims the row (session-db.ts claimStartingRow).
- *   lines      the waiting lines go with the resume (by their row ids: the host queues each once,
- *              ever), so the message is delivered once: taken by the host, or back here.
- *   failed     refused, or never sent: the lines are back and this delivery goes on as legacy (once:
- *              the session is held legacy for a while, so the same delivery never asks again).
- *              No answer: the lines wait here, unsent, until the host's born row says it took them
- *              (they go to it again, a no-op there) or the lost-start time runs out without it (the
- *              row is the leader's again and the legacy resume runs once). Never both.
+ *              place covers them all (tests/providers/host-resume-entry-ratchet.test.ts). A Restart
+ *              without a message (reinitialize) stays legacy.
+ *   at rest    notAtRestReason: a line waits, no live process the leader holds, no turn, restart,
+ *              delivery or start in flight, no pending stop, no running transfer, no line out, and
+ *              the host's runtime says no CLI of it runs (no answer is not at rest). The runner's
+ *              own facts are read again right before the hand, with no await between. A live
+ *              session is never handed over. ACP engines (Codex and the rest) stay legacy: a resume
+ *              of one needs its runtime and journal on the host, which this path does not move.
+ *   claim      a start's hand-over (host-handover.ts): a mark on disk, in flight, the leader's row
+ *              marked the host's, the born row ends it, the lost check when no answer comes. The
+ *              host claims the row (session-db.ts claimStartingRow).
+ *   lines      the waiting lines go with the resume by their row ids (the host queues each once,
+ *              ever) and leave this queue only once the host said yes: a leader that stops in
+ *              between still holds them. Delivered once: taken by the host, or delivered here.
+ *   failed     refused, or never sent: this delivery goes on as legacy (once: the session is held
+ *              legacy for a while, so the same delivery never asks again).
+ *   no answer  the window stays open (sends wait, host-judged-send.ts) until the host's row says it
+ *              took the resume (what waited goes to it once) or the lost check decides; that check
+ *              asks the host's runtime first and resumes here only when the CLI runs nowhere there,
+ *              else it waits on and says so in Walnut Health. Never both. A leader restart in the
+ *              window arms the check again (rearmHandOversAtBoot).
  *
- * With the switch off for the row's host, resumeHostOf answers null after one row lookup, and the
- * delivery runs exactly as before.
+ * With no host taking a resume (the switch off) resumeHostOf answers null without a row read, and
+ * the delivery runs exactly as before.
  */
 import { log } from '../logging/index.js'
 import { sessionJudgeInStore } from '../core/session-db.js'
@@ -34,28 +39,38 @@ import type { QueuedMessage } from '../core/session-queue-store.js'
 import type { SessionRecord } from '../core/types.js'
 import type { StartBody } from '../core/session-channel/host-api.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
-import { claimHostStarted } from '../core/session-channel/leader-tasks.js'
-import { armLostStartCheck, handStartToHost, startGoesToHost, takeStartBack } from './host-judged-runner.js'
-import { forwardSend, queuedLineOf } from './host-judged-send.js'
+import { claimHostStarted, unclaimHostStarted } from '../core/session-channel/leader-tasks.js'
+import { anyHostResumesSessions } from '../core/session-channel/resume-hosts.js'
+import { isHandedHold } from '../core/sessions/handed-holds.js'
+import { healthConditions, hostLabel } from '../core/notifications/health-items.js'
+import { startGoesToHost } from './host-judged-runner.js'
+import { armLostStartCheck, handOverAnswered, handStartToHost, rearmHandOvers, takeStartBack, type LostHooks } from './host-handover.js'
+import { queuedLineOf } from './host-judged-send.js'
 
 /** Why a legacy session is not handed to its host now (each keeps today's legacy delivery). */
 export type NotAtRest =
   | 'no_row' | 'host_judged' | 'acp_engine' | 'host_takes_no_resume' | 'sdk_session' | 'live_process'
   | 'turn_in_flight' | 'restart_in_flight' | 'delivery_preparing' | 'start_in_flight' | 'stop_pending'
-  | 'transfer_running' | 'line_out' | 'cli_alive' | 'cli_unknown'
+  | 'transfer_running' | 'line_out' | 'nothing_waiting' | 'cli_alive' | 'cli_unknown'
 
-/** What the at-rest decision reads of one session. `cli` undefined: the runtime was not asked yet. */
-export interface RestFacts {
-  row: Pick<SessionRecord, 'engine' | 'status_reason' | 'pid' | 'stopRequest' | 'judge' | 'host'> | null
-  hostResumes: boolean
+/** What the runner knows of a session now (sync: read again right before the hand). */
+interface RunnerFacts {
   sdk: boolean
   wrapperLive: boolean
   turnInFlight: boolean
   restartInFlight: boolean
   preparing: boolean
+}
+
+/** What the at-rest decision reads of one session. `cli` undefined: the runtime was not asked yet. */
+export interface RestFacts extends RunnerFacts {
+  row: Pick<SessionRecord, 'engine' | 'status_reason' | 'pid' | 'stopRequest' | 'judge' | 'host'> | null
+  hostResumes: boolean
   transferRunning: boolean
   /** A queued line of it is out (status 'processing'): a delivery holds it, or a dead CLI may. */
   lineOut: boolean
+  /** A line waits to go (a pending row, a handed hold): with none, nothing is handed over. */
+  linesWaiting: boolean
   /** The host's runtime: its CLI runs (true), does not (false), or no answer (null). */
   cli?: boolean | null
 }
@@ -75,6 +90,7 @@ export function notAtRestReason(f: RestFacts): NotAtRest | null {
   if (f.row.stopRequest?.state === 'pending') return 'stop_pending'
   if (f.transferRunning) return 'transfer_running'
   if (f.lineOut) return 'line_out'
+  if (!f.linesWaiting) return 'nothing_waiting'
   if (f.cli === true) return 'cli_alive'
   if (f.cli === null) return 'cli_unknown'
   return null
@@ -93,7 +109,7 @@ export interface RunnerRest {
   preparing(sid: string): boolean
   /** Rows parked only until the agent could run go back in line first, as the legacy delivery does. */
   unparkWaiting(sid: string): Promise<unknown>
-  /** The host runs it now: the runner's own (dead) object of it goes, so lookups answer the host's. */
+  /** The host runs it now: the runner's own (dead) objects of it go, so lookups answer the host's. */
   dropDeadWrapper(sid: string): void
   /** Deliver it here after all (a resume whose answer was lost and that the host never took). */
   deliverHere(sid: string): void
@@ -111,10 +127,11 @@ function holdLegacy(sid: string): void {
 
 /**
  * The host a delivery to the legacy session `sid` may hand it to, or null. Sync, so a delivery that
- * stays legacy (every one while the switch is off) waits on nothing more than one row lookup.
+ * stays legacy waits on nothing; while no host takes a resume (every one with the switch off) it
+ * reads no row either.
  */
 export function resumeHostOf(sid: string): string | null {
-  if (!sid) return null
+  if (!sid || !anyHostResumesSessions()) return null
   const until = heldLegacy.get(sid)
   if (until !== undefined) {
     if (until > Date.now()) return null
@@ -126,22 +143,28 @@ export function resumeHostOf(sid: string): string | null {
   return startGoesToHost(row.host) ? row.host : null
 }
 
-async function restFacts(sid: string, r: RunnerRest): Promise<{ facts: RestFacts; row: SessionRecord | null }> {
+function runnerFacts(sid: string, r: RunnerRest): RunnerFacts {
+  return { sdk: r.sdk(sid), wrapperLive: r.wrapperLive(sid), turnInFlight: r.turnInFlight(sid), restartInFlight: r.restartInFlight(sid), preparing: r.preparing(sid) }
+}
+
+async function restFacts(sid: string, r: RunnerRest): Promise<{ facts: RestFacts; row: SessionRecord | null; transferRunning: () => boolean }> {
   const [{ getSessionByClaudeId }, { getQueue }, { hostResumesSessions }, { runningTransferFor }] = await Promise.all([
     import('../core/session-tracker.js'), import('../core/session-message-queue.js'),
-    import('../core/session-channel/leader-boot.js'), import('../core/transfer/transfer-jobs.js'),
+    import('../core/session-channel/resume-hosts.js'), import('../core/transfer/transfer-jobs.js'),
   ])
   const row = await getSessionByClaudeId(sid)
   const queue: QueuedMessage[] = row ? await getQueue(sid) : []
+  const transferRunning = () => !!row?.taskId && !!runningTransferFor(row.taskId)
   return {
     row,
+    transferRunning,
     facts: {
       row,
       hostResumes: !!row?.host && hostResumesSessions(row.host),
-      sdk: r.sdk(sid), wrapperLive: r.wrapperLive(sid), turnInFlight: r.turnInFlight(sid),
-      restartInFlight: r.restartInFlight(sid), preparing: r.preparing(sid),
-      transferRunning: !!row?.taskId && !!runningTransferFor(row.taskId),
+      ...runnerFacts(sid, r),
+      transferRunning: transferRunning(),
       lineOut: queue.some((m) => m.status === 'processing'),
+      linesWaiting: queue.some((m) => m.status === 'pending' || isHandedHold(m)),
     },
   }
 }
@@ -159,76 +182,131 @@ async function cliOnHost(host: string, sid: string): Promise<boolean | null> {
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** A resume whose answer was lost and whose host may run it: one Walnut Health item per session. */
+const unanswered = healthConditions('host-resume')
+const unansweredKey = (sid: string) => `host-resume-unanswered:${sid}`
+
+/**
+ * What a lost check does with a resume (host-handover.ts): the host's row in time, it is the host's;
+ * none, it asks the host's runtime, and resumes here only when the CLI runs nowhere there.
+ */
+function resumeHooks(sid: string, host: string, r: RunnerRest): LostHooks {
+  const key = unansweredKey(sid)
+  return {
+    onBorn: () => { r.dropDeadWrapper(sid); void unanswered.recover(key) },
+    stillRuns: async () => {
+      const alive = await cliOnHost(host, sid)
+      if (alive === false) return false
+      void unanswered.raise(key, async () => {
+        const label = await hostLabel(host)
+        return {
+          kind: 'operation-error', severity: 'warning', category: 'Sessions', host,
+          title: `A session handed to ${label} has no answer yet`,
+          body: `Walnut handed the session to ${label} to resume it there and got no answer. ${alive ? 'Its CLI runs there' : `${label} does not say whether its CLI runs`}, so Walnut does not run it here too: its messages wait until ${label} answers, and Walnut asks again later.`,
+          detail: `host resume of ${sid} on ${host}: no answer and no row from the host; its runtime says ${alive === null ? 'nothing' : 'the CLI runs'}`,
+          dedupKey: key, recoveryKey: key, sessionId: sid,
+        }
+      })
+      return true
+    },
+    onLost: async () => {
+      holdLegacy(sid)
+      unclaimHostStarted(sid)
+      void unanswered.recover(key)
+      log.session.warn('host resume: the host never took a resume whose answer was lost; delivered here as legacy', { sessionId: sid, host })
+      r.deliverHere(sid)
+    },
+  }
+}
+
 /**
  * Hand the legacy session `sid`, at rest, to `host` as a resume. True: the host has it (or may: an
  * answer that was lost), so this delivery is done here. False: deliver it as legacy now.
  */
 export async function resumeAtRestOnHost(sid: string, host: string, r: RunnerRest): Promise<boolean> {
-  const { facts, row } = await restFacts(sid, r)
+  const { facts, row, transferRunning } = await restFacts(sid, r)
   let why = notAtRestReason(facts)
   if (!why) why = notAtRestReason({ ...facts, cli: await cliOnHost(host, sid) })
+  if (!why) await r.unparkWaiting(sid).catch(() => {})
+  // After every await above, and with none from here to the hand: a Restart or a transfer begun meanwhile keeps it legacy.
+  if (!why) why = notAtRestReason({ ...facts, ...runnerFacts(sid, r), transferRunning: transferRunning(), cli: false })
   if (why || !row) {
     log.session.info('host resume: the session stays legacy, it is not at rest', { sessionId: sid, host, why, ...(why === 'live_process' ? r.wrapperState?.(sid) : {}) })
     return false
   }
-  await r.unparkWaiting(sid).catch(() => {})
   // A resume is no new session: the born row of it says no session:started here.
   claimHostStarted(sid)
-  const handed = await handStartToHost(sid, host)
-  if (!handed) {
-    // The row changed meanwhile (another host's, a host's already): nothing went out.
-    log.session.info('host resume: the session stays legacy, its row could not be marked its host\'s', { sessionId: sid, host })
-    await takeStartBack(sid, host, false)
+  const handed = await handStartToHost(sid, host, 'resume')
+  const back = async (): Promise<false> => {
+    await takeStartBack(sid, host, handed)
+    unclaimHostStarted(sid)
     holdLegacy(sid)
     return false
   }
-  const [{ takeLinesForHost }, { getSessionByClaudeId }, { activeLeaderSide }, { requestNotSent }] = await Promise.all([
+  if (!handed) {
+    // The row changed meanwhile (another host's, a host's already): nothing went out.
+    log.session.info('host resume: the session stays legacy, its row could not be marked its host\'s', { sessionId: sid, host })
+    return back()
+  }
+  const [{ peekLinesForHost, takeLinesForHost }, { getSessionByClaudeId }, { activeLeaderSide }, { requestNotSent }] = await Promise.all([
     import('../core/session-message-queue.js'), import('../core/session-tracker.js'),
     import('../core/session-channel/leader-boot.js'), import('../core/session-channel/leader-side.js'),
   ])
-  const taken = await takeLinesForHost(sid)
+  const lines = await peekLinesForHost(sid)
   const marked = (await getSessionByClaudeId(sid).catch(() => null)) ?? row
   const body: StartBody = {
     // The send's own source frames its lines and stamps a person's input on the host, as a send to a
     // host-judged session does (host-judged-send.ts); a delivery no send asked for is Walnut's.
     taskId: marked.taskId ?? '', message: '', busSource: r.sendSource ?? 'host-resume',
-    resumeSessionId: sid, resumeRow: marked, queued: taken.lines.map(queuedLineOf),
+    resumeSessionId: sid, resumeRow: marked, queued: lines.map(queuedLineOf),
   }
   const fallBack = async (what: string, err: string): Promise<false> => {
-    await taken.putBack()
-    await takeStartBack(sid, host, true)
-    holdLegacy(sid)
     log.session.warn(`host resume: ${what}; delivered here as legacy`, { sessionId: sid, host, error: err })
-    return false
+    return back()
   }
   const side = activeLeaderSide()
   if (!side) return fallBack('this leader has no link to its hosts', 'no leader side')
-  log.session.info('session routing', { taskId: marked.taskId, type: 'host-resume', host, sessionId: sid, lines: taken.lines.length })
+  log.session.info('session routing', { taskId: marked.taskId, type: 'host-resume', host, sessionId: sid, lines: lines.length })
   let a: Awaited<ReturnType<typeof side.startOnHost>>
   try {
     a = await side.startOnHost(host, body)
   } catch (err) {
     if (requestNotSent(err)) return fallBack('the host did not get the resume', errText(err))
-    // No answer: the host may have it. Its lines wait here unsent; its born row sends them again
-    // (once there by their ids), or the lost-start time ends it here (host-judged-runner.ts).
-    await taken.putBack()
-    armLostStartCheck(sid, host, true, errText(err), async () => {
-      holdLegacy(sid)
-      log.session.warn('host resume: the host never took a resume whose answer was lost; delivered here as legacy', { sessionId: sid, host })
-      r.deliverHere(sid)
-    }, () => {
-      r.dropDeadWrapper(sid)
-      void forwardSend(sid, host, { sessionId: sid, message: '' }, 'host-resume', false)
-    })
+    // No answer: the host may have it. Its lines wait here, unsent, until the host's row ends the
+    // window (they go to it again, once there by their ids) or the lost check decides.
+    armLostStartCheck(sid, host, true, errText(err), resumeHooks(sid, host, r))
     log.session.warn('host resume: no answer from the host; the session waits for its word', { sessionId: sid, host, error: errText(err) })
     return true
   }
   if (a.ok !== true) return fallBack('the host refused the resume', `${a.error ?? 'no reason given'}${a.why ? ` (${String(a.why)})` : ''}`)
+  // The host queued them: they leave this queue now.
+  if (lines.length > 0) await takeLinesForHost(sid, { ids: lines.map((m) => m.id) }).then((t) => t.done()).catch(() => {})
   r.dropDeadWrapper(sid)
-  log.session.info('host resume: the host resumes the session; it is host-judged from now on', { sessionId: sid, host, lines: taken.lines.length })
+  handOverAnswered(sid)
+  log.session.info('host resume: the host resumes the session; it is host-judged from now on', { sessionId: sid, host, lines: lines.length })
   return true
+}
+
+/**
+ * Boot (leader-boot.ts): the hand-overs this leader had no answer to when it stopped wait for their
+ * host again, each with the hooks of its kind (a start fails as one that never ran, a resume as above).
+ */
+export async function rearmHandOversAtBoot(runner?: BootRunner): Promise<number> {
+  const r = runner ?? (await import('./claude-code-session.js')).sessionRunner
+  return rearmHandOvers((m) => {
+    if (m.kind === 'start') return { onLost: (err) => r.failLostHostStart(m.sid, err) }
+    claimHostStarted(m.sid)
+    return resumeHooks(m.sid, m.host, r.resumeView())
+  })
+}
+
+/** The runner a boot arms the hand-overs with (claude-code-session.ts SessionRunner). */
+export interface BootRunner {
+  resumeView(): RunnerRest
+  failLostHostStart(sid: string, err: unknown): Promise<void>
 }
 
 export function _resetHostResumeForTesting(): void {
   heldLegacy.clear()
+  unanswered.reset()
 }

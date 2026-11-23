@@ -993,10 +993,11 @@ export async function revertToPending(messages: QueuedMessage[]): Promise<void> 
  * start (the host takes an id once, so a resend of a line it took is a no-op). Throws, with the
  * lines still queued, when the take cannot be written.
  */
-export async function takeLinesForHost(sessionId: string, opts?: { heldOnly?: boolean }): Promise<{ lines: QueuedMessage[]; putBack(): Promise<void>; done(): Promise<void> }> {
+export async function takeLinesForHost(sessionId: string, opts?: { heldOnly?: boolean; ids?: readonly string[] }): Promise<{ lines: QueuedMessage[]; putBack(): Promise<void>; done(): Promise<void> }> {
   const { isHandedHold } = await import('./sessions/handed-holds.js');
   const transit = await import('./session-queue-transit.js');
-  const goes = (m: QueuedMessage) => isHandedHold(m) || (!opts?.heldOnly && m.status === 'pending');
+  const only = opts?.ids ? new Set(opts.ids) : null;
+  const goes = (m: QueuedMessage) => (only === null || only.has(m.id)) && (isHandedHold(m) || (!opts?.heldOnly && m.status === 'pending'));
   const id = transit.newTransitId('host');
   const lines = await transit.takeIntoTransit(id, 'host', sessionId, goes);
   if (lines.length === 0) transit.forgetTransit(id);
@@ -1012,6 +1013,36 @@ export async function takeLinesForHost(sessionId: string, opts?: { heldOnly?: bo
       await transit.dropTransit(id);
     },
   };
+}
+
+/**
+ * The lines takeLinesForHost would take, left in the queue: a hand-over whose answer may be lost
+ * sends them and takes them (takeLinesForHost `ids`) only once the host said it has them, so a
+ * leader that stops in between still holds them (providers/host-resume.ts).
+ */
+export async function peekLinesForHost(sessionId: string): Promise<QueuedMessage[]> {
+  const { isHandedHold } = await import('./sessions/handed-holds.js');
+  const s = await getStore();
+  return (s.queues[sessionId] ?? []).filter((m) => isHandedHold(m) || m.status === 'pending');
+}
+
+/**
+ * Host: take back rows this queue took a moment ago for lines whose hand-over failed part-way
+ * (sessions/handed-holds.ts queueLinesOnHost), with the once-only mark each id got, so the leader
+ * delivering them itself leaves nothing here to run again. Only rows no delivery holds yet.
+ */
+export async function withdrawQueuedLines(sessionId: string, ids: readonly string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const gone = new Set(ids);
+  return mutateStore((s) => {
+    const queue = s.queues[sessionId] ?? [];
+    const out = queue.filter((m) => gone.has(m.id) && m.status === 'pending');
+    if (out.length === 0) return 0;
+    s.queues[sessionId] = queue.filter((m) => !out.includes(m));
+    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
+    for (const m of out) if (fateOf(s, m.id) === 'taken' && s.relay) delete s.relay[m.id];
+    return out.length;
+  }, true, true);
 }
 
 /**

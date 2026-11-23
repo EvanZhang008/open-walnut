@@ -21,6 +21,8 @@ import type { HostCallTarget } from './host-calls.js'
 export const HOST_SESSIONS_PATH = '/host-api/sessions'
 export const HOST_CHANNEL_PATH = '/host-api/session-channel'
 export const HOST_SESSIONS_OFF = 'host_runs_sessions_off'
+/** A host's answer to a command for a session it does not own (host-routes.ts). */
+export const NOT_OWN_SESSION = 'not_own_session'
 
 /**
  * Leader data a host needs to assemble one start, computed on the leader by today's code (its

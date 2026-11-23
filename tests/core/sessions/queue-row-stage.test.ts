@@ -262,6 +262,7 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'providers/claude-code-session.ts': 13, // +1: the retry clock of a delivery that threw (retryAfterDeliveryThrow); +1: an ACP record that did not attach parks its pending rows (acp-native-guard.ts); +4: held, owned and parked rows of a send, kept batch rows, redelivery
   'providers/acp-stranded-rows.ts': 1, // settles an ACP row left 'processing' with no delivery in flight
   'providers/host-resume.ts': 1, // a legacy session is not at rest while one of its rows is out ('processing')
+  'core/sessions/handed-holds.ts': 1, // queueLinesOnHost: the rows queued before, so a failure part-way takes back only its own
   'core/sessions/queued-change.ts': 1, // queueOf: was a refused Edit or Delete's row taken or gone
   'core/sessions/prompt-refresh-respawn.ts': 1, // a prompt respawn goes only with no row waiting or in flight
   'core/sessions/lane-turn.ts': 2, // a joined message: which rows wait, and whether its own row was taken

@@ -49,6 +49,7 @@ import { foldTurnSpeed } from './sessions/speed-totals.js';
 import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
+import { clearHandOverMarkIn } from './session-channel/handover-marks.js';
 import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSnapshot, snapshotIsStale } from './session-channel/rows-snapshot.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { prepared } from '../lib/sqlite-prepared.js';
@@ -3554,6 +3555,8 @@ export interface HostChannelBatchResult {
   orphaned?: string[];
   /** A rows frame older than what was applied already: nothing of it was applied. */
   stale?: boolean;
+  /** Sessions whose hand-over to this host the rows ended (session-channel/handover-marks.ts). */
+  handOversEnded?: string[];
 }
 
 /**
@@ -3576,6 +3579,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
   const resync = new Set<string>();
   const removed: string[] = [];
   const orphaned: string[] = [];
+  const handOversEnded: string[] = [];
   let stale = false;
   let after = 0;
   // Deleted on the leader, its host not done yet: none of its rows comes back, none of its facts is said.
@@ -3636,6 +3640,9 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
           continue;
         }
         written.push(change.sid);
+        // The host wrote its row of a session this leader handed it: the hand-over's answer, on disk
+        // with the row (a lost answer, a leader that stopped before it, change nothing of it).
+        if (clearHandOverMarkIn(handle, change.sid, hostId)) handOversEnded.push(change.sid);
         announce.push({
           record: next,
           status: !before || !statusProjectionEquals(canonicalStatusProjection(before), canonicalStatusProjection(next))
@@ -3696,7 +3703,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
     log.session.warn('host channel: rows the host no longer has were removed', { hostId, sessionIds: removed.slice(0, 20), count: removed.length });
     try { bus.emit(EventNames.SESSION_DELETED, { sessionIds: removed }, ['*'], { source: 'host-channel', urgency: 'normal' }); } catch { /* announced best-effort */ }
   }
-  return { written, skipped, gone: [...gone], after, resync: [...resync], removed, orphaned, ...(stale ? { stale } : {}) };
+  return { written, skipped, gone: [...gone], after, resync: [...resync], removed, orphaned, ...(handOversEnded.length ? { handOversEnded } : {}), ...(stale ? { stale } : {}) };
 }
 
 export { loadChannelCursor } from './session-db.js';

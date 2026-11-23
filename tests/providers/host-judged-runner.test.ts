@@ -220,6 +220,27 @@ describe('a host-judged session', () => {
     } finally { delete process.env.WALNUT_HOST_START_LOST_MS }
   })
 
+  it('B1: a send to a start whose answer was lost waits on the leader (never sent, never refused) until the host\'s row; then it goes once', async () => {
+    process.env.WALNUT_HOST_START_LOST_MS = '5000'
+    try {
+      const { h, seeded } = await seededStart({ lost: true })
+      const { sent } = fakeSide({ lost: true })
+      await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
+      const { enqueueMessage, getQueue } = await import('../../src/core/session-message-queue.js')
+      const { bus, EventNames } = await import('../../src/core/event-bus.js')
+      await enqueueMessage(seeded, 'and then', { id: 'qm-window-1', sentBy: 'person' })
+      bus.emit(EventNames.SESSION_SEND, { sessionId: seeded, message: 'and then' }, ['*'], { source: 'ui' })
+      await new Promise((r) => setTimeout(r, 150))
+      expect(sent.filter((x) => x.op === 'send')).toEqual([])
+      expect((await getQueue(seeded)).map((m) => `${m.id}:${m.status}`)).toEqual(['qm-window-1:pending'])
+      // The host's row of it: the window ends and the line goes to the host, once.
+      const after = fakeSide()
+      noteHostStartBorn(seeded)
+      await vi.waitFor(() => expect(after.sent.filter((x) => x.op === 'send')).toHaveLength(1))
+      await vi.waitFor(async () => expect(await getQueue(seeded)).toEqual([]))
+    } finally { delete process.env.WALNUT_HOST_START_LOST_MS }
+  })
+
   it('its result runs no turn end here: no processNext, no record write; a legacy result still does', async () => {
     const h = harness()
     h.runner.init()

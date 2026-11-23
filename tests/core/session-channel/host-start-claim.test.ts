@@ -190,6 +190,27 @@ describe('a start the leader handed this host claims its session\'s row', () => 
     expect((await tracker.getSessionByClaudeId(copied))?.judge).toBeUndefined()
   })
 
+  it('S5: a resume of a row this host owns already keeps its own fields; only the leader\'s follow', async () => {
+    const sid = 'aaaaaaaa-0008-4008-8008-000000000008'
+    sessionDb.claimStartingRow(sid)
+    await runnerWrites(sid)
+    await tracker.updateSessionRecord(sid, { cwd: '/work/own', process_status: 'idle' })
+    sessionDb.releaseStartingRow(sid)
+    sessionDb.claimStartingRow(sid, { ...preJudgeSeed(sid), cwd: '/work/given', human_note: 'from the leader', pid: undefined } as SessionRecord)
+    expect(isClaimed(sid)).toBe(true)
+    expect(await tracker.getSessionByClaudeId(sid)).toMatchObject({ judge: 'host', host: KEY, pid: 4242, cwd: '/work/own', process_status: 'idle', human_note: 'from the leader' })
+  })
+
+  it('a copy that names a row this host\'s with no claim here (a hand-over still unanswered) stays the leader\'s copy', async () => {
+    const sid = 'aaaaaaaa-0009-4009-8009-000000000009'
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [markedSeed(sid)] })
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
+    await expect(tracker.updateSessionRecord(sid, { activity: 'writing' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)
+    // The claim (the hand-over reached it) makes it this host's.
+    sessionDb.claimStartingRow(sid)
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+  })
+
   it('a row no start claimed stays the leader\'s: the own-row writer still refuses it', async () => {
     sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(SID_UNCLAIMED)] })
     await expect(tracker.updateSessionRecord(SID_UNCLAIMED, { activity: 'writing' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)
@@ -232,12 +253,14 @@ describe('a row this host holds as its own that no session here runs goes back t
     expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
   })
 
-  it('the leader\'s marked seed reached the host with no start at all, then was taken back: the row goes back too', async () => {
+  it('the leader\'s marked seed reached the host with no start at all, then was taken back: it was never this host\'s', async () => {
     const sid = sidN(3)
     sessionDb.applySessionCopy({ ownHost: KEY, rows: [markedSeed(sid)] })
-    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+    // No claim here: the copy alone makes no row this host's.
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
     sessionDb.applySessionCopy({ ownHost: KEY, rows: [takenBack(sid)] })
-    expect(await sweep(sid)).toEqual([sid])
+    expect(await sweep(sid)).toEqual([])
+    expect(await tracker.getSessionByClaudeId(sid)).toMatchObject({ process_status: 'error', errorMessage: 'spawn failed' })
     expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
   })
 

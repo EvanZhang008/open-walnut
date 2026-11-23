@@ -16,6 +16,10 @@
  *              (the host took it, the leader timed out) never runs twice
  *   refused    the host answered no three times in a row: the rows that would run park here with the
  *              host's reason (a person retries them); a link that fails is never a refusal
+ *   hand-over  while a start or a resume of the session waits for its host's answer (host-handover.ts
+ *              handOverPending), nothing goes and nothing counts: the lines wait here, and go once
+ *              the host's answer or row ends the window (releaseLinesAfterHandOver), or are the
+ *              leader's own again when the session is taken back (forgetWaitingLines)
  *
  * All of it in the session's command order (inOrder): a send takes the lines the one before it
  * left, an interrupt after a send goes after it.
@@ -25,6 +29,8 @@ import { judgingHostOf } from '../core/sessions/judge-of.js'
 import { heldOf } from '../core/sessions/handed-holds.js'
 import type { QueuedLine } from '../core/session-channel/host-api.js'
 import type { QueuedMessage } from '../core/session-queue-store.js'
+import { NOT_OWN_SESSION } from '../core/session-channel/host-api.js'
+import { handOverPending } from './host-handover.js'
 
 /** Waits before each retry of a session's waiting lines; the last one repeats for good. */
 export const REDELIVER_MS = [5_000, 30_000, 120_000, 600_000]
@@ -110,6 +116,7 @@ interface DeliverOpts {
  * it rejects with why.
  */
 async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void> {
+  if (handOverPending(sid)) { waitForHandOver(sid, o); return }
   let side: Awaited<ReturnType<typeof leaderSide>>
   try { side = await leaderSide() } catch (err) {
     if (o.kick) stateOf(sid).kick = { source: o.source, endsWait: o.endsWait }
@@ -148,6 +155,9 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   }
   if (a.ok !== true) {
     await taken.putBack()
+    // A hand-over of it began while this send was out: the host does not own it yet, which is no
+    // refusal; the lines wait for the hand-over's end.
+    if (a.error === NOT_OWN_SESSION && handOverPending(sid)) { waitForHandOver(sid, o); return }
     w.refusals++
     const why = a.error ?? 'no reason given'
     if (w.refusals >= REFUSALS_BEFORE_PARK) {
@@ -168,6 +178,32 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     const { noteHostSessionSend } = await import('../core/session-channel/leader-tasks.js')
     void noteHostSessionSend(sid, told.source, told.endsWait)
   }
+}
+
+/** A send (or a redelivery) of a session whose hand-over is unanswered: it waits, its kick kept for the release. */
+function waitForHandOver(sid: string, o: DeliverOpts): void {
+  const w = stateOf(sid)
+  if (w.timer) { clearTimeout(w.timer); w.timer = null }
+  if (o.kick) w.kick = { source: o.source, endsWait: o.endsWait || w.kick?.endsWait === true }
+  log.session.info('host-run session: its lines wait here until its host answers the hand-over', { sessionId: sid })
+}
+
+/** The hand-over of `sid` ended with the host having it: what waited for it goes now. */
+export function releaseLinesAfterHandOver(sid: string): void {
+  void (async () => {
+    if (!waiting.has(sid)) {
+      const { peekLinesForHost } = await import('../core/session-message-queue.js')
+      if ((await peekLinesForHost(sid)).length === 0) return
+    }
+    const w = waiting.get(sid)
+    if (w) w.attempt = 0
+    redeliver(sid)
+  })().catch(() => { /* redeliver logs and retries itself */ })
+}
+
+/** The session is the leader's again (a hand-over taken back): nothing of it waits for a host. */
+export function forgetWaitingLines(sid: string): void {
+  settle(sid)
 }
 
 /**

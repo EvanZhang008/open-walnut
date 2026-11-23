@@ -60,22 +60,32 @@ export function heldEnqueueOptions(line: Pick<QueuedLine, 'held'>): { heldReason
  * (session-message-queue.ts sendMessageToSession); the holds the lines brought are watched here.
  */
 export async function queueLinesOnHost(sid: string, lines: readonly QueuedLine[], source: string): Promise<void> {
-  const [{ enqueueMessage }, { frameAsWalnut, frameForSource }] = await Promise.all([import('../session-message-queue.js'), import('./send-frame.js')])
+  const [{ enqueueMessage, getQueue, withdrawQueuedLines }, { frameAsWalnut, frameForSource }] = await Promise.all([import('../session-message-queue.js'), import('./send-frame.js')])
   if (lines.some((l) => !heldEnqueueOptions(l).heldReason)) {
     const { releaseColdHolds } = await import('./cold-hold.js')
     await releaseColdHolds(sid, 'a message that goes now')
   }
   const reasons = new Set<string>()
-  for (const l of lines) {
-    const text = l.sentBy === 'person' ? l.message : l.sentBy === 'agent' ? frameAsWalnut(l.message, source) : frameForSource(l.message, source)
-    const held = heldEnqueueOptions(l)
-    if (held.heldReason) reasons.add(held.heldReason)
-    await enqueueMessage(sid, text, {
-      // By the leader's row id, once: a resend whose first answer was lost queues nothing again.
-      ...(l.id ? { id: l.id, onceById: true } : {}), ...(l.userUuid ? { userUuid: l.userUuid } : {}), ...(l.lineUuid ? { lineUuid: l.lineUuid } : {}),
-      ...(l.closesPrompt ? { closesPrompt: true } : {}), ...(l.sentBy ? { sentBy: l.sentBy } : {}),
-      ...held,
-    })
+  // All or nothing: the rows queued here before one failed are taken back, so a failure the leader
+  // answers by delivering the lines itself (a resume it falls back from) leaves none to run here too.
+  const had = new Set((await getQueue(sid)).map((m) => m.id))
+  const added: string[] = []
+  try {
+    for (const l of lines) {
+      const text = l.sentBy === 'person' ? l.message : l.sentBy === 'agent' ? frameAsWalnut(l.message, source) : frameForSource(l.message, source)
+      const held = heldEnqueueOptions(l)
+      if (held.heldReason) reasons.add(held.heldReason)
+      await enqueueMessage(sid, text, {
+        // By the leader's row id, once: a resend whose first answer was lost queues nothing again.
+        ...(l.id ? { id: l.id, onceById: true } : {}), ...(l.userUuid ? { userUuid: l.userUuid } : {}), ...(l.lineUuid ? { lineUuid: l.lineUuid } : {}),
+        ...(l.closesPrompt ? { closesPrompt: true } : {}), ...(l.sentBy ? { sentBy: l.sentBy } : {}),
+        ...held,
+      })
+      if (l.id && !had.has(l.id)) added.push(l.id)
+    }
+  } catch (err) {
+    await withdrawQueuedLines(sid, added).catch(() => 0)
+    throw err
   }
   if (reasons.has(AFTER_TURN_REASON)) (await import('./queue-after-turn.js')).noteAfterTurnHold(sid)
   if (reasons.has(COLD_HOLD_REASON)) (await import('./cold-hold.js')).noteColdHold(sid)

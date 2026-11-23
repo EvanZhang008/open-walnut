@@ -431,7 +431,11 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
       // before the leader marked it this host's, comes down as this host's, so the own-row writer
       // takes the session's first writes whatever order the copy and the start arrive in.
       const claimed = !mine && own && isClaimed(sid) && claimable(r, own);
-      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : claimed ? claimedCopy(r, own) : r);
+      // Only a claim (a start or a resume this host took) or this host's own writer makes a row its
+      // own: a copy that names the row this host's before either (a hand-over whose answer is still
+      // out, the host never got it) stays the leader's copy here, so no send is taken for it and no
+      // CLI of it resumed without the claim's checks.
+      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : claimed ? claimedCopy(r, own) : own && rowOwnedHere(r, own) ? { ...r, judge: undefined } : r);
       const bound: Record<string, unknown> = {};
       for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
       ins.run(bound);
@@ -542,7 +546,8 @@ function writeCopyRow(handle: DatabaseType, raw: Record<string, unknown>): void 
  * (applySessionCopy). The leader's version it adopted is kept (noteLeaderDisown), so a start that
  * ends without a session gives the row back as the leader has it now. A row of another host is
  * never claimed. Nothing to do off a host that runs its sessions. `leaderRow`: the leader's row a
- * resume gives, taken over any copy here (its cwd, mode, model and last stop resume it).
+ * resume gives, taken over a copy here that is not this host's own (its cwd, mode, model and last
+ * stop resume it); a row this host owns keeps its own fields and takes only the leader's.
  */
 export function claimStartingRow(sid: string, leaderRow?: SessionRecord): void {
   const key = ownRowHostKey();
@@ -553,8 +558,15 @@ export function claimStartingRow(sid: string, leaderRow?: SessionRecord): void {
     // A resume names the leader's row (host-routes.ts resume), as the leader had it the moment it
     // handed it over: newer than any copy here (a copy round may not have brought its last stop yet,
     // and the runtime fences the resume with that stop's id).
+    // A row this host owns already keeps every field of its own; only the leader's fields follow.
+    const here = raw ? rowToSession(raw) : null;
     const given = leaderRow?.claudeSessionId === sid ? { ...leaderRow, judge: undefined } : null;
-    const rec = given ?? (raw ? rowToSession(raw) : null);
+    if (here && rowOwnedHere(here, key)) {
+      claimStart(sid);
+      if (given) writeCopyRow(handle, sessionToRow(mergeLeaderCopy(here, given)));
+      return;
+    }
+    const rec = given ?? here;
     if (rec && !claimable(rec, key)) {
       log.session.warn('host start: the row a start names is another host\'s; not claimed', { sessionId: sid, host: rec.host });
       return;
@@ -1123,6 +1135,12 @@ const SCHEMA_SQL = `
     claude_session_id TEXT PRIMARY KEY,
     row TEXT NOT NULL,
     at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS session_host_handovers (
+    claude_session_id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    since INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS session_turn_ends (
     claude_session_id TEXT PRIMARY KEY,

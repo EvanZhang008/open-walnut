@@ -31,7 +31,7 @@ import { WebSocketServer, type WebSocket } from '#ws'
 import { hostCallAllowed, hostCallArgs } from './host-calls.js'
 import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
-import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
+import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, NOT_OWN_SESSION, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
 import type { StartBundles } from './host-port.js'
 import type { SessionRecord } from '../types.js'
 import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH } from './door-wire.js'
@@ -182,7 +182,7 @@ function startIdOf(body: StartBody): string {
 
 /** A session id the leader may name for a start (event-types.ts checks it at the leader's edge; a file is named by it here). */
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-export const NOT_OWN_SESSION = 'not_own_session'
+export { NOT_OWN_SESSION }
 /** A session or runtime id as a file name takes it: letters, digits, '-' and '_' (acp-<hex>, a UUID). */
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 

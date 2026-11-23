@@ -35,6 +35,11 @@
  *         GET /profile?start=1, then ?to=<file>   a CPU profile of this process between the two (node:inspector)
  *         GET /judge?sid=    judgeOf and the judging host
  *         GET /holds?sid=    does the Mac's runner hold a live process of it (holdsLiveSession)
+ *         GET /lose-answer?mode=taken|dropped   the Mac's next start or resume to a host gets no
+ *                            answer: `taken`, the host gets it and its answer is lost; `dropped`, it
+ *                            never reaches the host (and is no "not sent" either): the one seam of a
+ *                            hand-over whose outcome is unknown here
+ *         GET /handover?sid= is a hand-over of it unanswered here (host-handover.ts), and its mark on disk
  *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts
  *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
@@ -144,6 +149,8 @@ const sdb = await import(${url('src/core/session-db.ts')})
 const trk = await import(${url('src/core/session-tracker.ts')})
 const drp = await import(${url('src/core/session-channel/leader-drops.ts')})
 const ccs = await import(${url('src/providers/claude-code-session.ts')})
+const hho = await import(${url('src/providers/host-handover.ts')})
+const hom = await import(${url('src/core/session-channel/handover-marks.ts')})
 const probeFile = (await import('node:path')).join((await import('node:path')).dirname(c.WALNUT_HOME), 'mac-probe.json')
 // The permit number this leader tells its hosts (leader-permit.ts), as the leader switch's permit
 // system would number two leaders of one Walnut: WALNUT_CLUSTER_PERMIT_NUMBER, once the side is on.
@@ -184,6 +191,18 @@ await serveProbe({
   },
   '/judge': (q) => ({ judge: jo.judgeOf(q.get('sid')), host: jo.judgingHostOf(q.get('sid')) }),
   '/holds': (q) => ({ live: ccs.sessionRunner.holdsLiveSession(q.get('sid')) }),
+  '/lose-answer': (q) => {
+    const side = lb.activeLeaderSide()
+    const real = side.startOnHost
+    const mode = q.get('mode')
+    side.startOnHost = async (host, body) => {
+      side.startOnHost = real
+      if (mode === 'taken') await real.call(side, host, body)
+      throw new Error('the request timed out (the cluster probe lost its answer)')
+    }
+    return { armed: mode }
+  },
+  '/handover': (q) => ({ pending: hho.handOverPending(q.get('sid')), onDisk: hom.handOverMarkStands(q.get('sid')) }),
   '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')) } },
   '/link': async (q) => ({ connected: (await import(${url('src/core/host-server/index.ts')})).hostServerLink(q.get('host')) !== null }),
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),

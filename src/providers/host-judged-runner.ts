@@ -17,7 +17,7 @@
 import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
 import { EventNames, type BusEvent } from '../core/event-bus.js'
-import { forgetHostJudged, judgeOfStart, judgingHostOf, noteHostJudged } from '../core/sessions/judge-of.js'
+import { judgeOfStart, judgingHostOf, noteHostJudged } from '../core/sessions/judge-of.js'
 import { sessionPort } from '../core/sessions/session-port.js'
 import { sessionTaskAndEngineInStore } from '../core/session-db.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
@@ -26,6 +26,7 @@ import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { StartBody, StartBundle } from '../core/session-channel/host-api.js'
 import { claimHostStarted, hostStartedSaid, noteHostSessionStarted } from '../core/session-channel/leader-tasks.js'
 import { _resetHostJudgedSendForTesting, forwardSend, inOrder } from './host-judged-send.js'
+import { _resetHostHandOverForTesting, armLostStartCheck, handOverAnswered, handOverPending, handStartToHost, takeStartBack } from './host-handover.js'
 
 type AnyFn = (...args: any[]) => any
 type Proto = Record<string, unknown>
@@ -112,77 +113,8 @@ export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
   }
 }
 
-/**
- * Seeded sessions whose start went to their host and whose born row has not come yet (a start the
- * host answered, or one whose answer was lost), until then or IN_FLIGHT_MS: a rows snapshot keeps
- * them untouched (rows-snapshot.ts), even one taken before the host wrote the row.
- */
-const inFlight = new Map<string, number>()
-const IN_FLIGHT_MS = 15 * 60_000
-export function hostStartsInFlight(): ReadonlySet<string> {
-  const now = Date.now()
-  for (const [sid, until] of inFlight) if (until <= now) inFlight.delete(sid)
-  return new Set(inFlight.keys())
-}
-
-/**
- * A start (or a resume, host-resume.ts) whose answer was lost (sent, no answer): when its in-flight
- * time runs out with no born row from the host, the host never took it. The seed is the leader's
- * again and `onLost` runs (a start fails as one that never ran; a resume runs here once), so it never
- * sits as a running session nobody runs. Its born row in time runs `onBorn` instead.
- */
-const lostStarts = new Map<string, { onBorn?: () => void }>()
-export function armLostStartCheck(sid: string, host: string, handed: boolean, why: string, onLost?: (err: Error) => Promise<void>, onBorn?: () => void): void {
-  lostStarts.set(sid, { onBorn })
-  const timer = setTimeout(() => {
-    if (!lostStarts.delete(sid)) return // its born row came
-    void (async () => {
-      await takeStartBack(sid, host, handed)
-      log.session.warn('host start: no born row came for a start whose answer was lost; it failed', { sessionId: sid, host, error: why })
-      await onLost?.(new Error(`the host ${host} never started the session (${why})`))
-    })().catch((err: unknown) => log.session.warn('host start: failing a lost start failed', { sessionId: sid, host, error: err instanceof Error ? err.message : String(err) }))
-  }, lostStartMs())
-  timer.unref?.()
-}
-
-/**
- * A start (or a resume) of `sid` goes to `host`: it is in flight and the host's before the host
- * speaks (its facts can beat the answer), and the leader's row of it, when there is one, is marked
- * the host's (session-tracker.ts handSeedToHost), so the channel's born row fills it in. True: a row
- * was marked (takeStartBack gives it back).
- */
-export async function handStartToHost(sid: string, host: string): Promise<boolean> {
-  inFlight.set(sid, Date.now() + IN_FLIGHT_MS)
-  noteHostJudged(sid, host)
-  const tracker = await import('../core/session-tracker.js')
-  return tracker.handSeedToHost(sid, host).catch((err: unknown) => {
-    log.session.warn('host start: the seeded row was not handed to its host', { sessionId: sid, host, error: err instanceof Error ? err.message : String(err) })
-    return false
-  })
-}
-
-/** The host did not take the start (or the resume) of `sid`: it is the leader's again, and so is its row. */
-export async function takeStartBack(sid: string, host: string, handed: boolean): Promise<void> {
-  inFlight.delete(sid)
-  forgetHostJudged(sid)
-  if (!handed) return
-  const tracker = await import('../core/session-tracker.js')
-  await tracker.takeSeedBack(sid, host).catch(() => {})
-}
-
-/** How long a start whose answer was lost waits for its born row (tests shorten it). */
-function lostStartMs(): number {
-  const n = Number(process.env.WALNUT_HOST_START_LOST_MS)
-  return Number.isFinite(n) && n > 0 ? n : IN_FLIGHT_MS
-}
-
-/** The host's born row of `sid` was applied here (leader-side.ts): its start is no longer in flight. */
-export function noteHostStartBorn(sid: string): void {
-  inFlight.delete(sid)
-  const lost = lostStarts.get(sid)
-  lostStarts.delete(sid)
-  lost?.onBorn?.()
-}
+// The hand-over of a start (and its no-answer window): host-handover.ts.
+export { armLostStartCheck, handStartToHost, hostStartsInFlight, noteHostStartBorn, takeStartBack } from './host-handover.js'
 
 /**
  * The start's answer did not come (the leader's timeout, a link that dropped): the host may run it.
@@ -291,7 +223,7 @@ export async function startOnJudgingHost<T extends StartData>(
     // says it started, the host's own row says how it ended (R2-H2). When no born row comes while
     // the start is in flight, the host never took it: the seed is taken back and fails then.
     if (typeof seeded === 'string' && seeded) {
-      armLostStartCheck(seeded, host, handed, why, onLost)
+      armLostStartCheck(seeded, host, handed, why, { onLost })
       log.session.warn('host start: no answer from the host; the session stays the host\'s and its channel tells what became of it', { sessionId: seeded, host, error: why })
       void commit(seeded).catch(() => {})
       return { claudeSessionId: seeded, title: '' }
@@ -304,6 +236,7 @@ export async function startOnJudgingHost<T extends StartData>(
     throw new Error(`the host ${host} did not start the session: ${a.error ?? 'no reason given'}${a.why ? ` (${String(a.why)})` : ''}`)
   }
   noteHostJudged(a.sessionId, host)
+  if (typeof seeded === 'string' && seeded) handOverAnswered(seeded)
   kinds.set(a.sessionId, isAcpEngine(data.engine) ? 'acp' : 'native')
   void commit(a.sessionId).catch(() => {})
   // The start is this leader's, so its session:started is too, as the runner says it for a start
@@ -364,7 +297,7 @@ export class HostRunsItError extends Error {
   }
 }
 const REFUSED = ['respawnOnCurrentPrompt'] as const
-/** The leader's own delivery of a host-judged session: never (the host drains its queue). */
+/** The leader's own delivery of a host-judged session, or of one whose hand-over is unanswered: never (the host drains its queue). */
 const GATED: Record<string, () => unknown> = {
   processNext: () => Promise.resolve(),
   deliverRest: () => undefined,
@@ -427,14 +360,15 @@ export function installHostJudgedRouting(proto: object): void {
   }
   for (const [name, skip] of Object.entries(GATED)) {
     wrap(name, (orig) => function (this: unknown, sid: string, ...rest: unknown[]) {
-      return judgingHostOf(sid) ? skip() : orig.call(this, sid, ...rest)
+      // Also while a hand-over of it waits for its host's answer (host-handover.ts), even before a
+      // restarted leader armed it again: its lines wait, neither the host's nor run here.
+      return judgingHostOf(sid) || handOverPending(sid) ? skip() : orig.call(this, sid, ...rest)
     })
   }
 }
 
 export function _resetHostJudgedRunnerForTesting(): void {
   kinds.clear()
-  inFlight.clear()
-  lostStarts.clear()
+  _resetHostHandOverForTesting()
   _resetHostJudgedSendForTesting()
 }

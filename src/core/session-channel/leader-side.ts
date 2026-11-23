@@ -231,6 +231,9 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       emitFact(hostId, r, r.name, r.data, r.to)
     }
     if (refused > 0) deps.log('warn', 'session channel: records of sessions this host does not own were not said', { hostId, count: refused })
+    // A hand-over its host answered with a row that is no born one (a row it owned already): ended too.
+    const bornHere = new Set(recs.filter((r) => r.name === 'row' && (r.data as { born?: unknown } | null)?.born === true).map((r) => r.sid))
+    if (deps.noteBorn) for (const sid of applied.handOversEnded ?? []) if (!bornHere.has(sid)) after(hostId, 'noteBorn', sid, () => deps.noteBorn!(sid))
   }
 
   function emitFact(hostId: string, r: AppliedFact, name: string, data: unknown, to: string[] | undefined): void {

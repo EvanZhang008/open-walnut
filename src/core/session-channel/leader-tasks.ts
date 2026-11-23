@@ -38,6 +38,11 @@ export function claimHostStarted(sid: string): boolean {
   return true
 }
 
+/** A claim made for a hand-over that did not go (a resume that fell back): its session:started is no longer said for. */
+export function unclaimHostStarted(sid: string): void {
+  said.delete(sid)
+}
+
 /** Was the session:started of `sid` said on this bus already? */
 export function hostStartedSaid(sid: string): boolean {
   return said.has(sid)

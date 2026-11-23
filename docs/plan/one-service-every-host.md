@@ -442,7 +442,15 @@ permission prompts still name Walnut.
   with a live CLI is never handed over, ACP engines stay the leader's, and a host that does not name
   `session-resume-v1` is never asked. One a host runs stays that host's after the switch goes off (tests:
   L1 in `tests/e2e/host-judged-session-lifecycle-e2e.test.ts`, S6 in `host-judged-session-cluster-e2e.test.ts`,
-  L1 to L5 in `host-judge-legacy-resume-e2e.test.ts`). So no session changes its judge while it runs.
+  L1 to L7 in `host-judge-legacy-resume-e2e.test.ts`). So no session changes its judge while it runs.
+- **A hand-over whose answer is lost** (a start or a resume, `src/providers/host-handover.ts`) is neither the
+  host's for sends nor the leader's: its lines wait on the leader, never sent, refused or parked, until the
+  host's row of the session comes (the channel clears the hand-over's mark in the same transaction; the lines
+  then go to the host once, by their ids) or the lost check decides. That check resumes a session here only
+  when the host's runtime says no CLI of it runs there; else it waits on and says so in Walnut Health. The
+  mark is on disk (`session_host_handovers` in sessions.sqlite), so a leader that restarts in the window
+  checks it again at boot. A host takes a row as its own only by a claim (a start or a resume it took) or its
+  own writer, never from the leader's copy alone.
 - **Rolling back, in order.** Each step can stop there; each later one is safe without the earlier.
   1. One host: `hosts.<name>.runs_sessions: false` in the leader's config (no restart). New starts on
      that host take today's path at once; the sessions it already runs keep running and reporting

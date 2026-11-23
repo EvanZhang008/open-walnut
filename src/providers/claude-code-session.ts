@@ -16428,6 +16428,16 @@ export class SessionRunner {
   /** The source of the send that asked for a session's next delivery (handleSend), until that delivery reads it. */
   private sendSources = new Map<string, string>()
 
+  /** What a resume's lost check asks of this runner after a restart (host-resume.ts rearmHandOversAtBoot). */
+  resumeView(): RunnerRest {
+    return this.restView(null, undefined)
+  }
+
+  /** A start handed to a host before a restart, whose answer never came: it fails as one that never ran. */
+  failLostHostStart(sid: string, err: unknown): Promise<void> {
+    return this.failUnspawnedStart({ preassignedSessionId: sid }, err)
+  }
+
   /** What host-resume.ts reads of a session here, and what it asks of this runner around a resume. */
   private restView(stopFence: string | null, sendSource: string | undefined): RunnerRest {
     return {
@@ -16443,7 +16453,14 @@ export class SessionRunner {
       preparing: (sid) => this.nativeDeliveryPreps.has(sid),
       unparkWaiting: (sid) => unparkAgentWaitRows(sid, stopFence, { onlyWithPending: true }),
       dropDeadWrapper: (sid) => {
-        for (const [key, s] of this.sessions) if (s.sessionId === sid && !s.active && !s.hasPipe) this.sessions.delete(key)
+        // The same test the hand-over passed (holdsLiveSession): every object of it that holds no
+        // live process goes, its transport let go (the CLI is the host's now), so no lookup answers it.
+        if (this.holdsLiveSession(sid)) return
+        for (const [key, s] of this.sessions) {
+          if (s.sessionId !== sid) continue
+          try { s.detach() } catch { /* it goes anyway */ }
+          this.sessions.delete(key)
+        }
       },
       deliverHere: (sid) => { this.processNext(sid).catch((err) => log.session.warn('processNext failed after a lost host resume', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })) },
     }
@@ -16847,6 +16864,10 @@ export class SessionRunner {
   }
 
   private async processNextNow(sessionId: string, mode?: string): Promise<void> {
+    // The send this delivery is for, read once whatever this delivery does (a later one no send
+    // asked for never frames its lines with this source).
+    const sendSource = this.sendSources.get(sessionId)
+    this.sendSources.delete(sessionId)
     if (this.nativeInterrupts.has(sessionId)) await this.nativeInterrupts.get(sessionId)
     const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const stopRecord = await getSessionByClaudeId(sessionId)
@@ -16862,8 +16883,6 @@ export class SessionRunner {
     // A legacy session at rest on a host whose service runs sessions: that host resumes it, and it is
     // host-judged from then on (host-resume.ts). Null (the switch off for its host): as before.
     const resumeHost = resumeHostOf(sessionId)
-    const sendSource = this.sendSources.get(sessionId)
-    this.sendSources.delete(sessionId)
     if (resumeHost && await resumeAtRestOnHost(sessionId, resumeHost, this.restView(stopFence, sendSource))) return
     if (this.nativeSessionReinitializations.has(sessionId)) {
       log.session.info('processNext: waiting for explicit session restart before delivery', { sessionId })

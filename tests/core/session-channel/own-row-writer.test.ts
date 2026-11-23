@@ -67,7 +67,7 @@ describe('the own-row writer of a host replica', () => {
     expect(await tracker.getSessionByClaudeId('leader-row')).not.toBeNull()
   })
 
-  it('the leader\'s copy never brings back an own row this host removed (a rename the leader has not applied yet); a seed it hands comes down', async () => {
+  it('the leader\'s copy never brings back an own row this host removed (a rename the leader has not applied yet); a marked seed with no claim stays the leader\'s', async () => {
     sessionDb.allowOwnRowWrites(KEY)
     await tracker.createSessionRecord('mine-now', '', 'p', '/tmp', own('mine-now') as never)
     sessionDb.noteOwnRowGone('renamed-away')
@@ -78,7 +78,8 @@ describe('the own-row writer of a host replica', () => {
         { claudeSessionId: 'renamed-away', host: KEY, judge: 'host', ...base } as never,
         { claudeSessionId: 'mine-now', host: KEY, judge: 'host', human_note: 'from the leader', ...base } as never,
         { claudeSessionId: 'leader-two', ...base } as never,
-        // A row the leader made for a start and marked this host's: this host's from here on.
+        // A row the leader made for a start and marked this host's, whose start never came here:
+        // only the start's claim makes it this host's (session-db.ts applySessionCopy).
         { claudeSessionId: 'seeded', host: KEY, judge: 'host', ...base } as never,
       ],
     })
@@ -87,6 +88,7 @@ describe('the own-row writer of a host replica', () => {
     expect(await tracker.getSessionByClaudeId('renamed-away')).toBeNull()
     expect(await tracker.getSessionByClaudeId('mine-now')).toMatchObject({ judge: 'host', human_note: 'from the leader' })
     expect(await tracker.getSessionByClaudeId('leader-two')).not.toBeNull()
-    expect(await tracker.getSessionByClaudeId('seeded')).toMatchObject({ judge: 'host', host: KEY })
+    expect(await tracker.getSessionByClaudeId('seeded')).toMatchObject({ host: KEY })
+    expect((await tracker.getSessionByClaudeId('seeded'))?.judge).toBeUndefined()
   })
 })

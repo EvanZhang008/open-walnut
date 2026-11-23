@@ -18,6 +18,7 @@ import {
 import { closeDb, getDb } from '../../../src/core/session-db.js'
 import { setOwnRowListener } from '../../../src/core/session-channel/row-hook.js'
 import { leaderDropHosts, leaderDropsOf } from '../../../src/core/session-channel/leader-drops.js'
+import { handOverMarkStands, writeHandOverMark } from '../../../src/core/session-channel/handover-marks.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import type { SessionRecord } from '../../../src/core/types.js'
@@ -68,6 +69,22 @@ describe('applyHostChannelBatch', () => {
     }
     expect((await getSessionByClaudeId('p1'))?.messageCount).toBe(6)
     expect(loadChannelCursor(HOST)).toEqual({ logId: 'L1', seq: 6 })
+  })
+
+  it('a row the host writes of a session handed to it ends that hand-over, on disk in the same transaction', async () => {
+    await createSessionRecord('h1', '', 'p', '/w', { host: HOST, judge: 'host' } as never)
+    await createSessionRecord('h2', '', 'p', '/w', { host: 'otherbox', judge: 'host' } as never)
+    writeHandOverMark({ sid: 'h1', host: HOST, kind: 'resume', since: 1 })
+    writeHandOverMark({ sid: 'h2', host: 'otherbox', kind: 'start', since: 1 })
+    // A patch, not a born row (the host owned the row already): it ends the hand-over too.
+    const r = await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h1', patch: { messageCount: 3 }, seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    expect(r.written).toEqual(['h1'])
+    expect(r.handOversEnded).toEqual(['h1'])
+    expect(handOverMarkStands('h1')).toBe(false)
+    // Another host's hand-over is not this host's to end.
+    expect(handOverMarkStands('h2')).toBe(true)
+    const again = await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h1', patch: { messageCount: 4 }, seq: 2 }], renames: [], cursor: { logId: 'L1', seq: 2 } })
+    expect(again.handOversEnded).toBeUndefined()
   })
 
   it('writes a born row and keeps the position, in one transaction', async () => {

@@ -3,7 +3,7 @@
  * every piece a real process: the cluster of tests/helpers/host-judge-cluster.ts, whose Mac turns
  * its switch off and on while it runs.
  *
- *   L1 legacy   the switch off: two sessions start on devbox the legacy way (the Mac runs them
+ *   L1 legacy   the switch off: four sessions start on devbox the legacy way (the Mac runs them
  *               through the host's daemon and parses their lines), answer, and are stopped
  *   L2 off      still off: a send to a stopped legacy session resumes it the legacy way, as before
  *   L3 on       the switch on: a send to the stopped legacy session goes to the host, whose service
@@ -11,6 +11,12 @@
  *               the answer comes back once over the channel, and the Mac parses no line of it any more
  *   L4 refused  the host refuses the resume (its runner says it holds a live session of it, the probe):
  *               the send is delivered the legacy way, once, and the row stays the Mac's
+ *   L6 lost     the resume's answer is lost though the host took it (the Mac probe's seam): a send in
+ *               the window waits on the Mac (never sent, refused or parked), then every line goes to
+ *               the host once its row comes; delivered once, the Mac parses none of it
+ *   L7 dropped  the resume never reaches the host and no answer comes: nothing runs anywhere and the
+ *               lines wait, the hand-over's mark on disk, until the lost check asks the host's runtime,
+ *               hears no CLI runs there, and delivers here the legacy way, once
  *   L5 stays    the switch off again: the session the host resumed stays the host's
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -28,6 +34,8 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
   let hostCwd = ''
   let sidA = ''
   let sidB = ''
+  let sidC = ''
+  let sidD = ''
 
   const macEvents = async (s: string): Promise<ProbeEvent[]> => (await h.mac(`/events?sid=${s}`)) as ProbeEvent[]
   const channelEvents = async (s: string) => (await macEvents(s)).filter((e) => e.source === 'host-channel')
@@ -77,7 +85,8 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
   }
 
   beforeAll(async () => {
-    h = await startHostJudgeCluster()
+    // A hand-over with no answer waits this long for the host's row (host-handover.ts), not 15 min.
+    h = await startHostJudgeCluster({ macEnv: { WALNUT_HOST_START_LOST_MS: '15000' } })
     process.stdout.write(`host-judge-legacy-resume-e2e: cluster at ${h.c.base}\n`)
     hostCwd = fs.realpathSync(path.join(h.c.base, 'hh', 'work'))
   }, 900_000)
@@ -86,14 +95,19 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
   })
   afterAll(async () => { await h?.stop() }, 120_000)
 
-  it('L1: with the switch off, two sessions start the legacy way, answer and are stopped', async () => {
+  it('L1: with the switch off, four sessions start the legacy way, answer and are stopped', async () => {
     await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.active && s.linked && s.judges }, 120_000, 'the Mac to link the host\'s session channel').catch(fail)
     await setSwitch(false)
     sidA = await startLegacy('Legacy A', 'ROUND a-one')
     sidB = await startLegacy('Legacy B', 'ROUND b-one')
+    // C and D for the lost answers (L6, L7): B's refusal holds B legacy for a while.
+    sidC = await startLegacy('Legacy C', 'ROUND c-one')
+    sidD = await startLegacy('Legacy D', 'ROUND d-one')
     expect(await parses(sidA)).toBeGreaterThan(0)
     await stop(sidA)
     await stop(sidB)
+    await stop(sidC)
+    await stop(sidD)
   }, 400_000)
 
   it('L2: still off, a send to a stopped legacy session resumes it the legacy way', async () => {
@@ -151,6 +165,59 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
     } finally {
       await h.host(`/hold-sid?sid=${sidB}&on=0`)
     }
+  }, 300_000)
+
+  const handover = async (s: string) => (await h.mac(`/handover?sid=${s}`)) as { pending: boolean; onDisk: boolean | null }
+  const noRefusals = () => {
+    const mac = h.c.logs().mac
+    expect(mac).not.toMatch(/host-run session: its host kept refusing its lines/)
+    expect(mac).not.toMatch(/refused the send/)
+  }
+
+  it('L6: the resume\'s answer is lost but the host took it; a send in the window waits, then every line goes to the host once', async () => {
+    const before = await parses(sidC)
+    expect((await h.mac('/lose-answer?mode=taken')).armed).toBe('taken')
+    await send(sidC, 'ROUND c-lost')
+    await waitFor(() => h.c.logs().mac.includes('host resume: no answer from the host; the session waits for its word'), 120_000, 'the resume whose answer was lost').catch(fail)
+    await send(sidC, 'ROUND c-window')
+    // The host's CLI answers it (it reaches the CLI in the resumed turn, mid-turn: its answer is the
+    // CLI's, the channel's result is that turn's).
+    await waitFor(() => turnsWith(h.c, sidC, 'ROUND c-window') > 0, 120_000, 'the line sent in the window, answered on the host').catch(fail)
+    await untilFactsStill(h)
+    expect(resultsOn(await channelEvents(sidC), 'echo: ROUND c-lost')).toHaveLength(1)
+    expect(turnsWith(h.c, sidC, 'ROUND c-lost')).toBe(1)
+    expect(turnsWith(h.c, sidC, 'ROUND c-window')).toBe(1)
+    expect(cliArgs(sidC) ?? '', 'the resumed CLI').toContain(`--resume ${sidC}`)
+    expect(await macRow(sidC)).toMatchObject({ judge: 'host', host: HOST_KEY })
+    expect(await handover(sidC)).toEqual({ pending: false, onDisk: false })
+    expect(await parses(sidC)).toBe(before)
+    noRefusals()
+  }, 300_000)
+
+  it('L7: the resume never reached the host and no answer came; the lost check finds no CLI there and delivers here once', async () => {
+    expect((await h.mac('/lose-answer?mode=dropped')).armed).toBe('dropped')
+    await send(sidD, 'ROUND d-lost')
+    await waitFor(async () => (await handover(sidD)).pending, 60_000, 'the unanswered hand-over').catch(fail)
+    expect((await handover(sidD)).onDisk).toBe(true)
+    await send(sidD, 'ROUND d-window')
+    // The window: nothing of it runs on either side, its lines wait on the Mac.
+    await new Promise((r) => setTimeout(r, 4_000))
+    expect(turnsWith(h.c, sidD, 'ROUND d-lost')).toBe(0)
+    expect(cliArgs(sidD)).toBeNull()
+    expect(h.c.logs().mac).toContain('host-run session: its lines wait here until its host answers the hand-over')
+    expect(await h.mac(`/judge?sid=${sidD}`)).toEqual({ judge: 'host', host: HOST_KEY })
+    // The lost check (15 s here): the host's runtime runs no CLI of it, so it is the Mac's again.
+    await waitFor(() => turnsWith(h.c, sidD, 'ROUND d-window') > 0, 120_000, 'the legacy delivery after the lost check').catch(fail)
+    expect(h.c.logs().mac).toContain('host resume: the host never took a resume whose answer was lost; delivered here as legacy')
+    expect((await macRow(sidD))?.judge).toBeUndefined()
+    expect(await h.mac(`/judge?sid=${sidD}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await handover(sidD)).toEqual({ pending: false, onDisk: false })
+    expect(cliArgs(sidD) ?? '').toContain(`--resume ${sidD}`)
+    await new Promise((r) => setTimeout(r, 3_000))
+    expect(turnsWith(h.c, sidD, 'ROUND d-lost')).toBe(1)
+    expect(turnsWith(h.c, sidD, 'ROUND d-window')).toBe(1)
+    expect(await channelEvents(sidD)).toEqual([])
+    noRefusals()
   }, 300_000)
 
   it('L5: the switch off again, the session the host resumed stays the host\'s', async () => {

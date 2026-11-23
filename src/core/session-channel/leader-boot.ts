@@ -17,6 +17,7 @@ import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
+import { forgetHostResumes, noteHostResumes } from './resume-hosts.js'
 import type { PermitPair } from './channel.js'
 import { leaderPermitNumberForHosts, runningLeaderPermit } from './leader-permit.js'
 
@@ -57,24 +58,12 @@ export function activeLeaderSide(): LeaderSide | null {
   return active
 }
 
-/** The hosts whose running service resumes a session the leader ran until now (switch.ts SESSION_RESUME_CAP). */
-const resumers = new Set<string>()
-
-/** Does `host`'s service take a resume (its last report names SESSION_RESUME_CAP)? */
-export function hostResumesSessions(host: string): boolean {
-  return resumers.has(host)
-}
+export { hostResumesSessions, _setHostResumesForTesting } from './resume-hosts.js'
 
 /** Tests: stand a fake leader side in (null removes it). */
 export function _setActiveLeaderSideForTesting(side: LeaderSide | null): void {
   active = side
-  if (!side) resumers.clear()
-}
-
-/** Tests: say whether `host`'s service takes a resume, as its report would. */
-export function _setHostResumesForTesting(host: string, on: boolean): void {
-  if (on) resumers.add(host)
-  else resumers.delete(host)
+  if (!side) forgetHostResumes()
 }
 
 /**
@@ -234,8 +223,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown; sessionSide?: { state?: unknown } | null } | null }) => {
     const connected = hostServer.hostServerLink(view.hostKey) !== null
     void side.noteHost(view.hostKey, { connected, judges: view.phase === 'running' && reportJudges(view.server) })
-    if (view.phase === 'running' && reportResumes(view.server)) resumers.add(view.hostKey)
-    else resumers.delete(view.hostKey)
+    noteHostResumes(view.hostKey, view.phase === 'running' && reportResumes(view.server))
     lookIssue(view)
     // A host that stood down, or waits on a channel this leader has not opened: Walnut Health (host-side-health.ts).
     noteHostSessionSide(view.hostKey, view.phase === 'running' ? view.server?.sessionSide?.state : null)
@@ -267,6 +255,10 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     }
   }, { global: true, interest: [EventNames.SESSION_DELETED] })
   for (const view of hostServer.peekHostServerViews()) look(view)
+  // Hand-overs this leader had no answer to when it stopped: their lost checks run again (host-handover.ts).
+  void import('../../providers/host-resume.js').then((m) => m.rearmHandOversAtBoot()).catch((err: unknown) => {
+    log.session.warn('host hand-over: the unanswered hand-overs were not armed again', { error: err instanceof Error ? err.message : String(err) })
+  })
   log.session.info('session channels: the leader side is on (hosts that name session-judge-v1 run their sessions)')
   return () => {
     unlisten()
@@ -282,6 +274,6 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     side.stop()
     setHostJudgeProbe(null)
     remote.setRemoteJudgedCaller(null)
-    if (active === side) { active = null; standing = null; pushDoors = null; resumers.clear() }
+    if (active === side) { active = null; standing = null; pushDoors = null; forgetHostResumes() }
   }
 }
