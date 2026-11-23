@@ -112,7 +112,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   // The own rows this host removed, kept on disk next to the log (gone-rows.ts).
   const gone = await GoneRows.open(dir, o.walnutId)
   // The copy's store is read only here: rows of this host's own sessions go through the own-row writer.
-  const { allowOwnRowWrites, noteOwnRowGone, setOwnRowsGoneStore } = await import('../session-db.js')
+  const { allowOwnRowWrites, noteOwnRowGone, setOwnRowsGoneStore, claimStartingRow, releaseStartingRow } = await import('../session-db.js')
   allowOwnRowWrites(o.hostKey)
   setOwnRowsGoneStore(gone)
   // The emitter is made just below; the leader's resync asks reach it once it is.
@@ -176,6 +176,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
       return sids.length
     },
     spillDir: path.join(dir, 'prompts'),
+    // A start the leader handed names its session: that row is this host's from its first write.
+    claim: { take: claimStartingRow, release: releaseStartingRow },
     // A session this host runs: the emitter knows it, or its row says so (a start whose row is just written).
     owns: async (sid) => {
       if (emitter.owns(sid)) return true

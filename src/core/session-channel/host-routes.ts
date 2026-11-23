@@ -98,6 +98,12 @@ export interface HostRoutesOptions {
   commandRunsOp?(command: string, op: string, file?: string): boolean
   /** The door credential route (host-credential-file.ts); absent: it answers 404. */
   credential?: CredentialRouteOptions
+  /**
+   * A start with a preassigned id makes that session this host's from its first write, whatever
+   * copy of the leader's row is here or comes later (session-db.ts claimStartingRow); `release` when
+   * the start ended without a session here. Absent (tests): nothing is claimed.
+   */
+  claim?: { take(sid: string): void; release(sid: string): void }
   now?: () => number
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -212,6 +218,9 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     data.waitForSpawn = true
     const startId = startIdOf(body)
     if (startBundle) o.bundles.put(startId, body.taskId, startBundle, body.preassignedSessionId)
+    if (pre) {
+      try { o.claim?.take(pre) } catch (err) { o.log?.('warn', 'host sessions: a start could not claim its session\'s row', { taskId: body.taskId, sessionId: pre, error: errText(err) }) }
+    }
     let runner: HostRunnerLike | null = null
     try {
       runner = await o.runner()
@@ -223,6 +232,9 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       if (pre && runner && (runner.findSessionByClaudeId(pre) || runner.findAcpSession(pre))) {
         o.log?.('warn', 'host sessions: a start threw after its session came up; answered as taken', { taskId: body.taskId, sessionId: pre, error: errText(err) })
         return { status: 200, body: { ok: true, sessionId: pre, title: '' } }
+      }
+      if (pre) {
+        try { o.claim?.release(pre) } catch (e) { o.log?.('warn', 'host sessions: a failed start\'s claim was not released', { sessionId: pre, error: errText(e) }) }
       }
       const why = typeof (err as { why?: unknown })?.why === 'string' ? (err as { why: string }).why : 'start_failed'
       o.log?.('warn', 'host sessions: a start failed', { taskId: body.taskId, error: errText(err) })

@@ -22,6 +22,7 @@ import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import { isHostReplica } from './server-role.js';
 import { mergeLeaderCopy, rowOwnedHere } from './sessions/session-row-owner.js';
+import { claimStart, isClaimed, noteClaimAdopted, releaseClaim } from './sessions/starting-claims.js';
 import { reopenIfWiped } from '../lib/sqlite-wiped.js';
 import type { SessionRecord } from './types.js';
 import { lookForHolders } from './blocking-calls.js';
@@ -422,13 +423,67 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
       // it, and the leader has not applied that yet): never stored again, or it would read as an
       // own row and come back to the leader as a session born again.
       if (!mine && own && rowOwnedHere(r, own) && ownRowGoneLately(r.claudeSessionId)) { skippedOwn++; continue; }
-      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : r);
+      // A session a start handed this host (starting-claims.ts): any copy of its row, even one from
+      // before the leader marked it this host's, comes down as this host's, so the own-row writer
+      // takes the session's first writes whatever order the copy and the start arrive in.
+      const src = !mine && own && isClaimed(r.claudeSessionId) ? claimedCopy(r, own) : r;
+      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : src);
       const bound: Record<string, unknown> = {};
       for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
       ins.run(bound);
     }
   }).immediate();
   return { keptOwn, skippedOwn };
+}
+
+/** A copied row as this host's own (host = its key, judge 'host'): the leader's mark, before its copy says it. */
+function claimedCopy(r: SessionRecord, hostKey: string): SessionRecord {
+  return { ...r, host: hostKey, judge: 'host' };
+}
+
+function writeCopyRow(handle: DatabaseType, raw: Record<string, unknown>): void {
+  const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload'];
+  const bound: Record<string, unknown> = {};
+  for (const c of cols) bound[c] = raw[c] === undefined ? null : raw[c];
+  handle.prepare(`INSERT OR REPLACE INTO sessions (${cols.join(', ')}) VALUES (${cols.map((c) => '@' + c).join(', ')})`).run(bound);
+}
+
+/**
+ * A start the leader handed this host names `sid` (session-channel/host-routes.ts): the session is
+ * this host's from its first write. A copy of its row already here that is not this host's yet (an
+ * older version of the leader's seed) becomes this host's now, on the copy's own connection, so the
+ * own-row writer takes the runner's first write of it; a copy that comes later does the same
+ * (applySessionCopy). Nothing to do off a host that runs its sessions.
+ */
+export function claimStartingRow(sid: string): void {
+  const key = ownRowHostKey();
+  if (!key || !sid) return;
+  claimStart(sid);
+  const handle = applyHandle ??= openCopyApplyConnection();
+  handle.transaction(() => {
+    const raw = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(sid) as Record<string, any> | undefined;
+    if (!raw) return;
+    const rec = rowToSession(raw);
+    if (rowOwnedHere(rec, key)) return;
+    const row = sessionToRow(claimedCopy(rec, key));
+    writeCopyRow(handle, row);
+    noteClaimAdopted(sid, raw, String(row.payload ?? ''));
+  }).immediate();
+}
+
+/**
+ * The start of `sid` ended without a session here: the claim goes, and a copied row it made this
+ * host's goes back to what the copy had, unless something wrote the row since (a session that came
+ * up after all keeps it).
+ */
+export function releaseStartingRow(sid: string): void {
+  const c = releaseClaim(sid);
+  if (!c?.before || !ownRowHostKey()) return;
+  const handle = applyHandle ??= openCopyApplyConnection();
+  handle.transaction(() => {
+    const now = handle.prepare('SELECT payload FROM sessions WHERE claude_session_id = ?').pluck().get(sid) as string | undefined;
+    if (now === c.wrote) writeCopyRow(handle, c.before!);
+  }).immediate();
 }
 
 // ── The cloud companion's copy of the Mac's sessions (stage 2c of

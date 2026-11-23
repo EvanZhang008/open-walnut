@@ -34,6 +34,8 @@ let seenAtStart: { bundle: StartBundle | null; data: Record<string, unknown> } |
 let undone = 0
 const dropped: string[][] = []
 const terminated: Array<{ sid: string; opts: unknown }> = []
+/** The claims a start made (session-db.ts claimStartingRow / releaseStartingRow), in order. */
+const claims: string[] = []
 
 const session = {
   getUsage: async (n: number) => ({ tokens: n * 2 }),
@@ -71,6 +73,7 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     drop: async (sids) => { dropped.push(sids); return sids.length },
     lifecycle: { terminateSession: async (sid, opts) => { terminated.push({ sid, opts }); return { status: 'terminated', sessionId: sid } } },
     owns: async (sid) => sid !== 'sid-leaders',
+    claim: { take: (sid) => { claims.push(`take:${sid}:${runnerCalls.includes('started') ? 'after' : 'before'}`) }, release: (sid) => { claims.push(`release:${sid}`) } },
   }) : null
   door = createLeaderDoor({ devices: {} as never, sessions: () => routes })
   server = net.createServer((sock) => door.accept(sock))
@@ -87,6 +90,7 @@ beforeEach(async () => {
   undone = 0
   dropped.length = 0
   terminated.length = 0
+  claims.length = 0
   bundles = new StartBundles()
   log = await FactLog.open({ dir: path.join(dir, 'log'), walnutId: 'w1', flushMs: 1, durable: false })
   channel = new HostChannel({ log, walnutId: 'w1', hostId: 'marina-box', ownRows: async () => [] })
@@ -297,6 +301,27 @@ describe('start, send, interrupt', () => {
       expect(seenAtStart).toBeNull()
     }
     expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', runtimeId: 'acp-0123abcd', forkedFromSessionId: '50000000-0000-4000-8000-0000000000a1' })).body).toMatchObject({ ok: true })
+  })
+
+  it('a start with a preassigned id claims that session\'s row before its runner writes it; one that failed with no session here releases it', async () => {
+    const ok = '50000000-0000-4000-8000-0000000000d1'
+    const failed = '50000000-0000-4000-8000-0000000000d2'
+    const up = '50000000-0000-4000-8000-0000000000b1'
+    const original = runner.startSession
+    runner.startSession = async (data) => { runnerCalls.push('started'); return original(data) }
+    try {
+      await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', preassignedSessionId: ok })
+      runnerCalls.length = 0
+      await post('/host-api/sessions/start', { taskId: 'task-1', message: 'fail', preassignedSessionId: failed })
+      runnerCalls.length = 0
+      // Its session came up after all: the claim stays.
+      await post('/host-api/sessions/start', { taskId: 'task-1', message: 'up-then-throw', preassignedSessionId: up })
+      runnerCalls.length = 0
+      await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi' })
+    } finally {
+      runner.startSession = original
+    }
+    expect(claims).toEqual([`take:${ok}:before`, `take:${failed}:before`, `release:${failed}`, `take:${up}:before`])
   })
 
   it('a failed start answers why', async () => {

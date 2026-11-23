@@ -3621,7 +3621,7 @@ export class ClaudeCodeSession {
             await this.persistSessionRecord(preassignedId, this._cwd ?? undefined)
             this.emitStatusChanged('IN_PROGRESS')
           } catch (err) {
-            log.session.error('CRITICAL: preassigned-id record persist failed', {
+            log.session.error('CRITICAL: preassigned-id record persist failed; the session keeps running without its record', {
               sessionId: preassignedId, taskId: this.taskId, initOnly,
               error: err instanceof Error ? err.message : String(err),
             })
@@ -7627,7 +7627,7 @@ export class ClaudeCodeSession {
             } catch (err) {
               // Persist failed — log loudly but still resolve so the session isn't stuck.
               // The session process IS running, just not registered.
-              log.session.error('CRITICAL: session record persist failed — session will be unregistered', {
+              log.session.error('CRITICAL: session record persist failed; the session keeps running without its record', {
                 sessionId: newId, taskId: this.taskId,
                 error: err instanceof Error ? err.message : String(err),
               })
