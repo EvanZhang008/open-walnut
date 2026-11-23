@@ -10,8 +10,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
-  CTRL_SESSION, CTRL_FILLER, mockControlsSession, openControlsSession, directControl,
+  CTRL_SESSION, CTRL_FILLER, mockControlsSession, openControlsSession, directControl, addButton, addRow,
 } from './composer-controls-overflow-helpers';
+
+/** btw where it is: its own button on the row, or the "+" menu's row when the row folded it. */
+async function openBtw(panel: Locator): Promise<void> {
+  const direct = directControl(panel, 'btw');
+  if (await direct.isVisible()) { await direct.click(); return; }
+  await addButton(panel).click();
+  await addRow(panel, 'btw').click();
+}
 
 const REGIONS_SOURCE = path.resolve(process.cwd(), 'web/src/components/common/RegionErrorBoundary.tsx');
 
@@ -77,9 +85,26 @@ const SCENARIOS: Record<string, (page: Page) => Promise<void>> = {
     await expect(box).toHaveValue('typing again after Retry');
     await expect(page.locator('[data-error-region]')).toHaveCount(0);
   },
+  'composer-controls': async (page) => {
+    const { panel, other } = await open(page);
+    await crash(page, 'composer-controls', CTRL_SESSION);
+    const error = panel.locator('.session-panel-input [data-error-region="composer-controls"]');
+    await expect(error).toHaveCount(1);
+    await expect(error).toContainText('These controls hit an error.');
+    // Only the row went: the message box around it still types and still sends.
+    await expect(panel.locator('[data-error-region="composer"], [data-error-region="session-panel"]')).toHaveCount(0);
+    const box = panel.locator('.session-panel-input textarea').first();
+    await box.fill('the box still types without its controls');
+    await expect(box).toHaveValue('the box still types without its controls');
+    await expect(panel.locator('.session-panel-input .chat-send-group button').first()).toBeEnabled();
+    await expectOtherColumnWorks(other);
+    await error.getByRole('button', { name: 'Retry' }).click();
+    await expect(page.locator('[data-error-region]')).toHaveCount(0);
+    await expect(panel.locator('.session-panel-input .composer-controls-bar')).toBeVisible();
+  },
   'side-threads': async (page) => {
     const { panel, other } = await open(page);
-    await directControl(panel, 'btw').click();
+    await openBtw(panel);
     const popover = panel.locator('.session-panel-input .side-question-popover--threads');
     await expect(popover).toBeVisible();
     await crash(page, 'side-threads', CTRL_SESSION);
@@ -97,7 +122,7 @@ const SCENARIOS: Record<string, (page: Page) => Promise<void>> = {
     await expectOtherColumnWorks(other);
     await error.getByRole('button', { name: 'Retry' }).click();
     await expect(page.locator('[data-error-region]')).toHaveCount(0);
-    await directControl(panel, 'btw').click();
+    await openBtw(panel);
     await expect(popover.locator('.side-question-popover-title')).toHaveText('Side chats');
     await expect(popover.locator('.side-question-composer textarea')).toBeVisible();
   },
@@ -116,3 +141,25 @@ for (const region of declaredRegions()) {
     await scenario!(page);
   });
 }
+
+test('a crash that comes straight back after Retry also offers Reload, and Reload brings the box back', async ({ page }) => {
+  const { panel } = await open(page);
+  await crash(page, 'composer', CTRL_SESSION);
+  const error = panel.locator('[data-error-region="composer"]');
+  await expect(error).toContainText('The message box hit an error.');
+  // The first time Retry is the way back; Reload is not offered yet.
+  await expect(error.getByRole('button', { name: 'Reload' })).toHaveCount(0);
+  await error.getByRole('button', { name: 'Retry' }).click();
+  await expect(error).toHaveCount(0);
+  // The same crash again at once, as when the state that caused it is still there.
+  await crash(page, 'composer', CTRL_SESSION);
+  await expect(error).toContainText('The message box hit an error again.');
+  await expect(error.getByRole('button', { name: 'Retry' })).toBeVisible();
+  await error.getByRole('button', { name: 'Reload' }).click();
+  await page.waitForLoadState('load');
+  const box = page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"] .session-panel-input textarea`).first();
+  await expect(box).toBeVisible({ timeout: 30_000 });
+  await box.fill('back after Reload');
+  await expect(box).toHaveValue('back after Reload');
+  await expect(page.locator('[data-error-region]')).toHaveCount(0);
+});

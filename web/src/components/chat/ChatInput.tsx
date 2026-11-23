@@ -474,7 +474,7 @@ interface ChatInputProps {
  *  the page stay, and Retry mounts it again (its draft is kept under draftKey). */
 export function ChatInput(props: ChatInputProps) {
   return (
-    <RegionErrorBoundary region="composer" compact ids={{ draftKey: props.draftKey }}>
+    <RegionErrorBoundary region="composer" compact ids={{ draftKey: props.draftKey }} resetKey={props.draftKey}>
       <ChatInputBody {...props} />
     </RegionErrorBoundary>
   );
@@ -604,8 +604,10 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
   // Session control rows of the "+" menu: Reply style, plus Note and btw while a
   // tight controls row has folded their direct buttons in. Read on render, as the
   // rows' labels are: the menu renders afresh each time it opens.
-  const addMenuRowIds = addMenuControls?.ids.filter((id) =>
-    (id !== 'note' && id !== 'btw') || !!addMenuControls.handleRef.current?.folded(id)) ?? [];
+  // None while the controls row is not mounted (it crashed and shows its own error): its
+  // rows would have no label and nothing to press.
+  const addMenuRowIds = !addMenuControls?.handleRef.current ? [] : addMenuControls.ids.filter((id) =>
+    (id !== 'note' && id !== 'btw') || !!addMenuControls.handleRef.current?.folded(id));
 
   // Draft persistence: debounce save to localStorage
   const draftTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);

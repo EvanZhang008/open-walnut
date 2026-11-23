@@ -15,6 +15,7 @@ import '@/styles/region-error.css';
 export const ERROR_REGIONS = {
   'session-panel': 'This session',
   composer: 'The message box',
+  'composer-controls': 'These controls',
   'side-threads': 'Side chats',
 } as const;
 
@@ -25,7 +26,8 @@ export type ErrorRegion = keyof typeof ERROR_REGIONS;
  * it loaded, `window.dispatchEvent(new CustomEvent('walnut:test-crash', { detail:
  * { region, key } }))` makes that region throw on its next render, every region of
  * that kind whose ids hold `key` (a session id), so a browser test can prove the
- * region holds its crash and Retry brings it back. Without the flag nothing listens.
+ * region holds its crash and Retry brings it back (`key: '*'` crashes every region of
+ * that kind). Without the flag nothing listens.
  */
 function CrashProbe({ region, ids }: { region: ErrorRegion; ids?: Record<string, string | undefined> }): null {
   const [crash, setCrash] = useState(false);
@@ -38,7 +40,7 @@ function CrashProbe({ region, ids }: { region: ErrorRegion; ids?: Record<string,
       if (detail?.region !== region || !detail.key) return;
       const values = Object.values(idsRef.current ?? {});
       // A whole id or a whole part of a key (`draft:session:<id>`), never a prefix of another id.
-      if (!values.some((v) => v === detail.key || v?.split(':').includes(detail.key!))) return;
+      if (detail.key !== '*' && !values.some((v) => v === detail.key || v?.split(':').includes(detail.key!))) return;
       setCrash(true);
     };
     window.addEventListener('walnut:test-crash', onCrash);
@@ -69,16 +71,29 @@ interface RegionErrorBoundaryState {
   error: Error | null;
   /** Bumped by Retry: the children mount again from scratch. */
   attempt: number;
+  /** When Retry was pressed last, to tell a crash that comes straight back. */
+  retriedAt: number;
+  /** It crashed again right after a Retry: the same state brings the same crash, so the
+   *  error also offers a reload, which starts every part of the page afresh. */
+  again: boolean;
 }
 
+/** A crash this soon after Retry is the same crash coming back. */
+const AGAIN_WINDOW_MS = 10_000;
+
 export class RegionErrorBoundary extends Component<RegionErrorBoundaryProps, RegionErrorBoundaryState> {
-  state: RegionErrorBoundaryState = { error: null, attempt: 0 };
+  state: RegionErrorBoundaryState = { error: null, attempt: 0, retriedAt: 0, again: false };
 
   static getDerivedStateFromError(error: Error): Partial<RegionErrorBoundaryState> {
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    // Decided once per crash and kept while the error shows (a later re-render must not
+    // take Reload away from under the pointer). 2026-11-23: a crash that came straight
+    // back after Retry left Retry as the only way out ("then I can never get back").
+    const again = this.state.retriedAt > 0 && Date.now() - this.state.retriedAt < AGAIN_WINDOW_MS;
+    if (again !== this.state.again) this.setState({ again });
     log.error('react', `${this.props.region} crashed; the rest of the page keeps working`, {
       region: this.props.region,
       ...this.props.ids,
@@ -89,17 +104,17 @@ export class RegionErrorBoundary extends Component<RegionErrorBoundaryProps, Reg
   }
 
   componentDidUpdate(previous: RegionErrorBoundaryProps): void {
-    if (this.state.error && previous.resetKey !== this.props.resetKey) this.setState({ error: null });
+    if (this.state.error && previous.resetKey !== this.props.resetKey) this.setState({ error: null, retriedAt: 0, again: false });
   }
 
   private retry = () => {
     log.info('react', `${this.props.region} retried after a crash`, { region: this.props.region, ...this.props.ids });
-    this.setState((s) => ({ error: null, attempt: s.attempt + 1 }));
+    this.setState((s) => ({ error: null, attempt: s.attempt + 1, retriedAt: Date.now(), again: false }));
   };
 
   render() {
     const { region, message, className, compact, actions, children } = this.props;
-    const { error, attempt } = this.state;
+    const { error, attempt, again } = this.state;
     if (!error) {
       return (
         <Fragment key={attempt}>
@@ -114,12 +129,22 @@ export class RegionErrorBoundary extends Component<RegionErrorBoundaryProps, Reg
         className={`region-error${compact ? ' region-error--compact' : ''}${className ? ` ${className}` : ''}`}
         data-error-region={region}
       >
-        <p className="region-error-title">{message ?? `${ERROR_REGIONS[region]} hit an error.`}</p>
+        <p className="region-error-title">{message ?? `${ERROR_REGIONS[region]} hit an error${again ? ' again' : ''}.`}</p>
         {!compact && error.message && <p className="region-error-detail">{error.message}</p>}
         <div className="region-error-actions">
           <button type="button" className="btn btn-sm btn-primary" onClick={this.retry} title={error.message || undefined}>
             Retry
           </button>
+          {again && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => { log.info('react', `${region} reloaded the page after a repeated crash`, { region, ...this.props.ids }); window.location.reload(); }}
+              title="Load Walnut again: every part of the page starts afresh, your drafts are kept"
+            >
+              Reload
+            </button>
+          )}
           {actions}
         </div>
       </div>

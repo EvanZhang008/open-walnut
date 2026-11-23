@@ -8,12 +8,23 @@
   min-width: 0;
 }
 
-/* One quiet word for what is happening now; its hint is the title. */
+/* One quiet word for what is happening now; its hint is the title. In a tight row the word
+   gives way, never the keys: "Back to the keyboard" must stay where it can be pressed
+   (2026-11-23: under about 320 px the keys spilled out of their box and the close key sat
+   under the send key, so an open voice conversation could not be closed). */
 .voice-keys-status {
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
   white-space: nowrap;
   padding: 0 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+.voice-keys > :not(.voice-keys-status) {
+  flex-shrink: 0;
 }
 
 /* The state key: round like the composer's send key, --accent with a white glyph. Its ring
@@ -63,4 +74,12 @@
 
 @keyframes voice-orb-spin {
   to { transform: rotate(360deg); }
+}
+
+/* A tight row with a voice conversation open: the dictation mic gives way before the voice
+   keys do (the conversation already holds the microphone), so the keys keep their size and
+   "Back to the keyboard" never slides under the send key. `.chat-input-controls` is the query
+   container. */
+@container (max-width: 240px) {
+  .chat-input-controls:has(> .voice-keys) > .mic-btn-wrapper { display: none; }
 }

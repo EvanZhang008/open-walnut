@@ -7,6 +7,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { detailFits, foldDirectButtons, pickVisibleControls, rowExcess, type ControlFitInput, type RowShape } from './composer-controls-fit';
 import { log } from '@/utils/log';
+import { RegionErrorBoundary } from '@/components/common/RegionErrorBoundary';
 import '@/styles/composer-controls.css';
 
 /** What the row tells the controls on it about the room it has. */
@@ -64,6 +65,8 @@ interface ComposerControlsBarProps {
   className?: string;
   /** Lets the add menu activate the mounted control without duplicating its logic. */
   handleRef?: RefObject<ComposerControlsBarHandle | null>;
+  /** The session these controls are for: named in the row's crash log. */
+  sessionId?: string;
 }
 
 /** Gap between pills — mirrors `.session-mode-bar { gap: 4px }`. */
@@ -147,7 +150,19 @@ function rowRoom(bar: HTMLElement, spacer: HTMLElement | null, hint: HTMLElement
   return content - used - Math.max(0, items - 1) * gap;
 }
 
-export function ComposerControlsBar({ controls, className, handleRef }: ComposerControlsBarProps) {
+/** The row keeps its own crash: a small error with Retry where the controls were, and the
+ *  message box beside it (the text, send, the voice keys and their way back to the
+ *  keyboard) keeps working (2026-11-23: a looping row took the whole box down, voice keys
+ *  included, so an open voice conversation could not be closed). */
+export function ComposerControlsBar(props: ComposerControlsBarProps) {
+  return (
+    <RegionErrorBoundary region="composer-controls" compact ids={{ sessionId: props.sessionId }} resetKey={props.sessionId}>
+      <ComposerControlsBarBody {...props} />
+    </RegionErrorBoundary>
+  );
+}
+
+function ComposerControlsBarBody({ controls, className, handleRef }: ComposerControlsBarProps) {
   const routeShown = useContext(RouteShownContext) !== false;
   // On a phone the model pill's percentage gives way before Note and btw fold (foldDirectButtons).
   const phone = usePhoneLayout();

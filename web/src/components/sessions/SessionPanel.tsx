@@ -3107,7 +3107,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   fullComposerShownRef.current = !ownComposerLight || sidePaneKeys.includes(ROOT_THREAD_KEY);
   // Main's page beside a question's: the panel's full composer controls (see ownComposerLight).
   const mainFullComposer = session && !plainChat && ownComposerLight ? {
-    controlsSlot: <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />,
+    controlsSlot: <ComposerControlsBar className="session-mode-bar" sessionId={sessionId} controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />,
     addMenuControls: { handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] },
     plusMenuActions: plusActions,
     ...(toggleSessionMode ? { onToggleMode: toggleSessionMode } : {}),
@@ -3517,7 +3517,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             plusMenuActions={engineSettingsEntry.plusMenuActions}
             addMenuControls={{ handleRef: planComposerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             controlsSlot={session ? (
-              <ComposerControlsBar className="session-mode-bar" controls={planComposerControls} handleRef={planComposerControlsRef} />
+              <ComposerControlsBar className="session-mode-bar" sessionId={sessionId} controls={planComposerControls} handleRef={planComposerControlsRef} />
             ) : undefined}
                           onSend={handleSend}
                           onInterruptSend={handleInterruptSendRaw}
@@ -4387,7 +4387,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             // selection: let the quote pill hold the passage first (holdDictationSelection).
             onDictationInsert={holdDictationSelection}
             controlsSlot={session && !plainChat ? (
-              <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />
+              <ComposerControlsBar className="session-mode-bar" sessionId={sessionId} controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />
             ) : plainChat ? (
               // The browser side panel's chat: its own chips, then the same mode and model (with its
               // effort) pills as every session's composer (2026-11-09, the user: "why can't i choose
@@ -4397,6 +4397,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 {session && (
                   <ComposerControlsBar
                     className="session-mode-bar is-plain-chat-pickers"
+                    sessionId={sessionId}
                     controls={composerControls({ openNonce: modelPickerRequest }).filter((c) => PLAIN_CHAT_CONTROLS.has(c.id))}
                     handleRef={composerControlsRef}
                   />

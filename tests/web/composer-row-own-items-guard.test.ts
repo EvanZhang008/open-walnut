@@ -69,10 +69,11 @@ describe('a session window keeps a crash in its part', () => {
     expect(own).toEqual([]);
   });
 
-  it('the panel, the composer and the side-thread drawer each sit in their region', () => {
+  it('the panel, the composer, its controls row and the side-thread drawer each sit in their region', () => {
     const read = (rel: string) => fs.readFileSync(path.join(WEB, rel), 'utf8');
     expect(read('components/sessions/SessionPanel.tsx')).toMatch(/<RegionErrorBoundary\s+region="session-panel"/);
     expect(read('components/chat/ChatInput.tsx')).toMatch(/<RegionErrorBoundary region="composer"/);
     expect(read('components/sessions/SideQuestionDrawer.tsx')).toMatch(/<RegionErrorBoundary region="side-threads"/);
+    expect(read('components/chat/ComposerControlsBar.tsx')).toMatch(/<RegionErrorBoundary region="composer-controls"/);
   });
 });
