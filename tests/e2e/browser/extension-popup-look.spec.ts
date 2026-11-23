@@ -484,7 +484,8 @@ test('the connect page wears the extension\'s colour and key; disconnected, the 
   }
   await sw().evaluate((b: string) => chrome.storage.local.set({ lastServer: b }), base)
 
-  // Connected again from the address it found: the connect page's button is the extension's brown.
+  // Connected again from the address it found: the connect page's button is the button family's
+  // primary key, filled from the extension's brown accent (a little darker for its label, buttons.css).
   await p.reload()
   await expect(p.getByTestId('popup-found')).toHaveText(`Found Walnut at ${new URL(base).host}`, { timeout: 10_000 })
   const opened = ctx.waitForEvent('page')
@@ -492,7 +493,18 @@ test('the connect page wears the extension\'s colour and key; disconnected, the 
   const connect = await opened
   const go = connect.getByTestId('connect-extension-go')
   await expect(go).toBeVisible({ timeout: 60_000 })
-  expect(await go.evaluate((b) => getComputedStyle(b).backgroundColor)).toBe('rgb(138, 90, 43)')
+  const look = await go.evaluate((b) => {
+    const probe = document.createElement('button')
+    probe.className = 'btn btn-primary'
+    const accent = document.createElement('span')
+    accent.style.color = 'var(--accent)'
+    b.parentElement!.append(probe, accent)
+    const out = { got: getComputedStyle(b).backgroundColor, family: getComputedStyle(probe).backgroundColor, accent: getComputedStyle(accent).color }
+    probe.remove(); accent.remove()
+    return out
+  })
+  expect(look.accent).toBe('rgb(138, 90, 43)')
+  expect(look.got).toBe(look.family)
   // Left on (its default), the connect turns agents on in this browser (R1-7).
   await expect(connect.getByTestId('connect-extension-agents')).toBeChecked({ timeout: 20_000 })
   await go.click()
