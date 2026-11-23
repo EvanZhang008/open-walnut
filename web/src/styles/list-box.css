@@ -1,0 +1,18 @@
+/*
+ * .wn-list-box: one list in one box. A page's list of like rows (a plugin's days, the plugin apps)
+ * is one card, filled and cornered as a card in a list (--card-bg, --radius-lg), with a
+ * hairline between its rows: never a box round every row, nor a box round a stack of boxes
+ * (2026-11-22 UI audit). It clips nothing, so a row's focus ring shows in full.
+ */
+.wn-list-box {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.wn-list-box > * + * {
+  border-top: 1px solid var(--border);
+}

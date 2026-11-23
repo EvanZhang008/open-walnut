@@ -115,7 +115,7 @@ export function CreatePluginPage() {
             first build succeeds, with no restart or refresh.
           {/* empty-state-ok: a sentence of a paragraph */}
           </p>
-          <div className="create-plugin-live" data-testid="create-plugin-live">
+          <div className={`create-plugin-live${pluginApps.length > 0 ? ' wn-list-box' : ''}`} data-testid="create-plugin-live">
             {pluginApps.length === 0 ? (
               <div className="create-plugin-waiting" data-testid="create-plugin-waiting">
                 <span className="create-plugin-pulse" aria-hidden="true" />
@@ -124,9 +124,9 @@ export function CreatePluginPage() {
             ) : (
               pluginApps.map((app) => (
                 <div key={app.key} className="create-plugin-app-row" data-testid={`create-plugin-app-${app.key}`}>
-                  <span className="create-plugin-app-title">{app.title}</span>
-                  <code className="create-plugin-app-path">{app.path}</code>
-                  <button type="button" className="btn btn-sm" onClick={() => navigate(app.path)}>
+                  <span className="create-plugin-app-title wn-title">{app.title}</span>
+                  <code className="create-plugin-app-path wn-meta">{app.path}</code>
+                  <button type="button" className="btn btn-sm wn-fixed" onClick={() => navigate(app.path)}>
                     Open
                   </button>
                 </div>

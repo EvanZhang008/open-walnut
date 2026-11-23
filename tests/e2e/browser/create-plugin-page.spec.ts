@@ -144,6 +144,7 @@ test('when a plugin app exists the live panel lists it instead of waiting', asyn
     contentType: 'application/json',
     body: JSON.stringify([
       { id: 'demo', pluginId: 'demo-plugin', title: 'Demo App', icon: null, url: 'http://127.0.0.1:9/never-loaded' },
+      { id: 'long', pluginId: 'long-plugin', title: `A${'n'.repeat(70)} unbroken plugin app name`, icon: null, url: 'http://127.0.0.1:9/never-loaded' },
     ]),
   }))
 
@@ -156,6 +157,13 @@ test('when a plugin app exists the live panel lists it instead of waiting', asyn
   await expect(page.getByTestId('create-plugin-waiting')).toHaveCount(0)
   const row = page.getByTestId('create-plugin-app-webview:demo')
   await expect(row).toContainText('Demo App')
+  // The apps are one box; a name with no break wraps inside it and its Open stays in the box, whole.
+  const live = page.getByTestId('create-plugin-live')
+  await expect(live).toHaveClass(/\bwn-list-box\b/)
+  const box = (await live.boundingBox())!
+  const open = (await page.getByTestId('create-plugin-app-webview:long').getByRole('button', { name: 'Open' }).boundingBox())!
+  expect(open.x + open.width).toBeLessThanOrEqual(box.x + box.width)
+  expect(open.width).toBeGreaterThan(30)
   await row.getByRole('button', { name: 'Open' }).click()
   await expect(page).toHaveURL(/\/apps\/demo$/)
 

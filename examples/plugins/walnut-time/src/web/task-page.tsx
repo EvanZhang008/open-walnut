@@ -124,7 +124,7 @@ function laneClass(lane: 'human' | 'agent', ms: number): string {
  *  rows' own classes and the same idle lane, so the heads stay over their values at every width. */
 function DayHead({ max }: { max: TimePair }) {
   return (
-    <div className="wt-task-day-row" aria-hidden="true" style={{ cursor: 'default', paddingBottom: 0 }}>
+    <div className="wt-task-day-row wt-task-day-head" aria-hidden="true">
       <span className="wt-task-day-date" />
       <span className="wt-task-bars" data-idle={idleLane(max)}>
         <span className="wt-task-bar is-human"><b>You</b><i style={{ width: 0 }} /></span>
@@ -250,7 +250,7 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
           <span className="wt-section-hint">{focused ? names.get(focused) : 'Open a day to see its sessions'}</span>
         </div>
         <DayHead max={max} />
-        <ol className="wt-task-days" data-testid="time-task-days">
+        <ol className="wt-task-days wn-list-box" data-testid="time-task-days">
           {rows.map(({ date, pair, day }) => {
             const expandable = !!day && (day.sessions.length > 0)
             const open = expandable && openDays.has(date)
@@ -307,7 +307,7 @@ function SessionBody({ data }: { data: SessionTime }) {
       <section className="wt-section">
         <div className="wt-section-head"><h2>Day by day</h2></div>
         <DayHead max={max} />
-        <ol className="wt-task-days" data-testid="time-task-days">
+        <ol className="wt-task-days wn-list-box" data-testid="time-task-days">
           {data.days.map((d) => (
             <li key={d.date} className="wt-task-day" data-date={d.date} data-testid="time-task-day">
               <div className="wt-task-day-row">

@@ -26674,10 +26674,10 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   /* Grid items refuse to shrink below content (min-width:auto), so the nowrap
      command line would set the whole page's width on phones without this. */
   min-width: 0;
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  /* A step is a section of the page, not a box: a hairline above each, so the code box and the
+     app list inside it are the only boxes (2026-11-22 UI audit: a grey box round grey boxes). */
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--border);
 }
 
 .create-plugin-step > p {
@@ -26705,7 +26705,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   flex-shrink: 0;
   width: 22px;
   height: 22px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--on-accent);
   font-size: var(--font-size-sm);
@@ -26753,7 +26753,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   flex-shrink: 0;
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent);
   animation: create-plugin-pulse 1.6s ease-in-out infinite;
 }
@@ -26763,17 +26763,27 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   50% { opacity: 0.25; }
 }
 
+/* With apps, the list is one box (.wn-list-box), a hairline between rows, still 12 px under the words. */
+.create-plugin-live.wn-list-box {
+  margin-top: 12px;
+}
+
 .create-plugin-app-row {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
 }
 
-.create-plugin-app-row + .create-plugin-app-row {
-  margin-top: 6px;
+.create-plugin-app-row .create-plugin-app-title {
+  /* Wraps (.wn-title) but takes only its words' width, so the path follows it. */
+  flex: 0 1 auto;
+}
+
+.create-plugin-app-row .create-plugin-app-path {
+  /* The path takes the room left (.wn-meta would keep only its own), so Open sits at the right; a cut
+     one shows whole in place (utils/truncation-peek.ts). */
+  flex: 1 1 0;
 }
 
 .create-plugin-app-title {
@@ -26800,7 +26810,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .create-plugin-cap {
   padding: 3px 9px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
 }

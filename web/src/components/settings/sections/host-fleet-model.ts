@@ -176,6 +176,11 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
       + (!c.connected && c.error ? ` (${c.error})` : ''),
     tone: c.connected ? undefined : 'bad',
   });
+  // A host away keeps its system from its last reading here: its map node says only that it is away
+  // (2026-11-22 UI audit), and this is where the node leads (a live host's card names it already).
+  if (!c.connected && h.system?.os) {
+    rows.push({ key: 'system', label: 'System', value: `${[h.system.os, h.system.arch].filter(Boolean).join(', ')} (last reading)`, tone: 'muted' });
+  }
   if (h.daemon) {
     const d = h.daemon;
     // Not starting after a reboot is a problem, said once on its row or in the problem list.

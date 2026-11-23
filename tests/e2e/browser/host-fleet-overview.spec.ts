@@ -325,14 +325,18 @@ test('a fleet of five, the Overview: its numbers, the diagram (a node lands on i
 
   // The diagram, every row of the list as its row says it (2026-11-04 review: it drew only the
   // hosts with a reading, and one green that its row said was off). Six nodes, five lines; the two
-  // hosts away and the one switched off are dashed. Each line says how this Mac reaches the host:
-  // the dev box by its SSH tunnel, only the companion's box through the companion.
+  // hosts away and the one switched off are dashed. Each line Walnut uses says how this Mac reaches
+  // the host: the dev box by its SSH tunnel, only the companion's box through the companion. A host
+  // away or off says so once, in its node, its line wordless (2026-11-22 UI audit), even one whose
+  // last reading named its system (Home PC: the system stays in its hover and its Details).
   const topo = dash.getByTestId('host-fleet-topology')
   const link = (h: string) => `[data-testid="host-fleet-topo-link"][data-host="${h}"]`
   const node = (h: string) => topo.locator(`[data-testid="host-fleet-topo-node"][data-host="${h}"]`)
   await see(topo, {
-    'host-fleet-topo-node': 6, 'path.hf-topo-link': 5, '[data-testid="host-fleet-topo-link"][data-live="false"]': 3,
-    [link('devbox')]: 'SSH tunnel, 38 ms', [link('__cloudbox__')]: 'Through your cloud companion, 120 ms', [link('homepc')]: 'Not connected', [link('fixture-remote')]: 'Off',
+    'host-fleet-topo-node': 6, 'path.hf-topo-link': 5, '[data-testid="host-fleet-topo-link"][data-live="false"]': 0,
+    [link('devbox')]: 'SSH tunnel, 38 ms', [link('__cloudbox__')]: 'Through your cloud companion, 120 ms', [link('olddev')]: 0, [link('fixture-remote')]: 0,
+    [link('homepc')]: 0, '[data-host="homepc"] .hf-topo-sub': 'Not connected', '[data-host="homepc"] title': /Not connected\s+Ubuntu 24\.04/,
+    '[data-host="olddev"] .hf-topo-sub': 'Not connected', '[data-host="fixture-remote"] .hf-topo-sub': 'Off',
     '[data-mark="cloud"]': 1, '[data-host="__cloudbox__"] [data-mark="cloud"], [data-host="devbox"] [data-mark="phone"]': 2, '[data-host="__local__"] .hf-topo-name': 'This Mac',
   })
   await expect(node('fixture-remote')).toHaveAttribute('data-kind', 'off')
@@ -409,6 +413,8 @@ test('a fleet of five, the Overview: its numbers, the diagram (a node lands on i
   await see(dev, { '[data-row="now"] dt': 'Up for', '[data-row="now"] dd': '13 d, load 6.16', '[data-row="daemon"] dt': 'Session helper' })
   await home.getByTestId('hf-dash-details-toggle').click()
   await see(home, { '[data-row="connection"] dd': 'SSH tunnel: Could not reach Home PC (ssh: connection timed out)', 'host-fleet-fit': 0 })
+  // Its system, which its map node no longer shows, is in the Details its node leads to.
+  await see(home, { '[data-row="system"] dt': 'System', '[data-row="system"] dd': 'Ubuntu 24.04, x64 (last reading)' })
   await old.getByTestId('hf-dash-details-toggle').click()
   await see(old, { '[data-row="now"] dd': 'Its session helper is older than this view (it updates on the next connect)' })
   await expectEveryUnknownSaysWhy(page)

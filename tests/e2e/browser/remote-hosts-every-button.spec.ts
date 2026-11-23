@@ -201,9 +201,12 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expect(node('__local__').locator('.hf-topo-name')).toHaveText('This Mac')
       // A host switched off is drawn off, whatever an old reading said (it drew one green).
       await expect(node('fixture-remote')).toHaveAttribute('data-kind', 'off')
-      await expect(link('fixture-remote')).toHaveText('Off')
+      // Its node says Off; its line says nothing more (one state, said once).
+      await expect(node('fixture-remote').locator('.hf-topo-sub')).toHaveText('Off')
+      await expect(link('fixture-remote')).toHaveCount(0)
       await expect(node('downbox')).toHaveAttribute('data-kind', 'failed')
-      await expect(link('downbox')).toHaveText('Not connected')
+      await expect(node('downbox').locator('.hf-topo-sub')).toHaveText('Not connected')
+      await expect(link('downbox')).toHaveCount(0)
       await expect(link('devbox')).toHaveText('SSH tunnel, 38 ms')
       await sweep()
       // Each node lands on its host in the Overview, in view, focused and ringed: a card, a Not

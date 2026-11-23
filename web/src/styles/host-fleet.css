@@ -22,17 +22,18 @@
 .hf-topo { display: block; height: auto; overflow: visible; }
 .hf-topo-node { cursor: pointer; outline: none; --hf-c: var(--success); }
 .hf-topo-node[data-kind="warn"] { --hf-c: var(--warning); }
-.hf-topo-node[data-kind="failed"] { --hf-c: var(--error); }
+/* A host Walnut does not reach: its dot in the summary's "need a look" tone, its box neutral, so
+   the state is one dot and one word, as a row's status (2026-11-22 UI audit). */
+.hf-topo-node[data-kind="failed"] { --hf-c: var(--priority-important-text); }
 .hf-topo-node[data-kind="off"] { --hf-c: var(--fg-muted); }
 .hf-topo-box {
   fill: color-mix(in srgb, var(--hf-c) 9%, var(--settings-group-bg));
   stroke: var(--hf-c);
   stroke-width: 1.4;
 }
-.hf-topo-node[data-live="false"] .hf-topo-box { fill: var(--settings-group-bg); stroke-dasharray: 5 4; }
+.hf-topo-node[data-live="false"] .hf-topo-box { fill: var(--settings-group-bg); stroke: var(--border-strong); stroke-dasharray: 5 4; }
 .hf-topo-node:focus-visible .hf-topo-box, .hf-topo-node:hover .hf-topo-box { stroke-width: 2.4; }
 .hf-topo-dot { fill: var(--hf-c); }
-.hf-topo-node[data-live="false"] .hf-topo-dot { fill: none; stroke: var(--fg-muted); stroke-width: 1.4; }
 .hf-topo-name { font-size: var(--font-size-md); font-weight: 600; fill: var(--fg); }
 .hf-topo-sub { font-size: var(--font-size-xs); fill: var(--settings-help-fg); }
 .hf-topo-node[data-live="false"] .hf-topo-name { fill: var(--settings-help-fg); }
@@ -41,7 +42,7 @@
 .hf-topo-link { --hf-c: var(--success); fill: none; stroke: var(--hf-c); stroke-width: 1.8; }
 .hf-topo-link[data-kind="warn"] { --hf-c: var(--warning); }
 .hf-topo-link[data-kind="failed"], .hf-topo-link[data-kind="off"] { --hf-c: var(--fg-muted); }
-.hf-topo-link[data-live="false"] { stroke-dasharray: 5 5; opacity: 0.75; }
+.hf-topo-link[data-live="false"] { stroke-dasharray: 4 4; stroke-width: 1.2; opacity: 0.55; }
 .hf-topo-label { font-size: var(--font-size-xs); fill: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
 
 /* A host's Details: rings, chips, numbers. */

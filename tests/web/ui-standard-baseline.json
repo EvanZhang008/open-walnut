@@ -264,7 +264,7 @@
     "components/chat/camera/camera-dock.css": 1,
     "components/notes/notes-editor.css": 2,
     "popout/ext-panel.css": 1,
-    "styles/globals.css": 6,
+    "styles/globals.css": 3,
     "styles/passwords.css": 1,
     "styles/phone-session.css": 1,
     "styles/pr-pill.css": 2,

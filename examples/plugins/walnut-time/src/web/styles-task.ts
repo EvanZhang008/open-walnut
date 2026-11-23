@@ -142,12 +142,9 @@ export const TASK_CSS = `
 .wt-task-session-v .is-agent, .wt-task-day-sessions .is-agent { color: var(--wt-agent); }
 .wt-task-session-v .is-zero, .wt-task-day-sessions .is-zero { color: var(--fg-muted); }
 
-.wt-task-days { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.wt-task-day {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 8px);
-}
+/* The days are one list in one box (the console's shared .wn-list-box), a hairline between days
+   (2026-11-22 UI audit: a full box round every day read as a stack of cards). */
+.wt-task-days { display: flex; flex-direction: column; }
 .wt-task-day-row {
   display: grid;
   grid-template-columns: minmax(130px, 170px) 1fr 14px;
@@ -164,6 +161,12 @@ export const TASK_CSS = `
   cursor: pointer;
 }
 .wt-task-day-row:disabled { cursor: default; color: var(--fg); }
+/* The heads sit over the rows' values: the rows' padding plus the box's 1 px edge. */
+.wt-task-day-head { cursor: default; padding: 0 13px 4px; }
+.wt-task-day-head .wt-task-bar b { font-size: var(--font-size-xs, 11px); }
+/* Small words in the lanes' colours, darkened to read on the card (4.5:1); the bars keep theirs. */
+.wt-task-day-head .wt-task-bar.is-human b { color: var(--accent-text, var(--wt-human)); }
+.wt-task-day-head .wt-task-bar.is-agent b { color: color-mix(in srgb, var(--wt-agent) 72%, var(--fg)); }
 .wt-task-day-date { font-weight: 500; white-space: nowrap; }
 .wt-task-day-caret { display: flex; align-items: center; justify-content: center; }
 .wt-task-day-caret > .wn-disclosure-chevron { color: var(--fg-secondary); }

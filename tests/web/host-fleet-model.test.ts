@@ -85,6 +85,8 @@ describe('missing readings say why', () => {
     })
     expect(value(h, 'now')?.value).toMatch(/\(last reading, 5 min ago\)$/)
     expect(value(h, 'connection')).toMatchObject({ value: 'SSH tunnel: Could not reach Dev box (ssh: connection refused)', tone: 'bad' })
+    // Its system from that reading: the map node of a host away says only that it is away.
+    expect(value(h, 'system')).toMatchObject({ label: 'System', value: 'Debian 12, x64 (last reading)', tone: 'muted' })
     expect(statusKind(h)).toBe('failed')
   })
 
