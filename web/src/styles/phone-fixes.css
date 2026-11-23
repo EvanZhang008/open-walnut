@@ -98,28 +98,6 @@
   }
 }
 
-/* N22: an empty tier on a phone says so in the middle of the list. */
-.phone-tier-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 48px 16px 24px;
-  text-align: center;
-}
-.phone-tier-empty-line {
-  margin: 0;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-lg);
-  line-height: 1.4;
-}
-/* Its one key is the family's .btn; a finger gets 44 px on a phone (the phone layout's own query, so
-   a touch phone and a narrow test viewport both match), and `.btn.` outranks the family's 34 px
-   whichever file loads first. */
-@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .btn.phone-tier-empty-btn { min-height: 44px; }
-}
-
 /* N12: a disabled row in the phone's session menu says why. */
 .phone-session-row-why {
   margin-left: auto;
