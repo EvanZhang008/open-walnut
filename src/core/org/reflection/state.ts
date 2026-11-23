@@ -50,13 +50,34 @@ export interface ReflectionState {
   aligns?: { date: string; count: number };
   /** Guidance lines named to the node as going against a changed rule of his, newest last. */
   alignLog?: Array<{ at: string; line: string; rule: string }>;
+  /** The local date the node was last asked to tidy a full guidance (guidance-tidy.ts): once a day. */
+  tidyAsked?: string;
+  /** When the node's high judge days began (dailyCallsMax). */
+  callsFrom?: string;
 }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
 export const SEEN_KEEP_MS = 45 * 24 * 3600_000;
 export const SKILLS_PER_DAY_MAX = 1;
-/** Judge calls one node may spend in a day; past it the rest wait for tomorrow. */
+/** Judge calls one node may spend in a day once it is settled; past it the rest wait for a later pass. */
 export const DAILY_CALLS_MAX = 40;
+/**
+ * A node starts with more: DAILY_CALLS_START a day, falling evenly to DAILY_CALLS_MAX over
+ * DAILY_CALLS_EASE_DAYS from `callsFrom` (the first pass that read this rule; 2026-11-23, the user:
+ * "At elast for now we need to do it more frequence over time cna be slower"). Raise or lower both
+ * here; a node's `callsFrom` set again starts its high days over.
+ */
+export const DAILY_CALLS_START = 80;
+export const DAILY_CALLS_EASE_DAYS = 28;
+
+/** Today's judge calls for a node whose high days began at `fromIso`. Pure. */
+export function dailyCallsMax(fromIso: string | undefined, nowMs: number): number {
+  const from = fromIso ? Date.parse(fromIso) : NaN;
+  if (!Number.isFinite(from)) return DAILY_CALLS_START;
+  const days = Math.max(0, (nowMs - from) / (24 * 3600_000));
+  if (days >= DAILY_CALLS_EASE_DAYS) return DAILY_CALLS_MAX;
+  return Math.round(DAILY_CALLS_START - (DAILY_CALLS_START - DAILY_CALLS_MAX) * (days / DAILY_CALLS_EASE_DAYS));
+}
 /** Of those, the calls only the specific signals (asks, defects, not his to answer, overrules) may spend. */
 export const DAILY_CALLS_RESERVED = 15;
 /** Corrections a Main or lead task's chat (the user's own) may get a day from reflections; the rest go to the nightly note only. */
@@ -93,6 +114,8 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(r.aligned && Array.isArray(r.aligned.rules) ? { aligned: { rules: r.aligned.rules.filter((k): k is string => typeof k === 'string').slice(0, 1000), ...(Number.isFinite(r.aligned.short) ? { short: r.aligned.short } : {}) } } : {}),
     ...(r.aligns?.date === today && Number.isFinite(r.aligns.count) ? { aligns: r.aligns } : {}),
     ...(Array.isArray(r.alignLog) ? { alignLog: r.alignLog.filter((x) => !!x && typeof x.line === 'string').slice(-50) } : {}),
+    ...(typeof r.tidyAsked === 'string' ? { tidyAsked: r.tidyAsked } : {}),
+    ...(typeof r.callsFrom === 'string' ? { callsFrom: r.callsFrom } : {}),
     ...(r.backfillTries && typeof r.backfillTries === 'object' ? { backfillTries: Object.fromEntries(Object.entries(r.backfillTries).filter(([, n]) => Number.isFinite(n))) } : {}),
   };
 }
@@ -138,9 +161,11 @@ export async function claimCandidate(
  * judged by a later pass while young enough), an earlier day's counted in `budgetDropped` and marked
  * seen. Answers today's left count.
  */
-export async function recordBudgetLeft(nodeId: string, left: readonly string[], dropped: readonly string[], nowMs = Date.now()): Promise<number> {
-  if (!left.length && !dropped.length) return 0;
+/** `first`: the first time today the budget left any (the day's record says it once). */
+export async function recordBudgetLeft(nodeId: string, left: readonly string[], dropped: readonly string[], nowMs = Date.now()): Promise<{ count: number; first: boolean }> {
+  if (!left.length && !dropped.length) return { count: 0, first: false };
   return updateReflectionState(nodeId, (s) => {
+    const first = s.day.budgetLeftCount === undefined && s.day.budgetDropped === undefined;
     const kept = s.day.budgetLeft ?? [];
     let count = s.day.budgetLeftCount ?? kept.length;
     for (const k of left) {
@@ -152,7 +177,7 @@ export async function recordBudgetLeft(nodeId: string, left: readonly string[], 
     s.day.budgetLeftCount = count;
     if (dropped.length) s.day.budgetDropped = (s.day.budgetDropped ?? 0) + dropped.length;
     for (const k of dropped) s.seen[k] ??= { at: new Date(nowMs).toISOString(), verdict: 'skipped_dropped' };
-    return count;
+    return { count, first };
   }, nowMs);
 }
 

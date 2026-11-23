@@ -2,7 +2,8 @@
  * What holds a reflection's correction or judge call back (src/core/org/reflection/pipeline.ts):
  * the node's own few sends a day, the check right before a send, a thread title that fails the
  * injection screen, a card answer's ask that is the agent's words, and the day's judge budget
- * (its reserve for the specific signals, newest first, an earlier day's leftovers dropped).
+ * (its reserve for the specific signals, newest first, leftovers carried while they can still be
+ * judged, only the too old dropped).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -15,7 +16,7 @@ import type { Task } from '../../../src/core/types.js'
 import { confirmSendCheck, reflectForNode, type ReflectDeps } from '../../../src/core/org/reflection/pipeline.js'
 import type { ReflectionThread } from '../../../src/core/org/reflection/candidates.js'
 import { readDayEntries } from '../../../src/core/org/reflection/records.js'
-import { DAILY_CALLS_MAX, DAILY_CALLS_RESERVED, CHAT_SENDS_PER_DAY_MAX, localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
+import { DAILY_CALLS_MAX, DAILY_CALLS_EASE_DAYS, DAILY_CALLS_RESERVED, CHAT_SENDS_PER_DAY_MAX, localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 
 const NOW = Date.parse('2026-11-19T20:00:00Z')
 const iso = (minAgo: number) => new Date(NOW - minAgo * 60_000).toISOString()
@@ -126,7 +127,11 @@ describe('a card answer', () => {
 })
 
 describe('the day\'s judge budget', () => {
-  const setCalls = (calls: number) => updateReflectionState(vp.id, (s) => { s.day = { date: localDate(NOW), calls } }, NOW)
+  // A settled node: its high first days are over, so its cap is DAILY_CALLS_MAX.
+  const setCalls = (calls: number) => updateReflectionState(vp.id, (s) => {
+    s.day = { date: localDate(NOW), calls }
+    s.callsFrom = new Date(NOW - (DAILY_CALLS_EASE_DAYS + 1) * 24 * 3600_000).toISOString()
+  }, NOW)
 
   it(`keeps its last ${DAILY_CALLS_RESERVED} calls from anger and long talks alone`, async () => {
     await setCalls(DAILY_CALLS_MAX - DAILY_CALLS_RESERVED)
@@ -136,10 +141,10 @@ describe('the day\'s judge budget', () => {
     expect((await reflectForNode(vp, 'Marina VP', [vp, worker], broke.d)).judged).toBe(1)
   })
 
-  it('judges the newest first and carries today\'s leftovers; an earlier day\'s are dropped', async () => {
+  it('judges the newest first and carries the leftovers that can wait; only one too old for tomorrow is dropped', async () => {
+    await updateReflectionState(vp.id, (s) => { s.since = iso(3 * 24 * 60) }, NOW)
     await setCalls(DAILY_CALLS_MAX - 1)
-    const midnight = new Date(NOW).setHours(0, 0, 0, 0)
-    const earlier = new Date(midnight - 60_000).toISOString()
+    const earlier = iso(60 * 50)
     const messages = [
       { id: 'old', at: earlier, text: 'the reply used to show' },
       { id: 'mid', at: iso(30), text: 'the list used to show' },
@@ -166,17 +171,18 @@ describe('the check right before a send', () => {
     dutyOn: (t: Task, id: string) => t.org_duties?.[id]?.on === true,
   })
 
-  it('lets a correction reach the node itself on its own session', async () => {
-    expect(await confirmSendCheck(on, on, 'sess-vp', look([on]))).toBe(true)
-    expect(await confirmSendCheck(on, on, 'sess-other', look([on]))).toBe(false)
-    expect(await confirmSendCheck(on, on, '', look([on]))).toBe(false)
+  it('lets a correction reach the node itself; a session that changed since is named, an unknown one refused', async () => {
+    expect(await confirmSendCheck(on, on, 'sess-vp', look([on]))).toBe('ok')
+    expect(await confirmSendCheck(on, on, 'sess-other', look([on]))).toBe('session_changed')
+    expect(await confirmSendCheck(on, on, '', look([on]))).toBe('no_session')
   })
 
-  it('refuses a finished task, a moved session, the switch off and the org off', async () => {
-    expect(await confirmSendCheck(on, worker, 'sess-1', look([on, worker]))).toBe(true)
-    expect(await confirmSendCheck(on, worker, 'sess-1', look([on, { ...worker, phase: 'COMPLETE' } as Task]))).toBe(false)
-    expect(await confirmSendCheck(on, worker, 'sess-old', look([on, worker]))).toBe(false)
-    expect(await confirmSendCheck(on, worker, 'sess-1', look([vp, worker]))).toBe(false)
-    expect(await confirmSendCheck(on, worker, 'sess-1', look([on, worker], false))).toBe(false)
+  it('says why: a finished task, a task out of the team, the switch off and the org off', async () => {
+    expect(await confirmSendCheck(on, worker, 'sess-1', look([on, worker]))).toBe('ok')
+    expect(await confirmSendCheck(on, worker, 'sess-1', look([on, { ...worker, phase: 'COMPLETE' } as Task]))).toBe('task_done')
+    expect(await confirmSendCheck(on, worker, 'sess-old', look([on, worker]))).toBe('session_changed')
+    expect(await confirmSendCheck(on, worker, 'sess-1', look([vp, worker]))).toBe('duty_off')
+    expect(await confirmSendCheck(on, worker, 'sess-1', look([on, worker], false))).toBe('org_off')
+    expect(await confirmSendCheck(on, { ...worker, project: 'Elsewhere' } as Task, 'sess-1', look([on, { ...worker, project: 'Elsewhere' } as Task]))).toBe('not_managed')
   })
 })

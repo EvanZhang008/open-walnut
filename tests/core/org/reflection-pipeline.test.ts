@@ -14,7 +14,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import type { Task } from '../../../src/core/types.js'
 import { reflectForNode, type ReflectDeps } from '../../../src/core/org/reflection/pipeline.js'
 import { addGuidance, guidanceFileOf, readDayEntries, readGuidance, readGuidanceStrict, reflectionDayFileOf } from '../../../src/core/org/reflection/records.js'
-import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
+import { DAILY_CALLS_START, localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 
 const NOW = Date.parse('2026-11-19T20:00:00Z')
 const iso = (minAgo: number) => new Date(NOW - minAgo * 60_000).toISOString()
@@ -131,7 +131,7 @@ describe('reflection pass', () => {
   })
 
   it('stops at the day\'s budget', async () => {
-    await updateReflectionState(vp.id, (s) => { s.day = { date: localDate(NOW), calls: 40 } }, NOW)
+    await updateReflectionState(vp.id, (s) => { s.day = { date: localDate(NOW), calls: DAILY_CALLS_START } }, NOW)
     const { d, calls } = deps()
     const r = await reflectForNode(vp, NAME, ALL, d)
     expect(r.candidates).toBe(1)
@@ -198,9 +198,9 @@ describe('reflection pass', () => {
     expect(await readGuidance(vp.id)).toEqual([])
   })
 
-  it('never judges a message older than a day, whatever the switch says', async () => {
-    await updateReflectionState(vp.id, (s) => { s.since = iso(3 * 24 * 60) }, NOW)
-    const { d, calls } = deps({ messages: { 'w-1': [{ id: 'old', at: iso(26 * 60), text: ANGRY }] } })
+  it('never judges a message older than three days, whatever the switch says', async () => {
+    await updateReflectionState(vp.id, (s) => { s.since = iso(5 * 24 * 60) }, NOW)
+    const { d, calls } = deps({ messages: { 'w-1': [{ id: 'old', at: iso(74 * 60), text: ANGRY }] } })
     expect((await reflectForNode(vp, NAME, ALL, d)).candidates).toBe(0)
     expect(calls).toHaveLength(0)
   })

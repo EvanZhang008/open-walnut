@@ -55,9 +55,9 @@ describe('the team-guidance hint', () => {
   })
 
   it('keeps within the hint\'s room, pointing at the file for the rest', () => {
-    const lines = Array.from({ length: 30 }, (_, i) => `Rule ${i}: ${'a careful sentence about the work '.repeat(3)}`)
+    const lines = Array.from({ length: 60 }, (_, i) => `Rule ${i}: ${'a careful sentence about the work '.repeat(3)}`)
     const text = teamGuidanceText(guidance(lines))
-    expect(text.length).toBeLessThanOrEqual(1900)
+    expect(text.length).toBeLessThanOrEqual(3700)
     expect(text).toMatch(/- \.\.\. \d+ more in \/tmp\/artifacts\/nodes\/vp\/guidance\.md$/)
   })
 
@@ -71,8 +71,8 @@ describe('the team-guidance hint', () => {
     expect(alone).not.toContain('Team guidance')
     expect(alone.startsWith('Org skills:')).toBe(true)
     const many = Array.from({ length: 40 }, (_, i) => ({ name: `skill-${i}`, description: 'a way of working the org wrote down '.repeat(2) }))
-    const full = teamGuidanceText({ ...guidance(Array.from({ length: 30 }, (_, i) => `Rule ${i}: ${'a careful sentence '.repeat(4)}`)), skills: many })
-    expect(full.length).toBeLessThanOrEqual(1900)
+    const full = teamGuidanceText({ ...guidance(Array.from({ length: 60 }, (_, i) => `Rule ${i}: ${'a careful sentence '.repeat(4)}`)), skills: many })
+    expect(full.length).toBeLessThanOrEqual(3700)
     expect(full).toMatch(/more in \/tmp\/artifacts\/nodes\/vp\/guidance\.md/)
     expect(full).toMatch(/- \.\.\. \d+ more: agent_skill_read with no name lists them\.$/)
     expect(teamGuidanceIdentity({ lines: [], skills })).not.toBe(teamGuidanceIdentity({ lines: [], skills: [...skills, { name: 'b', description: 'c' }] }))

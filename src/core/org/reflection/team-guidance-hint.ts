@@ -23,8 +23,13 @@ export interface TeamGuidanceState {
   skills?: Array<{ name: string; description: string }>;
 }
 
-/** Room the hint text keeps (HINT_TEXT_MAX is 2000): the head lines, then where the rest is. */
-const TEXT_ROOM = 1800;
+/**
+ * Room the hint text keeps: the head lines, then where the rest is. The hint rides a session's start,
+ * its compactions and a change of the lines, never every turn, so it may hold a full guidance
+ * (2026-11-23 audit: at 1,800 characters a node's 12 lines filled it, and every lesson after them
+ * was dropped as "not added").
+ */
+const TEXT_ROOM = 3600;
 /** With skills to name, the guidance leaves them at least this much of the room: lessons come first. */
 const SKILLS_ROOM_MIN = 300;
 /** The org's skills are read again at most this often: the hint's identity is checked at every send. */

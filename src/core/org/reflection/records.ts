@@ -22,11 +22,18 @@ import { normalizeForQuote, type Finding } from './judge.js';
 import type { ReflectionSignal } from './signals.js';
 
 export const GUIDANCE_LINES_MAX = 40;
-export const GUIDANCE_NEW_PER_DAY_MAX = 3;
+/** New lines a day (a merge is none): more than a few a day churns what every session reads. */
+export const GUIDANCE_NEW_PER_DAY_MAX = 6;
 /** Places of the org skill registry the reflection leaves to the nodes themselves. */
 const SKILL_ROOM_KEPT = 5;
 export const guidanceFileOf = (nodeId: string): string => path.join(nodeArtifactsDir(nodeId), 'guidance.md');
 export const reflectionDayFileOf = (nodeId: string, date: string): string => path.join(nodeArtifactsDir(nodeId), 'reflections', `${date}.md`);
+
+/** Why a correction was not sent, as the day record says it. */
+const NOT_SENT_WHY: Record<NonNullable<DayEntry['notSent']>, string> = {
+  no_session: 'no known session to send to', task_done: 'the task is complete', not_managed: 'the task is not in this node\'s team now',
+  duty_off: 'the node\'s reflection switch is off', org_off: 'the org is off', gone: 'the task or the node is gone', off: 'cause not recorded',
+};
 
 export interface GuidanceLine { text: string; from?: string; date?: string }
 
@@ -142,6 +149,10 @@ export interface DayEntry {
   corrected: 'sent' | 'already_fixed' | 'failed' | 'off' | 'held';
   /** own_cap: past a Main or lead chat's few a day; one_per_pass: its session got one this pass; no_asking_session / no_session: no known session to send to. */
   held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session';
+  /** With `off`: why it was not sent (pipeline.ts SendCheck). */
+  notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off';
+  /** Sent to the task's session now, about a turn of an earlier one. */
+  earlierSession?: boolean;
   rule: DayRule;
   /** The task its correction was sent to; absent when none was sent. */
   handedTo?: { taskId: string; title: string };
@@ -188,7 +199,7 @@ export function renderDayEntry(e: DayEntry): string {
     ...(f.rule_quote ? [`- Rule quoted: "${f.rule_quote}"`] : []),
     `- What went wrong: ${f.what_went_wrong}`,
     `- The right way: ${f.correct_action}`,
-    `- Correction: ${e.corrected === 'sent' ? 'sent to the session' : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : e.corrected === 'held' ? `held (${e.held ?? 'held'})` : 'not sent'}`,
+    `- Correction: ${e.corrected === 'sent' ? (e.earlierSession ? 'sent to the task\'s current session (the turn was in an earlier one)' : 'sent to the session') : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : e.corrected === 'held' ? `held (${e.held ?? 'held'})` : `not sent (${NOT_SENT_WHY[e.notSent ?? 'off']})`}`,
     `- Rule: ${ruleLine(e.rule)}`,
     `- Handed to: ${handedToLine(e)}`,
     ...(e.pain ? ['pending' in e.pain ? `- Pain registry: waits to be filed (the registry cannot be read): ${e.pain.title}` : `- Pain registry: ${e.pain.isNew ? 'new pain' : 'added to'} ${e.pain.id} ${e.pain.title}`] : []),
@@ -247,6 +258,16 @@ export async function appendDayEntry(nodeId: string, nodeName: string, date: str
     await fsp.rename(tmp, json);
   });
   return file;
+}
+
+/** One line about the pass itself (a spent budget) in the day's Markdown; the JSON keeps findings only. */
+export async function appendDayNote(nodeId: string, nodeName: string, date: string, text: string): Promise<void> {
+  const file = reflectionDayFileOf(nodeId, date);
+  await withFileLock(file, async () => {
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    const had = await fsp.readFile(file, 'utf-8').catch(() => '');
+    await fsp.appendFile(file, `${had ? '' : `# Session reflection: ${nodeName}, ${date}\n\n`}> Note: ${text.replace(/\s+/g, ' ').trim()}\n\n`, 'utf-8');
+  });
 }
 
 /** A finding's skill, written to the org registry unless one of that name exists already. Never throws. */

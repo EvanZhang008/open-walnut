@@ -109,6 +109,7 @@ export const JUDGE_SYSTEM = [
   '- unclear_ask: a question, card or letter put to him that a reader who never saw the task cannot understand from it alone: it does not say what the feature or thing is, it points with words like "here", "this place", "it" with nothing they point at, an ask about where something goes or how it looks has no screenshot or design page, or a button does not say what choosing it does ("OK", "put it here"). A card waiting on his decision is unclear too when its summary is missing or its first sentence does not say what he decides and what the agent recommends, when it names a plan or design page without its path or link, or when it offers a choice with no buttons (the recommended one first and marked).',
   '- unreviewed_design: a design page, picture or screenshot reached him without one review by someone who did not make it, looking at every picture (overlap, cut-off text, misalignment, spacing, overflow, match with the real screen), or the report does not say what the review looked at and changed. Text-only or small colour changes do not count.',
   'A message that starts `Answer to "<ask>": ` is his answer from a card: the quoted ask is the agent\'s words, the rest is his.',
+  'Read his words as he wrote them: a question or a complaint ("why does everything have to be round?") is not an instruction. The lesson and the guidance rest only on what he plainly asked for or ruled; never turn his question, a word he doubts, or your guess at what he wants into a rule. When it is unclear what he wants, the right way is to ask him or to follow his written RULES, not a rule of your own.',
   'For a frustrated message, find the cause in the agents\' work and give the rule that prevents it; answer no_issue only when the anger is at something outside the agents (a vendor, a colleague, himself).',
   'Judge what the user\'s message is ABOUT: the session actions it reacts to (usually the last SESSION turn before it, sometimes the run of turns that led to it; for an ask, THE ASK and the last SESSION turn; for many rounds, the rounds listed). A problem in an older turn the message is not about is no_issue here.',
   'NOT a bad decision (answer no_issue): the user simply preferred another reasonable option the session could not have known; the user is angry at himself, another person, a tool or the world, not at the session\'s work; the user is only asking to understand or for a summary; the session already did what was asked; the listed rules pull both ways on it (one says decide, another says ask him); anything you cannot quote.',
@@ -165,6 +166,43 @@ export function quoteHolds(quote: string, source: string): boolean {
   return true;
 }
 
+/**
+ * The quote as the source holds it: from its first piece to its last, with the punctuation and
+ * sentence-final particles that end it there (a question mark, an exclamation), so a question of
+ * his is never recorded as a plain statement (2026-11-23 audit: "...round?" filed as "everything
+ * must be round" became a guidance line). The judge's own copy when it cannot be placed. Pure.
+ */
+export function quoteAsWritten(quote: string, source: string): string {
+  // The normalized source, with each of its characters' place in `source`.
+  let norm = '';
+  const at: number[] = [];
+  let lastSpace = true;
+  for (let i = 0; i < source.length; i++) {
+    for (const ch of source[i].normalize('NFKC').toLowerCase()) {
+      if (/[\u2018\u2019\u201c\u201d"'`*_]/.test(ch)) continue;
+      if (/\s/.test(ch)) { if (!lastSpace) { norm += ' '; at.push(i); } lastSpace = true; continue; }
+      norm += ch; at.push(i); lastSpace = false;
+    }
+  }
+  const pieces = quote.split(/\.{3}|\u2026/).map(normalizeForQuote).filter(Boolean);
+  if (!pieces.length) return quote;
+  let from = 0;
+  let start = -1;
+  let end = -1;
+  for (const p of pieces) {
+    const k = norm.indexOf(p, from);
+    if (k < 0) return quote;
+    if (start < 0) start = at[k];
+    end = at[k + p.length - 1] + 1;
+    from = k + p.length;
+  }
+  const tail = /^[\p{Script=Han}]{0,1}[?!.,\u3002\uff1f\uff01\uff0c~\u2026]{1,3}/u.exec(source.slice(end));
+  // Only a particle that ends a sentence is taken with its mark (ah, ya, ba, ne, ma, la, ou).
+  const particle = tail && (tail[0].length === 1 || /^[\u554a\u5440\u5427\u5462\u5417\u5566\u54e6]/.test(tail[0])) ? tail[0] : '';
+  const span = source.slice(start, end + particle.length).trim();
+  return span.length <= 600 ? span : quote;
+}
+
 const str = (v: unknown, max = 2000): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 /** The judge's answer read and checked. Pure. */
@@ -203,6 +241,7 @@ export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 's
   if ((userQuoteNeeded || finding.user_quote) && !quoteHolds(finding.user_quote, input.userText)) {
     return { verdict: 'unverified', why: `user quote not in the record: "${finding.user_quote.slice(0, 120)}"` };
   }
+  if (finding.user_quote) finding.user_quote = quoteAsWritten(finding.user_quote, input.userText);
   if (finding.rule_quote && !quoteHolds(finding.rule_quote, input.rulesText)) {
     return { verdict: 'unverified', why: `rule quote not in the rules: "${finding.rule_quote.slice(0, 120)}"` };
   }

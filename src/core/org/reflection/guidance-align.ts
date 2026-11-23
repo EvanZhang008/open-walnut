@@ -91,7 +91,7 @@ export interface AlignDeps {
   userRules?: () => Promise<string>;
   send: (task: Task, text: string, title: string) => Promise<boolean>;
   /** Checked right before the send (pipeline.ts): the node's switch still on, the org on. */
-  confirmSend?: (node: Task, task: Task, sessionId: string) => Promise<boolean>;
+  confirmSend?: (node: Task, task: Task, sessionId: string) => Promise<boolean | string>;
 }
 
 /**
@@ -138,7 +138,7 @@ export async function alignGuidance(node: Task, nodeName: string, deps: AlignDep
   }
   const flags = readAlign(raw, lines, check, changes);
   const sessionId = node.session_id ?? node.exec_session_id ?? '';
-  if (flags.length && deps.confirmSend && !(await deps.confirmSend(node, node, sessionId).catch(() => false))) return [];
+  if (flags.length && deps.confirmSend && !['ok', 'session_changed', true].includes(await deps.confirmSend(node, node, sessionId).catch(() => false))) return [];
   if (flags.length && !(await deps.send(node, flagNote(guidanceFileOf(node.id), flags), `Team guidance: ${flags.length} line(s) against the user's changed rules`).catch(() => false))) return [];
   await updateReflectionState(node.id, (s) => {
     s.aligned = { rules: now };

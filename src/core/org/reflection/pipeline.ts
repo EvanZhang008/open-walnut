@@ -15,8 +15,8 @@ import { log } from '../../../logging/index.js';
 import { judge, callModelDefault, normalizeForQuote, PRODUCT_DEFECT_KINDS, type CallModel, type Finding, type JudgeInput, type Verdict } from './judge.js';
 import { readTranscriptDefault, renderTurns, splitCardAnswers, turnsAround, type TurnText } from './context.js';
 import { parseCardAnswer, type ReflectionSignal, type SpokenMessage } from './signals.js';
-import { addGuidance, appendDayEntry, deletedSince, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
-import { claimCandidate, DAILY_CALLS_MAX, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
+import { addGuidance, appendDayEntry, appendDayNote, deletedSince, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
+import { claimCandidate, dailyCallsMax, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
 import { screenSkillWrite } from '../../memory-safety.js';
 import { managedTasks } from './team.js';
 import { collectCandidates, type Candidate, type CandidateDeps } from './candidates.js';
@@ -29,6 +29,8 @@ import { alignGuidance } from './guidance-align.js';
 import { recordPain } from './pain-record.js';
 
 export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates.js';
+import { MOMENT_MAX_AGE_MS } from './candidates.js';
+import { askTidy } from './guidance-tidy.js';
 
 /** The session's text turns read before the moment: anger is often about a run of turns, not the last one. */
 const TURNS_BEFORE: Record<ReflectionSignal, number> = {
@@ -38,7 +40,16 @@ const TURNS_BEFORE: Record<ReflectionSignal, number> = {
 export type SendCorrection = (task: Task, text: string, title: string) => Promise<boolean>;
 
 /** Checked again right before a send: the switch still on, the task still the node's (or the node itself), open, and on the session judged. */
-export type ConfirmSend = (node: Task, task: Task, sessionId: string) => Promise<boolean>;
+/**
+ * Whether a correction may go now: true, or why not (SendCheck). A task still open whose session
+ * changed since the turn judged (a new chat, an engine switch, a restart) gets it on its session now,
+ * told it is about an earlier session of the task (2026-11-23 audit: 16 of 23 corrections of a day
+ * were "not sent", most for a session that had changed, and the record never said why).
+ */
+export type SendCheck = 'ok' | 'session_changed' | 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone';
+export type ConfirmSend = (node: Task, task: Task, sessionId: string) => Promise<boolean | SendCheck>;
+/** A check's answer as one SendCheck: true is ok, false a refusal of unknown cause. */
+export const sendCheckOf = (v: boolean | SendCheck): SendCheck | 'off' => (v === true ? 'ok' : v === false ? 'off' : v);
 
 export interface ReflectDeps extends CandidateDeps {
   callModel: CallModel;
@@ -62,11 +73,11 @@ function unsafeText(f: Finding): string | null {
   return screenSkillWrite([f.correction, f.guidance, f.skill?.description ?? '', f.skill?.text ?? ''].join('\n\n'), 'reflection finding');
 }
 
-function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding): string {
+function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding, earlier = false): string {
   // A thread's title is free text someone wrote: it rides a correction only when the injection screen passes it.
   const title = c.thread && !screenSkillWrite(c.thread.title, 'reflection thread title') ? c.thread.title : '';
   return [
-    `${nodeName}'s reflection looked at your recent turn${c.messages.length ? ' and the user\'s answer to it' : ''}${title ? ` in the thread "${title}"` : c.thread ? ' in a thread' : ''} and found a decision to fix.`,
+    `${nodeName}'s reflection looked at ${earlier ? 'a turn of an earlier session of this task' : 'your recent turn'}${c.messages.length ? ' and the user\'s answer to it' : ''}${title ? ` in the thread "${title}"` : c.thread ? ' in a thread' : ''} and found a decision to fix.`,
     '',
     f.correction,
     '',
@@ -171,6 +182,8 @@ export async function reflectOnCandidate(
   const now = deps.nowMs();
   let corrected: DayEntry['corrected'] = 'already_fixed';
   let held: DayEntry['held'];
+  let notSent: DayEntry['notSent'];
+  let earlierSession = false;
   if (!f.already_fixed && f.correction) {
     // Held, recorded and in the nightly note only: no known session to send to (an ask whose asking
     // session, or a thread message whose session, is unknown: never the task's current one by
@@ -179,18 +192,22 @@ export async function reflectOnCandidate(
     const chat = c.task.org_role === 'main' || c.task.org_role === 'lead';
     if (c.hold) { corrected = 'held'; held = c.hold; }
     else if (sentThisPass.has(c.sessionId)) { corrected = 'held'; held = 'one_per_pass'; }
-    else if (!(await deps.confirmSend(node, c.task, c.sessionId).catch(() => false))) corrected = 'off';
-    else if (chat && !(await takeChatSend(c.task.id, now))) { corrected = 'held'; held = 'own_cap'; }
     else {
-      sentThisPass.add(c.sessionId);
-      corrected = await deps.send(c.task, correctionText(node, nodeName, c, f), `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`)
-        .then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
+      const check = sendCheckOf(await deps.confirmSend(node, c.task, c.sessionId).catch(() => false));
+      if (check !== 'ok' && check !== 'session_changed') { corrected = 'off'; notSent = check; }
+      else if (chat && !(await takeChatSend(c.task.id, now))) { corrected = 'held'; held = 'own_cap'; }
+      else {
+        sentThisPass.add(c.sessionId);
+        corrected = await deps.send(c.task, correctionText(node, nodeName, c, f, check === 'session_changed'), `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`)
+          .then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
+        if (check === 'session_changed') notSent = undefined, earlierSession = true;
+      }
     }
   }
   const rule = await keepRule(node, nodeName, c, f, guidance, now, deps);
   const entry: DayEntry = {
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
-    finding: f, corrected, ...(held ? { held } : {}), rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
+    finding: f, corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}), rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
   };
   // His complaint goes to the pain registry too (pains.ts): never for an ask he has not answered.
   if (f.user_quote && c.messages.length) {
@@ -217,7 +234,8 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
   await rememberDeletedGuidance(node.id, now);
   // Read and kept in one write: a node seen for the first time keeps the `since` of this pass, never
   // a new "now" at every pass (2026-11-19 on production: a node with no guidance file saved nothing).
-  const state = await updateReflectionState(node.id, (s) => structuredClone(s), now);
+  const state = await updateReflectionState(node.id, (s) => { s.callsFrom ??= new Date(now).toISOString(); return structuredClone(s); }, now);
+  const callsMax = dailyCallsMax(state.callsFrom, now);
   const since = reflectionSince(node, state.since);
   const lines = await readGuidance(node.id);
   const result: ReflectResult = { candidates: 0, judged: 0, skipped: 0, findings: [] };
@@ -234,10 +252,11 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     // The language check calls no model: it spends nothing of the day's budget. Anger and long
     // talks alone never take the day's last calls: those stay for the asks, defects and words that
     // say a question was not his (11-20: 120 angry messages would have spent the day by noon).
-    const max = c.signal === 'frustration' || c.signal === 'many_rounds' ? DAILY_CALLS_MAX - DAILY_CALLS_RESERVED : DAILY_CALLS_MAX;
+    const max = c.signal === 'frustration' || c.signal === 'many_rounds' ? callsMax - DAILY_CALLS_RESERVED : callsMax;
     const claim = await claimCandidate(node.id, c.key, now, max, { free: c.signal === 'wrong_language' });
-    // A moment of an earlier day the budget cannot reach is dropped, never carried to another day.
-    if (claim === 'budget') { (localDate(Date.parse(c.to)) < today ? dropped : left).push(c.key); continue; }
+    // Left for a later pass (today or the next days) while it can still be judged then; only a moment
+    // that will be past MOMENT_MAX_AGE_MS by tomorrow's budget is dropped.
+    if (claim === 'budget') { (Date.parse(c.to) < now - (MOMENT_MAX_AGE_MS - 24 * 3600_000) ? dropped : left).push(c.key); continue; }
     if (claim === 'seen') continue;
     result.judged++;
     let out: { verdict: Verdict; entry?: DayEntry };
@@ -252,14 +271,21 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     result.findings.push({ candidate: c, verdict: out.verdict, ...(out.entry ? { entry: out.entry } : {}) });
   }
   if (left.length || dropped.length) {
-    // Never dropped unsaid: today's stay unseen for a later pass (today, or tomorrow while under
-    // MOMENT_MAX_AGE_MS old); an earlier day's are marked seen and counted as dropped. Both are logged.
+    // Never dropped unsaid: the ones that can wait stay unseen for a later pass; the rest are marked
+    // seen and counted as dropped. Both are logged and said in the day's record.
     result.skipped = left.length + dropped.length;
-    const leftToday = await recordBudgetLeft(node.id, left, dropped, now);
+    const { count: leftToday, first } = await recordBudgetLeft(node.id, left, dropped, now);
     log.task.info('reflection: the day\'s judge budget is spent', { nodeId: node.id, leftForLater: left.length, dropped: dropped.length, leftToday });
+    // Said in the day's record, which the audit and the nightly note read: once a day, and for each drop.
+    if (first || dropped.length) {
+      await appendDayNote(node.id, nodeName, today, `The day's ${callsMax} judge calls are spent at ${new Date(now).toISOString().slice(11, 16)} UTC: ${left.length} moment${left.length === 1 ? '' : 's'} wait for a later pass${dropped.length ? `, ${dropped.length} too old to wait were dropped unjudged` : ''}.`)
+        .catch(() => {});
+    }
   }
   // Lessons a full day dropped are taken up again, a few a pass, after this pass's own findings had their places.
   await backfillDropped(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: dropped lessons not taken up', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
+  // A full guidance is the node's to tidy: told once a day which lessons wait for room.
+  await askTidy(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: the node was not asked to tidy its guidance', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   // Last: every line, new ones included, agrees with the user's standing rules as they are now.
   await alignGuidance(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: guidance not aligned with the user\'s rules', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   return result;
@@ -288,12 +314,15 @@ export interface ConfirmLookups { getTask: (id: string) => Promise<Task | null>;
  * Right before a send: the node's switch and the org on, the task open, still on the session judged,
  * and the node itself (a correction about its own thread answers) or a task of its team.
  */
-export async function confirmSendCheck(node: Task, task: Task, sessionId: string, look: ConfirmLookups): Promise<boolean> {
+export async function confirmSendCheck(node: Task, task: Task, sessionId: string, look: ConfirmLookups): Promise<SendCheck> {
   const [n, t] = await Promise.all([look.getTask(node.id).catch(() => null), look.getTask(task.id).catch(() => null)]);
-  if (!n || !t || !look.dutyOn(n, 'reflection') || t.phase === 'COMPLETE' || !(await look.orgEnabled())) return false;
-  // The correction quotes this session: a task now on another session (an engine switch, a new chat) never gets it.
-  if (!sessionId || (t.session_id ?? t.exec_session_id ?? '') !== sessionId) return false;
-  return t.id === n.id || managedTasks(n, await look.orgTasks()).some((x) => x.id === t.id);
+  if (!n || !t) return 'gone';
+  if (!look.dutyOn(n, 'reflection')) return 'duty_off';
+  if (t.phase === 'COMPLETE') return 'task_done';
+  if (!(await look.orgEnabled())) return 'org_off';
+  if (t.id !== n.id && !managedTasks(n, await look.orgTasks()).some((x) => x.id === t.id)) return 'not_managed';
+  if (!sessionId) return 'no_session';
+  return (t.session_id ?? t.exec_session_id ?? '') === sessionId ? 'ok' : 'session_changed';
 }
 
 /** The real dependencies. */

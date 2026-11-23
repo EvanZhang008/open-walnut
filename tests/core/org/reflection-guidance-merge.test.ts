@@ -36,7 +36,8 @@ const MERGED = `${ASK} A step that follows from what he already agreed to is you
 /** Today's new lines already spent: the guidance holds two lines, both of today, and the cap is reached. */
 async function fullDay(): Promise<void> {
   await fs.mkdir(path.dirname(guidanceFileOf(vp.id)), { recursive: true })
-  const lines = [ASK, OTHER, 'Show a picture over a block of text.'].slice(0, GUIDANCE_NEW_PER_DAY_MAX).map((text) => ({ text, from: 'x', date: DAY }))
+  const texts = [ASK, OTHER, 'Show a picture over a block of text.', 'Name the file a report is in.', 'Say when a status was checked.', 'Keep a decision card to one ask.', 'Quote his words exactly.', 'Close what he acknowledged.']
+  const lines = texts.slice(0, GUIDANCE_NEW_PER_DAY_MAX).map((text) => ({ text, from: 'x', date: DAY }))
   await fs.writeFile(guidanceFileOf(vp.id), renderGuidance('Marina VP', lines))
 }
 
@@ -193,8 +194,8 @@ describe('a merge that would lose meaning is refused', () => {
 
   it('through the pipeline the user\'s line is marked in the prompt and stays as he wrote it', async () => {
     await fs.mkdir(path.dirname(guidanceFileOf(vp.id)), { recursive: true })
-    // His own line has no "(from ...)" note; the three of today are the reflection's.
-    const own = renderGuidance('Marina VP', [{ text: ASK }, ...['a1 rule here', 'a2 rule here', 'a3 rule here'].map((text) => ({ text, from: 'x', date: DAY }))])
+    // His own line has no "(from ...)" note; today's lines (the day's cap of them) are the reflection's.
+    const own = renderGuidance('Marina VP', [{ text: ASK }, ...Array.from({ length: GUIDANCE_NEW_PER_DAY_MAX }, (_, i) => ({ text: `a${i + 1} rule here`, from: 'x', date: DAY }))])
     await fs.writeFile(guidanceFileOf(vp.id), own)
     const { d, calls } = deps([finding(), JSON.stringify({ line: 1, text: MERGED })])
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
@@ -343,7 +344,7 @@ describe('what the sessions read', () => {
   })
 
   it('when the lines fill the hint, no call is made and the record says so; a rewrite that would overflow is refused', async () => {
-    const long = Array.from({ length: 12 }, (_, i) => ({ text: `Rule ${i}: ${'keep the words of this rule short and clear. '.repeat(3)}`.trim(), from: 'x', date: DAY }))
+    const long = Array.from({ length: 26 }, (_, i) => ({ text: `Rule ${i}: ${'keep the words of this rule short and clear. '.repeat(3)}`.trim(), from: 'x', date: DAY }))
     await write([{ text: ASK, from: 'x', date: DAY }, ...long])
     expect(guidanceRoomLeft('Marina VP', (await readGuidance(vp.id)).map((l) => l.text))).toBeLessThanOrEqual(0)
     const m = md(JSON.stringify({ line: 1, text: MERGED }))

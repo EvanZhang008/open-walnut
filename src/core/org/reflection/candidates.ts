@@ -28,8 +28,12 @@ import { asksForEnglish, readsNotChinese, wantsChinese } from './language.js';
 import { managedTasks, managerOf } from './team.js';
 import { localDate } from './state.js';
 
-/** A moment older than this is not judged: its correction would come too late. */
-export const MOMENT_MAX_AGE_MS = 24 * 3600_000;
+/**
+ * A moment older than this is not judged: its correction would come too late. Three days, so a day
+ * whose judge budget ran out early has its leftovers judged on the next days (2026-11-23 audit: a
+ * node spent its 40 calls by 11:09 UTC and the rest of that day was never judged).
+ */
+export const MOMENT_MAX_AGE_MS = 72 * 3600_000;
 /** A message is judged once the session had this long to answer it. */
 export const ANSWER_GRACE_MS = 3 * 60_000;
 /** A needs ask's evidence: his messages this far back, at most EVIDENCE_MAX (the newest), each cut to EVIDENCE_TEXT_MAX. */
