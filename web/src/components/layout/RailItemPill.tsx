@@ -19,6 +19,7 @@
  */
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { ICON_CLOSE } from '@/components/common/Icons';
 import '@/styles/sidebar-peek.css';
 
 // Marks that only decorate the row; the icon is the row's first other child.
@@ -171,14 +172,15 @@ export function RailItemPill({ item, grow, handlers, onGone }: {
       {dismiss && (
         <button
           type="button"
-          className="rail-item-pill-dismiss"
+          className="btn btn-ghost btn-icon btn-sm rail-item-pill-dismiss"
           data-testid="rail-item-pill-dismiss"
           title={dismiss}
+          aria-label={dismiss}
           tabIndex={-1}
           onPointerMove={handlers.onPointerMove}
           onPointerEnter={handlers.onPointerMove}
           onClick={(e) => { e.stopPropagation(); item.dispatchEvent(new CustomEvent('rail:dismiss')); }}
-        >×</button>
+        >{ICON_CLOSE}</button>
       )}
     </div>,
     document.body,
