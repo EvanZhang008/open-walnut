@@ -123,7 +123,7 @@ const RULES: readonly PathRule[] = [
     id: 'records', rule: 'keep', why: RECORD,
     stores: [
       'memory', 'memory-legacy', 'artifacts', 'notes', 'global-notes-legacy', 'knowledge-legacy', 'agent-memory-legacy', 'agent-skills-legacy',
-      'conversations', 'chat-history', 'session-queue', 'session-requests', 'session-audit', 'user-asks', 'side-questions', 'subtask-notices',
+      'conversations', 'chat-history', 'session-queue', 'session-queue-spool', 'session-requests', 'session-audit', 'user-asks', 'side-questions', 'subtask-notices',
       'human-inbox', 'topics', 'topic-mail', 'org', 'org.threads-db', 'org-reflection', 'boards', 'drawings', 'notifications',
       'approvals', 'host-exec-grants', 'usage-db', 'op-calls', 'offline-conflicts', 'offline-conflicts.log', 'private-tasks',
       'time-tracking', 'time-tracking.outside', 'time-tracking.day', 'time-tracking.outside.day', 'time-tracking.outside.detail', 'time-tracking.outside.calls',
@@ -134,7 +134,7 @@ const RULES: readonly PathRule[] = [
     ],
     file: [
       'memory/**', 'MEMORY.md', 'artifacts/**', 'notes/**', 'global-notes.md', 'knowledge/**', 'agent-memory/**', 'agent-skills/**',
-      'conversations/**', 'chat-history.json', 'chat-history-*.json', 'session-message-queue.json', 'session-requests.json', 'session-audit.jsonl',
+      'conversations/**', 'chat-history.json', 'chat-history-*.json', 'session-message-queue.json', 'session-message-queue.json.spool/**', 'session-requests.json', 'session-audit.jsonl',
       'user-asks/**', 'side-questions/**', 'subtask-notices-held.json', 'human-inbox/**', 'topics/**', 'topic-mail/**', 'org/**', 'org-reflection/**',
       'boards/**', 'drawings/**', 'notifications.json', 'approvals/**', 'host-exec-grants.json', 'usage.sqlite', 'op-calls/**', 'offline-conflicts/**',
       'private-tasks/**', 'time-tracking/**', 'browser/**', 'voice-archive/**', '.git/**', 'repositories/**', '.obsidian/**',
