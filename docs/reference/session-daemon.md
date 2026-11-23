@@ -651,7 +651,9 @@ they do not know) and ignores it.
 Turning a host off (`runs_sessions: false`): its new starts take today's path at once; the sessions it
 already runs keep running and reporting through the channel until they end, as with the experiment.
 The full rollback order, and what a straight downgrade does, are in "A session a host runs" of
-`docs/plan/one-service-every-host.md`.
+`docs/plan/one-service-every-host.md`. Going back to a leader older than the ban lifts every ban: it
+reads a revoked host's record as never issued and issues it a fresh key. Remove a revoked host from the
+config before going back, or revoke it again after going forward.
 
 ## Keep the twins in sync, and auto-deploy
 

@@ -482,6 +482,13 @@ permission prompts still name Walnut.
   2. Every host: the experiment `host_runs_sessions` off (and no host entry set to true). The same, for
      all hosts (S6).
   3. An older release, once those sessions ended or were stopped.
+- **Going back lifts every ban.** A leader older than the ban (before land 9) does not know a revoked
+  host: it reads a revoked credential record (one that keeps no key) as one never issued, and issues
+  that host a fresh key at its next link check, so the host dials in again and its channel, relays and
+  journal come in as for any host. Before going back, remove each revoked host from the config (or turn
+  its row off): that ends its daemon link and its door on any release. Or go back, then forward again,
+  and revoke it again (`POST /api/host-doors/<host>/revoke`): the newer leader keeps the mark the older
+  one replaced only if no key was issued meanwhile.
 - **A straight downgrade** (an older release put on the leader while a host still runs a session it
   judges). The older leader loses no session: it reads a host-run row as an ordinary row of that host
   and reaches the CLI through the host's daemon as today, and the daemon keeps one CLI per session
