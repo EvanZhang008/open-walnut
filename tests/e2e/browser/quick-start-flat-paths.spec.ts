@@ -17,7 +17,9 @@ async function fulfillWorkingDirs(route: Route): Promise<void> {
         { cwd: secondLocalCwd, host: null, project: 'Work', count: 10, lastUsed: now },
         { cwd: remoteCwd, host: 'remote-fixture', hostLabel: remoteLabel, project: 'Personal', count: 4, lastUsed: now },
       ],
-      hosts: [],
+      // The remote row's host is one in Settings: a host that is not is a removed host, whose
+      // rows show only under the Removed hosts tab, never in All (4d47df0633, host-tabs.ts).
+      hosts: [{ alias: 'remote-fixture', label: remoteLabel }],
     }),
   })
 }
@@ -143,10 +145,17 @@ test('history paths render as flat single-line rows with only remote host metada
   // Local rows are labeled too — an unlabeled row is ambiguous about which machine it runs on.
   await expect(rows.nth(0).locator('.sps-path-host-tag')).toHaveText('local')
   await expect(rows.nth(1).locator('.sps-path-host-tag')).toHaveText('local')
+  // The tag holds the host's whole name, cut only by CSS (an ellipsis past 16em) and named in full
+  // by its tooltip; it is never cut in code (3b4b4403ab, host-tag.ts). This name fits uncut.
   const remoteBadge = rows.nth(2).locator('.sps-path-host-tag')
-  await expect(remoteBadge).toHaveText(remoteLabel.slice(0, 10))
+  await expect(remoteBadge).toHaveText(remoteLabel)
   await expect(remoteBadge).toHaveAttribute('title', remoteLabel)
-  expect((await remoteBadge.textContent())!.length).toBeLessThanOrEqual(10)
+  const tagFit = await remoteBadge.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    return { overflow: cs.overflowX, ellipsis: cs.textOverflow, maxWidth: cs.maxWidth, fontSize: cs.fontSize, cut: el.scrollWidth > el.clientWidth }
+  })
+  expect(tagFit).toMatchObject({ overflow: 'hidden', ellipsis: 'ellipsis', cut: false })
+  expect(Number.parseFloat(tagFit.maxWidth)).toBeCloseTo(16 * Number.parseFloat(tagFit.fontSize), 0)
 
   await page.screenshot({ path: '/tmp/quick-start-flat/verify.png' })
 
