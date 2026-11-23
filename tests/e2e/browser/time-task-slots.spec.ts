@@ -279,7 +279,8 @@ test('the menu row pins the time to every session header, kept across a reload',
   // The pill: an icon and one whole unit per lane ("You" and "Agent" are there for a reader).
   await expect(chip).toHaveText('You 50m \u00b7 Agent 3h')
   await expect(chip).toHaveAttribute('aria-label', /Time on this session\. You: 50m total, .*Agent: 3h 02m total/)
-  await expect(chip).not.toHaveAttribute('title', /./)
+  // Its exact numbers are its native tooltip; nothing grows out of it (task-slots.tsx TimeChip).
+  await expect(chip).toHaveAttribute('title', /^Time on this session\nYou: 50m total[\s\S]*Agent: 3h 02m total/)
   expect(await page.evaluate((key) => localStorage.getItem(key), PINS_KEY)).toBe(JSON.stringify([SLOT_KEY]))
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-kebab-menu:visible')).toHaveCount(0)
