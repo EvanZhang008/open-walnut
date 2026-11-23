@@ -35,7 +35,7 @@ field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.ar
 CONTROL="$(field control)"
 status=0
 WALNUT_UITEST_SERVER="$(field server)" WALNUT_UITEST_TOKEN="$(field token)" WALNUT_UITEST_ISOLATED=1 \
-  WALNUT_UITEST_PRIVATE_TASKS=1 WALNUT_UITEST_SYNCED_TASK="$(field synced)" WALNUT_UITEST_KEPT_TASK="$(field kept)" \
+  WALNUT_UITEST_PRIVATE_TASKS=1 WALNUT_UITEST_SYNCED_TASK="$(field synced)" WALNUT_UITEST_KEPT_TASK="$(field kept)" WALNUT_UITEST_HELD_TASK="$(field held)" \
   WALNUT_UITEST_DD="$OUT/derived-data" WALNUT_UITEST_RESULT_BUNDLE="$OUT/result.xcresult" \
   bash "$ROOT/ios-native/tests/ui/run-ui-tests.sh" -only-testing:WalnutUITests/PrivateTasksUITests || status=$?
 # What the server holds afterwards, and every push the fixture service got.

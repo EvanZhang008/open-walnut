@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url'
 
 // Real server, isolated files, and one project that syncs to a fixture service ("Tracker",
 // a sync plugin that only records what it is handed: nothing leaves this machine). Seeds a
-// synced task and a local one in that project, on the board in Focus, for
-// PrivateTasksUITests. GET <control>/state answers the tasks as they are now and every push
+// synced task and a local one in that project, and a task held out of Tracker that was then moved
+// to a project that syncs nowhere ("Shelf": Sync to Tracker would be refused 409, so its menu
+// offers none and says why), all on the board in Focus, for PrivateTasksUITests. GET <control>/state answers the tasks as they are now and every push
 // the fixture service got.
 const out = process.argv[2]
 if (!out || !path.resolve(out).startsWith('/tmp/private-tasks-ios/')) throw new Error('Use a dedicated /tmp/private-tasks-ios/ evidence directory')
@@ -27,7 +28,7 @@ const { sessionRunner } = await import('../../../src/providers/claude-code-sessi
 const { createMockDaemon } = await import('../../../tests/helpers/mock-daemon.js')
 const { createDevice } = await import('../../../src/core/device-auth.js')
 const { registry } = await import('../../../src/core/integration-registry.js')
-const { addTask, ensureProject, getTask, listTasks, settleBackgroundPushes } = await import('../../../src/core/task-manager.js')
+const { addTask, ensureProject, getTask, listTasks, makeTaskLocal, settleBackgroundPushes, updateTask } = await import('../../../src/core/task-manager.js')
 const { settleSyncGates } = await import('../../../src/core/private-tasks/sync-gate.js')
 const daemon = await createMockDaemon()
 sessionRunner.setCliCommand(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../tests/providers/mock-claude.mjs'))
@@ -53,9 +54,17 @@ await ensureProject('Atlas', SERVICE)
 // Born local and checked (words only here: no model), then sent to the service.
 const synced = await addTask({ title: 'Quarter plan for the release', project: 'Atlas', pinned: true, focus_tier: 'focus' } as never)
 const kept = await addTask({ title: 'Garden plan notes', project: 'Atlas', source: 'local', pinned: true, focus_tier: 'focus' } as never)
+await ensureProject('Shelf')
+const shelved = await addTask({ title: 'Shelf inventory', project: 'Atlas', pinned: true, focus_tier: 'focus' } as never)
 for (let i = 0; i < 3; i++) { await settleSyncGates(); await settleBackgroundPushes() }
 const syncedNow = await getTask(synced.task.id)
 if (syncedNow.source !== SERVICE) throw new Error(`fixture task did not sync (source ${syncedNow.source})`)
+// Made local by the person, then moved to a project that syncs nowhere: the hold stays.
+await makeTaskLocal(shelved.task.id, { state: 'chosen', by: 'user', at: new Date().toISOString(), reason: 'You made it local' }, 'keep')
+await updateTask(shelved.task.id, { project: 'Shelf' } as never)
+await settleBackgroundPushes()
+const heldNow = await getTask(shelved.task.id)
+if (heldNow.source === SERVICE || heldNow.sync_hold?.target !== SERVICE) throw new Error(`fixture held task is not held (source ${heldNow.source}, hold ${JSON.stringify(heldNow.sync_hold)})`)
 
 const port = (server.address() as { port: number }).port
 const token = (await createDevice('private-tasks-fixture-phone')).token
@@ -63,9 +72,9 @@ const control = http.createServer(async (req, res) => {
   const send = (code: number, data: unknown) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)) }
   try {
     if (req.url === '/state' && req.method === 'GET') {
-      const tasks = (await listTasks()).filter(t => t.project === 'Atlas')
+      const tasks = (await listTasks()).filter(t => t.project === 'Atlas' || t.project === 'Shelf')
         .map(t => ({ id: t.id, title: t.title, source: t.source, sync_hold: t.sync_hold, ext: t.ext }))
-      return send(200, { synced: synced.task.id, kept: kept.task.id, tasks, pushes })
+      return send(200, { synced: synced.task.id, kept: kept.task.id, held: shelved.task.id, tasks, pushes })
     }
     send(404, { error: 'Unknown fixture route' })
   } catch { send(500, { error: 'Fixture control failed' }) }
@@ -73,7 +82,7 @@ const control = http.createServer(async (req, res) => {
 await new Promise<void>(resolve => control.listen(0, '127.0.0.1', resolve))
 const controlPort = (control.address() as { port: number }).port
 await fs.writeFile(path.join(out, 'ready.json'), JSON.stringify({ server: `http://127.0.0.1:${port}`, token, control: `http://127.0.0.1:${controlPort}`,
-  synced: synced.task.id, kept: kept.task.id }))
+  synced: synced.task.id, kept: kept.task.id, held: shelved.task.id }))
 console.log('PRIVATE_TASKS_IOS_FIXTURE_READY', port)
 
 let closing = false

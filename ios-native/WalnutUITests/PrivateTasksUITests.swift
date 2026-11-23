@@ -4,7 +4,9 @@ import XCTest
 /// fixture service ("Tracker", `tests/ui/private-tasks-server.ts`, run by
 /// `tests/ui/run-private-tasks-ui.sh`): a synced task turns local from its long-press menu
 /// and keeps its row, the menu then says it is local and why, and Sync to Tracker sends it
-/// back. Skips without a pairing, like every paired UI test here.
+/// back. A task held out of Tracker and then moved to a project that syncs nowhere ("Shelf") is
+/// offered no Sync to Tracker (the server would refuse it, 409) and its menu says why. Skips
+/// without a pairing, like every paired UI test here.
 final class PrivateTasksUITests: XCTestCase {
 
     override func setUp() {
@@ -109,5 +111,19 @@ final class PrivateTasksUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Sync to Tracker"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["Make local, keep its copy in Tracker"].exists)
         shot(app, "4-local-task-menu")
+    }
+
+    func testAHeldTaskInAProjectThatSyncsNowhereSaysWhyAndOffersNoSync() throws {
+        guard let held = env("WALNUT_UITEST_HELD_TASK") else { throw XCTSkip("no fixture task id") }
+        let app = try launchPaired()
+        openBoard(app)
+        openSync(app, held, expecting: "Sync: Local, not in Tracker").tap()
+        let why = "Its project does not sync to an outside service now, so it can only go to Tracker from a project that does."
+        XCTAssertTrue(app.staticTexts[why].waitForExistence(timeout: 10) || app.buttons[why].exists,
+            "the menu does not say why it cannot sync")
+        XCTAssertFalse(app.buttons["Sync to Tracker"].exists, "a Sync the server would refuse is offered")
+        // Its copy in Tracker was kept when it was made local: that copy can still be archived.
+        XCTAssertTrue(app.buttons["Archive its copy in Tracker"].exists)
+        shot(app, "5-held-task-in-a-project-that-syncs-nowhere")
     }
 }
