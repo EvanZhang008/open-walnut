@@ -532,17 +532,23 @@ export async function prepareStandby(o: { switchId: string; handover: number }):
 }
 
 /**
- * Boot B as the switch's commit start (WALNUT_LEADER_SWITCH_COMMIT = the handover's number), on its
- * config port, its own local daemon, the dev box dialed directly. The dev box follows B's home from here.
+ * Boot B as the switch's commit start (WALNUT_LEADER_SWITCH_COMMIT = the handover's number, and
+ * WALNUT_LEADER_SWITCH_START = the switch, as side.ts starts it, so the promotion wait lets it boot),
+ * on its config port, its own local daemon, the dev box dialed directly. `commitUntil`: the commit
+ * window's end (WALNUT_LEADER_SWITCH_COMMIT_UNTIL); none, as a start the window does not bound.
+ * The dev box follows B's home from here.
  */
-export async function bootStandby(o: { commitHandover: number }): Promise<void> {
+export async function bootStandby(o: { commitHandover: number; switchId: string; commitUntil?: number }): Promise<void> {
   const ls = world.leaderSwitch!
   await startSurvivingLocalDaemon(world.standby, 'sblocal')
   await bootLeader(world.standby, {
     fresh: false,
     links: { [KEEPER]: `ws://127.0.0.1:${world.devbox.port}` },
     listenPort: ls.b.port,
-    env: { WALNUT_MACHINE_ID_FILE: ls.b.idFile, WALNUT_LEADER_SWITCH_COMMIT: String(o.commitHandover) },
+    env: {
+      WALNUT_MACHINE_ID_FILE: ls.b.idFile, WALNUT_LEADER_SWITCH_COMMIT: String(o.commitHandover), WALNUT_LEADER_SWITCH_START: o.switchId,
+      ...(o.commitUntil ? { WALNUT_LEADER_SWITCH_COMMIT_UNTIL: String(o.commitUntil) } : {}),
+    },
   })
   world.leaderHome = world.standby.data
 }

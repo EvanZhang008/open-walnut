@@ -17,7 +17,8 @@
  *
  *   1. "a commit lands late anyway": B's data dir is a copy of A's leader data made while A is
  *      stopped, with the promotion record, and B boots as the commit start 6 product minutes after
- *      the stop. Per the design (section 6) B's job starts no commit past the 300 s window, so the
+ *      the stop, with no commit window's end in its environment (a start the window bounds,
+ *      WALNUT_LEADER_SWITCH_COMMIT_UNTIL, stops renewing on the handover at that end). Per the design (section 6) B's job starts no commit past the 300 s window, so the
  *      product does not take this path at these times; the case shows what the permit, the hosts and
  *      the companion do if a commit start comes late all the same (a job killed and resumed, a
  *      clock off): B's record stands, the backup steps back, B holds the dev box.
@@ -591,7 +592,9 @@ describe.skipIf(!liveWallsAvailable())('a late commit lands anyway: the companio
     expect((await companionLeads()).map((l) => l.host)).toContain(KEEPER)
 
     at.bBoot = Date.now()
-    await bootStandby({ commitHandover: h })
+    // As the switch starts it, but with no commit window's end: a start the window bounds stops
+    // renewing on the handover at that end (WALNUT_LEADER_SWITCH_COMMIT_UNTIL), so it would not commit.
+    await bootStandby({ commitHandover: h, switchId: w.switchId })
     mark(`B booted ${at.bBoot - at.aStop} ms after A's stop`)
     const bst = await waitFor(async () => {
       const r = await api(world.standby, '/api/leader/status')
