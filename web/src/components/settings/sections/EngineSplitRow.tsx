@@ -120,13 +120,14 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
         help={on
           ? 'New tasks that name no engine take turns between the entries below.'
           : switchOn
-            ? 'Check two or more entries below to share new tasks between them. Until then every new task runs on the default engine.'
+            ? 'Check two or more entries below to share new tasks between them.'
             // Off: what happens now only. What switching on gives is said once, in the entries'
             // reason line right under this row (ControlGroup `reason`).
             : enough
               ? 'Every new task runs on the default engine. The entries below are kept.'
               : 'Every new task runs on the default engine.'}
-        more={on ? 'Not shared: the chat composer, Main, leads, asks, routines, plugin tasks and reviewer subtasks. Switching off keeps the entries.' : undefined}
+        more={on ? 'Not shared: the chat composer, Main, leads, asks, routines, plugin tasks and reviewer subtasks. Switching off keeps the entries.'
+          : switchOn ? 'Until then every new task runs on the default engine.' : undefined}
         error={pick.error ?? offPick.error}
         data-testid="engine-split-row"
         control={(
