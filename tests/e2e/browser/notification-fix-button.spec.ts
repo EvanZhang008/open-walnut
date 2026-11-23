@@ -150,7 +150,7 @@ async function selfRepairAvailable(page: Page): Promise<{ available: boolean; re
 
 // ── 1. The button is on the card, and the card body still just expands ──
 
-test('an error card offers Fix with agent, and the card body still expands instead of navigating', async ({ page }) => {
+test('an error card offers Fix with agent, and the card body reads whole instead of navigating', async ({ page }) => {
   const repair = await selfRepairAvailable(page)
   await stubNotifications(page, [errorRecord(Date.now())])
   await loadHome(page)
@@ -172,14 +172,23 @@ test('an error card offers Fix with agent, and the card body still expands inste
 
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/card-with-button.png` })
 
-  // The card is itself a click target. With no session/task to link to, that
-  // click EXPANDS — it must not navigate away from the home page, and the panel
-  // must stay open (the button lives inside it).
+  // With no session, task or letter to link to, the card has nothing to open, so
+  // it is not a button. Its title and body are always shown whole (standard.md,
+  // "Text that does not fit"; the click-to-unclamp went in 9b60109d6c), so there
+  // is nothing to expand either. A click on it must not navigate away from the
+  // home page, and the panel must stay open (the button lives inside it).
+  await expect(card).not.toHaveAttribute('role', 'button')
+  await expect(card).not.toHaveClass(/clickable/)
+  for (const part of ['.notification-feed-item-title', '.notification-feed-item-body']) {
+    const whole = await card.locator(part).evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1)
+    expect(whole, `${part} reads whole, no clamp`).toBe(true)
+  }
+  await expect(card.locator('.notification-feed-item-body')).toHaveText(errorRecord(0).body!)
   const urlBefore = new URL(page.url()).pathname
   await card.locator('.notification-feed-item-title').click()
-  await expect(card).toHaveClass(/expanded/)
   expect(new URL(page.url()).pathname).toBe(urlBefore)
   await expect(panel).toBeVisible()
+  await expect(card).toBeVisible()
 })
 
 // ── 2. Clicking it starts the session and opens it on the home page ──
