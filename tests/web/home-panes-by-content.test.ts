@@ -66,8 +66,11 @@ describe("Home's panes go by content", () => {
     // (2026-11-22 review). The width shown is now one derivation (columnSizing.sessionAreaShownPct).
     expect(main).toMatch(/const sessionAreaShown = sessionAreaShownPct\(usersSessionWidth\(sessionPanel\), colCount, askSlot\)/)
     // The slot counts as shown only while it has something to read (an empty one keeps the smaller share).
-    expect(main).toMatch(/const askSlot: QuickQuestionSlot = !chatVisible \|\| phoneLayout \? 'closed' : askSlotHasContent \? 'shown' : 'empty';/)
-    expect(main).toMatch(/onContentChange=\{setAskSlotHasContent\}/)
+    // The answer is sampled when the row changes (a column opens or closes, Quick question shows or
+    // hides), so a report while the same columns stay open never moves them (2026-11-23).
+    expect(main).toMatch(/const askSlot: QuickQuestionSlot = !chatVisible \|\| phoneLayout \? 'closed' : shareSample\.has \? 'shown' : 'empty';/)
+    expect(main).toMatch(/if \(shareSample\.key !== shareKey\) setShareSample\(\{ key: shareKey, has: askSlotHasContent \}\)/)
+    expect(main).toMatch(/onContentChange=\{handleAskSlotContent\}/)
     expect(read('components/chat/AskWalnutSlot.tsx')).toMatch(/onHistoryShown=\{onHistoryShown\}/)
     expect(main).toMatch(/style=\{sessionColumns\.length > 0 \|\| triagePanelOpen \? \{ width: `\$\{sessionAreaShown\}%` \} : undefined\}/)
     // Nothing writes the session area's width but a drag: no effect sizes it in turn.

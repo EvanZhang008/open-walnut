@@ -149,6 +149,8 @@ const HEADER = 'a header or bar: no painter marks its words';
 const NO_PAINTED_WORDS: Record<string, string> = {
   // A search result's "·" before the word that starts a wrapped line: a separator, never words.
   'web/src/styles/badge.css :: .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > [data-line-start][data-line-start]::before': 'the "·" separator of a wrapped search line: no words a painter marks',
+  // A status card's "·" before the word that starts its wrapped meta line (meta-line-fit.ts).
+  'web/src/styles/status-sections.css :: .status-card-meta > [data-line-start][data-line-start]::before': 'the "·" separator of a wrapped status card meta line: no words a painter marks',
   // The off-screen probes that measure a scrollbar track and a kept gutter (Settings' pane).
   'web/src/utils/scrollbar-metrics.ts :: inline (2)': SLOT,
   // A topic line's time in the avatar column, shown on hover: a clock, no words a painter marks.
