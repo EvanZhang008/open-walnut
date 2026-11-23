@@ -26703,6 +26703,15 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-muted);
 }
 
+/* Under a flyout (the calendar list, the month): a click outside closes the flyout alone, never
+   the popover under it. The menu layer: portalled after the popover (so over it) and before the
+   flyout (so under that one). backdrop-classes-styled.test.ts keeps it drawn. */
+.cal-flyout-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-menu);
+}
+
 /* The date and times on one line that reads as text; each part is edited in place. */
 .cal-event-form-when {
   display: flex;
