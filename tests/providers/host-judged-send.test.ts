@@ -130,7 +130,8 @@ describe('a line that did not reach its host', () => {
     for (let i = 1; i <= 3; i++) {
       await redeliverWaitingFor('devbox')
       await vi.waitFor(() => expect(side.sent).toHaveLength(i))
-      if (i < 3) await vi.waitFor(async () => expect((await getQueue(HOST_SID)).find((m) => m.id === 'qm-h2-go')?.status).not.toBe('processing'))
+      // The refused line is back in this queue, waiting (while it is out with the host it is in no queue row at all).
+      if (i < 3) await vi.waitFor(async () => expect((await getQueue(HOST_SID)).find((m) => m.id === 'qm-h2-go')?.status).toBe('pending'))
     }
     await vi.waitFor(async () => {
       const q = await getQueue(HOST_SID)

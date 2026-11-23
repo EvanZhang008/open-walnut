@@ -90,6 +90,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
     'src/core/hosts/found-hosts.ts': 'merges the ~/.ssh/config rows into config.hosts: the rows themselves',
     'src/core/hosts/found-host-offer.ts': 'which found hosts may be asked about at all; the twin match needs the network, and Home reads it live (GET /api/hosts/net twins)',
     'src/core/artifacts/unify/refs.ts': "re-points every row's notes_exclude when the notes move: the rows themselves",
+    'src/core/session-channel/leader-issue.ts': 'the configured rows a door credential may be issued to or revoked from: every enabled row, a joined twin included, not a list to pick from',
     'src/commands/demo-ssh-masters.ts': "the Demo's stop ends the SSH masters of every SSH row its data dir holds: a teardown, not a choice",
   }
 

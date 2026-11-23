@@ -20,6 +20,7 @@ const FIXED: Record<string, string> = {
   'core/session-tracker.ts#completeTaskSessions': 'Status and pid only; preserves the original policy and task identity.',
   'core/task-manager.ts#applyTaskReplicaRows': 'The authenticated primary projection applied to the follower copy, not a new conversation.',
   'core/session-db.ts#applySessionCopy': 'The authenticated primary projection applied to the follower copy, not a new conversation.',
+  'core/session-db.ts#writeCopyRow': 'A host\'s copied row written back as the leader has it, or marked this host\'s for a start the leader handed it (claimStartingRow, handOwnRowBack): the leader\'s projection, not a new conversation.',
   'core/session-db.ts#applyCompanionSessionCopy': 'The authenticated primary projection stored in the separate companion copy.',
   'core/session-db-migration.ts#migrateSessionStore': 'Legacy JSON startup conversion completes before classification; start gates judge preserved rows.',
   'core/task-db-migration.ts#runMigrationIfNeeded': 'Legacy JSON startup conversion preserves historical rows; start gates judge them.',

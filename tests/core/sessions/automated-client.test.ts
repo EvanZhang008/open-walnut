@@ -165,6 +165,7 @@ describe('ratchet: who a person is gets decided through the rule', () => {
     const allowed: Record<string, number> = {
       'src/core/hints/hint-send.ts': 1,              // prepareStartHints: checks ambientAutomatedClient
       'src/core/org/thread-follow.ts': 1,            // prepareHintedSend downgrades `person` in the scope
+      'src/core/session-channel/companion-host-ops.ts': 1, // the phone's message the companion hands a host that runs the session (no browser)
       'src/core/sessions/folder-gone.ts': 1,         // rows re-sent as stored, already framed
       'src/core/sessions/personal-ai-lane.ts': 2,    // lane-turn.ts framed the first line for its source
       'src/core/sessions/quick-start.ts': 1,         // frameStartText framed it for the rewritten source

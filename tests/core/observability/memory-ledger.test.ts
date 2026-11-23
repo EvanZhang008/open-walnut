@@ -279,6 +279,8 @@ const NOT_ON_LEDGER: readonly string[] = [
   'src/integrations/microsoft-todo.ts',
   'src/lib/hybrid-search/query.ts',
   'src/lib/linear-regex/unicode-property.ts',
+  // One compiled statement per connection and fixed SQL text (no text is built from data), dropped with its connection.
+  'src/lib/sqlite-prepared.ts',
   'src/model/providers/registry.ts',
   'src/providers/codex-endpoint-models.ts',
   'src/providers/daemon-connection.ts',

@@ -91,7 +91,6 @@ describe('every retry kind is a reason with a row', () => {
     // A turn end heard, then a message sent into a session: what every retrier does.
     const NOT_RETRIES: Record<string, string> = {
       'src/providers/claude-code-session.ts': 'the runner itself: it delivers what others send',
-      'src/web/routes/session-stream-v1.ts': 'the stream route: a client sends through it',
       'src/core/sessions/lane-turn.ts': 'a side conversation redelivers its own question, not the task turn',
       'src/core/sessions/idle-compaction.ts': 'a quiet compaction of an idle session: no turn failed',
     };

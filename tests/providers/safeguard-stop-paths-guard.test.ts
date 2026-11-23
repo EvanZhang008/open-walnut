@@ -29,8 +29,8 @@ const EXEMPT: Array<{ file: string; marker: RegExp; why: string }> = [
     why: 'a copy of a result already published, for the browser only (web-ui), with every field of it kept',
   },
   {
-    file: 'src/web/routes/session-stream-v1.ts', marker: /emitSse\(key, 'turn-end'/,
-    why: 'the phone\'s stream reading a published result, not a turn end of its own',
+    file: 'src/web/session-event-sse.ts', marker: /emitSse\(key, 'turn-end'/,
+    why: 'the phone\'s stream (its route, and the companion\'s listener of a host\'s sessions) reading a published result, not a turn end of its own',
   },
   {
     file: 'src/providers/acp-stream-normalizer.ts', marker: /stopReason: event\.stopReason/,
