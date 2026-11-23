@@ -82,19 +82,39 @@ test('closing the draft beside open chat columns: gone in the first frame, nothi
 })
 
 test('the draft model menu, the folder picker and New task again give the caret to the composer in the same event', async ({ page }) => {
+  // Runs before the app's scripts, so this window-capture listener sees each keydown first.
+  await page.addInitScript(() => {
+    window.addEventListener('keydown', (e) => { (window as unknown as { __pwKeydown?: Event }).__pwKeydown = e }, true)
+  })
   await loadHome(page)
   await page.locator('.new-launcher-btn').click()
   const draft = page.locator('.main-page-session-column .draft-session-panel')
   const pill = draft.locator('.draft-model-select')
   await expect(pill).toBeVisible()
   // Where focus is once the event that closed the menu is done, before any frame: a frame can be
-  // long in coming on a busy main thread, and the caret must not wait for it. The listener is on
-  // document, added after the menu's own Escape listener there, so it runs right after that one.
+  // long in coming on a busy main thread, and the caret must not wait for it. A click reaches a
+  // listener on document after the menu's own handling. An Escape does not: the overlay family
+  // takes it at window capture and stops it there, so the Escape is judged by where focus moves
+  // while that keydown is still being dispatched (its eventPhase is not NONE yet).
   const focusAfter = (type: 'keydown' | 'click') => page.evaluate((t) => new Promise<string>((resolve) => {
-    document.addEventListener(t, () => {
-      const a = document.activeElement as HTMLElement | null
-      resolve(a?.matches('.draft-session-panel textarea.chat-input-textarea') ? 'composer' : a?.className || a?.tagName || 'none')
-    }, { once: true })
+    const describe = (a: Element | null) => (a as HTMLElement | null)?.matches('.draft-session-panel textarea.chat-input-textarea')
+      ? 'composer' : (a as HTMLElement | null)?.className || a?.tagName || 'none'
+    if (t === 'click') {
+      document.addEventListener('click', () => resolve(describe(document.activeElement)), { once: true })
+      return
+    }
+    const w = window as unknown as { __pwKeydown?: Event }
+    const onFocus = (e: FocusEvent) => {
+      const k = w.__pwKeydown
+      if (!k || k.eventPhase === Event.NONE) return
+      document.removeEventListener('focusin', onFocus, true)
+      resolve(describe(e.target as Element))
+    }
+    document.addEventListener('focusin', onFocus, true)
+    setTimeout(() => {
+      document.removeEventListener('focusin', onFocus, true)
+      resolve(`no focus move during the Escape; focus is on ${describe(document.activeElement)}`)
+    }, 5_000)
   }), type)
 
   await pill.click()
