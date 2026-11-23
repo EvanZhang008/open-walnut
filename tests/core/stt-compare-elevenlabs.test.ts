@@ -6,7 +6,8 @@
  * usage-based billing on uploads nothing, a take whose length is unknown is not
  * uploaded, a key that may not read its subscription or use speech-to-text reads
  * key-lacks-permission (for ten minutes, or until the key is saved again), and
- * the upload carries the multipart fields the API takes.
+ * the upload carries the multipart fields the API takes. A busy answer (429 not
+ * about the quota, 5xx) or a dropped connection is tried again, a few times.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
@@ -22,8 +23,11 @@ import type { Config } from '../../src/core/types.js'
 const KEY = 'fake-key-for-tests-0001'
 let server: Server
 let base = ''
-let subscription: { status: number; body: unknown }
-let stt: { status: number; body: unknown }
+type Answer = { status: number; body: unknown; drop?: boolean }
+/** One answer for every call, or a list answered in turn (its last one repeats). */
+let subscription: Answer | Answer[]
+let stt: Answer | Answer[]
+const next = (a: Answer | Answer[]) => (Array.isArray(a) ? (a.length > 1 ? a.shift()! : a[0]!) : a)
 const seen: Array<{ method: string; url: string; key?: string; body: string }> = []
 
 const read = (req: IncomingMessage) => new Promise<string>((resolve) => {
@@ -36,7 +40,8 @@ beforeAll(async () => {
   server = createServer(async (req, res) => {
     const body = await read(req)
     seen.push({ method: req.method!, url: req.url!, key: req.headers['xi-api-key'] as string | undefined, body })
-    const answer = req.url === '/v1/user/subscription' ? subscription : req.url === '/v1/speech-to-text' ? stt : { status: 404, body: {} }
+    const answer = next(req.url === '/v1/user/subscription' ? subscription : req.url === '/v1/speech-to-text' ? stt : { status: 404, body: {} })
+    if (answer.drop) { req.socket.destroy(); return }
     res.writeHead(answer.status, { 'content-type': 'application/json' })
     res.end(JSON.stringify(answer.body))
   })
@@ -177,5 +182,43 @@ describe('ElevenLabs Scribe engine', () => {
     const err = await runElevenLabs(input, config()).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(Error)
     expect(err).not.toBeInstanceOf(EngineStateError)
+  })
+
+  it('a busy answer to the quota read is tried again, so the engine stays ready', async () => {
+    subscription = [{ status: 429, body: { detail: { type: 'rate_limit_error', code: 'system_busy' } } }, { status: 200, body: { tier: 'free', character_count: 1000, character_limit: 10000 } }]
+    expect((await elevenLabsStatus(config(), true)).state).toBe('ready')
+    expect(seen.map((s) => s.url)).toEqual(['/v1/user/subscription', '/v1/user/subscription'])
+  })
+
+  it('a busy upload and a dropped connection are tried again with the whole take', async () => {
+    stt = [{ status: 429, body: { detail: { type: 'rate_limit_error', code: 'system_busy' } } }, { status: 0, body: null, drop: true }, { status: 200, body: { text: 'heard on the third try' } }]
+    expect((await runElevenLabs(input, config())).text).toBe('heard on the third try')
+    const uploads = seen.filter((s) => s.url === '/v1/speech-to-text')
+    expect(uploads).toHaveLength(3)
+    expect(uploads.every((u) => /name="file"; filename="take\.mp3"/.test(u.body))).toBe(true)
+  })
+
+  it('a 429 about the quota is not tried again', async () => {
+    stt = { status: 429, body: { detail: { status: 'quota_exceeded' } } }
+    await expect(runElevenLabs(input, config())).rejects.toMatchObject({ state: 'quota-used' })
+    expect(seen.filter((s) => s.url === '/v1/speech-to-text')).toHaveLength(1)
+  })
+
+  it('a server that stays busy fails the take after four tries', async () => {
+    stt = { status: 503, body: { detail: 'busy' } }
+    await expect(runElevenLabs(input, config())).rejects.toThrow(/answered 503/)
+    expect(seen.filter((s) => s.url === '/v1/speech-to-text')).toHaveLength(4)
+  })
+
+  it('a stop during the wait before another try ends the take at once', async () => {
+    _resetElevenLabsForTest([60_000])
+    stt = { status: 503, body: { detail: 'busy' } }
+    const stop = new AbortController()
+    const run = runElevenLabs(input, config(), stop.signal)
+    await vi.waitFor(() => expect(seen.filter((s) => s.url === '/v1/speech-to-text')).toHaveLength(1))
+    const t0 = Date.now()
+    stop.abort(new Error('stopped'))
+    await expect(run).rejects.toThrow('stopped')
+    expect(Date.now() - t0).toBeLessThan(1_000)
   })
 })

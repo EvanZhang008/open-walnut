@@ -31,7 +31,8 @@ export const QUOTA_FLOOR = 0.1
 export const SCRIBE_CREDITS_PER_MINUTE = 330
 /** A refusal of speech-to-text is believed this long, then the key is tried again. */
 export const DENIED_TTL_MS = 10 * 60_000
-const SUBSCRIPTION_TIMEOUT_MS = 10_000
+/** The quota read, its tries again included. */
+const SUBSCRIPTION_DEADLINE_MS = 45_000
 const STATUS_CACHE_MS = 60_000
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 
@@ -84,13 +85,53 @@ function refusalOf(status: number, body: string): { state: 'key-lacks-permission
   return null
 }
 
+/**
+ * Waits before each try again. ElevenLabs often answers a busy 429 ("system_busy",
+ * about 4 calls in 10 on 2026-11-23, the subscription read included) and sometimes
+ * drops the TLS handshake; tried once, a busy answer to the quota read left the
+ * engine out of a whole job, and one to an upload failed the take.
+ */
+let retryDelaysMs = [1_000, 3_000, 7_000]
+const RETRY_AFTER_MAX_MS = 15_000
+
+/** A busy or failing server: 429 that is not about the quota, or 5xx. */
+const busy = (status: number, body: string) => (status === 429 && !/quota/i.test(body)) || status >= 500
+
+const pause = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal?.aborted) return reject(signal.reason)
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, ms)
+  const onAbort = () => { clearTimeout(timer); reject(signal!.reason) }
+  signal?.addEventListener('abort', onAbort, { once: true })
+})
+
+/**
+ * One call to ElevenLabs, tried again after a busy answer or a dropped
+ * connection (the request is built again for each try). A stop or a timeout of
+ * the caller's own is never tried again. The last answer is returned with its body read.
+ */
+async function callElevenLabs(url: string, init: () => RequestInit, signal: AbortSignal): Promise<{ res: Response; body: string }> {
+  for (let attempt = 0; ; attempt++) {
+    const last = attempt >= retryDelaysMs.length
+    let wait = retryDelaysMs[attempt] ?? 0
+    try {
+      const res = await fetch(url, { ...init(), signal })
+      const body = await res.text()
+      if (last || !busy(res.status, body)) return { res, body }
+      const after = Number(res.headers.get('retry-after'))
+      if (Number.isFinite(after) && after > 0) wait = Math.min(RETRY_AFTER_MAX_MS, after * 1000)
+    } catch (err) {
+      if (last || signal.aborted) throw err
+    }
+    await pause(wait, signal)
+  }
+}
+
 /** The quota now, or the state that stops an upload. */
 export async function checkQuota(config: Config, key: string): Promise<{ status: EngineStatus; quota?: Quota }> {
   let res: Response
+  let text: string
   try {
-    res = await fetch(`${baseUrl(config)}/v1/user/subscription`, {
-      headers: { 'xi-api-key': key }, signal: AbortSignal.timeout(SUBSCRIPTION_TIMEOUT_MS),
-    })
+    ({ res, body: text } = await callElevenLabs(`${baseUrl(config)}/v1/user/subscription`, () => ({ headers: { 'xi-api-key': key } }), AbortSignal.timeout(SUBSCRIPTION_DEADLINE_MS)))
   } catch (err) {
     return { status: { state: 'not-installed', detail: `ElevenLabs could not be reached: ${err instanceof Error ? err.message : String(err)}` } }
   }
@@ -98,7 +139,7 @@ export async function checkQuota(config: Config, key: string): Promise<{ status:
     return { status: { state: 'key-lacks-permission', detail: 'The key cannot read its subscription, so its free quota cannot be checked (give it the user read permission).' } }
   }
   if (!res.ok) return { status: { state: 'not-installed', detail: `ElevenLabs answered ${res.status} for the subscription` } }
-  const quota = readQuota(await res.json().catch(() => null))
+  const quota = readQuota(parseJson(text))
   if (!quota) return { status: { state: 'not-installed', detail: 'The subscription answer has no quota in it' } }
   if (quota.overage) {
     return { status: { state: 'may-cost', detail: 'Usage-based billing is on for this key, so a take could cost money: Walnut uploads nothing (turn it off, or use a free-plan key)' }, quota }
@@ -160,29 +201,33 @@ export async function runElevenLabs(input: EngineInput, config: Config, signal?:
   }
   signal?.throwIfAborted()
   const model = elevenLabsModel(config)
-  const form = new FormData()
-  form.append('file', new Blob([new Uint8Array(audio)]), `take.${format}`)
-  form.append('model_id', model)
-  form.append('tag_audio_events', 'false')
+  const upload = (): RequestInit => {
+    const form = new FormData()
+    form.append('file', new Blob([new Uint8Array(audio)]), `take.${format}`)
+    form.append('model_id', model)
+    form.append('tag_audio_events', 'false')
+    return { method: 'POST', headers: { 'xi-api-key': key }, body: form }
+  }
   const t0 = Date.now()
   const timeout = AbortSignal.timeout(uploadTimeoutMs(seconds))
-  const res = await fetch(`${baseUrl(config)}/v1/speech-to-text`, {
-    method: 'POST', headers: { 'xi-api-key': key }, body: form,
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  })
+  const { res, body } = await callElevenLabs(`${baseUrl(config)}/v1/speech-to-text`, upload, signal ? AbortSignal.any([signal, timeout]) : timeout)
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
     const refusal = refusalOf(res.status, body)
     if (refusal?.state === 'key-lacks-permission') denied.set(fingerprint(key), { detail: refusal.detail, until: Date.now() + DENIED_TTL_MS })
     if (refusal) { cached = null; throw new EngineStateError(refusal.state, refusal.detail) }
     throw new Error(`ElevenLabs answered ${res.status}: ${body.slice(0, 200)}`)
   }
-  const body = await res.json().catch(() => null) as { text?: unknown } | null
-  if (typeof body?.text !== 'string') throw new Error('ElevenLabs answered with no text')
-  return { text: body.text.trim(), ms: Date.now() - t0, model }
+  const heard = parseJson(body) as { text?: unknown } | null
+  if (typeof heard?.text !== 'string') throw new Error('ElevenLabs answered with no text')
+  return { text: heard.text.trim(), ms: Date.now() - t0, model }
+}
+
+function parseJson(text: string): unknown {
+  try { return JSON.parse(text) } catch { return null }
 }
 
 /** Test hook. */
-export function _resetElevenLabsForTest(): void {
+export function _resetElevenLabsForTest(delaysMs: number[] = [0, 0, 0]): void {
   forgetElevenLabsKeyState()
+  retryDelaysMs = delaysMs
 }
