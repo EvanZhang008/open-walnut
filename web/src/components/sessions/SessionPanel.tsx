@@ -470,6 +470,10 @@ interface SessionPanelProps {
   headerSlot?: HTMLElement | null;
   /** With headerSlot: the kebab's Board row opens the host's Board instead of this panel's own. */
   onHostBoard?: () => void;
+  /** With headerSlot: the state pills (the wait, Trigger, the team, the Threads view key) are the kebab's
+   *  first row instead of the header line's, so a narrow host keeps only the kebab at its right (the Org
+   *  node under 640 px, 2026-11-23, the user's pick of ten layouts: design 2). */
+  headerPillsInMenu?: boolean;
   /** What an empty conversation says instead of "No conversation history found" (a router's page: why it is empty). */
   emptyHistory?: ReactNode;
   /** The host shows this task's Threads beside the chat (the Org page's side bar): the top of the chat
@@ -532,7 +536,7 @@ const carriedTitles = new Map<string, string>();
 /** How long a chat waits for the rest of a burst of events before it re-reads its record. */
 const RECORD_REREAD_COALESCE_MS = 250;
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory, threadsBeside = false, onHistoryShown }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, headerPillsInMenu = false, plainChat, composerPill, composerBar, emptyHistory, threadsBeside = false, onHistoryShown }: SessionPanelProps) {
   countRender('SessionPanelBody');
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
@@ -2933,6 +2937,19 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       {sessionTask && <LeaderPill task={sessionTask} />}
     </>
   );
+  // A host's header (headerSlot) draws these on its line, or, narrow, as the kebab's first row.
+  const hostPills = (
+    <>
+      {threads.hasQuestions && (
+        <ThreadModePill
+          viewMode={threadsApi.viewMode}
+          narrow
+          onToggle={() => threadsApi.setViewMode(threadsApi.viewMode === 'linear' ? 'stack' : 'linear')}
+        />
+      )}
+      {headerPills}
+    </>
+  );
 
   // The id resolved to nothing after the full retry window. Say so explicitly:
   // the previous behaviour rendered an ordinary empty panel, indistinguishable
@@ -3134,6 +3151,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
       onFullscreen={inset || phoneWidth ? undefined : (shownFullscreen ? exitFullscreen : enterFullscreen)}
       fullscreenLabel={shownFullscreen ? 'Exit full screen' : 'Full screen'}
+      {...(hostHeader && headerPillsInMenu ? { headerPills: hostPills } : {})}
       headerKeys={hostHeader ? {
         ...(taskSlot === 'live' && sessionTask ? { watch: sessionTask } : {}),
         ...(taskSlot === 'live' ? { locate: { label: locateLabel, why: locateWhy, onLocate: () => { const taskId = session?.taskId; if (taskId) locateOwnTask(taskId); } } } : {}),
@@ -3675,14 +3693,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   Watch, Locate and Minimize are the kebab's first rows (hostTagsInMenu, headerKeys). */}
               {!loading && hostHeader && headerSlot && createPortal(
                 <>
-                  {threads.hasQuestions && (
-                    <ThreadModePill
-                      viewMode={threadsApi.viewMode}
-                      narrow
-                      onToggle={() => threadsApi.setViewMode(threadsApi.viewMode === 'linear' ? 'stack' : 'linear')}
-                    />
-                  )}
-                  {headerPills}
+                  {!headerPillsInMenu && hostPills}
                   {/* This panel's own header is hidden under the host's; its tags list stays
                       mounted (hidden) so the menu's Tags row can count and open it. */}
                   <SessionHeaderLabels inMenu={hostTagsInMenu}>{headerTags}</SessionHeaderLabels>

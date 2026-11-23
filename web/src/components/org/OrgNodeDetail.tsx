@@ -72,6 +72,8 @@ export type OrgTab = 'board' | 'team' | 'chat';
 
 /** The node's width from which the rail sits beside the chat: a chat of about 520px beside it. */
 export const RAIL_SIDE_MIN_WIDTH = 880;
+/** The header's narrow layout up to this width: `@container org-detail (max-width: 640px)` in org-page.css. */
+const HEAD_NARROW_MAX = 640;
 /** The side rail's room: never narrower than this, and the chat beside it never narrower than that. */
 export const RAIL_MIN_PX = 300;
 export const CHAT_MIN_PX = 420;
@@ -406,10 +408,14 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // was shown, 2026-10-31); a phone or a narrow window stacks it above.
   const detailRef = useRef<HTMLDivElement>(null);
   const [wide, setWide] = useState(true);
+  // A narrow node (the header's container query in org-page.css, same width): the chat's state pills
+  // go into its kebab, so the header's right holds only the kebab and the side bar's switch (2026-11-23,
+  // the user's pick of ten layouts: design 2).
+  const [headNarrow, setHeadNarrow] = useState(false);
   useLayoutEffect(() => {
     const el = detailRef.current;
     if (!el) return;
-    const measure = () => setWide(el.clientWidth >= RAIL_SIDE_MIN_WIDTH);
+    const measure = () => { setWide(el.clientWidth >= RAIL_SIDE_MIN_WIDTH); setHeadNarrow(el.getBoundingClientRect().width <= HEAD_NARROW_MAX); }; // fractional, as the container query reads it
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
@@ -542,7 +548,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
             <ReplyThreadContext.Provider value={replyHost}>
-              <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} threadsBeside={threadsShown} onSessionClick={onOpenSession} />
+              <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} headerPillsInMenu={headNarrow} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} threadsBeside={threadsShown} onSessionClick={onOpenSession} />
             </ReplyThreadContext.Provider>
           </div>
         ) : (

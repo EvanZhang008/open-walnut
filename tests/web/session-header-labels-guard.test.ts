@@ -96,9 +96,13 @@ describe('session header title row', () => {
     expect(folded.length).toBe(2);
     expect([...header.matchAll(/<SessionHeaderLabels inMenu=\{hostTagsInMenu\}>/g)].length, 'only the host header folds them into the kebab').toBe(1);
     expect([...src.matchAll(/\{headerTags\}/g)].length).toBe(folded.length);
-    // Drawn twice (the row and the host header), and nowhere else: its definition plus those two.
-    expect([...header.matchAll(/\bheaderPills\s*\}/g)].length).toBe(2);
+    // Drawn twice, and nowhere else: on the title row, and in hostPills, which a host header draws on
+    // its line or, narrow, as its kebab's first row (the Org node, 2026-11-23, design 2).
+    expect([...header.matchAll(/\bheaderPills\s*\}/g)].length).toBe(1);
     expect([...src.matchAll(/\bheaderPills\s*\}/g)].length).toBe(2);
+    expect(fragment('hostPills', '\n  );\n')).toMatch(/\{headerPills\}/);
+    expect([...header.matchAll(/\bhostPills\s*\}/g)].length, 'the host header line').toBe(1);
+    expect([...src.matchAll(/\bhostPills\s*\}/g)].length, 'the host header line and its kebab').toBe(2);
     // The control folds the tags and nothing else.
     expect(src).not.toMatch(/<SessionHeaderLabels(?: inMenu=\{hostTagsInMenu\})?>(?!\{headerTags\}<\/SessionHeaderLabels>)/);
   });

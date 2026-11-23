@@ -13,6 +13,7 @@
  * `headerKeys`: a host that draws the header and keeps its line quiet (the Org node, 2026-11-23, the
  * user: "just move all these to the drop done") gets the header's window keys as the menu's first
  * rows instead: Watch, Locate, Minimize and the Tags list, each doing what its key does.
+ * `headerPills`: a narrow host of that kind gets the header's state pills above them too.
  */
 import type { MouseEvent, ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
@@ -87,6 +88,9 @@ export interface SessionMenuOpenProps {
   threads?: ThreadsMenu;
   /** The header's window keys as rows, where the host's header line has none (see the file's note). */
   headerKeys?: SessionHeaderKeyRows;
+  /** The header's state pills (the wait, Trigger, the team), each as it is on the line, as the menu's
+   *  first row: a narrow host keeps only the kebab at its right (SessionPanel headerPillsInMenu). */
+  headerPills?: ReactNode;
 }
 
 export interface SessionHeaderKeyRows {
@@ -167,6 +171,8 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
   ].filter(Boolean) : [];
   return (
     <>
+      {/* A pill that draws nothing leaves the row empty, and CSS hides it and its divider. */}
+      {p.headerPills && <><div className="session-menu-pills" data-testid="session-menu-pills">{p.headerPills}</div><div className="task-kebab-divider" /></>}
       {keyRows.length > 0 && <>{keyRows}<div className="task-kebab-divider" /></>}
       {/* Locate and Watch are on the header itself (2026-11-19: the crosshair among the window
           buttons, the eye on the label row), or the rows above (headerKeys); Open in new tab lives

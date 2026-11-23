@@ -21,7 +21,10 @@
  *  6. a narrow window stacks the side bar above the chat, with no widen;
  *  7. an old link naming a tab (?tab=team) opens the side bar on All tasks, then lets go of it;
  *  8. Quote on an ask in the side bar puts it into the chat beside it, focused;
- *  9. Minimize in the header's kebab puts the node's chat on the app's taskbar; its chip selects the node again.
+ *  9. Minimize in the header's kebab puts the node's chat on the app's taskbar; its chip selects the node again;
+ * 10. a narrow node (640 px or less) keeps only the kebab and the side bar's switch at its right: the
+ *     chat's state pills (Leader here) are the kebab's first row, each still opening what it opens
+ *     (2026-11-23, the user's pick of ten header layouts, design 2); wide, they are back on the line.
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import fs from 'node:fs'
@@ -177,6 +180,56 @@ test('one header: the name once, the chat\'s labels and kebab on its right, its 
   await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'true')
   await expect(chat.getByText('I processed your message: snapshot-clean-turn:Started.').or(chat.getByText('Started.')).first()).toBeVisible({ timeout: 60_000 })
   await shot(page, 'header')
+})
+
+test('a narrow node keeps only the kebab and the side bar\'s switch at its right: the chat\'s pills lead the kebab and still open', async ({ page, request }) => {
+  // A subtask makes the lead a leader, so its chat has a state pill (Leader) to place.
+  const { task: kid } = await post<{ task: { id: string } }>(request, '/api/tasks', { title: `Side kid ${STAMP}`, project: LED, source: 'local', parent_task_id: ids.lead })
+  try {
+    await isolateUiPrefs(page)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await loadHome(page)
+    await openNode(page, LED)
+    const detail = page.getByTestId('org-detail')
+    const tools = detail.getByTestId('org-detail-chat-tools')
+    // Wide: the pill is on the header's line, before the kebab.
+    await expect(tools.getByTestId('leader-pill')).toBeVisible({ timeout: 30_000 })
+    // Narrow: the header's right holds the kebab alone (and the side bar's switch beside it).
+    await page.setViewportSize({ width: 960, height: 900 })
+    await expect.poll(() => detail.evaluate((el) => el.clientWidth)).toBeLessThanOrEqual(640)
+    await expect(tools.getByTestId('leader-pill')).toHaveCount(0)
+    const shown = await tools.evaluate((el) => Array.from(el.children)
+      .filter((c) => (c as HTMLElement).getClientRects().length > 0 && getComputedStyle(c).display !== 'none')
+      .map((c) => (c.querySelector('.task-kebab-btn') ? 'kebab' : c.className)))
+    expect(shown, `header tools: ${shown}`).toEqual(['kebab'])
+    await expect(detail.getByTestId('org-rail-toggle')).toBeVisible()
+    // The name keeps its room: it is not cut.
+    const title = detail.getByTestId('org-detail-title')
+    expect(await title.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+    // The kebab's first row is the pills, above Watch; the pill opens its list over the menu, which stays.
+    const menu = await openSessionKebab(tools)
+    const pills = menu.getByTestId('session-menu-pills')
+    await expect(pills.getByTestId('leader-pill')).toBeVisible({ timeout: 30_000 })
+    const pillsBox = await pills.boundingBox()
+    const watchBox = await menu.getByTestId('task-kebab-watch').boundingBox()
+    expect((pillsBox?.y ?? 0) < (watchBox?.y ?? 0)).toBe(true)
+    await pills.getByTestId('leader-pill').click()
+    const flyout = page.getByTestId('leader-subtasks-flyout')
+    await expect(flyout).toBeVisible()
+    await expect(flyout.getByTestId('leader-sub-row')).toContainText(`Side kid ${STAMP}`)
+    await expect(menu).toBeVisible()
+    await shot(page, 'narrow-pills-in-kebab')
+    // Escape closes the pill's list first, then the menu.
+    await page.keyboard.press('Escape')
+    await expect(flyout).toHaveCount(0)
+    await expect(menu).toBeVisible()
+    await closeSessionKebab(tools)
+    // Wide again: the pill is back on the line.
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await expect(tools.getByTestId('leader-pill')).toBeVisible()
+  } finally {
+    await removeTask(request, kid.id)
+  }
 })
 
 /** A beat a person can follow, only while recording (PW_VIDEO, walnut-dev webkit --video). */

@@ -242,9 +242,10 @@
 .org-rail-toggle:hover, .org-rail-toggle:focus-visible { background: var(--bg-secondary); color: var(--fg); }
 .org-rail-toggle.is-on { background: var(--bg-secondary); color: var(--fg); }
 .org-rail-toggle .org-top-new { top: 3px; right: 3px; }
-/* A narrow column (about 560 px): the counts take a line under the name; the labels and the keys
-   stay on the name's line (its height is theirs, so the two share a centre), the avatar centred on
-   both lines. */
+/* A narrow column (about 560 px): the counts take a line under the name; the chat's labels go into
+   its kebab (OrgNodeDetail headNarrow, the user's pick, design 2), so only the kebab and the side bar's
+   switch stay on the name's line (its height is theirs, so the two share a centre), the avatar centred
+   on both lines. */
 @container org-detail (max-width: 640px) {
   .org-detail-who { flex-direction: column; align-items: flex-start; row-gap: 2px; }
   .org-detail-title { min-height: 28px; display: flex; align-items: center; }

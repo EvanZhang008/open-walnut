@@ -99,3 +99,9 @@
   margin-top: calc(var(--title-line) / 2);
   translate: 0 -50%;
 }
+
+/* A narrow Org node's state pills as the kebab's first row (SessionMenuOpen headerPills): each pill as
+   it is on the line, wrapping, on the rows' left edge. Pills that draw nothing leave no row. */
+.session-menu-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; }
+.session-menu-pills:empty, .session-menu-pills:empty + .task-kebab-divider { display: none; }
+.session-menu-pills .task-waiting-chip { max-width: 100%; }
