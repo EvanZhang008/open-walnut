@@ -11,6 +11,10 @@
  * fields (M3); sessions turned off here show and operate nothing (M4); a closed link's rows are
  * unknown, then gone, and a revoke forgets them (L2); a phone that opens mid-turn gets the turn (L6);
  * one turn-start reset per turn (L7).
+ *
+ * Review round 2: a refusal while the link is down is `bridge_offline`, the code the phone retries
+ * with the same id, and the host's queue takes that id once (M6); when the Mac turns away, the push
+ * feed hears the linked hosts' rows at once (L11).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -29,7 +33,7 @@ const upserts = k.upserts
 import { EventEmitter } from 'node:events'
 import { attachSse, closeAllSseChannels } from '../../../src/web/sse-channels.js'
 import { _resetCompanionListenerForTesting, attachHostListener, forgetHostListener, LINK_GRACE_MS, listenedRow, standingRow, standingRows } from '../../../src/core/session-channel/companion-listener.js'
-import { hostOperated, hostRoute, interruptViaHost, joinListenedRows, listenedDetail, permissionViaHost, sendViaHost, streamedByListener } from '../../../src/core/session-channel/companion-host-ops.js'
+import { checkMacAway, hostOperated, hostRoute, interruptViaHost, joinListenedRows, listenedDetail, permissionViaHost, sendViaHost, streamedByListener } from '../../../src/core/session-channel/companion-host-ops.js'
 
 const WALNUT = 'ab'.repeat(16)
 const row = (sid: string, over: Record<string, unknown> = {}) => ({ claudeSessionId: sid, taskId: 't1', judge: 'host', host: 'devbox', process_status: 'idle', startedAt: 'a', lastActiveAt: 'b', ...over })
@@ -256,6 +260,60 @@ describe('the push feed and the setting (review M3, M4)', () => {
   })
 })
 
+describe('when the Mac turns away (review L11)', () => {
+  it('the push feed hears every linked host row once, without waiting for the row to change', async () => {
+    k.macHere = true
+    await checkMacAway()
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1'), row('b1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    await checkMacAway()
+    expect(upserts).toEqual([])
+    k.macHere = false
+    await checkMacAway()
+    expect(upserts.map((r) => r.id).sort()).toEqual(['b1', 's1'])
+    // Still away: nothing again; a row told now is pushed as it comes, by itself.
+    await checkMacAway()
+    expect(upserts).toHaveLength(2)
+  })
+})
+
+describe('the phone\'s retry while the host is not linked (review M6)', () => {
+  it('a send, Stop or answer before the link is a retryable bridge_offline; the same id retried reaches the host\'s queue once', async () => {
+    const { queueLinesOnHost } = await import('../../../src/core/sessions/handed-holds.js')
+    const { getQueue } = await import('../../../src/core/session-message-queue.js')
+    // A restarted companion: the copy says the host judges it, no link claimed it yet.
+    k.copy = [{ id: 's1', host: 'devbox', judge: 'host', process_status: 'idle' }]
+    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', status: 503, code: 'bridge_offline' })
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    const route = await hostRoute('s1')
+    expect(route.kind).toBe('operated')
+    const t = (route as { t: Parameters<typeof sendViaHost>[0] }).t
+    // The host as its send route does (host-routes.ts, handed-holds.ts): queue the lines under their id.
+    const hostTakes = async (reply: boolean) => {
+      const call = l.sent.filter((f) => f.op === 'call').pop()
+      await queueLinesOnHost('s1', call.body.queued, 'mobile')
+      if (reply) l.frame({ ch: 'door', op: 'reply', id: call.id, status: 200, body: { ok: true } })
+    }
+    // The first try is queued on the host, its answer lost: a 503 the phone retries.
+    const first = sendViaHost(t, { text: 'hi', messageId: 'qm-mobile-m6', timeoutMs: 100 })
+    await settle(); await hostTakes(false)
+    expect(await first).toMatchObject({ status: 503, body: { error: { code: 'bridge_offline' } }, maybeTaken: true })
+    // The retry, the same id: answered, and on the host one line.
+    const again = sendViaHost(t, { text: 'hi', messageId: 'qm-mobile-m6', timeoutMs: 1000 })
+    await settle(); await hostTakes(true)
+    expect((await again).status).toBe(202)
+    expect((await getQueue('s1')).filter((m) => m.id === 'qm-mobile-m6')).toHaveLength(1)
+    // The link drops under a call: the same retryable code, for a send, a Stop and an answer.
+    l.h.onClose()
+    expect((await sendViaHost(t, { text: 'hi', messageId: 'qm-mobile-m6b', timeoutMs: 1000 })).body.error).toMatchObject({ code: 'bridge_offline' })
+    expect((await interruptViaHost(t, 1000)).body.error).toMatchObject({ code: 'bridge_offline' })
+    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', status: 503, code: 'bridge_offline' })
+  })
+})
+
 describe('a link that closes, or whose credential is revoked (review L2)', () => {
   it('leaves its rows unknown (never operated, a send refused, not the direct path), then drops them; its claim stays', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -267,10 +325,10 @@ describe('a link that closes, or whose credential is revoked (review L2)', () =>
     expect(await hostOperated('s1')).toBeNull()
     expect(await standingRows()).toEqual([])
     expect((await standingRow('s1'))?.live).toBeNull()
-    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', code: 'host_unreachable' })
+    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', code: 'bridge_offline' })
     vi.advanceTimersByTime(LINK_GRACE_MS + 1)
     expect(listenedRow('s1')).toBeNull()
-    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', code: 'host_unreachable' })
+    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', code: 'bridge_offline' })
   })
 
   it('a revoke forgets the host\'s rows and claims at once', async () => {

@@ -4,7 +4,7 @@
  * never written into its CLI by the companion. Not by the direct send funnel (deliverDirectToHost),
  * not by the banked-send sweep (the row stays banked, the Mac is not asked to give it back), and a
  * phone send, Stop or prompt answer while no host link stands (a restarted companion) is a 503
- * host_unreachable.
+ * bridge_offline (the code the phone retries).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -85,8 +85,8 @@ describe('the direct paths refuse it', () => {
     expect(commands().filter((c) => c !== 'session.message')).toEqual([])
   })
 
-  it('a restarted companion (no link claim yet), the Mac away: send, Stop and a prompt answer are 503 host_unreachable', async () => {
-    expect(await hostRoute('hj-1')).toMatchObject({ kind: 'refuse', status: 503, code: 'host_unreachable' })
+  it('a restarted companion (no link claim yet), the Mac away: send, Stop and a prompt answer are 503 bridge_offline', async () => {
+    expect(await hostRoute('hj-1')).toMatchObject({ kind: 'refuse', status: 503, code: 'bridge_offline' })
     expect(await hostRoute('pl-1')).toEqual({ kind: 'none' })
   })
 })

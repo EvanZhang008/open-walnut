@@ -18,7 +18,7 @@
  *   - leader/host-session-control.ts: `leader.control` (Stop, a prompt's answer, a mode) while the
  *     companion leads the host
  * A path that is refused keeps the message where it was (banked for the Mac's relay or the host's
- * link, or the phone told 503 host_unreachable): never a loss, never a second judge.
+ * link, or the phone told 503 bridge_offline): never a loss, never a second judge.
  */
 import { log } from '../../logging/index.js'
 
@@ -40,7 +40,7 @@ export async function directToDaemonAllowed(sid: string, path: string): Promise<
   return false
 }
 
-/** The phone's sentence while a host-judged session's host is not linked (and the Mac is away). */
+/** The phone's sentence while a host-judged session's host is not linked (and the Mac is away), with code `bridge_offline`, which the phone retries. */
 export function hostUnreachableSentence(hostName: string): string {
   return `${hostName} can't be reached right now and your Mac is away. Try again in a moment.`
 }

@@ -126,6 +126,7 @@ export function attachListenerSocket(ws: WebSocket, o: { alias: string; walnutId
     clearTimeout(helloTimer)
     const welcome: ListenerFrame = { ch: 'door', op: 'welcome', role: 'listener', walnutId: o.walnutId }
     ws.send(JSON.stringify(welcome))
+    void import('./companion-host-ops.js').then((ops) => ops.watchMacAway(), () => {})
     handlers = attachHostListener(o.alias, o.walnutId, {
       send: (t) => { if (ws.readyState === ws.OPEN) ws.send(t) },
       close: (code, why) => close(code, why),

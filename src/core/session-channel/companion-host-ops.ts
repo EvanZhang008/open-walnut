@@ -79,7 +79,9 @@ export async function hostRoute(sid: string): Promise<HostRoute> {
   const t = await hostOperated(sid)
   if (t) return { kind: 'operated', t }
   const { hostDisplayName } = await import('../hosts/host-display-name.js')
-  return { kind: 'refuse', status: 503, code: 'host_unreachable', message: hostUnreachableSentence(hostDisplayName(alias)) }
+  // `bridge_offline`: the code the phone retries on its own with the same message id (ios-native
+  // Models.swift leaderAwayCodes, SendRetryPolicy), and the host's queue takes an id once (review M6).
+  return { kind: 'refuse', status: 503, code: 'bridge_offline', message: hostUnreachableSentence(hostDisplayName(alias)) }
 }
 
 /** The stream of `sid` comes from its host's link (reading is no authority): a linked host stands for it, sessions kept here. */
@@ -133,6 +135,33 @@ export async function pushListenedRow(row: SessionRecord): Promise<void> {
   handleBridgeMobileEvent('session-upsert', overCopy(copy as unknown as Record<string, unknown> | undefined, projectSession(row, undefined) as unknown as Record<string, unknown>))
 }
 
+/** The Mac's last known presence, for the push when it turns away (null: not asked yet). */
+let wasAway: boolean | null = null
+let awayWatch: ReturnType<typeof setInterval> | null = null
+/** How often a linked companion asks whether the Mac turned away. */
+export const MAC_AWAY_WATCH_MS = 2_000
+
+/**
+ * The Mac just turned away: the phone's push feed hears every row the linked hosts stand for once,
+ * so its list fills in without waiting for the next change of a row (review L11). A row told while
+ * the Mac is away is pushed as it comes (pushListenedRow), so only the turn needs this.
+ */
+export async function checkMacAway(): Promise<void> {
+  if (!anyRows()) { wasAway = null; return }
+  const away = await macAway()
+  const turned = away && wasAway === false
+  wasAway = away
+  if (!turned) return
+  for (const t of await standingRows()) await pushListenedRow(t.row)
+}
+
+/** Watch for the Mac turning away while a host is linked (listener-door.ts starts it with the first link). */
+export function watchMacAway(): void {
+  if (awayWatch) return
+  awayWatch = setInterval(() => { void checkMacAway().catch(() => {}) }, MAC_AWAY_WATCH_MS)
+  awayWatch.unref?.()
+}
+
 /** GET /sessions/:id from the host's word: its row and the prompts it waits on now. */
 export function listenedDetail(t: OperatedSession): Record<string, unknown> {
   const pending = Array.isArray(t.live?.pendingPermissionRequests) ? t.live!.pendingPermissionRequests : []
@@ -155,7 +184,7 @@ async function call(t: OperatedSession, path: string, body: unknown, timeoutMs: 
   } catch (err) {
     // Not linked: nothing was sent. A timeout or a dropped link: the host may have taken it, and a
     // retry with the same message id is queued once there (the host's queue keys it by that id).
-    if (err instanceof ListenerNotLinked) return { ok: false, answer: v1Error(503, 'host_unreachable', 'The session\'s host is not linked to the companion right now; retrying automatically') }
+    if (err instanceof ListenerNotLinked) return { ok: false, answer: v1Error(503, 'bridge_offline', 'The session\'s host is not linked to the companion right now; retrying automatically') }
     return { ok: false, answer: { ...v1Error(503, 'bridge_offline', 'The session\'s host did not answer in time; retrying automatically'), maybeTaken: true } }
   }
 }

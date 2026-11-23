@@ -113,11 +113,11 @@ describe('never the daemon\'s direct send (M2)', () => {
     expect(directCalls()).toEqual([])
   })
 
-  it('the host\'s link down: a 503 host_unreachable, no relay and no direct send', async () => {
-    k.route = { kind: 'refuse', status: 503, code: 'host_unreachable', message: 'devbox can\'t be reached right now' }
+  it('the host\'s link down: a 503 bridge_offline, no relay and no direct send', async () => {
+    k.route = { kind: 'refuse', status: 503, code: 'bridge_offline', message: 'devbox can\'t be reached right now' }
     const r = await send({ text: 'hello', messageId: 'qm-mobile-b2' })
     expect(r.status).toBe(503)
-    expect(r.body.error.code).toBe('host_unreachable')
+    expect(r.body.error.code).toBe('bridge_offline')
     expect(directCalls()).toEqual([])
   })
 })
