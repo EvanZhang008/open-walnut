@@ -186,8 +186,12 @@ describe('a target reached as a host must say it can lead', () => {
     expect(hostLeadRefusal('box', { serviceRoles: ['replica', 'leader'], launcher: { goodRoles: ['replica', 'leader'] } })).toBeNull()
     expect(hostLeadRefusal('box', null)).toMatch(/not connected/)
     expect(hostLeadRefusal('box', { serviceRoles: ['replica'], launcher: { goodRoles: ['leader'] } })).toMatch(/running version does not say/)
-    expect(hostLeadRefusal('box', { serviceRoles: ['leader'] })).toMatch(/launcher goes back to does not say/)
     expect(hostLeadRefusal('box', { serviceRoles: ['leader'], launcher: {} })).toMatch(/goodRoles: null/)
+    expect(hostLeadRefusal('box', { serviceRoles: ['replica'], launcher: { goodRoles: ['replica'] } })).toMatch(/running version does not say it can lead/)
+    // No service runs there (a current hello, no launcher): the switch's job starts the leader, nothing to check.
+    expect(hostLeadRefusal('box', { serviceRoles: [] })).toBeNull()
+    // A hello from before serviceRoles: not guessed at.
+    expect(hostLeadRefusal('box', {})).toMatch(/does not say which service roles/)
   })
 })
 

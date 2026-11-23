@@ -112,14 +112,20 @@ async function switchLink(to: string, me: string): Promise<{ peer: import('../..
   const cfg = readHomeSwitchConfig(WALNUT_HOME)
   if (!cfg.settings) return { refused: cfg.problem ?? 'no leader_switch section' }
   if (!machineById(cfg.settings, me)) return { refused: `this machine (${me}) is not in leader_switch.machines` }
-  const raw = (await getConfig()).standby ?? {}
-  const standby = { ...(raw.dir ? { dir: raw.dir } : {}), ...(raw.host ? { host: raw.host } : {}) }
+  const config = await getConfig()
+  const raw = config.standby ?? {}
+  const walnut = typeof raw.walnut === 'string' ? [raw.walnut] : Array.isArray(raw.walnut) ? raw.walnut : undefined
+  const standby = { ...(raw.dir ? { dir: raw.dir } : {}), ...(raw.host ? { host: raw.host } : {}), ...(walnut ? { walnut } : {}) }
   // A target reached as a host: what this leader's link knows of its service (hello serviceRoles, launcher goodRoles).
   const hostService = standby.host ? ((await (await import('../../core/hosts/fleet.js')).getFleetHost(standby.host).catch(() => null))?.daemon ?? null) : undefined
-  const why = beginRefusal({ settings: cfg.settings, me, to, standby, ...(hostService !== undefined ? { hostService } : {}) })
+  const why = beginRefusal({ settings: cfg.settings, me, to, standby, hosts: Object.keys(config.hosts ?? {}), ...(hostService !== undefined ? { hostService } : {}) })
   if (why) return { refused: why }
-  const peer = peerFor({ to: machineById(cfg.settings, to)!, standby })
-  return 'refused' in peer ? peer : { peer, settings: cfg.settings }
+  const peer = await peerFor({ to: machineById(cfg.settings, to)!, standby, home: WALNUT_HOME })
+  if ('refused' in peer) return peer
+  // Over a daemon: its hello must name every command the copy link sends (named when one is missing).
+  const notReady = await peer.ready()
+  if (notReady) { peer.close(); return { refused: notReady } }
+  return { peer, settings: cfg.settings }
 }
 
 /** What the host steps of this switch's handover need, or null when this machine or `to` is not in the list. */
@@ -210,6 +216,8 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
   const ticket = {
     v: 1, switchId: o.switchId, from: o.machine, to: o.to, handover: o.record,
     sourceHome: o.home, targetHome: target.home, reverseStandbyDir: self.standbyDir,
+    // Over a daemon the new leader sends its copy back the same way: to this machine, by the name its config gives it.
+    ...(peer.kind === 'daemon' && self.hostKey ? { reverseStandbyHost: self.hostKey } : {}),
     ...(self.accountHome ? { sourceAccountHome: self.accountHome } : {}), ...(target.accountHome ? { targetAccountHome: target.accountHome } : {}),
     sourceVersion: process.env.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion(),
     ...(onHosts?.home ? { sourceHomeOnHosts: { home: onHosts.home, formerHomes: onHosts.formerHomes ?? [] } } : {}),
@@ -285,21 +293,24 @@ leaderSwitchRouter.get('/switch/target', thisMachineOnly, async (req, res) => {
 /** The candidate's check: the target job in check mode on the new leader's machine, started over the copy link; its report. */
 leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
   const to = typeof req.body?.to === 'string' ? req.body.to : ''
-  const [{ isSwitchId, checkReportName, removeSwitchFile }] = await Promise.all([import('../../core/leader/switch/ticket.js')])
+  const [{ isSwitchId, checkReportName }] = await Promise.all([import('../../core/leader/switch/ticket.js')])
   const switchId: unknown = req.body?.switchId
   if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
   const p = currentLeaderPermit()
   if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
   const link = await switchLink(to, p.machine)
   if ('refused' in link) { res.status(409).json({ ok: false, why: link.refused }); return }
-  if (link.peer.kind === 'local') removeSwitchFile(link.peer.standbyDir, checkReportName(switchId))
+  // An earlier report of this switch is cleared first (on every kind: a null report is none).
+  await link.peer.writeFile(checkReportName(switchId), null).catch(() => {})
+  // The copy there, verified before the candidate reads it (repaired from its chunks where it drifted).
+  const verified = await link.peer.verify().catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }))
   const job = await link.peer.startTargetJob(switchId, { check: true })
   if (!job.ok) { res.status(409).json({ ok: false, why: `the check did not start on ${to}: ${job.why}` }); return }
   try {
     const until = Date.now() + 90_000
     while (Date.now() < until) {
       const report = await link.peer.readFile(checkReportName(switchId)).catch(() => null)
-      if (report) { res.json({ ok: true, report }); return }
+      if (report) { res.json({ ok: true, report, verify: verified }); return }
       await new Promise((r) => setTimeout(r, 300))
     }
     res.status(504).json({ ok: false, why: `the check on ${to} did not report within 90 s` })

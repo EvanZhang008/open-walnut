@@ -108,6 +108,8 @@ export interface HomeSwitchConfig {
   /** Why `settings` is null while the flag is on. */
   problem?: string
   standbyDir?: string
+  /** standby.host: the copy goes to another machine, over the leader's link to its daemon (the copy link kind daemon). */
+  standbyHost?: string
 }
 
 const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0
@@ -278,9 +280,11 @@ export function readHomeSwitchConfig(home: string): HomeSwitchConfig {
   const flag = experimentalEnabled(raw.experimental as ExperimentalFlags | undefined, 'switchable_leader')
   const standby = raw.standby as Record<string, unknown> | undefined
   const standbyDir = str(standby?.dir) ? path.resolve(standby.dir) : undefined
-  if (!flag) return { flag, settings: null, ...(standbyDir ? { standbyDir } : {}) }
+  const standbyHost = str(standby?.host) ? standby.host : undefined
+  const at = { ...(standbyDir ? { standbyDir } : {}), ...(standbyHost ? { standbyHost } : {}) }
+  if (!flag) return { flag, settings: null, ...at }
   const { settings, problem } = parseSwitchSettings(raw.leader_switch)
-  return { flag, settings, ...(problem ? { problem } : {}), ...(standbyDir ? { standbyDir } : {}) }
+  return { flag, settings, ...(problem ? { problem } : {}), ...at }
 }
 
 export function machineById(s: LeaderSwitchSettings, id: string): MachinePlace | undefined {

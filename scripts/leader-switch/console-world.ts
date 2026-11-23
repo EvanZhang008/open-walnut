@@ -3,7 +3,7 @@
  * rehearsal's two machines (world.ts), where machine A also runs a host daemon of its own, the
  * one the new leader B reaches A by after the switch (as a host, through the direct test
  * transport of tests/helpers/replica-cluster.ts, never ssh). B is a real, non-ephemeral server
- * (console-server.ts) so it can run A's host replica; A stays the rehearsal's ephemeral server.
+ * (machine-server.ts) so it can run A's host replica; A stays the rehearsal's ephemeral server.
  * A's home is judged by src/core/home-manifest/home-kept.ts, the check the switch uses.
  *
  * `asInstalled`: A's data home is <A>/.open-walnut (an ephemeral server refuses that path, so A
@@ -45,9 +45,8 @@ function leaderEnv(w: World, bin: string, app: string, daemonPort: number, asIns
   return {
     ...w.b.env,
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
-    WALNUT_CONSOLE_HOST_KEY: HOST_KEY_A,
-    WALNUT_CONSOLE_HOST_DAEMON_PORT: String(daemonPort),
-    WALNUT_CONSOLE_HOST_HOME: w.a.dir,
+    // A's host daemon on its port, its probe in A's HOME (daemon-routes.ts); pooled once a second as an ssh link is.
+    WALNUT_REHEARSAL_DAEMON_ROUTES: JSON.stringify({ [HOST_KEY_A]: { port: daemonPort, home: w.a.dir, eager: true } }),
     WALNUT_HOST_SERVER_APP_DIR: app,
     // The replica's own install root: where an installed host has it (<HOME>/.open-walnut-host)
     // when asInstalled, else a folder of A's own. Named either way: the default root runs the
@@ -70,13 +69,13 @@ export async function makeConsoleWorld(root: string, opts: { portA: number; port
   writeAppDir(app, 'built')
   const daemonDir = asInstalled ? path.join(w.a.dir, '.cache', 'open-walnut') : path.join(w.a.dir, 'host-daemon')
   const d = await startHostDaemon('source', daemonDir, w.a.dir, bin, false, { asInstalled })
-  const realServer = (m: Machine) => [process.execPath, path.join(REPO, 'scripts/leader-switch/console-server.ts'), '--port', String(m.port)]
+  const realServer = (m: Machine) => [process.execPath, path.join(REPO, 'scripts/leader-switch/machine-server.ts'), '--port', String(m.port)]
   if (asInstalled) {
     w.a.start = realServer(w.a)
     // As installed, A's home is <HOME>/.open-walnut, which a process that inherits a test run's
     // markers (VITEST, NODE_ENV=test) takes for the production home and moves to a temp dir
     // (constants.ts). HOME is this rehearsal's folder, so A runs as an install does, without them;
-    // console-server.ts refuses the account's real home.
+    // machine-server.ts refuses the account's real home.
     w.a.env = { ...w.a.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, WALNUT_LOCAL_CLAUDE_PROBE: '0', ...windowEnv(), VITEST: '', VITEST_WORKER_ID: '', VITEST_POOL_ID: '', NODE_ENV: '' }
   }
   w.b.start = realServer(w.b)

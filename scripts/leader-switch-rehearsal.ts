@@ -4,6 +4,7 @@
  * `walnut leader switch` command. Prints one line per check; exits 1 when one fails.
  *
  *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--paths] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N] [--keep]
  *
  * Without a scenario flag it runs the main one: A leads, a standby copy to B, load through
  * A's API, the switch to B, every check, A started again by hand (online and offline), writes
@@ -17,6 +18,9 @@
  * A's home checked by its manifest classes; `--as-installed` keeps A's daemon state where an
  * installed one does (inside the home). It needs the built app (`bun run build`). Everything
  * stays inside <work dir>; nothing reads ~/.open-walnut or uses :3456.
+ * `--remote` is rehearsal (a) of the switch between machines (leader-switch/remote-rehearsal.ts): three
+ * machines with their own HOME, machine id and real daemon, the companion, every link a proxy the run cuts
+ * or slows; it is not part of `--all` (`--only` picks scenarios, `--gb N` the size for the downtime runs).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -47,6 +51,14 @@ const log = (s: string) => { if (process.env.REHEARSAL_VERBOSE) console.log(s) }
 const baseAt = args.indexOf('--port-base')
 let port = baseAt >= 0 ? Number(args[baseAt + 1]) : 4800
 const ports = () => { port += 2; return { portA: port, portB: port + 1 } }
+
+if (has('--remote')) {
+  const { rehearseRemote } = await import('./leader-switch/remote-rehearsal.js')
+  const onlyAt = args.indexOf('--only')
+  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, log, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}) })
+  for (const [k, v] of Object.entries(r.times)) console.log(`TIME  ${k}: ${v}`)
+  finish()
+}
 
 const main = !has('--kills') && !has('--stops') && !has('--trials') && !has('--flag-off') && !has('--restarts') && !has('--paths') && !has('--console')
 if (main || all) {
@@ -84,10 +96,14 @@ if (has('--flag-off') || all) {
 // The standby copies and the promoted homes are read-only on purpose (src/core/standby/), so a
 // plain `rm -rf` of the work dir fails and leaves gigabytes behind: make the tree writable again,
 // and drop it when every check passed (--keep keeps it); a failed run keeps it as evidence.
-makeWritable(work)
-if (!failed && !has('--keep')) fs.rmSync(work, { recursive: true, force: true })
-console.log(failed ? `${failed} check(s) FAILED; evidence in ${work} (writable, remove it with rm -rf)` : `all checks passed; ${has('--keep') ? `evidence in ${work}` : `work dir ${work} removed (--keep keeps it)`}`)
-process.exit(failed ? 1 : 0)
+finish()
+
+function finish(): never {
+  makeWritable(work)
+  if (!failed && !has('--keep')) fs.rmSync(work, { recursive: true, force: true })
+  console.log(failed ? `${failed} check(s) FAILED; evidence in ${work} (writable, remove it with rm -rf)` : `all checks passed; ${has('--keep') ? `evidence in ${work}` : `work dir ${work} removed (--keep keeps it)`}`)
+  process.exit(failed ? 1 : 0)
+}
 
 /**
  * `--browser`: a person's browser on A's console the whole time (console-browser.ts), recorded;

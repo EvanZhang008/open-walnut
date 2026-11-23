@@ -52,6 +52,8 @@ export interface SwitchTicket {
   targetHome: string
   /** Where the new leader's batches go after the switch (the old machine's standby_dir). */
   reverseStandbyDir: string
+  /** The old machine as the new leader's config names it in hosts (its host_key), when the copy link is a daemon: the batches go back over it. */
+  reverseStandbyHost?: string
   sourceAccountHome?: string
   targetAccountHome?: string
   /** The program that wrote the data: the new one must not be older. */

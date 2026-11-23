@@ -46,6 +46,8 @@ export async function bootStandbyTwin(dir: string, bun: string): Promise<Standby
   let port = 0
   let ws: WebSocket | null = null
   let rpcId = 1
+  /** What the daemon said it can do in its hello, read on each new socket (the server's DaemonConnection does the same). */
+  let caps: string[] = []
 
   const start = async () => {
     proc = spawn(bun, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -76,6 +78,7 @@ export async function bootStandbyTwin(dir: string, bun: string): Promise<Standby
     s.once('error', (err) => reject(markLinkFailure(err, 'no-link')))
   })
   const link = (sock: WebSocket): DaemonLink => ({
+    hasCapability: (name: string) => caps.includes(name),
     send(cmd, params = {}, timeoutMs = 30_000) {
       if (sock.readyState !== WebSocket.OPEN) return Promise.reject(markLinkFailure(new Error('no link to the daemon'), 'no-link'))
       const id = rpcId++
@@ -102,6 +105,8 @@ export async function bootStandbyTwin(dir: string, bun: string): Promise<Standby
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         if (!proc) throw markLinkFailure(new Error('the daemon is not running'), 'no-link')
         ws = await open()
+        const hello = await link(ws).send('hello', {}, 10_000).catch(() => ({}))
+        caps = Array.isArray((hello as { capabilities?: unknown }).capabilities) ? (hello as { capabilities: string[] }).capabilities : []
       }
       return link(ws)
     },

@@ -20,10 +20,9 @@
  * 2 down, and B renewing on w-a and w-k. No :3456, no ~/.open-walnut, no real companion.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
@@ -34,7 +33,7 @@ import { readHomeSwitchConfig, type RemoteWitnessPlace } from '../../src/core/le
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
 import { WITNESS_DOOR_PATH } from '../../src/core/leader/switch/witness-wire.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from '../helpers/cloud-box-replica.js'
-import { startWitnessMachine, type WitnessMachine } from '../helpers/witness-machines.js'
+import { startHostReplicaDoor, startWitnessMachine, type WitnessMachine } from '../helpers/witness-machines.js'
 import { makeLoopbackCert, startTlsFront, type TlsFront } from '../helpers/loopback-tls.js'
 
 const root = fs.mkdtempSync(path.join(process.env.LEADER_SWITCH_KEEP === '1' ? path.resolve(import.meta.dirname, '../../.scratch') : os.tmpdir(), 'leader-switch-no-link-'))
@@ -98,41 +97,6 @@ async function until<T>(fn: () => Promise<T | null | false | undefined>, ms: num
   return null
 }
 
-const freePort = () => new Promise<number>((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) }) })
-
-/**
- * Dev box 2's service: the real host replica program (`walnut web --replica`, as its host daemon starts it) with
- * the capability witness-door, its machine state (machine id, witness root) in `machineDir`. Resolves with its
- * public port once its door answers.
- */
-async function startDevBoxReplica(base: string, machineDir: string, walnutId: string): Promise<{ port: number; proc: ChildProcess; log: () => string }> {
-  const home = path.join(base, 'home')
-  const data = path.join(home, '.open-walnut-host', 'data')
-  const run = path.join(home, '.open-walnut-host', 'run')
-  const hostd = path.join(base, 'hostd')
-  for (const d of [data, run, hostd, machineDir]) fs.mkdirSync(d, { recursive: true, mode: 0o700 })
-  fs.writeFileSync(path.join(machineDir, 'machine-id'), 'machine-c\n')
-  const at = await freePort()
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: os.tmpdir(), NODE_ENV: 'production', NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
-    WALNUT_HOST_DAEMON_DIR: hostd, WALNUT_DAEMON_DIR: run, OPEN_WALNUT_HOME: data,
-    WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(at), WALNUT_WALNUT_ID: walnutId, WALNUT_NO_AUTO_UPDATE: '1',
-    WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_FOLLOWER_TOKEN: crypto.randomBytes(16).toString('hex'),
-    WALNUT_CAPABILITIES: 'witness-door', WALNUT_MACHINE_ID_FILE: path.join(machineDir, 'machine-id'),
-  }
-  let out = ''
-  const proc = spawn(process.execPath, [path.join(import.meta.dirname, '../../src/cli.ts'), 'web', '--replica', '--dev'], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  proc.stdout!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
-  proc.stderr!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
-  const up = await until(async () => {
-    if (proc.exitCode !== null) throw new Error(`the host replica exited (${proc.exitCode})\n${out.slice(-3000)}`)
-    const r = await fetch(`http://127.0.0.1:${at}${WITNESS_DOOR_PATH}/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ v: 1, walnutId, witness: 'w-c', digest: 'a'.repeat(64), cnonce: 'b'.repeat(64) }) })
-    return r.status === 404 && ((await r.json()) as { error?: string }).error === 'no_witness_here'
-  }, 180_000)
-  if (!up) throw new Error(`the host replica's witness door did not answer\n${out.slice(-3000)}`)
-  return { port: at, proc, log: () => out }
-}
-
 describe('a switch whose candidate has no leader link, on two dev boxes and the companion', () => {
   let walnutId = ''
   let doorC: TlsFront
@@ -187,7 +151,7 @@ describe('a switch whose candidate has no leader link, on two dev boxes and the 
     const started = await w.side(w.a).startServer('leader', 300_000)
     expect(started.ok, started.why).toBe(true)
     walnutId = (await (await import('../../src/core/device-store.js')).instanceIdAt(w.a.home))!
-    const replica = await startDevBoxReplica(path.join(root, 'devbox-2-service'), path.join(root, 'devbox-2'), walnutId)
+    const replica = await startHostReplicaDoor({ base: path.join(root, 'devbox-2-service'), machineDir: path.join(root, 'devbox-2'), machineId: 'machine-c', walnutId, witness: 'w-c' })
     replicaC = replica.proc
     replicaPort = replica.port
   }, 300_000)

@@ -15,7 +15,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { lockHolder, readMarker, summarize, switchLockFile } from './records.js'
 import { machineByHome, readHomeSwitchConfig, type LeaderSwitchSettings, type MachinePlace } from './settings.js'
-import { machineIdFile } from './machine-id.js'
+import { machineIdFile, permitHolderId } from './machine-id.js'
 import { serverCommand } from '../../trial-start/process.js'
 import { homeKey, switchFolder, ticketName, readSwitchFile, writeSwitchFile } from './ticket.js'
 import {
@@ -91,16 +91,28 @@ function readFrom(file: string, from: number): { text: string; to: number } {
   } catch { return { text: '', to: from } }
 }
 
+/**
+ * The machines whose standby folder this machine may use as a path: every one while this home's copy
+ * goes to a folder here (one computer, kind local); with `standby.host` the other machine is another
+ * computer, reached only over the leader's copy link, so only this machine's own (a folder of the same
+ * path on this disk is not that machine's, whatever it holds).
+ */
+function machinesHere(settings: LeaderSwitchSettings, home: string, env: NodeJS.ProcessEnv): LeaderSwitchSettings['machines'] {
+  if (!readHomeSwitchConfig(home).standbyHost) return settings.machines
+  const me = permitHolderId(env)
+  return settings.machines.filter((m) => m.id === me)
+}
+
 /** The target machine of the source's switch when its standby folder is on this computer (one machine): its state is readable here. */
-function localTarget(st: SwitchState | null): { dir: string; id: string } | null {
-  if (!st) return null
+function localTarget(st: SwitchState | null, here: LeaderSwitchSettings['machines']): { dir: string; id: string } | null {
+  if (!st || !here.some((m) => m.standbyDir === st.standbyDir)) return null
   return fs.existsSync(switchFolder(st.standbyDir)) ? { dir: st.standbyDir, id: st.id } : null
 }
 
-/** Open target jobs whose standby folder is on this computer: every machine's standby_dir of the list. */
-function openTargetsHere(settings: LeaderSwitchSettings): { dir: string; id: string; state: TargetState | null }[] {
+/** Open target jobs whose standby folder is on this computer (machinesHere). */
+function openTargetsHere(here: LeaderSwitchSettings['machines']): { dir: string; id: string; state: TargetState | null }[] {
   const found: { dir: string; id: string; state: TargetState | null }[] = []
-  for (const m of settings.machines) {
+  for (const m of here) {
     const folder = switchFolder(m.standbyDir)
     let names: string[] = []
     try { names = fs.readdirSync(folder) } catch { continue }
@@ -139,7 +151,7 @@ export async function runLeaderSwitch(o: SwitchCommandOptions): Promise<SwitchOu
 
   if (o.cancel || o.resume) {
     const open = before && !SOURCE_FINAL.has(before.step)
-    const targets = openTargetsHere(settings).filter((t) => !before || t.id === before.id || !open)
+    const targets = openTargetsHere(machinesHere(settings, home, env)).filter((t) => !before || t.id === before.id || !open)
     if (!open && !targets.length) throw new SwitchRefused('no switch from this home is under way')
     if (o.cancel) {
       if (open) writeDurableJson(sourceCancelFile(home), { switchId: before!.id, at: new Date().toISOString() })
@@ -167,7 +179,7 @@ export async function runLeaderSwitch(o: SwitchCommandOptions): Promise<SwitchOu
     for (const line of r.text.split('\n').filter(Boolean)) { out(line); if (/^leader: |refused: /.test(line)) lastRefusal = line }
     const src = readSwitchState(home)
     const mine = src && (src.id !== before?.id || o.resume || o.cancel) ? src : null
-    const t = localTarget(mine)
+    const t = localTarget(mine, machinesHere(settings, home, env))
     const tgt = t ? readTargetState(t.dir, t.id) : null
     if (t) {
       const tl = targetJobLog(t.dir, t.id, false)
@@ -213,7 +225,7 @@ export async function switchStatus(o: { home: string; env?: NodeJS.ProcessEnv })
   const lock = switchLockFile(home)
   const { targetJobRunning } = await import('./target-job.js')
   const targets: Record<string, unknown>[] = []
-  for (const m of settings.machines) {
+  for (const m of machinesHere(settings, home, env)) {
     let names: string[] = []
     try { names = fs.readdirSync(switchFolder(m.standbyDir)) } catch { continue }
     for (const n of names) {

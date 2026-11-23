@@ -20,8 +20,12 @@ export function makeLoopbackCert(dir: string): LoopbackCert {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const keyFile = path.join(dir, 'loopback-key.pem')
   const certFile = path.join(dir, 'loopback-cert.pem')
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
-    '-keyout', keyFile, '-out', certFile, '-days', '2', '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost'], { stdio: 'ignore' })
+  // A key, then the certificate from a config file: every openssl in use takes these (1.0.2, which
+  // Amazon Linux 2 ships, has neither `-addext` nor `-pkeyopt` on req).
+  const confFile = path.join(dir, 'loopback.cnf')
+  fs.writeFileSync(confFile, '[req]\ndistinguished_name = dn\nprompt = no\nx509_extensions = v3\n[dn]\nCN = 127.0.0.1\n[v3]\nsubjectAltName = IP:127.0.0.1,DNS:localhost\n')
+  execFileSync('openssl', ['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', keyFile], { stdio: 'ignore' })
+  execFileSync('openssl', ['req', '-x509', '-new', '-key', keyFile, '-out', certFile, '-days', '2', '-config', confFile, '-extensions', 'v3'], { stdio: 'ignore' })
   return { key: fs.readFileSync(keyFile, 'utf8'), cert: fs.readFileSync(certFile, 'utf8'), certFile }
 }
 

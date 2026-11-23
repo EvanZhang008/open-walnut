@@ -8,7 +8,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { getVersion } from '../../version.js'
-import { standbyStatus, verifyStandby } from '../../standby/index.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { readFinalStopResult, readHistory, readMarker, removeMarker, summarize, takeSwitchLock, writeDurableJson, writeMarker } from './records.js'
 import { olderVersion } from './self-check.js'
@@ -25,7 +24,6 @@ import { applyServiceRole, writeSwitchPointer, type SetServiceRole } from './ser
 import { instanceIdAt } from '../../device-store.js'
 import type { CheckReport } from './ticket.js'
 
-const RECENT_BATCH_S = 5 * 60
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export interface SourceJobOptions {
@@ -149,7 +147,10 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
         }
         case 'handover': {
           writeMarker(s.sourceHome, { switchId: s.id, to: s.to, state: 'switching', at: new Date().toISOString(), ...(s.handover ? { handover: s.handover } : {}) })
-          const standing = await readStanding()
+          // An unknown outcome (no majority of answers in one read: a busy machine, a slow door) is read again; only
+          // what a majority says stops the handover.
+          let standing = await readStanding()
+          for (const until = Date.now() + 20_000; standing === undefined && Date.now() < until;) { await sleep(500); standing = await readStanding() }
           if (committedRecord(standing, s) && s.handover) { save('hand-off', `already committed (record ${standing!.number})`); break }
           if (!standing || !(handoverStanding(standing, s) || standing.holder === s.from)) fail(`the witnesses do not name ${s.from} as the holder (${JSON.stringify(summarize(standing))})`)
           if (!side.runningServer()) fail('the old leader\'s server is not running: only the process that holds the permission can hand it over')
@@ -327,16 +328,6 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
     else if (!j.permit.mayAct) problems.push(`the old leader may not act now (${j.permit.state})`)
     if (j?.version) st.sourceVersion = j.version
   }
-  // The standby copy: complete, recent, verified (the copy link is a folder here: kind local).
-  try {
-    const status = await standbyStatus(st.standbyDir)
-    if (status.batch === null) problems.push(`the standby copy ${st.standbyDir} holds no complete batch yet`)
-    else if ((status.ageSeconds ?? Infinity) > RECENT_BATCH_S) problems.push(`the standby copy's last batch is ${status.ageSeconds} s old (more than ${RECENT_BATCH_S} s): is the standby running?`)
-    const v = await verifyStandby(st.standbyDir)
-    if (v.drift.length) problems.push(`the standby copy had ${v.drift.length} path(s) changed in it directly (repaired, saved under drift/): check them first`)
-  } catch (err) {
-    problems.push(`the standby copy ${st.standbyDir}: ${(err as Error).message}`)
-  }
   const { standing, answered } = await read().catch((err: Error) => { problems.push(err.message); return { standing: undefined, answered: 0 } })
   if (answered < majorityOf(settings.witnesses.map((w) => w.id))) problems.push(`only ${answered} of ${settings.witnesses.length} witnesses answered`)
   else if (!standing) problems.push(standing === null ? 'the witnesses hold no record yet: start the leader once with the permission' : 'the witnesses do not agree on a record')
@@ -355,10 +346,13 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   // IT reaches a majority of the witnesses with no leader link, holding the old leader's record.
   if (running && !problems.length) {
     const c = await src.api('POST', '/api/leader/switch/check', { to: st.to, switchId: st.id }).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
-    const r = (c.json as { report?: CheckReport & { reach?: { id: string; answered: boolean; held: { holder?: string; kind?: string } | null }[] }; why?: string } | null)
+    const r = (c.json as { report?: CheckReport & { reach?: { id: string; answered: boolean; held: { holder?: string; kind?: string } | null }[] }; verify?: { drift?: number; error?: string }; why?: string } | null)
     const report = r?.report
     if (!report) problems.push(`the new leader's check did not report: ${r?.why ?? `status ${c.status}`}`)
     else {
+      // The copy there, verified by the old leader's server over its copy link before the check read it.
+      if (r?.verify?.error) problems.push(`the standby copy on ${st.to} did not verify: ${r.verify.error}`)
+      else if (r?.verify?.drift) problems.push(`the standby copy on ${st.to} had ${r.verify.drift} path(s) changed in it directly (repaired, saved under drift/): check them first`)
       problems.push(...report.problems)
       const holding = (report.reach ?? []).filter((w) => w.answered && w.held && w.held.holder === st.from && w.held.kind !== 'handover' && w.held.kind !== 'release').length
       if (report.ok && holding < majorityOf(settings.witnesses.map((w) => w.id))) problems.push(`the witnesses the new leader reaches do not name ${st.from} as the holder (${JSON.stringify(report.reach)})`)

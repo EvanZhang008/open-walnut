@@ -17,6 +17,7 @@
  * 30 s (commands/web.ts): the new leader never promotes, the switch rolls back. A kill does the same.
  */
 import fs from 'node:fs'
+import path from 'node:path'
 import type { SwitchPeer } from './peer.js'
 import { finalMarkName, type FinalMark } from './ticket.js'
 import { finalStopResultFile, writeDurableJson, type FinalStopResult } from './records.js'
@@ -203,14 +204,19 @@ export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; 
  * target (the copy goes there, so its own copy is what it would lead with). A begin forwarded from
  * another machine is taken only from `to` itself. Null: allowed.
  */
-export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to: string; standby: { dir?: string; host?: string }; forwardedBy?: string | null; hostService?: HostServiceFacts | null }): string | null {
+export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to: string; standby: { dir?: string; host?: string }; hosts?: readonly string[]; forwardedBy?: string | null; hostService?: HostServiceFacts | null }): string | null {
   const target = machineById(o.settings, o.to)
   if (!target) return `machine ${o.to} is not in leader_switch.machines`
   if (target.id === o.me) return `${o.to} leads already`
   if (!o.standby.dir) return 'this leader keeps no standby copy (standby.dir): no machine holds one to lead with'
   if (o.standby.host) {
-    // The copy is on a host: that host must be the machine `to` (the daemon kind of the copy link, the next step).
-    if (o.standby.host !== o.to) return `this leader's standby copy is on host ${o.standby.host}, not on ${o.to}`
+    // The copy is on a host: that host must be the machine `to` (by its id, or the name this leader gives it: host_key).
+    if (o.standby.host !== o.to && o.standby.host !== target.hostKey) return `this leader's standby copy is on host ${o.standby.host}, not on ${o.to}`
+    if (path.resolve(o.standby.dir) !== path.resolve(target.standbyDir)) return `this leader's standby copy goes to ${o.standby.host}:${o.standby.dir}, not to ${o.to}'s standby_dir ${target.standbyDir}`
+    // The new leader sends its copy back here, as this machine's host: it must know this machine by name.
+    const self = machineById(o.settings, o.me)
+    if (!self?.hostKey) return `this machine (${o.me}) has no host_key in leader_switch.machines: the new leader on ${o.to} would have no way to send its standby copy back here`
+    if (o.hosts && !o.hosts.includes(self.hostKey)) return `config.yaml's hosts has no ${self.hostKey} (this machine's host_key): the new leader on ${o.to} would not reach this machine's daemon`
     // Its service must be able to lead: both versions say so (hello serviceRoles, launcher goodRoles). Never guessed.
     const cannot = hostLeadRefusal(o.standby.host, o.hostService)
     if (cannot) return cannot

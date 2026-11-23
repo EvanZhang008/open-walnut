@@ -6,11 +6,17 @@
  * request per stream, host-server/request-over.ts). It is every layer of a witness call but the
  * daemon and the ssh hop.
  */
+import { spawn, type ChildProcess } from 'node:child_process'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
 import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
 import { createLeaderDoor } from '../../src/replica/leader-door.js'
 import { requestOver } from '../../src/core/host-server/request-over.js'
 import type { DeviceCopy } from '../../src/host-server/device-copy.js'
 import type { RemoteCall } from '../../src/core/leader/switch/witness-transport.js'
+import { WITNESS_DOOR_PATH } from '../../src/core/leader/switch/witness-wire.js'
 
 export interface WitnessMachine {
   host: string
@@ -71,4 +77,51 @@ export function loopbackCall(machines: Record<string, { port: number }>, opts: {
 /** Setup evidence of a Walnut that never had a record: every other witness seen blank. */
 export function blankEvidence(list: string[], target: string): Array<{ witness: string; seen: 'blank' }> {
   return list.filter((w) => w !== target).map((witness) => ({ witness, seen: 'blank' as const }))
+}
+
+const freePort = () => new Promise<number>((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) }) })
+
+/**
+ * A dev box's service with a witness door: the real host replica program (`walnut web --replica`, as its
+ * host daemon starts it) with the capability witness-door, its machine state (machine id, witness root) in
+ * `machineDir`. Resolves with its public port once its door answers (for `witness`, a witness it holds no
+ * record of yet). Shared by tests/e2e/leader-switch-no-link-e2e.test.ts and the cross-machine rehearsal.
+ */
+export async function startHostReplicaDoor(o: { base: string; machineDir: string; machineId: string; walnutId: string; witness: string; env?: Record<string, string> }): Promise<{ port: number; proc: ChildProcess; log: () => string; stop: () => Promise<void> }> {
+  const home = path.join(o.base, 'home')
+  const data = path.join(home, '.open-walnut-host', 'data')
+  const run = path.join(home, '.open-walnut-host', 'run')
+  const hostd = path.join(o.base, 'hostd')
+  for (const d of [data, run, hostd, o.machineDir]) fs.mkdirSync(d, { recursive: true, mode: 0o700 })
+  const idFile = path.join(o.machineDir, 'machine-id')
+  if (!fs.existsSync(idFile)) fs.writeFileSync(idFile, `${o.machineId}\n`)
+  const at = await freePort()
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: os.tmpdir(), NODE_ENV: 'production', NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
+    WALNUT_HOST_DAEMON_DIR: hostd, WALNUT_DAEMON_DIR: run, OPEN_WALNUT_HOME: data,
+    WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(at), WALNUT_WALNUT_ID: o.walnutId, WALNUT_NO_AUTO_UPDATE: '1',
+    WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_FOLLOWER_TOKEN: crypto.randomBytes(16).toString('hex'),
+    WALNUT_CAPABILITIES: 'witness-door', WALNUT_MACHINE_ID_FILE: idFile,
+    ...(o.env ?? {}),
+  }
+  let out = ''
+  const proc = spawn(process.execPath, [path.join(import.meta.dirname, '../../src/cli.ts'), 'web', '--replica', '--dev'], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc.stdout!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
+  proc.stderr!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
+  const deadline = Date.now() + 180_000
+  for (;;) {
+    if (proc.exitCode !== null) throw new Error(`the host replica exited (${proc.exitCode})\n${out.slice(-3000)}`)
+    const r = await fetch(`http://127.0.0.1:${at}${WITNESS_DOOR_PATH}/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ v: 1, walnutId: o.walnutId, witness: o.witness, digest: 'a'.repeat(64), cnonce: 'b'.repeat(64) }) }).catch(() => null)
+    if (r && r.status === 404 && ((await r.json().catch(() => ({}))) as { error?: string }).error === 'no_witness_here') break
+    if (Date.now() > deadline) { try { process.kill(-proc.pid!, 'SIGKILL') } catch { /* gone */ } throw new Error(`the host replica's witness door did not answer\n${out.slice(-3000)}`) }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  // Its whole process group (it was spawned detached as its own group).
+  const stop = async () => {
+    if (!proc.pid || proc.exitCode !== null) return
+    try { process.kill(-proc.pid, 'SIGTERM') } catch { return }
+    for (let i = 0; i < 100 && proc.exitCode === null; i++) await new Promise((r) => setTimeout(r, 100))
+    try { process.kill(-proc.pid, 'SIGKILL') } catch { /* gone */ }
+  }
+  return { port: at, proc, log: () => out, stop }
 }

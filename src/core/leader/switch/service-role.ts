@@ -91,12 +91,18 @@ export async function serviceLeadRefusalHere(o: { ask?: (exe: string) => Promise
 export interface HostServiceFacts { serviceRoles?: ReadonlyArray<string>; launcher?: { goodRoles?: ReadonlyArray<string> } | null }
 
 /**
- * The preflight's rule for a target reached as a host: its running version says `leader` in its hello
- * (`serviceRoles`) and the version its launcher goes back to says it too (`goodRoles`). Missing is a no.
+ * The preflight's rule for a target reached as a host, the same rule serviceLeadRefusalHere keeps on that
+ * machine itself: where a Walnut service runs it (its hello carries the launcher's facts), its running
+ * version says `leader` in its hello (`serviceRoles`) and the version its launcher goes back to says it too
+ * (`goodRoles`). Where none runs (a current hello, `serviceRoles` there, and no launcher) there is no service
+ * to keep the new leader, so nothing to check: the switch's job starts it (and nothing restarts it after a
+ * reboot, docs/reference/leader-switch.md "Not done"). A hello from before `serviceRoles` is not guessed at.
  */
 export function hostLeadRefusal(host: string, d: HostServiceFacts | null | undefined): string | null {
   if (!d) return `host ${host} is not connected: whether its service can lead is not known`
-  if (!d.serviceRoles?.includes('leader')) return `host ${host}'s running version does not say it can lead (hello serviceRoles: ${JSON.stringify(d.serviceRoles ?? null)})`
-  if (!d.launcher?.goodRoles?.includes('leader')) return `the version host ${host}'s launcher goes back to does not say it can lead (goodRoles: ${JSON.stringify(d.launcher?.goodRoles ?? null)})`
+  if (!Array.isArray(d.serviceRoles)) return `host ${host}'s running version does not say which service roles it can take (an older Walnut there): update it first`
+  if (!d.launcher) return null
+  if (!d.serviceRoles.includes('leader')) return `host ${host}'s running version does not say it can lead (hello serviceRoles: ${JSON.stringify(d.serviceRoles)})`
+  if (!d.launcher.goodRoles?.includes('leader')) return `the version host ${host}'s launcher goes back to does not say it can lead (goodRoles: ${JSON.stringify(d.launcher.goodRoles ?? null)})`
   return null
 }

@@ -2,7 +2,7 @@
  * How a rehearsal's server process stops, as `walnut web` does (src/commands/web.ts): a signal is the
  * ordinary planned stop; a leader switch's stop is asked through the API (server.ts onSwitchStopRequest)
  * and may run its final batch past the usual bail; a signal during it aborts the batch (no final mark)
- * and the process ends within SWITCH_ABORT_BAIL_MS. Shared by rehearsal-server.ts and console-server.ts.
+ * and the process ends within SWITCH_ABORT_BAIL_MS. Shared by rehearsal-server.ts and machine-server.ts.
  */
 export async function wireServerStops(o: { bailMs: number }): Promise<{ stop: () => Promise<void> }> {
   const [{ stopServer, onSwitchStopRequest }, { SWITCH_ABORT_BAIL_MS }] = await Promise.all([import('../../src/web/server.js'), import('../../src/commands/web.js')])

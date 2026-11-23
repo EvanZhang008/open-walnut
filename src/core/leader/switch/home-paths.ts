@@ -469,6 +469,8 @@ export interface RewriteContext {
   roots: readonly PathRoot[]
   /** Where the new leader's standby batches go: the old machine's standby folder. */
   reverseStandbyDir: string
+  /** The host that folder is on (the old machine, as this config names it), when the copy came over a daemon link. */
+  reverseStandbyHost?: string
 }
 
 function globRe(glob: string, sep: string, subtree: boolean): RegExp {

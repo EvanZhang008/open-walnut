@@ -45,6 +45,10 @@ export interface PromoteInput {
   previousHome: string
   /** Where the new leader sends its standby batches: the old leader machine's standby_dir. */
   reverseStandbyDir: string
+  /** The old leader machine's host name in this config's hosts, when the copy came over a daemon link: the batches go back over it. */
+  reverseStandbyHost?: string
+  /** Called once the copy is the home, before any path in it is rewritten (also again on a resume): the trial's facts of the copy. */
+  beforeRewrite?: (home: string) => Promise<void>
   /** The account home dirs of the old and the new machine (paths under the old one move). */
   previousAccountHome?: string
   accountHome?: string
@@ -185,9 +189,11 @@ export async function promoteCopy(o: PromoteInput): Promise<PromoteResult> {
     }
   }
   await makeWritable(o.home)
+  await o.beforeRewrite?.(o.home)
   const rewritten = rewriteHomePaths(o.home, homePathRules({ skipLedgerRewrite: o.skipLedgerRewrite }), {
     roots: moveRoots(o),
     reverseStandbyDir: o.reverseStandbyDir,
+    ...(o.reverseStandbyHost ? { reverseStandbyHost: o.reverseStandbyHost } : {}),
   })
   const ledgerRows = rewritten.filter((d) => d.rules.includes(LEDGER_RULE)).reduce((n, d) => n + d.values, 0)
   writePromoted(o.home, { switchId: o.switchId, state: 'promoted', from: o.previousHome, at: new Date().toISOString() })

@@ -16,7 +16,7 @@ import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { appendHistory, lockHolder, promotedFile, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
 import { homePathRules } from './home-path-rules.js'
-import { offlineCheck, onlineCheck } from './self-check.js'
+import { offlineCheck, onlineCheck, readCopyFacts } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
 import { machineById, readHomeSwitchConfig, type LeaderSwitchSettings } from './settings.js'
 import { makeWitnessReader, type WitnessReading } from './witness-reader.js'
@@ -35,6 +35,8 @@ import { applyServiceRole, serviceLeadRefusalHere, writeSwitchPointer, type SetS
 import { instanceIdAt } from '../../device-store.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** The candidate's copy must hold a batch at most this old (its moment by the old leader's clock). */
+const RECENT_BATCH_S = 5 * 60
 
 export function targetLockFile(standbyDir: string, switchId: string): string {
   return path.join(switchFolder(standbyDir), `${switchId}.lock`)
@@ -105,7 +107,10 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
     if (!self) throw new Error(`this machine (${me ?? 'no id'}) is not one of leader_switch.machines`)
     const side = o.side ?? new LocalSide(self)
     if (side.runningServer()) problems.push(`a server already runs on the new leader's home ${self.home}`)
+    // The copy: complete and recent (its batches still come). The old leader's server verified it just before.
     const status = await standbyStatus(o.standbyDir)
+    if (status.batch === null) problems.push(`the standby copy ${o.standbyDir} holds no complete batch yet`)
+    else if ((status.ageSeconds ?? Infinity) > RECENT_BATCH_S) problems.push(`the standby copy's last batch is ${status.ageSeconds} s old (more than ${RECENT_BATCH_S} s): is the standby running?`)
     const free = freeBytes(self.home)
     const need = Math.max(1024 ** 3, status.bytes * 0.2)
     if (free !== null && free < need) problems.push(`only ${(free / 1024 ** 3).toFixed(1)} GB free where the new home goes; ${(need / 1024 ** 3).toFixed(1)} GB needed`)
@@ -126,6 +131,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
 function newTargetState(standbyDir: string, t: SwitchTicket): TargetState {
   return {
     id: t.switchId, from: t.from, to: t.to, standbyDir, sourceHome: t.sourceHome, targetHome: t.targetHome, reverseStandbyDir: t.reverseStandbyDir,
+    ...(t.reverseStandbyHost ? { reverseStandbyHost: t.reverseStandbyHost } : {}),
     ...(t.sourceAccountHome ? { sourceAccountHome: t.sourceAccountHome } : {}), ...(t.targetAccountHome ? { targetAccountHome: t.targetAccountHome } : {}),
     sourceVersion: t.sourceVersion, ...(t.sourceHomeOnHosts ? { sourceHomeOnHosts: t.sourceHomeOnHosts } : {}),
     handover: t.handover, commitDeadline: t.commitDeadline, step: 'wait-mark', log: [], ...(t.test ? { test: t.test } : {}),
@@ -225,7 +231,13 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           await side.stopServer()
           const r = await promoteCopy({
             switchId: s.id, standbyDir: o.standbyDir, home: s.targetHome, previousHome: s.sourceHome, reverseStandbyDir: s.reverseStandbyDir,
-            ...accountHomes(s), skipLedgerRewrite: skipLedger, afterRename: () => diesAt('during-promote'),
+            ...(s.reverseStandbyHost ? { reverseStandbyHost: s.reverseStandbyHost } : {}), ...accountHomes(s), skipLedgerRewrite: skipLedger, afterRename: () => diesAt('during-promote'),
+            // What the copy held, read on this machine before any rewrite: the trial compares with it (never the old home).
+            beforeRewrite: async (home) => {
+              if (s.copyFacts) return
+              s.copyFacts = await readCopyFacts(home, (await new StandbyTarget(o.standbyDir).current()).files)
+              writeSwitchFile(o.standbyDir, targetStateName(s.id), s)
+            },
           })
           s.outcomeUnknown = listUnsettledSends(s.targetHome)
           const moved = r.rewritten.reduce((n, d) => n + d.values, 0)
@@ -236,8 +248,10 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
         case 'trial': {
           await side.stopServer()
           const files = (await new StandbyTarget(o.standbyDir).current()).files
+          // A state from before the facts were kept: read them now (a rewritten database's rows are not compared).
+          s.copyFacts ??= await readCopyFacts(s.targetHome, files)
           const off = await offlineCheck({
-            sourceHome: s.sourceHome, home: s.targetHome, files, sizesAndRows: !s.offlineChecked,
+            facts: s.copyFacts, home: s.targetHome, files, sizesAndRows: !s.offlineChecked,
             roots: moveRoots({ previousHome: s.sourceHome, home: s.targetHome, ...accountHomes(s) }),
             rules: homePathRules({ skipLedgerRewrite: skipLedger }),
           })
@@ -251,7 +265,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           const started = await side.startServer('trial', 120_000, undefined, s.id)
           if (!started.ok) fail(`the trial start failed: ${started.why}${started.logTail ? `\n${started.logTail.split('\n').slice(-8).join('\n')}` : ''}`)
           diesAt('during-trial')
-          const on = await onlineCheck({ side, sourceHome: s.sourceHome, sourceVersion: s.sourceVersion, task: off.task, note: off.note })
+          const on = await onlineCheck({ side, sourceVersion: s.sourceVersion, facts: s.copyFacts })
           await side.stopServer()
           if (!on.ok) fail(`the trial server's self-check: ${on.problems.join('; ')}`)
           save('commit', 'the trial passed')

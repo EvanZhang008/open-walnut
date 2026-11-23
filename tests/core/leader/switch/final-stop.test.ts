@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { abandonSwitchStop, beginRefusal, beginSwitchStop, beginTakeBack, endTakeBack, finishSwitchStop, forgetHandedOver, noteHandedOver, runFinalBatch, type HandedOverSwitch } from '../../../../src/core/leader/switch/final-stop.js'
-import { LocalPeer, peerFor, type SwitchPeer } from '../../../../src/core/leader/switch/peer.js'
+import { DaemonPeer, LocalPeer, peerFor, type SwitchPeer } from '../../../../src/core/leader/switch/peer.js'
 import { readFinalStopResult } from '../../../../src/core/leader/switch/records.js'
 import { finalMarkName, readSwitchFile, validFinalMark } from '../../../../src/core/leader/switch/ticket.js'
 import { parseSwitchSettings } from '../../../../src/core/leader/switch/settings.js'
@@ -41,7 +41,8 @@ function fakePeer(changes: Array<boolean | 'void'>, files: Map<string, unknown> 
       if (c === 'void') return { ok: false, reason: 'a write at the wrong instant', stats: {} as never }
       return { ok: true, manifest: {} as never, commit: { batch: 10 + n, unchanged: !c, written: c ? 3 : 0, deleted: 0 } as never, stats: {} as never }
     },
-    async verify() { p.verified++ },
+    async verify() { p.verified++; return { drift: 0 } },
+    async ready() { return null },
     async writeFile(name: string, v: unknown) { files.set(name, v) },
     async readFile<T>(name: string) { return (files.get(name) ?? null) as T | null },
     async startTargetJob() { return { ok: true } },
@@ -178,7 +179,11 @@ describe('who may begin a switch, and the copy link', () => {
   fs.mkdirSync(sa); fs.mkdirSync(sb)
   const settings = parseSwitchSettings({
     witnesses: [{ id: 'w1', dir: '/w/1' }, { id: 'w2', dir: '/w/2' }, { id: 'w3', dir: '/w/3' }],
-    machines: [{ id: 'machine-a', home: '/a/home', standby_dir: sa, port: 1 }, { id: 'machine-b', home: '/b/home', standby_dir: sb, port: 2 }, { id: 'machine-c', home: '/c/home', standby_dir: '/c/standby', port: 3 }],
+    machines: [{ id: 'machine-a', home: '/a/home', standby_dir: sa, port: 1, host_key: 'dev-a' }, { id: 'machine-b', home: '/b/home', standby_dir: sb, port: 2, host_key: 'dev-b' }, { id: 'machine-c', home: '/c/home', standby_dir: '/c/standby', port: 3 }],
+  }).settings!
+  const noKeys = parseSwitchSettings({
+    witnesses: [{ id: 'w1', dir: '/w/1' }, { id: 'w2', dir: '/w/2' }, { id: 'w3', dir: '/w/3' }],
+    machines: [{ id: 'machine-a', home: '/a/home', standby_dir: sa, port: 1 }, { id: 'machine-b', home: '/b/home', standby_dir: sb, port: 2 }],
   }).settings!
 
   it('takes a machine of the list that holds this leader\'s standby target', () => {
@@ -194,16 +199,29 @@ describe('who may begin a switch, and the copy link', () => {
     expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'machine-b' }, hostService: { serviceRoles: ['replica', 'leader'], launcher: { goodRoles: ['replica', 'leader'] } } })).toBeNull()
   })
 
+  it('a copy on another machine: that machine by its id or its host_key, its own standby_dir, and a way back to this machine by its host_key', () => {
+    const can = { serviceRoles: ['replica', 'leader'], launcher: { goodRoles: ['replica', 'leader'] } }
+    expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'dev-b' }, hosts: ['dev-a', 'dev-b'], hostService: can })).toBeNull()
+    expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sa, host: 'dev-b' }, hosts: ['dev-a', 'dev-b'], hostService: can })).toMatch(/goes to dev-b:.*not to machine-b's standby_dir/)
+    expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'dev-b' }, hosts: ['dev-b'], hostService: can })).toMatch(/hosts has no dev-a/)
+    expect(beginRefusal({ settings: noKeys, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'machine-b' }, hosts: ['machine-b'], hostService: can })).toMatch(/machine-a\) has no host_key/)
+  })
+
   it('a begin forwarded from another machine is taken only from the machine it goes to', () => {
     expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb }, forwardedBy: 'machine-b' })).toBeNull()
     expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb }, forwardedBy: 'machine-c' })).toMatch(/taken only from the machine it goes to/)
     expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb }, forwardedBy: null })).toMatch(/unknown machine/)
   })
 
-  it('the copy link is the folder the standby runner sends to; a daemon one is not built yet', () => {
+  it('the copy link is the place the standby runner sends to: a folder here, or a folder on the target as a host', async () => {
     const b = settings.machines[1]!
-    expect(peerFor({ to: b, standby: { dir: sb } })).toBeInstanceOf(LocalPeer)
-    expect(peerFor({ to: b, standby: { dir: sa } })).toEqual({ refused: expect.stringMatching(/not to machine-b's standby_dir/) })
-    expect(peerFor({ to: b, standby: { dir: sb, host: 'box' } })).toEqual({ refused: expect.stringMatching(/next step/) })
+    expect(await peerFor({ to: b, standby: { dir: sb }, home: '/x/a' })).toBeInstanceOf(LocalPeer)
+    expect(await peerFor({ to: b, standby: { dir: sa }, home: '/x/a' })).toEqual({ refused: expect.stringMatching(/not to machine-b's standby_dir/) })
+    expect(await peerFor({ to: b, standby: { dir: sb, host: 'box' }, home: '/x/a' })).toEqual({ refused: expect.stringMatching(/on host box, not on machine-b/) })
+    const connect = async () => { throw new Error('not dialled in this test') }
+    const d = await peerFor({ to: b, standby: { dir: sb, host: 'dev-b' }, home: '/x/a', connect })
+    expect(d).toBeInstanceOf(DaemonPeer)
+    expect((d as DaemonPeer).kind).toBe('daemon')
+    ;(d as DaemonPeer).close()
   })
 })

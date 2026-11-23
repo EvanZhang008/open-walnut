@@ -84,6 +84,7 @@ export interface TargetState {
   sourceHome: string
   targetHome: string
   reverseStandbyDir: string
+  reverseStandbyHost?: string
   sourceAccountHome?: string
   targetAccountHome?: string
   sourceVersion: string
@@ -101,6 +102,8 @@ export interface TargetState {
   downtimeMs?: number
   rollbackWhy?: string
   offlineChecked?: boolean
+  /** What the copy held as it became the home (self-check.ts readCopyFacts): the trial compares with it, never with the old home. */
+  copyFacts?: import('./self-check.js').CopyFacts
   outcomeUnknown?: string[]
   serviceRole?: RoleStep
   /** Tests only, from the ticket. */

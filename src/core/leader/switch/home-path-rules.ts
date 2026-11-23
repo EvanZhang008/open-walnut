@@ -53,12 +53,17 @@ export function rewriteLedgerHome(home: string, from: string, to: string): numbe
   }
 }
 
-/** Point config.yaml's standby.dir at `dir`, keeping the rest of the file as it is. */
-export function rewriteStandbyDir(home: string, dir: string): void {
+/**
+ * Point config.yaml's standby at the old machine, keeping the rest of the file as it is: `dir` there,
+ * on the host `host` when the copy came over a daemon link (none: a folder this machine reaches).
+ */
+export function rewriteStandbyTarget(home: string, to: { dir: string; host?: string }): void {
   const file = path.join(home, 'config.yaml')
   const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
   const doc = YAML.parseDocument(text)
-  doc.setIn(['standby', 'dir'], dir)
+  doc.setIn(['standby', 'dir'], to.dir)
+  if (to.host) doc.setIn(['standby', 'host'], to.host)
+  else doc.deleteIn(['standby', 'host'])
   writeAtomic(file, String(doc))
 }
 
@@ -79,8 +84,8 @@ const RULES: readonly PathRule[] = [
   { id: 'config-leader-switch', stores: ['config-yaml'], file: 'config.yaml', at: 'leader_switch', rule: 'keep', why: 'names both machines\' places on purpose (each machine\'s home, standby folder, account home and witnesses)' },
   {
     id: 'config-standby-dir', stores: ['config-yaml'], file: 'config.yaml', at: 'standby.dir', rule: 'rewrite', remains: true,
-    why: 'becomes the old machine\'s standby folder: the new leader\'s batches go there, for the switch back',
-    apply: (home, ctx) => { rewriteStandbyDir(home, ctx.reverseStandbyDir); return 1 },
+    why: 'becomes the old machine\'s standby folder (on that machine as a host, when the copy came over a daemon link): the new leader\'s batches go there, for the switch back',
+    apply: (home, ctx) => { rewriteStandbyTarget(home, { dir: ctx.reverseStandbyDir, ...(ctx.reverseStandbyHost ? { host: ctx.reverseStandbyHost } : {}) }); return 1 },
   },
   { id: 'config-host-keyed', stores: ['config-yaml'], file: 'config.yaml', at: ['hosts', 'standby.walnut', 'usage.proxy_log_dirs', 'external_session_import.excluded_cwds'], rule: 'keep', why: 'a place or a command on a named host (a host\'s definition and its shell_setup, the standby host\'s program, a host\'s log folder or folders): that host did not move' },
   { id: 'config-settings', stores: ['config-yaml', 'config-dir'], file: ['config.yaml', 'config/**'], rule: 'rewrite', why: 'a setting the leader follows on its own machine (a model, a key file, a source checkout, a folder): the same place under the new home or the new account home' },

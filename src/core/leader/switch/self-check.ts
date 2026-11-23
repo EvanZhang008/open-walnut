@@ -1,19 +1,24 @@
 /**
  * The trial's self-check of the new leader's home (docs/reference/leader-switch.md, step 4).
  *
+ * Every comparison is with the new leader's OWN copy, on its own machine (the old home may be on
+ * another machine, never read by path): what the copy held is read once, right after the promotion
+ * moved it into the home and before any path in it was rewritten (readCopyFacts, kept in the target
+ * job's state), and the checks compare the home with that.
+ *
  * Offline, before the trial server starts:
  *   - every file of the final batch is in the home at its size (the batch is everything the
  *     old leader held as leader data: one missing is a copy that cannot lead);
- *   - every database of the batch passes integrity_check, and has as many rows as the old
- *     home's (read-only; the old leader is stopped);
+ *   - every database of the batch passes integrity_check, and has as many rows as the copy had
+ *     (a rewrite that drops rows is caught);
  *   - no path of the old machine is left in the home but those the rule table keeps on purpose
  *     (home-paths.ts scans, home-path-rules.ts decides): one the promotion should have
  *     rewritten, or one no rule names, and the new leader would keep using the old machine's
  *     places (the trial rolls back; the paths are in the message);
  * Online, against the trial server:
  *   - it runs a program that can read the data (its version is not older than the old one's);
- *   - the newest task of the old home and one of its notes read back through the API as they
- *     are in the old home.
+ *   - the newest task of the copy and one of its notes read back through the API as the copy
+ *     held them.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -41,15 +46,48 @@ export function leftoverPaths(home: string, roots: readonly PathRoot[], rules: r
   return { problems, detail }
 }
 
+/** What the new leader's copy held, read as it became the home (before any rewrite): the trial compares with it. */
+export interface CopyFacts {
+  /** Rows of each database of the batch. */
+  rows: Record<string, number>
+  /** The newest task (tasks.sqlite), and a note with its text: both read back through the trial server. */
+  task: { id: string; title: string } | null
+  note: (ReadBackNote & { content: string }) | null
+  at: string
+}
+
+/** A note larger than this is not kept in the job's state (its read-back is skipped). */
+const NOTE_MAX_BYTES = 256 * 1024
+
+export async function readCopyFacts(home: string, files: readonly BatchFile[]): Promise<CopyFacts> {
+  const rows: Record<string, number> = {}
+  let task: CopyFacts['task'] = null
+  await Promise.all(files.filter((f) => f.db).map(async (f) => {
+    const r = await inspectSqliteOffThread(path.join(home, f.p), f.p === 'tasks/tasks.sqlite' ? { query: TASK_QUERY } : {})
+    if (r.ok && typeof r.rows === 'number') rows[f.p] = r.rows
+    if (f.p === 'tasks/tasks.sqlite' && r.row && typeof r.row.id === 'string') task = { id: r.row.id, title: String(r.row.title ?? '') }
+  }))
+  const picked = pickReadBackNote(files.map((f) => f.p))
+  let note: CopyFacts['note'] = null
+  if (picked) {
+    try {
+      const file = path.join(home, picked.rel)
+      if (fs.statSync(file).size <= NOTE_MAX_BYTES) note = { ...picked, content: fs.readFileSync(file, 'utf8') }
+    } catch { /* not there: the offline check names it */ }
+  }
+  return { rows, task, note, at: new Date().toISOString() }
+}
+
 export async function offlineCheck(o: {
-  sourceHome: string
+  /** What the copy held (readCopyFacts). */
+  facts: CopyFacts
   home: string
   files: BatchFile[]
   sizesAndRows?: boolean
   /** The roots the promotion moved (promote.ts moveRoots) and the rule table it used. */
   roots: readonly PathRoot[]
   rules: readonly PathRule[]
-}): Promise<CheckOutcome & { task: { id: string; title: string } | null; note: ReadBackNote | null }> {
+}): Promise<CheckOutcome> {
   const exact = o.sizesAndRows !== false
   let missing = 0
   const paths = leftoverPaths(o.home, o.roots, o.rules)
@@ -68,20 +106,15 @@ export async function offlineCheck(o: {
   }
   if (missing > 5) problems.push(`... ${missing - 5} more files missing or of another size`)
   const dbs = o.files.filter((f) => f.db).map((f) => f.p).sort()
-  const counts: Record<string, { copy?: number; source?: number }> = {}
-  let task: { id: string; title: string } | null = null
+  const counts: Record<string, { home?: number; copy?: number }> = {}
   await Promise.all(dbs.map(async (rel) => {
-    const [copy, source] = await Promise.all([
-      inspectSqliteOffThread(path.join(o.home, rel), rel === 'tasks/tasks.sqlite' ? { query: TASK_QUERY } : {}),
-      inspectSqliteOffThread(path.join(o.sourceHome, rel), rel === 'tasks/tasks.sqlite' ? { query: TASK_QUERY } : {}),
-    ])
-    counts[rel] = { copy: copy.rows, source: source.rows }
-    if (!copy.ok) problems.push(`${rel}: ${copy.detail ?? 'integrity check failed'} in the new home`)
-    else if (exact && source.ok && !rowsChange(rel) && copy.rows !== source.rows) problems.push(`${rel}: ${copy.rows} rows in the new home, ${source.rows} in the old one`)
-    if (rel === 'tasks/tasks.sqlite' && source.row && typeof source.row.id === 'string') task = { id: source.row.id, title: String(source.row.title ?? '') }
+    const r = await inspectSqliteOffThread(path.join(o.home, rel))
+    const had = o.facts.rows[rel]
+    counts[rel] = { home: r.rows, copy: had }
+    if (!r.ok) problems.push(`${rel}: ${r.detail ?? 'integrity check failed'} in the new home`)
+    else if (exact && had !== undefined && !rowsChange(rel) && r.rows !== had) problems.push(`${rel}: ${r.rows} rows in the new home, ${had} in the copy it was made from`)
   }))
-  const note = pickReadBackNote(o.files.map((f) => f.p))
-  return { ok: problems.length === 0, problems, detail: { files: o.files.length, databases: counts, paths: paths.detail }, task, note }
+  return { ok: problems.length === 0, problems, detail: { files: o.files.length, databases: counts, paths: paths.detail } }
 }
 
 function versionTuple(v: string): number[] {
@@ -98,7 +131,7 @@ export function olderVersion(a: string, b: string): boolean {
   return false
 }
 
-export async function onlineCheck(o: { side: SwitchSide; sourceHome: string; sourceVersion: string; task: { id: string; title: string } | null; note: ReadBackNote | null }): Promise<CheckOutcome> {
+export async function onlineCheck(o: { side: SwitchSide; sourceVersion: string; facts: Pick<CopyFacts, 'task' | 'note'> }): Promise<CheckOutcome> {
   const problems: string[] = []
   const detail: Record<string, unknown> = {}
   const st = await o.side.api('GET', '/api/leader/status').catch((err) => ({ status: 0, json: { error: String(err) } }))
@@ -107,11 +140,10 @@ export async function onlineCheck(o: { side: SwitchSide; sourceHome: string; sou
   if (st.status !== 200 || !s?.version) problems.push(`the trial server's leader status did not answer (${st.status})`)
   else if (olderVersion(s.version, o.sourceVersion)) problems.push(`the trial server runs ${s.version}, older than ${o.sourceVersion} that wrote the data`)
   if (s?.permit?.mayAct) problems.push('the trial server says it may act: a trial must keep every outward door closed')
-  // The newest task and a note of the old home, through the trial server (shared with the restore drill).
-  const note = o.note ? { ...o.note, content: fs.readFileSync(path.join(o.sourceHome, o.note.rel), 'utf8') } : null
-  const back = await readBackThroughServer((m, p) => o.side.api(m, p), { task: o.task, note })
+  // The newest task and a note the copy held, through the trial server (shared with the restore drill).
+  const back = await readBackThroughServer((m, p) => o.side.api(m, p), { task: o.facts.task, note: o.facts.note })
   problems.push(...back.problems)
-  if (o.task) detail.task = o.task.id
-  if (o.note) detail.note = o.note.rel
+  if (o.facts.task) detail.task = o.facts.task.id
+  if (o.facts.note) detail.note = o.facts.note.rel
   return { ok: problems.length === 0, problems, detail }
 }
