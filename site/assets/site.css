@@ -499,6 +499,8 @@ footer{border-top:1px solid var(--line);padding:40px 0 52px}
 @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 
 /* ---------- responsive ---------- */
+.phones{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:22px;max-width:1120px;margin:56px auto 0}
+.phones img{width:100%;height:auto;border-radius:22px}
 @media (max-width:980px){
   .cols{grid-template-columns:repeat(3,1fr)}
   .cols .col:nth-child(n+4){display:none}
@@ -525,6 +527,7 @@ footer{border-top:1px solid var(--line);padding:40px 0 52px}
   .tier.top{justify-content:flex-start}
 }
 @media (max-width:720px){
+  .phones{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:36px}
   .core-tabs{display:flex;width:100%}
   .ct{padding:8px 12px;font-size:13px}
   .core-cap{font-size:15px;min-height:4.5em}

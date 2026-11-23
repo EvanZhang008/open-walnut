@@ -352,6 +352,13 @@ is on, with no server to run), or an optional
 self-hosted cloud companion that also answers while the machine sleeps. The app learns
 every address after it connects once and switches to the best one that answers.
 
+<p align="center">
+  <img src="docs/assets/ios/chat-ceo.png" alt="The CEO chat on iPhone: ask for nightly photo backups and the CEO hands it to the Home server VP" width="200" />
+  <img src="docs/assets/ios/tasks.png" alt="Tasks on iPhone, grouped by what needs you, what is working and what is done" width="200" />
+  <img src="docs/assets/ios/session.png" alt="One agent session on iPhone: what it did and the result" width="200" />
+  <img src="docs/assets/ios/notes.png" alt="A note on iPhone, the same notes your agents read" width="200" />
+</p>
+
 See [Phone connection routes](docs/reference/phone-connection-routes.md) for how the
 switching works, and [Cloud sync](docs/reference/cloud-sync.md) for the companion.
 
