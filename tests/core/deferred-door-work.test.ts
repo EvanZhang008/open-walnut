@@ -153,8 +153,10 @@ describe('held at a closed door', () => {
     p.doors.notifyOutwardDoorsOpened()
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1))
     await vi.waitFor(() => expect(unclaimed()).toEqual(['task-sync:mark-moved:ms-todo:t2']))
-    p.doors.notifyOutwardDoorsOpened()
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2))
+    // The kept entry's claim is back in the file a moment before its first pass ends; an opening in
+    // that moment leaves it to the slow retry. Open again until the next opening takes it: it still
+    // runs exactly once more (the counts below).
+    await vi.waitFor(() => { p.doors.notifyOutwardDoorsOpened(); expect(run).toHaveBeenCalledTimes(2) })
     await vi.waitFor(() => expect(held()).toEqual([]))
     expect(await p.work.replayDeferredDoorWork()).toBe(0)
     expect(run).toHaveBeenCalledTimes(2)
@@ -178,7 +180,8 @@ describe('held at a closed door', () => {
     p.work.registerDeferredReplay('mail-unsubscribe', answer)
     await vi.waitFor(() => expect(answer).toHaveBeenCalledWith({ letterId: 'lt-1', actionId: 'unsubscribe' }))
     await vi.waitFor(() => expect(unclaimed()).toEqual(['task-sync:delete:gone:t3']))
-    expect(held()).toHaveLength(1)
+    // The answer's entry leaves the file after its run: wait for that, not only for the claim.
+    await vi.waitFor(() => expect(held()?.map((e) => e.key)).toEqual(['task-sync:delete:gone:t3']))
     expect(answer).toHaveBeenCalledTimes(1)
   })
 
