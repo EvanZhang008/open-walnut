@@ -58,17 +58,13 @@ export const TASK_CSS = `
 .wt-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .wt-chip .wt-fact-v { font-weight: 500; }
 
-/* The pill: icon, name and one whole unit per lane; the exact numbers are its native tooltip. */
+/* The pill: icon + one whole unit per lane; the exact numbers are its native tooltip. */
 .wt-pill { position: relative; display: inline-flex; }
 .wt-pill .wt-chip { gap: 2px; background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .wt-pill .wt-chip:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .wt-pill-icon { flex-shrink: 0; }
 .wt-pill-icon.is-human { color: var(--wt-human); }
 .wt-pill-icon.is-agent { color: var(--wt-agent); margin-left: 5px; }
-/* Each lane says whose time it is: "You 0m · Agent 9h". */
-.wt-pill .wt-pill-name { color: var(--fg-secondary, var(--fg-muted)); }
-.wt-pill .wt-chip .wt-pill-icon.is-agent { margin-left: 2px; }
-.wt-pill .wt-chip .wt-fact-sep { margin: 0 2px; }
 .wt-sr {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;

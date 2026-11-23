@@ -276,7 +276,9 @@ test('the menu row pins the time to every session header, kept across a reload',
   await expect(menu).toBeVisible()
   const chip = item.getByTestId('time-session-chip')
   await expect(chip).toBeVisible()
-  // The pill: per lane an icon, its name ("You", "Agent") and one whole unit.
+  // The pill: an icon and one whole unit per lane ("You" and "Agent" are there for a reader).
+  // Written out on screen it no longer fits a 1280 px window's second column and drops into "..."
+  // (2026-11-23), so the words stay in its text for a reader, its tooltip and the menu's Time row.
   await expect(chip).toHaveText('You 50m \u00b7 Agent 3h')
   await expect(chip).toHaveAttribute('aria-label', /Time on this session\. You: 50m total, .*Agent: 3h 02m total/)
   // Its exact numbers are its native tooltip; nothing grows out of it (task-slots.tsx TimeChip).
@@ -373,8 +375,6 @@ test('the header pill grows nothing on hover or focus: the exact numbers are its
   await expect(cell(chip, 'agent-compact')).toHaveText('3h')
   await expect(chip.locator('.wt-pill-icon.is-human')).toHaveCount(1)
   await expect(chip.locator('.wt-pill-icon.is-agent')).toHaveCount(1)
-  // Each lane says whose time it is, in words (icons alone did not).
-  await expect(chip.locator('.wt-pill-name')).toHaveText(['You', 'Agent'])
   // The exact numbers: its tooltip, and its name for a screen reader.
   await expect(chip).toHaveAttribute('title', /You: 50m total[\s\S]*Agent: 3h 02m total[\s\S]*Click for day by day/)
   await expect(chip).toHaveAttribute('aria-label', /You: 50m total.*Agent: 3h 02m total/)
