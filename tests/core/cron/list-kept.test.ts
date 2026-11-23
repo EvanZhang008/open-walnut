@@ -84,4 +84,22 @@ describe('cron listKept', () => {
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter((c) => !c.includes('kept: true'))).toEqual([]);
   });
+
+  // 2026-11-23: trigger_list (GET /api/v1/routines) waited 7 to 11 s behind the lock, past its op's
+  // 10 s self-call limit. Every route that only shows routines, and the replica relay's reads, read kept.
+  it.each([
+    ['src/web/routes/routines-v1.ts', /\b(?:listRoutines|getRoutine)\([^)]*\)/g],
+    ['src/web/routes/cron.ts', /\b(?:listRoutines|getRoutine)\((?:[^()]|\([^()]*\))*\)/g],
+  ])('%s reads the routines without the lock', (file, re) => {
+    const src = readFileSync(path.join(__dirname, '../../..', file), 'utf-8');
+    const calls = src.match(re) ?? [];
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.filter((c) => !c.includes('kept: true'))).toEqual([]);
+  });
+
+  it("the replica relay's list and get read without the lock", () => {
+    const src = readFileSync(path.join(__dirname, '../../../src/core/routines/routines-core.ts'), 'utf-8');
+    expect(src).toMatch(/case 'list': return await listRoutines\([^;]*kept: true/);
+    expect(src).toMatch(/case 'get': return await getRoutine\(id, \{ kept: true \}\)/);
+  });
 });

@@ -291,12 +291,18 @@ export async function listRoutines(includeDisabled: boolean, opts?: { kept?: boo
   return owned({ jobs: jobs.map((j) => withMissed(j)) });
 }
 
-export async function getRoutine(id: string): Promise<{ job: unknown }> {
+/**
+ * `opts.kept`: a reader that only shows the job (a route, trigger_list) takes it as this process
+ * last read or wrote it, without waiting for the store's lock (cron ops.listKept), as listRoutines does.
+ */
+export async function getRoutine(id: string, opts?: { kept?: boolean }): Promise<{ job: unknown }> {
   if (isCompanion()) {
     const out = await (await companion()).companionGetRoutine(id);
     return owned({ ...out, job: withMissed(out.job) });
   }
-  const jobs = isHostReplicaProgram() ? await copiedRoutines(true) : await (await requireCronService()).list({ includeDisabled: true });
+  const service = isHostReplicaProgram() ? null : await requireCronService();
+  const jobs = !service ? await copiedRoutines(true)
+    : opts?.kept ? await service.listKept({ includeDisabled: true }) : await service.list({ includeDisabled: true });
   const job = jobs.find((j) => j.id === id);
   if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
   return owned({ job: withMissed(job) });
@@ -572,11 +578,12 @@ export async function handleRoutinesRelayAction(
       const { createTriggerRoutine } = await import('./trigger-api.js');
       return await createTriggerRoutine(p.body, typeof p.callerSid === 'string' ? p.callerSid : undefined, origin) as unknown as Record<string, unknown>;
     }
-    case 'list': return await listRoutines(p.includeDisabled === true) as unknown as Record<string, unknown>;
+    // A replica's reads only show the routines: without the store's lock (listKept), as the routes read them.
+    case 'list': return await listRoutines(p.includeDisabled === true, { kept: true }) as unknown as Record<string, unknown>;
     case 'actions': return await listRoutineActions() as unknown as Record<string, unknown>;
     case 'status': return await getRoutinesStatus();
     case 'executors': return await listRoutineExecutors();
-    case 'get': return await getRoutine(id) as unknown as Record<string, unknown>;
+    case 'get': return await getRoutine(id, { kept: true }) as unknown as Record<string, unknown>;
     case 'create': return await createRoutine(p.body, origin, typeof p.callerSid === 'string' ? { callerSid: p.callerSid } : undefined) as unknown as Record<string, unknown>;
     case 'patch': return await patchRoutine(id, p.body, origin, typeof p.callerSid === 'string' ? { callerSid: p.callerSid } : undefined) as unknown as Record<string, unknown>;
     case 'delete': return await deleteRoutine(id) as unknown as Record<string, unknown>;

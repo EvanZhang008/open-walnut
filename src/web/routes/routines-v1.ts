@@ -118,8 +118,10 @@ routinesV1Router.get('/routines', async (req: Request, res: Response, next: Next
       await relayControlAction(res, 'server.routines', SERVER_RELAY_SID, { includeDisabled }, 200)
       return
     }
+    // Read without the store's lock (cron ops.listKept): behind a run of recorded trigger checks
+    // the locked list waited 7 to 11 s, past trigger_list's 10 s self-call limit (2026-11-23).
     const { listRoutines } = await import('../../core/routines/routines-core.js')
-    await runLocal(res, next, 200, () => listRoutines(includeDisabled))
+    await runLocal(res, next, 200, () => listRoutines(includeDisabled, { kept: true }))
   } catch (err) {
     next(err)
   }
@@ -250,7 +252,7 @@ routinesV1Router.get('/routines/:id', async (req: Request, res: Response, next: 
       return
     }
     const { getRoutine } = await import('../../core/routines/routines-core.js')
-    await runLocal(res, next, 200, () => getRoutine(id))
+    await runLocal(res, next, 200, () => getRoutine(id, { kept: true }))
   } catch (err) {
     next(err)
   }

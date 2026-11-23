@@ -74,7 +74,7 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // GET /api/cron — list jobs
   router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      res.json(await listRoutines(req.query.includeDisabled === 'true'))
+      res.json(await listRoutines(req.query.includeDisabled === 'true', { kept: true }))
     } catch (err) {
       handleCoreError(res, next, err)
     }
@@ -161,7 +161,7 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // GET /api/cron/:id — single job
   router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      res.json(await getRoutine(req.params.id as string))
+      res.json(await getRoutine(req.params.id as string, { kept: true }))
     } catch (err) {
       handleCoreError(res, next, err)
     }
