@@ -211,7 +211,7 @@ export function GeneralSection({ config, onSave }: Props) {
         />
         <SettingsRow
           label="Closed sessions go to"
-          help="Where a session goes when you close it or start a new one: the Recent list at the taskbar's right end, or a taskbar chip, as if minimized."
+          help="Where a session goes when you close it or start a new one: the Recent list at the taskbar's right end, or a chip there."
           data-testid="settings-taskbar-leaving-row"
           control={
             <SegmentedControl

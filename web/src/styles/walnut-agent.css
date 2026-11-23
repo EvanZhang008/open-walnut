@@ -613,8 +613,9 @@
 /* The draft's empty tool row (DraftSessionPanel) only where it sits beside session columns. */
 .draft-header-tool-row { display: none; }
 .main-page-session-column .draft-session-panel .draft-header-tool-row { display: flex; }
-/* A session's title row is as tall as its meta chips (.session-panel-title-meta, 22px). */
-.main-page-session-column .draft-session-panel .session-panel-header-top { min-height: 22px; }
+/* A session's title row is as tall as its kebab key (TaskQuickActions: the 28px quiet icon key of
+   the session header), so the draft's header lines meet its neighbours' (draft-first-frame.spec.ts). */
+.main-page-session-column .draft-session-panel .session-panel-header-top { min-height: 28px; }
 .draft-header-tool-spacer { visibility: hidden; pointer-events: none; }
 /* There the draft's discard x stands where every column's close is: on the tool row, over the
    spacer (the header's padding: 12px top, 14px right), not small in the title row. */
