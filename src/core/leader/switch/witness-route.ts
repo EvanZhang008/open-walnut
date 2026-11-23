@@ -21,9 +21,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
+import { withFileLock } from '../../../utils/file-lock.js'
 import { serveLocalWitness, setUpLocalWitnesses } from './local-witnesses.js'
 import {
-  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, parseWitnessCall, parseWitnessSetup, type WitnessAnswer,
+  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, parseWitnessCall, parseWitnessSetup, setupAllowed, type WitnessAnswer,
 } from './witness-wire.js'
 
 /** The largest body read: a list change carries every op entry. */
@@ -82,11 +83,12 @@ export async function serveWitnessCall(pathname: string, body: unknown, caller: 
     if (!call) return { status: 400, body: { ok: false, error: 'bad_request' } }
     const auth = authorizeWitnessCaller(caller(call.walnutId), deps.walnutId())
     if (!auth.ok) return { status: auth.status, body: { ok: false, error: auth.error } }
-    // A directory that is not there is a witness that was never set up here (or one whose disk was lost).
+    // A directory that is not there is a witness that was never set up here (or one whose disk was lost): the
+    // answer is the one of a path this service does not have, as with the experiment off.
     const place = { id: call.witness, dir: witnessDir(deps.root, call.walnutId, call.witness) }
     try {
       const reply = await serveLocalWitness(place, call.request, deps.params ?? DEFAULT_PERMIT_PARAMS)
-      return reply ? { status: 200, body: { ok: true, reply } } : { status: 404, body: { ok: false, error: 'not_a_witness' } }
+      return reply ? { status: 200, body: { ok: true, reply, ...(call.round !== undefined ? { round: call.round } : {}) } } : NOT_FOUND
     } catch (err) {
       deps.log?.('warn', 'witness route: a request could not be served', { witness: call.witness, error: err instanceof Error ? err.message : String(err) })
       return { status: 503, body: { ok: false, error: 'busy' } }
@@ -97,13 +99,25 @@ export async function serveWitnessCall(pathname: string, body: unknown, caller: 
     if (!setup) return { status: 400, body: { ok: false, error: 'bad_request' } }
     const auth = authorizeWitnessCaller(caller(setup.walnutId), deps.walnutId())
     if (!auth.ok) return { status: auth.status, body: { ok: false, error: auth.error } }
+    // A setup makes a witness from nothing: allowed only while the caller saw no other witness holding a record.
+    const allowed = setupAllowed(setup)
+    if (!allowed.ok) return { status: 409, body: { ok: false, error: allowed.error } }
+    // One setup at a time per Walnut: the check for another witness here and the making of this one are one step.
     const walnutDir = path.join(deps.root, setup.walnutId)
-    let others: string[] = []
-    try { others = fs.readdirSync(walnutDir).filter((n) => n !== setup.witness) } catch { /* none yet */ }
-    if (others.length) return { status: 409, body: { ok: false, error: 'another_witness_here' } }
-    const made = setUpLocalWitnesses([{ id: setup.witness, dir: witnessDir(deps.root, setup.walnutId, setup.witness) }], setup.list)
-    deps.log?.('info', 'witness route: set up', { witness: setup.witness, made: made.made.length > 0 })
-    return { status: 200, body: { ok: true, made: made.made.length > 0 } }
+    fs.mkdirSync(walnutDir, { recursive: true, mode: 0o700 })
+    try {
+      return await withFileLock(path.join(walnutDir, '.setup'), async (): Promise<WitnessResponse> => {
+        let others: string[] = []
+        try { others = fs.readdirSync(walnutDir).filter((n) => n !== setup.witness && !n.startsWith('.')) } catch { /* none yet */ }
+        if (others.length) return { status: 409, body: { ok: false, error: 'another_witness_here' } }
+        const made = setUpLocalWitnesses([{ id: setup.witness, dir: witnessDir(deps.root, setup.walnutId, setup.witness) }], setup.list)
+        deps.log?.('info', 'witness route: set up', { witness: setup.witness, made: made.made.length > 0 })
+        return { status: 200, body: { ok: true, made: made.made.length > 0 } }
+      }, { timeoutMs: 5_000 })
+    } catch (err) {
+      deps.log?.('warn', 'witness route: a setup could not be done', { witness: setup.witness, error: err instanceof Error ? err.message : String(err) })
+      return { status: 503, body: { ok: false, error: 'busy' } }
+    }
   }
   return NOT_FOUND
 }

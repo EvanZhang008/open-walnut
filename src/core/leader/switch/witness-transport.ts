@@ -27,7 +27,7 @@ import { DEFAULT_PERMIT_PARAMS, type PermitParams, type PermitReply, type Permit
 import { serveLocalWitness } from './local-witnesses.js'
 import { isRemoteWitness, type RemoteWitnessPlace, type WitnessPlace } from './settings.js'
 import {
-  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, acceptReply, type WitnessCall, type WitnessSetup,
+  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, acceptReply, type WitnessCall, type WitnessEvidence, type WitnessSetup,
 } from './witness-wire.js'
 
 /**
@@ -84,6 +84,12 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
   const after = opts.after ?? timerAfter
   const timeoutMs = opts.timeoutMs ?? WITNESS_REQUEST_TIMEOUT_MS
   const open = new Map<string, number>()
+  // Each read of a witness gets the next round number, and its answer echoes it. An answer is handed on only if it is newer
+  // than the last one handed on for that witness: a reply that overtook a newer one (late over a slow link, or reordered)
+  // never takes the state back. An answer to an older read still counts when no newer one came first, so a witness whose
+  // round trip is longer than the interval between looks is still heard (its answers are as old as its round trip).
+  const readRound = new Map<string, number>()
+  const answeredRound = new Map<string, number>()
   const deliver = (reply: PermitReply): void => { defer(() => opts.deliver(reply)) }
 
   function sendRemote(place: RemoteWitnessPlace, req: PermitRequest): void {
@@ -93,6 +99,8 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
     const n = open.get(slot) ?? 0
     if (n >= maxOpen) { opts.onDrop?.('too-many-open', { witness: place.id }); return }
     open.set(slot, n + 1)
+    let round: number | undefined
+    if (req.type === 'read') { round = (readRound.get(place.id) ?? 0) + 1; readRound.set(place.id, round) }
     let settled = false
     let cancelTimer: (() => void) | null = null
     let abandon: (() => void) | void = undefined
@@ -104,12 +112,16 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
       if (late) { abandon?.(); opts.onDrop?.('late-reply', { witness: place.id }); return }
       if (!r) return
       if (r.status !== 200) { opts.onDrop?.('bad-status', { witness: place.id, status: r.status }); return }
-      const reply = acceptReply(r.body, place.id, req)
+      const reply = acceptReply(r.body, place.id, req, round)
+      if (reply && round !== undefined) {
+        if (round <= (answeredRound.get(place.id) ?? 0)) { opts.onDrop?.('late-reply', { witness: place.id }); return }
+        answeredRound.set(place.id, round)
+      }
       if (!reply) { opts.onDrop?.('invalid-reply', { witness: place.id }); return }
       deliver(reply)
     }
     if (Number.isFinite(timeoutMs)) cancelTimer = after(timeoutMs, () => finish(null, true))
-    const call: WitnessCall = { v: 1, walnutId: opts.walnutId ?? '', witness: place.id, request: req }
+    const call: WitnessCall = { v: 1, walnutId: opts.walnutId ?? '', witness: place.id, request: req, ...(round !== undefined ? { round } : {}) }
     abandon = opts.remote(place, WITNESS_REQUEST_PATH, call, (r) => finish(r, false))
     // A call that ended before it returned its handle has nothing left to abandon.
     if (settled) abandon = undefined
@@ -151,9 +163,12 @@ export function addWitnessReach(reach: HostCall): () => void {
   return () => { const i = reaches.indexOf(reach); if (i >= 0) reaches.splice(i, 1) }
 }
 
+let configModule: Promise<typeof import('../../config-manager.js')> | null = null
+
 /** `host` as the config names it: a `hosts` alias, or else a machine id some connected host reported in its hello. */
 export async function resolveWitnessHost(host: string): Promise<string> {
-  const { getConfig } = await import('../../config-manager.js')
+  // One import shared by the calls that arrive together (a read goes to every witness at once).
+  const { getConfig } = await (configModule ??= import('../../config-manager.js'))
   const hosts = (await getConfig()).hosts ?? {}
   if (Object.hasOwn(hosts, host)) return host
   const { pooledMachineIdOf } = await import('../../../providers/daemon-connection.js')
@@ -162,10 +177,30 @@ export async function resolveWitnessHost(host: string): Promise<string> {
   return alias
 }
 
+let linkModules: Promise<[typeof import('../../hosts/link.js'), typeof import('../../host-server/request-over.js')]> | null = null
+
+/** Whether this process ever opened a daemon link for a witness call (closeWitnessLinks). */
+let daemonLinkOpened = false
+
+/**
+ * Close the daemon links this process opened for witness calls, when it did. A server refused the permission goes on as a
+ * standby, which must hold no link that describes this Walnut to a host as its leader (boot.ts calls this before that).
+ * The permit runtime opens none before it leads, so this is the second line, not the first.
+ */
+export async function closeWitnessLinks(): Promise<void> {
+  if (!daemonLinkOpened) return
+  daemonLinkOpened = false
+  const { disconnectAllDaemons } = await import('../../../providers/daemon-connection.js')
+  disconnectAllDaemons()
+}
+
 /** Through the daemon link this server holds to the host: one stream, one request. */
 async function overDaemonLink(host: string, path: string, body: unknown, timeoutMs: number, abandoned: { stream: { destroy(): void } | null; cancelled: boolean }): Promise<RemoteCallResult> {
-  const [{ link }, { requestOver }] = await Promise.all([import('../../hosts/link.js'), import('../../host-server/request-over.js')])
-  const conn = await link(await resolveWitnessHost(host))
+  // One import shared by the calls that arrive together (a read goes to every witness at once).
+  const [{ link }, { requestOver }] = await (linkModules ??= Promise.all([import('../../hosts/link.js'), import('../../host-server/request-over.js')]))
+  const resolved = await resolveWitnessHost(host)
+  daemonLinkOpened = true
+  const conn = await link(resolved)
   const stream = await conn.openStream('follower', 'replica')
   abandoned.stream = stream
   if (abandoned.cancelled) { stream.destroy(); throw new Error('abandoned') }
@@ -180,7 +215,7 @@ async function overDaemonLink(host: string, path: string, body: unknown, timeout
  * that must never do that (a standby, a reader command) leaves it off and reaches no remote witness
  * until a reach is registered.
  */
-export function hostLinkCall(o: { timeoutMs?: number; daemonLink?: boolean } = {}): RemoteCall {
+export function hostLinkCall(o: { timeoutMs?: number; daemonLink?: boolean | (() => boolean) } = {}): RemoteCall {
   const timeoutMs = o.timeoutMs ?? WITNESS_REQUEST_TIMEOUT_MS
   return (place, path, body, done) => {
     const abandoned: { stream: { destroy(): void } | null; cancelled: boolean } = { stream: null, cancelled: false }
@@ -193,6 +228,8 @@ export function hostLinkCall(o: { timeoutMs?: number; daemonLink?: boolean } = {
           if (p) { done(await p); return }
         }
         if (!o.daemonLink) { done(null); return }
+        // A function is asked per call: the leader runtime answers true only while it is `leading`.
+        if (typeof o.daemonLink === 'function' && !o.daemonLink()) { done(null); return }
         done(await overDaemonLink(place.host, path, body, timeoutMs, abandoned))
       } catch {
         // No link, a cut, a refusal: no answer.
@@ -206,12 +243,14 @@ export function hostLinkCall(o: { timeoutMs?: number; daemonLink?: boolean } = {
 /**
  * Set a remote witness up (its record is made once, with the first list). Not part of a permit
  * round: `walnut leader witnesses init` calls it, and a witness that already holds a record answers `made: false`.
+ * `evidence`: what the caller saw at each OTHER witness of the list; the witness refuses a setup unless
+ * none of them held a record (a witness that lost its disk never starts over beside records that still exist).
  */
-export function setUpRemoteWitness(place: RemoteWitnessPlace, list: string[], walnutId: string | null, call: RemoteCall = hostLinkCall({ daemonLink: true }), timeoutMs = 30_000): Promise<{ ok: true; made: boolean } | { ok: false; error: string }> {
+export function setUpRemoteWitness(place: RemoteWitnessPlace, list: string[], walnutId: string | null, evidence: WitnessEvidence[], call: RemoteCall = hostLinkCall({ daemonLink: true }), timeoutMs = 30_000): Promise<{ ok: true; made: boolean } | { ok: false; error: string }> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve({ ok: false, error: 'no answer' }), timeoutMs)
     timer.unref?.()
-    const setup: WitnessSetup = { v: 1, walnutId: walnutId ?? '', witness: place.id, list }
+    const setup: WitnessSetup = { v: 1, walnutId: walnutId ?? '', witness: place.id, list, evidence }
     call(place, WITNESS_SETUP_PATH, setup, (r) => {
       clearTimeout(timer)
       const b = r?.body as { ok?: boolean; made?: boolean; error?: string } | null | undefined

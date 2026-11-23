@@ -21,19 +21,21 @@ import { inspectSqliteOffThread } from '../../../lib/sqlite.js'
 import type { BatchFile } from '../../standby/types.js'
 import type { SwitchSide } from './side.js'
 import { pickReadBackNote, readBackThroughServer, type ReadBackNote } from '../../trial-start/read-back.js'
-import { describeHit, judgePathHits, keptPlace, ruleCoversFile, scanHomePaths, type PathHit, type PathRoot, type PathRule } from './home-paths.js'
+import { describeHit, judgePathHits, keptPlace, ruleCoversFile, scanHomePaths, unscannedProblems, type PathHit, type PathRoot, type PathRule, type ScanOptions } from './home-paths.js'
 
 export interface CheckOutcome { ok: boolean; problems: string[]; detail: Record<string, unknown> }
 
 const TASK_QUERY = 'SELECT id, title FROM tasks ORDER BY updated_at DESC LIMIT 1'
 
 /** Old-machine paths the promotion left in the home that no rule keeps, as problems. */
-export function leftoverPaths(home: string, roots: readonly PathRoot[], rules: readonly PathRule[]): { problems: string[]; detail: Record<string, unknown> } {
-  const scan = scanHomePaths(home, roots, { skip: keptPlace(rules) })
+export function leftoverPaths(home: string, roots: readonly PathRoot[], rules: readonly PathRule[], opts: Pick<ScanOptions, 'maxFileBytes' | 'maxDbBytes'> = {}): { problems: string[]; detail: Record<string, unknown> } {
+  const scan = scanHomePaths(home, roots, { ...opts, skip: keptPlace(rules) })
   const j = judgePathHits(scan.hits, rules)
   const problems: string[] = []
   const list = (hits: PathHit[]) => `${hits.slice(0, 8).map(describeHit).join('; ')}${hits.length > 8 ? `; ... ${hits.length - 8} more` : ''}`
   if (j.notRewritten.length) problems.push(`the promotion left old paths where it rewrites them: ${list(j.notRewritten.map((x) => x.hit))}`)
+  const unread = unscannedProblems(scan.skipped, rules)
+  if (unread.length) problems.push(`the home holds leader data the path scan could not read, which no rule marks as a blob or as kept: ${unread.slice(0, 8).map((u) => `${u.file} (${u.why})`).join('; ')}${unread.length > 8 ? `; ... ${unread.length - 8} more` : ''}`)
   if (j.unknown.length) problems.push(`the home holds old-machine paths no rule decides about (a store the switch does not know: docs/reference/leader-switch.md, Paths): ${list(j.unknown)}`)
   const detail = { files: scan.files, bytes: scan.bytes, ms: Math.round(scan.ms), hits: scan.hits.length, kept: j.kept.length, skipped: scan.skipped }
   return { problems, detail }

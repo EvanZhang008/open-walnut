@@ -5,7 +5,8 @@
  * The installed layout: the daemon's dir is `<HOME>/.cache/open-walnut` and its journal root,
  * leader book, streams and samples are in the data home's `tmp/` (daemon-standalone.ts keeps
  * them there for the daemon on its production dir, which a test must never use; here the
- * same places are given by WALNUT_JOURNAL_DIR, WALNUT_STREAMS_DIR, WALNUT_HOST_VITALS_DIR).
+ * same places are given by WALNUT_JOURNAL_DIR, WALNUT_STREAMS_DIR, WALNUT_HOST_VITALS_DIR), and its
+ * spawn journal and CLI-owner records are at their installed default, `<home>/local` (no override).
  * A real daemon (the standalone twin, on bun) holds a leader book and an offline slice of a
  * Walnut, and runs a session whose CLI prints a numbered line every 5 ms into the stream the
  * daemon writes in the home. Then the home is promoted twice, both shapes a switch meets:
@@ -26,6 +27,7 @@ import { WebSocket } from 'ws'
 import YAML from 'yaml'
 import { testBun } from '../../../helpers/bun-runtime.js'
 import { promoteCopy, promotedBy } from '../../../../src/core/leader/switch/promote.js'
+import { isMachineRuntimePath } from '../../../../src/core/home-manifest/index.js'
 
 const ROOT = path.resolve(__dirname, '../../../..')
 const BUN = testBun()
@@ -80,6 +82,8 @@ function cmd(body: Record<string, unknown>): Promise<Record<string, any>> {
 const streamFile = () => path.join(home, 'tmp', 'streams', `${SID}.jsonl`)
 const leaderBook = () => path.join(home, 'tmp', 'leader', `leader-${keyOf(leaderHome)}.json`)
 const sliceFile = () => path.join(home, 'tmp', 'offline-host', `slice-${keyOf(leaderHome)}.json`)
+const spawnJournal = () => path.join(home, 'local', 'spawn-journal.jsonl')
+const cliOwners = () => path.join(home, 'local', 'cli-owners')
 
 /** The numbered lines of the stream at the path the daemon reads. */
 function ticks(): number[] {
@@ -137,9 +141,9 @@ beforeAll(async () => {
     WALNUT_STREAMS_DIR: path.join(home, 'tmp', 'streams'),
     WALNUT_HOST_VITALS_DIR: path.join(home, 'tmp', 'host-vitals'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(base, 'no-legacy'),
-    WALNUT_SPAWN_JOURNAL: path.join(daemonDir, 'spawn-journal.jsonl'),
   }
-  for (const k of ['VITEST', 'VITEST_MODE', 'VITEST_WORKER_ID', 'VITEST_POOL_ID', 'WALNUT_DAEMON_STATE_DIR', 'WALNUT_HOME', 'OPEN_WALNUT_HOME']) delete env[k]
+  // The spawn journal and the CLI-owner records at their installed default, <HOME>/.open-walnut/local.
+  for (const k of ['VITEST', 'VITEST_MODE', 'VITEST_WORKER_ID', 'VITEST_POOL_ID', 'WALNUT_DAEMON_STATE_DIR', 'WALNUT_HOME', 'OPEN_WALNUT_HOME', 'WALNUT_SPAWN_JOURNAL']) delete env[k]
   proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[daemon] ${b}`))
   await waitFor(() => fs.existsSync(path.join(daemonDir, 'daemon.port')) && fs.existsSync(path.join(daemonDir, 'daemon.pid')), 90_000, 'the daemon')
@@ -159,6 +163,7 @@ beforeAll(async () => {
   const r = await cmd({ cmd: 'start', sid: SID, cwd: base, message: 'go', args: [process.execPath, mock, SID, path.join(base, 'mock-pids.txt')], origin: { home: leaderHome, task: 'tpromote-0001' } })
   expect(r.ok, JSON.stringify(r)).toBe(true)
   await waitFor(() => ticks().length > 20, 30_000, 'the stream in the home')
+  await waitFor(() => { try { return fs.readFileSync(spawnJournal(), 'utf8').includes(SID) } catch { return false } }, 30_000, 'the spawn journal in the home')
 }, 180_000)
 
 afterAll(() => {
@@ -177,7 +182,8 @@ async function promoteWhileWriting(switchId: string, files: Record<string, strin
   const standby = path.join(base, `standby-${switchId}`)
   makeCopy(standby, files)
   const inode = (f: string) => fs.statSync(f).ino
-  const before = { stream: inode(streamFile()), book: inode(leaderBook()), slice: inode(sliceFile()) }
+  const owners = () => (fs.existsSync(cliOwners()) ? fs.readdirSync(cliOwners()).sort() : null)
+  const before = { stream: inode(streamFile()), book: inode(leaderBook()), slice: inode(sliceFile()), journal: inode(spawnJournal()), owners: owners() }
   const startTick = ticks().at(-1)!
   const r = await promoteCopy({ switchId, standbyDir: standby, home, previousHome: leaderHome, reverseStandbyDir: path.join(base, 'machine-a', 'standby') })
   const endOfPromote = Date.now()
@@ -188,7 +194,8 @@ async function promoteWhileWriting(switchId: string, files: Record<string, strin
   for (const [rel, body] of Object.entries(files)) if (rel !== 'config.yaml') expect(fs.readFileSync(path.join(home, rel), 'utf8')).toBe(body)
   expect(YAML.parse(fs.readFileSync(path.join(home, 'config.yaml'), 'utf8')).standby.dir).toBe(path.join(base, 'machine-a', 'standby'))
   // The daemon's files: at the path it reads, the same files.
-  expect({ stream: inode(streamFile()), book: inode(leaderBook()), slice: inode(sliceFile()) }).toEqual(before)
+  expect({ stream: inode(streamFile()), book: inode(leaderBook()), slice: inode(sliceFile()), journal: inode(spawnJournal()), owners: owners() }).toEqual(before)
+  expect(fs.readFileSync(spawnJournal(), 'utf8')).toContain(SID)
   // Not one line lost: 1..last with no gap, past the line printed when the promotion began.
   expect(after.at(-1)!).toBeGreaterThan(startTick + 10)
   const gaps = after.filter((n, i) => n !== i + 1)
@@ -198,12 +205,13 @@ async function promoteWhileWriting(switchId: string, files: Record<string, strin
   expect((await cmd({ cmd: 'leader.configure', home: leaderHome, walnutId: WALNUT, backup: false })).ok).toBe(true)
   expect(fs.existsSync(leaderBook())).toBe(true)
   // Nothing of the daemon went with the old folder.
-  if (r.movedAside) expect(filesUnder(r.movedAside).filter((f) => /^tmp\/(streams|leader|offline-host|host-vitals)\//.test(f))).toEqual([])
+  if (r.movedAside) expect(filesUnder(r.movedAside).filter((f) => /^(tmp\/(streams|leader|offline-host|host-vitals)\/|local\/(spawn-journal\.jsonl|cli-owners\/))/.test(f))).toEqual([])
 }
 
 d('a promotion swaps a home around the daemon that writes in it', () => {
   it('the first switch: a folder holding only this machine\'s daemon state takes the copy', async () => {
-    expect(filesUnder(home).every((f) => f.startsWith('tmp/'))).toBe(true)
+    // Everything the daemon wrote in the home is in the manifest's runtime set (a place it is missing would move).
+    expect(filesUnder(home).filter((f) => !isMachineRuntimePath(f))).toEqual([])
     await promoteWhileWriting('s1', {
       'config.yaml': YAML.stringify({ standby: { dir: '/x' } }),
       'notes/a.md': '# a\n',

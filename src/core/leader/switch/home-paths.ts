@@ -78,9 +78,17 @@ function trimRoot(p: string): string {
   return t || p
 }
 
+/** `p` with its symlinks resolved, when it exists on this machine (else null). */
+function realOf(p: string): string | null {
+  try { return trimRoot(fs.realpathSync.native(p)) } catch { return null }
+}
+
 /**
  * The roots of a move: the old home and the old account home, each with what it becomes. A
- * root that does not change, or is not known, is left out.
+ * root that does not change, or is not known, is left out. A root that is a symlink (or lies
+ * under one: `/home/u` -> `/local/home/u`, macOS `/var` -> `/private/var`) is also matched by
+ * its real path, which is what a store that resolved it saved. Resolved on the machine that runs
+ * this, so it holds for a home on this machine (today's switch runs both sides here).
  */
 export function pathRoots(o: { fromHome: string; toHome: string; fromAccount?: string; toAccount?: string }): PathRoot[] {
   const roots: PathRoot[] = []
@@ -88,7 +96,10 @@ export function pathRoots(o: { fromHome: string; toHome: string; fromAccount?: s
     if (!from || !to) return
     const f = trimRoot(isWindowsStyle(from) ? from : path.resolve(from))
     const t = trimRoot(isWindowsStyle(to) ? to : path.resolve(to))
-    if (f !== t && f.length > 1) roots.push({ kind, from: f, to: t })
+    if (f === t || f.length <= 1) return
+    roots.push({ kind, from: f, to: t })
+    const real = isWindowsStyle(f) ? null : realOf(f)
+    if (real && real !== f && real !== t && real !== realOf(t) && !roots.some((r) => r.from === real)) roots.push({ kind, from: real, to: t })
   }
   add('home', o.fromHome, o.toHome)
   add('account', o.fromAccount, o.toAccount)
@@ -190,27 +201,73 @@ function walkValue(v: unknown, at: string, roots: readonly PathRoot[], hit: (at:
 /** The roots to move at a place (`under`: at it or anywhere under it); `all` is every root of the move. */
 interface RootsAt { (at: string, under?: boolean): readonly PathRoot[]; all: readonly PathRoot[] }
 
-/** A parsed value with the roots moved in every string and key whose place has roots to move. */
-function rewriteValue(v: unknown, at: string, rootsAt: RootsAt, n: { count: number }): unknown {
-  if (typeof v === 'string') {
+/**
+ * `text` (JSON) with the roots moved inside the string tokens whose place has roots to move, and
+ * nothing else touched: numbers, key order, spacing and the escapes of every other string stay
+ * byte for byte (a re-serialized value would lose an id above 2^53, a `__proto__` key, or one of
+ * two keys that become the same). A changed string is written again as JSON.stringify writes it.
+ * Null when `text` is not one JSON value.
+ */
+export function spliceJson(text: string, rootsAt: RootsAt): { text: string; count: number } | null {
+  const edits: { start: number; end: number; token: string }[] = []
+  let i = 0
+  const ws = () => { while (i < text.length && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r')) i++ }
+  const fail = (): never => { throw new SyntaxError('not JSON') }
+  const str = (at: string): string => {
+    if (text[i] !== '"') fail()
+    const start = i++
+    while (i < text.length && text[i] !== '"') i += text[i] === '\\' ? 2 : 1
+    if (i >= text.length) fail()
+    const end = ++i
+    const value = JSON.parse(text.slice(start, end)) as string
     const roots = rootsAt(at)
-    if (!roots.length) return v
-    const r = replaceRoots(v, rootsAt.all, roots)
-    if (r !== v) n.count++
-    return r
-  }
-  if (Array.isArray(v)) return v.map((x) => rewriteValue(x, `${at}[]`, rootsAt, n))
-  if (v && typeof v === 'object') {
-    const out: Record<string, unknown> = {}
-    const keyRoots = rootsAt(at ? `${at}.{key}` : '{key}')
-    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-      let key = k
-      if (keyRoots.length) { const r = replaceRoots(k, rootsAt.all, keyRoots); if (r !== k) { key = r; n.count++ } }
-      out[key] = rewriteValue(x, child(at, k), rootsAt, n)
+    if (roots.length) {
+      const next = replaceRoots(value, rootsAt.all, roots)
+      if (next !== value) edits.push({ start, end, token: JSON.stringify(next) })
     }
-    return out
+    return value
   }
-  return v
+  const value = (at: string): void => {
+    ws()
+    const c = text[i]
+    if (c === '{') {
+      i++; ws()
+      if (text[i] === '}') { i++; return }
+      for (;;) {
+        ws()
+        const key = str(at ? `${at}.{key}` : '{key}')
+        ws(); if (text[i++] !== ':') fail()
+        value(child(at, key))
+        ws()
+        if (text[i] === ',') { i++; continue }
+        if (text[i++] !== '}') fail()
+        return
+      }
+    }
+    if (c === '[') {
+      i++; ws()
+      if (text[i] === ']') { i++; return }
+      for (;;) {
+        value(`${at}[]`)
+        ws()
+        if (text[i] === ',') { i++; continue }
+        if (text[i++] !== ']') fail()
+        return
+      }
+    }
+    if (c === '"') { str(at); return }
+    const m = /^(?:true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(text.slice(i, i + 400))
+    if (!m) fail()
+    i += m![0].length
+  }
+  try {
+    value('')
+    ws()
+    if (i !== text.length) return null
+  } catch { return null }
+  let out = text
+  for (const e of edits.reverse()) out = out.slice(0, e.start) + e.token + out.slice(e.end)
+  return { text: out, count: edits.length }
 }
 
 const looksJson = (s: string) => /^\s*[[{]/.test(s)
@@ -326,8 +383,8 @@ export function scanHomePaths(home: string, roots: readonly PathRoot[], opts: Sc
     let head: Buffer
     try { head = readHead(path.join(home, rel)) } catch (err) { res.skipped.push({ file: rel, why: (err as Error).message }); continue }
     const kind = kindOf(rel, head)
-    if (kind === 'binary') continue
-    if (size > (kind === 'sqlite' ? maxDb : maxFile)) { res.skipped.push({ file: rel, why: `${size} bytes, over the cap` }); continue }
+    if (kind === 'binary') { res.skipped.push({ file: rel, why: 'binary (a NUL byte in its first 4 KB)' }); continue }
+    if (size > (kind === 'sqlite' ? maxDb : maxFile)) { res.skipped.push({ file: rel, why: `${size} bytes, over the ${kind === 'sqlite' ? 'database' : 'file'} cap` }); continue }
     res.files++
     res.bytes += size
     if (kind === 'sqlite') { scanDb(home, rel, roots, needles, opts, res, fromMatch); continue }
@@ -506,6 +563,17 @@ export function keptPlace(rules: readonly PathRule[]): (file: string, at?: strin
   }
 }
 
+/**
+ * Files the scan could not read (binary, over the cap, a database that would not open or read)
+ * that must fail the trial: leader data that no `keep` rule covers whole (the blob rule names
+ * images, audio, archives and the like), and that is not a top-level file of the user's own.
+ * Such a file travels with the leader and may hold a path nobody could check.
+ */
+export function unscannedProblems(skipped: readonly { file: string; why: string }[], rules: readonly PathRule[]): { file: string; why: string }[] {
+  const kept = keptPlace(rules)
+  return skipped.filter((s) => homePathClass(s.file) === 'leader-data' && !isUnnamedHomePath(s.file) && !kept(s.file))
+}
+
 export function describeHit(h: PathHit): string {
   const where = [h.at, h.line !== undefined ? `line ${h.line}` : '', h.row !== undefined ? `row ${h.row}` : ''].filter(Boolean).join(' ')
   return `${h.file}${where ? ` (${where})` : ''}: ${h.path}`
@@ -515,16 +583,17 @@ export function describeHit(h: PathHit): string {
 
 export interface RewriteDone { file: string; rules: string[]; values: number }
 
-function writeAtomic(abs: string, text: string): void {
+/**
+ * Replace `abs` with `text` in one rename, keeping its mode (a trigger's `check.sh` stays
+ * executable): the temp file is set to the original's mode before it takes its place.
+ */
+export function writeAtomic(abs: string, text: string): void {
+  let mode = 0o600
+  try { mode = fs.statSync(abs).mode & 0o7777 } catch { /* a new file */ }
   const tmp = `${abs}.switch.tmp`
   const fd = fs.openSync(tmp, 'w', 0o600)
-  try { fs.writeSync(fd, text); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  try { fs.writeSync(fd, text); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   fs.renameSync(tmp, abs)
-}
-
-function jsonIndent(text: string): number | string {
-  const m = /^[[{]\r?\n([ \t]+)/.exec(text)
-  return m ? (m[1]!.startsWith('\t') ? '\t' : m[1]!.length) : 0
 }
 
 function rewriteFile(abs: string, kind: FileKind, rootsAt: RootsAt): number {
@@ -532,10 +601,10 @@ function rewriteFile(abs: string, kind: FileKind, rootsAt: RootsAt): number {
   const n = { count: 0 }
   const text = fs.readFileSync(abs, 'utf8')
   let next = text
-  const whole = kind === 'json' ? tryJson(text) : { ok: false as const }
-  if (whole.ok) {
-    const v = rewriteValue(whole.v, '', rootsAt, n)
-    if (n.count) next = JSON.stringify(v, null, jsonIndent(text)) + (text.endsWith('\n') ? '\n' : '')
+  const whole = kind === 'json' ? spliceJson(text, rootsAt) : null
+  if (whole) {
+    n.count = whole.count
+    next = whole.text
   } else if (kind === 'yaml') {
     const doc = YAML.parseDocument(text)
     YAML.visit(doc, {
@@ -551,12 +620,8 @@ function rewriteFile(abs: string, kind: FileKind, rootsAt: RootsAt): number {
     if (n.count) next = String(doc)
   } else {
     const lines = text.split('\n').map((line) => {
-      const j = looksJson(line) ? tryJson(line) : { ok: false as const }
-      if (j.ok) {
-        const before = n.count
-        const v = rewriteValue(j.v, '', rootsAt, n)
-        return n.count > before ? JSON.stringify(v) : line
-      }
+      const j = looksJson(line) ? spliceJson(line, rootsAt) : null
+      if (j) { n.count += j.count; return j.text }
       const roots = rootsAt('')
       if (!roots.length) return line
       const r = replaceRoots(line, rootsAt.all, roots)
@@ -604,13 +669,10 @@ function rewriteDb(abs: string, rootsAt: RootsAt): number {
         ? db.prepare(`UPDATE OR IGNORE ${quote(c.table)} SET ${quote(c.column)} = ? WHERE rowid = ?`)
         : db.prepare(`UPDATE OR IGNORE ${quote(c.table)} SET ${quote(c.column)} = ? WHERE ${quote(c.column)} = ?`)
       for (const { r, v } of rows) {
-        const j = looksJson(v) ? tryJson(v) : { ok: false as const }
+        const j = looksJson(v) ? spliceJson(v, jsonRoots) : null
         let next = v
-        if (j.ok) {
-          const k = { count: 0 }
-          const nv = rewriteValue(j.v, '', jsonRoots, k)
-          if (k.count) next = JSON.stringify(nv)
-        } else if (colRoots.length) next = replaceRoots(v, rootsAt.all, colRoots)
+        if (j) next = j.text
+        else if (colRoots.length) next = replaceRoots(v, rootsAt.all, colRoots)
         if (next === v) continue
         n += Number(set.run(next, c.rowid ? r : v).changes ?? 0)
       }

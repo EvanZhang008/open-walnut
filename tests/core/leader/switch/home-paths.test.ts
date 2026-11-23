@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from '../../../../src/lib/sqlite.js'
-import { findRoots, judgePathHits, pathRoots, replaceRoots, rewriteHomePaths, scanHomePaths, type PathRoot, type PathRule } from '../../../../src/core/leader/switch/home-paths.js'
+import { findRoots, judgePathHits, pathRoots, replaceRoots, rewriteHomePaths, scanHomePaths, spliceJson, type PathRoot, type PathRule } from '../../../../src/core/leader/switch/home-paths.js'
 
 let root = ''
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-home-paths-')) })
@@ -132,7 +132,7 @@ describe('scanHomePaths', () => {
     put(home, 'db.sqlite-wal', '/home/a/x')
     const r = scanHomePaths(home, ROOTS, { maxFileBytes: 1000 })
     expect(r.hits).toEqual([])
-    expect(r.skipped.map((s) => s.file)).toEqual(['big.txt'])
+    expect(r.skipped.map((s) => s.file).sort()).toEqual(['big.txt', 'img.png'])
   })
 
   it('caps the hits kept per place and counts the rest', () => {
@@ -178,6 +178,49 @@ describe('rewriteHomePaths', () => {
     const before = ['a.json', 'c.yaml', 'acc.json', 's.sqlite'].map(bytes)
     expect(rewriteHomePaths(home, rules, ctx)).toEqual([])
     expect(['a.json', 'c.yaml', 'acc.json', 's.sqlite'].map(bytes)).toEqual(before)
+  })
+})
+
+describe('review round 1: modes, JSON bytes, symlinked homes', () => {
+  const all = (roots: PathRoot[]) => Object.assign(() => roots, { all: roots })
+
+  it('a rewritten script keeps its mode (a trigger stays executable)', () => {
+    const home = path.join(root, 'h')
+    put(home, 'triggers/t/check.sh', '#!/bin/sh\ncat /home/a/.open-walnut/notes/x.md\n')
+    fs.chmodSync(path.join(home, 'triggers/t/check.sh'), 0o750)
+    rewriteHomePaths(home, [{ id: 'r', stores: [], file: 'triggers/**', rule: 'rewrite', why: 't' }], { roots: ROOTS, reverseStandbyDir: '/x' })
+    expect(fs.readFileSync(path.join(home, 'triggers/t/check.sh'), 'utf8')).toContain('/Users/b/.open-walnut/notes/x.md')
+    expect(fs.statSync(path.join(home, 'triggers/t/check.sh')).mode & 0o777).toBe(0o750)
+  })
+
+  it('a JSON rewrite changes the path strings only: big ids, number spellings, key order, __proto__ and other escapes stay byte for byte', () => {
+    const text = '{\n  "z": 12345678901234567890, "n": 1.0, "e": 1E5,\n  "__proto__": {"cwd": "/home/a/code"},\n  "s": "caf\\u00e9 \\/ok", "a": [ "/home/a/.open-walnut/x" , 2 ],\n  "/home/a/key": true\n}\n'
+    const r = spliceJson(text, all(ROOTS))!
+    expect(r.count).toBe(3)
+    expect(r.text).toBe('{\n  "z": 12345678901234567890, "n": 1.0, "e": 1E5,\n  "__proto__": {"cwd": "/Users/b/code"},\n  "s": "caf\\u00e9 \\/ok", "a": [ "/Users/b/.open-walnut/x" , 2 ],\n  "/Users/b/key": true\n}\n')
+    expect(spliceJson('{"a": 1,}', all(ROOTS))).toBeNull()
+    expect(spliceJson('{"a": 1} x', all(ROOTS))).toBeNull()
+    // Through the file rewrite too.
+    const home = path.join(root, 'h')
+    put(home, 'p.json', text)
+    rewriteHomePaths(home, [{ id: 'r', stores: [], file: 'p.json', rule: 'rewrite', why: 't' }], { roots: ROOTS, reverseStandbyDir: '/x' })
+    expect(fs.readFileSync(path.join(home, 'p.json'), 'utf8')).toBe(r.text)
+  })
+
+  it('a symlinked home: paths saved under its real path are found and moved too', () => {
+    const real = path.join(root, 'real-account')
+    const link = path.join(root, 'account-link')
+    fs.mkdirSync(path.join(real, '.open-walnut'), { recursive: true })
+    fs.symlinkSync(real, link)
+    const roots = pathRoots({ fromHome: path.join(link, '.open-walnut'), toHome: '/Users/b/.open-walnut', fromAccount: link, toAccount: '/Users/b' })
+    const realHome = fs.realpathSync(path.join(real, '.open-walnut'))
+    expect(roots.map((r) => r.from)).toEqual(expect.arrayContaining([path.join(link, '.open-walnut'), realHome, link, fs.realpathSync(real)]))
+    const home = path.join(root, 'h')
+    put(home, 'a.json', JSON.stringify({ given: `${link}/.open-walnut/x`, real: `${realHome}/y`, acct: `${fs.realpathSync(real)}/code` }))
+    const hits = scanHomePaths(home, roots).hits.map((h) => [h.at, h.root])
+    expect(hits).toEqual(expect.arrayContaining([['given', 'home'], ['real', 'home'], ['acct', 'account']]))
+    rewriteHomePaths(home, [{ id: 'r', stores: [], file: 'a.json', rule: 'rewrite', why: 't' }], { roots, reverseStandbyDir: '/x' })
+    expect(JSON.parse(fs.readFileSync(path.join(home, 'a.json'), 'utf8'))).toEqual({ given: '/Users/b/.open-walnut/x', real: '/Users/b/.open-walnut/y', acct: '/Users/b/code' })
   })
 })
 

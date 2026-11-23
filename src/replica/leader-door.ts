@@ -64,7 +64,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  */
 async function witnessAnswered(req: IncomingMessage, res: ServerResponse, opts: LeaderDoorOptions): Promise<boolean> {
   const own = opts.witness ?? await defaultWitnessDoor()
-  if (!(await own.enabled())) return false
+  // A config that cannot be read counts as the experiment off: the path has the answer it always had, never a 500.
+  if (!(await own.enabled().catch(() => false))) return false
   const [{ handleWitnessHttp }, { witnessRoot }] = await Promise.all([import('../core/leader/switch/witness-route.js'), import('../core/leader/switch/machine-id.js')])
   await handleWitnessHttp(req, res, { walnutId: own.walnutId, root: own.root?.() ?? witnessRoot(), log: opts.log })
   return true

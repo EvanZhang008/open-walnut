@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { startWitnessMachine, loopbackCall, type WitnessMachine } from '../../../helpers/witness-machines.js'
+import { blankEvidence, startWitnessMachine, loopbackCall, type WitnessMachine } from '../../../helpers/witness-machines.js'
 import { DEFAULT_PERMIT_PARAMS, genesisConfigId, type PermitRecord } from '../../../../src/core/leader/permit/index.js'
 import { authorizeWitnessCaller, witnessDir } from '../../../../src/core/leader/switch/witness-route.js'
 import { setUpRemoteWitness, type RemoteCallResult } from '../../../../src/core/leader/switch/witness-transport.js'
@@ -44,7 +44,7 @@ afterEach(async () => {
 
 describe('the witness route of a machine', () => {
   it('serves the witness set up here: a grant is taken, durably, on this machine\'s disk', async () => {
-    const set = await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, call)
+    const set = await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
     expect(set).toEqual({ ok: true, made: true })
     const file = path.join(witnessDir(root, WALNUT, 'w1'), 'permit-record.json')
     expect(fs.existsSync(file)).toBe(true)
@@ -57,34 +57,79 @@ describe('the witness route of a machine', () => {
   })
 
   it('setting up twice keeps the record', async () => {
-    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, call)
+    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
     await post('m1', WITNESS_REQUEST_PATH, grant('w1'))
-    expect(await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, call)).toEqual({ ok: true, made: false })
+    expect(await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)).toEqual({ ok: true, made: false })
     expect(((await read('w1'))!.body as { reply: { held: { number: number } } }).reply.held.number).toBe(1)
   })
 
   it('answers a caller that names another Walnut with 403, and a service that does not know its Walnut with 503', async () => {
-    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, call)
+    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
     expect((await read('w1', 'another-walnut'))?.status).toBe(403)
     m.walnutId = null
     expect((await read('w1'))?.status).toBe(503)
   })
 
-  it('a machine that was never set up is no witness: 404, and a request never makes a record', async () => {
+  it('a machine that was never set up is no witness: the very answer of a path it never had, and a request never makes a record', async () => {
     const r = await read('w1')
-    expect(r?.status).toBe(404)
+    expect(r).toEqual(await post('m1', '/host-api/never-had-this', {}))
+    expect(r).toEqual({ status: 404, body: { ok: false, error: 'not_found' } })
     expect(fs.existsSync(path.join(root, WALNUT))).toBe(false)
   })
 
+  it('a read answers with the round it carried, and a propose with none', async () => {
+    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
+    const r = await post('m1', WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', request: { type: 'read' }, round: 7 })
+    expect((r!.body as { round?: number }).round).toBe(7)
+    const g = await post('m1', WITNESS_REQUEST_PATH, grant('w1'))
+    expect((g!.body as { round?: number }).round).toBeUndefined()
+    expect((await post('m1', WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', request: { type: 'read' }, round: -1 }))?.status).toBe(400)
+  })
+
+  it('a record is stored only when its whole shape is a PermitRecord: a bad list, an unknown field, a wrong type is a 400 and stores nothing', async () => {
+    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
+    const bad = (patch: Record<string, unknown>) => {
+      const g = grant('w1')
+      return { ...g, request: { ...g.request, record: { ...g.request.record, ...patch } } }
+    }
+    for (const patch of [{ list: 'w1' }, { list: [1, 2, 3] }, { validMs: -5 }, { validMs: 'long' }, { extra: true }, { ops: { register: 'x' } }, { ops: { other: [] } }, { kind: 'wipe' }, { epoch: 1.5 }, { progress: { seq: 'a', writtenAt: 1 } }, { ledger: [{ id: 'a', state: 'maybe', by: 'x', nonce: 'y' }] }, { stage: 'half' }, { joint: [null] }]) {
+      expect((await post('m1', WITNESS_REQUEST_PATH, bad(patch)))?.status, JSON.stringify(patch)).toBe(400)
+    }
+    expect(((await read('w1'))!.body as { reply: { held: unknown } }).reply.held).toBeNull()
+    // Every field a real record carries passes.
+    const full = bad({ kind: 'renew', progress: { seq: 3, writtenAt: 1_700_000_000_000, by: 'A' }, ops: { register: ['a'], sent: ['b'], notSent: ['c'] }, clock: 'boottime' })
+    expect((await post('m1', WITNESS_REQUEST_PATH, full))?.status).toBe(200)
+  })
+
+  it('a setup carries evidence: none is a 400, a record seen at another witness is a 409 and makes nothing, an incomplete list is a 409', async () => {
+    const body = { v: 1, walnutId: WALNUT, witness: 'w1', list: LIST }
+    expect((await post('m1', WITNESS_SETUP_PATH, body))?.status).toBe(400)
+    const seen = (a: string, b: string) => [{ witness: 'w2', seen: a }, { witness: 'w3', seen: b }]
+    expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: seen('blank', 'record') })).toEqual({ status: 409, body: { ok: false, error: 'witnesses_hold_records' } })
+    expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: [{ witness: 'w2', seen: 'blank' }] })).toEqual({ status: 409, body: { ok: false, error: 'evidence_incomplete' } })
+    expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: [{ witness: 'w2', seen: 'blank' }, { witness: 'w2', seen: 'none' }] })).toEqual({ status: 409, body: { ok: false, error: 'evidence_incomplete' } })
+    expect(fs.existsSync(path.join(root, WALNUT, 'w1'))).toBe(false)
+    expect((await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: seen('none', 'blank') }))?.status).toBe(200)
+  })
+
+  it('two setups of different ids at once make exactly one witness: the check and the making are one step', async () => {
+    const [a, b] = await Promise.all([
+      setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call),
+      setUpRemoteWitness({ id: 'w2', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w2'), call),
+    ])
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1)
+    expect(fs.readdirSync(path.join(root, WALNUT)).filter((n) => !n.startsWith('.'))).toHaveLength(1)
+  })
+
   it('one witness id per Walnut per machine: another id is refused when one is set up, and is not served', async () => {
-    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, call)
-    const second = await setUpRemoteWitness({ id: 'w2', host: 'm1' }, LIST, WALNUT, call)
+    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
+    const second = await setUpRemoteWitness({ id: 'w2', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w2'), call)
     expect(second).toEqual({ ok: false, error: '409 another_witness_here' })
     expect((await read('w2'))?.status).toBe(404)
   })
 
   it('a record that is not readable answers ok:false with nothing held, never a yes', async () => {
-    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, call)
+    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
     fs.writeFileSync(path.join(witnessDir(root, WALNUT, 'w1'), 'permit-record.json'), '{"torn')
     const r = await post('m1', WITNESS_REQUEST_PATH, grant('w1'))
     const reply = (r!.body as { reply: { ok: boolean; held: unknown; reason: string } }).reply
@@ -94,7 +139,7 @@ describe('the witness route of a machine', () => {
   })
 
   it('refuses a body that is not a witness call, a name that is a path, and other methods and paths', async () => {
-    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, call)
+    await setUpRemoteWitness({ id: 'w1', host: 'm1' }, LIST, WALNUT, blankEvidence(LIST, 'w1'), call)
     expect((await post('m1', WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', request: { type: 'wipe' } }))?.status).toBe(400)
     expect((await post('m1', WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: '../w1', request: { type: 'read' } }))?.status).toBe(400)
     expect((await post('m1', WITNESS_SETUP_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', list: ['w1'] }))?.status).toBe(400)

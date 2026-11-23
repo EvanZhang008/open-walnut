@@ -11,7 +11,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { startWitnessMachine, loopbackCall, type WitnessMachine } from '../../../helpers/witness-machines.js'
+import { blankEvidence, startWitnessMachine, loopbackCall, type WitnessMachine } from '../../../helpers/witness-machines.js'
 import { DEFAULT_PERMIT_PARAMS } from '../../../../src/core/leader/permit/types.js'
 import { startPermitRuntime, type PermitRuntime } from '../../../../src/core/leader/switch/runtime.js'
 import { setOutwardDoorChecker } from '../../../../src/core/leader/switch/doors.js'
@@ -37,7 +37,7 @@ beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'witness-reader-'))
   machines = await Promise.all(PLACES.map((p) => startWitnessMachine({ host: p.host, root: path.join(root, p.host), walnutId: WALNUT })))
   const call = loopbackCall(Object.fromEntries(machines.map((m) => [m.host, m])))
-  for (const p of PLACES) await setUpRemoteWitness(p, LIST, WALNUT, call)
+  for (const p of PLACES) await setUpRemoteWitness(p, LIST, WALNUT, blankEvidence(LIST, p.id), call)
   settings = {
     witnesses: PLACES,
     machines: ['machine-a', 'machine-b'].map((id, i) => ({ id, home: path.join(root, id, 'home'), standbyDir: path.join(root, id, 'standby'), port: 4900 + i })),

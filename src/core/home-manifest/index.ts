@@ -104,8 +104,10 @@ export function isAppendOnlyHomePath(relPath: string): boolean {
 }
 
 /**
- * Places this machine's daemon writes inside the data home while it runs (the installed layout
- * keeps its journal root, leader book, streams and samples in `<home>/tmp`, daemon-standalone.ts):
+ * Places this machine's daemon writes inside the data home while it runs, in the installed layout
+ * (daemon-standalone.ts, which the in-process daemon runs too: its journal root, leader book,
+ * streams, samples and host copies in `<home>/tmp`, its spawn journal and CLI-owner records in
+ * `<home>/local`, the skills a leader sends it in `<home>/distributed-skills`):
  * they belong to the machine, so a leader switch never moves them with the home it swaps
  * (src/core/leader/switch/promote.ts), and the daemon never loses a file it is writing.
  *
@@ -115,6 +117,7 @@ export function isAppendOnlyHomePath(relPath: string): boolean {
 const MACHINE_RUNTIME_IDS: ReadonlySet<string> = new Set([
   'tmp.offline-host', 'tmp.leader-book', 'tmp.host-vitals', 'tmp.streams', 'tmp.spawned-sessions', 'tmp.resume-records',
   'tmp.trigger-state', 'tmp.usage-budgets', 'tmp.host-exec', 'tmp.host-replica', 'tmp.host-server', 'tmp.plugin-jobs',
+  'local.spawn-journal', 'local.cli-owners', 'distributed-skills',
 ])
 
 /** The one predicate: an entry is this machine's daemon runtime state (see MACHINE_RUNTIME_IDS). */

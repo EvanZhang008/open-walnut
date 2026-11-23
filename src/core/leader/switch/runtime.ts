@@ -58,7 +58,7 @@ export interface PermitRuntime {
    * the one way a command reads remote witnesses (witness-reader.ts). `standing` is the record a majority
    * holds (null: none ever), `agreed` false when no record has a majority among the answers.
    */
-  readWitnesses(): Promise<{ standing: PermitRecord | null; agreed: boolean; answered: number; of: number }>
+  readWitnesses(): Promise<{ standing: PermitRecord | null; agreed: boolean; answered: number; of: number; sightings: Array<{ witness: string; held: boolean; epoch: number | null }> }>
   /** The switch's handover, written by this process (the only one the witnesses take it from). */
   handover(to: string): Promise<{ ok: boolean; record?: PermitRecord; why?: string }>
   /** Take back a handover this process wrote (the switch rolled back while this server runs). */
@@ -162,9 +162,14 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   const { home, holderId: me, settings } = opts
   const log = opts.log ?? (() => {})
   let lock: InstanceLock | null = null
-  // The leader server reaches remote witnesses over its host links; a trial start describes this Walnut to no host.
-  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held(), { daemonLink: !opts.trial, ...opts.net })
   let state: RuntimeState = 'waiting'
+  // The leader server reaches remote witnesses over its host links, but only once it has LED: a link is a full daemon
+  // connection that describes this Walnut to the host as its leader (slice, leader.configure, the offline drain), which a
+  // server that does not yet hold the permission, or is refused it, must never do. Before that it reaches the witnesses
+  // that need no such link (a registered reach); a list that is all remote cannot be read until a reach exists.
+  // After it led, the link stays allowed for what only a leader writes (renew, handover, cancel, the release at a stop).
+  let everLed = false
+  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held(), { daemonLink: () => !opts.trial && everLed, ...opts.net })
   let why: string | undefined
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
@@ -322,6 +327,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     timer.unref?.()
   }
   const lead = (record: PermitRecord, msg: string) => {
+    everLed = true
     state = 'leading'
     why = undefined
     learn()
@@ -391,7 +397,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     // handing-over, handed-over, lost: nothing to send; a cancel (below) brings it back.
   }
 
-  if (decision.kind === 'lead') { state = 'leading'; learn(); schedule(settings.params.renewEveryMs) }
+  if (decision.kind === 'lead') { everLed = true; state = 'leading'; learn(); schedule(settings.params.renewEveryMs) }
   if (decision.kind === 'waiting') { why = decision.why; schedule(Math.min(5_000, settings.params.renewEveryMs)) }
   if (decision.kind === 'refuse') { state = 'lost'; why = decision.why }
 
@@ -462,7 +468,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     cancel,
     readWitnesses: async () => {
       const r = await readStanding(h)
-      return { standing: r.standing ?? null, agreed: r.standing !== undefined, answered: r.answered, of: h.places.length }
+      return { standing: r.standing ?? null, agreed: r.standing !== undefined, answered: r.answered, of: h.places.length, sightings: r.replies.map((x) => ({ witness: x.witness, held: x.held !== null, epoch: x.epoch })) }
     },
     stop: async () => {
       if (stopped) return

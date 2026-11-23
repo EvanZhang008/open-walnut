@@ -67,3 +67,8 @@ export function loopbackCall(machines: Record<string, { port: number }>, opts: {
     return () => { gone = true; sock?.destroy() }
   }
 }
+
+/** Setup evidence of a Walnut that never had a record: every other witness seen blank. */
+export function blankEvidence(list: string[], target: string): Array<{ witness: string; seen: 'blank' }> {
+  return list.filter((w) => w !== target).map((witness) => ({ witness, seen: 'blank' as const }))
+}

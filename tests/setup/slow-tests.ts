@@ -74,8 +74,10 @@ export const SLOW_TEST_FILES = [
   'tests/core/leader/permit/net-slow-witness.test.ts', // ~3s: 10-minute simulated leaders with one slow witness, through the real network transport
   'tests/core/leader/switch/promote-daemon-runtime.test.ts', // a real daemon (the standalone twin on bun) writing in a home promoted twice around it
   'tests/core/leader/switch/witness-route.test.ts', // real leader doors on loopback sockets, witness records on disk
+  'tests/core/leader/switch/witness-twin.test.ts', // a real host daemon runtime in a bun process relaying the leader's stream to a real leader door
+  'tests/core/leader/switch/witness-setup.test.ts', // real witness doors on loopback sockets, three machines' records on disk
+  'tests/core/leader/switch/witness-link-gate.test.ts', // a real permit runtime, the daemon link spied on, loopback witness doors
   'tests/core/leader/switch/witness-reader.test.ts', // a real permit runtime over three remote witness doors, and the route that reads them
-  'tests/core/leader/switch/witness-door-off.test.ts', // the same door with the experiment off
   'tests/core/leader/switch/witness-transport.test.ts', // three witness machines on loopback sockets: a permit client over real HTTP, the renew round trip measured
   'tests/core/leader/permit/change-repair.test.ts', // ~4s: 35 ten-minute schedules of candidates racing for the permission (back-off)
   'tests/core/offline-merge/notes.test.ts', // ~3s: two 1 MB merges in a worker thread under the stall recorder, one waits out the 2 s deadline (WP11)

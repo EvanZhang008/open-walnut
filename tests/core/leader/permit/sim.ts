@@ -340,14 +340,15 @@ export class World {
       const to = place.id
       const req = JSON.parse(JSON.stringify((body as WitnessCall).request)) as PermitRequest
       if (req.type === 'propose' && req.record.kind === 'release' && this.releaseReach.get(req.record.nonce)?.has(to) === false) return
-      this.transmit(from, to, req, () => this.deliverToWitness(from, to, req, done))
+      const round = (body as WitnessCall).round
+      this.transmit(from, to, req, () => this.deliverToWitness(from, to, req, done, round))
     }
   }
 
   /** Called with the reply about to go out; return true to crash the witness instead of answering. */
   crashBeforeAnswer: ((witness: string, req: PermitRequest, reply: PermitReply) => boolean) | null = null
 
-  private deliverToWitness(from: string, to: string, req: PermitRequest, done: (r: RemoteCallResult | null) => void): void {
+  private deliverToWitness(from: string, to: string, req: PermitRequest, done: (r: RemoteCallResult | null) => void, round?: number): void {
     const n = this.witnesses.get(to)
     if (!n || !n.w || n.clock.asleep()) return
     const reply = n.w.handle(req)
@@ -359,7 +360,8 @@ export class World {
       this.crashWitness(to, 1_000 + this.rand() * 10_000)
       return
     }
-    const wire = JSON.parse(JSON.stringify({ ok: true, reply })) as unknown
+    // The route's answer: the reply, and the round of the read it answers.
+    const wire = JSON.parse(JSON.stringify({ ok: true, reply, ...(round !== undefined ? { round } : {}) })) as unknown
     this.transmit(to, from, reply, () => done({ status: 200, body: wire }))
   }
 

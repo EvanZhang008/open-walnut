@@ -613,8 +613,14 @@ keeps it); a failed run keeps it, writable, as evidence.
 
 A witness entry is `{ id, dir }` (a directory on this computer) or `{ id, host }` (the Walnut service
 of another machine). `host` is a `hosts` alias of config.yaml, or, when it is none, the machine id a
-connected host reported in its hello. The list stays FIXED and a majority of it decides; two entries on one
-`dir` or `host` are refused (two ids on one machine would be one witness counted twice).
+connected host reported in its hello. The list stays FIXED and a majority of it decides.
+
+**One list, one meaning on every machine.** The config travels with the home, so on the other machine a `dir` is a different
+directory with a different record: one witness id would be two witnesses. A list therefore has either only `dir` entries (one
+computer) or only `host` entries; a `dir` beside a `host` is refused when the settings are read. Two entries that name one place
+are refused too (`host` compared ignoring case; an alias and a machine id naming one machine are found when the witnesses are set
+up: the first setup on a machine claims it, and a second witness id there is refused with 409, `walnut leader witnesses init` also
+resolves each `host` and reports two that name one machine, and the claim is taken under a lock so two setups at once make one).
 
 **The route.** A host's Walnut service (`walnut web --replica`, the host's one service) answers
 `POST /host-api/witness/request` (one permit request, one reply) and `POST /host-api/witness/setup` on
@@ -634,18 +640,33 @@ is made, and that function is the only place that changes.
 **When it answers.** A machine serves a witness only when the experiment `switchable_leader` is on (a host's
 config is a copy of the leader's) AND an operator set the witness up (`walnut leader witnesses init`): a
 witness that lost its record never starts over by itself, so a request alone never makes one. Otherwise
-the answer is **404 `not_found`**, byte for byte the answer of a path the service never had: nothing tells a
-caller from today's service, and with the experiment off the door loads none of the permit or switch code (it checks the
-flag first). 404 rather than 503 because 503 would say "a witness is here", and a caller gets nothing more from
-it (any answer but 200 is no answer to the permit client). One witness id per Walnut per machine: a second `setup`
-with another id is refused with 409, and a request for an id this machine does not hold is 404.
+the answer is **404 `not_found`**, byte for byte the answer of a path the service never had (also for a witness that is
+not set up, and when the config cannot be read): nothing tells a caller from today's service, and with the experiment off the door
+loads none of the permit or switch code (it checks the flag first). 404 rather than 503 because 503 would say "a witness is
+here", and a caller gets nothing more from it (any answer but 200 is no answer to the permit client). One witness id per Walnut
+per machine: a second `setup` with another id is refused with 409, and a request for an id this machine does not hold is 404.
+A body is stored only when it is exactly a permit record (every field checked, unknown fields refused, 400 otherwise).
+
+**Setup only from nothing.** A setup makes a witness record from nothing, so it is refused while any other witness of the list
+may still hold records: a witness that lost its disk must not come back as a fresh one beside witnesses that still hold the
+lease (it would say yes to a second machine, and that machine plus a witness with only an old record would be a majority while the
+first still leads). Every setup therefore carries what the caller saw at each OTHER witness of the list (`none`, `blank`, or
+`record`); the witness refuses (409) one that is missing, incomplete, or shows a record, and `walnut leader witnesses init` does not
+send one it knows will be refused. A lost witness rejoins through a list change (permit/store.ts), which is not built for the
+switch yet; until then it stays unset and the list runs on its other two. The setup is for the first time a list is made.
 
 **The transport.** `src/core/leader/switch/witness-transport.ts` is the `PermitTransport` for both kinds of
 witness. A remote request is one HTTP request on a stream the host daemon relays (the leader server's link: `link(host)`,
 `openStream('follower', 'replica')`, `requestOver`). That pooled link is a full daemon connection (it describes this Walnut to the host:
-slice, leader.configure, the offline drain), so only the leader server's own permit client uses it (`daemonLink: true`, not in a trial
-start); a standby, `walnut leader status` and the switch command's preflight reach a remote witness only through a registered reach.
-`walnut leader witnesses init` sets remote witnesses up through the running server (`POST /api/leader/witnesses/init`). The reply is handed to the client on a later tick; each request
+slice, leader.configure, the offline drain), so a server opens it only once it HAS LED (the runtime's `daemonLink` gate is false until the
+first lead and in a trial start, and stays open after, for the renew, a handover, a cancel and the release at a stop). A start that is
+still waiting for the permission, one the witnesses refuse, a standby, `walnut leader status` and the switch command's preflight
+open none: they reach a remote witness only through a registered reach. Before it leads, a server whose witnesses are all remote therefore
+reaches none of them (see the candidate gap below), and a start refused after reading closes any link this module opened before it
+goes on as a standby (`closeWitnessLinks`, called by `boot.ts`; the gate means there is none). `walnut leader witnesses init` sets remote
+witnesses up through the running leader server (`POST /api/leader/witnesses/init`, 409 unless it holds the permission); it reads the witnesses
+first and sends the evidence above. Each read carries a round number that the answer echoes: a reply is handed on only when it is newer than the last one handed on for that witness, so one that overtook a
+newer reply (late or reordered over a slow link) never takes the reading back. (A witness whose round trip is longer than the gap between looks is still heard, with answers as old as its round trip.) The reply is handed to the client on a later tick; each request
 has a **15 s timeout** (the renew period) and a reply after it is dropped as a lost one; a reply counts only when it names the
 witness asked and the request sent; at most 4 reads and 16 proposals are open to one witness at once; nothing is retried here
 (the client retransmits, and a duplicate is a no-op at a witness). The permit core is safe under a lost,
@@ -692,6 +713,16 @@ leader's door, so it needs one of: a door of its own that hosts dial (the standb
 the host links before it renews (an outward configure the doors list must then cover). The first needs 5a's door on a
 non-leader, the second a decision; neither is built here. A relay through the old leader is not an option today:
 the two machines have no route to each other.
+
+**What that means until the direct link exists.** A server opens a leader-describing link only after it has led, so a
+list of witnesses that are all on other machines cannot be led from or read by a server that has not led yet: a first start waits
+(no majority answers), `walnut leader witnesses init` for remote witnesses is refused unless the server already leads (and then the
+records exist, so it refuses a setup beside them), and a switch to a machine whose witnesses are all remote refuses in preflight. The
+remote witness code, its route, its transport and its tests are in; the first real use waits for the host-dialed door (a
+reach for a not-yet-leader). Tests: a real host daemon runtime relays the leader's `follower`/`replica` stream to a real leader door
+with the route on it (`tests/core/leader/switch/witness-twin.test.ts`, the standalone twin; the source twin keeps the same relay
+rule and is not run there), and a spy on the link module shows no link before the first lead, none for a refused or trial start, and the
+link of each host after it (`witness-link-gate.test.ts`).
 
 ## Not built yet
 

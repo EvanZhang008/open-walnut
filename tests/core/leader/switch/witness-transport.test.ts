@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { startWitnessMachine, loopbackCall, type WitnessMachine } from '../../../helpers/witness-machines.js'
+import { blankEvidence, startWitnessMachine, loopbackCall, type WitnessMachine } from '../../../helpers/witness-machines.js'
 import { DEFAULT_PERMIT_PARAMS, type PermitReply } from '../../../../src/core/leader/permit/index.js'
 import { openPermitClient, proposeAndWait, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
 import {
@@ -25,7 +25,8 @@ const READ = { type: 'read' } as const
 function reply(witness: string, over: Partial<PermitReply> = {}): PermitReply {
   return { witness, re: 'read', ok: true, held: null, list: LIST, joint: null, cfg: 'c', epoch: 0, progress: null, ops: [], grantable: true, ...over }
 }
-const answer = (r: PermitReply): RemoteCallResult => ({ status: 200, body: { ok: true, reply: r } })
+const answer = (r: PermitReply, round?: number): RemoteCallResult => ({ status: 200, body: { ok: true, reply: r, ...(round !== undefined ? { round } : {}) } })
+const roundOf = (body: unknown): number | undefined => (body as { round?: number }).round
 
 describe('what a reply must be to count', () => {
   it('names the witness asked and the request sent, and is whole', () => {
@@ -58,7 +59,7 @@ describe('the transport with a fake call', () => {
   }
 
   it('hands a reply back on a later tick, never inside send', () => {
-    const b = build((_p, _path, _body, done) => { done(answer(reply('w1'))) })
+    const b = build((_p, _path, body, done) => { done(answer(reply('w1'), roundOf(body))) })
     b.t.send('w1', READ)
     expect(b.delivered).toEqual([])
     b.runTicks()
@@ -66,7 +67,7 @@ describe('the transport with a fake call', () => {
   })
 
   it('a duplicate answer to one request is one reply', () => {
-    const b = build((_p, _path, _body, done) => { done(answer(reply('w1'))); done(answer(reply('w1'))) })
+    const b = build((_p, _path, body, done) => { done(answer(reply('w1'), roundOf(body))); done(answer(reply('w1'), roundOf(body))) })
     b.t.send('w1', READ)
     b.runTicks()
     expect(b.delivered).toHaveLength(1)
@@ -78,7 +79,7 @@ describe('the transport with a fake call', () => {
     const b = build((_p, _path, _body, done) => { finish = done; return () => { abandoned++ } }, { timeoutMs: 20_000 })
     b.t.send('w1', READ)
     b.fire()
-    finish!(answer(reply('w1')))
+    finish!(answer(reply('w1'), 1))
     b.runTicks()
     expect(b.delivered).toEqual([])
     expect(b.dropped).toContain('late-reply')
@@ -86,10 +87,11 @@ describe('the transport with a fake call', () => {
   })
 
   it('throws away a reply from the wrong witness, to the wrong request, a refusal, and no answer', () => {
-    const results: Array<RemoteCallResult | null> = [
-      answer(reply('w3')), answer(reply('w1', { re: 9 })), { status: 404, body: { ok: false, error: 'not_found' } }, null, { status: 200, body: 'torn' },
+    // The rounds of the five reads are 1..5, each answered for its own round (so only what is wrong is wrong).
+    const results: Array<(round: number) => RemoteCallResult | null> = [
+      (n) => answer(reply('w3'), n), (n) => answer(reply('w1', { re: 9 }), n), () => ({ status: 404, body: { ok: false, error: 'not_found' } }), () => null, () => ({ status: 200, body: 'torn' }),
     ]
-    const b = build((_p, _path, _body, done) => { done(results.shift()!) })
+    const b = build((_p, _path, body, done) => { done(results.shift()!(roundOf(body)!)) })
     for (let i = 0; i < 5; i++) b.t.send('w1', READ)
     b.runTicks()
     expect(b.delivered).toEqual([])
@@ -113,7 +115,62 @@ describe('the transport with a fake call', () => {
     const b = build((p, path, body, done) => { seen.push({ host: p.host, path, body }); done(null) })
     b.t.send('w2', READ)
     b.t.send('w9', READ)
-    expect(seen).toEqual([{ host: 'm2', path: WITNESS_REQUEST_PATH, body: { v: 1, walnutId: WALNUT, witness: 'w2', request: READ } }])
+    expect(seen).toEqual([{ host: 'm2', path: WITNESS_REQUEST_PATH, body: { v: 1, walnutId: WALNUT, witness: 'w2', request: READ, round: 1 } }])
+  })
+})
+
+describe('a read is answered for its own round', () => {
+  function rig() {
+    const open: Array<{ body: { round?: number }; done: (r: RemoteCallResult | null) => void }> = []
+    const delivered: PermitReply[] = []
+    const dropped: string[] = []
+    const ticks: Array<() => void> = []
+    const t = createWitnessTransport({
+      placeOf: (id) => PLACES.find((p) => p.id === id), params: DEFAULT_PERMIT_PARAMS, walnutId: WALNUT,
+      remote: (_p, _path, body, done) => { open.push({ body: body as { round?: number }, done }) },
+      deliver: (r) => delivered.push(r), defer: (fn) => ticks.push(fn), after: () => () => {}, onDrop: (why) => dropped.push(why),
+    })
+    return { t, open, delivered, dropped, run: () => { while (ticks.length) ticks.shift()!() } }
+  }
+
+  it('an answer that overtook a newer one never takes a witness back: the older answer arriving after it is dropped', () => {
+    const r = rig()
+    r.t.send('w1', READ)
+    r.t.send('w1', READ)
+    expect(r.open.map((o) => o.body.round)).toEqual([1, 2])
+    r.open[1]!.done(answer(reply('w1', { epoch: 5 }), 2))
+    r.open[0]!.done(answer(reply('w1', { epoch: 4 }), 1))
+    r.run()
+    expect(r.delivered.map((x) => x.epoch)).toEqual([5])
+    expect(r.dropped).toContain('late-reply')
+  })
+
+  it('a witness slower than the interval between looks is still heard: its older answer counts when no newer one came first', () => {
+    const r = rig()
+    r.t.send('w1', READ)
+    r.t.send('w1', READ)
+    r.open[0]!.done(answer(reply('w1', { epoch: 4 }), 1))
+    r.open[1]!.done(answer(reply('w1', { epoch: 5 }), 2))
+    r.run()
+    expect(r.delivered.map((x) => x.epoch)).toEqual([4, 5])
+  })
+
+  it('an answer that echoes no round, or another one, is no answer to a read', () => {
+    const r = rig()
+    r.t.send('w1', READ)
+    r.t.send('w2', READ)
+    r.open[0]!.done(answer(reply('w1')))
+    r.open[1]!.done(answer(reply('w2'), 7))
+    r.run()
+    expect(r.delivered).toEqual([])
+    expect(r.dropped).toEqual(['invalid-reply', 'invalid-reply'])
+  })
+
+  it('rounds are counted per witness, and a propose carries none', () => {
+    const r = rig()
+    r.t.send('w1', READ); r.t.send('w2', READ); r.t.send('w1', READ)
+    r.t.send('w1', { type: 'propose', record: { number: 1 } as never })
+    expect(r.open.map((o) => o.body.round)).toEqual([1, 1, 2, undefined])
   })
 })
 
@@ -126,7 +183,7 @@ describe('a permit client over real witness machines', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'witness-net-'))
     machines = await Promise.all(PLACES.map((p) => startWitnessMachine({ host: p.host, root: path.join(root, p.host), walnutId: WALNUT })))
     const call = loopbackCall(hosts())
-    for (const p of PLACES) expect(await setUpRemoteWitness(p, LIST, WALNUT, call)).toEqual({ ok: true, made: true })
+    for (const p of PLACES) expect(await setUpRemoteWitness(p, LIST, WALNUT, blankEvidence(LIST, p.id), call)).toEqual({ ok: true, made: true })
   })
   afterEach(async () => {
     await Promise.all(machines.map((m) => m.close()))
@@ -164,17 +221,6 @@ describe('a permit client over real witness machines', () => {
     expect(bg?.outcome).not.toBe('chosen')
     expect(b.client.mayAct()).toBe(false)
     expect(a.client.mayAct()).toBe(true)
-  }, 30_000)
-
-  it('serves a witness list with a local witness among the remote ones', async () => {
-    const dir = path.join(root, 'local-w1')
-    const { setUpLocalWitnesses } = await import('../../../../src/core/leader/switch/local-witnesses.js')
-    setUpLocalWitnesses([{ id: 'w1', dir }], LIST)
-    const mixed = [{ id: 'w1', dir }, PLACES[1]!, PLACES[2]!]
-    const h = openPermitClient('A', mixed, DEFAULT_PERMIT_PARAMS, undefined, { remote: loopbackCall(hosts()), walnutId: WALNUT })
-    expect((await proposeAndWait(h, (c) => c.requestGrant()))?.outcome).toBe('chosen')
-    machines[1]!.setUp(false)
-    expect((await proposeAndWait(h, (c) => c.renew()))?.outcome).toBe('chosen')
   }, 30_000)
 
   it('a process with no link of its own (a candidate) reaches the witnesses through a reach registered for the host', async () => {

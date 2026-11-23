@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import YAML from 'yaml'
 import Database from '../../../lib/sqlite.js'
-import type { PathRule, RewriteContext } from './home-paths.js'
+import { writeAtomic, type PathRule, type RewriteContext } from './home-paths.js'
 
 const HOST_PLACE = 'a place on the machine that ran the work (a repo, a task or session folder, a transcript): the work and its files stay on that machine, so the path is kept as it is'
 const RECORD = 'text a person or an agent wrote, or a log of what happened: nothing follows it as a setting'
@@ -59,18 +59,22 @@ export function rewriteStandbyDir(home: string, dir: string): void {
   const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
   const doc = YAML.parseDocument(text)
   doc.setIn(['standby', 'dir'], dir)
-  const tmp = `${file}.switch.tmp`
-  const fd = fs.openSync(tmp, 'w', 0o600)
-  try { fs.writeSync(fd, String(doc)); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-  fs.renameSync(tmp, file)
+  writeAtomic(file, String(doc))
 }
 
-const ledgerMove = (home: string, ctx: RewriteContext): number => {
-  const root = ctx.roots.find((r) => r.kind === 'home')
-  return root ? rewriteLedgerHome(home, root.from, root.to) : 0
-}
+// Every spelling of the old home (its real path too): the ledger keys rows by the one its server used.
+const ledgerMove = (home: string, ctx: RewriteContext): number =>
+  ctx.roots.filter((r) => r.kind === 'home').reduce((n, r) => n + rewriteLedgerHome(home, r.from, r.to), 0)
+
+/** Files by their kind: an image, audio, video, font, archive or compiled code. */
+const BLOB_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'bmp', 'ico', 'tif', 'tiff', 'pdf',
+  'mp3', 'm4a', 'wav', 'ogg', 'opus', 'flac', 'aac', 'caf', 'webm', 'mp4', 'mov', 'mkv',
+  'zip', 'gz', 'tgz', 'bz2', 'xz', 'zst', '7z', 'tar', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'wasm', 'node', 'so', 'dylib', 'dll', 'exe', 'pack', 'idx']
+const BLOB_GLOBS = BLOB_EXTS.flatMap((e) => [e, e.toUpperCase()]).flatMap((e) => [`*.${e}`, `**/*.${e}`])
 
 const RULES: readonly PathRule[] = [
+  // Read first: a blob is never scanned, and an unreadable file it is not fails the trial.
+  { id: 'blobs', stores: [], file: BLOB_GLOBS, rule: 'keep', why: 'an image, audio, video, font, archive or compiled file: a blob, and no path Walnut follows is in one' },
   // config.yaml: the leader's own settings.
   { id: 'config-leader-switch', stores: ['config-yaml'], file: 'config.yaml', at: 'leader_switch', rule: 'keep', why: 'names both machines\' places on purpose (each machine\'s home, standby folder, account home and witnesses)' },
   {
@@ -78,7 +82,7 @@ const RULES: readonly PathRule[] = [
     why: 'becomes the old machine\'s standby folder: the new leader\'s batches go there, for the switch back',
     apply: (home, ctx) => { rewriteStandbyDir(home, ctx.reverseStandbyDir); return 1 },
   },
-  { id: 'config-host-keyed', stores: ['config-yaml'], file: 'config.yaml', at: ['standby.walnut', 'usage.proxy_log_dirs', 'external_session_import.excluded_cwds'], rule: 'keep', why: 'a place on a named host (the standby host\'s program, a host\'s log folder or folders): that host did not move' },
+  { id: 'config-host-keyed', stores: ['config-yaml'], file: 'config.yaml', at: ['hosts', 'standby.walnut', 'usage.proxy_log_dirs', 'external_session_import.excluded_cwds'], rule: 'keep', why: 'a place or a command on a named host (a host\'s definition and its shell_setup, the standby host\'s program, a host\'s log folder or folders): that host did not move' },
   { id: 'config-settings', stores: ['config-yaml', 'config-dir'], file: ['config.yaml', 'config/**'], rule: 'rewrite', why: 'a setting the leader follows on its own machine (a model, a key file, a source checkout, a folder): the same place under the new home or the new account home' },
   { id: 'config-history', stores: ['config-history'], file: 'config.yaml.history/**', rule: 'keep', why: `earlier versions of config.yaml: ${RECORD}` },
 

@@ -68,16 +68,15 @@ leaderSwitchRouter.post('/cancel', thisMachineOnly, async (_req, res) => {
 
 leaderSwitchRouter.post('/witnesses/init', thisMachineOnly, async (_req, res) => {
   const p = currentLeaderPermit()
-  // Not the permission itself: a Walnut's first leader waits for its witnesses, and they are set up from here.
-  if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server is not running the write permission (start it as the leader with the experiment and leader_switch set)' }); return }
-  const [{ readHomeSwitchConfig, isRemoteWitness }, { setUpRemoteWitness }, { WALNUT_HOME }] = await Promise.all([
-    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/witness-transport.js'), import('../../constants.js'),
+  // Only a server that holds the permission has a host link to speak over (a link describes this Walnut to the host as its leader).
+  if (!p || p.trial || p.runtime.status().state !== 'leading') { res.status(409).json({ ok: false, why: 'this server does not hold the write permission (a host link is opened only by the leader)' }); return }
+  const [{ readHomeSwitchConfig, isRemoteWitness }, { setUpRemoteWitnesses }, { WALNUT_HOME }] = await Promise.all([
+    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/witness-setup.js'), import('../../constants.js'),
   ])
   const cfg = readHomeSwitchConfig(WALNUT_HOME)
   if (!cfg.settings) { res.status(409).json({ ok: false, why: cfg.problem ?? 'no leader_switch section' }); return }
-  const list = cfg.settings.witnesses.map((w) => w.id)
-  const results = []
-  for (const w of cfg.settings.witnesses.filter(isRemoteWitness)) results.push({ witness: w.id, host: w.host, ...(await setUpRemoteWitness(w, list, null)) })
+  const seen = await p.runtime.readWitnesses()
+  const results = await setUpRemoteWitnesses({ places: cfg.settings.witnesses.filter(isRemoteWitness), list: cfg.settings.witnesses.map((w) => w.id), walnutId: null, sightings: seen.sightings })
   res.json({ ok: results.every((r) => r.ok), results })
 })
 

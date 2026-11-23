@@ -35,7 +35,7 @@ import { recordMentionDir } from '../../../../src/core/mention-dirs.js'
 import { snapshotTo, verifyStandby } from '../../../../src/core/standby/index.js'
 import { promoteCopy } from '../../../../src/core/leader/switch/promote.js'
 import { leftoverPaths } from '../../../../src/core/leader/switch/self-check.js'
-import { judgePathHits, pathRoots, ruleFor, scanHomePaths, type PathHit, type ScanResult } from '../../../../src/core/leader/switch/home-paths.js'
+import { judgePathHits, pathRoots, ruleCoversFile, ruleFor, scanHomePaths, unscannedProblems, type PathHit, type ScanResult } from '../../../../src/core/leader/switch/home-paths.js'
 import { homePathRules, LEDGER_RULE, NO_PATH_STORES } from '../../../../src/core/leader/switch/home-path-rules.js'
 
 // Fake account homes: only strings in the data, nothing is made there.
@@ -68,6 +68,7 @@ async function seed(): Promise<void> {
       self_repair: { source_dir: `${A}/code/open-walnut` },
       push: { apns: { key_path: `${H}/secrets/apns.p8` } },
       usage: { proxy_log_dirs: { 'host-x': `${A}/proxy-logs` } },
+      hosts: { devbox: { ssh: 'devbox', shell_setup: `source ${A}/.env` } },
     })
     return { write: true, result: null }
   })
@@ -106,6 +107,8 @@ async function seed(): Promise<void> {
   put('subagent-runs.json', JSON.stringify([{ dirs: [{ host: null, dir: `${A}/.local/state/open-walnut/sub/1` }], sessionCwd: `${A}/code/proj` }]))
   put('notes/watch.md', `The repo lives at ${A}/code/proj.\n`)
   put('memory/daily/2026-11-22.md', `Edited ${H}/config.yaml\n`)
+  // A plugin's icon (a blob: never read, and no reason to fail the trial).
+  put('plugins/p1/icon.png', `\u0089PNG\u0000\u0000${H}/x`)
   put('chat-history.json', JSON.stringify({ messages: [{ content: [{ type: 'image', path: `${A}/.cache/open-walnut/images/i.png` }] }] }))
   // Machine data: never in a batch.
   put('local/home.json', JSON.stringify({ home: H, formerHomes: [`${A}/.open-walnut-former`] }))
@@ -151,6 +154,7 @@ describe('old-machine paths in a promoted home', () => {
     const j = judgePathHits(after.hits, rules)
     expect(show(j.notRewritten.map((x) => x.hit))).toEqual([])
     expect(show(j.unknown)).toEqual([])
+    expect(unscannedProblems(after.skipped, rules)).toEqual([])
     // The trial's own check (which skips what is kept) agrees.
     expect(leftoverPaths(newHome, pathRoots({ fromHome: WALNUT_HOME, toHome: newHome, fromAccount: OLD_ACCOUNT, toAccount: NEW_ACCOUNT }), rules).problems).toEqual([])
   })
@@ -170,6 +174,9 @@ describe('old-machine paths in a promoted home', () => {
       const store = classifyHomePath(h.file)?.id ?? ''
       met.set(r.id, (met.get(r.id) ?? new Set()).add(store))
     }
+    // A whole-file keep rule (the blobs) is met by a file it covers: such files are never read.
+    const files = fs.readdirSync(WALNUT_HOME, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => path.relative(WALNUT_HOME, path.join(e.parentPath, e.name)).split(path.sep).join('/'))
+    for (const r of rules) if (r.rule === 'keep' && r.at === undefined && !r.root && files.some((f) => ruleCoversFile(r, f))) met.set(r.id, met.get(r.id) ?? new Set())
     expect(rules.filter((r) => !met.has(r.id)).map((r) => r.id)).toEqual([])
     const missing = rules.filter((r) => r.rule === 'rewrite').flatMap((r) => r.stores.filter((s) => !met.get(r.id)!.has(s)).map((s) => `${r.id}: ${s}`))
     expect(missing).toEqual([])
@@ -182,6 +189,7 @@ describe('old-machine paths in a promoted home', () => {
     expect(cfg).toContain(`dir: ${OLD_ACCOUNT}/standby`)
     // Host-keyed and leader_switch places are kept.
     expect(cfg).toContain(`${OLD_ACCOUNT}/proxy-logs`)
+    expect(cfg).toContain(`shell_setup: source ${OLD_ACCOUNT}/.env`)
     expect(cfg).toContain(`home: ${WALNUT_HOME}`)
     const tdb = new Database(path.join(newHome, 'tasks', 'tasks.sqlite'), { readonly: true })
     const cwd = (id: string) => (JSON.parse((tdb.prepare('SELECT payload FROM tasks WHERE id = ?').get(id) as { payload: string }).payload) as { cwd?: string }).cwd

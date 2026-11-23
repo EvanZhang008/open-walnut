@@ -90,8 +90,14 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
   }
   if (witnesses.length < 3) return { settings: null, problem: `leader_switch.witnesses lists ${witnesses.length}; at least three are needed for a majority that survives one loss` }
   if (new Set(witnesses.map((w) => w.id)).size !== witnesses.length) return { settings: null, problem: 'leader_switch.witnesses: ids must be unique' }
+  // A `dir` is a path on THIS computer, and the config travels with the home: on another machine the same line names a
+  // different directory, so one witness id would be two witnesses with two records. Once a witness is on another machine
+  // every witness is named by its machine (`host`), which means the same machine from wherever the config is read.
+  if (witnesses.some(isRemoteWitness) && witnesses.some(isLocalWitness)) {
+    return { settings: null, problem: 'leader_switch.witnesses: with a witness on another machine (host), every witness needs a host: a dir is a path on one computer only, and the config is read on both machines' }
+  }
   // Two witness ids that reach one machine would be one witness counted twice: a majority that is not one.
-  const where = witnesses.map((w) => (isRemoteWitness(w) ? `host:${w.host}` : `dir:${w.dir}`))
+  const where = witnesses.map((w) => (isRemoteWitness(w) ? `host:${w.host.toLowerCase()}` : `dir:${w.dir}`))
   if (new Set(where).size !== witnesses.length) return { settings: null, problem: 'leader_switch.witnesses: each witness needs its own dir or host (two ids on one place count one machine twice)' }
   const machines: MachinePlace[] = []
   for (const m of Array.isArray(o.machines) ? o.machines : []) {

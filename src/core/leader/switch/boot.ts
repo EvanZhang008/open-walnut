@@ -91,6 +91,8 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
   })
   if (rt.decision.kind === 'refuse') {
     await rt.stop()
+    // The standby this becomes holds no link to a host (witness-transport.ts: none is opened before the runtime leads).
+    await (await import('./witness-transport.js')).closeWitnessLinks()
     const d = rt.decision
     throw new LeaderBootRefused(d.why, d.leader ? (await import('./handed-over.js')).standbyForRecord({ home: input.home, env, leader: d.leader, record: d.record, why: d.why }) : undefined)
   }

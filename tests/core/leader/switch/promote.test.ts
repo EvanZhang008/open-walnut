@@ -242,3 +242,22 @@ describe('a home swapped around this machine\'s daemon state (home-manifest isMa
     expect(r.movedAside).toBe(`${home}.before-s9`)
   })
 })
+
+describe('leftoverPaths: leader data the scan could not read fails the trial, unless a rule marks it', () => {
+  it('a file over the cap, a database that will not open and an unnamed binary fail; a blob, a kept store\'s binary and the user\'s own file do not', () => {
+    const home = path.join(root, 'b', 'home')
+    const put = (rel: string, body: string | Buffer) => { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); fs.writeFileSync(path.join(home, rel), body) }
+    put('triggers/t/big.log', 'x'.repeat(5000))
+    put('plugin-data/p/broken.sqlite', Buffer.concat([Buffer.from('SQLite format 3\u0000'), Buffer.alloc(200, 7)]))
+    put('plugin-files/p/tool', Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0, 1]))
+    put('plugins/p/icon.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0]))
+    put('notes/scan.heic.bin', Buffer.from([1, 0, 2]))
+    put('my-own-archive.dat', Buffer.from([1, 0, 2]))
+    const roots = moveRoots({ previousHome: '/srv/a/home', home })
+    const r = leftoverPaths(home, roots, homePathRules(), { maxFileBytes: 1000 })
+    expect(r.problems).toHaveLength(1)
+    expect(r.problems[0]).toMatch(/could not read/)
+    for (const f of ['triggers/t/big.log', 'plugin-data/p/broken.sqlite', 'plugin-files/p/tool']) expect(r.problems[0]).toContain(f)
+    for (const f of ['icon.png', 'scan.heic.bin', 'my-own-archive.dat']) expect(r.problems[0]).not.toContain(f)
+  })
+})

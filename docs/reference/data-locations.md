@@ -232,6 +232,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/planned-restart.json` | machine | no | A restart this server planned |
 | `~/.open-walnut/local/last-planned-stop.json` | machine | no | Why the last server stopped, for the next boot |
 | `~/.open-walnut/local/spawn-journal.jsonl` | machine (daemon state) | no | Sessions this host's daemon started |
+| `~/.open-walnut/local/cli-owners/` | machine (daemon state) | no | Which daemon owns each running CLI of this host, beside the spawn journal |
 | `~/.open-walnut/local/host-mcp.json` | machine | no | MCP servers this host offers |
 | `~/.open-walnut/local/expose-handover.json` | machine | no | Port handover between server generations |
 | `~/.open-walnut/local/fleet-cache.json` | machine | no | Last known host fleet facts |
