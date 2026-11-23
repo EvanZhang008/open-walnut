@@ -119,12 +119,9 @@
 .session-cron-prompt { margin-top: 4px; }
 /* The disclosure (controls/Disclosure.tsx) draws the toggle; here only its placement. */
 .session-cron-prompt-toggle .wn-disclosure-label { flex: 0 0 auto; }
+/* The collapsed prompt's first line is metadata (`.wn-meta`, text-fit.css): one line, cut with an
+   ellipsis inside its own box when the column is narrower than the line. */
 .session-cron-prompt-preview {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg-muted);
   font-weight: 400;
 }

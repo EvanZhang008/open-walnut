@@ -138,7 +138,7 @@ import { reconcileActiveSession } from '@/stores/active-session';
 import { homeRowFloorVars, loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelAloneWidth, todoPanelBasisPx, todoPanelWidth, usersSessionWidth, type QuickQuestionSlot } from './columnSizing';
 import { HomeEmptyPane } from './HomeEmptyPane';
 import {
-  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
+  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readAskSlotHasContent, readHomeChatVisible, shouldAutoOpenFirstDraft, writeAskSlotHasContent,
 } from './home-panel-flags';
 import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
@@ -545,8 +545,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // agentId/conversationId form stays on the route for other callers).
   const inspector = useContextInspector(undefined, undefined, askSlotSelection.sessionId ?? undefined);
   // Whether the slot's conversation has anything to read, as the slot last reported it (it says
-  // nothing while it loads): an empty one keeps the smaller share beside the columns.
-  const [askSlotHasContent, setAskSlotHasContent] = useState(true);
+  // nothing while it loads): an empty one keeps the smaller share beside the columns. A page load
+  // starts from this browser's last answer, so the columns do not move once the slot has loaded.
+  const [askSlotHasContent, setAskSlotHasContent] = useState(() => readAskSlotHasContent(localStorage));
+  const handleAskSlotContent = useLeanCallback((has: boolean) => setAskSlotHasContent(has), []);
 
   // Chat panel visibility: toggle via the Focus Dock "Walnut" cell or the Sidebar
   // "Ask Walnut" toggle. Hidden until the user opens it.
@@ -1019,7 +1021,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // The session area's width, from the layout as it is now (sessionAreaShownPct): the user's
   // dragged width as he left it, else the graduated width for these columns, capped beside the
   // Quick question slot. Nothing writes it, so every order of opening and a reload agree.
-  const askSlot: QuickQuestionSlot = !chatVisible || phoneLayout ? 'closed' : askSlotHasContent ? 'shown' : 'empty';
+  // The share is sampled from the slot's answer only when the row itself changes (a column opens
+  // or closes, Quick question is shown or hidden): a report that comes while the same columns stay
+  // open (the slot's history loading, a passing state on a deep link, a switch inside the slot)
+  // never moves them under the pointer (2026-11-23: the columns jumped 138 px once the history
+  // loaded). The sample is what the next page load starts from.
+  const shareKey = `${colCount}|${chatVisible}`;
+  const [shareSample, setShareSample] = useState(() => ({ key: shareKey, has: askSlotHasContent }));
+  if (shareSample.key !== shareKey) setShareSample({ key: shareKey, has: askSlotHasContent });
+  useEffect(() => { writeAskSlotHasContent(localStorage, shareSample.has); }, [shareSample.has]);
+  const askSlot: QuickQuestionSlot = !chatVisible || phoneLayout ? 'closed' : shareSample.has ? 'shown' : 'empty';
   const sessionAreaShown = sessionAreaShownPct(usersSessionWidth(sessionPanel), colCount, askSlot);
   sessionAreaShownRef.current = sessionAreaShown;
   // Every column keeps a floor; a short row takes the room from the session area's share, then
@@ -3951,7 +3962,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOpenOrg={openOrg}
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
-          onContentChange={setAskSlotHasContent}
+          onContentChange={handleAskSlotContent}
           onLocateTask={handleLocateTaskById}
           onOpenTaskDetail={handleOpenTaskDetailById}
           onSessionClick={handleSessionClick}

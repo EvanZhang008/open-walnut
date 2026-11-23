@@ -46,6 +46,31 @@ export function hasHomeChatChoice(storage: Pick<Storage, 'getItem'> | null | und
 }
 
 /**
+ * Whether the Quick question slot had anything to read when this browser last drew Home. The slot
+ * says nothing while it loads, and the session area's share depends on the answer (columnSizing.ts
+ * sessionAreaShownPct: an empty slot leaves the columns 65%, one with content 50%), so a reload that
+ * started from a fixed guess redrew every open column 15% of the row to the side once the task list
+ * and the slot's history arrived (2026-11-23: 138 px at 1280, under a click aimed at Files). Starting
+ * from the last answer draws the split the page had before the reload. Per device: the 'walnut.'
+ * prefix keeps it out of the ui-prefs mirror (it changes with every conversation picked).
+ */
+export const LS_ASK_SLOT_HAS_CONTENT_KEY = 'walnut.home.askSlotHasContent';
+
+/** The slot's last answer, or `true` (the smaller share for the columns) when none is stored. */
+export function readAskSlotHasContent(storage: Pick<Storage, 'getItem'> | null | undefined): boolean {
+  try {
+    return storage?.getItem(LS_ASK_SLOT_HAS_CONTENT_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+/** Keep the slot's answer for the next page load. Storage that throws keeps nothing. */
+export function writeAskSlotHasContent(storage: Pick<Storage, 'setItem'> | null | undefined, has: boolean): void {
+  try { storage?.setItem(LS_ASK_SLOT_HAS_CONTENT_KEY, has ? 'true' : 'false'); } catch { /* storage disabled */ }
+}
+
+/**
  * THE ASK WALNUT TOGGLE IS ALWAYS THERE. The sidebar's "Ask Walnut" button and the
  * Focus Dock's chat cell are how a closed chat comes back. From 2026-10-01 they
  * showed only after the spot had been opened once, which left a new user with no

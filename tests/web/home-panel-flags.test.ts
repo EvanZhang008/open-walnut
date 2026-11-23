@@ -17,13 +17,17 @@ import {
   autoDraftMayTakeFocus,
   firstDraftDecisionReady,
   focusHolderOf,
+  LS_ASK_SLOT_HAS_CONTENT_KEY,
   hasHomeChatChoice,
+  readAskSlotHasContent,
   readHomeChatVisible,
+  writeAskSlotHasContent,
   shouldAutoOpenFirstDraft,
   homeChatChosenOpen,
   showHomeChatToggle,
   type FirstDraftInput,
 } from '../../web/src/pages/home-panel-flags';
+import { syncable } from '../../web/src/utils/ui-prefs-sync';
 
 const storageWith = (value: string | null) => ({
   getItem: (key: string) => (key === LS_HOME_CHAT_VISIBLE_KEY ? value : null),
@@ -207,5 +211,30 @@ describe('the auto-opened first draft takes the caret only when nothing else hol
     const src = readFileSync(join(__dirname, '../../web/src/pages/MainPage.tsx'), 'utf8');
     expect(src).toContain('const holder = focusHolderOf(document);');
     expect(src).toContain('if (!takeFocus) setFocusDraftId(');
+  });
+});
+
+describe('the Quick question slot answer a page load starts from', () => {
+  // The session area's share depends on it, so a reload that guessed wrong moved every open column.
+  it('reads the last answer kept, and the smaller share for the columns when none is', () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
+    expect(readAskSlotHasContent(storage)).toBe(true);
+    writeAskSlotHasContent(storage, false);
+    expect(store.get(LS_ASK_SLOT_HAS_CONTENT_KEY)).toBe('false');
+    expect(readAskSlotHasContent(storage)).toBe(false);
+    writeAskSlotHasContent(storage, true);
+    expect(readAskSlotHasContent(storage)).toBe(true);
+  });
+
+  it('treats storage that throws as nothing kept', () => {
+    const broken = { getItem: () => { throw new Error('off'); }, setItem: () => { throw new Error('off'); } };
+    expect(readAskSlotHasContent(broken)).toBe(true);
+    expect(() => writeAskSlotHasContent(broken, false)).not.toThrow();
+    expect(readAskSlotHasContent(null)).toBe(true);
+  });
+
+  it('stays on this device: it changes with every conversation picked, so the ui-prefs mirror never sends it', () => {
+    expect(syncable(LS_ASK_SLOT_HAS_CONTENT_KEY)).toBe(false);
   });
 });

@@ -718,7 +718,20 @@ test('the cron card shows each job as the CLI reported it and follows every chan
   const daily = card.locator('.session-cron-job[data-job-id="41935620"]')
   const preview = daily.locator('.session-cron-prompt-preview')
   await expect(preview).toHaveText(/^Daily disk inspection/)
-  expect(await preview.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  // One line of metadata: where the column is narrower than the line (one column beside the
+  // Quick question slot takes half the row), it is cut with an ellipsis inside its own box and
+  // never runs past the toggle or widens the card.
+  expect(await preview.evaluate((node) => {
+    const style = getComputedStyle(node)
+    const box = node.getBoundingClientRect()
+    const toggle = node.closest('.session-cron-prompt-toggle')!.getBoundingClientRect()
+    return {
+      oneLine: style.whiteSpace === 'nowrap' && box.height < 2 * parseFloat(style.fontSize),
+      clipped: style.overflow === 'hidden' && style.textOverflow === 'ellipsis',
+      inside: box.right <= toggle.right + 1,
+    }
+  })).toEqual({ oneLine: true, clipped: true, inside: true })
+  expect(await card.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await daily.locator('.session-cron-prompt-toggle').click()
   const text = daily.locator('.session-cron-prompt-text')
   await expect(text).toContainText('\u78C1\u76D8\u5DE1\u68C0 \u6BCF\u5929\u4E00\u6B21')

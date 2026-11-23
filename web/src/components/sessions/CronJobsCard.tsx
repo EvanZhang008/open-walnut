@@ -68,7 +68,7 @@ function JobRow({ job, now }: { job: SessionCronJob; now: number }) {
             className="session-cron-prompt-toggle"
             expanded={promptOpen}
             onClick={() => setPromptOpen((open) => !open)}
-            trailing={!promptOpen && <span className="session-cron-prompt-preview">{preview}</span>}
+            trailing={!promptOpen && <span className="session-cron-prompt-preview wn-meta">{preview}</span>}
           >
             Prompt
           </DisclosureButton>

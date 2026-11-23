@@ -94,6 +94,7 @@ const DEVICE_LOCAL_KEYS: Record<string, string> = {
   'walnut.org.place': "the Org page's place; a phone's place is not the Mac's (org-place.ts)",
   'walnut.org.briefFolded': 'the Brief folded, per device',
   'walnut.org.briefSeen': 'when this device last read each Brief',
+  'walnut.home.askSlotHasContent': "whether this device's Quick question slot last had content, so a reload draws the columns' split it had (home-panel-flags.ts)",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

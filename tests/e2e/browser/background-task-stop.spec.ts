@@ -106,19 +106,22 @@ test.describe('Stop one background task', () => {
     const stop = head.locator('[data-testid="bg-task-stop"]')
     await expect(stop).toHaveText('Stop')
     await expect(stop).toHaveAttribute('aria-label', 'Stop this agent')
-    // The header holds a long title AND the control: the title ellipsizes, the
-    // control stays whole inside the header.
+    // The header holds a long title AND the control: the title wraps whole (a title is
+    // never cut, text-fit.css .wn-title), the control stays whole inside the header.
     const headBox = (await head.boundingBox())!
     const stopBox = (await stop.boundingBox())!
     expect(stopBox.x + stopBox.width).toBeLessThanOrEqual(headBox.x + headBox.width + 0.5)
     expect(stopBox.width).toBeGreaterThan(40)
-    expect(await head.locator('.bg-tasks-detail-title').evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true)
+    expect(await head.locator('.bg-tasks-detail-title').evaluate(el => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis')).toBe(true)
+    const titleBox = (await head.locator('.bg-tasks-detail-title').boundingBox())!
+    expect(titleBox.x + titleBox.width, 'the title ends before the control').toBeLessThanOrEqual(stopBox.x + 0.5)
     // One row: the timing line gives way beside the control instead of wrapping.
     const oneLine = async () => {
       const meta = head.locator('.wf-modal-meta')
       const lh = await meta.evaluate(el => parseFloat(getComputedStyle(el).lineHeight) || 18)
       expect((await meta.boundingBox())!.height).toBeLessThanOrEqual(lh + 1)
-      expect((await head.boundingBox())!.height).toBeLessThanOrEqual(headBox.height + 0.5)
+      // The title may take another line beside the wider armed control; it stays whole.
+      expect(await head.locator('.bg-tasks-detail-title').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
     }
     await oneLine()
     const dir = `/tmp/background-task-stop/${project}`
