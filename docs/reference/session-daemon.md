@@ -590,9 +590,13 @@ Only the leader's start decision reads it per host (`hostRunsSessionsFor`, the s
 service names `session-judge-v1`. Every other reader asks "on for any host" (`hostRunsSessionsAny`):
 the host's session routes and its dialers, the leader's door and credential issuer, the companion's
 listener door and the heartbeat. `tests/core/session-channel/switch-readers.test.ts` lists every
-caller of each and fails on a new one. A config write takes effect without a restart on the leader
-(it reads the switch again at every write). A host's service starts its session side at its boot, so
-a host turned on for the first time runs it from its next restart.
+caller of each and fails on a new one. A config write takes effect without a restart on either side: the
+leader reads the switch again at every write, and a host's service whose session side is not up
+starts it after the first config copy round that turns the switch on (`host-boot.ts`
+`followHostSwitch`); the leader links its channel once the host's report names `session-judge-v1`.
+Turned off again, the host keeps its session side: a new start there answers
+`host_runs_sessions_off`, its door and companion dialers do not dial again once their link drops, and
+the sessions it runs keep running and reporting over the leader's link.
 
 A host reads the leader's config through the config copy, which never names `hosts.*.runs_sessions`
 (an older replica refuses a whole row that names a field it does not know): the leader's copy says the

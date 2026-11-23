@@ -29,6 +29,8 @@ export interface FileCopySpec<Row> {
   hash?(row: Row): string
   /** The host's check before it writes a row: false skips it. */
   admit?(row: Row): boolean
+  /** After the copy changed here (rows written or removed, the kind purged). Never throws into the round. */
+  onChanged?(): void
 }
 
 export interface FileCopy<Row> {
@@ -93,7 +95,7 @@ export function createFileCopy<Row>(spec: FileCopySpec<Row>): FileCopy<Row> {
       return { skipped }
     },
     held: async () => (await import('../../../replica/journal-overlay.js')).journalHeld(spec.kind),
-    changed: () => {},
+    changed: () => { try { spec.onChanged?.() } catch { /* a reader's failure never fails the round */ } },
     purge: async () => {
       const removed = Object.keys((await readFile())?.rows ?? {}).length
       await markCopyOff(spec.kind)

@@ -25,8 +25,7 @@ const PER_HOST: Record<string, string> = {
 /** Callers of "on for any host": file -> why. */
 const ANY_HOST: Record<string, string> = {
   'src/core/session-channel/leader-boot.ts': 'the leader door /host-door open, the doors push to dialed hosts, the credential issuer: one door and one issuer for every host',
-  'src/core/session-channel/host-boot.ts': "a host's session routes, its dialer to the leader's door and to the companion: the leader's start decision says which starts come",
-  'src/web/server.ts': "a host replica's boot: whether it starts its session routes at all",
+  'src/core/session-channel/host-boot.ts': "a host's session routes, its dialer to the leader's door and to the companion, and whether its session side starts at all (at boot, or when a copy turns it on): the leader's start decision says which starts come",
   'src/core/session-channel/listener-door.ts': "the companion's listener door, with the leader's heartbeat",
   'src/core/leader/primary-leader.ts': "the heartbeat's hostRunsSessions to the companion (its listener door)",
   'src/core/replication/config-allowlist.ts': 'derives the copy-only hosts_run_sessions row (hostsTurnedOn) a replica reads "any" from',

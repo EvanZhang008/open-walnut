@@ -103,6 +103,17 @@ function isRow(v: unknown): v is ConfigCopyRow {
   return !!r && typeof r === 'object' && typeof r.key === 'string' && !!r.key && 'value' in r && Object.keys(r).length === 2
 }
 
+const changeListeners = new Set<() => void>()
+
+/**
+ * On the host: `fn` runs after each round that changed the config copy (a server that reads a
+ * setting only at its boot, the host's session side, follows a change with it). Returns its removal.
+ */
+export function onConfigCopyChanged(fn: () => void): () => void {
+  changeListeners.add(fn)
+  return () => { changeListeners.delete(fn) }
+}
+
 const copy = createFileCopy<ConfigCopyRow>({
   kind: 'config',
   schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -111,6 +122,7 @@ const copy = createFileCopy<ConfigCopyRow>({
   isRow,
   key: (r) => r.key,
   admit: configRowAdmissible,
+  onChanged: () => { for (const fn of changeListeners) { try { fn() } catch { /* one listener never stops the others */ } } },
 })
 
 export const configFollower = copy.follower

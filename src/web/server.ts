@@ -704,6 +704,7 @@ let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = nul
 /** A host replica that runs its sessions: its routes and capabilities (core/session-channel/host-boot.ts). */
 let hostSessionsRoutes: (() => import('../core/session-channel/host-routes.js').HostSessionRoutes | null) | null = null
 let hostSessionsCaps: (() => string[]) | null = null
+let stopHostSwitchFollow: (() => void) | null = null
 /** A host replica's front (replica/front.ts): follower link, presence, dispatcher. Null elsewhere. */
 let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
 /** The away writes of a host replica (WP10): its overlay timer, copy watcher and RPC answer, stopped with the server. */
@@ -4803,20 +4804,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // A host replica that runs and judges its sessions (switch on, a runtime of its own): its port,
   // fact log, channel and routes, before the runner starts anything (core/session-channel/host-boot.ts).
+  // Started here when the switch is on for any host (or this host ran sessions: its fact log), and
+  // later, with no restart, the first time a config copy turns it on (host-boot.ts followHostSwitch).
   if (isHostReplica()) {
-    const [sw, boot] = await Promise.all([import('../core/session-channel/switch.js'), import('../core/session-channel/host-boot.js')])
-    // On with the switch, and on again after a restart while this host has a fact log, so the
-    // sessions it ran keep reporting and taking sends after the switch went off.
-    const switchOn = sw.hostRunsSessionsAny(await (await import('../core/config-manager.js')).getConfig().catch(() => null))
-    if ((switchOn || boot.hostRanSessions((process.env.WALNUT_WALNUT_ID ?? '').trim())) && boot.hostCanRunSessions()) {
+    const boot = await import('../core/session-channel/host-boot.js')
+    if (boot.hostCanRunSessions()) {
       hostSessionsRoutes = boot.hostSessionRoutes
       hostSessionsCaps = boot.hostSessionCapabilities
-      await boot.startHostSessions({
+      stopHostSwitchFollow = await boot.followHostSwitch({
         walnutId: (process.env.WALNUT_WALNUT_ID ?? '').trim(),
         hostKey: (process.env.WALNUT_HOST_KEY ?? '').trim(),
         log: (level, msg, data) => log.session[level](msg, data),
-      }).catch((err: unknown) => {
-        log.session.warn('host sessions: not started; the leader runs this host\'s sessions as before', { error: err instanceof Error ? err.message : String(err) })
       })
     }
   }
@@ -7782,6 +7780,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   const searchCopy = searchCopyHandle
   await shutdownStep('search copy', () => searchCopy?.stop())
   searchCopyHandle = null
+  stopHostSwitchFollow?.()
+  stopHostSwitchFollow = null
   if (hostSessionsRoutes) {
     hostSessionsRoutes = null
     hostSessionsCaps = null

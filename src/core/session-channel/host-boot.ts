@@ -1,6 +1,7 @@
 /**
  * A host replica that runs and judges its sessions (docs/plan/one-service-every-host.md, phase 2),
- * put together at boot when the switch is on (switch.ts) and this host can run sessions:
+ * put together when the switch is on (switch.ts) and this host can run sessions: at boot, or the
+ * moment a config copy turns it on (followHostSwitch):
  *
  *   the fact log    one per Walnut, keyed by its instance id (WALNUT_WALNUT_ID), under this host's
  *                   own state dir
@@ -240,6 +241,39 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   void stranded.run().catch(() => {})
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
   return current
+}
+
+/**
+ * The session side follows the switch (switch.ts hostRunsSessionsAny on this host's config copy):
+ * started now when the switch is on for any host or this host ran sessions before (its fact log, so
+ * the sessions it ran keep reporting after the switch went off), and else started, with no restart,
+ * after the first copy round that turns it on. Once up it stays up when the switch goes off again:
+ * a new start answers host_runs_sessions_off (host-routes.ts), and the door and companion dialers do
+ * not dial again once their link drops (host-dialer.ts, companion-dialer.ts); the sessions it runs,
+ * its fact log and the leader's own link to its channel go on. Returns the stop of the following.
+ */
+export async function followHostSwitch(o: StartHostSessionsOptions): Promise<() => void> {
+  const say = o.log ?? (() => {})
+  const [{ hostRunsSessionsAny }, { getConfig }, { onConfigCopyChanged }] = await Promise.all([
+    import('./switch.js'), import('../config-manager.js'), import('../replication/kinds/config.js'),
+  ])
+  let starting: Promise<void> | null = null
+  let stopped = false
+  const look = (): Promise<void> => {
+    if (stopped || current) return Promise.resolve()
+    starting ??= (async () => {
+      const on = hostRunsSessionsAny(await getConfig().catch(() => null)) || hostRanSessions(o.walnutId, o.stateDir)
+      if (!on || stopped || current) return
+      await startHostSessions(o)
+    })().catch((err: unknown) => {
+      say('warn', 'host sessions: not started; the leader runs this host\'s sessions as before', { error: err instanceof Error ? err.message : String(err) })
+    }).finally(() => { starting = null })
+    return starting
+  }
+  await look()
+  if (current) return () => {}
+  const off = onConfigCopyChanged(() => { void look().then(() => { if (current) off() }) })
+  return () => { stopped = true; off() }
 }
 
 export async function stopHostSessions(): Promise<void> {
