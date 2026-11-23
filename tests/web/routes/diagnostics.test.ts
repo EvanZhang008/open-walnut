@@ -215,3 +215,20 @@ describe('serverDiagnosticsOptions', () => {
     expect(serverDiagnosticsOptions(true).probes?.webAssets).toBeTypeOf('function')
   })
 })
+
+describe('GET /api/diagnostics/line-parses', () => {
+  it('reads the per-session line parse counts and the frame parses, 0 for a session never parsed here', async () => {
+    const lpc = await import('../../../src/providers/line-parse-count.js')
+    lpc._resetLineParseCountForTesting()
+    lpc.noteLineParsed('legacy-sid'); lpc.noteLineParsed('legacy-sid'); lpc.noteFrameParsed('channel')
+    const app = express()
+    app.use('/api/diagnostics', createDiagnosticsRouter())
+    const all = await request(app).get('/api/diagnostics/line-parses')
+    expect(all.status).toBe(200)
+    expect(all.body.sessions).toEqual([{ sessionId: 'legacy-sid', lines: 2 }])
+    expect(all.body.frames).toEqual({ daemon: 0, channel: 1 })
+    expect(typeof all.body.since).toBe('string')
+    const one = await request(app).get('/api/diagnostics/line-parses?session=host-judged-sid')
+    expect(one.body).toMatchObject({ sessionId: 'host-judged-sid', lines: 0 })
+  })
+})

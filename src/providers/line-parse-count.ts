@@ -16,6 +16,11 @@ export function lineParsesOf(sid: string): number {
   return counts.get(sid) ?? 0
 }
 
+/** Every session counted so far, most parsed first (GET /api/diagnostics/line-parses). */
+export function lineParsesAll(): Array<{ sessionId: string; lines: number }> {
+  return [...counts].map(([sessionId, lines]) => ({ sessionId, lines })).sort((a, b) => b.lines - a.lines)
+}
+
 /**
  * The other JSON parses on this server's side of a session's output, counted whole (not per
  * session): each frame its daemon links bring (daemon-connection.ts handleMessage: one per remote
