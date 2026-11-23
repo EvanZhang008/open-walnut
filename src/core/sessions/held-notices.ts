@@ -44,6 +44,7 @@ export function dropParts(sid: string, parts: readonly unknown[], why: string, n
     const m = metaOf(p);
     if (!m.mid) continue;
     recordFate(m.mid, { state: 'dropped', at: now, sid, why });
+    void import('./delivery-ledger.js').then((l) => l.recordDelivery({ step: 'dropped', id: m.mid, sessionId: sid, why })).catch(() => {});
     log.session.info('held note dropped unread', { messageId: m.mid, sessionId: sid, fromSessionId: m.from, taskId: m.task, why });
     if (!m.from) continue;
     const sent = typeof m.at === 'number' ? new Date(m.at).toISOString().slice(0, 16).replace('T', ' ') : '';
@@ -177,12 +178,15 @@ export async function pendingHeldNotices(sessionId: string, now = Date.now()): P
       // wait again and their fate is recorded when they ride.
       if (!taken.delete(token)) return;
       const at = Date.now();
+      const mids: string[] = [];
       for (const [, v] of keep) {
         for (const p of v.parts ?? []) {
           const mid = metaOf(p).mid;
-          if (mid) recordFate(mid, { state: 'delivered', at, sid: sessionId, ...(row ? { row } : {}) });
+          if (mid) { recordFate(mid, { state: 'delivered', at, sid: sessionId, ...(row ? { row } : {}) }); mids.push(mid); }
         }
       }
+      // The delivery ledger: these notes are where the row that carries them is (sessions/delivery-ledger.ts).
+      if (mids.length) void import('./delivery-ledger.js').then((l) => l.recordDelivery({ step: 'carried', ...(row ? { id: row } : {}), sessionId, ids: mids })).catch(() => {});
       void persist();
     },
   };

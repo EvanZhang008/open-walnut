@@ -40,6 +40,7 @@ const CACHE_ENTRIES: readonly HomeEntry[] = [
   mach('cache.leader', 'cache/leader', 'dir', 'Who leads this box while the primary is away'),
   mach('cache.host-link-ledger', 'cache/host-link-ledger.json', 'file', 'When each host\'s link was down, as this box saw it'),
   mach('cache.sleep-ledger', 'cache/sleep-ledger.json', 'file', 'When this machine slept and when no server ran on it'),
+  mach('cache.delivery-ledger', 'cache/delivery-ledger', 'dir', 'Where each message to a session got to (sent, held, queued, written, read), one line per step, 14 days'),
   mach('cache.server-alive', 'cache/server-alive.json', 'file', 'Last alive stamp of the server running on this machine'),
   mach('cache.cloud-chat-lanes', 'cache/cloud-chat-lanes.json', 'file', 'Catch-up marks of this box\'s chat lanes'),
   mach('cache.acp-upgrade-hold', 'cache/acp-upgrade-hold.json', 'file', 'A hold on upgrading this machine\'s engine adapter'),

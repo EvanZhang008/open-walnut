@@ -171,6 +171,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/cache/leader/` | machine | no | Who leads this box while the primary is away |
 | `~/.open-walnut/cache/host-link-ledger.json` | machine | no | When each host's link was down, as this box saw it |
 | `~/.open-walnut/cache/sleep-ledger.json` | machine | no | When this machine slept and when no server ran on it |
+| `~/.open-walnut/cache/delivery-ledger/` | machine | no | Where each message to a session got to (sent, held, queued, written, read), one line per step, 14 days |
 | `~/.open-walnut/cache/server-alive.json` | machine | no | Last alive stamp of the server running on this machine |
 | `~/.open-walnut/cache/cloud-chat-lanes.json` | machine | no | Catch-up marks of this box's chat lanes |
 | `~/.open-walnut/cache/acp-upgrade-hold.json` | machine | no | A hold on upgrading this machine's engine adapter |

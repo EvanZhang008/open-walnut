@@ -2960,6 +2960,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     app.use('/api/cloud/companion-build', (await import('./routes/companion-build.js')).companionBuildRouter)
   }
   // Claude subscription limit readings per host (live: host:subscription-limits).
+  // Where messages to sessions got to (core/sessions/delivery-ledger.ts).
+  app.use('/api/delivery', (await import('./routes/delivery.js')).deliveryRouter)
   app.use('/api/subscription-limits', subscriptionLimitsRouter)
   // /api/search-index (canonical) + /api/qmd (legacy alias, one release).
   app.use(['/api/search-index', '/api/qmd'], searchIndexRouter)
@@ -4610,6 +4612,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A delivered ask stamps its request reached, which the silent-target notice reads after any
     // restart (src/core/sessions/request-reached.ts).
     void import('../core/sessions/request-reached.js').then((m) => m.startRequestReachedWatch()).catch(() => {})
+    // Where each message to a session got to, one line per step (src/core/sessions/delivery-ledger.ts).
+    void import('../core/sessions/delivery-ledger.js').then((m) => m.startDeliveryLedger()).catch(() => {})
     // Answers a dead server settled but never queued go out now, then with every sweep below
     // (src/core/sessions/reply-outbox.ts).
     const owedReplies = () => void import('../core/sessions/reply-outbox.js')

@@ -1055,9 +1055,18 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
         + 'nothing was held. Send it with wake=true (it starts a turn and is read now), or wait until the target reads what it holds.',
         429, { heldBytes: full.heldBytes, bytes: full.bytes, maxBytes: full.maxBytes });
     }
+    // The delivery ledger names it by its message id (sessions/delivery-ledger.ts); a replay held nothing more.
+    if (!duplicate) {
+      void import('./delivery-ledger.js').then(({ recordDelivery }) => recordDelivery({
+        step: 'held', id: noteId, sessionId: targetSid, ...(heldTaskId ? { taskId: heldTaskId } : {}),
+        from: caller.kind === 'session' ? caller.record.claudeSessionId : label,
+        ...(caller.kind === 'session' && caller.record.taskId ? { fromTaskId: caller.record.taskId } : {}),
+        ...(input.source ? { source: input.source } : {}), ...(input.title ? { title: input.title } : {}),
+      })).catch(() => {});
+    }
     log.session.info('session_send held: the note asks nothing, it rides the next message', {
-      targetSessionId: targetSid, taskId: heldTaskId, callerKind: caller.kind, wake: input.wake, messageId: noteId, duplicate,
-    });
+    targetSessionId: targetSid, taskId: heldTaskId, callerKind: caller.kind, wake: input.wake, messageId: noteId, duplicate,
+  });
     return {
       delivery: 'held',
       messageId: noteId,
@@ -1192,6 +1201,13 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
     targetSessionId: targetSid, taskId, delivery, fenced,
     requestId: request?.id, callerKind: caller.kind, messageId,
   });
+  // Who sent it, in the delivery ledger beside where it got to (sessions/delivery-ledger.ts).
+  void import('./delivery-ledger.js').then((m) => m.recordDelivery({
+    step: 'sent', id: messageId ?? rowId, sessionId: targetSid, ...(taskId ? { taskId } : {}), source,
+    from: caller.kind === 'session' ? caller.record.claudeSessionId : caller.kind,
+    ...(caller.kind === 'session' && caller.record.taskId ? { fromTaskId: caller.record.taskId } : {}),
+    ...(input.title ? { title: input.title } : {}), ...(request ? { requestId: request.id } : {}),
+  })).catch(() => {});
   const targetDeliverable = caller.kind === 'session' ? await workTargetDeliverable(caller.record.taskId, taskId) : '';
   return {
     delivery,
