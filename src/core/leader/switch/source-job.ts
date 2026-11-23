@@ -22,6 +22,7 @@ import {
 } from './flow.js'
 import { notesAccessOf, readSwitchNotes, writeSwitchNote, type NotesAccess } from './switch-notes.js'
 import { applyServiceRole, writeSwitchPointer, type SetServiceRole } from './service-role.js'
+import { instanceIdAt } from '../../device-store.js'
 import type { CheckReport } from './ticket.js'
 
 const RECENT_BATCH_S = 5 * 60
@@ -224,10 +225,11 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           const c = s.commit ?? (await readStanding())?.number
           writeMarker(s.sourceHome, { switchId: s.id, to: s.to, state: 'handed-over', handover: s.handover, ...(c ? { commit: c } : {}), ...(target.doors?.length ? { leaderDoors: target.doors } : {}), at: new Date().toISOString() })
           // Records first (the marker), mode second: this machine's service follows the new leader as
-          // a replica of its copy dir (where the new leader's batches land). The pointer lets the
-          // service's start hook find this record when a kill fell between the two.
+          // its replica (the mode's home: the Walnut it follows, the new leader's data dir). The pointer
+          // lets the service's start hook find this record when a kill fell between the two.
           writeSwitchPointer({ switchId: s.id, side: 'source', stateFile: switchStateFile(home) }, env)
-          const r = await applyServiceRole({ want: { role: 'replica', home: s.reverseStandbyDir }, switchId: s.id, current: s.serviceRole, set: o.setServiceRole, record: (x) => { s.serviceRole = x; writeDurableJson(switchStateFile(home), s) } })
+          const walnutId = await instanceIdAt(s.sourceHome).catch(() => null) ?? ''
+          const r = await applyServiceRole({ want: { role: 'replica', home: s.targetHome, walnutId }, switchId: s.id, current: s.serviceRole, set: o.setServiceRole, record: (x) => { s.serviceRole = x; writeDurableJson(switchStateFile(home), s) } })
           try { fs.unlinkSync(sourceCancelFile(home)) } catch { /* none */ }
           save('done', `${s.to} leads; this home is handed over${r.set ? '; service role: replica' : `; service role not set (${r.why})`}`)
           await note('handed-off')

@@ -31,7 +31,8 @@ import {
   type TargetState, type TargetStep,
 } from './flow.js'
 import { notesAccessOf, writeSwitchNote, type NotesAccess } from './switch-notes.js'
-import { applyServiceRole, writeSwitchPointer, type SetServiceRole } from './service-role.js'
+import { applyServiceRole, serviceLeadRefusalHere, writeSwitchPointer, type SetServiceRole } from './service-role.js'
+import { instanceIdAt } from '../../device-store.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -57,6 +58,8 @@ export interface TargetJobOptions {
   readWitnesses?: () => Promise<WitnessReading>
   notes?: NotesAccess | null
   setServiceRole?: SetServiceRole
+  /** Tests: whether this machine's service can lead (default: its launcher's good version, asked). */
+  serviceLeadRefusal?: () => Promise<string | null>
   kill?: (name: string) => void
   /** How long the handover may take to show at this machine's majority (default 10 s). */
   handoverSeenMs?: number
@@ -261,6 +264,11 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
             if (committedRecord(after, s)) committed = after!
             else fail('cancelled by hand')
           }
+          // Again right before the commit (the preflight asked it first): a Walnut service here must be able to lead.
+          if (!committed) {
+            const refusal = await (o.serviceLeadRefusal ?? serviceLeadRefusalHere)()
+            if (refusal) fail(refusal)
+          }
           if (readPromoted(s.targetHome)?.state !== 'led') writePromoted(s.targetHome, { switchId: s.id, state: 'promoted', from: s.sourceHome, ...onHosts, at: new Date().toISOString() })
           const until = Date.now() + takeBackMs(settings)
           while (!committed && Date.now() < until) {
@@ -284,7 +292,8 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
         }
         case 'role': {
           // Records first (the commit above, then the wanted role in this state), mode second.
-          const r = await applyServiceRole({ want: { role: 'leader', home: s.targetHome }, switchId: s.id, current: s.serviceRole, set: o.setServiceRole, record: (x) => { s.serviceRole = x; writeSwitchFile(o.standbyDir, targetStateName(s.id), s) } })
+          const walnutId = await instanceIdAt(s.targetHome).catch(() => null) ?? ''
+          const r = await applyServiceRole({ want: { role: 'leader', home: s.targetHome, walnutId }, switchId: s.id, current: s.serviceRole, set: o.setServiceRole, record: (x) => { s.serviceRole = x; writeSwitchFile(o.standbyDir, targetStateName(s.id), s) } })
           save('start-target', r.set ? `service role: leader on ${s.targetHome}` : `service role not set (${r.why})`)
           break
         }

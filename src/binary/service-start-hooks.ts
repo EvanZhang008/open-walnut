@@ -33,8 +33,11 @@ export interface ServiceStartResult {
 }
 export type ServiceStartHook = (ctx: ServiceStartContext) => Promise<ServiceStartResult | void>
 
-/** Lazy: each entry is loaded only when a mode file reads. The leader switch adds its loader here. */
-export const SERVICE_START_HOOKS: Array<() => Promise<ServiceStartHook>> = []
+/** Lazy: each entry is loaded only when a mode file reads. */
+export const SERVICE_START_HOOKS: Array<() => Promise<ServiceStartHook>> = [
+  // The leader switch: a kill between its role record and the mode, and a commit start's handover (local files only).
+  async () => (await import('../core/leader/switch/service-start-hook.js')).leaderSwitchStartHook,
+]
 
 export const SERVICE_START_HOOKS_DEADLINE_MS = 5_000
 

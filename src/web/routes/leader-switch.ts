@@ -232,7 +232,9 @@ leaderSwitchRouter.post('/switch/begin', thisMachineOnly, async (req, res) => {
   const cfg = readHomeSwitchConfig(WALNUT_HOME)
   if (!cfg.settings) { res.status(409).json({ ok: false, why: cfg.problem ?? 'no leader_switch section' }); return }
   const standby = (await getConfig()).standby ?? {}
-  const why = beginRefusal({ settings: cfg.settings, me: p.machine, to, standby: { ...(standby.dir ? { dir: standby.dir } : {}), ...(standby.host ? { host: standby.host } : {}) } })
+  // A target reached as a host: what this leader's link knows of its service (hello serviceRoles, launcher goodRoles).
+  const hostService = standby.host ? ((await (await import('../../core/hosts/fleet.js')).getFleetHost(standby.host).catch(() => null))?.daemon ?? null) : undefined
+  const why = beginRefusal({ settings: cfg.settings, me: p.machine, to, standby: { ...(standby.dir ? { dir: standby.dir } : {}), ...(standby.host ? { host: standby.host } : {}) }, ...(hostService !== undefined ? { hostService } : {}) })
   if (why) { res.status(403).json({ ok: false, why }); return }
   const startedBy = { machine: p.machine, via: 'cli' as const }
   const line = beganLine({ switchId, from: p.machine, to, by: startedBy })

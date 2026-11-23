@@ -251,16 +251,28 @@ and each machine's newest note of the switch.
 
 ### Service role
 
-The one launcher-kept service of a machine starts as the leader or as a replica, on a home. The
-switch says what it should be at two places: on the new leader after the commit (leader, the
-promoted home), and on the old leader after the hand-off (replica, its copy dir). Records first,
-mode second: the job writes the role it wants into its state, asks for the mode
-(`setServiceRole`, injected), then marks it set. A kill between the two is healed by
-`resumeServiceRole`, a read-only entry for the service's start hook: it reads this machine's last
-switch record (through `leader-switch-pointer.json` beside the machine id) and asks for the same
-role again; for a target job at its commit it also hands the start its handover number. The
-mode is never the truth of who leads: the witnesses' record stays that. **The real setter is not
-wired**: until the launcher's owner lands it, the step is recorded as not set, with why.
+The host's one Walnut service starts as the leader or as a replica, on a home, as its mode file
+says (`<install root>/service-mode.json`, [session daemon](./session-daemon.md)). The switch says what it
+should be at two places: on the new leader after the commit (leader, the promoted home), and on the
+old leader after the hand-off (replica, the new leader's data dir: the Walnut it follows, through its
+one follower spec). Records first, mode second: the job writes the role it wants (with the Walnut id)
+into its state, asks the mode file's one writer (`setServiceRole` in `src/binary/service-mode.ts`, on
+`serviceInstallRoot()`), then marks it set. After the commit nothing rolls back: a refusal
+(`not_service_owner`, `no_follower_spec`) is recorded with why for a person, `mode_busy` is tried again
+a few times. A machine whose job runs outside a service has no install root: recorded as not set.
+
+A kill between the record and the mode is healed by the leader switch's service start hook
+(`service-start-hook.ts`, in `SERVICE_START_HOOKS`, under the hooks' shared 5 s): it reads this
+machine's last switch record (through `leader-switch-pointer.json` beside the machine id), and when the
+record's role is not yet marked set and the mode differs, asks for it again. For a target job at its
+commit it adds `WALNUT_LEADER_SWITCH_COMMIT` to that one start. A role the job marked set is left
+alone (a mode a person changed since is theirs). The mode is never the truth of who leads: the
+witnesses' record stays that.
+
+Whether the target can lead as a service is asked, never guessed: in the preflight, for a target
+reached as a host, the leader's link must show `leader` in the host's hello `serviceRoles` and in its
+launcher's `goodRoles`; and right before the commit the target job asks the version its own launcher
+goes back to (`__daemon --service-roles`) when a service runs that machine. Either no refuses.
 
 ### A launcher during a switch
 
@@ -1023,8 +1035,9 @@ witness, above).
   [done](#witnesses-on-other-machines), with a candidate's own ways to the witnesses (a and b).
 - **A begin forwarded from another machine**: the trust rule is built and tested (`beginRefusal`); a replica passing a
   person's `walnut leader switch` to the leader is not wired.
-- **The service role's setter**: `setServiceRole` is an injected function with its two call sites and the start hook's resume
-  entry; the launcher's real setter (and calling `resumeServiceRole` from the service's start hook) is its owner's to land.
+- **The service role, as tested**: the two call sites and the start hook run against the real mode writer on a scratch install
+  root (`tests/core/leader/switch/service-role.test.ts`). Not tested: a compiled leader run of a switched service, the boot
+  time at real size, and the Mac half.
 - **Waiting on 5a** (the host-dialed door): its call frames as way c (`allowDoorCallPrefix('/host-api/witness/')` registering an
   `addWitnessReach`), and moving its proofs onto `src/utils/hmac-proof.ts`. Until then a witness reached only by a `host` cannot
   be set up or read by a server that has not led: it joins after the first lead (above), and the Mac as a first leader (no witness

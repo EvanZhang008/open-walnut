@@ -44,7 +44,7 @@ export interface StepLog { step: SwitchStep; at: string; note?: string }
 export interface StartedBy { machine: string; via: 'cli' | 'forwarded' }
 
 /** A service role the job asked for and whether it was set: recorded before the mode (service-role.ts). */
-export interface RoleStep { role: 'leader' | 'replica'; home: string; at: string; set?: boolean; why?: string }
+export interface RoleStep { role: 'leader' | 'replica'; home: string; walnutId: string; at: string; set?: boolean; why?: string }
 
 export interface SwitchState {
   id: string

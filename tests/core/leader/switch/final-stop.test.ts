@@ -160,6 +160,10 @@ describe('who may begin a switch, and the copy link', () => {
     expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-a', standby: { dir: sa } })).toMatch(/leads already/)
     expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: {} })).toMatch(/no standby copy/)
     expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'machine-c' } })).toMatch(/on host machine-c, not on machine-b/)
+    // A copy on the target as a host: its service must say it can lead, in both versions.
+    expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'machine-b' }, hostService: null })).toMatch(/not connected/)
+    expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'machine-b' }, hostService: { serviceRoles: ['replica'], launcher: { goodRoles: ['leader'] } } })).toMatch(/does not say it can lead/)
+    expect(beginRefusal({ settings, me: 'machine-a', to: 'machine-b', standby: { dir: sb, host: 'machine-b' }, hostService: { serviceRoles: ['replica', 'leader'], launcher: { goodRoles: ['replica', 'leader'] } } })).toBeNull()
   })
 
   it('a begin forwarded from another machine is taken only from the machine it goes to', () => {

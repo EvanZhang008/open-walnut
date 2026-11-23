@@ -22,6 +22,7 @@ import { finalMarkName, type FinalMark } from './ticket.js'
 import { finalStopResultFile, writeDurableJson, type FinalStopResult } from './records.js'
 import { machineById, type LeaderSwitchSettings } from './settings.js'
 import type { StartedBy } from './flow.js'
+import { hostLeadRefusal, type HostServiceFacts } from './service-role.js'
 
 export interface HandedOverSwitch {
   switchId: string
@@ -143,7 +144,7 @@ export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; 
  * target (the copy goes there, so its own copy is what it would lead with). A begin forwarded from
  * another machine is taken only from `to` itself. Null: allowed.
  */
-export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to: string; standby: { dir?: string; host?: string }; forwardedBy?: string | null }): string | null {
+export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to: string; standby: { dir?: string; host?: string }; forwardedBy?: string | null; hostService?: HostServiceFacts | null }): string | null {
   const target = machineById(o.settings, o.to)
   if (!target) return `machine ${o.to} is not in leader_switch.machines`
   if (target.id === o.me) return `${o.to} leads already`
@@ -151,6 +152,9 @@ export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to
   if (o.standby.host) {
     // The copy is on a host: that host must be the machine `to` (the daemon kind of the copy link, the next step).
     if (o.standby.host !== o.to) return `this leader's standby copy is on host ${o.standby.host}, not on ${o.to}`
+    // Its service must be able to lead: both versions say so (hello serviceRoles, launcher goodRoles). Never guessed.
+    const cannot = hostLeadRefusal(o.standby.host, o.hostService)
+    if (cannot) return cannot
   } else if (safeReal(o.standby.dir) !== safeReal(target.standbyDir)) {
     return `this leader's standby copy goes to ${o.standby.dir}, not to ${o.to}'s standby_dir ${target.standbyDir}`
   }
