@@ -150,11 +150,13 @@ export function SessionsSection({ config, onSave }: Props) {
         <ClaudeDefaultModeRow config={config} />
         <FallbackEngineRow config={config} save={save} />
       </SettingsGroup>
+      {/* The engines the model picker offers come right under the defaults: they are set far
+          more often than Share new tasks, and stay on the first screen at a 1280x800 window. */}
+      <PickerEnginesGroup config={config} save={save} />
       {/* A multi-select list of engines: a checklist, like Session modes (C14). */}
       <SettingsGroup className="settings-checklist engine-split-list">
         <EngineSplitRow config={config} save={save} />
       </SettingsGroup>
-      <PickerEnginesGroup config={config} save={save} />
       <ClaudeCodeImportGroups />
       <SettingsGroup>
         <SettingsRow

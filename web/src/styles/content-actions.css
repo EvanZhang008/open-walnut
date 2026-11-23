@@ -47,7 +47,7 @@
 .ceo-composer-answer .answer-box-input { min-height: 54px; }
 .ceo-composer-attached {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   min-width: 0;
   padding: 5px 8px;
@@ -56,12 +56,13 @@
   color: var(--fg);
   font-size: var(--font-size-sm);
 }
-.ceo-composer-attached svg { flex: none; color: var(--fg-muted); }
+/* The clip and the source sit on the title's first line. */
+.ceo-composer-attached svg { flex: none; margin-top: 2px; color: var(--fg-muted); }
 .ceo-composer-source { flex: none; font-weight: 600; }
-/* What is attached says its title in full (.wn-title) at its words' width, so where it is from
-   (at most 40%, cut) follows it. */
-.ceo-composer-attached > .ceo-composer-title { flex: 0 1 auto; }
-.ceo-composer-from { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+/* What is attached says its title in full (.wn-title) across the row, and where it is from on
+   one line under it (.wn-meta), so the sender never takes the title's width. */
+.ceo-composer-what { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; gap: 1px; }
+.ceo-composer-from { max-width: 100%; color: var(--fg-muted); font-size: var(--font-size-xs); }
 .ceo-composer-error { color: var(--error); font-size: var(--font-size-sm); }
 .ceo-composer-foot {
   display: flex;

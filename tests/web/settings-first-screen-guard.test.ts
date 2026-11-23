@@ -43,7 +43,6 @@ describe('Settings > Sessions keeps the engine checkboxes on the first screen', 
     'web/src/components/settings/sections/DefaultEngineRow.tsx',
     'web/src/components/settings/sections/ClaudeLaunchDefaultsRow.tsx',
     'web/src/components/settings/sections/ClaudeDefaultModeRow.tsx',
-    'web/src/components/settings/sections/EngineSplitRow.tsx',
   ]
   // A warning a person's own entry raises may take a second line: it is shown only then.
   const warnings = [/is not a model Claude Code lists here/]
@@ -57,6 +56,19 @@ describe('Settings > Sessions keeps the engine checkboxes on the first screen', 
       }
     }
     expect(long).toEqual([])
+  })
+
+  // 2026-11-23, the audit's live check: at 1280x800 the Share new tasks card above them (five rows,
+  // grey while it is off) pushed the checkboxes under the fold again. They follow the defaults.
+  it('the checkboxes come right after the defaults group, before Share new tasks', () => {
+    const src = read('web/src/components/settings/sections/SessionsSection.tsx')
+    const body = src.slice(src.indexOf('<SettingsSection id="sessions"'))
+    const firstGroupEnd = body.indexOf('</SettingsGroup>')
+    const picker = body.indexOf('<PickerEnginesGroup')
+    const split = body.indexOf('<EngineSplitRow')
+    expect(picker).toBeGreaterThan(firstGroupEnd)
+    expect(body.slice(firstGroupEnd + '</SettingsGroup>'.length, picker)).not.toMatch(/<[A-Z]/)
+    expect(split).toBeGreaterThan(picker)
   })
 
   it('the When it is out of usage row says it in one line', () => {

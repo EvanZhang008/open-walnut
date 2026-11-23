@@ -182,8 +182,10 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
       <div className="ceo-composer-attached" data-testid="ceo-composer-attached" title="Sent with your message as context">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.5 4.5 5.8 9.2a1.6 1.6 0 0 0 2.3 2.3l5-5a3 3 0 0 0-4.3-4.3l-5 5a4.4 4.4 0 0 0 6.2 6.2l4-4"/></svg>
         <span className="ceo-composer-source">{item.source}</span>
-        <span className="ceo-composer-title wn-title">{item.title}</span>
-        {from && <span className="ceo-composer-from">{from}</span>}
+        <span className="ceo-composer-what">
+          <span className="ceo-composer-title wn-title">{item.title}</span>
+          {from && <span className="ceo-composer-from wn-meta">{from}</span>}
+        </span>
       </div>
       {error && <div className="ceo-composer-error" role="alert">{error}</div>}
       <div className="ceo-composer-foot">
