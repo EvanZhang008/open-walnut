@@ -98,8 +98,10 @@ describe('a Stop that cancels a queued line', () => {
     // The CLI dropped this uuid: a Retry must go out as a new line.
     for (const row of queue) expect(row.lineUuid).not.toBe(h.uuid)
     // A second cancellation frame of the same line returns nothing and keeps the rows.
+    // A return the frame starts claims its rows synchronously (returnCancelledRows), so once
+    // nothing is in flight every return it started has ended.
     h.inner.handleStreamLine(JSON.stringify({ type: 'command_lifecycle', command_uuid: h.uuid, state: 'cancelled' }))
-    await new Promise((r) => setTimeout(r, 20))
+    await vi.waitFor(() => expect(h.inner._cancelReturnsInFlight.size).toBe(0))
     expect(h.returned).toHaveLength(1)
     expect(parkedIds(await getQueue(SID))).toEqual([h.agent.id, h.unknown.id])
   })
