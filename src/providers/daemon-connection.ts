@@ -145,7 +145,7 @@ import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_HOST_LABEL, CLOUD_BOX_OTHER_MAC_SENTENC
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
 import { linkFailureKind, markLinkFailure } from './link-failure.js'
 import { DRAIN_SWAP_WINDOW_MS, daemonSwapExpected, resendThroughSwap, waitHostLink, wakeHostLink } from './daemon-drain-resend.js'
-import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, SERVES_FILE, type DaemonServes } from './daemon-shared.js'
+import { parseServes, thisWalnutSharedVerdict, walnutKeyOf, REPLACE_BREAKER_MS, SERVES_FILE, type DaemonServes } from './daemon-shared.js'
 import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
 import { isHostReplica, isHostReplicaProgram, serviceRuntime } from '../core/server-role.js'
@@ -4997,9 +4997,9 @@ export class DaemonConnection {
   }
 
   /** Whether to keep another build's daemon that another Walnut shares (daemon-shared.ts). */
-  private keepSharedDaemon(running: DaemonServes | null, runningVersion: string, expected: string): boolean {
+  private async keepSharedDaemon(running: DaemonServes | null, runningVersion: string, expected: string): Promise<boolean> {
     const now = Date.now()
-    const verdict = sharedDaemonVerdict({
+    const verdict = await thisWalnutSharedVerdict(this.hostKey, {
       ourKey: this.ownWalnutKey, runningVersion, running, now,
       replacedRecently: this._sharedReplacedAt !== null && now - this._sharedReplacedAt < REPLACE_BREAKER_MS,
     })
@@ -5119,7 +5119,7 @@ export class DaemonConnection {
 
       // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
       // or each server would put its own build back on every connect (daemon-shared.ts).
-      if (remoteVersion && remoteVersion !== expected && this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
+      if (remoteVersion && remoteVersion !== expected && await this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
       // The bound on the whole update (daemon-update-behind.ts): behind this long, every hold below gives way.
       this.noteOverdue(expected, remoteVersion, daemonUpdateOverdue(this.hostKey, remoteVersion, !!remoteVersion && remoteVersion !== expected))
       // One replacement per host per gap: the update is decided again when it ends,
@@ -5669,16 +5669,20 @@ export class DaemonConnection {
     if (!expected || this.isReadOnlyRemote) return
     // The current build: only a switch of the mode may be due (one-service-mode.ts).
     if (this._daemonVersion === expected) { void this.checkServiceMode(); return }
-    if (this._daemonVersion && this.keepSharedDaemon(this._daemonServes, this._daemonVersion, expected)) return
-    log.session.info('DaemonConnection: serving the running daemon; its update runs in the background', {
-      host: this.hostKey, running: this._daemonVersion ?? '(unknown)', expected,
-    })
-    if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
-    this.upgradeRecheckTimer = setTimeout(() => {
-      this.upgradeRecheckTimer = null
-      void this.recheckPostponedUpgrade()
-    }, DaemonConnection.DEFERRED_UPGRADE_DELAY_MS)
-    this.upgradeRecheckTimer.unref?.()
+    const running = this._daemonVersion
+    const later = () => {
+      log.session.info('DaemonConnection: serving the running daemon; its update runs in the background', {
+        host: this.hostKey, running: running ?? '(unknown)', expected,
+      })
+      if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
+      this.upgradeRecheckTimer = setTimeout(() => {
+        this.upgradeRecheckTimer = null
+        void this.recheckPostponedUpgrade()
+      }, DaemonConnection.DEFERRED_UPGRADE_DELAY_MS)
+      this.upgradeRecheckTimer.unref?.()
+    }
+    if (!running) { later(); return }
+    void this.keepSharedDaemon(this._daemonServes, running, expected).then((keep) => { if (!keep) later() }, () => later())
   }
 
   /**

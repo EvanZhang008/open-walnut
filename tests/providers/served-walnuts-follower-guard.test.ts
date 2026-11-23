@@ -71,8 +71,9 @@ describe('served walnuts: a server a daemon runs for a leader is never another W
       // servedWalnutOf asks the supervisor's walnutOf; serverDataHomes its data dirs.
       expect(text).toMatch(/function servedWalnutOf\(home[^)]*\)[^{]*\{[\s\S]{0,200}hostServers\.walnutOf\(home\)/)
       expect(text).toMatch(/function serverDataHomes\(\)[^{]*\{[\s\S]{0,300}hostServers\.dataDirs\(\)/)
-      // After the supervisor read its specs, the record is written again (an older build's key goes).
-      expect(text).toMatch(/hostServers\.boot\(\)[^\n]*\n[^\n]*\n\s*servedWalnuts\.write\(\)/)
+      // After the supervisor read its specs, the record is written again (an older build's key goes):
+      // the next statement after boot() is that write, whatever comment lines sit between them.
+      expect(text).toMatch(/hostServers\.boot\(\)[^\n]*\n(?:[ \t]*(?:\/\/[^\n]*)?\n)*[ \t]*servedWalnuts\.write\(\)/)
     })
 
     it(`${twin} twin: every servedWalnuts.note call site is a known one`, () => {

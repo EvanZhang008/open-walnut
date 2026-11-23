@@ -37,8 +37,8 @@ import { execRunsReason, execRunsWait, holdingJobs } from './exec-runs-hold.js'
 import { daemonUpdateOverdue } from './daemon-update-behind.js'
 import { fenceDaemonFileChanges } from './daemon-file-fence.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
-import { DAEMON_BINARIES_DIR, WALNUT_HOME } from '../constants.js'
-import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, type DaemonServes } from './daemon-shared.js'
+import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { parseServes, thisWalnutSharedVerdict, REPLACE_BREAKER_MS, type DaemonServes } from './daemon-shared.js'
 import { daemonServiceConfigFiles, serviceConfigGovernsDir } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
 import { testRunnerClaude } from '../core/test-claude-guard.js'
@@ -551,11 +551,12 @@ export class LocalDaemon {
   }
 
   /** Whether to keep another build's daemon that another Walnut shares (daemon-shared.ts). */
-  private keepSharedDaemon(hello: { version?: string; served?: DaemonServes | null }, expected: string): boolean {
+  private async keepSharedDaemon(hello: { version?: string; served?: DaemonServes | null }, expected: string): Promise<boolean> {
     if (this.soleManager) return false
     const now = Date.now()
-    const verdict = sharedDaemonVerdict({
-      ourKey: walnutKeyOf(WALNUT_HOME), runningVersion: hello.version ?? '', running: hello.served ?? null, now,
+    // This computer's own daemon: which host row (if any) reaches it is not known here (null).
+    const verdict = await thisWalnutSharedVerdict(null, {
+      runningVersion: hello.version ?? '', running: hello.served ?? null, now,
       replacedRecently: this._sharedReplacedAt !== null && now - this._sharedReplacedAt < REPLACE_BREAKER_MS,
     })
     this._sharedReplacing = !verdict.keep && !!verdict.shared
@@ -639,7 +640,7 @@ export class LocalDaemon {
         this._backDue = null
         // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
         // or each Walnut would put its own build back on every start (daemon-shared.ts).
-        if (expectedVersion && helloResult.version && helloResult.version !== expectedVersion && this.keepSharedDaemon(helloResult, expectedVersion)) {
+        if (expectedVersion && helloResult.version && helloResult.version !== expectedVersion && await this.keepSharedDaemon(helloResult, expectedVersion)) {
           this._port = existingPort
           this._wsUrl = `ws://localhost:${existingPort}`
           this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()

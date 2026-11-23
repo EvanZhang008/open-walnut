@@ -29,7 +29,7 @@ const hello = () => ({
   version: RUNNING,
   served: { version: RUNNING, twin: 'binary' as const, capabilities: ourDaemonCapabilities('binary'), walnuts: { cccccccccccccccc: Date.now() - 60_000 } },
 })
-const keeps = (d: LocalDaemon) => (d as unknown as { keepSharedDaemon: (h: unknown, e: string) => boolean }).keepSharedDaemon(hello(), EXPECTED)
+const keeps = (d: LocalDaemon) => (d as unknown as { keepSharedDaemon: (h: unknown, e: string) => Promise<boolean> }).keepSharedDaemon(hello(), EXPECTED)
 
 /**
  * Every `new LocalDaemon(...)` in src, per file in source order, and whether that call is
@@ -97,21 +97,21 @@ afterEach(() => {
 })
 
 describe('a daemon only this server manages', () => {
-  it('is replaced by a new build whoever its record names; a default one is kept', () => {
+  it('is replaced by a new build whoever its record names; a default one is kept', async () => {
     vi.spyOn(log.session, 'info').mockImplementation(() => {})
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-sole-manager-'))
     try {
-      expect(keeps(new LocalDaemon({ daemonDir: path.join(dir, 'shared') }))).toBe(true)
-      expect(keeps(new LocalDaemon({ daemonDir: path.join(dir, 'sole'), soleManager: true }))).toBe(false)
+      expect(await keeps(new LocalDaemon({ daemonDir: path.join(dir, 'shared') }))).toBe(true)
+      expect(await keeps(new LocalDaemon({ daemonDir: path.join(dir, 'sole'), soleManager: true }))).toBe(false)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 
-  it('the companion\'s tunnel daemon is one', () => {
+  it('the companion\'s tunnel daemon is one', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-tunnel-daemon-'))
     try {
       vi.stubEnv('WALNUT_TUNNEL_DAEMON_DIR', path.join(dir, 'primary-daemon'))
-      expect(keeps(getTunnelDaemon())).toBe(false)
-      expect(keeps(getTunnelDaemon('mac-device-1'))).toBe(false)
+      expect(await keeps(getTunnelDaemon())).toBe(false)
+      expect(await keeps(getTunnelDaemon('mac-device-1'))).toBe(false)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 

@@ -580,14 +580,15 @@ function servedWalnutOf(home: string): string | undefined {
   try { return hostServers.walnutOf(home) } catch { return undefined }
 }
 
-/** The data dir of every server this daemon runs for a leader, the service's own included (served-walnuts-core.ts). */
+/**
+ * The data dir of every server this daemon runs for a leader (served-walnuts-core.ts). The host's
+ * one Walnut service is among them: hostServers.boot() files its follower spec (server-<key>.json)
+ * as the self entry, whose env names the data dir. Its own OPEN_WALNUT_HOME is not asked: the
+ * in-process runtime's env has none (local-daemon.ts buildSpawnEnv). Mirror daemon-source.ts.
+ */
 function serverDataHomes(): string[] {
-  let out: string[] = []
   // The supervisor is made further down: none before it is.
-  try { out = hostServers.dataDirs() } catch { out = [] }
-  // The host's one Walnut service runs its own server on OPEN_WALNUT_HOME (host-server-core.ts self.dataHome).
-  const own = daemonEnv.OPEN_WALNUT_HOME
-  return own ? [...out, own] : out
+  try { return hostServers.dataDirs() } catch { return [] }
 }
 
 /**
@@ -15572,6 +15573,9 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // A host server connects through the port file; a runtime with no door starts none.
   if (DOOR) { try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) } }
   // Their specs read: the record drops the key an older build filed their data dirs under. Mirror daemon-source.ts.
+  // No socket is served between the write above and this one (one synchronous block): no hello
+  // or push sees the record before the specs are read, and a leader that reads the file meanwhile
+  // still sees only itself (daemon-shared.ts thisWalnutSharedVerdict).
   servedWalnuts.write()
   // The plugin jobs an earlier daemon ran here (plugin-jobs-core.ts): adopt, schedule or start them.
   try { pluginJobs.boot() } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: (err as Error).message }) }

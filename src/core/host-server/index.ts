@@ -10,6 +10,7 @@ import type { FollowerFact } from '../../providers/one-service-mode.js'
 import { log } from '../../logging/index.js'
 import { isFollower } from '../server-role.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
+import { HOST_SERVERS_FILE } from './own-follower-dirs.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager, type HostServerSettings, type HostServerView } from './manager.js'
 import { createHostFileSource, type HostFileSource } from './host-file.js'
 import { resolveDaemonSourceVersion } from '../../providers/daemon-source.js'
@@ -251,7 +252,7 @@ export function getHostServerManager(): HostServerManager | null {
       await getExposeRuntime()?.releaseTunnelPort(holder)
     },
     hostFile: sharedHostFileSource(),
-    stateFile: path.join(WALNUT_HOME, 'host-servers.json'),
+    stateFile: path.join(WALNUT_HOME, HOST_SERVERS_FILE),
     // Machine-local: local/ is never synced (another machine's counts would restart the hosts' tunnels).
     retryFile: path.join(WALNUT_HOME, 'local', 'host-server-tunnel-retries.json'),
     now: Date.now,

@@ -2093,8 +2093,8 @@ function servedWalnutOf(home) {
   try { return hostServers.walnutOf(home); } catch (e) { return undefined; }
 }
 
-// The data dir of every server this daemon runs for a leader (twin of daemon-standalone.ts
-// serverDataHomes; this twin is never a host's one service, so it has no data dir of its own).
+// The data dir of every server this daemon runs for a leader, from the specs hostServers.boot()
+// read (twin of daemon-standalone.ts serverDataHomes).
 function serverDataHomes() {
   try { return hostServers.dataDirs(); } catch (e) { return []; }
 }
@@ -17938,6 +17938,7 @@ async function startDaemon() {
     // The servers an earlier daemon kept running here (twin of daemon-standalone.ts).
     try { hostServers.boot(); } catch (err) { logMsg('warn', 'host server: boot failed', { error: err.message }); }
     // Their specs read: the record drops the key an older build filed their data dirs under (twin of daemon-standalone.ts).
+    // Still inside the listen callback: no socket is served between the two writes.
     servedWalnuts.write();
     // The plugin jobs an earlier daemon ran here (twin of daemon-standalone.ts).
     try { pluginJobs.boot(); } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: err.message }); }

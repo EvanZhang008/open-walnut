@@ -42,8 +42,7 @@ import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
-import { sharedDaemonVerdict, walnutKeyOf, type DaemonServes } from './daemon-shared.js'
-import { WALNUT_HOME } from '../constants.js'
+import { thisWalnutSharedVerdict, type DaemonServes } from './daemon-shared.js'
 import { netDaemonUpdateTurnedOff } from './daemon-update-paths.js'
 import { createNetUpdateIo, netReadText, NetUpdateHeldError, NetUpdateUnansweredError, shq, type NetUpdateConn, type NetUpdateIoOptions } from './daemon-net-update-io.js'
 import { LaunchedNetUpdate, type DaemonUpdateView } from './daemon-net-update-record.js'
@@ -259,9 +258,9 @@ export const LINK_CUTS_BEFORE_FAILURE = 3
 export const STAGE_TRIES_BEFORE_UNFIT = 3
 /** Answers that need no word in the log: nothing to do, or not this path's host. */
 /** Why another build's daemon on this link is kept (daemon-shared.ts), or null. */
-function sharedWhy(c: NetUpdateLink, expected: string | null, now: number): string | null {
+export async function sharedWhy(c: Pick<NetUpdateLink, 'host' | 'daemonVersion' | 'daemonServes'>, expected: string | null, now: number): Promise<string | null> {
   if (!expected || !c.daemonVersion || c.daemonVersion === expected) return null
-  const v = sharedDaemonVerdict({ ourKey: walnutKeyOf(WALNUT_HOME), runningVersion: c.daemonVersion, running: c.daemonServes ?? null, now })
+  const v = await thisWalnutSharedVerdict(c.host, { runningVersion: c.daemonVersion, running: c.daemonServes ?? null, now })
   return v.keep ? v.why : null
 }
 
@@ -413,7 +412,7 @@ export class NetDaemonUpdater {
       has: (cap) => c.hasCapability(cap), autofixOff: await (this.d.autofixOff ?? (() => defaultAutofixOff(c.host)))(),
       turnedOff: netDaemonUpdateTurnedOff(env),
       requested: trigger === 'request', modeDue, lastAttempt: this.lastAttempt, now: (this.d.now ?? Date.now)(), cooldownMs: this.d.cooldownMs,
-      shared: sharedWhy(c, this.d.expectedVersion(), (this.d.now ?? Date.now)()),
+      shared: await sharedWhy(c, this.d.expectedVersion(), (this.d.now ?? Date.now)()),
       contested: !!this.installed && this.installed === this.d.expectedVersion() && c.daemonVersion !== this.installed,
       failedTries: this.failed && this.failed.expected === this.d.expectedVersion() ? this.failed.count : 0,
       daemonAgeMs: c.daemonStartedAt ? (this.d.now ?? Date.now)() - c.daemonStartedAt : null,

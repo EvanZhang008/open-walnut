@@ -23,6 +23,8 @@
  */
 import crypto from 'node:crypto'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { WALNUT_HOME } from '../constants.js'
+import { ownFollowerDirs } from '../core/host-server/own-follower-dirs.js'
 
 /** Another Walnut seen this recently still uses the daemon. */
 export const SHARED_WINDOW_MS = 3 * 24 * 3600_000
@@ -106,6 +108,11 @@ export type SharedVerdict =
 /** Whether a server keeps another build's daemon running; pure. */
 export function sharedDaemonVerdict(args: {
   ourKey: string
+  /**
+   * The keys of this Walnut's own servers' data dirs on that host (thisWalnutSharedVerdict): a
+   * daemon before 2026-11-23 filed a host replica's own data dir as a second Walnut.
+   */
+  ownFollowerKeys?: readonly string[]
   /** The daemon's version as this server read it (daemon.version or hello). */
   runningVersion: string
   running: DaemonServes | null
@@ -128,7 +135,7 @@ export function sharedDaemonVerdict(args: {
   if (running.version !== args.runningVersion) return { keep: false, why: `its record is of another build (${running.version || 'none'})` }
   const window = args.windowMs ?? SHARED_WINDOW_MS
   const others = Object.entries(running.walnuts)
-    .filter(([k, at]) => k !== args.ourKey && args.now - at < window)
+    .filter(([k, at]) => k !== args.ourKey && !args.ownFollowerKeys?.includes(k) && args.now - at < window)
     .map(([k]) => k)
   if (!others.length) return { keep: false, why: 'only this Walnut uses it' }
   const has = new Set(running.capabilities)
@@ -146,6 +153,25 @@ export function sharedDaemonVerdict(args: {
   if (extra.length) return kept(`it has ${extra.join(', ')}, which this build's daemon lacks`)
   if (args.replacedRecently) return kept('this server replaced it lately and another build came back')
   return { keep: false, why: `it lacks ${missing.join(', ')}`, missing, shared: true }
+}
+
+/**
+ * The verdict for this Walnut on one host, the one way its servers ask it (daemon-connection.ts,
+ * daemon-net-update.ts, local-daemon.ts; tests/providers/daemon-shared-own-follower.test.ts):
+ * this Walnut is its data dir's key (`ourKey`, the caller's own when it keeps one) and the keys of
+ * its own servers' data dirs on that host
+ * (own-follower-dirs.ts; `hostKey` null for this computer's own daemon). The state file is read
+ * only when another key is in the record at all.
+ */
+export async function thisWalnutSharedVerdict(
+  hostKey: string | null,
+  args: Omit<Parameters<typeof sharedDaemonVerdict>[0], 'ourKey' | 'ownFollowerKeys'> & { ourKey?: string },
+): Promise<SharedVerdict> {
+  const ourKey = args.ourKey ?? walnutKeyOf(WALNUT_HOME)
+  const first = sharedDaemonVerdict({ ...args, ourKey })
+  if (!first.keep && !first.shared) return first
+  const dirs = await ownFollowerDirs(hostKey).catch(() => [] as string[])
+  return dirs.length ? sharedDaemonVerdict({ ...args, ourKey, ownFollowerKeys: dirs.map(walnutKeyOf) }) : first
 }
 
 /** How long a replace of a shared daemon holds off replacing it again (sharedDaemonVerdict). */

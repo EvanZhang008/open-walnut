@@ -18,7 +18,7 @@
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -228,5 +228,36 @@ describe.each(TWINS)('$name', (twin) => {
     await until(() => { try { return walnutsIn().join() === walnutKeyOf(HOME_A) } catch { return false } })
     const again = await rpc(await open(port), { cmd: 'hello' })
     expect(Object.keys((again.served as { walnuts: Record<string, number> }).walnuts)).toEqual([walnutKeyOf(HOME_A)])
+  }, 120_000)
+})
+
+/**
+ * The live case of 2026-11-23: a host's one Walnut service (one process, the binary twin's
+ * runtime with its own follower home) whose own-sessions link pushes from the same process
+ * (tests/helpers/served-walnuts-self-proc.ts). Its data dir is its leader's Walnut, by the self
+ * entry boot() files from the spec the leader configured, not by the service's env (which has no
+ * OPEN_WALNUT_HOME); an older build's key of that dir is gone once the runtime started.
+ */
+describe.skipIf(!BUN)('a host\'s one Walnut service (binary twin, in one process)', () => {
+  it('its own data dir is its leader\'s Walnut: the record holds only the leader key, at start and after its pushes', async () => {
+    const dir = path.join(root, 'self-service')
+    fs.mkdirSync(dir, { recursive: true })
+    const FIXTURE = path.resolve(__dirname, '../helpers/served-walnuts-self-proc.ts')
+    const out = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const env = { ...process.env, PATH: guardedPath([], '/usr/bin:/bin') }
+      delete env.OPEN_WALNUT_HOME
+      execFile(BUN!, [FIXTURE, dir], { env, timeout: 90_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+        const last = String(stdout).trim().split('\n').pop() ?? ''
+        try { resolve(JSON.parse(last) as Record<string, unknown>) } catch { reject(new Error(`${error?.message ?? ''}\n${String(stderr).slice(-3000)}\n${String(stdout).slice(-1500)}`)) }
+      })
+    })
+    const only = [out.leaderKey]
+    expect(out.atStart, 'an older build\'s key of the data dir is gone once it started').toEqual(only)
+    expect(out.helloAtStart).toEqual(only)
+    expect(out.turns).toBe(true)
+    expect(out.helloAfterPush, 'its pushes are filed under its leader').toEqual(only)
+    expect(out.fileAfterPush).toEqual(only)
+    expect(out.stopCode).toBe(0)
+    expect(out.exitCalls).toBe(0)
   }, 120_000)
 })
