@@ -488,13 +488,15 @@ describe('what it does not start', () => {
     expect(text).toContain('host replica: skipping session reconciliation')
   })
 
-  it('logs one boot policy line: placement host, only the tunnel trust and its own credential on, with RSS', async () => {
+  it('logs one boot policy line: placement host, only the tunnel trust, its own credential, its disk watch and the topics runtime on, with RSS', async () => {
     const lines = serverLog().split('\n').filter((l) => l.includes('"boot policy"') || l.includes('boot policy'))
     const json = lines.map((l) => { try { return JSON.parse(l.slice(l.indexOf('{'))) } catch { return null } }).find((o) => o && o.placement === 'host')
     expect(json, lines.join('\n').slice(0, 2000)).toBeTruthy()
     const data = json.data ?? json
     expect(data.role).toBe('replica')
-    expect([...data.on].sort()).toEqual(['self-api-credential', 'trust-proxy'])
+    // disk-watermark and topics-runtime ran on every non-ephemeral box before they became
+    // BOOT_POLICY rows (the trial-column change); as rows they are named in this line too.
+    expect([...data.on].sort()).toEqual(['disk-watermark', 'self-api-credential', 'topics-runtime', 'trust-proxy'])
     expect(data.off).toEqual(expect.arrayContaining(['local-daemon', 'plugins', 'cron', 'board-reminders', 'wait-until', 'title-reconciler', 'notes-indexer', 'leader-heartbeat', 'replica-pushes']))
     expect(data.rssMb).toBeGreaterThan(0)
     expect(data.rssMb).toBeLessThan(400)
