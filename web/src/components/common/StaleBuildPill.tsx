@@ -9,14 +9,14 @@ import { useAppUpdateState } from '@/hooks/useAppUpdate';
 import { useAppUpdateActions } from '@/components/layout/useAppUpdateActions';
 import { getAppUpdateButtonTooltip, resolveAppUpdateButtonAction, shouldShowAppUpdateItem } from '@/components/layout/app-update-logic';
 import { ConfirmDialog } from './ConfirmDialog';
-import { setUpdateNoticeOccupied, useUpdateNoticeDock } from './update-notice-dock';
+import { setUpdateNoticeOccupied, useUpdateNoticeDock, useUpdateNoticeDockHandlers } from './update-notice-dock';
 import { isSnoozed, readSnooze, SNOOZE_KEY, writeSnooze, type UpdateSnooze } from './update-notice-snooze';
 import { gatherUnsavedWork, hasAny, UnsavedWorkDialog, type UnsavedWork } from './UnsavedWorkDialog';
 import { installUpdateNow, restartIntoUpdate, UpdateActionError } from '@/api/update';
 import { applyUpdateStatus, useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useAppAutoUpdate } from '@/components/layout/useAppAutoUpdate';
 import { HowToUpdateDialog, type UpdateCommand } from './HowToUpdateDialog';
-import { displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, WORKING_SHORT, writeSeenVersion } from './server-update-pill';
+import { displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, writeSeenVersion } from './server-update-pill';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { log } from '@/utils/log';
 
@@ -80,17 +80,15 @@ export function StaleBuildPill() {
         : pending ? 'Downloading…' : 'Download'
     : kind === 'server' ? (starting ? (server!.action === 'restart' ? 'Restarting…' : 'Updating…') : server!.label)
     : kind === 'updated' ? 'Updated' : 'Reload';
-  // The collapsed rail is 56px wide: the verb in a word that fits (CSS shows it from data-short).
-  const shortLabel = kind === 'server' ? (starting ? WORKING_SHORT : server!.short)
-    : label.match(/\d+%/)?.[0] ?? (pending ? '…' : label === 'Download' ? 'Update' : label);
   const identity = kind === 'app' ? `app:${installed.update?.token ?? 'restarting'}`
     // Download and Restart of one release are two asks: a × on the first must not hide the second.
     : kind === 'release' ? `release:${shell?.downloadedVersion ?? shell?.availableVersion}:${shellAction === 'install' ? 'install' : 'download'}`
     : kind === 'server' ? server!.identity : kind === 'web' ? state?.served : kind === 'updated' ? `updated:${updatedTo}` : undefined;
   // The server's step with nothing to click (installing, restarting, an announcement).
   const noAction = (kind === 'server' && !server!.action) || kind === 'updated';
-  // The server is installing or restarting (or the click is on its way): the icon spins.
-  const working = kind === 'server' && (starting || server!.working);
+  // Work under way (the server installing or restarting, a download, a restart on its way):
+  // the icon spins, the one sign of it the collapsed rail's bare key shows.
+  const working = pending || (kind === 'server' && server!.working);
 
   useEffect(() => {
     setState(getStaleBuild());
@@ -180,6 +178,19 @@ export function StaleBuildPill() {
   }, [kind, markSeen]);
   const visible = !!identity && (pending || !isSnoozed(snooze, identity, Date.now()));
   const docked = !!dock;
+  // In the rail the notice is one of its rows: the collapsed rail's peek names it and holds its ×
+  // (RailItemPill, `data-rail-dismiss`), which comes back here as `rail:dismiss`.
+  const inRail = !!dock?.classList.contains('sidebar-update-dock');
+  const railHandlers = useUpdateNoticeDockHandlers();
+  const laterRef = useRef<() => void>(() => {});
+  laterRef.current = onLater;
+  const [actionEl, setActionEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!actionEl) return;
+    const onDismiss = () => laterRef.current();
+    actionEl.addEventListener('rail:dismiss', onDismiss);
+    return () => actionEl.removeEventListener('rail:dismiss', onDismiss);
+  }, [actionEl]);
   // Before paint, so the popout never shows a frame with the bar pushed off the window.
   useLayoutEffect(() => {
     setUpdateNoticeOccupied(visible && docked);
@@ -193,6 +204,7 @@ export function StaleBuildPill() {
   const error = installed.error ?? shellActions.error ?? serverError?.message ?? null;
   const clearError = () => { installed.clearError(); shellActions.clearError(); setServerError(null); };
   const errorTitle = shellActions.error || serverError?.verb === 'update' ? 'Could not update Walnut' : 'Could not restart Walnut';
+  const laterLabel = kind === 'updated' ? 'Dismiss' : 'Later: hide this update notice for 30 minutes';
   const tooltip = kind === 'app' ? 'Restart to use the installed app update'
     : kind === 'release' && shell ? getAppUpdateButtonTooltip(shell)
     : kind === 'server' ? server!.tooltip
@@ -202,23 +214,25 @@ export function StaleBuildPill() {
 
   return <>
     {visible && createPortal(
-      <div className={`stale-build-pill${docked ? ' is-docked' : ''}`} role="status" aria-live="polite"
-        data-served={state?.served} data-running={state?.running} data-update-kind={kind ?? undefined} data-status={dataStatus}>
+      <div className={`stale-build-pill${docked ? ' is-docked' : ''}${inRail ? ' is-rail' : ''}`} role="status" aria-live="polite"
+        data-served={state?.served} data-running={state?.running} data-update-kind={kind ?? undefined} data-status={dataStatus}
+        {...(inRail ? railHandlers : null)}>
         <span className="stale-build-pill-text" title={headingTitle ?? (noAction ? tooltip : undefined)}>{heading}</span>
         {noAction
           // Nothing to click: the words say it; the collapsed rail shows the short word in the button's place.
-          ? <span className={`stale-build-pill-action is-status${working ? ' is-working' : ''}`} data-testid="walnut-update-action" data-status={dataStatus} data-short={shortLabel} title={tooltip}>
+          ? <span ref={setActionEl} className={`stale-build-pill-action is-status${working ? ' is-working' : ''}`} data-testid="walnut-update-action" data-status={dataStatus} title={tooltip}
+            data-rail-dismiss={inRail && !pending ? laterLabel : undefined}>
             <RefreshIcon /><span className="stale-build-pill-label">{label}</span>
           </span>
           : <>
             <span className="stale-build-pill-sep" aria-hidden="true">·</span>
-            <button type="button" className={`stale-build-pill-action${working ? ' is-working' : ''}`} data-testid="walnut-update-action" data-status={dataStatus} onClick={() => { void onAction(); }} aria-disabled={pending || undefined} data-short={shortLabel}
-              title={tooltip}>
+            <button ref={setActionEl} type="button" className={`stale-build-pill-action${working ? ' is-working' : ''}`} data-testid="walnut-update-action" data-status={dataStatus} onClick={() => { void onAction(); }} aria-disabled={pending || undefined}
+              title={tooltip} data-rail-dismiss={inRail && !pending ? laterLabel : undefined}>
               <RefreshIcon /><span className="stale-build-pill-label">{label}</span>
             </button>
           </>}
         <button type="button" className="stale-build-pill-later" onClick={onLater} aria-disabled={pending || undefined}
-          title={kind === 'updated' ? 'Dismiss' : 'Later: hide this update notice for 30 minutes'} aria-label={kind === 'updated' ? 'Dismiss' : 'Later: hide this update notice for 30 minutes'}>×</button>
+          title={laterLabel} aria-label={laterLabel}>×</button>
       </div>, docked ? dock : document.body,
     )}
     {howTo && <HowToUpdateDialog version={update.status?.live?.version ?? update.status?.latest ?? null}

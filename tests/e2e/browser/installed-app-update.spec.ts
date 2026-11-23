@@ -3,6 +3,7 @@ import { test, expect, type Page, type Route } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
 import { healthyGitSync } from './host-attention-helpers'
+import { dismissUpdateNotice } from './update-notice-helpers'
 
 const SHOTS = '/tmp/mac-update-fix/shots'
 const STATUS = /\/api\/system\/desktop-update(\?|$)/
@@ -244,7 +245,7 @@ test('Later hides the notice for 30 minutes, a newer build included, and a new t
   let token = '12:old:new'
   await page.route(STATUS, r => r.fulfill({ json: { available: true, token } }))
   await loadApp(page)
-  await page.locator('.stale-build-pill-later').click()
+  await dismissUpdateNotice(page)
   await expect(button(page)).toHaveCount(0)
   token = '12:old:newer'
   await page.clock.fastForward(30_000)
@@ -255,8 +256,8 @@ test('Later hides the notice for 30 minutes, a newer build included, and a new t
   await button(page).click()
   await expect(unsaved(page)).toBeVisible()
   token = '12:old:newest'
-  await page.clock.fastForward(30_000)
-  await expect(unsaved(page)).toHaveCount(0)
+  // The next status read (every 30 s, armed when the last one answered) brings the new token.
+  await expect.poll(async () => { await page.clock.fastForward(10_000); return unsaved(page).count() }, { timeout: 30_000 }).toBe(0)
   await expect(button(page)).toHaveText('Restart')
 })
 

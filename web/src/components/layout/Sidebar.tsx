@@ -28,7 +28,7 @@ import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { SidebarStatusItems } from './SidebarStatusItems';
-import { setUpdateNoticeDock } from '@/components/common/update-notice-dock';
+import { setUpdateNoticeDock, setUpdateNoticeDockHandlers } from '@/components/common/update-notice-dock';
 import { useLendAppUpdateToasts } from './useAppUpdateActions';
 import { useRailPeek } from './useRailPeek';
 import { RailItemPill } from './RailItemPill';
@@ -120,6 +120,13 @@ export function Sidebar({
     blocked: notifOpen || statusOpen,
     hold: appMenu.state !== null,
   });
+  // The update notice is portalled in from App's tree, so the rail's handlers never hear it:
+  // it carries these (one object for the rail's life).
+  const { portalHandlers } = peek;
+  useEffect(() => {
+    setUpdateNoticeDockHandlers(portalHandlers);
+    return () => setUpdateNoticeDockHandlers(null);
+  }, [portalHandlers]);
   const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
   // Bridge audio capture errors into the unified toaster. useAudioCapture still
   // owns lastError (it resets recording state + handles the no-WS local failure);

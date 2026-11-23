@@ -9,6 +9,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
 import { healthyGitSync } from './host-attention-helpers'
+import { dismissUpdateNotice, peekUpdateNotice } from './update-notice-helpers'
 import { popoutFromKebab } from './session-kebab-helpers'
 
 const SHOTS = 'test-results/update-notice-dock'
@@ -75,9 +76,24 @@ test('the notice docks in the collapsed rail and in the open sidebar, and both b
   await expect(action(page)).toHaveText('Restart')
   await expectDockedInRail(page)
   await expect(page.locator('.sidebar.collapsed')).toHaveCount(1)
-  await expectHitWhereDrawn(page, action(page), later(page))
-  // The badge is a circle: its square's corners are not part of it.
-  await expectHitWhereDrawn(page, later(page), undefined, [0.25, 0.5, 0.75])
+  // One of the rail's keys (2026-11-23, the user: "the reload is too big, not same style"):
+  // the bell's size and column, the glyph alone, no frame and no corner ×.
+  const key = (await action(page).boundingBox())!
+  const bell = (await page.locator('.sidebar-notification-btn').boundingBox())!
+  expect(Math.abs(key.width - bell.width)).toBeLessThanOrEqual(0.5)
+  expect(Math.abs(key.height - bell.height)).toBeLessThanOrEqual(0.5)
+  expect(Math.abs(key.x + key.width / 2 - (bell.x + bell.width / 2)), JSON.stringify({ key, bell })).toBeLessThanOrEqual(0.5)
+  expect(await pill(page).evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('0px')
+  expect(await later(page).evaluate((el) => getComputedStyle(el).opacity)).toBe('0')
+  // The key is a circle: its square's corners are not part of it.
+  await expectHitWhereDrawn(page, action(page), undefined, [0.3, 0.5, 0.7])
+  // Hovering names it and offers its ×, like every rail item.
+  await peekUpdateNotice(page)
+  await expect(page.getByTestId('rail-item-pill')).toContainText('Restart')
+  await expect(page.getByTestId('rail-item-pill-dismiss')).toBeVisible()
+  await page.screenshot({ path: `${SHOTS}/rail-peek-${test.info().project.name}.png` })
+  await page.mouse.move(700, 300)
+  await expect(page.getByTestId('rail-item-pill')).toHaveCount(0)
   await page.locator('.sidebar').screenshot({ path: `${SHOTS}/rail-collapsed-${test.info().project.name}.png` })
   await page.screenshot({ path: `${SHOTS}/home-collapsed-${test.info().project.name}.png` })
 
@@ -99,7 +115,7 @@ test('× keeps the notice away for 30 minutes through a reload, another window a
   await page.clock.install()
   await loadApp(page)
   await expect(action(page)).toHaveText('Restart')
-  await later(page).click()
+  await dismissUpdateNotice(page)
   await expect(pill(page)).toHaveCount(0)
 
   // A newer update lands (a deploy) inside the 30 minutes: still quiet.
@@ -130,7 +146,7 @@ test('after 30 minutes the very update that was dismissed stays dismissed', asyn
   await page.clock.install()
   await loadApp(page)
   await expect(action(page)).toHaveText('Restart')
-  await later(page).click()
+  await dismissUpdateNotice(page)
   await page.clock.fastForward(31 * 60_000)
   // Past the wake-up render: the dismissed update must stay away, not just not be back yet.
   await page.clock.fastForward(5_000)
@@ -147,7 +163,7 @@ test('× in one window hides the notice in another window already open', async (
   await other.goto(page.url())
   await expect(other.locator('.stale-build-pill-action')).toHaveText('Restart', { timeout: 30_000 })
   await expect(action(page)).toHaveText('Restart')
-  await later(page).click()
+  await dismissUpdateNotice(page)
   await expect(other.locator('.stale-build-pill')).toHaveCount(0)
   await other.close()
 })
@@ -209,3 +225,36 @@ test('a document popout scrolls its view above the bar; the bar stays on the win
   expect(viewBox.y + viewBox.height).toBeLessThanOrEqual(bar.y + 0.5)
   await child.screenshot({ path: `${SHOTS}/popout-file-${test.info().project.name}.png` })
 })
+
+for (const notice of [true, false]) {
+  test(`the rail never scrolls sideways: nothing in it is wider than the rail, collapsed or open (${notice ? 'with' : 'without'} the notice)`, async ({ page }) => {
+    if (!notice) {
+      await page.context().unroute(STATUS)
+      await page.context().route(STATUS, r => r.fulfill({ json: { available: false, token: null } }))
+    }
+    await loadApp(page)
+    await expect(page.locator('.sidebar-notification-btn')).toBeVisible()
+    await expect(pill(page)).toHaveCount(notice ? 1 : 0, { timeout: 15_000 })
+    for (const collapsed of [true, false]) {
+      if ((await page.locator('.sidebar.collapsed').count() > 0) !== collapsed) await page.locator('.sidebar-collapse-btn').click()
+      await expect(page.locator('.sidebar.collapsed')).toHaveCount(collapsed ? 1 : 0)
+      const overflow = await page.locator('#primary-sidebar').evaluate((el) => {
+        const r = el.getBoundingClientRect().right
+        // Past the rail's edge and not cut off by a box of its own inside the rail.
+        const shownRight = (e: Element) => {
+          let right = e.getBoundingClientRect().right
+          for (let a = e.parentElement; a && a !== el; a = a.parentElement) {
+            if (getComputedStyle(a).overflowX !== 'visible') right = Math.min(right, a.getBoundingClientRect().right)
+          }
+          return right
+        }
+        const wider = [...el.querySelectorAll('*')].filter((e) => e.getBoundingClientRect().width > 0 && shownRight(e) > r + 0.5)
+          .map((e) => `${e.tagName}.${e.className} "${(e.textContent || '').trim().slice(0, 20)}"`)
+        return { scroll: el.scrollWidth - el.clientWidth, overflowX: getComputedStyle(el).overflowX, wider }
+      })
+      expect(overflow.wider, `collapsed=${collapsed}`).toEqual([])
+      expect(overflow.scroll, `collapsed=${collapsed}`).toBeLessThanOrEqual(0)
+      expect(overflow.overflowX).toBe('hidden')
+    }
+  })
+}

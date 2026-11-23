@@ -8,8 +8,8 @@ import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { RailPeekController, type RailPeekOptions } from './rail-peek-controller';
 
-/** The rows that peek: every rail entry (apps, Home's toggles, Org, status items, Voice, the bell). */
-export const RAIL_ITEM_SELECTOR = '.sidebar-link';
+/** The rows that peek: every rail entry (apps, Home's toggles, Org, status items, the update notice, the bell). */
+export const RAIL_ITEM_SELECTOR = '.sidebar-link, .sidebar-update-dock .stale-build-pill-action';
 // Focus a closing panel puts back on its rail button (Escape on the bell's panel) is not a
 // keyboard visit. Keyboard focus right after Escape is that hand-back.
 const ESCAPE_HANDBACK_MS = 1000;
@@ -117,6 +117,35 @@ export function useRailPeek(options: RailPeekOptions) {
     onScroll() { peek.reset(); },
   };
 
+  /**
+   * For a row portalled into the rail from outside its React tree (the update notice,
+   * StaleBuildPill): React sends that row's events up ITS tree, never through the rail's
+   * own handlers, so the row carries these. A leave into the rail or its pill is not a
+   * leave of the rail (the rail's own leave, which React fires when the pointer crosses
+   * into the row, is undone by the row's next move). One object for the hook's life: every
+   * handler reads only the controller and refs.
+   */
+  const portalHandlers = useRef({
+    onPointerMove(e: React.PointerEvent<HTMLElement>) {
+      if (e.pointerType === 'touch' || !moved.current) return;
+      peek.pointerMove(rowOf(e.target), e.buttons);
+    },
+    onPointerLeave(e: React.PointerEvent<HTMLElement>) {
+      if (e.pointerType === 'touch') return;
+      const to = e.relatedTarget instanceof Node ? e.relatedTarget : null;
+      if (to && (e.currentTarget.closest('aside')?.contains(to) || pill.current?.contains(to))) return;
+      peek.pointerLeave();
+    },
+    onFocus: handlers.onFocus,
+    onBlur(e: React.FocusEvent<HTMLElement>) {
+      const next = e.relatedTarget as Node | null;
+      if (next && e.currentTarget.closest('aside')?.contains(next)) return;
+      peek.focusLeft();
+    },
+    onKeyDown: handlers.onKeyDown,
+    onClickCapture: handlers.onClickCapture,
+  }).current;
+
   const pillHandlers = {
     ref: pill,
     onPointerMove(e: React.PointerEvent<HTMLElement>) {
@@ -127,5 +156,5 @@ export function useRailPeek(options: RailPeekOptions) {
   // The pill's row went away, or the wheel turned on the pill: the rows are leaving the pointer.
   const pillGone = (why: 'gone' | 'wheel') => { if (why === 'gone') peek.drop(); else peek.reset(); };
 
-  return { item: state.item, grow: state.grow, handlers, pillHandlers, pillGone };
+  return { item: state.item, grow: state.grow, handlers, portalHandlers, pillHandlers, pillGone };
 }

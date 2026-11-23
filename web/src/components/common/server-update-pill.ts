@@ -21,10 +21,8 @@ export interface ServerPillView {
   stage: 'available' | 'updating' | 'ready' | 'installed' | 'restarting' | 'failed';
   heading: string;
   action: ServerPillAction;
-  /** The button's words; for a step with no action, the collapsed rail's status word. */
+  /** The button's words; for a step with no action, the status word (the collapsed rail's peek name). */
   label: string;
-  /** The collapsed rail's word (56px wide). */
-  short: string;
   tooltip: string;
   /** The heading's tooltip: the full version (a nightly's display form drops its build stamp). */
   versionTitle: string;
@@ -43,9 +41,6 @@ export function displayVersion(v: string): string {
   const m = /^v?(\d+\.\d+\.\d+)-nightly(?:[.+-].*)?$/.exec(v.trim());
   return m ? `${m[1]} nightly` : v;
 }
-
-/** The collapsed rail's word while work runs: it fits the 56px rail beside the spinning icon. */
-export const WORKING_SHORT = 'Wait';
 
 export const RESTART_TOOLTIP = 'Restarts by itself once you have been away 10 minutes';
 
@@ -71,14 +66,14 @@ function serverPillViewOf(s: UpdateStatus | null): ServerPillView | null {
   switch (live.state) {
     case 'restarting':
       return { identity: id('restarting'), stage: 'restarting', heading: `Restarting into Walnut ${shown}…`, action: null,
-        label: 'Restarting…', short: WORKING_SHORT, tooltip: `Walnut is restarting into ${version}; this window reconnects by itself`,
+        label: 'Restarting…', tooltip: `Walnut is restarting into ${version}; this window reconnects by itself`,
         versionTitle, busy: true, working: true };
     case 'installed':
     case 'waiting':
       return live.canInstall ? ready(version, id('ready')) : installedOnly(version, id('installed'));
     case 'failed':
       return { identity: id('failed'), stage: 'failed', heading: `Walnut ${shown} did not install`, action: 'install',
-        label: 'Try again', short: 'Retry', tooltip: live.error ? `Install of ${version} failed: ${live.error}` : `Install of ${version} failed. Click to try again.`,
+        label: 'Try again', tooltip: live.error ? `Install of ${version} failed: ${live.error}` : `Install of ${version} failed. Click to try again.`,
         versionTitle, busy: false, working: false };
     case 'downloading':
       return updating(version, id('updating'));
@@ -92,19 +87,19 @@ function serverPillViewOf(s: UpdateStatus | null): ServerPillView | null {
   if (!s.available || !s.latest) return null;
   if (!live.canInstall) {
     return { identity: id('available'), stage: 'available', heading: `Walnut ${shown} available`, action: 'how',
-      label: 'How to update', short: 'How', tooltip: 'This copy cannot update itself: see the command that updates it',
+      label: 'How to update', tooltip: 'This copy cannot update itself: see the command that updates it',
       versionTitle, busy: false, working: false };
   }
   // Auto on and nothing held: the server starts the install by itself at its next check.
   if (live.updatesAuto && !live.held && live.state === 'idle') return updating(version, id('updating'));
   return { identity: id('available'), stage: 'available', heading: `Walnut ${shown} available`, action: 'install',
-    label: 'Update', short: 'Update',
+    label: 'Update',
     tooltip: live.held ? `Install ${version} now and restart (held back here: ${live.held})` : `Install ${version} now and restart`,
     versionTitle, busy: false, working: false };
 }
 
 function ready(version: string, identity: string): ServerPillView {
-  return { identity, stage: 'ready', heading: `Walnut ${displayVersion(version)} is ready`, action: 'restart', label: 'Restart', short: 'Restart',
+  return { identity, stage: 'ready', heading: `Walnut ${displayVersion(version)} is ready`, action: 'restart', label: 'Restart',
     tooltip: RESTART_TOOLTIP, versionTitle: `Walnut ${version}`, busy: false, working: false };
 }
 
@@ -115,14 +110,14 @@ function ready(version: string, identity: string): ServerPillView {
  */
 function installedOnly(version: string, identity: string): ServerPillView {
   return { identity, stage: 'installed', heading: `Walnut ${displayVersion(version)} is installed`, action: null,
-    label: 'Restart Walnut to use it', short: 'Ready', tooltip: INSTALLED_TOOLTIP,
+    label: 'Restart Walnut to use it', tooltip: INSTALLED_TOOLTIP,
     versionTitle: `Walnut ${version}. ${INSTALLED_TOOLTIP}`, busy: false, working: false };
 }
 
 export const INSTALLED_TOOLTIP = 'Installed. Quit Walnut and start it again to use it; this copy cannot restart itself';
 
 function updating(version: string, identity: string): ServerPillView {
-  return { identity, stage: 'updating', heading: `Updating Walnut to ${displayVersion(version)}…`, action: null, label: 'Updating…', short: WORKING_SHORT,
+  return { identity, stage: 'updating', heading: `Updating Walnut to ${displayVersion(version)}…`, action: null, label: 'Updating…',
     tooltip: `Installing ${version} in the background; Walnut restarts once you have been away 10 minutes`,
     versionTitle: `Walnut ${version}`, busy: false, working: true };
 }

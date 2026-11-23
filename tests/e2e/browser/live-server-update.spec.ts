@@ -16,6 +16,7 @@ import { test, expect, type Page, type WebSocketRoute } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp, openBell } from './host-problems-fixture-helpers'
 import { healthyGitSync, railButton } from './host-attention-helpers'
+import { dismissUpdateNotice, peekUpdateNotice } from './update-notice-helpers'
 
 const SHOTS = process.env.LIVE_UPDATE_SHOTS ?? '/tmp/live-server-update/shots'
 test.describe.configure({ timeout: 90_000 })
@@ -169,29 +170,37 @@ test('available -> Update -> updating -> ready -> Restart -> restarting -> back 
   await expect(heading(page)).toHaveText('Walnut updated to 0.9.0')
   await shoot(page, '3-updated')
   // Read: the × dismisses it for this tab (no 30-minute snooze of the next real update).
-  await pill(page).locator('.stale-build-pill-later').click()
+  await dismissUpdateNotice(page)
   await expect(pill(page)).toHaveCount(0)
   expect(await page.evaluate(() => localStorage.getItem('open-walnut-update-notice-snooze'))).toBeNull()
 })
 
-test('a nightly reads "0.6.25 nightly" untruncated in the open rail; the collapsed rail says Wait with a turning icon while it installs and restarts', async ({ page }) => {
+test('a nightly reads "0.6.25 nightly" untruncated in the open rail; the collapsed rail shows a turning icon, named on hover, while it installs and restarts', async ({ page }) => {
   const v = '0.6.25-nightly.20261103.9000002'
   const nightly = (l: Partial<Live>) => status({ current: '0.6.24-nightly.20261102.9000001', latest: v, channel: 'nightly', tags: { latest: '0.6.24', nightly: v } }, l)
   const sock = await routeSocket(page)
   await routeUpdate(page, nightly({ state: 'downloading', version: v }))
   await loadApp(page)
   await expect(pill(page)).toHaveAttribute('data-status', 'updating', { timeout: 20_000 })
-  const busyWord = () => pill(page).locator('.stale-build-pill-action.is-status').evaluate((el) => getComputedStyle(el, '::after').content)
+  // The collapsed rail's key is the glyph alone (2026-11-23, the user: "not same style"); its peek names it.
+  const busyWord = async () => {
+    const key = pill(page).locator('.stale-build-pill-action.is-status')
+    await peekUpdateNotice(page)
+    const name = (await key.locator('.stale-build-pill-label').textContent())!.trim()
+    await expect(page.getByTestId('rail-item-pill')).toContainText(name)
+    await page.mouse.move(700, 300)
+    return name
+  }
   const spinning = () => pill(page).locator('.stale-build-pill-action.is-status .stale-build-pill-icon').evaluate((el) => getComputedStyle(el).animationName)
   // Collapsed rail (the fixture's default): "Wait" and a turning icon, never a bare "…".
   if (!(await page.locator('.sidebar.collapsed').count())) await page.locator('.sidebar-collapse-btn').click()
   await expect(page.locator('.sidebar.collapsed')).toHaveCount(1)
-  expect(await busyWord()).toBe('"Wait"')
+  expect(await busyWord()).toBe('Updating…')
   expect(await spinning()).toBe('stale-build-pill-spin')
-  // The word fits the rail's card.
-  const card = (await pill(page).boundingBox())!
+  // The key fits the rail.
+  const rail = (await page.locator('#primary-sidebar').boundingBox())!
   const word = (await pill(page).locator('.stale-build-pill-action.is-status').boundingBox())!
-  expect(word.x + word.width).toBeLessThanOrEqual(card.x + card.width + 0.5)
+  expect(word.x + word.width).toBeLessThanOrEqual(rail.x + rail.width + 0.5)
   await shoot(page, '5-nightly-updating-rail')
   // Open rail: the short form, whole, the full version on the heading's tooltip.
   await page.locator('.sidebar-collapse-btn').click()
@@ -200,7 +209,7 @@ test('a nightly reads "0.6.25 nightly" untruncated in the open rail; the collaps
   await expect(heading(page)).toHaveAttribute('title', `Walnut ${v}`)
   await expectWhole(page)
   await shoot(page, '5-nightly-updating')
-  // Ready and restarting, both untruncated; restarting says Wait in the collapsed rail too.
+  // Ready and restarting, both untruncated; restarting turns in the collapsed rail too.
   for (const [state, text] of [['installed', 'Walnut 0.6.25 nightly is ready'], ['restarting', 'Restarting into Walnut 0.6.25 nightly…']] as const) {
     push(sock(), nightly({ state, version: v }))
     await expect(heading(page)).toHaveText(text)
@@ -209,7 +218,7 @@ test('a nightly reads "0.6.25 nightly" untruncated in the open rail; the collaps
   }
   await page.locator('.sidebar-collapse-btn').click()
   await expect(page.locator('.sidebar.collapsed')).toHaveCount(1)
-  expect(await busyWord()).toBe('"Wait"')
+  expect(await busyWord()).toBe('Restarting…')
   expect(await spinning()).toBe('stale-build-pill-spin')
   await shoot(page, '5-nightly-restarting-rail')
 })
@@ -219,8 +228,11 @@ test('installed on a server that cannot restart itself: "is installed", no Resta
   await loadApp(page)
   await expect(pill(page)).toHaveAttribute('data-status', 'installed', { timeout: 20_000 })
   if (await page.locator('.sidebar.collapsed').count()) {
-    // The collapsed rail: a status word, no button.
-    expect(await pill(page).locator('.stale-build-pill-action.is-status').evaluate((el) => getComputedStyle(el, '::after').content)).toBe('"Ready"')
+    // The collapsed rail: a status key, no button; its peek names it.
+    const key = pill(page).locator('.stale-build-pill-action.is-status')
+    await peekUpdateNotice(page)
+    await expect(page.getByTestId('rail-item-pill')).toContainText((await key.locator('.stale-build-pill-label').textContent())!.trim())
+    await page.mouse.move(700, 300)
     await page.locator('.sidebar-collapse-btn').click()
     await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)
   }
@@ -257,7 +269,7 @@ test('auto on: "Updating Walnut to X…" shows at start, and the panel\'s System
   await expect(heading(page)).toHaveText('Updating Walnut to 0.9.0…', { timeout: 20_000 })
   expect(r.gets()).toBeGreaterThanOrEqual(1)
   // × hides it, like any update notice.
-  await pill(page).locator('.stale-build-pill-later').click()
+  await dismissUpdateNotice(page)
   await expect(pill(page)).toHaveCount(0)
   await openBell(page)
   await expect(railButton(page, 'System').locator('.nfc-rail-dot')).toHaveCount(1)

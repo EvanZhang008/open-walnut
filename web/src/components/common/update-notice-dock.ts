@@ -5,10 +5,15 @@
  * page it sat on the transcript and the composer). The phone layout has no slot, and
  * the notice floats above its bottom bar instead.
  */
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, type DOMAttributes } from 'react';
 
 let dock: HTMLElement | null = null;
 let occupied = false;
+// The rail's peek handlers for a row portalled into it (useRailPeek `portalHandlers`).
+let railHandlers: RailRowHandlers | null = null;
+
+export type RailRowHandlers = Partial<Pick<DOMAttributes<HTMLElement>,
+  'onPointerMove' | 'onPointerLeave' | 'onFocus' | 'onBlur' | 'onKeyDown' | 'onClickCapture'>>;
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -20,6 +25,17 @@ export function setUpdateNoticeDock(el: HTMLElement | null): void {
   if (dock === el) return;
   dock = el;
   notify();
+}
+
+/** The rail hands its peek handlers to the notice it hosts; the popout's slot has none. */
+export function setUpdateNoticeDockHandlers(handlers: RailRowHandlers | null): void {
+  if (railHandlers === handlers) return;
+  railHandlers = handlers;
+  notify();
+}
+
+export function useUpdateNoticeDockHandlers(): RailRowHandlers | null {
+  return useSyncExternalStore(subscribe, () => railHandlers, () => null);
 }
 
 /**

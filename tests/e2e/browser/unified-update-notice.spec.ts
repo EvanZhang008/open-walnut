@@ -3,6 +3,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
 import { healthyGitSync } from './host-attention-helpers'
+import { dismissUpdateNotice } from './update-notice-helpers'
 import { popoutFromKebab } from './session-kebab-helpers'
 import { openDraft } from './draft-helpers'
 
@@ -69,7 +70,7 @@ test('web reload: × keeps the notice away for 30 minutes through another deploy
   await showDrift(page)
   await expect(action(page)).toHaveText('Reload')
   await expect(pill(page)).toHaveAttribute('data-served', 'new-notice-build')
-  await page.locator('.stale-build-pill-later').click()
+  await dismissUpdateNotice(page)
   await expect(pill(page)).toHaveCount(0)
   // Another deploy lands: the next check sees it, and the notice stays away.
   servedBundle = 'newer-notice-build'

@@ -48,6 +48,30 @@
   opacity: 1;
   overflow: visible;
 }
+/* The update notice's glyph is hidden outside the collapsed rail; its copy here shows it. */
+.rail-item-pill .stale-build-pill-icon { display: block; }
+/* A row that can be put away: its × after the name, the rail's quiet round close. */
+.rail-item-pill-dismiss {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0 -6px 0 -2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.rail-item-pill-dismiss:hover { color: var(--fg); background: var(--bg-tertiary); }
 /* Badges sit at the pill's right end, after the name, as in the docked sidebar. */
 .rail-item-pill .notification-badge-count,
 .rail-item-pill .notification-badge-dot,

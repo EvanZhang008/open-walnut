@@ -9,6 +9,9 @@
  * click, a drag, its tooltip, the wheel). Only the part past the row (the name) takes
  * events, and hands a click (with its modifier keys) or a right-click to the row.
  *
+ * A row that can be put away (the update notice: `data-rail-dismiss` names its ×) gets a ×
+ * at the end of the name; it sends `rail:dismiss` to the row, and the row does the rest.
+ *
  * Portalled to <body> (the rail scrolls and clips), but rendered inside the rail's React
  * tree, so moving from a row onto the name is not a leave of the rail. It follows its row:
  * a scroll, a resize or a change inside the rail (a badge count, a ticking ring) measures
@@ -132,6 +135,7 @@ export function RailItemPill({ item, grow, handlers, onGone }: {
 
   if (!place) return null;
   const active = item.classList.contains('active');
+  const dismiss = item.dataset.railDismiss;
   return createPortal(
     <div
       ref={handlers.ref as React.RefObject<HTMLDivElement>}
@@ -164,6 +168,18 @@ export function RailItemPill({ item, grow, handlers, onGone }: {
         }}
         onWheel={() => { goneRef.current('wheel'); }}
       />
+      {dismiss && (
+        <button
+          type="button"
+          className="rail-item-pill-dismiss"
+          data-testid="rail-item-pill-dismiss"
+          title={dismiss}
+          tabIndex={-1}
+          onPointerMove={handlers.onPointerMove}
+          onPointerEnter={handlers.onPointerMove}
+          onClick={(e) => { e.stopPropagation(); item.dispatchEvent(new CustomEvent('rail:dismiss')); }}
+        >×</button>
+      )}
     </div>,
     document.body,
   );

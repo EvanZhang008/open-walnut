@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import type { LiveUpdate, UpdateStatus } from '@/api/update';
 import {
-  INSTALLED_TOOLTIP, RESTART_TOOLTIP, WORKING_SHORT, displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, writeSeenVersion,
+  INSTALLED_TOOLTIP, RESTART_TOOLTIP, displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, writeSeenVersion,
 } from '@/components/common/server-update-pill';
 
 const NPM = { kind: 'npm' as const, sourceDir: null, packageRoot: '/usr/local/lib/node_modules/open-walnut', manager: 'npm' as const, updateCommand: 'npm install -g open-walnut@latest' };
@@ -45,7 +45,7 @@ describe('serverPillView', () => {
 
   it('available, can install, auto off: "Update"', () => {
     const v = serverPillView(status({ live: live({ state: 'off', updatesAuto: false }) }))!;
-    expect(v).toMatchObject({ stage: 'available', heading: 'Walnut 0.9.0 available', action: 'install', label: 'Update', short: 'Update' });
+    expect(v).toMatchObject({ stage: 'available', heading: 'Walnut 0.9.0 available', action: 'install', label: 'Update' });
   });
 
   it('available, can install, auto on but the version is held: "Update", and the tooltip names why', () => {
@@ -144,13 +144,12 @@ describe('displayVersion (one formatter for every server heading)', () => {
     expect(views[5]!.tooltip).toContain(v);
   });
 
-  it('the collapsed rail: installing and restarting say "Wait" with a turning icon; the rest keep their verbs', () => {
+  it('the collapsed rail: installing and restarting turn the icon and name the step; ready keeps its verb', () => {
     const u = serverPillView(status({ live: live({ state: 'downloading', version: '0.9.0' }) }))!;
     const r = serverPillView(status({ live: live({ state: 'restarting', version: '0.9.0' }) }))!;
-    expect([u.short, u.working, r.short, r.working]).toEqual([WORKING_SHORT, true, WORKING_SHORT, true]);
-    expect(WORKING_SHORT.length).toBeLessThanOrEqual(7);
+    expect([u.label, u.working, r.label, r.working]).toEqual(['Updating…', true, 'Restarting…', true]);
     const ready = serverPillView(status({ live: live({ state: 'installed', version: '0.9.0' }) }))!;
-    expect([ready.short, ready.working]).toEqual(['Restart', false]);
+    expect([ready.label, ready.working]).toEqual(['Restart', false]);
   });
 });
 
