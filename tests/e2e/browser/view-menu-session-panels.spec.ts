@@ -8,7 +8,7 @@
  * (2026-09-23: "this should show the number of session panels we can adjust"). So the
  * assertions are about the shared setting, not a local copy: the menu reads the current
  * value, a pick moves the strip at once and reaches config, the session kebab agrees
- * (both ways, the same "N columns now" words), and under Auto the row names the count Auto
+ * (both ways, the same "Auto (fits N)" words), and under Auto the row names the count Auto
  * means in this window.
  */
 import { test, expect, type Page } from '@playwright/test'
@@ -17,7 +17,7 @@ import { closeViewMenu, openHome, openViewMenu } from './home-navigation-helpers
 import { holdPanelCountLock } from './panel-count-lock'
 
 const SHOTS = '/tmp/filterbar/shots'
-const autoWords = (n: number) => `Auto (${n} column${n === 1 ? '' : 's'} now)`
+const autoWords = (n: number) => `Auto (fits ${n})`
 const SIDS = ['pw-normal-session', 'pw-plan-session-completed', 'pw-vscode-session'] as const
 
 test.describe.configure({ mode: 'serial' })
@@ -151,7 +151,7 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   const kebabAutoIdle = idleRow.locator('.task-kebab-panels-opt[data-value="Auto"]')
   await expect(kebabAutoIdle).toHaveAttribute('aria-checked', 'false')
   await expect(kebabAutoIdle).toHaveText('Auto')
-  await expect(idleRow.getByTestId('kebab-panels-auto-note')).toHaveText(`Auto: ${autoHere} column${autoHere === 1 ? '' : 's'} now`)
+  await expect(idleRow.getByTestId('kebab-panels-auto-note')).toHaveText(autoWords(autoHere))
   await page.keyboard.press('Escape')
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['4'])
@@ -185,7 +185,7 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   const kebabAuto = autoRow.locator('.task-kebab-panels-opt[aria-checked="true"]')
   await expect(kebabAuto).toHaveAttribute('data-value', 'Auto')
   await expect(kebabAuto).toHaveText('Auto')
-  await expect(autoRow.getByTestId('kebab-panels-auto-note')).toHaveText(`Auto: ${wide} columns now`)
+  await expect(autoRow.getByTestId('kebab-panels-auto-note')).toHaveText(autoWords(wide))
   await page.keyboard.press('Escape')
 
   // The choice survives a reload.

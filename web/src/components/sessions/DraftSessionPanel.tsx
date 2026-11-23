@@ -187,7 +187,7 @@ function effortFor(model: string, effort: SessionEffort | undefined): SessionEff
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel, sourceNote, projectEffort, autoWord = 'Auto' }: {
+function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel, sourceNote, projectEffort }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
@@ -207,8 +207,6 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
   sourceNote?: React.ReactNode;
   /** The draft's project's own default effort (its settings), under a pick here. */
   projectEffort?: SessionEffort;
-  /** The word for no model picked: the v6 draft says "Default", so its one Auto is Where's. */
-  autoWord?: string;
 }) {
   const [open, setOpen] = useState(false);
   // The provider tab the picker shows while the launch is on the fallback: it opens on the
@@ -265,7 +263,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
     // name, never as a provider id like "global.anthropic.claude-..." (N10).
     ? nameOfModel(meta.model!)
     : defaultModel ? `Default (${nameOfModel(defaultModel)})`
-    : autoResolved ? `${autoWord} (${autoResolved})` : autoWord === 'Auto' ? 'Auto model' : autoWord; // a bare "Auto" read as any setting
+    : autoResolved ? `Auto (${autoResolved})` : 'Auto model'; // a bare "Auto" read as any setting
   // What the effort picker's Default row starts at: the project's, else Walnut's, else Claude Code's own.
   const effortDefault = projectEffort
     ? { level: effortLabel(projectEffort), title: 'No level picked here: the project\'s default effort applies (its settings)' }
@@ -879,7 +877,7 @@ export function DraftSessionPanel({
   }, [startWith, text]);
 
   const modePill = showModePill && (
-    <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode} {...(v6 ? { prefix: 'Permissions: ' } : {})}
+    <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode}
       source={sourceRows?.find((r) => r.key === 'mode')} />
   );
   // Why the last Start did not start (a refusal, the host gate) and the fallback engine: both layouts.
@@ -998,9 +996,8 @@ export function DraftSessionPanel({
             fallbackEngine={onFallback?.engine ?? null}
             fallbackModel={onFallback?.model}
             projectEffort={projectDefaults.effort}
-            {...(v6 ? { autoWord: 'Default' } : {})}
           />
-          {/* v6: the model, then "Permissions: Auto" (the approved order; its words say what it is). */}
+          {/* v6: the model ("Auto model"), then the mode ("Default mode"): each says what it is (approved 2026-11-23). */}
           {v6 && modePill}
           {/* No "Start ↵" here: the composer's send arrow (and Enter) already
               starts the session, and two buttons for one action read as two

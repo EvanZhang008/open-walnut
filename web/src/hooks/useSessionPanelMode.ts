@@ -127,11 +127,12 @@ function publishLiveAutoCount(n: number) {
   for (const listener of liveCountListeners) listener();
 }
 /**
- * The words that name the count Auto gives in this window ("2 columns now"), the same in
- * the session kebab's Columns note and the Display menu's Session columns row.
+ * The words beside Auto that name how many columns fit this window ("fits 2"), the same in the
+ * session kebab's Columns note and the Display menu's Session columns row ("Auto (fits 2)"):
+ * "2 columns now" read as the count shown now (2026-11-23 review).
  */
 export function autoPanelCountWords(n: number): string {
-  return `${n} column${n === 1 ? '' : 's'} now`;
+  return `fits ${n}`;
 }
 
 /** Auto's panel count at the home strip's width; null until the home page has measured it. */

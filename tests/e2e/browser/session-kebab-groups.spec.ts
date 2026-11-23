@@ -134,7 +134,7 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   // internal "Auto(1)": what Auto gives in this window is the muted note beside the control.
   expect(await opts.allInnerTexts()).toEqual(['1', '2', '3', '4', '5', 'Auto'])
   const note = menu.getByTestId('kebab-panels-auto-note')
-  await expect(note).toHaveText(/^Auto: [1-5] columns? now$/)
+  await expect(note).toHaveText(/^Auto \(fits [1-5]\)$/)
   const trackWidth = async () => (await menu.getByTestId('kebab-panels').locator('.task-kebab-panels-track').boundingBox())!.width
   const widthBefore = await trackWidth()
   // The row is as tall as the menu's other rows, and its control ends on the column of the
@@ -175,7 +175,7 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   }
   await expect(opts.nth(5)).toHaveAttribute('aria-checked', 'true')
   await expect(opts.nth(5)).toHaveText('Auto')
-  await expect(note).toHaveText(/^Auto: [1-5] columns? now$/)
+  await expect(note).toHaveText(/^Auto \(fits [1-5]\)$/)
   // Picking Auto moves nothing: the control is as wide as it was with a number picked.
   if (original !== 'Auto') expect(Math.abs((await trackWidth()) - widthBefore)).toBeLessThanOrEqual(1)
   await page.mouse.move(0, 0)

@@ -42,8 +42,10 @@ export function inHostTerms(text: string, host: string, label?: unknown): string
   const name = hostDisplayName(host, label)
   if (!host || name === host || !text.includes(host)) return text
   // Not inside a word, a hostname (`box.example.test`) or a path (`/srv/box/x`);
-  // a sentence's closing period is not a hostname.
-  return text.replace(new RegExp(`(?<![\\w./-])${escapeRe(host)}(?![\\w/-]|\\.\\w)`, 'g'), () => name)
+  // a sentence's closing period is not a hostname. The name itself, already in the text, stays as it
+  // is: a label that holds the key ("New big clouddev" for clouddev) read "New big New big clouddev".
+  const named = name.includes(host) ? `${escapeRe(name)}|` : ''
+  return text.replace(new RegExp(`${named}(?<![\\w./-])${escapeRe(host)}(?![\\w/-]|\\.\\w)`, 'g'), (m) => (m === name ? m : name))
 }
 
 /** hostDisplayName with the label read from the host's row in config. */

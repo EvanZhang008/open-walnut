@@ -18,7 +18,7 @@ describe('sessionPanelsViewGroup', () => {
   });
 
   it('names the live count on Auto only while Auto is the setting', () => {
-    expect(row(sessionPanelsViewGroup('auto', 2, vi.fn())).choices.at(-1)).toMatchObject({ label: 'Auto (2 columns now)', active: true });
+    expect(row(sessionPanelsViewGroup('auto', 2, vi.fn())).choices.at(-1)).toMatchObject({ label: 'Auto (fits 2)', active: true });
     expect(row(sessionPanelsViewGroup('auto', null, vi.fn())).choices.at(-1)).toMatchObject({ label: 'Auto', active: true });
     expect(row(sessionPanelsViewGroup('2', 2, vi.fn())).choices.at(-1)).toMatchObject({ label: 'Auto', active: false });
   });

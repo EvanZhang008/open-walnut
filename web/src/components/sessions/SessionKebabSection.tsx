@@ -76,7 +76,7 @@ const PANEL_CHOICES: SessionPanelMode[] = [
  *
  * Labelled "Columns", as the Display menu's "Session columns" row names the same setting.
  * One shared SegmentedControl (size sm) whose options are their plain names (Auto, 1, 2, ...);
- * what Auto gives in this window is a muted note beside it ("Auto: 2 columns now"), from the
+ * what Auto gives in this window is a muted note beside it ("Auto (fits 2)"), from the
  * count the home strip publishes (useLiveAutoPanelCount), so the breakpoints live in one place.
  * Every confirm (a click or tap, Enter / Space, an assistive tech's activation) applies and closes
  * the menu the same way: the control's onChange is the only place a pick lands. The arrows and
@@ -87,7 +87,7 @@ const PANEL_CHOICES: SessionPanelMode[] = [
 export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
   const { mode, setMode } = useSessionPanelMode();
   const autoCount = useLiveAutoPanelCount();
-  const autoNote = autoCount === null ? null : `Auto: ${autoPanelCountWords(autoCount)}`;
+  const autoNote = autoCount === null ? null : `Auto (${autoPanelCountWords(autoCount)})`;
   return (
     <div className="task-kebab-panels" data-testid="kebab-panels">
       <span className="task-kebab-icon">{VIEWS_ICON}</span>

@@ -82,7 +82,9 @@ test('the tiles, the row and Quick chat: a switch never moves the composer', asy
     await expect(panel.locator(gone), gone).toHaveCount(0)
   }
   await expect(sendLabel(panel)).toHaveText('Start task')
-  await expect(panel.locator('.draft-v6-input')).toContainText('Permissions:')
+  // The model and the mode each say what they are ("Auto model", "Default mode"; approved 2026-11-23).
+  await expect(panel.locator('.draft-v6-input')).not.toContainText('Permissions:')
+  await expect(panel.locator('.draft-v6-input')).toContainText('Auto model')
   const base = await geometry(panel)
   // The composer's column is at most 960 px wide and centred in the draft.
   expect(base.composer.width).toBeLessThanOrEqual(961)

@@ -26,11 +26,11 @@ export const DIRECTORS_LAYOUT_OPTIONS: ReadonlyArray<SegmentedOption<DirectorsLa
  *  "We need to be super simple"), so the stored 'fold' now means the chart only. */
 export function directorsLayoutHelp(layout: DirectorsLayout): string {
   return layout === 'sections'
-    ? 'On the Org chart, and a Directors section after the VPs in the list, one row per Director.'
-    : 'On the Org chart: a folded "N directors" line under each VP; open it to see them.';
+    ? 'On the Org chart, and as a Directors section in the list.'
+    : 'On the Org chart, as a folded "N directors" line under each VP.';
 }
 
-export const DIRECTORS_PROJECTS_HELP = 'In the Org chart\'s "N directors" line, each project\'s Directors sit under its name. Off: one list, in their order.';
+export const DIRECTORS_PROJECTS_HELP = 'Each project\'s Directors sit under its name in the "N directors" line. Off: one list.';
 
 export function useDirectorSettings() {
   const on = useExperimental('org_leaders');
