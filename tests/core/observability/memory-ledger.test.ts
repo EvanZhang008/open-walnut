@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
-  memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, GC_NUDGE_RISE_MB, _resetMemoryLedgerForTesting,
+  memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, GC_NUDGE_RISE_MB, nudgeGcOnRise, _resetMemoryLedgerForTesting,
   writeHeapSnapshot, SNAPSHOT_EVERY_MS,
   watchMemoryBurst, startMemoryBurstProbe, BURST_PROBE_EVERY_MS, BURST_HEAP_WALK_MB, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
 } from '../../../src/core/observability/memory-ledger.js';
@@ -125,6 +125,31 @@ describe('nudgeGcUnderPressure', () => {
       expect(gc).toHaveBeenCalledTimes(2);
       nudgeGcUnderPressure(t0 + 60_000 + GC_NUDGE_EVERY_MS, gc, 4000);
       expect(gc).toHaveBeenCalledTimes(3);
+    } finally { info.mockRestore(); }
+  });
+
+  it('the fast probe asks as soon as the footprint is GC_NUDGE_RISE_MB over its lowest reading since the last ask', () => {
+    const info = vi.spyOn(log.obs, 'info').mockImplementation(() => {});
+    const gc = vi.fn();
+    try {
+      const t0 = 9_200_000_000;
+      expect(nudgeGcOnRise(t0, gc, 2500)).toBe(false);
+      expect(nudgeGcOnRise(t0 + 2_000, gc, 2500 + GC_NUDGE_RISE_MB - 1)).toBe(false);
+      // 4 s into a climb, long before the 30 s tick (2026-11-23: 5.9 to 7.2 GB in 4 s).
+      expect(nudgeGcOnRise(t0 + 4_000, gc, 2500 + GC_NUDGE_RISE_MB)).toBe(true);
+      expect(gc).toHaveBeenCalledWith(false);
+      // Not again within GC_NUDGE_MIN_GAP_MS, however far it climbs.
+      expect(nudgeGcOnRise(t0 + 6_000, gc, 6000)).toBe(false);
+      // The rise is measured from the lowest reading since the ask: down to 3 GB, then up 1 GB.
+      expect(nudgeGcOnRise(t0 + 16_000, gc, 3000)).toBe(false);
+      expect(nudgeGcOnRise(t0 + 18_000, gc, 3000 + GC_NUDGE_RISE_MB)).toBe(true);
+      expect(gc).toHaveBeenCalledTimes(2);
+      // Under the floor nothing is asked, whatever the rise.
+      _resetMemoryLedgerForTesting();
+      expect(nudgeGcOnRise(t0 + 40_000, gc, 100)).toBe(false);
+      expect(nudgeGcOnRise(t0 + 42_000, gc, GC_NUDGE_RSS_MB - 1)).toBe(false);
+      // What an ask gave back is logged at the next ask's reading, marked as the probe's.
+      expect(info).toHaveBeenCalledWith('memory gc nudge', expect.objectContaining({ beforeMb: 2500 + GC_NUDGE_RISE_MB, via: 'rise' }));
     } finally { info.mockRestore(); }
   });
 

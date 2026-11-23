@@ -233,8 +233,11 @@ export function sampleMemory(now = Date.now()): void {
 export const GC_NUDGE_RSS_MB = 1536;
 export const GC_NUDGE_EVERY_MS = 3 * 60_000;
 export const GC_NUDGE_RISE_MB = 1024;
+/** The fast probe asks again at most this often. */
+export const GC_NUDGE_MIN_GAP_MS = 10_000;
 let lastNudgeAt = -Infinity;
-let lastNudgeRssMb = Infinity;
+/** The lowest reading since the last ask (or since start): a rise is measured from here. */
+let troughMb = Infinity;
 let nudgedFromMb: number | null = null;
 
 type GcFn = (sync: boolean) => void;
@@ -249,16 +252,45 @@ function bunGc(): GcFn | null {
  */
 export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc(), rssMb = processMemoryMb().rssMb): void {
   if (process.env.WALNUT_GC_NUDGE === '0' || !gc) return;
-  if (nudgedFromMb !== null) {
-    log.obs.info('memory gc nudge', { beforeMb: nudgedFromMb, afterMb: rssMb, freedMb: nudgedFromMb - rssMb });
-    nudgedFromMb = null;
-  }
+  settleNudge(rssMb);
+  troughMb = Math.min(troughMb, rssMb);
   if (rssMb < GC_NUDGE_RSS_MB) return;
-  if (now - lastNudgeAt < GC_NUDGE_EVERY_MS && rssMb - lastNudgeRssMb < GC_NUDGE_RISE_MB) return;
+  if (now - lastNudgeAt < GC_NUDGE_EVERY_MS && rssMb - troughMb < GC_NUDGE_RISE_MB) return;
+  askGc(now, gc, rssMb, 'tick');
+}
+
+/**
+ * Fast-probe hook (every BURST_PROBE_EVERY_MS): ask for a collection as soon as the footprint is
+ * GC_NUDGE_RISE_MB over its lowest reading since the last ask, at most every GC_NUDGE_MIN_GAP_MS.
+ * The engine lets garbage reach about twice the live heap before it collects on its own: a heap
+ * snapshot of the live server at 3.9 GB (2026-11-23 19:48) held 0.9 GB reachable and 2.2 GB
+ * unreachable, 2.0 GB of it strings; a burst climbs 1 to 2 GB in 4 s, so the 30 s tick asked
+ * after the peak. On a 2 GB live heap a burst of parsing peaked at 4.2 to 4.6 GB without the
+ * ask and 3.5 to 3.8 GB with it, at the same throughput.
+ */
+export function nudgeGcOnRise(now = Date.now(), gc: GcFn | null = bunGc(), rssMb = processMemoryMb().rssMb): boolean {
+  if (process.env.WALNUT_GC_NUDGE === '0' || !gc) return false;
+  troughMb = Math.min(troughMb, rssMb);
+  if (rssMb < GC_NUDGE_RSS_MB || rssMb - troughMb < GC_NUDGE_RISE_MB || now - lastNudgeAt < GC_NUDGE_MIN_GAP_MS) return false;
+  settleNudge(rssMb);
+  askGc(now, gc, rssMb, 'rise');
+  return true;
+}
+
+function askGc(now: number, gc: GcFn, rssMb: number, via: 'tick' | 'rise'): void {
   lastNudgeAt = now;
-  lastNudgeRssMb = rssMb;
+  troughMb = rssMb;
   nudgedFromMb = rssMb;
+  nudgedVia = via;
   gc(false);
+}
+
+let nudgedVia: 'tick' | 'rise' = 'tick';
+/** Log what the last ask gave back, read at the next reading after it. */
+function settleNudge(rssMb: number): void {
+  if (nudgedFromMb === null) return;
+  log.obs.info('memory gc nudge', { beforeMb: nudgedFromMb, afterMb: rssMb, freedMb: nudgedFromMb - rssMb, ...(nudgedVia === 'rise' ? { via: 'rise' } : {}) });
+  nudgedFromMb = null;
 }
 
 // ── What was running when memory jumped ────────────────────────────────────
@@ -350,7 +382,10 @@ export function startMemoryBurstProbe(everyMs = BURST_PROBE_EVERY_MS, readRssMb:
   const timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    void watchMemoryBurst(Date.now(), readRssMb()).catch(() => false).finally(() => { busy = false; });
+    const now = Date.now();
+    const rssMb = readRssMb();
+    nudgeGcOnRise(now, bunGc(), rssMb);
+    void watchMemoryBurst(now, rssMb).catch(() => false).finally(() => { busy = false; });
   }, everyMs);
   timer.unref?.();
   return () => clearInterval(timer);
@@ -413,6 +448,7 @@ export function _resetMemoryLedgerForTesting(): void {
   lastBurstAt = -Infinity;
   lastBurstRssMb = Infinity;
   lastBurstHeapWalkAt = -Infinity;
-  lastNudgeRssMb = Infinity;
+  troughMb = Infinity;
+  nudgedVia = 'tick';
   recentRss.length = 0;
 }
