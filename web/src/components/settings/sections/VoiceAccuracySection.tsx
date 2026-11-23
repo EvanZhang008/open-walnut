@@ -238,7 +238,7 @@ function DeleteGroup({ data }: { data: ReturnType<typeof useVoiceAccuracy> }) {
         label="Delete comparison data"
         help={done
           ? 'Deleted. Your recordings themselves are kept as before.'
-          : "Removes the comparisons (the engines' texts and the estimated errors), the ElevenLabs key and the settings above. Your recordings themselves are not touched."}
+          : "Removes the engines' texts, the estimated errors, the ElevenLabs key and these settings. Your recordings stay."}
         error={data.saveError?.row === 'delete' ? `Couldn't delete it: ${data.saveError.text}` : undefined}
         control={(
           <InlineConfirmButton
