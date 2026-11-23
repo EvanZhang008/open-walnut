@@ -116,7 +116,10 @@ export function useReaderSplit(a: UseReaderSplitArgs) {
     const p = pane.getBoundingClientRect();
     const b = body.getBoundingClientRect();
     const start = side ? p.left : p.top;
-    const span = (side ? b.right : b.bottom) - start;
+    // The chat's box runs on under the composer's glass by a negative bottom margin
+    // (session-scroll-glass.css); its share of the column ends where that margin starts.
+    const under = side ? 0 : Math.max(0, -(parseFloat(getComputedStyle(body).marginBottom) || 0));
+    const span = (side ? b.right : b.bottom - under) - start;
     if (span <= 0) return;
     const target = e.currentTarget;
     const pointerId = e.pointerId;

@@ -207,6 +207,7 @@ import { titleRowBandProps, useTitleRowTight } from './useTitleRowTight';
 import { NoticeToken, PanelNotice } from './PanelNotice';
 import '@/styles/session-header-fit.css';
 import '@/styles/session-plain-chat.css';
+import '@/styles/session-scroll-glass.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
 import { MessageAboutContext } from './message-about';
 import { ReplyThreadContext, type ReplyThreadHost } from './reply-thread-line';
@@ -489,6 +490,13 @@ interface SessionPanelProps {
   composerBar?: ReactNode;
 }
 
+/** Whether the engine draws ::-webkit-scrollbar, whose track margins are what keep the
+ *  2026-09-18 rule ("the scroll bar must not run on below it and make people think there is more")
+ *  while the chat runs on under its glass chrome (session-scroll-glass.css). Firefox has no track
+ *  margin: there the thumb would run on under the composer and the header, so the
+ *  chat_glass_edges experiment stays off and the chat keeps its in-flow layout. */
+const TRACK_MARGINS = typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('selector(::-webkit-scrollbar)');
+
 /**
  * The panel, following its session when another replaces it (an engine switch, a rewind, a
  * plan run, a prefix id): a host that follows passes `onSessionReplaced` and shows the new id
@@ -673,12 +681,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
 
   // G4 liquid glass: the header overlays the chat column (position: absolute)
   // so content scrolls UNDER it; the scroll area pads its top by the measured
-  // height (a CSS var on the panel root, it varies with chip-row wrap). The
-  // composer is deliberately NOT measured: it sits in flow below the scroller,
-  // so the scroller ends where the composer starts (globals.css, "Session
-  // panel: composer").
+  // height (a CSS var on the panel root, it varies with chip-row wrap). With
+  // the chat_glass_edges experiment on (glassChat), the composer is measured the
+  // same way below (--sp-composer-h): the transcript runs on under its glass and
+  // its scrollbar stops at it (session-scroll-glass.css). Off, the composer is
+  // not measured and the scroller ends where it starts.
   const panelRef = useRef<HTMLDivElement>(null);
   const glassHeaderRef = useHeightVar(panelRef, '--sp-header-h');
+  // Experiment chat_glass_edges: the chat scrolls on behind glass chrome at both ends. Never on a
+  // phone layer, whose composer stays in flow above its keyboard, and only in an engine with
+  // ::-webkit-scrollbar (TRACK_MARGINS).
+  const glassChatOn = useExperimental('chat_glass_edges');
+  const glassChat = glassChatOn && TRACK_MARGINS && !(phoneLayer || phoneHostSlot);
   // A narrow column keeps the tool row on one line: its items
   // leave by priority (window buttons into the kebab, view chips into a "..."
   // menu). Hidden items stay mounted under data-hidden="true"; the menu proxies to
@@ -1192,6 +1206,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // composer's text and focus feed the stack's Esc rule and its draft flush.
   const composerTextRef = useRef('');
   const composerWrapRef = useRef<HTMLDivElement>(null);
+  useHeightVar(panelRef, '--sp-composer-h', composerWrapRef, glassChat);
   const composerControlsRef = useRef<ComposerControlsBarHandle>(null);
   const planComposerControlsRef = useRef<ComposerControlsBarHandle>(null);
   const composerProbe = useMemo(() => ({
@@ -3251,7 +3266,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           view stays guttered at 1400px in this slide-out. */}
       <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
-        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread && !plainChat ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}${plainChat ? ' is-plain-chat' : ''}${(phoneLayer || phoneHostSlot) && phoneBar.phone ? ' is-phone-layer' : ''}${hostHeader ? ' has-host-header' : ''}`}
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread && !plainChat ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}${plainChat ? ' is-plain-chat' : ''}${(phoneLayer || phoneHostSlot) && phoneBar.phone ? ' is-phone-layer' : ''}${hostHeader ? ' has-host-header' : ''}${glassChat ? ' is-glass-chat' : ''}${glassChat && treeSplit.barShown && !treeGrid && !splitOpen ? ' has-glass-bar' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
         // The panel the user last pointed into is "the current session" for
@@ -4248,8 +4263,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             )}
         <div className="session-panel-body" ref={bodyRef}>
           {/* What its task asks the user, right under the title bar (experiment action_needed_everywhere):
-              the body's first flow child, so the glass header's offset rule places it. */}
-          {session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} threadsOpen={threadsBeside || activeView === 'threads'} />}
+              the body's first flow child, so the glass header's offset rule places it. With
+              chat_glass_edges on it comes last of these rows instead (below). */}
+          {!glassChat && session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} threadsOpen={threadsBeside || activeView === 'threads'} />}
           {/* A transferred task names the other end in one quiet line (the header row is precious). */}
           <TransferLinks task={sessionTask} className="xfer-links-panel" testId="session-transfer-links" />
           {/* A phone says one plain sentence for a session that is gone (N29). */}
@@ -4257,6 +4273,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />
           )}
           <CronJobsCard sid={sessionId} snapshot={supervisionSnapshot} open={cronDetailOpen} onClose={() => setCronDetailOpen(false)} archived={session?.archived} />
+          {/* With chat_glass_edges on, the strip is the last of the rows above the timeline: alone (the
+              usual case) it is the body's first child and floats on glass over the timeline's top
+              (session-scroll-glass.css); under another row it sits in flow below it. */}
+          {glassChat && session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} threadsOpen={threadsBeside || activeView === 'threads'} float />}
           <IslandHostContext.Provider value={islandHost}>
           <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
           <TreeHalfContext.Provider value={rightHalf}>

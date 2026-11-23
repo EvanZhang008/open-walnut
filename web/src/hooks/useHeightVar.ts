@@ -11,16 +11,21 @@ import { useLayoutEffect, useRef, type RefObject } from 'react';
  * (chip-row wrap, title growth) writes `${varName}: <offsetHeight>px` onto the
  * host element.
  *
- * Only the header is measured. The composer used to be a second overlay tracked
- * the same way (with a pin-to-bottom across the padding change); it is in normal
- * flow now, so the scroller ends where the composer starts and nothing has to be
- * measured for it (globals.css, "Session panel: composer").
+ * The session panel measures two: its header (`--sp-header-h`) and its composer
+ * (`--sp-composer-h`, session-scroll-glass.css: with the chat_glass_edges
+ * experiment on, the transcript runs on under the composer's glass and pads its
+ * end by this height). A caller that already holds a ref to the measured element
+ * passes it as `existing`, so one element keeps one ref object; `enabled: false`
+ * measures nothing and leaves the property unset.
  */
 export function useHeightVar(
   hostRef: RefObject<HTMLElement | null>,
   varName: string,
+  existing?: RefObject<HTMLElement | null>,
+  enabled = true,
 ) {
-  const targetRef = useRef<HTMLElement | null>(null);
+  const ownRef = useRef<HTMLElement | null>(null);
+  const targetRef = existing ?? ownRef;
 
   // Layout effect: the first measurement lands before the first paint. As a
   // plain effect, a new panel painted one frame with the CSS fallback padding
@@ -29,7 +34,7 @@ export function useHeightVar(
   useLayoutEffect(() => {
     const el = targetRef.current;
     const host = hostRef.current;
-    if (!el || !host) return;
+    if (!el || !host || !enabled) return;
 
     const apply = () => {
       // An element with NO BOX measures 0: a session column the mobile layout
@@ -60,8 +65,8 @@ export function useHeightVar(
       ro.disconnect();
       host.style.removeProperty(varName);
     };
-    // hostRef is a stable ref object; varName is constant per call site.
-  }, [hostRef, varName]);
+    // hostRef and targetRef are stable ref objects; varName is constant per call site.
+  }, [hostRef, varName, targetRef, enabled]);
 
   return targetRef as RefObject<HTMLDivElement | null>;
 }

@@ -8,7 +8,7 @@
  * first thread there instead (org/TopThread.tsx), under the items that are not threads yet (a live
  * prompt, an approval), which still lead as they do today and are not counted in its "1 / N".
  */
-import { memo, useLayoutEffect, useRef } from 'react';
+import { memo, useLayoutEffect, useRef, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { ActionItem } from '@open-walnut/user-status';
 import { keepsThreads } from '@open-walnut/keeps-threads';
@@ -27,11 +27,13 @@ import { ActionNeeded } from './ActionNeeded';
  * draws none of them again, neither a card nor its line (2026-11-23, the user, on the same question in
  * the Threads view and above the chat: the same question card drawn twice); what no thread holds still shows.
  */
-export const SessionActionStrip = memo(function SessionActionStrip({ task, sessionId, threadsOpen = false }: { task: Task | null | undefined; sessionId: string; threadsOpen?: boolean }) {
+/** `float`: the panel's chat_glass_edges switch (on, never on a phone layer): alone above the
+ *  timeline, the top floats on glass over it (useTopFloat). */
+export const SessionActionStrip = memo(function SessionActionStrip({ task, sessionId, threadsOpen = false, float = false }: { task: Task | null | undefined; sessionId: string; threadsOpen?: boolean; float?: boolean }) {
   const on = useExperimental('action_needed_everywhere');
   const top = useExperimental('top_thread');
   const everyTask = useExperimental('task_threads');
-  if (top && task && keepsThreads(task, everyTask)) return <SessionTop task={task} sessionId={sessionId} actions={on} threadsOpen={threadsOpen} />;
+  if (top && task && keepsThreads(task, everyTask)) return <SessionTop task={task} sessionId={sessionId} actions={on} threadsOpen={threadsOpen} float={float} />;
   if (!on || !task?.user_status?.actions?.length) return null;
   return <PlainStrip task={task} sessionId={sessionId} />;
 });
@@ -119,14 +121,16 @@ function floorWords(top: HTMLElement, lines: number): void {
   }
 }
 
-function useTopRoom(shown: boolean) {
+function useTopRoom(shown: boolean, float: boolean) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     const body = el?.parentElement;
     if (!el || !body) return;
     const fit = () => {
-      const h = body.clientHeight;
+      // The body runs on under the composer's glass (a negative bottom margin, session-scroll-glass.css):
+      // its share is of the part above the composer.
+      const h = body.clientHeight + Math.min(0, parseFloat(getComputedStyle(body).marginBottom) || 0);
       for (const [i, level] of ROOM_LEVELS.entries()) {
         el.style.setProperty('--session-top-room', `${Math.floor(h / level.share)}px`);
         el.dataset.room = level.room;
@@ -146,11 +150,45 @@ function useTopRoom(shown: boolean) {
     changed.observe(el, { childList: true, subtree: true, characterData: true });
     return () => { resized.disconnect(); changed.disconnect(); cancelAnimationFrame(frame); };
   }, [shown]);
+  useTopFloat(ref, shown && float);
   return ref;
 }
 
+/**
+ * Alone above the timeline (the body's first child) the top floats on glass over the timeline's
+ * first rows, which scroll on under it (2026-11-23, the user: the text should pass behind the glass,
+ * never a blank band around the threads line): the body learns its height as --sp-top-h, which the
+ * timeline pads its top by (session-scroll-glass.css). Written in the ResizeObserver phase, before
+ * paint, so a top that grows never covers the first line for a frame. Under another row it sits in
+ * flow as before and the variable is gone. Only with the chat_glass_edges experiment on (`on`):
+ * `data-float` is what session-scroll-glass.css and the glass header's offset rules key on.
+ */
+function useTopFloat(ref: RefObject<HTMLDivElement | null>, on: boolean) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const body = el?.parentElement;
+    if (!el || !body || !on) return;
+    const apply = () => {
+      if (body.firstElementChild !== el || el.getClientRects().length === 0) {
+        delete el.dataset.float;
+        body.style.removeProperty('--sp-top-h');
+        return;
+      }
+      el.dataset.float = '';
+      const next = `${el.offsetHeight}px`;
+      if (body.style.getPropertyValue('--sp-top-h') !== next) body.style.setProperty('--sp-top-h', next);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    const rows = new MutationObserver(apply);
+    rows.observe(body, { childList: true });
+    return () => { ro.disconnect(); rows.disconnect(); delete el.dataset.float; body.style.removeProperty('--sp-top-h'); };
+  }, [ref, on]);
+}
+
 /** The top of a chat whose task keeps Threads: the items that are not threads (when the strip is on), then the first thread. */
-function SessionTop({ task, sessionId, actions, threadsOpen }: { task: Task; sessionId: string; actions: boolean; threadsOpen: boolean }) {
+function SessionTop({ task, sessionId, actions, threadsOpen, float }: { task: Task; sessionId: string; actions: boolean; threadsOpen: boolean; float: boolean }) {
   const threads = useOrgThreads(task.id, true);
   // One list and one clock for both: what the top shows and what the strip leaves to it.
   const { at, list } = useTopThreads(threads);
@@ -165,7 +203,7 @@ function SessionTop({ task, sessionId, actions, threadsOpen }: { task: Task; ses
   const topShown = list.length > 0 && !threadsOpen;
   const shown = items.length > 0 || topShown;
   const [hidden, setHidden] = useTopHidden();
-  const room = useTopRoom(shown);
+  const room = useTopRoom(shown, float);
   // Nothing to show draws nothing: an empty first child would still move the chat under the glass header.
   if (!shown) return null;
   return (

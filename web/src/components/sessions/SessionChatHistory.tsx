@@ -3249,22 +3249,35 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !routeShown) return;
-    let prevHeight = el.clientHeight;
+    // The room the rows are read in: the box less the chrome that lies over it.
+    // With the chat_glass_edges experiment on, the main timeline's box runs on
+    // under the composer and under a floating strip above it (--sp-composer-h,
+    // --sp-top-h, session-scroll-glass.css), so a taller composer or strip
+    // shrinks this room, not the box. Only that timeline: Tree Mode's left pages
+    // and the reader pane sit outside the panel body and inherit the composer's
+    // height without lying under it. Off, the room is the box, which the in-flow
+    // composer shrinks. Both are the same shrink here.
+    const roomOf = () => {
+      if (!el.matches('.session-panel.is-glass-chat .session-panel-body .session-history')) return el.clientHeight;
+      const cs = getComputedStyle(el);
+      const under = (name: string) => parseFloat(cs.getPropertyValue(name)) || 0;
+      return el.clientHeight - under('--sp-composer-h') - under('--sp-top-h');
+    };
+    let prevHeight = roomOf();
     const ro = new ResizeObserver(() => {
       if (!routeShownRef.current) return;
-      const newHeight = el.clientHeight;
+      const newHeight = roomOf();
       const delta = newHeight - prevHeight;
       if (delta !== 0) {
         scrollLog('resize', `delta=${delta > 0 ? '+' : ''}${Math.round(delta)}`, el);
         prevHeight = newHeight;
       }
-      // A SHRINK while following is closed right here, before paint. The
-      // composer is a flow sibling below this scroller, so every time it grows
-      // (textarea autogrow, the recap tip landing after a turn, a note opening)
-      // the scroller loses exactly that height off its bottom edge, and the
-      // browser keeps scrollTop where it was: the newest rows would sit under
-      // the composer for the debounce window (250ms, a visible flash on every
-      // typed newline). ResizeObserver callbacks run after layout and before
+      // A SHRINK while following is closed right here, before paint. Every time
+      // the composer grows (textarea autogrow, the recap tip landing after a
+      // turn, a note opening) the room loses exactly that height off its bottom
+      // edge, and the browser keeps scrollTop where it was: the newest rows would
+      // sit under the composer for the debounce window (250ms, a visible flash on
+      // every typed newline). ResizeObserver callbacks run after layout and before
       // paint, so a pin here is never seen. The debounced pass below stays as
       // the net for growth that lands in several steps.
       //
@@ -3282,7 +3295,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         if (gap <= 2) { shrinkOwed.current = 0; return; }
         if (gap <= shrinkOwed.current + 2) el.scrollTop = el.scrollHeight;
       };
-      if (delta < 0 && newHeight > 0 && isAtBottom.current && !selectionActive()) {
+      if (delta < 0 && el.clientHeight > 0 && isAtBottom.current && !selectionActive()) {
         shrinkOwed.current += -delta;
         closeShrinkGap();
         // Chromium keeps that write. WebKit reads it back correctly and then

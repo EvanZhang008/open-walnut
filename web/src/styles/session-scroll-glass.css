@@ -1,0 +1,208 @@
+/* ── A session's chat scrolls behind its glass chrome, at both ends ──
+   2026-11-23, the user, of a session in the Mac app: the text should pass behind
+   the glass, the composer must not cover it at rest, and scrolling must never
+   show a hard dividing line. Before, the transcript stopped dead at a hard edge
+   right above the composer, Tree Mode's path bar was an opaque band with a 1px
+   rule under it, and the threads line above the chat sat in a blank band.
+
+   The parts, each measured into a variable the transcript pads by:
+   - the header (absolute, --sp-header-h on the panel; globals.css G4 pass);
+   - Tree Mode's path bar on a single page (absolute under the header, a fixed
+     44px: the body's --sp-header-h grows by it);
+   - the strip above the timeline (.session-top, alone in the body: it floats,
+     --sp-top-h on the body, written by SessionActionStrip useTopFloat);
+   - the composer (in flow below the body; --sp-composer-h on the panel,
+     SessionPanel useHeightVar): the body reaches under it by a negative bottom
+     margin, the transcript pads its end by the same height.
+
+   The scrollbar keeps the 2026-09-18 rule ("the scroll bar must not run on below
+   it and make people think there is more"): its track starts where the top
+   chrome ends and stops where the composer starts, so scrolled to the end the
+   thumb's end is the last row's end. Unmeasured, every variable is 0 and the
+   layout is the in-flow one. Pinned by composer-in-flow-helpers.ts and
+   session-scroll-glass.spec.ts.
+
+   Experiment chat_glass_edges (src/core/experimental.ts; 2026-11-23, the user,
+   after a before/after page: "why? I want the glass feeling why not"): every
+   rule below applies only to a panel with .is-glass-chat, which SessionPanel
+   sets while the switch is on (never on a phone layer). Off, nothing here
+   matches, the variables stay unset, and the chat is the in-flow layout with
+   opaque chrome it always was. */
+
+:root {
+  /* The bands' glass is the one legible recipe (overlay-glass.css, its floors
+     checked by tests/web/overlays-opaque.test.ts), named here only so the bands
+     can turn solid as a variable: that recipe's own solid fallbacks are rules on
+     .wn-glass, which these pseudo layers do not carry. Solid where blur is
+     missing or off (below). */
+  --sp-glass-bg: var(--bg);
+  --sp-glass-blur: none;
+  /* Over the timeline's own floating layers (comment card 11, jump arrow 10),
+     under the header (30) and the composer (40). */
+  --z-sp-glass: 29;
+}
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  :root {
+    --sp-glass-bg: var(--glass-legible-bg);
+    --sp-glass-blur: var(--glass-legible-blur);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root { --sp-glass-bg: var(--bg); --sp-glass-blur: none; }
+}
+html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; }
+
+/* ── The composer ── */
+.session-panel { --sp-composer-h: 0px; }
+
+.session-panel.is-glass-chat .session-panel-body {
+  margin-bottom: calc(-1 * var(--sp-composer-h));
+}
+.session-panel.is-glass-chat .session-panel-body .session-history {
+  padding-bottom: calc(12px + var(--sp-composer-h));
+  scroll-padding-bottom: calc(8px + var(--sp-composer-h));
+}
+.session-panel.is-glass-chat .session-panel-body .session-history-empty { padding-bottom: var(--sp-composer-h); }
+.session-panel.is-glass-chat .session-panel-body .session-history::-webkit-scrollbar-track {
+  margin-top: calc(var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px));
+  margin-bottom: var(--sp-composer-h);
+}
+/* The band around the card: glass that fades in from its top edge, never a cut. */
+.session-panel.is-glass-chat .session-panel-body + .session-panel-input::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--sp-glass-bg);
+  -webkit-backdrop-filter: var(--sp-glass-blur);
+  backdrop-filter: var(--sp-glass-blur);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--glass-g4-fade));
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--glass-g4-fade));
+}
+
+/* ── How much chrome lies over the body's top (--sp-cover): the header's height
+   (the default, read as var(--sp-cover, var(--sp-header-h))), or none where the
+   body starts below it: the Files split, a banner above the split, or a row of
+   its own in flow above the timeline. Read by globals.css, chat-reading.css,
+   code-block.css and thread-card.css, which fall back to the header unset. ── */
+.session-panel.is-glass-chat .session-panel-split.is-changed-open .session-panel-body,
+.session-panel.is-glass-chat:has(> .session-error-banner, > .session-action-panel) .session-panel-body {
+  --sp-cover: 0px;
+}
+.session-panel.is-glass-chat .session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]), :where(.session-top[data-float]))) .session-history {
+  --sp-cover: 0px;
+}
+
+/* ── The header and Tree Mode's path bar: one pane of glass ── */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  /* :root: globals.css's G4 rule of the same weight comes later in the bundle. */
+  :root .session-panel.is-glass-chat:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header::before {
+    background: var(--sp-glass-bg);
+    -webkit-backdrop-filter: var(--sp-glass-blur);
+    backdrop-filter: var(--sp-glass-blur);
+  }
+  :root .session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) > .session-panel-header {
+    border-bottom-color: transparent;
+  }
+  /* With the bar under it, the bar's layer is the glass of both (below): two blurs meeting at a
+     seam each clamp at their edge, and the rows crossing it showed as a sharp line of glyphs. */
+  :root .session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) > .session-panel-header::before {
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+.session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar {
+  --sp-bar-cover: calc(var(--sp-header-h, 76px) + 44px);
+}
+.session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar > .tree-path-bar {
+  position: absolute;
+  top: var(--sp-header-h, 76px);
+  left: 0;
+  right: 0;
+  margin-top: 0;
+  z-index: var(--z-sp-glass);
+  border-bottom: 0.5px solid var(--border);
+  background: transparent;
+}
+.session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar > .tree-path-bar::before {
+  content: '';
+  position: absolute;
+  /* Up through the header too: one pane of glass from the panel's top to the bar's bottom. */
+  inset: calc(-1 * var(--sp-header-h, 76px)) 0 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--sp-glass-bg);
+  -webkit-backdrop-filter: var(--sp-glass-blur);
+  backdrop-filter: var(--sp-glass-blur);
+}
+/* The page below starts at the panel's top again: the header and the bar are what covers it. */
+.session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar > .session-panel-body {
+  --sp-header-h: var(--sp-bar-cover);
+  --sp-first-flow-top: initial;
+}
+
+/* ── The strip above the timeline, alone: it floats on the same glass ──
+   In flow under the header, and its bottom margin takes back its whole place, so
+   the timeline starts at the body's top and runs on under it (no positioned body:
+   the timeline's own absolute layers keep their containing block). data-float is
+   set by SessionActionStrip useTopFloat, with the switch on, while it is the
+   body's first child. */
+.session-panel.is-glass-chat .session-panel-body > .session-top[data-float] {
+  position: relative;
+  /* One step under the header and the bar: its glass reaches up under theirs (below). */
+  z-index: calc(var(--z-sp-glass) - 1);
+  margin-top: var(--sp-cover, var(--sp-header-h, 76px));
+  margin-bottom: calc(-1 * (var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px)));
+  padding: 4px 0 8px;
+}
+.session-panel.is-glass-chat .session-panel-body > .session-top[data-float]::before {
+  content: '';
+  position: absolute;
+  /* Up to the panel's top, under the header's glass: no seam where the two meet. */
+  inset: calc(-1 * var(--sp-cover, var(--sp-header-h, 76px))) -8px 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--sp-glass-bg);
+  -webkit-backdrop-filter: var(--sp-glass-blur);
+  backdrop-filter: var(--sp-glass-blur);
+  /* Its lower edge dissolves into the rows, as the composer's upper edge does. */
+  -webkit-mask-image: linear-gradient(to top, transparent, #000 8px);
+  mask-image: linear-gradient(to top, transparent, #000 8px);
+}
+/* A page with its own head (a question's page) sits below the strip, in flow as before. */
+.session-panel.is-glass-chat .session-panel-body > .session-top[data-float] + .thread-stack:not([data-thread-bare]) {
+  margin-top: calc(var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px) + 4px);
+}
+.session-panel.is-glass-chat .session-panel-body > .session-top[data-float] + .thread-stack:not([data-thread-bare]) > .session-history {
+  --sp-cover: 0px;
+  --sp-top-h: 0px;
+  padding-top: 12px;
+}
+
+/* ── Solid chrome: a soft edge instead of a rule ──
+   Where the bars are solid (no blur drawn: html[data-glass="solid"], or the
+   --sp-glass-bg solid default), the rows still never meet a hard line: under the
+   header (or Tree Mode's bar under it) the page's colour fades out over
+   --sp-edge-fade, as the composer's band fades in above the composer. */
+:root { --sp-edge-fade: 16px; }
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  :root { --sp-edge-fade: 0px; }
+}
+html[data-glass="solid"] { --sp-edge-fade: 16px; }
+.session-panel.is-glass-chat:not(.pending-session-panel):not(.draft-session-panel):not(.has-glass-bar) > .session-panel-header::after,
+.session-panel.is-glass-chat.has-glass-bar .session-panel-chat-col.has-tree-bar > .tree-path-bar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: var(--sp-edge-fade);
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--bg), transparent);
+}
+html[data-glass="solid"] .session-panel.is-glass-chat > .session-panel-header,
+html[data-glass="solid"] .session-panel.is-glass-chat .session-panel-chat-col.has-tree-bar > .tree-path-bar {
+  border-bottom-color: transparent;
+}

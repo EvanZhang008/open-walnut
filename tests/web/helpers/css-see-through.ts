@@ -6,7 +6,8 @@
 
 /** A background a reader sees through: transparent, an alpha under 1, or the shared glass. */
 export function seeThrough(value: string): boolean {
-  if (/transparent|--overlay-glass-bg|--glass-bg/.test(value)) return true;
+  // --sp-glass-bg: a session chat's glass chrome (session-scroll-glass.css), see-through by design.
+  if (/transparent|--overlay-glass-bg|--glass-bg|--sp-glass-bg/.test(value)) return true;
   for (const m of value.matchAll(/(?:rgba|hsla)\(([^)]*)\)/g)) {
     const parts = m[1].split(/[,/]/).map((s) => s.trim());
     const a = parseFloat(parts[3] ?? '1');

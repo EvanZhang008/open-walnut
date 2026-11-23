@@ -47,7 +47,7 @@
    the block's own color reaches up from the header behind the glass, and the
    block clips it, so it only ever paints inside the block (never over the
    paragraph above it while the header sits at the block's top). */
-.session-panel-body .session-history { --md-code-stick-cover: var(--sp-header-h, 76px); }
+.session-panel-body .session-history { --md-code-stick-cover: calc(var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px)); }
 @supports (overflow: clip) {
   /* The block's own corners round whatever reaches them (the header at the
      block's top, the fold's fade at its foot). A header stuck mid-block is

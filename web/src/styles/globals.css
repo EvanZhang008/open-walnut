@@ -24786,7 +24786,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
      container pads its top by the measured height (--sp-header-h, written by a
      ResizeObserver in SessionPanel via useHeightVar).
      The composer is NOT an overlay any more (2026-09-18): it sits in normal
-     flow under the scroller, see "Session panel: composer" below.
+     flow under the scroller, see "Session panel: composer" below. The one
+     exception is the chat_glass_edges experiment (2026-11-23, off by default):
+     with it on, the text passes behind the composer, Tree Mode's path bar and
+     the strip above the timeline too, all on glass (session-scroll-glass.css).
    - Main chat column: the composer overlay (QuickAccessBar pills + quick-start
      bar + ChatInput ride together) floats over .chat-panel; padding via
      --chat-composer-h on .chat-page.
@@ -24846,13 +24849,21 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    covered by construction (no measured height, no variable to publish wrong,
    see the 2026-09-17 boxless 0px bug). The card keeps its glass material; the
    header stays an overlay because nothing has to end at it. Pinned by
-   tests/e2e/browser/composer-in-flow-helpers.ts. */
+   tests/e2e/browser/composer-in-flow-helpers.ts.
+   The exception is the chat_glass_edges experiment (off by default): with it
+   on, the box runs on under the composer by its measured height and the
+   scrollbar's TRACK stops where the composer starts, so the thumb still ends
+   with the last row (session-scroll-glass.css, an engine with
+   ::-webkit-scrollbar only; pinned by session-scroll-glass-helpers.ts). */
 
-/* The scroller pads its top so content starts clear of the header glass and
-   visibly passes under it mid-scroll. Padding on the scroll container is
-   included in scrollHeight, so the pin-to-bottom logic keeps working. */
+/* The scroller pads its top so content starts clear of the header glass (and of
+   the strip floating under it, --sp-top-h) and visibly passes under it
+   mid-scroll. Padding on the scroll container is included in scrollHeight, so
+   the pin-to-bottom logic keeps working. --sp-cover and --sp-top-h are set only
+   with the chat_glass_edges experiment on (session-scroll-glass.css); unset,
+   this is the header's height + 8px, as it always was. */
 .session-panel-body .session-history {
-  padding-top: calc(var(--sp-header-h, 76px) + 8px);
+  padding-top: calc(var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px) + 8px);
 }
 /* The sticky ↓ arrow keeps the base rule's bottom: 8px. A sticky element is
    confined to its containing block's CONTENT box, so the scroller's own bottom
@@ -24862,10 +24873,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    card) sit in normal flow at the panel top — push the first one below the
    glass header and drop the history's compensating padding (the history's
    top edge is then below them; content can't slide under the header). */
-.session-panel-body > :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare])) {
+.session-panel-body > :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]), :where(.session-top[data-float])) {
   margin-top: var(--sp-first-flow-top, calc(var(--sp-header-h, 76px) + 4px));
 }
-.session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]))) .session-history {
+.session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]), :where(.session-top[data-float]))) .session-history {
   padding-top: 12px;
 }
 
@@ -24877,9 +24888,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   padding-top: var(--sp-header-h, 76px);
 }
 .session-panel-split.is-changed-open .session-history {
-  padding-top: 12px;
+  padding-top: calc(12px + var(--sp-top-h, 0px));
 }
-.session-panel-split.is-changed-open .session-panel-body > :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare])) {
+.session-panel-split.is-changed-open .session-panel-body > :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]), :where(.session-top[data-float])) {
   margin-top: 4px;
 }
 
@@ -24893,7 +24904,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   padding-top: 0;
 }
 .session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body .session-history {
-  padding-top: 12px;
+  padding-top: calc(12px + var(--sp-top-h, 0px));
 }
 /* Set on the panel and read by the first flow child's rule above: a `:has()` followed by that
    universal `:first-child:not(...)` made every row a chat inserted restyle the whole page

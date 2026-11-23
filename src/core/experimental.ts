@@ -17,6 +17,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'chat_glass_edges',
+    name: 'Glass edges in session chats',
+    description: 'A session chat scrolls on behind its header, Tree Mode\'s path bar, the threads line above the chat and the box you type in, which turn to frosted glass the text shows softly through, with no hard line where the text meets them. At rest the newest line still ends above the box, and the scroll bar still stops where the box and the header begin. Off: the chat ends at a straight edge above the box, as before.',
+    default: false,
+  },
+  {
     id: 'router_tidies_noise_mail',
     name: 'Mail router tidies noise',
     description: 'When a mail router judges an email to be noise, Walnut marks it read and moves it from the inbox to the archive. Nothing is deleted or sent, and its recorded reason says what was done.',

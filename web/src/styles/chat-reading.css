@@ -35,12 +35,12 @@
    starts: clear of the glass header the history scrolls under, or 12 px below a hard top edge
    (a notice above the panel, a strip in flow, the "Chat" bar of a split), 8 px on a phone. */
 :root .session-panel-body .session-history {
-  scroll-padding-top: calc(var(--sp-header-h, 76px) + 8px);
+  scroll-padding-top: calc(var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px) + 8px);
 }
 :root .session-panel-split.is-changed-open .session-panel-chat-col .session-history,
-:root .session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]))) .session-history,
+:root .session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]), :where(.session-top[data-float]))) .session-history,
 :root .session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body .session-history {
-  scroll-padding-top: 12px;
+  scroll-padding-top: calc(12px + var(--sp-top-h, 0px));
 }
 :root .app-shell-navigation .session-panel.is-phone-layer .session-panel-body .session-history {
   scroll-padding-top: 8px;

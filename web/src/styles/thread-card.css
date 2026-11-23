@@ -250,7 +250,7 @@
 /* Scrolled into view, a card stops below the panel's glass header (the
    history's top padding is that header): a tall card opened near the top put
    its title, Quote in chat and x under the header (2026-10-27). */
-.session-panel .thread-card-layer .thread-card { scroll-margin-top: calc(var(--sp-header-h, 76px) + 8px); }
+.session-panel .thread-card-layer .thread-card { scroll-margin-top: calc(var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px) + 8px); }
 @media (prefers-reduced-motion: reduce) { .thread-card.is-sizing { transition: none; } }
 .thread-card.is-expanded .thread-card-body { padding: 10px 18px 8px; }
 .thread-card-expand svg { width: 12px; height: 12px; }

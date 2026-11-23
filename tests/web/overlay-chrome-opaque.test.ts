@@ -42,6 +42,48 @@ const BLURRED_MENUS: Record<string, string> = {
   'vd-panel': 'the view dropdown menu, portalled to <body> with the menu surface',
 };
 
+/**
+ * The one scoped exception: a session chat's chrome with the chat_glass_edges experiment on
+ * (web/src/styles/session-scroll-glass.css). The owner, 2026-11-23, after a before/after page of
+ * solid and glass chrome: "why? I wan thte galss feeling why not". It ships behind that switch (off by
+ * default), so only rules that SessionPanel's `.is-glass-chat` class scopes may paint the header,
+ * Tree Mode's path bar, the strip above the chat and the composer's band with the see-through
+ * --sp-glass-bg; with the switch off none of them matches and every rule below still holds the
+ * same chrome to solid.
+ */
+const GLASS_SWITCH = /\.is-glass-chat\b/;
+/** The chrome the switch may turn to glass: the rule's subject (its last compound) must be one. */
+const GLASS_CHROME = new Set(['session-panel-header', 'tree-path-bar', 'session-top', 'session-panel-input']);
+
+/** A selector with every :not(...) and :has(...) taken out, nested parentheses included. */
+function withoutNegatives(sel: string): string {
+  let out = sel;
+  for (let at = out.search(/:(not|has)\(/); at >= 0; at = out.search(/:(not|has)\(/)) {
+    let depth = 0, end = at;
+    for (let i = out.indexOf('(', at); i < out.length; i++) {
+      if (out[i] === '(') depth++;
+      else if (out[i] === ')' && --depth === 0) { end = i + 1; break; }
+    }
+    if (end === at) break;
+    out = out.slice(0, at) + out.slice(end);
+  }
+  return out;
+}
+
+/**
+ * Whether one selector (no top-level commas) is the switch's own glass chrome: `.is-glass-chat`
+ * in a positive place (not inside :not() or :has()), styling one of GLASS_CHROME itself or its
+ * ::before / ::after. Every other rule is checked as before.
+ */
+export function glassExempt(sel: string): boolean {
+  if (!GLASS_SWITCH.test(withoutNegatives(sel))) return false;
+  const last = sel.trim().split(/\s+|>|\+|~/).filter(Boolean).pop() ?? '';
+  const pseudoEl = /::([\w-]+)/.exec(last)?.[1];
+  if (pseudoEl && pseudoEl !== 'before' && pseudoEl !== 'after') return false;
+  const { cls } = lastOf(sel);
+  return cls !== null && GLASS_CHROME.has(cls);
+}
+
 /** Surfaces inside a positioned layer, not positioned themselves: the layer that places them. */
 const INSIDE_AN_OVERLAY: Record<string, { layer: string; paintedBy?: string }> = {
   'doc-comment-card': { layer: 'doc-comment-slot' },
@@ -129,6 +171,7 @@ function rulesFor(cls: string): Hit[] {
   for (const rule of RULES) {
     // Top-level commas only: `:is(.a, .b) > .c` styles `.c`, never `.a`.
     for (const sel of topLevelLayers(rule.selector)) {
+      if (glassExempt(sel)) continue; // the glass experiment's own chrome (GLASS_SWITCH)
       const l = lastOf(sel);
       if (l.cls === cls) { out.push({ rule, pseudo: l.pseudo }); break; }
     }
@@ -144,6 +187,7 @@ function positionedSurfaces(): Set<string> {
     // A full-window scrim is the one layer allowed to be see-through.
     if (/fixed/.test(pos) && decl(r.body, 'inset') === '0') continue;
     for (const sel of topLevelLayers(r.selector)) {
+      if (glassExempt(sel)) continue;
       const { cls, pseudo } = lastOf(sel);
       if (cls && !pseudo && SURFACE.test(cls)) out.add(cls);
     }
@@ -234,6 +278,38 @@ describe('chrome over scrolling content is solid', () => {
     }
     expect(seen).toBeGreaterThanOrEqual(10);
     expect(bad).toEqual([]);
+  });
+
+  it('the glass chat material is used only under its switch, and is see-through there', () => {
+    const outside: string[] = [];
+    let under = 0;
+    for (const r of RULES) {
+      const bg = bgOf(r.body);
+      if (!bg || !/--sp-glass-bg/.test(bg)) continue;
+      for (const sel of topLevelLayers(r.selector)) {
+        if (glassExempt(sel)) under++;
+        else outside.push(`${r.file}: ${sel}`);
+      }
+    }
+    expect(outside, 'the see-through chat glass outside the chat_glass_edges switch').toEqual([]);
+    expect(under, 'the switch still has its glass rules (else GLASS_SWITCH is stale)').toBeGreaterThan(0);
+    expect(seeThrough('var(--sp-glass-bg)'), 'the chat glass counts as see-through').toBe(true);
+  });
+
+  it('exempts a rule only where the switch is positive and the subject is the chat chrome', () => {
+    // The switch in a positive place, styling the chrome or its glass layer: exempt.
+    expect(glassExempt('.session-panel.is-glass-chat .session-panel-header')).toBe(true);
+    expect(glassExempt(':root .session-panel.is-glass-chat > .session-panel-header::before')).toBe(true);
+    expect(glassExempt('.session-panel.is-glass-chat .session-panel-body > .session-top[data-float]::before')).toBe(true);
+    expect(glassExempt('.session-panel.is-glass-chat.has-glass-bar .tree-path-bar')).toBe(true);
+    // The switch only inside :not() or :has(): checked as before.
+    expect(glassExempt('.session-panel:not(.is-glass-chat) .session-panel-header')).toBe(false);
+    expect(glassExempt('.main-page:has(.session-panel.is-glass-chat) .session-panel-header')).toBe(false);
+    expect(glassExempt('.session-panel:not(:has(.is-glass-chat)) .session-panel-input::before')).toBe(false);
+    // The switch positive, but the subject another surface (or another pseudo element): checked as before.
+    expect(glassExempt('.session-panel.is-glass-chat .todo-panel-toolbar')).toBe(false);
+    expect(glassExempt('.session-panel.is-glass-chat .session-panel-header .chip-card')).toBe(false);
+    expect(glassExempt('.session-panel.is-glass-chat .session-panel-input::-webkit-scrollbar')).toBe(false);
   });
 
   it('reads layered and translucent backgrounds right', () => {

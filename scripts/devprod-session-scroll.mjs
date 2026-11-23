@@ -171,6 +171,10 @@ export async function checkSessionScroll(browser, url, timeoutMs, strict = false
       return {
         clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
         scrollerBottom: el.getBoundingClientRect().bottom,
+        // With the experiment chat_glass_edges on (the server's own config may have it), the
+        // transcript runs on under the composer's glass by this much (session-scroll-glass.css) and
+        // what the reader sees ends at the composer. 0 with it off, and on a build without it.
+        overlap: parseFloat(getComputedStyle(el).getPropertyValue('--sp-composer-h')) || 0,
         bodyBottom: body.getBoundingClientRect().bottom,
         composerTop: composer.getBoundingClientRect().top,
       };
@@ -178,7 +182,7 @@ export async function checkSessionScroll(browser, url, timeoutMs, strict = false
     if (!geometry || geometry.clientHeight < 100
       || geometry.scrollHeight <= geometry.clientHeight + 100
       || geometry.scrollerBottom > geometry.bodyBottom + 1
-      || geometry.scrollerBottom > geometry.composerTop + 1) {
+      || geometry.scrollerBottom - geometry.overlap > geometry.composerTop + 1) {
       return { code: 1, message: `session scroll FAILED: transcript is clipped or has no scroll range ${JSON.stringify(geometry)}` };
     }
     // Down, up, down: whichever end the panel opens at, the last two legs must move.
