@@ -214,7 +214,7 @@ describe('Walnut enforces it', () => {
     expect(() => updateThread(merged, asked.id, { close: 'dropped', user_words: 'drop' }, 'task:lead-1', at(12))).toThrow(ThreadError)
     // Words from before the node's post are no answer to it.
     const early = fileMessage(emptyThreads('lead-1'), { text: 'stop asking me about the career budget', via: 'chat', at: at(0) }).file
-    const late = openThread(early, { title: 'Career budget', text: 'Use it?', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' }, 'task:lead-1', at(5))
+    const late = openThread(early, { title: 'Career budget', text: 'The career budget pays up to $2,000 a year for courses. Use it?', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' }, 'task:lead-1', at(5))
     const lateMerged = mergeThreads(late.file, early.threads[0].id, late.thread.id, 'task:lead-1', at(6)).file
     expect(() => updateThread(lateMerged, late.thread.id, { close: 'acked', user_words: 'stop asking me about the career budget' }, 'task:lead-1', at(6))).toThrow(ThreadError)
     // He asked a question, then said "close this thread", then the node answered the question: that answer is unseen.

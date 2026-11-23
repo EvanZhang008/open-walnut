@@ -19,6 +19,8 @@ const NOW = Date.parse('2026-11-04T03:00:00Z')
 const iso = (agoMin: number) => new Date(NOW - agoMin * 60_000).toISOString()
 const KIND = { user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team' } as const
 const NODE = 'task:lead-1' as const
+/** The background a card handed to the user carries (ask-clarity.ts bareCardRefusal: a bare ask says too little). */
+const BG = 'The team plan costs $96 a year for five seats; the free tier caps us at two.'
 
 function asked(): ThreadsFile {
   return fileMessage(emptyThreads('lead-1'), { text: 'should we buy the plan?', via: 'chat', at: iso(60) }).file
@@ -28,7 +30,7 @@ describe('a move into needs is seen (enteredNeeds)', () => {
   it('a node\'s write into needs counts; staying there, his own write, another state or a closed thread does not', () => {
     const f0 = asked()
     const id = f0.threads[0].id
-    const f1 = updateThread(f0, id, { state: 'needs', ask: 'Buy the plan?', ...KIND }, NODE, iso(50)).file
+    const f1 = updateThread(f0, id, { state: 'needs', ask: 'Buy the plan?', reply: BG, ...KIND }, NODE, iso(50)).file
     expect(enteredNeeds(f0, f1).map((t) => t.id)).toEqual([id])
     // Still needs, a new summary: no new entry.
     const f2 = updateThread(f1, id, { reply: 'Still waiting on the plan choice' }, NODE, iso(40)).file
@@ -47,7 +49,7 @@ describe('a move into needs is seen (enteredNeeds)', () => {
   it('merge, split, reopen and the buzz mark itself: each counted once or not at all', () => {
     const f0 = asked()
     const a = f0.threads[0].id
-    let f = updateThread(f0, a, { state: 'needs', ...KIND }, NODE, iso(50)).file
+    let f = updateThread(f0, a, { state: 'needs', reply: BG, ...KIND }, NODE, iso(50)).file
     // The buzz mark changes no state: no new entry, so it cannot buzz again.
     const marked = { ...f, threads: f.threads.map((t) => ({ ...t, needsBuzzedAt: iso(49) })) }
     expect(enteredNeeds(f, marked)).toEqual([])
@@ -73,7 +75,7 @@ describe('a move into needs is seen (enteredNeeds)', () => {
 
   it('a thread the node opens waiting on him is an entry too', () => {
     const f0 = emptyThreads('lead-1')
-    const r = openThread(f0, { title: 'Answer the organizer', text: 'A mail asks for a date', from: 'mail', ...KIND }, NODE, iso(5))
+    const r = openThread(f0, { title: 'Answer the organizer', text: 'A mail from the meetup organizer asks which date we pick', from: 'mail', ...KIND }, NODE, iso(5))
     expect(r.thread.state).toBe('needs')
     expect(enteredNeeds(f0, r.file).map((t) => t.id)).toEqual([r.thread.id])
   })

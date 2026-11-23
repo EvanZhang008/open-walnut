@@ -166,7 +166,8 @@ test('the task\'s own thread waiting on him with options: the one card\'s row, n
   expect(body.error?.code).toBe('needs_options')
   await call(request, 'patch', `/api/v1/tasks/${taskId}/threads/${own}`, {
     title: `Notes place ${STAMP}`, reply, state: 'needs', ...kind,
-    options: [{ id: 'repo', label: `Beside the code ${STAMP}` }, { id: 'vault', label: `In the vault ${STAMP}`, detail: 'One place, searchable', recommended: true }],
+    // The pick first: a card whose pick is not first is refused (ask-clarity.ts bareCardRefusal).
+    options: [{ id: 'vault', label: `In the vault ${STAMP}`, detail: 'One place, searchable', recommended: true }, { id: 'repo', label: `Beside the code ${STAMP}` }],
   }, { 'x-walnut-caller-sid': sid })
 
   await isolateUiPrefs(page)
@@ -218,7 +219,7 @@ test('with the one-card setting off, the cards are today\'s: no frame, no option
   // One with options stored (they are written either way): no buttons while it is off.
   const stored = (await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${taskId}/threads`, { text: `Which shelf ${STAMP}?` })).thread.id
   await call(request, 'patch', `/api/v1/tasks/${taskId}/threads/${stored}`, {
-    title: `Shelf ${STAMP}`, reply: 'Top shelf or the desk?', state: 'needs', ...kind,
+    title: `Shelf ${STAMP}`, reply: 'Top shelf or the desk? The top shelf keeps the books dry; the desk keeps them at hand.', state: 'needs', ...kind,
     options: [{ id: 'top', label: `Top shelf ${STAMP}`, recommended: true }, { id: 'desk', label: `The desk ${STAMP}` }],
   }, { 'x-walnut-caller-sid': sid })
   const read = (await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${taskId}/threads`, { text: `Summarise the chapter ${STAMP}` })).thread.id

@@ -231,7 +231,7 @@ describe('the inbox, read by an agent', () => {
     await settleReplied(rq.id);
     await expect(send({ type: 'completion' })).rejects.toThrow(/already went to it/);
     // A decision still goes: the task is blocked on the user.
-    expect((await send({ type: 'action_required', actions: [{ id: 'a', label: 'A' }], user_kind: 'permissions', user_kind_why: 'It widens what an agent may do' })).letterId).toBeTruthy();
+    expect((await send({ type: 'action_required', markdown: 'The fix needs the daemon to restart itself on the build host; agents cannot do that today.', actions: [{ id: 'a', label: 'Let agents restart the daemon' }], user_kind: 'permissions', user_kind_why: 'It widens what an agent may do' })).letterId).toBeTruthy();
     // The user asked this task for the report (its own subject: the same one again within minutes is a duplicate).
     expect((await send({ user_asked: true, subject: 'Timeout fix: the report you asked for' })).letterId).toBeTruthy();
     // A task nobody asked sends as before.

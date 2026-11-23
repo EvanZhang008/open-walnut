@@ -88,7 +88,8 @@ describe('a turn-end ask that does not read on its own', () => {
   })
 
   it('an ask the words let through, that the fast model finds unreadable, is asked again with its fixes', async () => {
-    const JARGON = 'Approve the ZQX high-side pairing for the 7 accounts? Reply with the number or click the link.'
+    // No count of things without their names: that the word check refuses itself (ask-clarity.ts bareCardRefusal).
+    const JARGON = 'Approve the ZQX high-side pairing for the alert accounts? Reply with the number or click the link.'
     const FIXED = 'Approve 7 hours of read-only access to the 7 production alert accounts (ticket https://example.com/t/1)?'
     setAskJudgeOverride(async (card) => (card.includes('ZQX') ? '- Say what ZQX and the high side are\n- Give the number and the link' : 'PASS'))
     try {

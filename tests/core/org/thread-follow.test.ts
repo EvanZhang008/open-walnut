@@ -152,7 +152,7 @@ describe('the move itself (moveThreadOut / moveThreadIn)', () => {
   const base = () => {
     let f = fileMessage(emptyThreads(marina.id), { text: 'learn from this bot', via: 'chat', at: at(1), newThreadId: 'th-aaaaaaaaaaaa', messageId: 'tm-aaaaaaaaaaaa' }).file
     f = setAnswers(f, new Map([['tm-aaaaaaaaaaaa', { text: 'Handed to research.', at: at(2) }]])).file
-    f = updateThread(f, 'th-aaaaaaaaaaaa', { title: 'Bot lessons', state: 'needs', user_kind: 'user_own', user_kind_why: 'he asked to decide which lesson to adopt', tasks: ['t1'], watch: true }, `task:${marina.id}`, at(3)).file
+    f = updateThread(f, 'th-aaaaaaaaaaaa', { title: 'Bot lessons', ask: 'Which lesson from the support bot do we adopt first: its retries or its handoff note?', state: 'needs', user_kind: 'user_own', user_kind_why: 'he asked to decide which lesson to adopt', tasks: ['t1'], watch: true }, `task:${marina.id}`, at(3)).file
     return f
   }
 

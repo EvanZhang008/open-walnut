@@ -22,7 +22,7 @@
  * has to pick a kind, and "undoing my own mess" or "choosing between two fine options" has none.
  * The kinds mirror the team charter (team-charter.ts) and the approval rules (answer-approval.ts).
  */
-import { askClarityRefusal } from './ask-clarity.js';
+import { askClarityRefusal, type ChoiceShape } from './ask-clarity.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { USER_KIND_LEAD_WORDS } from '../human-inbox/walnut-letters/thread-words.js';
 
@@ -195,6 +195,8 @@ export interface UserKindInput {
   detail?: string;
   /** The labels of its choices (ask-clarity.ts). */
   labels?: readonly string[];
+  /** Its choices as the user sees them, in order: label, the line under it, the asker's pick (ask-clarity.ts). */
+  choices?: readonly ChoiceShape[];
   /** With a design or picture: who reviewed it, what they checked, what changed (ask-clarity.ts). */
   design_review?: unknown; designReview?: unknown;
   /** The writer's own words in `subject` when the rest is the user's (a thread he opened carries his title). */
@@ -220,7 +222,7 @@ export function userKindVerdict(input: UserKindInput): UserKindVerdict {
   if (cited) return { ok: false, message: cited };
   // An explicit call's question must read on its own (ask-clarity.ts).
   const unclear = known && why.length >= USER_KIND_WHY_MIN && input.subject !== undefined
-    ? askClarityRefusal(input.subject, input.detail ?? '', input.labels ?? [], str(input.design_review ?? input.designReview), input.own_words !== undefined ? { ownWords: input.own_words } : {}) : null;
+    ? askClarityRefusal(input.subject, input.detail ?? '', input.labels ?? [], str(input.design_review ?? input.designReview), { ...(input.own_words !== undefined ? { ownWords: input.own_words } : {}), ...(input.choices ? { choices: input.choices } : {}), standalone: true }) : null;
   if (unclear) return { ok: false, message: unclear };
   if (known && why.length >= USER_KIND_WHY_MIN) return { ok: true, kind: kind as UserKind, why };
   const kinds = USER_KINDS.map((k) => `${k} (${USER_KIND_WORDS[k]})`).join('; ');

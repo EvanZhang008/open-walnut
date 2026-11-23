@@ -102,7 +102,7 @@ describe('a letter that only informs, from a task that keeps Threads', () => {
   })
 
   it('an update never answers a thread that waits on his decision, and a thread it names that is not open is said', async () => {
-    const opened = await executeOp('thread_create', { title: 'Pick the tray supplier', text: 'Two quotes in.', from: 'node', state: 'needs', user_kind: 'spending', user_kind_why: 'It spends his money on trays' }, { apiBase: base, origin: '__local__', callerMode: 'session', callerSid: TRAYS_SID })
+    const opened = await executeOp('thread_create', { title: 'Pick the tray supplier', text: 'Two quotes in: Greenleaf at $180 delivers Monday, Rootwell at $150 delivers in two weeks.', from: 'node', state: 'needs', user_kind: 'spending', user_kind_why: 'It spends his money on trays' }, { apiBase: base, origin: '__local__', callerMode: 'session', callerSid: TRAYS_SID })
     expect(opened.ok, opened.ok ? '' : opened.message).toBe(true)
     const needs = (await threadsOf(trays)).find((t) => t.title === 'Pick the tray supplier')!
     const out = await send({ subject: 'Third quote arrived', type: 'info', markdown: 'Cheaper by 10%.', thread: needs.id }, TRAYS_SID)
@@ -129,7 +129,7 @@ describe('a letter that only informs, from a task that keeps Threads', () => {
   })
 
   it('a decision, a review and an update the user asked for stay letters', async () => {
-    const decision = await send({ subject: 'Which tray size?', type: 'action_required', markdown: '72 or 128 cells', actions: [{ id: 'a', label: '72' }, { id: 'b', label: '128' }], user_kind: 'spending', user_kind_why: 'It buys trays with his money' }, TRAYS_SID)
+    const decision = await send({ subject: 'Which tray size?', type: 'action_required', markdown: '72 or 128 cells: the 72-cell trays fit the shelf, the 128-cell ones start twice the seedlings.', actions: [{ id: 'a', label: '72' }, { id: 'b', label: '128' }], user_kind: 'spending', user_kind_why: 'It buys trays with his money' }, TRAYS_SID)
     expect(decision.letterId).toMatch(/^lt-/)
     expect(decision.threadId).toBeUndefined()
     const review = await send({ subject: 'Check the planting plan', type: 'review', markdown: 'See /tmp/orchard/plan.md' }, TRAYS_SID)

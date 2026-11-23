@@ -102,7 +102,7 @@ describe('a decision about one ticket is asked once across teams (2026-11-18, th
     expect(why).toContain(lead.id)
     expect(why).toContain('TKT-1101')
     // The same in a letter of its own.
-    const asLetter = await call('POST', '/api/v1/human-inbox', { type: 'action_required', subject: 'Approve removing the stale NS entry?', markdown: 'It is the record of this ticket.', actions: [{ id: 'yes', label: 'Yes' }], ...kind }, finding.sid)
+    const asLetter = await call('POST', '/api/v1/human-inbox', { type: 'action_required', subject: 'Approve removing the stale NS entry?', markdown: 'It is the record of this ticket; the zone it points at was deleted last week.', actions: [{ id: 'yes', label: 'Remove the NS entry' }], ...kind }, finding.sid)
     expect(asLetter.status).toBe(409)
   })
 
@@ -114,14 +114,14 @@ describe('a decision about one ticket is asked once across teams (2026-11-18, th
 
   it('a Board choice about the ticket is refused the same way; another matter goes as before', async () => {
     const owner = await making('Ops board owner', 'Ops Board')
-    const html = (title: string) => `<html><body><h1>Ops</h1><walnut-choice id="pick1" title="${title}" options="a:Yes,b:No"></walnut-choice></body></html>`
+    const html = (title: string) => `<html><body><h1>Ops</h1><walnut-choice id="pick1" title="${title}" options="a:Go with plan A,b:Go with plan B"></walnut-choice></body></html>`
     const refused = await call('PUT', `/api/v1/tasks/${owner.id}/board`, { html: html('Delete the TKT-1101 record now?') }, owner.sid)
     expect(refused.status).toBe(409)
     expect(JSON.stringify(await refused.json())).toContain(letter)
     const other = await call('PUT', `/api/v1/tasks/${owner.id}/board`, { html: html('Pick the on-call rotation for December?') }, owner.sid)
     expect(other.status, await other.clone().text()).toBe(200)
     // A choice added by an edit is checked too.
-    const added = await call('POST', `/api/v1/tasks/${owner.id}/board/edits`, { edits: [{ old: '</body>', new: '<walnut-choice id="pick2" title="Remove the TKT-1101 record?" options="a:Yes,b:No"></walnut-choice></body>' }] }, owner.sid)
+    const added = await call('POST', `/api/v1/tasks/${owner.id}/board/edits`, { edits: [{ old: '</body>', new: '<walnut-choice id="pick2" title="Remove the TKT-1101 record?" options="a:Remove it now,b:Keep it a week"></walnut-choice></body>' }] }, owner.sid)
     expect(added.status).toBe(409)
     expect(JSON.stringify(await added.json())).toContain('Choice not added')
     // A choice already on the Board is not checked again when the page is edited around it.
@@ -130,7 +130,7 @@ describe('a decision about one ticket is asked once across teams (2026-11-18, th
   })
 
   it('with same_ask_reason it goes; two statuses about the ticket then show once, the older task', async () => {
-    const own = await call('PUT', `/api/v1/tasks/${finding.id}/report`, { state: 'needs', ask: 'Who removes the stale NS entry?', same_ask_reason: 'The lead handed the ticket to this task and settles its letter', ...kind }, finding.sid)
+    const own = await call('PUT', `/api/v1/tasks/${finding.id}/report`, { state: 'needs', ask: 'Who removes the stale NS entry?', ask_more: 'The record points at a zone that is gone, so anyone could take the name over.', same_ask_reason: 'The lead handed the ticket to this task and settles its letter', ...kind }, finding.sid)
     expect(own.status, await own.clone().text()).toBe(200)
     const { setArchived } = await import('../../src/core/human-inbox/store.js')
     await setArchived(letter, true)

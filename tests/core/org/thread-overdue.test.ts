@@ -116,7 +116,7 @@ describe('2. a newer summary replaces the older answer on the card', () => {
     const id = f.threads[0].id
     f = updateThread(f, id, { reply: 'Yes, with a Live Activity.' }, 'task:vp', iso(MIN)).file
     expect(f.threads[0]).toMatchObject({ reply: 'Yes, with a Live Activity.', replyAt: iso(MIN), state: 'answered' })
-    f = updateThread(f, id, { state: 'needs', user_kind: 'user_own', user_kind_why: 'He picks which build to try' }, 'task:vp', iso(2 * MIN)).file
+    f = updateThread(f, id, { state: 'needs', ask: 'Which build do you try first: the Live Activity one or the home screen widget?', user_kind: 'user_own', user_kind_why: 'He picks which build to try' }, 'task:vp', iso(2 * MIN)).file
     expect(f.threads[0].replyAt).toBe(iso(MIN))
     f = updateThread(f, id, { reply: '' }, 'task:vp', iso(3 * MIN)).file
     expect(f.threads[0].replyAt).toBeUndefined()
@@ -206,7 +206,7 @@ describe('3. a thread that waits too long with nothing from the node', () => {
   })
 
   it('checks once before the nearest open linked task deadline, even after a quiet check, never per scan', () => {
-    const f = openThread(emptyThreads('vp'), { title: 'Pick a date', text: 'Pick the date.', from: 'node', tasks: ['open', 'closed'], user_kind: 'user_own', user_kind_why: 'The user asked to pick a date' }, 'task:vp', iso(0)).file
+    const f = openThread(emptyThreads('vp'), { title: 'Pick a date', text: 'Pick the date for the team offsite: May 3 or May 10. Both venues hold it until Friday.', from: 'node', tasks: ['open', 'closed'], user_kind: 'user_own', user_kind_why: 'The user asked to pick a date' }, 'task:vp', iso(0)).file
     const hour = 3600_000
     const tasks = [{ id: 'open', due_date: iso(50 * hour), phase: 'TODO' as const }, { id: 'closed', due_date: iso(30 * hour), phase: 'COMPLETE' as const }, { id: 'other', due_date: iso(29 * hour) }]
     const t = { ...f.threads[0], recheck: { since: iso(0), at: iso(24 * hour), why: 'needs' as const } }
@@ -238,7 +238,7 @@ describe('3. a thread that waits too long with nothing from the node', () => {
   })
 
   it('a daily check never tells the node to repeat an unchanged ask or rewrite a checked time', () => {
-    const f = openThread(emptyThreads('vp'), { title: 'Pick a date', text: 'Pick the date.', from: 'node', user_kind: 'user_own', user_kind_why: 'The user asked to pick a date' }, 'task:vp', iso(0)).file
+    const f = openThread(emptyThreads('vp'), { title: 'Pick a date', text: 'Pick the date for the team offsite: May 3 or May 10. Both venues hold it until Friday.', from: 'node', user_kind: 'user_own', user_kind_why: 'The user asked to pick a date' }, 'task:vp', iso(0)).file
     const due = threadsDueRecheck(f.threads, T0 + NEEDS_QUIET_MS)
     expect(due).toHaveLength(1)
     const body = threadRecheckBody(due, T0 + NEEDS_QUIET_MS)
@@ -248,7 +248,7 @@ describe('3. a thread that waits too long with nothing from the node', () => {
 
   it('a wake is due once per stretch, and the note names each thread with what to do', () => {
     let f = fileMessage(emptyThreads('vp'), { text: 'why still queued?', via: 'chat', at: iso(0) }).file
-    f = openThread(f, { title: 'Admin prompt at the home PC', text: 'Click yes once.', from: 'task', user_kind: 'user_info', user_kind_why: 'Only he can sit at that PC' }, 'task:vp', iso(0)).file
+    f = openThread(f, { title: 'Admin prompt at the home PC', text: 'Click yes once on its admin prompt so the backup agent can finish installing.', from: 'task', user_kind: 'user_info', user_kind_why: 'Only he can sit at that PC' }, 'task:vp', iso(0)).file
     f = setAnswers(f, new Map()).file
     const threads = f.threads as OrgThread[]
     const now = T0 + NEEDS_QUIET_MS
@@ -342,7 +342,7 @@ describe('5. his message outdates the summary until the node rewrites it', () =>
   const answered = () => {
     let f = fileMessage(emptyThreads('vp'), { text: 'is it you?', via: 'chat', at: iso(0) }).file
     const id = f.threads[0].id
-    f = updateThread(f, id, { title: 'Is it you?', reply: 'Is it you on the home PC?', state: 'needs', user_kind: 'user_info', user_kind_why: 'Only he knows who sits at that PC' }, 'task:vp', iso(MIN)).file
+    f = updateThread(f, id, { title: 'Is it you?', reply: 'Is it you on the home PC? A new sign-in from it asked for admin rights at 9pm.', state: 'needs', user_kind: 'user_info', user_kind_why: 'Only he knows who sits at that PC' }, 'task:vp', iso(MIN)).file
     return { f, id }
   }
 

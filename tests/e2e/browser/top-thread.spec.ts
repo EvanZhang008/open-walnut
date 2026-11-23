@@ -171,7 +171,7 @@ test.beforeAll(async ({ request }) => {
   ids.taskThread = await readThread(request, ids.task, `Lease draft ${STAMP}`)
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': ids.taskSid },
-    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
+    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one. Both choices were tested and cost the same; the work waits on this pick.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   await expect.poll(async () => ((await (await request.get(`/api/tasks/${ids.task}`)).json()).task?.user_status?.actions ?? []).map((a: { kind: string }) => a.kind).join(','), { timeout: 60_000 }).toContain('letter')

@@ -78,7 +78,7 @@ describe('a chat message right after his last one', () => {
 
   it('a thread the node opened after his last message ends that conversation', () => {
     const { f } = one('subject one')
-    const opened = openThread(f, { title: 'Learning budget', text: 'Decide: let it lapse?', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' }, 'task:vp', at(30_000)).file
+    const opened = openThread(f, { title: 'Learning budget', text: 'Decide: let it lapse? The yearly learning budget of $1,500 ends on Dec 31 with $400 unspent.', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' }, 'task:vp', at(30_000)).file
     expect(fileMessage(opened, { text: 'close this thread', via: 'chat', joinRecent: SAME_CONVERSATION_MS, at: at(60_000) }).created).toBe(true)
   })
 

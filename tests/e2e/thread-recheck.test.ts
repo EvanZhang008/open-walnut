@@ -99,7 +99,7 @@ describe('a thread with no reply for too long', () => {
 
   it('needs threads stay unchanged at four hours, are checked once after a day, and checked-only writes do not repeat it', async () => {
     const lead = await newLead();
-    const opened = await run(lead, 'thread_create', { title: 'Pick a release date', text: 'Which date works for you?', from: 'node', user_kind: 'user_own', user_kind_why: 'The user asked to choose a release date' });
+    const opened = await run(lead, 'thread_create', { title: 'Pick a release date', text: 'Which date works for you? The release can go out on May 3 or May 10; both pass the freeze.', from: 'node', user_kind: 'user_own', user_kind_why: 'The user asked to choose a release date' });
     const id = (opened.thread as { id: string }).id;
     const original = (await readThreads(lead.id)).threads.find((t) => t.id === id)!;
     const at = Date.parse(original.updatedAt);
@@ -114,7 +114,7 @@ describe('a thread with no reply for too long', () => {
     expect(checked.recheck?.pending).toBeUndefined();
     expect((await notes(lead))[0].message).toContain('If nothing changed, leave the thread unchanged');
     // Even when the node writes again, the persisted reminder time keeps the daily gap.
-    await run(lead, 'thread_update', { id, state: 'needs', reply: 'Which date works for you?' });
+    await run(lead, 'thread_update', { id, state: 'needs', reply: 'Which date works for you? The release can go out on May 3 or May 10.' });
     expect(await runThreadRecheck(at + 28 * hour)).not.toContain(lead.id);
     expect(await notes(lead)).toHaveLength(1);
     const work = (await addTask({ title: 'Release', project: `RcProj${n}`, source: 'local' } as never)).task;

@@ -443,7 +443,7 @@ describe('every surface shows the same state after every step', () => {
     // A Needs you its lead puts on the user names which of their kinds it is, or changes nothing.
     expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'yes_no' })).status).toBe(409)
     expect((await stored())?.askForm).toEqual(form)
-    expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'yes_no', user_kind: 'outward', user_kind_why: 'It deploys a fix to the live server' })).status).toBe(200)
+    expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'yes_no', ask_more: 'The sync bug loses edits; the fix passed its tests on the staging server.', user_kind: 'outward', user_kind_why: 'It deploys a fix to the live server' })).status).toBe(200)
     expect(await stored()).toMatchObject({ askForm: { summary: 'Ship the sync fix today?', kind: 'yes_no' }, line: { by: `task:${lead.id}` } })
     // The answer goes in as one message and its turn runs; the next report has no ask.
     expect(askAnswerText((await stored())!.askForm!, { picked: ['yes'] })).toBe('Answer to "Ship the sync fix today?": Yes')

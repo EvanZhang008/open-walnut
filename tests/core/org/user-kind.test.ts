@@ -53,7 +53,7 @@ describe('userKindVerdict', () => {
 describe('Threads an agent hands to the user', () => {
   const file = (): ThreadsFile => emptyThreads('lead-1')
   const opened = (state?: 'needs' | 'answered', by: 'human' | 'agent' | `task:${string}` = 'task:lead-1', extra: Record<string, unknown> = {}) =>
-    openThread(file(), { title: 'Reinstall?', text: 'A test overwrote it', from: 'node', ...(state ? { state } : {}), ...extra }, by, AT)
+    openThread(file(), { title: 'Reinstall?', text: 'A test run overwrote the installed app on the Mac mini this morning', from: 'node', ...(state ? { state } : {}), ...extra }, by, AT)
 
   it('opening one that waits on the user (the default) needs a kind; answered does not', () => {
     expect(() => opened()).toThrow(ThreadError)
@@ -69,10 +69,11 @@ describe('Threads an agent hands to the user', () => {
     const { file: f, thread } = opened('answered')
     expect(() => updateThread(f, thread.id, { state: 'needs' }, 'task:lead-1', AT)).toThrow(/user_kind/)
     expect(() => updateThread(f, thread.id, { state: 'needs' }, 'agent', AT)).toThrow(/user_kind/)
-    const moved = updateThread(f, thread.id, { state: 'needs', user_kind: 'spending', user_kind_why: 'It buys a paid plan' }, 'task:lead-1', AT)
+    const moved = updateThread(f, thread.id, { state: 'needs', reply: 'The reinstall needs the paid plan; the free one cannot restore the app.', user_kind: 'spending', user_kind_why: 'It buys a paid plan' }, 'task:lead-1', AT)
     expect(moved.thread.state).toBe('needs')
     // Already waiting: a new summary with state needs again is not a new hand-over.
-    expect(updateThread(moved.file, thread.id, { state: 'needs', reply: 'Still open' }, 'task:lead-1', AT).thread.reply).toBe('Still open')
+    const still = 'Still open: the reinstall waits on the paid plan choice.'
+    expect(updateThread(moved.file, thread.id, { state: 'needs', reply: still }, 'task:lead-1', AT).thread.reply).toBe(still)
     // Other changes never ask.
     expect(updateThread(f, thread.id, { reply: 'Done' }, 'task:lead-1', AT).thread.reply).toBe('Done')
     expect(updateThread(f, thread.id, { title: 'New title' }, 'task:lead-1', AT).thread.title).toBe('New title')

@@ -140,7 +140,7 @@ test('one question at a time, "1/3": the arrows and Left / Right page it, the fo
 
 test('a page the status drops while shown: the next one takes its place, the focus stays on an arrow', async ({ page, request }) => {
   const extra = `Order more compost for the beds ${STAMP}?`
-  const sent = await post<{ id: string }>(request, '/api/v1/human-inbox', { subject: extra, type: 'action_required', user_kind: 'user_own', user_kind_why: 'he decides what the garden money buys', markdown: 'Twelve bags.', actions: [{ id: 'yes', label: 'Order' }, { id: 'no', label: 'Wait' }] }, { 'x-walnut-caller-sid': sid })
+  const sent = await post<{ id: string }>(request, '/api/v1/human-inbox', { subject: extra, type: 'action_required', user_kind: 'user_own', user_kind_why: 'he decides what the garden money buys', markdown: 'Twelve bags of compost for the spring beds, about $90 from the garden fund.', actions: [{ id: 'yes', label: 'Order' }, { id: 'no', label: 'Wait' }] }, { 'x-walnut-caller-sid': sid })
   await expect.poll(async () => (await actionsOf(request)).length, { timeout: 60_000 }).toBe(4)
   const block = await openBlock(page)
   const at = block.getByTestId('action-page-at')
@@ -229,7 +229,7 @@ test('each page is answered on its own: an answered page stays marked, paging aw
 test('a sideways swipe on a touch screen pages it', async ({ browser, request }: { browser: Browser; request: APIRequestContext }) => {
   // A fresh question for this test (the one above answered them all).
   expect((await request.put(`/api/v1/tasks/${taskId}/report`, { data: { state: 'needs', ask: `Should the hose reel go by the shed ${STAMP}?`, ask_kind: 'yes_no' } })).ok()).toBe(true)
-  await post(request, '/api/v1/human-inbox', { subject: `Order more compost ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'he decides what the garden money buys', markdown: 'Twelve bags.', actions: [{ id: 'yes', label: 'Order' }, { id: 'no', label: 'Wait' }] }, { 'x-walnut-caller-sid': sid })
+  await post(request, '/api/v1/human-inbox', { subject: `Order more compost ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'he decides what the garden money buys', markdown: 'Twelve bags of compost for the spring beds, about $90 from the garden fund.', actions: [{ id: 'yes', label: 'Order' }, { id: 'no', label: 'Wait' }] }, { 'x-walnut-caller-sid': sid })
   expect((await request.patch(`/api/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
   await expect.poll(async () => (await actionsOf(request)).length, { timeout: 60_000 }).toBe(2)
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, hasTouch: true })

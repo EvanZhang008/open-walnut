@@ -278,7 +278,7 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
     const id = await sendLetter({
       subject: 'Which cache should we keep?',
       type: 'action_required',
-      markdown: 'A or B?',
+      markdown: 'A or B? Cache A halves cold reads; cache B keeps memory flat. I recommend A.',
       actions: [{ id: 'a', label: 'Keep A' }, { id: 'b', label: 'Keep B' }],
       ...KIND,
     }, SENDER_SID)

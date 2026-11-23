@@ -153,7 +153,8 @@ function moves(before: Task, after: Task): Record<string, boolean> {
   pendingRiding('s-vp', NOW)!.markTold()
   const thread = (() => {
     const opened = openThread(emptyThreads('lead'), { title: 'The ask', text: 'x', from: 'node', state: 'needs' }, 'human', iso(NOW - 120_000))
-    const asked = updateThread(opened.file, opened.thread.id, { ask: before.status_report!.ask }, 'task:lead', iso(NOW - 60_000))
+    // The lead's summary gives the card its background (ask-clarity.ts bareCardRefusal refuses a bare ask).
+    const asked = updateThread(opened.file, opened.thread.id, { ask: before.status_report!.ask, reply: 'The lead checked the logs and the costs; each choice says what it does.' }, 'task:lead', iso(NOW - 60_000))
     return updateThread(asked.file, opened.thread.id, { ask: after.status_report!.ask, state: 'needs' }, 'task:lead', iso(NOW)).thread.updatedAt !== asked.thread.updatedAt
   })()
   const watched = askCheckedAtOf(

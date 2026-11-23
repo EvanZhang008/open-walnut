@@ -56,7 +56,7 @@ test.beforeAll(async ({ request }) => {
   const { sessionId } = await post<{ sessionId: string }>(request, '/api/sessions/quick-start', { cwd, message: `Lease ready ${STAMP}`, taskId: ids.letter })
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': sessionId },
-    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
+    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one. Both choices were tested and cost the same; the work waits on this pick.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   expect((await request.patch(`/api/tasks/${ids.letter}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)

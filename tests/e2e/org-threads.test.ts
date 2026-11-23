@@ -310,7 +310,7 @@ describe('Org Threads', () => {
     // thread, show 0 thread" (4ea0b2f06, replacing bc63ca220's Needs you for a waiting thread).
     const res = await fetch(`${base}/api/v1/tasks/${leadId}/threads/open`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': LEAD_SID },
-      body: JSON.stringify({ title: 'Pick one of three header designs', text: 'Which one?', from: 'node', user_kind: 'user_own', user_kind_why: 'He asked to pick the design himself' }),
+      body: JSON.stringify({ title: 'Pick one of three header designs', text: 'Which one? Design 1 keeps the search box; design 2 drops it for a bigger title.', from: 'node', user_kind: 'user_own', user_kind_why: 'He asked to pick the design himself' }),
     })
     expect(res.status).toBe(201)
     const opened = ((await res.json()) as { thread: OrgThread }).thread
@@ -332,8 +332,8 @@ describe('a question for the user names which of their kinds it is', () => {
     method, headers: { 'content-type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}) }, body: JSON.stringify(body),
   })
   const letter = (sid: string | undefined, extra: Record<string, unknown> = {}) => post('/human-inbox', sid, {
-    type: 'action_required', subject: 'Reinstall the main build on the simulator?', markdown: 'A test overwrote it.',
-    actions: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }], ...extra,
+    type: 'action_required', subject: 'Reinstall the main build on the simulator?', markdown: 'A test overwrote it. The simulator now runs a test build, so the demo would show unfinished screens.',
+    actions: [{ id: 'yes', label: 'Reinstall the main build' }, { id: 'no', label: 'Keep the test build' }], ...extra,
   })
 
   it('a lead\'s decision letter without a kind is refused, with the kinds and the never-his list', async () => {
@@ -383,7 +383,7 @@ describe('a question for the user names which of their kinds it is', () => {
     const move = (extra: Record<string, unknown> = {}, sid: string | null = LEAD_SID) => post(`/tasks/${leadId}/threads/${id}`, sid ?? undefined, { state: 'needs', ...extra }, 'PATCH')
     expect((await move()).status).toBe(409)
     // The mail thread above still waits on him: this is another decision (thread-supersede.ts).
-    expect((await move({ user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team', separate_reason: 'The paid plan is not the mail reply' })).status).toBe(200)
+    expect((await move({ reply: 'A test overwrote the build; reinstalling it needs the paid plan for the team.', user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team', separate_reason: 'The paid plan is not the mail reply' })).status).toBe(200)
     expect((await move({ reply: 'Still waiting on the plan choice' })).status).toBe(200)
     const after = (await threads()).find((t) => t.id === id)!
     expect(after.state).toBe('needs')

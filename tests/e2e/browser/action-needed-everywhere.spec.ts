@@ -115,7 +115,7 @@ test.beforeAll(async ({ request }) => {
   ids.letterSid = await startSession(request, ids.letter, `Lease ready ${STAMP}`)
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': ids.letterSid },
-    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
+    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one. Both choices were tested and cost the same; the work waits on this pick.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   ids.letterId = ((await sent.json()) as { id: string }).id
@@ -199,7 +199,7 @@ test('the session\'s own question points at its card below; answered on the row,
 async function sendLetter(request: APIRequestContext, subject: string, actions: Array<{ id: string; label: string }>): Promise<string> {
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': ids.letterSid },
-    data: { subject, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions },
+    data: { subject, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one. Both choices were tested and cost the same; the work waits on this pick.', actions },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   return ((await sent.json()) as { id: string }).id

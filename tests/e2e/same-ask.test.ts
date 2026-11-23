@@ -33,6 +33,8 @@ import { checkStatuses } from '../../src/core/status-consistency.js'
 
 const ASK_LEAD = 'Should we create three alpha test accounts?'
 const ASK_CHILD = 'Create the three alpha test accounts?'
+/** The background an agent's needs line carries (ask-clarity.ts bareCardRefusal refuses a bare ask). */
+const MORE = { ask_more: 'Each test account costs $20 a month; the alpha stages start on Monday.' }
 let base = ''
 let n = 0
 
@@ -122,20 +124,20 @@ describe('a parent and its subtask ask the same decision', () => {
   })
 
   it('the subtask asking what its lead asks is the deeper one: its line goes through', async () => {
-    const res = await call('PUT', `/api/v1/tasks/${child.id}/report`, { state: 'needs', ask: ASK_LEAD, user_kind: 'spending', user_kind_why: 'It creates paid accounts' }, child.sid)
+    const res = await call('PUT', `/api/v1/tasks/${child.id}/report`, { state: 'needs', ...MORE, ask: ASK_LEAD, user_kind: 'spending', user_kind_why: 'It creates paid accounts' }, child.sid)
     expect(res.status, await res.clone().text()).toBe(200)
     await report(child.id, ASK_CHILD)
     await settle()
   })
 
   it('a report line, a letter and a Thread asking it again are refused, naming the subtask', async () => {
-    const line = await call('PUT', `/api/v1/tasks/${lead.id}/report`, { state: 'needs', ask: ASK_LEAD, user_kind: 'spending', user_kind_why: 'It creates paid accounts' }, lead.sid)
+    const line = await call('PUT', `/api/v1/tasks/${lead.id}/report`, { state: 'needs', ...MORE, ask: ASK_LEAD, user_kind: 'spending', user_kind_why: 'It creates paid accounts' }, lead.sid)
     expect(line.status).toBe(409)
     const lineBody = await line.json() as { error?: { code?: string; message?: string }; code?: string; message?: string }
     expect(JSON.stringify(lineBody)).toContain('same_ask')
     expect(JSON.stringify(lineBody)).toContain(child.id)
 
-    const letter = { type: 'action_required', subject: ASK_LEAD, markdown: 'Three accounts for the alpha stages.', actions: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }], user_kind: 'spending', user_kind_why: 'It creates paid accounts' }
+    const letter = { type: 'action_required', subject: ASK_LEAD, markdown: 'Three accounts for the alpha stages.', actions: [{ id: 'yes', label: 'Create the accounts' }, { id: 'no', label: 'Skip the accounts' }], user_kind: 'spending', user_kind_why: 'It creates paid accounts' }
     const sent = await call('POST', '/api/v1/human-inbox', letter, lead.sid)
     expect(sent.status).toBe(409)
     expect(JSON.stringify(await sent.json())).toMatch(/same_ask[\s\S]*Alpha stages/)
@@ -153,7 +155,7 @@ describe('a parent and its subtask ask the same decision', () => {
     const opened = await call('POST', `/api/v1/tasks/${vpId}/threads/open`, { title: ASK_LEAD, text: 'The alpha stages need accounts', from: 'task', state: 'answered' }, VP_SID)
     expect(opened.status).toBe(201)
     const tid = ((await opened.json()) as { thread: { id: string } }).thread.id
-    const moved = await call('PATCH', `/api/v1/tasks/${vpId}/threads/${tid}`, { state: 'needs', user_kind: 'spending', user_kind_why: 'It creates paid accounts' }, VP_SID)
+    const moved = await call('PATCH', `/api/v1/tasks/${vpId}/threads/${tid}`, { state: 'needs', reply: 'The alpha stages need accounts; each costs $20 a month.', user_kind: 'spending', user_kind_why: 'It creates paid accounts' }, VP_SID)
     expect(moved.status).toBe(409)
     // The user's own move is never asked.
     expect((await call('PATCH', `/api/v1/tasks/${vpId}/threads/${tid}`, { state: 'needs' })).status).toBe(200)
@@ -227,23 +229,23 @@ describe('teammates beside each other, and an ask answered above (2026-11-04, af
   })
 
   it('an explicit same-decision owner becomes a pointer through the real report API', async () => {
-    const res = await call('PUT', `/api/v1/tasks/${second.id}/report`, { state: 'needs', ask: 'Confirm the already pending rollout decision?',
+    const res = await call('PUT', `/api/v1/tasks/${second.id}/report`, { state: 'needs', ...MORE, ask: 'Confirm the already pending rollout decision?',
       same_as: first.id, user_kind: 'user_own', user_kind_why: 'The owner carries the same decision.' }, second.sid);
     expect(res.status).toBe(200);
     await settle();
     const saved = await getTask(second.id);
     expect(saved.status_report?.decision_owner?.taskId).toBe(first.id);
     expect(saved.user_status).toMatchObject({ state: 'waiting', sameAsk: { id: first.id } });
-    const bad = await call('PUT', `/api/v1/tasks/${first.id}/report`, { state: 'needs', ask: 'Create a circular decision pointer?',
+    const bad = await call('PUT', `/api/v1/tasks/${first.id}/report`, { state: 'needs', ...MORE, ask: 'Create a circular decision pointer?',
       same_as: second.id, user_kind: 'user_own', user_kind_why: 'This would point to another pointer.' }, first.sid);
     expect(bad.status).toBe(409);
     const third = await asking('Orchard decision root', 'Choose a different release region?', undefined, 'Orchard');
     await settle();
     // A root changing ownership resolves every dependent to the new root, before and after refresh.
-    const chain = await call('PUT', `/api/v1/tasks/${first.id}/report`, { state: 'needs', ask: 'Repeat the root decision?',
+    const chain = await call('PUT', `/api/v1/tasks/${first.id}/report`, { state: 'needs', ...MORE, ask: 'Repeat the root decision?',
       ask_id: (await getTask(first.id)).user_status?.decision?.id, same_as: third.id, user_kind: 'user_own', user_kind_why: 'This would create a chain.' }, first.sid);
     expect(chain.status).toBe(200);
-    const pointer = await call('PUT', `/api/v1/tasks/${third.id}/report`, { state: 'needs', ask: 'Repeat the existing pointer?',
+    const pointer = await call('PUT', `/api/v1/tasks/${third.id}/report`, { state: 'needs', ...MORE, ask: 'Repeat the existing pointer?',
       same_as: second.id, user_kind: 'user_own', user_kind_why: 'This would target a stored pointer.' }, third.sid);
     expect(pointer.status).toBe(409);
     await settle();
@@ -259,7 +261,7 @@ describe('teammates beside each other, and an ask answered above (2026-11-04, af
   });
 
   it('a teammate putting the same ask on the user from outside is refused, naming the one that asks', async () => {
-    const res = await call('PUT', `/api/v1/tasks/${second.id}/report`, { state: 'needs', ask: ASK_R, user_kind: 'user_own', user_kind_why: 'He decides the design' }, second.sid)
+    const res = await call('PUT', `/api/v1/tasks/${second.id}/report`, { state: 'needs', ...MORE, ask: ASK_R, user_kind: 'user_own', user_kind_why: 'He decides the design' }, second.sid)
     expect(res.status).toBe(409)
     expect(JSON.stringify(await res.json())).toMatch(new RegExp(`same_ask[\\s\\S]*${first.id}`))
   })

@@ -66,16 +66,89 @@ function clean(s: string): string {
 
 /** The labels of the choices a caller passed, whatever their shape (strings, {label}). */
 export function choiceLabels(raw: unknown): string[] {
+  return choiceShapes(raw).map((c) => c.label);
+}
+
+/** One choice as the user sees it: its label, the line under it, and whether it is the asker's pick. */
+export interface ChoiceShape { label: string; detail?: string; recommended?: boolean }
+
+/** The choices a caller passed, whatever their shape: strings, {label, detail | description, recommended}. */
+export function choiceShapes(raw: unknown): ChoiceShape[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map((o) => (typeof o === 'string' ? o : o && typeof o === 'object' && typeof (o as { label?: unknown }).label === 'string' ? (o as { label: string }).label : ''))
-    .filter(Boolean);
+  const out: ChoiceShape[] = [];
+  for (const o of raw.slice(0, 12)) {
+    if (typeof o === 'string') { if (o.trim()) out.push({ label: o }); continue; }
+    if (!o || typeof o !== 'object') continue;
+    const r = o as { label?: unknown; detail?: unknown; description?: unknown; recommended?: unknown };
+    if (typeof r.label !== 'string' || !r.label.trim()) continue;
+    const detail = typeof r.detail === 'string' ? r.detail : typeof r.description === 'string' ? r.description : '';
+    out.push({ label: r.label, ...(detail.trim() ? { detail } : {}), ...(r.recommended === true ? { recommended: true } : {}) });
+  }
+  return out;
+}
+
+/** A label that names its pick in its words ("Delete them (recommended)"), for a door with no flag. */
+const RECOMMENDED_WORD = /\((?:recommended|\u63a8\u8350)\)|\u3010\u63a8\u8350\u3011/i;
+
+/** A count of things a decision is about ("about 7 clusters", "\u7ea6 7 \u4e2a\u96c6\u7fa4"), which then needs their names. */
+const COUNTED = /(?<![\p{L}\p{N}])(?:(?:about|around|roughly|nearly|over|some|~) ?)?(?:\d{1,3}\+?|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|several) (?:[\p{L}\p{N}-]{1,30} ){0,3}(?:clusters?|tickets?|CRs?|PRs?|pull requests?|accounts?|instances?|resources?|buckets?|hosts?|machines?|repos?|repositories|branches|stacks?|nodes|servers?|databases?|volumes?|keys?|secrets?|domains?|alarms?|pipelines?|deployments?)(?![\p{L}\p{N}])|(?:\u7ea6|\u5927\u7ea6|\u5927\u6982|\u8fd1|\u5171)?\s?\d{1,3}\s?(?:\u4e2a|\u6761|\u53f0|\u4efd|\u5957)\s?[\p{L}\p{N}-]{0,12}\s?(?:\u96c6\u7fa4|\u5de5\u5355|\u8d26\u53f7|\u5b9e\u4f8b|\u8d44\u6e90|\u673a\u5668|\u8282\u70b9|\u4ed3\u5e93|\u5206\u652f|\u6570\u636e\u5e93|\u5bc6\u94a5|\u57df\u540d|\u544a\u8b66|\u6d41\u6c34\u7ebf)/iu;
+const MAKE = /\b(?:create|creating|add|adding|buy|buying|open|opening|make|making|set up|spin up|provision|provisioning|new)\b(?:\s+(?:the|a|another))?\s*$|(?:\u65b0\u5efa|\u521b\u5efa|\u65b0\u589e|\u5f00|\u4e70|\u52a0)\s*$/i;
+/** Their names are there: a link, a path, a name in backticks, a list, or two names like "acme-1". */
+const NAMED = /https?:\/\/|(?:^|\s)~?\/[\w.-]+\/|`[^`\n]{2,80}`|^[ \t]*(?:[-*\u2022]|\d{1,2}[.)])[ \t]+\S/m;
+const NAME_TOKEN = /\b[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+\b/gi;
+
+/** Under this much text (a CJK character counts as two) a card says what, not why: no background. */
+export const THIN_CARD_MIN = 40;
+
+function weight(text: string): number {
+  const t = text.replace(/\s+/g, '');
+  const cjk = (t.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
+  return t.length + cjk;
+}
+
+/**
+ * A card that hands the user a decision and leaves out what they need to make it, as the refusal, or
+ * null (2026-11-23, the CEO's reflection on 11-22: "the cards that ask Evan to decide are bare Yes/No,
+ * with no background"; a delete card with only [Yes] [No] and its pick second, an ops review that named
+ * "about 7 clusters" with no names or links, an approval with no body):
+ *   - the asker's pick is not the first choice;
+ *   - (a card he reads on its own: `standalone`) too little text to say what it is and why it is his;
+ *   - (`standalone`) it counts the things it is about ("7 clusters") without naming or linking them.
+ * Yes and No as the only choices are not refused by themselves: a yes or no question is the ask kind the
+ * workers are told to prefer (FOR_USER_ASK_KIND), and its card shows the same two keys; what made the
+ * reported cards bare was the missing background, the pick second, the unnamed things.
+ * `text`: everything the user reads on the card. Pure.
+ */
+export function bareCardRefusal(text: string, choices: readonly ChoiceShape[], opts: { standalone?: boolean } = {}): string | null {
+  const t = text.slice(0, SCAN_MAX);
+  const pick = choices.findIndex((c) => c.recommended === true || RECOMMENDED_WORD.test(c.label));
+  if (pick > 0) {
+    return `Not sent to the user: your pick "${choices[pick]!.label}" is not the first choice. Put the option you recommend first `
+      + '(marked recommended), then the others, so the user reads your pick before anything else.';
+  }
+  if (!opts.standalone) return null;
+  if (weight(t) < THIN_CARD_MIN) {
+    return 'Not sent to the user: the card says too little to decide on. The user has not seen this work: say what it is, what you '
+      + 'recommend and why, what each choice does, and who else it touches (a colleague who must approve, a team), with the evidence by '
+      + 'path or link.';
+  }
+  const counted = COUNTED.exec(t);
+  // Things still to make ("create three test accounts") have no names yet.
+  const toMake = counted && MAKE.test(t.slice(Math.max(0, counted.index - 40), counted.index));
+  // "e.g." and "i.e." are no names.
+  const names = (t.match(NAME_TOKEN) ?? []).filter((n) => n.length >= 5);
+  if (counted && !toMake && !NAMED.test(t) && names.length < 2) {
+    return `Not sent to the user: it counts "${counted[0].trim()}" without naming them. Name each one (or link the list) so the `
+      + 'user can see what they are deciding about.';
+  }
+  return null;
 }
 
 /**
  * Why the question does not read on its own, or null. `question`: its title and question (where the
  * pointing words are judged); `detail`: the rest the user reads beside it (where a picture may be).
  */
-export function askClarityRefusal(question: string, detail = '', labels: readonly string[] = [], review = '', opts: { reviewInText?: boolean; ownWords?: string } = {}): string | null {
+export function askClarityRefusal(question: string, detail = '', labels: readonly string[] = [], review = '', opts: { reviewInText?: boolean; ownWords?: string; choices?: readonly ChoiceShape[]; standalone?: boolean } = {}): string | null {
   const q = question.slice(0, SCAN_MAX);
   const all = `${q}\n${detail.slice(0, SCAN_MAX)}`;
   const hasPicture = DESIGN.test(all);
@@ -110,7 +183,7 @@ export function askClarityRefusal(question: string, detail = '', labels: readonl
     return `Not sent to the user: the choice "${vague}" says nothing on its own. Name the result in each label `
       + '("Show the sign-in entry under All devices and ship"), so the user can pick without reading back.';
   }
-  return null;
+  return bareCardRefusal(`${all}\n${(opts.choices ?? []).map((c) => c.detail ?? '').join('\n')}`, opts.choices ?? labels.map((label) => ({ label })), { standalone: opts.standalone === true });
 }
 
 /** A first sentence with no subject: "Go ahead with this plan? I recommend it." names nothing. */
@@ -195,9 +268,9 @@ export function longTextHint(text: string | undefined): string | null {
  *   - a new Board choice (refused 409, its title and option labels: the page around it is its picture).
  * A review of a picture is named in the text itself ("Reviewed: sol, function 8/10, ...").
  */
-export function turnEndAskRefusal(r: { state?: string; ask?: string; ask_more?: string; ask_options?: ReadonlyArray<{ label: string }> }): string | null {
+export function turnEndAskRefusal(r: { state?: string; ask?: string; ask_more?: string; ask_options?: ReadonlyArray<{ label: string; detail?: string; recommended?: boolean }> }): string | null {
   if (r.state !== 'needs' || !r.ask?.trim()) return null;
-  return askClarityRefusal(r.ask, r.ask_more ?? '', (r.ask_options ?? []).map((o) => o.label), '', { reviewInText: true });
+  return askClarityRefusal(r.ask, r.ask_more ?? '', (r.ask_options ?? []).map((o) => o.label), '', { reviewInText: true, choices: choiceShapes(r.ask_options), standalone: true });
 }
 
 /** One AskUserQuestion question as the tool takes it. */
@@ -210,7 +283,8 @@ export function askUserQuestionRefusal(toolInput: unknown): string | null {
   for (const q of qs.slice(0, 8) as ToolQuestion[]) {
     const opts = Array.isArray(q?.options) ? (q.options as Array<{ label?: unknown; description?: unknown; preview?: unknown }>) : [];
     const detail = opts.map((o) => `${s(o?.description)}\n${s(o?.preview)}`).join('\n');
-    const why = askClarityRefusal(`${s(q?.question)}\n${s(q?.header)}`, detail, opts.map((o) => s(o?.label)).filter(Boolean), '', { reviewInText: true });
+    // In the chat, beside the work it is about: no background or names asked, only what each choice does.
+    const why = askClarityRefusal(`${s(q?.question)}\n${s(q?.header)}`, detail, opts.map((o) => s(o?.label)).filter(Boolean), '', { reviewInText: true, choices: choiceShapes(opts) });
     if (why) return why;
   }
   return null;

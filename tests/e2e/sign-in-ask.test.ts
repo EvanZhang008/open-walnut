@@ -96,6 +96,9 @@ afterAll(async () => {
 const statusOfId = async (id: string) => (await getTask(id)).user_status
 const ids = () => tasks.map((t) => t.id)
 
+/** The background an agent's needs line carries (ask-clarity.ts bareCardRefusal refuses a bare ask). */
+const MORE = { ask_more: 'The work on this task waits on it; nothing else in the task can move until it is done.' }
+
 describe('one sign-in is one ask, whatever its words or team', () => {
   it('five sign-in asks show once: the first asked; the rest wait on it', async () => {
     const all = (await listTasks()).filter((t) => ids().includes(t.id))
@@ -109,13 +112,13 @@ describe('one sign-in is one ask, whatever its words or team', () => {
 
   it('a sixth put on the user from outside is refused, naming the one that asks', async () => {
     const sixth = await asking('Docs work', null, 'Docs')
-    const line = await call('PUT', `/api/v1/tasks/${sixth.id}/report`, { state: 'needs', ask: 'Please re-authenticate with acmelogin --refresh', user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, sixth.sid)
+    const line = await call('PUT', `/api/v1/tasks/${sixth.id}/report`, { state: 'needs', ...MORE, ask: 'Please re-authenticate with acmelogin --refresh', user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, sixth.sid)
     expect(line.status).toBe(409)
     expect(JSON.stringify(await line.json())).toMatch(new RegExp(`same_ask[\\s\\S]*${tasks[0]!.id}`))
     const letter = await call('POST', '/api/v1/human-inbox', { type: 'action_required', subject: 'Run acmelogin -o --refresh on the Mac', markdown: 'The dev box refuses packages.', actions: [{ id: 'done', label: 'Done' }], user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, sixth.sid)
     expect(letter.status).toBe(409)
     // Not a sign-in ask: goes as before.
-    const other = await call('PUT', `/api/v1/tasks/${sixth.id}/report`, { state: 'needs', ask: 'Review the login page copy before it ships', user_kind: 'user_own', user_kind_why: 'He owns the copy' }, sixth.sid)
+    const other = await call('PUT', `/api/v1/tasks/${sixth.id}/report`, { state: 'needs', ...MORE, ask: 'Review the login page copy before it ships', user_kind: 'user_own', user_kind_why: 'He owns the copy' }, sixth.sid)
     expect(other.status, await other.clone().text()).toBe(200)
   })
 
@@ -154,7 +157,7 @@ describe('one sign-in is one ask, whatever its words or team', () => {
     await settle()
     for (const t of tasks) expect((await statusOfId(t.id))?.state).not.toBe('needs')
     expect((await statusOfId(tasks[0]!.id))?.waitingOn).toContain('sign-in works (checked')
-    const res = await call('PUT', `/api/v1/tasks/${tasks[2]!.id}/report`, { state: 'needs', ask: 'Please sign in again with acmelogin', user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, tasks[2]!.sid)
+    const res = await call('PUT', `/api/v1/tasks/${tasks[2]!.id}/report`, { state: 'needs', ...MORE, ask: 'Please sign in again with acmelogin', user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, tasks[2]!.sid)
     expect(res.status).toBe(409)
     expect(JSON.stringify(await res.json())).toContain('sign-in works')
     // A word older than the freshness window counts for nothing: the ask shows again (once).
@@ -248,7 +251,7 @@ describe("a sign-in asked in one task's letter is asked there only (2026-11-15)"
     const reply = await call('POST', `/api/v1/human-inbox/${newsLetter}/reply`, { text: 'Please run acmelogin -o first and I will re-measure.' }, reporter.sid)
     expect(reply.status).toBe(409)
     expect(JSON.stringify(await reply.json())).toContain(ownerLetter)
-    const line = await call('PUT', `/api/v1/tasks/${reporter.id}/report`, { state: 'needs', ask: 'Please run acmelogin so I can re-measure', user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, reporter.sid)
+    const line = await call('PUT', `/api/v1/tasks/${reporter.id}/report`, { state: 'needs', ...MORE, ask: 'Please run acmelogin so I can re-measure', user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, reporter.sid)
     expect(line.status).toBe(409)
     expect(JSON.stringify(await line.json())).toContain(ownerLetter)
     // The owner follows up on its own letter.

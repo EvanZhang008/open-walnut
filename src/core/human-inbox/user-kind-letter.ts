@@ -10,7 +10,7 @@
  * `user_own` already covers what the user asked to decide. Without a kind and a reason the letter is
  * refused (409 `user_kind`); with them they lead the body, so the user reads why it is theirs.
  */
-import { choiceLabels } from '../org/ask-clarity.js';
+import { choiceLabels, choiceShapes } from '../org/ask-clarity.js';
 import { log } from '../../logging/index.js';
 import { userKindLead, userKindVerdict } from '../org/user-kind.js';
 import { LetterError } from './store.js';
@@ -42,7 +42,7 @@ export async function admitUserKindLetter(input: LetterInput, sender: LetterSend
   // The ask's own words (its subject and preview), never the body, where a sender names its source.
   const subject = [input.subject, input.text].filter((v): v is string => typeof v === 'string').join('\n');
   const detail = [input.markdown, input.html].filter((v): v is string => typeof v === 'string').join('\n');
-  const verdict = userKindVerdict({ ...input, subject, detail, labels: choiceLabels(input.actions) });
+  const verdict = userKindVerdict({ ...input, subject, detail, labels: choiceLabels(input.actions), choices: choiceShapes(input.actions) });
   if (!verdict.ok) {
     log.notif.info('human-inbox: decision letter refused, no user kind named', { senderTaskId: sender.taskId });
     throw new LetterError(verdict.message, 'user_kind', 409);

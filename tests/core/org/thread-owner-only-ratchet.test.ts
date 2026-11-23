@@ -104,7 +104,7 @@ describe('the pure rules', () => {
     const reworded = stampAskIds(a, updateThread(a, id, { ask: 'Should we buy the 72-cell trays?' }, 'task:owner-1', AT).file)
     expect(reworded.threads[0].askId).toBe(askA)
     const out = stampAskIds(reworded, updateThread(reworded, id, { state: 'working' }, 'task:owner-1', AT).file)
-    const back = stampAskIds(out, updateThread(out, id, { state: 'needs', ...KIND }, 'task:owner-1', AT).file)
+    const back = stampAskIds(out, updateThread(out, id, { state: 'needs', reply: 'The budget covers one size; the 72-cell trays fit the shelf.', ...KIND }, 'task:owner-1', AT).file)
     expect(back.threads[0].askId).not.toBe(askA)
   })
 

@@ -41,7 +41,7 @@ describe('a follow-up of what the user already agreed to is never his', () => {
       expect(v.ok, why).toBe(false)
       if (!v.ok) expect(v.message).toMatch(/the step that follows is yours\. Do it now and tell them in one line afterwards/)
     }
-    for (const why of stillHis) expect(userKindVerdict({ user_kind: 'outward', user_kind_why: why, subject: 'Move the meeting with Alex to Thursday 3pm?' }).ok, why).toBe(true)
+    for (const why of stillHis) expect(userKindVerdict({ user_kind: 'outward', user_kind_why: why, subject: 'Move the meeting with Alex to Thursday 3pm?', detail: 'Alex can no longer make Tuesday; Thursday 3pm is free on both calendars.' }).ok, why).toBe(true)
     // The turn-end line has no subject: it keeps the old verdict (a refusal there would silently drop the ask).
     expect(userKindVerdict({ user_kind: 'outward', user_kind_why: followUps[0] }).ok).toBe(true)
   })
@@ -67,31 +67,31 @@ describe('words of his cover only what they were about', () => {
   })
 
   it('words about another CR are refused for this one, with the rule in the refusal', () => {
-    const v = userKindVerdict({ user_kind: 'user_own', user_kind_why: why, user_kind_words: words, user_kind_about: 'CR-100000777 (task abcd1234)', subject: ask })
+    const v = userKindVerdict({ user_kind: 'user_own', user_kind_why: why, user_kind_words: words, user_kind_about: 'CR-1234 (task abcd1234)', subject: ask })
     expect(v.ok).toBe(false)
     if (!v.ok) expect(v.message).toMatch(/Those words cover only what they were about/)
     expect(() => openThread(emptyThreads('vp'), {
-      title: 'New CR descriptions', text: ask, from: 'task', user_kind: 'user_own', user_kind_why: why, user_kind_words: words, user_kind_about: 'CR-100000777',
+      title: 'New CR descriptions', text: ask, from: 'task', user_kind: 'user_own', user_kind_why: why, user_kind_words: words, user_kind_about: 'CR-1234',
     }, 'task:cis', AT)).toThrow(/Those words cover only what they were about/)
   })
 
   it('naming the other CR in the reason does not make the ask about it', () => {
-    const v = userKindVerdict({ user_kind: 'user_own', user_kind_why: 'You said on CR-100000777 that descriptions go to you first', user_kind_words: words, user_kind_about: 'CR-100000777', subject: ask })
+    const v = userKindVerdict({ user_kind: 'user_own', user_kind_why: 'You said on CR-1234 that descriptions go to you first', user_kind_words: words, user_kind_about: 'CR-1234', subject: ask })
     expect(v.ok).toBe(false)
   })
 
   it('reasons that only mention someone speaking are no citation', () => {
     for (const why2 of ['He wrote the original post, so a reply in his name is his', 'They said Tuesday or Wednesday works', 'The vendor said they required his signature']) {
-      expect(userKindVerdict({ user_kind: 'outward', user_kind_why: why2, subject: 'Reply?' }).ok, why2).toBe(true)
+      expect(userKindVerdict({ user_kind: 'outward', user_kind_why: why2, subject: 'Reply?', detail: 'The vendor asked when the signed contract comes back; a draft answer says Friday.' }).ok, why2).toBe(true)
     }
     const v = userKindVerdict({ user_kind: 'user_own', user_kind_why: 'He asked to see CR descriptions before publishing', subject: ask })
     expect(v.ok).toBe(false)
   })
 
   it('words about this very CR pass, and asking alone is no citation', () => {
-    const same = 'Swap in the new description of CR-100000777?'
-    expect(userKindVerdict({ user_kind: 'user_own', user_kind_why: why, user_kind_words: words, user_kind_about: 'CR-100000777', subject: same }).ok).toBe(true)
-    expect(userKindVerdict({ user_kind: 'user_own', user_kind_why: 'The user asked to pick the date himself', subject: 'Pick a date' }).ok).toBe(true)
+    const same = 'Swap in the new description of CR-1234?'
+    expect(userKindVerdict({ user_kind: 'user_own', user_kind_why: why, user_kind_words: words, user_kind_about: 'CR-1234', subject: same, detail: 'The new text names the retry fix and links its diagram; the old one predates the fix.' }).ok).toBe(true)
+    expect(userKindVerdict({ user_kind: 'user_own', user_kind_why: 'The user asked to pick the date himself', subject: 'Pick a date', detail: 'The team offsite can be on May 3 or May 10; both venues hold the booking until Friday.' }).ok).toBe(true)
     // The turn-end line has no room for the words: it is judged as before.
     expect(userKindVerdict({ user_kind: 'user_own', user_kind_why: why }).ok).toBe(true)
   })
@@ -127,8 +127,18 @@ describe('a question reads on its own (2026-11-21: "what is here?")', () => {
       labels: ['Show it under All devices and ship', 'Keep it in Settings only'],
     })
     expect(v.ok).toBe(true)
-    // A clear yes or no question keeps Yes and No.
-    expect(userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', labels: ['Yes', 'No'] }).ok).toBe(true)
+    // A clear yes or no question keeps Yes and No, each with a line saying what it does.
+    const yesNo = [{ label: 'Yes', detail: 'Buy the $96 yearly plan today', recommended: true }, { label: 'No', detail: 'Stay on the free tier' }]
+    expect(userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', detail: 'The free tier stops syncing past two devices; the yearly plan covers five.', labels: ['Yes', 'No'], choices: yesNo }).ok).toBe(true)
+    // Yes and No with the background are a yes or no question (the ask kind workers prefer); its pick
+    // second, or no background at all, is refused (ask-clarity.ts bareCardRefusal).
+    expect(userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', detail: 'The free tier stops syncing past two devices; the yearly plan covers five.', labels: ['Yes', 'No'] }).ok).toBe(true)
+    const second = userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', detail: 'The free tier stops syncing past two devices; the yearly plan covers five.', choices: [{ label: 'No' }, { label: 'Yes', recommended: true }] })
+    expect(second.ok).toBe(false)
+    if (!second.ok) expect(second.message).toMatch(/not the first choice/)
+    const thin = userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', labels: ['Buy the yearly plan', 'Stay on the free tier'] })
+    expect(thin.ok).toBe(false)
+    if (!thin.ok) expect(thin.message).toMatch(/says too little/)
   })
 })
 
@@ -163,7 +173,9 @@ describe('a design reaches him only after a scored review on another model (2026
 
 describe('the clarity check stays narrow and fast (review of 2026-11-21)', () => {
   const kind = { user_kind: 'user_own', user_kind_why: 'Only he can decide this for his team' }
-  const ok = (subject: string, labels: string[] = [], detail = '') => userKindVerdict({ ...kind, subject, detail, labels }).ok
+  // The background a decision card carries (ask-clarity.ts bareCardRefusal refuses a card with none).
+  const BG = 'The nightly job failed this week; both ways are tested and cost the same.'
+  const ok = (subject: string, labels: string[] = [], detail = BG) => userKindVerdict({ ...kind, subject, detail, labels }).ok
 
   it('leaves ordinary decision asks alone', () => {
     for (const q of [

@@ -116,7 +116,8 @@ describe('answers_ask for the team own code', () => {
     expect((await answer(id)).status).toBe(202);
     for (const shape of [
       { ask_more: 'Then send it to the customer.' },
-      { ask_kind: 'single', ask_options: [{ id: 'draft', label: 'Keep the draft local' }, { id: 'send', label: 'Send the email' }] },
+      // Background that adds no send of its own (ask-clarity.ts bareCardRefusal refuses a card with none): the options add it.
+      { ask_more: 'The customer asked for the refund terms in writing.', ask_kind: 'single', ask_options: [{ id: 'draft', label: 'Keep the draft local' }, { id: 'send', label: 'Send the email' }] },
     ]) {
       const res = await fetch(`${base}/api/v1/tasks/${id}/report`, {
         method: 'PUT', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': LEAD_SID },

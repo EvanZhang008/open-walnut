@@ -42,8 +42,11 @@ describe('the turn-end ask lines', () => {
   })
 
   it('leaves clear asks and every other state alone', () => {
-    expect(needs('Buy the yearly plan for $96?')).toBeNull()
-    expect(needs('Approve testing on your real iPhone?')).toBeNull()
+    expect(needs('Buy the yearly plan for $96?', 'The free tier stops syncing past two devices; the yearly plan covers five.')).toBeNull()
+    expect(needs('Approve testing on your real iPhone?', 'The simulator cannot show the camera bug; a real-phone build takes ten minutes.')).toBeNull()
+    // The same asks with no background say too little to decide on (ask-clarity.ts bareCardRefusal).
+    expect(needs('Buy the yearly plan for $96?')).toMatch(/says too little/)
+    expect(needs('Approve testing on your real iPhone?')).toMatch(/says too little/)
     expect(turnEndAskRefusal({ state: 'working', ask: HERE_Q })).toBeNull()
     expect(turnEndAskRefusal({ state: 'needs' })).toBeNull()
   })

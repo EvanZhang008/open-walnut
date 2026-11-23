@@ -146,7 +146,8 @@ describe('a report set through the writer, answered or withdrawn before (2026-11
     const { setTaskReport } = await import('../../src/core/sessions/report-set.js')
     const { stampAskDecision, reportDecision } = await import('../../src/core/ask-decision.js')
     const { askKey } = await import('../../src/core/same-ask.js')
-    const ask = 'Approve testing on the shared garden tablet?'
+    // Long enough to read on its own (ask-clarity.ts bareCardRefusal refuses a card under 40 characters).
+    const ask = 'Approve testing the new build on the shared garden tablet?'
     const now = Date.now()
     const prev = stampAskDecision({ state: 'needs', ask, at: new Date(now - 30 * 86_400_000).toISOString(), ask_own: { kind: 'user_own', why: 'Only the user lends the tablet' } } as never, null)
     const d = reportDecision(prev)!

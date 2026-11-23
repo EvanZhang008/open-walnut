@@ -178,8 +178,8 @@ describe('a pending thread: only handed off or being worked on, out of his sight
     expect(updateThread(f0, id, { reply: 'Found the cause' }, 'task:lead-1', at(1)).thread.state).toBe('answered')
     const working = updateThread(f0, id, { state: 'working', reply: 'On it' }, 'task:lead-1', at(1)).file
     expect(updateThread(working, id, { reply: 'Fixed and live' }, 'task:lead-1', at(2)).thread.state).toBe('answered')
-    const needs = updateThread(f0, id, { state: 'needs', reply: 'Which one?', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(1)).file
-    expect(updateThread(needs, id, { reply: 'Which one: A or B?' }, 'task:lead-1', at(2)).thread.state).toBe('needs')
+    const needs = updateThread(f0, id, { state: 'needs', reply: 'Which one: the calendar view or the mail view as the default? Both are built.', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(1)).file
+    expect(updateThread(needs, id, { reply: 'Which one: A (calendar first) or B (mail first) as the default view?' }, 'task:lead-1', at(2)).thread.state).toBe('needs')
   })
 
   it('he writes in it (a follow-up, or the node merges his new ask under it): it is the node\'s turn again', () => {
@@ -383,7 +383,8 @@ describe('a thread the node opens itself', () => {
   })
 
   it('his chat message about it merges into it, never the other way; the react rule holds for its first post too', () => {
-    let f = openThread(emptyThreads('lead-1'), { title: 'A team needs your call', text: 'Ship on Monday or wait?', from: 'task', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(0)).file
+    const post = 'Ship on Monday or wait? The release passed its tests; one partner asked for another week.'
+    let f = openThread(emptyThreads('lead-1'), { title: 'A team needs your call', text: post, from: 'task', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(0)).file
     const opened = f.threads[0]
     expect(() => updateThread(f, opened.id, { close: 'acked' }, 'task:lead-1', at(1))).toThrow(/not written/)
     // Dropping its own post he never saw is the node's call.
@@ -398,7 +399,7 @@ describe('a thread the node opens itself', () => {
     // A split of his only message leaves the node's post standing.
     const out = splitThreadMessage(f, opened.id, f.threads[0].messages[0].id, 'human', at(5))
     expect(out.from.messages).toEqual([])
-    expect(out.from.opener?.text).toBe('Ship on Monday or wait?')
+    expect(out.from.opener?.text).toBe(post)
   })
 
   // 2026-11-23: two threads the node opened about one issue were refused both ways and could only be closed.

@@ -142,7 +142,7 @@ describe('Threads on a leader task', () => {
   let spawnedOff = ''
   let spawnedOn = ''
   it('a thread waiting on him holds the worker while on, and a session spawned off hears the rules', async () => {
-    await patchThread(leaderId, filed.id, { state: 'needs', user_kind: 'user_own', user_kind_why: 'He asked to pick the watering plan himself' }, `task:${leaderId}`)
+    await patchThread(leaderId, filed.id, { state: 'needs', reply: 'The greenhouse sits at 85% humidity; a vent fan or misting less often both bring it down.', user_kind: 'user_own', user_kind_why: 'He asked to pick the watering plan himself' }, `task:${leaderId}`)
     const worker = await getTask(workerId)
     expect((await threadWaitItems(worker, await listTasks(), false)).map((w) => w.id)).toEqual([filed.id])
     const leader = await getTask(leaderId)

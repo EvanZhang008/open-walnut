@@ -38,7 +38,9 @@ const post = (path: string, body: Record<string, unknown>, sid?: string) => fetc
   method: 'POST', headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}) }, body: JSON.stringify(body),
 });
 const decision = (subject: string, extra: Record<string, unknown> = {}) => ({
-  subject, type: 'action_required', markdown: 'Details in the task.', actions: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }],
+  // Its background and labels that name their result (ask-clarity.ts bareCardRefusal refuses bare Yes/No and no background).
+  subject, type: 'action_required', markdown: 'The scanner flagged them; nothing has used them for months. Details in the task.',
+  actions: [{ id: 'yes', label: 'Go ahead with the change' }, { id: 'no', label: 'Leave everything as it is' }],
   // A decision letter names which of the user's kinds it is (org/user-kind.ts).
   user_kind: 'cloud_delete', user_kind_why: 'It deletes cloud resources for good', ...extra,
 });

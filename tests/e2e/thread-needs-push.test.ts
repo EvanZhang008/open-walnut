@@ -32,6 +32,8 @@ import { log } from '../../src/logging/index.js';
 let server: Server;
 let root: string;
 const KIND = { user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team' };
+/** The background a card handed to him carries (ask-clarity.ts bareCardRefusal refuses a bare ask). */
+const BG = 'The team plan costs $96 a year for five seats; the free tier caps us at two.';
 /** Every `thread push` line: one per move into needs (push/thread-push.ts). */
 const lines: Array<{ threadId?: string; sent?: number; reason?: string }> = [];
 
@@ -84,7 +86,7 @@ describe('a thread that waits on him', () => {
     await away(lead);
     const letters = (await listLetters()).letters.length;
     const id = await asked(lead, 'Should we buy the paid plan?');
-    await run(lead, 'thread_update', { id, title: 'Buy the paid plan?', ask: 'Pick a plan for the team', state: 'needs', ...KIND });
+    await run(lead, 'thread_update', { id, title: 'Buy the paid plan?', ask: 'Pick a plan for the team', reply: BG, state: 'needs', ...KIND });
     expect(await pushLine(id)).toMatchObject({ sent: 1 });
     expect(sendApns).toHaveBeenCalledTimes(1);
     expect(pushed()[0]).toMatchObject({ aps: { alert: { title: 'Buy the paid plan?', body: 'Pick a plan for the team' } }, type: 'org_thread', taskId: lead.id, threadId: id });
@@ -96,7 +98,7 @@ describe('a thread that waits on him', () => {
     await run(lead, 'thread_update', { id, state: 'answered', reply: 'Bought the team plan' });
     await run(lead, 'thread_update', { id, state: 'pending' });
     // Back into needs: a new entry buzzes again. Its line is the second: nothing came in between.
-    await run(lead, 'thread_update', { id, state: 'needs', ...KIND });
+    await run(lead, 'thread_update', { id, state: 'needs', reply: BG, ...KIND });
     expect(await pushLine(id, 2)).toMatchObject({ sent: 1 });
     expect(lines.filter((l) => l.threadId === id)).toHaveLength(2);
     expect(sendApns).toHaveBeenCalledTimes(2);
@@ -106,11 +108,11 @@ describe('a thread that waits on him', () => {
     const lead = await newLead();
     await away(lead);
     const first = await asked(lead, 'Buy the plan?');
-    await run(lead, 'thread_update', { id: first, state: 'needs', ...KIND });
+    await run(lead, 'thread_update', { id: first, state: 'needs', reply: BG, ...KIND });
     expect(await pushLine(first)).toMatchObject({ sent: 1 });
     await buzzMark(lead, first);
     const second = await asked(lead, 'Renew the domain?');
-    await run(lead, 'thread_update', { id: second, state: 'needs', ...KIND });
+    await run(lead, 'thread_update', { id: second, state: 'needs', reply: 'The domain expires on Friday; renewing it costs $12 for a year.', ...KIND });
     expect(await pushLine(second)).toMatchObject({ sent: 0, reason: expect.stringMatching(/another thread/) });
     expect(sendApns).toHaveBeenCalledTimes(1);
   });
@@ -119,7 +121,7 @@ describe('a thread that waits on him', () => {
     const lead = await newLead();
     await present(lead);
     const id = await asked(lead, 'Delete the old bucket?');
-    await run(lead, 'thread_update', { id, state: 'needs', user_kind: 'cloud_delete', user_kind_why: 'It deletes a cloud bucket for good' });
+    await run(lead, 'thread_update', { id, state: 'needs', reply: 'The old bucket holds last year\'s build logs; nothing has read them since March.', user_kind: 'cloud_delete', user_kind_why: 'It deletes a cloud bucket for good' });
     expect(await pushLine(id)).toMatchObject({ sent: 0, reason: expect.stringMatching(/in the node's chat/) });
     expect(sendApns).not.toHaveBeenCalled();
   });
@@ -128,7 +130,7 @@ describe('a thread that waits on him', () => {
     const lead = await newLead();
     await away(lead);
     const answered = await run(lead, 'thread_create', { title: 'A mail answered', text: 'The organizer confirmed the date', from: 'mail', state: 'answered' });
-    const waiting = await run(lead, 'thread_create', { title: 'Answer the organizer', text: 'A mail asks for a date', from: 'mail', ...KIND });
+    const waiting = await run(lead, 'thread_create', { title: 'Answer the organizer', text: 'A mail from the meetup organizer asks which date we pick', from: 'mail', ...KIND });
     const waitingId = waiting.thread?.id ?? waiting.id;
     expect(await pushLine(waitingId)).toMatchObject({ sent: 1 });
     expect(lines.some((l) => l.threadId === (answered.thread?.id ?? answered.id))).toBe(false);

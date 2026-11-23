@@ -79,7 +79,7 @@ test.beforeAll(async ({ request }) => {
   ids.letterSid = await startSession(request, ids.letter, `Bucket ready ${STAMP}`)
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': ids.letterSid },
-    data: { subject: `Pick the bucket policy ${STAMP}`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'prefix', label: 'Prefix only' }, { id: 'whole', label: 'Whole bucket' }] },
+    data: { subject: `Pick the bucket policy ${STAMP}`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one. Both choices were tested and cost the same; the work waits on this pick.', actions: [{ id: 'prefix', label: 'Prefix only' }, { id: 'whole', label: 'Whole bucket' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   ids.letterId = ((await sent.json()) as { id: string }).id

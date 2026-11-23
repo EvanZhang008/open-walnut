@@ -97,7 +97,7 @@ const KIND = { user_kind: 'spending', user_kind_why: 'Paying the invoice spends 
 async function leadThread(task: Task, ask: string): Promise<{ lead: Task; thread: string }> {
   const lead = await threadsLead(task.project)
   const th = await openNodeThread(lead.id, { title: 'Print shop invoice', text: 'A new document is an invoice.', from: 'task', state: 'needs', tasks: [task.id], ref: task.id, ...KIND }, `task:${lead.id}`)
-  await patchThread(lead.id, th.id, { ask, state: 'needs', ...KIND } as never, `task:${lead.id}`)
+  await patchThread(lead.id, th.id, { ask, reply: 'The document the worker opened is a bill; it is due on Friday.', state: 'needs', ...KIND } as never, `task:${lead.id}`)
   return { lead, thread: th.id }
 }
 
@@ -581,7 +581,7 @@ describe('what does not hold, and who settles', () => {
     const other = await worker('Wide')
     const lead = await threadsLead('Wide')
     await updateTask(task.id, { parent_task_id: lead.id })
-    await openNodeThread(lead.id, { title: 'Order', text: 'Which goes first?', from: 'task', state: 'needs', tasks: [task.id, other.task.id], ...KIND }, `task:${lead.id}`)
+    await openNodeThread(lead.id, { title: 'Order', text: 'Which goes first? The importer is ready to ship; the exporter still waits on review.', from: 'task', state: 'needs', tasks: [task.id, other.task.id], ...KIND }, `task:${lead.id}`)
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Shipped the importer.' }, sid)).status).toBe(200)
   })
 

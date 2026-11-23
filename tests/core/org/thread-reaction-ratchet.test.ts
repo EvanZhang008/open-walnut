@@ -115,7 +115,7 @@ describe('a reaction is durable news provenance, not a state', () => {
   it('needs is news but still requires an agent to name a valid user kind', () => {
     const r = reacted();
     expect(() => model.updateThread(r.file, r.thread.id, { state: 'needs' }, by, at(5))).toThrow(model.ThreadError);
-    const u = model.updateThread(r.file, r.thread.id, { state: 'needs', user_kind: 'user_info', user_kind_why: 'Only the user has this preference.' }, by, at(5));
+    const u = model.updateThread(r.file, r.thread.id, { state: 'needs', reply: 'The daily digest can arrive at 7am or at 9am; I recommend 7am, before his first meeting.', user_kind: 'user_info', user_kind_why: 'Only the user has this preference.' }, by, at(5));
     expect(shownToHim(u.thread)).toBe(true);
   });
 

@@ -10,7 +10,7 @@
  */
 import type { Task } from '../types.js';
 import { userKindVerdict } from '../org/user-kind.js';
-import { choiceLabels } from '../org/ask-clarity.js';
+import { choiceLabels, choiceShapes } from '../org/ask-clarity.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
 import { AskOptionsError, readAskOptions } from '../ask-options.js';
 import { askSinceStamp, needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
@@ -89,7 +89,7 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
   // in readStatusReport (an ask with no kind reads as a report to its lead).
   let own: { kind: string; why: string } | undefined;
   if (c.state === 'needs' && by !== 'human') {
-    const verdict = userKindVerdict({ ...c, subject: ask, detail: text(c.ask_more), labels: choiceLabels(c.ask_options) });
+    const verdict = userKindVerdict({ ...c, subject: ask, detail: typeof c.ask_more === 'string' ? c.ask_more : '', labels: choiceLabels(c.ask_options), choices: choiceShapes(c.ask_options) });
     if (!verdict.ok) throw new ReportChangeError(verdict.message.replace(/^Not sent to the user:/, 'Not put on the user:'), 'user_kind', 409);
     own = { kind: verdict.kind, why: verdict.why };
   }

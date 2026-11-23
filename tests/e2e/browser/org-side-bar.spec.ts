@@ -513,7 +513,7 @@ test('Quote on an ask in the side bar puts it into the chat beside it', async ({
   const { sessionId } = await post<{ sessionId: string }>(request, '/api/sessions/quick-start', { cwd: `${fixtureRoot}/projects/walnut`, message: 'snapshot-clean-turn:Ready.', taskId: id })
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': sessionId },
-    data: { subject: `Sign the side lease ${STAMP}`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'yes', label: 'Yes' }] },
+    data: { subject: `Sign the side lease ${STAMP}`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one. Both choices were tested and cost the same; the work waits on this pick.', actions: [{ id: 'yes', label: 'Yes', description: 'Sign the lease as drafted' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.source ?? ''), { timeout: 60_000 }).toBe('letter')

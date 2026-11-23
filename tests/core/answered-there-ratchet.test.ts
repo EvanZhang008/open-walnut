@@ -51,7 +51,7 @@ describe('the answered-there rule', () => {
 
   it('rides the overdue check of a thread that waits on him, and only that one', () => {
     const f = openThread(emptyThreads('vp'), {
-      title: 'Meeting move', text: 'Which time?', from: 'node', user_kind: 'user_own', user_kind_why: 'Only he can answer a colleague in his name',
+      title: 'Meeting move', text: 'Which time? Dana can move the review to 4:00 or 4:30 on Thursday.', from: 'node', user_kind: 'user_own', user_kind_why: 'Only he can answer a colleague in his name',
     }, 'task:vp', new Date(T0).toISOString()).file
     const due = threadsDueRecheck(f.threads, T0 + NEEDS_QUIET_MS)
     expect(due.map((d) => d.overdue.why)).toEqual(['needs'])

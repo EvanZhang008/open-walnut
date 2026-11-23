@@ -53,7 +53,7 @@
  * store (threads-store.ts) runs them under the file lock.
  */
 import { userKindVerdict, type UserKindInput } from './user-kind.js';
-import { askClarityRefusal, choiceLabels, needsCardRefusal, showsDesign } from './ask-clarity.js';
+import { askClarityRefusal, choiceLabels, choiceShapes, needsCardRefusal, showsDesign } from './ask-clarity.js';
 import { returnRefusal, returnedReply, wroteSinceNeeds } from './thread-return.js';
 import type { AskOption } from '../user-status.js';
 import { AskOptionsError, checkNeedsOptions, threadOptionsOf } from './thread-options.js';
@@ -899,7 +899,7 @@ const waitsOnUser = (state: ThreadState): boolean => state === 'needs';
 
 function checkHandedToUser(by: ThreadWriter, input: UserKindInput & { options?: unknown }, subject: string, detail = ''): void {
   if (by === 'human') return;
-  const v = userKindVerdict({ ...input, subject, detail: isStr(detail) ? detail : '', labels: choiceLabels(input.options) });
+  const v = userKindVerdict({ ...input, subject, detail: isStr(detail) ? detail : '', labels: choiceLabels(input.options), choices: choiceShapes(input.options) });
   if (!v.ok) throw new ThreadError('user_kind', 409, v.message.replace(/^Not sent to the user:/, 'Not handed to the user:'));
 }
 
@@ -1113,19 +1113,23 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   }
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
   if (handing) {
-    // The ask's own words only: never older context, where a sender names its source (user-kind.ts).
-    checkHandedToUser(by, { ...patch, options: patch.options ?? cur.options, ...(cur.opener ? {} : { own_words: [patch.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') }) }, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'), cur.reply);
+    // The card's shape first (no summary hides all below the first line), then the question's words.
     if (by !== 'human') {
       const own = (isStr(patch.reply) ? patch.reply : cur.reply) || '';
       const card = needsCardRefusal({ title: patch.title ?? cur.title, summary: own || cur.opener?.text || '', hasSummary: !!own.trim(), opener: cur.opener?.text, options: choiceLabels(patch.options ?? cur.options) });
       if (card) throw new ThreadError('user_kind', 409, card);
     }
-  } else if (by !== 'human' && cur.state === 'needs' && !cur.closed && (patch.title !== undefined || patch.ask !== undefined || patch.reply !== undefined || patch.options !== undefined)) {
+    // The ask's own words only: never older context, where a sender names its source (user-kind.ts).
+    checkHandedToUser(by, { ...patch, options: patch.options ?? cur.options, ...(cur.opener ? {} : { own_words: [patch.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') }) }, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'), [cur.reply, cur.opener?.text].filter(isStr).join('\n'));
+  } else if (by !== 'human' && cur.state === 'needs' && !cur.closed && !patch.close && (patch.state === undefined || patch.state === 'needs')
+    && (patch.title !== undefined || patch.ask !== undefined || patch.reply !== undefined || patch.options !== undefined)) {
+    // Leaving needs or closing is never held to it; only choices this write gives are judged (a card
+    // stored before the bare-card check keeps taking its progress lines).
     // A question already waiting on him, reworded: it must still read on its own (ask-clarity.ts).
-    const unclear = askClarityRefusal([patch.title ?? cur.title, patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n'), '',
+    const unclear = askClarityRefusal([patch.title ?? cur.title, patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n'), cur.opener?.text ?? '',
       choiceLabels(patch.options ?? cur.options),
       isStr(patch.design_review) ? patch.design_review : showsDesign([cur.title, cur.ask, cur.reply].filter(isStr).join('\n')) ? 'small: reviewed when it was handed over' : '',
-      cur.opener ? {} : { ownWords: [patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') });
+      { ...(cur.opener ? {} : { ownWords: [patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') }), choices: choiceShapes(patch.options), standalone: true });
     if (unclear) throw new ThreadError('user_kind', 409, unclear.replace(/^Not sent to the user:/, 'Not handed to the user:'));
   }
   if (patch.watch === false && cur.watched) checkHisWatch(cur, by, 'unwatched');
@@ -1530,7 +1534,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
     const card = needsCardRefusal({ title: input.title, summary: isStr(input.reply) && input.reply.trim() ? input.reply : input.text, hasSummary: isStr(input.reply) && !!input.reply.trim(), opener: input.text, options: options.map((o) => o.label) });
     if (card) throw new ThreadError('user_kind', 409, card);
   }
-  if (!quiet && waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input, [input.title, input.text].filter(isStr).join('\n'));
+  if (!quiet && waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input, [input.title, input.text].filter(isStr).join('\n'), isStr(input.reply) ? input.reply : '');
   if (options.length && !waitsOnUser(input.state ?? 'needs')) throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
   if (waitsOnUser(input.state ?? 'needs')) checkChoicesAsOptions(by, [input.text], options);
   const tasks = taskList(input.tasks ?? []);

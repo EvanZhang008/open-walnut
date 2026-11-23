@@ -73,7 +73,7 @@ describe('a snoozed thread', () => {
     const withAnswer = setAnswers(s2, new Map([[asked.message.id, { text: 'About the same.', at: at(9) }]])).file
     expect(snoozedNow(withAnswer.threads[0], ms(10))).toBe(false)
     // The node moves it to needs (its question to him), or to answered from working.
-    const needs = updateThread(s, id, { state: 'needs', user_kind: 'user_own', user_kind_why: 'He asked to pick the design himself.' }, 'task:lead-1', at(10)).file
+    const needs = updateThread(s, id, { state: 'needs', reply: 'Option 2 routes through the cheaper region; option 1 is faster but costs more.', user_kind: 'user_own', user_kind_why: 'He asked to pick the design himself.' }, 'task:lead-1', at(10)).file
     expect(needs.threads[0].snoozed).toBeUndefined()
     const working = updateThread(f, id, { state: 'working' }, 'task:lead-1', at(3)).file
     const s3 = snooze(working, id, at(600))
