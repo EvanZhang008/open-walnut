@@ -20,8 +20,8 @@ import path from 'node:path'
 import { PNG, open } from './composer-send-harness'
 
 test.describe.configure({ timeout: 180_000 })
-// The video of each flow (the reviewer's look at it); 1280 wide, as every screenshot here.
-test.use({ viewport: { width: 1280, height: 800 }, video: { mode: 'on', size: { width: 1280, height: 800 } } })
+// 1280 wide, as every screenshot here; a recording takes its size from this viewport (pw-video.ts).
+test.use({ viewport: { width: 1280, height: 800 } })
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 const NOTE_AGENT_ID = 'note-agent'
 const GONE_UPLOAD = '1700000000000-deadbeefcafe.png'
