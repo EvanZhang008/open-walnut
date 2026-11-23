@@ -11,7 +11,8 @@
  * person (setup, a failure) on a tile, where a row says it in words instead; an App's own badge
  * sits there otherwise. The ⋯ of a tile is at its top left, clear of both. No switches on an item.
  */
-import { useCallback, useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
+import { useLeanCallback } from '@/hooks/useLeanCallback'
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu'
 import { useMenuButton } from '@/components/settings/sections/useMenuButton'
 import { PluginIcon } from '@/components/settings/PluginIcon'
@@ -64,7 +65,7 @@ const PRESS_SLOP_PX = 10
 function useItemMenu(entry: HomeEntry, actions: HomeItemActions) {
   const moreRef = useRef<HTMLButtonElement>(null)
   const anchorRef = useRef<HTMLSpanElement>(null)
-  const button = useMenuButton(useCallback(() => moreRef.current, []))
+  const button = useMenuButton(useLeanCallback(() => moreRef.current, []))
   const context = useContextMenu({ ignorePressSelection: true })
   const [pressedAt, setPressedAt] = useState<{ x: number; y: number } | null>(null)
   const press = useRef<{ timer: ReturnType<typeof setTimeout> | null; x: number; y: number; fired: boolean }>({ timer: null, x: 0, y: 0, fired: false })

@@ -217,7 +217,7 @@ describe('the companion is a replica: no new "am I the companion" check', () => 
 
 /** The web files still reading a `cloud` flag, and why. */
 const WEB_ROWS: Array<[string, number, string]> = [
-  ['web/src/components/apps-page/PluginStoreGrid.tsx', 1, "the Apps page registry's own `cloud` flag, sent by the plugin relay (src/web/routes/plugin-runtime.ts, a FRONT row)"],
+  ['web/src/components/apps-page/PluginAddFlows.tsx', 1, "the Apps page registry's own `cloud` flag, sent by the plugin relay (src/web/routes/plugin-runtime.ts, a FRONT row)"],
   ['web/src/components/apps-page/plugin-detail-sections.tsx', 3, "the Apps page registry's own `cloud` flag, sent by the plugin relay (src/web/routes/plugin-runtime.ts, a FRONT row)"],
   ['web/src/components/apps-page/plugin-store-model.ts', 1, "the Apps page registry's own `cloud` flag, sent by the plugin relay (src/web/routes/plugin-runtime.ts, a FRONT row)"],
 ]

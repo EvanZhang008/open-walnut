@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useEvent } from './useWebSocket';
+import { useLeanCallback } from './useLeanCallback';
 import { wsClient } from '@/api/ws';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { spillOversizedText } from '@/api/paste-spill';
@@ -963,7 +964,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
 
   /** A queued send that was refused: its bubble says why and keeps what it carries for Retry. */
   const failedSendsRef = useRef(new Map<number, QueuedChatSend>());
-  const markQueuedFailed = useCallback((send: QueuedChatSend, reason: string) => {
+  const markQueuedFailed = useLeanCallback((send: QueuedChatSend, reason: string) => {
     failedSendsRef.current.set(send.id, send);
     setMessages((prev) => prev.map((m) => (m.queueId === send.id && m.role === 'user' ? { ...m, queued: false, failed: reason || 'Send failed' } : m)));
   }, []);
@@ -1081,7 +1082,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     return await sendRpc(text, taskContext, images, source, mode, planModeFirst, planModeOff);
   }, [sendRpc, flushTextDelta]);
 
-  const retryFailedMessage = useCallback((queueId: number) => {
+  const retryFailedMessage = useLeanCallback((queueId: number) => {
     const send = failedSendsRef.current.get(queueId);
     if (!send) return;
     failedSendsRef.current.delete(queueId);

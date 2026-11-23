@@ -152,7 +152,9 @@ describe('the host refuses the session (another CLI holds it)', () => {
     expect(notice).toContain('Do not move the work elsewhere or close the task.')
     expect(notice).not.toContain('Its turn ended')
     expect(notice).not.toContain('its last message')
-    expect(await requestOf(rq)).toMatchObject({ status: 'notified', outcome: 'error' })
+    // Walnut tries this park again by itself (core/sessions/delivery-retry.ts, 22a4168adb): the
+    // request stays open for the late answer, never settled as an error the asker should resend.
+    expect(await requestOf(rq)).toMatchObject({ status: 'expired', outcome: 'timeout' })
 
     // The message is kept (parked with the cause), not retried in a loop.
     resetCache()
@@ -218,7 +220,10 @@ describe('the resumed CLI exits before it reads the message', () => {
       const rq = await ask(victim.taskId, 'Second decision.')
       await vi.waitFor(() => expect(noticesFor(rq)).toHaveLength(1), { timeout: 20_000 })
       const notice = noticesFor(rq)[0]
-      expect(notice).toContain('NOT DELIVERED')
+      // A park Walnut tries again by itself (core/sessions/delivery-retry.ts): not delivered YET,
+      // and it goes out by itself, so the asker never sends it a second time.
+      expect(notice).toContain('Your message has NOT BEEN DELIVERED yet')
+      expect(notice).toContain('It goes out by itself once that session can take it.')
       expect(notice).toContain('exited with code 1 while resuming this session')
       expect(notice).not.toContain('It hit an ERROR before replying')
 
