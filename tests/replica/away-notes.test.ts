@@ -6,11 +6,14 @@
  * dispatcher's part (req.replicaWrite) is a stub that records what it was asked.
  */
 import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import express from 'express'
 import request from 'supertest'
 import { ROUTE_TABLE, classify, journals } from '../../src/replica/route-table.js'
 import { awayNotes, noteRouteOf } from '../../src/replica/away-notes.js'
 import type { ReplicaWriteResult } from '../../src/replica/dispatch.js'
+import { isNotesExtrasPath } from '../../src/core/notes/note-paths.js'
 
 const PHONE = { kind: 'device', deviceId: 'dev-acme-phone', name: 'Acme phone' }
 
@@ -60,6 +63,36 @@ describe('note-write rows and the handler agree', () => {
     expect(noteRouteOf('DELETE', '/v1/notes/content/Acme/Plan')).toBeNull()
     expect(noteRouteOf('POST', '/notes-v2/move')).toBeNull()
     expect(noteRouteOf('GET', '/notes-v2/content/Acme/Plan.md')).toBeNull()
+  })
+})
+
+describe('a delete under /api/v1/notes/ that names no note is never a note delete away', () => {
+  // Every DELETE route a /api/v1 router mounts at `/notes/<segment>/...` (an attachment, a
+  // folder): read from the routers' source, so a new one turns this red until
+  // isNotesExtrasPath, and so the leader's note delete and the replica's table, know it.
+  const ROUTES = path.resolve(import.meta.dirname, '..', '..', 'src', 'web', 'routes')
+  const segmentsOf = () => {
+    const out = new Set<string>()
+    for (const f of fs.readdirSync(ROUTES).filter((n) => n === 'api-v1.ts' || n.endsWith('-v1.ts'))) {
+      const src = fs.readFileSync(path.join(ROUTES, f), 'utf8')
+      for (const m of src.matchAll(/\.delete\(\s*'\/notes\/([A-Za-z0-9_-]+)\/[^']*'/g)) out.add(m[1]!)
+    }
+    return [...out].sort()
+  }
+
+  it('finds the attachment and folder deletes', () => {
+    expect(segmentsOf()).toEqual(expect.arrayContaining(['attachment', 'folder']))
+  })
+
+  it('each is passed on by the note delete, refused away, and no note route of the handler', () => {
+    for (const seg of segmentsOf()) {
+      expect(isNotesExtrasPath(`${seg}/Acme/x`), seg).toBe(true)
+      expect(classify('DELETE', `/api/v1/notes/${seg}/Acme/x`), seg).toMatchObject({ away: 'needs-leader', why: 'note_changes_need_mac' })
+      expect(noteRouteOf('DELETE', `/v1/notes/${seg}/Acme/x`), seg).toBeNull()
+    }
+    // A note whose folder is only named like one stays a note delete.
+    expect(classify('DELETE', '/api/v1/notes/Acme/folder/Plan').away).toBe('note-write')
+    expect(noteRouteOf('DELETE', '/v1/notes/Acme/folder/Plan')).toEqual({ flavor: 'v1', op: 'delete', path: 'Acme/folder/Plan' })
   })
 })
 

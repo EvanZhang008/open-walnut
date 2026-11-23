@@ -276,6 +276,9 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'DELETE', pattern: '/api/notes-v2/content/:path+', away: 'note-write' },
   { method: 'PUT', pattern: '/api/v1/notes/content/:path+', away: 'note-write' },
   { method: 'POST', pattern: '/api/v1/notes', away: 'note-write' },
+  // The attachment and folder deletes share the note delete's prefix (isNotesExtrasPath).
+  { method: 'DELETE', pattern: '/api/v1/notes/attachment/*', away: 'needs-leader', why: 'note_changes_need_mac' },
+  { method: 'DELETE', pattern: '/api/v1/notes/folder/*', away: 'needs-leader', why: 'note_changes_need_mac' },
   { method: 'DELETE', pattern: '/api/v1/notes/:path+', away: 'note-write' },
   { method: W, pattern: '/api/notes-v2/*', away: 'needs-leader', why: 'note_changes_need_mac' },
   // Drawings are scene files in the leader's Notes vault, read and written there only (routes/drawings.ts);

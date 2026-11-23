@@ -149,6 +149,15 @@ export function noteRelOf(abs: string): string {
   return path.relative(notesRoot(), abs).replace(/\\/g, '/')
 }
 
+/**
+ * A path after `/api/v1/notes/` that names no note: the attachment and folder deletes
+ * (`DELETE /api/v1/notes/attachment/*`, `/notes/folder/*`, notes-extras-v1.ts). The note
+ * delete route (api-v1.ts) passes these on, and a host replica away never takes them as one.
+ */
+export function isNotesExtrasPath(rel: string): boolean {
+  return /^(attachment|folder)\//.test(rel)
+}
+
 /** `child` is strictly inside `root` (both absolute). */
 export function isInside(child: string, root: string): boolean {
   const rel = path.relative(root, child)

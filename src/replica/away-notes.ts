@@ -13,6 +13,7 @@
  */
 
 import type { Request, Response, NextFunction, RequestHandler } from 'express'
+import { isNotesExtrasPath } from '../core/notes/note-paths.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer, type WriteActor } from './write-port.js'
 
 export interface AwayNotesDeps {
@@ -43,7 +44,7 @@ export function noteRouteOf(method: string, apiPath: string): NoteRoute | null {
   if (v1 && m === 'PUT') return { flavor: 'v1', op: 'put', path: v1 }
   if (m === 'POST' && apiPath === '/v1/notes') return { flavor: 'v1', op: 'create', path: '' }
   const v1del = rest('/v1/notes/')
-  if (v1del && m === 'DELETE' && !v1del.startsWith('content/')) return { flavor: 'v1', op: 'delete', path: v1del }
+  if (v1del && m === 'DELETE' && !v1del.startsWith('content/') && !isNotesExtrasPath(v1del)) return { flavor: 'v1', op: 'delete', path: v1del }
   return null
 }
 

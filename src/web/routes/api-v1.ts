@@ -59,7 +59,7 @@ import {
   getWildcardPath,
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
-import { noteRelOf, resolveNotePath } from '../../core/notes/note-paths.js'
+import { isNotesExtrasPath, noteRelOf, resolveNotePath } from '../../core/notes/note-paths.js'
 import { getNotesTree, invalidateNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { armLateMirror, mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
@@ -4742,7 +4742,7 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
 apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const notePath = getWildcardPath(req)
-    if (notePath && /^(attachment|folder)\//.test(notePath)) { next(); return }
+    if (notePath && isNotesExtrasPath(notePath)) { next(); return }
     ensureIndexBootstrap()
     if (!notePath) { sendError(res, 400, 'bad_request', 'path required'); return }
     const fullPath = resolveNotePath(notePath)
