@@ -893,17 +893,21 @@ struct SessionConversationView: View {
     /// The two-line principal title. A chevron says it opens something when it does.
     private func navTitle(opensTask: Bool) -> some View {
         VStack(spacing: 0) {
-            HStack(spacing: 3) {
-                // An Org node goes by the name the drawer and its page use (CEO, "X VP").
-                Text(orgNode.map { TaskMentions.shownTitle($0.title, orgRole: $0.orgRole) }
-                     ?? AskProjectName.displayTitle(session.rowTitle, project: session.project ?? linkedTask?.project ?? fetchedTask?.project))
-                    .font(.headline)
-                    .lineLimit(1)
-                if opensTask {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
+            HStack(spacing: 0) {
+                // An Org node wears its avatar before its name, as on its page (none: as before).
+                OrgAvatar(taskId: orgNode?.id, side: 18, gap: 5)
+                HStack(spacing: 3) {
+                    // An Org node goes by the name the drawer and its page use (CEO, "X VP").
+                    Text(orgNode.map { TaskMentions.shownTitle($0.title, orgRole: $0.orgRole) }
+                         ?? AskProjectName.displayTitle(session.rowTitle, project: session.project ?? linkedTask?.project ?? fetchedTask?.project))
+                        .font(.headline)
+                        .lineLimit(1)
+                    if opensTask {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             Text(navSubtitle)

@@ -168,6 +168,7 @@ enum LocalDataReset {
         LetterReplyStore.shared.eraseAll()
         InboxItemStore.shared.eraseAll()
         AttachmentLoader.shared.eraseAll()
+        OrgAvatarLoader.shared.eraseAll()
         SessionStreamResumeIDs.shared.removeAll()
         TimeHeartbeatReporter.shared.eraseLocalData()
         // The diagnostic tape keeps running: it must not carry the old screen

@@ -251,3 +251,46 @@ extension WalnutAPI {
         try await send("POST", "/tasks/\(escape(taskId))/start", body: ["message": message], timeout: 60)
     }
 }
+
+// MARK: - Org avatars
+
+extension WalnutAPI {
+    /// The sizes the server draws (`GET /org/avatars/:taskId.png?size=`, clamped there too).
+    static let orgAvatarPixels = 16...512
+
+    /// `GET /api/v1/org/avatars/<taskId>.png?size=<px>`: the avatar the Org page shows for a task,
+    /// drawn `pixels` wide. The id is one path segment, so a `/` in it is escaped too.
+    static func orgAvatarURL(base: URL, taskId: String, pixels: Int) -> URL? {
+        var segment = CharacterSet.urlPathAllowed
+        segment.remove(charactersIn: "/")
+        guard !taskId.isEmpty, let id = taskId.addingPercentEncoding(withAllowedCharacters: segment) else { return nil }
+        var root = base.absoluteString
+        while root.hasSuffix("/") { root.removeLast() }
+        var components = URLComponents(string: root + "/api/v1/org/avatars/\(id).png")
+        let size = min(max(pixels, orgAvatarPixels.lowerBound), orgAvatarPixels.upperBound)
+        components?.queryItems = [URLQueryItem(name: "size", value: String(size))]
+        return components?.url
+    }
+
+    /// The task's avatar PNG, or nil when the server has none to give (404: a plain task, which wears none, the task is gone,
+    /// an older server without the route, or one where the avatars were still an experiment and off). Any other
+    /// answer throws, so a caller can keep what it showed and ask again later.
+    func orgAvatarPNG(taskId: String, pixels: Int) async throws -> Data? {
+        guard let base = AppConfig.serverURL, let token = AppConfig.token,
+              let url = Self.orgAvatarURL(base: base, taskId: taskId, pixels: pixels) else {
+            throw APIError.notConfigured
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        request.authorizeForWalnut(token: token)
+        let (data, response) = try await perform(request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
+        switch http.statusCode {
+        case 200: return data
+        case 404: return nil
+        default:
+            throw APIError.server(status: http.statusCode, code: "http_error",
+                                  message: "Server returned \(http.statusCode)", serverHash: nil, serverContent: nil)
+        }
+    }
+}

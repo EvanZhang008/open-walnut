@@ -204,13 +204,16 @@ struct ChatOrgRowView: View {
         .contentShape(Rectangle())
     }
 
+    /// The node's Org avatar when the server draws one (`OrgAvatar`), else its initials.
     private var avatar: some View {
         let ceo = row.kind == .ceo
-        return Text(verbatim: ceo ? "C" : ChatOrgModel.initials(row.name))
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(ceo ? Theme.onTint : .white)
-            .frame(width: 34, height: 34)
-            .background(ceo ? Theme.accent : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
+        return OrgAvatar(taskId: row.contactId, side: 34) {
+            Text(verbatim: ceo ? "C" : ChatOrgModel.initials(row.name))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ceo ? Theme.onTint : .white)
+                .frame(width: 34, height: 34)
+                .background(ceo ? Theme.accent : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
+        }
     }
 
     static func color(_ rgb: Int) -> Color {

@@ -233,6 +233,14 @@ struct OrgNodePage: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(route.name)
         .navigationBarTitleDisplayMode(.inline)
+        // The title with the node's avatar before it (the Back button keeps the plain name).
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                OrgNodeTitle(nodeId: route.nodeId, name: route.name)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isHeader)
+            }
+        }
         .task {
             // What the phone last read for this node first (offline too), then the server's.
             await threads.hydrate()
