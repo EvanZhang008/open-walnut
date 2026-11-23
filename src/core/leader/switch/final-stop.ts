@@ -85,14 +85,18 @@ export function beginTakeBack(): { ok: true; sw: HandedOverSwitch | null } | { o
 
 /**
  * How a take-back ended. Taken back: nothing waits for a stop any more. Not (no witness majority
- * this moment): the switch waits for its stop again, and `retryMs` tries the take-back again then.
+ * this moment): the switch waits for its stop again, and the take-back is tried again `retryMs` later
+ * (whoever began it: a handed-over server is never left with nothing that ends its wait).
  */
-export function endTakeBack(sw: HandedOverSwitch | null, ok: boolean, retryMs?: number): void {
+export function endTakeBack(sw: HandedOverSwitch | null, ok: boolean, retryMs = 5_000): void {
   if (!sw || current !== sw) return
   if (ok) { if (current.timer) clearTimeout(current.timer); cancelledId = sw.switchId; current = null; return }
   current.phase = 'waiting'
-  if (retryMs !== undefined) armStopWait(current, retryMs)
+  armStopWait(current, retryMs)
 }
+
+/** This server took the handover of `switchId` back: a handover again under that id is refused (a new switch begins anew). */
+export function wasTakenBack(switchId: string): boolean { return cancelledId === switchId }
 
 /** The switch stop begins: the stop wait ends here, and a take-back can no longer start. Synchronous, so the two never both run. */
 export function beginSwitchStop(switchId: string): { ok: true; sw: HandedOverSwitch } | { ok: false; why: string } {

@@ -169,10 +169,11 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           for (;;) {
             const t = await side.api('GET', `/api/leader/switch/target?switchId=${encodeURIComponent(s.id)}`).catch(() => null)
             const ts = (t?.json as { state?: TargetState | null } | null)?.state
-            if (ts?.handoverSeen) break
+            // A target that gave up after it saw the handover is not ready: its giving up is read first.
             if (ts?.step === 'rolled-back' || ts?.step === 'cancel' || ts?.step === 'restore') fail(`${s.to} gave up: ${ts.rollbackWhy ?? ts.step}`)
             const n = await theirs()
             if (n?.step === 'gave-up') fail(`${s.to} gave up: ${n.why ?? 'no reason given'}`)
+            if (ts?.handoverSeen) break
             if (n?.step === 'waiting-mark') break
             if (Date.now() > until) fail(`${s.to}'s switch job did not say it sees the handover within ${Math.round((o.targetReadyMs ?? 30_000) / 1000)} s`)
             await sleep(300)

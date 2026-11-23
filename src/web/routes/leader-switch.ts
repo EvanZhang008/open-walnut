@@ -63,17 +63,20 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   ])
   let link: Awaited<ReturnType<typeof switchLink>> | null = null
   if (switchId !== undefined) {
-    const { isSwitchId } = await import('../../core/leader/switch/ticket.js')
+    const [{ isSwitchId }, { wasTakenBack }] = await Promise.all([import('../../core/leader/switch/ticket.js'), import('../../core/leader/switch/final-stop.js')])
     if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
+    // Its target job holds the first handover's number and deadline: a switch taken back begins anew.
+    if (wasTakenBack(switchId)) { res.status(409).json({ ok: false, why: `this server took the handover of switch ${switchId} back: begin a new switch` }); return }
     link = await switchLink(to, p.machine)
     if ('refused' in link) { res.status(409).json({ ok: false, why: link.refused }); return }
   }
   // What must land before the handover record (this machine's console on the new leader, ...).
   const before = await beforeHandover({ to, machine: p.machine, home: WALNUT_HOME, address: listeningAddress() })
-  if (!before.ok) { res.status(409).json({ ok: false, why: before.why }); return }
+  if (!before.ok) { if (link && !('refused' in link)) link.peer.close(); res.status(409).json({ ok: false, why: before.why }); return }
   const r = await p.runtime.handover(to)
   // Not handed over: the console minted for it will never stand.
   if (!r.ok) await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
+  if (!r.ok && link && !('refused' in link)) link.peer.close()
   if (!r.ok || !link || 'refused' in link || typeof switchId !== 'string') {
     res.status(r.ok ? 200 : 409).json({ ok: r.ok, ...(r.record ? { record: r.record.number } : {}), ...(r.why ? { why: r.why } : {}) })
     return
@@ -113,19 +116,19 @@ async function switchLink(to: string, me: string): Promise<{ peer: import('../..
  * Takes this server's handover back (a cancel by hand, the stop wait, a target side that did not start):
  * never while its switch stop runs (final-stop.ts beginTakeBack), the console minted for it withdrawn.
  */
-async function takeBackHandover(why: string, o: { retryMs?: number; begun?: import('../../core/leader/switch/final-stop.js').HandedOverSwitch } = {}): Promise<{ ok: boolean; why?: string }> {
+async function takeBackHandover(why: string, o: { begun?: import('../../core/leader/switch/final-stop.js').HandedOverSwitch } = {}): Promise<{ ok: boolean; why?: string }> {
   const p = currentLeaderPermit()
   const stop = await import('../../core/leader/switch/final-stop.js')
   if (!p || p.trial) { if (o.begun) stop.endTakeBack(o.begun, false); return { ok: false, why: 'this server does not hold the write permission' } }
   // The stop wait began its take-back already (synchronously, in its timer); everyone else begins it here.
   const begun = o.begun ? { ok: true as const, sw: o.begun } : stop.beginTakeBack()
   if (!begun.ok) return { ok: false, why: begun.why }
-  const retryMs = o.retryMs
   log.web.warn(`leader switch: this server takes its handover back (${why})`, { switchId: begun.sw?.switchId ?? null })
   const r = await p.runtime.cancel().catch((err: unknown) => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
-  stop.endTakeBack(begun.sw, r.ok, r.ok ? undefined : retryMs)
+  // Not taken back: the switch waits for its stop again, and the take-back is tried again in 5 s.
+  stop.endTakeBack(begun.sw, r.ok)
   if (r.ok) await withdrawConsoleQuietly(p.machine, (await import('../../constants.js')).WALNUT_HOME)
-  else log.web.warn('leader switch: the handover could not be taken back yet', { switchId: begun.sw?.switchId ?? null, why: r.why, retryMs: retryMs ?? null })
+  else log.web.warn('leader switch: the handover could not be taken back yet', { switchId: begun.sw?.switchId ?? null, why: r.why })
   return r
 }
 
@@ -153,6 +156,13 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
   // A resumed source job asks again: the same switch keeps its deadline.
   const had = handedOverSwitch()
   const deadline = had && had.switchId === o.switchId ? had.commitDeadline : Date.now() + settings.commitWindowMs
+  // From here the stop wait runs: whatever fails below, the take-back of this handover is retried until it stands.
+  noteHandedOver({
+    switchId: o.switchId, to: o.to, peer, commitDeadline: deadline, stopWaitMs: settings.stopWaitMs,
+    // No stop within the wait: take the handover back; when the witnesses do not answer, try again every 5 s
+    // (a stop that comes between two tries is taken: the handover still stands).
+    onStopWaitOver: (sw) => { void takeBackHandover(`no switch stop came within ${Math.round(settings.stopWaitMs / 1000)} s`, { begun: sw }) },
+  })
   const onHosts = await homeOnHostsNow().catch(() => null)
   const knobs = testKnobs(o.test)
   const test = knobs ? { ...(knobs.killAt ? { killAt: knobs.killAt } : {}), ...(knobs.skipLedgerRewrite ? { skipLedgerRewrite: true } : {}) } : undefined
@@ -172,12 +182,6 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
   }
   const job = await peer.startTargetJob(o.switchId, { check: false }).catch((err: unknown) => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
   if (!job.ok) return { ok: false, why: `the switch job on ${o.to} did not start: ${job.why ?? 'no reason'}` }
-  noteHandedOver({
-    switchId: o.switchId, to: o.to, peer, commitDeadline: deadline, stopWaitMs: settings.stopWaitMs,
-    // No stop within the wait: take the handover back; when the witnesses do not answer, try again every 5 s
-    // (a stop that comes between two tries is taken: the handover still stands).
-    onStopWaitOver: (sw) => { void takeBackHandover(`no switch stop came within ${Math.round(settings.stopWaitMs / 1000)} s`, { begun: sw, retryMs: 5_000 }) },
-  })
   return { ok: true, commitDeadline: ticket.commitDeadline }
 }
 
@@ -193,9 +197,14 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
   const [{ beginSwitchStop, abandonSwitchStop, finishSwitchStop }, server, { WALNUT_HOME }] = await Promise.all([
     import('../../core/leader/switch/final-stop.js'), import('../server.js'), import('../../constants.js'),
   ])
-  if (!server.switchStopAvailable()) { res.status(409).json({ ok: false, why: 'this server cannot stop itself for a switch (it was not started by `walnut web`, or it is stopping already)' }); return }
+  // The switch's own state first: a resumed job asking again is told it is in its stop already.
   const begun = beginSwitchStop(switchId)
   if (!begun.ok) { res.status(409).json({ ok: false, why: begun.why }); return }
+  if (!server.switchStopAvailable()) {
+    abandonSwitchStop(begun.sw)
+    res.status(409).json({ ok: false, why: 'this server cannot stop itself for a switch (it was not started by `walnut web`, or it is stopping already)' })
+    return
+  }
   const knobs = testKnobs(req.body?.test)
   const test = knobs ? { ...(knobs.killAt ? { killAt: knobs.killAt } : {}), ...(knobs.pauseAfterFirstBatchMs ? { pauseAfterFirstBatchMs: knobs.pauseAfterFirstBatchMs } : {}) } : undefined
   const abort = new AbortController()
@@ -245,13 +254,17 @@ leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
   if (link.peer.kind === 'local') removeSwitchFile(link.peer.standbyDir, checkReportName(switchId))
   const job = await link.peer.startTargetJob(switchId, { check: true })
   if (!job.ok) { res.status(409).json({ ok: false, why: `the check did not start on ${to}: ${job.why}` }); return }
-  const until = Date.now() + 90_000
-  while (Date.now() < until) {
-    const report = await link.peer.readFile(checkReportName(switchId)).catch(() => null)
-    if (report) { res.json({ ok: true, report }); return }
-    await new Promise((r) => setTimeout(r, 300))
+  try {
+    const until = Date.now() + 90_000
+    while (Date.now() < until) {
+      const report = await link.peer.readFile(checkReportName(switchId)).catch(() => null)
+      if (report) { res.json({ ok: true, report }); return }
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    res.status(504).json({ ok: false, why: `the check on ${to} did not report within 90 s` })
+  } finally {
+    link.peer.close()
   }
-  res.status(504).json({ ok: false, why: `the check on ${to} did not report within 90 s` })
 })
 
 /**

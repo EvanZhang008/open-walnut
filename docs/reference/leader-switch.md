@@ -203,7 +203,10 @@ was never changed.
 Defaults: `commit_window_s: 300` (from the handover to the last moment the new leader may start
 its commit; the final batch and its mark must end inside it, a mark dated after it is refused, no
 commit start begins after it, and the commit start itself stops renewing on the handover at that
-moment (`WALNUT_LEADER_SWITCH_COMMIT_UNTIL`); one already running gets 30 s more to reach its majority), `stop_wait_s: 120` (the old leader's server cancels
+moment (`WALNUT_LEADER_SWITCH_COMMIT_UNTIL`); one already running gets 30 s more to reach its majority;
+the deadline is the old leader's clock read on the new leader's, so the two machines' clocks must agree
+to within seconds (NTP): a skew moves the window's edges by as much, never who leads, which the
+witnesses decide), `stop_wait_s: 120` (the old leader's server cancels
 its own handover when no switch stop came this long after it, so a source job that died after the
 handover leaves no machine without a leader for long; a stop asked later is refused).
 
