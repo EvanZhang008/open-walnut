@@ -1038,7 +1038,7 @@ describe('host_exec', () => {
 
   it('a read of a job that never reached the host says it is final and how to run it; a repeat of it logs at info (2026-11-22)', async () => {
     const jobId = 'hx-e2e-never-started-0001'
-    const readIt = () => fetch(`http://127.0.0.1:${port}/api/v1/hosts/macbox/exec/${jobId}?wait_ms=15000`, {
+    const readIt = () => fetch(`http://127.0.0.1:${port}/api/v1/hosts/macbox/exec/${jobId}?wait_ms=0`, {
       headers: { 'x-walnut-caller-sid': OWN_SID, 'x-walnut-answer-by': String(Date.now() + 20_000) },
     })
     const first = await readIt()
@@ -1065,6 +1065,26 @@ describe('host_exec', () => {
     expect(gone).toMatchObject({ status: 404, body: { code: 'unknown_job', final: true } })
     expect(String(gone.body.error)).toContain('Walnut started it at')
     expect(String(gone.body.error)).toContain('To run the command anew, leave job_id out.')
+  }, 30_000)
+
+  it('a read that waits holds an unknown job for its wait: a start that lands meanwhile is found, an id that never starts answers once the wait is over (2026-11-23)', async () => {
+    // A start still on its way: the read finds it when it lands, not a 404 per poll.
+    const late = 'hx-e2e-start-in-flight-0001'
+    const t0 = Date.now()
+    const read = api('GET', `/api/v1/hosts/macbox/exec/${late}?wait_ms=8000`, undefined, OWN_SID)
+    await new Promise((r) => setTimeout(r, 1_500))
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo landed', job_id: late }, OWN_SID)).toMatchObject({ status: 200 })
+    expect(await read).toMatchObject({ status: 200, body: { jobId: late, running: false, output: 'landed\n' } })
+    expect(Date.now() - t0).toBeLessThan(8_000)
+    // An id that never starts: the final answer comes after the wait, so a loop goes at its pace.
+    const never = 'hx-e2e-never-lands-0001'
+    const t1 = Date.now()
+    expect(await api('GET', `/api/v1/hosts/macbox/exec/${never}?wait_ms=4000`, undefined, OWN_SID)).toMatchObject({ status: 404, body: { code: 'unknown_job', final: true } })
+    expect(Date.now() - t1).toBeGreaterThanOrEqual(2_000)
+    // Without a wait the answer is at once.
+    const t2 = Date.now()
+    expect(await api('GET', `/api/v1/hosts/macbox/exec/${never}?wait_ms=0`, undefined, OWN_SID)).toMatchObject({ status: 404, body: { code: 'unknown_job' } })
+    expect(Date.now() - t2).toBeLessThan(2_000)
   }, 30_000)
 
   it('a relayed call answers inside its caller\'s deadline, and starts nothing it could not answer for', async () => {
@@ -1567,12 +1587,13 @@ describe('host_exec', () => {
       // The op refuses a key it does not know before it calls.
       const typo = await executeOp('host_exec_read', { host: 'macbox', job_id: 'hx-none-0001', wait_for: { outptu: 'x' } }, opAs(waiter.sid)) as OpResult
       expect(typo.ok).toBe(false)
-      // With wait_for a read may wait as long as host_exec (600000): the op takes it and the host is asked.
+      // With wait_for a read may wait as long as host_exec (600000): the op takes it and the host is asked
+      // (the job never starts, so the read holds its unknown_job 15 s at most, then answers it).
       const asked = sent.length
       const tenMin = await executeOp('host_exec_read', { host: 'macbox', job_id: 'hx-none-0001', wait_ms: 600_000, wait_for: { output: 'x' } }, opAs(waiter.sid)) as OpResult
       expect(tenMin.ok).toBe(false)
       expect(sent.slice(asked).some((m) => m.cmd === 'exec.read')).toBe(true)
-    }, 30_000)
+    }, 60_000)
 
     it('a daemon from before host-exec-wait-v1 is refused every wait_for before anything runs; without one it runs', async () => {
       // 2026-11-04 review: the server's own fallback ran patterns on its loop; now no pattern runs on the server.

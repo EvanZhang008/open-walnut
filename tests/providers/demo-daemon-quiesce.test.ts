@@ -456,10 +456,10 @@ describe('demo.quiesce background wiring in both twins', () => {
     expect(fn(src, 'deliverUnclaimedFires')).toMatch(/^function deliverUnclaimedFires\([^\n]*\{\n\s*if \(demoQuiesce\.fenced\) return;?\n/)
     expect(fn(src, 'startUnclaimedRun')).toContain('demoQuiesce.fenced) return')
     expect(fn(src, 'runTriggerTest')).toContain("if (demoQuiesce.fenced) throw new Error('triggers.test: Demo is stopping; no check starts')")
-    // A run the stop ended writes no state and sends no event.
+    // A run the stop ended (a Demo's stop, or the daemon's own cleanup) writes no state and sends no event.
     const run = fn(src, 'runTrigger')
     const call = run.indexOf('runCheckProcess(')
-    const discard = run.indexOf('if (demoQuiesce.fenced) {', call)
+    const discard = run.indexOf('if (demoQuiesce.fenced || triggerChecksEnded) {', call)
     expect(discard).toBeGreaterThan(call)
     expect(run.indexOf('persistTriggerState', call)).toBeGreaterThan(discard)
     expect(run.indexOf('sendTriggerEvent', call)).toBeGreaterThan(discard)
@@ -517,9 +517,11 @@ describe('demo.quiesce background wiring in both twins', () => {
     expect([...src.matchAll(/setInterval\(tickTriggers/g)]).toHaveLength(1)
   })
 
-  it('the check fence is the same in both twins: an abort controller only demo.quiesce aborts, a pid set, the final gate', () => {
+  it('the check fence is the same in both twins: an abort controller only demo.quiesce and the daemon\'s own cleanup abort, a pid set, the final gate', () => {
     for (const src of [standalone, source]) {
-      expect([...src.matchAll(/demoTriggerChecks\.abort\(\)/g)]).toHaveLength(1)
+      // demo.quiesce, and cleanup(): a check run never outlives its daemon (2026-11-23, repeat-answers.test.ts).
+      expect([...src.matchAll(/demoTriggerChecks\.abort\(\)/g)]).toHaveLength(2)
+      expect(fn(src, 'cleanup')).toMatch(/demoTriggerChecks\.abort\(\)/)
       const fence = fn(src, 'checkRunFence')
       expect(fence).toContain('!demoQuiesce.fenced')
       expect(fence).toContain('demoTriggerChecks.signal')

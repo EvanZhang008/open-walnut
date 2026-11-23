@@ -1976,12 +1976,12 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     for (const src of [standaloneSrc, templateSrc]) {
       const start = src.search(/function cleanup\(/)
       expect(start).toBeGreaterThan(-1)
-      const body = src.slice(start, start + 3000)
+      const body = src.slice(start, start + 4000)
       expect(body).toMatch(/if \(session\.snapshotTimer\) \{\s*\n\s*try \{ pushSnapshot\(sid, true\);? \} catch \{\}/)
     }
     // standalone clears the subscriber set in cleanup — the flush must come FIRST.
     const saStart = standaloneSrc.search(/function cleanup\(/)
-    const saBody = standaloneSrc.slice(saStart, saStart + 3000)
+    const saBody = standaloneSrc.slice(saStart, saStart + 4000)
     const flushIdx = saBody.indexOf('pushSnapshot(sid, true)')
     const clearIdx = saBody.indexOf('session.subscribers.clear()')
     expect(flushIdx).toBeGreaterThan(-1)

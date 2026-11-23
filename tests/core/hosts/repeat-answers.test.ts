@@ -90,8 +90,20 @@ describe('the class: answers about an id with no run', () => {
 
   it('a read and a stop of a job turn the host\'s unknown_job into the final answer', () => {
     const jobs = read('src/core/hosts/host-exec-jobs.ts')
-    expect(jobs).toMatch(/return finalIfUnknown\(caller, host, String\(params\.job_id\), \(\) => readOn\(/)
+    expect(jobs).toMatch(/return finalIfUnknown\(caller, host, String\(params\.job_id\), \(\) => readOnceKnown\(/)
     expect(jobs).toMatch(/err\.code === 'unknown_job' \? await unknownJob\(err, caller, host, String\(params\.job_id\), 'stop'\)/)
+  })
+
+  it('a daemon that stops ends the check runs it started, in both twins (2026-11-23: orphaned runs got 403 session_only)', () => {
+    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
+      const text = read(twin)
+      const at = text.search(/\nfunction cleanup\(/)
+      expect(at, twin).toBeGreaterThan(0)
+      const body = text.slice(at, text.indexOf('\n}\n', at))
+      expect(body, `${twin}: cleanup() must abort the check runs' signal`).toMatch(/demoTriggerChecks\.abort\(\)/)
+      // The only signal every check run listens to is that one (checkRunFence): a new one would need its own abort here.
+      expect(text.match(/signal: demoTriggerChecks\.signal|fence\.signal = demoTriggerChecks\.signal/g)?.length, twin).toBe(1)
+    }
   })
 
   it('every route that answers a host refusal marks its repeats', () => {

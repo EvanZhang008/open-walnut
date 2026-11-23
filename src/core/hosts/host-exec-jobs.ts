@@ -111,7 +111,36 @@ export async function readHostJob(params: { host: string; job_id: string; offset
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
   await grantFor(caller, host, null)
-  return finalIfUnknown(caller, host, String(params.job_id), () => readOn(params, caller, callerSid, host, waitFor, t0))
+  return finalIfUnknown(caller, host, String(params.job_id), () => readOnceKnown(params, caller, callerSid, host, waitFor, t0))
+}
+
+/** How often a read that waits looks again for a job the host does not hold yet, and for how long at most. */
+const UNKNOWN_RECHECK_MS = 2_000
+const UNKNOWN_HOLD_MAX_MS = 15_000
+
+/**
+ * A read that may wait (wait_ms, or wait_for) holds an unknown_job for that wait (15 s at most),
+ * looking again every 2 s: a start still on its way to the host is found when it lands, and a loop of reads of an
+ * id that never started goes at the pace of its own wait, not as fast as the 404s come back
+ * (2026-11-22: one task's script read an id 201 times in 105 s while its start was in flight).
+ */
+async function readOnceKnown(params: { job_id: string; offset?: number; wait_ms?: number }, caller: Caller, callerSid: string | undefined, host: string,
+  waitFor: import('./host-exec-wait.js').WaitFor | null, t0: number): Promise<Record<string, unknown>> {
+  const asked = typeof params.wait_ms === 'number' && params.wait_ms >= 0 ? params.wait_ms : waitFor ? HOST_WAIT_MAX_MS : 0
+  // The unknown id is held at most UNKNOWN_HOLD_MAX_MS; once found, the read waits what is left of its own.
+  const until = t0 + Math.min(asked, UNKNOWN_HOLD_MAX_MS)
+  for (let again = false; ; again = true) {
+    try {
+      return await readOn(again ? { ...params, wait_ms: Math.max(0, t0 + asked - Date.now()) } : params, caller, callerSid, host, waitFor, t0)
+    } catch (err) {
+      if (!(err instanceof HostExecError && err.code === 'unknown_job')) throw err
+      // A run Walnut started that the host dropped never comes back: no hold helps it.
+      if (startedRun(String(params.job_id))?.taskId === caller.taskId) throw err
+      // Room for one more look, and for its answer to get back inside the caller's own deadline.
+      if (Date.now() + UNKNOWN_RECHECK_MS >= Math.min(until, Date.now() + budgetLeft(caller, t0) - 2_000)) throw err
+      await new Promise((r) => setTimeout(r, UNKNOWN_RECHECK_MS))
+    }
+  }
 }
 
 async function readOn(params: { job_id: string; offset?: number; wait_ms?: number }, caller: Caller, callerSid: string | undefined, host: string,

@@ -8548,6 +8548,8 @@ const triggersConfigureGate = new DaemonSessionGate()
 // Check pids not closed yet (runs in flight: triggerChecksRunning): demo.quiesce alone aborts them and waits for 0. Mirror daemon-source.ts.
 const demoTriggerChecks = new AbortController()
 const demoTriggerCheckPids = new Set<number>()
+// Set by cleanup(): a run its abort ended writes no state and sends no event (the successor runs it next).
+let triggerChecksEnded = false
 /** runCheckProcess options every check of this daemon runs with: its fence, and the runtime's own spawn and env. */
 function checkRunFence(): { maySpawn: () => boolean; signal: AbortSignal; children: Set<number>; childProcess: ChildProcessUse } {
   return { maySpawn: () => !demoQuiesce.fenced, signal: demoTriggerChecks.signal, children: demoTriggerCheckPids, childProcess: childUse }
@@ -9001,8 +9003,8 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     const fault = error ? caller.fault() : undefined
     const now = Date.now()
     // A stopping Demo writes no state and sends no event for a run its stop ended.
-    if (demoQuiesce.fenced) {
-      logMsg('info', 'trigger run discarded: Demo is stopping', { id: entry.def.id })
+    if (demoQuiesce.fenced || triggerChecksEnded) {
+      logMsg('info', triggerChecksEnded ? 'trigger run discarded: the daemon is stopping' : 'trigger run discarded: Demo is stopping', { id: entry.def.id })
       return { outcome: 'quiet', reason: 'demo_stopping' }
     }
     if (!stillArmed()) {
@@ -14329,6 +14331,13 @@ function cleanup(opts: { registrySaved?: boolean } = {}) {
     try { clearInterval(triggerTickTimer) } catch {}
     triggerTickTimer = null
   }
+  // Then end the check runs still going: a run outlives the daemon that started it otherwise, with a
+  // token (WALNUT_CHECK_TOKEN) only this daemon knows, no deadline anyone enforces and an answer
+  // nobody reads. 2026-11-23: after each restart the land link's relay check ran on for about three
+  // minutes, and every host_exec_read it relayed reached the server as an unknown caller and got 403
+  // session_only (about 500 a week). The successor starts each trigger's next run on its own clock.
+  triggerChecksEnded = true
+  try { demoTriggerChecks.abort() } catch {}
   if (runtimeKeepTimer) { try { clearInterval(runtimeKeepTimer) } catch {} runtimeKeepTimer = null }
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.

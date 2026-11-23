@@ -218,5 +218,28 @@ for (const twin of ['standalone', 'source'] as const) {
       expect(second.seq).toBe((first.seq as number) + 1)
       expect(await rpc({ cmd: 'triggers.ack', triggerId: 'watch', seq: second.seq as number })).toMatchObject({ acked: true })
     }, 90_000)
+
+    // 2026-11-23: a check run outlived its daemon's restart. Its token (WALNUT_CHECK_TOKEN) was the
+    // old daemon's, so the new one relayed its calls as an unknown caller: 403 session_only on every
+    // host_exec_read the land link's relay made, for minutes after each restart, and no deadline held it.
+    it('a daemon that stops ends the check runs it started', async () => {
+      const pidFile = path.join(BASE, 'long-check.pid')
+      expect(await rpc({
+        cmd: 'triggers.configure',
+        config: { version: 1, triggers: [{ id: 'long', name: 'long', everyMs: 3_600_000, check: { run: `echo $$ > ${JSON.stringify(pidFile)}; exec sleep 60`, timeoutSeconds: 120 } }] },
+      })).toMatchObject({ ok: true, count: 1 })
+      await rpc({ cmd: 'triggers.run', triggerId: 'long' })
+      const pid = await waitFor(() => {
+        const n = fs.existsSync(pidFile) ? parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10) : NaN
+        return n > 1 ? n : undefined
+      }, 15_000, 'the check to start')
+      expect(() => process.kill(pid, 0), 'the check runs').not.toThrow()
+      await stopDaemon()
+      await waitFor(() => { try { process.kill(pid, 0); return undefined } catch { return true } }, 5_000, 'the check run to end with its daemon')
+      // The run its stop ended is no failure of the script: no strike, nothing written for it.
+      const statePath = path.join(DURABLE, 'long.json')
+      if (fs.existsSync(statePath)) expect(readState(DURABLE, 'long').consecutiveErrors ?? 0).toBe(0)
+      expect(checksOf('long').filter((e) => e.outcome === 'error')).toHaveLength(0)
+    }, 60_000)
   })
 }
