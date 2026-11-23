@@ -115,6 +115,29 @@ final class PrivateTasksTests: XCTestCase {
         XCTAssertEqual(store.syncStanding(task("a", source: "plugin-a")), .synced(service: "plugin-a"))
     }
 
+    /// A task held out of Tracker whose project was then moved to one that syncs nowhere: the server
+    /// answers 409 to Sync to Tracker, so the menu (TaskSyncMenu) offers no such button and says why.
+    /// What it reads: the standing (kept, not checking), and the project syncing nowhere now.
+    func testAKeptTaskInAProjectThatSyncsNowhereIsOfferedNoSync() async {
+        let mock = MockTaskTransport()
+        mock.projectSourcesResult = sources
+        let store = TasksStore(transport: mock)
+        // Before the projects load, the menu still offers Sync (the server's answer decides then).
+        XCTAssertTrue(store.projectSources.isEmpty)
+        await store.loadProjectSources()
+        let held = task("h", project: "Home", hold: WalnutSyncHold(state: "chosen", target: "plugin-a"))
+        let standing = store.syncStanding(held)
+        XCTAssertEqual(standing, .kept(service: "plugin-a", hold: held.syncHold))
+        XCTAssertFalse(standing.isChecking)
+        XCTAssertFalse(store.projectSources.isEmpty)
+        XCTAssertNil(store.projectService(held.project), "Home syncs nowhere: no Sync to Tracker")
+        XCTAssertEqual(SyncStanding.projectSyncsNowhere(store.serviceName("plugin-a")),
+                       "Its project does not sync to an outside service now, so it can only go to Tracker from a project that does.")
+        // The same hold in a project that syncs still offers it, and a task being checked does too.
+        XCTAssertNotNil(store.projectService(task("k", hold: held.syncHold).project))
+        XCTAssertTrue(SyncStanding.checking(service: "plugin-a", hold: WalnutSyncHold(state: "checking", target: "plugin-a")).isChecking)
+    }
+
     func testAnOlderServerOffersNoLocalChoice() async {
         // Before private tasks a server sent `source` without `source_name`, ignored `local` and
         // had no make-local route: nothing may offer Local or a service there.
@@ -218,7 +241,7 @@ final class PrivateTasksTests: XCTestCase {
          "due_date":"2026-11-02","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z",
          "completed_at":"2026-11-01T00:00:00Z","starred":true,"pinned":true,"tags":["a"],"summary":"s",
          "start_date":"2026-11-01","end_date":"2026-11-02","unread":true,"parent_task_id":"p1",
-         "user_status":{"state":"working"},"org_role":"lead","threads_on":true,
+         "user_status":{"state":"working"},"org_role":"lead","threads_on":true,"director":"yes",
          "live_activity":{"kind":"tool","since":"2026-11-01T00:00:00Z"},
          "result_report":{"result":"r"},"team_stop":{"at":"2026-11-01T00:00:00Z"},
          "wait_until":"2026-11-03T00:00:00Z","watched_at":"2026-11-01T00:00:00Z",
