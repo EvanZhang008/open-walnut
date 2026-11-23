@@ -46,6 +46,20 @@ export interface LeaderBootInput {
   trial?: boolean
   env?: NodeJS.ProcessEnv
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
+  /** Tests: this machine's own daemon for the first lead's take-back (default the server's link to it). */
+  ownDaemon?: import('./host-follow.js').OwnDaemon
+}
+
+async function takeBackLeftovers(input: LeaderBootInput, machine: string): Promise<void> {
+  const log = input.log ?? (() => {})
+  try {
+    const { takeBackSwitchLeftovers } = await import('./host-follow.js')
+    const r = await takeBackSwitchLeftovers({ home: input.home, machine, ...(input.ownDaemon ? { daemon: input.ownDaemon } : {}) })
+    if (!r.ok) log('warn', 'leader switch: what a switch left on this machine was not all taken back', { why: r.why })
+    else if (r.console || r.hostService || r.credential || r.credentialFile) log('info', 'leader switch: this home leads: what a switch left on this machine is taken back', { console: r.console, hostService: r.hostService, credential: r.credential, credentialFile: r.credentialFile })
+  } catch (err) {
+    log('warn', 'leader switch: what a switch left on this machine was not all taken back', { error: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<PermitRuntime | null> {
@@ -91,6 +105,10 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
     ...(commitHandover !== undefined ? { commitHandover } : {}),
     ...(commitUntil !== undefined ? { commitUntil } : {}),
     log: input.log,
+    // The first time this server leads (at boot, or later from waiting): what a switch left on this
+    // machine goes (host-follow.ts takeBackSwitchLeftovers). In the background: it waits for this
+    // server's link to its own daemon, and nothing waits for it.
+    onFirstLead: () => { void takeBackLeftovers(input, id) },
   })
   if (rt.decision.kind === 'refuse') {
     await rt.stop()

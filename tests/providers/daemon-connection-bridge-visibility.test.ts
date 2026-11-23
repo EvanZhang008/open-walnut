@@ -22,6 +22,8 @@ const bridgeConfigMock = vi.hoisted(() => ({
   failure: false,
   /** While set, a read of the config waits here after taking the payload (a push in flight). */
   gate: null as Promise<void> | null,
+  /** Called when a read reaches the gate (the push is in flight there). */
+  entered: null as (() => void) | null,
   /** What revalidateBridgeToken answers, call by call (then false). */
   reminted: [] as boolean[],
   revalidated: [] as string[],
@@ -30,7 +32,7 @@ vi.mock('../../src/integrations/cloud-bridge-config.js', () => ({
   getBridgeConfigForHost: vi.fn(async () => {
     if (bridgeConfigMock.failure) throw new Error('Cloud pairing read failed')
     const payload = bridgeConfigMock.payload
-    if (bridgeConfigMock.gate) await bridgeConfigMock.gate
+    if (bridgeConfigMock.gate) { bridgeConfigMock.entered?.(); await bridgeConfigMock.gate }
     return payload
   }),
   revalidateBridgeToken: vi.fn(async (host: string) => {
@@ -100,8 +102,11 @@ describe('DaemonConnection bridge visibility', () => {
       const before = commands()
       let release!: () => void
       bridgeConfigMock.gate = new Promise<void>((r) => { release = r })
+      const entered = new Promise<void>((r) => { bridgeConfigMock.entered = r })
       ;(conn as unknown as { pushBridgeConfig(): void }).pushBridgeConfig()
-      await new Promise((r) => setTimeout(r, 100))
+      // The push has passed its first check and reads the config: the hold starts now.
+      await entered
+      bridgeConfigMock.entered = null
       holdOwnBridge(true)
       release()
       bridgeConfigMock.gate = null

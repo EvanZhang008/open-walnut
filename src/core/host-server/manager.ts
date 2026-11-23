@@ -63,7 +63,7 @@ import { NoHostFile } from './host-file.js'
 import { validBuildId } from '../companion-build/wire.js'
 import {
   checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, installCannotRun, launchScript, legacyDataOwnerScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
-  walnutDirs, walnutDirsScript,
+  walnutDirs, walnutDirsOf, walnutDirsScript,
 } from './install.js'
 import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, heldNotice, updateHold } from './update-hold.js'
 import { requestOver } from './request-over.js'
@@ -277,10 +277,9 @@ export function createHostServerManager(deps: ManagerDeps) {
     // another Walnut. One this Walnut already ran in the shared dirs from before the split
     // stays there (a live data dir is not moved), unless another Walnut marked them since.
     const walnutId = await deps.walnutId()
-    const legacy = walnutDirs(root, null)
-    const ownsLegacy = readState()[host.hostKey]?.working?.cwd === legacy.dataDir
+    const ownsLegacy = readState()[host.hostKey]?.working?.cwd === walnutDirs(root, null).dataDir
       && (await host.runRemoteScript(legacyDataOwnerScript(walnutId, rootSpec), 15_000)).trim() === 'MINE'
-    const dirs = { root, rootSpec, ...(ownsLegacy ? legacy : walnutDirs(root, walnutId)) }
+    const dirs = { root, rootSpec, ...walnutDirsOf(root, walnutId, ownsLegacy) }
     // The server's cwd is its data dir: a spawn into a dir no one made fails (ENOENT). A daemon
     // with walnut-scope-v1 makes it itself before the spawn; this covers an older one.
     await host.runRemoteScript(walnutDirsScript(dirs), 15_000)

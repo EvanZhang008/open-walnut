@@ -5,7 +5,7 @@
  * is off again or waits for its record; and no other file of the session channel reads a permit
  * record's number itself.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -89,6 +89,32 @@ describe('leaderPermitNumberForHosts', () => {
     setCurrentLeaderPermit({ ...running(12), trial: true })
     expect(leaderPermitNumberForHosts()).toBe(12)
     expect(fs.existsSync(keptPermitNumberFile(home))).toBe(false)
+  })
+
+  it('a write that failed is not tried on every call, only again after a while; a temp file a crash left is swept', () => {
+    // The cache dir cannot be made (a file holds its name): the write fails.
+    fs.writeFileSync(path.join(home, 'cache'), 'not a dir')
+    const mkdir = vi.spyOn(fs, 'mkdirSync')
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      setCurrentLeaderPermit(running(6))
+      for (let i = 0; i < 5; i++) expect(leaderPermitNumberForHosts()).toBe(6)
+      expect(mkdir).toHaveBeenCalledTimes(1)
+      // A while later (past the back-off) it is tried again, and now it can be kept.
+      fs.rmSync(path.join(home, 'cache'))
+      fs.mkdirSync(path.join(home, 'cache'))
+      const left = `${keptPermitNumberFile(home)}.99999.tmp`
+      fs.writeFileSync(left, '{"v":1,"number":5}')
+      mkdir.mockClear()
+      now.mockReturnValue(1_000_000 + 29_000)
+      expect(leaderPermitNumberForHosts()).toBe(6)
+      expect(mkdir).not.toHaveBeenCalled()
+      now.mockReturnValue(1_000_000 + 31_000)
+      expect(leaderPermitNumberForHosts()).toBe(6)
+      expect(JSON.parse(fs.readFileSync(keptPermitNumberFile(home), 'utf8')).number).toBe(6)
+      expect(fs.existsSync(left)).toBe(false)
+      expect(fs.readdirSync(path.join(home, 'cache'))).toEqual(['leader-permit-number.json'])
+    } finally { mkdir.mockRestore(); now.mockRestore() }
   })
 
   it('a lower running number is told as it is and never lowers the kept one; a torn file reads as none', () => {

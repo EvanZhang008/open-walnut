@@ -10,13 +10,17 @@
  *     (`leader.configure`: its data dir, its id, whether the companion may
  *     lead) and, when the companion holds the lead there, takes it back
  *     (`leader.claim`). The host's leader book raises the epoch, so anything
- *     the companion still sends from its old lead is refused.
+ *     the companion still sends from its old lead is refused. Under the leader
+ *     switch's write permission the claim waits until this server may act (a
+ *     restart after a switch rolled back boots waiting for its earlier handover
+ *     to run out): a host never follows a leader whose permit record does not stand.
  */
 
 import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { LEADER_HEARTBEAT_KIND, LEADER_HEARTBEAT_MS, LEADER_RESTART_GRACE_MS, type LeaderHeartbeatFrame } from './protocol.js'
 import { isFollower } from '../server-role.js'
+import { doorsClosed, onceOutwardDoorsOpened } from './switch/doors.js'
 
 export interface HostLeaderState {
   epoch: number
@@ -77,6 +81,11 @@ export function startLeaderHeartbeat(): { stop: () => void } {
   heartbeatTimer.unref?.()
   beat()
   return { stop: () => { if (heartbeatTimer) clearInterval(heartbeatTimer); heartbeatTimer = null } }
+}
+
+/** Whether this process beats its regular heartbeat now (startLeaderHeartbeat ran, nothing stopped it). */
+export function leaderHeartbeatRunning(): boolean {
+  return heartbeatTimer !== null
 }
 
 /** The leader switch's stop: what the restart notice says instead of the grace (setRestartNotice). */
@@ -249,7 +258,14 @@ export async function configureHostLeader(conn: LeaderHostConnection): Promise<H
     holder: reply.holder === 'backup' ? 'backup' : 'primary',
     at: new Date().toISOString(),
   }
-  if (state.holder === 'backup') {
+  if (state.holder === 'backup' && doorsClosed()) {
+    // The companion leads this host and this server may not act yet: the host stays with the
+    // backup, and the lead is taken back the moment the permission stands (described again then).
+    onceOutwardDoorsOpened(`leader-claim:${conn.hostKey}`, () => {
+      void configureHostLeader(conn).catch((err: unknown) => log.leader.warn('leader: taking the lead back once this server may act failed', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) }))
+    })
+    log.leader.info('leader: the cloud companion leads this host; the lead is taken back once this server holds the write permission', { host: conn.hostKey, epoch: state.epoch })
+  } else if (state.holder === 'backup') {
     const since = typeof reply.since === 'number' ? reply.since : Date.now()
     const claim = await conn.send('leader.claim', { home: WALNUT_HOME }, 15_000)
     if (claim.ok !== true) throw new Error(`leader.claim refused: ${String(claim.error ?? '')}`)

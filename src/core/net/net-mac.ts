@@ -155,7 +155,11 @@ export function netLeadOf(permit: PermitView | null, selfEndpoint: string | null
 let netLead: NetLead | null = null
 let netRefused = false
 
-/** What this Mac's own walnut-net is told: dial every host member, let none in (under a permit: dial every other member, let in the lead's). */
+/**
+ * What this Mac's own walnut-net is told: dial every host member, let none in (under a permit: dial
+ * every other member, `mac` ones too: the old leader's machine is one, and after the commit it is a
+ * host the new leader dials; let in the lead's).
+ */
 export function macConfig(s: NetState, lead: NetLead | null = null): Record<string, unknown> {
   return {
     ...relayFields(s),
@@ -166,29 +170,50 @@ export function macConfig(s: NetState, lead: NetLead | null = null): Record<stri
   }
 }
 
-/** What each joined machine is told: let in this Mac (every `mac` member; under a permit: the lead's). */
-export function hostConfig(s: NetState, lead: NetLead | null = null): Record<string, unknown> {
+/**
+ * What each joined machine is told: let in this Mac (every `mac` member; under a permit: the lead's,
+ * but never the machine it is told to: `to`, its network id).
+ */
+export function hostConfig(s: NetState, lead: NetLead | null = null, to: string | null = null): Record<string, unknown> {
   return {
     ...relayFields(s),
-    members: s.members.filter((m) => (lead ? lead.accept.includes(m.id) : m.role === 'mac')).map((m) => ({ id: m.id, name: m.name, accept: true })),
+    members: s.members.filter((m) => (lead ? lead.accept.includes(m.id) && m.id !== to : m.role === 'mac')).map((m) => ({ id: m.id, name: m.name, accept: true })),
   }
 }
 
+/** The lead a sync found, with what the switch asks of it: the new holder's network id, and the machines of the record with none known. */
+interface PermitLeadRead { lead: NetLead | 'not-mine' | null; holder: string | null; holderEndpoint: string | null; unknown: string[] }
+
+/**
+ * Network ids of machines a caller knows (the switch knows the new leader's, net.identity on its
+ * daemon): asked first by permitLead, before the hellos. Set by retellNet for its sync.
+ */
+let knownEndpoints: Readonly<Record<string, string>> = {}
+
 /** The lead from the running permit now (null: none runs, the member lists go by role). */
-async function permitLead(s: NetState): Promise<NetLead | 'not-mine' | null> {
+async function permitLead(s: NetState): Promise<PermitLeadRead> {
   const { runningLeaderPermit } = await import('../session-channel/leader-permit.js')
   const permit = runningLeaderPermit()
-  if (!permit) return null
+  if (!permit) return { lead: null, holder: null, holderEndpoint: null, unknown: [] }
   const record = permit.runtime.status().record
-  // A machine id to its network id: the net host row whose daemon said that id in its hello.
+  // A machine id to its network id: one the caller named, else the net host row whose daemon said
+  // that id in its hello (on the host server's link, else on the pooled one).
   const rows = await pushTargets()
-  const { pooledMachineIdOf } = await import('../../providers/daemon-connection.js')
+  const [{ pooledMachineIdOf }, { hostServerLink }] = await Promise.all([import('../../providers/daemon-connection.js'), import('../host-server/index.js')])
+  const unknown: string[] = []
   const endpointOf = (machineId: string): string | null => {
-    const row = rows.find(([name]) => pooledMachineIdOf(name) === machineId)
-    if (!row) log.session.warn('net: the machine of a handover is no host linked over the network here; it is not let in', { machine: machineId })
+    const named = knownEndpoints[machineId]
+    if (named) return named
+    const row = rows.find(([name]) => (hostServerLink(name)?.helloMachineId ?? pooledMachineIdOf(name)) === machineId)
+    if (!row) {
+      unknown.push(machineId)
+      log.session.warn('net: the machine of a handover is no host linked over the network here; it is not let in', { machine: machineId })
+    }
     return row?.[1] ?? null
   }
-  return netLeadOf({ machine: permit.machine, record: record ?? null }, s.macId, endpointOf)
+  const lead = netLeadOf({ machine: permit.machine, record: record ?? null }, s.macId, endpointOf)
+  const holder = record && record.holder !== permit.machine ? record.holder : null
+  return { lead, holder, holderEndpoint: holder && lead && lead !== 'not-mine' ? lead.accept.find((e) => e !== s.macId) ?? null : null, unknown }
 }
 
 /** Endpoints Remove is taking out right now (this process): never put back on the list. */
@@ -237,29 +262,49 @@ async function restoreMissing(members: NetMember[]): Promise<boolean> {
  * Never one Remove is taking out: its `enabled: false` would be undone. The check sits
  * right before the send, so a push that passed it went out before Remove's message.
  */
-async function pushToHost(name: string, endpoint: string, s: NetState, relayMoved: boolean): Promise<void> {
-  const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
+async function pushToHost(name: string, endpoint: string, s: NetState, relayMoved: boolean): Promise<NetPushOutcome> {
+  const { peekDaemonConnection } = await daemonConnections()
   // Under a permit: never while no record names this machine, and never this machine's own row
   // (a leader a switch moved to a machine on the list keeps that machine's host row).
-  if (netRefused || (netLead && endpoint === s.macId)) return
+  if (netRefused) return { host: name, endpoint, told: false, why: 'this machine does not hold the write permission' }
+  if (netLead && endpoint === s.macId) return { host: name, endpoint, told: false, skipped: true, why: 'this machine' }
+  if (removing.has(endpoint)) return { host: name, endpoint, told: false, skipped: true, why: 'being removed' }
   const conn = peekDaemonConnection(name)
-  if (!conn?.connected || !conn.hasCapability('net-v1') || removing.has(endpoint)) return
+  if (!conn?.connected) return { host: name, endpoint, told: false, why: 'not connected' }
+  if (!conn.hasCapability('net-v1')) return { host: name, endpoint, told: false, why: 'its daemon has no host network' }
   // An older daemon drops the relay mode and would run with no relay at all: it keeps the
   // companion's relay it has until it is updated.
   const { walnutNetOfAnother } = await import('./net-shared-host.js')
+  let out: NetPushOutcome
   if (s.relay !== 'own' && !conn.hasCapability('net-join-v1')) {
     log.session.warn('net: a machine is too old for this relay choice; it keeps the one it has', { host: name, relay: s.relay })
+    out = { host: name, endpoint, told: false, why: 'too old for this relay choice' }
   } else if (await walnutNetOfAnother(name, conn, { relayMoved })) {
     // Its walnut-net is another Walnut's: a list from here would replace that Walnut's (net-shared-host.ts).
     log.session.debug('net: a machine whose walnut-net another Walnut runs is handed no list from here', { host: name })
+    out = { host: name, endpoint, told: false, skipped: true, why: "another Walnut runs its walnut-net" }
   } else {
-    try { await conn.send('net.configure', hostConfig(s, netLead), 20_000) } catch (err) { log.session.warn('net: could not hand a machine its member list', { host: name, error: (err as Error).message }) }
+    try {
+      const r = await conn.send('net.configure', hostConfig(s, netLead, endpoint), 20_000) as { ok?: boolean; error?: string } | undefined
+      out = r && r.ok === false ? { host: name, endpoint, told: false, why: r.error ?? 'refused' } : { host: name, endpoint, told: true }
+    } catch (err) {
+      log.session.warn('net: could not hand a machine its member list', { host: name, error: (err as Error).message })
+      out = { host: name, endpoint, told: false, why: (err as Error).message }
+    }
   }
   const local = await localDaemon().catch(() => null)
   // Noted under the endpoint the link dials now: its own service set's once moved (net-service-sets.ts).
   const dialled = (await Promise.resolve(conn.netEndpointNow?.()).catch(() => null)) ?? endpoint
   if (local) await noteSeen(local, conn, name, dialled, relaysOfChoice(s.relay, s.relays), dialled === endpoint ? {} : { via: name })
+  return out
 }
+
+/** The daemon links' module, imported once for every push (all of them at once, pushToHosts). */
+let daemonConnectionsModule: Promise<typeof import('../../providers/daemon-connection.js')> | null = null
+const daemonConnections = () => (daemonConnectionsModule ??= import('../../providers/daemon-connection.js'))
+
+/** What one machine's push came to: told, missed (with why), or skipped (this machine, one being removed, or one whose walnut-net another Walnut runs). */
+export interface NetPushOutcome { host: string; endpoint: string; told: boolean; skipped?: true; why?: string }
 
 /** The machines to hand the list to: every net host row but those a Remove is taking out. */
 async function pushTargets(): Promise<Array<[string, string]>> {
@@ -271,8 +316,10 @@ async function pushTargets(): Promise<Array<[string, string]>> {
 }
 
 /** Every connected machine at once; a slow one holds up nothing (an invite never waits on it). */
-async function pushToHosts(s: NetState, relayMoved = false): Promise<void> {
-  await Promise.allSettled((await pushTargets()).map(([name, endpoint]) => pushToHost(name, endpoint, s, relayMoved)))
+async function pushToHosts(s: NetState, relayMoved = false): Promise<NetPushOutcome[]> {
+  const targets = await pushTargets()
+  const all = await Promise.allSettled(targets.map(([name, endpoint]) => pushToHost(name, endpoint, s, relayMoved)))
+  return all.map((r, i) => (r.status === 'fulfilled' ? r.value : { host: targets[i]![0], endpoint: targets[i]![1], told: false, why: String(r.reason) }))
 }
 
 /**
@@ -292,7 +339,52 @@ export async function syncNet(opts: { enable?: boolean; adopt?: string[] } = {})
   return syncing
 }
 
-function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState> {
+/** What retellNet found: every net host's push, and whether the new holder of a handover is let in. */
+export interface NetRetell {
+  state: NetState
+  /** The hosts that took the list now, and those that did not (not connected, refused, too old). */
+  told: string[]
+  missed: Array<{ host: string; why: string }>
+  /**
+   * The new holder of the permit's record (another machine than this one) is on the lists this
+   * sync handed out: true; false when its network id is not known here (`unknownMachines`);
+   * null when no record names another holder (no permit, or this machine holds it).
+   */
+  newLeaderLetIn: boolean | null
+  unknownMachines: string[]
+}
+
+/**
+ * The member lists told again now, in a sync of its own (as an adoption owns one), and every host's
+ * answer waited for: the leader switch asks it after the handover record and before the old
+ * leader's stop, so it can wait or refuse while a net host would still let in only the old leader
+ * (host-follow.ts retellNetMembers). `endpoints`: network ids of machines the caller knows
+ * (machine id to id), asked before the hellos.
+ */
+export async function retellNet(o: { endpoints?: Record<string, string> } = {}): Promise<NetRetell> {
+  while (syncing) await syncing.catch(() => {})
+  const report: SyncReport = {}
+  knownEndpoints = { ...(o.endpoints ?? {}) }
+  let st: NetState
+  try {
+    syncing = runSync({}, report)
+    st = await syncing
+  } finally { knownEndpoints = {} }
+  const pushed = (await report.pushed?.catch(() => [] as NetPushOutcome[])) ?? []
+  const read = report.read
+  return {
+    state: st,
+    told: pushed.filter((p) => p.told).map((p) => p.host),
+    missed: pushed.filter((p) => !p.told && !p.skipped).map((p) => ({ host: p.host, why: p.why ?? 'not told' })),
+    newLeaderLetIn: read?.holder ? read.holderEndpoint !== null : null,
+    unknownMachines: read?.unknown ?? [],
+  }
+}
+
+/** What a sync tells its caller beyond the state (retellNet): the lead it found and every machine's push. */
+interface SyncReport { read?: PermitLeadRead; pushed?: Promise<NetPushOutcome[]> }
+
+function runSync(opts: { enable?: boolean; adopt?: string[] }, report: SyncReport = {}): Promise<NetState> {
   return (async () => {
     try {
       const { getConfig } = await import('../config-manager.js')
@@ -320,7 +412,9 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
       if (!ident.ok || !ident.endpointId) throw new NetError(500, 'no_identity', `This machine's network key: ${ident.error ?? 'none'}`)
       state.macId = ident.endpointId
       // Under a running permit the lists follow its record, not the roles (netLeadOf).
-      const lead = await permitLead(state)
+      const read = await permitLead(state)
+      report.read = read
+      const lead = read.lead
       // Until a sync finds it named again, no machine is handed a list from here (pushToHost too).
       netRefused = lead === 'not-mine'
       if (lead === 'not-mine') throw new NetError(409, 'not_permit_holder', 'This machine does not hold the leader\'s write permission; it gives no machine its member list.')
@@ -358,7 +452,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
         if (modes === null) throw new NetError(409, 'net_starting', "This machine's walnut-net is still starting; try again in a minute.")
         if (!modes) throw new NetError(409, 'net_too_old', "This machine's walnut-net is older than this Walnut; the relay changes once the new version is downloaded.")
       }
-      if (relayMoved) await pushToHosts({ ...state }, true)
+      if (relayMoved) { report.pushed = pushToHosts({ ...state }, true); await report.pushed }
       const conf = await local.send('net.configure', withServiceSetMembers(macConfig(state, lead), sets), 30_000) as { ok?: boolean; error?: string }
       if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
@@ -372,7 +466,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
       }
       if (changed.added.length || changed.removed.length) log.session.info('net: hosts updated from the member list', changed)
       await keepWhere(new Set([...state.members.map((m) => m.id), ...sets.add.map((a) => a.id)]))
-      if (!relayMoved) void pushToHosts({ ...state })
+      if (!relayMoved) { report.pushed = pushToHosts({ ...state }); void report.pushed.catch(() => {}) }
       state.syncedAt = Date.now()
       state.error = null
     } catch (err) {

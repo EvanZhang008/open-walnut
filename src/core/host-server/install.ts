@@ -77,6 +77,16 @@ export function walnutDirs(root: string, walnut: string | null): WalnutHostDirs 
 }
 
 /**
+ * The dirs one Walnut's server runs in under `root`, as every place that starts one picks them
+ * (the host-server manager for a host, host-follow.ts for the old leader's own machine): the
+ * shared ones from before the split while this Walnut owns them (legacyDataOwnerScript), else
+ * its own.
+ */
+export function walnutDirsOf(root: string, walnutId: string, ownsLegacy: boolean): WalnutHostDirs {
+  return ownsLegacy ? walnutDirs(root, null) : walnutDirs(root, walnutId)
+}
+
+/**
  * Whether the shared data dir from before the split is this Walnut's: it ran its
  * server there (the caller knows that from its own record), and no other Walnut
  * marked the dir since. The first to ask with no mark there marks it. Prints MINE

@@ -14,9 +14,9 @@
  * The device is the console of this machine on the new leader, revocable as any device.
  *
  * A console that will never stand is withdrawn (withdrawConsole): a handover refused after the
- * mint and a cancel take the record and the file back, and so does this home's own boot as the
- * leader for real (server.ts: a switch back, a rollback). The machine a handover goes to keeps its
- * console device until then: a switch back that is cancelled leaves its console standing.
+ * mint and a cancel take the record and the file back, and so does this home's first lead for real
+ * (host-follow.ts takeBackSwitchLeftovers: a switch back, a rollback). The machine a handover goes
+ * to keeps its console device until then: a switch back that is cancelled leaves its console standing.
  */
 import path from 'node:path'
 import { freshRecord, getInstanceId, tombstone, updateAuth } from '../../device-store.js'

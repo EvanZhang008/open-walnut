@@ -12,7 +12,11 @@
  * Walnut that never told a host a permit number. Every number a host ever saw went through this
  * function, so keeping it here, when it is told, is enough. A number that could not be kept is
  * still told: a later lower one is refused by the host (stale_permit), which delays it, never lets
- * a wrong leader in.
+ * a wrong leader in. A write that failed is tried again only after KEEP_RETRY_MS (each call would
+ * otherwise do it on the event loop), and a temp file a crash left beside it is swept at the next
+ * write. A forged higher number in the file (it needs write access to the home) only raises the
+ * floor the hosts hold: they refuse this Walnut's lower numbers until the permit passes it, a
+ * liveness cost, never a second leader let in (a host still checks each record's holder).
  *
  * The switch's modules load only when the permit really runs
  * (tests/core/leader/switch/flag-off-imports.test.ts, the rehearsal's no-witness check), so neither
@@ -43,11 +47,15 @@ export function keptPermitNumberFile(home: string = WALNUT_HOME): string {
 
 let keptHome: string | null = null
 let kept: { file: string; number: number } | null = null
+/** A write of the kept number failed at this time (ms): none tried again before KEEP_RETRY_MS. */
+let keepFailedAt = 0
+const KEEP_RETRY_MS = 30_000
 
 /** Tests: the home whose kept number is read and written (null: WALNUT_HOME), and the cache forgotten. */
 export function _setKeptPermitHomeForTesting(home: string | null): void {
   keptHome = home
   kept = null
+  keepFailedAt = 0
 }
 
 function keptNumber(file: string): number {
@@ -62,10 +70,21 @@ function keptNumber(file: string): number {
 }
 
 function keepNumber(file: string, n: number): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const dir = path.dirname(file)
+  fs.mkdirSync(dir, { recursive: true })
+  // A temp file an earlier process left (it crashed between the write and the rename) goes.
+  const base = path.basename(file)
+  for (const f of fs.readdirSync(dir)) {
+    if (f.startsWith(`${base}.`) && f.endsWith('.tmp') && f !== `${base}.${process.pid}.tmp`) fs.rmSync(path.join(dir, f), { force: true })
+  }
   const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify({ v: 1, number: n, at: new Date().toISOString() }))
-  fs.renameSync(tmp, file)
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, number: n, at: new Date().toISOString() }))
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    fs.rmSync(tmp, { force: true })
+    throw err
+  }
   kept = { file, number: n }
 }
 
@@ -76,8 +95,8 @@ export function leaderPermitNumberForHosts(): number {
   const running = permit?.runtime.status().record?.number
   if (typeof running !== 'number' || !Number.isSafeInteger(running) || running <= 0) return last
   // A switch's trial start writes nothing into the home it tries.
-  if (running > last && !permit!.trial) {
-    try { keepNumber(file, running) } catch { /* told anyway: see the header */ }
+  if (running > last && !permit!.trial && Date.now() - keepFailedAt >= KEEP_RETRY_MS) {
+    try { keepNumber(file, running); keepFailedAt = 0 } catch { keepFailedAt = Date.now() /* told anyway: see the header */ }
   }
   return running
 }

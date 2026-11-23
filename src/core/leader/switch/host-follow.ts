@@ -19,21 +19,26 @@
  *                             commit window (capped at 5 minutes), so the companion's backup lead
  *                             waits; withdrawSwitchStop when the handover does not happen after all
  * After the handover record, before the stop:
- *   retellNetMembers          the host network's member lists again (net-mac.ts): under a running
- *                             permit they follow its record, which now names the new holder handed
- *                             from this machine, so every host and this machine's own walnut-net let
- *                             the new leader in
+ *   retellNetMembers          the host network's member lists again (net-mac.ts retellNet): under a
+ *                             running permit they follow its record, which now names the new holder
+ *                             handed from this machine, so every host and this machine's own
+ *                             walnut-net let the new leader in; each host's answer comes back
+ *                             (told, missed) with whether the new leader is let in, so the flow can
+ *                             wait or refuse before the stop
  *   dropOwnDaemonDuties       this machine's daemon drops its trigger set and its bridge, so nothing of
  *                             the old leader keeps firing and only the new leader's daemon holds the
  *                             companion's one `__local__` bridge; a rollback's restart pushes both
  *                             again (every boot's link pushes them); a rollback with no restart
  *                             (the handover cancelled before the stop) calls restoreOwnDaemonDuties
  * A handover that did not happen while this server runs on (refused, or cancelled before the stop):
- *   undoHandoverHostSteps     every step above taken back, as a restart's boot would
- * At this home's own boot as the leader:
- *   removeSwitchHostService   a host service a handover left on this machine's daemon goes (a
- *                             rollback), and so does one an earlier leader left there for this Walnut
- *                             (a switch back: this home was promoted by a switch)
+ *   undoHandoverHostSteps     every step above taken back, as the first lead after a restart does
+ * The first time this home's server leads (boot.ts onFirstLead: at boot, or later from waiting for
+ * the witnesses, so a crash anywhere above converges at the next lead):
+ *   takeBackSwitchLeftovers   this machine's console from a handover (console-credential.ts), the
+ *                             host service a handover left on this machine's daemon (a rollback) or
+ *                             one an earlier leader left there for this Walnut (a switch back:
+ *                             removeSwitchHostService), and this machine's own door credential (its
+ *                             record in auth.json, the host side): a leader dials no door
  *
  * Every daemon command goes to this machine's own daemon over this server's own link (OwnDaemon,
  * default `link('__local__')`); none is new (`server.configure`, `triggers.configure`,
@@ -45,7 +50,7 @@ import path from 'node:path'
 import { assertOutwardDoor, leaderPermitActive } from './doors.js'
 import { cleanDoorUrls, doorKeyId, doorUrlRefusal } from '../../session-channel/door-wire.js'
 import type { PermitPair } from '../../session-channel/channel.js'
-import type { WalnutHostDirs } from '../../host-server/install.js'
+import { checkHostRoot, HOST_ROOT, walnutDirs, walnutDirsOf, type WalnutHostDirs } from '../../host-server/install.js'
 
 /** What a hook sends to this machine's own daemon (a DaemonConnection does). */
 export interface OwnDaemon {
@@ -125,13 +130,24 @@ export async function pushNewLeaderDoors(doors: readonly string[]): Promise<Hook
   return { ok: true, dialed: r.dialed, routed: r.routed, failed: r.failed }
 }
 
-/** The host network's member lists, told again now (nothing while the network is off). */
-export async function retellNetMembers(): Promise<HookResult<{ told: boolean }>> {
+/**
+ * The host network's member lists, told again now and every host's answer waited for (net-mac.ts
+ * retellNet), so the flow can wait or refuse before the stop: a net host that missed this push
+ * still lets in only this leader, and once this leader stops nobody tells it again.
+ *   told             the net hosts that took the list
+ *   missed           those that did not (not connected, refused, too old), each with why
+ *   newLeaderLetIn   the record's new holder is on the lists: false when its network id is not known
+ *                    here (pass it in `endpoints`: machine id to network id); null with the network
+ *                    off or no record naming another holder
+ * `ok: false` only when the sync itself failed (this machine's walnut-net, the companion's list).
+ */
+export async function retellNetMembers(o: { endpoints?: Record<string, string> } = {}): Promise<HookResult<{ told: string[]; missed: Array<{ host: string; why: string }>; newLeaderLetIn: boolean | null }>> {
   const { getConfig } = await import('../../config-manager.js')
-  if ((await getConfig() as { net?: { enabled?: boolean } }).net?.enabled !== true) return { ok: true, told: false }
-  const { syncNet } = await import('../../net/net-mac.js')
-  const s = await syncNet()
-  return s.error ? { ok: false, why: s.error } : { ok: true, told: true }
+  if ((await getConfig() as { net?: { enabled?: boolean } }).net?.enabled !== true) return { ok: true, told: [], missed: [], newLeaderLetIn: null }
+  const { retellNet } = await import('../../net/net-mac.js')
+  const r = await retellNet(o.endpoints ? { endpoints: o.endpoints } : {})
+  if (r.state.error) return { ok: false, why: r.state.error }
+  return { ok: true, told: r.told, missed: r.missed, newLeaderLetIn: r.newLeaderLetIn }
 }
 
 /** Beside the home (machine data, `local/leader-switch/`): the host service a handover set up on this machine's daemon. */
@@ -149,7 +165,7 @@ export interface OldMachineHostServiceInput {
   /** The loopback port the service listens on (never this server's own port). */
   port: number
   label?: string
-  /** The service's dirs (default: walnutDirs under ~/.open-walnut-host, as on any host). */
+  /** The service's dirs (default: the ones the host-server manager would pick on this machine, oldMachineHostDirs). */
   dirs?: WalnutHostDirs
   /** The program and its leading args (default: this CLI, as the switch starts its servers). */
   program?: { command: string; prefix: string[] }
@@ -158,13 +174,29 @@ export interface OldMachineHostServiceInput {
   switchId?: string
 }
 
+/**
+ * The dirs this Walnut's host service uses on this machine, as the host-server manager picks them on
+ * any host (install.ts walnutDirsOf): under its root (WALNUT_HOST_SERVER_ROOT, else HOST_ROOT), the
+ * shared dirs from before the split when this Walnut marked them its own, else its own dirs.
+ * The manager also asks its record of that host; this machine was never this leader's host, so the
+ * mark alone says it (read only: nothing is marked here).
+ */
+export async function oldMachineHostDirs(walnutId: string): Promise<WalnutHostDirs> {
+  const { hostServerRootSpec } = await import('../../host-server/index.js')
+  const spec = checkHostRoot(hostServerRootSpec() ?? HOST_ROOT)
+  const root = spec.replace('$HOME', () => os.homedir())
+  let mark = ''
+  try { mark = fs.readFileSync(path.join(walnutDirs(root, null).dataDir, '.walnut-id'), 'utf8') } catch { /* none */ }
+  return walnutDirsOf(root, walnutId, mark === walnutId)
+}
+
 /** The spec `server.configure` takes: the ordinary host replica (replica-run.ts), as the host-server manager sends it. */
 export async function oldMachineHostServiceSpec(o: OldMachineHostServiceInput): Promise<Record<string, unknown> & { cwd: string; log: string }> {
-  const [{ walnutDirs }, { hostProgramRun, hostServerEnvOf }, { serverCommand }, { pluginsKeepingTasks }] = await Promise.all([
-    import('../../host-server/install.js'), import('../../host-server/replica-run.js'), import('../../trial-start/process.js'),
+  const [{ hostProgramRun, hostServerEnvOf }, { serverCommand }, { pluginsKeepingTasks }] = await Promise.all([
+    import('../../host-server/replica-run.js'), import('../../trial-start/process.js'),
     import('../../plugins/plugin-task-visibility.js'),
   ])
-  const dirs = o.dirs ?? walnutDirs(path.join(os.homedir(), '.open-walnut-host'), o.walnutId)
+  const dirs = o.dirs ?? await oldMachineHostDirs(o.walnutId)
   const [command, ...prefix] = o.program ? [o.program.command, ...o.program.prefix] : serverCommand([])
   const env = hostServerEnvOf({ dataDir: dirs.dataDir, runDir: dirs.runDir, port: o.port, leaderHome: path.resolve(o.home), walnutId: o.walnutId, label: o.label ?? (os.hostname().split('.')[0] || 'host') })
   const run = hostProgramRun({ prefix, env, replica: true, hostKey: o.hostKey, gateway: o.gateway === true })
@@ -239,20 +271,101 @@ export async function restoreOwnDaemonDuties(o: { daemon?: { recheckTriggers(): 
  * withdrawSwitchStop.
  */
 export async function announceSwitchStop(commitWindowMs: number, o: { maxWaitMs?: number } = {}): Promise<number | null> {
-  const { setRestartNotice, announceLeaderRestart } = await import('../primary-leader.js')
+  const { setRestartNotice, announceLeaderRestart, leaderHeartbeatRunning } = await import('../primary-leader.js')
   const ms = setRestartNotice(commitWindowMs)
-  if (ms !== null) await announceLeaderRestart(o.maxWaitMs ?? 1_500)
+  if (ms === null) return null
+  // The notice stops the regular heartbeats: withdrawSwitchStop starts them again only if they ran.
+  if (leaderHeartbeatRunning()) heartbeatStoppedBySwitch = true
+  await announceLeaderRestart(o.maxWaitMs ?? 1_500)
   return ms
 }
 
-/** The switch did not stop this leader after all (a refused or cancelled handover): the notice is withdrawn and the heartbeats beat again. */
-export async function withdrawSwitchStop(): Promise<{ stop: () => void }> {
+/** announceSwitchStop stopped this process's regular heartbeats (they ran when it was called). */
+let heartbeatStoppedBySwitch = false
+
+/**
+ * The switch did not stop this leader after all (a refused or cancelled handover): the notice is
+ * withdrawn, and the heartbeats beat again if announceSwitchStop stopped them (never where they did
+ * not run: no notice sent, or a boot policy with no heartbeat).
+ */
+export async function withdrawSwitchStop(): Promise<{ restarted: boolean; stop: () => void }> {
   const { setRestartNotice, startLeaderHeartbeat } = await import('../primary-leader.js')
   setRestartNotice(null)
-  return startLeaderHeartbeat()
+  if (!heartbeatStoppedBySwitch) return { restarted: false, stop: () => {} }
+  heartbeatStoppedBySwitch = false
+  return { restarted: true, stop: startLeaderHeartbeat().stop }
 }
 
-// ---- at this home's own boot as the leader --------------------------------------------------
+// ---- the first time this home's server leads -----------------------------------------------
+
+/**
+ * This machine's own door credential goes: its record in auth.json (a leader verifies no door of
+ * its own machine) and the host side this machine dials with (a leader dials no door). Each part
+ * tried; `failed` says which did not go.
+ */
+async function dropOwnCredential(machineId: string, walnutId: string): Promise<{ record: boolean; file: boolean; failed: string[] }> {
+  const [{ dropHostCredential }, { hostCredentialFile }] = await Promise.all([
+    import('../../session-channel/host-credentials.js'), import('../../session-channel/host-credential-file.js'),
+  ])
+  const failed: string[] = []
+  const record = await dropHostCredential(machineId).catch((err: unknown) => { failed.push(`the credential: ${why(err)}`); return false })
+  let file = false
+  try {
+    const f = hostCredentialFile(walnutId)
+    file = fs.existsSync(f)
+    fs.rmSync(f, { force: true })
+  } catch (err) { failed.push(`the host side of the credential: ${why(err)}`); file = false }
+  return { record, file, failed }
+}
+
+export interface SwitchLeftovers { console: boolean; hostService: boolean; credential: boolean; credentialFile: boolean }
+
+/**
+ * What a switch left on this machine, taken back the first time this home's server leads (boot.ts
+ * onFirstLead), whichever way it came to lead: at boot, or later from waiting for the witnesses (a
+ * restart after a cut that lost them too, in the B2b design). A crash after any step before the
+ * handover record, or a rollback after it, so converges at the next lead. In a home that took part
+ * in a switch (its `local/leader-switch/` folder; no other home has one):
+ *   - this machine's console from a handover (console-credential.ts withdrawConsole; any home, as before);
+ *   - the host service on this machine's daemon (removeSwitchHostService);
+ *   - this machine's own door credential: the record in auth.json and the host side.
+ * Each part tried; the answer says what went and what failed.
+ */
+export async function takeBackSwitchLeftovers(o: {
+  home: string
+  /** This machine's id in the permit (the console's device is named for it). */
+  machine: string
+  daemon?: OwnDaemon
+  /** Tests: this machine's id as its credential names it (default machine-id.ts readMachineId) and this Walnut's id (default getInstanceId). */
+  machineId?: () => Promise<string>
+  walnutId?: () => Promise<string>
+}): Promise<HookResult<SwitchLeftovers>> {
+  const home = path.resolve(o.home)
+  const failed: string[] = []
+  const out: SwitchLeftovers = { console: false, hostService: false, credential: false, credentialFile: false }
+  try {
+    const { withdrawConsole } = await import('./console-credential.js')
+    const w = await withdrawConsole({ home, machine: o.machine })
+    out.console = w.device || w.files.length > 0
+  } catch (err) { failed.push(`the console: ${why(err)}`) }
+  if (fs.existsSync(path.join(home, 'local', 'leader-switch'))) {
+    const hs = await removeSwitchHostService({ home, ...(o.daemon ? { daemon: o.daemon } : {}) })
+    if (hs.ok) out.hostService = hs.removed
+    else failed.push(`the host service: ${hs.why}`)
+    try {
+      const [machineId, walnutId] = await Promise.all([
+        (o.machineId ?? (async () => (await import('../../machine-id.js')).readMachineId()))(),
+        (o.walnutId ?? (async () => (await import('../../device-store.js')).getInstanceId()))(),
+      ])
+      const own = await dropOwnCredential(machineId, walnutId)
+      out.credential = own.record
+      out.credentialFile = own.file
+      failed.push(...own.failed)
+    } catch (err) { failed.push(`this machine's credential: ${why(err)}`) }
+  }
+  return failed.length ? { ok: false, why: failed.join('; ') } : { ok: true, ...out }
+}
+
 
 /**
  * Take back a host service of this Walnut on this machine's own daemon that a switch left: the one a
@@ -273,15 +386,12 @@ async function takeBackHostService(daemon: OwnDaemon | undefined, home: string):
   try {
     const d = await ownDaemon(daemon)
     const st = await d.send('server.status', { home }, 10_000)
-    const state = (st.status as { state?: string } | undefined)?.state
-    let removed = false
-    if (st.ok === true && state && state !== 'off') {
-      const r = await d.send('server.configure', { home, spec: null }, 15_000)
-      if (r.ok !== true) return { ok: false, why: `this machine's daemon kept the host service: ${String(r.error ?? 'refused')}` }
-      removed = true
-    }
+    if (st.ok !== true) return { ok: false, why: `this machine's daemon did not say what runs for this home: ${String(st.error ?? 'no answer')}` }
+    // Sent whatever the state says: a spec adopted and not started yet reads 'off' (host-server-core.ts statusOf).
+    const r = await d.send('server.configure', { home, spec: null }, 15_000)
+    if (r.ok !== true) return { ok: false, why: `this machine's daemon kept the host service: ${String(r.error ?? 'refused')}` }
     fs.rmSync(hostServiceRecordFile(home), { force: true })
-    return { ok: true, removed }
+    return { ok: true, removed: ((st.status as { state?: string } | undefined)?.state ?? 'off') !== 'off' }
   } catch (err) { return { ok: false, why: why(err) } }
 }
 
@@ -289,7 +399,8 @@ async function takeBackHostService(daemon: OwnDaemon | undefined, home: string):
 
 /**
  * The switch rolled back and this server leads on with no restart (its handover refused, or cancelled
- * before the stop): every step above is taken back here, as a restart's boot would. The host service
+ * before the stop): every step above is taken back here, as the first lead after a restart does
+ * (takeBackSwitchLeftovers), and what only a running server holds with them. The host service
  * a handover set up (its record), this machine's credential for the new leader (the record in
  * auth.json, and the host side), the bridge hold with the trigger set and bridge pushed again, and the
  * restart notice withdrawn. Each step is tried; the answer lists what failed.
@@ -308,11 +419,9 @@ export async function undoHandoverHostSteps(o: {
     if (r.ok) hostService = r.removed
     else failed.push(`the host service: ${r.why}`)
   }
-  const [{ dropHostCredential }, { hostCredentialFile }] = await Promise.all([
-    import('../../session-channel/host-credentials.js'), import('../../session-channel/host-credential-file.js'),
-  ])
-  const credential = await dropHostCredential(o.machineId).catch((err: unknown) => { failed.push(`the credential: ${why(err)}`); return false })
-  try { fs.rmSync(hostCredentialFile(o.walnutId), { force: true }) } catch (err) { failed.push(`the host side of the credential: ${why(err)}`) }
+  const own = await dropOwnCredential(o.machineId, o.walnutId)
+  failed.push(...own.failed)
+  const credential = own.record
   const duties = await restoreOwnDaemonDuties(o.daemon ? { daemon: o.daemon } : {})
   if (!duties.ok) failed.push(`the trigger set and bridge: ${duties.why}`)
   try { await withdrawSwitchStop() } catch (err) { failed.push(`the heartbeat: ${why(err)}`) }

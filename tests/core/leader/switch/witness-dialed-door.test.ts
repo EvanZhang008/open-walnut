@@ -11,7 +11,8 @@
  *   - the leader sets the host's witness up, proposes, and reads it back, by host key and by machine id;
  *   - a permit read over the fixed list counts the door witness by way `link`;
  *   - the caller is the credential's Walnut, not the body's: a host service that follows another
- *     Walnut refuses (403), whatever the body claims, and a host with the experiment off answers 404;
+ *     Walnut refuses (403), whatever the body claims, and a host with the experiment off answers as
+ *     a prefix nobody allowed (403 not_callable, as before), so the leader tries its next way;
  *   - an answer on the dialed socket never takes the daemon link; once the socket is gone, or the host
  *     did not allow the route on it (an older service), the daemon link is the next way.
  */
@@ -167,8 +168,13 @@ describe('a witness on a host that dialed the leader\'s door, reached over call 
     const r = await post('olddev', { v: 1, walnutId: 'claimed-other', witness: 'w3', request: { type: 'read' } })
     expect(r).toMatchObject({ status: 200, body: { ok: true, reply: { witness: 'w3' } } })
     expect(fs.existsSync(path.join(root, 'claimed-other'))).toBe(false)
+    // The experiment off on the host: answered as a prefix nobody allowed (as before the witness rode
+    // call frames), so the leader goes on to its next way (the daemon link, spied).
     host.enabled = false
-    expect(await post('olddev', { v: 1, walnutId: WALNUT, witness: 'w3', request: { type: 'read' } })).toEqual({ status: 404, body: { ok: false, error: 'not_found' } })
+    linkCalls.length = 0
+    expect(await post('olddev', { v: 1, walnutId: WALNUT, witness: 'w3', request: { type: 'read' } })).toBeNull()
+    expect(linkCalls).toEqual(['olddev'])
+    expect(await dialedHostCall('olddev')!('POST', WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w3', request: { type: 'read' } }, 5_000)).toEqual({ status: 403, body: { ok: false, error: 'not_callable' } })
   })
 
   it('once the host\'s socket is gone the reach is gone: the daemon link is the next way', async () => {

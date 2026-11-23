@@ -74,8 +74,7 @@ function gitEnv(): NodeJS.ProcessEnv {
   return env
 }
 
-/** One world per test file (each file runs in its own worker). */
-export const world = {
+const blankWorld = () => ({
   base: '',
   procs: null as LiveProcs | null,
   unhookTerm: null as (() => void) | null,
@@ -93,7 +92,9 @@ export const world = {
   daemons: [] as LiveDaemon[],
   clis: [] as LiveCli[],
   net: { cloud: null, keeper: null, found: null } as { cloud: SilentLinkProxy | null; keeper: SilentLinkProxy | null; found: SilentLinkProxy | null },
-}
+})
+/** The world of a test file; setupTwinMac starts it anew, so a file may run one world after another (each describe its own setup and teardown). */
+export const world = blankWorld()
 export type LeaderServer = LiveServer & { controlPort: number; out: Record<string, any> }
 export interface LeaderSwitchPlaces {
   a: { id: string; idFile: string; port: number }
@@ -214,6 +215,9 @@ function leaderSwitchConfig(ls: LeaderSwitchPlaces): string[] {
   ]
 }
 
+/** A witness dir's record file (local-witnesses.ts, imported with the setup). */
+let recordFileOf: ((w: { id: string; dir: string }) => string) | null = null
+
 /** The places of a leader switch, and the witness dirs set up from nothing (local-witnesses.ts, as `walnut leader witnesses init` does). */
 async function prepareLeaderSwitch(): Promise<void> {
   const place = async (name: 'a' | 'b') => {
@@ -223,8 +227,9 @@ async function prepareLeaderSwitch(): Promise<void> {
     return { id: `machine-${name}`, idFile, port: await freePort() }
   }
   const witnesses = ['w1', 'w2', 'w3'].map((id) => ({ id, dir: path.join(world.base, 'witnesses', id) }))
-  const { setUpLocalWitnesses } = await import('../../src/core/leader/switch/local-witnesses.js')
+  const { setUpLocalWitnesses, witnessRecordFile } = await import('../../src/core/leader/switch/local-witnesses.js')
   setUpLocalWitnesses(witnesses)
+  recordFileOf = witnessRecordFile
   world.leaderSwitch = { a: await place('a'), b: await place('b'), witnesses }
 }
 
@@ -386,6 +391,31 @@ async function bootPrimary(fresh: boolean): Promise<void> {
   world.leaderHome = world.primary.data
 }
 
+/** A's server booted again on its own data and its surviving local daemon (a rolled-back switch's start of the old leader, flow.ts 'start-source'). */
+export async function restartPrimary(): Promise<void> {
+  if (world.primary.server && !world.primary.server.exited) throw new Error('restartPrimary: A\'s server still runs')
+  await bootPrimary(false)
+}
+
+/** What one witness dir holds now (its permit record file, read as a file: no witness is served from here). */
+export interface WitnessHeld { witness: string; number: number; kind: string; holder: string; by: string; from?: string; to?: string; validMs: number }
+export function witnessRecords(): Array<WitnessHeld | null> {
+  return (world.leaderSwitch?.witnesses ?? []).map((w) => {
+    try {
+      const h = JSON.parse(fs.readFileSync(recordFileOf!(w), 'utf8')).held
+      return h ? { witness: w.id, number: h.number, kind: h.kind, holder: h.holder, by: h.by, ...(h.from ? { from: h.from } : {}), ...(h.to ? { to: h.to } : {}), validMs: h.validMs } : null
+    } catch { return null }
+  })
+}
+/** The record a majority of the witness dirs holds (the same number at two of three), or null. */
+export function standingRecord(): WitnessHeld | null {
+  const held = witnessRecords().filter((r): r is WitnessHeld => r !== null)
+  const ls = world.leaderSwitch
+  const need = ls ? Math.floor(ls.witnesses.length / 2) + 1 : Infinity
+  for (const r of held) if (held.filter((x) => x.number === r.number).length >= need) return r
+  return null
+}
+
 /** A hook of the leader switch run inside a leader's own process (host-follow.ts), or the link state. */
 export async function leaderControl(s: LeaderServer, p: '/links' | '/link-found' | '/drop-duties' | `/restart-notice?ms=${number}`): Promise<Record<string, any>> {
   const res = await fetch(`http://127.0.0.1:${s.controlPort}${p}`, { method: p === '/links' ? 'GET' : 'POST', headers: { Authorization: `Bearer ${world.tokens.local}` }, signal: AbortSignal.timeout(30_000) })
@@ -537,6 +567,8 @@ export function sliceSids(d: LiveDaemon): string[] | null {
 export async function setupTwinMac(prefix: string, firstBoot = '', opts: TwinOptions = {}): Promise<void> {
   firstBootSnippet = firstBoot
   twinOpts = opts
+  // A world after another in the same file starts from nothing of the one before.
+  Object.assign(world, blankWorld())
   world.base = await liveBase(prefix, ['prd', 'cod', 'de', 'std', 'pm', 'sb'])
   world.procs = new LiveProcs(realProcTable(), world.base)
   world.unhookTerm = resumeOnTerm(world.procs)

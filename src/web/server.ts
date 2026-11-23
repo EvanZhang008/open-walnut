@@ -1613,29 +1613,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       } else {
         setBootMode('normal')
       }
-      // This home boots holding the permit (a switch's trial and a marked home never decide 'lead'):
-      // a console it had as a handed-over home (a switch back), or one minted for a handover that
-      // did not happen, is over: its device and files go (console-credential.ts). A boot that
-      // waits for the witnesses writes nothing and leaves it to its next boot.
-      if (leaderPermitHandle?.decision.kind === 'lead') {
-        const machine = (await import('../core/leader/switch/boot.js')).currentLeaderPermit()?.machine
-        if (machine) {
-          await import('../core/leader/switch/console-credential.js')
-            .then((m) => m.withdrawConsole({ home: WALNUT_HOME, machine }))
-            .then((w) => { if (w.device || w.files.length) log.web.info('leader switch: this home leads: its console from a handover is withdrawn', { device: w.device, files: w.files.length }) })
-            .catch((err) => log.web.warn('leader switch: this home\'s old console could not be withdrawn', { error: err instanceof Error ? err.message : String(err) }))
-        }
-        // A host service a handover left on this machine's own daemon (a rollback), or one an earlier
-        // leader left here for this Walnut (a switch back), goes (host-follow.ts). In the background:
-        // it waits for this server's link to its own daemon, and the boot does not.
-        void import('../core/leader/switch/host-follow.js')
-          .then((m) => m.removeSwitchHostService({ home: WALNUT_HOME }))
-          .then((r) => {
-            if (!r.ok) log.web.warn('leader switch: a host service a switch left on this machine\'s daemon could not be taken back', { why: r.why })
-            else if (r.removed) log.web.info('leader switch: this home leads: the host service a switch left on this machine\'s daemon is taken back')
-          })
-          .catch((err) => log.web.warn('leader switch: a host service a switch left on this machine\'s daemon could not be taken back', { error: err instanceof Error ? err.message : String(err) }))
-      }
+      // What a switch left on this machine (a console from a handover, a host service on this
+      // machine's daemon, this machine's own door credential) goes the first time this server leads,
+      // at boot or later from waiting for the witnesses (boot.ts onFirstLead, host-follow.ts).
     }
     // This process owns the data folder now: read back what earlier servers saw of this
     // machine's sleep and when no server ran, and stamp from now on that this one is alive

@@ -605,12 +605,12 @@ old leader's server prepares both while it still leads. Each step is a named hoo
 |---|---|---|
 | before the handover record | `prepareOldMachineAsHost({walnutId, machineId, hostKey, doors, standing?})` | behind the outward door `host-credential`: mints this machine's door credential (`mintHostCredential`). The record goes into `auth.json` (leader data, so the final batch carries it to the new leader) and the host side into this machine's state dir (`writeHostCredentialFile`). Bad doors or another machine id: nothing is minted. A refused host side takes the record back |
 | before the handover record | `pushNewLeaderDoors(doors)` | every host hears the new leader's doors (`pushHostDoors`) under this leader's standing |
-| before the handover record | `configureOldMachineHostService({home, walnutId, hostKey, port, ...})` | `server.configure` on this machine's own daemon: the ordinary host replica spec (`src/core/host-server/replica-run.ts`, the program and environment the host-server manager sends any host, with the settings of a host that carries no tunnel), under this home. Its record is `local/leader-switch/host-service.json` (machine data) |
-| last, right before the handover record | `announceSwitchStop(commitWindowMs)` | the restart heartbeat goes now with `restartingMs` = the commit window, capped at 5 minutes, and the regular heartbeats stop, so the companion's backup lead waits. It must go before the record: from then on this machine may not act, and the outward door `companion-upload` refuses every heartbeat (a notice sent at the stop never left, measured). `withdrawSwitchStop()` when the handover does not happen after all. A hint, not a safety argument: the hosts' fences decide |
-| after the handover record, before the stop | `retellNetMembers()` | the host network's member lists again: the record now names the new holder, handed from this machine, so every host and this machine's own walnut-net let the new leader in (below) |
+| before the handover record | `configureOldMachineHostService({home, walnutId, hostKey, port, ...})` | `server.configure` on this machine's own daemon: the ordinary host replica spec (`src/core/host-server/replica-run.ts`, the program and environment the host-server manager sends any host, with the settings of a host that carries no tunnel), under this home, in the dirs the manager would pick on this machine (`oldMachineHostDirs`, `install.ts walnutDirsOf`: under `WALNUT_HOST_SERVER_ROOT` or `~/.open-walnut-host`, the shared dirs from before the split only while this Walnut marked them). Its record is `local/leader-switch/host-service.json` (machine data) |
+| last, right before the handover record | `announceSwitchStop(commitWindowMs)` | the restart heartbeat goes now with `restartingMs` = the commit window, capped at 5 minutes, and the regular heartbeats stop, so the companion's backup lead waits. It must go before the record: from then on this machine may not act, and the outward door `companion-upload` refuses every heartbeat (a notice sent at the stop never left, measured). `withdrawSwitchStop()` when the handover does not happen after all: the notice is withdrawn, and the heartbeats start again only if this call stopped them. A hint, not a safety argument: the hosts' fences decide |
+| after the handover record, before the stop | `retellNetMembers({endpoints?})` → `{told, missed, newLeaderLetIn}` | the host network's member lists again, in a sync of its own, every host's answer waited for (`net-mac.ts retellNet`): the record now names the new holder, handed from this machine, so every host and this machine's own walnut-net let the new leader in (below). `missed` lists each net host that did not take the list (not connected, refused, too old) and `newLeaderLetIn` is false when the new holder's network id is not known here (no hello from it over the network; the flow can name it in `endpoints`). A net host that misses this push lets in only this leader, and once this leader stops nobody tells it again, so the flow waits or refuses before the stop |
 | after the handover record, before the stop | `dropOwnDaemonDuties({home})` | this machine's daemon drops this Walnut's trigger set (`triggers.configure` with the empty set) and its bridge (`bridge.configure {enabled: false}`); the server pushes its own bridge no more until it exits (`src/core/leader/own-bridge-hold.ts`). |
-| a handover that did not happen, while this server leads on (refused, or cancelled before the stop) | `undoHandoverHostSteps({home, walnutId, machineId})` | every step above taken back as a restart's boot would: the host service and its record, this machine's credential (the record and the host side), the bridge hold with the trigger set and bridge pushed again (`restoreOwnDaemonDuties`), the restart notice withdrawn and the heartbeats back (`withdrawSwitchStop`) |
-| this home's own boot as the leader | `removeSwitchHostService({home})` (`src/web/server.ts`, after the permit boot) | the host service a handover left on this machine's daemon goes (a rollback), and so does one an earlier leader left there for this Walnut in a home a switch promoted (a switch back). A home that took no part in a switch is not touched |
+| a handover that did not happen, while this server leads on (refused, or cancelled before the stop) | `undoHandoverHostSteps({home, walnutId, machineId})` | every step above taken back, as the first lead after a restart does: the host service and its record, this machine's credential (the record and the host side), the bridge hold with the trigger set and bridge pushed again (`restoreOwnDaemonDuties`), the restart notice withdrawn (`withdrawSwitchStop`) |
+| the first time this home's server leads (at boot, or later from waiting for the witnesses) | `takeBackSwitchLeftovers({home, machine})` (`boot.ts`, the runtime's `onFirstLead`) | what a switch left on this machine goes, so a crash after any step above, or a restart after a cut that lost the witnesses too (it boots waiting and leads later), converges at the next lead: this machine's console from a handover (any home, as before); and in a home that took part in a switch (its `local/leader-switch/` folder) the host service a handover left on this machine's daemon (a rollback) or one an earlier leader left there for this Walnut in a home a switch promoted (a switch back), and this machine's own door credential, its record in `auth.json` and its host side. `server.configure {spec: null}` is sent whatever the status says (a spec adopted and not started yet reads `off`) |
 
 A rollback's restart pushes the trigger set and the bridge again: every boot's link to its own
 daemon pushes both.
@@ -619,42 +619,84 @@ daemon pushes both.
 `src/core/session-channel/leader-permit.ts`): the running permit's record number; with the permit
 off after it was on, or still waiting for its record, the highest number this Walnut ever told a
 host, kept in `cache/leader-permit-number.json` (leader data: the standby copy carries it). A host
-that saw `(n, e)` never sees `(0, e')` from the same Walnut.
+that saw `(n, e)` never sees `(0, e')` from the same Walnut. A write that failed is tried again
+only after 30 s, and a temp file a crash left beside it is swept at the next write. A forged higher
+number in that file (it needs write access to the home) only raises the floor the hosts hold: they
+refuse this Walnut's lower numbers until the permit passes it, a liveness cost, never a second
+leader let in.
 
 **The host network's member lists follow the permit** (`src/core/net/net-mac.ts`, `netLeadOf`). With
 no permit running the lists are by role, byte for byte as before: the Mac dials every host and lets
 none in, each host lets in the Mac. Under a running permit with a record, the machine of this server
-dials every other member (the old Mac too), and the machines let in the record's holder and, during
-a handover, the machine it is handed from. So during the handover every host and the old leader's own
-walnut-net let the new leader in, and after its record stands the hosts let in the new leader only.
-A machine that the record names neither way gives no list (`not_permit_holder`). A leader on a machine
-already on the companion's list never takes the Mac's place on it. Not checked on real machines.
+dials every other member (`mac` members too: the old Mac is one, and after the commit it is a host
+the new leader dials; another Mac outside the switch is dialled too and lets nobody in, which
+walnut-net does not mind and its status shows), and the machines let in the record's holder and,
+during a handover, the machine it is handed from, never themselves. So during the handover every
+host and the old leader's own walnut-net let the new leader in, and after its record stands the
+hosts let in the new leader only. A machine that the record names neither way gives no list
+(`not_permit_holder`) and pushes to no host, a host that connects later included. A leader on a
+machine with a host row never pushes to that row, and a leader already on the companion's list
+never takes the Mac's place on it (`tests/core/net/net-permit-sync.test.ts`). Not checked on real
+machines.
 
 **Its witness over the door** (way c over call frames): a host's service allows
-`/host-api/witness/` on the socket it dialed into its leader's door (`src/replica/leader-door.ts`), and
+`/host-api/witness/` on the socket it dialed into its leader's door (`src/replica/leader-door.ts`;
+with `switchable_leader` off there it answers `403 not_callable`, as a prefix nobody allowed did
+before, so the leader goes on to its next way), and
 the leader's permit boot registers the dialed sockets as a reach (`reachDialedHosts`,
 `witness-transport.ts`), tried before the daemon link. The caller is the leader that proved the
 machine's credential: the record is the credential's Walnut, never the one the body names
 (`tests/core/leader/switch/witness-dialed-door.test.ts`).
 
 **The companion and the phone follow** (`tests/e2e/leader-switch-companion-follow-live-e2e.test.ts`,
-real servers and daemons, the companion test cluster; one test second stands for ten product
-seconds: takeover window 6 s for 60 s, commit window 30 s for 300 s, B late 36 s for 6 minutes).
-Measured on 2026-11-23:
+real servers and daemons, the companion test cluster). One test second stands for ten product
+seconds: takeover window 6 s for 60 s, commit window (the restart notice) 30 s for 300 s, B late
+36 s for 6 minutes, and the permit's lease 6 s for 60 s (`WALNUT_LEADER_PERMIT_VALID_MS`,
+`settings.ts permitParamsFor`: renew, margins and back-off scale with it; it works only with witness
+dirs this machine opens itself, a witness served by another machine keeps 60 s and refuses such a
+record). Before 2026-11-23 the lease was not scaled, so B's late commit was a renew on a handover
+still inside its 60 s lease, a path the product does not take at those times.
 
-- The restart notice reached the companion (`restartingMs` 30 000), and the backup claimed the
-  dev box 29.9 s after A's stop, not after the takeover window.
-- Never two primaries: the dev box's book went primary (epoch 1), backup (2), primary (3), one
-  record the whole time (B's home an alias of A's). The backup stepped back the moment B claimed.
-- The backup claims with the host's epoch + 1 and no permit number (the permit was at 3, its
-  handover 6, B's commit 7). While it led it made no outward connection, fetch or send, and wrote
-  no leader data: the companion only rebuildable files, the host only machine data.
-- A brought back is refused (`walnut_home_busy`, `movedTo` B's home) and moves nothing.
-- The phone's token paired while A led got B's answer through the companion 112 ms after B took
-  the dev box back. Exactly one `__local__` bridge, B's, for 120 s (120 samples, 0 `replaced`).
-  Without the drop of A's bridge the two daemons replace each other about once a second.
-- The session channel's permit pair is not reached in that cluster (its host runs no service); the
-  pair rule is `tests/e2e/host-judge-leader-move-e2e.test.ts`'s.
+In product time B 6 minutes late is past the handover's lease and past the commit window
+(`commit_window_s`, above), so B's job starts no commit and A's job takes back. The test runs both, each in its own world:
+
+1. **A commit lands late anyway** (not the product's path at these times: a job killed and resumed,
+   or a clock off). B's record stands, the backup steps back, B holds the dev box. Here B's commit is
+   a **renew** on the handover, not a grant: a witness dir is served by whichever process asks, and a
+   new process counts a record as accepted at its own first read (`permit/witness.ts`), so B's first
+   read finds the handover inside the lease as it counts it and renews at once, however late it
+   comes. Only a witness kept by a long-running service (another machine's) counts from the real
+   acceptance; there a commit past the lease is refused as a renew and stands only as a grant.
+2. **B gives up, A takes back** (the product's path). B never starts. The test plays A's source job
+   rolling back (the marker removed, A's server started again): A boots waiting for its earlier
+   handover to run out, then grants; the backup steps back when A takes the dev box back. A commit
+   start of B that came now anyway is refused by what the witnesses hold.
+
+Measured on 2026-11-23 (run 10), milliseconds after A's stop:
+
+| | 1. late commit | 2. B gives up, A takes back |
+|---|---|---|
+| The backup claims the dev box (the restart notice ran out, not the takeover window) | 29 570, epoch 2 | 29 565, epoch 2 |
+| Records at the witnesses | handover 34, B's renew 35 (40.6 s after the handover) | handover 34, A's grant 38 (45.7 s after the handover, 9.4 s after A's boot) |
+| The backup steps back | 45 707, 2 ms after B took the dev box | 47 025, 8 ms after A took the dev box |
+| The dev box taken back after the new holder may act | 5.2 s | 13 ms |
+| The phone's first answer from the leader after the take-back | 524 ms | 2.3 s |
+| One `__local__` bridge for 120 s (samples, registrations, replaced) | B's: 120, 1, 0 | A's: 120, 1, 0 |
+
+In both: never two primaries (the dev box's book primary 1, backup 2, primary 3, one home record);
+the backup claims with the host's epoch + 1 and no permit number; while it led the companion made no
+outward connection, fetch or send, and wrote no leader data (the companion only rebuildable files, the
+dev box only machine data). In case 1 A's old home brought back is refused (`walnut_home_busy`,
+`movedTo` B's home). Without the drop of A's bridge the two daemons replace each other about once a
+second. The session channel's permit pair is not reached in that cluster (its host runs no service);
+the pair rule is `tests/e2e/host-judge-leader-move-e2e.test.ts`'s.
+
+**A host follows only a leader that may act.** Under the permit, a server whose doors are closed
+(a restart waiting for its earlier handover to run out) describes the Walnut to a host the
+companion's backup leads but sends no `leader.claim`; the claim goes the moment the doors open
+(`primary-leader.ts configureHostLeader`, `tests/core/leader/primary-leader-claim-permit.test.ts`).
+Before this, case 2's A took the dev box back 2.8 s before its grant stood (up to a whole lease in
+product time).
 
 #### What does not work on a host reached only through a door
 
@@ -1167,11 +1209,15 @@ witness, above).
   link; on another machine that needs the daemon kind above.
 - **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)):
   no daemon runs in the rehearsal yet, so that runs only in the real-daemon test.
-- **The flow does not call the host hooks yet** ([the steps around the stop](#the-old-machine-as-a-host-and-the-steps-around-the-stop)):
-  each is built and tested alone. Their inputs have no config yet: the new leader's doors for each
-  machine and the new leader's name for the old machine (`leader_switch.machines[]`). The new leader
-  also gets no host row for the old Mac from the member list (a `mac` member becomes no host row,
-  `net-rows.ts`), so the leader-dialed case needs that row in the promoted config.
+- **The host hooks are not set yet** ([the steps around the stop](#the-old-machine-as-a-host-and-the-steps-around-the-stop)):
+  the handover route calls them through `handover-host-steps.ts`, and nothing calls
+  `setHandoverHostSteps` with host-follow.ts's hooks, so none runs; each is built and tested alone.
+  Setting them needs an adapter: `configureOldMachineHostService` needs a loopback port the
+  interface does not pass, and `afterHandoverRecord` reads only `ok` from `retellNetMembers`, so a
+  host it `missed`, or a new leader not let in (`newLeaderLetIn: false`), is not yet a reason to
+  wait or refuse before the stop. The new leader also gets no host row for the old Mac from the
+  member list (a `mac` member becomes no host row, `net-rows.ts`), so the leader-dialed case needs
+  that row in the promoted config.
 - **Operation ids registered at the witnesses before an outward send**: the permit core has
   them (`registerOps`, `beginSend`, `reportOutcome`), no send path calls them yet. For this
   manual switch they add nothing the data does not carry: the old leader is stopped and its

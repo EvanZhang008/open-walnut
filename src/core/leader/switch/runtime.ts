@@ -109,6 +109,11 @@ export interface RuntimeOptions {
   commitUntil?: number
   /** Tests: how remote witnesses are reached (witness-transport.ts), in place of the host links. */
   net?: Partial<import('./witness-transport.js').WitnessTransportOptions>
+  /**
+   * Once, the first time this process leads (at boot, or later from waiting): what a switch left
+   * behind is taken back then (boot.ts). Called on a later tick, never awaited, never twice.
+   */
+  onFirstLead?: () => void
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -343,8 +348,14 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     timer = setTimeout(() => { void serial(loop) }, ms)
     timer.unref?.()
   }
-  const lead = (record: PermitRecord, msg: string) => {
+  // The first lead of this process (at boot or from waiting) tells onFirstLead, once.
+  const ledNow = () => {
+    if (everLed) return
     everLed = true
+    if (opts.onFirstLead) setImmediate(() => { try { opts.onFirstLead!() } catch (err) { log('warn', 'leader permit: the first lead\'s step failed', { error: (err as Error).message }) } })
+  }
+  const lead = (record: PermitRecord, msg: string) => {
+    ledNow()
     state = 'leading'
     why = undefined
     learn()
@@ -414,7 +425,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     // handing-over, handed-over, lost: nothing to send; a cancel (below) brings it back.
   }
 
-  if (decision.kind === 'lead') { everLed = true; state = 'leading'; learn(); schedule(settings.params.renewEveryMs) }
+  if (decision.kind === 'lead') { ledNow(); state = 'leading'; learn(); schedule(settings.params.renewEveryMs) }
   if (decision.kind === 'waiting') { why = decision.why; schedule(Math.min(5_000, settings.params.renewEveryMs)) }
   if (decision.kind === 'refuse') { state = 'lost'; why = decision.why }
 

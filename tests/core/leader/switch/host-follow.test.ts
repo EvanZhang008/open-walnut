@@ -15,6 +15,9 @@
  *                             and a home a switch promoted), and a home that took no part in a switch
  *                             is left alone; the trigger set and the bridge are dropped on the daemon,
  *                             and this process stops pushing its own bridge
+ *   takeBackSwitchLeftovers   a crash after prepare and configure, then a restart that boots waiting
+ *                             for the witnesses and leads later: at that first lead the host service,
+ *                             this machine's credential record and its host side are all gone
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
@@ -26,18 +29,22 @@ vi.mock('../../../../src/constants.js', () => createMockConstants('walnut-host-f
 
 import { WALNUT_HOME } from '../../../../src/constants.js'
 import { _resetDeviceAuthForTesting } from '../../../../src/core/device-auth.js'
-import { setMachineIdHomeForTest } from '../../../../src/core/machine-id.js'
+import { readMachineId, setMachineIdHomeForTest } from '../../../../src/core/machine-id.js'
 import { classifyHomePath } from '../../../../src/core/home-manifest/index.js'
 import { hostCredentialOf } from '../../../../src/core/session-channel/host-credentials.js'
 import { readHostCredential } from '../../../../src/core/session-channel/host-credential-file.js'
 import { setOutwardDoorChecker } from '../../../../src/core/leader/switch/doors.js'
 import { ownBridgeHeld, holdOwnBridge } from '../../../../src/core/leader/own-bridge-hold.js'
-import { setRestartNotice, startLeaderHeartbeat } from '../../../../src/core/leader/primary-leader.js'
+import { leaderHeartbeatRunning, setRestartNotice, startLeaderHeartbeat } from '../../../../src/core/leader/primary-leader.js'
 import {
-  announceSwitchStop, configureOldMachineHostService, dropOwnDaemonDuties, hostServiceRecordFile, oldMachineHostServiceSpec,
+  announceSwitchStop, configureOldMachineHostService, dropOwnDaemonDuties, hostServiceRecordFile, oldMachineHostDirs, oldMachineHostServiceSpec,
   prepareOldMachineAsHost, pushNewLeaderDoors, removeSwitchHostService, restoreOwnDaemonDuties, undoHandoverHostSteps, withdrawSwitchStop, type OwnDaemon,
 } from '../../../../src/core/leader/switch/host-follow.js'
 import { promotedFile } from '../../../../src/core/leader/switch/records.js'
+import { leaderPermitAtBoot } from '../../../../src/core/leader/switch/boot.js'
+import { forgetLocalWitnesses, setUpLocalWitnesses } from '../../../../src/core/leader/switch/local-witnesses.js'
+import type { PermitRuntime } from '../../../../src/core/leader/switch/runtime.js'
+import { getInstanceId } from '../../../../src/core/device-store.js'
 import { bootStandbyTwin, type StandbyTwin } from '../../standby/twin-link.js'
 import { testBun } from '../../../helpers/bun-runtime.js'
 
@@ -133,8 +140,69 @@ describe('pushNewLeaderDoors and announceSwitchStop', () => {
     expect(await announceSwitchStop(900_000, { maxWaitMs: 50 })).toBe(300_000)
     expect(await announceSwitchStop(0, { maxWaitMs: 50 })).toBeNull()
     expect(setRestartNotice(60_000)).toBe(60_000)
-    ;(await withdrawSwitchStop()).stop()
+    // No heartbeat ran when the notice went: the withdrawal starts none.
+    expect(await withdrawSwitchStop()).toMatchObject({ restarted: false })
+    expect(leaderHeartbeatRunning()).toBe(false)
     expect(setRestartNotice(null)).toBeNull()
+  })
+
+  it('a withdrawn notice starts again the heartbeats the notice stopped, and only those', async () => {
+    const beating = startLeaderHeartbeat()
+    try {
+      expect(leaderHeartbeatRunning()).toBe(true)
+      expect(await announceSwitchStop(60_000, { maxWaitMs: 50 })).toBe(60_000)
+      expect(leaderHeartbeatRunning()).toBe(false)
+      expect(await withdrawSwitchStop()).toMatchObject({ restarted: true })
+      expect(leaderHeartbeatRunning()).toBe(true)
+      // Withdrawn again: nothing more to start.
+      expect(await withdrawSwitchStop()).toMatchObject({ restarted: false })
+    } finally { beating.stop() }
+    expect(leaderHeartbeatRunning()).toBe(false)
+  })
+})
+
+describe('the host service\'s dirs and its take-back, without a daemon', () => {
+  afterEach(() => { delete process.env.WALNUT_HOST_SERVER_ROOT })
+
+  it('picks the dirs as the host-server manager does: its own under the root, the shared ones only while this Walnut marked them', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-follow-root-'))
+    try {
+      process.env.WALNUT_HOST_SERVER_ROOT = root
+      const own = { dataDir: `${root}/walnuts/${WALNUT.slice(0, 16)}/data`, logFile: `${root}/walnuts/${WALNUT.slice(0, 16)}/logs/server.log`, runDir: `${root}/walnuts/${WALNUT.slice(0, 16)}/run` }
+      expect(await oldMachineHostDirs(WALNUT)).toEqual(own)
+      // The shared data dir from before the split, marked by another Walnut: not this one's.
+      fs.mkdirSync(path.join(root, 'data'), { recursive: true })
+      fs.writeFileSync(path.join(root, 'data', '.walnut-id'), 'another-walnut')
+      expect(await oldMachineHostDirs(WALNUT)).toEqual(own)
+      // Marked by this Walnut: it runs there, as the manager would keep it there.
+      fs.writeFileSync(path.join(root, 'data', '.walnut-id'), WALNUT)
+      expect(await oldMachineHostDirs(WALNUT)).toEqual({ dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run` })
+      // Read only: nothing is marked where there was no mark.
+      fs.rmSync(path.join(root, 'data', '.walnut-id'))
+      await oldMachineHostDirs(WALNUT)
+      expect(fs.existsSync(path.join(root, 'data', '.walnut-id'))).toBe(false)
+      // With no root set: under the home's .open-walnut-host, as HOST_ROOT says.
+      delete process.env.WALNUT_HOST_SERVER_ROOT
+      expect((await oldMachineHostDirs(WALNUT)).dataDir).toBe(path.join(os.homedir(), '.open-walnut-host', 'walnuts', WALNUT.slice(0, 16), 'data'))
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('a spec adopted and not started yet (its status reads off) is still removed: nothing is left behind the record', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'host-follow-off-'))
+    try {
+      fs.mkdirSync(path.dirname(hostServiceRecordFile(home)), { recursive: true })
+      fs.writeFileSync(hostServiceRecordFile(home), '{}')
+      const sent: Array<[string, Record<string, unknown>]> = []
+      const daemon: OwnDaemon = { send: async (cmd, payload) => { sent.push([cmd, payload]); return cmd === 'server.status' ? { ok: true, status: { state: 'off', since: 0, restarts: 0 } } : { ok: true } } }
+      expect(await removeSwitchHostService({ daemon, home })).toEqual({ ok: true, removed: false })
+      expect(sent).toEqual([['server.status', { home }], ['server.configure', { home, spec: null }]])
+      expect(fs.existsSync(hostServiceRecordFile(home))).toBe(false)
+      // A daemon that does not answer the status: the record stays for the next try.
+      fs.writeFileSync(hostServiceRecordFile(home), '{}')
+      const mute: OwnDaemon = { send: async () => ({ ok: false, error: 'busy' }) }
+      expect((await removeSwitchHostService({ daemon: mute, home })).ok).toBe(false)
+      expect(fs.existsSync(hostServiceRecordFile(home))).toBe(true)
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 })
 
@@ -158,7 +226,6 @@ describe.skipIf(!BUN)('this machine\'s own daemon (a real daemon twin)', () => {
     home = fs.mkdtempSync(path.join(dir, 'leader-home-'))
     // A new socket per home: a server's socket speaks for one home.
     twin.drop()
-    await new Promise((r) => setTimeout(r, 50))
     const link = await twin.connect()
     daemon = { send: (cmd, payload, timeoutMs) => link.send(cmd, payload, timeoutMs) as Promise<Record<string, unknown>> }
     // As the server's link does: this socket speaks for its home first.
@@ -229,7 +296,8 @@ describe.skipIf(!BUN)('this machine\'s own daemon (a real daemon twin)', () => {
       home, walnutId: WALNUT, machineId: MACHINE,
       daemon: { send: daemon.send, recheckTriggers: () => { pushed.push('triggers') }, pushBridgeConfig: () => { pushed.push('bridge') } },
     })
-    startLeaderHeartbeat().stop()
+    // No notice went out (announceSwitchStop never ran): the undo starts no heartbeat.
+    expect(leaderHeartbeatRunning()).toBe(false)
     expect(r).toEqual({ ok: true, hostService: true, credential: true })
     expect(((await daemon.send('server.status', { home }, 10_000)).status as { state: string }).state).toBe('off')
     expect(fs.existsSync(hostServiceRecordFile(home))).toBe(false)
@@ -239,6 +307,62 @@ describe.skipIf(!BUN)('this machine\'s own daemon (a real daemon twin)', () => {
     expect(pushed).toEqual(['triggers', 'bridge'])
     expect(setRestartNotice(null)).toBeNull()
   }, 60_000)
+
+  it('a crash after prepare and configure, then a boot that waits for the witnesses and leads later: its first lead takes all three back', async () => {
+    // This Walnut's own id (the take-back reads it as the server does): the socket speaks for it.
+    const walnutId = await getInstanceId()
+    twin.drop()
+    const link = await twin.connect()
+    daemon = { send: (cmd, payload, timeoutMs) => link.send(cmd, payload, timeoutMs) as Promise<Record<string, unknown>> }
+    expect((await daemon.send('leader.configure', { home, walnutId, backup: false }, 10_000)).ok).toBe(true)
+    const out = path.join(dir, `env-${path.basename(home)}`)
+    const dirs = { dataDir: path.join(dir, 'svc4', 'data'), logFile: path.join(dir, 'svc4', 'logs', 'server.log'), runDir: path.join(dir, 'svc4', 'run') }
+    // The old leader's steps before the handover record, then a crash (nothing undone).
+    // And this machine's own id, as the take-back reads it (machine-id.ts, under this test's account).
+    const machineId = await readMachineId()
+    const prepared = await prepareOldMachineAsHost(input({ walnutId, machineId, thisMachine: async () => machineId }))
+    expect(prepared.ok, prepared.ok ? '' : prepared.why).toBe(true)
+    const configured = await configureOldMachineHostService({ daemon, home, walnutId, hostKey: 'mac', port: 41_237, dirs, program: program(out) })
+    expect(configured.ok, configured.ok ? '' : configured.why).toBe(true)
+    expect(await hostCredentialOf(machineId)).not.toBeNull()
+    expect(await readHostCredential(walnutId)).not.toBeNull()
+    // The restart: this home's config names three witness dirs, two of them gone for now.
+    const sw = path.join(dir, `switch-${path.basename(home)}`)
+    const witnesses = ['w1', 'w2', 'w3'].map((id) => ({ id, dir: path.join(sw, 'witnesses', id) }))
+    setUpLocalWitnesses(witnesses)
+    const idFile = path.join(sw, 'machine-a.id')
+    fs.writeFileSync(idFile, 'machine-a\n')
+    fs.writeFileSync(path.join(home, 'config.yaml'), [
+      'experimental:', '  switchable_leader: true', 'leader_switch:', '  witnesses:',
+      ...witnesses.map((w) => `    - { id: ${w.id}, dir: ${w.dir} }`),
+      '  machines:',
+      `    - { id: machine-a, home: ${home}, standby_dir: ${path.join(sw, 'a-standby')}, port: 4911 }`,
+      `    - { id: machine-b, home: ${path.join(sw, 'b-home')}, standby_dir: ${path.join(sw, 'b-standby')}, port: 4912 }`,
+      '',
+    ].join('\n'))
+    for (const w of witnesses.slice(0, 2)) fs.renameSync(w.dir, `${w.dir}.off`)
+    let rt: PermitRuntime | null = null
+    try {
+      rt = await leaderPermitAtBoot({ home, flagOn: true, isLeaderRole: true, ephemeral: false, env: { WALNUT_MACHINE_ID_FILE: idFile }, ownDaemon: daemon })
+      expect(rt?.decision.kind).toBe('waiting')
+      // Waiting, it takes nothing back: it does not lead.
+      expect(((await daemon.send('server.status', { home }, 10_000)).status as { state: string }).state).not.toBe('off')
+      expect(fs.existsSync(hostServiceRecordFile(home))).toBe(true)
+      expect(await hostCredentialOf(machineId)).not.toBeNull()
+      // The witnesses answer again: it leads, and its first lead takes the three back.
+      for (const w of witnesses.slice(0, 2)) fs.renameSync(`${w.dir}.off`, w.dir)
+      await vi.waitFor(() => expect(rt!.status().state).toBe('leading'), { timeout: 30_000, interval: 100 })
+      await vi.waitFor(async () => {
+        expect(((await daemon.send('server.status', { home }, 10_000)).status as { state: string }).state).toBe('off')
+        expect(fs.existsSync(hostServiceRecordFile(home))).toBe(false)
+        expect(await hostCredentialOf(machineId)).toBeNull()
+        expect(await readHostCredential(walnutId)).toBeNull()
+      }, { timeout: 20_000, interval: 100 })
+    } finally {
+      await rt?.stop()
+      forgetLocalWitnesses()
+    }
+  }, 90_000)
 
   it('drops the trigger set and the bridge on the daemon, and this process stops pushing its own bridge', async () => {
     const set = { version: 1, triggers: [{ id: 'mfollow1-0001', name: 'Watch', everyMs: 3_600_000, check: { run: 'true', timeoutSeconds: 10 } }] }

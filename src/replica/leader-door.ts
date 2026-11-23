@@ -75,12 +75,15 @@ async function witnessAnswered(req: IncomingMessage, res: ServerResponse, opts: 
 /**
  * The same witness as a call frame on the socket this host dialed into its leader's door
  * (core/session-channel/host-dialer.ts, door-calls.ts): the caller is the leader that proved this
- * machine's credential, so its Walnut is the credential's (`from`), never the body's claim. Off, or
- * any method but POST: the 404 the HTTP route answers.
+ * machine's credential, so its Walnut is the credential's (`from`), never the body's claim. Off: the
+ * refusal a prefix nobody allowed gets (403 not_callable, door-calls.ts), so with the experiment off
+ * a call frame is answered exactly as before the prefix was allowed. On, any method but POST: the
+ * 404 the HTTP route answers.
  */
 async function witnessCallAnswered(method: string, pathname: string, body: unknown, from: DoorPeer, opts: LeaderDoorOptions): Promise<{ status: number; body: unknown }> {
   const own = opts.witness ?? await defaultWitnessDoor()
-  if (method !== 'POST' || !(await own.enabled().catch(() => false))) return { status: 404, body: { ok: false, error: 'not_found' } }
+  if (!(await own.enabled().catch(() => false))) return { status: 403, body: { ok: false, error: 'not_callable' } }
+  if (method !== 'POST') return { status: 404, body: { ok: false, error: 'not_found' } }
   const [{ serveWitnessCall }, { witnessRoot }] = await Promise.all([import('../core/leader/switch/witness-route.js'), import('../core/leader/switch/machine-id.js')])
   return serveWitnessCall(pathname, body, () => ({ via: 'host-door', machineId: from.machineId, verifiedWalnutId: from.walnutId }), { walnutId: own.walnutId, root: own.root?.() ?? witnessRoot(), log: opts.log })
 }

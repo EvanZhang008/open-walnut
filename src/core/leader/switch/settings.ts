@@ -34,6 +34,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import YAML from 'yaml'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
+import { checkTiming } from '../permit/rules.js'
 import { experimentalEnabled, type ExperimentalFlags } from '../../experimental.js'
 
 /** A witness whose record is a directory on this computer (one-computer rehearsals and tests). */
@@ -226,11 +227,35 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
       witnesses,
       machines,
       backWindowHours: Number.isFinite(hours) && hours > 0 ? hours : 168,
-      params: { ...DEFAULT_PERMIT_PARAMS },
+      params: permitParamsFor(),
       commitWindowMs: seconds(o.commit_window_s, DEFAULT_COMMIT_WINDOW_S, 30),
       stopWaitMs: seconds(o.stop_wait_s, DEFAULT_STOP_WAIT_S, 10),
     },
   }
+}
+
+/** The shortest record WALNUT_LEADER_PERMIT_VALID_MS may ask for (the runtime tests' 3 s). */
+const MIN_SCALED_VALID_MS = 3_000
+
+/**
+ * The permit's clocks. WALNUT_LEADER_PERMIT_VALID_MS: the live tests' scaled time (as
+ * WALNUT_LEADER_RESTART_GRACE_MS and WALNUT_LEADER_HEARTBEAT_MS), between 3 s and the default 60 s;
+ * every other time of the permit scales with it, so the margins still cover the same drift. A
+ * witness served by another machine's service keeps the default and refuses such a record
+ * (bad-validity): the knob only works with witnesses this machine opens itself (witness dirs).
+ */
+export function permitParamsFor(env: NodeJS.ProcessEnv = process.env): PermitParams {
+  const want = Number(env.WALNUT_LEADER_PERMIT_VALID_MS)
+  if (!Number.isFinite(want) || want < MIN_SCALED_VALID_MS || want >= DEFAULT_PERMIT_PARAMS.validMs) return { ...DEFAULT_PERMIT_PARAMS }
+  const f = Math.floor(want) / DEFAULT_PERMIT_PARAMS.validMs
+  const d = DEFAULT_PERMIT_PARAMS
+  const scaled: PermitParams = {
+    ...d,
+    validMs: Math.floor(want), renewEveryMs: Math.round(d.renewEveryMs * f), holderMarginMs: Math.round(d.holderMarginMs * f),
+    witnessMarginMs: Math.round(d.witnessMarginMs * f), minSendRemainingMs: Math.round(d.minSendRemainingMs * f),
+    backoffBaseMs: Math.max(1, Math.round(d.backoffBaseMs * f)), backoffMaxMs: Math.max(1, Math.round(d.backoffMaxMs * f)),
+  }
+  try { checkTiming(scaled); return scaled } catch { return { ...DEFAULT_PERMIT_PARAMS } }
 }
 
 export function readHomeSwitchConfig(home: string): HomeSwitchConfig {
