@@ -259,7 +259,7 @@
     "styles/walnut-agent.css": 3,
     "styles/workspaces.css": 3,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2,
-    "../../plugin-store/notes-import/src/web/styles.ts": 9
+    "../../plugin-store/notes-import/src/web/styles.ts": 8
   },
   "pillRadius": {
     "apps/mail/mail-reader.css": 1,
@@ -274,8 +274,7 @@
     "styles/trigger-picker.css": 1,
     "styles/usage-breakdown.css": 1,
     "styles/workspaces.css": 2,
-    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 1,
-    "../../plugin-store/notes-import/src/web/styles.ts": 7
+    "../../plugin-store/notes-import/src/web/styles.ts": 6
   },
   "fontSizeOffScale": {
     "apps/mail/mail-compose.css": 3,
@@ -1019,9 +1018,6 @@
     "styles/doc-comments.css": 1,
     "styles/globals.css": 1
   },
-  "squareKey": {
-    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 1,
-    "../../plugin-store/notes-import/src/web/styles.ts": 2
-  },
+  "squareKey": {},
   "roundRow": {}
 }

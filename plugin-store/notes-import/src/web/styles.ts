@@ -82,7 +82,7 @@ export const IMPORT_CSS = `
   height: 28px;
   padding: 0 12px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-full);
   background: var(--card-bg, var(--bg));
   color: var(--fg);
   font: inherit;
@@ -203,7 +203,7 @@ a.ni-button { text-decoration: none; display: inline-flex; align-items: center; 
 .ni-preview-text[data-full] { max-height: none; }
 .ni-compare { display: grid; gap: 6px; margin: 6px 0 4px; min-width: 0; }
 .ni-compare-key { display: flex; flex-wrap: wrap; gap: 6px; }
-.ni-diff-chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; }
+.ni-diff-chip { font-size: 12px; padding: 1px 8px; border-radius: var(--radius-full); }
 .ni-diff-chip[data-side="mine"], .ni-diff-line[data-side="mine"] { background: color-mix(in srgb, #d73a49 16%, transparent); }
 .ni-diff-chip[data-side="notion"], .ni-diff-line[data-side="notion"] { background: color-mix(in srgb, #22a06b 18%, transparent); }
 .ni-diff-line { display: block; min-height: 1.4em; padding-left: 1.6em; text-indent: -1.6em; }

@@ -93,7 +93,7 @@ export const RHYTHM_CSS = `
 .rhythm-two { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 22px; align-items: start; }
 .rhythm-pill {
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   color: var(--fg-muted);
   font-size: 12px;
