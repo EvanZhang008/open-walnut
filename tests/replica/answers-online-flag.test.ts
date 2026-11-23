@@ -83,7 +83,7 @@ describe('answersOnline follows the host_call_entry experiment', () => {
     const sock = { said: false }
     const g = createFollowerGateway<typeof sock>({
       follower: () => sock, mayWrite: () => false, answersOnline: (ws) => ws.said, now: () => 0,
-      send: () => true, nextRelayId: () => 1, instanceId: 'i', attemptMs: () => 1_000,
+      send: () => true, nextRelayId: () => 1, instanceId: 'i', attemptMs: () => 1_000, minRelayMs: 8_000,
       setTimer: () => null, clearTimer: () => {}, log: () => {},
     })
     expect(g.answersOnline('/h')).toBe(false)

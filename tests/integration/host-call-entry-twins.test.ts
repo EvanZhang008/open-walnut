@@ -241,7 +241,7 @@ afterAll(async () => {
 })
 
 for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: the host call entry`, () => {
+  describe.skipIf(twin === 'standalone' && !BUN)(`${twin === 'source' ? `source twin (${SOURCE_TWIN.runtime})` : 'standalone twin'}: the host call entry`, () => {
     it('a job run gets the entry socket and its own token, its call goes through the entry and back with the socket\'s answer, and a wrong or ended run\'s token runs nothing', async () => {
       const r = await rig(twin, `${twin.slice(0, 2)}a`)
       try {

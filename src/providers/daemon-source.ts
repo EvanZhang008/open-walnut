@@ -5898,7 +5898,8 @@ function primarySocketOpen(home) {
   return false;
 }
 
-function forwardToBackup(home, capability, callerSid, payload, respond) {
+// timeoutMs: how long to wait for its answer (default the hub's own timeout): a call's own deadline's rest.
+function forwardToBackup(home, capability, callerSid, payload, respond, timeoutMs) {
   var lead = leaderBook.backupLead(home);
   // The companion of this Walnut, on its own link.
   var backupLink = bridgeLinkFor(home);
@@ -5908,13 +5909,15 @@ function forwardToBackup(home, capability, callerSid, payload, respond) {
   var relayId = gatewayRelayCounter;
   var timer = setTimeout(function () {
     gatewayRelayPending.delete(relayId);
-    respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time'));
-  }, GATEWAY_HUB_TIMEOUT_MS);
+    respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time; the call may have run, read before trying again'));
+  }, typeof timeoutMs === 'number' ? timeoutMs : GATEWAY_HUB_TIMEOUT_MS);
   gatewayRelayPending.set(relayId, { respond: respond, timer: timer, via: 'bridge', bridge: adapter });
   logMsg('info', 'gateway: relaying to the backup leader', { relayId: relayId, capability: capability, callerSid: callerSid, epoch: lead.epoch });
   sendEvent(adapter, 'gateway-request', {
     relayId: relayId, capability: capability, callerSid: callerSid, payload: payload,
     walnutId: lead.walnutId, epoch: lead.epoch,
+    // What this host still waits for, so the companion holds its work to it (backup-gateway.ts).
+    answerInMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
     caller: callerSid ? offlineHost.callerOf(home, callerSid) : undefined,
   });
   return true;
@@ -6139,13 +6142,14 @@ var followerGateway = (__CREATE_FOLLOWER_GATEWAY__)({
   // The companion leading takes what the follower refuses for want of a leader: relayed to it on its
   // link, held for the Mac when it takes nothing either (follower-gateway-core.ts askElsewhere).
   leaderElsewhere: function (home) { return leaderBook.backupLead(home) !== null; },
-  relayElsewhere: function (call, answer) { return forwardToBackup(call.home, call.capability, call.callerSid, call.payload, answer); },
+  relayElsewhere: function (call, answer, timeoutMs) { return forwardToBackup(call.home, call.capability, call.callerSid, call.payload, answer, timeoutMs); },
   holdForLeader: function (call) { return offlineHost.holdWrite(call.home, call.callerSid, call.capability, call.payload); },
   now: function () { return Date.now(); },
   send: function (ws, ev, data) { try { sendEvent(ws, ev, data); return true; } catch (e) { return false; } },
   nextRelayId: function () { return ++gatewayRelayCounter; },
   instanceId: DAEMON_INSTANCE_ID,
   attemptMs: function (deadline) { return relayAttemptMs(deadline, Date.now(), GATEWAY_HUB_TIMEOUT_MS); },
+  minRelayMs: GATEWAY_MIN_RELAY_MS,
   setTimer: function (fn, ms) { var t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
   clearTimer: function (t) { clearTimeout(t); },
   log: function (level, msg, data) { logMsg(level, msg, data); },

@@ -32,6 +32,8 @@ export interface GatewayRequestFrame {
   walnutId?: unknown
   epoch?: unknown
   caller?: unknown
+  /** What the host's daemon still waits for, in ms (absent from an older daemon: its hub timeout). */
+  answerInMs?: unknown
 }
 
 type Outcome =
@@ -253,6 +255,9 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
 
 // ── The cloud box's wiring ──
 
+/** Answered this much before the host's daemon gives up, so the answer reaches it in time. */
+const ANSWER_MARGIN_MS = 500
+
 /** Answer one `gateway-request` frame a host's bridge carried (bridge-registry.ts). */
 export async function handleBackupGatewayFrame(host: string, frame: GatewayRequestFrame): Promise<void> {
   const receivedAt = Date.now()
@@ -283,9 +288,12 @@ export async function handleBackupGatewayFrame(host: string, frame: GatewayReque
       const [{ executeOp }, { hostOrigin }, { withAnswerBy }, { gatewayHubTimeoutMs }] = await Promise.all([
         import('../../ops/index.js'), import('../../lib/caller-origin.js'), import('../../lib/answer-by.js'), import('../../providers/gateway-core.js'),
       ])
-      // The host's gateway gives up on this call at its hub timeout: work that holds an answer
-      // (host_exec, a read's wait) is held to it, as on the Mac's relay (daemon-connection.ts).
-      return withAnswerBy(receivedAt + gatewayHubTimeoutMs(), () => executeOp(name, args, {
+      // The host's gateway gives up on this call at its hub timeout, or sooner when it says so
+      // (answerInMs: the rest of a call's time it first gave this host's own server): work that
+      // holds an answer (host_exec, a read's wait) is held to it, as on the Mac's relay (daemon-connection.ts).
+      const hub = gatewayHubTimeoutMs()
+      const answerIn = typeof frame.answerInMs === 'number' && frame.answerInMs > 0 ? Math.min(hub, frame.answerInMs - ANSWER_MARGIN_MS) : hub
+      return withAnswerBy(receivedAt + Math.max(0, answerIn), () => executeOp(name, args, {
         callerSid: ctx.callerSid, callerHost: ctx.callerHost, origin: hostOrigin(ctx.callerHost), ...(ctx.callId ? { callId: ctx.callId } : {}),
         ...(ctx.forAgent ? { forAgent: ctx.forAgent } : {}),
       }), { fresh: true })

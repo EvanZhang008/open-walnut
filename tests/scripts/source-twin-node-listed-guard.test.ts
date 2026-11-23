@@ -39,6 +39,7 @@ function testSources(): Map<string, string> {
 /** Helpers that start the JS twin with SOURCE_TWIN.file, and the calls of theirs that start it. */
 const TWIN_HELPERS: Record<string, RegExp> = {
   'tests/helpers/daemon-twin.ts': /\bstartDaemonTwin\(/,
+  'tests/helpers/follower-twin-rig.ts': /\bspawnFollowerTwin\(/,
   'tests/helpers/host-alone-harness.ts': /\bstartHostAloneHarness\(/,
   'tests/helpers/live-daemon.ts': /\bspawnLiveDaemon\(/,
   'tests/helpers/replica-cluster.ts': /\bstart(?:ReplicaCluster|HostDaemon)\(/,
@@ -52,6 +53,34 @@ const TWIN_ELSEWHERE: Record<string, string> = {
   'tests/e2e/session-budget-acp.test.ts': 'needs the full daemon build and the budget-e2e-manifest.json scripts/build-daemon.sh writes beside it; it runs in the e2e tier, which builds',
   'tests/providers/daemon-startup-failure-twins.live.test.ts': 'needs a real Claude Code binary (WALNUT_TEST_REAL_CLAUDE_BIN), so it runs in the live tier; its stand-in twin, daemon-startup-failure-twins-e2e.test.ts, runs node-side',
 }
+
+/** The test files a vitest config takes (its `include`), read from the config's source. */
+function configIncludes(config: string): RegExp[] {
+  const text = fs.readFileSync(path.join(REPO, config), 'utf8')
+  const m = /include(?:!)?\s*[:=]\s*\[([^\]]*)\]/.exec(text)
+  if (!m) throw new Error(`${config}: no include list found`)
+  const globs = [...m[1]!.matchAll(/'([^']+)'/g)].map((g) => g[1]!)
+  return globs.map((g) => new RegExp('^' + g.split('**/').map((part) => part.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('(?:.*/)?') + '$'))
+}
+
+describe('each node-side command runs the files it lists', () => {
+  // 2026-11-23: nine twin files sat in a command whose config (vitest.e2e.config.ts, tests/e2e/ only)
+  // drops every other path without a word, so node-side never ran them.
+  it('every file a node-side command lists is one its config includes', () => {
+    const missed: string[] = []
+    for (const name of TWIN_SCRIPTS) {
+      for (const command of SCRIPTS[name]!.split('&&')) {
+        const config = /--config\s+(\S+)/.exec(command)?.[1]
+        if (!config) continue
+        const takes = configIncludes(config)
+        for (const f of command.split(/\s+/).filter((w) => /^tests\/.*\.test\.tsx?$/.test(w))) {
+          if (!takes.some((r) => r.test(f))) missed.push(`${name}: ${f} is not in ${config}'s include`)
+        }
+      }
+    }
+    expect(missed).toEqual([])
+  })
+})
 
 describe('every suite that starts the JS twin runs node-side', () => {
   it('every test file that starts the JS twin runs in one of them: SOURCE_TWIN.file, or a helper that starts it', () => {

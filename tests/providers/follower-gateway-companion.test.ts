@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { type FollowerGatewayResponse } from '../../src/providers/follower-gateway-core.js'
+import { GATEWAY_MIN_RELAY_MS } from '../../src/providers/gateway-core.js'
 import { call, setup } from '../helpers/follower-gateway-harness.js'
 
 const refused: FollowerGatewayResponse = { ok: false, error: { code: 'needs_leader', message: 'host_exec needs your Mac', detail: { final: true } } }
@@ -65,6 +66,38 @@ describe('follower gateway: a final refusal while the companion leads', () => {
       expect(respond).toHaveBeenCalledWith(refused)
       expect(fallback).not.toHaveBeenCalled()
       expect(s.timers.filter((t) => !t.cleared)).toEqual([])
+      expect(s.g.ownAnswers().total).toBe(0)
+    }
+  })
+
+  it('the companion is given only what is left of the call\'s deadline, never a whole hub wait on top of the follower\'s', () => {
+    // The call is due at 31 000; the follower answered at 13 000: 18 s are left for the companion.
+    const s = setup()
+    s.state.companion = true
+    const respond = vi.fn()
+    expect(s.g.handOff(call({ fallback: vi.fn(), ...hostExec }), respond)).toBe(true)
+    s.state.now = 13_000
+    s.g.settle(s.sock, 101, refused)
+    expect(s.relayed).toHaveLength(1)
+    expect(s.relayed[0]!.timeoutMs).toBe(18_000)
+    expect(s.logs.find((l) => l.msg.startsWith('gateway: this host\'s Walnut server needs a leader'))?.data).toMatchObject({ timeoutMs: 18_000 })
+  })
+
+  it('with less than the floor left of the call\'s deadline, nothing is asked of the companion: held for the Mac, else the refusal stands', () => {
+    // An older companion knows no limit of ours and would run the call past the moment this host gave up.
+    for (const [held, now] of [[null, 31_000], [{ ok: true, result: { held: true } }, 31_000], [null, 31_000 - GATEWAY_MIN_RELAY_MS + 1]] as Array<[FollowerGatewayResponse | null, number]>) {
+      const s = setup()
+      s.state.companion = true
+      s.state.held = held
+      const respond = vi.fn()
+      const fallback = vi.fn()
+      expect(s.g.handOff(call({ fallback, ...hostExec }), respond)).toBe(true)
+      s.state.now = now
+      s.g.settle(s.sock, 101, refused)
+      expect(s.relayed).toEqual([])
+      expect(fallback).not.toHaveBeenCalled()
+      expect(respond).toHaveBeenCalledWith(held ?? refused)
+      expect(s.logs.find((l) => l.data?.why === 'no_time')).toBeTruthy()
       expect(s.g.ownAnswers().total).toBe(0)
     }
   })

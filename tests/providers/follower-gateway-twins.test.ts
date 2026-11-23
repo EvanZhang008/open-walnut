@@ -56,7 +56,14 @@ describe('follower gateway twin wiring', () => {
       // A final refusal goes to the companion while it leads, on its link, and is held for the Mac
       // when it takes nothing either: never the daemon's own away answer (follower-gateway-core.ts askElsewhere).
       expect(src).toMatch(/leaderElsewhere: (\(home\) => |function \(home\) \{ return )leaderBook\.backupLead\(home\) !== null/)
-      expect(src).toMatch(/relayElsewhere: (\(call, answer\) => |function \(call, answer\) \{ return )forwardToBackup\(call\.home, call\.capability, call\.callerSid, call\.payload, answer\)/)
+      expect(src).toMatch(/relayElsewhere: (\(call, answer, timeoutMs\) => |function \(call, answer, timeoutMs\) \{ return )forwardToBackup\(call\.home, call\.capability, call\.callerSid, call\.payload, answer, timeoutMs\)/)
+      // ...waiting for it only what is left of the call's deadline (the hub's own timeout is only the default).
+      expect(src).toMatch(/timeoutMs \?\? gatewayHubTimeoutMs\(\)|typeof timeoutMs === 'number' \? timeoutMs : GATEWAY_HUB_TIMEOUT_MS/)
+      // Under the gateway's own least relay time nothing is asked of it.
+      expect(src).toMatch(/minRelayMs: GATEWAY_MIN_RELAY_MS,/)
+      // ...telling the companion that rest (answerInMs), and a timeout says the call may have run.
+      expect(src).toMatch(/answerInMs: (timeoutMs|typeof timeoutMs === 'number' \? timeoutMs : undefined),/)
+      expect(src).toContain('did not answer in time; the call may have run, read before trying again')
       expect(src).toMatch(/holdForLeader: (\(call\) => |function \(call\) \{ return )offlineHost\.holdWrite\(call\.home, call\.callerSid, call\.capability, call\.payload\)/)
       // A session's call while the leader still takes this host's journal goes to the follower too.
       expect(src).toContain('(!target || offlineHost.pendingHandover(home)) && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)')

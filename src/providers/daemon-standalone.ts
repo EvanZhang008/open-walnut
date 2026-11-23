@@ -4606,6 +4606,8 @@ function forwardToBackup(
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
+  /** How long to wait for its answer (default the hub's own timeout): a call's own deadline's rest. */
+  timeoutMs?: number,
 ): boolean {
   const lead = leaderBook.backupLead(home)
   // The companion of this Walnut, on its own link.
@@ -4614,13 +4616,15 @@ function forwardToBackup(
   const relayId = ++gatewayRelayCounter
   const timer = setTimeout(() => {
     gatewayRelayPending.delete(relayId)
-    respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time'))
-  }, gatewayHubTimeoutMs())
+    respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time; the call may have run, read before trying again'))
+  }, timeoutMs ?? gatewayHubTimeoutMs())
   gatewayRelayPending.set(relayId, { respond, timer, via: 'bridge', bridge: adapter })
   logMsg('info', 'gateway: relaying to the backup leader', { relayId, capability, callerSid, epoch: lead.epoch })
   sendEvent(adapter, 'gateway-request', {
     relayId, capability, callerSid, payload,
     walnutId: lead.walnutId, epoch: lead.epoch,
+    // What this host still waits for, so the companion holds its work to it (backup-gateway.ts).
+    answerInMs: timeoutMs,
     caller: callerSid ? offlineHost.callerOf(home, callerSid) : undefined,
   })
   return true
@@ -4867,13 +4871,14 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   // The companion leading takes what the follower refuses for want of a leader: relayed to it on its
   // link, held for the Mac when it takes nothing either (follower-gateway-core.ts askElsewhere).
   leaderElsewhere: (home) => leaderBook.backupLead(home) !== null,
-  relayElsewhere: (call, answer) => forwardToBackup(call.home, call.capability, call.callerSid, call.payload, answer),
+  relayElsewhere: (call, answer, timeoutMs) => forwardToBackup(call.home, call.capability, call.callerSid, call.payload, answer, timeoutMs),
   holdForLeader: (call) => offlineHost.holdWrite(call.home, call.callerSid, call.capability, call.payload) as FollowerGatewayResponse | null,
   now: () => Date.now(),
   send: (ws, ev, data) => { try { sendEvent(ws, ev, data); return true } catch { return false } },
   nextRelayId: () => ++gatewayRelayCounter,
   instanceId: DAEMON_INSTANCE_ID,
   attemptMs: (deadline) => relayAttemptMs(deadline, Date.now(), gatewayHubTimeoutMs()),
+  minRelayMs: GATEWAY_MIN_RELAY_MS,
   setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
   clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
   log: (level, msg, data) => logMsg(level, msg, data),

@@ -445,7 +445,7 @@ mode lowered on the Mac just before it went away (Bypass to Default) still count
 looser one until that copy catches up: the window lasts exactly as long as the replication delay.
 
 A session sid the host's daemon could not prove is capped as an outside caller: the daemon marks such a
-relayed call `callerUnproven` (always on a host running the JS daemon, which cannot read the process on
+relayed call `callerUnproven` (always on a host running the JS daemon, as a host without bun does, which cannot read the process on
 its socket; on the bun daemon only when it cannot read it), and the Mac or the host's own service then
 reads that caller as `external` on every start, mode change and subagent run
 (`src/lib/caller-unproven.ts`), so a session naming its Bypass sibling's sid starts nothing looser than

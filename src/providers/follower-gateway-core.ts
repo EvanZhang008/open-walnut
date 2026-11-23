@@ -85,10 +85,11 @@ export interface FollowerGatewayDeps<S> {
   /** The cloud companion leads `home` (a backup lead is recorded): what the follower refuses for want of a leader is asked of it. */
   leaderElsewhere?(home: string): boolean
   /**
-   * Relay `call` to that leader, its answer to `answer`. False: nothing was sent (no link to it
-   * now), so the follower's answer stands. The twins' forwardToBackup.
+   * Relay `call` to that leader, its answer to `answer` within `timeoutMs` (what is left of the
+   * call's own deadline, so the caller hears by then). False: nothing was sent (no link to it now),
+   * so the follower's answer stands. The twins' forwardToBackup.
    */
-  relayElsewhere?(call: HandOff, answer: (r: FollowerGatewayResponse) => void): boolean
+  relayElsewhere?(call: HandOff, answer: (r: FollowerGatewayResponse) => void, timeoutMs: number): boolean
   /**
    * What this host keeps for the Mac of a call no leader took (the twins' offlineHost.holdWrite: a
    * message or a memory write, held as the follower's own hold is, which the daemon refuses while
@@ -104,6 +105,8 @@ export interface FollowerGatewayDeps<S> {
   instanceId: string
   /** How long the attempt may wait for a call due by `deadline` (gateway-core.ts relayAttemptMs). */
   attemptMs(deadline: number): number
+  /** The least of a call's time left worth asking the companion with (gateway-core.ts GATEWAY_MIN_RELAY_MS). */
+  minRelayMs: number
   setTimer(fn: () => void, ms: number): unknown
   clearTimer(t: unknown): void
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
@@ -351,13 +354,19 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
    */
   function askElsewhere(relayId: number, e: Pending, refused: FollowerGatewayResponse): void {
     const op = typeof e.call.payload.name === 'string' ? e.call.payload.name : undefined
-    const stand = (why: 'not_taken' | 'no_link') => {
+    const stand = (why: 'not_taken' | 'no_link' | 'no_time') => {
       const held = deps.holdForLeader?.(e.call) ?? null
       deps.log('info', held ? 'gateway: a call nobody leading takes now is held for the Mac' : 'gateway: this host\'s Walnut server\'s refusal stands', { relayId, op, why })
       e.respond(held ?? refused)
     }
-    const sent = deps.relayElsewhere?.(e.call, (r) => (notTaken(r) ? stand('not_taken') : e.respond(r))) === true
-    if (sent) deps.log('info', 'gateway: this host\'s Walnut server needs a leader for the call; asked of the cloud companion, which leads', { relayId, op })
+    // The companion gets what is left of the call's deadline, never a whole hub wait of its own on
+    // top of the follower's: the caller hears by its own deadline. None left: nothing is asked.
+    // Under a floor nothing is asked (held for the Mac: nothing ran anywhere), as an older companion
+    // knows no such limit and would run the call past the moment this host gave up on it.
+    const timeoutMs = deps.attemptMs(e.call.deadline)
+    if (timeoutMs < deps.minRelayMs) { stand('no_time'); return }
+    const sent = deps.relayElsewhere?.(e.call, (r) => (notTaken(r) ? stand('not_taken') : e.respond(r)), timeoutMs) === true
+    if (sent) deps.log('info', 'gateway: this host\'s Walnut server needs a leader for the call; asked of the cloud companion, which leads', { relayId, op, timeoutMs })
     else stand('no_link')
   }
 

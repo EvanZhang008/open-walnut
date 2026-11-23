@@ -39,7 +39,7 @@ function cluster(o: { fail?: string } = {}) {
   const gw = createFollowerGateway<typeof sock>({
     follower: () => sock, mayWrite: () => false, answersOnline: () => true, now: () => T0,
     send: (_ws, _ev, data) => { sent.push(data); return true },
-    nextRelayId: (() => { let n = 0; return () => ++n })(), instanceId: 'daemon-1', attemptMs: () => 20_000,
+    nextRelayId: (() => { let n = 0; return () => ++n })(), instanceId: 'daemon-1', attemptMs: () => 20_000, minRelayMs: 8_000,
     setTimer: (fn) => { timers.push(fn); return fn }, clearTimer: (t) => { const i = timers.indexOf(t as () => void); if (i >= 0) timers.splice(i, 1) },
     log: () => {},
   })

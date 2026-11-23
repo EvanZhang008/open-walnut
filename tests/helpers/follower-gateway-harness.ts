@@ -2,6 +2,7 @@
  * A follower gateway (src/providers/follower-gateway-core.ts) on fake sockets, a fake clock and
  * hand-fired timers: the harness of tests/providers/follower-gateway-*.test.ts.
  */
+import { GATEWAY_MIN_RELAY_MS } from '../../src/providers/gateway-core.js'
 import { createFollowerGateway, type FollowerGatewayResponse, type HandOff } from '../../src/providers/follower-gateway-core.js'
 
 export interface Sock { name: string; answersLocal: boolean; answersOnline?: boolean; sent: Array<{ ev: string; data: Record<string, unknown> }>; broken?: boolean }
@@ -16,14 +17,14 @@ export function setup(o: { linked?: Sock | null } = {}) {
   /** Whether the follower may write (the twin's followerMayWrite), and the clock. */
   const state = { mayWrite: true, now: 1_000, companion: false, stopping: false, companionLinked: true, held: null as FollowerGatewayResponse | null }
   /** Calls relayed to the companion (the twins' forwardToBackup), each with its answer to give. */
-  const relayed: Array<{ call: HandOff; answer: (r: FollowerGatewayResponse) => void }> = []
+  const relayed: Array<{ call: HandOff; answer: (r: FollowerGatewayResponse) => void; timeoutMs: number }> = []
   /** Calls the gateway asked to hold for the Mac (the twins' offlineHost.holdWrite). */
   const holds: HandOff[] = []
   const g = createFollowerGateway<Sock>({
     follower: () => (link.ws && link.ws.answersLocal ? link.ws : null),
     mayWrite: () => state.mayWrite,
     leaderElsewhere: () => state.companion,
-    relayElsewhere: (c, answer) => { if (!state.companion || !state.companionLinked) return false; relayed.push({ call: c, answer }); return true },
+    relayElsewhere: (c, answer, timeoutMs) => { if (!state.companion || !state.companionLinked) return false; relayed.push({ call: c, answer, timeoutMs }); return true },
     holdForLeader: (c) => { holds.push(c); return state.held },
     answersOnline: (ws) => ws.answersOnline === true,
     now: () => state.now,
@@ -31,6 +32,7 @@ export function setup(o: { linked?: Sock | null } = {}) {
     nextRelayId: () => ++id,
     instanceId: 'inst-1',
     attemptMs: (deadline) => deadline - state.now,
+    minRelayMs: GATEWAY_MIN_RELAY_MS,
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t },
     clearTimer: (t) => { (t as { cleared: boolean }).cleared = true },
     log: (level, msg, data) => { logs.push({ level, msg, ...(data ? { data } : {}) }) },

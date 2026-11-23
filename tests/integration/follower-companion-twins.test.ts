@@ -20,65 +20,22 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
-import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
-import { testBun } from '../helpers/bun-runtime.js'
-import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import { createBackupLeader } from '../../src/core/leader/backup-leader.js'
 import { createBackupGateway } from '../../src/core/leader/backup-gateway.js'
+import { BUN, cleanupFollowerTwins, cmd, connectWs, gatewayCall, linkFollower, nextFrameId, spawnFollowerTwin, startMockSession, waitFor } from '../helpers/follower-twin-rig.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
-const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
 const WALNUT = 'wmarinacomp01'
 const SID = 'dddddddd-4444-4444-8444-444444444444'
 const TASK = 'mcompddd-0004'
-const BUN: string | undefined = testBun()
 /** The takeover window, and the daemon's keepalive beat. */
 const T = 4_000
 const BEAT = 1_000
-
-const MOCK_CLI = `
-const fs = require('fs')
-const sid = process.argv[2]
-fs.appendFileSync(process.argv[3], JSON.stringify({ pid: process.pid }) + '\\n')
-const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
-out({ type: 'system', subtype: 'init', session_id: sid })
-out({ type: 'result', subtype: 'success', is_error: false, result: 'ready', session_id: sid })
-out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
-process.stdin.on('data', () => {})
-setInterval(() => {}, 1 << 30)
-`
-
-/** The host server the daemon starts: hands its follower token to the test (FAKE_OUT) and idles. */
-const FAKE_SERVER = `
-const fs = require('fs')
-fs.appendFileSync(process.env.FAKE_OUT, JSON.stringify({ pid: process.pid, token: process.env.WALNUT_FOLLOWER_TOKEN }) + '\\n')
-process.on('SIGTERM', () => process.exit(0))
-setInterval(() => {}, 1 << 30)
-`
-
-type Twin = 'source' | 'standalone'
-interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-async function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> {
-  const end = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for ' + label)
-    await sleep(50)
-  }
-}
-function lines(file: string): Array<Record<string, any>> {
-  try { return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] }
-}
-function alive(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch { return false }
-}
 
 let base = ''
 const started: number[] = []
@@ -138,63 +95,7 @@ async function startCompanion(): Promise<number> {
   return (wss.address() as net.AddressInfo).port
 }
 
-// ── A daemon, the Mac's socket, the follower ──
-async function spawnDaemon(name: string, twin: Twin): Promise<Daemon> {
-  const dir = path.join(base, name)
-  fs.mkdirSync(dir, { recursive: true })
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    WALNUT_DAEMON_DIR: dir,
-    WALNUT_JOURNAL_DIR: path.join(base, name + '-j'),
-    WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
-    WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
-    WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
-    WALNUT_LEADER_TAKEOVER_MS: String(T),
-    WALNUT_LEADER_QUIET_MS: String(T),
-    WALNUT_GATEWAY_TIMEOUT_MS: '20000',
-  }
-  delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  delete env.WALNUT_DAEMON_STATE_DIR
-  delete env.OPEN_WALNUT_API_URL; delete env.WALNUT_AGENT_SOCKET; delete env.WALNUT_SESSION_ID
-  const stderr = process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'
-  let proc: ChildProcess
-  if (twin === 'standalone') {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
-  } else {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', stderr] })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
-  const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
-  const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
-  started.push(pid)
-  return { proc, dir, sock, pid, port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10) }
-}
-
-function connectWs(port: number, autoPong = true): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`, { autoPong })
-    const t = setTimeout(() => reject(new Error('ws connect timeout')), 5000)
-    ws.once('open', () => { clearTimeout(t); resolve(ws) })
-    ws.once('error', (e) => { clearTimeout(t); reject(e) })
-  })
-}
-
-let cmdId = 1
-function cmd(ws: WebSocket, body: Record<string, unknown>): Promise<Record<string, any>> {
-  const id = cmdId++
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => { ws.off('message', on); reject(new Error(`cmd ${body.cmd} timed out`)) }, 30_000)
-    const on = (data: WebSocket.Data) => {
-      try { const m = JSON.parse(data.toString()); if (m.id === id) { clearTimeout(t); ws.off('message', on); resolve(m) } } catch { /* not json */ }
-    }
-    ws.on('message', on)
-    ws.send(JSON.stringify({ id, ...body }))
-  })
-}
-
+// ── The follower ──
 /** The follower as the real one answers a route of the leader's while away (replica/local-calls.ts awayReply). */
 function refusesForTheMac(ws: WebSocket): string[] {
   const asked: string[] = []
@@ -203,25 +104,9 @@ function refusesForTheMac(ws: WebSocket): string[] {
     try { m = JSON.parse(String(data)) } catch { return }
     if (m.ev !== 'gateway-request') return
     asked.push(String(m.payload?.name ?? ''))
-    ws.send(JSON.stringify({ id: cmdId++, cmd: 'gateway-result', relayId: m.relayId, errorCode: 'needs_leader', error: `${m.payload?.name} needs your Mac`, detail: { final: true } }))
+    ws.send(JSON.stringify({ id: nextFrameId(), cmd: 'gateway-result', relayId: m.relayId, errorCode: 'needs_leader', error: `${m.payload?.name} needs your Mac`, detail: { final: true } }))
   })
   return asked
-}
-
-function gatewayCall(d: Daemon, name: string, args: Record<string, unknown> = {}): Promise<{ ms: number; reply: GatewayResponse }> {
-  const t0 = Date.now()
-  return new Promise((resolve, reject) => {
-    const s = net.connect(d.sock)
-    let buf = ''
-    const t = setTimeout(() => { s.destroy(); reject(new Error(`gateway ${name} timeout`)) }, 60_000)
-    s.on('connect', () => s.write(JSON.stringify({ v: 1, op: 'tools.call', sid: SID, waitMs: 20_000, args: { name, args } }) + '\n'))
-    s.on('data', (c) => {
-      buf += c.toString('utf8')
-      const nl = buf.indexOf('\n')
-      if (nl !== -1) { clearTimeout(t); s.destroy(); resolve({ ms: Date.now() - t0, reply: JSON.parse(buf.slice(0, nl)) }) }
-    })
-    s.on('error', (e) => { clearTimeout(t); reject(e) })
-  })
 }
 
 beforeAll(() => {
@@ -231,50 +116,32 @@ beforeAll(() => {
 afterAll(async () => {
   if (tickTimer) clearInterval(tickTimer)
   if (heartbeatTimer) clearInterval(heartbeatTimer)
-  for (const f of fs.existsSync(base) ? fs.readdirSync(base).filter((n) => n.endsWith('.jsonl')) : []) {
-    for (const l of lines(path.join(base, f))) if (typeof l.pid === 'number' && l.pid > 1 && alive(l.pid)) { try { process.kill(l.pid, 'SIGKILL') } catch { /* gone */ } }
-  }
-  for (const pid of started) if (pid > 1) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
   for (const c of wss?.clients ?? []) c.terminate()
   await new Promise<void>((r) => (wss ? wss.close(() => r()) : r()))
-  await sleep(300)
-  try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
+  await cleanupFollowerTwins(base, started)
 }, 60_000)
 
 for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a final refusal of this host's server while the companion leads`, () => {
+  describe.skipIf(twin === 'standalone' && !BUN)(`${twin === 'source' ? `source twin (${SOURCE_TWIN.runtime})` : 'standalone twin'}: a final refusal of this host's server while the companion leads`, () => {
     it('goes to the companion: its answer when it takes the call, else the follower\'s refusal at once; never the daemon\'s own away answer', async () => {
       if (!wss) await startCompanion()
       const cport = (wss!.address() as net.AddressInfo).port
       const alias = `${twin.slice(0, 3)}box`
-      const d = await spawnDaemon(alias, twin)
+      const d = await spawnFollowerTwin({ base, name: alias, twin, takeoverMs: T, beatMs: BEAT, started })
       const mac = await connectWs(d.port, false)
       let beat: ReturnType<typeof setInterval> | null = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT / 2)
       macAwake = true
       if (!heartbeatTimer) heartbeatTimer = setInterval(() => { if (macAwake) leader.noteHeartbeat({ walnutId: WALNUT, backup: true }) }, 300)
       try {
         // A session of this Walnut on the host, and the host's bridge to the companion.
-        const mock = path.join(base, 'mock-cli.cjs')
-        fs.writeFileSync(mock, MOCK_CLI)
-        const startedSession = await cmd(mac, { cmd: 'start', sid: SID, cwd: d.dir, message: 'init', args: [process.execPath, mock, SID, path.join(base, `${alias}-cli.jsonl`)], origin: { home: HOME, task: TASK } })
+        const startedSession = await startMockSession({ base, name: alias, d, mac, sid: SID, home: HOME, task: TASK })
         expect(startedSession.ok, JSON.stringify(startedSession)).toBe(true)
         expect((await cmd(mac, { cmd: 'bridge.configure', enabled: true, url: `ws://127.0.0.1:${cport}/bridge`, token: 't', hostAlias: alias })).ok).toBe(true)
         await waitFor(() => conns.has(alias), 20_000, 'the bridge')
         await cmd(mac, { cmd: 'host.slice', slice: { v: 1, home: HOME, hash: `h-${alias}`, asOf: Date.now(), host: alias, sessions: [{ sid: SID, taskId: TASK, title: 'Ship it' }], tasks: [{ id: TASK, title: 'Ship it', phase: 'IN_PROGRESS', project: 'Acme' }], requests: [], boards: [], boardOf: {} } })
         expect((await cmd(mac, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
         // The host server this daemon starts; its token makes the second socket the follower.
-        const fakeOut = path.join(base, `${alias}-fake.jsonl`)
-        const entry = path.join(base, `${alias}-server.cjs`)
-        fs.writeFileSync(entry, FAKE_SERVER)
-        const spec = { v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [entry], cwd: base, env: { FAKE_OUT: fakeOut }, log: path.join(base, `${alias}-server.log`), port: 41_238, settings: { expose: { enabled: false } } }
-        expect((await cmd(mac, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
-        await waitFor(() => lines(fakeOut).length > 0, 30_000, 'the host server token')
-        const follower = await connectWs(d.port)
-        let hello: Record<string, any> = {}
-        for (let attempt = 0; attempt < 40 && hello.ok !== true; attempt++) {
-          hello = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token: lines(fakeOut).at(-1)!.token, answersLocal: true })
-          if (hello.ok !== true) await sleep(250)
-        }
+        const { follower, hello } = await linkFollower({ base, name: alias, d, mac, home: HOME, walnutId: WALNUT, serverPort: 41_238 })
         expect(hello.ok, JSON.stringify(hello)).toBe(true)
         const followerAsked = refusesForTheMac(follower)
 
@@ -285,10 +152,10 @@ for (const twin of ['source', 'standalone'] as const) {
         companionAsked.length = 0
 
         // One the companion answers: its answer.
-        const read = await gatewayCall(d, 'note_read', { path: 'Acme/plan.md' })
+        const read = await gatewayCall(d, SID, 'note_read', { path: 'Acme/plan.md' })
         expect(read.reply, JSON.stringify(read.reply)).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
         // One it does not: the follower's refusal, at once (no wait for the Mac, not asked twice).
-        const exec = await gatewayCall(d, 'host_exec', { host: alias, command: 'ls' })
+        const exec = await gatewayCall(d, SID, 'host_exec', { host: alias, command: 'ls' })
         expect(exec.reply, JSON.stringify(exec.reply)).toMatchObject({ ok: false, error: { code: 'needs_leader', message: 'host_exec needs your Mac' } })
         expect(exec.ms).toBeLessThan(5_000)
         expect(followerAsked).toEqual(['note_read', 'host_exec'])
