@@ -1,5 +1,6 @@
 //! Endpoints in relayMode none over loopback, driven through the control ops: the join protocol,
-//! and the member check on daemon connections that must not loosen because of it.
+//! the member check on daemon connections that must not loosen because of it, and where each
+//! member's streams go (its own daemon's port file, else the top-level one).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -268,4 +269,54 @@ async fn a_restart_listens_on_the_port_it_had_and_a_taken_one_is_not_fatal() {
     assert_eq!(port(&third), kept);
     third.ep.close().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One daemon door: a listener and the port file naming it.
+async fn door(file: &std::path::Path) -> TcpListener {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    std::fs::write(file, l.local_addr().unwrap().port().to_string()).unwrap();
+    l
+}
+
+/// The next stream on `door` carries `hello`; nothing else reaches `other`.
+async fn reaches(door: &TcpListener, other: &TcpListener) {
+    let (mut sock, _) = timeout(Duration::from_secs(5), door.accept()).await.expect("the stream reaches its daemon").unwrap();
+    let mut got = [0u8; 5];
+    sock.read_exact(&mut got).await.unwrap();
+    assert_eq!(&got, b"hello");
+    assert!(timeout(Duration::from_millis(300), other.accept()).await.is_err(), "nothing reaches the other daemon");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_that_names_its_own_daemon_port_file_reaches_that_daemon_and_one_that_does_not_the_top_level_one() {
+    // Two Walnut services on one machine: the default one (the top-level file) and a second one.
+    let (a, set_leader, default_leader) = (host().await, host().await, host().await);
+    let default_door = door(&a.dir.join("daemon.port")).await;
+    let set_file = a.dir.join("set.port");
+    let set_door = door(&set_file).await;
+    let both = json!([
+        {"id": set_leader.id(), "name": "set", "accept": true, "walnut": "0123456789abcdef", "daemonPortFile": set_file},
+        {"id": default_leader.id(), "name": "default", "accept": true},
+    ]);
+    a.node.set_members(&cfg(&a.dir, both)).await.unwrap();
+    let c1 = set_leader.dial(&a, ALPN_DAEMON).await;
+    reaches(&set_door, &default_door).await;
+    let c2 = default_leader.dial(&a, ALPN_DAEMON).await;
+    reaches(&default_door, &set_door).await;
+    // The same members as an older Walnut writes them (no per-member file), which is also how an
+    // older walnut-net reads the new ones: every member reaches the top-level daemon, as before.
+    let old = json!([
+        {"id": set_leader.id(), "name": "set", "accept": true},
+        {"id": default_leader.id(), "name": "default", "accept": true},
+    ]);
+    a.node.set_members(&cfg(&a.dir, old)).await.unwrap();
+    let (mut send, _recv) = c1.open_bi().await.unwrap();
+    send.write_all(b"hello").await.unwrap();
+    let _ = send.finish();
+    reaches(&default_door, &set_door).await;
+    c1.close(0u32.into(), b"done");
+    c2.close(0u32.into(), b"done");
+    a.done().await;
+    set_leader.done().await;
+    default_leader.done().await;
 }

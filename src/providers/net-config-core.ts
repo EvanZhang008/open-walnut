@@ -21,6 +21,10 @@ export interface NetMember {
   addrs?: string[]
   /** Relays it was last seen on: it is reached there until it moves to this host's choice. */
   relays?: string[]
+  /** In the file only: the service set that wrote it (absent: the default set, as every older file). */
+  walnut?: string
+  /** In the file only: the port file of that set's daemon, where its streams go (absent: the top-level one). */
+  daemonPortFile?: string
 }
 
 export interface NetConfigureRequest {
@@ -152,4 +156,114 @@ export function pruneNetBinaries(dir: string): void {
   const current = path.join(dir, netInstallName())
   const older = downloadedVersions(dir).filter((d) => d.file !== current)
   for (const { file } of older.slice(1)) { try { fs.rmSync(file, { force: true }) } catch { /* best effort */ } }
+}
+
+// ── Two Walnut services on one machine (service sets, src/providers/service-set.ts) ──
+// One walnut-net, one key, one config per machine; each service writes only its own set's
+// members. A member's `walnut` names its set ('' or absent: the default set, so every file an
+// older Walnut wrote is the default set's), and a non-default set's members carry its daemon's
+// port file, which walnut-net routes their streams to. The rest of the file (relays, the
+// top-level port file) is the default set's; a set writes it only when no file exists yet.
+
+const SET_ID_RE = /^[0-9a-f]{16}$/
+
+/** A service set id as the daemon is given it: '' (the default set) or 16 hex; null when it is neither. */
+export function netSetId(v: unknown): string | null {
+  if (v === undefined || v === null || v === '') return ''
+  return typeof v === 'string' && SET_ID_RE.test(v) ? v : null
+}
+
+type FileMember = Record<string, unknown>
+
+/** The set a member of the file belongs to. */
+function setOf(m: unknown): string {
+  const w = m && typeof m === 'object' ? (m as FileMember).walnut : undefined
+  return typeof w === 'string' ? w : ''
+}
+
+function configObject(text: string | null): Record<string, unknown> | null {
+  if (!text) return null
+  try {
+    const v = JSON.parse(text) as unknown
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null
+  } catch { return null }
+}
+
+function fileMembers(file: Record<string, unknown> | null): FileMember[] {
+  return file && Array.isArray(file.members) ? file.members.filter((m): m is FileMember => !!m && typeof m === 'object') : []
+}
+
+function configText(obj: Record<string, unknown>): string {
+  return JSON.stringify(obj, null, 2) + '\n'
+}
+
+/**
+ * One machine listed by two sets: one entry stays, so walnut-net's member check and route are
+ * not left to the order of the file. The one that lets it in wins; of two alike, the other
+ * set's (already in the file), so two writers never take it from each other in turn.
+ */
+function mergeMembers(own: NetMember[], others: FileMember[], ownFirst: boolean): unknown[] {
+  const mine = new Map(own.map((m) => [m.id, m]))
+  const dropOwn = new Set<string>()
+  const kept = others.filter((o) => {
+    const id = typeof o.id === 'string' ? o.id.toLowerCase() : ''
+    const m = mine.get(id)
+    if (!m) return true
+    if (m.accept && o.accept !== true) return false
+    dropOwn.add(id)
+    return true
+  })
+  const ownKept = own.filter((m) => !dropOwn.has(m.id))
+  return ownFirst ? [...ownKept, ...kept] : [...kept, ...ownKept]
+}
+
+export interface NetConfigWrite {
+  /** The file as it is now (null: none). */
+  current: string | null
+  /** The writing service's set ('' default). */
+  setId: string
+  /** This host's endpoint id: never one of its own members. */
+  self: string
+  keyFile: string
+  control: string
+  /** The writing daemon's port file. */
+  portFile: string
+  request: ReturnType<typeof parseNetConfig>
+}
+
+/**
+ * The config text after one service's configure: its set's members replaced by the request's,
+ * every other set's kept as the file has them. For the default set with no other set in the
+ * file this is exactly the text Walnut wrote before sets.
+ */
+export function netConfigText(w: NetConfigWrite): string {
+  const file = configObject(w.current)
+  const others = fileMembers(file).filter((m) => setOf(m) !== w.setId)
+  const own = w.request.members
+    .filter((m) => m.id !== w.self)
+    .map((m) => (w.setId ? { ...m, walnut: w.setId, daemonPortFile: w.portFile } : m))
+  const members = mergeMembers(own, others, w.setId === '')
+  if (w.setId === '' || !file) {
+    return configText({ version: NET_CONFIG_VERSION, key: w.keyFile, ...w.request, members, daemonPortFile: w.portFile, control: w.control })
+  }
+  // A set leaves the endpoint (key, relays) and the top-level port file to the default set.
+  return configText({
+    ...file, version: NET_CONFIG_VERSION, key: w.keyFile, members, control: w.control,
+    ...(typeof file.daemonPortFile === 'string' ? {} : { daemonPortFile: w.portFile }),
+  })
+}
+
+/** The config without one set's members (null: no readable file), and how many members remain. */
+export function netConfigWithout(current: string | null, setId: string): { text: string; remaining: number } | null {
+  const file = configObject(current)
+  if (!file) return null
+  const members = fileMembers(file).filter((m) => setOf(m) !== setId)
+  return { text: configText({ ...file, members }), remaining: members.length }
+}
+
+/** The configure request that puts one set's part of a config back (null: no readable file). */
+export function netRequestOf(current: string | null, setId: string): NetConfigureRequest | null {
+  const file = configObject(current)
+  if (!file) return null
+  return { relayMode: file.relayMode, relays: file.relays, relayRoots: file.relayRoots, members: fileMembers(file).filter((m) => setOf(m) === setId) }
 }

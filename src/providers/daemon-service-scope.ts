@@ -17,6 +17,7 @@ import { daemonServiceConfigFiles } from './daemon-service-config.js'
 import { CRON_BOOT_PROBE_SCRIPT, isNoCrontab, parseCronBootProbe } from './daemon-service-boot-script.js'
 import type { DaemonServiceCommandResult, DaemonServiceFailure, DaemonServiceScope } from './daemon-service-manager.js'
 import { lingerValue } from './daemon-service-manager.js'
+import type { ServiceSet } from './service-set.js'
 
 export interface ScopeDeps {
   platform: 'linux' | 'darwin'
@@ -25,6 +26,8 @@ export interface ScopeDeps {
   run(program: string, args: string[], input?: string): Promise<DaemonServiceCommandResult>
   /** Is a config at this path (owned or not)? */
   present(file: string): Promise<boolean>
+  /** The service set whose configs count (service-set.ts); the default set's when absent. */
+  set?: Pick<ServiceSet, 'unit' | 'plist' | 'installRoot'>
 }
 
 export type ScopeChoice =
@@ -37,9 +40,9 @@ async function lingerOn(deps: ScopeDeps): Promise<boolean> {
 }
 
 /** The installed backend on this host, or null with none (or more than one, which stays the user's to sort out). */
-export async function installedDaemonServiceScope(deps: Pick<ScopeDeps, 'platform' | 'home' | 'present'>): Promise<DaemonServiceScope | null> {
-  if (deps.platform === 'darwin') return (await deps.present(daemonServiceConfigFiles('darwin', deps.home)[0])) ? 'user' : null
-  const [user, system, cron] = daemonServiceConfigFiles('linux', deps.home)
+export async function installedDaemonServiceScope(deps: Pick<ScopeDeps, 'platform' | 'home' | 'present' | 'set'>): Promise<DaemonServiceScope | null> {
+  if (deps.platform === 'darwin') return (await deps.present(daemonServiceConfigFiles('darwin', deps.home, deps.set)[0])) ? 'user' : null
+  const [user, system, cron] = daemonServiceConfigFiles('linux', deps.home, deps.set)
   const found = { user: await deps.present(user), system: await deps.present(system), cron: await deps.present(cron) }
   const scopes = (Object.keys(found) as (keyof typeof found)[]).filter((scope) => found[scope])
   return scopes.length === 1 ? scopes[0] : null

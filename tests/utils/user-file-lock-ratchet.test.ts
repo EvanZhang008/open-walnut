@@ -33,6 +33,7 @@ const repoRoot = path.resolve(__dirname, '../..');
 const STORE_LOCKS = new Set<string>([
   'src/core/router/route-lock.ts: lock',                        // WALNUT_HOME/router/areas/<area>/items.sqlite route lock
   'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
+  'src/providers/net-core.ts: configFile',                      // the machine's walnut-net config.json in its 0700 net state dir, two services' daemons write it
   'src/commands/demo.ts: root.state',                           // Walnut's own Demo state, not user content
   'src/core/standby/target.ts: this.t.state',                   // the standby copy's own state, owner-only, never a person's file
   'src/core/leader/switch/local-witnesses.ts: file',           // a local witness's permit-record.json in its own 0700 dir (walnut leader witnesses init), never a person's file
@@ -72,6 +73,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/task-manager.ts: TASKS_FILE',                       // the task store
   'src/core/triage/runs.ts: file',                              // triage run log
   'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
+  'src/providers/net-core.ts: configFile',                      // the machine's walnut-net config.json in its 0700 net state dir, two services' daemons write it
   'src/core/triage/state.ts: file',                             // triage state
   'src/providers/daemon-service-files.ts: ownershipPath',       // daemon dir ownership record
   'src/providers/session-host.ts: manifest',                    // ~/Library/Application Support/Open Walnut/session-host-launch.json: Walnut's own, read by Walnut.app; the deploy and the server approve under one lock whatever their data homes

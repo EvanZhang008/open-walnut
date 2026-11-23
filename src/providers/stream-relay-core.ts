@@ -91,6 +91,12 @@ export interface StreamRelayDeps<L> {
     own: () => number | null
     dirs: string[]
     deviceBases: string[]
+    /**
+     * Another Walnut's service on this machine (service-set.ts): `<setBase>/<id16>/rt` and its
+     * short fallback `/tmp/open-walnut-set-<uid>-<id16>` hold its daemon.port. Absent: none.
+     */
+    setBase?: string
+    uid?: number
     read: (file: string) => string | null
     list: (dir: string) => string[]
   }
@@ -163,6 +169,13 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
         let keys: string[] = []
         try { keys = d.list(`${base}.by-device`) } catch { /* none */ }
         for (const key of keys.slice(0, 64)) files.push(`${base}.by-device/${key}/daemon/daemon.port`)
+      }
+      if (d.setBase) {
+        let ids: string[] = []
+        try { ids = d.list(d.setBase).filter((k) => /^[0-9a-f]{16}$/.test(k)) } catch { /* none */ }
+        for (const id of ids.slice(0, 64)) {
+          files.push(`${d.setBase}/${id}/rt/daemon.port`, `/tmp/open-walnut-set-${d.uid ?? 0}-${id}/daemon.port`)
+        }
       }
       const next = new Set<number>()
       for (const file of files) {

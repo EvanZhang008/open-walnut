@@ -17,6 +17,11 @@
  * machines that drive this daemon (the Mac, the cloud companion). The key file is 0600
  * and never leaves this host; the config holds no secret.
  *
+ * Two Walnut services on one machine (service sets) share the one walnut-net: whichever
+ * holds its control socket runs it, the other writes its own set's members into the shared
+ * config (under a file lock, net-config-core.ts netConfigText), asks the running one to
+ * reload, and takes over (same key, same address) once it is gone.
+ *
  * Bundled into the binary daemon and shipped as the net-core.cjs sidecar for the source
  * twin; 'net-v1' is advertised only where it loads. It never signals a process group:
  * it ends its own child with SIGTERM, then SIGKILL.
@@ -27,7 +32,8 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { fetchNetBinary } from './net-binary.js'
-import { ID_RE, NET_CONFIG_VERSION, parseNetConfig, previousNetBinary, pruneNetBinaries, type NetConfigureRequest } from './net-config-core.js'
+import { withFileLock } from '../utils/file-lock.js'
+import { ID_RE, netConfigText, netConfigWithout, netRequestOf, netSetId, parseNetConfig, previousNetBinary, pruneNetBinaries, type NetConfigureRequest } from './net-config-core.js'
 
 export { NET_CONFIG_VERSION, netStateDir, parseNetConfig, resolveNetBinary, type NetConfigureRequest, type NetMember } from './net-config-core.js'
 
@@ -36,6 +42,8 @@ const EXIT_RESTART = 75
 /** walnut-net's "this config cannot be read" exit code (EX_CONFIG). */
 const EXIT_CONFIG = 78
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000]
+/** How often a service whose walnut-net another service runs looks whether it is gone. */
+const HELD_CHECK_MS = 30_000
 /** A run this long counts as healthy: the next failure starts the backoff over. */
 const HEALTHY_MS = 60_000
 const CONTROL_TIMEOUT_MS = 30_000
@@ -62,6 +70,10 @@ export interface NetDeps {
   previousBin?: () => string | null
   log?: (level: 'info' | 'warn', msg: string, fields?: Record<string, unknown>) => void
   now?: () => number
+  /** This service's set (service-set.ts): '' (default) is the default set, 16 hex another Walnut's. */
+  setId?: string
+  /** How often to look whether another service's walnut-net is gone (default HELD_CHECK_MS). */
+  heldCheckMs?: number
 }
 
 export interface NetStatus {
@@ -78,6 +90,8 @@ export interface NetStatus {
   lastError: string | null
   /** walnut-net's own status (relays, peers and their paths), when it answered. */
   node: Record<string, unknown> | null
+  /** The running walnut-net is another Walnut service's on this machine (this one takes over when it stops). */
+  heldByOther: boolean
 }
 
 /** The control socket: inside the state dir when the path fits, else a 0700 dir in /tmp. */
@@ -137,7 +151,12 @@ export function createNetSupervisor(deps: NetDeps) {
   const keyFile = path.join(stateDir, 'net.key')
   const logFile = path.join(stateDir, 'walnut-net.log')
   const control = netControlPath(stateDir)
+  const setId = netSetId(deps.setId) ?? ''
+  if (setId !== (deps.setId ?? '')) log('warn', 'walnut-net: a service set id that is not 16 hex; writing as the default set', { setId: String(deps.setId).slice(0, 40) })
   let child: ChildProcess | null = null
+  // Another live walnut-net answers on the control socket (another service on this machine runs it).
+  let held = false
+  let probing = false
   let childStartedAt = 0
   let ready = false
   let id: string | null = null
@@ -285,9 +304,58 @@ export function createNetSupervisor(deps: NetDeps) {
     try { writeFileAtomic(goodFile, want) } catch { /* best effort */ }
   }
 
+  /** Does a walnut-net that is not this supervisor's child answer on the control socket? */
+  function otherHolds(): Promise<boolean> {
+    if (child || !fs.existsSync(control)) return Promise.resolve(false)
+    return new Promise((resolve) => {
+      const sock = net.createConnection(control)
+      const t = setTimeout(() => { sock.destroy(); resolve(false) }, 2_000)
+      sock.on('connect', () => { clearTimeout(t); sock.destroy(); resolve(true) })
+      sock.on('error', () => { clearTimeout(t); resolve(false) })
+    })
+  }
+
+  /** Another service runs it: no second one (it could not bind anyway); look again on a slow timer. */
+  function holdOff(): void {
+    if (!held) log('info', 'walnut-net: another Walnut service on this machine runs it; this one takes over when it stops', { control })
+    held = true
+    lastError = null
+    settleReady(true)
+    if (stopping || timer) return
+    timer = setTimeout(spawnChild, deps.heldCheckMs ?? HELD_CHECK_MS)
+    timer.unref?.()
+  }
+
+  /** Have the walnut-net another service runs read the file this one wrote; `previous` (when given) goes back on a refusal. */
+  async function reloadHolder(wrote: string, previous?: string | null): Promise<void> {
+    const res = await netControlCall(control, { op: 'reload' }, 10_000)
+    if (res.ok === true || res.error === 'shutting down') return
+    if (previous !== undefined && readText(configFile) === wrote) {
+      if (previous === null) fs.rmSync(configFile, { force: true })
+      else writeFileAtomic(configFile, previous)
+    }
+    throw new Error(`walnut-net refused the config: ${typeof res.error === 'string' ? res.error : 'invalid'}`)
+  }
+
   function spawnChild(): void {
     timer = null
+    if (stopping || child || probing || !fs.existsSync(configFile)) return
+    // A socket file is there: another service's walnut-net, or one a crash left behind.
+    if (fs.existsSync(control)) {
+      probing = true
+      void otherHolds().then((other) => {
+        probing = false
+        if (other) holdOff()
+        else spawnNow()
+      })
+      return
+    }
+    spawnNow()
+  }
+
+  function spawnNow(): void {
     if (stopping || child || !fs.existsSync(configFile)) return
+    if (held) { held = false; log('info', 'walnut-net: the other service\'s one is gone; this one runs it now') }
     let bin = deps.bin()
     onPrevious = false
     if (!bin) {
@@ -374,7 +442,7 @@ export function createNetSupervisor(deps: NetDeps) {
   }
 
   function waitReady(timeoutMs: number): Promise<boolean> {
-    if (ready) return Promise.resolve(true)
+    if (ready || held) return Promise.resolve(true)
     return new Promise((resolve) => {
       const t = setTimeout(() => { readyWaiters = readyWaiters.filter((f) => f !== done); resolve(false) }, timeoutMs)
       const done = (ok: boolean) => { clearTimeout(t); resolve(ok) }
@@ -424,14 +492,47 @@ export function createNetSupervisor(deps: NetDeps) {
     stopping = was
   }
 
-  async function applyConfig(req: NetConfigureRequest): Promise<{ endpointId: string; running: boolean }> {
-    if (req.enabled === false) {
+  /** Read, change and write the config under the machine's lock: two services write one file. */
+  function underLock<T>(fn: () => Promise<T>): Promise<T> {
+    ensureState()
+    return withFileLock(configFile, fn)
+  }
+
+  function removeConfig(): void {
+    try { fs.rmSync(configFile, { force: true }) } catch { /* gone */ }
+    try { fs.rmSync(goodFile, { force: true }) } catch { /* gone */ }
+  }
+
+  /**
+   * This set leaves the network (`enabled: false`): its members go, every other set's stay. With
+   * none left the config goes and walnut-net stops, as before sets; the key always stays.
+   */
+  async function leave(): Promise<{ endpointId: string; running: boolean }> {
+    const out = await underLock(async () => {
+      const cur = readText(configFile)
+      const rest = netConfigWithout(cur, setId)
+      const gone = !rest || rest.remaining === 0
       // The config first: the server's link to this daemon may ride the child it stops.
-      try { fs.rmSync(configFile, { force: true }) } catch { /* gone */ }
-      try { fs.rmSync(goodFile, { force: true }) } catch { /* gone */ }
-      await stopChild()
-      return { endpointId: await identity(), running: false }
+      if (gone && (!held || !rest)) { removeConfig(); return { text: null, gone } }
+      if (cur !== rest!.text) writeFileAtomic(configFile, rest!.text)
+      return { text: rest!.text, gone }
+    })
+    if (out.text !== null) {
+      // The running walnut-net (this one's, or another service's that holds this set's members
+      // in memory) reads them gone; with no member left the file goes right after.
+      const reread = held ? reloadHolder(out.text) : catchUp()
+      if (out.gone) await reread.catch(() => {})
+      else await reread
     }
+    if (!out.gone) return { endpointId: await identity(), running: !!child || held }
+    if (out.text !== null) await underLock(async () => { if (readText(configFile) === out.text) removeConfig() })
+    held = false
+    await stopChild()
+    return { endpointId: await identity(), running: false }
+  }
+
+  async function applyConfig(req: NetConfigureRequest): Promise<{ endpointId: string; running: boolean }> {
+    if (req.enabled === false) return leave()
     const parsed = parseNetConfig(req)
     // An older walnut-net reads no relay mode and would run with no relay at all. A host with
     // none at all fetches this version before it starts (a new machine joining waits for it);
@@ -446,21 +547,25 @@ export function createNetSupervisor(deps: NetDeps) {
     }
     if (parsed.relayMode && !child && !deps.bin() && !previousBin()) await haveBin()
     const firstStart = !child
-    const before = readText(configFile)
     ensureState()
     const me = await identity()
-    const cfg = {
-      version: NET_CONFIG_VERSION, key: keyFile, ...parsed,
-      // A member never lists this host itself.
-      members: parsed.members.filter((m) => m.id !== me),
-      daemonPortFile: deps.portFile, control,
-    }
-    const text = JSON.stringify(cfg, null, 2) + '\n'
-    if (readText(configFile) !== text) writeFileAtomic(configFile, text)
+    // Only this set's members change; a member never lists this host itself.
+    const { before, text } = await underLock(async () => {
+      const cur = readText(configFile)
+      const next = netConfigText({ current: cur, setId, self: me, keyFile, control, portFile: deps.portFile, request: parsed })
+      if (cur !== next) writeFileAtomic(configFile, next)
+      return { before: cur, text: next }
+    })
     rolledBack = false
     if (!child) {
       failures = 0
       if (timer) { clearTimeout(timer); timer = null }
+      if (await otherHolds()) {
+        holdOff()
+        await reloadHolder(text, before)
+        return { endpointId: me, running: true }
+      }
+      held = false
       spawnChild()
     } else if (await waitReady(15_000)) {
       // Running: it reads the new text now. A child still starting reads it once ready.
@@ -480,7 +585,13 @@ export function createNetSupervisor(deps: NetDeps) {
       // with no version in its name), which ignored the mode: what ran before goes back.
       const downloading = !deps.bin()
       await stopChild()
-      if (before !== null) { writeFileAtomic(configFile, before); spawnChild() } else fs.rmSync(configFile, { force: true })
+      // Only what this configure wrote is undone: another service's write since stays.
+      await underLock(async () => {
+        if (readText(configFile) !== text) return
+        if (before !== null) writeFileAtomic(configFile, before)
+        else fs.rmSync(configFile, { force: true })
+      })
+      spawnChild()
       throw new Error(downloading ? OLD_NET_RELAY_RETRY : OLD_NET_RELAY)
     }
     return { endpointId: me, running: ok }
@@ -498,12 +609,12 @@ export function createNetSupervisor(deps: NetDeps) {
       if (!id && (deps.bin() ?? previousBin()) && fs.existsSync(keyFile)) { try { await identity() } catch { /* reported below */ } }
       // Read after the awaits above: `running` and `node` describe the same moment.
       let node: Record<string, unknown> | null = null
-      if (ready) {
+      if (ready || held) {
         try { node = await netControlCall(control, { op: 'status' }, 5_000) } catch (err) { lastError = (err as Error).message }
       }
       return {
-        available: !!(deps.bin() ?? previousBin()), enabled, running: !!child && ready, pid: child?.pid ?? null, endpointId: id, restarts,
-        lastExit, lastError, node,
+        available: !!(deps.bin() ?? previousBin()), enabled, running: (!!child && ready) || (held && !!node), pid: child?.pid ?? null, endpointId: id, restarts,
+        lastExit, lastError, node, heldByOther: held,
       }
     },
 
@@ -544,7 +655,8 @@ export function createNetSupervisor(deps: NetDeps) {
         return { id: o.id, codeHash: o.codeHash, expiresAt: o.expiresAt, name: typeof o.name === 'string' && o.name ? o.name.slice(0, 80) : null }
       })
       if (!ready && !(await waitReady(10_000))) throw new Error(lastError ?? 'walnut-net is not running on this host')
-      if (protocol < JOIN_PROTOCOL) throw new Error(OLD_NET)
+      // Another service's walnut-net reports no protocol here: an older one answers the op as unknown.
+      if (!held && protocol < JOIN_PROTOCOL) throw new Error(OLD_NET)
       await call({ op: 'invites', invites })
       return { ok: true }
     },
@@ -565,7 +677,8 @@ export function createNetSupervisor(deps: NetDeps) {
       if (req.relayMode !== undefined && req.relayMode !== 'public' && req.relayMode !== 'none') throw new Error('`relayMode` is public or none')
       const ask = async (): Promise<{ joined: boolean; name?: string; error?: string }> => {
         if (!ready && !(await waitReady(10_000))) throw new Error(lastError ?? 'walnut-net is not running on this host')
-        if (protocol < JOIN_PROTOCOL) throw new Error(OLD_NET)
+        // Another service's walnut-net reports no protocol here: an older one answers the op as unknown.
+        if (!held && protocol < JOIN_PROTOCOL) throw new Error(OLD_NET)
         const res = await netControlCall(control, {
           op: 'join', to, code: req.code, addrs, relay,
           hostname: typeof req.hostname === 'string' ? req.hostname.slice(0, 255) : '',
@@ -588,8 +701,8 @@ export function createNetSupervisor(deps: NetDeps) {
           // No answer on a machine that had no network: kept, so a Mac that took it in but whose
           // answer was lost still reaches it, and the same command can be run again.
           if (!res?.joined && !(res?.error === 'no_answer' && before === null)) {
-            let previous: NetConfigureRequest | null = null
-            try { previous = before ? JSON.parse(before) as NetConfigureRequest : null } catch { /* unreadable: off */ }
+            // This set's part of what was there (another set's members stay as they are now).
+            const previous = netRequestOf(before, setId)
             await applyConfig(previous ?? { enabled: false }).catch((err: Error) => { lastError = `could not put back the network after a refused join: ${err.message}` })
           }
         }

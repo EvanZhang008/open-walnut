@@ -6,7 +6,9 @@ import { WebSocket } from '#ws'
 import { ADOPTED_WORK_CAPABILITIES } from './detached-registry.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { performance } from 'node:perf_hooks'
-import { DAEMON_SERVICE_LABEL, daemonInstallRoot, readDaemonServiceExecutable } from './daemon-service-config.js'
+import { readDaemonServiceExecutable } from './daemon-service-config.js'
+import { serviceSet, serviceSetIdOf, serviceSetLine, type ServiceSet } from './service-set.js'
+import { chooseServiceSet } from './service-set-choice.js'
 import { accountInfo } from '../lib/account.js'
 import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
 import { createDaemonServiceManager, daemonServiceConfigPath, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
@@ -49,6 +51,11 @@ export interface DaemonServiceCliOptions {
    * Unset: the mode stays as it is, carried over to the new version.
    */
   serve?: { home: string; on: boolean }
+  /**
+   * install, update, status, uninstall, restart, handback: the Walnut (its walnut id) the service is for,
+   * which picks its service set on this host (service-set-choice.ts). Unset: the default set, as before.
+   */
+  walnut?: string
 }
 
 export function runDaemonServiceCommand(program: string, args: string[], input?: string, timeoutMs?: number): Promise<DaemonServiceCommandResult> {
@@ -339,6 +346,8 @@ export const LAUNCHER_FLAG = '--launcher'
 /** The leader of `<home>` switches this host to its one Walnut service, or back (service-mode.ts). */
 export const SERVE_FLAG = '--serve'
 export const NO_SERVE_FLAG = '--no-serve'
+/** The Walnut a service is for: its own set when another Walnut holds the default (the experiment host_service_sets). */
+export const WALNUT_FLAG = '--walnut'
 
 
 export async function runDaemonServiceArgs(args: string[]): Promise<number> {
@@ -359,6 +368,13 @@ export function parseDaemonServiceArgs(args: string[]): { action: string; option
       const home = args[i + 1]
       if (!home || !path.isAbsolute(home)) throw new Error(`${args[i]} requires the absolute data dir of the Walnut it is for`)
       options.serve = { home, on: args[i] === SERVE_FLAG }
+      i++
+    }
+    else if (args[i] === WALNUT_FLAG) {
+      const id = args[i + 1]
+      if (!id) throw new Error(`${WALNUT_FLAG} requires the walnut id of the Walnut the service is for`)
+      serviceSetIdOf(id)
+      options.walnut = id
       i++
     }
     else if (args[i] === '--scope') {
@@ -387,10 +403,22 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     || await fs.realpath(home) !== await fs.realpath(user.homedir))) {
     throw new Error('Service changes require the real host account, not a test or isolated home')
   }
-  if (action === 'handback') return handBackCli(home, user.uid)
+  // The production daemon dir of this account: /tmp/open-walnut, or ~/.cache/open-walnut
+  // when another user on this machine owns that one (src/lib/daemon-dir.ts).
+  const defaultRuntimeDir = localProductionDaemonDir()
+  // Which set the action is for: the default, or this Walnut's own beside another's (service-set.ts).
+  const set: ServiceSet = options.walnut
+    ? (await chooseServiceSet({
+        platform: process.platform, home, walnutId: options.walnut, serveHome: options.serve?.home,
+        defaultRuntimeDir, uid: user.uid, claim: action === 'install' || action === 'update',
+      })).set
+    : serviceSet(process.platform, home, '', { runtimeDir: defaultRuntimeDir })
+  // Before the answer, on stdout: a leader that asked reads it there (its status run drops stderr).
+  if (options.walnut) process.stdout.write(`${serviceSetLine(set.id)}\n`)
+  if (action === 'handback') return handBackCli(home, user.uid, set)
   // No --scope: the installed backend, or for a first install the first boot start this account can have without root.
   const resolved = await resolveDaemonServiceScope(action, options.scope, {
-    platform: process.platform, home, user: user.username, run: runDaemonServiceCommand,
+    platform: process.platform, home, user: user.username, run: runDaemonServiceCommand, set,
     present: (file) => fs.lstat(file).then(() => true, (error) => (error as NodeJS.ErrnoException).code !== 'ENOENT'),
   })
   if ('failure' in resolved) {
@@ -401,16 +429,14 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   for (const note of resolved.notes) process.stderr.write(`walnut daemon: ${note}\n`)
   const systemScope = process.platform === 'linux' && scope === 'system'
   if (systemScope && action !== 'status' && !options.sudo) throw new Error('System service changes require --sudo --yes; the daemon still runs as your current account')
-  const root = daemonInstallRoot(process.platform, home)
+  const root = set.installRoot
   try {
     const stat = await fs.lstat(root)
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== user.uid || (stat.mode & 0o077)) {
       throw new Error('Daemon service directory is not private')
     }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-  // The production daemon dir of this account: /tmp/open-walnut, or ~/.cache/open-walnut
-  // when another user on this machine owns that one (src/lib/daemon-dir.ts).
-  const runtimeDir = localProductionDaemonDir()
+  const runtimeDir = set.runtimeDir
   const platform = process.platform
   const system = systemScope ? createSystemServiceAccess(runDaemonServiceCommand) : null
   if (system && action !== 'status') await system.preflight()
@@ -431,7 +457,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     const common = {
       platform, home, uid: user.uid, user: user.username,
       path: servicePath(process.env.PATH, home),
-      stateDir: root, runtimeDir,
+      stateDir: root, runtimeDir, set,
       inspectConfig: (target: string) => files.inspectConfig(target),
       readConfig: (target: string) => files.readConfig(target),
       writeConfig: (target: string, text: string) => files.writeConfig(target, text),
@@ -458,11 +484,12 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
           },
         })
       },
-      launchdSpawns: () => launchdSpawnsJobs((program, args, timeout) => runDaemonServiceCommand(program, args, undefined, timeout), user.uid, DAEMON_SERVICE_LABEL),
+      launchdSpawns: () => launchdSpawnsJobs((program, args, timeout) => runDaemonServiceCommand(program, args, undefined, timeout), user.uid, set.label),
       handover: async () => {
         const handedOver = await requestDaemonServiceHandover(runtimeDir, root)
         // The unmanaged daemon is gone: its durable state goes where the service daemon reads it.
-        if (!(await runtimeDaemonAlive(runtimeDir))) await reportMoved(await moveDaemonState(unmanagedStateRoot(home), root), 'to the service')
+        // ~/.open-walnut/tmp is the machine's one copy: only the default set's service takes it.
+        if (!set.id && !(await runtimeDaemonAlive(runtimeDir))) await reportMoved(await moveDaemonState(unmanagedStateRoot(home), root), 'to the service')
         return handedOver
       },
       prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root, options.overBusy ? { busyMs: OVER_BUSY_WAIT_MS, force: true } : {}),
@@ -485,7 +512,8 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       : createDaemonServiceManager({ ...common, ...launcher, run: system?.run ?? runDaemonServiceCommand })
     if (action === 'status') {
       const facts = await readLauncherFacts(path.join(root, LAUNCHER_DIR_NAME)).catch(() => null)
-      process.stdout.write(JSON.stringify({ ...(await manager.status({ scope })), ...(facts ? { launcher: facts } : {}) }, null, 2) + '\n')
+      const named = options.walnut ? { serviceSet: set.id || 'default' } : {}
+      process.stdout.write(JSON.stringify({ ...(await manager.status({ scope })), ...(facts ? { launcher: facts } : {}), ...named }, null, 2) + '\n')
       return 0
     }
     const configPath = manager.configPath(scope)
@@ -517,7 +545,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     }
     if (result.ok && action === 'uninstall' && !(await runtimeDaemonAlive(runtimeDir))) {
       await forgetRestartMark(runtimeDir)
-      await reportMoved(await moveDaemonState(root, unmanagedStateRoot(home)).catch(() => []), 'back for the daemon Walnut starts over SSH')
+      if (!set.id) await reportMoved(await moveDaemonState(root, unmanagedStateRoot(home)).catch(() => []), 'back for the daemon Walnut starts over SSH')
     }
     if (result.ok && action === 'uninstall') {
       // The launcher's own files: its script (systemd, launchd; cron's is the boot script, removed above) and its dir.
@@ -543,17 +571,17 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
  * its sessions to the LaunchAgent's job (daemon-service-handback.ts), under the install lock.
  * Run by the stand-in's own loop (daemon-update-standin.ts) once launchd starts jobs again.
  */
-async function handBackCli(home: string, uid: number): Promise<number> {
+async function handBackCli(home: string, uid: number, set: ServiceSet): Promise<number> {
   if (process.platform !== 'darwin') throw new Error('handback is for a macOS LaunchAgent')
-  const root = daemonInstallRoot('darwin', home)
-  const runtimeDir = localProductionDaemonDir()
-  const plist = daemonServiceConfigPath('darwin', home, 'user')
-  const job = `gui/${uid}/${DAEMON_SERVICE_LABEL}`
+  const root = set.installRoot
+  const runtimeDir = set.runtimeDir
+  const plist = daemonServiceConfigPath('darwin', home, 'user', set)
+  const job = `gui/${uid}/${set.label}`
   return withDaemonServiceFiles({ root, uid }, async (files) => {
     const result = await handBackStandIn({
       platform: process.platform, runtimeDir,
       ours: async () => { const found = await files.inspectConfig(plist); return found.present && found.owned },
-      spawns: () => launchdSpawnsJobs((program, args, timeout) => runDaemonServiceCommand(program, args, undefined, timeout), uid, DAEMON_SERVICE_LABEL),
+      spawns: () => launchdSpawnsJobs((program, args, timeout) => runDaemonServiceCommand(program, args, undefined, timeout), uid, set.label),
       prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root),
       job: async () => {
         const out = await runDaemonServiceCommand('launchctl', ['print', job])

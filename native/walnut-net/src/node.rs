@@ -35,7 +35,9 @@ pub struct Node {
     relays: Vec<RelayUrl>,
     /// Pending invites and the join rate limits.
     pub joins: Joins,
-    daemon_port_file: PathBuf,
+    /// The top-level port file: where a member's streams go unless it names its own. A reload
+    /// takes a new one.
+    daemon_port_file: RwLock<PathBuf>,
     members: RwLock<HashMap<EndpointId, Member>>,
     /// Connections members opened to this host, so a removed member is cut at once.
     incoming: Mutex<HashMap<EndpointId, Vec<Connection>>>,
@@ -132,7 +134,7 @@ impl Node {
             choice: cfg.relay_choice(),
             relays,
             joins: Joins::default(),
-            daemon_port_file: cfg.daemon_port_file.clone(),
+            daemon_port_file: RwLock::new(cfg.daemon_port_file.clone()),
             members: RwLock::new(cfg.member_map()),
             incoming: Mutex::new(HashMap::new()),
             outgoing: Mutex::new(HashMap::new()),
@@ -145,6 +147,7 @@ impl Node {
     pub async fn set_members(&self, cfg: &Config) -> Result<()> {
         let next = cfg.member_map();
         *self.members.write().await = next.clone();
+        *self.daemon_port_file.write().await = cfg.daemon_port_file.clone();
         let mut incoming = self.incoming.lock().await;
         incoming.retain(|id, conns| {
             let keep = next.get(id).is_some_and(|m| m.accept);
@@ -172,6 +175,15 @@ impl Node {
             keep
         });
         Ok(())
+    }
+
+    /// The port file a stream from `peer` goes to: the member's own, else the top-level one.
+    pub async fn port_file_of(&self, peer: &EndpointId) -> PathBuf {
+        let default = self.daemon_port_file.read().await.clone();
+        match self.members.read().await.get(peer) {
+            Some(m) => m.port_file(&default).to_path_buf(),
+            None => default,
+        }
     }
 
     /// Accept loop: the member check runs on the peer's id, which the TLS handshake proved is
@@ -210,7 +222,9 @@ impl Node {
                 log::info("member connected", json!({"peer": peer.to_string(), "path": selected_kind(&conn), "conn": conn.stable_id()}));
                 log_paths(conn.clone(), peer, "server");
                 while let Ok((send, recv)) = conn.accept_bi().await {
-                    let port_file = node.daemon_port_file.clone();
+                    // Looked up per stream: a reload that moves the member to another daemon
+                    // takes effect on its next stream.
+                    let port_file = node.port_file_of(&peer).await;
                     tokio::spawn(async move {
                         match daemon_port(&port_file).await {
                             Ok(port) => match TcpStream::connect(("127.0.0.1", port)).await {

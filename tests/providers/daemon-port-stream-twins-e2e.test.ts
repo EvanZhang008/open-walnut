@@ -240,7 +240,7 @@ for (const twin of TWINS) {
       expect(dialled).toBe(0)
     }, 90_000)
 
-    it('never reaches a daemon socket on this machine: its own port, or a sibling daemon\'s from its port file', async () => {
+    it('never reaches a daemon socket on this machine: its own port, or a sibling daemon\'s from its port file (another Walnut\'s service too)', async () => {
       const port = await boot(twin)
       // Siblings: the cloud companion's tunnel daemon (unkeyed and keyed per device) and the
       // home fallback dir, under this test's HOME. Each "daemon" is a server this test owns.
@@ -249,7 +249,9 @@ for (const twin of TWINS) {
       let dialled = 0
       const home = path.join(root, 'home')
       const tunnel = path.join(home, '.local', 'state', 'open-walnut', 'primary-daemon')
-      const siblings = [tunnel, path.join(`${tunnel}.by-device`, 'device-1', 'daemon'), path.join(home, '.cache', 'open-walnut')]
+      // Another Walnut's service on this machine (service-set.ts: ~/.open-walnut-host/walnuts/<id16>/rt).
+      const otherSet = path.join(home, '.open-walnut-host', 'walnuts', '0123456789abcdef', 'rt')
+      const siblings = [tunnel, path.join(`${tunnel}.by-device`, 'device-1', 'daemon'), path.join(home, '.cache', 'open-walnut'), otherSet]
       const ports: number[] = []
       for (const dir of siblings) {
         const sib = await listen(() => { dialled++ })

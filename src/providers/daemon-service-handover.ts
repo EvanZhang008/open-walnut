@@ -3,7 +3,8 @@ import { constants } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RegistryEntry, DaemonHooksConfig } from './daemon-core.js'
-import { daemonInstallRoot, type DaemonServicePlatform } from './daemon-service-config.js'
+import type { DaemonServicePlatform } from './daemon-service-config.js'
+import { isServiceInstallRoot } from './service-set.js'
 import { probeCronProcess, readCronBootId, type CronHostUse } from './daemon-cron-host.js'
 import type { CronProcessIdentity } from './daemon-cron-supervision.js'
 
@@ -72,8 +73,9 @@ export async function prepareDaemonServiceHandover(input: HandoverLocation & {
   /** How its probes start (ps, sysctl): the daemon runtime's own; default node's. */
   childProcess?: CronHostUse
 }): Promise<void> {
-  if (path.resolve(input.stateDir) !== daemonInstallRoot(input.platform, input.home)) {
-    throw new Error('Service handover requires the default host service directory')
+  // The default set's install root, or a set's (service-set.ts): never any other dir.
+  if (!path.isAbsolute(input.home) || !isServiceInstallRoot(input.platform, input.home, input.stateDir)) {
+    throw new Error('Service handover requires a host service directory')
   }
   await checkDirectory(input)
   if (!path.isAbsolute(input.registryFile) || await readPrivate(input.registryFile, input.uid) === null) {

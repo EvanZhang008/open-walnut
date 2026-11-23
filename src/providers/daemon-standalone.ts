@@ -442,8 +442,15 @@ const LEGACY_STREAMS_DIR = daemonEnv.WALNUT_LEGACY_STREAMS_DIR || '/tmp/open-wal
 const FALLBACK_DAEMON_DIR = path.join(daemonEnv.HOME || HOME_DIR, '.cache', 'open-walnut')
 const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR)
   || path.resolve(DAEMON_DIR) === path.resolve(FALLBACK_DAEMON_DIR)
+// A host's own service set beside another Walnut's (service-set.ts): its unit names it in
+// WALNUT_SERVICE_SET, read only as a service with a state dir. Its runtime is a real install
+// (KEEPS_SESSIONS: sessions outlive it, durable state, no test knobs), but the machine's single
+// copies (the user PATH shim, ~/.open-walnut/tmp/<name>, the legacy streams dir, the desktop app)
+// stay the default set's: a set keeps its own under its install root. Mirror daemon-source.ts.
+const SET_ID = SERVICE_MODE && !!DAEMON_STATE_DIR && /^[0-9a-f]{16}$/.test(daemonEnv.WALNUT_SERVICE_SET ?? '') ? daemonEnv.WALNUT_SERVICE_SET! : ''
+const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR || SET_ID !== ''
 const STREAMS_DIR = daemonEnv.WALNUT_STREAMS_DIR
-  || (IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
+  || (SET_ID ? path.join(DAEMON_STATE_DIR!, 'streams') : IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
 // demo.quiesce (demo-daemon-quiesce-core.ts): a Demo's own daemon closes for good before
 // its reset and waits for what it accepted. Refused on every other daemon. Mirror daemon-source.ts.
 const demoQuiesce = createDemoDaemonQuiesce({
@@ -1244,7 +1251,7 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
  * companion meets this daemon as an older one and takes its older path; refused for the
  * prod daemon dir, as every test knob that changes what a daemon does (section 10).
  */
-const BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR ? [] : (daemonEnv.WALNUT_BRIDGE_HIDE_CAPS ?? '').split(',').map((x) => x.trim())
+const BRIDGE_HIDDEN_CAPS = KEEPS_SESSIONS ? [] : (daemonEnv.WALNUT_BRIDGE_HIDE_CAPS ?? '').split(',').map((x) => x.trim())
 const BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
 
 /**
@@ -1534,7 +1541,7 @@ function runningGroupIdsSync(): Set<number> | null {
  */
 function shouldReapOnExit(): boolean {
   try {
-    return !SERVICE_MODE && !handoverPrepared && !IS_PROD_DAEMON_DIR && !KEEP_SESSIONS_ON_EXIT
+    return !SERVICE_MODE && !handoverPrepared && !KEEPS_SESSIONS && !KEEP_SESSIONS_ON_EXIT
   } catch {
     return false // unresolvable → treat as prod (never kill)
   }
@@ -3388,6 +3395,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       // Whose follower the service is: only that Walnut's leader switches it back (one-service-mode.ts).
       ...(RUNS_AS === 'walnut-serve' && options.selfHome ? { serviceHome: options.selfHome } : {}),
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
+      // A host's own service set beside another Walnut's (service-set.ts): its leader reads the set's files, never the default's.
+      ...(SET_ID ? { serviceSet: SET_ID } : {}),
       ...(launcherFactsNow() ? { launcher: launcherFactsNow() } : {}),
       // The roles this program can take as a host's one Walnut service (service-roles.ts). The template twin says none.
       serviceRoles: programServiceRoles(singleFile() !== null),
@@ -4510,8 +4519,9 @@ const attachmentCopy = createAttachmentCopy({
 // the home fallback) into v2. Mirror daemon-source.ts.
 const JOURNAL_PROD_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp')
 const JOURNAL_HOST_DAEMON = IS_PROD_DAEMON_DIR
-const JOURNAL_TEST_DIR = !IS_PROD_DAEMON_DIR ? daemonEnv.WALNUT_JOURNAL_DIR : undefined
-const JOURNAL_ROOT = JOURNAL_TEST_DIR || (JOURNAL_HOST_DAEMON ? JOURNAL_PROD_STATE_DIR : DAEMON_DIR)
+const JOURNAL_TEST_DIR = !KEEPS_SESSIONS ? daemonEnv.WALNUT_JOURNAL_DIR : undefined
+// A set's journal lives in its install root: ~/.open-walnut/tmp is the default set's, and its runtime dir may be /tmp.
+const JOURNAL_ROOT = JOURNAL_TEST_DIR || (JOURNAL_HOST_DAEMON ? JOURNAL_PROD_STATE_DIR : SET_ID ? DAEMON_STATE_DIR! : DAEMON_DIR)
 const OFFLINE_HOST_DIR = path.join(JOURNAL_ROOT, 'offline-host')
 const LEADER_BOOK_DIR = path.join(JOURNAL_ROOT, 'leader')
 // Which homes name a Walnut kept here under another home (walnut-scope-core.ts declared moves).
@@ -4550,7 +4560,7 @@ function ownsDaemonDir(): boolean {
  * Pending records per Walnut before a write is refused (offline-host-core.ts OFFLINE_MAX_RECORDS).
  * Tests only (never in the real daemon dir) may lower it. Mirror daemon-source.ts.
  */
-const OFFLINE_JOURNAL_MAX = !IS_PROD_DAEMON_DIR && /^[1-9][0-9]{0,6}$/.test(daemonEnv.WALNUT_TEST_OFFLINE_MAX_RECORDS ?? '')
+const OFFLINE_JOURNAL_MAX = !KEEPS_SESSIONS && /^[1-9][0-9]{0,6}$/.test(daemonEnv.WALNUT_TEST_OFFLINE_MAX_RECORDS ?? '')
   ? Number(daemonEnv.WALNUT_TEST_OFFLINE_MAX_RECORDS) : OFFLINE_MAX_RECORDS
 
 /**
@@ -4597,7 +4607,7 @@ const hostJournal = createHostJournal({
   canonical: walnutScope.canonical,
   startTimeOf: (pid) => readStartTime(pid),
   isOwner: ownsDaemonDir,
-  ignoredTestDir: IS_PROD_DAEMON_DIR ? daemonEnv.WALNUT_JOURNAL_DIR || null : null,
+  ignoredTestDir: KEEPS_SESSIONS ? daemonEnv.WALNUT_JOURNAL_DIR || null : null,
   importLegacyLeaders: () => leaderBook.importLegacy(),
   rearm: () => triggerHoldsChanged(),
   fenced: () => demoQuiesce.fenced,
@@ -5184,6 +5194,9 @@ const streamRelay = createStreamRelay<ServerWebSocket<WsData>>({
     own: () => listeningPort,
     dirs: [...new Set([DAEMON_DIR, PROD_DAEMON_DIR, FALLBACK_DAEMON_DIR, TUNNEL_DAEMON_BASE])],
     deviceBases: [TUNNEL_DAEMON_BASE],
+    // Every other Walnut's service on this machine (service-set.ts).
+    setBase: path.join(HOME_DIR, '.open-walnut-host', 'walnuts'),
+    uid: process.getuid?.() ?? 0,
     read: (file) => { try { return fs.readFileSync(file, 'utf8').slice(0, 16) } catch { return null } },
     list: (dir) => { try { return fs.readdirSync(dir) } catch { return [] } },
   },
@@ -5453,7 +5466,7 @@ const pluginJobs = createPluginJobSupervisor({
   sha256File: (file) => { try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') } catch { return null } },
   maxLogBytes: Number(daemonEnv.WALNUT_PLUGIN_JOB_LOG_MAX_BYTES) || undefined,
   // A test knob: never on the production daemon dir.
-  minEveryMs: IS_PROD_DAEMON_DIR ? undefined : Number(daemonEnv.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
+  minEveryMs: KEEPS_SESSIONS ? undefined : Number(daemonEnv.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
   maySpawn: () => !demoQuiesce.fenced,
   // A serving job's routes ('plugin-jobs-serve-v1', plugin-job-door.ts); a socket path too deep
   // under the jobs dir goes beside this daemon's gateway socket.
@@ -5795,9 +5808,9 @@ function cmdLeaderSpawnTemplate(ws: ServerWebSocket<WsData>, id: number, cmd: Re
 }
 
 /** Tests only (never in the real daemon dir): die right after a host ask's CLI is spawned, before its record. */
-const DIE_AFTER_ASK_SPAWN = !IS_PROD_DAEMON_DIR && daemonEnv.WALNUT_TEST_DIE_AFTER_ASK_SPAWN === '1'
+const DIE_AFTER_ASK_SPAWN = !KEEPS_SESSIONS && daemonEnv.WALNUT_TEST_DIE_AFTER_ASK_SPAWN === '1'
 /** Tests only (never in the real daemon dir): die right after a routine run's CLI is spawned, before its records. */
-const DIE_AFTER_ROUTINE_SPAWN = !IS_PROD_DAEMON_DIR && daemonEnv.WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN === '1'
+const DIE_AFTER_ROUTINE_SPAWN = !KEEPS_SESSIONS && daemonEnv.WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN === '1'
 
 /** How a start made on this host (a follower's ask, a routine run) runs its CLI: one set for both cores. */
 const hostStartSessions = {
@@ -9846,7 +9859,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
     }
     entries.push({ name, body })
   }
-  if (!IS_PROD_DAEMON_DIR) {
+  if (!KEEPS_SESSIONS) {
     return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' })
   }
   const wrote: string[] = []
@@ -13302,7 +13315,7 @@ const hostFacts = createHostFacts({
 // (/tmp does not); an isolated daemon keeps it inside its own throwaway dir.
 // PARITY: keep in sync with daemon-source.ts.
 const HOST_VITALS_DIR = daemonEnv.WALNUT_HOST_VITALS_DIR
-  || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals') : path.join(DAEMON_DIR, 'host-vitals'))
+  || (SET_ID ? path.join(DAEMON_STATE_DIR!, 'host-vitals') : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals') : path.join(DAEMON_DIR, 'host-vitals'))
 const hostVitals = createHostVitals({
   fs, os, execFile: execFile as unknown as HostVitalsDeps['execFile'], platform: process.platform,
   dir: HOST_VITALS_DIR, startedAt: DAEMON_START_TS, diskPath: HOME_DIR,
@@ -13471,6 +13484,8 @@ const netSupervisor = createNetSupervisor({
   spawn: (command, args, opts) => spawn(command, args, opts),
   stateDir: NET_STATE_DIR,
   portFile: PORT_FILE,
+  // The service set whose members this daemon writes into walnut-net's config (service-set.ts); '' the default's.
+  setId: SET_ID,
   bin: () => resolveNetBinary({ dirs: [path.dirname(process.execPath), DAEMON_DIR, path.join(NET_STATE_DIR, 'bin')] }),
   log: (level, msg, data) => logMsg(level, msg, data),
 })

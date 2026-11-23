@@ -243,6 +243,9 @@ SOURCES=(
   src/providers/daemon-service-cron-host.ts
   src/providers/daemon-service-scope.ts
   src/providers/daemon-service-state-move.ts
+  src/providers/service-set.ts
+  src/providers/service-set-choice.ts
+  src/providers/daemon-shared.ts
   src/lib/account.ts
   src/lib/daemon-dir.ts
   src/providers/daemon-service-files.ts

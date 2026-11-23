@@ -1,10 +1,6 @@
 import path from 'node:path'
 import {
-  DAEMON_BOOT_SCRIPT_NAME,
-  daemonInstallRoot,
-  DAEMON_SERVICE_LABEL,
-  DAEMON_SERVICE_PLIST_NAME,
-  DAEMON_SERVICE_UNIT_NAME,
+  daemonServiceConfigFiles,
   renderDaemonLaunchAgent,
   renderDaemonSystemdUnit,
   replaceDaemonServiceExecutable,
@@ -18,6 +14,7 @@ import { createLaunchAgentControl, LAUNCHD_NOT_SPAWNING, launchdLoadedFrom, pars
 import { keepUnitActive } from './daemon-service-systemd.js'
 import type { LauncherControl, LauncherResult } from './service-launcher-control.js'
 import { LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
+import { serviceSetNames, type ServiceSet } from './service-set.js'
 
 export type { LaunchdOverride } from './daemon-service-launchd.js'
 
@@ -74,6 +71,11 @@ export interface DaemonServiceDeps {
   path: string
   stateDir: string
   runtimeDir: string
+  /**
+   * The service set this manager acts on (service-set.ts): its unit, label, plist and cron tag,
+   * and its install root for the cron script. Absent: the default set, as before.
+   */
+  set?: ServiceSet
   run(program: string, args: string[]): Promise<DaemonServiceCommandResult>
   writeConfig(configPath: string, text: string): Promise<void>
   removeConfig(configPath: string): Promise<void>
@@ -167,16 +169,17 @@ export class DaemonServiceUpdateRefusedError extends Error {}
 
 const FOREGROUND_ARG = '--service'
 
+/** Where a scope's config is, of the default set or of `set`: one table, daemonServiceConfigFiles. */
 export function daemonServiceConfigPath(
   platform: DaemonServicePlatform,
   home: string,
   scope: DaemonServiceScope,
+  set?: Pick<ServiceSet, 'unit' | 'plist' | 'installRoot'>,
 ): string {
-  if (platform === 'darwin') return path.join(home, 'Library', 'LaunchAgents', DAEMON_SERVICE_PLIST_NAME)
-  if (scope === 'cron') return path.join(daemonInstallRoot('linux', home), DAEMON_BOOT_SCRIPT_NAME)
-  return scope === 'system'
-    ? path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME)
-    : path.join(home, '.config', 'systemd', 'user', DAEMON_SERVICE_UNIT_NAME)
+  const [first, system, cron] = daemonServiceConfigFiles(platform, home, set)
+  if (platform === 'darwin') return first!
+  if (scope === 'cron') return cron!
+  return scope === 'system' ? system! : first!
 }
 
 /** Whose config the init system is actually serving under our name. */
@@ -219,9 +222,11 @@ const describeState = (state: { active: boolean; enabled: boolean }): string =>
   `${state.active ? 'active' : 'stopped'} and ${state.enabled ? 'enabled' : 'not enabled'}`
 
 export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServiceManager {
+  // The set's names; the default set's are today's constants.
+  const { unit: UNIT, label: LABEL } = deps.set ?? serviceSetNames('')
   const cfgPath = (scope: DaemonServiceScope): string =>
-    daemonServiceConfigPath(deps.platform, deps.home, scope)
-  const target = (): string => `gui/${deps.uid}/${DAEMON_SERVICE_LABEL}`
+    daemonServiceConfigPath(deps.platform, deps.home, scope, deps.set)
+  const target = (): string => `gui/${deps.uid}/${LABEL}`
   const scoped = (scope: DaemonServiceScope, args: string[]): string[] =>
     scope === 'user' ? ['--user', ...args] : args
   const clock = {
@@ -231,7 +236,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     // deadline met a sleep mid-confirm and rolled a healthy daemon back (2026-11-04 review).
     now: deps.now ?? (() => performance.now()),
   }
-  const launchd = createLaunchAgentControl(clock, { uid: deps.uid, label: DAEMON_SERVICE_LABEL, plist: cfgPath('user') })
+  const launchd = createLaunchAgentControl(clock, { uid: deps.uid, label: LABEL, plist: cfgPath('user') })
 
   const fail = (
     code: DaemonServiceErrorCode,
@@ -271,7 +276,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     const args = ['print-disabled', `gui/${deps.uid}`]
     const printed = await deps.run('launchctl', args)
     return {
-      verdict: printed.code === 0 ? parseLaunchdOverride(printed.stdout, DAEMON_SERVICE_LABEL) : 'unknown',
+      verdict: printed.code === 0 ? parseLaunchdOverride(printed.stdout, LABEL) : 'unknown',
       command: ['launchctl', ...args].join(' '),
       stderr: printed.stderr,
     }
@@ -283,7 +288,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     identityDetail?: string
     identityCommand: string
   }> {
-    const args = scoped(scope, ['show', DAEMON_SERVICE_UNIT_NAME, '-p', 'FragmentPath', '-p', 'DropInPaths'])
+    const args = scoped(scope, ['show', UNIT, '-p', 'FragmentPath', '-p', 'DropInPaths'])
     const identityCommand = ['systemctl', ...args].join(' ')
     const shown = await deps.run('systemctl', args)
     const props = new Map<string, string>()
@@ -337,8 +342,8 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
         overrideStderr: override.stderr,
       }
     }
-    const active = await deps.run('systemctl', scoped(scope, ['is-active', DAEMON_SERVICE_UNIT_NAME]))
-    const enabled = await deps.run('systemctl', scoped(scope, ['is-enabled', DAEMON_SERVICE_UNIT_NAME]))
+    const active = await deps.run('systemctl', scoped(scope, ['is-active', UNIT]))
+    const enabled = await deps.run('systemctl', scoped(scope, ['is-enabled', UNIT]))
     // static / enabled-runtime also exit 0, but neither means start at boot; only 'enabled' counts.
     const bootStart = enabled.code === 0 && enabled.stdout.trim() === 'enabled'
     const unit = await unitIdentity(scope)
@@ -360,7 +365,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     if (p.identity === 'unverified') {
       return {
         code: 'unverifiedJob',
-        message: `could not confirm which config the already loaded ${DAEMON_SERVICE_LABEL} service came from, so walnut will not act on it`,
+        message: `could not confirm which config the already loaded ${LABEL} service came from, so walnut will not act on it`,
         command: p.identityCommand,
       }
     }
@@ -376,10 +381,10 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
 
   function overrideNote(override?: LaunchdOverride): string | undefined {
     if (override === 'disabled') {
-      return `launchd keeps ${DAEMON_SERVICE_LABEL} disabled for this login session, so it will not start on its own`
+      return `launchd keeps ${LABEL} disabled for this login session, so it will not start on its own`
     }
     if (override === 'unknown') {
-      return `launchd did not say whether ${DAEMON_SERVICE_LABEL} is disabled, so a login start cannot be confirmed`
+      return `launchd did not say whether ${LABEL} is disabled, so a login start cannot be confirmed`
     }
     return undefined
   }
@@ -498,7 +503,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     const printed = await deps.run('launchctl', ['print', target()])
     if (printed.code === 113) return null
     if (launchdIdentity(scope, printed).identity !== 'ours') {
-      return `the loaded ${DAEMON_SERVICE_LABEL} job did not come from ${cfgPath(scope)}`
+      return `the loaded ${LABEL} job did not come from ${cfgPath(scope)}`
     }
     return (await launchd.bootout())?.message ?? null
   }
@@ -536,9 +541,9 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       if (!broke && was.registered) broke = (await launchd.bootstrap())?.message ?? null
     } else {
       const steps: [string, string[]][] = [['systemctl', scoped(scope, ['daemon-reload'])]]
-      if (!was.enabled) steps.push(['systemctl', scoped(scope, ['disable', DAEMON_SERVICE_UNIT_NAME])])
-      if (was.active) steps.push(['systemctl', scoped(scope, ['reset-failed', DAEMON_SERVICE_UNIT_NAME])])
-      steps.push(['systemctl', scoped(scope, [was.active ? 'restart' : 'stop', DAEMON_SERVICE_UNIT_NAME])])
+      if (!was.enabled) steps.push(['systemctl', scoped(scope, ['disable', UNIT])])
+      if (was.active) steps.push(['systemctl', scoped(scope, ['reset-failed', UNIT])])
+      steps.push(['systemctl', scoped(scope, [was.active ? 'restart' : 'stop', UNIT])])
       broke = await runAll(steps)
     }
     if (broke) return `${put}, but ${broke}`
@@ -555,7 +560,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     // systemd needs the unit file still on disk to stop the service, so disable must come before the delete.
     const stuck = deps.platform === 'darwin'
       ? await bootoutLoaded(scope)
-      : await runAll([['systemctl', scoped(scope, ['disable', '--now', DAEMON_SERVICE_UNIT_NAME])]])
+      : await runAll([['systemctl', scoped(scope, ['disable', '--now', UNIT])]])
     if (stuck) return `kept the service config because the stop was not confirmed: ${stuck}`
     const lingering = (p: Probe): string | null => {
       if (p.identity === 'unverified') return 'the init system would not say what is still registered'
@@ -629,12 +634,12 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       if (deps.platform === 'darwin') {
         const found = await deps.inspectConfig(cfgPath(scope))
         const kept = await launchd.ensureLoaded(found.present && found.owned)
-        note = kept.did ? `launchd had no ${DAEMON_SERVICE_LABEL} job afterwards, so it was loaded again`
-          : kept.loaded ? null : `${DAEMON_SERVICE_LABEL} is not loaded (${kept.why}); a new login starts it`
+        note = kept.did ? `launchd had no ${LABEL} job afterwards, so it was loaded again`
+          : kept.loaded ? null : `${LABEL} is not loaded (${kept.why}); a new login starts it`
       } else {
-        const kept = await keepUnitActive(clock, (args) => scoped(scope, args), DAEMON_SERVICE_UNIT_NAME)
-        note = kept.did ? `${DAEMON_SERVICE_UNIT_NAME} was stopped afterwards, so it was started again`
-          : kept.active ? null : `${DAEMON_SERVICE_UNIT_NAME} is stopped (${kept.why})`
+        const kept = await keepUnitActive(clock, (args) => scoped(scope, args), UNIT)
+        note = kept.did ? `${UNIT} was stopped afterwards, so it was started again`
+          : kept.active ? null : `${UNIT} is stopped (${kept.why})`
       }
     } catch (err) {
       note = `could not check that the service still runs: ${errText(err)}`
@@ -687,7 +692,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       if (before.override === 'disabled') {
         return fail(
           'disabledOverride',
-          `launchd has ${DAEMON_SERVICE_LABEL} disabled for this login session, so the daemon would not start; run "launchctl enable ${target()}" yourself, then install again`,
+          `launchd has ${LABEL} disabled for this login session, so the daemon would not start; run "launchctl enable ${target()}" yourself, then install again`,
           before.overrideCommand,
           before.overrideStderr,
         )
@@ -695,7 +700,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       if (before.override === 'unknown') {
         return fail(
           'overrideUnreadable',
-          `could not read whether launchd has ${DAEMON_SERVICE_LABEL} disabled, so the install cannot promise a login start; check "${before.overrideCommand}" yourself, then install again`,
+          `could not read whether launchd has ${LABEL} disabled, so the install cannot promise a login start; check "${before.overrideCommand}" yourself, then install again`,
           before.overrideCommand,
           before.overrideStderr,
         )
@@ -726,6 +731,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       stateDir: deps.stateDir,
       path: deps.path,
       ...(deps.user.trim() ? { user: deps.user } : {}),
+      ...(deps.set?.id ? { serviceSet: deps.set.id } : {}),
     }
     if (deps.launcher) return attemptWithLauncher(scope, undo, updateOnly, before, ours, prepared, config, deps.launcher)
     let text: string
@@ -799,12 +805,12 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     const reload = await step('systemctl', scoped(scope, ['daemon-reload']))
     if (reload) return reload
     if (!updateOnly) {
-      const enable = await step('systemctl', scoped(scope, ['enable', '--now', DAEMON_SERVICE_UNIT_NAME]))
+      const enable = await step('systemctl', scoped(scope, ['enable', '--now', UNIT]))
       if (enable) return enable
     }
     // enable --now does not replace an old binary that is already running.
     if (ours) {
-      const again = await step('systemctl', scoped(scope, ['restart', DAEMON_SERVICE_UNIT_NAME]))
+      const again = await step('systemctl', scoped(scope, ['restart', UNIT]))
       if (again) return again
     }
     return null
@@ -950,7 +956,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       // Bootout and wait for launchd to let go; the probe below says whether it did.
       await launchd.bootout()
     } else if (before.registered) {
-      const off = await step('systemctl', scoped(scope, ['disable', '--now', DAEMON_SERVICE_UNIT_NAME]))
+      const off = await step('systemctl', scoped(scope, ['disable', '--now', UNIT]))
       if (off) return off
     }
 
@@ -1015,7 +1021,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       const stuck = await reloadAgent(before.registered)
       if (stuck) return stuck
     } else {
-      const restarted = await step('systemctl', scoped(scope, ['restart', DAEMON_SERVICE_UNIT_NAME]))
+      const restarted = await step('systemctl', scoped(scope, ['restart', UNIT]))
       if (restarted) return restarted
     }
 

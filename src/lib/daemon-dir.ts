@@ -41,6 +41,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { accountInfo } from './account.js'
 import { DAEMON_SERVICE_UNIT_NAME, daemonServiceConfigFiles, readDaemonServiceDir, serviceConfigRunsAs } from '../providers/daemon-service-config.js'
+import { isServiceSetRuntimeDir } from '../providers/service-set.js'
 
 /** The shared default. Remote hosts call it PROD_REMOTE_DAEMON_DIR. */
 export const SHARED_DAEMON_DIR = '/tmp/open-walnut'
@@ -206,12 +207,15 @@ export function localProductionDaemonDir(): string {
  * isolated one (tests, sandboxes, ephemeral servers). The home dir counts by
  * the account's own home too: a process that inherited the real dir under a
  * faked HOME (a demo server inside a session) must still see the production
- * daemon there, and leave it alone.
+ * daemon there, and leave it alone. A service set's runtime dir (a second Walnut's own service on
+ * this account, providers/service-set.ts) is one too: its sessions outlive it the same way.
  */
 export function isProductionDaemonDir(dir: string, env: Env = process.env): boolean {
   const resolved = path.resolve(dir)
   if (resolved === SHARED_DAEMON_DIR) return true
-  return [userDaemonDir(env), accountDaemonDir()].some((own) => !!own && resolved === path.resolve(own))
+  if ([userDaemonDir(env), accountDaemonDir()].some((own) => !!own && resolved === path.resolve(own))) return true
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  return [env.HOME, accountHome()].some((home) => isServiceSetRuntimeDir(resolved, home, uid))
 }
 
 let accountDir: string | null | undefined
@@ -219,11 +223,22 @@ let accountDir: string | null | undefined
 /** $HOME/.cache/open-walnut by the passwd entry's home, whatever $HOME says. */
 function accountDaemonDir(): string | null {
   if (accountDir === undefined) {
-    let home = ''
-    try { home = os.userInfo().homedir } catch { /* no passwd entry */ }
-    accountDir = home && path.isAbsolute(home) ? path.join(home, USER_DAEMON_SUBDIR) : null
+    const home = accountHome()
+    accountDir = home ? path.join(home, USER_DAEMON_SUBDIR) : null
   }
   return accountDir
+}
+
+let accountHomeDir: string | null | undefined
+
+/** The passwd entry's home, read once. */
+function accountHome(): string | null {
+  if (accountHomeDir === undefined) {
+    let home = ''
+    try { home = os.userInfo().homedir } catch { /* no passwd entry */ }
+    accountHomeDir = home && path.isAbsolute(home) ? home : null
+  }
+  return accountHomeDir
 }
 
 /**

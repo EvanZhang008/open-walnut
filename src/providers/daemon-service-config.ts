@@ -1,4 +1,10 @@
 import path from 'node:path'
+import {
+  DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME, SERVICE_SET_ENV,
+  defaultInstallRootUnder, isServiceSetId, serviceSetNames, type ServiceSet,
+} from './service-set.js'
+
+export { DAEMON_SERVICE_LABEL, DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME } from './service-set.js'
 
 export type DaemonServicePlatform = 'linux' | 'darwin'
 
@@ -11,11 +17,9 @@ export interface DaemonServiceConfig {
   stateDir: string
   path: string
   user?: string
+  /** The service set's id (service-set.ts); absent or '' for the default set, whose files stay as they were. */
+  serviceSet?: string
 }
-
-export const DAEMON_SERVICE_LABEL = 'dev.openwalnut.session-daemon'
-export const DAEMON_SERVICE_UNIT_NAME = 'open-walnut-daemon.service'
-export const DAEMON_SERVICE_PLIST_NAME = `${DAEMON_SERVICE_LABEL}.plist`
 /** The cron boot backend's supervisor script, in the install root (daemon-service-boot-script.ts). */
 export const DAEMON_BOOT_SCRIPT_NAME = 'daemon-boot.sh'
 
@@ -33,6 +37,7 @@ export interface CheckedConfig {
   stateDir: string
   path: string
   user?: string
+  serviceSet?: string
 }
 
 function fail(message: string): never {
@@ -97,7 +102,13 @@ function checkConfig(config: DaemonServiceConfig, expected: DaemonServicePlatfor
     stateDir: checkAbsolutePath('stateDir', config.stateDir),
     path: checkSearchPath('path', config.path),
     user: config.user === undefined ? undefined : checkUser(config.user),
+    ...(config.serviceSet ? { serviceSet: checkServiceSet(config.serviceSet) } : {}),
   }
+}
+
+function checkServiceSet(value: unknown): string {
+  if (!isServiceSetId(value)) fail(`serviceSet must be 16 hex digits, got ${JSON.stringify(value)}`)
+  return value as string
 }
 
 function serviceEnv(config: CheckedConfig): [string, string][] {
@@ -106,17 +117,15 @@ function serviceEnv(config: CheckedConfig): [string, string][] {
     ['PATH', config.path],
     ['WALNUT_DAEMON_DIR', config.runtimeDir],
     ['WALNUT_DAEMON_STATE_DIR', config.stateDir],
+    // Only a set's: the default's unit and plist stay byte for byte as they were.
+    ...(config.serviceSet ? [[SERVICE_SET_ENV, config.serviceSet] as [string, string]] : []),
   ]
 }
 
+/** The default set's install root (service-set.ts has every set's). */
 export function daemonInstallRoot(platform: DaemonServicePlatform, home: string): string {
   const base = checkAbsolutePath('home', home)
-  switch (checkPlatform(platform)) {
-    case 'linux':
-      return path.join(base, '.local', 'share', 'open-walnut', 'daemon')
-    case 'darwin':
-      return path.join(base, 'Library', 'Application Support', 'Open Walnut', 'Daemon')
-  }
+  return defaultInstallRootUnder(checkPlatform(platform), base)
 }
 
 // Environment does not expand $, ExecStart does; both expand %.
@@ -149,7 +158,8 @@ export function renderDaemonSystemdUnit(
   }
 
   const launcher = opts.launcher === undefined ? null : checkAbsolutePath('launcher', opts.launcher)
-  const lines: string[] = ['[Unit]', `Description=Open Walnut session daemon${launcher ? ' (its launcher)' : ''}`]
+  const set = checked.serviceSet ? ` ${checked.serviceSet}` : ''
+  const lines: string[] = ['[Unit]', `Description=Open Walnut session daemon${set}${launcher ? ' (its launcher)' : ''}`]
   if (scope === 'system') lines.push('After=network.target')
   // The launcher never gives up on the daemon, and systemd never gives up on the launcher.
   lines.push(...(launcher ? ['StartLimitIntervalSec=0'] : ['StartLimitIntervalSec=60', 'StartLimitBurst=5']), '')
@@ -231,15 +241,17 @@ export function readDaemonServiceUser(text: string): string | null {
 /**
  * The service configs an install may leave for this user on this platform: the
  * LaunchAgent on macOS; the user unit, the system unit, then the cron boot script, on Linux.
+ * Of the default set, or of `set` (service-set.ts).
  */
-export function daemonServiceConfigFiles(platform: string, home: string): string[] {
-  if (platform === 'darwin') return [path.join(home, 'Library', 'LaunchAgents', DAEMON_SERVICE_PLIST_NAME)]
+export function daemonServiceConfigFiles(platform: string, home: string, set?: Pick<ServiceSet, 'unit' | 'plist' | 'installRoot'>): string[] {
+  const unit = set?.unit ?? DAEMON_SERVICE_UNIT_NAME
+  if (platform === 'darwin') return [path.join(home, 'Library', 'LaunchAgents', set?.plist ?? DAEMON_SERVICE_PLIST_NAME)]
   if (platform === 'linux') {
     return [
-      path.join(home, '.config', 'systemd', 'user', DAEMON_SERVICE_UNIT_NAME),
-      path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME),
+      path.join(home, '.config', 'systemd', 'user', unit),
+      path.join('/etc', 'systemd', 'system', unit),
       // Not daemonInstallRoot: the remote probe passes a literal '$HOME'.
-      path.join(home, '.local', 'share', 'open-walnut', 'daemon', DAEMON_BOOT_SCRIPT_NAME),
+      path.join(set?.installRoot ?? defaultInstallRootUnder('linux', home), DAEMON_BOOT_SCRIPT_NAME),
     ]
   }
   return []
@@ -294,7 +306,7 @@ export function renderDaemonLaunchAgent(config: DaemonServiceConfig, opts: { lau
     '<plist version="1.0">',
     '<dict>',
     '\t<key>Label</key>',
-    `\t<string>${xmlText(DAEMON_SERVICE_LABEL)}</string>`,
+    `\t<string>${xmlText(serviceSetNames(checked.serviceSet ?? '').label)}</string>`,
     '\t<key>ProgramArguments</key>',
     '\t<array>',
   ]

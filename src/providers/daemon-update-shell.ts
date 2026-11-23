@@ -12,12 +12,8 @@
  * transaction that hangs) is not waited on for good: the tail must still run, unlocked.
  */
 import path from 'node:path'
-import {
-  DAEMON_BOOT_SCRIPT_NAME,
-  DAEMON_SERVICE_LABEL,
-  DAEMON_SERVICE_UNIT_NAME,
-  daemonInstallRoot,
-} from './daemon-service-config.js'
+import { DAEMON_BOOT_SCRIPT_NAME } from './daemon-service-config.js'
+import { serviceSet, serviceSetNames } from './service-set.js'
 import { DAEMON_BOOT_PID_NAME } from './daemon-service-boot-script.js'
 import { DAEMON_STAMP_SH } from './daemon-live-sh.js'
 import { DAEMON_OWNERSHIP_NAME } from './daemon-service-files.js'
@@ -32,24 +28,28 @@ function underHome(absolute: (home: string) => string): string {
   return `"$HOME/${rel}"`
 }
 
+/** The install root of the default set, or of set `id` (service-set.ts), as the shell writes it. */
+const rootUnderHome = (platform: 'linux' | 'darwin', id: string): string => underHome((h) => serviceSet(platform, h, id).installRoot)
+
 /** Sets tb (the install root) only, the same for every scope: for a script that changes nothing of the service (the launcher). */
-export function installRootLine(): string {
-  return `case "$(uname -s)" in Darwin) tb=${underHome((h) => daemonInstallRoot('darwin', h))};; *) tb=${underHome((h) => daemonInstallRoot('linux', h))};; esac`
+export function installRootLine(id = ''): string {
+  return `case "$(uname -s)" in Darwin) tb=${rootUnderHome('darwin', id)};; *) tb=${rootUnderHome('linux', id)};; esac`
 }
 
-/** Sets tk (launchd|systemd|cron), tc (the config), tb (the install root), to (the ownership record), tu (uid). */
-export function servicePreamble(scope: 'user' | 'cron'): string[] {
-  const macRoot = underHome((h) => daemonInstallRoot('darwin', h))
-  const linuxRoot = underHome((h) => daemonInstallRoot('linux', h))
+/** Sets tk (launchd|systemd|cron), tc (the config), tb (the install root), to (the ownership record), tu (uid); of set `id`, the default's when ''. */
+export function servicePreamble(scope: 'user' | 'cron', id = ''): string[] {
+  const macRoot = rootUnderHome('darwin', id)
+  const linuxRoot = rootUnderHome('linux', id)
+  const { plist, unit } = serviceSetNames(id)
   return [
     'tu=$(id -u)',
     // The SSH path has no latest marker; the runner sets its own before this.
     ': "${L:=}"',
     'case "$(uname -s)" in',
-    `  Darwin) tk=launchd; tb=${macRoot}; tc="$HOME/Library/LaunchAgents/${DAEMON_SERVICE_LABEL}.plist";;`,
+    `  Darwin) tk=launchd; tb=${macRoot}; tc="$HOME/Library/LaunchAgents/${plist}";;`,
     scope === 'cron'
       ? `  *) tk=cron; tb=${linuxRoot}; tc="$tb/${DAEMON_BOOT_SCRIPT_NAME}";;`
-      : `  *) tk=systemd; tb=${linuxRoot}; tc="$HOME/.config/systemd/user/${DAEMON_SERVICE_UNIT_NAME}"; export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/$tu}";;`,
+      : `  *) tk=systemd; tb=${linuxRoot}; tc="$HOME/.config/systemd/user/${unit}"; export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/$tu}";;`,
     'esac',
     `to="$tb/${DAEMON_OWNERSHIP_NAME}"`,
   ]
@@ -167,21 +167,22 @@ export const LAUNCHD_DISABLED_WORDS = 'the service is turned off in launchd (lau
  * stand-in ran the daemon outside launchd past that choice. An answer that cannot be read is no
  * disable.
  */
-export function disabledLines(): string[] {
-  const label = DAEMON_SERVICE_LABEL.replace(/\./g, '\\.')
+export function disabledLines(id = ''): string[] {
+  const label = serviceSetNames(id).label.replace(/\./g, '\\.')
   return [`t_disabled() { [ "$tk" = launchd ] || return 1; launchctl print-disabled "gui/$tu" 2>/dev/null | grep -Eq '"${label}"[[:space:]]*=>[[:space:]]*(true|disabled)'; }`]
 }
 
 /** t_loaded: the job is loaded (launchd), the unit active (systemd), the supervisor alive (cron). */
-export function loadedLines(): string[] {
-  const job = `"gui/$tu/${DAEMON_SERVICE_LABEL}"`
+export function loadedLines(id = ''): string[] {
+  const { label, unit } = serviceSetNames(id)
+  const job = `"gui/$tu/${label}"`
   return [
     't_loaded() { case $tk in',
     `  launchd) launchctl print ${job} >/dev/null 2>&1;;`,
     // A unit waiting out a crash (activating, SubState auto-restart) is not running: systemd gives it up at its start limit.
     // No --value: systemd before 230 rejects it (2026-11-04 review: the crash loop read as running); all print SubState=<word>.
-    `  systemd) case "$(systemctl --user is-active ${DAEMON_SERVICE_UNIT_NAME} 2>/dev/null)" in active|reloading) return 0;;`,
-    `    activating) case "$(systemctl --user show -p SubState ${DAEMON_SERVICE_UNIT_NAME} 2>/dev/null)" in *=auto-restart|auto-restart) return 1;; esac;; *) return 1;; esac;;`,
+    `  systemd) case "$(systemctl --user is-active ${unit} 2>/dev/null)" in active|reloading) return 0;;`,
+    `    activating) case "$(systemctl --user show -p SubState ${unit} 2>/dev/null)" in *=auto-restart|auto-restart) return 1;; esac;; *) return 1;; esac;;`,
     `  cron) p=$(cat "$tb/${DAEMON_BOOT_PID_NAME}" 2>/dev/null); case "$p" in ""|*[!0-9]*) return 1;; esac; [ "$p" -gt 1 ] && kill -0 "$p" 2>/dev/null;;`,
     'esac; }',
   ]

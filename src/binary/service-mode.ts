@@ -181,6 +181,16 @@ function ownerOf(stateDir: string, mode: ServiceMode, f: FsLike): string | null 
 }
 
 /**
+ * The Walnut the service mode of `stateDir` belongs to by the rule above (null: it cannot be told),
+ * or 'none' when the dir holds no mode it can read. Which service set a Walnut uses asks it
+ * (providers/service-set-choice.ts).
+ */
+export function serviceModeOwner(stateDir: string, f: FsLike = fs): { owner: string | null } | 'none' {
+  const read = readServiceMode(stateDir, f)
+  return 'mode' in read ? { owner: ownerOf(stateDir, read.mode, f) } : 'none'
+}
+
+/**
  * The one writer of a machine's service role (the leader switch: at commit on the new leader, at
  * hand-over on the old one). Same role and home: nothing written. Ownership is by Walnut, never by
  * path: a mode of another Walnut is refused. A replica role needs exactly one follower spec for

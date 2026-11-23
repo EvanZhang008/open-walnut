@@ -271,6 +271,14 @@ export const EXPERIMENTAL_FEATURES = [
     ownSwitchOnly: true,
   },
   {
+    id: 'host_service_sets',
+    name: 'Own service on a shared computer',
+    description: 'When another person\'s Walnut already runs the service on a computer you both use under one account, this Walnut installs its own service there beside it, with its own files, start-up item and sessions, instead of sharing the other one. The computer\'s network address and key stay shared. Off: a second Walnut shares the service that is there, as before. "Every experiment on" does not turn this on: it changes which service runs your sessions on those computers, so it keeps its own switch.',
+    summary: 'On a computer another Walnut already serves, this Walnut installs its own service beside it instead of sharing.',
+    default: false,
+    ownSwitchOnly: true,
+  },
+  {
     id: 'restore_drill',
     name: 'Weekly restore drill',
     description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health. "Every experiment on" does not turn this on: it copies or downloads all of your data, so it keeps its own switch.',

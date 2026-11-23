@@ -91,7 +91,9 @@ interface Undo {
 export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonServiceManager {
   const script = path.join(deps.stateDir, DAEMON_BOOT_SCRIPT_NAME)
   // The systemd units: a daemon with one of them already has a service, and two would race for one runtime dir.
-  const units = daemonServiceConfigFiles('linux', deps.home).filter((file) => file !== script)
+  const units = daemonServiceConfigFiles('linux', deps.home, deps.set).filter((file) => file !== script)
+  // The set's tag on its crontab lines (service-set.ts): the default set's when none is given.
+  const tag = deps.set?.cronTag
 
   const fail = (code: DaemonServiceErrorCode, message: string, command?: string, stderr?: string): DaemonServiceResult => ({
     ok: false,
@@ -135,13 +137,13 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
   async function probe(seen?: { present: boolean; owned: boolean }): Promise<Probe> {
     const found = seen ?? await deps.inspectConfig(script)
     const tab = await deps.run('crontab', ['-l'])
-    const line: Probe['line'] = tab.code === 0 ? cronLineState(tab.stdout, script, { everyMinute: await launcherOnDisk() })
+    const line: Probe['line'] = tab.code === 0 ? cronLineState(tab.stdout, script, { everyMinute: await launcherOnDisk(), tag })
       : isNoCrontab(tab.stderr) ? 'none' : 'unreadable'
     return {
       present: found.present,
       owned: found.owned,
       line,
-      ourLines: tab.code === 0 && cronLinesOursInEitherForm(tab.stdout, script),
+      ourLines: tab.code === 0 && cronLinesOursInEitherForm(tab.stdout, script, tag),
       ...(line === 'unreadable' ? { lineStderr: tab.stderr } : {}),
       boot: await cronBoot(),
       daemon: await deps.serviceDaemon(),
@@ -284,7 +286,7 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
   async function putOurLines(everyMinute: boolean, undo?: Undo): Promise<DaemonServiceResult | null> {
     const tab = await readCrontab()
     if ('failure' in tab) return tab.failure
-    const want = crontabWithDaemonLine(tab.text, script, { everyMinute })
+    const want = crontabWithDaemonLine(tab.text, script, { everyMinute, tag })
     if (want === tab.text) return null
     if (undo) undo.tabWritten = true
     return writeCrontab(want)
@@ -326,8 +328,8 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     // daemon again the usual way, since no service config is left to stop it).
     const tab = await readCrontab()
     if ('failure' in tab) return 'kept the boot script because the crontab could not be read to take the @reboot line out'
-    if (cronLineState(tab.text, script) !== 'none') {
-      const wrote = await writeCrontab(crontabWithoutDaemonLine(tab.text, script))
+    if (cronLineState(tab.text, script, { tag }) !== 'none') {
+      const wrote = await writeCrontab(crontabWithoutDaemonLine(tab.text, script, tag))
       if (wrote) return `kept the boot script because the @reboot line could not be taken out: ${wrote.ok ? '' : wrote.failure.message}`
     }
     await deps.setStop(true)
@@ -356,12 +358,12 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     if (updateOnly && !ours) return fail('notInstalled', 'Only an existing owned service can be updated')
     undo.ours = ours
     // The launcher's crontab has its minute line too (service-launcher-script.ts).
-    const line = cronLineState(tab.text, script, { everyMinute: await launcherOnDisk() })
+    const line = cronLineState(tab.text, script, { everyMinute: await launcherOnDisk(), tag })
     if (line === 'foreign') return fail('foreignConfig', 'this account\'s crontab has an Open Walnut line for another boot script; remove it yourself before installing')
     const before = await probe(found)
     // Our lines in the other form (a rollback of an older build left them so) are still the boot
     // start the person chose: the update goes on and writes the form of the script it puts in place.
-    if (updateOnly && (!before.daemon || !cronLinesOursInEitherForm(tab.text, script))) {
+    if (updateOnly && (!before.daemon || !cronLinesOursInEitherForm(tab.text, script, tag))) {
       return fail('serviceInactive', 'The service is stopped or its @reboot line is gone; automatic updates leave that choice unchanged')
     }
 
@@ -375,12 +377,13 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     const config: DaemonServiceConfig = {
       platform: 'linux', home: deps.home, executable: prepared.executable, args: prepared.args,
       runtimeDir: deps.runtimeDir, stateDir: deps.stateDir, path: deps.path,
+      ...(deps.set?.id ? { serviceSet: deps.set.id } : {}),
     }
     if (deps.launcher) return attemptWithLauncher(undo, updateOnly, before, ours, prepared, config)
     let text: string
     try {
       text = renderDaemonBootScript(config)
-      daemonCronLine(script)
+      daemonCronLine(script, tag)
     } catch (err) {
       return fail('invalidConfig', errText(err))
     }
@@ -461,7 +464,7 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     // A plain config ran since any launcher state on disk was written: that state names versions that do not run.
     if (!wasLauncher) await L.reset()
     let text: string
-    try { text = L.render(config, seed); daemonCronLine(script) } catch (err) { return fail('invalidConfig', errText(err)) }
+    try { text = L.render(config, seed); daemonCronLine(script, tag) } catch (err) { return fail('invalidConfig', errText(err)) }
     if (updateOnly) {
       const latest = await probe()
       if (!latest.daemon || !latest.ourLines) return fail('serviceInactive', 'The service was stopped during staging; nothing was changed')
@@ -522,10 +525,10 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     if (found.present && !found.owned) return fail('foreignConfig', `${script} was not written by this tool; leaving it in place`)
     const tab = await readCrontab()
     if ('failure' in tab) return tab.failure
-    const line = cronLineState(tab.text, script)
+    const line = cronLineState(tab.text, script, { tag })
     if (line === 'foreign' && !found.present) return fail('foreignConfig', 'the Open Walnut line in this crontab is for another boot script; leaving it in place')
     // Only lines naming our script go; another install root's tagged line stays.
-    const without = crontabWithoutDaemonLine(tab.text, script)
+    const without = crontabWithoutDaemonLine(tab.text, script, tag)
     if (without !== tab.text && line !== 'none') {
       const wrote = await writeCrontab(without)
       if (wrote) return wrote
