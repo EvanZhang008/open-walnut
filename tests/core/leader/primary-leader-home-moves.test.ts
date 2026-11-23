@@ -49,22 +49,23 @@ beforeEach(() => {
   health.taken.length = 0
   fs.rmSync(homeRecordFile(WALNUT_HOME), { force: true })
 })
-afterEach(() => {
+afterEach(async () => {
+  // First: a judgement still keeping its record reads this test's permit, machine id and data dir.
+  await resetHomeMoveForTests()
   permit.current = null
   setOutwardDoorChecker(null)
   fs.rmSync(path.join(WALNUT_HOME, 'local', 'leader-switch'), { recursive: true, force: true })
   if (saved === undefined) delete process.env.WALNUT_IN_PROCESS_DAEMON
   else process.env.WALNUT_IN_PROCESS_DAEMON = saved
   resetInProcessDaemonWantedForTests()
-  resetHomeMoveForTests()
   setMachineIdHomeForTest(null)
   fs.rmSync(account, { recursive: true, force: true })
 })
 
-function switchTo(flag: '0' | '1'): void {
+async function switchTo(flag: '0' | '1'): Promise<void> {
+  await resetHomeMoveForTests()
   process.env.WALNUT_IN_PROCESS_DAEMON = flag
   resetInProcessDaemonWantedForTests()
-  resetHomeMoveForTests()
 }
 
 /** The data dir was at `old` on this machine before (its record says so). */
@@ -83,7 +84,7 @@ function host(reply: Record<string, unknown> = { ok: false, error: 'test stops h
 
 describe('leader.configure and declared home moves', () => {
   it('the experiment off: no movedFrom, but the move is kept in the record off the connect path (L2)', async () => {
-    switchTo('0')
+    await switchTo('0')
     const old = path.join(os.tmpdir(), 'walnut-gone-home-0')
     await movedFrom(old)
     const h = host()
@@ -96,14 +97,14 @@ describe('leader.configure and declared home moves', () => {
     const first = host()
     await declareHomeMove(first.conn)
     expect(first.sent).toEqual([])
-    switchTo('1')
+    await switchTo('1')
     const later = host({ ok: true, epoch: 1, holder: 'primary' })
     await configureHostLeader(later.conn)
     expect(later.sent.find((s) => s.cmd === 'leader.configure')).toMatchObject({ movedFrom: old, formerHomes: [old] })
   })
 
   it('the experiment known off: a connect has nothing to wait for (L5)', async () => {
-    switchTo('0')
+    await switchTo('0')
     expect(settledHomeMove(), 'not asked yet').toBeUndefined()
     expect(await inProcessDaemonWanted()).toBe(false)
     // The server's boot asked the switch: the home move is known to declare nothing, before any ask of it.
@@ -111,7 +112,7 @@ describe('leader.configure and declared home moves', () => {
   })
 
   it('the experiment on, a data dir that never moved: no movedFrom, and the record is kept', async () => {
-    switchTo('1')
+    await switchTo('1')
     const h = host()
     await configureHostLeader(h.conn)
     expect(h.sent.find((s) => s.cmd === 'leader.configure')).not.toHaveProperty('movedFrom')
@@ -122,7 +123,7 @@ describe('leader.configure and declared home moves', () => {
   })
 
   it('the experiment on, a data dir that moved: the first frame and every leader.configure carry movedFrom', async () => {
-    switchTo('1')
+    await switchTo('1')
     const old = path.join(os.tmpdir(), 'walnut-gone-home-1')
     await movedFrom(old)
     const first = host({ ok: true, epoch: 7, holder: 'primary' })
@@ -138,7 +139,7 @@ describe('leader.configure and declared home moves', () => {
   })
 
   it('the home a host keeps this Walnut under after a move (homeHere) reaches the connection; any other answer says none (A3b S34-L3)', async () => {
-    switchTo('1')
+    await switchTo('1')
     const old = path.join(os.tmpdir(), 'walnut-gone-home-here')
     await movedFrom(old)
     const heard: Array<string | null> = []
@@ -154,7 +155,7 @@ describe('leader.configure and declared home moves', () => {
   })
 
   it('a host that takes the description but not the declared move: a Walnut Health item says so (M2)', async () => {
-    switchTo('1')
+    await switchTo('1')
     await movedFrom(path.join(os.tmpdir(), 'walnut-gone-home-2'))
     const h = host({ ok: true, epoch: 1, holder: 'primary', moveNotTaken: 'lost_trail' })
     expect(await configureHostLeader(h.conn)).toMatchObject({ epoch: 1 })
@@ -163,14 +164,14 @@ describe('leader.configure and declared home moves', () => {
   })
 
   it('another Walnut left this path on the host: the item says so, not "another copy" (M3)', async () => {
-    switchTo('0')
+    await switchTo('0')
     const h = host({ ok: false, error: 'another Walnut used this data dir here and moved to another one: abc', errorKind: 'walnut_home_taken', movedTo: '/their/home' })
     expect(await configureHostLeader(h.conn)).toBeNull()
     expect(health.busy).toEqual([['h1', '/their/home', 'taken']])
   })
 
   it('N1: a host that follows another copy that is gone from this machine: described again naming it, and this copy is served', async () => {
-    switchTo('1')
+    await switchTo('1')
     await movedFrom(path.join(os.tmpdir(), 'walnut-gone-home-n1'))
     const gone = path.join(account, 'backup-copy-deleted')
     const sent: Array<Record<string, unknown>> = []
@@ -188,7 +189,7 @@ describe('leader.configure and declared home moves', () => {
   })
 
   it('N1: the other copy still holds this Walnut: no claim, and the item tells the person what to do (contested)', async () => {
-    switchTo('1')
+    await switchTo('1')
     await movedFrom(path.join(os.tmpdir(), 'walnut-gone-home-n1b'))
     const { getInstanceId } = await import('../../../src/core/device-auth.js')
     const live = path.join(account, 'backup-copy-live')
@@ -208,7 +209,7 @@ describe('leader.configure and declared home moves', () => {
   })
 
   it('a host that refuses this data dir: one Walnut Health item names where the Walnut moved', async () => {
-    switchTo('0')
+    await switchTo('0')
     const h = host({ ok: false, error: 'this Walnut moved to another data dir: abc', errorKind: 'walnut_home_busy', movedTo: '/new/home' })
     expect(await configureHostLeader(h.conn)).toBeNull()
     expect(health.busy).toEqual([['h1', '/new/home', 'busy']])
@@ -230,7 +231,7 @@ describe('leader.configure after a leader switch to this data dir', () => {
   }
 
   it('the experiment off and the switch committed: every leader.configure carries the old holder\'s path, raw', async () => {
-    switchTo('0')
+    await switchTo('0')
     newLeader('leading')
     expect(settledHomeMove(), 'a connect holds its commands for the declaration').toBeUndefined()
     const first = host({ ok: true, epoch: 3, holder: 'primary' })
@@ -243,7 +244,7 @@ describe('leader.configure after a leader switch to this data dir', () => {
   })
 
   it('before the commit stands nothing reaches the host; at the commit the first frame declares', async () => {
-    switchTo('0')
+    await switchTo('0')
     const leader = newLeader('waiting')
     const h = host({ ok: true, epoch: 3, holder: 'primary' })
     const done = configureHostLeader(h.conn)
@@ -256,7 +257,7 @@ describe('leader.configure after a leader switch to this data dir', () => {
   })
 
   it('the witness majority out of reach: each attempt fails at its deadline with no frame and a Health item; back, it declares once', async () => {
-    switchTo('0')
+    await switchTo('0')
     health.held.length = 0
     health.confirmed = 0
     process.env.WALNUT_TEST_COMMIT_WAIT_MS = '500'
@@ -288,12 +289,12 @@ describe('leader.configure after a leader switch to this data dir', () => {
   })
 
   it('a record naming another machine, or no permit (the experiment off), declares nothing: as before', async () => {
-    switchTo('0')
+    await switchTo('0')
     newLeader('leading', 'led', 'machine-c')
     const h = host({ ok: true, epoch: 3, holder: 'primary' })
     await configureHostLeader(h.conn)
     expect(h.sent.find((s) => s.cmd === 'leader.configure')).not.toHaveProperty('movedFrom')
-    resetHomeMoveForTests()
+    await resetHomeMoveForTests()
     fs.rmSync(homeRecordFile(WALNUT_HOME), { force: true })
     newLeader('leading', 'led')
     permit.current = null

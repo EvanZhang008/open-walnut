@@ -20,9 +20,9 @@ import { homeMoveToDeclare, homeRecordFile, resetHomeMoveForTests, settledHomeMo
 import { setOutwardDoorChecker } from '../../../../src/core/leader/switch/doors.js'
 import { writePromoted } from '../../../../src/core/leader/switch/records.js'
 
-afterEach(() => {
+afterEach(async () => {
+  await resetHomeMoveForTests()
   setOutwardDoorChecker(null)
-  resetHomeMoveForTests()
   fs.rmSync(path.join(WALNUT_HOME, 'local'), { recursive: true, force: true })
 })
 

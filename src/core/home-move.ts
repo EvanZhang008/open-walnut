@@ -156,7 +156,7 @@ export async function noteHome(home: string, machineId: string, walnutId: string
     const { record, formerHomes } = judgeHome(prev, { machineId, home, walnutId }, () => oldHolds, () => same, opts.switched ?? null)
     if (JSON.stringify(record) !== JSON.stringify(prev)) {
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-      // One temp file per write: two judgements in one process (a test's reset while the last one still writes) never rename each other's.
+      // One temp file per write: two writers never rename each other's half-written file.
       const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
       await fs.writeFile(tmp, `${JSON.stringify(record)}\n`, { mode: 0o600 })
       await fs.rename(tmp, file)
@@ -176,6 +176,8 @@ export async function noteHome(home: string, machineId: string, walnutId: string
 let declared: Promise<string[] | null> | null = null
 /** What `homeMoveToDeclare` answered, once it has (undefined until then). */
 let settled: string[] | null | undefined
+/** The record kept off the connect path (the experiment off), until it is written. */
+let keeping: Promise<unknown> | null = null
 
 /**
  * A leader switch may have made this data dir the Walnut's (the permit guards this process and
@@ -227,7 +229,7 @@ export function homeMoveToDeclare(): Promise<string[] | null> {
       return noteHome(WALNUT_HOME, await readMachineId(), id && !isVolatileInstanceId(id) ? id : null, { declares: on, switched })
     })()
     // Off: the record is kept so a later switch-on declares the move; nothing waits for it.
-    if (!on) { void note.catch(() => {}); return null }
+    if (!on) { keeping = note.catch(() => {}); return null }
     const formers = await note
     return formers.length > 0 ? formers : null
   })().then((moved) => { settled = moved; return moved }, (err: unknown) => {
@@ -268,5 +270,13 @@ export async function homeOnHosts(): Promise<{ home: string; formerHomes: string
   return { home: WALNUT_HOME, formerHomes: prev.machineId === machineId ? formerHomesOf(prev) : [] }
 }
 
-/** Tests only: judge again. */
-export function resetHomeMoveForTests(): void { declared = null; settled = undefined }
+/**
+ * Tests only: judge again, once the judgement asked so far is done, its record kept off the connect
+ * path included. Left running, that write lands after the reset, in the next test's record.
+ */
+export async function resetHomeMoveForTests(): Promise<void> {
+  await Promise.allSettled([declared, keeping])
+  declared = null
+  settled = undefined
+  keeping = null
+}
