@@ -118,8 +118,8 @@ out.offRead = await read('w1', 1)
 enabled = true
 out.onNotSetUp = await read('w1', 1)
 // Set up, with evidence that nothing held a record; then a read, a grant and a read again.
-out.setup = await ask(WITNESS_SETUP_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', list: LIST, evidence: [{ witness: 'w2', seen: 'none' }, { witness: 'w3', seen: 'none' }] })
-out.setupAgainWithRecords = await ask(WITNESS_SETUP_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', list: LIST, evidence: [{ witness: 'w2', seen: 'record' }, { witness: 'w3', seen: 'none' }] })
+out.setup = await ask(WITNESS_SETUP_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', list: LIST, evidence: [{ witness: 'w2', seen: 'absent' }, { witness: 'w3', seen: 'absent' }] })
+out.setupAgainWithRecords = await ask(WITNESS_SETUP_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', list: LIST, evidence: [{ witness: 'w2', seen: 'record' }, { witness: 'w3', seen: 'absent' }] })
 out.readAfterSetup = await read('w1', 2)
 out.grant = await ask(WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', request: { type: 'propose', record } })
 out.readAfterGrant = await read('w1', 3)

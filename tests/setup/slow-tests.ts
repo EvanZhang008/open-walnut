@@ -79,6 +79,8 @@ export const SLOW_TEST_FILES = [
   'tests/core/leader/switch/witness-link-gate.test.ts', // a real permit runtime, the daemon link spied on, loopback witness doors
   'tests/core/leader/switch/witness-reader.test.ts', // a real permit runtime over three remote witness doors, and the route that reads them
   'tests/core/leader/switch/witness-transport.test.ts', // three witness machines on loopback sockets: a permit client over real HTTP, the renew round trip measured
+  'tests/core/leader/switch/witness-door.test.ts', // three direct witness doors behind TLS on loopback: a permit client over them, every refusal, the renew round trip measured
+  'tests/core/leader/switch/witness-ways.test.ts', // three witness machines on loopback sockets: way a and way c on one record
   'tests/core/leader/permit/change-repair.test.ts', // ~4s: 35 ten-minute schedules of candidates racing for the permission (back-off)
   'tests/core/offline-merge/notes.test.ts', // ~3s: two 1 MB merges in a worker thread under the stall recorder, one waits out the 2 s deadline (WP11)
   'tests/integration/replica-ask-twins.test.ts', // both daemon twins as processes, mock CLIs spawned from the spawn template, a resume, ten asks an hour

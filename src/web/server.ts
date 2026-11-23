@@ -2033,6 +2033,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { BRIDGE_BUILD_PATH } = await import('../core/companion-build/wire.js')
     app.use(BRIDGE_BUILD_PATH, createBridgeBuildRouter())
   }
+  // One witness of a switchable leader (capability witness-door, off by default): its direct door,
+  // proven with the witness's own key, and its one-time setup from the Mac's machine token. Without
+  // the capability neither path is mounted (routes/witness-door.ts).
+  if (hasCapability('witness-door')) {
+    const { createWitnessDoorRouter, createBridgeWitnessSetupRouter, WITNESS_DOOR_PATH, BRIDGE_WITNESS_SETUP_PATH } = await import('./routes/witness-door.js')
+    app.use(WITNESS_DOOR_PATH, createWitnessDoorRouter())
+    app.use(BRIDGE_WITNESS_SETUP_PATH, createBridgeWitnessSetupRouter())
+  }
 
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,
   // /api/sessions/:id/history) are 2-8MB of highly-repetitive JSON and dominate

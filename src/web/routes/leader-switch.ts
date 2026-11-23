@@ -68,15 +68,27 @@ leaderSwitchRouter.post('/cancel', thisMachineOnly, async (_req, res) => {
 
 leaderSwitchRouter.post('/witnesses/init', thisMachineOnly, async (_req, res) => {
   const p = currentLeaderPermit()
-  // Only a server that holds the permission has a host link to speak over (a link describes this Walnut to the host as its leader).
-  if (!p || p.trial || p.runtime.status().state !== 'leading') { res.status(409).json({ ok: false, why: 'this server does not hold the write permission (a host link is opened only by the leader)' }); return }
-  const [{ readHomeSwitchConfig, isRemoteWitness }, { setUpRemoteWitnesses }, { WALNUT_HOME }] = await Promise.all([
-    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/witness-setup.js'), import('../../constants.js'),
+  // Before it leads a server opens no link that describes this Walnut to a host as its leader: its setups go only
+  // where that needs none (a registered reach, the companion's lane), and after the first lead any record makes a
+  // setup refused, so the list is set up before then (docs/reference/leader-switch.md, "Setup only from nothing").
+  if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server is not running the write permission (start it as the leader with the experiment and leader_switch set)' }); return }
+  const [{ readHomeSwitchConfig, isRemoteWitness }, { setUpRemoteWitnesses }, { hostLinkCall, thisWalnutId }, { setUpCompanionWitness }, { witnessRoot }, { WALNUT_HOME }] = await Promise.all([
+    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/witness-setup.js'), import('../../core/leader/switch/witness-transport.js'),
+    import('../../core/leader/switch/witness-direct.js'), import('../../core/leader/switch/machine-id.js'), import('../../constants.js'),
   ])
   const cfg = readHomeSwitchConfig(WALNUT_HOME)
   if (!cfg.settings) { res.status(409).json({ ok: false, why: cfg.problem ?? 'no leader_switch section' }); return }
+  const list = cfg.settings.witnesses.map((w) => w.id)
+  const walnutId = await thisWalnutId()
+  // The ways and keys init just wrote, for this server's own permit client (the same fixed list).
+  p.runtime.setWitnessPlaces(cfg.settings.witnesses)
   const seen = await p.runtime.readWitnesses()
-  const results = await setUpRemoteWitnesses({ places: cfg.settings.witnesses.filter(isRemoteWitness), list: cfg.settings.witnesses.map((w) => w.id), walnutId: null, sightings: seen.sightings })
+  const leading = p.runtime.status().state === 'leading'
+  const results = await setUpRemoteWitnesses({
+    places: cfg.settings.witnesses.filter(isRemoteWitness), list, walnutId, sightings: seen.sightings, here: { machineId: p.machine, root: witnessRoot() },
+    call: hostLinkCall({ daemonLink: leading }),
+    companion: (w, evidence) => setUpCompanionWitness(w, list, walnutId, evidence),
+  })
   res.json({ ok: results.every((r) => r.ok), results })
 })
 

@@ -6,6 +6,9 @@
  * is on this machine's disk, outside every data home (machine-id.ts witnessRoot, the home
  * manifest's `state.leader-witness`), and is served by the same code as a local witness
  * (local-witnesses.ts serveLocalWitness): one witness record file, one lock, one PermitWitness.
+ * The same record is served by the machine's direct door when it has one (witness-door.ts) and
+ * opened by a caller on this machine itself (witness-transport.ts, way a): every way reaches the
+ * one file under its lock. Beside it is the witness's own key (`witness-key`, from the setup).
  *
  * A machine serves a witness for a Walnut only when ALL hold, and answers 404 (the answer of a
  * path it does not have, so nothing tells a caller from today's service) otherwise:
@@ -24,8 +27,9 @@ import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
 import { withFileLock } from '../../../utils/file-lock.js'
 import { serveLocalWitness, setUpLocalWitnesses } from './local-witnesses.js'
 import {
-  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, parseWitnessCall, parseWitnessSetup, setupAllowed, type WitnessAnswer,
+  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, parseWitnessCall, parseWitnessSetup, setupAllowed, type WitnessAnswer, type WitnessSetup,
 } from './witness-wire.js'
+import { PROOF_SECRET_RE, proofsEqual } from '../../../utils/hmac-proof.js'
 
 /** The largest body read: a list change carries every op entry. */
 const MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -76,6 +80,61 @@ export function witnessDir(root: string, walnutId: string, witness: string): str
   return path.join(root, walnutId, witness)
 }
 
+/** The witness's own key beside its record (0600 in its 0700 dir): what its direct door checks (witness-door.ts). */
+const KEY_FILE = 'witness-key'
+
+/** The key kept for a witness here, or null: none set up (a witness set up before keys existed has none). */
+export function readWitnessKey(dir: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(dir, KEY_FILE), 'utf8').trim()
+    return PROOF_SECRET_RE.test(text) ? text : null
+  } catch { return null }
+}
+
+/**
+ * Set a witness of this machine up, once (THE setup, whichever way it came: the leader door's route,
+ * the companion's setup route, `walnut leader witnesses init` on this machine itself): its record with
+ * the first list, and its key when one is given.
+ *   - Only from nothing: the setup carries what the caller saw at every OTHER witness, and is refused
+ *     (409) unless none held a record (witness-wire.ts setupAllowed; a witness that lost its disk never
+ *     starts over beside records that still exist).
+ *   - One witness id per Walnut per machine (409 another_witness_here), checked and made under one
+ *     lock, so two setups at once make one.
+ *   - A record that is there is kept; a key that is there is never replaced (409 key_differs: a new
+ *     key is a new witness's, set up anew by an operator).
+ */
+export async function setUpMachineWitness(root: string, setup: WitnessSetup, log?: WitnessRouteDeps['log']): Promise<WitnessResponse> {
+  const allowed = setupAllowed(setup)
+  if (!allowed.ok) return { status: 409, body: { ok: false, error: allowed.error } }
+  const walnutDir = path.join(root, setup.walnutId)
+  fs.mkdirSync(walnutDir, { recursive: true, mode: 0o700 })
+  try {
+    return await withFileLock(path.join(walnutDir, '.setup'), async (): Promise<WitnessResponse> => {
+      let others: string[] = []
+      try { others = fs.readdirSync(walnutDir).filter((n) => n !== setup.witness && !n.startsWith('.')) } catch { /* none yet */ }
+      if (others.length) return { status: 409, body: { ok: false, error: 'another_witness_here' } }
+      const dir = witnessDir(root, setup.walnutId, setup.witness)
+      const held = readWitnessKey(dir)
+      if (setup.key && held && !proofsEqual(held, setup.key)) return { status: 409, body: { ok: false, error: 'key_differs' } }
+      const made = setUpLocalWitnesses([{ id: setup.witness, dir }], setup.list)
+      if (setup.key && !held) writeKeyFile(dir, setup.key)
+      log?.('info', 'witness route: set up', { witness: setup.witness, made: made.made.length > 0, keyed: !!(setup.key || held) })
+      return { status: 200, body: { ok: true, made: made.made.length > 0 } }
+    }, { timeoutMs: 5_000 })
+  } catch (err) {
+    log?.('warn', 'witness route: a setup could not be done', { witness: setup.witness, error: err instanceof Error ? err.message : String(err) })
+    return { status: 503, body: { ok: false, error: 'busy' } }
+  }
+}
+
+function writeKeyFile(dir: string, key: string): void {
+  const file = path.join(dir, KEY_FILE)
+  const tmp = `${file}.${process.pid}.tmp`
+  const fd = fs.openSync(tmp, 'w', 0o600)
+  try { fs.writeSync(fd, `${key}\n`); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  fs.renameSync(tmp, file)
+}
+
 /** Serve one call of the witness route. `path`: the request path; `body`: its parsed JSON. */
 export async function serveWitnessCall(pathname: string, body: unknown, caller: (claimed: string) => WitnessCaller, deps: WitnessRouteDeps): Promise<WitnessResponse> {
   if (pathname === WITNESS_REQUEST_PATH) {
@@ -99,25 +158,7 @@ export async function serveWitnessCall(pathname: string, body: unknown, caller: 
     if (!setup) return { status: 400, body: { ok: false, error: 'bad_request' } }
     const auth = authorizeWitnessCaller(caller(setup.walnutId), deps.walnutId())
     if (!auth.ok) return { status: auth.status, body: { ok: false, error: auth.error } }
-    // A setup makes a witness from nothing: allowed only while the caller saw no other witness holding a record.
-    const allowed = setupAllowed(setup)
-    if (!allowed.ok) return { status: 409, body: { ok: false, error: allowed.error } }
-    // One setup at a time per Walnut: the check for another witness here and the making of this one are one step.
-    const walnutDir = path.join(deps.root, setup.walnutId)
-    fs.mkdirSync(walnutDir, { recursive: true, mode: 0o700 })
-    try {
-      return await withFileLock(path.join(walnutDir, '.setup'), async (): Promise<WitnessResponse> => {
-        let others: string[] = []
-        try { others = fs.readdirSync(walnutDir).filter((n) => n !== setup.witness && !n.startsWith('.')) } catch { /* none yet */ }
-        if (others.length) return { status: 409, body: { ok: false, error: 'another_witness_here' } }
-        const made = setUpLocalWitnesses([{ id: setup.witness, dir: witnessDir(deps.root, setup.walnutId, setup.witness) }], setup.list)
-        deps.log?.('info', 'witness route: set up', { witness: setup.witness, made: made.made.length > 0 })
-        return { status: 200, body: { ok: true, made: made.made.length > 0 } }
-      }, { timeoutMs: 5_000 })
-    } catch (err) {
-      deps.log?.('warn', 'witness route: a setup could not be done', { witness: setup.witness, error: err instanceof Error ? err.message : String(err) })
-      return { status: 503, body: { ok: false, error: 'busy' } }
-    }
+    return setUpMachineWitness(deps.root, setup, deps.log)
   }
   return NOT_FOUND
 }

@@ -84,23 +84,35 @@ export async function runLeaderWitnessesInit(options: Record<string, unknown>): 
   try {
     const home = typeof options.home === 'string' ? options.home : WALNUT_HOME
     const m = await import('../core/leader/switch/index.js')
-    const cfg = m.readHomeSwitchConfig(home)
+    let cfg = m.readHomeSwitchConfig(home)
     if (!cfg.flag) return fail('the experiment switchable_leader is off')
     if (!cfg.settings) return fail(cfg.problem ?? 'no leader_switch section')
+    // Each witness kept by a machine gets its own key, once: in the leader data (config.yaml, sensitive)
+    // and, by its setup below, beside its record on its machine. Never printed.
+    const { mintWitnessKeys } = await import('../core/leader/switch/witness-keys.js')
+    const minted = await mintWitnessKeys(home)
+    if (minted.length) {
+      console.log(`Minted a key for ${minted.join(', ')} (kept in config.yaml leader_switch, which only travels with the standby copy)`)
+      cfg = m.readHomeSwitchConfig(home)
+      if (!cfg.settings) return fail(cfg.problem ?? 'no leader_switch section')
+    }
     const list = cfg.settings.witnesses.map((w) => w.id)
     const r = m.setUpLocalWitnesses(cfg.settings.witnesses.filter(m.isLocalWitness), list)
     console.log(`Witnesses set up: ${r.made.join(', ') || 'none'}; already set up: ${r.kept.join(', ') || 'none'}`)
-    // A remote witness is set up by its own machine's service, asked by the running leader server over its host links.
-    const remote = cfg.settings.witnesses.filter(m.isRemoteWitness)
-    if (remote.length) {
-      const me = m.machineById(cfg.settings, m.permitHolderId() ?? '')
-      const res = me ? await fetch(`http://127.0.0.1:${me.port}/api/leader/witnesses/init`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(120_000) }).catch(() => null) : null
-      const body = res ? await res.json().catch(() => null) as { results?: Array<{ witness: string; host: string; ok: boolean; made?: boolean; error?: string }>; why?: string } | null : null
+    // A witness kept by a machine is set up by this machine's leader server: one this machine keeps in its own
+    // state dir, one on a host over the server's link (or registered reach before it leads), one with only a door on
+    // the companion's lane. The server reads them all first: the setup's evidence.
+    const me = m.permitHolderId()
+    const elsewhere = cfg.settings.witnesses.filter(m.isRemoteWitness)
+    if (elsewhere.length) {
+      const self = m.machineById(cfg.settings, me ?? '') ?? m.machineByHome(cfg.settings, home)
+      const res = self ? await fetch(`http://127.0.0.1:${self.port}/api/leader/witnesses/init`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(120_000) }).catch(() => null) : null
+      const body = res ? await res.json().catch(() => null) as { results?: Array<{ witness: string; at: string; ok: boolean; made?: boolean; error?: string }>; why?: string } | null : null
       if (!body?.results) {
-        console.log(`Remote witnesses ${remote.map((w) => w.id).join(', ')} not set up: ${body?.why ?? 'this machine\'s leader server did not answer'}. Start the leader (it holds the permission) and run this again.`)
+        console.log(`Witnesses ${elsewhere.map((w) => w.id).join(', ')} not set up: ${body?.why ?? 'this machine\'s leader server did not answer'}. Start the leader server and run this again.`)
         process.exitCode = 1
       } else {
-        for (const x of body.results) console.log(`Witness ${x.witness} on ${x.host}: ${x.ok ? (x.made ? 'set up' : 'already set up') : `not set up (${x.error})`}`)
+        for (const x of body.results) console.log(`Witness ${x.witness} on ${x.at}: ${x.ok ? (x.made ? 'set up' : 'already set up') : `not set up (${x.error})`}`)
         if (body.results.some((x) => !x.ok)) process.exitCode = 1
       }
     }

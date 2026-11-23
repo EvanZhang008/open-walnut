@@ -86,7 +86,11 @@ describe('reading remote witnesses through the running leader server', () => {
   it('with no server to ask it says so plainly, and does not read the witnesses itself', async () => {
     const read = makeWitnessReader('machine-a-switch-reader', settings, () => [])
     await expect(read()).rejects.toBeInstanceOf(NoLeaderServerToRead)
-    await expect(read()).rejects.toThrow(/only a running leader server can read them: none is running here/)
+    await expect(read()).rejects.toThrow(/no running leader server here reads them, and no majority of them is reached without a leader link/)
+    // The switch's own read (a machine's ways a and b) is asked next: its reading when it has a majority, else the same refusal.
+    const reading = { standing: null, answered: 2 }
+    await expect(makeWitnessReader('r', settings, () => [], async () => reading)()).resolves.toEqual(reading)
+    await expect(makeWitnessReader('r', settings, () => [], async () => null)()).rejects.toBeInstanceOf(NoLeaderServerToRead)
     // A server that is down answers no differently.
     const dead = makeWitnessReader('x', settings, () => [{ api: () => Promise.reject(new Error('ECONNREFUSED')) }])
     await expect(dead()).rejects.toBeInstanceOf(NoLeaderServerToRead)

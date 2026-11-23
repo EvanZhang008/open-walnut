@@ -51,7 +51,7 @@ export async function startWitnessMachine(o: { host: string; root: string; walnu
 /** A call to `machines[place.host]` over a fresh loopback connection (a witness whose host is not a machine here: no answer). */
 export function loopbackCall(machines: Record<string, { port: number }>, opts: { delayMs?: number; timeoutMs?: number } = {}): RemoteCall {
   return (place, path, body, done) => {
-    const m = machines[place.host]
+    const m = place.host ? machines[place.host] : undefined
     if (!m) { done(null); return }
     let sock: net.Socket | null = null
     let gone = false

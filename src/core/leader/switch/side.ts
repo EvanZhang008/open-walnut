@@ -19,6 +19,7 @@ import { confirmStandby, readStandbyServer, type StandbyServer } from './handed-
 import { alive, serverCommand, stopPid, tail } from '../../trial-start/process.js'
 import { waitForConsolePort } from './console-port.js'
 import { consoleDir, consoleDirOfAccount } from '../../handed-over-console.js'
+import type { WitnessReachReport } from './witness-reach.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -41,6 +42,12 @@ export interface SwitchSide {
   startServer(mode: ServerMode, timeoutMs?: number, commitHandover?: number): Promise<StartResult>
   /** One request to this side's server. */
   api(method: string, urlPath: string, body?: unknown): Promise<{ status: number; json: unknown }>
+  /**
+   * What THIS machine reaches of the witnesses with no leader link (ways a and b, witness-reach.ts),
+   * as it would on its own: its machine identity, and the config and Walnut id of `copyHome`, its
+   * own copy of the leader data (the standby copy, which carries every witness key).
+   */
+  reachWitnesses(copyHome: string): Promise<WitnessReachReport>
 }
 
 export class LocalSide implements SwitchSide {
@@ -112,6 +119,22 @@ export class LocalSide implements SwitchSide {
     }
     try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* gone */ }
     return { ok: false, why: `the server did not answer within ${Math.round(timeoutMs / 1000)} s`, logTail: tail(logFile) }
+  }
+
+  /**
+   * On this computer, in this process with the other machine's identity (its machine-id file and
+   * witness root from its env): the same function a side on another machine runs there.
+   */
+  async reachWitnesses(copyHome: string): Promise<WitnessReachReport> {
+    const [{ readHomeSwitchConfig }, { instanceIdAt }, { thisMachine }, { probeWitnessReach }] = await Promise.all([
+      import('./settings.js'), import('../../device-store.js'), import('./permit-ops.js'), import('./witness-reach.js'),
+    ])
+    const cfg = readHomeSwitchConfig(copyHome)
+    if (!cfg.settings) throw new Error(`${copyHome} has no leader_switch section the new leader would read`)
+    const walnutId = await instanceIdAt(copyHome)
+    if (!walnutId) throw new Error(`${copyHome} holds no Walnut id`)
+    const env = { ...process.env, ...this.machine.env }
+    return probeWitnessReach({ places: cfg.settings.witnesses, params: cfg.settings.params, here: thisMachine(env, walnutId), walnutId })
   }
 
   async api(method: string, urlPath: string, body?: unknown): Promise<{ status: number; json: unknown }> {

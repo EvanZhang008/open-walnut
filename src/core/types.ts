@@ -2108,7 +2108,13 @@ export interface Config {
    * docs/reference/leader-switch.md). Off, or absent, nothing of it runs.
    */
   leader_switch?: {
-    witnesses?: { id: string; dir: string }[];
+    /**
+     * The FIXED witness list: `dir` (a directory on this computer), or a witness kept by a machine:
+     * `machine` (a caller on it opens the record itself), `url` (a direct door), `host` (the leader's
+     * link to its service), and `key`, the witness's own, minted by `walnut leader witnesses init`
+     * (sensitive: masked in every client view, config-redact.ts; never in a host's config copy).
+     */
+    witnesses?: { id: string; dir?: string; machine?: string; host?: string; url?: string; key?: string }[];
     machines?: { id: string; home: string; standby_dir: string; port: number; start_command?: string[]; env?: Record<string, string> }[];
     /** `walnut leader switch --back` is offered this long after a switch (default 168). */
     back_window_hours?: number;

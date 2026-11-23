@@ -9,11 +9,19 @@
  * JSON wire. Only the link under it is the simulation's: a RemoteCall that sends the request and
  * the reply through World.transmit (delay, drop, duplicate, reorder, cuts). A test replaces it
  * with `world.makeLink` to break the link in a way of its own.
+ *
+ * `world.way = 'direct'` reaches every witness by its direct door instead (way b: the real caller,
+ * witness-direct.ts, and the real door, witness-door.ts, each witness with its own key): a request
+ * is then a challenge and the keyed call, each crossing the network both ways, the nonce timed on
+ * the witness's own clock.
  */
 import {
   createWitnessTransport, type RemoteCall, type RemoteCallResult,
 } from '../../../../src/core/leader/switch/witness-transport.js'
 import type { WitnessCall } from '../../../../src/core/leader/switch/witness-wire.js'
+import { createWitnessDoor, type WitnessDoor } from '../../../../src/core/leader/switch/witness-door.js'
+import { directWitnessCall, type DoorPost } from '../../../../src/core/leader/switch/witness-direct.js'
+import { sha256Hex } from '../../../../src/utils/hmac-proof.js'
 import {
   bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
   type ElapsedClock, type PermitParams, type PermitRecord, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
@@ -155,6 +163,10 @@ export class World {
   injected = 0
   /** What the transport threw away, by reason. */
   drops: Record<string, number> = {}
+  /** How machines reach the witnesses: over a link (way c) or by each witness's direct door (way b). Set before addMachine. */
+  way: 'link' | 'direct' = 'link'
+  /** Each witness's direct door (way b), made at its first call; its nonces outlive a witness restart only as a real door's would not (a restart forgets them: see startWitness). */
+  private doors = new Map<string, WitnessDoor>()
 
   constructor(public params: PermitParams, public net: NetOptions = CALM, seed = 1) {
     this.rand = rng(seed)
@@ -213,6 +225,8 @@ export class World {
 
   startWitness(n: WitnessNode): void {
     n.w = new PermitWitness({ id: n.id, store: n.store, clock: createWitnessClock({ monotonic: n.clock.monotonic }), params: this.params })
+    // A restarted service starts with no nonce issued.
+    this.doors.delete(n.id)
     this.onNewWitness?.(n)
   }
 
@@ -245,9 +259,10 @@ export class World {
     return new PermitClient({
       id: node.id, list, clock, params: this.params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
       transport: createWitnessTransport({
-        placeOf: (id) => ({ id, host: id }), params: this.params, walnutId: 'sim',
+        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : { id, host: id }), params: this.params, walnutId: 'sim',
         deliver: this.wrapDeliver ? this.wrapDeliver(node.key, (reply) => this.deliverToMachine(node.key, reply)) : (reply) => this.deliverToMachine(node.key, reply),
         remote: this.makeLink ? this.makeLink(node.key, this.simLink(node.key)) : this.simLink(node.key),
+        direct: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key)) : this.simDirect(node.key),
         timeoutMs: this.transportTimeoutMs, ...(this.transportMaxInFlight !== undefined ? { maxInFlight: this.transportMaxInFlight } : {}),
         defer: (fn) => this.after(0, fn),
         after: (ms, fn) => { let live = true; this.after(ms, () => { if (live) fn() }); return () => { live = false } },
@@ -345,12 +360,54 @@ export class World {
     }
   }
 
-  /** Called with the reply about to go out; return true to crash the witness instead of answering. */
-  crashBeforeAnswer: ((witness: string, req: PermitRequest, reply: PermitReply) => boolean) | null = null
+  /**
+   * The direct way of process `from` (way b): the real caller over posts that cross the simulated
+   * network, each to the witness's real door. What a message carries, for `intercept`, is the
+   * permit request inside it (both of its posts) and the reply (the call's answer).
+   */
+  simDirect(from: string): RemoteCall {
+    return (place, path, body, done) => {
+      const req = JSON.parse(JSON.stringify((body as WitnessCall).request)) as PermitRequest
+      const to = place.id
+      if (req.type === 'propose' && req.record.kind === 'release' && this.releaseReach.get(req.record.nonce)?.has(to) === false) return
+      const post: DoorPost = (url, b, answered) => {
+        const step = url.slice(url.lastIndexOf('/') + 1)
+        this.transmit(from, to, req, () => {
+          const n = this.witnesses.get(to)
+          if (!n || !n.w || n.clock.asleep()) return
+          const door = this.doorOf(n)
+          const back = (r: { status: number; body: unknown }, msg: PermitRequest | PermitReply): void => {
+            const wire = JSON.parse(JSON.stringify(r.body)) as unknown
+            this.transmit(to, from, msg, () => answered({ status: r.status, json: wire }))
+          }
+          if (step === 'challenge') back(door.challenge(b), req)
+          else door.request(b, (r) => back(r, r.status === 200 ? JSON.parse((r.body as { reply: string }).reply) as PermitReply : req))
+        })
+      }
+      return directWitnessCall({ post })(place, path, body, done)
+    }
+  }
 
-  private deliverToWitness(from: string, to: string, req: PermitRequest, done: (r: RemoteCallResult | null) => void, round?: number): void {
+  private doorOf(n: WitnessNode): WitnessDoor {
+    let door = this.doors.get(n.id)
+    if (!door) {
+      door = createWitnessDoor({
+        keyOf: (walnutId, witness) => (walnutId === 'sim' && witness === n.id ? simWitnessKey(n.id) : null),
+        serve: (_walnutId, witness, req, done) => {
+          const reply = this.answerAtWitness(witness, req)
+          if (reply) done(reply)
+        },
+        now: () => n.clock.monotonic(),
+      })
+      this.doors.set(n.id, door)
+    }
+    return door
+  }
+
+  /** The witness takes the request; its reply, or null when it gives none (down, asleep, or it crashed before answering). */
+  private answerAtWitness(to: string, req: PermitRequest): PermitReply | null {
     const n = this.witnesses.get(to)
-    if (!n || !n.w || n.clock.asleep()) return
+    if (!n || !n.w || n.clock.asleep()) return null
     const reply = n.w.handle(req)
     if (this.trace && req.type === 'propose' && reply.ok) {
       const r = req.record
@@ -358,9 +415,17 @@ export class World {
     }
     if (this.crashBeforeAnswer?.(to, req, reply)) {
       this.crashWitness(to, 1_000 + this.rand() * 10_000)
-      return
+      return null
     }
-    // The route's answer: the reply, and the round of the read it answers.
+    return reply
+  }
+
+  /** Called with the reply about to go out; return true to crash the witness instead of answering. */
+  crashBeforeAnswer: ((witness: string, req: PermitRequest, reply: PermitReply) => boolean) | null = null
+
+  private deliverToWitness(from: string, to: string, req: PermitRequest, done: (r: RemoteCallResult | null) => void, round?: number): void {
+    const reply = this.answerAtWitness(to, req)
+    if (!reply) return
     const wire = JSON.parse(JSON.stringify({ ok: true, reply, ...(round !== undefined ? { round } : {}) })) as unknown
     this.transmit(to, from, reply, () => done({ status: 200, body: wire }))
   }
@@ -658,4 +723,9 @@ export function takeOnMinorityRelease(c: PermitClient): void {
     receive(r)
   }
   x.chosen = (p) => chosen(p) || (p.record.kind === 'grant' && showed.size > 0 && [...showed].every((w) => p.acks.has(w)))
+}
+
+/** Each simulated witness's own key (the direct way): fixed per id, as a minted one is for the witness's life. */
+export function simWitnessKey(id: string): string {
+  return sha256Hex(`walnut-sim-witness-key:${id}`)
 }

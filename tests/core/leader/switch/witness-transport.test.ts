@@ -95,7 +95,7 @@ describe('the transport with a fake call', () => {
     for (let i = 0; i < 5; i++) b.t.send('w1', READ)
     b.runTicks()
     expect(b.delivered).toEqual([])
-    expect(b.dropped.sort()).toEqual(['bad-status', 'invalid-reply', 'invalid-reply', 'invalid-reply'])
+    expect(b.dropped.sort()).toEqual(['bad-status', 'invalid-reply', 'invalid-reply', 'invalid-reply', 'no-answer'])
   })
 
   it('opens no more requests to a witness that holds too many open (a hung link never piles up), and frees one when it ends', () => {
@@ -249,7 +249,7 @@ describe('a permit client over real witness machines', () => {
     // The pooled daemon link (a full DaemonConnection) is only ever loaded when the leader server asked for it.
     const src = fs.readFileSync(path.resolve(__dirname, '../../../../src/core/leader/switch/witness-transport.ts'), 'utf8')
     expect(src.indexOf("if (!o.daemonLink) { done(null); return }")).toBeGreaterThan(0)
-    expect(src.indexOf("if (!o.daemonLink) { done(null); return }")).toBeLessThan(src.indexOf('overDaemonLink(place.host'))
+    expect(src.indexOf("if (!o.daemonLink) { done(null); return }")).toBeLessThan(src.indexOf('overDaemonLink(host, '))
   }, 30_000)
 
   it('measures the renew round trip: a real client, three real witnesses, the grant on disk before each answer', async () => {

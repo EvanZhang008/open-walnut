@@ -69,6 +69,8 @@ interface Variant {
   replayOldReplies?: boolean
   /** Negative control: a transport that also hands each reply over as another witness's (one machine counted as two). */
   wrongWitnessId?: boolean
+  /** Every witness is reached by its direct door (way b): a challenge, the keyed call, the keyed reply. */
+  direct?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -78,6 +80,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     slow: v.lateSteps ? 0.1 : 0.04, slowMs: v.lateSteps ? [60_000, 300_000] : [1_000, 90_000],
   }, seed)
   const r = world.rand
+  if (v.direct) world.way = 'direct'
   if (v.transportTimeoutMs !== undefined) world.transportTimeoutMs = v.transportTimeoutMs
   // With the real 15 s timeout the real in-flight caps apply too (lost messages free their slot then).
   if (v.transportTimeoutMs === 15_000) world.transportMaxInFlight = undefined
@@ -484,6 +487,27 @@ describe('write permission: random schedules', () => {
   it('never lets two processes act at once, or sends an op twice, when old replies come again across restarts, planned stops and list changes (60 seeds)', async () => {
     const r = await sweep(60, { replayOldReplies: true, ops: true, releases: true, restarts: true, members: true, tickMs: 1_000 })
     expect(r.injected).toBeGreaterThan(1_000)
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+  }, 120_000)
+
+  // Way b, the direct door (witness-direct.ts and witness-door.ts, each witness with its own key): every
+  // request is two posts over the faulty network, its nonce timed on the witness's clock.
+  it('never lets two machines act at once through the witnesses\' direct doors (200 seeds, faults, drift at the edge)', async () => {
+    const r = await sweep(200, { direct: true })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    // Not vacuous. Lower than over a link (0.5): a request is four messages here, each lost one time in ten.
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 120_000)
+
+  it('never lets two processes act at once, or sends an op twice, through the direct doors with the real 15 s timeout, restarts, planned stops and list changes (60 seeds)', async () => {
+    const r = await sweep(60, { direct: true, transportTimeoutMs: 15_000, ops: true, releases: true, restarts: true, members: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.sent, 'ops were sent').toBeGreaterThan(0)
+  }, 120_000)
+
+  it('never lets two machines act at once through the direct doors when old replies arrive again (100 seeds)', async () => {
+    const r = await sweep(100, { direct: true, replayOldReplies: true })
+    expect(r.injected).toBeGreaterThan(500)
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
   }, 120_000)
 

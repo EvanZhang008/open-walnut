@@ -2,8 +2,9 @@
  * How the switch command and `walnut leader status` read the witnesses (read only). Local witnesses
  * are read from this process. Remote witnesses are read only through a running leader server of
  * this Walnut (its runtime's own links, GET /api/leader/witnesses): a command-line process opens no
- * host link, because a pooled link describes the Walnut to the host. With no server to ask the reader says so
- * and never guesses.
+ * host link, because a pooled link describes the Walnut to the host. With no server to ask, the
+ * caller's `own` read (a machine's ways a and b, which need no link: witness-reach.ts) is tried;
+ * with neither the reader says so and never guesses.
  */
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { openPermitClient, readStanding } from './permit-ops.js'
@@ -23,16 +24,17 @@ export interface ReadingServer {
 /** Remote witnesses are listed and no leader server of this Walnut is running to read them. */
 export class NoLeaderServerToRead extends Error {
   constructor(detail: string) {
-    super(`the witnesses ${detail} are on other machines and only a running leader server can read them: none is running here (start the leader first)`)
+    super(`the witnesses ${detail} are on other machines: no running leader server here reads them, and no majority of them is reached without a leader link (start the leader first)`)
     this.name = 'NoLeaderServerToRead'
   }
 }
 
 /**
  * A reader over `settings.witnesses`. `servers`: the running servers to ask, in order, when any witness is
- * remote (the first that answers wins); none usable throws NoLeaderServerToRead.
+ * remote (the first that answers wins). `own`: the read with no server and no link (null: no majority
+ * that way); neither usable throws NoLeaderServerToRead.
  */
-export function makeWitnessReader(id: string, settings: LeaderSwitchSettings, servers: () => ReadingServer[]): () => Promise<WitnessReading> {
+export function makeWitnessReader(id: string, settings: LeaderSwitchSettings, servers: () => ReadingServer[], own?: () => Promise<WitnessReading | null>): () => Promise<WitnessReading> {
   const remote = settings.witnesses.filter(isRemoteWitness)
   if (!remote.length) {
     const h = openPermitClient(id, settings.witnesses, settings.params)
@@ -49,6 +51,8 @@ export function makeWitnessReader(id: string, settings: LeaderSwitchSettings, se
         return { standing: j.agreed === false ? undefined : (j.standing ?? null), answered: j.answered }
       }
     }
+    const read = own ? await own().catch(() => null) : null
+    if (read) return read
     throw new NoLeaderServerToRead(remote.map((w) => w.id).join(', '))
   }
 }

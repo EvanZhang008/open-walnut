@@ -1,10 +1,12 @@
 /**
- * What a witness on another machine is asked and answers (witness-route.ts serves it, the
- * network transport in witness-transport.ts sends it). One request is one POST with a JSON body;
- * nothing here is stateful, so a request may be lost, repeated, or answered late: the permit core
- * (permit/client.ts, witness.ts, rules.ts) is built for that.
+ * What a witness on another machine is asked and answers (witness-route.ts serves it over a
+ * leader link, witness-door.ts over its direct door; the network transport in witness-transport.ts
+ * and witness-direct.ts sends it). One request is one POST with a JSON body (two on the direct door:
+ * its challenge, then the request); a request may be lost, repeated, or answered late: the permit
+ * core (permit/client.ts, witness.ts, rules.ts) is built for that.
  */
 import { MAX_CLOCK_MARK_LENGTH, type PermitRecord, type PermitReply, type PermitRequest } from '../permit/types.js'
+import { PROOF_SECRET_RE, proofText } from '../../../utils/hmac-proof.js'
 
 /** Every path of the witness route starts with this (`allowDoorCallPrefix` takes it for a host-dialed door). */
 export const WITNESS_PREFIX = '/host-api/witness/'
@@ -36,10 +38,13 @@ export interface WitnessCall {
 
 /**
  * What the caller saw at one other witness of the list before it asked for a setup (witness-route.ts
- * refuses a setup without it): 'none' no answer (not set up, or not reached), 'blank' it answered that it
- * holds no record and is at generation 0, 'record' it holds one (the setup is then refused).
+ * refuses a setup without it): 'absent' reached, and it answered that no witness is there (404, or no
+ * record on this machine), 'unreached' no answer at all (a timeout, a cut, no way to it: it may hold a
+ * record), 'blank' it answered that it holds no record and is at generation 0, 'record' it holds one.
+ * A setup is allowed only when every other witness is 'absent' or 'blank'.
  */
-export type WitnessSeen = 'none' | 'blank' | 'record'
+export type WitnessSeen = 'absent' | 'unreached' | 'blank' | 'record'
+const SEEN: ReadonlySet<string> = new Set<WitnessSeen>(['absent', 'unreached', 'blank', 'record'])
 export interface WitnessEvidence { witness: string; seen: WitnessSeen }
 
 export interface WitnessSetup {
@@ -50,6 +55,8 @@ export interface WitnessSetup {
   list: string[]
   /** One entry per OTHER witness of the list: a setup makes a witness from nothing, so it is allowed only while none holds a record. */
   evidence: WitnessEvidence[]
+  /** The witness's own key (64 hex), minted by `walnut leader witnesses init`: what its direct door checks. */
+  key?: string
 }
 
 export type WitnessAnswer =
@@ -132,22 +139,25 @@ export function parseWitnessSetup(raw: unknown): WitnessSetup | null {
   if (!Array.isArray(raw.evidence) || raw.evidence.length > raw.list.length) return null
   const evidence: WitnessEvidence[] = []
   for (const e of raw.evidence) {
-    if (!isObj(e) || !isWitnessName(e.witness) || (e.seen !== 'none' && e.seen !== 'blank' && e.seen !== 'record')) return null
-    evidence.push({ witness: e.witness, seen: e.seen })
+    if (!isObj(e) || !isWitnessName(e.witness) || typeof e.seen !== 'string' || !SEEN.has(e.seen)) return null
+    evidence.push({ witness: e.witness, seen: e.seen as WitnessSeen })
   }
-  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, list: raw.list as string[], evidence }
+  if (raw.key !== undefined && !(typeof raw.key === 'string' && PROOF_SECRET_RE.test(raw.key))) return null
+  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, list: raw.list as string[], evidence, ...(typeof raw.key === 'string' ? { key: raw.key } : {}) }
 }
 
 /**
  * Whether a setup's evidence allows making the witness: it names every OTHER witness of the list exactly
- * once and none of them was seen holding a record. A witness that lost its disk while the others still hold
- * records is therefore never made again as a fresh one (permit/store.ts: it rejoins through a list change).
+ * once, and each was reached and holds nothing ('absent' or 'blank'). One not reached may hold a record, so it
+ * refuses too. A witness that lost its disk while the others still hold records is therefore never made
+ * again as a fresh one (permit/store.ts: it rejoins through a list change).
  */
 export function setupAllowed(setup: WitnessSetup): { ok: true } | { ok: false; error: string } {
   const others = setup.list.filter((w) => w !== setup.witness)
   const named = setup.evidence.map((e) => e.witness)
   if (new Set(named).size !== named.length || named.length !== others.length || !others.every((w) => named.includes(w))) return { ok: false, error: 'evidence_incomplete' }
   if (setup.evidence.some((e) => e.seen === 'record')) return { ok: false, error: 'witnesses_hold_records' }
+  if (setup.evidence.some((e) => e.seen !== 'absent' && e.seen !== 'blank')) return { ok: false, error: 'witnesses_unreached' }
   return { ok: true }
 }
 
@@ -172,4 +182,58 @@ export function acceptReply(body: unknown, asked: string, req: PermitRequest, ro
   if (typeof r.grantable !== 'boolean') return null
   for (const k of ['list', 'joint', 'ops'] as const) if (r[k] !== null && !Array.isArray(r[k])) return null
   return r as unknown as PermitReply
+}
+
+// ---- the direct door (witness-door.ts) ----------------------------------------------------
+//
+// A witness's own door on a service others can reach (the cloud companion's capability
+// `witness-door`), independent of any leader link. The caller proves the witness's key; the
+// witness proves the same key over its reply. Two POSTs per request:
+//
+//   POST <url>/challenge  {v:1, walnutId, witness, digest}           digest = sha256(call text)
+//                         -> {ok:true, nonce, ttlMs}                  a nonce for THIS call only, used once
+//   POST <url>/request    {v:1, nonce, proof, call}                   call = the WitnessCall's JSON text,
+//                                                                     proof = HMAC(key, doorCallerProofText)
+//                         -> {ok:true, reply, proof}                  reply = the PermitReply's JSON text,
+//                                                                     proof = HMAC(key, doorWitnessProofText)
+// Every refusal is 4xx {ok:false, error} with a fixed code and nothing else: never a key, a proof or
+// the record. A refused request never reaches the record (its number is never lowered or raised).
+
+/** The direct door's mount path on a service; a witness's `url` names where it is reached (this path behind a proxy). */
+export const WITNESS_DOOR_PATH = '/leader-witness'
+export const WITNESS_DOOR_CHALLENGE = '/challenge'
+export const WITNESS_DOOR_REQUEST = '/request'
+/** The largest call text the door takes (a list change carries every op entry). */
+export const WITNESS_DOOR_MAX_CALL = 4 * 1024 * 1024
+
+export interface DoorChallenge { v: 1; walnutId: string; witness: string; digest: string }
+export interface DoorRequest { v: 1; nonce: string; proof: string; call: string }
+export type DoorAnswer =
+  | { ok: true; nonce: string; ttlMs: number }
+  | { ok: true; reply: string; proof: string }
+  | { ok: false; error: string }
+
+export function parseDoorChallenge(raw: unknown): DoorChallenge | null {
+  if (!isObj(raw) || raw.v !== 1 || !isWitnessName(raw.walnutId) || !isWitnessName(raw.witness)) return null
+  if (typeof raw.digest !== 'string' || !PROOF_SECRET_RE.test(raw.digest)) return null
+  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, digest: raw.digest }
+}
+
+export function parseDoorRequest(raw: unknown): DoorRequest | null {
+  if (!isObj(raw) || raw.v !== 1 || typeof raw.nonce !== 'string' || !PROOF_SECRET_RE.test(raw.nonce)) return null
+  if (typeof raw.proof !== 'string' || !PROOF_SECRET_RE.test(raw.proof)) return null
+  if (typeof raw.call !== 'string' || raw.call.length === 0 || raw.call.length > WITNESS_DOOR_MAX_CALL) return null
+  return { v: 1, nonce: raw.nonce, proof: raw.proof, call: raw.call }
+}
+
+interface DoorProofFields { walnutId: string; witness: string; nonce: string; digest: string }
+
+/** What the caller's proof is the HMAC of: the witness asked, the nonce it issued, the call's digest. */
+export function doorCallerProofText(f: DoorProofFields): string {
+  return proofText(['walnut-witness-door-v1', 'caller', f.walnutId, f.witness, f.nonce, f.digest])
+}
+
+/** What the witness's proof of its reply is the HMAC of: the same, and the reply's digest (its own tag). */
+export function doorWitnessProofText(f: DoorProofFields & { replyDigest: string }): string {
+  return proofText(['walnut-witness-door-v1', 'witness', f.walnutId, f.witness, f.nonce, f.digest, f.replyDigest])
 }

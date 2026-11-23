@@ -33,8 +33,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { appendMayAct, markerRefusal, readMarker, readOpOutcomes, recordOpOutcomes, summarize, writeUnresolvedOps } from './records.js'
 import { openPermitClient, proposeAndWait, readStanding, type PermitHandle } from './permit-ops.js'
+import { sightingsOf, type WitnessSighting } from './witness-setup.js'
 import { DEFERRED_DOOR_WORK_FILE, notifyOutwardDoorsOpened, setOutwardDoorChecker, setOutwardSender, type OutwardDoorKind } from './doors.js'
-import type { LeaderSwitchSettings } from './settings.js'
+import type { LeaderSwitchSettings, WitnessPlace } from './settings.js'
 import type { PermitRecord } from '../permit/types.js'
 import { PermitNotHeld } from '../permit/client.js'
 import { acquireInstanceLock, type InstanceLock } from '../permit/instance-lock.js'
@@ -58,7 +59,9 @@ export interface PermitRuntime {
    * the one way a command reads remote witnesses (witness-reader.ts). `standing` is the record a majority
    * holds (null: none ever), `agreed` false when no record has a majority among the answers.
    */
-  readWitnesses(): Promise<{ standing: PermitRecord | null; agreed: boolean; answered: number; of: number; sightings: Array<{ witness: string; held: boolean; epoch: number | null }> }>
+  readWitnesses(): Promise<{ standing: PermitRecord | null; agreed: boolean; answered: number; of: number; sightings: WitnessSighting[] }>
+  /** New ways to the same fixed list (keys `walnut leader witnesses init` minted): false when the list itself differs. */
+  setWitnessPlaces(places: WitnessPlace[]): boolean
   /** The switch's handover, written by this process (the only one the witnesses take it from). */
   handover(to: string): Promise<{ ok: boolean; record?: PermitRecord; why?: string }>
   /** Take back a handover this process wrote (the switch rolled back while this server runs). */
@@ -468,8 +471,9 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     cancel,
     readWitnesses: async () => {
       const r = await readStanding(h)
-      return { standing: r.standing ?? null, agreed: r.standing !== undefined, answered: r.answered, of: h.places.length, sightings: r.replies.map((x) => ({ witness: x.witness, held: x.held !== null, epoch: x.epoch })) }
+      return { standing: r.standing ?? null, agreed: r.standing !== undefined, answered: r.answered, of: h.places.length, sightings: sightingsOf(r.replies, r.absent) }
     },
+    setWitnessPlaces: (places) => h.setPlaces(places),
     stop: async () => {
       if (stopped) return
       const wasLeading = state === 'leading' && h.client.mayAct()

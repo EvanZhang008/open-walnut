@@ -150,4 +150,16 @@ describe('a server that has led reaches its witnesses over the link of each host
     expect(spy.links).toEqual(['m1'])
     expect(spy.streams).toEqual([{ host: 'm1', to: 'follower', purpose: 'replica' }])
   }, 30_000)
+
+  it('init on a server that has not led sets the hosts up over a registered reach only, never a link (the route\'s daemonLink: leading)', async () => {
+    const { setUpRemoteWitnesses } = await import('../../../../src/core/leader/switch/witness-setup.js')
+    const input = { places: PLACES, list: LIST, walnutId: WALNUT, sightings: LIST.map((witness) => ({ witness, held: false, epoch: null, absent: true as const })), call: hostLinkCall({ daemonLink: false }), resolveHost: async (h: string) => h }
+    // No reach: nothing goes out, and no link is opened.
+    expect((await setUpRemoteWitnesses(input)).map((r) => [r.witness, r.ok, r.error])).toEqual(LIST.map((w) => [w, false, 'no answer']))
+    expect(spy.links).toEqual([])
+    // A reach (the host-dialed door's seam): the setups go over it (already set up here, so made: false), still no link.
+    reachToDoors()
+    expect((await setUpRemoteWitnesses(input)).map((r) => [r.witness, r.ok, r.made])).toEqual(LIST.map((w) => [w, true, false]))
+    expect(spy.links).toEqual([])
+  }, 30_000)
 })

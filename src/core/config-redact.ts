@@ -5,7 +5,7 @@
  * secret's shape (config-secret-shape.ts), gets its value replaced with a stub
  * of bullets and its last 4 characters.
  */
-import { isSecretKey, maskByKey, maskSecretTail, maskSecretTailInPlace, type KeyJudge } from './config-secret-shape.js'
+import { BLIND_LIST_MASK, isSecretKey, maskByKey, maskSecretTail, maskSecretTailInPlace, type KeyJudge } from './config-secret-shape.js'
 
 /** Fields that hold provider/API secrets — masked before leaving the box. */
 export const SECRET_FIELDS = new Set([
@@ -113,7 +113,7 @@ const redactJudge: KeyJudge = (key, path) => {
  * (`restoreMaskedSecrets`), so a whole round trip keeps every stored value.
  */
 export function redactConfig(value: unknown): unknown {
-  return maskByKey(value, maskSecretTailInPlace, redactJudge)
+  return maskByKey(isRecord(value) ? maskLeaderSwitchKeys(value) : value, maskSecretTailInPlace, redactJudge)
 }
 
 /**
@@ -163,7 +163,21 @@ function maskFreeFormMaps(config: Record<string, unknown>): Record<string, unkno
  */
 export function maskForMacClients<T>(config: T): T {
   const pushMasked = maskPushTokens(config)
-  return isRecord(pushMasked) ? maskFreeFormMaps(pushMasked) as T : pushMasked
+  return isRecord(pushMasked) ? maskLeaderSwitchKeys(maskFreeFormMaps(pushMasked)) as T : pushMasked
+}
+
+/**
+ * The switchable leader's witness keys (`leader_switch.witnesses[].key`, core/leader/switch/witness-keys.ts):
+ * a key lets its holder speak for the leader to that witness, so no client view shows one. A typed field,
+ * but no screen edits it (init mints it); the mask a client sends back is put back to the stored key
+ * (`restoreMaskedSecrets`, by the entry's id).
+ */
+export function maskLeaderSwitchKeys(config: Record<string, unknown>): Record<string, unknown> {
+  const ls = config.leader_switch
+  if (!isRecord(ls) || !Array.isArray(ls.witnesses)) return config
+  // Bullets only: not even a key's last characters leave the box.
+  const witnesses = ls.witnesses.map((w) => (isRecord(w) && typeof w.key === 'string' && w.key ? { ...w, key: BLIND_LIST_MASK } : w))
+  return { ...config, leader_switch: { ...ls, witnesses } }
 }
 
 /** The secrets of each backup destination; ids, buckets and endpoints stay readable (the pane shows them). */

@@ -30,6 +30,7 @@ import { getVersion } from '../../version.js'
 import { snapshotTo, verifyStandby, standbyStatus, StandbyTarget } from '../../standby/index.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { makeWitnessReader, type ReadingServer } from './witness-reader.js'
+import { reachedHolding, reachSentence, type WitnessReachReport } from './witness-reach.js'
 import { appendHistory, readHistory, readMarker, removeMarker, summarize, switchDir, takeSwitchLock, writeDurableJson, writeMarker, writePromoted, promotedFile, readPromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
 import { homePathRules } from './home-path-rules.js'
@@ -156,10 +157,13 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
   // Tests only: the promotion leaves the applied-ops ledger as the old home wrote it.
   const skipLedger = opts.skipLedgerRewrite || env.WALNUT_LEADER_SWITCH_SKIP_LEDGER_REWRITE === '1'
 
+  // A new switch writes nothing until its preflight passed: a refusal changes nothing on disk (the
+  // preflight itself changes nothing either, so a kill during it leaves nothing to resume).
+  let persisted = !!(opts.resume || opts.cancel)
   const save = (step: SwitchStep, note?: string) => {
     st.step = step
     st.log.push({ step, at: new Date().toISOString(), ...(note ? { note } : {}) })
-    writeDurableJson(switchStateFile(home), st)
+    if (persisted || step !== 'preflight') { persisted = true; writeDurableJson(switchStateFile(home), st) }
     out(`${step}${note ? `: ${note}` : ''}`)
   }
 
@@ -175,7 +179,7 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
 
   // The switch command reads the witnesses and never proposes: they take records only from the
   // process that holds the permission, which is always a server.
-  const readWitnesses = witnessReading(`${st.from}-switch-reader`, settings, srcSide, dstSide)
+  const readWitnesses = witnessReading(`${st.from}-switch-reader`, settings, srcSide, dstSide, st)
   const fail = (why: string): never => { throw new StepFailed(why) }
 
   for (;;) {
@@ -202,6 +206,10 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           }
           st.handover = done!
           writeMarker(st.sourceHome, { switchId: st.id, to: st.to, state: 'switching', handover: st.handover, at: new Date().toISOString() })
+          // The new leader commits only at witnesses that hold the handover, and only by its own
+          // ways: the handover must stand at a majority IT reaches, not just at the old leader's
+          // majority (a witness out of reach a moment ago may have missed it; then it rolls back).
+          await handoverReached(st, settings, dstSide, fail)
           save('stop-source', `handover record ${st.handover} at a majority`)
           killPoint(env, 'after-handover')
           break
@@ -376,10 +384,13 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
       // changed, so going back is always safe. From the commit on only --resume goes forward.
       const preCommit = PRE_COMMIT.has(st.step)
       if (!(caught instanceof StepFailed) && !preCommit) throw caught
+      // From the commit on a failed step is not rolled back by going round again: it stops, and says how to go on.
+      if (!preCommit) throw new SwitchRefused(`${st.step}: ${(caught as Error).message}; rerun with ${COMMITTED.has(st.step) ? '--resume' : '--cancel'}`)
       const err = caught instanceof StepFailed ? caught : new StepFailed(`${st.step}: ${(caught as Error)?.message ?? String(caught)}`)
       if (st.step === 'preflight') {
         st.rollbackWhy = err.message
-        save('rolled-back', `refused: ${err.message}`)
+        if (persisted) save('rolled-back', `refused: ${err.message}`)
+        else out(`refused: ${err.message}`)
         throw new SwitchRefused(err.message)
       }
       st.rollbackWhy = err.message
@@ -419,15 +430,47 @@ function accountHomes(st: SwitchState): { previousAccountHome?: string; accountH
 }
 
 const PRE_COMMIT = new Set<SwitchStep>(['preflight', 'handover', 'stop-source', 'final-batch', 'promote', 'trial', 'commit'])
+/** Steps after the commit stood: only --resume goes on from them. */
+const COMMITTED = new Set<SwitchStep>(['start-target', 'done'])
 
 /**
  * The witnesses' record for the switch: local ones read here, remote ones through whichever side's server
  * runs (the old leader before the handover, the new leader's commit start after it; a trial start cannot read them).
+ * With neither running (between the old leader's stop and the new one's commit start) the new
+ * leader's machine reads them by its own ways a and b, then the old one's: what the candidate-side
+ * preflight proved it reaches.
  */
-function witnessReading(id: string, settings: LeaderSwitchSettings, srcSide: SwitchSide, dstSide: SwitchSide): () => Promise<{ standing: PermitRecord | null | undefined; answered: number }> {
+function witnessReading(id: string, settings: LeaderSwitchSettings, srcSide: SwitchSide, dstSide: SwitchSide, st: SwitchState): () => Promise<{ standing: PermitRecord | null | undefined; answered: number }> {
   const servers = (): ReadingServer[] => [srcSide, dstSide].filter((side) => side.runningServer()).map((side) => ({ api: (m: string, p: string) => side.api(m, p) }))
-  const read = makeWitnessReader(id, settings, servers)
+  const own = async () => {
+    const copy = path.join(st.standbyDir, 'copy')
+    const sides: Array<[SwitchSide, string]> = [[dstSide, fs.existsSync(path.join(copy, 'config.yaml')) ? copy : st.targetHome], [srcSide, st.sourceHome]]
+    for (const [side, home] of sides) {
+      const r = await side.reachWitnesses(home).catch(() => null)
+      if (r?.majority) return { standing: r.standing, answered: r.answered }
+    }
+    return null
+  }
+  const read = makeWitnessReader(id, settings, servers, own)
   return () => read().catch((err) => { throw err instanceof Error && err.name === 'NoLeaderServerToRead' ? new StepFailed(err.message) : err })
+}
+
+/** Waits (10 s at most) until the switch's handover stands at a majority of the witnesses the new leader reaches by its own ways. */
+async function handoverReached(st: SwitchState, settings: LeaderSwitchSettings, dst: SwitchSide, fail: (why: string) => never): Promise<void> {
+  const need = majorityOf(settings.witnesses.map((w) => w.id))
+  const deadline = Date.now() + 10_000
+  for (;;) {
+    const reach = await dst.reachWitnesses(path.join(st.standbyDir, 'copy')).catch((err: Error) => err)
+    if (!(reach instanceof Error) && reachedHolding(reach, (x) => x.kind === 'handover' && x.number === st.handover && x.to === st.to) >= need) return
+    if (Date.now() > deadline) {
+      fail(`the handover (record ${st.handover}) does not stand at a majority of the witnesses the new leader reaches on its own: ${reach instanceof Error ? reach.message : `${reachSentence(reach, settings.witnesses.length)} (${heldSummary(reach)})`}`)
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+}
+
+function heldSummary(r: WitnessReachReport): string {
+  return r.witnesses.filter((w) => w.answered).map((w) => `${w.id} holds ${JSON.stringify(summarize(w.held ?? null))}`).join(', ')
 }
 
 class StepFailed extends Error {
@@ -500,12 +543,23 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
     problems.push(`the standby copy ${st.standbyDir}: ${(err as Error).message}`)
   }
   // The witnesses: a majority answers and names the old leader.
-  const { standing, answered } = await witnessReading(`${st.from}-switch-reader`, settings, src, dst)()
+  const { standing, answered } = await witnessReading(`${st.from}-switch-reader`, settings, src, dst, st)()
   if (answered < majorityOf(settings.witnesses.map((w) => w.id))) problems.push(`only ${answered} of ${settings.witnesses.length} witnesses answered`)
   else if (!standing) problems.push(standing === null ? 'the witnesses hold no record yet: start the leader once with the permission' : 'the witnesses do not agree on a record')
   else if (standing.holder !== st.from || standing.kind === 'handover') problems.push(standing.kind === 'release'
     ? `the permission was released by ${standing.by} (record ${standing.number}) and nobody holds it yet: start the old leader first`
     : `the witnesses name ${standing.holder} (${standing.kind} ${standing.number}), not ${st.from}`)
+  // The new leader's own reach: IT, not the old leader on its behalf, reaches a majority of the
+  // witnesses with no leader link (a witness it keeps, a direct door), with its own copy of the
+  // config. Otherwise its commit would hang on links only the old leader has.
+  try {
+    const reach = await dst.reachWitnesses(path.join(st.standbyDir, 'copy'))
+    const of = settings.witnesses.length
+    if (!reach.majority) problems.push(`the new leader cannot reach a majority of the witnesses on its own: ${reachSentence(reach, of)} (${majorityOf(settings.witnesses.map((w) => w.id))} needed)`)
+    else if (reachedHolding(reach, (x) => x.holder === st.from && x.kind !== 'handover' && x.kind !== 'release') < majorityOf(settings.witnesses.map((w) => w.id))) problems.push(`the witnesses the new leader reaches do not name ${st.from} as the holder (${heldSummary(reach)}): ${reachSentence(reach, of)}`)
+  } catch (err) {
+    problems.push(`the new leader's reach of the witnesses: ${(err as Error).message}`)
+  }
   // The programs: the new leader's must read what the old one wrote.
   const targetVersion = dst.machine.env?.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion()
   if (olderVersion(targetVersion, st.sourceVersion)) problems.push(`the new leader runs ${targetVersion}, older than ${st.sourceVersion} that wrote the data`)

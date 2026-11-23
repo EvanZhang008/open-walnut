@@ -394,6 +394,12 @@ witness of three it waits for the hold too (its negative control: a process that
 one witness acts beside the next holder); and a process whose lease ran out but was never cleared
 releasing over the next holder's lower-numbered record (refused; its negative control, witnesses
 that take a release on any live record, lets a third machine act beside the holder).
+Every machine reaches the witnesses through the real network transport (`src/core/leader/switch/witness-transport.ts`):
+over a link (way c), and in a share of the schedules (with faults and drift, with restarts, planned stops, list changes and
+ops under the real 15 s timeout, and with old replies coming again) by each witness's direct door (way b: the real caller
+`witness-direct.ts` and door `witness-door.ts`, each witness with its own key, every request a challenge and the keyed call
+over the faulty network, the nonce timed on the witness's clock). Who may ask a witness, and how a candidate with no leader link
+reaches it: `docs/reference/leader-switch.md`, "How a witness is reached".
 `units.test.ts` holds the release's witness rule and the client's side of it. `ops.test.ts`, `change-repair.test.ts`, `instance.test.ts`
 and `system-clock.test.ts` hold the op ids, the final-step evidence and the repair, the back-off,
 the two processes and the instance lock, and the clocks.

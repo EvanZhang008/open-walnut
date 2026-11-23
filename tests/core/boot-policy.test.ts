@@ -199,6 +199,8 @@ const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
   'backup-leader': ['backup-leader', 'routine-wake', 'cron'],
   // A host replica's own: it answers its host's calls on the follower link, which is no boot row.
   'host-local-calls': [],
+  // Two routes outside /api (the witness's direct door and its setup), mounted in server.ts: no boot row.
+  'witness-door': [],
 }
 
 /** What the companion still runs on its own pipeline, and the stage that decides each. */

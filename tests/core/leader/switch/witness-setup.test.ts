@@ -13,7 +13,7 @@ import path from 'node:path'
 import { blankEvidence, startWitnessMachine, loopbackCall, type WitnessMachine } from '../../../helpers/witness-machines.js'
 import { DEFAULT_PERMIT_PARAMS, genesisConfigId, type PermitRecord } from '../../../../src/core/leader/permit/index.js'
 import { openPermitClient, proposeAndWait, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
-import { evidenceFor, setUpRemoteWitnesses, type WitnessSighting } from '../../../../src/core/leader/switch/witness-setup.js'
+import { evidenceFor, setUpRemoteWitnesses, sightingsOf, type WitnessSighting } from '../../../../src/core/leader/switch/witness-setup.js'
 import { setUpRemoteWitness, type RemoteCall, type RemoteCallResult } from '../../../../src/core/leader/switch/witness-transport.js'
 import { WITNESS_REQUEST_PATH } from '../../../../src/core/leader/switch/witness-wire.js'
 import type { RemoteWitnessPlace } from '../../../../src/core/leader/switch/settings.js'
@@ -42,7 +42,7 @@ afterEach(async () => {
 async function sightings(): Promise<WitnessSighting[]> {
   const h = openPermitClient('operator', PLACES, DEFAULT_PERMIT_PARAMS, undefined, { remote: call, walnutId: WALNUT })
   const r = await readStanding(h, 1_000)
-  return r.replies.map((x) => ({ witness: x.witness, held: x.held !== null, epoch: x.epoch }))
+  return sightingsOf(r.replies, r.absent)
 }
 
 describe('the first setup of a Walnut\'s witnesses', () => {
@@ -53,15 +53,16 @@ describe('the first setup of a Walnut\'s witnesses', () => {
     expect(again.map((r) => [r.witness, r.ok, r.made])).toEqual([['w1', true, false], ['w2', true, false], ['w3', true, false]])
   })
 
-  it('evidence is what the caller saw at the others: nothing answered is none, a genesis record is blank, a held record or a generation is a record', () => {
+  it('evidence is what the caller saw at the others: no answer is unreached, a 404 is absent, a genesis record is blank, a held record or a generation is a record', () => {
     expect(evidenceFor(LIST, 'w1', [{ witness: 'w2', held: false, epoch: 0 }, { witness: 'w3', held: true, epoch: 0 }])).toEqual([{ witness: 'w2', seen: 'blank' }, { witness: 'w3', seen: 'record' }])
-    expect(evidenceFor(LIST, 'w1', [{ witness: 'w2', held: false, epoch: 2 }])).toEqual([{ witness: 'w2', seen: 'record' }, { witness: 'w3', seen: 'none' }])
+    expect(evidenceFor(LIST, 'w1', [{ witness: 'w2', held: false, epoch: 2 }])).toEqual([{ witness: 'w2', seen: 'record' }, { witness: 'w3', seen: 'unreached' }])
+    expect(evidenceFor(LIST, 'w1', [{ witness: 'w2', held: false, epoch: null, absent: true }, { witness: 'w3', held: false, epoch: 0 }])).toEqual([{ witness: 'w2', seen: 'absent' }, { witness: 'w3', seen: 'blank' }])
   })
 })
 
 describe('a witness that lost its disk is not made again beside records that still exist (named case)', () => {
   async function aHoldsThroughAllThree(): Promise<void> {
-    await setUpRemoteWitnesses({ places: PLACES, list: LIST, walnutId: WALNUT, sightings: [], call, resolveHost: async (h) => h })
+    expect((await setUpRemoteWitnesses({ places: PLACES, list: LIST, walnutId: WALNUT, sightings: await sightings(), call, resolveHost: async (h) => h })).every((r) => r.ok)).toBe(true)
     const a = openPermitClient('A', PLACES, DEFAULT_PERMIT_PARAMS, undefined, { remote: call, walnutId: WALNUT })
     expect((await proposeAndWait(a, (c) => c.requestGrant()))?.outcome).toBe('chosen')
     expect(a.client.mayAct()).toBe(true)
@@ -81,7 +82,7 @@ describe('a witness that lost its disk is not made again beside records that sti
     expect(w2.error).toMatch(/other witnesses hold records \(w1, w3\)/)
     // The witness itself refuses the same setup when a caller leaves the evidence out or claims no record was seen.
     expect(await post('m2', '/host-api/witness/setup', { v: 1, walnutId: WALNUT, witness: 'w2', list: LIST })).toMatchObject({ status: 400 })
-    expect(await post('m2', '/host-api/witness/setup', { v: 1, walnutId: WALNUT, witness: 'w2', list: LIST, evidence: [{ witness: 'w1', seen: 'record' }, { witness: 'w3', seen: 'none' }] })).toEqual({ status: 409, body: { ok: false, error: 'witnesses_hold_records' } })
+    expect(await post('m2', '/host-api/witness/setup', { v: 1, walnutId: WALNUT, witness: 'w2', list: LIST, evidence: [{ witness: 'w1', seen: 'record' }, { witness: 'w3', seen: 'absent' }] })).toEqual({ status: 409, body: { ok: false, error: 'witnesses_hold_records' } })
     // Still no witness: it answers like a path that is not there, and a grant to it is no yes.
     expect(await readFrom('w2', 'm2')).toEqual({ status: 404, body: { ok: false, error: 'not_found' } })
     expect(await post('m2', WITNESS_REQUEST_PATH, bGrant('w2'))).toEqual({ status: 404, body: { ok: false, error: 'not_found' } })
@@ -101,12 +102,45 @@ describe('a witness that lost its disk is not made again beside records that sti
   })
 })
 
+describe('a witness the caller did not hear from may hold a record (N1)', () => {
+  it('a slow link: the read hears w1 and w3 too late, so they are unreached, not absent, and w2 is not made beside them', async () => {
+    expect((await setUpRemoteWitnesses({ places: PLACES, list: LIST, walnutId: WALNUT, sightings: await sightings(), call, resolveHost: async (h) => h })).every((r) => r.ok)).toBe(true)
+    const a = openPermitClient('A', PLACES, DEFAULT_PERMIT_PARAMS, undefined, { remote: call, walnutId: WALNUT })
+    expect((await proposeAndWait(a, (c) => c.requestGrant()))?.outcome).toBe('chosen')
+    fs.rmSync(path.join(root, 'm2'), { recursive: true, force: true })
+    // Every answer takes 3 s, the read waits 1 s: w1 and w3 hold A's records and are heard from too late.
+    const slow = loopbackCall(Object.fromEntries(machines.map((m) => [m.host, m])), { delayMs: 3_000 })
+    const h = openPermitClient('operator', PLACES, DEFAULT_PERMIT_PARAMS, undefined, { remote: slow, walnutId: WALNUT })
+    const r = await readStanding(h, 1_000)
+    const seen = sightingsOf(r.replies, r.absent)
+    expect(seen).toEqual([])
+    expect(evidenceFor(LIST, 'w2', seen)).toEqual([{ witness: 'w1', seen: 'unreached' }, { witness: 'w3', seen: 'unreached' }])
+    const w2 = (await setUpRemoteWitnesses({ places: PLACES, list: LIST, walnutId: WALNUT, sightings: seen, call, resolveHost: async (h) => h })).find((x) => x.witness === 'w2')!
+    expect(w2).toMatchObject({ ok: false, error: expect.stringMatching(/w1, w3 did not answer, and may hold records/) })
+    // The witness refuses the same evidence by itself, and stays unset.
+    expect(await post('m2', '/host-api/witness/setup', { v: 1, walnutId: WALNUT, witness: 'w2', list: LIST, evidence: evidenceFor(LIST, 'w2', seen) })).toEqual({ status: 409, body: { ok: false, error: 'witnesses_unreached' } })
+    expect(await readFrom('w2', 'm2')).toEqual({ status: 404, body: { ok: false, error: 'not_found' } })
+  }, 30_000)
+
+  it('red control: the old rule (no answer counts as nothing there) makes w2 blank beside A\'s records', async () => {
+    expect((await setUpRemoteWitnesses({ places: PLACES, list: LIST, walnutId: WALNUT, sightings: await sightings(), call, resolveHost: async (h) => h })).every((r) => r.ok)).toBe(true)
+    const a = openPermitClient('A', PLACES, DEFAULT_PERMIT_PARAMS, undefined, { remote: call, walnutId: WALNUT })
+    expect((await proposeAndWait(a, (c) => c.requestGrant()))?.outcome).toBe('chosen')
+    fs.rmSync(path.join(root, 'm2'), { recursive: true, force: true })
+    // What `none` allowed: an unheard witness reported as one with nothing there.
+    const asOld = [{ witness: 'w1', seen: 'absent' }, { witness: 'w3', seen: 'absent' }]
+    expect(await post('m2', '/host-api/witness/setup', { v: 1, walnutId: WALNUT, witness: 'w2', list: LIST, evidence: asOld })).toEqual({ status: 200, body: { ok: true, made: true } })
+    const reply = ((await readFrom('w2', 'm2'))!.body as { reply: { held: unknown; epoch: number } }).reply
+    expect(reply).toMatchObject({ held: null, epoch: 0 })
+  })
+})
+
 describe('two witnesses on one machine', () => {
   it('names that resolve to one machine (an alias and a machine id) are reported and neither is made', async () => {
     const places: RemoteWitnessPlace[] = [{ id: 'w1', host: 'dev-alias' }, { id: 'w2', host: 'm2-machine-id' }, { id: 'w3', host: 'm3' }]
     const calls: string[] = []
     const reports = await setUpRemoteWitnesses({
-      places, list: LIST, walnutId: WALNUT, sightings: [], call: (p, _path, _body, done) => { calls.push(p.id); done({ status: 200, body: { ok: true, made: true } }) },
+      places, list: LIST, walnutId: WALNUT, sightings: sightingsOf([], LIST), call: (p, _path, _body, done) => { calls.push(p.id); done({ status: 200, body: { ok: true, made: true } }) },
       resolveHost: async (h) => (h === 'm2-machine-id' ? 'dev-alias' : h),
     })
     expect(reports.map((r) => [r.witness, r.ok])).toEqual([['w1', false], ['w2', false], ['w3', true]])

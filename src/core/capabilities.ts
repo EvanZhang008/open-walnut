@@ -31,9 +31,10 @@ import { cloudExec } from './capabilities/cloud-exec.js'
 import { backupLeader } from './capabilities/backup-leader.js'
 import { hostLocalCalls } from './capabilities/host-local-calls.js'
 import { LEADER_DOORS, openLeaderDoor } from './leader-doors.js'
+import { witnessDoor } from './capabilities/witness-door.js'
 
 /** Every capability, in the order the boot policy line and serverCapabilities list them. */
-export const MANIFESTS = [publicDoor, bridgeDoor, cloudExec, backupLeader, hostLocalCalls] as const
+export const MANIFESTS = [publicDoor, bridgeDoor, cloudExec, backupLeader, hostLocalCalls, witnessDoor] as const
 export type Capability = (typeof MANIFESTS)[number]['name']
 export const CAPABILITIES: readonly Capability[] = MANIFESTS.map((m) => m.name)
 

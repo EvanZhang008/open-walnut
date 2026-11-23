@@ -101,15 +101,18 @@ describe('the witness route of a machine', () => {
     expect((await post('m1', WITNESS_REQUEST_PATH, full))?.status).toBe(200)
   })
 
-  it('a setup carries evidence: none is a 400, a record seen at another witness is a 409 and makes nothing, an incomplete list is a 409', async () => {
+  it('a setup carries evidence: none is a 400, a record seen or a witness not reached is a 409 and makes nothing, an incomplete list is a 409', async () => {
     const body = { v: 1, walnutId: WALNUT, witness: 'w1', list: LIST }
     expect((await post('m1', WITNESS_SETUP_PATH, body))?.status).toBe(400)
     const seen = (a: string, b: string) => [{ witness: 'w2', seen: a }, { witness: 'w3', seen: b }]
     expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: seen('blank', 'record') })).toEqual({ status: 409, body: { ok: false, error: 'witnesses_hold_records' } })
     expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: [{ witness: 'w2', seen: 'blank' }] })).toEqual({ status: 409, body: { ok: false, error: 'evidence_incomplete' } })
-    expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: [{ witness: 'w2', seen: 'blank' }, { witness: 'w2', seen: 'none' }] })).toEqual({ status: 409, body: { ok: false, error: 'evidence_incomplete' } })
+    expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: [{ witness: 'w2', seen: 'blank' }, { witness: 'w2', seen: 'absent' }] })).toEqual({ status: 409, body: { ok: false, error: 'evidence_incomplete' } })
+    // One not reached may hold a record: no setup beside it.
+    expect(await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: seen('unreached', 'blank') })).toEqual({ status: 409, body: { ok: false, error: 'witnesses_unreached' } })
+    expect((await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: seen('none', 'blank') }))?.status).toBe(400)
     expect(fs.existsSync(path.join(root, WALNUT, 'w1'))).toBe(false)
-    expect((await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: seen('none', 'blank') }))?.status).toBe(200)
+    expect((await post('m1', WITNESS_SETUP_PATH, { ...body, evidence: seen('absent', 'blank') }))?.status).toBe(200)
   })
 
   it('two setups of different ids at once make exactly one witness: the check and the making are one step', async () => {
