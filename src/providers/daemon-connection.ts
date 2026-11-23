@@ -5143,7 +5143,9 @@ export class DaemonConnection {
           if (await this.execRunsOpen(expected, remoteVersion)) return false
           if (await this.claimOrHold(expected, remoteVersion, held)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
-          if (updated === 'held') return false
+          // Held (busy, deferred, another runner there): nothing changed on the host and this name asks
+          // again, so the other names keep off for the settle window rather than paying an upload of their own.
+          if (updated === 'held') { held.claim?.release(true); return false }
           if (updated) { this.noteDaemonReplaced(); held.claim?.release(true); return true }
           // No safe user-level service is known. Keep serving without publishing a retry as an error.
           log.session.info(

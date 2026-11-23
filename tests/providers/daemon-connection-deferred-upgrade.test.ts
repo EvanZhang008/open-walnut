@@ -44,6 +44,7 @@ import {
   waitDaemonHandover,
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
+import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 import { recentLinkDrops, resetLinkDropsForTest } from '../../src/providers/daemon-link-drops.js'
 import { __resetHostLinkLedgerForTest, linkDownIntervals } from '../../src/providers/host-link-ledger.js'
 import { waitHostLink } from '../../src/providers/daemon-drain-resend.js'
@@ -147,6 +148,29 @@ describe('the background update of a service-managed daemon', () => {
     await expect(waiting).resolves.toBe(true)
     expect(daemonHandoverPending('devbox')).toBe(false)
     expect(state(c)._handoverUntil).toBe(0)
+  })
+
+  it.each([
+    ['refused for a busy daemon (nothing changed there, this name asks again)', 'Managed daemon update failed: Error: service.handover: active ACP workers or relay requests must finish first', true],
+    ['failed', 'the new daemon did not answer its trial run', false],
+  ])('an update %s: the other host names of the daemon keep off = %s', async (_what, message, keptOff) => {
+    // 2026-11-23: newdev's update was refused for a busy daemon and freed the claim; clouddev, the same
+    // daemon over the host network, then sent the same 35 MB build up again for the same refusal.
+    resetDaemonUpdateClaims()
+    const c = make()
+    stub(c, { probe: MANAGED, version: OLD })
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    vi.spyOn(priv(c), 'sameDaemonHosts').mockResolvedValue(['devbox', 'devbox-net'])
+    managedUpdate.mockRejectedValue(new Error(message))
+    live(c)
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    const other = await claimDaemonUpdate('devbox-net', async () => ['devbox', 'devbox-net'])
+    expect('heldBy' in other ? other.heldBy : null).toBe(keptOff ? 'devbox' : null)
+    priv(c).clearUpgradeRecheck()
+    resetDaemonUpdateClaims()
   })
 
   it('work that started during the upload holds the swap', async () => {

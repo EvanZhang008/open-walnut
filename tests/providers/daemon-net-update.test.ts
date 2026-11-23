@@ -795,6 +795,16 @@ describe('NetDaemonUpdater', () => {
       u.stop()
     })
 
+    it('an update the host refused before it changed anything keeps the other names off: this one asks again', async () => {
+      // 2026-11-23: a busy refusal freed the claim, and the other name sent the same build up again.
+      const update = vi.fn(async () => { throw new Error('service.handover: active ACP workers or relay requests must finish first') })
+      const { u } = updater({ update, sameDaemon: async () => ['studio-mac', 'studio-ssh'] })
+      await u.request()
+      await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+      expect(await claimDaemonUpdate('studio-ssh', async () => ['studio-mac'])).toEqual({ heldBy: 'studio-mac' })
+      u.stop()
+    })
+
     it('a failed update frees the daemon for its other names at once', async () => {
       const update = vi.fn(async () => { throw new Error('the update did not start detached from the daemon') })
       const { u } = updater({ update, sameDaemon: async () => ['studio-mac', 'studio-ssh'] })

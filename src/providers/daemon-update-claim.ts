@@ -30,8 +30,13 @@ interface Claim { by: string; until: number }
 const claims = new Map<string, Claim>()
 
 export interface UpdateClaim {
-  /** `ok`: the update went through (the settle window holds the others); otherwise the claim goes at once. */
-  release(ok: boolean): void
+  /**
+   * `kept`: the update went through, or was refused on the host before it changed anything and this
+   * name asks again (2026-11-23: newdev's update refused for a busy daemon freed the claim, and
+   * clouddev started a second upload of the same build); the settle window holds the others. A
+   * failure frees them at once.
+   */
+  release(kept: boolean): void
 }
 
 /** Every host name of the daemon, asked only when some other claim exists. */
@@ -76,11 +81,11 @@ export async function claimDaemonUpdate(host: string, names: DaemonNames, now = 
   claims.set(host, claim)
   let done = false
   return {
-    release(ok: boolean) {
+    release(kept: boolean) {
       if (done) return
       done = true
       if (claims.get(host) !== claim) return
-      if (ok) claim.until = Math.min(claim.until, Date.now() + UPDATE_CLAIM_SETTLE_MS)
+      if (kept) claim.until = Math.min(claim.until, Date.now() + UPDATE_CLAIM_SETTLE_MS)
       else claims.delete(host)
     },
   }
