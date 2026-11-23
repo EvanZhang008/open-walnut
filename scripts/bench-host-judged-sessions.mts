@@ -199,7 +199,7 @@ async function runOnce(mode: Mode, index: number) {
     if (lossy.length && OUT) fs.writeFileSync(path.join(OUT, `run-${index}-${mode}.loss.log`), channelLogLines(h.c.base, lossy).join('\n') + '\n')
     return {
       mode, run: index, loadBefore, loadAfter: loadavg(), sessions: SESSIONS, ratePerSession: RATE, windowS: Math.round(wallS * 10) / 10, windowFrom, windowTo, link,
-      loopMaxMs: loop.maxMs, loopP99Ms: loop.p99Ms, loopP50Ms: loop.p50Ms, loopMeanMs: loop.meanMs,
+      loopMaxMs: loop.maxMs, loopP99Ms: loop.p99Ms, loopP50Ms: loop.p50Ms, loopMeanMs: loop.meanMs, loopSamples: loop.samples,
       cpuSecPerMin: Math.round((cpu / wallS) * 60 * 100) / 100,
       cpuMsPer1kLines: Math.round((cpu * 1000 / outputLinesInWindow) * 1000 * 10) / 10,
       rssMaxMb: Math.max(...rss), rssEndMb: rss[rss.length - 1],
@@ -240,7 +240,9 @@ async function main() {
   for (const mode of MODES) {
     const of = runs.filter((r) => r.mode === mode)
     const val = (r: any, k: string) => (k === 'allParsesPerLine' ? r.parses.allPerLine : k in r ? r[k] : r.parses[k])
-    medians[mode] = Object.fromEntries(COLUMNS.map(([k]) => [k, median(of.map((r) => val(r, k)))]))
+    // A window whose delay histogram took no sample (seen once on bun: all zeros) says nothing of the loop.
+    const loopOk = of.filter((r) => r.loopSamples > 0)
+    medians[mode] = Object.fromEntries(COLUMNS.map(([k]) => [k, median((k.startsWith('loop') ? loopOk : of).map((r) => val(r, k)))]))
   }
   const summary = {
     at: new Date().toISOString(), host: os.hostname(), cpus: os.cpus().length, commit: execFileSync('git', ['rev-parse', 'HEAD']).toString().trim(),
