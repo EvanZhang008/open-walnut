@@ -111,7 +111,7 @@ export interface HostRoutesOptions {
    * the runtime, or no word from the runtime), or null when nothing of it runs. Absent: this host
    * takes no resume (it answers `resume_unsupported`).
    */
-  notAtRest?(sid: string): Promise<string | null>
+  notAtRest?(sid: string, row?: SessionRecord): Promise<string | null>
   now?: () => number
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -269,7 +269,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     if (!o.notAtRest) return { status: 200, body: { ok: false, error: 'this host does not resume sessions', why: 'resume_unsupported' } }
     // Checked before the row is claimed: a refusal leaves nothing here. Nothing else starts a CLI of
     // it meanwhile: its leader delivers to it only through this resume until the answer comes.
-    const busy = await o.notAtRest(sid)
+    const busy = await o.notAtRest(sid, row)
     if (busy) {
       o.log?.('info', 'host sessions: a resume was refused, the session is not at rest here', { sessionId: sid, why: busy })
       return { status: 200, body: { ok: false, error: `the session is not at rest on this host: ${busy}`, why: 'not_at_rest' } }

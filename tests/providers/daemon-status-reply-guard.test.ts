@@ -19,7 +19,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-status-reply-guard'))
 
-import { statusReplyAlive } from '../../src/providers/daemon-status-reply.js'
+import { acpWorkerReplyAlive, statusReplyAlive } from '../../src/providers/daemon-status-reply.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 
 const REPO = path.resolve(__dirname, '../..')
@@ -34,6 +34,19 @@ describe('statusReplyAlive', () => {
     ['held, process running', { ok: true, exists: true, alive: true }, true],
   ])('%s', (_name, reply, want) => {
     expect(statusReplyAlive(reply as never)).toBe(want)
+  })
+})
+
+describe('acpWorkerReplyAlive (an ACP worker, asked by its runtime id)', () => {
+  it.each([
+    ['the worker answered', { ok: true, result: {} }, true],
+    ['the daemon holds no worker of it', { ok: false, errorKind: 'no_worker' }, false],
+    ['a worker being adopted', { ok: false, errorKind: 'worker_adopting' }, null],
+    ['a worker whose group still runs', { ok: false, errorKind: 'worker_stopping' }, null],
+    ['an error reply', SHUTTING_DOWN, null],
+    ['no reply', null, null],
+  ])('%s', (_name, reply, want) => {
+    expect(acpWorkerReplyAlive(reply as never)).toBe(want)
   })
 })
 

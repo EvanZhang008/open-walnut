@@ -21,6 +21,18 @@ export function statusReplyAlive(reply: { ok?: unknown; exists?: unknown; alive?
 }
 
 /**
+ * A daemon's `acpState {sid: <runtime id>}` reply read as the liveness of an ACP session's worker
+ * (`status` knows only native CLIs: an ACP worker reads `exists: false` there). `true` when the
+ * worker answered, `false` only when the daemon says it holds no worker of it (`no_worker`), and
+ * `null` for every other reply: one being adopted or stopping, a daemon shutting down, no reply.
+ */
+export function acpWorkerReplyAlive(reply: { ok?: unknown; errorKind?: unknown } | null | undefined): boolean | null {
+  if (!reply) return null
+  if (reply.ok === true) return true
+  return reply.errorKind === 'no_worker' ? false : null
+}
+
+/**
  * How long a liveness `status` ask waits for its answer (RemoteSessionManager.isAlive, and
  * isSessionProcessAlive's probeDaemonSession). The command's own default is 30 s: on a link that
  * stopped answering, one scan of many sessions then waited 30 s per session. Past this the ask is

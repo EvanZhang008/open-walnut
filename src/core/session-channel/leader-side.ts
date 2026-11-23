@@ -26,7 +26,7 @@ import type { Duplex } from 'node:stream'
 import { attachLeaderChannel, isChannelFrame, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { createLeaderApply, HostRevoked } from './leader-apply.js'
-import { SESSION_JUDGE_CAP, SESSION_RESUME_CAP } from './switch.js'
+import { SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import { noteFrameParsed } from '../../providers/line-parse-count.js'
@@ -421,6 +421,11 @@ export function reportJudges(report: { capabilities?: unknown } | null | undefin
 /** Does a host's last report say its start route resumes a session the leader ran (host-resume.ts)? */
 export function reportResumes(report: { capabilities?: unknown } | null | undefined): boolean {
   return reportNames(report, SESSION_JUDGE_CAP) && reportNames(report, SESSION_RESUME_CAP)
+}
+
+/** Does it also resume an ACP engine's session (host-resume.ts, SESSION_RESUME_ACP_CAP)? */
+export function reportResumesAcp(report: { capabilities?: unknown } | null | undefined): boolean {
+  return reportResumes(report) && reportNames(report, SESSION_RESUME_ACP_CAP)
 }
 
 function reportNames(report: { capabilities?: unknown } | null | undefined, cap: string): boolean {

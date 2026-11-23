@@ -229,11 +229,18 @@ await serveProbe({
  * What the host's service imports once its server answers (replica-cluster.ts hostService `after`):
  * the ACP stand-in, a loopback port for the leader door, the bus recorder and the probe.
  */
+/** Boot code: this server's runner runs ACP engines through a worker built from this checkout and the scripted adapter. */
+const acpStandIn = () => `
+;(await import(${url('src/providers/claude-code-session.ts')})).sessionRunner.setTestAcpArtifacts({
+  workerCmd: [process.execPath, (await import(${url('tests/helpers/acp-worker-bundle.ts')})).acpWorkerBundle()],
+  adapterCmd: [process.execPath, ${JSON.stringify(path.join(ROOT, 'tests/providers/mock-acp-agent.mjs'))}],
+})
+`
+
 export function hostJudgeServiceProbe(): string {
   return `
 const { sessionRunner } = await import(${url('src/providers/claude-code-session.ts')})
-const { acpWorkerBundle } = await import(${url('tests/helpers/acp-worker-bundle.ts')})
-sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, acpWorkerBundle()], adapterCmd: [process.execPath, ${JSON.stringify(path.join(ROOT, 'tests/providers/mock-acp-agent.mjs'))}] })
+${acpStandIn()}
 ;(await import('node:fs')).mkdirSync(process.env.CODEX_HOME, { recursive: true })
 const { getHostReplicaLeaderDoor } = await import(${url('src/web/server.ts')})
 const door = getHostReplicaLeaderDoor()
@@ -261,6 +268,11 @@ await serveProbe({
     return { phase: t ? t.phase : null }
   },
   '/live': () => ({ live: !!boot.hostSessionsRunning()?.channel.leaderLive() }),
+  // The host runner's own ACP object of a session (its runtime, and the host it reaches it on).
+  '/acp': (q) => {
+    const a = sessionRunner.findAcpSession(q.get('sid'))
+    return { found: !!a, runtimeId: a?.runtimeId ?? null, host: a?.host ?? null, workerLive: a?.workerLive ?? null }
+  },
   '/dialer': async () => {
     const cf = await import(${url('src/core/session-channel/host-credential-file.ts')})
     const held = await cf.readHostCredential(process.env.WALNUT_WALNUT_ID ?? '')
@@ -454,6 +466,8 @@ export interface HostJudgeClusterOptions {
   /** More lines of the host's own entry in the Mac's config.yaml (indented four spaces: `    runs_sessions: true`). */
   macHostExtra?: readonly string[]
   macBootExtra?: string
+  /** The Mac runs ACP engines (its legacy sessions on the host) with the host's scripted adapter too. */
+  macAcp?: boolean
   /** Called before the Mac boots, with its data dir (and the cluster's base). */
   seedMac?: (o: { base: string; macData: string }) => void | Promise<void>
 }
@@ -464,7 +478,7 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
     twin: 'standalone',
     ...(o.linkProxy ? { linkProxy: true } : {}),
     hostService: { env: (d) => ({ ...hostJudgeServiceEnv(d), ...(o.hostEnv ?? {}) }), after: hostJudgeServiceProbe() },
-    macBootExtra: macProbe(o.macRecord ?? 'full') + (o.macBootExtra ?? ''),
+    macBootExtra: macProbe(o.macRecord ?? 'full') + (o.macAcp ? acpStandIn() : '') + (o.macBootExtra ?? ''),
     macConfigExtra: [
       ...(o.macSwitch === false ? [] : ['experimental:', '  host_runs_sessions: true']),
       ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : []),

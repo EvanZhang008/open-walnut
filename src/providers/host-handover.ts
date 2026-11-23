@@ -28,6 +28,8 @@
  *             it over again with the claim.
  */
 import { log } from '../logging/index.js'
+import { sessionTaskAndEngineInStore } from '../core/session-db.js'
+import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { forgetHostJudged, noteHostJudged } from '../core/sessions/judge-of.js'
 import {
   clearHandOverMark, handOverMarkStands, handOverMarks, writeHandOverMark, type HandOverKind, type HandOverMark,
@@ -118,7 +120,7 @@ export async function handStartToHost(sid: string, host: string, kind: HandOverK
   noteHostJudged(sid, host)
   // The host may bring this session here (handed-sessions.ts), for its task: a start's, or the
   // resumed row's own. On disk before anything goes out.
-  const [hands, { sessionTaskAndEngineInStore }] = await Promise.all([import('../core/session-channel/handed-sessions.js'), import('../core/session-db.js')])
+  const hands = await import('../core/session-channel/handed-sessions.js')
   const taskId = o.taskId ?? (() => { try { return sessionTaskAndEngineInStore(sid)?.taskId } catch { return undefined } })() ?? ''
   await hands.handStart(host, sid, { taskId }).catch((err: unknown) => {
     log.session.warn('host hand-over: its hand was not kept; the host\'s row of it applies only once the leader\'s is the host\'s', { sessionId: sid, host, error: errText(err) })
@@ -240,11 +242,19 @@ export async function askHostOwns(sid: string, host: string): Promise<boolean | 
   }
 }
 
-/** The host's runtime on the CLI of `sid`, through this leader's daemon link to it (null: no answer). */
+/**
+ * The host's runtime on the CLI of `sid`, through this leader's daemon link to it (null: no answer).
+ * An ACP session's CLI is its worker, which the runtime knows by the row's runtime id (`status`
+ * knows only native CLIs): a row of an ACP engine with no runtime id is no answer.
+ */
 export async function cliOnHost(host: string, sid: string): Promise<boolean | null> {
   try {
-    const { probeDaemonSession } = await import('./daemon-connection.js')
-    const probe = await probeDaemonSession(host, sid)
+    const dc = await import('./daemon-connection.js')
+    const row = sessionTaskAndEngineInStore(sid)
+    if (isAcpEngine((row?.engine ?? undefined) as import('../core/types.js').SessionEngine | undefined)) {
+      return row?.acpRuntimeId ? await dc.probeAcpWorker(host, row.acpRuntimeId) : null
+    }
+    const probe = await dc.probeDaemonSession(host, sid)
     return probe ? probe.alive : null
   } catch {
     return null

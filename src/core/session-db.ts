@@ -328,14 +328,17 @@ export function sessionJudgeInStore(claudeSessionId: string, handle: DatabaseTyp
   return row ? { host: row.host, judgedByHost: row.judged === 1 } : null;
 }
 
-/** A session's task and engine, without decoding its whole record (a host-judged session's proxy). */
-export function sessionTaskAndEngineInStore(claudeSessionId: string): { taskId: string | null; engine: string | null } | null {
+/**
+ * A session's task and engine, and an ACP session's runtime id, without decoding its whole record
+ * (a host-judged session's proxy; the runtime probe of a hand-over, host-handover.ts cliOnHost).
+ */
+export function sessionTaskAndEngineInStore(claudeSessionId: string): { taskId: string | null; engine: string | null; acpRuntimeId: string | null } | null {
   const handle = getDb();
   if (!handle) return null;
   const row = handle.prepare(
-    `SELECT task_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.engine') END AS engine FROM sessions WHERE claude_session_id = ?`,
-  ).get(claudeSessionId) as { task_id: string | null; engine: string | null } | undefined;
-  return row ? { taskId: row.task_id, engine: row.engine } : null;
+    `SELECT task_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.engine') END AS engine, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.acpRuntimeId') END AS runtime FROM sessions WHERE claude_session_id = ?`,
+  ).get(claudeSessionId) as { task_id: string | null; engine: string | null; runtime: unknown } | undefined;
+  return row ? { taskId: row.task_id, engine: row.engine, acpRuntimeId: typeof row.runtime === 'string' && row.runtime ? row.runtime : null } : null;
 }
 
 /** Every session id and ACP runtime id in the store, without decoding records (the ephemeral session gate's copied set). */

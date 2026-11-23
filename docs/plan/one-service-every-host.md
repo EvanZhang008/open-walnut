@@ -439,13 +439,20 @@ permission prompts still name Walnut.
   its host as a resume when a start there would (`src/providers/host-resume.ts`): the host resumes the same
   CLI session id from the same row, through the same claim, in-flight and lost-start rules as a start, and
   the session is the host's from then on; refused or never sent, it resumes here as before, once. A session
-  with a live CLI is never handed over, ACP engines stay the leader's, and a host that does not name
+  with a live CLI is never handed over, and a host that does not name
   `session-resume-v1` is never asked (a host turned on before its service has a build that names it keeps
   its sessions legacy). With the switch on for the host, each such delivery logs one line saying which way it
   went and why (`host resume: ...`, `why`: held legacy, the host takes no resume, not judging, or a reason it is
   not at rest); off, it is quiet. One a host runs stays that host's after the switch goes off (tests:
   L1 in `tests/e2e/host-judged-session-lifecycle-e2e.test.ts`, S6 in `host-judged-session-cluster-e2e.test.ts`,
   L1 to L7 in `host-judge-legacy-resume-e2e.test.ts`). So no session changes its judge while it runs.
+  An ACP engine's session (Codex and the rest) is handed the same way, only to a host whose service also
+  names `session-resume-acp-v1` (else it stays legacy): nothing moves, since its worker, its journal and the
+  engine's own thread already live in the host's daemon; the host attaches it from the same row (its
+  runtime id, journal cursor, mode and model) and resumes it there. Its runtime is asked for the worker by
+  the row's runtime id, the leader's ACP object counts live while it holds anything, and an ACP send asks
+  before it attaches the session (an attach starts a worker) (tests: `host-resume-acp.test.ts`, A1 to A4 in
+  `host-judge-legacy-acp-resume-e2e.test.ts`).
 - **A hand-over whose answer is lost** (a start or a resume, `src/providers/host-handover.ts`) is neither the
   host's for sends nor the leader's: its lines wait on the leader, never sent, refused or parked, until the
   host's row of the session comes (the channel clears the hand-over's mark in the same transaction; the lines

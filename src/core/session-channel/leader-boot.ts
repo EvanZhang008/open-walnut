@@ -11,7 +11,7 @@
  */
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
-import { createLeaderSide, reportJudges, reportResumes, type LeaderSide } from './leader-side.js'
+import { createLeaderSide, reportJudges, reportResumes, reportResumesAcp, type LeaderSide } from './leader-side.js'
 import { noteHostSessionSide } from './host-side-health.js'
 import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
@@ -264,7 +264,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown; sessionSide?: { state?: unknown } | null } | null }) => {
     const connected = hostServer.hostServerLink(view.hostKey) !== null
     void side.noteHost(view.hostKey, { connected, judges: view.phase === 'running' && reportJudges(view.server) })
-    noteHostResumes(view.hostKey, view.phase === 'running' && reportResumes(view.server))
+    noteHostResumes(view.hostKey, view.phase === 'running' && reportResumes(view.server), view.phase === 'running' && reportResumesAcp(view.server))
     lookIssue(view)
     // A host that stood down, or waits on a channel this leader has not opened: Walnut Health (host-side-health.ts).
     noteHostSessionSide(view.hostKey, view.phase === 'running' ? view.server?.sessionSide?.state : null)

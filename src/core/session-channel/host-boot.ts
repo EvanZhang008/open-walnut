@@ -32,7 +32,7 @@ import path from 'node:path'
 import { FactLog } from './fact-log.js'
 import { GoneRows } from './gone-rows.js'
 import { HostChannel } from './channel.js'
-import { SESSION_JUDGE_CAP, SESSION_RESUME_CAP } from './switch.js'
+import { SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { HOST_DOOR_CAP } from './door-wire.js'
 import { startHostDialer, type HostDialer } from './host-dialer.js'
 import { startCompanionDialer, type CompanionDialer } from './companion-dialer.js'
@@ -75,7 +75,7 @@ export function hostSessionRoutes(): HostSessionRoutes | null {
 
 /** What this host's service adds to the capabilities its report names. */
 export function hostSessionCapabilities(): string[] {
-  return current ? [SESSION_JUDGE_CAP, SESSION_RESUME_CAP, HOST_DOOR_CAP] : []
+  return current ? [SESSION_JUDGE_CAP, SESSION_RESUME_CAP, SESSION_RESUME_ACP_CAP, HOST_DOOR_CAP] : []
 }
 
 /**
@@ -220,9 +220,12 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     // A start the leader handed names its session: that row is this host's from its first write.
     claim: { take: claimStartingRow, release: (sid) => { releaseStartingRow(sid); void stranded.run(sid).catch(() => {}) } },
     // A resume of a session its leader ran: refused while anything of it runs here.
-    notAtRest: async (sid) => {
+    notAtRest: async (sid, row) => {
       if (sessionRunner.holdsLiveSession(sid)) return 'a live session of it is in this host\'s runner'
-      const cli = await runtimeHoldsCli(sid)
+      // An ACP engine's CLI is its worker, which the runtime knows by the row's runtime id (the
+      // row the resume names, else this host's copy of it).
+      const known = row ?? await (await import('../session-tracker.js')).getSessionByClaudeId(sid).catch(() => null)
+      const cli = await runtimeHoldsCli(sid, known)
       if (cli === true) return 'its CLI runs in this host\'s runtime'
       return cli === null ? 'this host\'s runtime did not say whether its CLI runs' : null
     },
@@ -379,12 +382,14 @@ export async function stopHostSessions(): Promise<void> {
 
 /**
  * The runtime's word on a session's CLI (its `status` answer through the own-sessions link): alive,
- * dead, or null when the link or the answer did not come within a few seconds.
+ * dead, or null when the link or the answer did not come within a few seconds. For a row of an ACP
+ * engine, its worker's (`acpState` by the row's runtime id; no runtime id is no answer).
  */
-async function runtimeHoldsCli(sid: string): Promise<boolean | null> {
+async function runtimeHoldsCli(sid: string, row?: Pick<SessionRecord, 'engine' | 'acpRuntimeId'> | null): Promise<boolean | null> {
   const dc = await import('../../providers/daemon-connection.js')
   const { getLocalDaemonConnection } = await import('../../providers/local-daemon-dial.js')
-  const { statusReplyAlive } = await import('../../providers/daemon-status-reply.js')
+  const { acpWorkerReplyAlive, statusReplyAlive } = await import('../../providers/daemon-status-reply.js')
+  const { isAcpEngine } = await import('../agents/engine-registry.js')
   const within = <T>(p: Promise<T>, ms: number): Promise<T | null> => new Promise((resolve) => {
     const t = setTimeout(() => resolve(null), ms)
     t.unref?.()
@@ -392,6 +397,10 @@ async function runtimeHoldsCli(sid: string): Promise<boolean | null> {
   })
   const conn = dc.getConnectedDaemonConnection('__local__') ?? await within(getLocalDaemonConnection(), 3_000)
   if (!conn) return null
+  if (row && isAcpEngine(row.engine ?? undefined)) {
+    if (!row.acpRuntimeId) return null
+    return acpWorkerReplyAlive(await within(conn.send('acpState', { sid: row.acpRuntimeId }, 3_000), 3_500) as { ok?: unknown; errorKind?: unknown } | null)
+  }
   const reply = await within(conn.send('status', { sid }, 3_000), 3_500)
   return reply ? statusReplyAlive(reply as { ok?: unknown; exists?: unknown; alive?: unknown }) : null
 }

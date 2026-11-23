@@ -35,6 +35,12 @@ export const SESSION_JUDGE_CAP = 'session-judge-v1'
  * start as a new session, so a leader hands a resume only to a host that names this.
  */
 export const SESSION_RESUME_CAP = 'session-resume-v1'
+/**
+ * Capability a host's service names when its resume also takes an ACP engine's session (Codex and
+ * the rest): it asks its runtime for the ACP worker by the row's runtime id and attaches the session
+ * to its own daemon. A host naming only SESSION_RESUME_CAP keeps ACP sessions legacy.
+ */
+export const SESSION_RESUME_ACP_CAP = 'session-resume-acp-v1'
 
 type SwitchConfig = Pick<Config, 'experimental' | 'hosts' | 'hosts_run_sessions'>
 

@@ -16,10 +16,12 @@ const store = vi.hoisted(() => ({ row: null as { host: string | null; judgedByHo
 vi.mock('../../src/core/session-db.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   sessionJudgeInStore: vi.fn(() => { store.reads++; return store.row }),
+  // An ACP send's ask reads the row's engine first (acpResumeHostOf).
+  sessionTaskAndEngineInStore: vi.fn(() => { store.reads++; return store.row ? { taskId: null, engine: 'codex', acpRuntimeId: 'acp-1' } : null }),
 }))
 
 import { log } from '../../src/logging/index.js'
-import { resumeHostOf, _holdLegacyForTesting, _resetHostResumeForTesting, type NoResumeHost } from '../../src/providers/host-resume.js'
+import { acpResumeHostOf, resumeHostOf, _holdLegacyForTesting, _resetHostResumeForTesting, type NoResumeHost } from '../../src/providers/host-resume.js'
 import { _setHostResumesForTesting, _setHostSwitchForTesting, forgetHostResumes } from '../../src/core/session-channel/resume-hosts.js'
 import { _resetJudgeOfForTesting, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 
@@ -53,17 +55,28 @@ const REASONS: Record<NoResumeHost, () => void> = {
   // The incident: the host's running service names session-judge-v1 but not session-resume-v1.
   host_takes_no_resume: () => _setHostResumesForTesting(HOST, false),
   host_not_judging: () => setHostJudgeProbe(() => false),
+  // An ACP send to a host whose service resumes only native sessions (no session-resume-acp-v1).
+  host_takes_no_acp_resume: () => {},
 }
+
+/** The ask each reason is said on: an ACP send's for the ACP one, a delivery's for the rest. */
+const ask = (why: NoResumeHost) => (why === 'host_takes_no_acp_resume' ? acpResumeHostOf(SID) : resumeHostOf(SID))
 
 describe('with the switch on for the session\'s host', () => {
   it.each(Object.keys(REASONS) as NoResumeHost[])('%s: stays legacy with one line naming why', (why) => {
     REASONS[why]()
-    expect(resumeHostOf(SID)).toBeNull()
+    expect(ask(why)).toBeNull()
     expect(lines()).toEqual([{ sessionId: SID, host: HOST, why }])
   })
 
   it('a host that takes the resume is named, and the hand-over (resumeAtRestOnHost) logs its own outcome', () => {
     expect(resumeHostOf(SID)).toBe(HOST)
+    expect(lines()).toEqual([])
+  })
+
+  it('an ACP send to a host that also resumes ACP sessions names it, with no line', () => {
+    _setHostResumesForTesting(HOST, true, { acp: true })
+    expect(acpResumeHostOf(SID)).toBe(HOST)
     expect(lines()).toEqual([])
   })
 
@@ -101,6 +114,7 @@ describe('with the switch off', () => {
   it('off for every host: null, no line, and no row is read', () => {
     _setHostSwitchForTesting(null)
     expect(resumeHostOf(SID)).toBeNull()
+    expect(acpResumeHostOf(SID)).toBeNull()
     expect(lines()).toEqual([])
     expect(store.reads).toBe(0)
   })

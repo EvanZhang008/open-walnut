@@ -27,7 +27,7 @@ import { HOOK_FILES_CAPABILITY } from './hook-files.js'
 const TRIGGERS_PROBE_CAPABILITY = 'triggers-probe-v1'
 const TRIGGERS_DELTA_CAPABILITY = 'triggers-delta-v1'
 import { ACP_HOST_FILES } from './acp-host-artifacts.js'
-import { statusReplyAlive } from './daemon-status-reply.js'
+import { STATUS_PROBE_TIMEOUT_MS, acpWorkerReplyAlive, statusReplyAlive } from './daemon-status-reply.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from '#ws'
 import { IN_PROCESS_DAEMON_URL, InProcessDaemonSocket, isInProcessDaemonSocket } from './in-process-daemon-socket.js'
@@ -11581,6 +11581,21 @@ export async function probeDaemonSession(
       hostKey, sessionId,
       error: err instanceof Error ? err.message : String(err),
     })
+    return null
+  }
+}
+
+/**
+ * Does the daemon of `hostKey` run the ACP worker `runtimeId` (an ACP session's row names it)?
+ * `acpState` through the pooled link: true, false (the daemon holds no worker of it), or null (no
+ * link, no answer, or any other reply: daemon-status-reply.ts acpWorkerReplyAlive).
+ */
+export async function probeAcpWorker(hostKey: string, runtimeId: string, timeoutMs = STATUS_PROBE_TIMEOUT_MS): Promise<boolean | null> {
+  const conn = getConnectedDaemonConnection(hostKey)
+  if (!conn) return null
+  try {
+    return acpWorkerReplyAlive(await conn.send('acpState', { sid: runtimeId }, timeoutMs) as { ok?: unknown; errorKind?: unknown })
+  } catch {
     return null
   }
 }
