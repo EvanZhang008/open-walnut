@@ -125,6 +125,12 @@ export interface ThreadMessage {
   delivery?: ThreadDelivery;
   /** The ask this reply answers (OrgThread.askId as his card showed it); `stale`: the thread asked something else by then. */
   answers?: { ask_id: string; stale?: boolean };
+  /**
+   * `recent`: filed here only for coming right after his last message (SAME_CONVERSATION_MS), and the
+   * node has not said yet whether it is this subject: its status question asks once
+   * (sessions/status-thread-split.ts), and a split or that answer takes the mark off.
+   */
+  joined?: 'recent';
 }
 
 /**
@@ -493,6 +499,7 @@ function normalizeMessage(m: unknown): ThreadMessage | null {
   if (!isStr(x.id) || !isStr(x.at) || !isStr(x.text)) return null;
   const next = { ...x, via: isStr(x.via) ? x.via : 'chat', ...(Array.isArray(x.images) ? { images: x.images.filter(isStr) } : {}) } as ThreadMessage;
   if (next.readAt !== undefined && !(isStr(next.readAt) && Number.isFinite(Date.parse(next.readAt)))) delete next.readAt;
+  if (next.joined !== undefined && next.joined !== 'recent') delete next.joined;
   if (next.answer && !(typeof next.answer === 'object' && isStr(next.answer.text) && isStr(next.answer.at))) delete next.answer;
   else if (next.answer) next.answer = withSource(next.answer, false);
   return next;
@@ -694,9 +701,10 @@ export interface FileMessageResult {
   duplicate: boolean;
   /**
    * Why it went to a thread it did not name: `reopened`, a Follow up on a thread he had closed
-   * minutes ago; `recent`, a chat message right after his last one, which went to that thread.
+   * minutes ago; `recent`, a chat message right after his last one, which went to that thread (marked
+   * on the message: ThreadMessage.joined); `reaction`, a bare reaction filed with the node's newest answer.
    */
-  joined?: 'reopened' | 'recent';
+  joined?: 'reopened' | 'recent' | 'reaction';
 }
 
 /**
@@ -807,19 +815,20 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
     // decision nor a new turn for the node (review 2026-11-23).
     if (target === reaction) {
       const next: OrgThread = { ...recordReaction(target, input.at), messages: [...target.messages, message], updatedAt: input.at, by: 'human' };
-      return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false, joined: 'recent' };
+      return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false, joined: 'reaction' };
     }
     // His own message in a snoozed thread brings it back; one he closed minutes ago opens again.
     // His answer ends its needs, and its options with it (a choice clicked is filed as his words).
     const { snoozed: _s, closed: _c, options: _o, ...rest } = target;
     const reacted = recordReaction(rest, input.at);
+    const filed: ThreadMessage = recent ? { ...message, joined: 'recent' } : message;
     const next: OrgThread = {
-      ...reacted, messages: [...reacted.messages, message], updatedAt: input.at, by: 'human',
+      ...reacted, messages: [...reacted.messages, filed], updatedAt: input.at, by: 'human',
       // He spoke again: a thread answered, waiting on him or pending is the node's turn again.
       ...(reopened || target.state === 'answered' || target.state === 'needs' || target.state === 'pending' ? { state: 'working' as ThreadState } : {}),
     };
     const joined = reopened ? 'reopened' as const : recent ? 'recent' as const : undefined;
-    return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false, ...(joined ? { joined } : {}) };
+    return { file: replace(file, next, input.at), thread: next, message: filed, created: false, duplicate: false, ...(joined ? { joined } : {}) };
   }
   const thread: OrgThread = {
     id: input.newThreadId && THREAD_ID_RE.test(input.newThreadId) ? input.newThreadId : newThreadId(),
@@ -1481,9 +1490,11 @@ export function splitThreadMessage(file: ThreadsFile, threadId: string, messageI
   }
   // The first message names a thread Walnut titled: it follows the message that is now first.
   if (!from.titled && from.messages.length) from.title = fallbackTitle(from.messages[0].text, lang);
+  // Out on its own, the question whether it belongs there is answered.
+  const { joined: _j, ...moved } = msg;
   const thread: OrgThread = {
     id: newId && THREAD_ID_RE.test(newId) ? newId : newThreadId(),
-    title: fallbackTitle(msg.text, lang), state: 'new', messages: [msg], createdAt: msg.at, updatedAt: at, by,
+    title: fallbackTitle(msg.text, lang), state: 'new', messages: [moved], createdAt: msg.at, updatedAt: at, by,
   };
   const settled = opts.keepOpen ? from : ackReaction(from, by, at);
   return {

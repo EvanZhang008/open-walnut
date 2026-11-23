@@ -21,6 +21,7 @@ const CASES: Array<{ name: string; state: ThreadHintState; title: boolean; node?
   { name: 'follow-up', state: { ...base, followUp: true }, title: true },
   { name: 'follow-up that reopened', state: { ...base, followUp: true, joined: 'reopened' }, title: true },
   { name: 'joined the recent conversation', state: { ...base, joined: 'recent' }, title: true },
+  { name: 'a bare reaction', state: { ...base, joined: 'reaction' }, title: true },
   { name: 'moved with its work', state: { ...base, followUp: true, movedTo: { task: 'mvm0n3bu-6910', title: 'Research (the bot)' } }, title: true, node: 'mvm0n3bu-6910' },
   { name: 'a reply on a task below', state: { ...base, followUp: true, movedTo: { task: 'mvm0n3bu-6911', title: 'Parser' }, popped: true }, title: true, node: 'mvm0n3bu-6911' },
   { name: 'with closes told', state: { ...base, closed: [{ id: 'th-777777777777', title: 'Done', how: 'acked', by: 'human' }] }, title: true },

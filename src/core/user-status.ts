@@ -43,6 +43,7 @@ import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
 import type { SameAskFold } from './same-ask.js';
 import type { StatusThreadLine, StatusThreadNew, ThreadMark } from './sessions/status-threads.js';
+import type { JoinMark, StatusThreadSplit } from './sessions/status-thread-split.js';
 import { reportDecision, type AskMemory, type StatusDecision } from './ask-decision.js';
 import type { ActionItem } from './action-needed.js';
 // The web reads Action needed through this module's alias (@open-walnut/user-status).
@@ -237,6 +238,10 @@ export interface StatusReport {
   thread_titles?: ThreadMark[];
   /** Its threads whose answer he reacted to (FOR_USER_THREAD_SEEN, threads_kept_by_walnut), likewise: marked known, never stored here. */
   threads_seen?: ThreadMark[];
+  /** His messages it said are another subject than the thread they joined for coming right after (FOR_USER_THREAD_SPLIT): split out, never stored here. */
+  threads_split?: StatusThreadSplit[];
+  /** Every join the question asked about, whatever the answer said: its mark comes off, never stored here. */
+  joins_checked?: JoinMark[];
   /** Its state came from its thread lines, not FOR_USER_STATE (status-threads.ts settleStateFromThreads). */
   from_threads?: true;
 }

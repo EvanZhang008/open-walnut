@@ -537,11 +537,15 @@ export interface OwnThreadOpen { title: string; text: string; state: ThreadState
 export async function writeOwnThreads(
   taskId: string, plan: (cur: ThreadsFile) => { writes: OwnThreadWrite[]; opens: OwnThreadOpen[] }, by: ThreadWriter,
   ask?: { ask: TaskAsk | null; named?: string },
+  /** Runs first under the same lock (the answer's splits, sessions/status-thread-split.ts): its threads, and the ids it changed. */
+  pre?: (cur: ThreadsFile) => { file: ThreadsFile; out: string[] },
 ): Promise<string[]> {
   const at = new Date().toISOString();
   const handsToUser = (p: ThreadPatch) => p.state === 'needs' || !!p.reopen;
   const changed = await mutateThreads(taskId, (cur) => {
-    const r = writeOwn(cur);
+    const first = pre ? pre(cur) : { file: cur, out: [] };
+    const own = writeOwn(first.file);
+    const r = { file: own.file, out: [...new Set([...first.out, ...own.out])] };
     if (!ask) return r;
     // The report's ask goes on its thread in the same write, after the lines (thread-report-ask.ts).
     const placed = placeAsk(r.file, ask.ask, at, ask.named);

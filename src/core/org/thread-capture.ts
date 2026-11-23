@@ -93,7 +93,7 @@ export interface ThreadHintState {
   /** `movedTo` is the task below that owns it (threads_pop_up): it gets his words (thread-reply.ts). */
   popped?: boolean;
   /** It went to a thread it did not name (threads-model.ts FileMessageResult.joined). */
-  joined?: 'reopened' | 'recent';
+  joined?: 'reopened' | 'recent' | 'reaction';
   /** His words switched this task's Threads off or back on (threads-word-switch.ts): nothing was filed. */
   switched?: ThreadsWordSwitch;
 }
@@ -278,7 +278,9 @@ export function threadHintText(s: ThreadHintState): string {
       ? `a follow-up in thread ${s.threadId} ${q(s.title)}, which he had closed a moment ago: filed there, and the thread is open again.`
       : `a follow-up in thread ${s.threadId} ${q(s.title)}, filed there.`;
   } else if (s.joined === 'recent') {
-    text = `filed under thread ${s.threadId} ${q(s.title)}: it came right after his last message there. Another subject: thread_split it out.`;
+    text = `filed under thread ${s.threadId} ${q(s.title)}: it came right after his last message there. Another subject: thread_split it out (the status question asks too).`;
+  } else if (s.joined === 'reaction') {
+    text = `filed under thread ${s.threadId} ${q(s.title)}: a bare reaction to your newest answer there.`;
   }
   else if (s.created) {
     text = `filed as new thread ${s.threadId}${s.follows ? ` (asks again about closed ${s.follows.id} ${q(s.follows.title)})` : ''}.`;

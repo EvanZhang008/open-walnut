@@ -115,7 +115,7 @@ async function saveStatusAnswer(
   }
   // Its thread lines set its state when its own words did not (status-threads.ts), and go to its
   // threads once the report is stored: they are never part of it.
-  const { settleStateFromThreads, applyThreadLines, placesAskOnThread } = await import('./status-threads.js');
+  const { settleStateFromThreads, applyThreadLines, placesAskOnThread, takeThreadFields } = await import('./status-threads.js');
   // Whether this turn answered a person's message: such a turn never parks the task (report-phase.ts).
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const { turnAnsweredPerson } = await import('./report-phase.js');
@@ -128,8 +128,8 @@ async function saveStatusAnswer(
   // Main and the leads say their own state (their teams run the work) and open no subject from a
   // line: only a task that is no Org node is settled from its lines, or opens threads (review round 1).
   const taskLike = placesAskOnThread(current);
-  const { threads: threadLines, threads_new: opened, ask_thread: askThread, thread_titles: titles, threads_seen: seen, ...settled } = taskLike ? settleStateFromThreads(report) : report;
-  const threadsNew = taskLike ? opened : undefined;
+  const { lines: threadFields, rest: settled } = takeThreadFields(taskLike ? settleStateFromThreads(report) : report);
+  if (!taskLike) delete threadFields.threads_new;
   report = settled;
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
   // The writer is the session asked, recorded here; a session_id the parsed answer carried is dropped.
@@ -173,7 +173,7 @@ async function saveStatusAnswer(
   // Nothing stored: its thread lines and phase move nothing either.
   if (newerMeanwhile) return false;
   // Only a task that is no Org node places its ask on a thread (status-threads.ts placesAskOnThread).
-  await applyThreadLines(taskId, { threads: threadLines, threads_new: threadsNew, ...(askThread ? { ask_thread: askThread } : {}), ...(titles ? { thread_titles: titles } : {}), ...(seen ? { threads_seen: seen } : {}) }, taskLike ? report : null);
+  await applyThreadLines(taskId, threadFields, taskLike ? report : null);
   const { applyReportPhase } = await import('./report-phase.js');
   if (!opts.midTurn) await applyReportPhase(taskId, sessionId, report, turnEndedMs);
   // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).
