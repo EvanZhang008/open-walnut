@@ -32,6 +32,7 @@ import { blockRepeatIn, heardOncePcm } from './wav-repair.js';
 import { pcmToWav, joinSegmentTexts, SAMPLE_RATE } from './wav-segment.js';
 import type { SttResult } from './types.js';
 import { log } from '../../logging/index.js';
+import { markSwitchRunning, clearSwitchRunning } from '../sessions/running-switches.js';
 
 /** Hears one 16 kHz WAV through the normal engine path (transcribeAudio). */
 export type HearWav = (wav: Buffer) => Promise<SttResult>;
@@ -88,6 +89,12 @@ interface Take {
   /** Why hearing ahead stopped for this take; the stop then hears the whole clip. */
   stopped: string | null;
   finishing: boolean;
+  /**
+   * The deploy hold's token: while a take is kept here a deploy waits (running-switches.ts, read by
+   * scripts/lib/deploy-queue.sh), because a restart loses what was heard ahead (2026-11-23: a deploy
+   * 3 minutes into a 4.5-minute take made the stop hear all of it, 10.8 s).
+   */
+  hold: string;
 }
 
 const takes = new Map<string, Take>();
@@ -97,6 +104,9 @@ let sweepTimer: ReturnType<typeof setInterval> | null = null;
 let liveDrafts = 0;
 
 const takeDir = () => join(TMP_DIR, 'stt-takes');
+
+/** The deploy hold's marker name for a take (TAKE_ID allows only file-safe characters). */
+export const holdName = (id: string) => `stt-take-${id}`;
 
 /** Runs `fn` after every earlier operation on the take: appends, removal and the stop never interleave. */
 function serial<T>(t: Take, fn: () => Promise<T>): Promise<T> {
@@ -117,6 +127,7 @@ function sweep(now = Date.now()): void {
 function forget(t: Take, why: string): Promise<void> {
   if (takes.get(t.id) === t) takes.delete(t.id);
   done.mark(t.id);
+  void clearSwitchRunning(holdName(t.id), t.hold);
   t.stopped ??= why;
   return serial(t, () => rm(t.path, { force: true })).catch(() => {});
 }
@@ -189,6 +200,7 @@ function newTake(id: string, opts: { format: string; language: string | undefine
     settled: 0, pieces: [], repeat: undefined, decodedSize: 0, bytesPerSec: null,
     chain: prepareDir().then(() => rm(path, { force: true })),
     work: null, stopped: null, finishing: false,
+    hold: markSwitchRunning(holdName(id), 'a dictation is being heard ahead'),
   };
   takes.set(id, t);
   if (!sweepTimer) {

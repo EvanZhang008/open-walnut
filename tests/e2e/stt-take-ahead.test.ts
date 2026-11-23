@@ -28,7 +28,10 @@ vi.mock('../../src/core/stt/index.js', () => ({
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { pcmToWav, wavPcm } from '../../src/core/stt/wav-segment.js'
-import { _resetTakesForTest } from '../../src/core/stt/take-ahead.js'
+import { _resetTakesForTest, holdName } from '../../src/core/stt/take-ahead.js'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { runningSwitchesDir } from '../../src/core/sessions/running-switches.js'
 
 let server: Server
 let root: string
@@ -134,6 +137,20 @@ describe('a long take heard ahead through the real server', () => {
     expect(res.body.heardAheadSec).toBeGreaterThan(60)
     expect(res.body.heardAheadSec! + heard[heard.length - 1]!).toBeCloseTo(150, 0)
   }, 60_000)
+
+  it('a deploy waits while a take is kept: its running marker lives from the first part to the stop or the drop', async () => {
+    const marker = (id: string) => join(runningSwitchesDir(), holdName(id))
+    const clip = pcmToWav(speechPcm(6))
+    expect((await append('take-e2e-hold-01', 0, clip.subarray(0, 4000))).status).toBe(200)
+    await vi.waitFor(() => expect(existsSync(marker('take-e2e-hold-01'))).toBe(true))
+    expect((await stop(clip, 'take-e2e-hold-01')).status).toBe(200)
+    await vi.waitFor(() => expect(existsSync(marker('take-e2e-hold-01'))).toBe(false))
+
+    expect((await append('take-e2e-hold-02', 0, clip.subarray(0, 4000))).status).toBe(200)
+    await vi.waitFor(() => expect(existsSync(marker('take-e2e-hold-02'))).toBe(true))
+    expect((await fetch(`${root}/api/stt/takes/take-e2e-hold-02`, { method: 'DELETE' })).status).toBe(200)
+    await vi.waitFor(() => expect(existsSync(marker('take-e2e-hold-02'))).toBe(false))
+  })
 
   it('the append answers 409 with its size for a wrong offset, and refuses a bad take id', async () => {
     const clip = pcmToWav(speechPcm(4))
