@@ -24,6 +24,8 @@ const EXPECTED_IDS = [
   // Task providers (2026-11-02): each plugin that syncs tasks, with the rules a task must
   // pass before it syncs there.
   'tasks', 'focus-tiers', 'tags', 'task-providers',
+  // Focus (2026-11-23): focus spaces, moved off the side bar; only while focus_workspace is on.
+  'focus-spaces',
   // Keyboard shortcuts (2026-11-13): every shortcut, and a new key for the ones that can change.
   'shortcuts', 'sessions',
   // `stt` is labelled Voice and also carries Text-to-Speech now.

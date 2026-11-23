@@ -9,7 +9,6 @@ import { useAppActivity, useAppCatalog } from '@/apps/hooks';
 import { appPathMatches } from '@/apps/registry';
 import { useRailItemsShown } from '@/apps/rail-items';
 import { QuickBarRailButton } from '@/components/quickbar/QuickBarRailButton';
-import { FocusRailButton } from '@/focus-spaces/FocusRail';
 import { useFocusAppModes } from '@/focus-spaces/useFocusApps';
 import { AgendaIcon, ChatBubbleIcon, OrgChartIcon, PuzzleIcon, ScratchpadIcon, TaskPanelIcon } from '@/apps/icons';
 import {
@@ -469,8 +468,8 @@ export function Sidebar({
         {/* Plugin status items (a live ring each), above the bell; nothing when none is live.
             Voice lives in Settings > Voice (its recordings included) since 2026-10-26. */}
         <SidebarStatusItems onOpenChange={setStatusOpen} />
-        {/* The focus the person is in, or Focus (experiment focus_workspace). */}
-        <FocusRailButton />
+        {/* No Focus entry here: it lives in Settings > Focus (2026-11-23, the user: "it takes too
+            much room, put it in settings"); Home's banner shows a focus the person is in. */}
         {/* A tool, not a page: with the bell, right above it (2026-11-20, the user), never at the top. */}
         <QuickBarRailButton />
         <button

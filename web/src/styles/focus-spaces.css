@@ -1,13 +1,8 @@
-/* Focus spaces (web/src/focus-spaces/): the rail entry, its popover, and the cover of a chat
-   column outside the focus. The popover frame is the status items' (.status-item-popover). */
+/* Focus spaces (web/src/focus-spaces/): the panel in Settings > Focus, Home's banner, and the
+   cover of a chat column outside the focus. */
 
-/* In a focus: the accent glyph with its centre filled, never the tint of the page you are on. */
-.sidebar-focus-link[data-active="true"] { color: var(--accent); font-weight: 600; }
-.sidebar-focus-link[data-active="true"] .focus-glyph-core { fill: currentColor; }
-.sidebar-focus-link.is-open { color: var(--fg); background: var(--accent-subtle); }
-.sidebar-focus-link .sidebar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.focus-popover { width: 320px; max-height: min(560px, calc(100vh - 32px)); }
+/* Settings > Focus: the panel in the settings card, at a reading width. */
+.focus-settings-card { padding: 12px 16px; max-width: 560px; }
 
 .focus-panel { display: flex; flex-direction: column; gap: 8px; }
 .focus-panel-head { display: flex; flex-direction: column; gap: 4px; }
@@ -22,7 +17,8 @@
 /* Layout only: the option rows, ticks and buttons are the card family's (ask-card.css). */
 .focus-options, .focus-ticks, .focus-actions { margin-block: 0; }
 .focus-actions { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
-.focus-panel-head + .focus-actions { border-top: none; padding-top: 0; }
+.focus-panel-head + .focus-actions, .focus-actions:first-child { border-top: none; padding-top: 0; }
+.focus-actions:first-child { margin-top: 0; }
 .focus-ticks { flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
 .focus-ticks .focus-tick-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-block: 4px; }
 .focus-ticks .focus-tick-label { overflow-wrap: anywhere; }
@@ -77,5 +73,8 @@
 /* A caption sits as close to its list as to its input (the rows bring their own 4 px). */
 .focus-panel-caption + .focus-form-projects { margin-top: -4px; }
 .focus-banner-actions { margin-block: 0; flex: none; }
+.focus-banner-error { color: var(--error); font-size: var(--font-size-sm); }
+/* Right after leaving: what waited outside, in the banner's place, until Done. */
+.focus-banner.focus-banner-summary { display: block; padding: 12px; }
 /* On the Tasks page the banner lines up with the toolbar under it (tasks-page.css .tp-toolbar). */
 .tp-board > .focus-banner { padding: 0 20px; }

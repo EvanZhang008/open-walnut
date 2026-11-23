@@ -12,6 +12,7 @@ import { ExperimentalSection } from './sections/ExperimentalSection'
 import { DevicesWaySection } from './sections/DevicesWaySection'
 import { PhonesCloudLanding } from './sections/PhonesCloudLanding'
 import { FocusTiersSection } from './sections/FocusTiersSection'
+import { FocusSpacesSection } from './sections/FocusSpacesSection'
 import { GeneralSection } from './sections/GeneralSection'
 import { HooksSection } from './sections/HooksSection'
 import { MailRulesSection } from './sections/MailRulesSection'
@@ -172,6 +173,16 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       'to do', 'tracker', 'provider',
     ],
     render: ({ config, saveSection }) => <TaskProvidersSection config={config} onSave={saveSection} />,
+  },
+  // Focus spaces: show only a few projects or one task; everything else waits (experiment
+  // focus_workspace). Its own entry, moved off the side bar on 2026-11-23 (the user's ask).
+  {
+    owner: 'walnut', id: 'focus-spaces', label: 'Focus', title: 'Focus', group: 'configure',
+    requires: 'focus-workspace',
+    icon: 'target', tint: '#5856D6',
+    description: 'Show only the projects or tasks you pick, and let everything else wait until you leave.',
+    keywords: ['focus', 'focus space', 'workspace', 'space', 'quiet', 'leave focus', 'enter focus'],
+    render: () => <FocusSpacesSection />,
   },
   // Every keyboard shortcut, from the one table the keys use (keyboard/commands.ts and
   // shortcuts.ts); the ones a person can change get their key here.

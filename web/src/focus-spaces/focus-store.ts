@@ -154,16 +154,12 @@ export async function enterFocus(input: EnterFocusInput): Promise<ActiveFocus> {
   return active
 }
 
-/** This window's person left a focus: the rail opens on what waited outside (FocusRail.tsx). */
-export const FOCUS_ENDED_EVENT = 'walnut:focus-ended'
-
 /** Leave the focus; `onlyBy` leaves only one that source entered. Returns the focus that ended. */
 export async function leaveFocus(onlyBy?: FocusBy): Promise<ActiveFocus | null> {
   const { ended } = await apiDelete<{ ended: ActiveFocus | null }>(`${BASE}/active${onlyBy ? `?only_by=${onlyBy}` : ''}`)
   if (ended) {
     reads++
     emit({ ...state, active: null })
-    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ActiveFocus>(FOCUS_ENDED_EVENT, { detail: ended }))
   }
   return ended
 }

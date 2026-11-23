@@ -9,9 +9,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchMacAccess, peekMacAccess } from '@/api/config'
 import { useIsReplicaServer } from '@/hooks/useServerRole'
+import { useExperimental } from '@/hooks/useExperimental'
 
-/** `primary`: the console of the Mac itself (Tailscale, a browser link), never a replica answering without it. */
-export type SettingsPaneGate = 'mac-access' | 'primary'
+/**
+ * `primary`: the console of the Mac itself (Tailscale, a browser link), never a replica answering without it.
+ * `focus-workspace`: experiment focus_workspace is on (the page's last read of the flags).
+ */
+export type SettingsPaneGate = 'mac-access' | 'primary' | 'focus-workspace'
 
 type GateState = Readonly<Record<'mac-access', boolean | null>>
 
@@ -20,9 +24,10 @@ function peekGates(): GateState {
 }
 
 /** The gates that are known closed on this server. */
-export function closedGates(state: GateState, replica = false): ReadonlySet<SettingsPaneGate> {
+export function closedGates(state: GateState, replica = false, focusOn = true): ReadonlySet<SettingsPaneGate> {
   const closed = new Set<SettingsPaneGate>((Object.keys(state) as Array<keyof GateState>).filter((g) => state[g] === false))
   if (replica) closed.add('primary')
+  if (!focusOn) closed.add('focus-workspace')
   return closed
 }
 
@@ -30,6 +35,7 @@ export function useClosedPaneGates(): ReadonlySet<SettingsPaneGate> {
   const [state, setState] = useState<GateState>(peekGates)
   // Unknown reads as the Mac (false), so the Mac never loses an entry to a slow answer.
   const replica = useIsReplicaServer()
+  const focusOn = useExperimental('focus_workspace')
   useEffect(() => {
     let live = true
     void fetchMacAccess().then((macAccess) => {
@@ -37,5 +43,5 @@ export function useClosedPaneGates(): ReadonlySet<SettingsPaneGate> {
     })
     return () => { live = false }
   }, [])
-  return useMemo(() => closedGates(state, replica), [state, replica])
+  return useMemo(() => closedGates(state, replica, focusOn), [state, replica, focusOn])
 }

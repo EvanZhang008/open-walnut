@@ -1,12 +1,12 @@
 /**
- * What the focus popover shows (FocusRail.tsx): the focus the person is in, the saved spaces to
+ * Settings > Focus (FocusSpacesSection.tsx): the focus the person is in, the saved spaces to
  * enter, a space being made or changed, and, right after leaving, what waited outside.
  *
  * Its controls are the card family's (standard.md): option rows (`.org-answer-options .btn` with
  * its line of why in data-detail), ticks (`.org-answer-check`), and the 34 px buttons of
  * `.ask-card-answer`, one of them blue.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Task } from '@open-walnut/core'
 import { taskInScope } from '@open-walnut/focus-scope'
 import { useTaskListSelect } from '@/contexts/TasksContext'
@@ -24,9 +24,13 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** `ended`: the focus the person just left in this window (the summary shows first). */
-export function FocusPanel({ ended, onClose }: { ended: ActiveFocus | null; onClose(): void }) {
+export function FocusPanel() {
   const { active, spaces } = useFocusSnapshot()
+  // The focus the person just left here: what waited outside shows first, until Done.
+  const [ended, setEnded] = useState<ActiveFocus | null>(null)
+  // A focus entered since (here or elsewhere) makes the last one's summary old news.
+  const inFocus = !!active
+  useEffect(() => { if (inFocus) setEnded(null) }, [inFocus])
   const tasks = useTaskListSelect(({ tasks: list }) => list) ?? NO_TASKS
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks])
   const titleOf = (id: string) => byId.get(id)?.title
@@ -46,11 +50,10 @@ export function FocusPanel({ ended, onClose }: { ended: ActiveFocus | null; onCl
 
   const enter = (spaceId: string) => run(async () => {
     await enterFocus({ spaceId, ...(length ? { until: Date.now() + length * 60_000 } : {}) })
-    onClose()
+    setEditing(false)
   })
 
-  // The rail hears the leave (FOCUS_ENDED_EVENT) and hands the ended focus back as `ended`.
-  const leave = () => run(async () => { await leaveFocus() })
+  const leave = () => run(async () => { setEnded(await leaveFocus()) })
   const summary = useMemo<FocusSummary | null>(() => {
     if (!ended) return null
     const lookup = (id: string) => byId.get(id) ?? null
@@ -64,24 +67,18 @@ export function FocusPanel({ ended, onClose }: { ended: ActiveFocus | null; onCl
       <SpaceForm
         space={mode.space}
         length={length}
-        onDone={(entered) => { if (entered) onClose(); else setMode({ kind: 'main' }) }}
+        onDone={() => setMode({ kind: 'main' })}
       />
     )
   }
-  if (summary && !active) return <SummaryView summary={summary} onClose={onClose} />
+  if (summary && !active) return <SummaryView summary={summary} onClose={() => setEnded(null)} />
 
   const others = spaces.filter((s) => s.id !== active?.spaceId)
   const activeSpace = active?.spaceId ? spaces.find((s) => s.id === active.spaceId) : undefined
   return (
     <div className="focus-panel" data-testid="focus-panel">
-      {active
-        ? <ActiveHead active={active} tasks={tasks} byId={byId} titleOf={titleOf} />
-        : (
-          <div className="focus-panel-head">
-            <div className="focus-panel-title">Focus</div>
-            <div className="focus-panel-detail">Show only the projects or tasks you pick. Everything else waits, quietly, until you leave.</div>
-          </div>
-        )}
+      {/* Outside a focus the Settings pane's own title and sentence say what Focus is. */}
+      {active && <ActiveHead active={active} tasks={tasks} byId={byId} titleOf={titleOf} />}
       {/* The length first: a space row enters at once, so it is picked before one. */}
       {!active && !editing && others.length > 0 && (
         <>
@@ -152,7 +149,7 @@ function ActiveHead({ active, tasks, byId, titleOf }: {
   )
 }
 
-function SummaryView({ summary, onClose }: { summary: FocusSummary; onClose(): void }) {
+export function SummaryView({ summary, onClose }: { summary: FocusSummary; onClose(): void }) {
   const openTask = useOpenTask()
   return (
     <div className="focus-panel" data-testid="focus-summary">
@@ -169,7 +166,7 @@ function SummaryView({ summary, onClose }: { summary: FocusSummary; onClose(): v
           <div className="ask-card-answer focus-options">
             <div className="org-answer-options" role="list">
               {summary.needs.slice(0, 6).map((t) => (
-                <button key={t.id} type="button" role="listitem" className="btn btn-sm" data-peek-row="" onClick={() => { onClose(); openTask(t.id) }}>{t.title}</button>
+                <button key={t.id} type="button" role="listitem" className="btn btn-sm" data-peek-row="" onClick={() => openTask(t.id)}>{t.title}</button>
               ))}
             </div>
           </div>

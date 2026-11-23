@@ -905,7 +905,6 @@
     "components/workspaces/ProjectScriptsDialog.tsx": 4,
     "components/workspaces/WorkspaceMenuSection.tsx": 9,
     "components/workspaces/WorkspacePreparingPanel.tsx": 2,
-    "focus-spaces/FocusRail.tsx": 1,
     "pages/AppsPage.tsx": 1,
     "pages/DashboardPage.tsx": 1,
     "pages/NotesPage.tsx": 5,
