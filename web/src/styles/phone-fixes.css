@@ -250,7 +250,7 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .notes-split-view .notes-tab-strip,
   .app-shell-navigation .notes-editor-pane .notes-editor-breadcrumb,
-  .app-shell-navigation .notes-editor-pane :is(.notes-locate-btn, .notes-raw-toggle-btn, .notes-width-btn, .notes-width-toggle) {
+  .app-shell-navigation .notes-editor-pane :is(.notes-locate-btn, .notes-raw-toggle-btn, .notes-width-btn) {
     display: none;
   }
   .app-shell-navigation .notes-editor-pane .notes-editor-header {
@@ -411,7 +411,9 @@
     padding-top: 10px;
     padding-bottom: 10px;
   }
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-control {
+  /* The 22 px box fills the 20 px first line itself: no 2 px drop, so the row stays 44 px and its
+     whole height is the box's target (N20). */
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-row > .settings-checkbox-input {
     margin-top: 0;
   }
   /* N20: a larger box in the 44 px row (the shared box's tick is placed from its centre, so it
