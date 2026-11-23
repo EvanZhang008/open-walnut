@@ -301,7 +301,7 @@ describe('locateClickedPath anywhere: a path whose writer is unknown', () => {
     const r = await locateClickedPath({ ref: SHARED, anywhere: true, taskId: 'task-c' })
     expect(r).toMatchObject({ path: SHARED, found: false, missing: true, unreachable: ['Dev box'] })
     expect(r.host).toBeUndefined()
-    expect(r.checked!.sort()).toEqual(['Local', 'spare'])
+    expect(r.checked!.sort()).toEqual(['This Mac', 'spare'])
   })
 
   it('a hinted machine that never answers holds a found file only for the short grace', async () => {

@@ -288,6 +288,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'reply_language_gate',
     name: 'Hold sends that are not in your reply language',
+    summary: 'An agent\'s sends to you that are not in your Reply language are held until it writes them in it. Chat replies are not.',
     description: 'When your Reply language setting names a language, words an agent sends you (a message to another task, a thread, a letter, the Board, the Brief, a task report, a question it asks you) that are not in that language are not sent: the agent is told to write them again in it. Code, commands, paths and quoted words do not count. Its chat replies are never held or corrected. Off: every send goes out as written.',
     default: false,
   },
