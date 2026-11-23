@@ -31,7 +31,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import type { RemoteDaemonUpdateIo } from './daemon-service-update.js'
-import { installRootLine, laterLines, RUNNER_BEAT_SECONDS, servicePreamble } from './daemon-update-shell.js'
+import { installRootLine, laterLines, latestMarkerWord, RUNNER_BEAT_SECONDS, servicePreamble } from './daemon-update-shell.js'
 import { PROBATION_FAILED_NAME, PROBATION_REFUSE_SECONDS, probationRecordLines, SNAPSHOT_DIR } from './daemon-update-probation.js'
 import { parseUpdateTail, TAIL_FILE, tailSteppedIn, updateSnapshotLines, updateTailLines, type UpdateTail, type UpdateTailOptions } from './daemon-update-tail.js'
 import { STAGING } from './daemon-update-staging.js'
@@ -90,8 +90,7 @@ const HOLD_WAIT_MS = 2 * 60_000
 export const LAUNCHED = 'walnut-update-started'
 /** The launcher found another update's runner still at work on the host, and started nothing. */
 export const RUNNER_BUSY = 'walnut-update-busy'
-/** One per user: a hyphen, so it never matches STAGING. */
-const LATEST_MARKER = '"/tmp/open-walnut-update-latest-$(id -u)"'
+/** One per user, and one per service set (latestMarkerWord): a hyphen, so it never matches STAGING. */
 const SUPERSEDED = 'rc=superseded'
 /** The runner found the last update's probation at work (daemon-update-probation.ts) and changed nothing. */
 const PROBING_RC = 'rc=probation'
@@ -119,7 +118,7 @@ export function shq(s: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`
 }
 
-const markerWord = (latest?: string) => (latest ? shq(latest) : LATEST_MARKER)
+const markerWord = (latest?: string, set = '') => (latest ? shq(latest) : latestMarkerWord(set))
 
 /**
  * The detached script: it writes its pid, waits for the launcher's go (written only once
@@ -150,7 +149,7 @@ export function runnerScript(o: {
     '#!/bin/sh',
     '# Walnut daemon update runner (src/providers/daemon-net-update-io.ts), started detached.',
     `d=${d}`,
-    `L=${markerWord(o.latest)}`,
+    `L=${markerWord(o.latest, o.tail?.set)}`,
     `tvb=${build}`,
     ...laterLines(),
     'echo $$ > "$d/update.pid"',
@@ -231,10 +230,10 @@ export function runnerScript(o: {
  * The check and the marker's move hold a lock of their own (`$L.lock`, this user's), so two
  * launches at once cannot both find the host free.
  */
-export function launcherScript(directory: string, latest?: string): string {
+export function launcherScript(directory: string, latest?: string, set = ''): string {
   const d = shq(directory)
   return [
-    `d=${d}; s="$d/update.sh"; L=${markerWord(latest)}`,
+    `d=${d}; s="$d/update.sh"; L=${markerWord(latest, set)}`,
     ...laterLines(),
     installRootLine(),
     ...probationRecordLines(),
@@ -361,7 +360,7 @@ export async function runDetachedUpdate(
     held = (await opts.beforeLaunch?.()) ?? null
   }
   if (held) throw new NetUpdateHeldError(held)
-  const said = await run(launcherScript(directory, opts.latestMarker), 30_000).catch((err: Error) => `${err.message}`)
+  const said = await run(launcherScript(directory, opts.latestMarker, set ?? ''), 30_000).catch((err: Error) => `${err.message}`)
   if (said.includes(RUNNER_BUSY)) throw new NetUpdateHeldError(said.includes(`${RUNNER_BUSY} probation`) ? PROBATION_BUSY : 'another daemon update is still running on the host')
   if (!said.includes(LAUNCHED)) throw new Error(`the update did not start detached from the daemon: ${said.slice(-300)}`)
   opts.onLaunched?.(directory)

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { installRemoteDaemonService, updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
 import { reviveScript, tailFunctionLines, updateSnapshotLines, updateTailLines } from '../../src/providers/daemon-update-tail.js'
 import { standInScript, standInStartLines } from '../../src/providers/daemon-update-standin.js'
+import { launcherScript, runnerScript } from '../../src/providers/daemon-net-update-io.js'
 import { probingCheckScript } from '../../src/providers/daemon-update-probation.js'
 import { managedUpdateScope, remoteServiceProbePaths, reviveScopeOf } from '../../src/providers/daemon-connection.js'
 import {
@@ -223,5 +224,24 @@ describe('service sets on the leader: flag on', () => {
       await recordServiceSetFrom('ssh:h', 'service set: default\n{}')
       expect((await hostServiceSets.read('ssh:h'))?.set).toBe('')
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('the latest-update marker is per service set (review round 1, should-fix 1)', () => {
+  const DEFAULT = '"/tmp/open-walnut-update-latest-$(id -u)"'
+  const OWN = `"/tmp/open-walnut-update-latest-$(id -u)-${SET}"`
+  const dir = '/tmp/open-walnut-update.abcdefghij'
+  it('a set\'s runner, launcher, revive and stand-in use its own marker; the default keeps today\'s name', () => {
+    const runner = (set?: string) => runnerScript({ directory: dir, command: 'x', executable: '/x/walnut', tail: { scope: 'user', ...(set ? { set } : {}) } })
+    expect(runner(SET)).toContain(`L=${OWN}`)
+    expect(runner()).toContain(`L=${DEFAULT}`)
+    expect(launcherScript(dir, undefined, SET)).toContain(`L=${OWN}`)
+    expect(launcherScript(dir)).toContain(`L=${DEFAULT}`)
+    expect(reviveScript({ scope: 'user', set: SET })).toContain(`L=${OWN}`)
+    expect(reviveScript({ scope: 'user' })).toContain(`L=${DEFAULT}`)
+    expect(standInScript(30, SET)).toContain(`L=\${3:-${OWN}}`)
+    expect(standInScript(30)).toContain(`L=\${3:-${DEFAULT}}`)
+    // One set's marker never reads as the other's.
+    expect(runner(SET)).not.toContain(`L=${DEFAULT}`)
   })
 })

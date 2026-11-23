@@ -13,7 +13,7 @@
  */
 import path from 'node:path'
 import { DAEMON_BOOT_SCRIPT_NAME } from './daemon-service-config.js'
-import { serviceSet, serviceSetNames } from './service-set.js'
+import { isServiceSetId, serviceSet, serviceSetNames } from './service-set.js'
 import { DAEMON_BOOT_PID_NAME } from './daemon-service-boot-script.js'
 import { DAEMON_STAMP_SH } from './daemon-live-sh.js'
 import { DAEMON_OWNERSHIP_NAME } from './daemon-service-files.js'
@@ -69,6 +69,16 @@ export const RUNNER_BEAT_SECONDS = 15
  * the first check after such a wake stood the update's runner down).
  */
 export const RUNNER_WAKE_GRACE_SECONDS = RUNNER_BEAT_SECONDS + 5
+
+/**
+ * The marker naming the latest update's staging dir, as a shell word: one per OS user for the
+ * default set (today's name, which older releases read too), and one per service set beside it, so
+ * one set's update never reads as a later update of another's and ends its tail or rollback
+ * (review round 1, should-fix 1).
+ */
+export function latestMarkerWord(set = ''): string {
+  return isServiceSetId(set) ? `"/tmp/open-walnut-update-latest-$(id -u)-${set}"` : '"/tmp/open-walnut-update-latest-$(id -u)"'
+}
 
 /**
  * t_later: the latest marker ($L, a file of this user's) names another update's dir whose

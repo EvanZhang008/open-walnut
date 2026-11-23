@@ -18,7 +18,7 @@
  */
 import { launchdSpawnProbeLines } from './daemon-service-launchd.js'
 import { serviceSetNames } from './service-set.js'
-import { DETACH_LINE, disabledLines, laterLines, lockLines, servicePreamble, UP_LINE } from './daemon-update-shell.js'
+import { DETACH_LINE, disabledLines, laterLines, latestMarkerWord, lockLines, servicePreamble, UP_LINE } from './daemon-update-shell.js'
 
 export const STANDIN_SCRIPT_NAME = 'daemon-standin.sh'
 export const STANDIN_PID_NAME = 'daemon.standin'
@@ -46,7 +46,7 @@ export function standInScript(everySeconds: number, set = ''): string {
     '# Walnut stand-in daemon loop (src/providers/daemon-update-standin.ts), started detached by an update tail.',
     // $1 the runtime dir; $2 the program the config named when the tail began (a second CLI for the handback).
     // $3 the runners' latest marker the tail used (tests point it elsewhere).
-    'tr=$1; tsx0=${2:-}; L=${3:-"/tmp/open-walnut-update-latest-$(id -u)"}; d=',
+    `tr=$1; tsx0=\${2:-}; L=\${3:-${latestMarkerWord(set)}}; d=`,
     ...servicePreamble('user', set),
     '[ "$tk" = launchd ] && [ -f "$tc" ] && [ -d "$tr" ] || exit 0',
     UP_LINE,

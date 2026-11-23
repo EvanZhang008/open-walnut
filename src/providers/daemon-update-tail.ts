@@ -34,7 +34,7 @@
 import { DAEMON_BOOT_PID_NAME, DAEMON_BOOT_STOP_NAME } from './daemon-service-boot-script.js'
 import { serviceSetNames } from './service-set.js'
 import { JOB_GONE_BY_MS, launchdSpawnProbeLines } from './daemon-service-launchd.js'
-import { disabledLines, LAUNCHD_DISABLED_WORDS, laterLines, loadedLines, lockLines, servicePreamble, UP_LINE } from './daemon-update-shell.js'
+import { disabledLines, LAUNCHD_DISABLED_WORDS, laterLines, latestMarkerWord, loadedLines, lockLines, servicePreamble, UP_LINE } from './daemon-update-shell.js'
 import { plistWordLines, standInStartLines, UNXML_SED } from './daemon-update-standin.js'
 import { PROBATION_EVERY_SECONDS, PROBATION_SECONDS, probationRecordLines, probationStartLines, SNAPSHOT_DIR } from './daemon-update-probation.js'
 import { RUNTIME_KEEP_MS } from './daemon-core.js'
@@ -361,7 +361,7 @@ const NO_ROOT = 'the service config is there, but not the service install dir, s
 export function reviveScript(o: UpdateTailOptions & { latest?: string }): string {
   if (o.latest && !/^\/[A-Za-z0-9._/-]+$/.test(o.latest)) throw new Error('the latest marker must be a plain absolute path')
   return [
-    `L=${o.latest ? `'${o.latest}'` : '"/tmp/open-walnut-update-latest-$(id -u)"'}`,
+    `L=${o.latest ? `'${o.latest}'` : latestMarkerWord(o.set ?? '')}`,
     `d=$(umask 077; mktemp -d /tmp/open-walnut-update.XXXXXXXXXX 2>/dev/null) || { printf 'outcome=down\\nno dir for the check could be made in /tmp\\n'; exit 0; }`,
     ...servicePreamble(o.scope, o.set ?? ''),
     ...laterLines(),
