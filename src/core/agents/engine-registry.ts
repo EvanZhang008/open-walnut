@@ -41,6 +41,22 @@ export interface EngineAcpAdapter {
   /** argv TAIL after the resolved absolute binary path; null unless source==='cli'. */
   readonly args: readonly string[] | null;
   readonly versionArgs: readonly string[];
+  /**
+   * Variables every process of this adapter gets (sessions, model probes), under the
+   * operator's `engines.<id>.env` overlay, which wins (acp-worker/adapter-env.ts).
+   */
+  readonly env?: Readonly<Record<string, string>>;
+  /** How the worker signs the adapter in after `initialize` (ACP `authenticate`); absent = it never does. */
+  readonly auth?: EngineAcpAuthPlan;
+}
+
+/**
+ * Which ACP auth method the worker asks for: the first `byEnv` entry whose variable is set
+ * in the adapter's env, else `otherwise`; only a method the adapter's initialize advertised.
+ */
+export interface EngineAcpAuthPlan {
+  readonly byEnv?: ReadonlyArray<readonly [envVar: string, methodId: string]>;
+  readonly otherwise?: string;
 }
 
 export interface EngineCapabilities {

@@ -151,6 +151,8 @@ export class AcpJournalProjector {
   private tools = new Map<string, ToolIdentity>()
   private terminalOutput = new Map<string, string>()
   private turnHasError = false
+  /** The turn whose own outcome was an error (an error meta naming its commandId). */
+  private erroredCommandId: string | null = null
   private terminalCommands = new Set<string>()
   /** providerRequestId → optionId → ACP option `kind`, harvested from the
    *  request frame so an ANSWER can tell an allow from a reject. Dropped as
@@ -219,12 +221,18 @@ export class AcpJournalProjector {
         if (event.stopReason === 'cancelled' && !this.turnHasError) {
           out.push(this.system(record.ts, event.commandId, 'Turn interrupted by user.'))
         }
-        out.push({
-          type: 'result',
-          ts: record.ts,
-          commandId: event.commandId,
-          stopReason: event.stopReason,
-        })
+        // A turn the provider answered but that failed (its error written as the turn's text,
+        // worker.ts journalTurnTextFailure) ended on its error, as a rejected prompt does: no
+        // result after it, or the session would read as a clean turn and the usage-limit wait
+        // would close at once.
+        if (this.erroredCommandId !== event.commandId) {
+          out.push({
+            type: 'result',
+            ts: record.ts,
+            commandId: event.commandId,
+            stopReason: event.stopReason,
+          })
+        }
         this.finishTurn()
         return out
       }
@@ -288,6 +296,7 @@ export class AcpJournalProjector {
         // changed nothing, so it is no error of the turn (OP_REFUSAL_KINDS).
         if (isOpRefusalRecord(event)) return []
         this.turnHasError = true
+        if (event.commandId) this.erroredCommandId = event.commandId
         const commandId = event.commandId ?? this.currentCommandId
         // The usage limit is no failure of the turn's work: the provider's words above say it, and
         // Walnut continues the session at the reset (core/sessions/usage-limit-wait.ts). Still an
@@ -441,6 +450,7 @@ export class AcpJournalProjector {
     this.tools.clear()
     this.terminalOutput.clear()
     this.turnHasError = false
+    this.erroredCommandId = null
   }
 
   private finishTurn(): void {
@@ -449,6 +459,7 @@ export class AcpJournalProjector {
     this.tools.clear()
     this.terminalOutput.clear()
     this.turnHasError = false
+    this.erroredCommandId = null
   }
 
   private ensureSegment(providerMessageId?: string): TextSegment {

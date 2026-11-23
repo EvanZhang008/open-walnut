@@ -111,6 +111,9 @@ import {
 import { CODEX_MODEL_PREFIX_ENV, codexPickForProvider, codexRawConfig, parseCodexBaseConfig, resolveCodexEngine } from './codex-engine-config.js'
 import { parseUsageLimitReset, usageLimitSentence } from './usage-limit-text.js'
 import { safeguardStopOfAcpStopReason } from '../core/sessions/safeguard-stop.js'
+import { descriptorAdapterEnv } from './acp-worker/adapter-env.js'
+import { refusalMeansUsageLimit } from './acp-worker/executor-error.js'
+import { EFFORT_PICK_KEY, effortControlOf, effortValueFor } from './acp-effort.js'
 import type { UsageLimitFacts } from '../core/sessions/usage-limit-model.js'
 import type { OutlivingSource } from '../core/sessions/outliving-work.js'
 import { ACP_SURVIVE_CAPABILITY, workSurvives } from '../core/hosts/work-survives.js'
@@ -804,6 +807,8 @@ export class AcpSession {
   private _cursorCommit: Promise<void> = Promise.resolve()
   private _establishing: Promise<string> | null = null
   private _turnHadError = false
+  /** The adapter ends a quota-exhausted turn with a refusal (its initialize says who it is): no safeguard stop. */
+  private _refusalIsUsageLimit = false
   /** The provider's usage-limit words when the usage limit ended this turn (the record's errorMessage). */
   private _turnLimitText: string | null = null
   /** Turn boundaries seen in the journal: a steer the live turn refused is not asked again in it. */
@@ -1088,7 +1093,7 @@ export class AcpSession {
       // not, so the task stays in progress (server.ts session-result, as for a Claude background command).
       if (name === 'session:result' && (this._backgroundWork.length > 0 || this._pendingWake)) full.detachedBgActive = true
       // The model's safeguards refused the turn (the protocol's own stop reason): the safeguard switch counts it.
-      if (name === 'session:result' && v > this._committedV) {
+      if (name === 'session:result' && v > this._committedV && !this._refusalIsUsageLimit) {
         const refused = safeguardStopOfAcpStopReason(full.stopReason)
         if (refused) full.safeguardStop = { ...refused, ...(this._models.currentModelId ? { model: this._models.currentModelId } : {}) }
       }
@@ -1652,6 +1657,8 @@ export class AcpSession {
     config?: { overlay?: Record<string, string> },
   ): Promise<Record<string, string> | undefined> {
     const overlay = config ? config.overlay : await this.resolveConfiguredEngineEnv()
+    // The engine descriptor's own variables and sign-in plan, under the operator's overlay.
+    const descriptor = descriptorAdapterEnv(engineCaps(this.engineId).acpAdapter)
     if (this.engineId !== 'codex') {
       const managed = buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId, walnutApiEnv: walnutApiEnvForSession(this.host) })
       const provider = this.engineId === 'pi' && providerExecutable
@@ -1664,7 +1671,7 @@ export class AcpSession {
       const tagged = requestTagOn(await (await import('./codex-engine-source.js')).codexWalnutConfig().catch(() => ({})))
         ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(ownHeaders, requestTagValue(this.taskId), await requestTagProject(this.taskId, this.project)) }
         : undefined
-      return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}), ...(tagged ?? {}) }
+      return { ...(descriptor ?? {}), ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}), ...(tagged ?? {}) }
     }
     const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
     // engines.codex (provider, default model and effort) merged under the user's own
@@ -1724,8 +1731,8 @@ export class AcpSession {
     // Walnut's own app-server client, or the codex-acp adapter (codex-app-server/transport.ts),
     // read from the same engines.codex as the provider (the Mac's copy off the Mac).
     const transport = { [CODEX_TRANSPORT_ENV]: resolveCodexTransport(walnutConfig, process.env, { adapterGiven: !!this.cfg.artifacts }) }
-    if (!overlay) return { ...(managed ?? {}), ...transport }
-    return { ...overlay, ...(managed ?? {}), ...transport }
+    if (!overlay && !descriptor) return { ...(managed ?? {}), ...transport }
+    return { ...(descriptor ?? {}), ...(overlay ?? {}), ...(managed ?? {}), ...transport }
   }
 
   /**
@@ -2100,13 +2107,13 @@ export class AcpSession {
     const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
     const stored = record?.acpConfig ?? this.cfg.acpConfig
     if (stored?.mode) this._chosenMode = stored.mode
-    if (!stored || this._configOptions.length === 0) return
+    if (!stored) return
     const wanted = await this.codexPickAsStarted(stored)
     let modelReplayed = false
-    for (const [configId, value] of Object.entries(wanted)) {
-      const control = this._configOptions.find((c) => c.id === configId)
-      if (!control || control.currentValue === value) continue
-      if (!control.options.some((o) => o.value === value)) continue
+    for (const [key, storedValue] of Object.entries(wanted)) {
+      const target = this.replayTarget(key, storedValue)
+      if (!target) continue
+      const { configId, value } = target
       const resp = await conn.send('acpSetConfigOption', {
         sid: this.runtimeId,
         commandId: `acp-config-replay-${crypto.randomBytes(8).toString('hex')}`,
@@ -2118,7 +2125,7 @@ export class AcpSession {
         this._configOptions = result?.configOptions ?? this._configOptions.map((c) =>
           c.id === configId ? { ...c, currentValue: value } : c)
         this._models = result?.models ?? (configId === 'model' ? { ...this._models, currentModelId: value } : this._models)
-        if (configId === 'model' || configId === 'reasoning_effort') {
+        if (configId === 'model' || key === EFFORT_PICK_KEY) {
           modelReplayed = Boolean(result?.models?.currentModelId)
         }
         log.session.info('acp: replayed persisted config after worker spawn', {
@@ -2140,6 +2147,30 @@ export class AcpSession {
         ...this.acpModelNamePatch(this._models.currentModelId),
       }).catch(() => {})
     }
+  }
+
+  /**
+   * The config op one stored acpConfig entry asks for now, or undefined when it is in place
+   * or the adapter offers nothing it fits. A start's effort (EFFORT_PICK_KEY) goes to the
+   * adapter's effort control, mapped onto the values it offers (acp-effort.ts); a model on an
+   * adapter that lists models but has no model control goes as 'model' too (the worker
+   * switches it with session/set_model).
+   */
+  private replayTarget(key: string, value: string): { configId: string; value: string } | undefined {
+    if (key === EFFORT_PICK_KEY) {
+      const control = effortControlOf(this._configOptions)
+      const mapped = control ? effortValueFor(value, control) : undefined
+      return control && mapped && control.currentValue !== mapped ? { configId: control.id, value: mapped } : undefined
+    }
+    const control = this._configOptions.find((c) => c.id === key)
+    if (control) {
+      return control.currentValue !== value && control.options.some((o) => o.value === value) ? { configId: key, value } : undefined
+    }
+    if (key === 'model' && !this._configOptions.some((c) => c.category === 'model')
+      && this._models.currentModelId !== value && this._models.availableModels.some((m) => m.modelId === value)) {
+      return { configId: key, value }
+    }
+    return undefined
   }
 
   /**
@@ -2442,6 +2473,7 @@ export class AcpSession {
       await this.publishSessionResponse({ sessionId: state.providerSessionId })
     }
     this._capabilities = state.capabilities
+    this._refusalIsUsageLimit = refusalMeansUsageLimit(state.initializeResponse)
     this._models = state.models ?? snapshotAcpModels(state.sessionResponse)
     this._configOptions = state.configOptions ?? snapshotAcpConfigOptions(state.sessionResponse)
     this._turnActive = state.turnActive
@@ -2563,10 +2595,15 @@ export class AcpSession {
       base = asStarted
     }
     if (!await this.setConfigOption('model', base)) return false
-    if (effort && !await this.setConfigOption('reasoning_effort', effort)) {
-      log.session.warn('acp: model applied but reasoning_effort rejected', {
-        sessionId: this.trackingId(), modelId, effort,
-      })
+    if (effort) {
+      // Read after the model: an adapter's effort choices can depend on it (acp-effort.ts).
+      const control = effortControlOf(this._configOptions)
+      const value = control ? effortValueFor(effort, control) : effort
+      if (!value || !await this.setConfigOption(control?.id ?? EFFORT_PICK_KEY, value)) {
+        log.session.warn('acp: model applied but its effort rejected', {
+          sessionId: this.trackingId(), modelId, effort, control: control?.id,
+        })
+      }
     }
     // Persist the requested (qualified) id so the pill shows what was chosen.
     this._models = { ...this._models, currentModelId: modelId }

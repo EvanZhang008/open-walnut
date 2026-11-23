@@ -76,6 +76,17 @@ describe('probeAdapterModels', () => {
     ])
   })
 
+  it('signs in first when the adapter env names an auth plan, as a session does (acp-worker/adapter-env.ts)', async () => {
+    const env = { ...process.env, MOCK_ACP_REQUIRE_AUTH: '1', WALNUT_ACP_AUTH: JSON.stringify({ otherwise: 'mock-oauth' }) }
+    const result = await probeAdapterModels([process.execPath, MOCK_AGENT], { env })
+    expect(result.currentModelId).toBe('mock-gpt-best')
+    // Without the plan the adapter refuses session/new; a refused sign-in says so.
+    await expect(probeAdapterModels([process.execPath, MOCK_AGENT], { env: { ...process.env, MOCK_ACP_REQUIRE_AUTH: '1' } }))
+      .rejects.toThrow(/session\/new failed: Authentication required/)
+    await expect(probeAdapterModels([process.execPath, MOCK_AGENT], { env: { ...env, MOCK_ACP_AUTH_FAIL: '1' } }))
+      .rejects.toThrow(/authenticate failed/)
+  })
+
   it('falls back to the model config option when no models extension exists', async () => {
     // Inline adapter: initialize + session/new advertising ONLY configOptions.
     const script = `

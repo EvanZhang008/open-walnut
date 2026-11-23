@@ -41,9 +41,10 @@ export const ACP_FULL_ACCESS_MODE_VALUES: ReadonlySet<string> = new Set([
   'agent-full-access', 'bypassPermissions', 'yolo',
 ])
 
-/** Adapter mode values that ask before acting; listed in the order an asking default is picked. */
+/** Adapter mode values that ask before acting; listed in the order an asking default is picked.
+ *  'accept-edits' is the Gemini family agent CLIs' spelling (their presets: default, accept-edits, plan). */
 export const ACP_ASKING_MODE_VALUES: readonly string[] = [
-  'agent', 'default', 'acceptEdits', 'autoEdit', 'read-only', 'plan', 'dontAsk',
+  'agent', 'default', 'acceptEdits', 'accept-edits', 'autoEdit', 'read-only', 'plan', 'dontAsk',
 ]
 
 /** The codex-acp preset a Walnut permission mode starts in. */

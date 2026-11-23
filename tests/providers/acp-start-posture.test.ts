@@ -19,8 +19,11 @@ import { recordedSessionMode } from '../../src/core/sessions/acp-recorded-mode.j
 import { persistSessionModeChange } from '../../src/core/sessions/session-lifecycle.js'
 import { _resetForTesting } from '../../src/core/task-manager.js'
 import type { SessionEngine, SessionMode } from '../../src/core/types.js'
-import { AcpSession } from '../../src/providers/acp-session.js'
-import { AcpModeRefusedError } from '../../src/providers/acp-permission-posture.js'
+import { AcpSession, hostAdapterEnv } from '../../src/providers/acp-session.js'
+import { AcpModeRefusedError, acpPostureAllowsAll, acpSupposedFullAccess } from '../../src/providers/acp-permission-posture.js'
+import { ACP_AUTH_ENV } from '../../src/providers/acp-worker/adapter-env.js'
+import { engineCaps } from '../../src/core/agents/engine-registry.js'
+import { bus } from '../../src/core/event-bus.js'
 
 const ARTIFACTS = { workerCmd: ['worker'], adapterCmd: ['adapter'] }
 
@@ -28,10 +31,15 @@ function modeControl(values: string[], current: string) {
   return { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: current, options: values.map((value) => ({ value, name: value })) }
 }
 
-async function establish(o: { engine: SessionEngine; mode: SessionMode; modeNamed: boolean; controls?: unknown[]; sid: string; refuseSet?: boolean }) {
+async function establish(o: {
+  engine: SessionEngine; mode: SessionMode; modeNamed: boolean; controls?: unknown[]; sid: string; refuseSet?: boolean
+  /** The worker's state extras: its initialize answer and model catalog. */
+  initializeResponse?: unknown; models?: unknown
+  acpConfig?: Record<string, string>
+}) {
   const session = new AcpSession({
     taskId: '', project: '', cwd: '/tmp', mode: o.mode, modeNamed: o.modeNamed, engine: o.engine,
-    runtimeId: `acp-${o.sid}`, artifacts: ARTIFACTS,
+    runtimeId: `acp-${o.sid}`, artifacts: ARTIFACTS, ...(o.acpConfig ? { acpConfig: o.acpConfig } : {}),
   })
   const send = vi.fn(async (command: string, params?: Record<string, unknown>) => {
     if (command === 'acpStart') {
@@ -40,8 +48,9 @@ async function establish(o: { engine: SessionEngine; mode: SessionMode; modeName
         session: { sessionId: o.sid, ...(o.controls ? { configOptions: o.controls } : {}) },
         state: {
           providerSessionId: undefined, adapterPid: 1, turnActive: false, controlActive: false, pendingPermissions: [],
-          initializeResponse: {}, capabilities: {}, sessionResponse: { sessionId: o.sid }, lastAcceptedCommands: {}, journalOffset: 0,
+          initializeResponse: o.initializeResponse ?? {}, capabilities: {}, sessionResponse: { sessionId: o.sid }, lastAcceptedCommands: {}, journalOffset: 0,
           ...(o.controls ? { configOptions: o.controls } : {}),
+          ...(o.models ? { models: o.models } : {}),
         },
       }
     }
@@ -252,5 +261,96 @@ describe('an old ACP session whose record says default', () => {
     expect(recordedSessionMode({ engine: 'codex', mode: 'default', modeChosen: true })).toEqual({ mode: 'default', chosen: true })
     expect(recordedSessionMode({ engine: 'claude', mode: 'default' })).toEqual({ mode: 'default', chosen: true })
     expect(recordedSessionMode({ engine: undefined, mode: 'default' })).toEqual({ mode: 'default', chosen: true })
+  })
+})
+
+describe('the Gemini family agent CLI presets and controls', () => {
+  const thought = (values: string[], current: string) => ({ id: 'thought_level', name: 'Thinking', category: 'thought_level', type: 'select', currentValue: current, options: values.map((value) => ({ value, name: value })) })
+  const model = (values: string[], current: string) => ({ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: current, options: values.map((value) => ({ value, name: value })) })
+  const catalog = (ids: string[], current: string) => ({ currentModelId: current, availableModels: ids.map((modelId) => ({ modelId, name: modelId })) })
+
+  it('accept-edits is an asking preset: chosen, nothing is answered for the session', () => {
+    expect(acpSupposedFullAccess({ walnutMode: 'bypass', chosenMode: 'accept-edits' })).toBe(false)
+    expect(acpPostureAllowsAll({ walnutMode: 'bypass', chosenMode: 'accept-edits' })).toBe(false)
+  })
+
+  it('a bypass start on presets with no full access (default, accept-edits, plan) sets none; Walnut answers', async () => {
+    const { sets, session } = await establish({
+      engine: 'gemini', mode: 'bypass', modeNamed: true, sid: 'agy-bypass',
+      controls: [modeControl(['default', 'accept-edits', 'plan'], 'default')],
+    })
+    expect(sets).toEqual([])
+    expect(acpPostureAllowsAll({ walnutMode: session.mode, chosenMode: undefined })).toBe(true)
+  })
+
+  it("a start's effort goes to the thought_level control, mapped onto the values it offers", async () => {
+    const { sets } = await establish({
+      engine: 'gemini', mode: 'bypass', modeNamed: true, sid: 'agy-effort',
+      controls: [model(['gemini-a', 'gemini-b'], 'gemini-a'), thought(['low', 'medium', 'high', 'xhigh'], 'medium')],
+      acpConfig: { model: 'gemini-b', reasoning_effort: 'max' },
+    })
+    expect(sets).toEqual([
+      expect.objectContaining({ configId: 'model', value: 'gemini-b' }),
+      expect.objectContaining({ configId: 'thought_level', value: 'xhigh' }),
+    ])
+  })
+
+  it("a picked model[effort] sets the model, then the thought_level the new model offers", async () => {
+    const { session, send } = await establish({
+      engine: 'gemini', mode: 'bypass', modeNamed: true, sid: 'agy-pick',
+      controls: [model(['gemini-a', 'gemini-b'], 'gemini-a'), thought(['low', 'medium', 'high'], 'medium')],
+    })
+    send.mockClear()
+    expect(await session.setModel('gemini-b[xhigh]')).toBe(true)
+    expect(send.mock.calls.filter((c) => c[0] === 'acpSetConfigOption').map((c) => [c[1]?.configId, c[1]?.value]))
+      .toEqual([['model', 'gemini-b'], ['thought_level', 'high']])
+  })
+
+  it('a stored model on an adapter with models but no model control (Gemini CLI) is replayed as a model op', async () => {
+    const { sets } = await establish({
+      engine: 'gemini', mode: 'bypass', modeNamed: true, sid: 'gemini-models-only',
+      models: catalog(['gemini-a', 'gemini-b'], 'gemini-a'),
+      acpConfig: { model: 'gemini-b' },
+    })
+    expect(sets).toEqual([expect.objectContaining({ configId: 'model', value: 'gemini-b' })])
+    // In place, or not listed: nothing is sent.
+    expect((await establish({ engine: 'gemini', mode: 'bypass', modeNamed: true, sid: 'gemini-same', models: catalog(['gemini-a'], 'gemini-a'), acpConfig: { model: 'gemini-a' } })).sets).toEqual([])
+    expect((await establish({ engine: 'gemini', mode: 'bypass', modeNamed: true, sid: 'gemini-unlisted', models: catalog(['gemini-a'], 'gemini-a'), acpConfig: { model: 'gone' } })).sets).toEqual([])
+  })
+
+  it("a refusal from an adapter whose refusal is its quota is no safeguard stop; another adapter's is", async () => {
+    const results: Array<Record<string, unknown>> = []
+    for (const [sid, name] of [['agy-refusal', 'Antigravity ACP Server'], ['other-refusal', 'some-agent']] as const) {
+      const { session } = await establish({ engine: 'gemini', mode: 'bypass', modeNamed: true, sid, initializeResponse: { agentInfo: { name } } })
+      const feed = (v: number, event: Record<string, unknown>) => (session as unknown as { handleDaemonEvent(ev: unknown): void })
+        .handleDaemonEvent({ sid: `acp-${sid}`, ev: 'jsonl', v, line: JSON.stringify({ kind: 'meta', ts: Date.now(), event }) })
+      const emit = vi.spyOn(bus, 'emit').mockImplementation(((name: string, payload: Record<string, unknown>) => {
+        if (name === 'session:result') results.push(payload)
+      }) as never)
+      try {
+        feed(1, { type: 'turn-started', commandId: `c-${sid}` })
+        feed(2, { type: 'turn-ended', commandId: `c-${sid}`, stopReason: 'refusal' })
+      } finally {
+        emit.mockRestore()
+      }
+    }
+    expect(results.map((r) => Boolean(r.safeguardStop))).toEqual([false, true])
+  })
+})
+
+describe('the engine descriptor env', () => {
+  it('its variables and sign-in plan ride the start env, and a session on another host keeps them', async () => {
+    const adapter = engineCaps('gemini').acpAdapter as { env?: Record<string, string>; auth?: unknown }
+    const before = { env: adapter.env, auth: adapter.auth }
+    Object.assign(adapter, { env: { SSH_CONNECTION: 'walnut 0 walnut 0', AGY_ACP_FORCE_FILE_STORAGE: '1' }, auth: { otherwise: 'oauth-personal' } })
+    try {
+      const { env } = await establish({ engine: 'gemini', mode: 'bypass', modeNamed: true, sid: 'descriptor-env' })
+      expect(env).toMatchObject({ SSH_CONNECTION: 'walnut 0 walnut 0', AGY_ACP_FORCE_FILE_STORAGE: '1', [ACP_AUTH_ENV]: JSON.stringify({ otherwise: 'oauth-personal' }) })
+      expect(hostAdapterEnv(env, home)).toMatchObject({ SSH_CONNECTION: 'walnut 0 walnut 0', AGY_ACP_FORCE_FILE_STORAGE: '1', [ACP_AUTH_ENV]: expect.any(String) })
+    } finally {
+      Object.assign(adapter, before)
+      if (before.env === undefined) delete adapter.env
+      if (before.auth === undefined) delete adapter.auth
+    }
   })
 })

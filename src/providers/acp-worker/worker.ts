@@ -39,6 +39,8 @@ import { AcpJournal, readJournal } from './journal.js'
 import { redactSensitiveText } from '../../logging/redact.js'
 import { mergeAcpSpawnEnv, OP_REFUSAL_KINDS, snapshotAcpTurnUsage } from './protocol.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from '../usage-limit-text.js'
+import { ACP_AUTH_ENV, pickAcpAuthMethod } from './adapter-env.js'
+import { TurnTextTail, turnEndFailure } from './executor-error.js'
 import { CodexDirectConnection, type AcpClientHandler } from '../codex-app-server/connection.js'
 import { CodexLaunchError, prepareCodexLaunch } from '../codex-app-server/launch.js'
 import { AppServerRpcError } from '../codex-app-server/rpc.js'
@@ -222,12 +224,13 @@ export class AcpWorker {
 
     const [cmd, ...cmdArgs] = params.adapterCommand ?? []
     if (!cmd) throw <WorkerError>{ kind: 'adapter_spawn_failed', message: 'empty adapterCommand' }
+    // Same unset semantics as the daemon's worker spawn: '' deletes. A raw
+    // re-merge here resurrected env vars the daemon had already unset.
+    const env = mergeAcpSpawnEnv(process.env, params.env)
     const adapter = spawn(cmd, cmdArgs, {
       cwd: params.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // Same unset semantics as the daemon's worker spawn: '' deletes. A raw
-      // re-merge here resurrected env vars the daemon had already unset.
-      env: mergeAcpSpawnEnv(process.env, params.env),
+      env,
     })
     await new Promise<void>((resolve, reject) => {
       adapter.once('spawn', resolve)
@@ -267,7 +270,25 @@ export class AcpWorker {
     })
     this.initializeResponse = initResp
     this.capabilities = snapshotAcpCapabilities(initResp)
+    await this.authenticate(initResp, env)
     return initResp
+  }
+
+  /**
+   * Sign the adapter in when its descriptor names an auth plan (WALNUT_ACP_AUTH,
+   * acp-worker/adapter-env.ts) and initialize advertised the method it picks. Some
+   * adapters refuse session/new until a client authenticates, even with their API key
+   * in the env. A failure is auth_required; the provider's words go to the daemon log.
+   */
+  private async authenticate(initResp: unknown, env: NodeJS.ProcessEnv): Promise<void> {
+    const methodId = pickAcpAuthMethod(env[ACP_AUTH_ENV], env, initResp)
+    if (!methodId || !this.conn) return
+    try {
+      await this.conn.authenticate({ methodId })
+    } catch (e) {
+      this.reportProviderError('initialize', 'auth_required', e)
+      throw <WorkerError>{ kind: 'auth_required', message: `ACP provider sign-in (${methodId}) failed`, walnutWords: true }
+    }
   }
 
   /** The adapter (or the app-server it stood for) is gone: the turn with it, and this worker. */
@@ -324,6 +345,8 @@ export class AcpWorker {
   private configOptions: AcpConfigOption[] = []
   /** Commands the session's last turn left running (direct Codex only; background.ts). */
   private backgroundWork: BackgroundTerminal[] = []
+  /** The live turn's last agent text: a turn some adapters fail in words (executor-error.ts). */
+  private turnTail = new TurnTextTail()
 
   /**
    * MCP mounts for session/new + session/load. The SAME list must ride both:
@@ -472,6 +495,7 @@ export class AcpWorker {
     }, true)
     this.notifyJournal()
     this.toolCalls.clear()
+    this.turnTail.reset()
     this.turnActive = true
     this.turnCommandId = params.commandId
 
@@ -514,6 +538,7 @@ export class AcpWorker {
       this.turnActive = false
       this.turnCommandId = null
       this.lastEnded = 'turn'
+      this.journalTurnTextFailure(params.commandId, resp.stopReason)
       const usage = snapshotAcpTurnUsage((resp as { usage?: unknown }).usage)
       this.journal.appendMeta({ type: 'turn-ended', commandId: params.commandId, stopReason: resp.stopReason, ...(usage ? { usage } : {}) })
       this.notifyJournal()
@@ -542,6 +567,26 @@ export class AcpWorker {
       this.notifyJournal()
     })
     return acceptedResult
+  }
+
+  /**
+   * A turn the provider answered but that failed: its error written as the turn's last
+   * text, or a refusal that is the adapter's quota (executor-error.ts). Journaled as the
+   * turn's `error` ahead of its turn-ended, with Walnut's own words; the provider's line
+   * (already in the journal as the chat text it is) goes to the daemon log only.
+   */
+  private journalTurnTextFailure(commandId: string, stopReason: unknown): void {
+    const failure = turnEndFailure({ tail: this.turnTail.read(), stopReason, initializeResponse: this.initializeResponse, nowMs: Date.now() })
+    this.turnTail.reset()
+    if (!failure) return
+    this.reportProviderError('prompt', failure.kind, new Error(failure.words))
+    this.journal.appendMeta({
+      type: 'error',
+      errorKind: failure.kind,
+      message: safeWorkerErrorMessage(failure.kind),
+      commandId,
+      ...(failure.resetsAt ? { resetsAt: failure.resetsAt } : {}),
+    })
   }
 
   /**
@@ -759,6 +804,9 @@ export class AcpWorker {
     if (!params.configId || (typeof params.value !== 'string' && typeof params.value !== 'boolean')) {
       throw <WorkerError>{ kind: 'protocol', message: 'setConfigOption requires configId and a string or boolean value' }
     }
+    // An adapter that lists models but has no model control (Gemini CLI) switches them with
+    // session/set_model instead: its session/set_config_option is "Method not found".
+    if (this.switchesModelBySetModel(params)) return this.opSetModel(params, conn, params.value as string)
     const request = typeof params.value === 'boolean'
       ? {
           sessionId: this.providerSessionId,
@@ -779,6 +827,31 @@ export class AcpWorker {
         : option)
     this.sessionResponse = { ...asObject(this.sessionResponse), configOptions: this.configOptions }
     this.models = snapshotAcpModels(this.sessionResponse)
+    return this.acceptConfigOption(params)
+  }
+
+  private switchesModelBySetModel(params: SetConfigOptionParams): boolean {
+    return params.configId === 'model' && typeof params.value === 'string' && !this.direct
+      && !this.configOptions.some((option) => option.id === 'model' || option.category === 'model')
+      && this.models.availableModels.some((model) => model.modelId === params.value)
+  }
+
+  /** ACP's model switch for an adapter with no model control (`session/set_model`, unstable in the spec). */
+  private async opSetModel(params: SetConfigOptionParams, conn: ClientSideConnection, modelId: string): Promise<unknown> {
+    await conn.extMethod('session/set_model', { sessionId: this.providerSessionId, modelId })
+    this.models = { ...this.models, currentModelId: modelId }
+    // Both catalog copies the raw response may carry, so a later snapshot of it agrees.
+    const response = asObject(this.sessionResponse)
+    const meta = asObject(response._meta)
+    this.sessionResponse = {
+      ...response,
+      models: { ...asObject(response.models), currentModelId: modelId },
+      ...(meta.models ? { _meta: { ...meta, models: { ...asObject(meta.models), currentModelId: modelId } } } : {}),
+    }
+    return this.acceptConfigOption(params)
+  }
+
+  private acceptConfigOption(params: SetConfigOptionParams): unknown {
     const accepted = {
       applied: true,
       configId: params.configId,
@@ -863,6 +936,10 @@ export class AcpWorker {
         // conversation isn't unrecoverable.
         if (this.loadingSession && this.skipReplayFrames) return
         const update = params.update
+        if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text'
+          && this.turnActive && !this.controlPrompt && !this.loadingSession) {
+          this.turnTail.push(update.content.text)
+        }
         if (update.sessionUpdate === 'tool_call' && this.controlPrompt) this.refuseControlTool(update.title)
         if (update.sessionUpdate === 'tool_call') {
           this.toolCalls.set(update.toolCallId, { toolCallId: update.toolCallId, title: update.title, kind: update.kind, rawInput: update.rawInput })

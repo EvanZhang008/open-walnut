@@ -34,6 +34,17 @@
  * JSON-RPC internal error whose message carries <text>.
  * Set MOCK_ACP_EXIT_ON_STDIN_CLOSE_MS to delay exit after stdin closes
  * (default 50ms — models codex-acp's ~2s app-server teardown, shortened).
+ * Set MOCK_ACP_REQUIRE_AUTH=1 to advertise auth methods (mock-key, mock-oauth) and refuse
+ * session/new with -32000 "Authentication required" until `authenticate` succeeds (an
+ * adapter that needs it even with its key in the env); MOCK_ACP_AUTH_FAIL=1 refuses every
+ * authenticate, MOCK_ACP_AUTH_LOG=<file> records each method id asked for.
+ * Set MOCK_ACP_AGENT_NAME to the agentInfo.name initialize answers.
+ * Set MOCK_ACP_MODELS_ONLY=1 for an adapter that lists models with no configOptions and
+ * switches them with session/set_model only (Gemini CLI): set_config_option is -32601.
+ *
+ * More prompts: "executor-bad-key" / "executor-quota-out" write the provider failure as
+ * the turn's last text (the Gemini family's "agent executor error" line) and end the turn
+ * with end_turn; "refusal-stop" ends the turn with stopReason refusal.
  */
 
 import readline from 'node:readline';
@@ -75,9 +86,10 @@ function send(obj) {
 function reply(id, result) {
   send({ jsonrpc: '2.0', id, result });
 }
-function replyError(id, message) {
-  send({ jsonrpc: '2.0', id, error: { code: -32603, message } });
+function replyError(id, message, code = -32603) {
+  send({ jsonrpc: '2.0', id, error: { code, message } });
 }
+let authenticated = false;
 function notify(method, params) {
   send({ jsonrpc: '2.0', method, params });
 }
@@ -204,6 +216,23 @@ async function handlePrompt(id, params) {
 
   if (process.env.MOCK_ACP_PROMPT_LOG) {
     fs.appendFileSync(process.env.MOCK_ACP_PROMPT_LOG, JSON.stringify({ sessionId, text: raw }) + '\n');
+  }
+
+  if (text.includes('executor-bad-key')) {
+    chunk(sessionId, 'Looking at it. ');
+    chunk(sessionId, '\n\u26a0 agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com reason:API_KEY_INVALID]]\n');
+    reply(id, { stopReason: 'end_turn' });
+    return;
+  }
+  if (text.includes('executor-quota-out')) {
+    chunk(sessionId, '\n\u26a0 agent executor error: generating and executing: Error 429, Message: Resource has been exhausted (e.g. check quota)., Status: RESOURCE_EXHAUSTED, Details: [map[reason:QUOTA_EXHAUSTED metadata:map[quotaResetDelay:1h30m0s]]]\n');
+    reply(id, { stopReason: 'end_turn' });
+    return;
+  }
+  if (text.includes('refusal-stop')) {
+    chunk(sessionId, 'stopping');
+    reply(id, { stopReason: 'refusal' });
+    return;
   }
 
   if (text.includes('error')) {
@@ -496,8 +525,10 @@ rl.on('line', async (line) => {
             ...(process.env.MOCK_ACP_RESUME_ONLY === '1' || process.env.MOCK_ACP_RESUME === '1' ? { resume: {} } : {}),
           },
         },
-        agentInfo: { name: 'mock-acp-agent', version: '1.0.0' },
-        authMethods: [],
+        agentInfo: { name: process.env.MOCK_ACP_AGENT_NAME || 'mock-acp-agent', version: '1.0.0' },
+        authMethods: process.env.MOCK_ACP_REQUIRE_AUTH === '1'
+          ? [{ id: 'mock-key', name: 'API key' }, { id: 'mock-oauth', name: 'Sign in' }]
+          : [],
         // codex-acp ≥1.2 advertises mid-turn steering here, and Walnut's patch adds injectOnly.
         // MOCK_ACP_NO_STEERING=1 models an adapter without steering, MOCK_ACP_STEER_NO_INJECT_ONLY=1
         // an unpatched one that steers but may start a turn of its own (both: the fallback path).
@@ -535,7 +566,30 @@ rl.on('line', async (line) => {
       }
       break;
     }
+    case 'authenticate':
+      if (process.env.MOCK_ACP_AUTH_LOG) fs.appendFileSync(process.env.MOCK_ACP_AUTH_LOG, `${msg.params?.methodId}\n`);
+      if (process.env.MOCK_ACP_AUTH_FAIL === '1') {
+        replyError(msg.id, 'mock agent: sign-in refused, token SUPER_SECRET_AUTH_TOKEN', -32000);
+        break;
+      }
+      authenticated = true;
+      reply(msg.id, {});
+      break;
+    case 'session/set_model': {
+      const sid = msg.params?.sessionId;
+      if (!availableModels.some((model) => model.modelId === msg.params?.modelId)) {
+        replyError(msg.id, 'mock agent: unknown model', -32602);
+        break;
+      }
+      sessionModels.set(sid, msg.params.modelId);
+      reply(msg.id, {});
+      break;
+    }
     case 'session/new':
+      if (process.env.MOCK_ACP_REQUIRE_AUTH === '1' && !authenticated) {
+        replyError(msg.id, 'Authentication required', -32000);
+        break;
+      }
       sessionCounter++;
       logSessionRequest('session/new', msg.params);
       {
@@ -547,7 +601,7 @@ rl.on('line', async (line) => {
         sessionModes.set(sessionId, process.env.MOCK_ACP_START_MODE || 'agent');
         sessionCollaborationModes.set(sessionId, 'default');
         const models = modelState(sessionId);
-        reply(msg.id, {
+        reply(msg.id, process.env.MOCK_ACP_MODELS_ONLY === '1' ? { sessionId, models } : {
           sessionId,
           configOptions: sessionConfigOptions(sessionId),
           ...(process.env.MOCK_ACP_CONFIG_ONLY === '1' ? {} : { _meta: { models }, models }),
@@ -605,6 +659,10 @@ rl.on('line', async (line) => {
       break;
     }
     case 'session/set_config_option': {
+      if (process.env.MOCK_ACP_MODELS_ONLY === '1') {
+        replyError(msg.id, 'Method not found', -32601);
+        break;
+      }
       const sid = msg.params?.sessionId;
       const configId = msg.params?.configId;
       const value = msg.params?.value;

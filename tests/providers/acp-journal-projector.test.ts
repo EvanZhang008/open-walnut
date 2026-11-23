@@ -522,6 +522,38 @@ describe('ACP journal projector', () => {
     expect(system).toEqual([])
   })
 
+  // A turn the provider answered but failed in words (worker.ts journalTurnTextFailure): its
+  // error, then turn-ended. It ends on the error, as a rejected prompt does: a result after it
+  // read as a clean turn and closed the usage-limit wait at once.
+  it.each(['usage_limit', 'auth_required'])('an error naming the turn, then its turn-ended, ends it on the %s error with no result', (kind) => {
+    const records: JournalRecord[] = [
+      meta(1, { type: 'prompt-accepted', commandId: 'failed', walnutMessageId: 'm1', text: 'work' } as never),
+      meta(2, { type: 'turn-started', commandId: 'failed' } as never),
+      frame(3, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'provider error line' } }),
+      meta(4, { type: 'error', errorKind: kind, message: 'Usage limit reached', commandId: 'failed' } as never),
+      meta(5, { type: 'turn-ended', commandId: 'failed', stopReason: 'end_turn' } as never),
+      // The next turn ends clean again.
+      meta(6, { type: 'prompt-accepted', commandId: 'next', walnutMessageId: 'm2', text: 'again' } as never),
+      meta(7, { type: 'turn-started', commandId: 'next' } as never),
+      meta(8, { type: 'turn-ended', commandId: 'next', stopReason: 'end_turn' } as never),
+    ]
+    const normalizer = new AcpStreamNormalizer(new AcpJournalProjector('runtime-text-failure'))
+    const live = records.flatMap((r) => normalizer.normalize(r))
+    expect(live.filter((e) => e.name === 'session:error')).toHaveLength(1)
+    expect(live.filter((e) => e.name === 'session:result').map((e) => e.payload.commandId)).toEqual(['next'])
+  })
+
+  it('an error naming no turn (a failed control op) still lets the turn end with its result', () => {
+    const records: JournalRecord[] = [
+      meta(1, { type: 'turn-started', commandId: 'live' } as never),
+      meta(2, { type: 'error', errorKind: 'protocol', message: 'ACP provider protocol operation failed' } as never),
+      meta(3, { type: 'turn-ended', commandId: 'live', stopReason: 'end_turn' } as never),
+    ]
+    const normalizer = new AcpStreamNormalizer(new AcpJournalProjector('runtime-op-error'))
+    const live = records.flatMap((r) => normalizer.normalize(r))
+    expect(live.filter((e) => e.name === 'session:result')).toHaveLength(1)
+  })
+
   // 2026-11-09: an older worker journals a refused steer or prompt as an `error`;
   // read as the live turn's failure, each drove the queue to steer again.
   it.each(['steer_race', 'no_turn', 'steer_unsupported', 'turn_active'])('a journaled %s refusal is no turn error, live or in history', (kind) => {

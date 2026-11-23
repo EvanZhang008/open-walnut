@@ -33,6 +33,7 @@ import {
   snapshotAcpModels,
   type AcpModelInfo,
 } from './acp-worker/protocol.js'
+import { ACP_AUTH_ENV, descriptorAdapterEnv, pickAcpAuthMethod } from './acp-worker/adapter-env.js'
 import { log } from '../logging/index.js'
 import { getLocalDaemonConnection } from './local-daemon-dial.js'
 import { mapCodexCatalog, resolveCodexEngine } from './codex-engine-config.js'
@@ -182,12 +183,24 @@ export function probeAdapterModels(
         send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'not supported by the model probe' } })
         return
       }
+      const newSession = () => send({ jsonrpc: '2.0', id: 2, method: 'session/new', params: { cwd, mcpServers: [] } })
       if (msg.id === 1) {
         if (msg.error) {
           finish(new Error(`initialize failed: ${describeRpcError(msg.error)}`))
           return
         }
-        send({ jsonrpc: '2.0', id: 2, method: 'session/new', params: { cwd, mcpServers: [] } })
+        // The descriptor's sign-in plan, as the session's worker follows it (acp-worker/adapter-env.ts).
+        const methodId = pickAcpAuthMethod(env[ACP_AUTH_ENV], env, msg.result)
+        if (methodId) send({ jsonrpc: '2.0', id: 3, method: 'authenticate', params: { methodId } })
+        else newSession()
+        return
+      }
+      if (msg.id === 3) {
+        if (msg.error) {
+          finish(new Error(`authenticate failed: ${describeRpcError(msg.error)}`))
+          return
+        }
+        newSession()
         return
       }
       if (msg.id === 2) {
@@ -275,7 +288,9 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
   const provider = engine === 'pi'
     ? { PI_ACP_PI_COMMAND: resolveEngineExecutable({ engine: 'pi', cwd: probeCwd, env: configuredEnv }) }
     : undefined
-  const env = mergeAcpSpawnEnv(process.env, { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) })
+  // The descriptor's own variables and sign-in plan sit under the overlay, as on a launch (acp-session.ts buildAdapterEnv).
+  const descriptor = descriptorAdapterEnv(engineCaps(engine).acpAdapter)
+  const env = mergeAcpSpawnEnv(process.env, { ...(descriptor ?? {}), ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) })
   if (codexPath) {
     const conn = await getLocalDaemonConnection()
     if (conn.hasCapability('acp-model-catalog-v1')) {

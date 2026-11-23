@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { AcpWorker, providerErrorDetail, classifyPromptRejection } from '../../src/providers/acp-worker/worker.js'
+import { AcpWorker, providerErrorDetail, classifyPromptRejection, type ProviderErrorReport } from '../../src/providers/acp-worker/worker.js'
 import { readJournal } from '../../src/providers/acp-worker/journal.js'
 import {
   WALNUT_MCP_SERVER,
@@ -1201,5 +1201,113 @@ describe('the worker goes away with its adapter', () => {
     expect((await op(w, 'shutdown')).ok).toBe(true)
     await new Promise((r) => setTimeout(r, 100))
     expect(gone).toBe(0)
+  })
+})
+
+describe('signing in after initialize (the descriptor auth plan)', () => {
+  const plan = JSON.stringify({ byEnv: [['MOCK_KEY', 'mock-key']], otherwise: 'mock-oauth' })
+  const authLog = () => path.join(tmpDir, 'auth.log')
+  const asked = () => fs.existsSync(authLog()) ? fs.readFileSync(authLog(), 'utf-8').trim().split('\n') : []
+
+  it('asks for the method whose variable is set, and session/new then works', async () => {
+    worker = await initWorker({ MOCK_ACP_REQUIRE_AUTH: '1', MOCK_ACP_AUTH_LOG: authLog(), WALNUT_ACP_AUTH: plan, MOCK_KEY: 'k' })
+    expect((await op(worker, 'newSession', { cwd: tmpDir })).ok).toBe(true)
+    expect(asked()).toEqual(['mock-key'])
+  })
+
+  it('falls back to `otherwise` when no variable is set (an unset overlay value does not count)', async () => {
+    worker = await initWorker({ MOCK_ACP_REQUIRE_AUTH: '1', MOCK_ACP_AUTH_LOG: authLog(), WALNUT_ACP_AUTH: plan, MOCK_KEY: '' })
+    expect((await op(worker, 'newSession', { cwd: tmpDir })).ok).toBe(true)
+    expect(asked()).toEqual(['mock-oauth'])
+  })
+
+  it('never asks for a method initialize did not advertise, nor without a plan: session/new is auth_required', async () => {
+    for (const env of [{ WALNUT_ACP_AUTH: JSON.stringify({ otherwise: 'not-advertised' }) }, {}]) {
+      const w = await initWorker({ MOCK_ACP_REQUIRE_AUTH: '1', MOCK_ACP_AUTH_LOG: authLog(), ...env })
+      const resp = await op(w, 'newSession', { cwd: tmpDir })
+      expect(resp.ok).toBe(false)
+      expect(resp.error?.kind).toBe('auth_required')
+      await op(w, 'shutdown')
+    }
+    expect(asked()).toEqual([])
+  })
+
+  it('a refused sign-in fails initialize as auth_required; the provider words reach only the daemon log', async () => {
+    const reports: ProviderErrorReport[] = []
+    const w = new AcpWorker(journalPath(), () => {}, () => {}, () => {}, (r) => reports.push(r))
+    worker = w
+    const resp = await op(w, 'initialize', {
+      adapterCommand: [process.execPath, MOCK_AGENT], cwd: tmpDir,
+      env: { MOCK_ACP_REQUIRE_AUTH: '1', MOCK_ACP_AUTH_FAIL: '1', WALNUT_ACP_AUTH: plan },
+    })
+    expect(resp.ok).toBe(false)
+    expect(resp.error).toEqual({ kind: 'auth_required', message: 'ACP provider sign-in (mock-oauth) failed' })
+    expect(reports).toEqual([expect.objectContaining({ op: 'initialize', kind: 'auth_required' })])
+    expect(fs.readFileSync(journalPath(), 'utf-8')).not.toContain('SUPER_SECRET_AUTH_TOKEN')
+  })
+})
+
+describe('a turn the provider answered but that failed', () => {
+  const turnMetas = async (text: string, env?: Record<string, string>) => {
+    worker = await initWorker(env)
+    await op(worker, 'newSession', { cwd: tmpDir })
+    await op(worker, 'prompt', { commandId: `acp-prompt:qm-${text}`, walnutMessageId: `qm-${text}`, text })
+    return metas(await waitForJournal(turnEnded))
+  }
+  const types = (events: Array<{ type: string }>) => events.map((e) => e.type).filter((t) => t === 'error' || t === 'turn-ended')
+
+  it('an executor-error line for a bad key journals auth_required ahead of turn-ended, in Walnut words', async () => {
+    const events = await turnMetas('executor-bad-key')
+    expect(types(events)).toEqual(['error', 'turn-ended'])
+    expect(events.find((e) => e.type === 'error')).toEqual({
+      type: 'error', errorKind: 'auth_required', message: 'ACP provider authentication is required', commandId: 'acp-prompt:qm-executor-bad-key',
+    })
+    // The provider's line is in the journal only as the chat text it is.
+    const raw = fs.readFileSync(journalPath(), 'utf-8').split('\n').filter((l) => l.includes('API key not valid'))
+    expect(raw.every((l) => JSON.parse(l).kind === 'acp')).toBe(true)
+  })
+
+  it('a quota line journals usage_limit with the reset its delay names', async () => {
+    const before = Date.now()
+    const events = await turnMetas('executor-quota-out')
+    const err = events.find((e) => e.type === 'error') as { errorKind: string; resetsAt?: number }
+    expect(err.errorKind).toBe('usage_limit')
+    expect(err.resetsAt).toBeGreaterThanOrEqual(before + 90 * 60_000)
+    expect(err.resetsAt).toBeLessThanOrEqual(Date.now() + 90 * 60_000)
+  })
+
+  it('a refusal is the usage limit only on an adapter whose refusal is its quota (by agentInfo.name)', async () => {
+    const quota = await turnMetas('refusal-stop', { MOCK_ACP_AGENT_NAME: 'Antigravity ACP Server' })
+    expect(quota.find((e) => e.type === 'error')).toMatchObject({ errorKind: 'usage_limit', message: 'Usage limit reached' })
+    await op(worker!, 'shutdown')
+    fs.rmSync(journalPath(), { force: true })
+    const plain = await turnMetas('refusal-stop')
+    expect(types(plain)).toEqual(['turn-ended'])
+  })
+
+  it('a clean turn journals no error', async () => {
+    expect(types(await turnMetas('hello'))).toEqual(['turn-ended'])
+  })
+})
+
+describe('model switch on an adapter with models but no model control (Gemini CLI)', () => {
+  it('a model config op goes as session/set_model and answers the same shape', async () => {
+    worker = await initWorker({ MOCK_ACP_MODELS_ONLY: '1' })
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const resp = await op(worker, 'setConfigOption', { commandId: 'cfg-model-fast', configId: 'model', value: 'mock-gpt-fast' })
+    expect(resp.ok).toBe(true)
+    expect(resp.result).toMatchObject({ applied: true, configId: 'model', value: 'mock-gpt-fast', configOptions: [], models: { currentModelId: 'mock-gpt-fast' } })
+    const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    expect(state.models.currentModelId).toBe('mock-gpt-fast')
+    expect(snapshotAcpModels(state.sessionResponse).currentModelId).toBe('mock-gpt-fast')
+    expect(metas(readJournal(journalPath()).records.map(({ record }) => record)).filter((e) => e.type === 'config-option-set'))
+      .toEqual([{ type: 'config-option-set', configId: 'model', value: 'mock-gpt-fast' }])
+  })
+
+  it('a model the adapter does not list still goes as a config op (and fails there)', async () => {
+    worker = await initWorker({ MOCK_ACP_MODELS_ONLY: '1' })
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const resp = await op(worker, 'setConfigOption', { commandId: 'cfg-model-x', configId: 'model', value: 'not-listed' })
+    expect(resp.ok).toBe(false)
   })
 })
