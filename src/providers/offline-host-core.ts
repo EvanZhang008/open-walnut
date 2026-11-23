@@ -533,6 +533,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   // waiting_on is no task field: the server's park gate reads it online (sessions/outside-wait.ts)
   // and a queued park is checked again at replay, so it is dropped here, never a refusal.
   const RETIRED_TASK_INPUTS = ['wait_report', 'waiting_on']
+  /**
+   * What a close says beyond its phase and its score (task_complete's result, evidence and
+   * not_done, and the force, reason and user_words of the close gate) rides no away record: a
+   * close that says any of them needs the server, never queued with them dropped. The host
+   * replica answers the same (replica/write-port.ts taskComplete); away-op-fields.test.ts holds
+   * this list to task_complete's own input, so a new input is decided here before it ships.
+   */
+  const CLOSE_NEEDS_SERVER = ['result', 'evidence', 'not_done', 'force', 'reason', 'user_words']
+  /** A value that says something: an empty text or list and a false flag say nothing. */
+  const saysSomething = (v: unknown): boolean => v !== undefined && v !== null && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
   /** The fields a task write may queue (task-outbox whitelist plus phase, parent, pinned, focus tier). */
   const QUEUEABLE = [
     'title', 'status', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',
@@ -2215,6 +2225,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     // A review's score on a close is checked as the server checks it, before anything is queued.
     const closeScore = name === 'task_complete' ? offlineScoreOf(args.score) : undefined
     if (closeScore === null) return fail('bad_request', 'score must be {"function": n, "ux": n, "ui": n} (any of them, each 0..10) or "n/n/n"')
+    const said = name === 'task_complete' ? CLOSE_NEEDS_SERVER.filter((k) => saysSomething(args[k])) : []
+    if (said.length) {
+      return fail('needs_leader', `A close with its ${said.join(', ')} can only be made while the Walnut server answers; the task was not completed`, { detail: { why: 'fields', fields: said } })
+    }
     const { task, error } = resolveTask(home, ref)
     if (error) return error
     if (!task) return needsServer(`Task ${ref} is not in this host's offline copy; changing it`)
@@ -3952,7 +3966,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
     noteRoutineTask, checkRoutineRun, knowsSession,
     pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverTriggerTo, liveSessionsOf, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession, checkTaskStart,
-    triggerHolds, triggerHoldsByHome, applyTriggerHolds, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS,
+    triggerHolds, triggerHoldsByHome, applyTriggerHolds, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS, CLOSE_NEEDS_SERVER,
     /** The follower's read of this Walnut's triggers here (follower.triggers, follower-triggers-v1). */
     followerTriggers,
     /** The follower's trigger_test (follower.trigger.test): the check run once here, as this host's own trigger_test runs it. */

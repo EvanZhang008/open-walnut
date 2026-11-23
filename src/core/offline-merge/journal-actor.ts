@@ -84,19 +84,30 @@ export async function actorOptions(hostKey: string, actor: JournalActorLike | un
 }
 
 /**
+ * Task fields another op writes online that the away host journals as a task_update record
+ * (replica/away-writes.ts: task_note_write's PUT /tasks/:id/note, task_pin_set's /focus/tasks/:id),
+ * each with the op that writes it. 2026-11-23: a session's task_note_write while the Mac was away
+ * was answered "Task note replaced", then refused on the drain as "task_update does not take
+ * note". tests/core/offline-merge/away-op-fields.test.ts reads every field the away host writes
+ * this way from its source, so a new one fails until it names its op here.
+ */
+export const TASK_FIELDS_OF_OTHER_OPS: Readonly<Record<string, string>> = { note: 'task_note_write', pinned: 'task_pin_set' };
+
+/**
  * An op-strict actor's away write takes exactly what its op takes online (executor.ts parses
- * the op's input strictly, after dropping its retired fields): task_update its own fields,
- * task_complete the phase alone, task_create its own fields. Anything else (status, summary,
- * note, unread, pin_order, depends_on, ...) refuses the whole record, the answer the same
- * call online gets. A device or a trigger writes the whole queueable set, as the routes it
- * stands for do.
+ * the op's input strictly, after dropping its retired fields): task_update its own fields and
+ * the fields its sibling ops write (TASK_FIELDS_OF_OTHER_OPS), task_complete the phase alone,
+ * task_create its own fields. Anything else (status, summary, unread, pin_order, depends_on,
+ * ...) refuses the whole record, the answer the same call online gets. A device or a trigger
+ * writes the whole queueable set, as the routes it stands for do.
  */
 export async function opWriteFields<T>(record: { kind: string; op?: unknown; actor?: JournalActorLike }, fields: Record<string, T>): Promise<Record<string, T>> {
   if (!actorRules(record.actor).opStrict) return fields;
   const name = record.kind === 'task-create' ? 'task_create' : record.op === 'task_complete' ? 'task_complete' : 'task_update';
   const { getOp } = await import('../../ops/index.js');
   const op = getOp(name);
-  const allowed = name === 'task_complete' ? new Set(['phase']) : new Set(Object.keys(op?.input ?? {}).filter((k) => k !== 'id'));
+  const allowed = name === 'task_complete' ? new Set(['phase'])
+    : new Set([...Object.keys(op?.input ?? {}).filter((k) => k !== 'id'), ...(name === 'task_update' ? Object.keys(TASK_FIELDS_OF_OTHER_OPS) : [])]);
   // waiting_on is the park gate's words, no task field (sessions/outside-wait.ts).
   const retired = new Set([...(op?.retiredInput ?? []), 'waiting_on']);
   const out: Record<string, T> = {};

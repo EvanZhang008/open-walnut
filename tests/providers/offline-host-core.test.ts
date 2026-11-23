@@ -720,6 +720,30 @@ describe('offline host: queued writes and the handover', () => {
     ])
   })
 
+  /**
+   * The class (2026-11-23): an away close answered "queued" never drops what it said. A close that
+   * says its result, evidence, not_done, or the force, reason and user_words of the close gate
+   * needs the server (no away record keeps them; the host replica answers the same); a bare close,
+   * one with empty values, and one with only a score (the record keeps it) are queued.
+   */
+  it('a close that says more than its phase and score needs the server; a bare or score-only close is queued', async () => {
+    const { getOp } = await import('../../src/ops/index.js')
+    const h = harness()
+    h.host.configure(slice())
+    // The list is task_complete's own input but its id and score: a new input is decided here first.
+    const said = Object.keys(getOp('task_complete')!.input).filter((k) => k !== 'id' && k !== 'score').sort()
+    expect([...h.host.CLOSE_NEEDS_SERVER].sort()).toEqual(said)
+    for (const k of said) {
+      const r = await call(h, B, 'task_complete', { id: 'mtaskbbb-0002', [k]: k === 'force' ? true : 'Shipped, watch set' })
+      expect(!r.ok && r.error.code, k).toBe('needs_leader')
+    }
+    expect((await call(h, B, 'task_get', { id: 'mtaskbbb-0002' })).ok && h.host.drain(HOME).records.length).toBe(0)
+    const empty = await call(h, B, 'task_complete', { id: 'mtaskbbb-0002', not_done: [], evidence: [], force: false, result: '' })
+    expect(empty.ok).toBe(true)
+    const scored = await call(h, A, 'task_complete', { id: 'mtaskaaa-0001', score: '8/7/9' })
+    expect(scored.ok).toBe(true)
+  })
+
   it('queues completing a parent whose children in the copy are still open, as the server allows', async () => {
     const h = harness()
     h.host.configure(slice())

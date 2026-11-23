@@ -47,6 +47,7 @@ import type { ReplicaWrite, ReplicaWriteResult } from './dispatch.js'
 import { deriveStatusFromPhase, phaseDerivedFields, phaseFromStatus } from '../core/phase.js'
 import { PIN_TIER_POLICY, type Task, type TaskPhase, type TaskStatus } from '../core/types.js'
 import { RefusedWrite, checkResolvedPatch } from '../core/offline-merge/patch-check.js'
+import { opWriteFields } from '../core/offline-merge/journal-actor.js'
 import { createdRow, mintTaskId } from '../core/offline-merge/task-row-fold.js'
 import type { CallerPlacement } from '../core/sessions/caller-placement.js'
 import { INHERITED_PROJECT_CAP, placeAwayCreate, plainCaller } from './away-create-placement.js'
@@ -241,8 +242,8 @@ function inputs(patch: Record<string, unknown>): Record<string, unknown> {
 export interface WritePort {
   /** An edit (a reopen is a phase): `task_update`. */
   taskUpdate(w: ReplicaWrite, actor: WriteActor, taskId: string, patch: Record<string, unknown>): Promise<PortAnswer>
-  /** A complete: `task_complete` (the phase field, base the phase shown). */
-  taskComplete(w: ReplicaWrite, actor: WriteActor, taskId: string): Promise<PortAnswer>
+  /** A complete: `task_complete` (the phase field, base the phase shown); `body`, the route's, says more only online. */
+  taskComplete(w: ReplicaWrite, actor: WriteActor, taskId: string, body?: Record<string, unknown>): Promise<PortAnswer>
   /** A new task under an id minted here: `task_create`. */
   taskCreate(w: ReplicaWrite, actor: WriteActor, input: Record<string, unknown>): Promise<PortAnswer>
   /** A move next to `anchor` (null: the end of its tier): `task_move`. */
@@ -300,6 +301,15 @@ export function createWritePort(deps: WritePortDeps): WritePort {
     if (!row) return refusalAnswer('not_found', `Task ${taskId} not found`)
     const refused = macRefusalOf(row, values)
     if (refused) return refusalAnswer('bad_request', refused)
+    // The drain holds a session's (or a plugin job's) write to what its op takes online
+    // (journal-actor.ts opWriteFields): one it would refuse waits for the Mac now, never kept
+    // and answered "saved" (2026-11-23: a task_note_write answered "replaced" here was refused
+    // later). Not a final refusal: the same write through a route the Mac takes (the `api` op's
+    // PUT /tasks/:id/summary) works once it answers.
+    try { await opWriteFields({ kind: 'task-fields', op, actor }, values) } catch (err) {
+      if (err instanceof RefusedWrite) return needsLeaderAnswer('fields', `Away from your Mac, ${err.message.replace(/; nothing of this write was applied$/, '')}: this write needs your Mac to answer, and nothing of it was saved.`)
+      throw err
+    }
     const base = fieldBases(row, values, deps.createdHere?.(taskId) === true)
     const args = op === 'task_complete' ? { id: taskId } : { id: taskId, ...values }
     const r = await w.submit(op, args, base, actor)
@@ -325,7 +335,19 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       }
       return fieldsWrite(w, actor, taskId, 'task_update', values)
     },
-    taskComplete(w, actor, taskId) {
+    async taskComplete(w, actor, taskId, body = {}) {
+      // What a close says beyond the phase (task_complete's result, evidence, not_done and score,
+      // its force, reason and user_words for the close gate: every input of the op but its id) is
+      // no field the away record keeps: such a close waits for the Mac, never answered "completed"
+      // with them dropped. A device's close button sends none of them.
+      // The score too: this away record carries none (the daemon's own away close keeps it,
+      // offline-host-core.ts). An empty text or list and a false flag say nothing.
+      const { getOp } = await import('../ops/index.js')
+      const says = (v: unknown) => v !== undefined && v !== null && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
+      const said = Object.keys(getOp('task_complete')?.input ?? {}).filter((k) => k !== 'id' && says(body[k]))
+      if (said.length) {
+        return needsLeaderAnswer('fields', `A close with its ${said.join(', ')} can only be made while your Mac answers; the task was not completed.`, { fields: said })
+      }
       return fieldsWrite(w, actor, taskId, 'task_complete', { phase: 'COMPLETE' })
     },
     async taskCreate(w, actor, input) {

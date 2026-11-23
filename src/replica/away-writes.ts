@@ -205,7 +205,7 @@ export function awayWrites(deps: AwayWritesDeps): RequestHandler {
     // The console's task writes.
     { method: 'POST', pattern: '/tasks', handle: create },
     { method: 'PATCH', pattern: '/tasks/:id', handle: (req, w, actor, p) => port.taskUpdate(w, actor, p.id!, body(req)) },
-    { method: 'POST', pattern: '/tasks/:id/complete', handle: (_req, w, actor, p) => port.taskComplete(w, actor, p.id!) },
+    { method: 'POST', pattern: '/tasks/:id/complete', handle: (req, w, actor, p) => port.taskComplete(w, actor, p.id!, body(req)) },
     { method: 'POST', pattern: '/tasks/:id/toggle-complete', handle: toggle },
     { method: 'PUT', pattern: '/tasks/:id/note', handle: textField('note') },
     { method: 'PUT', pattern: '/tasks/:id/description', handle: textField('description') },
@@ -213,7 +213,7 @@ export function awayWrites(deps: AwayWritesDeps): RequestHandler {
     // The phone's (and the console's v1) twins.
     { method: 'POST', pattern: '/v1/tasks', handle: create },
     { method: 'PATCH', pattern: '/v1/tasks/:id', handle: (req, w, actor, p) => port.taskUpdate(w, actor, p.id!, body(req)) },
-    { method: 'POST', pattern: '/v1/tasks/:id/complete', handle: (_req, w, actor, p) => port.taskComplete(w, actor, p.id!) },
+    { method: 'POST', pattern: '/v1/tasks/:id/complete', handle: (req, w, actor, p) => port.taskComplete(w, actor, p.id!, body(req)) },
     { method: 'PUT', pattern: '/v1/tasks/:id/note', handle: textField('note') },
     { method: 'PUT', pattern: '/v1/tasks/:id/description', handle: textField('description') },
     { method: 'PUT', pattern: '/v1/tasks/:id/summary', handle: textField('summary') },
