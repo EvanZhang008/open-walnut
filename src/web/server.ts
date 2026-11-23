@@ -774,7 +774,7 @@ let standbyHandle: { stop: () => void } | null = null
 /** The write permission of a switchable leader (core/leader/switch/boot.ts); null with the experiment off. */
 let leaderPermitHandle: { stop: () => Promise<void>; decision: { kind: string } } | null = null
 /** A home that handed the leader over runs this instead of the server (core/leader/switch/handed-over.ts). */
-let handedOverServer: { server: HttpServer; close: () => Promise<void>; yielded: Promise<string> } | null = null
+let handedOverServer: import('../core/leader/switch/handed-over.js').StandbyListener | null = null
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
@@ -1253,30 +1253,29 @@ function assertNotTestHomeOnProductionPort(port: number, dev: boolean): void {
  */
 async function serveHandedOverHome(standby: import('../core/leader/switch/handed-over.js').HandedOverStandby, port: number, options: ServerOptions): Promise<HttpServer> {
   assertNotTestHomeOnProductionPort(port, options.dev ?? false)
-  const { serveHandedOver, yieldToConsoleAtStart } = await import('../core/leader/switch/handed-over.js')
-  // This machine's replica of the new leader serves this home's console at its address: nothing
-  // to listen for here (throws ConsoleServedByReplica with the line `walnut web` prints).
-  await yieldToConsoleAtStart(standby.home)
+  const { serveHandedOver } = await import('../core/leader/switch/handed-over.js')
   log.web.warn('leader switch: this home handed the leader over; running as a standby that leads nothing', { leader: standby.leader, switchId: standby.switchId, why: standby.why })
   // Also on stdout: the one line a person who started it by hand reads.
   console.log(`Walnut runs as a standby: ${standby.message}`)
   // Loopback unless the server's own bind setting names an address (bind-address.ts): it serves
   // only this machine's launcher, app and switch command.
+  // It shares the port with this machine's console replica (handed-over.ts): it listens only while
+  // that replica does not serve the console there, and the process stays either way.
   handedOverServer = await serveHandedOver(standby, { port, host: serverBindAddress({ replica: false, requested: options.bindAddress }) ?? '127.0.0.1' })
-  const bound = handedOverServer.server.address()
   // The line the Mac app waits for before it loads the page (desktop/main.swift: it stops a
-  // started server that never says it, after 180 s).
-  console.log(`Walnut standby listening on http://localhost:${bound && typeof bound === 'object' ? bound.port : port}`)
+  // started server that never says it, after 180 s): the standby's, or the console's at this port.
+  console.log(handedOverServer.line)
   bootCompleted = true
   return handedOverServer.server
 }
 
 /**
- * The standby of a handed-over home gave its port up to this machine's console replica
- * (handed-over.ts): settles with the line to print, then `walnut web` stops. Null when no standby runs.
+ * The standby of a handed-over home has nothing left to do (its home leads again, or another
+ * standby serves the port; handed-over.ts): settles with the line to print, then `walnut web`
+ * stops. Null when no standby runs.
  */
-export function standbyYielded(): Promise<string> | null {
-  return handedOverServer?.yielded ?? null
+export function standbyEnded(): Promise<string> | null {
+  return handedOverServer?.ended ?? null
 }
 
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
@@ -1321,7 +1320,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // database, no log in it), only the standby that says who leads now (handed-over.ts).
   // Checked as boot.ts checks it: a leader, and an ephemeral server only when told to.
   if (role() === 'leader' && (!IS_EPHEMERAL || process.env.WALNUT_EPHEMERAL_LEADER_SWITCH === '1')
-    && fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'))) {
+    && (await import('../core/handed-over-console.js')).hasHandedOverMarker(WALNUT_HOME)) {
     const { handedOverAtBoot } = await import('../core/leader/switch/handed-over.js')
     const standby = handedOverAtBoot({ home: WALNUT_HOME })
     if (standby) return serveHandedOverHome(standby, options.port ?? DEFAULT_PORT, options)
@@ -1518,7 +1517,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // is checked, so turning the experiment off never brings it back as a second leader.
       const witnessesSet = Array.isArray(bootConfig.leader_switch?.witnesses) && bootConfig.leader_switch.witnesses.length > 0
       // records.ts markerFile and promotedFile, spelled out: importing records.ts here would load switch code on every boot.
-      const switchMarked = fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'))
+      const switchMarked = (await import('../core/handed-over-console.js')).hasHandedOverMarker(WALNUT_HOME)
         || fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'promoted.json'))
       // A switch's trial or commit start (set only by `walnut leader switch`) is always checked:
       // boot.ts refuses it without the permit. The one read of WALNUT_LEADER_TRIAL.
@@ -3497,11 +3496,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // the address its leader served (replica/console-door.ts): opened once that console stands.
   if (isHostReplica()) {
     const bound = httpServer.address()
-    const { startConsoleDoor } = await import('../replica/console-door.js')
+    const [{ startConsoleDoor }, { verifyReplicaToken }] = await Promise.all([import('../replica/console-door.js'), import('../replica/auth.js')])
     hostConsoleDoor = startConsoleDoor({
       walnutId: (process.env.WALNUT_WALNUT_ID ?? '').trim(),
       publicPort: bound && typeof bound === 'object' ? bound.port : port,
       app, mainServer: httpServer,
+      knowsToken: (token) => verifyReplicaToken(token) !== null,
       log: (level, msg, data) => log.web[level](msg, data),
     })
   }

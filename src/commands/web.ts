@@ -88,7 +88,7 @@ export async function runWeb(options: {
   // A home that handed the leader over (the leader switch's marker) boots only the standby that
   // says who leads (core/leader/switch/handed-over.ts) and stays byte for byte as it is: no
   // restored-data switch and no update install, both of which write in the home.
-  const handedOver = fs.existsSync(path.join((await import('../constants.js')).WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'))
+  const handedOver = (await import('../core/handed-over-console.js')).hasHandedOverMarker((await import('../constants.js')).WALNUT_HOME)
   // "Use this restored data" (Settings, Backup): the restored folder becomes the data
   // folder now, before anything below reads it (core/backup/restore-switch.ts).
   if (!handedOver) {
@@ -231,22 +231,13 @@ export async function runWeb(options: {
     void shutdown('parent_gone')
   })
 
-  try {
-    await startServer({ port, dev: !!options.dev })
-  } catch (err) {
-    // A handed-over home whose console this machine's replica serves (core/leader/switch/handed-over.ts):
-    // the console listens at this address already; this start has nothing to do.
-    const { ConsoleServedByReplica } = await import('../core/leader/switch/handed-over.js')
-    if (!(err instanceof ConsoleServedByReplica)) throw err
-    console.log(err.line)
-    process.exitCode = 0
-    process.exit(0)
-  }
-  // The standby of a handed-over home gives its port up once this machine's console replica wants it.
-  const { standbyYielded } = await import('../web/server.js')
-  void standbyYielded()?.then((line) => {
+  await startServer({ port, dev: !!options.dev })
+  // The standby of a handed-over home shares its port with this machine's console replica and
+  // stays while it does (core/leader/switch/handed-over.ts); it ends when its home leads again.
+  const { standbyEnded } = await import('../web/server.js')
+  void standbyEnded()?.then((line) => {
     console.log(line)
-    void shutdown('console_replica')
+    void shutdown('standby_ended')
   })
   // Its own login session and cwd, checked now and every minute; GET /api/config
   // reports it, and the Mac app replaces a server whose session ended.

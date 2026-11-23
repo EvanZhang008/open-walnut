@@ -50,9 +50,23 @@ export class ConsoleBrowser {
 
   constructor(private readonly cw: ConsoleWorld, private readonly out: string, private readonly data: WalkData) {}
 
-  private row(title: string): Locator {
-    return this.page.locator('.todo-panel .todo-panel-item, .todo-panel .todo-pinned-card, .todo-panel .todo-focus-card')
-      .filter({ has: this.page.locator('.todo-item-title, .todo-pinned-title', { hasText: new RegExp(`^\\s*${escapeRe(title)}\\s*$`) }) }).first()
+  /** A task's row in the task list's search results (a home of thousands of tasks is searched, not scrolled). */
+  private found(id: string, title?: string): Locator {
+    const row = this.page.locator(`.todo-search-results .todo-panel-item[data-task-id="${id}"]`)
+    return (title ? row.filter({ has: this.page.locator('.todo-item-title', { hasText: new RegExp(`^\\s*${escapeRe(title)}\\s*$`) }) }) : row).first()
+  }
+
+  /** Types into Home's "Search tasks" box, as a person does. */
+  private async search(query: string): Promise<void> {
+    const input = this.page.locator('#home-task-navigation .todo-search-input').first()
+    await input.waitFor({ state: 'visible', timeout: 120_000 })
+    await input.click()
+    await input.fill(query)
+  }
+
+  private async clearSearch(): Promise<void> {
+    const input = this.page.locator('#home-task-navigation .todo-search-input').first()
+    if (await input.count()) await input.fill('')
   }
 
   private panel(): Locator {
@@ -90,17 +104,6 @@ export class ConsoleBrowser {
     await this.page.locator('#primary-sidebar').getByRole('link', { name, exact: true }).first().click()
   }
 
-  private async openAcme(): Promise<void> {
-    const header = this.page.locator('.todo-group-project-header').filter({ has: this.page.locator('.todo-group-project-name').filter({ hasText: /^Acme$/ }) }).first()
-    // A large home opens with its Projects section folded: open it as a person does.
-    const projects = this.page.locator('.todo-panel .todo-tasks-header .navigation-heading-open').first()
-    await projects.waitFor({ state: 'visible', timeout: 120_000 })
-    if ((await projects.getAttribute('aria-expanded')) === 'false') await projects.click()
-    await header.waitFor({ state: 'visible', timeout: 60_000 })
-    const chevron = header.locator('.collapse-chevron')
-    if ((await chevron.getAttribute('aria-expanded')) !== 'true') await header.locator('.todo-group-name-btn').click()
-  }
-
   private async backToTasks(): Promise<void> {
     const exit = this.page.getByRole('button', { name: 'Exit full screen' })
     for (let i = 0; i < 3 && (await exit.count()) > 0; i++) { await exit.first().click(); await this.page.waitForTimeout(300) }
@@ -116,12 +119,13 @@ export class ConsoleBrowser {
     const added = ` Edited at the console ${randomBytes(3).toString('hex')}.`
     await this.step(c, 'Home opens at the old address (the task list of the new leader)', async () => {
       await p.locator('.todo-panel').waitFor({ state: 'visible', timeout: 120_000 })
-      await this.openAcme()
-      await this.row(this.data.board.title).waitFor({ state: 'visible', timeout: 30_000 })
       await this.shot('01-home')
+      await this.search(this.data.board.title)
+      await this.found(this.data.board.id).waitFor({ state: 'visible', timeout: 30_000 })
+      await this.shot('01b-home-search')
     })
     await this.step(c, 'a task opens with its session\'s chat', async () => {
-      await this.row(this.data.board.title).locator('.todo-item-title, .todo-pinned-title').first().click()
+      await this.found(this.data.board.id).locator('.todo-item-title').first().click()
       await this.panel().waitFor({ state: 'visible', timeout: 30_000 })
       await this.panel().getByText('echo: hello from the leader').first().waitFor({ state: 'visible', timeout: 60_000 })
       await this.shot('02-task-session')
@@ -147,16 +151,19 @@ export class ConsoleBrowser {
     })
     await this.backToTasks()
     await this.step(c, 'a task is renamed', async () => {
-      await this.openAcme()
-      const title = this.row(this.data.rename.title).locator('.todo-item-title')
+      await this.search(this.data.rename.title)
+      const title = this.found(this.data.rename.id, this.data.rename.title).locator('.todo-item-title')
+      await title.waitFor({ state: 'visible', timeout: 30_000 })
       await title.click()
       await title.click()
       const editing = p.locator('.todo-item-title.editing')
       await editing.waitFor({ state: 'visible', timeout: 10_000 })
       await editing.fill(renamed)
       await editing.press('Enter')
-      await this.row(renamed).waitFor({ state: 'visible', timeout: 15_000 })
+      await this.search(renamed)
+      await this.found(this.data.rename.id, renamed).waitFor({ state: 'visible', timeout: 30_000 })
       await this.shot('05-renamed')
+      await this.clearSearch()
     })
     await this.step(c, 'a note opens and an edit is saved', async () => {
       await this.navTo('Notes')
@@ -219,8 +226,10 @@ export class ConsoleBrowser {
     })
     await this.step(c, 'away: the task list and a note read from this machine\'s copies', async () => {
       await this.navTo('Home')
-      await this.openAcme()
-      await this.row(this.data.board.title).waitFor({ state: 'visible', timeout: 30_000 })
+      await this.search(this.data.board.title)
+      await this.found(this.data.board.id).waitFor({ state: 'visible', timeout: 30_000 })
+      await this.shot('09a-away-task-search')
+      await this.clearSearch()
       await this.navTo('Notes')
       await p.locator('.notes-tree-file', { hasText: this.data.note.name }).first().click()
       await p.locator('.notes-editor-pane, .notes-editor').locator('.ProseMirror, .tiptap').first().filter({ hasText: this.data.note.text }).waitFor({ state: 'visible', timeout: 30_000 })
@@ -235,9 +244,12 @@ export class ConsoleBrowser {
         return { status: r.status, body: await r.text() }
       }, keptTitle)
       if (made.status >= 300) throw new Error(`the create answered ${made.status} ${made.body.slice(0, 200)}`)
-      await this.openAcme()
-      await this.row(keptTitle).getByTestId('away-sync-mark').waitFor({ state: 'visible', timeout: 30_000 })
+      const id = (JSON.parse(made.body) as { task?: { id?: string } }).task?.id
+      if (!id) throw new Error(`the create answered no task id: ${made.body.slice(0, 200)}`)
+      await this.search(keptTitle!)
+      await this.found(id).getByTestId('away-sync-mark').waitFor({ state: 'visible', timeout: 30_000 })
       await this.shot('10-away-kept-write')
+      await this.clearSearch()
       return `${made.status}`
     })
     await this.step(c, 'away: a write that needs the leader is refused with a line saying so', async () => {

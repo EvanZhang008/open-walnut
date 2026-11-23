@@ -17,12 +17,14 @@
  * Two ways in (server.ts): the marker, checked before anything else of the boot; or the write
  * permission's boot step finding a record that names another machine (boot.ts).
  *
- * It gives the port up to this machine's console (core/handed-over-console.ts): once the replica
- * this machine's daemon runs for the new leader holds, or waits for, the console of this home
- * (its holder file names a live process), the standby closes its listener and `yielded` settles;
- * `walnut web` then exits, and the Mac app that started it attaches to the console at the same
- * address. A standby that starts while such a replica holds the console does not listen at all
- * (ConsoleServedByReplica).
+ * It shares its port with this machine's console (core/handed-over-console.ts). The replica this
+ * machine's daemon runs for the new leader serves the console of this home at the same address;
+ * while it holds, or waits for, that port (its holder file names a live process and this port),
+ * the standby gives the port up and stays, holding nothing: the process the Mac app started keeps
+ * running, so the app never sees it end. When the console ends (the replica stops, or never
+ * answers as this Walnut for a minute) the standby takes the port back. It ends (`ended`) only
+ * when this home no longer stands handed over in its switch (a switch back moved it aside) or
+ * another standby of this home serves the port.
  */
 import fs from 'node:fs'
 import http from 'node:http'
@@ -90,29 +92,33 @@ export function standbyForRecord(o: { home: string; env?: NodeJS.ProcessEnv; lea
 }
 
 export interface StandbyListener {
+  /** The standby's listener; it listens only while the console does not hold the port. */
   server: http.Server
   close(): Promise<void>
-  /** Settles (with the line to print) once the standby gave its port up to this machine's console replica. */
-  yielded: Promise<string>
+  /** The line to print first: the standby listens, or this machine's replica serves the console here. */
+  line: string
+  /** Settles (with the line to print) when this standby has nothing left to do: `walnut web` then ends. */
+  ended: Promise<string>
 }
 
-/** A start on a handed-over home whose console this machine's replica serves: nothing listens here. */
-export class ConsoleServedByReplica extends Error {
-  constructor(readonly line: string) { super(line); this.name = 'ConsoleServedByReplica' }
-}
-
-/** How often a running standby looks for this machine's console replica. */
+/** How often a standby looks for this machine's console replica (and, while it gave the port up, for its end). */
 const CONSOLE_LOOK_MS = 1_000
-/** How long a start waits for a console replica that holds the console to answer at its address. */
+/** How long a console replica holding this port may not answer as this Walnut before the standby takes the port back. */
 const CONSOLE_ANSWER_WAIT_MS = 60_000
 
-/** The live replica that holds (or waits for) a console of `home`, with that console, or null. */
-export async function consoleHolderOf(home: string): Promise<{ holder: ConsoleHolder; console: HandedOverConsole } | null> {
+export interface ConsoleOnPort { holder: ConsoleHolder; console: HandedOverConsole }
+
+/**
+ * The live replica that holds (or waits for) the console of `home` on `port`, with that console,
+ * or null. Only this port: a console the replica waits for elsewhere (its port taken by another
+ * program, the app moved on to the next one) is not this standby's to give way to.
+ */
+export async function consoleOnPort(home: string, port: number): Promise<ConsoleOnPort | null> {
   const { consolesOfHome, consoleRefusal, readHolder } = await import('../../handed-over-console.js')
   for (const c of consolesOfHome(home)) {
-    if (consoleRefusal(c)) continue
+    if (c.port !== port || consoleRefusal(c)) continue
     const holder = readHolder(c.walnutId)
-    if (holder) return { holder, console: c }
+    if (holder && holder.port === port) return { holder, console: c }
   }
   return null
 }
@@ -121,34 +127,27 @@ function hostOf(c: { host: string }): string {
   return c.host === '::' || c.host === '0.0.0.0' || !c.host ? '127.0.0.1' : c.host
 }
 
-/** The console answers at its address (any HTTP answer). */
-async function consoleAnswers(c: HandedOverConsole): Promise<boolean> {
+/**
+ * The console answers at its address as this Walnut (GET /api/v1/instance names its id; online the
+ * leader answers it through the replica, away the replica itself): not just anything on the port.
+ */
+export async function consoleAnswers(c: HandedOverConsole): Promise<boolean> {
   const h = hostOf(c)
-  const r = await fetch(`http://${h.includes(':') ? `[${h}]` : h}:${c.port}/api/health`, { signal: AbortSignal.timeout(3_000) }).catch(() => null)
-  return r !== null
+  try {
+    const r = await fetch(`http://${h.includes(':') ? `[${h}]` : h}:${c.port}/api/v1/instance`, { signal: AbortSignal.timeout(3_000) })
+    const j = await r.json() as { instance?: unknown }
+    return j.instance === c.walnutId
+  } catch {
+    return false
+  }
 }
 
-function servedLine(found: { holder: ConsoleHolder; console: HandedOverConsole }): string {
+function servedLine(found: ConsoleOnPort): string {
   return `Walnut console listening on http://localhost:${found.console.port}: served by this machine's replica of ${found.console.to} (pid ${found.holder.pid}); this home handed the leader over (switch ${found.console.switchId})`
 }
 
-/**
- * Before a standby of `home` takes its port: when this machine's replica holds the console of
- * this home, wait for it to answer and throw ConsoleServedByReplica (the line to print); when it
- * holds it and never answers, throw a plain error. Resolves when no replica holds it.
- */
-export async function yieldToConsoleAtStart(home: string, waitMs = CONSOLE_ANSWER_WAIT_MS): Promise<void> {
-  const deadline = Date.now() + waitMs
-  for (;;) {
-    const found = await consoleHolderOf(home)
-    if (!found) return
-    if (await consoleAnswers(found.console)) throw new ConsoleServedByReplica(servedLine(found))
-    if (Date.now() > deadline) {
-      throw new Error(`this machine's replica of ${found.console.to} (pid ${found.holder.pid}) holds the console of this home but does not answer on port ${found.console.port}`)
-    }
-    await new Promise((r) => setTimeout(r, 500))
-  }
-}
+const holderKey = (f: ConsoleOnPort) => `${f.holder.pid}:${f.holder.since}`
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** How long a live read of the witnesses is reused by the status route. */
 const LIVE_READ_MS = 3_000
@@ -171,7 +170,16 @@ async function readLive(home: string, machine: string | null): Promise<RecordSum
   }
 }
 
-export async function serveHandedOver(s: HandedOverStandby, o: { port: number; host?: string; env?: NodeJS.ProcessEnv }): Promise<StandbyListener> {
+export async function serveHandedOver(s: HandedOverStandby, o: {
+  port: number
+  host?: string
+  env?: NodeJS.ProcessEnv
+  /** Where later lines go (the port given up, taken back); stdout by default. */
+  say?: (line: string) => void
+  /** Tests: CONSOLE_ANSWER_WAIT_MS and CONSOLE_LOOK_MS. */
+  answerWaitMs?: number
+  lookMs?: number
+}): Promise<StandbyListener> {
   const env = o.env ?? process.env
   // One standby per home: a second process (a launcher's restart beside a live one) starts none.
   const running = readStandbyServer(s.home, env)
@@ -244,48 +252,126 @@ export async function serveHandedOver(s: HandedOverStandby, o: { port: number; h
   server.on('upgrade', (_req, socket) => {
     socket.end(`HTTP/1.1 409 Conflict\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n${refusal()}`)
   })
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(o.port, o.host, () => { server.off('error', reject); resolve() })
-  })
   const file = standbyServerFile(s.home, env)
-  const address = server.address()
-  const port = typeof address === 'object' && address ? address.port : o.port
-  // Where a later process reaches it: the bound address (a --bind to a Tailscale address listens
-  // on nothing else), or loopback when it listens on every interface.
-  const bound = typeof address === 'object' && address ? address.address : '127.0.0.1'
-  const host = bound === '0.0.0.0' || bound === '::' || bound === '' ? '127.0.0.1' : bound
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  fs.writeFileSync(file, `${JSON.stringify({ pid: process.pid, port, host, home: s.home, at: new Date().toISOString() })}\n`, { mode: 0o600 })
   const unlink = () => { try { if (JSON.parse(fs.readFileSync(file, 'utf8')).pid === process.pid) fs.unlinkSync(file) } catch { /* gone */ } }
-  // An exit that skips close() (an uncaught error, process.exit) takes its file along; a SIGKILL
-  // leaves it, and side.ts asks the port before it believes it.
-  process.once('exit', unlink)
-  let closed = false
-  const close = async () => {
-    if (closed) return
-    closed = true
-    clearInterval(look)
+  let boundPort = o.port
+  async function listen(): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(o.port, o.host, () => { server.off('error', reject); resolve() })
+    })
+    const address = server.address()
+    boundPort = typeof address === 'object' && address ? address.port : o.port
+    // Where a later process reaches it: the bound address (a --bind to a Tailscale address listens
+    // on nothing else), or loopback when it listens on every interface.
+    const bound = typeof address === 'object' && address ? address.address : '127.0.0.1'
+    const host = bound === '0.0.0.0' || bound === '::' || bound === '' ? '127.0.0.1' : bound
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(file, `${JSON.stringify({ pid: process.pid, port: boundPort, host, home: s.home, at: new Date().toISOString() })}\n`, { mode: 0o600 })
+    // An exit that skips close() (an uncaught error, process.exit) takes its file along; a SIGKILL
+    // leaves it, and side.ts asks the port before it believes it.
+    process.once('exit', unlink)
+  }
+  async function release(): Promise<void> {
     unlink()
     process.off('exit', unlink)
     server.closeAllConnections?.()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
-  // This machine's console replica wants the port: it is the console's now.
-  let yieldTo: (line: string) => void = () => {}
-  const yielded = new Promise<string>((resolve) => { yieldTo = resolve })
+  const listeningLine = (why = '') => `Walnut standby listening on http://localhost:${boundPort}${why}`
+
+  let state: 'serving' | 'yielded' = 'serving'
+  // A holder that never answered as this Walnut while it could have (a pid used again, another program on the port).
+  let distrusted: string | null = null
+  let silentSince = 0
+  let closed = false
+  let endWith: (line: string) => void = () => {}
+  const ended = new Promise<string>((resolve) => { endWith = resolve })
+  const say = o.say ?? ((line: string) => console.log(line))
+
+  // At the start this machine's replica may hold this port already (the app started `walnut web`
+  // after it): stand by without the port, as long as it answers.
+  let line = ''
+  const first = await consoleOnPort(s.home, o.port)
+  if (first) {
+    const deadline = Date.now() + (o.answerWaitMs ?? CONSOLE_ANSWER_WAIT_MS)
+    let now: ConsoleOnPort | null = first
+    while (now && !(await consoleAnswers(now.console)) && Date.now() < deadline) {
+      await sleep(500)
+      now = await consoleOnPort(s.home, o.port)
+    }
+    if (now && await consoleAnswers(now.console)) { state = 'yielded'; line = servedLine(now) }
+    else if (now) distrusted = holderKey(now)
+  }
+  if (state === 'serving') {
+    try {
+      await listen()
+    } catch (err) {
+      // The word the Mac app looks for to try its next port (desktop/main.swift), as server.ts says it.
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EADDRINUSE' || /in use/i.test(String(err))) throw new Error(`Port ${o.port} is in use by another program (EADDRINUSE): this standby cannot listen there`)
+      throw err
+    }
+    line = listeningLine()
+  }
+
+  async function step(): Promise<void> {
+    if (state === 'serving') {
+      const found = await consoleOnPort(s.home, o.port)
+      if (!found || holderKey(found) === distrusted || closed) return
+      await release()
+      state = 'yielded'
+      silentSince = 0
+      say(`${servedLine(found)}: this standby gave the port up and takes it back if the console ends`)
+      return
+    }
+    // A switch back moved this home aside (or another switch took it): nothing to stand by for.
+    const m = readMarker(s.home)
+    if (!m || m.state !== 'handed-over' || m.switchId !== s.switchId) {
+      closed = true
+      clearInterval(look)
+      endWith(`Walnut standby: ${s.home} no longer stands handed over by switch ${s.switchId}; this standby ends`)
+      return
+    }
+    const found = await consoleOnPort(s.home, o.port)
+    if (found) {
+      if (await consoleAnswers(found.console)) { silentSince = 0; return }
+      silentSince ||= Date.now()
+      if (Date.now() - silentSince < (o.answerWaitMs ?? CONSOLE_ANSWER_WAIT_MS)) return
+      distrusted = holderKey(found)
+    }
+    // Nothing serves the console here any more: the port is the standby's again.
+    const other = readStandbyServer(s.home, env)
+    if (other && other.pid !== process.pid && await confirmStandby(other)) {
+      closed = true
+      clearInterval(look)
+      endWith(`Walnut standby: another standby of this home (pid ${other.pid}) serves port ${other.port}; this one ends`)
+      return
+    }
+    try {
+      await listen()
+    } catch {
+      return // taken (the replica still holds it, or another program): looked at again in a second
+    }
+    if (closed) { await release(); return }
+    state = 'serving'
+    silentSince = 0
+    say(listeningLine(': this machine\'s console replica no longer serves it'))
+  }
   let looking = false
   const look = setInterval(() => {
     if (looking || closed) return
     looking = true
-    void consoleHolderOf(s.home).then(async (found) => {
-      if (!found || closed) return
-      await close()
-      yieldTo(servedLine(found))
-    }).catch(() => {}).finally(() => { looking = false })
-  }, CONSOLE_LOOK_MS)
+    void step().catch(() => {}).finally(() => { looking = false })
+  }, o.lookMs ?? CONSOLE_LOOK_MS)
   look.unref?.()
-  return { server, close, yielded }
+  const close = async () => {
+    if (closed && state === 'yielded') return
+    closed = true
+    clearInterval(look)
+    if (state === 'serving') { state = 'yielded'; await release() }
+  }
+  return { server, close, line, ended }
 }
 
 /** A standby's pid file: its process, its port and the address it listens on. */

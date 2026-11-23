@@ -23,6 +23,22 @@ if (!Number.isInteger(port) || port <= 0 || port === 3456) {
   process.exit(2)
 }
 const home = process.env.HOME ?? ''
+// Never the account's own home: a rehearsal machine's HOME is a folder of the rehearsal. The
+// account's home comes from its user record (Bun's os.userInfo().homedir follows $HOME).
+const accountHome = await (async () => {
+  const { execFileSync } = await import('node:child_process')
+  const os = await import('node:os')
+  try {
+    if (process.platform === 'darwin') return execFileSync('dscl', ['.', '-read', `/Users/${os.userInfo().username}`, 'NFSHomeDirectory'], { encoding: 'utf8' }).split(':').pop()!.trim()
+    return execFileSync('getent', ['passwd', String(process.getuid?.() ?? '')], { encoding: 'utf8' }).split(':')[5]!.trim()
+  } catch {
+    return ''
+  }
+})()
+if (!home || (accountHome && path.resolve(home) === path.resolve(accountHome))) {
+  console.error('console-server: HOME must be a folder of the rehearsal, never the account\'s own home')
+  process.exit(2)
+}
 const inside = (p: string | undefined) => !!p && !!home && path.resolve(p).startsWith(path.resolve(home) + path.sep)
 if (!inside(process.env.OPEN_WALNUT_HOME) || !inside(process.env.WALNUT_DAEMON_DIR) || !inside(process.env.WALNUT_STREAMS_DIR)) {
   console.error('console-server: OPEN_WALNUT_HOME, WALNUT_DAEMON_DIR and WALNUT_STREAMS_DIR must be set inside HOME (the rehearsal folder)')
@@ -65,7 +81,7 @@ if (hostKey && Number.isInteger(daemonPort) && daemonPort > 0) {
   }
 }
 
-const { startServer, stopServer, armGracefulSignalExit, standbyYielded } = await import('../../src/web/server.js')
+const { startServer, stopServer, armGracefulSignalExit, standbyEnded } = await import('../../src/web/server.js')
 let stopping = false
 const stop = async () => {
   if (stopping) return
@@ -81,10 +97,8 @@ armGracefulSignalExit()
 try {
   await startServer({ port, dev: false })
   console.log(`REHEARSAL_SERVER_READY ${JSON.stringify({ pid: process.pid, port, home: process.env.OPEN_WALNUT_HOME })}`)
-  void standbyYielded()?.then((line) => { console.log(line); void stop() })
+  void standbyEnded()?.then((line) => { console.log(line); void stop() })
 } catch (err) {
-  const { ConsoleServedByReplica } = await import('../../src/core/leader/switch/handed-over.js')
-  if (err instanceof ConsoleServedByReplica) { console.log(err.line); process.exit(0) }
   console.error(`console-server: ${err instanceof Error ? err.message : String(err)}`)
   process.exit(1)
 }

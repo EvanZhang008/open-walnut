@@ -333,8 +333,9 @@ the promoted path); stopping it through the launcher is the next phase's.
 
 **The old leader's console.** Once the new leader runs a replica on the old machine (that
 machine as one of its hosts), the replica serves the old machine's console at the address its
-leader served, and the standby gives the port up to it: the Mac app, a browser and `walnut web`
-on that machine keep working, as a device of the new leader. The handover makes what it needs
+leader served, and the standby shares that port with it (it gives the port up and stays, and takes
+it back if the console ends): the Mac app, a browser and `walnut web` on that machine keep
+working, as a device of the new leader. The handover makes what it needs
 (a console device and a file outside the home). See [The old leader's console](./leader-switch-console.md).
 
 ### `--back`

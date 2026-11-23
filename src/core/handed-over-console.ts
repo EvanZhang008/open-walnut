@@ -63,6 +63,11 @@ export function consoleDir(): string {
   return path.join(path.dirname(machineIdFile()), 'console')
 }
 
+/** The console files of the account whose home is `accountHome` (a switch's side of another account, a rehearsal machine). */
+export function consoleDirOfAccount(accountHome: string): string {
+  return path.join(path.dirname(machineIdFile(accountHome)), 'console')
+}
+
 function fileOf(walnutId: string, dir: string): string {
   if (!ID.test(walnutId)) throw new Error(`not a Walnut id: ${walnutId}`)
   return path.join(dir, `${walnutId}.json`)
@@ -74,9 +79,13 @@ function holderFileOf(walnutId: string, dir: string): string {
 }
 
 function writePrivate(file: string, body: unknown): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const dir = path.dirname(file)
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  // mkdir's mode does not tighten a folder that was there already; a leftover tmp file keeps its own.
+  fs.chmodSync(dir, 0o700)
   const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(body)}\n`, { mode: 0o600 })
+  fs.rmSync(tmp, { force: true })
+  fs.writeFileSync(tmp, `${JSON.stringify(body)}\n`, { mode: 0o600, flag: 'wx' })
   fs.renameSync(tmp, file)
 }
 
@@ -103,6 +112,15 @@ export function readConsoleFile(walnutId: string, dir = consoleDir()): HandedOve
   }
 }
 
+/** readConsoleFile off the event loop: what a server's timer reads (every host replica looks each second). */
+export async function readConsoleFileAsync(walnutId: string, dir = consoleDir()): Promise<HandedOverConsole | null> {
+  try {
+    return parse(JSON.parse(await fs.promises.readFile(fileOf(walnutId, dir), 'utf8')))
+  } catch {
+    return null
+  }
+}
+
 /** Every console file naming `home` (one per Walnut that home led). */
 export function consolesOfHome(home: string, dir = consoleDir()): HandedOverConsole[] {
   let names: string[]
@@ -119,11 +137,21 @@ export function consolesOfHome(home: string, dir = consoleDir()): HandedOverCons
   return out
 }
 
+/** The leader switch's handed-over marker of a home (leader/switch/records.ts markerFile, the same path). */
+export function handedOverMarkerFile(home: string): string {
+  return path.join(home, 'local', 'leader-switch', 'handed-over.json')
+}
+
+/** A home that handed the leader over, or is handing it over: it carries the switch's marker. */
+export function hasHandedOverMarker(home: string): boolean {
+  return fs.existsSync(handedOverMarkerFile(home))
+}
+
 /** Why the console of `c` does not stand now, or null when it does: the home's own marker decides (read only). */
 export function consoleRefusal(c: HandedOverConsole): string | null {
   let text: string
   try {
-    text = fs.readFileSync(path.join(c.home, 'local', 'leader-switch', 'handed-over.json'), 'utf8')
+    text = fs.readFileSync(handedOverMarkerFile(c.home), 'utf8')
   } catch {
     return `${c.home} carries no handed-over marker (the switch was cancelled, or the home was replaced)`
   }
@@ -154,6 +182,21 @@ export function readHolder(walnutId: string, dir = consoleDir()): ConsoleHolder 
   } catch {
     return null
   }
+}
+
+/**
+ * Removes every console file naming `home` (a console that will never stand: its handover did not
+ * happen, or the home leads again), and the holder file of each when no live process holds it.
+ * Returns the Walnut ids it removed.
+ */
+export function removeConsolesOfHome(home: string, dir = consoleDir()): string[] {
+  const gone: string[] = []
+  for (const c of consolesOfHome(home, dir)) {
+    try { fs.unlinkSync(fileOf(c.walnutId, dir)) } catch { continue }
+    gone.push(c.walnutId)
+    if (!readHolder(c.walnutId, dir)) { try { fs.unlinkSync(holderFileOf(c.walnutId, dir)) } catch { /* none */ } }
+  }
+  return gone
 }
 
 /** Removes the holder file when `pid` wrote it. */

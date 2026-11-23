@@ -1,9 +1,9 @@
 /**
  * The old leader's side of its machine's console (docs/reference/leader-switch.md, "The old
  * leader's console"): the handover mints the console device and writes the console file
- * (console-credential.ts); the standby of the handed-over home gives its port up to the replica
- * that holds that console (handed-over.ts); a switch's start waits for that replica to let the
- * port go (console-port.ts). auth.json in the mocked WALNUT_HOME, everything else in a temp folder.
+ * (console-credential.ts); the standby of the handed-over home shares its port with the replica
+ * that holds that console, staying while it does and taking the port back when it ends
+ * (handed-over.ts); a switch's start waits for that replica to let the port go (console-port.ts). auth.json in the mocked WALNUT_HOME, everything else in a temp folder.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import crypto from 'node:crypto'
@@ -19,9 +19,9 @@ vi.mock('../../../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME } from '../../../../src/constants.js'
 import { setMachineIdHomeForTest } from '../../../../src/core/machine-id.js'
 import { consoleDir, readConsoleFile, writeConsoleFile, writeHolder, clearHolder } from '../../../../src/core/handed-over-console.js'
-import { consoleDeviceName, prepareConsoleForHandover } from '../../../../src/core/leader/switch/console-credential.js'
+import { consoleDeviceName, prepareConsoleForHandover, withdrawConsole } from '../../../../src/core/leader/switch/console-credential.js'
 import { beforeHandover } from '../../../../src/core/leader/switch/before-handover.js'
-import { ConsoleServedByReplica, handedOverAtBoot, serveHandedOver, yieldToConsoleAtStart, type StandbyListener } from '../../../../src/core/leader/switch/handed-over.js'
+import { handedOverAtBoot, serveHandedOver, type StandbyListener } from '../../../../src/core/leader/switch/handed-over.js'
 import { waitForConsolePort } from '../../../../src/core/leader/switch/console-port.js'
 import { getInstanceId } from '../../../../src/core/device-store.js'
 import { writeMarker } from '../../../../src/core/leader/switch/records.js'
@@ -90,6 +90,32 @@ describe('the console minted at the handover', () => {
     expect(revoked).toContain(sha(c.token))
   })
 
+  it('a console that will never stand is withdrawn: its record leaves auth.json (tombstoned), its file goes; nothing to do is no error', async () => {
+    writeMarker(WALNUT_HOME, { switchId: 'sw-1', to: 'machine-b', state: 'switching', at: 'x' })
+    await beforeHandover({ to: 'machine-b', machine: 'machine-a', home: WALNUT_HOME, address: { port: 4802, host: '::' } })
+    const id = await getInstanceId()
+    const c = readConsoleFile(id)!
+    expect(await withdrawConsole({ home: WALNUT_HOME, machine: 'machine-a' })).toEqual({ device: true, files: [id] })
+    expect(devices().some((d) => d.name === 'console-machine-a')).toBe(false)
+    expect(readConsoleFile(id)).toBeNull()
+    const revoked = (JSON.parse(fs.readFileSync(path.join(WALNUT_HOME, 'auth.json'), 'utf8')) as { revokedHashes?: string[] }).revokedHashes ?? []
+    expect(revoked).toContain(sha(c.token))
+    expect(await withdrawConsole({ home: WALNUT_HOME, machine: 'machine-a' })).toEqual({ device: false, files: [] })
+  })
+
+  it('a handover to a machine drops that machine\'s own console device (a switch back: it leads now)', async () => {
+    // machine-a handed over to machine-b before: its console device came to machine-b with the data.
+    writeMarker(WALNUT_HOME, { switchId: 'sw-1', to: 'machine-b', state: 'switching', at: 'x' })
+    await prepareConsoleForHandover({ to: 'machine-b', machine: 'machine-a', home: WALNUT_HOME, address: { port: 4802, host: '::' } })
+    expect(devices().map((d) => d.name)).toContain('console-machine-a')
+    // Now machine-b hands back to machine-a.
+    writeMarker(WALNUT_HOME, { switchId: 'sw-2', to: 'machine-a', state: 'switching', at: 'x' })
+    await prepareConsoleForHandover({ to: 'machine-a', machine: 'machine-b', home: WALNUT_HOME, address: { port: 4803, host: '::' } })
+    const names = devices().map((d) => d.name)
+    expect(names).toContain('console-machine-b')
+    expect(names).not.toContain('console-machine-a')
+  })
+
   it('refuses the handover when it cannot say where this server listens', async () => {
     writeMarker(WALNUT_HOME, { switchId: 'sw-1', to: 'machine-b', state: 'switching', at: 'x' })
     expect(await beforeHandover({ to: 'machine-b', machine: 'machine-a', home: WALNUT_HOME, address: null })).toMatchObject({ ok: false })
@@ -118,40 +144,110 @@ describe('the standby gives its port up to the console replica', () => {
 
   afterEach(() => { clearHolder(WALNUT, process.pid) })
 
-  it('a running standby closes its listener once a live replica holds the console', async () => {
-    const s = handedOverAtBoot({ home, env: { WALNUT_MACHINE_ID_FILE: path.join(root, 'id') } })!
+  const ID_ENV = () => ({ WALNUT_MACHINE_ID_FILE: path.join(root, 'id') })
+  const lines: string[] = []
+  const seat = async (over: { answerWaitMs?: number } = {}) => {
     fs.writeFileSync(path.join(root, 'id'), 'machine-a\n')
-    standby = await serveHandedOver(s, { port, host: '127.0.0.1', env: { WALNUT_MACHINE_ID_FILE: path.join(root, 'id') } })
-    expect((await fetch(`http://127.0.0.1:${port}/api/health`)).status).toBe(200)
-    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'now' })
-    const line = await standby.yielded
-    expect(line).toMatch(new RegExp(`listening on http://localhost:${port}`))
-    // The port is free for the replica.
+    const s = handedOverAtBoot({ home, env: ID_ENV() })!
+    standby = await serveHandedOver(s, { port, host: '127.0.0.1', env: ID_ENV(), say: (l) => lines.push(l), lookMs: 100, answerWaitMs: 1_500, ...over })
+    return standby
+  }
+  const portFree = async () => {
     const s2 = net.createServer()
-    await new Promise<void>((resolve, reject) => { s2.once('error', reject); s2.listen(port, '127.0.0.1', () => resolve()) })
-    await new Promise<void>((r) => s2.close(() => r()))
+    const ok = await new Promise<boolean>((resolve) => { s2.once('error', () => resolve(false)); s2.listen(port, '127.0.0.1', () => resolve(true)) })
+    if (ok) await new Promise<void>((r) => s2.close(() => r()))
+    return ok
+  }
+  const until = async (fn: () => Promise<boolean> | boolean, ms = 5_000) => {
+    const end = Date.now() + ms
+    while (Date.now() < end) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 100)) }
+    return false
+  }
+  const health = () => fetch(`http://127.0.0.1:${port}/api/health`).then((r) => r.json() as Promise<{ standby?: boolean }>).catch(() => null)
+  /** This Walnut's replica at the console's address: GET /api/v1/instance names the Walnut. */
+  const fakeReplica = async (instance = WALNUT) => {
+    const r = http.createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ instance, mode: 'REPLICA' })) })
+    await new Promise<void>((resolve, reject) => { r.once('error', reject); r.listen(port, '127.0.0.1', () => resolve()) })
+    return { close: () => new Promise<void>((resolve) => { r.closeAllConnections?.(); r.close(() => resolve()) }) }
+  }
+  let ended: string | null = null
+  beforeEach(() => { lines.length = 0; ended = null })
+  const watchEnd = (l: StandbyListener) => { void l.ended.then((x) => { ended = x }) }
+
+  it('a running standby gives its listener up once a live replica holds the console on its port, and stays', async () => {
+    const l = await seat()
+    watchEnd(l)
+    expect(l.line).toMatch(new RegExp(`^Walnut standby listening on http://localhost:${port}$`))
+    expect((await health())?.standby).toBe(true)
+    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'now' })
+    expect(await until(portFree)).toBe(true)
+    expect(lines.at(-1)).toMatch(new RegExp(`listening on http://localhost:${port}: served by this machine's replica of machine-b.*gave the port up`))
+    // It stays: the process the Mac app started does not end.
+    await new Promise((r) => setTimeout(r, 400))
+    expect(ended).toBeNull()
   })
 
-  it('a start finds the console served already: nothing listens, and it says where the console is', async () => {
-    await expect(yieldToConsoleAtStart(home, 1_000)).resolves.toBeUndefined()
-    const replica = http.createServer((_req, res) => res.end('ok'))
-    await new Promise<void>((r) => replica.listen(port, '127.0.0.1', () => r()))
+  it('a holder of another port is not its to give way to: it keeps the port', async () => {
+    const l = await seat()
+    watchEnd(l)
+    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port: port + 1, host: '127.0.0.1', since: 'now' })
+    await new Promise((r) => setTimeout(r, 600))
+    expect((await health())?.standby).toBe(true)
+    expect(ended).toBeNull()
+  })
+
+  it('a start finds the console served already: it stands by without the port, and takes the port back when the console ends', async () => {
+    const replica = await fakeReplica()
+    writeHolder(WALNUT, { pid: process.pid, state: 'serving', port, host: '127.0.0.1', since: 'now' })
+    const l = await seat()
+    watchEnd(l)
+    expect(l.line).toMatch(new RegExp(`^Walnut console listening on http://localhost:${port}: served by this machine's replica of machine-b`))
+    expect(l.server.listening).toBe(false)
+    // The replica stops (its daemon did not start it again): the standby serves the port.
+    clearHolder(WALNUT, process.pid)
+    await replica.close()
+    expect(await until(async () => (await health())?.standby === true)).toBe(true)
+    expect(lines.at(-1)).toMatch(/^Walnut standby listening on .*no longer serves it/)
+    // And gives it up again when a replica comes back.
+    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'again' })
+    expect(await until(portFree)).toBe(true)
+    expect(ended).toBeNull()
+  })
+
+  it('a holder that never answers as this Walnut (a pid used again, nothing at the port): it takes the port after the wait and does not give way to it again', async () => {
+    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'stale' })
+    const l = await seat({ answerWaitMs: 600 })
+    expect(l.line).toMatch(/^Walnut standby listening on/)
+    await new Promise((r) => setTimeout(r, 500))
+    expect((await health())?.standby).toBe(true)
+  })
+
+  it('another program on the port answering as something else: the start does not count it as the console, and fails on the taken port', async () => {
+    const other = await fakeReplica('another-program')
     try {
-      writeHolder(WALNUT, { pid: process.pid, state: 'serving', port, host: '127.0.0.1', since: 'now' })
-      const err = await yieldToConsoleAtStart(home, 1_000).catch((e: unknown) => e)
-      expect(err).toBeInstanceOf(ConsoleServedByReplica)
-      expect((err as ConsoleServedByReplica).line).toMatch(new RegExp(`listening on http://localhost:${port}.*replica of machine-b`))
+      writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'now' })
+      const err = await seat({ answerWaitMs: 600 }).catch((e: unknown) => e)
+      expect(String(err)).toMatch(/in use by another program \(EADDRINUSE\)/)
+      standby = null
     } finally {
-      await new Promise<void>((r) => replica.close(() => r()))
+      await other.close()
     }
   })
 
-  it('a start fails plainly when the replica holds the console and never answers', async () => {
-    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'now' })
-    const err = await yieldToConsoleAtStart(home, 800).catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(Error)
-    expect(err).not.toBeInstanceOf(ConsoleServedByReplica)
-    expect(String(err)).toMatch(/does not answer on port/)
+  it('ends when its home no longer stands handed over (a switch back moved it aside)', async () => {
+    const replica = await fakeReplica()
+    try {
+      writeHolder(WALNUT, { pid: process.pid, state: 'serving', port, host: '127.0.0.1', since: 'now' })
+      const l = await seat()
+      watchEnd(l)
+      fs.renameSync(home, `${home}.before-sw-2`)
+      fs.mkdirSync(home)
+      expect(await until(() => ended !== null)).toBe(true)
+      expect(ended).toMatch(/no longer stands handed over by switch sw-1; this standby ends/)
+      expect(l.server.listening).toBe(false)
+    } finally {
+      await replica.close()
+    }
   })
 
   it('a switch start waits for the console replica to let the port go, bounded', async () => {

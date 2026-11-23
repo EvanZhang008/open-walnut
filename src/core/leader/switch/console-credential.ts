@@ -12,10 +12,15 @@
  * A handover asked again (a resumed switch) mints again: the old record goes (its hash
  * tombstoned) and the new token replaces it in the file, before the final batch reads auth.json.
  * The device is the console of this machine on the new leader, revocable as any device.
+ *
+ * A console that will never stand is withdrawn (withdrawConsole): a handover refused after the
+ * mint and a cancel take the record and the file back. A handover to a machine drops that machine's
+ * own console device (a switch back: its console was a replica's, and it leads now); its file goes
+ * once it leads (side.ts).
  */
 import path from 'node:path'
 import { freshRecord, getInstanceId, tombstone, updateAuth } from '../../device-store.js'
-import { writeConsoleFile } from '../../handed-over-console.js'
+import { removeConsolesOfHome, writeConsoleFile } from '../../handed-over-console.js'
 import { readMarker } from './records.js'
 
 export interface ConsoleMint { ok: true; device: string; switchId: string }
@@ -40,11 +45,13 @@ export async function prepareConsoleForHandover(o: {
   }
   const device = consoleDeviceName(o.machine)
   const walnutId = await getInstanceId()
+  // The machine the lead goes to has no console of its own once it leads (a switch back).
+  const theirs = consoleDeviceName(o.to)
   const token = await updateAuth((auth) => {
     const fresh = freshRecord(device)
-    const old = auth.devices.filter((d) => d.name === device)
+    const old = auth.devices.filter((d) => d.name === device || d.name === theirs)
     tombstone(auth, old.map((d) => d.tokenHash))
-    auth.devices = [...auth.devices.filter((d) => d.name !== device), fresh.record]
+    auth.devices = [...auth.devices.filter((d) => d.name !== device && d.name !== theirs), fresh.record]
     return { persist: true, result: fresh.token }
   })
   writeConsoleFile({
@@ -52,4 +59,21 @@ export async function prepareConsoleForHandover(o: {
     switchId: marker.switchId, to: o.to, device, token, at: new Date().toISOString(),
   }, o.dir)
   return { ok: true, device, switchId: marker.switchId }
+}
+
+/**
+ * This machine's console of `home` will never stand (the handover was refused after the mint, or
+ * cancelled): its device record leaves this server's auth.json (its hash tombstoned, so a copy of
+ * the token never works again) and its console file goes. Nothing to do is no error.
+ */
+export async function withdrawConsole(o: { home: string; machine: string; dir?: string }): Promise<{ device: boolean; files: string[] }> {
+  const device = consoleDeviceName(o.machine)
+  const removed = await updateAuth((auth) => {
+    const old = auth.devices.filter((d) => d.name === device)
+    if (old.length === 0) return { persist: false, result: false }
+    tombstone(auth, old.map((d) => d.tokenHash))
+    auth.devices = auth.devices.filter((d) => d.name !== device)
+    return { persist: true, result: true }
+  })
+  return { device: removed, files: removeConsolesOfHome(path.resolve(o.home), o.dir) }
 }

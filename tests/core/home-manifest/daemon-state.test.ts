@@ -104,10 +104,17 @@ describe('the daemon\'s places in the data home', () => {
     expect(bad.some((b) => b.startsWith('notes:'))).toBe(true)
   })
 
-  it('marks only machine places', () => {
+  it('marks only machine and rebuildable places, never leader data', () => {
     const marked = homeEntries().filter((e) => e.daemonState)
     expect(marked.length).toBeGreaterThan(0)
-    for (const e of marked) expect(e.class, e.id).toBe('machine')
+    for (const e of marked) expect(['machine', 'rebuildable'], e.id).toContain(e.class)
+  })
+
+  it('marks every tmp/ place a daemon twin names (a promotion leaves each where it is, so none may be missed)', () => {
+    for (const [i, set] of found.entries()) {
+      const missing = [...set].filter((rel) => rel.startsWith('tmp/')).map((rel) => classifyHomePath(rel)).filter((e) => e && !e.daemonState).map((e) => e!.id)
+      expect(missing, TWINS[i]).toEqual([])
+    }
   })
 })
 
@@ -121,12 +128,12 @@ describe('the mark changes nothing in backups or the standby copy', () => {
     }
   })
 
-  it('the standby copy leaves each out, as machine data', () => {
+  it('the standby copy leaves each out, by its class (machine or rebuildable)', () => {
     const fileClass = makeFileClass()
     for (const e of marked) {
       const rel = e.kind === 'dir' ? `${e.path}/x.json` : e.path
-      expect(homePathClass(rel), e.id).toBe('machine')
-      expect(fileClass(path.posix.dirname(rel), path.posix.basename(rel)), e.id).toBe('machine')
+      expect(homePathClass(rel), e.id).toBe(e.class)
+      expect(fileClass(path.posix.dirname(rel), path.posix.basename(rel)), e.id).toBe(e.class)
     }
   })
 

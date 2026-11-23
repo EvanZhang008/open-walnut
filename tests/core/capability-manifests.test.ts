@@ -77,6 +77,7 @@ const UPGRADE_LISTENERS: Record<string, string> = {
   'src/commands/demo-server.ts': 'the local demo server',
   'src/core/leader/switch/handed-over.ts': 'the standby of a handed-over home: answers every upgrade 409 handed_over and closes the connection',
   'src/replica/leader-door.ts': "a host replica's leader door: a server on no port, fed only by streams its daemon accepted from the leader's own link (the door is the credential); upgrades only the session channel of a host that runs its sessions",
+  'src/replica/console-door.ts': "the old leader's console door: stamps the console credential, then hands the upgrade to the replica's own handler",
 }
 
 /** Code lines only: a comment that names a call is not a use. */

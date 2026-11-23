@@ -158,9 +158,9 @@ const TMP_ENTRIES: readonly HomeEntry[] = [
   mach('tmp.ephemeral-registry', 'tmp/ephemeral-registry.json', 'file', 'The throwaway servers running here'),
   // Rebuilt or fetched again.
   rebuild('tmp.standby-spool', 'tmp/standby-spool', 'dir', 'Chunks of a standby batch waiting to go to the standby host; a folder whose process is gone is removed by the next batch'),
-  rebuild('tmp.host-replica', 'tmp/host-replica', 'dir', 'This host\'s copies of the leader\'s stores'),
-  rebuild('tmp.host-server', 'tmp/host-server', 'dir', 'Host server build packages'),
-  rebuild('tmp.plugin-jobs', 'tmp/plugin-jobs', 'dir', 'Plugin job bundles'),
+  rebuild('tmp.host-replica', 'tmp/host-replica', 'dir', 'This host\'s copies of the leader\'s stores', DAEMON),
+  rebuild('tmp.host-server', 'tmp/host-server', 'dir', 'Host server build packages', DAEMON),
+  rebuild('tmp.plugin-jobs', 'tmp/plugin-jobs', 'dir', 'Plugin job bundles', DAEMON),
   rebuild('tmp.plugins', 'tmp/plugins', 'dir', 'Each plugin\'s scratch area'),
   rebuild('tmp.plugin-updates-cache', 'tmp/plugin-updates-cache.json', 'file', 'Last plugin update check'),
   rebuild('tmp.bin', 'tmp/bin', 'dir', 'Prebuilt helper binaries'),

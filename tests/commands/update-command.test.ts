@@ -243,6 +243,17 @@ describe('the compiled file', () => {
 })
 
 describe('what a launcher runs on its own (--auto), and an install that did not take', () => {
+  it('--auto on a data home that handed the leader over checks and writes nothing (a person\'s own update still runs)', async () => {
+    const { d, out, checkNow, run } = deps(NPM_NEWER, { handedOver: () => true, autoEnabled: async () => true })
+    expect(await runUpdateWith({ auto: true }, { json: false }, d)).toBe(0)
+    expect(out.join('\n')).toMatch(/handed the leader over/)
+    expect(checkNow).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    const own = deps(NPM_NEWER, { handedOver: () => true })
+    expect(await runUpdateWith({}, { json: false }, own.d)).toBe(0)
+    expect(own.run).toHaveBeenCalled()
+  })
+
   it('--auto keeps updates.auto: false, and never asks the registry then', async () => {
     const { d, out, checkNow, run } = deps(NPM_NEWER, { autoEnabled: async () => false })
     expect(await runUpdateWith({ auto: true }, { json: false }, d)).toBe(0)

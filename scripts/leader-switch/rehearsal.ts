@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto'
 import YAML from 'yaml'
 import Database from '../../src/lib/sqlite.js'
 import { makeWorld, REPO, treeHash, type Machine, type World } from './world.js'
+import { consoleDirOfAccount } from '../../src/core/handed-over-console.js'
 import { standbyStatus } from '../../src/core/standby/index.js'
 import { experimentalEnabled } from '../../src/core/experimental.js'
 import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/switch/records.js'
@@ -434,6 +435,8 @@ export async function rehearseCancel(root: string, print: (c: Check) => void, po
     c.add('cancel: --cancel rolls back', cancel.code === 3 && readSwitchState(w.a.home)?.step === 'rolled-back', cancel.out.trim().split('\n').slice(-1).join(''))
     const back = await waitFor('A to act again', async () => (await status(w, w.a))?.mayAct === true, 60_000).catch(() => false)
     c.add('cancel: A takes its permission back by itself, without a restart', back === true)
+    const left = consoleLeft(w.a)
+    c.add('cancel: the console minted for the handover is withdrawn (no console file, no console device)', left.files.length === 0 && left.devices.length === 0, JSON.stringify(left))
     await checkCarried(c, w, w.a, w.a, { tasks: s.tasks, notes: s.notes, pluginFiles: s.pluginFiles }, 'cancel')
     return c
   } finally {
@@ -635,4 +638,16 @@ export async function writeFiller(home: string, gb: number, log: (s: string) => 
     if (i < 200) fs.mkdirSync(d, { recursive: true })
     fs.writeFileSync(path.join(d, `f-${i}.md`), `small file ${i}\n`)
   }
+}
+
+/** What is left of a machine's console (core/handed-over-console.ts): its console files and the console devices in its home's auth.json. */
+export function consoleLeft(m: Machine): { files: string[]; devices: string[] } {
+  const dir = consoleDirOfAccount(m.env.HOME ?? m.dir)
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.endsWith('.json') && !n.endsWith('.holder.json')) : []
+  let devices: string[] = []
+  try {
+    devices = ((JSON.parse(fs.readFileSync(path.join(m.home, 'auth.json'), 'utf8')) as { devices?: Array<{ name?: string }> }).devices ?? [])
+      .map((d) => d.name ?? '').filter((n) => n.startsWith('console-'))
+  } catch { /* none */ }
+  return { files, devices }
 }

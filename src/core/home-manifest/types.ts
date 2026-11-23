@@ -52,11 +52,13 @@ export interface HomeEntry extends EntryBase {
   appendOnly?: true
   /**
    * This machine's daemon writes here as it runs, whichever home leads (an installed daemon keeps
-   * its state in the data home's tmp/ and local/, daemon-standalone.ts and daemon-source.ts). Only
-   * on `machine` entries. A home that handed the leader over keeps every other path of its leader
-   * data and machine data byte for byte; these go on changing (home-kept.ts skips them and says
-   * so). Nothing else reads it: backups and the standby copy decide by their own rules and by the
-   * class, as before (tests/core/home-manifest/daemon-state.test.ts).
+   * its state in the data home's tmp/ and local/, daemon-standalone.ts and daemon-source.ts). On
+   * `machine` entries, and on `rebuildable` ones the running daemon writes (its host server's
+   * install, plugin job bundles). A home that handed the leader over keeps every other path of its
+   * leader data and machine data byte for byte; these go on changing (home-kept.ts skips them and
+   * says so), and a promotion leaves them where they are (leader/switch: isMachineRuntimeEntry).
+   * Backups and the standby copy never read it: they decide by their own rules and by the class,
+   * as before (tests/core/home-manifest/daemon-state.test.ts).
    */
   daemonState?: true
 }

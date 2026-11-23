@@ -9,8 +9,8 @@ and a `leader_switch` section, like the switch itself: without them nothing here
 
 Code: `src/core/handed-over-console.ts` (the console files), `src/core/leader/switch/before-handover.ts`
 and `console-credential.ts` (made at the handover), `src/replica/console-door.ts` (the door),
-`src/core/leader/switch/handed-over.ts` (the standby gives the port up) and `console-port.ts`
-(a switch back waits for the port).
+`src/core/leader/switch/handed-over.ts` (the standby shares the port with the console) and
+`console-port.ts` (a switch back waits for the port).
 
 ## How it works
 
@@ -21,20 +21,35 @@ and `console-credential.ts` (made at the handover), `src/replica/console-door.ts
    over, the address it listens on, the switch id, B's machine id and the device's plain token
    (the home holds only its hash). If this fails the handover is refused with its reason and A
    leads on. Later steps of the same kind (a host credential) go beside it in `before-handover.ts`.
+   A console that will never stand is withdrawn (`withdrawConsole`): the handover refused after
+   the mint, or cancelled, takes the device out of `auth.json` (its hash tombstoned) and removes
+   the file. A handover to a machine drops that machine's own console device (a switch back: it
+   leads now), and its console file goes when its leader starts (`side.ts`).
 2. **The console stands** only while the handed-over home's own marker
    (`local/leader-switch/handed-over.json`) says `handed-over` in that switch. A cancelled switch
    removes the marker and a switch back moves the home aside: either ends it.
-3. **The door.** Every host replica looks once a second for a console file of its Walnut on its
-   machine. While one stands it opens a second listener at that address, beside its own port,
-   serving the same app and the same `/ws` handler. Until the port is free (the standby holds it)
-   it tries again each second and says so in its holder file
-   (`console/<walnutId>.holder.json`: pid, `waiting` or `serving`, address).
-4. **The standby gives the port up.** A standby of the handed-over home that sees a live holder
-   closes its listener, prints its line and exits 0. `walnut web` started while the replica
-   serves prints `Walnut console listening on http://localhost:<port>: served by this machine's
-   replica of <B> (pid N); this home handed the leader over (switch S)` and exits 0, with the
-   witnesses online or every one of them out of reach. It never leads and opens nothing in the
-   home. A holder that never answers on the port makes `walnut web` fail with an error naming it.
+3. **The door.** Every host replica looks once a second (an async read of one file) for a console
+   file of its Walnut on its machine. While one stands, and once its own device copy knows the
+   console's token (B sent it the device), it opens a second listener at that address, beside
+   its own port, serving the same app and the same `/ws` handler. Until the port is free (the
+   standby holds it) it tries again each second and says so in its holder file
+   (`console/<walnutId>.holder.json`: pid, `waiting` or `serving`, address). A token its copy
+   stops knowing (the device was removed on B) closes the door.
+4. **The standby shares the port.** `walnut web` on the handed-over home never exits while its
+   home stays handed over, so the process the Mac app started never ends under it:
+   - A standby that sees a live holder of **its own port** closes its listener and stays, holding
+     nothing, and prints `Walnut console listening on http://localhost:<port>: served by this
+     machine's replica of <B> (pid N); ...`.
+   - Started while the replica already serves (as this Walnut: `GET /api/v1/instance` names its
+     id), it prints that line first and stays the same way, with the witnesses online or every
+     one of them out of reach. It never leads and opens nothing in the home.
+   - When the console ends (the holder goes, or does not answer as this Walnut for a minute: a
+     pid used again, another program on the port), it takes the port back as the standby and
+     says `Walnut standby listening on http://localhost:<port>: ...`.
+   - It ends (exit 0) only when its home no longer stands handed over in its switch (a switch
+     back moved it aside), or another standby of the home serves the port.
+   - A port another program holds makes the start fail with `(EADDRINUSE)`, the word the Mac app
+     looks for to try its next port.
 5. **Switch back.** The promotion moves the handed-over home aside, so within a second the door
    closes and its holder file goes. The switch's start of A's leader (`side.ts`) waits for the
    port to be let go, at most 30 s, before it starts.
@@ -57,9 +72,11 @@ So the console is never trusted more widely than A's leader trusted a local call
 trusted less: B sees a device on its tunnel port (`classifyLocalRequest` answers `tunnel-port`,
 `fromThisMachine` is false). The device's rights were not widened for anything below.
 
-One answer is the machine's own: `GET /api/config` through the door carries this machine's
-`loginSession`, not the leader's. The Mac app stops a server that reports an ended login session
-(`desktop/main.swift` replaceEndedSessionServer), and the server on that port is the replica.
+One answer is never the leader's: `GET /api/config` through the door carries a `loginSession` with
+no problem. The Mac app stops the listener on its port when that reports an ended login session
+(`desktop/main.swift` replaceEndedSessionServer), and the listener there is the replica, which the
+app did not start and cannot restart (this machine's daemon runs it); the leader's own login
+session is another machine's.
 
 The device shows in the leader's device list as `console-<machine>`. Removing it ends the
 console's access until the next switch makes a new one.
@@ -188,14 +205,30 @@ the server's own sentence is shown only for a reason the console does not know.
 ## The Mac app
 
 `desktop/main.swift` is unchanged. What it does at each moment (checked continuously by
-`scripts/leader-switch/mac-app-replay.ts`, a step for step port of its server handling):
+`scripts/leader-switch/mac-app-replay.ts`, a step for step port of its server handling, its output
+and exit order included: Swift stops its output reader at an exit without reading what is left):
 
 | Moment | What the app sees | What it does |
 |---|---|---|
 | only the standby runs (no replica yet) | `GET /` 200 (the standby page, refreshing every 15 s), the listening line | attaches to the server it started |
-| the standby gives its port up | its server exits 0 after printing its line | restarts it after 1 s, as for any exit; discovery finds `GET /` 200 at the replica first and attaches (no orphan reclaim: the listener is not its recorded child) |
-| the replica has just taken over | `GET /` 200, `/api/config` with this machine's login session | stays attached; a spawn of `walnut web` only prints the console line and exits 0 |
+| the standby gives its port up | its process stays (no exit); the port is the replica's a moment later | nothing: no restart, no spawn; the page loads from the replica |
+| the replica has just taken over | `GET /` 200, `/api/config` with a login session it leaves alone | stays attached; a `walnut web` started now prints the console line and stays without the port |
 | the new leader is cut off | the replica's own page and copies, `GET /` 200 | stays attached; its watchdog only logs |
+| the replica stops (its daemon does not start it again) | its own process takes the port back as the standby | stays attached; the standby page loads |
+
+A start that printed its line and exited at once (the first version of this) could lose that line
+to Swift's reader and end on the app's error screen; the replay's unit test keeps that case as its
+control. Nothing in the console flow exits now until the home leads again.
+
+The app runs `walnut update --auto` once it sees its server's line; on a handed-over home that
+update does nothing (`src/commands/update.ts`), so the home is not written. A person's own
+`walnut update` there still installs, and writes its install record in the home as it does
+anywhere.
+
+One case stays the app's: after a crash of the app its `server.pid` still names the old standby;
+should the replica later get that pid, the app's orphan check (`isOwnServerCommand`, which accepts
+`web --replica`) would stop it, and the daemon starts it again. Unlikely, and only an app change
+fixes it.
 
 ## Data
 
@@ -232,3 +265,8 @@ Its test is `tests/e2e/leader-switch-console-e2e.test.ts`.
   "Needs your Mac" on the console too.
 - **After a switch back** A's daemon still holds B's server spec (its replica runs, with B a
   standby); removing it is the cross-machine phase's.
+- **The Mac app at a switch back**: the standby ends when the promotion moves its home aside, and
+  the app starts `walnut web` again a second later while the switch starts its own leader on
+  that home. That start refuses until the promotion is done (a `promoted.json` not yet `led`,
+  [the switch](./leader-switch.md)) and the app tries again on its restart clock. The switch's
+  leader becoming the app's server is the cross-machine phase's.

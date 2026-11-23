@@ -15,6 +15,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getVersion } from '../../core/version.js'
 import { currentLeaderPermit } from '../../core/leader/switch/boot.js'
 import { fromThisMachine } from '../middleware/local-trust.js'
+import { log } from '../../logging/index.js'
 
 export const leaderSwitchRouter = Router()
 
@@ -42,6 +43,8 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   const before = await beforeHandover({ to, machine: p.machine, home: WALNUT_HOME, address: listeningAddress() })
   if (!before.ok) { res.status(409).json({ ok: false, why: before.why }); return }
   const r = await p.runtime.handover(to)
+  // Not handed over: the console minted for it will never stand.
+  if (!r.ok) await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
   res.status(r.ok ? 200 : 409).json({ ok: r.ok, ...(r.record ? { record: r.record.number } : {}), ...(r.why ? { why: r.why } : {}) })
 })
 
@@ -49,5 +52,18 @@ leaderSwitchRouter.post('/cancel', thisMachineOnly, async (_req, res) => {
   const p = currentLeaderPermit()
   if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
   const r = await p.runtime.cancel()
+  // This server leads on: the console minted for the handover will never stand.
+  if (r.ok) await withdrawConsoleQuietly(p.machine, (await import('../../constants.js')).WALNUT_HOME)
   res.status(r.ok ? 200 : 409).json(r)
 })
+
+/** withdrawConsole, logged and never failing the answer it rides on (core/leader/switch/console-credential.ts). */
+async function withdrawConsoleQuietly(machine: string, home: string): Promise<void> {
+  try {
+    const { withdrawConsole } = await import('../../core/leader/switch/console-credential.js')
+    const w = await withdrawConsole({ home, machine })
+    if (w.device || w.files.length) log.web.info('leader switch: this machine\'s console withdrawn (no handover)', { device: w.device, files: w.files.length })
+  } catch (err) {
+    log.web.warn('leader switch: this machine\'s console could not be withdrawn', { error: err instanceof Error ? err.message : String(err) })
+  }
+}

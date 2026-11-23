@@ -24,15 +24,20 @@
  * only that person may do (routes behind fromThisMachine and the like) is refused here as for
  * any device.
  *
- * One answer is this machine's, never the leader's: GET /api/config's `loginSession`. The Mac app
- * reads it to judge the server on its port (desktop/main.swift replaceEndedSessionServer stops a
- * server that reports `user_lookup` or `dns_config`), and the server on this port is this
- * replica: a leader on another machine with a broken login session must not get it stopped.
+ * It opens only once this replica's device copy knows the console's token (the new leader sent
+ * it the device the switch moved): before that every console request would be refused and counted
+ * against the replica's one failure bucket. A token it stops knowing (the device was removed)
+ * closes the door again.
+ *
+ * One answer is never the leader's: GET /api/config's `loginSession`. The Mac app reads it to judge
+ * the server on its port (desktop/main.swift replaceEndedSessionServer stops the listener when it
+ * reports `user_lookup` or `dns_config`). The listener here is this replica, which the app did not
+ * start and cannot restart (this machine's daemon runs it), and the leader's own login session is
+ * another machine's: so the door always answers a session with no problem, one the app leaves alone.
  */
 import http from 'node:http'
 import type { Duplex } from 'node:stream'
-import { clearHolder, consoleRefusal, readConsoleFile, writeHolder, type HandedOverConsole } from '../core/handed-over-console.js'
-import { loginSessionState } from '../core/login-session.js'
+import { clearHolder, consoleRefusal, readConsoleFileAsync, writeHolder, type HandedOverConsole } from '../core/handed-over-console.js'
 import { classifyLoopbackClient } from '../web/middleware/local-trust.js'
 
 export interface ConsoleDoorOptions {
@@ -43,6 +48,8 @@ export interface ConsoleDoorOptions {
   /** The server whose 'upgrade' handler serves /ws (the public port's). */
   mainServer: http.Server
   log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
+  /** Whether this replica's device copy knows a token (replica/auth.ts verifyReplicaToken). */
+  knowsToken: (token: string) => boolean
   /** Tests: the console files' dir and the look interval. */
   dir?: string
   tickMs?: number
@@ -72,13 +79,17 @@ export function stampConsoleCredential(req: http.IncomingMessage, token: string 
   return true
 }
 
+/** The login session the console reports: no problem, so the Mac app never stops the replica over it (see the header). */
+export const CONSOLE_LOGIN_SESSION = Object.freeze({ ok: true, problems: [] as string[], checkedAt: null })
+
 /**
- * GET /api/config answered with this machine's login session in place of the leader's (see the
- * header). The leader's answer is held whole (asked uncompressed and unconditional, so it is
- * plain JSON with a body), its `loginSession` replaced, and sent on with its own length; any other
- * answer (an error, not JSON) goes on as it came.
+ * GET /api/config answered with CONSOLE_LOGIN_SESSION in place of the leader's (see the header).
+ * The leader's answer is held whole (asked uncompressed and unconditional, so it is plain JSON with
+ * a body), its `loginSession` replaced, and sent on with its own length; any other answer (an
+ * error, not JSON) goes on as it came. A second head (the forward answering again after a failed
+ * first try) starts the held answer over.
  */
-export function answerLoginSessionOfThisMachine(req: http.IncomingMessage, res: http.ServerResponse): void {
+export function answerConsoleLoginSession(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (req.method !== 'GET' || (req.url ?? '').split('?')[0] !== '/api/config') return
   delete req.headers['accept-encoding']
   delete req.headers['if-none-match']
@@ -91,6 +102,7 @@ export function answerLoginSessionOfThisMachine(req: http.IncomingMessage, res: 
   let status: number | null = null
   let message: string | undefined
   res.writeHead = ((code: number, a?: unknown, b?: unknown) => {
+    if (status !== null) chunks.length = 0
     status = code
     const headers = typeof a === 'string' ? b : a
     if (typeof a === 'string') message = a
@@ -118,7 +130,7 @@ export function answerLoginSessionOfThisMachine(req: http.IncomingMessage, res: 
       try {
         const j = JSON.parse(body.toString('utf8')) as unknown
         if (j && typeof j === 'object' && !Array.isArray(j)) {
-          (j as Record<string, unknown>).loginSession = loginSessionState()
+          (j as Record<string, unknown>).loginSession = { ...CONSOLE_LOGIN_SESSION, problems: [] }
           body = Buffer.from(JSON.stringify(j))
           res.removeHeader('etag')
         }
@@ -147,10 +159,13 @@ export function startConsoleDoor(o: ConsoleDoorOptions): ConsoleDoor {
   let opening: Promise<void> | null = null
   let stopped = false
   let lastBusyLog = 0
+  // The WebSockets taken through the door: handed to the main server's handler, so its own
+  // closeAllConnections no longer sees them; ended here when the door closes.
+  const sockets = new Set<Duplex>()
 
   const handler: http.RequestListener = (req, res) => {
     stampConsoleCredential(req, current?.token ?? null)
-    answerLoginSessionOfThisMachine(req, res)
+    answerConsoleLoginSession(req, res)
     o.app(req, res)
   }
 
@@ -167,6 +182,8 @@ export function startConsoleDoor(o: ConsoleDoorOptions): ConsoleDoor {
     server = null
     if (s) {
       s.closeAllConnections?.()
+      for (const sock of sockets) sock.destroy()
+      sockets.clear()
       await new Promise<void>((resolve) => s.close(() => resolve()))
       o.log('info', 'console door: closed', { reason, port: current?.port })
     }
@@ -181,6 +198,8 @@ export function startConsoleDoor(o: ConsoleDoorOptions): ConsoleDoor {
     state = 'waiting'
     const s = http.createServer(handler)
     s.on('upgrade', (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
       stampConsoleCredential(req, current?.token ?? null)
       o.mainServer.emit('upgrade', req, socket, head)
     })
@@ -209,8 +228,9 @@ export function startConsoleDoor(o: ConsoleDoorOptions): ConsoleDoor {
   async function look(): Promise<void> {
     if (stopped) return
     if (opening) return opening
-    const c = readConsoleFile(o.walnutId, dir)
-    const refusal = !c ? 'no console file for this Walnut on this machine' : c.port === o.publicPort ? 'the console names this replica\'s own port' : consoleRefusal(c)
+    const c = await readConsoleFileAsync(o.walnutId, dir)
+    const refusal = !c ? 'no console file for this Walnut on this machine' : c.port === o.publicPort ? 'the console names this replica\'s own port'
+      : consoleRefusal(c) ?? (o.knowsToken(c.token) ? null : 'this replica does not know the console device yet (or it was removed): its device copy comes from the leader')
     if (!c || refusal) {
       if (state !== 'none') await close(refusal ?? 'the console ended')
       else why = refusal ?? undefined

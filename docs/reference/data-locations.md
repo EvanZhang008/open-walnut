@@ -26,13 +26,15 @@ writes has its own row. Lock files count as `machine` only by Walnut's own lock 
 a lockfile of a project or a plugin (`bun.lock`, `Cargo.lock`) stays with its folder.
 **Sensitive** marks credentials, tokens, keys and the password vault.
 
-**Daemon state.** `machine (daemon state)` marks the places this machine's daemon writes as it
-runs, whichever home leads: an installed daemon keeps its state in the data home's `tmp/` and
+**Daemon state.** `(daemon state)` after a class marks the places this machine's daemon writes as
+it runs, whichever home leads: an installed daemon keeps its state in the data home's `tmp/` and
 `local/`. A home that handed the leader over keeps every other `leader-data` and `machine` path
 byte for byte (`src/core/home-manifest/home-kept.ts` checks it and says which paths it skipped);
-these go on changing. The mark changes nothing else: backups and the standby copy treat them as
-before. A ratchet (`tests/core/home-manifest/daemon-state.test.ts`) reads both daemon twins and
-fails on a data home path the daemon writes that is neither marked nor `rebuildable`.
+these go on changing, and a leader switch's promotion leaves them where they are. The mark
+changes nothing else: backups and the standby copy treat them by their class, as before. A
+ratchet (`tests/core/home-manifest/daemon-state.test.ts`) reads both daemon twins and fails on a
+data home path the daemon writes that is neither marked nor `rebuildable`, and on a `tmp/` place
+it writes that is not marked.
 
 **Older places.** The places only older releases wrote stay in the manifest with a class,
 so data an upgrade left there is still copied or skipped right, but they have no row here.
@@ -269,9 +271,9 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/tmp/ephemeral-slots/` | machine | no | Slots of the throwaway servers running here |
 | `~/.open-walnut/tmp/ephemeral-registry.json` | machine | no | The throwaway servers running here |
 | `~/.open-walnut/tmp/standby-spool/` | rebuildable | no | Chunks of a standby batch waiting to go to the standby host; a folder whose process is gone is removed by the next batch |
-| `~/.open-walnut/tmp/host-replica/` | rebuildable | no | This host's copies of the leader's stores |
-| `~/.open-walnut/tmp/host-server/` | rebuildable | no | Host server build packages |
-| `~/.open-walnut/tmp/plugin-jobs/` | rebuildable | no | Plugin job bundles |
+| `~/.open-walnut/tmp/host-replica/` | rebuildable (daemon state) | no | This host's copies of the leader's stores |
+| `~/.open-walnut/tmp/host-server/` | rebuildable (daemon state) | no | Host server build packages |
+| `~/.open-walnut/tmp/plugin-jobs/` | rebuildable (daemon state) | no | Plugin job bundles |
 | `~/.open-walnut/tmp/plugins/` | rebuildable | no | Each plugin's scratch area |
 | `~/.open-walnut/tmp/plugin-updates-cache.json` | rebuildable | no | Last plugin update check |
 | `~/.open-walnut/tmp/bin/` | rebuildable | no | Prebuilt helper binaries |

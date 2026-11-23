@@ -73,7 +73,11 @@ export async function makeConsoleWorld(root: string, opts: { portA: number; port
   const realServer = (m: Machine) => [process.execPath, path.join(REPO, 'scripts/leader-switch/console-server.ts'), '--port', String(m.port)]
   if (asInstalled) {
     w.a.start = realServer(w.a)
-    w.a.env = { ...w.a.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, WALNUT_LOCAL_CLAUDE_PROBE: '0', ...windowEnv() }
+    // As installed, A's home is <HOME>/.open-walnut, which a process that inherits a test run's
+    // markers (VITEST, NODE_ENV=test) takes for the production home and moves to a temp dir
+    // (constants.ts). HOME is this rehearsal's folder, so A runs as an install does, without them;
+    // console-server.ts refuses the account's real home.
+    w.a.env = { ...w.a.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, WALNUT_LOCAL_CLAUDE_PROBE: '0', ...windowEnv(), VITEST: '', VITEST_WORKER_ID: '', VITEST_POOL_ID: '', NODE_ENV: '' }
   }
   w.b.start = realServer(w.b)
   w.b.env = leaderEnv(w, bin, app, d.port, asInstalled)

@@ -12,7 +12,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { readHolder, writeConsoleFile, type HandedOverConsole } from '../../src/core/handed-over-console.js'
-import { startConsoleDoor, type ConsoleDoor } from '../../src/replica/console-door.js'
+import { answerConsoleLoginSession, startConsoleDoor, type ConsoleDoor } from '../../src/replica/console-door.js'
 
 const WALNUT = 'b0b1b2b3b4b5b6b7b8b9babbbcbdbebf'
 const TOKEN = 'c'.repeat(32)
@@ -24,6 +24,8 @@ let main: http.Server
 let mainPort: number
 let door: ConsoleDoor | null = null
 let blockers: net.Server[] = []
+/** The tokens this replica's device copy knows (the leader sent it the console device). */
+let known = new Set<string>()
 
 /** The leader machine's login session as its GET /api/config reports it: broken (an ended session). */
 const LEADER_SESSION = { ok: false, problems: ['user_lookup', 'dns_config'], checkedAt: '2026-01-01T00:00:00.000Z' }
@@ -86,12 +88,13 @@ function consoleAt(port: number, over: Partial<HandedOverConsole> = {}): void {
 }
 
 function open(): ConsoleDoor {
-  door = startConsoleDoor({ walnutId: WALNUT, publicPort: mainPort, app, mainServer: main, log: () => {}, dir, tickMs: 60_000 })
+  door = startConsoleDoor({ walnutId: WALNUT, publicPort: mainPort, app, mainServer: main, log: () => {}, knowsToken: (t) => known.has(t), dir, tickMs: 60_000 })
   return door
 }
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-door-'))
+  known = new Set([TOKEN])
   dir = path.join(root, 'console')
   home = path.join(root, 'home')
   fs.mkdirSync(home)
@@ -144,7 +147,7 @@ describe('the console door', () => {
     expect((await get(mainPort)).json.auth).toBeNull()
   })
 
-  it("answers GET /api/config with this machine's login session, never the leader's (the Mac app stops a server that reports an ended one)", async () => {
+  it("answers GET /api/config with a login session the Mac app never acts on, never the leader's (the app stops a listener that reports an ended one)", async () => {
     const port = await freePort()
     consoleAt(port)
     marker('handed-over')
@@ -175,6 +178,66 @@ describe('the console door', () => {
     // The tunnel port is not this machine's console: the leader's answer as it is.
     const tunnel = await new Promise<string>((resolve) => http.get({ host: '127.0.0.1', port: mainPort, path: '/api/config' }, (res) => { let b = ''; res.on('data', (c) => { b += c }); res.on('end', () => resolve(b)) }))
     expect(JSON.parse(tunnel).loginSession).toEqual(LEADER_SESSION)
+  })
+
+  it('opens only once the device copy knows the console token, and closes when it stops knowing it', async () => {
+    const port = await freePort()
+    consoleAt(port)
+    marker('handed-over')
+    known.clear()
+    const d = open()
+    await d.look()
+    // Not yet: no holder file (so the standby keeps the port), nothing listens.
+    expect(d.status()).toMatchObject({ state: 'none', why: expect.stringMatching(/device copy/) })
+    expect(readHolder(WALNUT, dir)).toBeNull()
+    await expect(get(port)).rejects.toThrow()
+    known.add(TOKEN)
+    await d.look()
+    expect(d.status().state).toBe('serving')
+    expect((await get(port)).json.auth).toBe(`Bearer ${TOKEN}`)
+    // The device was removed on the leader: its copy no longer knows the token.
+    known.clear()
+    await d.look()
+    expect(d.status()).toMatchObject({ state: 'none', why: expect.stringMatching(/device copy/) })
+    expect(readHolder(WALNUT, dir)).toBeNull()
+  })
+
+  it('ends the WebSockets taken through the door when it closes', async () => {
+    const port = await freePort()
+    consoleAt(port)
+    marker('handed-over')
+    main.removeAllListeners('upgrade')
+    main.on('upgrade', (_req, socket) => { socket.write('HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\n') })
+    const d = open()
+    await d.look()
+    const sock = await new Promise<net.Socket>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/ws', headers: { connection: 'Upgrade', upgrade: 'websocket' } })
+      req.on('upgrade', (_res, s) => resolve(s))
+      req.on('error', reject)
+      req.end()
+    })
+    const closed = new Promise<void>((resolve) => sock.on('close', () => resolve()))
+    await d.stop()
+    door = null
+    await expect(Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(() => r('open'), 3_000))])).resolves.toBe('closed')
+  })
+
+  it('sends one answer when the forward answers again after a failed first try (a second head starts it over)', async () => {
+    const s = http.createServer((req, res) => {
+      answerConsoleLoginSession(req, res)
+      res.writeHead(502, { 'content-type': 'text/plain' })
+      res.write('half of a first answer')
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ config: { ok: 1 }, loginSession: LEADER_SESSION }))
+    })
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()))
+    blockers.push(s as unknown as net.Server)
+    const p = (s.address() as net.AddressInfo).port
+    const r = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: p, path: '/api/config' }, (res) => { let b = ''; res.on('data', (c) => { b += c }); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: b })) }).on('error', reject)
+    })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)).toEqual({ config: { ok: 1 }, loginSession: { ok: true, problems: [], checkedAt: null } })
   })
 
   it('gives the port back when the console ends', async () => {
@@ -219,7 +282,7 @@ describe('the console door', () => {
     await d.look()
     expect(d.status()).toMatchObject({ state: 'none', why: expect.stringMatching(/own port/) })
     await d.stop()
-    door = startConsoleDoor({ walnutId: 'other0123', publicPort: mainPort, app, mainServer: main, log: () => {}, dir, tickMs: 60_000 })
+    door = startConsoleDoor({ walnutId: 'other0123', publicPort: mainPort, app, mainServer: main, log: () => {}, knowsToken: (t) => known.has(t), dir, tickMs: 60_000 })
     await door.look()
     expect(door.status()).toMatchObject({ state: 'none', why: expect.stringMatching(/no console file/) })
   })

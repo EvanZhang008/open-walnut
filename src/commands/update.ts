@@ -136,6 +136,8 @@ export interface UpdateDeps {
   versionOf?: (install: InstallInfo) => Promise<string | null>
   /** config.yaml `updates.auto` after WALNUT_NO_AUTO_UPDATE (for --auto). */
   autoEnabled?: () => Promise<boolean>
+  /** This data home handed the leader over (the switch's marker): it stays as it was handed over (for --auto). */
+  handedOver?: () => boolean
   /** Why the published version is held back here, or null (for --auto). */
   held?: (status: UpdateStatus) => string | null
   /** Clear the published version's held-back mark once it is installed. */
@@ -170,6 +172,7 @@ export async function defaultDeps(): Promise<UpdateDeps> {
   const { badDirFor, clearBad, heldBack } = await import('../core/self-update/held-versions.js')
   const { WALNUT_HOME } = await import('../constants.js')
   const { brewUpgradeHint } = await import('../core/self-update/homebrew-keg.js')
+  const { hasHandedOverMarker } = await import('../core/handed-over-console.js')
   return {
     // A fresh checker, not the server's: this process is the install being updated.
     checkNow: (channel) => new UpdateChecker(channel ? { channel } : {}).checkNow(),
@@ -182,6 +185,7 @@ export async function defaultDeps(): Promise<UpdateDeps> {
       })
     },
     versionOf: relaunchVersion,
+    handedOver: () => hasHandedOverMarker(WALNUT_HOME),
     autoEnabled: async () => {
       let configAuto: boolean | undefined
       try {
@@ -212,6 +216,13 @@ export async function runUpdateWith(options: UpdateOptions, globals: GlobalOptio
   } catch (err) {
     deps.err(err instanceof Error ? err.message : String(err))
     return 2
+  }
+  // A launcher's update on a home that handed the leader over (the Mac app updates once it sees its
+  // server's line, and the standby of that home says one): the install record and the held-back
+  // marks it would write live in the home, which stays byte for byte as it was handed over.
+  if (options.auto && deps.handedOver?.()) {
+    deps.out('This data home handed the leader over to another machine and stays as it was: a launcher\'s update does not run here.')
+    return 0
   }
   if (options.auto && deps.autoEnabled && !(await deps.autoEnabled())) {
     deps.out('Automatic updates are off here (updates.auto: false in config.yaml, or WALNUT_NO_AUTO_UPDATE).')

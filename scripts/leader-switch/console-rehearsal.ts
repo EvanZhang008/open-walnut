@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { Checks, seed, waitForBatch, type Check } from './rehearsal.js'
+import { Checks, consoleLeft, seed, waitForBatch, type Check } from './rehearsal.js'
 import { makeConsoleWorld, HOST_KEY_A, type ConsoleWorld } from './console-world.js'
 import { compareKept, describeKept, snapshotHome } from '../../src/core/home-manifest/home-kept.js'
 import { MacAppReplay } from './mac-app-replay.js'
@@ -44,17 +44,30 @@ export function appCommand(m: Machine, port: number): { cmd: string; args: strin
   }
 }
 
-/** One `walnut web --port <p>` by hand: its exit and output (it either serves, or says where the console is and ends). */
-export function startByHand(m: Machine, port: number, timeoutMs = 120_000): Promise<{ code: number | null; out: string; stillRunning: boolean; pid?: number; stop(): void }> {
+/**
+ * One `walnut web --port <p>` by hand on the handed-over home while this machine's replica serves
+ * the console there: it should say so and stay, holding nothing (handed-over.ts). Waits for its
+ * line (or its exit), checks the port still answers as this Walnut's console, then stops it
+ * (SIGTERM) and reports how it ended.
+ */
+export async function byHandBesideConsole(m: Machine, port: number, walnutId: string, timeoutMs = 120_000): Promise<{ ok: boolean; detail: string }> {
   const { cmd, args, env } = appCommand(m, port)
   const child = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   let out = ''
   child.stdout.on('data', (d) => { out += String(d) })
   child.stderr.on('data', (d) => { out += String(d) })
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ code: null, out, stillRunning: true, ...(child.pid ? { pid: child.pid } : {}), stop: () => { try { child.kill('SIGTERM') } catch { /* gone */ } } }), timeoutMs)
-    child.on('exit', (code) => { clearTimeout(timer); resolve({ code, out, stillRunning: false, stop: () => {} }) })
-  })
+  let exited: number | null | undefined
+  const gone = new Promise<void>((resolve) => child.on('exit', (code) => { exited = code; resolve() }))
+  const said = await until('the console line', () => (/listening on http:\/\/localhost:\d+: served by this machine's replica of/.test(out) || exited !== undefined ? true : null), timeoutMs, 250)
+  const inst = await fetch(`http://127.0.0.1:${port}/api/v1/instance`).then((r) => r.json() as Promise<{ instance?: string }>).catch(() => null)
+  const stayed = exited === undefined
+  try { child.kill('SIGTERM') } catch { /* gone */ }
+  await Promise.race([gone, sleep(20_000)])
+  const last = out.trim().split('\n').filter((l) => /listening on|standby|console/.test(l)).slice(-1)[0] ?? out.trim().split('\n').slice(-1)[0]
+  return {
+    ok: !!said && stayed && inst?.instance === walnutId && exited === 0,
+    detail: `${stayed ? 'stayed' : `exited ${exited} by itself`}; the port answers as ${inst?.instance === walnutId ? 'this Walnut' : JSON.stringify(inst)}; ended ${exited === undefined ? 'not' : `code ${exited}`} after SIGTERM | ${last}`,
+  }
 }
 
 export interface ConsoleRehearsalOptions {
@@ -86,7 +99,7 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
     if (opts.seedHome) await opts.seedHome(cw.a.home, { ...cw.a.env, OPEN_WALNUT_HOME: cw.a.home })
     log('A seeded')
     const started = await a.startServer('leader', 300_000)
-    if (!c.add('A starts as the leader', started.ok, started.why ?? '')) return c
+    if (!c.add('A starts as the leader', started.ok, `${started.why ?? ''}${!started.ok && started.logTail ? ` | log: ${started.logTail.slice(-1500)}` : ''}`)) return c
     const s = await seed(cw, cw.a, 5)
     const t0 = Date.now()
     await waitForBatch(cw.b.standbyDir, t0, 600_000)
@@ -120,15 +133,15 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
       const h = readHolder(walnutId, cw.consoleDir)
       return h?.state === 'serving' ? h : null
     }, 300_000)
-    const yielded = serving ? replay.events.find((e) => e.kind === 'server_exited' && e.at > t0) : undefined
-    c.add('phase 2: the standby gives its port to the replica, which serves the console there', !!serving && serving.port === cw.a.port,
-      `${JSON.stringify(serving)}; standby exit: ${yielded?.detail ?? 'none'}`)
-    const attached = await until('the app attaches to the replica', () => {
-      const last = replay.events.filter((e) => e.kind === 'attached').at(-1)
-      return last && serving && last.at > (yielded?.at ?? 0) ? last : null
-    }, 120_000)
-    c.add('phase 3: the app finds the replica on its port and shows it (no spawn loop)', !!attached && replay.attachedPort() === cw.a.port,
-      `spawns ${replay.spawns().length}, restarts ${replay.events.filter((e) => e.kind === 'restart_scheduled').length}`)
+    await sleep(3_000)
+    const exits = replay.events.filter((e) => e.kind === 'server_exited')
+    const inst = await fetch(`http://127.0.0.1:${cw.a.port}/api/v1/instance`).then((r) => r.json() as Promise<{ instance?: string }>).catch(() => null)
+    c.add('phase 2: the standby gives its port to the replica, which serves the console there, and stays (the app\'s process never ends)',
+      !!serving && serving.port === cw.a.port && exits.length === 0 && inst?.instance === walnutId,
+      `${JSON.stringify(serving)}; the port answers as ${inst?.instance === walnutId ? 'this Walnut' : JSON.stringify(inst)}; app child exits ${exits.length}`)
+    const restarts = () => replay.events.filter((e) => e.kind === 'restart_scheduled').length
+    c.add('phase 3: the app stays on its port, now the replica\'s console (no restart, no spawn)', replay.attachedPort() === cw.a.port && restarts() === 0 && replay.spawns().length === 1,
+      `spawns ${replay.spawns().length}, restarts ${restarts()}`)
     // The console answers as B: its data, its writes land on B once.
     const tasks = await cw.api(cw.a, 'GET', '/api/tasks')
     const seen = ((tasks.json?.tasks ?? []) as Array<{ id: string }>).map((t) => t.id)
@@ -139,16 +152,15 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
     const copies = ((onB.json?.tasks ?? []) as Array<{ title: string }>).filter((t) => t.title === title).length
     c.add('a write at the console lands on B, once', made.status < 300 && copies === 1, `${made.status}; on B ${copies}`)
     const cfg = await cw.api(cw.a, 'GET', '/api/config')
-    c.add('GET /api/config at the console names this machine\'s login session', cfg.status === 200 && Array.isArray(cfg.json?.loginSession?.problems), JSON.stringify(cfg.json?.loginSession))
+    c.add('GET /api/config at the console reports a login session the Mac app never acts on', cfg.status === 200 && cfg.json?.loginSession?.ok === true && Array.isArray(cfg.json?.loginSession?.problems) && cfg.json.loginSession.problems.length === 0, JSON.stringify(cfg.json?.loginSession))
     if (opts.online) await opts.online(cw, c)
     // A start by hand of `walnut web` on the handed-over home: never a leader, it says where the console is.
-    const byHand = await startByHand(cw.a, cw.a.port)
-    c.add('`walnut web --port <p>` on the handed-over home says the replica serves the console and ends (witnesses online)',
-      byHand.code === 0 && /listening on http:\/\/localhost:\d+.*replica of/.test(byHand.out), byHand.out.trim().split('\n').slice(-2).join(' | '))
+    const byHand = await byHandBesideConsole(cw.a, cw.a.port, walnutId)
+    c.add('`walnut web --port <p>` on the handed-over home says the replica serves the console there and stays without the port (witnesses online)', byHand.ok, byHand.detail)
     for (const x of cw.witnesses) fs.renameSync(x.dir, `${x.dir}.off`)
     try {
-      const off = await startByHand(cw.a, cw.a.port)
-      c.add('... the same with every witness out of reach', off.code === 0 && /replica of/.test(off.out), off.out.trim().split('\n').slice(-2).join(' | '))
+      const off = await byHandBesideConsole(cw.a, cw.a.port, walnutId)
+      c.add('... the same with every witness out of reach', off.ok, off.detail)
     } finally {
       for (const x of cw.witnesses) fs.renameSync(`${x.dir}.off`, x.dir)
     }
@@ -181,8 +193,8 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
     }
     // The Mac app, the whole time: no stop of a server, no spawn loop, no error screen, shown now.
     const kills = replay.kills()
-    c.add('the Mac app never stopped a server, never looped, and shows the console', kills.length === 0 && replay.errors().length === 0 && replay.spawns().length <= 2 && replay.attachedPort() === cw.a.port,
-      `kills ${JSON.stringify(kills)}; spawns ${replay.spawns().length}; errors ${JSON.stringify(replay.errors())}; shown ${replay.attachedPort()}`)
+    c.add('the Mac app never stopped a server, never restarted or looped, and shows the console', kills.length === 0 && replay.errors().length === 0 && replay.spawns().length === 1 && restarts() === 0 && replay.attachedPort() === cw.a.port,
+      `kills ${JSON.stringify(kills)}; spawns ${replay.spawns().length}; restarts ${restarts()}; errors ${JSON.stringify(replay.errors())}; shown ${replay.attachedPort()}`)
     // A's home, by the manifest's classes: what is leader data or this machine's is byte for byte as handed over.
     const kept = compareKept(homeAfterSwitch, await snapshotHome(cw.a.home))
     c.add(`A's handed-over home: no path of the leader's data or this machine's data changed (by the manifest's classes)${cw.asInstalled ? ', its daemon keeping its state inside it, as installed' : ''}`,
@@ -196,6 +208,8 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
     c.add('switch back B -> A completes, A leads at its own port again', back.code === 0 && sb?.step === 'done' && (await cw.api(cw.a, 'GET', '/api/leader/status')).json?.permit?.mayAct === true,
       `exit ${back.code}; ${back.out.trim().split('\n').slice(-3).join(' | ')}`)
     c.add('the console door closed (no holder), the replica no longer listens at A\'s address', !readHolder(walnutId, cw.consoleDir), JSON.stringify(readHolder(walnutId, cw.consoleDir)))
+    const left = consoleLeft(cw.a)
+    c.add('A leads again: its console file is gone and its own console device left the data (B dropped it at its handover)', left.files.length === 0 && !left.devices.includes(`console-${HOST_KEY_A}`), JSON.stringify(left))
     return c
   } finally {
     if (stoppedB) try { process.kill(stoppedB, 'SIGCONT') } catch { /* gone */ }

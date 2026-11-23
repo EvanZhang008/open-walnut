@@ -23,6 +23,16 @@
  *                            error screen
  *   watchdog                 GET / every 60 s: logs only
  *
+ * Output and exit keep Swift's order (main.swift tryStartServerOnPort, DesktopDiagnostics.swift
+ * stop): an exit stops the reader first, without reading what is left, so a line the child printed
+ * just before it ended can be lost, and that start counts as one that exited without saying it
+ * listens. How often that happens depends on scheduling; the replay reads a chunk at once by
+ * default and `readerLag` widens the window (a test shows a start that prints and exits at once).
+ * A recovery stays "recovering" until a start confirms its port.
+ *
+ * Linux only: the process and listener lookups read /proc (psCommand, lsofListener); on macOS it
+ * finds no lock holder's command and no listener, so the orphan check never fires there.
+ *
  * Every stop it does is recorded (`kills`), as is every spawn, attach and error screen: a test
  * asserts no stop of a healthy server and no spawn loop.
  */
@@ -52,6 +62,8 @@ export interface ReplayOptions {
 export const APP_CLOCKS = {
   checkTimeout: 2, pollEvery: 0.5, pollTries: 60, startupTimeout: 180, waitPoll: 2, waitRequestTimeout: 5,
   maxRediscoveries: 3, restartDelays: [1, 2, 4, 8, 16] as number[], healthyReset: 120, endedRecheck: 90, watchdog: 60,
+  /** How long after a write the app's reader sees it; 0: at once (its reader thread reads what is there). */
+  readerLag: 0,
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -80,7 +92,8 @@ function psCommand(pid: number): string {
   try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ') } catch { return '' }
 }
 
-const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+// As Swift's kill(pid, 0) check: a process of another user (EPERM) is alive.
+const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' } }
 
 function lsofListener(port: number): number | null {
   // /proc/net/tcp{,6}: the socket inode listening on the port, then the process holding it.
@@ -119,6 +132,8 @@ export class MacAppReplay {
   private lastSpawnedPid: number | null = null
   private serverReadyAt: number | null = null
   private restartAttempts = 0
+  /** isRecoveringServer: set by a scheduled recovery, cleared when a start confirms its port. */
+  private recovering = false
   private rediscoveries = 0
   private replacedEnded = false
   private generation = 0
@@ -286,6 +301,7 @@ export class MacAppReplay {
     this.generation++
     this.rediscoveries = 0
     this.restartAttempts = 0
+    this.recovering = false
     this.ownsServer = false
     this.serverPort = port
     this.shownPort = port
@@ -307,17 +323,24 @@ export class MacAppReplay {
     let out = ''
     let portConfirmed = false
     let settled = false
-    const onText = (d: Buffer) => {
+    let readerStopped = false
+    const read = (d: Buffer) => {
+      if (readerStopped) return
       out += String(d)
       if (!portConfirmed && out.includes(`listening on http://localhost:${port}`)) {
         portConfirmed = true
-        this.note('port_confirmed', { port, ...(child.pid ? { pid: child.pid } : {}) })
-        this.ownsServer = true
-        this.serverPort = port
-        this.serverReadyAt = Date.now()
-        void this.pollForServer(port)
+        // The confirmation itself runs on the main queue.
+        setImmediate(() => {
+          this.note('port_confirmed', { port, ...(child.pid ? { pid: child.pid } : {}) })
+          this.ownsServer = true
+          this.serverPort = port
+          this.serverReadyAt = Date.now()
+          this.recovering = false
+          void this.pollForServer(port)
+        })
       }
     }
+    const onText = (d: Buffer) => { if (this.c.readerLag > 0) setTimeout(() => read(d), this.c.readerLag * 1000); else read(d) }
     child.stdout?.on('data', onText)
     child.stderr?.on('data', onText)
     const began = Date.now()
@@ -330,7 +353,18 @@ export class MacAppReplay {
       this.serverProcess = null
       void this.handleStartupFailure(`never said it listens on ${port}`)
     }, 1000)
+    // What the pipes still hold when the child ends: Swift's reader thread has usually read it by
+    // the time the exit is handled; Node may tell the exit first, so the replay lets the pipes end
+    // (at most 50 ms) before it stops the reader as terminationHandler does.
+    const drained = Promise.all([child.stdout, child.stderr].map((st) => (st ? new Promise<void>((r) => { if (st.readableEnded) r(); else st.once('end', () => r()).once('close', () => r()) }) : Promise.resolve())))
     child.on('exit', (code, signal) => {
+      void Promise.race([drained, sleep(50)]).then(() => {
+        // terminationHandler: the reader stops first (what it had not read yet is lost), then the main queue.
+        readerStopped = true
+        setImmediate(() => onExit(code, signal))
+      })
+    })
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       this.children.delete(child)
       clearInterval(deadline)
       this.note('server_exited', { port, ...(child.pid ? { pid: child.pid } : {}), detail: `code ${code} signal ${signal}; ${out.trim().split('\n').slice(-2).join(' | ')}` })
@@ -350,7 +384,7 @@ export class MacAppReplay {
       if (current) this.serverProcess = null
       if (/eaddrinuse|address already in use/i.test(out)) return void this.tryStartServerOnPort(index + 1)
       void this.handleStartupFailure(`exited with code ${code}`)
-    })
+    }
   }
 
   private async pollForServer(port: number): Promise<void> {
@@ -366,15 +400,16 @@ export class MacAppReplay {
   private async handleStartupFailure(message: string): Promise<void> {
     const holder = this.liveLockHolder()
     if (holder) return this.waitForRunningServer(holder)
-    if (this.restartAttempts > 0) return this.scheduleServerRecovery('recovery_start_failed', null, message)
+    if (this.recovering) return this.scheduleServerRecovery('recovery_start_failed', null, message)
     return this.errorScreen(message)
   }
 
   private scheduleServerRecovery(reason: string, healthyFor: number | null, detail = ''): void {
     if (healthyFor !== null && healthyFor >= this.c.healthyReset) this.restartAttempts = 0
-    if (this.restartAttempts >= this.c.restartDelays.length) return void this.errorScreen(`could not keep the server running after ${this.restartAttempts} restarts. ${detail}`)
+    if (this.restartAttempts >= this.c.restartDelays.length) { this.recovering = false; return void this.errorScreen(`could not keep the server running after ${this.restartAttempts} restarts. ${detail}`) }
     const delay = this.c.restartDelays[this.restartAttempts]!
     this.restartAttempts++
+    this.recovering = true
     this.note('restart_scheduled', { detail: `${reason}, attempt ${this.restartAttempts}, in ${delay} s` })
     const gen = this.generation
     setTimeout(() => { if (!this.stopped && gen === this.generation) { this.serverPort = null; void this.startServer() } }, delay * 1000)
