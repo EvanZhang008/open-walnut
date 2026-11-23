@@ -8075,7 +8075,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     triageRunsHandle = null
   }
   if (cronServiceInstance) {
-    cronServiceInstance.stop()
+    const cron = cronServiceInstance
+    await shutdownStep('cron routine checks', () => cron.stop())
     setCronService(null)
     cronServiceInstance = null
   }

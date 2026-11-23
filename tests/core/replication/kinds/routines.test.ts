@@ -162,6 +162,8 @@ describe('a host replica keeps the routines copy', () => {
         type: 'trigger.checked', id: trig.id, atMs: now, outcome, ...(outcome === 'quiet' ? { reason: 'fire-false' } : { error: 'exit 2' }),
         durationMs: 120, nextRunAtMs: now + 300_000, consecutiveErrors: outcome === 'error' ? 1 : 0,
       } as never)
+      // A quiet check's write waits for the checks after it (trigger-apply.ts persistRoutineCheck).
+      await service.flushRoutineChecks()
       setReplica(true)
       expect(applied.found).toBe(true)
     }
@@ -372,6 +374,8 @@ describe('the leader starts a round when a routine changes', () => {
       let seen = n
       now += 300_000
       await service.applyTriggerChecked({ type: 'trigger.checked', id: trig.id, atMs: now, outcome: 'quiet', reason: 'fire-false', durationMs: 5, nextRunAtMs: now + 300_000, consecutiveErrors: 0 } as never)
+      // A quiet check is written with the checks after it, within ROUTINE_WRITE_DELAY_MS.
+      await service.flushRoutineChecks()
       expect(n).toBeGreaterThan(seen)
       seen = n
       await service.update(trig.id, { name: 'Acme watch, renamed' } as never)

@@ -82,6 +82,9 @@ export async function diskStampOf(state: CronServiceState): Promise<string> {
 /** The next forced reload reads the files (an op threw: memory may hold a change never written). */
 export function forgetDiskStamp(state: CronServiceState): void {
   state.disk = undefined;
+  // The op that threw may have half-changed `store`: the routine records waiting with it go too
+  // (at most ROUTINE_WRITE_DELAY_MS of check lines), as the reload below drops the rest.
+  state.routineWriteDue = false;
 }
 
 /**
@@ -103,6 +106,13 @@ export async function ensureLoaded(
     state.keptAt = Date.now();
     if (!opts?.skipRecompute) recomputeNextRuns(state);
     return;
+  }
+  // About to read the files: what routine checks left in `store` is written first, unless another
+  // writer changed a file since (its write wins, as it did over our store before; a few seconds of
+  // check lines are lost, never a fire or a count).
+  if (state.store && state.routineWriteDue) {
+    if (state.disk && await diskStampOf(state) === state.disk.stamp) await persist(state);
+    else state.routineWriteDue = false;
   }
 
   // Taken before the read: a write after it changes the stamp, so the next reload reads again.
@@ -239,6 +249,8 @@ export async function persist(state: CronServiceState): Promise<void> {
   // recomputed a next run would rewrite the copy away from the Mac's rows.
   if (isHostReplicaProgram()) throw new NeedsLeaderError('routine_writes_need_mac');
   if (!state.store) return;
+  // This write carries what routine checks left waiting (trigger-apply.ts persistRoutineCheck).
+  state.routineWriteDue = false;
 
   // Before overwriting with 0 jobs, check if the on-disk file has jobs
   if (state.store.jobs.length === 0) {

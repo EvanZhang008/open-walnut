@@ -14,7 +14,8 @@
 import { MAX_CONSECUTIVE_CHECK_ERRORS, isHostDelivery, isMachineFaultKind } from '../../providers/trigger-check-core.js';
 import type { MachineFaultKind, TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
 import type { CronJob, CronServiceState, OwedFire } from './types.js';
-import { ensureLoaded, persist } from './store.js';
+import { diskStampOf, ensureLoaded, persist } from './store.js';
+import { isHostReplicaProgram } from '../server-role.js';
 import { applyJobResult, emit, locked } from './timer.js';
 import { applyClockRun, clockTenureOf, owedClockVerdict, settleClockNext } from './clock-fire.js';
 import {
@@ -263,6 +264,8 @@ export async function applyTriggerChecked(
       }
       return { found: true, disabled: false, ignored: true };
     }
+    // What a routine check must not change for its write to wait (persistRoutineCheck).
+    const before = { errors: job.state.consecutiveErrors ?? 0, lastError: job.state.lastError, faultSince: job.state.machineFaultSinceMs };
     // A deadline kill is said as one, with the limit, whichever daemon version worded it.
     const limitS = timeLimitSeconds(job.check);
     const killedAtLimit = event.outcome === 'error' && isTimeLimitError(event.error);
@@ -362,7 +365,11 @@ export async function applyTriggerChecked(
       disabled = true;
     }
 
-    await persist(state);
+    const routine = event.outcome === 'quiet' && !event.replay && !disabled && !warningsToTell && !budgetHeld
+      && Object.keys(health).length === 0 && before.errors === 0 && before.lastError === undefined && before.faultSince === undefined;
+    // On a host replica persist refuses (the Mac writes the routines): it still refuses at once.
+    if (routine && !state.stopped && !isHostReplicaProgram()) persistRoutineCheck(state);
+    else await persist(state);
     // 'updated' is what the Routines card listens to (cron:job-updated): without
     // it a quiet check only shows up after a manual reload. A quiet check carries the
     // job as stored, so a page puts it in place without reading it back: every page
@@ -395,6 +402,41 @@ export async function applyTriggerChecked(
       ...health,
     };
   });
+}
+
+/**
+ * How long a routine check's write waits, gathering the checks after it into one write.
+ *
+ * A quiet check of a healthy trigger changes only what it records (lastCheck, the check log, the
+ * next run the daemon reported), and every one rewrote cron-state.json (1 MB, both files' texts
+ * built to compare) at about one a second: 238 writes in the 100 s after a restart (2026-11-23),
+ * one of the largest sources of the server's garbage. Losing the last few seconds of such lines to
+ * a crash loses no fire, no notice and no error count: those always write at once.
+ */
+export const ROUTINE_WRITE_DELAY_MS = 10_000;
+
+/** Record a routine check: `store` holds it now, one write within ROUTINE_WRITE_DELAY_MS carries it. */
+export function persistRoutineCheck(state: CronServiceState): void {
+  state.routineWriteDue = true;
+  if (state.routineWriteTimer) return;
+  state.routineWriteTimer = setTimeout(() => { void flushRoutineChecks(state); }, ROUTINE_WRITE_DELAY_MS);
+  state.routineWriteTimer.unref?.();
+}
+
+/** Write what routine checks left waiting, under the store lock (also on stop). */
+export async function flushRoutineChecks(state: CronServiceState): Promise<void> {
+  if (state.routineWriteTimer) clearTimeout(state.routineWriteTimer);
+  state.routineWriteTimer = undefined;
+  if (!state.routineWriteDue) return;
+  await locked(state, async () => {
+    if (!state.routineWriteDue) return;
+    // Another writer changed a file since this store last matched it (git-sync, another process):
+    // writing would put this store's older rows over theirs. Theirs wins; the waiting check lines
+    // are dropped, as a reload would have dropped them.
+    if (!state.store || !state.disk || await diskStampOf(state) !== state.disk.stamp) { state.routineWriteDue = false; return; }
+    await persist(state);
+  })
+    .catch((err) => state.deps.log.warn('cron routine check write failed', { error: err instanceof Error ? err.message : String(err) }));
 }
 
 /**

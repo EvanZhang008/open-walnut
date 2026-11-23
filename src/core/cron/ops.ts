@@ -22,10 +22,12 @@ import {
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
 import { armTimer, cronFireOpId, emit, executeJob, findDueJobs, locked, replayGuardOf, settleSentRuns, stopTimer } from './timer.js';
 import { WALNUT_HOME } from '../../constants.js';
+import { flushRoutineChecks } from './trigger-apply.js';
 import { leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js';
 import { CronJobChangedError, cronJobRevision } from './job-revision.js';
 
 export async function start(state: CronServiceState): Promise<void> {
+  state.stopped = false;
   // Phase 1: Load store, clear stale markers, find missed jobs (under lock)
   const missed = await locked(state, async () => {
     if (!state.deps.cronEnabled) {
@@ -107,8 +109,11 @@ export async function start(state: CronServiceState): Promise<void> {
   }
 }
 
-export function stop(state: CronServiceState): void {
+/** Stop the clock; the promise settles once the routine checks still waiting are written. */
+export function stop(state: CronServiceState): Promise<void> {
   stopTimer(state);
+  state.stopped = true;
+  return flushRoutineChecks(state);
 }
 
 export async function status(state: CronServiceState): Promise<CronStatusSummary> {

@@ -646,6 +646,14 @@ export type CronServiceState = {
    * parsing them again. Cleared by an op that threw (timer.ts locked). Optional, like replayGuard.
    */
   disk?: { stamp: string; readAt: number; jobsText?: string; stateText?: string };
+  /**
+   * A routine trigger check changed only what it records (trigger-apply.ts persistRoutineCheck):
+   * `store` holds it, the files not yet. Cleared by every persist; dropped with `disk` when an op threw.
+   */
+  routineWriteDue?: boolean;
+  routineWriteTimer?: ReturnType<typeof setTimeout>;
+  /** ops.stop ran: a routine check writes at once again (nothing would wait for a later write). */
+  stopped?: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   running: boolean;
   op: Promise<unknown>;

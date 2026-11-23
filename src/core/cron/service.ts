@@ -17,6 +17,7 @@ import type {
 import * as ops from './ops.js';
 import {
   applyTriggerChecked,
+  flushRoutineChecks,
   applyTriggerFired,
   type ApplyFiredOptions,
   type DeliverResult,
@@ -52,8 +53,9 @@ export class CronService {
     await ops.start(this.state);
   }
 
-  stop(): void {
-    ops.stop(this.state);
+  /** The promise settles once the routine checks still waiting are written (trigger-apply.ts persistRoutineCheck). */
+  stop(): Promise<void> {
+    return ops.stop(this.state);
   }
 
   async status(): Promise<CronStatusSummary> {
@@ -133,6 +135,11 @@ export class CronService {
    */
   async applyTriggerChecked(event: TriggerCheckedEvent): Promise<TriggerCheckedApplied> {
     return await applyTriggerChecked(this.state, event);
+  }
+
+  /** Write the routine checks still waiting for their shared write (trigger-apply.ts persistRoutineCheck). */
+  async flushRoutineChecks(): Promise<void> {
+    await flushRoutineChecks(this.state);
   }
 
   async applyTriggerFired(

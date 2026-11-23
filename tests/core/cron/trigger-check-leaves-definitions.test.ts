@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants())
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import * as ops from '../../../src/core/cron/ops.js'
-import { applyTriggerChecked } from '../../../src/core/cron/trigger-apply.js'
+import { applyTriggerChecked, flushRoutineChecks } from '../../../src/core/cron/trigger-apply.js'
 import { cronStatePath } from '../../../src/core/cron/store.js'
 import type { CronServiceState } from '../../../src/core/cron/types.js'
 import type { TriggerCheckedEvent } from '../../../src/providers/trigger-check-core.js'
@@ -59,6 +59,7 @@ describe('a trigger check leaves the definitions file alone', () => {
       const applied = await applyTriggerChecked(state, checked(job.id, { outcome }))
       expect(applied.found).toBe(true)
     }
+    await flushRoutineChecks(state)
     const rows = jsonIoTop(50)
     expect(rows.find((r) => r.file === state.deps.storePath)?.writes ?? 0).toBe(0)
     expect(rows.find((r) => r.file === cronStatePath(state.deps.storePath))?.writes ?? 0).toBeGreaterThan(0)
