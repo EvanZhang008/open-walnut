@@ -116,6 +116,31 @@ describe('PeerThrottle — duplicate suppression', () => {
   });
 });
 
+describe('PeerThrottle — a send that was never delivered', () => {
+  // 2026-11-23, the user: no message is ever lost, and an error is retried. A send whose delivery
+  // threw is taken back, so the sender's retry of the same words is not refused as a repeat.
+  it('forget lets the same words in again and frees their slot in the window', () => {
+    const { throttle } = makeThrottle();
+    expect(throttle.admit('sender', 'target', 'note').allowed).toBe(true);
+    const at = throttle.admittedAt('sender', 'target', 'note');
+    throttle.forget('sender', 'target', 'note', at);
+    expect(throttle.admit('sender', 'target', 'note').allowed).toBe(true);
+    for (let i = 0; i < PEER_SEND_MAX_PER_WINDOW - 1; i++) expect(throttle.admit('sender', 'target', `n${i}`).allowed).toBe(true);
+    expect(throttle.admit('sender', 'target', 'one more').allowed).toBe(false);
+  });
+
+  it('forget never takes back a newer identical send that was delivered', () => {
+    const { throttle, tick } = makeThrottle();
+    expect(throttle.admit('sender', 'target', 'note').allowed).toBe(true);
+    const first = throttle.admittedAt('sender', 'target', 'note');
+    throttle.forget('sender', 'target', 'note', first);
+    tick(1000);
+    expect(throttle.admit('sender', 'target', 'note').allowed).toBe(true);
+    throttle.forget('sender', 'target', 'note', first);
+    expect(throttle.admit('sender', 'target', 'note').allowed).toBe(false);
+  });
+});
+
 describe('constants', () => {
   it('exports the plan §7 values', () => {
     expect(PEER_SEND_WINDOW_MS).toBe(60_000);

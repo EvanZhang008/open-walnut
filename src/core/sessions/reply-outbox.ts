@@ -15,7 +15,10 @@
  *     - its row is in a queue, or left one as a written line: cleared (it went out)
  *     - else: the result is noted if the replier's task holds none newer, the same row id is
  *       queued again where the asker reads now (reply-routing.ts), then cleared
- *     - an asker that is gone, or OWED_MAX_TRIES failed tries: cleared, and logged
+ *     - an asker that is gone (nowhere to read it): cleared, and logged
+ *     - a failed try is tried again on the next pass, every minute, for as long as it fails: an
+ *       answer is never given up (2026-11-23, the user: no message is ever lost, and an error is
+ *       retried); the log says so at the 1st, 2nd, 4th, 8th... failure
  *   A replier that sends the answer again after the death (the request reads replied) goes out as
  *   the owed row and clears it (session-send-core.ts performReply).
  *
@@ -28,8 +31,15 @@
 import { log } from '../../logging/index.js';
 import type { ReplyOutbox, SessionRequest } from '../session-requests.js';
 
-/** Deliveries tried from one outbox before it is given up. */
-export const OWED_MAX_TRIES = 5;
+/** Failed tries after which each further one is logged only at a power of two (the answer is still tried). */
+const QUIET_AFTER_TRIES = 5;
+/**
+ * Past QUIET_AFTER_TRIES a failing answer waits longer between tries (2, 4, 8... minutes, at most
+ * an hour), so one that fails for days is not written to disk every minute. Kept in memory: a
+ * restart tries every owed answer at once.
+ */
+const OUTBOX_RETRY_MAX_MS = 60 * 60_000;
+const nextTryAt = new Map<string, number>();
 
 /** Requests a performReply of this server is answering now: their outbox is its own to clear. */
 const inFlight = new Map<string, number>();
@@ -111,14 +121,11 @@ async function run(d: OwedReplyDeps): Promise<number> {
     const box = req.outbox!;
     // Still being answered here: its own call delivers and clears it.
     if (inFlight.has(req.id)) continue;
+    if ((nextTryAt.get(req.id) ?? 0) > Date.now()) continue;
     const release = replyInFlight(req.id);
     try {
       if (await d.wentOut(box.to, box.messageId)) {
-        await d.clear(req.id, box.messageId);
-        continue;
-      }
-      if ((box.tries ?? 0) >= OWED_MAX_TRIES) {
-        log.session.warn('owed reply given up: it could not be delivered', { requestId: req.id, to: box.to, tries: box.tries });
+        nextTryAt.delete(req.id);
         await d.clear(req.id, box.messageId);
         continue;
       }
@@ -127,10 +134,15 @@ async function run(d: OwedReplyDeps): Promise<number> {
       const how = await d.deliver(req, box);
       if (how === 'gone') log.session.warn('owed reply dropped: its asker is gone', { requestId: req.id, to: box.to });
       else { delivered++; log.session.info('owed reply delivered after a restart', { requestId: req.id, to: box.to, messageId: box.messageId }); }
+      nextTryAt.delete(req.id);
       await d.clear(req.id, box.messageId);
     } catch (err) {
-      // Kept: the next pass tries again, up to OWED_MAX_TRIES.
-      log.session.warn('owed reply: delivery failed, trying again later', { requestId: req.id, error: err instanceof Error ? err.message : String(err) });
+      // Kept: the next pass tries again, however many tries it takes.
+      const tries = (box.tries ?? 0) + 1;
+      if (tries > QUIET_AFTER_TRIES) nextTryAt.set(req.id, Date.now() + Math.min(OUTBOX_RETRY_MAX_MS, 60_000 * 2 ** Math.min(tries - QUIET_AFTER_TRIES, 10)));
+      if (tries <= QUIET_AFTER_TRIES || (tries & (tries - 1)) === 0) {
+        log.session.warn('owed reply: delivery failed, trying again later', { requestId: req.id, tries, error: err instanceof Error ? err.message : String(err) });
+      }
     } finally {
       release();
     }

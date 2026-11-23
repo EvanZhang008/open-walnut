@@ -33,7 +33,10 @@ import { addTasksBulk, _resetForTesting as resetTaskStore } from '../../src/core
 import { ClaudeCodeSession, SessionRunner, sessionRunner } from '../../src/providers/claude-code-session.js'
 import { retrySession } from '../../src/core/sessions/session-lifecycle.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
-import { enqueueMessage, getQueue, loadQueue, markProcessing, resetCache } from '../../src/core/session-message-queue.js'
+import { enqueueMessage as enqueueRow, getQueue, loadQueue, markProcessing, resetCache } from '../../src/core/session-message-queue.js'
+// The rows here are the person's own words: a Stop hands them back to the composer, while an
+// agent's row stays parked in the queue (claude-code-session.ts returnCancelledRows, 2026-11-23).
+const enqueueMessage = (sid: string, text: string, opts: Parameters<typeof enqueueRow>[2] = {}) => enqueueRow(sid, text, { sentBy: 'person', ...opts })
 import { awaitLine, lineRows, markUnconfirmed, resetLineConsumption } from '../../src/providers/line-consumption.js'
 import { readQueueFileFresh } from '../../src/core/session-queue-store.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'

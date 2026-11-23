@@ -74,6 +74,7 @@ import type { QueuedMessage } from '../core/session-message-queue.js'
 import { RedeliveryGuard, REDELIVERY_LOOP_REASON } from '../core/sessions/redelivery-guard.js'
 import { settleStrandedAcpRows } from './acp-stranded-rows.js'
 import { cancelledRows, cancelledSessionIds, repairCancelledTaken } from '../core/session-queue-lines.js'
+import { CANCELLED_UNRUN_REASON, STOP_PARKED_REASON } from '../core/relay-fates.js'
 
 interface CancellationScope {
   uuid: string
@@ -6428,12 +6429,22 @@ export class ClaudeCodeSession {
         removed = true
         return (await Promise.all(joined)).every(Boolean)
       }
+      // Only the person's own words go back to the composer. Any other row (a peer's
+      // note, a trigger, a reply, a Walnut notice) would be lost there with no panel
+      // open, or become the person's draft with one: it stays queued, parked with its
+      // Retry (2026-11-23). A cancel that was no Stop (an engine switch, a lane drain, a
+      // send-now interrupt) is sent again by itself; a person's Stop moved the fence, so
+      // what it cancelled waits for their Retry either way (delivery-retry.ts).
+      const setAside = this.claudeSessionId
+        ? new Set((await parkIfQueued(queued.filter((r) => r.sentBy !== 'person'), why === 'cancelled' ? CANCELLED_UNRUN_REASON : STOP_PARKED_REASON)).map((r) => r.id))
+        : new Set<string>()
       const deleted = this.claudeSessionId
         ? await removeTaken(this.claudeSessionId, queued.map((r) => r.id), { ran: false, rows: queued, preserveParked: scope?.preserveParked, confirmedCancelled: why === 'cancelled' })
         : []
-      const kept = why === 'stopped' && this.claudeSessionId
+      // A confirmed cancellation gives a row it set aside a new line uuid: it is kept by id.
+      const kept = (why === 'stopped' || setAside.size > 0) && this.claudeSessionId
         ? (await getQueue(this.claudeSessionId)).filter((r) => r.status === 'parked'
-          && queued.some((q) => q.id === r.id && q.lineUuid === r.lineUuid))
+          && (setAside.has(r.id) || why === 'stopped' && queued.some((q) => q.id === r.id && q.lineUuid === r.lineUuid)))
         : []
       if (scope) {
         if (!scope.confirmedCancelled) scope.queuedRows = [...deleted, ...kept]
@@ -15167,7 +15178,10 @@ export class SessionRunner {
     // so the global task write-lock never blocks message delivery above.
     // applySessionPhase is an idempotent state machine (reads current phase, no-ops if
     // no transition needed), so running it after delivery is safe.
-    void this.syncPhaseAfterSend(sessionId, source, data.endsWait === true)
+    // Walnut's own try again of a row already sent (core/sessions/delivery-retry.ts) is no new
+    // input: the task's phase and its error line were set by the send itself, and a try every
+    // hour must not flip them back and forth.
+    if (source !== 'delivery-retry') void this.syncPhaseAfterSend(sessionId, source, data.endsWait === true)
   }
 
   /** Fire-and-forget phase/status bookkeeping after a send. Never blocks delivery.

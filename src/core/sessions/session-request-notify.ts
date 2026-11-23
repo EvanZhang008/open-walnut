@@ -448,6 +448,11 @@ async function gateRequest(
         });
         return 'skip';
       }
+    } else if (row?.status === 'parked' && context.phase !== 'COMPLETE' && await (await import('./delivery-retry.js')).parkRetriedByClock(row)) {
+      // Parked for now, and Walnut tries it again by itself (delivery-retry.ts): the asker hears it
+      // has not been delivered YET and goes out by itself, never "not delivered, send it again"
+      // (a resend would run twice once the clock delivers it).
+      undelivered = { why: row.parkedReason || 'it could not be delivered yet', stillQueued: true };
     } else if (row?.status === 'parked') {
       // A park that cannot say whether the line ran (the CLI never acknowledged it) is no proof.
       if (parkMeansNeverRan(row.parkedReason) || parkByStop(row.parkedReason)) {
@@ -526,7 +531,7 @@ export async function notifyRequesterGroup(
       const gate = await gateRequest(request, outcome, context);
       if (gate === 'skip') continue;
       // A message that never arrived is an error for the asker, whatever edge noticed it.
-      const settled = await settleNotified(request.id, gate.undelivered && !gate.undelivered.stillQueued ? 'error' : outcome);
+      const settled = await settleNotified(request.id, gate.undelivered ? (gate.undelivered.stillQueued ? 'timeout' : 'error') : outcome);
       if (!settled) continue; // replied / already notified — someone else spoke
       heard.push({ request: settled, ...(gate.undelivered ? { undelivered: gate.undelivered } : {}), ...(gate.withheld ? { withheld: true } : {}) });
     }

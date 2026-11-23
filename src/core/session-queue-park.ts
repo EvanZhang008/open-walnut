@@ -60,12 +60,13 @@ function logParked(rows: QueuedMessage[], reason: string): void {
  * Callers holding a verdict pass the verdict itself, never only its `reason`
  * (tests/core/sessions/agent-wait-resend-guard.test.ts).
  */
-export type ParkCause = string | { reason: string; waitsFor?: string };
+export type ParkCause = string | { reason: string; waitsFor?: string; code?: string };
 
 export async function parkMessages(messages: QueuedMessage[], cause: ParkCause, strict = false): Promise<number> {
   if (messages.length === 0) return 0;
   const reason = typeof cause === 'string' ? cause : cause.reason;
   const waitsFor = typeof cause === 'string' ? undefined : cause.waitsFor;
+  const code = typeof cause === 'string' ? undefined : cause.code;
   const parkedAt = new Date().toISOString();
   const parked = await mutateStore((s) => {
     const done: QueuedMessage[] = [];
@@ -81,6 +82,8 @@ export async function parkMessages(messages: QueuedMessage[], cause: ParkCause, 
       parkRow(row, reason, parkedAt);
       if (waitsFor) row.waitsFor = waitsFor;
       else delete row.waitsFor;
+      if (code) row.parkedCode = code;
+      else delete row.parkedCode;
       done.push(row);
     }
     return done;

@@ -137,11 +137,15 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
     const id = requestIdOf(row);
     if (!id) continue;
     try {
+      // A park the clock tries again (delivery-retry.ts) is not for good: the asker hears it has not
+      // been delivered yet and goes out by itself (session-request-notify.ts reads the row).
+      const { parkRetriedByClock } = await import('./delivery-retry.js');
+      const retried = await parkRetriedByClock(row);
       const { getSessionRequest } = await import('../session-requests.js');
       const request = await getSessionRequest(id);
       if (!request || request.status !== 'pending') continue;
       const { notifyRequesterFallback } = await import('./session-request-notify.js');
-      await notifyRequesterFallback(request, 'error', { notDelivered: row.parkedReason });
+      await notifyRequesterFallback(request, 'error', retried ? {} : { notDelivered: row.parkedReason });
     } catch (err) {
       log.session.warn('parked request: notifying the asker failed', {
         requestId: id, sessionId: row.sessionId, messageId: row.id,

@@ -36,6 +36,7 @@ const KNOWN: Record<string, { count: number; how: string; records: boolean }> = 
   'src/providers/daemon-source.ts': { count: 1, how: "a daemon's start check: words the classifier reads as cwd_missing", records: false },
   'src/providers/daemon-standalone.ts': { count: 1, how: "a daemon's start check (twin of daemon-source.ts)", records: false },
   'src/core/session-auto-recover.ts': { count: 1, how: 'restart recovery: deps.noteFolderGone on the cwd_missing verdict', records: true },
+  'src/core/sessions/delivery-retry.ts': { count: 1, how: 'reads an old park\'s words as a verdict: a gone folder (cwd_missing) is left for a person, never tried again by the clock; recorded where the park was made', records: false },
   'src/core/sessions/undelivered-requests.ts': { count: 1, how: 'reads a gone-folder park as a message that never ran, so its asker is told it was not delivered', records: false },
   'src/core/session-hooks/builtins.ts': { count: 1, how: "the turn-end detector's notification names the way on (Open the session to continue it in a new folder)", records: false },
 }

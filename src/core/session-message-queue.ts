@@ -8,7 +8,7 @@
  *   enqueue()        → status: 'pending'     (on disk, editable)
  *   markProcessing() → status: 'processing'  (on disk, locked)
  *   removeProcessed()→ removed from disk      (now in JSONL history)
- *   parkMessages()   → status: 'parked'      (on disk, NEVER auto-redelivered)
+ *   parkMessages()   → status: 'parked'      (on disk, tried again on a growing clock: sessions/delivery-retry.ts)
  *
  * ## Why 'parked' exists (the dead-letter state)
  *
@@ -21,9 +21,12 @@
  * session per cycle. Every deploy lit up the Errors rail with the same 12-day-old
  * failure.
  *
- * Parking ends that loop AT THE SOURCE: the row stays on disk and visible, but no
- * automatic trigger will ever pick it up again. Only an explicit human action
- * (unparkMessage, from Retry) puts it back in line, or deleteMessage discards it.
+ * Parking ends that loop AT THE SOURCE: the row stays on disk and visible, and no
+ * boot or reconnect picks it up again. A person's Retry (unparkMessage) puts it back
+ * in line, or deleteMessage discards it; and since 2026-11-23 (the user: no message
+ * is ever lost, an error is retried) sessions/delivery-retry.ts puts back, on a clock
+ * that grows to once an hour, every park a retry can fix: not a Stop's, not a hold's,
+ * not one only a person can fix (a deleted folder or session record, too large).
  */
 
 import { noteRecentHumanMessage } from './recent-task-touch.js';

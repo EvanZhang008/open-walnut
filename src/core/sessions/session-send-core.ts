@@ -927,6 +927,19 @@ async function settleAnswerNotDelivered(
 }
 
 async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult | HeldSendResult> {
+  // A send the throttle admitted and that then failed before it reached the queue is taken back
+  // from it, so the sender's retry of the same words is admitted (peer-throttle.ts forget). Never
+  // once it was delivered, nor when its enqueue timed out (it may still land).
+  const throttled: { undo?: () => void } = {};
+  try {
+    return await performPlainSendOnce(input, throttled);
+  } catch (err) {
+    throttled.undo?.();
+    throw err;
+  }
+}
+
+async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?: () => void }): Promise<DeliveredSendResult | HeldSendResult> {
   const { readStructuredReply, composeReplyText, scoreProblem } = await import('../peers/structured-reply.js');
   const badScore = scoreProblem(input.reply?.score);
   if (badScore) throw new SendError('bad_request', badScore);
@@ -999,6 +1012,8 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
       throw new SendError('throttled', 'peer send throttled — do not retry in a loop', 429,
         { retryAfterMs: decision.retryAfterMs });
     }
+    const at = sharedThrottle.admittedAt(senderKey, targetSid, text);
+    throttled.undo = () => sharedThrottle.forget(senderKey, targetSid, text, at);
     const { getQueue } = await import('../session-message-queue.js');
     const queueDepth = (await getQueue(targetSid)).length;
     if (queueDepth >= PEER_PENDING_CAP) {
@@ -1136,6 +1151,8 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
       ...(wakeReason ? { wakeReason } : {}),
     });
     ({ delivery, messageId } = await deliver());
+    // Delivered: whatever throws after this must not take the send back from the throttle.
+    throttled.undo = undefined;
   } catch (err) {
     // A rejected delivery never landed, so a request row we just created would
     // otherwise sit pending until its deadline and the sweeper would tell the
@@ -1144,6 +1161,9 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
     // it, so the envelope (carrying request="rq-…") may still arrive and the
     // receiver's reply needs a row to land in. Leave that row to the sweeper.
     const timedOut = err instanceof SendError && err.code === 'delivery_failed';
+    // The same holds for the throttle: a timed-out enqueue may still land, so the sender's retry
+    // stays a duplicate of it and is refused rather than delivered twice.
+    if (timedOut) throttled.undo = undefined;
     if (request && !timedOut) {
       await deletePendingRequest(request.id).catch((e) => {
         log.session.warn('session_send: could not drop the orphaned request row', {

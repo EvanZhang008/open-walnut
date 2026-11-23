@@ -47,6 +47,13 @@ export interface QueuedMessage {
    */
   coldSend?: { source: string; endsWait?: true };
   /**
+   * How many times Walnut put this row back in line by itself after a delivery failure parked it
+   * (sessions/delivery-retry.ts): its next try waits longer each time. Kept across parks.
+   */
+  autoRetries?: number;
+  /** The delivery verdict's code a park came with (providers/delivery-failure.ts), e.g. cwd_missing. Goes with the park. */
+  parkedCode?: string;
+  /**
    * Process-monotonic enqueue counter: the tiebreaker for messages that share
    * an `enqueuedAt` millisecond. Optional: rows persisted before this field
    * existed don't have it. See compareEnqueueOrder.
@@ -243,8 +250,11 @@ export async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false, d
     const cache = await getStore();
     const before = structuredClone(cache);
     result = fn(cache);
-    replays.push(diffStore(before, cache));
-    scheduleReplayFlush();
+    // A change that changed nothing (the flush's own empty write) waits for nothing: only the
+    // changes still to reach the disk are kept, and their flush is tried again.
+    const patch = diffStore(before, cache);
+    if (patch.rows.length > 0 || patch.top.length > 0) replays.push(patch);
+    if (replays.length > 0) scheduleReplayFlush();
   } finally {
     release();
   }
@@ -364,7 +374,9 @@ async function persist<R>(fn: (s: QueueStore) => R, take: (r: R) => void, durabl
   for (let attempt = 1; ; attempt++) {
     try {
       return await withFileLock(SESSION_QUEUE_FILE, async () => {
-        const s = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
+        // A file that exists but cannot be read (EMFILE, EACCES) throws: read as empty, this write
+        // would replace every session's queue with this one change (2026-11-23, no message is lost).
+        const s = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }, { readErrors: 'throw' }));
         const before = JSON.stringify(s);
         const waiting = replays;
         for (const patch of waiting) applyPatch(s, patch);

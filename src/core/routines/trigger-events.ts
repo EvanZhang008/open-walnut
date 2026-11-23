@@ -42,6 +42,7 @@ import type {
 import { log } from '../../logging/index.js';
 import { WALNUT_HOME } from '../../constants.js';
 import type { CronJob } from '../cron/types.js';
+import type { DeliverResult } from '../cron/trigger-apply.js';
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope.js';
 import { findTriggerDaemon } from './trigger-daemon.js';
 import { promptOf } from './trigger-push.js';
@@ -335,7 +336,110 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     return;
   }
 
-  const applied = await service.applyTriggerFired(batch, async (job, fresh, at) => {
+  const applied = await service.applyTriggerFired(batch, fireDelivery(host, head), { fromHost: await clockOwnerAlias(host, head) });
+  // A clock run left for the daemon's replay is never acked (clock-fire.ts `held`).
+  const held = new Set(applied.heldSeqs ?? []);
+
+  log.cron.info('trigger fired', {
+    host, jobId: head.id, epoch: head.epoch, seq: applied.seq ?? Math.min(...seqs),
+    ...(batch.length > 1 ? { seqs, coalesced: batch.length } : {}),
+    items: batch.reduce((n, e) => n + (e.items?.length ?? 0), 0),
+    found: applied.found, duplicate: applied.duplicate, delivered: applied.delivered, retry: applied.retry,
+    ...(applied.supersededSeqs?.length ? { superseded: applied.supersededSeqs } : {}),
+    ...(applied.owedSeqs?.length ? { keptByServer: applied.owedSeqs } : {}),
+    ...(held.size ? { held: [...held] } : {}),
+    ...(applied.error ? { error: applied.error } : {}),
+  });
+
+  if (!applied.found) {
+    if (!HOST_TRIGGER_ID_RE.test(head.id) && await hasPushedTriggersTo(host)) {
+      await ackFires(host, head.id, seqs);
+    } else {
+      log.cron.warn('trigger.fired for a routine this server never pushed: left unacked', { host, jobId: head.id, seqs });
+    }
+    return;
+  }
+  if (applied.retry) {
+    // Withheld ack = the daemon replays it; the attempt count lives on the job.
+    // Seqs already recorded before this batch are acked anyway, or they would
+    // keep riding every replay, and so are fires the server now keeps itself (owedSeqs: its
+    // sweep tries them, so the daemon's capped list never drops them). A fire is never given up
+    // (2026-11-23, the user: no message is ever lost, an error is retried): a replay inside its
+    // wait only says so, quietly.
+    if (applied.waiting) log.cron.debug('trigger fire waits for its next try', { host, jobId: head.id, seqs, nextTryAtMs: applied.nextTryAtMs });
+    else log.cron.warn('trigger delivery failed transiently; it is tried again', { host, jobId: head.id, seqs, attempts: applied.attempts, error: applied.error });
+    // The delivery into the trigger's own task keeps failing: its lead hears it once, never the user.
+    if (applied.attempts !== undefined && applied.attempts === (await import('../cron/trigger-apply.js')).FIRE_DELIVERY_FAST_ATTEMPTS) await tellUndelivered(service, head.id, applied);
+    await ackFires(host, head.id, [...(applied.duplicateSeqs ?? []), ...(applied.supersededSeqs ?? []), ...(applied.owedSeqs ?? [])]);
+    return;
+  }
+  // A one-shot that ran is off (or gone): the next push takes it off the host's clock.
+  if (head.clock) await pushTriggers(host);
+  if (applied.recovered) {
+    const { dismissFailingNotice } = await import('./trigger-health.js');
+    await dismissFailingNotice(head.id);
+  }
+  await ackFires(host, head.id, seqs.filter((seq) => !held.has(seq)));
+}
+
+/**
+ * The fires the server keeps itself (job.state.owedFires: their delivery failed past the fast
+ * tries, so they were acked and the daemon forgot them) are tried here, all of a trigger's in one
+ * delivery, when the trigger's retry clock says so, until one lands (2026-11-23, the user: no
+ * message is ever lost, and an error is retried). In the trigger's lane, so it never overlaps a
+ * daemon fire's delivery. Called each minute by sessions/delivery-retry.ts.
+ */
+export async function sweepOwedFires(nowMs = Date.now()): Promise<string[]> {
+  const service = await resolveService();
+  if (!service) return [];
+  const { fireRetryDueAt } = await import('../cron/trigger-apply.js');
+  const jobs = await service.list({ includeDisabled: true, recompute: false }).catch(() => [] as CronJob[]);
+  const tried: string[] = [];
+  for (const job of jobs) {
+    const owed = job.state?.owedFires;
+    if (!owed?.length || !job.check || lanes.has(job.id)) continue;
+    const due = fireRetryDueAt(job.state);
+    if (due !== undefined && nowMs < due) continue;
+    // One numbering per delivery (the dedup window is per epoch): the oldest epoch's fires first.
+    const epoch = owed[0].epoch;
+    const events = owed.filter((e) => (e.epoch ?? '') === (epoch ?? '')).map((e) => ({ ...e, type: 'trigger.fired' as const }));
+    // The outward door, as for a daemon's fire: a server that may not deliver now leaves them kept.
+    if (leaderPermitActive()) {
+      const refused = outwardDoorRefusal('trigger-fire', fireMessageId(job.id, epoch, events.map((e) => e.seq)));
+      if (refused) {
+        log.cron.info('kept trigger fires left for later: this server may not deliver them now', { jobId: job.id, why: refused });
+        continue;
+      }
+    }
+    const lane: FireLane = { queue: [], keys: new Set(), draining: true, verdicts: new Map() };
+    lanes.set(job.id, lane);
+    try {
+      const applied = await service.applyTriggerFired(events, fireDelivery('', events[0]), { owed: true });
+      tried.push(job.id);
+      log.cron.info('kept trigger fires tried again', {
+        jobId: job.id, seqs: events.map((e) => e.seq), delivered: applied.delivered, retry: applied.retry,
+        ...(applied.attempts !== undefined ? { attempts: applied.attempts } : {}),
+        ...(applied.nextTryAtMs !== undefined ? { nextTryAtMs: applied.nextTryAtMs } : {}),
+        ...(applied.error ? { error: applied.error } : {}),
+      });
+      if (applied.recovered) {
+        const { dismissFailingNotice } = await import('./trigger-health.js');
+        await dismissFailingNotice(job.id);
+      }
+    } catch (err) {
+      log.cron.warn('kept trigger fires could not be tried', { jobId: job.id, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      lane.draining = false;
+      if (lane.queue.length > 0) void drainLane(job.id, lane);
+      else if (lanes.get(job.id) === lane) lanes.delete(job.id);
+    }
+  }
+  return tried;
+}
+
+/** How one trigger's fires reach their routine: the delivery applyTriggerFired runs outside its lock. */
+function fireDelivery(host: string, head: TriggerFiredEvent) {
+  return async (job: CronJob, fresh: TriggerFiredEvent[], at: { startedAtMs: number }): Promise<DeliverResult> => {
     if (!job.executor) return { status: 'error' as const, error: 'routine has no executor to deliver to' };
     await endInterruptedWait(job);
     // A clock routine's run is the routine's own run: the session executor gets
@@ -362,59 +466,23 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     const { runExecutor } = await import('./registry.js');
     // The same fires get the same id on every try: delivered before a restart lost the mark, the session keeps one.
     return await runExecutor(job, job.executor, message, { messageId: fireMessageId(job.id, head.epoch, fresh.map((e) => e.seq)) });
-  }, { fromHost: await clockOwnerAlias(host, head) });
-  // A clock run left for the daemon's replay is never acked (clock-fire.ts `held`).
-  const held = new Set(applied.heldSeqs ?? []);
+  };
+}
 
-  log.cron.info('trigger fired', {
-    host, jobId: head.id, epoch: head.epoch, seq: applied.seq ?? Math.min(...seqs),
-    ...(batch.length > 1 ? { seqs, coalesced: batch.length } : {}),
-    items: batch.reduce((n, e) => n + (e.items?.length ?? 0), 0),
-    found: applied.found, duplicate: applied.duplicate, delivered: applied.delivered, retry: applied.retry,
-    ...(applied.supersededSeqs?.length ? { superseded: applied.supersededSeqs } : {}),
-    ...(held.size ? { held: [...held] } : {}),
-    ...(applied.error ? { error: applied.error } : {}),
+/** A fire's delivery into its task keeps failing (Walnut keeps trying): the task's lead is told once. */
+async function tellUndelivered(service: { list: (o: { includeDisabled: boolean }) => Promise<CronJob[]> }, jobId: string, applied: { jobName?: string; error?: string; nextTryAtMs?: number }): Promise<void> {
+  const job = await service.list({ includeDisabled: true }).then((jobs) => jobs.find((j) => j.id === jobId)).catch(() => undefined);
+  const { routineTargetTask } = await import('../cron/trigger-apply.js');
+  const { buildTriggerTroubleNotice, tellTriggerTeam } = await import('./trigger-health.js');
+  const next = applied.nextTryAtMs ? ` The next try is at ${new Date(applied.nextTryAtMs).toISOString().slice(11, 16)} UTC, and the tries go on, less often, until one lands.` : '';
+  await tellTriggerTeam({
+    taskId: job ? routineTargetTask(job) : undefined, jobId, reach: 'above',
+    text: (a) => buildTriggerTroubleNotice({
+      jobId, jobName: applied.jobName ?? jobId, title: 'Trigger could not deliver', outcome: 'trigger_undelivered',
+      body: `Walnut could not deliver a fire into its task: ${(applied.error ?? 'delivery kept failing').replace(/[.\s]+$/, '')}.${next} `
+        + 'Check that the task\'s session can take a message.',
+    }, a),
   });
-
-  if (!applied.found) {
-    if (!HOST_TRIGGER_ID_RE.test(head.id) && await hasPushedTriggersTo(host)) {
-      await ackFires(host, head.id, seqs);
-    } else {
-      log.cron.warn('trigger.fired for a routine this server never pushed: left unacked', { host, jobId: head.id, seqs });
-    }
-    return;
-  }
-  if (applied.retry) {
-    // Withheld ack = the daemon replays it; the attempt count lives on the job.
-    // Seqs already recorded before this batch are acked anyway, or they would
-    // keep riding every replay.
-    log.cron.warn('trigger delivery failed transiently; the daemon will replay it', {
-      host, jobId: head.id, seqs, error: applied.error,
-    });
-    await ackFires(host, head.id, [...(applied.duplicateSeqs ?? []), ...(applied.supersededSeqs ?? [])]);
-    return;
-  }
-  // A one-shot that ran is off (or gone): the next push takes it off the host's clock.
-  if (head.clock) await pushTriggers(host);
-  if (applied.recovered) {
-    const { dismissFailingNotice } = await import('./trigger-health.js');
-    await dismissFailingNotice(head.id);
-  }
-  // The delivery into the trigger's own task is what failed: its lead hears it, never the user.
-  if (applied.gaveUp) {
-    const job = await service.list({ includeDisabled: true }).then((jobs) => jobs.find((j) => j.id === head.id)).catch(() => undefined);
-    const { routineTargetTask } = await import('../cron/trigger-apply.js');
-    const { buildTriggerTroubleNotice, tellTriggerTeam } = await import('./trigger-health.js');
-    await tellTriggerTeam({
-      taskId: job ? routineTargetTask(job) : undefined, jobId: head.id, reach: 'above',
-      text: (a) => buildTriggerTroubleNotice({
-        jobId: head.id, jobName: applied.jobName ?? head.id, title: 'Trigger could not deliver', outcome: 'trigger_undelivered',
-        body: `Walnut could not deliver a fire into its task: ${(applied.error ?? 'delivery kept failing').replace(/[.\s]+$/, '')}. `
-          + 'The fire is recorded as failed and the next one tries again. Check that the task\'s session can take a message.',
-      }, a),
-    });
-  }
-  await ackFires(host, head.id, seqs.filter((seq) => !held.has(seq)));
 }
 
 async function ackFires(host: string, id: string, seqs: readonly number[]): Promise<void> {

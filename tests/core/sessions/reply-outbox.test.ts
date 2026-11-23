@@ -45,7 +45,7 @@ vi.mock('../../../src/core/session-queue-lines.js', () => ({
 }));
 
 import { performSessionSend } from '../../../src/core/sessions/session-send-core.js';
-import { OWED_MAX_TRIES, redeliverOwedReplies, replyInFlight } from '../../../src/core/sessions/reply-outbox.js';
+import { redeliverOwedReplies, replyInFlight } from '../../../src/core/sessions/reply-outbox.js';
 import { REQUESTS_FILE, createSessionRequest, getSessionRequest } from '../../../src/core/session-requests.js';
 
 const ASKER = 'sess-asker-1';
@@ -184,15 +184,25 @@ describe('a server that died between the settle and the queue delivers the answe
     expect(noted).toEqual([`${died.id} task-target ${died.id}`]);
   });
 
-  it('a delivery that keeps failing is tried again, then given up', async () => {
+  it('a delivery that keeps failing is tried again on every pass, never given up, and goes once it can', async () => {
+    // 2026-11-23, the user: no message is ever lost, and an error is retried.
     const died = await answerAndDie('done');
     sendMessageToSession.mockRejectedValue(new Error('queue write failed'));
-    for (let i = 0; i < OWED_MAX_TRIES; i++) await redeliverOwedReplies(later);
-    expect(sendMessageToSession).toHaveBeenCalledTimes(OWED_MAX_TRIES);
-    expect((await getSessionRequest(died.id))?.outbox?.tries).toBe(OWED_MAX_TRIES);
+    // Past the 5th failure each try waits longer (at most an hour): a pass inside the wait skips it.
+    const t0 = Date.now();
+    const at = (ms: number) => vi.spyOn(Date, 'now').mockReturnValue(t0 + ms);
+    for (let i = 0; i < 12; i++) { at(i * 2 * 3_600_000); await redeliverOwedReplies(later); }
+    expect(sendMessageToSession).toHaveBeenCalledTimes(12);
+    expect((await getSessionRequest(died.id))?.outbox?.tries).toBe(12);
+    at(11 * 2 * 3_600_000 + 1_800_000);
     await redeliverOwedReplies(later);
-    expect(sendMessageToSession).toHaveBeenCalledTimes(OWED_MAX_TRIES);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(12);
+    sendMessageToSession.mockImplementation(async (_sid: string, _text: string, opts: { messageId?: string }) => ({ id: opts.messageId ?? 'qm-x' }));
+    at(12 * 2 * 3_600_000);
+    await redeliverOwedReplies(later);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(13);
     expect((await getSessionRequest(died.id))?.outbox).toBeUndefined();
+    vi.mocked(Date.now).mockRestore();
   });
 
   it('an asker that is gone is dropped, not retried', async () => {

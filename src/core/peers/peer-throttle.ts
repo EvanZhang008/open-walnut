@@ -76,6 +76,27 @@ export class PeerThrottle {
   }
 
   /**
+   * Take back an admitted send that was never delivered (its delivery threw): its slot in the
+   * window and its duplicate mark go, so the sender's retry of the same words is admitted, not
+   * refused as a repeat of a message that never arrived (2026-11-23, the user: no message is ever
+   * lost, and an error is retried).
+   */
+  forget(senderSid: string, targetSid: string, text: string, admittedAt?: number): void {
+    const key = this.dupKey(senderSid, targetSid, text);
+    const at = this.dups.get(key);
+    if (at === undefined || (admittedAt !== undefined && at !== admittedAt)) return;
+    this.dups.delete(key);
+    const live = this.sends.get(senderSid);
+    const i = live?.lastIndexOf(at) ?? -1;
+    if (live && i >= 0) live.splice(i, 1);
+  }
+
+  /** When the last admitted identical send was recorded (forget's guard against a newer one). */
+  admittedAt(senderSid: string, targetSid: string, text: string): number | undefined {
+    return this.dups.get(this.dupKey(senderSid, targetSid, text));
+  }
+
+  /**
    * Window-cap-only admission (no duplicate suppression) — used by gateway
    * `tools.call` writes, where an identical retry after a transient failure
    * is legitimate and must not be swallowed as a "duplicate". Its own

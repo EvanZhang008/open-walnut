@@ -2538,6 +2538,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // ── end of the land 3b leader block ──
     // Messages held for a cold session's next wake go out by their max hold, a restart's included (src/core/sessions/cold-hold.ts).
     if (role() === 'leader') void import('../core/sessions/cold-hold.js').then((m) => m.startColdHold()).catch(() => {})
+    // A message a delivery failure parked goes back in line by itself, for as long as it fails (sessions/delivery-retry.ts).
+    if (role() === 'leader') void import('../core/sessions/delivery-retry.js').then((m) => m.startDeliveryRetry()).catch(() => {})
     if (bootPolicy('start-queue')) void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})

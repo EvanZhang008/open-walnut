@@ -80,6 +80,8 @@ export const NOTICE_WAKES: Readonly<Record<string, string>> = {
   check_repaired: 'the session\'s own trigger check broke its output contract and the daemon repaired it: only its owner can fix the script (told at most once a day, trigger-health.ts)',
   trigger_disabled: 'the session\'s own trigger was switched off: only its owner can repair and resume it',
   routine_trouble: 'a routine of the session is in trouble: only its owner can fix it',
+  trigger_undelivered: 'a fire of the session\'s own trigger keeps failing to reach its task (Walnut keeps trying): only its owner can see why the task takes no message',
+  fire_budget_held: 'the session\'s own trigger is holding fires back on its daily budget: only its owner can raise the budget or slow the check',
   'threads-overdue': 'threads wait on this node\'s decision past their time',
   vp: 'the session was made a VP: it takes up the role',
   handover: 'a project was handed to this lead: it takes up the work',

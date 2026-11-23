@@ -13,7 +13,7 @@
 
 import { MAX_CONSECUTIVE_CHECK_ERRORS, isHostDelivery, isMachineFaultKind } from '../../providers/trigger-check-core.js';
 import type { MachineFaultKind, TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
-import type { CronJob, CronServiceState } from './types.js';
+import type { CronJob, CronServiceState, OwedFire } from './types.js';
 import { ensureLoaded, persist } from './store.js';
 import { applyJobResult, emit, locked } from './timer.js';
 import { applyClockRun, clockTenureOf, owedClockVerdict, settleClockNext } from './clock-fire.js';
@@ -26,12 +26,26 @@ import { checkErrorText, isTimeLimitError, timeLimitSeconds } from './trigger-ti
 /** A fire's delivery must not hang the socket handler that started it. */
 const DELIVER_TIMEOUT_MS = 2 * 60_000;
 /**
- * How many times a transiently failing delivery is retried (the daemon replays
- * an unacked fire about once a minute) before the fire is recorded as failed and
- * acked anyway. Three is enough to ride out a tunnel flap; more would keep
- * re-spawning a session that cannot start.
+ * A transiently failing delivery is never given up (2026-11-23, the user: "我们任何时候不应该造成这个
+ * message loss，而且有 error 的话一直会 retry"): the fire stays unacked, so the daemon keeps replaying
+ * it (about once a minute), until a try lands. The first FIRE_DELIVERY_FAST_ATTEMPTS tries go on each
+ * replay, enough to ride out a tunnel flap. After that a try waits fireRetryWaitMs from the last one,
+ * growing to an hour, so a session that cannot start is not re-spawned every minute: a replay that
+ * comes before the next try is due delivers nothing and is answered as a retry again.
  */
-export const FIRE_DELIVERY_MAX_ATTEMPTS = 3;
+export const FIRE_DELIVERY_FAST_ATTEMPTS = 3;
+/** The waits after the FIRE_DELIVERY_FAST_ATTEMPTS-th failure and the ones after it; then FIRE_RETRY_EVERY_MS for good. */
+export const FIRE_RETRY_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 30 * 60_000] as const;
+export const FIRE_RETRY_EVERY_MS = 60 * 60_000;
+
+/**
+ * How long after its last try a fire that failed `failures` times waits for the next one. The same
+ * schedule as sessions/delivery-retry.ts (copied, so the cron module needs nothing from sessions).
+ */
+export function fireRetryWaitMs(failures: number): number {
+  if (failures < FIRE_DELIVERY_FAST_ATTEMPTS) return 0;
+  return FIRE_RETRY_BACKOFF_MS[failures - FIRE_DELIVERY_FAST_ATTEMPTS] ?? FIRE_RETRY_EVERY_MS;
+}
 
 export interface TriggerCheckedApplied {
   found: boolean;
@@ -115,8 +129,15 @@ export interface TriggerFiredApplied {
    * goes through the same path again.
    */
   retry: boolean;
-  /** Set with `retry: false` when the retries were exhausted this time. */
-  gaveUp?: boolean;
+  /**
+   * With `retry`, when the next try is due. A replay before then delivered nothing
+   * (`delivered: false`, `error` is the last try's): the fire waits for its turn.
+   */
+  nextTryAtMs?: number;
+  /** With `retry`: a replay inside the wait, so no try ran (the caller logs it quietly). */
+  waiting?: true;
+  /** With `retry` after a try: how many tries this fire has failed so far. */
+  attempts?: number;
   jobName?: string;
   status?: 'ok' | 'error';
   error?: string;
@@ -138,11 +159,18 @@ export interface TriggerFiredApplied {
   supersededSeqs?: number[];
   /** Clock runs not decidable now: never acked, the daemon's replay brings them back. */
   heldSeqs?: number[];
+  /**
+   * Fires the server now keeps itself (job.state.owedFires) and tries on its own clock: safe to
+   * ack, so the daemon's capped list of unacked fires never has to drop one.
+   */
+  owedSeqs?: number[];
 }
 
 export interface ApplyFiredOptions {
   /** The host whose daemon sent the fires: a clock run counts only under that host's clock. */
   fromHost?: string;
+  /** The server's own try of its owed fires (routines/trigger-events.ts sweepOwedFires), not a daemon's fire. */
+  owed?: true;
 }
 
 /**
@@ -434,7 +462,9 @@ export type DeliverResult = {
  * and the caller withholds the acks, so the daemon replays the fires and the
  * items are not lost. The daemon marked them seen at fire time, so a consumed
  * fire can never fire again; this is the one place at-least-once has to be
- * honored on the server. A batch retries as a unit, identified by its lowest seq.
+ * honored on the server. A batch retries as a unit, identified by its lowest seq,
+ * for as long as it fails; past the fast tries a replay that comes before the
+ * next try is due delivers nothing (fireRetryWaitMs) and is withheld again.
  */
 export async function applyTriggerFired(
   state: CronServiceState,
@@ -455,7 +485,17 @@ export async function applyTriggerFired(
     if (!job || (!job.check && !head.clock)) return { found: false as const };
     if (!job.state) job.state = {};
     const jobState = job.state;
-    let fresh = batch.filter((e) => !isDuplicateFire(jobState, e));
+    // Fires the server keeps itself: the daemon's replay of one (its ack was lost) is a duplicate,
+    // and only the server's own sweep tries them.
+    const owedNow = job.check ? jobState.owedFires ?? [] : [];
+    const owed = (e: TriggerFiredEvent) => owedNow.some((o) => sameFire(o, e));
+    // The server's own try: an owed fire recorded meanwhile (a copy delivered another way) leaves the list.
+    if (opts.owed && owedNow.some((o) => isDuplicateFire(jobState, o))) {
+      const left = owedNow.filter((o) => !isDuplicateFire(jobState, o));
+      jobState.owedFires = left.length > 0 ? left : undefined;
+      await persist(state);
+    }
+    let fresh = batch.filter((e) => !isDuplicateFire(jobState, e) && (opts.owed ? owed(e) : !owed(e)));
     const duplicateSeqs = batch.filter((e) => !fresh.includes(e)).map((e) => e.seq);
     // A clock run nobody took is run here only when it is this server's to run.
     const supersededSeqs: number[] = [];
@@ -474,6 +514,19 @@ export async function applyTriggerFired(
     }
     const passed = { duplicateSeqs, supersededSeqs, heldSeqs };
     if (fresh.length === 0) return { duplicate: true as const, job, ...passed };
+    // The trigger's delivery is in its long wait: a new fire joins the owed ones untried and is
+    // acked, to go with them on the server's next try.
+    // A fire its host delivered already is only recorded, as ever: never kept to be sent again,
+    // nor held back by the retry clock (nothing is sent for it).
+    const recordOnly = fresh.every((e) => isHostDelivery(e.host));
+    if (!opts.owed && owedNow.length > 0 && !recordOnly) {
+      jobState.owedFires = [...owedNow, ...fresh.map(owedCopy)];
+      await persist(state);
+      return { joined: fresh.map((e) => e.seq), job, ...passed };
+    }
+    // A fire waiting out its retry clock: not tried before it is due (fireRetryWaitMs).
+    const notDue = recordOnly ? undefined : fireRetryNotDue(jobState, fresh, state.deps.nowMs());
+    if (notDue) return { notDue, job, ...passed };
     job.state.runningAtMs = state.deps.nowMs();
     job.state.lastError = undefined;
     await persist(state);
@@ -490,6 +543,22 @@ export async function applyTriggerFired(
   };
   if ('duplicate' in phase1) {
     return { found: true, duplicate: true, delivered: false, retry: false, jobName: phase1.job.name, ...skipped };
+  }
+  if ('joined' in phase1) {
+    const lastError = phase1.job.state.lastError;
+    const atMs = fireRetryDueAt(phase1.job.state);
+    return {
+      found: true, duplicate: false, delivered: false, retry: true, waiting: true, owedSeqs: phase1.joined,
+      ...(atMs !== undefined ? { nextTryAtMs: atMs } : {}),
+      jobName: phase1.job.name, ...(lastError ? { error: lastError } : {}), ...skipped, seq: phase1.joined[0],
+    };
+  }
+  if ('notDue' in phase1) {
+    const lastError = phase1.job.state.lastError;
+    return {
+      found: true, duplicate: false, delivered: false, retry: true, waiting: true, nextTryAtMs: phase1.notDue.atMs,
+      jobName: phase1.job.name, ...(lastError ? { error: lastError } : {}), ...skipped, seq: phase1.notDue.seq,
+    };
   }
 
   const { job, fresh } = phase1;
@@ -520,20 +589,15 @@ export async function applyTriggerFired(
     const target = state.store?.jobs.find((j) => j.id === head.id) ?? job;
     if (!target.state) target.state = {};
 
-    // Attempt accounting for THIS fire (or batch). The batch continues a retry
-    // chain only when every fire in it belongs to that chain: a fire that joined
-    // later starts the count over, so it is never given up on after one try.
-    const chain = target.state.fireRetry
-      && (target.state.fireRetry.epoch ?? '') === (identity.epoch ?? '')
-      ? target.state.fireRetry : undefined;
-    const chainSeqs = chain ? chain.seqs ?? [chain.seq] : [];
-    const sameFire = !!chain && fresh.every((e) => chainSeqs.includes(e.seq));
-    const attempts = (sameFire ? chain!.attempts : 0) + 1;
-    const transient = result.status === 'error' && result.retryable === true;
-    const retry = transient && attempts < FIRE_DELIVERY_MAX_ATTEMPTS;
-    const gaveUp = transient && !retry;
-    const error = gaveUp
-      ? `delivery failed ${attempts} times, giving up: ${result.error ?? 'unknown error'}`
+    // Attempt accounting for the trigger's delivery: every fire of one trigger goes to the same
+    // place, so the failed tries count for the trigger, whichever fire made them. A transient
+    // failure is always a retry; the count only sets how long the next try waits.
+    const { chain, chainSeqs } = retryChainOf(target.state, fresh);
+    const attempts = (chain ? chain.attempts : 0) + 1;
+    const retry = result.status === 'error' && result.retryable === true;
+    const nextTryAtMs = retry ? endedAt + fireRetryWaitMs(attempts) : undefined;
+    const error = retry && attempts >= FIRE_DELIVERY_FAST_ATTEMPTS
+      ? `delivery failed ${attempts} times, trying again at ${new Date(nextTryAtMs!).toISOString()}: ${result.error ?? 'unknown error'}`
       : result.error;
 
     const clockRun = !!head.clock && !target.check;
@@ -614,24 +678,34 @@ export async function applyTriggerFired(
       target.state.fireCount = seeded + fresh.length;
     }
     const freshSeqs = fresh.map((e) => e.seq);
+    let owedSeqs: number[] | undefined;
     if (retry) {
       // Not recorded as processed: the replay must pass the dedup again.
+      const seqs = [...new Set([...chainSeqs, ...freshSeqs])].sort((a, b) => a - b);
       target.state.fireRetry = {
         ...(identity.epoch ? { epoch: identity.epoch } : {}),
-        seq: sameFire ? chain!.seq : identity.seq,
+        seq: seqs[0] ?? identity.seq,
         attempts,
-        seqs: sameFire ? chainSeqs : freshSeqs,
+        seqs,
+        lastTryAtMs: endedAt,
       };
+      // Past the fast tries a check's fires are kept here and acked: the daemon's list of unacked
+      // fires is capped (PENDING_FIRES_MAX) and drops the oldest, which would lose them.
+      if (!clockRun && target.check && attempts >= FIRE_DELIVERY_FAST_ATTEMPTS && fresh.every((e) => !isHostDelivery(e.host))) {
+        const kept = target.state.owedFires ?? [];
+        const added = fresh.filter((e) => !kept.some((o) => sameFire(o, e)));
+        target.state.owedFires = [...kept, ...added.map(owedCopy)];
+        owedSeqs = added.map((e) => e.seq);
+      }
     } else {
-      // Recorded on success, on a refusal, and when the retries ran out: the
-      // daemon is about to be acked in all three cases.
+      // Recorded on success and on a refusal: the daemon is about to be acked
+      // in both cases (owed fires were acked already).
       for (const event of fresh) recordFireSeq(target.state, event);
-      // A chain of OTHER fires (a batch still waiting for its replay) keeps its
-      // count: this fire landing says nothing about how often that one failed.
-      const open = chainSeqs.filter((seq) => !freshSeqs.includes(seq));
-      target.state.fireRetry = chain && open.length > 0
-        ? { ...chain, seq: Math.min(...open), seqs: open }
-        : undefined;
+      const left = (target.state.owedFires ?? []).filter((o) => !fresh.some((e) => sameFire(o, e)));
+      target.state.owedFires = left.length > 0 ? left : undefined;
+      // The trigger's delivery worked (or was refused for good): fires still waiting are tried at
+      // once. A fire its host delivered says nothing of this server's delivery: the clock stays.
+      if (fresh.some((e) => !isHostDelivery(e.host))) target.state.fireRetry = undefined;
     }
     // The daemon's next check. A clock routine's next slot is its owner's
     // (clock-fire.ts): the host's report while it holds the clock, else the
@@ -663,7 +737,8 @@ export async function applyTriggerFired(
       duplicate: false,
       delivered: result.status === 'ok',
       retry,
-      ...(gaveUp ? { gaveUp: true } : {}),
+      ...(nextTryAtMs !== undefined ? { nextTryAtMs, attempts } : {}),
+      ...(owedSeqs?.length ? { owedSeqs } : {}),
       jobName: target.name,
       status: result.status,
       ...(error ? { error } : {}),
@@ -673,6 +748,52 @@ export async function applyTriggerFired(
       ...(recovered ? { recovered } : {}),
     };
   });
+}
+
+/**
+ * The trigger's retry chain: its failed tries in a row, whichever fires they carried (every fire of
+ * one trigger goes to the same place, so a new fire waits out the chain's clock too, and several
+ * unacked fires never restart each other's count). `chainSeqs` are the waiting fires of the same
+ * epoch as these (another epoch numbers its fires apart).
+ */
+function retryChainOf(s: CronJob['state'], fresh: readonly TriggerFiredEvent[]) {
+  const head = fresh[0];
+  const chain = s.fireRetry;
+  const sameEpoch = !!chain && !!head && (chain.epoch ?? '') === (head.epoch ?? '');
+  const chainSeqs = chain && sameEpoch ? chain.seqs ?? [chain.seq] : [];
+  return { chain, chainSeqs };
+}
+
+/** When the trigger's next delivery try is due, if it waits for one. */
+export function fireRetryDueAt(s: CronJob['state'] | undefined): number | undefined {
+  const chain = s?.fireRetry;
+  const last = chain?.lastTryAtMs;
+  if (!chain || typeof last !== 'number' || !Number.isFinite(last)) return undefined;
+  return last + fireRetryWaitMs(chain.attempts);
+}
+
+/**
+ * When the trigger's next try is not due yet: when it is. A last try dated after now (the clock
+ * moved back) is not waited on.
+ */
+function fireRetryNotDue(s: CronJob['state'], fresh: readonly TriggerFiredEvent[], nowMs: number): { atMs: number; seq: number } | undefined {
+  const last = s.fireRetry?.lastTryAtMs;
+  const atMs = fireRetryDueAt(s);
+  if (atMs === undefined || nowMs < last!) return undefined;
+  return nowMs < atMs ? { atMs, seq: s.fireRetry!.seq ?? fresh[0]?.seq } : undefined;
+}
+
+/** One daemon fire: its trigger, numbering and number. */
+function sameFire(a: { id: string; epoch?: string; seq: number }, b: { id: string; epoch?: string; seq: number }): boolean {
+  return a.id === b.id && (a.epoch ?? '') === (b.epoch ?? '') && a.seq === b.seq;
+}
+
+/** A fire as the server keeps it: the daemon's event, without a host's delivery mark or a replay flag. */
+function owedCopy(e: TriggerFiredEvent): OwedFire {
+  const { host: _host, ...rest } = e;
+  const copy = { ...rest } as OwedFire & { replay?: unknown };
+  delete copy.replay;
+  return copy;
 }
 
 /** The newest fire's time: a batch is dated by the moment its backlog ends. */

@@ -421,41 +421,65 @@ describe('the retry count of a batch', () => {
     await sleep(300)
   }
 
-  // Fire 3 joins a batch that has already failed twice. Inheriting that count
-  // would give fire 3 one try before its items were given up on.
-  it('restarts when a new fire joins, so no fire is given up on early', async () => {
+  // The count is the trigger's: every fire of one trigger goes to the same place, so a fire that
+  // joins continues it (several unacked fires restarting each other's count kept every try at
+  // once and the lead never heard). Past the fast tries the server keeps the fires itself and
+  // acks them: the daemon's list of unacked fires is capped (PENDING_FIRES_MAX) and would drop
+  // the oldest (2026-11-23, the user: no message is ever lost).
+  it('continues when a new fire joins, and past the fast tries the server keeps the fires and acks them', async () => {
     mode = 'throw'; sends.length = 0
     await deliverNow([1, 2], true)
     await deliverNow([1, 2], true)
     let job = await jobState(jobId)
     expect(job.state.fireRetry).toMatchObject({ seq: 1, attempts: 2, seqs: [1, 2] })
+    expect(acksFor(jobId), 'not kept yet: the daemon still holds them').toEqual([])
 
     await deliverNow([1, 2, 3], true)
     job = await jobState(jobId)
-    expect(acksFor(jobId), 'nothing may be given up on yet').toEqual([])
-    expect(job.state.fireRetry).toMatchObject({ seq: 1, attempts: 1, seqs: [1, 2, 3] })
+    expect(job.state.fireRetry).toMatchObject({ seq: 1, attempts: 3, seqs: [1, 2, 3] })
+    expect(job.state.owedFires.map((f: { seq: number }) => f.seq)).toEqual([1, 2, 3])
+    expect(job.state.owedFires[0].items).toEqual([{ id: 'storm-e-ITEM-1', title: 'item 1' }])
+    await waitForAcks(jobId, 3)
+    expect([...acksFor(jobId)].sort((a, b) => a - b)).toEqual([1, 2, 3])
+    expect(job.state.lastFireSeq).toBeUndefined()
   }, 60_000)
 
-  // A fire landing on its own says nothing about how often the waiting batch failed.
-  it('is kept when a different fire lands while the batch waits for its replay', async () => {
-    mode = 'ok'
-    await deliverNow([4], false)
-    let job = await jobState(jobId)
-    expect(acksFor(jobId)).toEqual([4])
-    expect(job.state.fireRetry).toMatchObject({ seq: 1, attempts: 1, seqs: [1, 2, 3] })
+  it('a fire that comes while some are kept joins them untried; the server\'s own try delivers them all at once', async () => {
+    const { getCronService } = await import('../../src/web/routes/cron.js')
+    const { sweepOwedFires } = await import('../../src/core/routines/trigger-events.js')
+    const deps = (getCronService() as unknown as { state: { deps: { nowMs: () => number } } }).state.deps
+    const realNow = deps.nowMs
+    let offsetMs = 0
+    deps.nowMs = () => realNow() + offsetMs
+    try {
+      mode = 'ok'; sends.length = 0
+      const before = runs
+      deliverWithFanOut(fireEvent(jobId, 'storm-e', 4, Date.now(), false))
+      await waitForAcks(jobId, 1)
+      let job = await jobState(jobId)
+      expect(runs, 'joined untried').toBe(before)
+      expect(acksFor(jobId)).toEqual([4])
+      expect(job.state.owedFires.map((f: { seq: number }) => f.seq)).toEqual([1, 2, 3, 4])
+      // A daemon replay of a kept fire (its ack was lost) is acked again and delivers nothing.
+      await deliverNow([2], true)
+      expect(runs).toBe(before)
 
-    mode = 'throw'
-    await deliverNow([1, 2, 3], true)
-    job = await jobState(jobId)
-    expect(job.state.fireRetry).toMatchObject({ seq: 1, attempts: 2 })
-
-    mode = 'ok'
-    await deliverNow([1, 2, 3], true)
-    await waitForAcks(jobId, 4)
-    job = await jobState(jobId)
-    expect([...acksFor(jobId)].sort((a, b) => a - b)).toEqual([1, 2, 3, 4])
-    expect(job.state.fireRetry).toBeUndefined()
-    expect(job.state.lastFireSeq).toBe(4)
-    expect(job.state.fireCount).toBe(4)
-  }, 60_000)
+      // Not due yet: the sweep leaves them.
+      expect(await sweepOwedFires(realNow())).toEqual([])
+      // Due: one delivery carries all four, and nothing is left owed.
+      offsetMs = 2 * 60_000
+      expect(await sweepOwedFires(realNow() + offsetMs)).toEqual([jobId])
+      expect(runs).toBe(before + 1)
+      job = await jobState(jobId)
+      expect(job.state.owedFires).toBeUndefined()
+      expect(job.state.fireRetry).toBeUndefined()
+      expect(job.state.lastFireSeq).toBe(4)
+      expect(job.state.fireCount).toBe(4)
+      // Its replay after that is a duplicate.
+      await deliverNow([4], true)
+      expect(runs).toBe(before + 1)
+    } finally {
+      deps.nowMs = realNow
+    }
+  }, 120_000)
 })

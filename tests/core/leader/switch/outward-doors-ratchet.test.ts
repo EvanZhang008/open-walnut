@@ -312,6 +312,7 @@ const PRIMITIVE_OF: Record<string, RegExp | null> = {
   'core/cron/ops.ts#relayCheckRun': /\.send\('triggers\.run'/,
   'core/routines/trigger-events.ts#claimFire': /claimBatched\(/,
   'core/routines/trigger-events.ts#deliverFires': /applyTriggerFired\(/,
+  'core/routines/trigger-events.ts#sweepOwedFires': /applyTriggerFired\(/,
   'providers/daemon-connection.ts#pushTriggersOnce': /\.send\('triggers\.configure'/,
   'core/plugin-jobs/manager.ts#reconcileOnce': /handle\.send\(|uploadFile\(/,
   'integrations/calendar/service.ts#updateEvent': /source\.updateEvent\(/,

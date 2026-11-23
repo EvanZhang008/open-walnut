@@ -9,7 +9,10 @@
 import { randomUUID } from 'node:crypto';
 import { noteLineCarries } from '../providers/batch-uuid.js';
 import { log } from '../logging/index.js';
-import { fateOf, isPhoneMessageId, noteDelivered, setFate, STOP_PARKED_REASON } from './relay-fates.js';
+import { CANCELLED_UNRUN_REASON, fateOf, isPhoneMessageId, noteDelivered, setFate, STOP_PARKED_REASON } from './relay-fates.js';
+
+/** Parks a cancelled line sets its rows aside under (a Stop's, or a cancel that was no Stop): kept, never removed with the line. */
+const setAsideByCancel = (reason: string | undefined): boolean => reason === STOP_PARKED_REASON || reason === CANCELLED_UNRUN_REASON;
 import { compareEnqueueOrder, getStore, mutateStore, type QueuedMessage, type QueueStore } from './session-queue-store.js';
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 
@@ -27,11 +30,11 @@ export async function removeTaken(sessionId: string, ids: string[], opts?: { ran
     const queue = s.queues[sessionId];
     if (!queue) return false;
     const matches = (m: QueuedMessage) => idSet.has(m.id)
-      && !(m.status === 'parked' && (!ran && m.parkedReason === STOP_PARKED_REASON || opts?.preserveParked))
+      && !(m.status === 'parked' && (!ran && setAsideByCancel(m.parkedReason) || opts?.preserveParked))
       && (!opts?.rows || opts.rows.some((r) => r.id === m.id && r.lineUuid === m.lineUuid));
     if (!ran && opts?.confirmedCancelled) {
       for (const m of queue) {
-        if (m.status !== 'parked' || m.parkedReason !== STOP_PARKED_REASON || !idSet.has(m.id)
+        if (m.status !== 'parked' || !setAsideByCancel(m.parkedReason) || !idSet.has(m.id)
           || opts?.rows && !opts.rows.some((r) => r.id === m.id && r.lineUuid === m.lineUuid)) continue;
         // The CLI cancelled this UUID; an explicit Retry must be a new line.
         m.lineUuid = randomUUID();

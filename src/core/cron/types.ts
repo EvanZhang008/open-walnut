@@ -4,7 +4,10 @@
  */
 
 import type { SubsystemLogger } from '../../logging/index.js';
-import type { MachineFaultKind } from '../../providers/trigger-check-core.js';
+import type { MachineFaultKind, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
+
+/** A fire the server keeps until it is delivered (CronJobState.owedFires): the daemon's event, without a host delivery. */
+export type OwedFire = Omit<TriggerFiredEvent, 'host'>;
 
 // ── Schedule: three kinds ──
 
@@ -368,17 +371,22 @@ export type CronJobState = {
   lastFireSeq?: number;
   lastFireEpoch?: string;
   /**
-   * Check jobs only: a fire whose delivery failed for a transient reason (the
-   * target host unreachable, the send timing out) is NOT acked, so the daemon
-   * replays it; this counts the attempts so a permanently failing delivery is
-   * given up on (recorded, acked, notified) instead of retried forever.
+   * The fire (or batch, named by its lowest seq) whose delivery failed for a
+   * transient reason (the target host unreachable, the send timing out) and is
+   * being retried. It is NOT acked, so the daemon replays it; it is never given
+   * up on (trigger-apply.ts fireRetryWaitMs). `attempts` counts the tries,
+   * `lastTryAtMs` dates the last one, so a replay that comes before the next try
+   * is due delivers nothing. `seqs` lists every fire of that batch; absent on rows
+   * written before batches, where it means `[seq]`.
    */
+  fireRetry?: { epoch?: string; seq: number; attempts: number; seqs?: number[]; lastTryAtMs?: number };
   /**
-   * The fire (or batch, named by its lowest seq) whose delivery is being retried.
-   * `seqs` lists every fire of that batch; absent on rows written before batches,
-   * where it means `[seq]`.
+   * Check jobs only: fires whose delivery failed past the fast tries, kept here whole and acked, so
+   * the daemon's capped list of unacked fires (PENDING_FIRES_MAX) can never drop them. The server
+   * tries them itself on fireRetry's clock (routines/trigger-events.ts sweepOwedFires), all in one
+   * delivery, until one lands. A fire that arrives while some are owed joins them without a try.
    */
-  fireRetry?: { epoch?: string; seq: number; attempts: number; seqs?: number[] };
+  owedFires?: OwedFire[];
   /**
    * Check jobs only: recorded fire seqs ABOVE `lastFireSeq`, which is the highest
    * CONTIGUOUS one. Fires are not processed in order (see isDuplicateFire), so a

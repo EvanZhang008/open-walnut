@@ -49,8 +49,8 @@ export async function writeTaskTranscript(
 
 export type HeldRow = import('../session-queue-store.js').QueuedMessage;
 
-/** Why a message waits on a session its task is moving away from (never auto-delivered while parked). */
-export const MOVE_HELD_REASON = 'Held while its task moves to another host';
+import { MOVE_HELD_REASON } from '../relay-fates.js';
+export { MOVE_HELD_REASON };
 
 /** A row held for a move, deliverable again. */
 export function releaseMoveHeld(r: HeldRow): HeldRow {

@@ -78,6 +78,7 @@ export const OUTWARD_DOORS: readonly OutwardDoor[] = [
   { kind: 'trigger-fire', file: 'core/cron/ops.ts', fn: 'relayCheckRun', onRefusal: "a Run of a check asks no daemon: { ok: true, ran: false, reason: 'not-permitted' }" },
   { kind: 'trigger-fire', file: 'core/routines/trigger-events.ts', fn: 'claimFire', onRefusal: "returns a 'wait' verdict: not claimed, not acked, the daemon replays it" },
   { kind: 'trigger-fire', file: 'core/routines/trigger-events.ts', fn: 'deliverFires', onRefusal: 'nothing runs and nothing is acked: the daemon replays it' },
+  { kind: 'trigger-fire', file: 'core/routines/trigger-events.ts', fn: 'sweepOwedFires', onRefusal: 'nothing runs: the fires stay kept on the trigger (owedFires) for the next lap of a server that may deliver' },
   { kind: 'trigger-arm', file: 'providers/daemon-connection.ts', fn: 'pushTriggersOnce', onRefusal: 'sends no set; every host is pushed again once the doors open' },
   { kind: 'plugin-jobs', file: 'core/plugin-jobs/manager.ts', fn: 'reconcileOnce', onRefusal: 'throws before any upload; the host waits in checking (no error, no back-off) and the pass runs once the doors open' },
   { kind: 'calendar-write', file: 'integrations/calendar/service.ts', fn: 'updateEvent', onRefusal: 'throws to the caller (a route answers 503)' },

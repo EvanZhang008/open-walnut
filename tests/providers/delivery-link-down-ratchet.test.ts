@@ -38,6 +38,7 @@ const NOT_LINK: Record<string, string> = {
   parkIfRedeliveryLoop: 'a row taken too often in a short time: each take was answered, a loop bound, not a link failure',
   send: 'a fresh start the host refused because the agent is not installed there: the host answered, and the first line is parked to wait for the agent (parkUnstartedFirstLine)',
   cancelBeforeColdSend: 'a Stop came before the cold send wrote anything: the person stopped it, nothing to wait for',
+  returnCancelledRows: 'the CLI (or a Stop) cancelled the line: the host answered; its non-person rows are set aside, and one a cancel that was no Stop set aside is sent again by core/sessions/delivery-retry.ts',
 };
 
 const FAILURE_CALL = /\b(reportBatchFailed|revertToPending|revertIfQueued|parkMessages|parkIfQueued)\(/g;

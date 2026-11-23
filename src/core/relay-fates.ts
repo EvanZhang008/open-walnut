@@ -48,12 +48,22 @@ export type WithdrawState =
 
 /** Why a stop parks a pending row (session-message-queue.ts markProcessing). */
 export const STOP_PARKED_REASON = 'Session stopped by user; retry explicitly to send';
+/**
+ * Why a row whose turn was cancelled before it ran is set aside when the cancel was not a
+ * person's Stop (an engine switch, a lane drain, a send-now interrupt): Walnut sends it again by
+ * itself (core/sessions/delivery-retry.ts). A person's Stop moved the session's stop fence, so
+ * a row it cancelled is still left for their Retry.
+ */
+export const CANCELLED_UNRUN_REASON = 'Not delivered yet: the turn it was going to was cancelled before it ran. Walnut sends it again by itself.';
 
 /** Why a message a person lined up for after the running turn waits (core/sessions/queue-after-turn.ts). */
 /** Rows a start death holds until restart recovery starts the session again (session-queue-park.ts holdForStartRecovery). */
 export const START_RECOVERY_HELD_REASON = 'Waiting for Walnut to start the session again: its process ended before it read this message';
 
 export const AFTER_TURN_REASON = 'Waiting for the running turn to finish';
+
+/** Why a message waits on a session its task is moving away from (never auto-delivered while parked; sessions/engine-switch-io.ts). */
+export const MOVE_HELD_REASON = 'Held while its task moves to another host';
 
 /** Why a message that can wait is held for an idle session whose prompt cache expired (core/sessions/cold-hold.ts). */
 export const COLD_HOLD_REASON = 'Held for the session\'s next wake: it is idle and its prompt cache has expired';

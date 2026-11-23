@@ -28,7 +28,9 @@ import { setTriggerDaemonLookupForTest, type TriggerDaemon } from '../../src/cor
 import { handleTriggerChecked, handleTriggerEvent, handleTriggerFired } from '../../src/core/routines/trigger-events.js'
 import { listNotifications } from '../../src/core/notifications/store.js'
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core.js'
-import { FIRE_DELIVERY_MAX_ATTEMPTS } from '../../src/core/cron/trigger-apply.js'
+import {
+  FIRE_DELIVERY_FAST_ATTEMPTS, FIRE_RETRY_BACKOFF_MS, FIRE_RETRY_EVERY_MS, fireRetryWaitMs,
+} from '../../src/core/cron/trigger-apply.js'
 import { registerExecutor } from '../../src/core/routines/registry.js'
 import { compileTriggersForHost, triggerDefOf } from '../../src/core/routines/trigger-push.js'
 import { getOp } from '../../src/ops/index.js'
@@ -1290,32 +1292,101 @@ describe('a fire whose delivery fails', () => {
     expect(job.state.fireCount).toBe(1)
   })
 
-  it(`gives up after ${FIRE_DELIVERY_MAX_ATTEMPTS} transient failures: recorded and acked, and the user is not the one told`, async () => {
-    mode = 'throw'; attempts = 0; sends.length = 0
-    for (let i = 0; i < FIRE_DELIVERY_MAX_ATTEMPTS; i++) await fire(2)
-    expect(attempts).toBe(FIRE_DELIVERY_MAX_ATTEMPTS)
-    const job = await jobState(flakyJobId)
-    expect(job.state.lastFireSeq).toBe(2)
-    expect(job.state.lastStatus).toBe('error')
-    expect(job.state.lastError).toContain(`failed ${FIRE_DELIVERY_MAX_ATTEMPTS} times`)
-    expect(job.state.fireRetry).toBeUndefined()
-    expect(sends.filter((s) => s.cmd === 'triggers.ack')).toHaveLength(1)
-    // A delivery failure is its task's lead's to hear (this routine has no task): never a bell.
-    const { feed } = await listNotifications()
-    expect(feed.filter((n) => n.dedupKey.includes(flakyJobId))).toEqual([])
-    // The audit shows ONE fire that failed, with the attempt count, and the
-    // total counts it once even though three attempts were made.
-    const afterGiveUp = job.state.fireLog as Array<Record<string, any>>
-    expect(afterGiveUp.filter((f) => f.seq === 2)).toHaveLength(1)
-    expect(afterGiveUp[0]).toMatchObject({ seq: 2, attempts: FIRE_DELIVERY_MAX_ATTEMPTS })
-    expect(afterGiveUp[0].delivery.status).toBe('error')
-    expect(job.state.fireCount).toBe(2)
+  it('a transient failure is never given up: past the fast tries the server keeps the fire, acks it, and tries it on a growing clock until it lands', async () => {
+    // The cron engine's own clock (state.deps.nowMs), moved forward to stand for the waits.
+    const { getCronService } = await import('../../src/web/routes/cron.js')
+    const { sweepOwedFires } = await import('../../src/core/routines/trigger-events.js')
+    const deps = (getCronService() as unknown as { state: { deps: { nowMs: () => number } } }).state.deps
+    const realNow = deps.nowMs
+    let offsetMs = 0
+    deps.nowMs = () => realNow() + offsetMs
+    const sweep = () => sweepOwedFires(realNow() + offsetMs)
+    try {
+      mode = 'throw'; attempts = 0; sends.length = 0
+      const acks = () => sends.filter((s) => s.cmd === 'triggers.ack')
+      // The fast tries: each daemon replay tries again, unacked.
+      for (let i = 1; i < FIRE_DELIVERY_FAST_ATTEMPTS; i++) await fire(2)
+      expect(acks()).toEqual([])
+      // The last fast try fails too: the server keeps the fire whole and acks it, so the
+      // daemon's capped list of unacked fires can never drop it.
+      await fire(2)
+      expect(attempts).toBe(FIRE_DELIVERY_FAST_ATTEMPTS)
+      expect(acks().map((a) => a.params)).toEqual([{ triggerId: flakyJobId, seq: 2, home: WALNUT_HOME }])
+      let job = await jobState(flakyJobId)
+      expect(job.state.owedFires).toEqual([expect.objectContaining({ seq: 2, epoch: 'flaky-epoch', items: [{ id: 'item-2' }] })])
+      // A replay of it now (the ack was lost) is a duplicate: acked, no try.
+      await fire(2)
+      expect(attempts).toBe(FIRE_DELIVERY_FAST_ATTEMPTS)
+      // A fire its host delivered meanwhile is only recorded, as ever: never kept to be sent again.
+      await handleTriggerFired('__local__', {
+        type: 'trigger.fired', id: flakyJobId, epoch: 'flaky-epoch', seq: 9, atMs: Date.now(),
+        items: [{ id: 'item-9' }], durationMs: 1, nextRunAtMs: Date.now() + 600_000,
+        host: { atMs: Date.now(), sessionId: 'host-session', messageId: 'qm-host-9', seqs: [9] },
+      })
+      expect(attempts).toBe(FIRE_DELIVERY_FAST_ATTEMPTS)
+      job = await jobState(flakyJobId)
+      expect(job.state.owedFires.map((f: { seq: number }) => f.seq)).toEqual([2])
+      expect(job.state.fireSeqsDone).toContain(9)
+
+      // Then each try waits its turn, growing to an hour, and goes on past it.
+      const failures = FIRE_DELIVERY_FAST_ATTEMPTS + FIRE_RETRY_BACKOFF_MS.length + 1
+      for (let n = FIRE_DELIVERY_FAST_ATTEMPTS; n < failures; n++) {
+        const wait = fireRetryWaitMs(n)
+        expect(wait).toBe(FIRE_RETRY_BACKOFF_MS[n - FIRE_DELIVERY_FAST_ATTEMPTS] ?? FIRE_RETRY_EVERY_MS)
+        offsetMs += wait - 10_000
+        expect(await sweep()).toEqual([])
+        expect(attempts).toBe(n)
+        offsetMs += 10_000
+        expect(await sweep()).toEqual([flakyJobId])
+        expect(attempts).toBe(n + 1)
+      }
+      expect(fireRetryWaitMs(failures)).toBe(FIRE_RETRY_EVERY_MS)
+      expect(fireRetryWaitMs(failures + 50)).toBe(FIRE_RETRY_EVERY_MS)
+
+      job = await jobState(flakyJobId)
+      expect(job.state.lastFireSeq).toBe(1)
+      expect(job.state.owedFires.map((f: { seq: number }) => f.seq)).toEqual([2])
+      expect(job.state.fireRetry).toMatchObject({ seq: 2, attempts: failures })
+      expect(job.state.lastError).toContain(`delivery failed ${failures} times, trying again at`)
+      expect(job.state.lastError).not.toContain('giving up')
+      // Still counted once: a retry is the same fire, not a new one (the host's fire 9 is the other).
+      expect(job.state.fireCount).toBe(2)
+      // A delivery failure is its task's lead's to hear (this routine has no task): never a bell.
+      const { feed } = await listNotifications()
+      expect(feed.filter((n) => n.dedupKey.includes(flakyJobId))).toEqual([])
+
+      // Delivery works again, but the hour has not passed: nothing yet.
+      mode = 'ok'
+      offsetMs += 30 * 60_000
+      expect(await sweep()).toEqual([])
+      expect(attempts).toBe(failures)
+      // Once it has, the server's try delivers it, counted once, and nothing is left owed.
+      offsetMs += 30 * 60_000
+      expect(await sweep()).toEqual([flakyJobId])
+      expect(attempts).toBe(failures + 1)
+      job = await jobState(flakyJobId)
+      expect(job.state.lastFireSeq).toBe(2)
+      expect(job.state.lastStatus).toBe('ok')
+      expect(job.state.owedFires).toBeUndefined()
+      expect(job.state.fireRetry).toBeUndefined()
+      expect(job.state.lastCheck.retryPending).toBeUndefined()
+      // The audit shows ONE fire that took every try.
+      const fires = job.state.fireLog as Array<Record<string, any>>
+      expect(fires.filter((f) => f.seq === 2)).toHaveLength(1)
+      expect(fires.find((f) => f.seq === 2)).toMatchObject({ seq: 2, attempts: failures + 1 })
+      expect(fires.find((f) => f.seq === 2)!.delivery.status).toBe('ok')
+      expect(job.state.fireCount).toBe(3)
+      // A replay after it landed is a duplicate: nothing delivered again.
+      await fire(2)
+      expect(attempts).toBe(failures + 1)
+    } finally {
+      deps.nowMs = realNow
+    }
     // A later fire is a new attempt series, not a continuation.
-    mode = 'ok'
     await fire(3)
     const later = await jobState(flakyJobId)
     expect(later.state.lastStatus).toBe('ok')
-    expect(later.state.fireCount).toBe(3)
+    expect(later.state.fireCount).toBe(4)
     const newest = (later.state.fireLog as Array<Record<string, any>>)[0]
     expect(newest.seq).toBe(3)
     // A first attempt carries no attempt count at all (nothing to explain).

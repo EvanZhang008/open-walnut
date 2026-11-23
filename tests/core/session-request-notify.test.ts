@@ -1564,17 +1564,32 @@ describe('notifyRequesterFallback — a message that has not reached its target'
 
   it('a parked message is reported NOT DELIVERED with its reason, and nothing of the target is quoted', async () => {
     const request = await arm();
-    getQueue.mockResolvedValue([rowFor(request.id, { status: 'parked', parkedReason: 'Not delivered: another Claude Code process (pid 4087) already has this session open' })]);
+    // A park only a person can fix (the folder is gone): not delivered, and a Retry there sends it.
+    getQueue.mockResolvedValue([rowFor(request.id, { status: 'parked', parkedReason: 'Not sent: the working directory no longer exists (/gone)', parkedCode: 'cwd_missing' })]);
     buildSessionTranscript.mockResolvedValue(transcriptOf('an answer from an earlier turn'));
     expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(true);
     const text = deliveredText();
     const envelope = parseWalnutMessage(text)!;
     expect(envelope.attrs.outcome).toBe('error');
     expect(envelope.body).toContain('Your message was NOT DELIVERED');
-    expect(envelope.body).toContain('Why: Not delivered: another Claude Code process (pid 4087)');
+    expect(envelope.body).toContain('Why: Not sent: the working directory no longer exists');
     expect(envelope.body).not.toContain('an answer from an earlier turn');
     expect(envelope.body).not.toContain('Its turn ended');
     expect((await getSessionRequest(request.id))).toMatchObject({ status: 'notified', outcome: 'error' });
+  });
+
+  it('a park Walnut tries again by itself is reported as NOT DELIVERED YET, going out by itself, never "send it again"', async () => {
+    // 2026-11-23, the user: no message is ever lost, an error is retried (core/sessions/delivery-retry.ts).
+    const request = await arm();
+    getQueue.mockResolvedValue([rowFor(request.id, { status: 'parked', parkedReason: 'Not delivered: Claude Code exited before it read this message. Retry it.' })]);
+    expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(true);
+    const envelope = parseWalnutMessage(deliveredText())!;
+    expect(envelope.attrs.outcome).toBe('timeout');
+    expect(envelope.body).toContain('Your message has NOT BEEN DELIVERED yet');
+    expect(envelope.body).toContain('It goes out by itself once that session can take it.');
+    expect(envelope.body).not.toContain('a Retry there sends it');
+    // Still open: the target's answer, once the message reaches it, settles it (a late reply).
+    expect((await getSessionRequest(request.id))).toMatchObject({ status: 'expired', outcome: 'timeout' });
   });
 
   it('the target\'s task completed with the ask still queued: the asker hears now that it was not delivered', async () => {
