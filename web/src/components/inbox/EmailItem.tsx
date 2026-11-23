@@ -65,7 +65,7 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
       <span>{item.display?.sender?.name || item.display?.sender?.address || 'Sender unavailable'}</span>
       <span>{mailDateText(item.display?.sentAt)}</span>
       {canOpenMail && item.source?.account && item.source?.message && !damaged
-        ? <button type="button" className="btn btn-sm hib-row-btn" aria-label={`Open email for ${item.subject}`} title="Open this original email"
+        ? <button type="button" className="btn btn-link hib-row-btn" aria-label={`Open email for ${item.subject}`} title="Open this original email"
           onClick={() => onNavigate(`/mail?${new URLSearchParams({ account: item.source.account, message: item.source.message, readOnly: '1' })}`)}>Open email</button>
         : null}
     </div>
