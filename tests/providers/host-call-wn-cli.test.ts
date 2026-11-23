@@ -69,7 +69,7 @@ describe('the host walnut with a host call entry', () => {
   it('the entry answers: its answer, the socket is never asked', async () => {
     const e = await entry((_req, res) => { res.writeHead(200, { [HOST_CALL_ANSWER_HEADER]: '1' }); res.end(JSON.stringify({ ok: true, result: { via: 'entry' } })) })
     expect(await callHostDaemonTool('task_get', { id: 't1' }, env(e.url), 'oc-abcdefgh02')).toEqual({ ok: true, result: { via: 'entry' } })
-    expect(e.seen).toEqual([{ v: 1, op: 'tools.call', sid: 'sid-1', args: { name: 'task_get', args: { id: 't1' }, callId: 'oc-abcdefgh02' } }])
+    expect(e.seen).toEqual([{ v: 1, op: 'tools.call', sid: 'sid-1', args: { name: 'task_get', args: { id: 't1' }, callId: 'oc-abcdefgh02', client: 'cli' } }])
     expect(socketLines).toEqual([])
   })
 

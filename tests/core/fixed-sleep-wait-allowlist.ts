@@ -491,6 +491,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/vscode-server-core.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: a process with another start time must not be signalled" },
   { file: "tests/providers/vscode-server-core.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: nothing signalled and the record kept when ps cannot answer" },
   { file: "tests/providers/vscode-server-core.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: another daemon dir's instance must not be signalled" },
+  { file: "tests/providers/walnut-mcp-stdio.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: after the first list_changed, no second one follows the late answer" },
   { file: "tests/providers/worker-question-route.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20))", reason: "negative: a withdrawn request gets no response and no user prompt" },
   { file: "tests/providers/worker-question-route.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20))", reason: "negative: the router must not be consulted" },
   { file: "tests/replica/dispatch.test.ts", sleep: "await new Promise((res) => setTimeout(res, 600))", reason: "negative: the read must never reach the Mac" },
