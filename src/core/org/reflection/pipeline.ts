@@ -191,13 +191,14 @@ export async function reflectOnCandidate(
     // (the user's own chat).
     const chat = c.task.org_role === 'main' || c.task.org_role === 'lead';
     if (c.hold) { corrected = 'held'; held = c.hold; }
-    else if (sentThisPass.has(c.sessionId)) { corrected = 'held'; held = 'one_per_pass'; }
+    // One a pass per task: a task's old session and its current one are the same reader now.
+    else if (sentThisPass.has(c.task.id)) { corrected = 'held'; held = 'one_per_pass'; }
     else {
       const check = sendCheckOf(await deps.confirmSend(node, c.task, c.sessionId).catch(() => false));
       if (check !== 'ok' && check !== 'session_changed') { corrected = 'off'; notSent = check; }
       else if (chat && !(await takeChatSend(c.task.id, now))) { corrected = 'held'; held = 'own_cap'; }
       else {
-        sentThisPass.add(c.sessionId);
+        sentThisPass.add(c.task.id);
         corrected = await deps.send(c.task, correctionText(node, nodeName, c, f, check === 'session_changed'), `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`)
           .then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
         if (check === 'session_changed') notSent = undefined, earlierSession = true;
@@ -278,7 +279,9 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     log.task.info('reflection: the day\'s judge budget is spent', { nodeId: node.id, leftForLater: left.length, dropped: dropped.length, leftToday });
     // Said in the day's record, which the audit and the nightly note read: once a day, and for each drop.
     if (first || dropped.length) {
-      await appendDayNote(node.id, nodeName, today, `The day's ${callsMax} judge calls are spent at ${new Date(now).toISOString().slice(11, 16)} UTC: ${left.length} moment${left.length === 1 ? '' : 's'} wait for a later pass${dropped.length ? `, ${dropped.length} too old to wait were dropped unjudged` : ''}.`)
+      const used = (await readReflectionState(node.id, now)).day.calls;
+      const kind = used < callsMax ? `the judge calls anger and long talks may use (${used} of ${callsMax}; the last ${DAILY_CALLS_RESERVED} are kept for asks and defects)` : `the day's ${callsMax} judge calls`;
+      await appendDayNote(node.id, nodeName, today, `Judge budget: ${kind} were spent at ${new Date(now).toISOString().slice(11, 16)} UTC; ${left.length} moment${left.length === 1 ? '' : 's'} wait for a later pass${dropped.length ? `, ${dropped.length} too old to wait were dropped unjudged` : ''}.`)
         .catch(() => {});
     }
   }
@@ -321,8 +324,9 @@ export async function confirmSendCheck(node: Task, task: Task, sessionId: string
   if (t.phase === 'COMPLETE') return 'task_done';
   if (!(await look.orgEnabled())) return 'org_off';
   if (t.id !== n.id && !managedTasks(n, await look.orgTasks()).some((x) => x.id === t.id)) return 'not_managed';
-  if (!sessionId) return 'no_session';
-  return (t.session_id ?? t.exec_session_id ?? '') === sessionId ? 'ok' : 'session_changed';
+  const current = t.session_id ?? t.exec_session_id ?? '';
+  if (!sessionId || !current) return 'no_session';
+  return current === sessionId ? 'ok' : 'session_changed';
 }
 
 /** The real dependencies. */

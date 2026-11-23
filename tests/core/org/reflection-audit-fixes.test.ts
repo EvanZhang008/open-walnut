@@ -19,6 +19,8 @@ import { appendDayEntry, guidanceFileOf, readDayEntries, reflectionDayFileOf, re
 import { DAILY_CALLS_EASE_DAYS, DAILY_CALLS_MAX, DAILY_CALLS_START, dailyCallsMax, localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 import { JUDGE_SYSTEM, quoteAsWritten, verifyFinding } from '../../../src/core/org/reflection/judge.js'
 import { askTidy } from '../../../src/core/org/reflection/guidance-tidy.js'
+import { nightlyText } from '../../../src/core/org/reflection/nightly.js'
+import { confirmSendCheck } from '../../../src/core/org/reflection/pipeline.js'
 import { guidanceRoomLeft } from '../../../src/core/org/reflection/team-guidance-hint.js'
 
 const NOW = Date.parse('2026-11-23T20:00:00Z')
@@ -71,6 +73,28 @@ describe('a correction', () => {
     expect(await fs.readFile(reflectionDayFileOf(vp.id, localDate(NOW)), 'utf-8')).toContain('sent to the task\'s current session (the turn was in an earlier one)')
   })
 
+  it('goes once a pass to a task, its old session and its current one alike', async () => {
+    // Two of his thread messages, one answered by the node's old session and one by its current one.
+    const threads = [{ id: 'th-aa0001', title: 'Pier page', messages: [
+      { id: 'tm-aa0010', at: iso(40), text: 'The reply under the card used to show.', sid: 'sess-vp-old', answer: { text: BEFORE, at: iso(39) } },
+      { id: 'tm-aa0020', at: iso(20), text: 'The tab under the card used to show.', sid: 'sess-vp', answer: { text: BEFORE, at: iso(19) } },
+    ] }]
+    const { d, sent } = deps({
+      readThreads: async (id) => (id === vp.id ? threads : []),
+      confirmSend: async (_n, _t, sid) => (sid === 'sess-vp' ? 'ok' : 'session_changed'),
+    })
+    const r = await reflectForNode(vp, 'Marina VP', [vp], d)
+    expect(r.findings).toHaveLength(2)
+    expect(sent).toHaveLength(1)
+  })
+
+  it('a task with no session now is no session, never a changed one', async () => {
+    const on = { ...vp, org_duties: { reflection: { on: true, at: iso(999) } } } as Task
+    const bare = { ...worker, session_id: undefined } as Task
+    const look = { getTask: async (id: string) => [on, bare].find((t) => t.id === id) ?? null, orgTasks: async () => [on, bare], orgEnabled: async () => true, dutyOn: (t: Task) => t.org_duties?.reflection?.on === true }
+    expect(await confirmSendCheck(on, bare, 'sess-old', look)).toBe('no_session')
+  })
+
   it('not sent says why, in the JSON and the Markdown', async () => {
     const { d, sent } = deps({ messages: broke, confirmSend: async () => 'task_done' })
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
@@ -103,8 +127,11 @@ describe('the judge budget', () => {
     expect(s.day.budgetDropped).toBeUndefined()
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
     const md = await fs.readFile(reflectionDayFileOf(vp.id, localDate(NOW)), 'utf-8')
-    expect(md.match(/> Note: The day's \d+ judge calls are spent/g)).toHaveLength(1)
+    expect(md.match(/> Note: Judge budget: the day's \d+ judge calls were spent/g)).toHaveLength(1)
     expect(md).toContain('2 moments wait for a later pass')
+    // The second pass keeps the node's start of its high days.
+    expect((await readReflectionState(vp.id, NOW + 60_000)).callsFrom).toBe(new Date(NOW).toISOString())
+    expect(nightlyText('Marina VP', 'f.md', { markdown: md, entries: [] })).toContain('- Judge budget:')
   })
 })
 
@@ -117,6 +144,12 @@ describe('his words', () => {
     expect(quoteAsWritten('did it SHOW', 'Why did it show twice? Fix it')).toBe('did it show')
     expect(quoteAsWritten('it show twice', 'Why did it show twice? Fix it')).toBe('it show twice?')
     expect(quoteAsWritten('not in there at all', said)).toBe('not in there at all')
+    // Two marks, a mark after a space or a word, a skip and a line break.
+    expect(quoteAsWritten('is it gone', 'Is it gone?!')).toBe('Is it gone?!')
+    expect(quoteAsWritten('is it gone', 'Is it gone ?')).toBe('Is it gone ?')
+    expect(quoteAsWritten('where is the', 'where is the tab? ok')).toBe('where is the tab?')
+    expect(quoteAsWritten('first part here ... second part', 'First part here, then a long aside. Second part!')).toBe('First part here ... Second part!')
+    expect(quoteAsWritten('the reply used to show', 'the reply\n  used to show')).toBe('the reply used to show')
   })
 
   it('a finding quotes them as written, and the judge is told a question is no instruction', () => {
@@ -154,6 +187,10 @@ describe('a full guidance', () => {
     expect(sent[0]).toContain(`- ${waiting}`)
     expect(sent[0]).toContain(guidanceFileOf(vp.id))
     expect(await askTidy(vp, 'Marina VP', { send }, NOW + 60_000)).toBe(false)
+    expect(sent).toHaveLength(1)
+    // With room again, the lesson that waits needs no tidy: tomorrow asks nothing.
+    await fs.writeFile(guidanceFileOf(vp.id), renderGuidance('Marina VP', [{ text: long(0), from: 'a task', date: '2026-11-20' }]))
+    expect(await askTidy(vp, 'Marina VP', { send }, NOW + DAY)).toBe(false)
     expect(sent).toHaveLength(1)
   })
 })

@@ -63,16 +63,22 @@ beforeEach(async () => {
 })
 
 describe('sends to a Main or lead chat', () => {
-  it(`go out at most ${CHAT_SENDS_PER_DAY_MAX} a day; the rest are recorded as held, for the nightly note`, async () => {
+  it(`go out at most ${CHAT_SENDS_PER_DAY_MAX} a day and one a pass; the rest are recorded as held, for the nightly note`, async () => {
+    await updateReflectionState(vp.id, (s) => { s.day = { date: localDate(NOW), calls: 0, chatSends: CHAT_SENDS_PER_DAY_MAX - 1 } }, NOW)
     const { d, sent } = deps({ threads: threadOf(3, 'Pier page', (i) => `sess-vp-${i}`) })
     const r = await reflectForNode(vp, 'Marina VP', [vp], d)
     expect(r.findings).toHaveLength(3)
-    expect(sent.filter((s) => s.task === vp.id)).toHaveLength(CHAT_SENDS_PER_DAY_MAX)
+    expect(sent.filter((s) => s.task === vp.id)).toHaveLength(1)
     const entries = (await readDayEntries(vp.id, localDate(NOW)))!
-    const held = entries.filter((e) => e.held === 'own_cap')
+    expect(entries.filter((e) => e.held === 'one_per_pass')).toHaveLength(2)
+    // The day's last chat send is spent: the next pass's finding is held for the nightly note.
+    const next = deps({ threads: [{ ...threadOf(0)[0], messages: [{ id: 'tm-bb0010', at: iso(5), text: 'The reply under the list used to show.', sid: 'sess-vp', answer: { text: BEFORE, at: iso(4) } }] }] })
+    await reflectForNode(vp, 'Marina VP', [vp], next.d)
+    const held = (await readDayEntries(vp.id, localDate(NOW)))!.filter((e) => e.held === 'own_cap')
     expect(held).toHaveLength(1)
     expect(held[0].handedTo).toBeUndefined()
     expect(held[0].corrected).toBe('held')
+    expect(next.sent).toHaveLength(0)
   })
 
   it('count per chat, whichever node sends: a lead in the team is a chat too', async () => {

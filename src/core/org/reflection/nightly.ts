@@ -62,11 +62,15 @@ export function nightlyText(nodeName: string, file: string, record: string | rea
     if (body.length + l.length > SUMMARY_MAX) { body += `- ... and ${lines.length - i} more, not listed here: all ${lines.length} are in ${file}\n`; break; }
     body += `${l}\n`;
   }
+  // The pass's own notes (a judge budget spent: moments that wait) are the reader's too.
+  const md = typeof record === 'string' ? record : 'markdown' in record ? record.markdown : '';
+  const notes = md.split('\n').filter((l) => l.startsWith('> Note: ')).map((l) => `- ${l.slice(8).trim()}`);
   return [
     `${nodeName}'s reflection today found ${lines.length} decision${lines.length === 1 ? '' : 's'} to fix in your team's sessions. `
       + `The whole record (what each session said, the correction it got, the rule it became, the task it went to): ${file}`,
     '',
     body.trimEnd(),
+    ...(notes.length ? ['', ...notes.slice(-3)] : []),
     '',
     'Read it in tonight\'s reflection. Keep in your MEMORY.md or instructions what is yours to keep; the team guidance already holds the lines for your team. No reply is needed.',
   ].join('\n');

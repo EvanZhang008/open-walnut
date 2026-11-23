@@ -167,10 +167,12 @@ export function quoteHolds(quote: string, source: string): boolean {
 }
 
 /**
- * The quote as the source holds it: from its first piece to its last, with the punctuation and
- * sentence-final particles that end it there (a question mark, an exclamation), so a question of
- * his is never recorded as a plain statement (2026-11-23 audit: "...round?" filed as "everything
- * must be round" became a guidance line). The judge's own copy when it cannot be placed. Pure.
+ * The quote as the source holds it: each piece as written there (its own case and marks), joined
+ * with " ... " where the judge skipped, and the last piece carried on to the mark that ends its
+ * sentence when one comes within a few characters (a question mark, an exclamation), so a question
+ * of his reads as a question in the record (2026-11-23 audit: "...round?" filed as "everything must
+ * be round" became a guidance line). Whitespace is folded. The judge's own copy when a piece cannot
+ * be placed. Pure.
  */
 export function quoteAsWritten(quote: string, source: string): string {
   // The normalized source, with each of its characters' place in `source`.
@@ -186,21 +188,21 @@ export function quoteAsWritten(quote: string, source: string): string {
   }
   const pieces = quote.split(/\.{3}|\u2026/).map(normalizeForQuote).filter(Boolean);
   if (!pieces.length) return quote;
+  const spans: Array<[number, number]> = [];
   let from = 0;
-  let start = -1;
-  let end = -1;
   for (const p of pieces) {
     const k = norm.indexOf(p, from);
     if (k < 0) return quote;
-    if (start < 0) start = at[k];
-    end = at[k + p.length - 1] + 1;
+    spans.push([at[k], at[k + p.length - 1] + 1]);
     from = k + p.length;
   }
-  const tail = /^[\p{Script=Han}]{0,1}[?!.,\u3002\uff1f\uff01\uff0c~\u2026]{1,3}/u.exec(source.slice(end));
-  // Only a particle that ends a sentence is taken with its mark (ah, ya, ba, ne, ma, la, ou).
-  const particle = tail && (tail[0].length === 1 || /^[\u554a\u5440\u5427\u5462\u5417\u5566\u54e6]/.test(tail[0])) ? tail[0] : '';
-  const span = source.slice(start, end + particle.length).trim();
-  return span.length <= 600 ? span : quote;
+  // The sentence's end mark, when it is near: at most four more characters, none of them a break.
+  const last = spans[spans.length - 1];
+  const tail = /^[^\n?!.,;:\u3002\uff1f\uff01\uff0c\uff1b\uff1a]{0,4}?\s?[?!\uff1f\uff01]+/u.exec(source.slice(last[1]));
+  if (tail) last[1] += tail[0].length;
+  const fold = (t: string) => t.replace(/\s+/g, ' ').trim();
+  const out = spans.map(([a, b]) => fold(source.slice(a, b))).join(' ... ');
+  return out.length <= 600 ? out : quote;
 }
 
 const str = (v: unknown, max = 2000): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');

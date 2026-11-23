@@ -249,7 +249,8 @@ async function threadCardCandidates(owner: Task, p: Pass): Promise<void> {
     // Once per decision: a summary rewritten for the same ask is not judged again (each rewrite would spend a call).
     const key = `card:${th.id}:${th.askId ?? sha12(cardText('', th.reply ?? '', th.options))}`;
     if (has(p, key)) continue;
-    const since = new Date(p.now - EVIDENCE_MS).toISOString();
+    // From before the card: a card judged days later still shows what he had said by then.
+    const since = new Date(Math.min(p.now, Date.parse(at)) - EVIDENCE_MS).toISOString();
     const evidence = th.messages.filter((m) => m.at > since).slice(-EVIDENCE_MAX)
       .map((m) => ({ id: m.id, at: m.at, text: m.text.length > EVIDENCE_TEXT_MAX ? `${m.text.slice(0, EVIDENCE_TEXT_MAX)} [...]` : m.text }));
     const sessionId = th.replySid ?? '';
@@ -281,7 +282,7 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   if (askAt && askAt <= p.floor) return null;
   const key = decisionId ? `ask:${task.id}:${decisionId}` : `ask:${task.id}:${r.source}:${sha12(words)}`;
   if (p.seen.has(key)) return null;
-  const since = new Date(p.now - EVIDENCE_MS).toISOString();
+  const since = new Date(Math.min(p.now, askAt ? Date.parse(askAt) : p.now) - EVIDENCE_MS).toISOString();
   const own = (await p.deps.readMessages(task.id)).filter((m) => m.at > since);
   const holders = [...new Set([(managerOf(task, all) ?? node).id, node.id])];
   const inThreads = (await Promise.all(holders.map(async (id) => (await p.threadsOf(id))
