@@ -42,16 +42,36 @@ export function hostsThatLeft(before: ReadonlySet<string>, after: ReadonlySet<st
   return [...before].filter((h) => !after.has(h))
 }
 
+/**
+ * Did `host` leave Settings for good (its row gone from config.yaml itself), not turned off? The merged
+ * rows alone cannot say: a host that is also in ~/.ssh/config comes back from the merge as a found host
+ * that is off, so a Remove read as a Turn off and its service set never left (drill round 3, R3-4). A
+ * config.yaml that cannot be read decides nothing: not removed.
+ */
+export async function removedFromSettings(
+  host: string,
+  merged: Readonly<Record<string, unknown>>,
+  stored: () => Promise<{ hosts?: Record<string, unknown> } | null> = async () => (await import('../config-manager.js')).readStoredConfig(),
+): Promise<boolean> {
+  if (!Object.hasOwn(merged, host)) return true
+  const doc = await stored().catch(() => null)
+  return !!doc && !Object.hasOwn(doc.hosts ?? {}, host)
+}
+
 /** Is `host` one whose link a Turn off or Remove ends here? */
 export function endsLinkWhenLeft(host: string): boolean {
   return !!host && host !== '__local__' && host !== CLOUD_BOX_HOST_ALIAS && !host.startsWith('direct:')
 }
 
-/** End Walnut's own link to a host that left Settings (`removed`: for good, not turned off). Never throws. */
-export async function endHostLink(host: string, deps?: Partial<HostLinkEndDeps>, o: { removed?: boolean } = {}): Promise<{ connection: boolean; terminal: boolean }> {
+/**
+ * End Walnut's own link to a host that left Settings. `removed`: for good, not turned off; or `rows`, the
+ * merged host rows after the change, to judge it from (removedFromSettings). Never throws.
+ */
+export async function endHostLink(host: string, deps?: Partial<HostLinkEndDeps>, o: { removed?: boolean; rows?: Readonly<Record<string, unknown>> } = {}): Promise<{ connection: boolean; terminal: boolean }> {
   if (!endsLinkWhenLeft(host)) return { connection: false, terminal: false }
   const d = { ...(await defaultDeps()), ...deps }
-  if (o.removed) {
+  const removed = o.removed ?? (o.rows ? await removedFromSettings(host, o.rows).catch(() => false) : false)
+  if (removed) {
     try { await d.leaveServiceSet(host, SET_LEAVE_BOUND_MS) } catch (err) {
       log.session.warn('host left Settings: its own service set could not be left', { host, error: (err as Error).message })
     }

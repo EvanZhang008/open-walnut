@@ -46,7 +46,7 @@ const CONNECTION: Record<string, Entry> = {
   sweepStaleIsolatedRoots: { count: 1, kind: 'own-root', why: 'buildStaleIsolatedRootSweepScript: only 16-hex test roots this user owns, no live daemon or terminal, untouched for 2 hours' },
   resolveRemoteDir: { count: 1, kind: 'own-dir', why: 'an isolated connection probes only isolatedProbeOpts (tests/providers/remote-isolation.test.ts runs it)' },
   detectServiceTakeover: { count: 1, kind: 'not-for-test-server', why: 'returns unmanaged for an isolated connection before probing the host\'s service files' },
-  checkDaemonRunning: { count: 2, kind: 'own-dir', why: 'candidateDaemonDirs: only the isolated dirs; --status with dirEnv' },
+  checkDaemonRunningInDir: { count: 2, kind: 'own-dir', why: 'candidateDaemonDirs: only the isolated dirs; --status with dirEnv' },
   shouldUpgradeDaemon: { count: 2, kind: 'own-dir', why: 'reads the binary in the chosen daemon dir, and keeps the build that runs (the way back) there; beside it for an isolated dir (keepsDurable)' },
   trialStaged: { count: 1, kind: 'own-dir', why: 'the staged build in a throwaway walnut-proof dir with its own HOME and dirs; for an isolated connection that dir, its sweep and the runtime tree are under its own root' },
   startHeldBack: { count: 1, kind: 'own-dir', why: 'the kept copy back into the chosen daemon dir and started there; an isolated connection reads no held build (ownUpdateRecord)' },

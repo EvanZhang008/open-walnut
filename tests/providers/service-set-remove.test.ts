@@ -102,6 +102,18 @@ describe('removeServiceSetDir (drill D5)', () => {
     expect(await removeServiceSetDir(home, set, 1000, table({ 7001: 'Tue Nov 24 09:00:00 2026' }))).toMatchObject({ removed: true })
   })
 
+  it('review round 3 L-H4: a detached runs\' or followers\' dir that is there but does not read keeps the set\'s dir', async () => {
+    for (const sub of [DETACHED_RUNS_STATE_DIR, HOST_SERVER_STATE_DIR]) {
+      const set = await layout()
+      // A file where the dir belongs: readdir fails with ENOTDIR, not ENOENT.
+      await fs.writeFile(path.join(set.installRoot, sub), 'x')
+      expect(await removeServiceSetDir(home, set, 1000, table({}))).toMatchObject({ removed: false, why: expect.stringMatching(/dir does not read/) })
+      await fs.rm(path.join(set.installRoot, sub))
+    }
+    // Not there at all: nothing of it runs, the dir goes.
+    expect(await removeServiceSetDir(home, await layout(), 1000, table({}))).toMatchObject({ removed: true })
+  })
+
   it('review round 2 H-L3: the unit\'s own runtime dir (its WALNUT_DAEMON_DIR) is the one checked and removed', async () => {
     const id = [...Array(16)].map(() => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('')
     const set = await layout(id)

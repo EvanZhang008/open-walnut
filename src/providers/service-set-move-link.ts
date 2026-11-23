@@ -6,10 +6,10 @@
  * entry point returns at its first line.
  *
  * Holding reuses the queue a host that is briefly away has (session-lifecycle.md "A message to a
- * host nothing reaches waits for that host"): while held, the link refuses `start` and `send` with
- * its "not connected" words and reads as down (hostLinkDown), so the runner keeps the rows pending,
- * and every other command that starts work there waits (service-set-hold.ts); the release asks the
- * runner to deliver the rows, to whatever the link reaches then.
+ * host nothing reaches waits for that host"): while held, the link refuses `send` with its "not
+ * connected" words and reads as down (hostLinkDown), so the runner keeps the rows pending, and a
+ * `start` and every other command that starts work there waits (service-set-hold.ts); the release
+ * asks the runner to deliver the rows, to whatever the link reaches then.
  *
  * On a host network link the set has a walnut-net identity of its own: the move first pairs with it
  * over the link as it is (service-set-net-pair.ts), the flip is which endpoint the link dials, and
@@ -21,14 +21,12 @@
  * gates only new moves.
  */
 import { log } from '../logging/index.js'
-import { clearServiceSetMoved, hostServiceSets, hostServiceSetsWanted, linkStanding, markServiceSetMoved, movedToSet, recordServiceSetFrom, type HostSetRecord, type LinkStanding, type SetAsk } from './service-set-leader.js'
+import { clearServiceSetMoved, hostServiceSets, hostServiceSetsWanted, linkStanding, markServiceSetMoved, movedToSet, recordServiceSetFrom, setWordsDue, type HostSetRecord, type LinkStanding, type SetAsk } from './service-set-leader.js'
 import { moveOnce, moveReconnectMs, runMove, serviceSetMoves, settleMove, type MoveDeps, type MoveOutcome, type MoveSession, type StopResult } from './service-set-move.js'
 import { dropWalnutScope, moveBlocker, moveSessions, openWorkThere, seedTriggerMemory, stopFollowerThere, stopProven, takeTriggerMemory, type MoveCheckLink, type TriggerMemory } from './service-set-move-checks.js'
-import type { SetProvision } from './service-set-provision.js'
+import { setCliCommand, type SetProvision } from './service-set-provision.js'
 import { isServiceSetId } from './service-set.js'
 import { forgetSetNet, leaveSharedNet, pairServiceSetNet, type NetPairDeps } from './service-set-net-pair.js'
-import { shq } from './daemon-net-update-io.js'
-import { DAEMON_VERSION_ARGS } from './daemon-service-update.js'
 
 /** What the link gives this module. */
 export interface SetLinkConn {
@@ -57,6 +55,8 @@ export interface SetLinkConn {
   setHold(on: boolean): void
   /** Ask the runner to deliver what waited for this host (the reconnect hook). */
   redeliver(): void
+  /** Where this connect dialled: SSH the runtime dir it chose, the host network the endpoint; null before a dial. */
+  dialled(): string | null
   /** The trigger ids this link last pushed to the daemon it reaches (this Walnut's, for its home). */
   triggerIds(): string[]
   /** This Walnut's offline journal on the daemon the link reaches, drained to empty within `boundMs`; throws when not. */
@@ -101,21 +101,6 @@ async function localEndpointId(): Promise<string | null> {
   const local = await link('__local__')
   const s = await local.send('net.status', {}, 5_000) as { endpointId?: unknown }
   return typeof s.endpointId === 'string' && /^[0-9a-f]{64}$/.test(s.endpointId) ? s.endpointId : null
-}
-
-/**
- * The shell that runs `walnut daemon <words>` with this build's copy in the set's install root (the
- * build its install put there: versions/<sha>/, the first that names `expected`), its JSON answer on
- * stdout; a set with no such copy answers `no_build`.
- */
-export function setCliCommand(set: string, expected: string, words: string): string {
-  if (!isServiceSetId(set)) throw new Error('not a service set id')
-  const versions = `"$HOME/.open-walnut-host/walnuts/${set}/daemon/versions"`
-  return [
-    `x=; for f in ${versions}/*/*; do [ -x "$f" ] || continue; [ "$("$f" ${DAEMON_VERSION_ARGS} 2>/dev/null | tail -n 1)" = ${shq(expected)} ] && { x=$f; break; }; done`,
-    `[ -n "$x" ] || { echo '{"ok":false,"code":"no_build","message":"this Walnut\\u0027s build is not in its set on the host"}'; exit 0; }`,
-    `"$x" walnut daemon ${words} 2>/dev/null || true`,
-  ].join('\n')
 }
 
 /** This leader's host network side, from core/net/net-service-sets.ts (a test gives its own). */
@@ -178,6 +163,16 @@ export class ServiceSetLink {
 
   /** The words-to-be for this link's `walnut daemon` lines: null with the experiment off or no set possible here. */
   setAsk(): Promise<SetAsk | null> { return this.ask() }
+
+  /**
+   * An update line for the set `set` the link reaches names this Walnut (setWordsDue, the rule of both
+   * paths). A standing that cannot be read is 'unknown', as the host network path reads it: never the
+   * words with no set named (review round 3, L-H1).
+   */
+  async wordsDue(set: string): Promise<boolean> {
+    const standing = (await this.standingFor().catch(() => null))?.standing ?? 'unknown'
+    return setWordsDue(await this.ask().catch(() => null), standing, set)
+  }
 
   /** Where the link stands now, read from the kept record and the current hello. */
   async standingFor(): Promise<{ standing: LinkStanding; record: HostSetRecord | null }> {
@@ -246,6 +241,14 @@ export class ServiceSetLink {
    */
   async leave(boundMs: number): Promise<{ ok: boolean; why: string }> {
     this.stop()
+    // A look or a move under way ends first, bounded to a quarter of the bound, so it does not write
+    // the records this forgets after it (review round 3, L-N4).
+    if (this.checking) {
+      const started = Date.now()
+      let t: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([this.checking, new Promise<void>((r) => { t = setTimeout(r, boundMs / 4); t.unref?.() })]).finally(() => clearTimeout(t))
+      boundMs = Math.max(1_000, boundMs - (Date.now() - started))
+    }
     const record = await hostServiceSets.read(this.place).catch(() => null)
     const ask = record && isServiceSetId(record.set) ? await this.ask().catch(() => null) : null
     const expected = this.expected()
@@ -257,12 +260,13 @@ export class ServiceSetLink {
         timer = setTimeout(() => resolve({ ok: false, why: `the host did not finish removing this Walnut's own service within ${Math.round(boundMs / 1000)} s` }), boundMs)
         timer.unref?.()
       })
-      const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((r) => { const t = setTimeout(r, ms); t.unref?.() }))
       const left = leaveServiceSet({
-        set: record.set, ask, now: this.now, sleep, waitMs: Math.min(20_000, boundMs / 2),
+        set: record.set, ask, now: this.now, sleep: this.sleep, waitMs: Math.min(10_000, boundMs / 4),
         sessions: async () => (await (this.d.sessions ? this.d.sessions(this.c.hostKey) : moveSessions(this.checkLink))).map((s) => ({ inTurn: !!s.busy })),
+        stopSessions: () => this.stopAllThere(),
         send: (cmd, params, timeoutMs) => this.c.send(cmd, params, timeoutMs),
-        helloSet: () => this.c.helloSet(),
+        // A link that is down reaches no set (L-H2: the uninstall's own stop of the set's daemon ends it).
+        helloSet: () => (this.c.connected ? this.c.helloSet() : ''),
         runSetCli: (words, timeoutMs) => this.c.run(setCliCommand(record.set, expected, words), timeoutMs),
       }).catch((err: unknown) => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
       out = await Promise.race([left, bound]).finally(() => clearTimeout(timer))
@@ -299,13 +303,13 @@ export class ServiceSetLink {
     // A moved host whose set's dir (or endpoint, while still a member of the shared walnut-net) answers
     // with a daemon naming no set: the set is gone there (uninstalled by hand, the box rebuilt). The move
     // is undone here and the link takes today's choice again (review round 2, M6).
-    if (standing === 'shared' && movedToSet(record) && (this.c.kind() === 'ssh' || record.netSharedLeftAt === undefined)) {
+    // Only when this connect dialled the set's own place (review round 3, L-M2).
+    if (standing === 'shared' && movedToSet(record) && this.dialledSetPlace(record) && (this.c.kind() === 'ssh' || record.netSharedLeftAt === undefined)) {
       log.session.warn('service set: the host\'s set no longer answers at its place; the move is undone here', { host: this.c.hostKey, set: record.set, hello: this.c.helloSet() })
-      await clearServiceSetMoved(this.place)
-      await serviceSetMoves.write(this.place, null).catch(() => {})
-      this.sshOverride = null
-      this.netOverride = null
-      this.provisionedAt = 0
+      // What this leader pushed to the daemon that answers there goes before the redial (round 3, S3).
+      await (this.d.dropScope ?? (() => dropWalnutScope(this.checkLink)))().catch(() => {})
+      await (this.d.stopFollower ?? (() => stopFollowerThere(this.checkLink, this.sleep)))().catch(() => {})
+      await this.undoMove()
       void this.c.relink(moveReconnectMs())
       return
     }
@@ -321,7 +325,10 @@ export class ServiceSetLink {
     const look = standing === 'unknown' || this.provisionedAt === 0 || (this.c.kind() === 'ssh' && !record?.runtimeDir)
     if (look && (this.provisionedAt === 0 || this.now() - this.provisionedAt >= PROVISION_EVERY_MS)) {
       this.provisionedAt = Math.max(1, this.now())
-      const p = await this.c.provision(ask).finally(() => { this.lookEnded = true })
+      // A look that threw (the link cut mid-line) is a look that found nothing: looked at again (drill round 3, R3-3).
+      const p: SetProvision = await this.c.provision(ask)
+        .catch((err: unknown) => ({ set: null, installed: false, ok: false, message: err instanceof Error ? err.message : String(err) }))
+        .finally(() => { this.lookEnded = true })
       if (p.set === null) {
         // Nothing known (a look refused or cut, or an older host): looked at again soon, then less
         // often, never left silent for the next 30 min (drill round 2, N1).
@@ -347,9 +354,49 @@ export class ServiceSetLink {
 
   private get noticeKey(): string { return `service-set:${this.c.hostKey}` }
   private now = (): number => (this.d.now ?? Date.now)()
+  private sleep = (ms: number): Promise<void> => (this.d.sleep ?? ((x: number) => new Promise<void>((r) => { const t = setTimeout(r, x); t.unref?.() })))(ms)
+
+  /** This connect dialled the set's own place: SSH its runtime dir, the host network its endpoint (review round 3, L-M2). */
+  private dialledSetPlace(record: HostSetRecord): boolean {
+    const at = this.c.dialled()
+    return !!at && at === (this.c.kind() === 'ssh' ? record.runtimeDir : record.netEndpoint)
+  }
+
+  /** The move is undone here: the host's record says moved no more, the move's record goes, nothing points the link at the set. */
+  private async undoMove(): Promise<void> {
+    await clearServiceSetMoved(this.place)
+    await serviceSetMoves.write(this.place, null).catch(() => {})
+    this.sshOverride = null
+    this.netOverride = null
+    this.provisionedAt = 0
+  }
+
+  /**
+   * SSH connect: the set's runtime dir `dir` holds neither its service config nor a daemon (review round 3,
+   * S3). The link points there no more: a done move is undone (as M6), a move under way is put back by its
+   * own flip, which finds no set in the hello. The caller then takes today's dir and deploys nothing there.
+   */
+  async setGoneAt(dir: string): Promise<void> {
+    if (this.sshOverride === dir) this.sshOverride = null
+    const record = await hostServiceSets.read(this.place).catch(() => null)
+    if (!record?.set || record.runtimeDir !== dir) return
+    const move = await serviceSetMoves.read(this.place).catch(() => null)
+    if (movedToSet(record) || (move?.set === record.set && move.phase === 'done')) await this.undoMove()
+  }
 
   private store(): MoveDeps['store'] {
     return { read: () => serviceSetMoves.read(this.place), write: (r) => serviceSetMoves.write(this.place, r) }
+  }
+
+  /** Stop each of this Walnut's sessions on the daemon the link reaches, proven (R3-5); why each one not stopped stays. */
+  private async stopAllThere(): Promise<string[]> {
+    const left: string[] = []
+    for (const s of await (this.d.sessions ? this.d.sessions(this.c.hostKey) : moveSessions(this.checkLink))) {
+      if (s.blocks) { left.push(s.blocks); continue }
+      const r = await (this.d.stop ?? ((x: string) => stopProven(this.checkLink, x)))(s.id)
+      if (!r.ok) left.push(r.why ?? `session ${s.id}`)
+    }
+    return left
   }
 
   /** The link's part the shared daemon's checks use. */
@@ -363,7 +410,7 @@ export class ServiceSetLink {
     const kind = this.c.kind()!
     /** Each trigger's memory, taken at the drop from the shared daemon, for the set's daemon. */
     let memory: TriggerMemory[] = []
-    const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((r) => { const t = setTimeout(r, ms); t.unref?.() }))
+    const sleep = this.sleep
     const run = (): Promise<MoveOutcome> => runMove({
       set, link: kind, now: this.now, force, sleep,
       store: this.store(),

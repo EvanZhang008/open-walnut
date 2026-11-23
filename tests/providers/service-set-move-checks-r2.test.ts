@@ -65,11 +65,17 @@ describe('takeTriggerMemory and seedTriggerMemory (M2)', () => {
     expect(waits).toEqual([2_000, 2_000])
   })
 
-  it('a memory that cannot be taken gives the move up; one past its reliable time is not carried', async () => {
+  it('a memory that cannot be taken gives the move up', async () => {
     const { l } = link(['trigger-state-snapshot-v1'], () => ({ ok: true, supported: false, reason: 'state_corrupt' }))
     await expect(takeTriggerMemory(l, ['t1'], async () => {})).rejects.toThrow(/trigger t1: its memory could not be taken \(state_corrupt\)/)
-    const stale = link(['trigger-state-snapshot-v1'], () => ({ ...ok('t1'), seenReliableUntil: Date.now() - 1 }))
-    expect(await takeTriggerMemory(stale.l, ['t1'], async () => {})).toEqual([])
+  })
+
+  it('S1: a memory holding an entry older than 30 days is still carried, whole', async () => {
+    // A watcher that has not fired since an old item aged out keeps that entry (pruned only on a fire).
+    const old = Date.now() - 40 * 86_400_000
+    const aged = { epoch: 'e', seq: 9, seen: { gone: old, fresh: Date.now() - 1_000 } }
+    const { l } = link(['trigger-state-snapshot-v1'], () => ({ ...ok('t1'), state: aged, seenReliableUntil: old + 30 * 86_400_000 }))
+    expect(await takeTriggerMemory(l, ['t1'], async () => {})).toEqual([{ triggerId: 't1', state: aged, digest: 'd-t1' }])
   })
 
   it('hands each to the set\'s daemon; one it already keeps stays; a daemon that cannot take it is an error', async () => {

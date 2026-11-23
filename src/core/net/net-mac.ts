@@ -190,7 +190,7 @@ async function restoreMissing(members: NetMember[]): Promise<boolean> {
  * Never one Remove is taking out: its `enabled: false` would be undone. The check sits
  * right before the send, so a push that passed it went out before Remove's message.
  */
-async function pushToHost(name: string, endpoint: string, s: NetState): Promise<void> {
+async function pushToHost(name: string, endpoint: string, s: NetState, relayMoved: boolean): Promise<void> {
   const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
   const conn = peekDaemonConnection(name)
   if (!conn?.connected || !conn.hasCapability('net-v1') || removing.has(endpoint)) return
@@ -199,7 +199,7 @@ async function pushToHost(name: string, endpoint: string, s: NetState): Promise<
   const { walnutNetOfAnother } = await import('./net-shared-host.js')
   if (s.relay !== 'own' && !conn.hasCapability('net-join-v1')) {
     log.session.warn('net: a machine is too old for this relay choice; it keeps the one it has', { host: name, relay: s.relay })
-  } else if (await walnutNetOfAnother(name, conn)) {
+  } else if (await walnutNetOfAnother(name, conn, { relayMoved })) {
     // Its walnut-net is another Walnut's: a list from here would replace that Walnut's (net-shared-host.ts).
     log.session.debug('net: a machine whose walnut-net another Walnut runs is handed no list from here', { host: name })
   } else {
@@ -221,8 +221,8 @@ async function pushTargets(): Promise<Array<[string, string]>> {
 }
 
 /** Every connected machine at once; a slow one holds up nothing (an invite never waits on it). */
-async function pushToHosts(s: NetState): Promise<void> {
-  await Promise.allSettled((await pushTargets()).map(([name, endpoint]) => pushToHost(name, endpoint, s)))
+async function pushToHosts(s: NetState, relayMoved = false): Promise<void> {
+  await Promise.allSettled((await pushTargets()).map(([name, endpoint]) => pushToHost(name, endpoint, s, relayMoved)))
 }
 
 /**
@@ -302,7 +302,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
         if (modes === null) throw new NetError(409, 'net_starting', "This machine's walnut-net is still starting; try again in a minute.")
         if (!modes) throw new NetError(409, 'net_too_old', "This machine's walnut-net is older than this Walnut; the relay changes once the new version is downloaded.")
       }
-      if (relayMoved) await pushToHosts({ ...state })
+      if (relayMoved) await pushToHosts({ ...state }, true)
       const conf = await local.send('net.configure', withServiceSetMembers(macConfig(state), sets), 30_000) as { ok?: boolean; error?: string }
       if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
@@ -425,7 +425,7 @@ export async function startNet(): Promise<void> {
   const { addOnDaemonHostConnected } = await import('../../providers/daemon-connection.js')
   offConnected = addOnDaemonHostConnected((host) => {
     if (!state.syncedAt) return
-    void pushTargets().then((rows) => { const row = rows.find(([name]) => name === host); if (row) void pushToHost(host, row[1], state) }).catch(() => {})
+    void pushTargets().then((rows) => { const row = rows.find(([name]) => name === host); if (row) void pushToHost(host, row[1], state, false) }).catch(() => {})
   })
   void syncNet()
 }
@@ -440,15 +440,21 @@ export function stopNet(): void {
   offConnected = null
 }
 
-/** How long Remove gives this Walnut's own service set on the machine to leave (the route's deadline is 60 s). */
-const SET_LEAVE_BOUND_MS = 25_000
+/**
+ * How long Remove gives this Walnut's own service set on the machine to leave (the route's deadline is
+ * 60 s). Its turn wait is a quarter of it (service-set-move-link.ts leave), so the uninstall has the
+ * rest (review round 3, L-N2); what came of it is in Remove's answer.
+ */
+const SET_LEAVE_BOUND_MS = 45_000
 
 /** Take a machine out: it stops its walnut-net, the companion forgets it, this Mac drops its host row. */
-export async function removeMachine(host: string): Promise<{ removed: string }> {
+export async function removeMachine(host: string): Promise<{ removed: string; serviceSet?: string }> {
   const { getConfig } = await import('../config-manager.js')
   const def = (await getConfig()).hosts?.[host] as { transport?: string; endpoint?: string } | undefined
   if (!def || def.transport !== 'net' || !def.endpoint) throw new NetError(404, 'not_net_host', `${host} is not a machine on the host network`)
   const endpoint = def.endpoint
+  /** What became of this Walnut's own service set there, for the answer (review round 3, L-N2). */
+  let setWhy: string | undefined
   removing.add(endpoint)
   try {
     // Read before anything is marked: a pairing that cannot be read fails Remove with nothing
@@ -478,7 +484,15 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
     // effort), and its endpoint goes from the companion's list and from here (core/hosts/host-set-leave.ts).
     // The machine's walnut-net is then another Walnut's: it is never turned off from here.
     const { leaveHostServiceSet } = await import('../hosts/host-set-leave.js')
+    // Read before the leave forgets the host's set record (review round 3, L-N1): a walnut-net another
+    // Walnut runs there is never turned off from here, own set record or not.
+    const ofAnother = await (async () => {
+      const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
+      const c = peekDaemonConnection(host)
+      return c?.connected ? (await import('./net-shared-host.js')).walnutNetOfAnother(host, c) : false
+    })().catch(() => false)
     const set = await leaveHostServiceSet(host, SET_LEAVE_BOUND_MS)
+    if (set.own) setWhy = set.why
     // Then the machine, while this Mac still reaches it (its own walnut-net still lists it):
     // it stops its walnut-net, which ends the link this very command rides, so the reply
     // may never come. Away, it is not told; it reaches nobody anyway (the relay refuses it,
@@ -486,8 +500,8 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
     try {
       const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
       const conn = peekDaemonConnection(host)
-      if (set.own) {
-        log.session.info('net: a machine with this Walnut\'s own service set is taken out; its own walnut-net stays', { host, left: set.ok, why: set.why })
+      if (set.own || ofAnother) {
+        log.session.info('net: a machine with this Walnut\'s own service set is taken out; its own walnut-net stays', { host, left: set.ok, why: set.why, ofAnother })
       } else if (conn?.connected && conn.hasCapability('net-v1')) {
         const told = await conn.send('net.configure', { enabled: false }, 10_000).catch((err: Error) => ({ ok: false, error: err.message }))
         log.session.info('net: told a machine it is out', { host, ok: (told as { ok?: boolean }).ok, error: (told as { error?: string }).error })
@@ -512,7 +526,7 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
     removing.delete(endpoint)
   }
   await syncNet()
-  return { removed: host }
+  return { removed: host, ...(setWhy ? { serviceSet: setWhy } : {}) }
 }
 
 /** The user's relay pick: every machine, then this Mac, moves to it (one away moves when it is back). */

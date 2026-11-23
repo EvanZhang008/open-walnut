@@ -1,14 +1,14 @@
 /**
  * The first look at a host for this Walnut's service set and its install (service-set-provision.ts),
- * leaving a host (leaveServiceSet), and the link that runs the look and the move
+ * and the link that runs the look and the move
  * (service-set-move-link.ts) with a fake connection: no ssh, no daemon, every line recorded.
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { leaveServiceSet, provisionWith, setRuntimeDirFrom } from '../../src/providers/service-set-provision.js'
-import { ServiceSetLink, setCliCommand, type SetLinkConn } from '../../src/providers/service-set-move-link.js'
+import { provisionWith, setCliCommand, setRuntimeDirFrom } from '../../src/providers/service-set-provision.js'
+import { ServiceSetLink, type SetLinkConn } from '../../src/providers/service-set-move-link.js'
 import { hostServiceSets } from '../../src/providers/service-set-leader.js'
 import { serviceSetMoves } from '../../src/providers/service-set-move.js'
 import type { SetProvision } from '../../src/providers/service-set-provision.js'
@@ -17,6 +17,8 @@ const WALNUT = '0123456789abcdef0123456789abcdef'
 const SET = '0123456789abcdef'
 const ask = { walnutId: WALNUT, home: '/home/u/.open-walnut' }
 const EXE = '/x/walnut'
+/** The dir an SSH link takes when no set points it elsewhere. */
+const TODAY_DIR = '/tmp/open-walnut-daemon'
 
 function host(answers: Record<string, string>) {
   const lines: string[] = []
@@ -74,66 +76,6 @@ describe('provisionWith', () => {
   })
 })
 
-describe('leaveServiceSet', () => {
-  const base = (said: string, inTurn = false, hello = SET) => {
-    const sent: string[] = []
-    const params_: Array<Record<string, unknown>> = []
-    let now = 0
-    return {
-      sent, params: params_,
-      deps: {
-        set: SET, ask, now: () => now, sleep: async (ms: number) => { now += ms },
-        sessions: async () => [{ inTurn }],
-        send: async (cmd: string, params: Record<string, unknown>) => { sent.push(cmd); params_.push(params); return {} },
-        helloSet: () => hello,
-        runSetCli: async (words: string) => { sent.push(words); return said },
-        waitMs: 60_000,
-      },
-    }
-  }
-  const UNINSTALL = `uninstall --yes --walnut ${WALNUT} --walnut-home /home/u/.open-walnut`
-
-  it('drill D4: stops its follower there, uninstalls only its set, then stops the set\'s own walnut-net', async () => {
-    const b = base(`service set: ${SET}\n{"ok":true}`)
-    expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
-    // Over a host network link the set's walnut-net carries the link itself: it is stopped after the uninstall's answer.
-    expect(b.sent).toEqual(['server.configure', UNINSTALL, 'net.configure'])
-    expect(b.params[0]).toEqual({ home: '/home/u/.open-walnut', spec: null })
-    expect(b.params[1]).toEqual({ enabled: false })
-  })
-
-  it('option B: a link that reaches the shared daemon never turns the machine\'s walnut-net off', async () => {
-    const b = base(`service set: ${SET}\n{"ok":true}`, false, '')
-    expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
-    expect(b.sent).toEqual(['server.configure', UNINSTALL])
-  })
-
-  it('drill D4: a follower stop that fails does not hold the uninstall (best effort)', async () => {
-    const b = base(`service set: ${SET}\n{"ok":true}`)
-    const send = b.deps.send
-    b.deps.send = async (cmd: string, params: Record<string, unknown>) => { if (cmd === 'server.configure') { b.sent.push(cmd); throw new Error('timed out') } return send(cmd, params) }
-    expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
-    expect(b.sent).toEqual(['server.configure', UNINSTALL, 'net.configure'])
-  })
-
-  it('drill D5: an uninstall that kept the set\'s dir says why', async () => {
-    const b = base(`service set: ${SET}\n{"ok":true,"setDir":{"removed":false,"why":"1 CLI of the set still runs (s1)"}}`)
-    expect(await leaveServiceSet(b.deps)).toEqual({ ok: true, why: 'this Walnut\'s own service set was removed from the host; its dir stays (1 CLI of the set still runs (s1))' })
-  })
-
-  it('waits for a turn, bounded, and removes nothing at the bound', async () => {
-    const b = base(`service set: ${SET}\n{"ok":true}`, true)
-    expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: false })
-    expect(b.sent).toEqual([])
-  })
-
-  it('an answer that names another set is not taken for this one', async () => {
-    const b = base('service set: default\n{"ok":true}')
-    expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: false })
-    expect(await leaveServiceSet({ ...b.deps, set: '' })).toMatchObject({ ok: false })
-  })
-})
-
 describe('the set\'s own CLI line', () => {
   it('runs this build\'s copy from the set\'s install root', () => {
     const cmd = setCliCommand(SET, 'walnut-daemon-abc', `net-forget --member ${'e'.repeat(64)}`)
@@ -167,6 +109,8 @@ describe('ServiceSetLink', () => {
     let held = false
     const calls: string[] = []
     const dialled: string[] = []
+    /** Where the last dial went (SetLinkConn.dialled). */
+    let at: string | null = null
     let link!: ServiceSetLink
     const c: SetLinkConn = {
       hostKey: 'h', kind: () => kind, connected: true,
@@ -187,10 +131,11 @@ describe('ServiceSetLink', () => {
       relink: async () => {
         calls.push('relink')
         // SSH: the dial goes where sshDir points now; net: to the endpoint netEndpoint names (else the host row's).
-        if (kind === 'ssh') hello = (await link.sshDir())?.set ?? ''
+        if (kind === 'ssh') { const d = await link.sshDir(); hello = d?.set ?? ''; at = d?.dir ?? TODAY_DIR }
         else {
           const ep = (await link.netEndpoint()) ?? SHARED
           dialled.push(ep)
+          at = ep
           hello = ep === SET_EP && o.setAnswers !== false ? SET : ''
           if (ep === SET_EP && o.setAnswers === false) return null
         }
@@ -198,6 +143,7 @@ describe('ServiceSetLink', () => {
       },
       setHold: (on) => { held = on; calls.push(on ? 'hold' : 'release') },
       redeliver: () => calls.push('redeliver'),
+      dialled: () => at,
       triggerIds: () => [],
       drainJournal: async () => {},
       home: '/home/u/.open-walnut',
@@ -217,7 +163,7 @@ describe('ServiceSetLink', () => {
       sleep: async () => {},
       settleMs: 0,
     }, () => 'walnut-daemon-abc')
-    return { link, calls, dialled, held: () => held, setHello: (h: string) => { hello = h } }
+    return { link, calls, dialled, held: () => held, setHello: (h: string) => { hello = h }, setDialled: (d: string) => { at = d } }
   }
 
   it('ssh: the first look installs its set, the move runs, and the link then dials the set\'s runtime dir', async () => {
@@ -474,19 +420,72 @@ describe('ServiceSetLink', () => {
       expect(later).toEqual([60_000, 120_000, 240_000])
     })
 
+    it('drill round 3, R3-3: a look that throws (the link cut mid-line) is looked at again soon, not in 30 min', async () => {
+      const t = conn('net', { set: SET, installed: true, ok: true })
+      ;(t.link as unknown as { c: SetLinkConn }).c.provision = async () => { t.calls.push('provision'); throw new Error('not connected') }
+      const later: number[] = []
+      t.link.schedule = (ms?: number) => { later.push(ms ?? -1) }
+      await t.link.check()
+      await t.link.check()
+      expect(t.calls).toEqual(['provision', 'provision'])
+      expect(later).toEqual([60_000, 120_000])
+      expect(t.link.looked).toBe(true)
+    })
+
     it('M6: a moved host whose set\'s dir answers with a daemon naming no set is moved no more: today\'s dir again, the next look starts anew', async () => {
       const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: RT })
       await hostServiceSets.write('ssh:h', { at: Date.now(), set: SET, runtimeDir: RT, movedAt: Date.now() })
       await serviceSetMoves.write('ssh:h', { v: 1, at: Date.now(), set: SET, link: 'ssh', phase: 'done', startedAt: Date.now(), stopped: [] })
       expect(await t.link.sshDir()).toEqual({ dir: RT, set: SET })
       t.setHello('')
+      t.setDialled(RT)
       await t.link.check()
       expect((await hostServiceSets.read('ssh:h'))?.movedAt).toBeUndefined()
       expect(await serviceSetMoves.read('ssh:h')).toBe(null)
-      expect(t.calls).toEqual(['relink'])
+      // Round 3, S3: what this leader pushed to the daemon that answered there goes first (triggers, follower).
+      expect(t.calls).toEqual(['triggers.configure', 'server.configure', 'server.status', 'relink'])
       // The redial goes to today's dir: the set's dir only while a move points there.
       expect(await t.link.sshDir()).toBe(null)
     })
+
+    it('L-M2: a moved host whose link reached another place than the set\'s (today\'s dir) is no undo', async () => {
+      const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: RT })
+      await hostServiceSets.write('ssh:h', { at: Date.now(), set: SET, runtimeDir: RT, movedAt: Date.now() })
+      await serviceSetMoves.write('ssh:h', { v: 1, at: Date.now(), set: SET, link: 'ssh', phase: 'done', startedAt: Date.now(), stopped: [] })
+      t.setHello('')
+      t.setDialled(TODAY_DIR)
+      await t.link.check()
+      // No M6 undo (it drops this Walnut's scope there, then relinks, and never looks): the look goes on.
+      expect(t.calls[0]).toBe('provision')
+      expect(await serviceSetMoves.read('ssh:h')).not.toBe(null)
+      expect((await hostServiceSets.read('ssh:h'))?.movedAt).toEqual(expect.any(Number))
+      expect(await t.link.sshDir()).toEqual({ dir: RT, set: SET })
+    })
+
+    it('S3: a connect that finds the set\'s dir empty undoes a done move there; a move under way only loses its pointer', async () => {
+      const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: RT })
+      await hostServiceSets.write('ssh:h', { at: Date.now(), set: SET, runtimeDir: RT, movedAt: Date.now() })
+      await serviceSetMoves.write('ssh:h', { v: 1, at: Date.now(), set: SET, link: 'ssh', phase: 'done', startedAt: Date.now(), stopped: [] })
+      await t.link.setGoneAt('/some/other/dir')
+      expect(await t.link.sshDir()).toEqual({ dir: RT, set: SET })
+      await t.link.setGoneAt(RT)
+      expect(await t.link.sshDir()).toBe(null)
+      expect((await hostServiceSets.read('ssh:h'))?.movedAt).toBeUndefined()
+      expect(await serviceSetMoves.read('ssh:h')).toBe(null)
+      // Nothing was sent: the undo runs before any push (the caller deploys nothing there).
+      expect(t.calls).toEqual([])
+    })
+  })
+
+  it('round 3, L-H1: an update line\'s words with a standing that cannot be read: today\'s line on the default\'s daemon, never words naming no set', async () => {
+    const t = conn('ssh', { set: SET, installed: true, ok: true })
+    t.link.standingFor = async () => { throw new Error('the record store did not read') }
+    expect(await t.link.wordsDue('')).toBe(false)
+    expect(await t.link.wordsDue(SET)).toBe(true)
+    // Read: the default set the host gave this Walnut names it.
+    const u = conn('ssh', { set: '', installed: true, ok: true })
+    await hostServiceSets.write('ssh:h', { at: Date.now(), set: '' })
+    expect(await u.link.wordsDue('')).toBe(true)
   })
 
   it('flag off: nothing runs at all', async () => {
@@ -497,5 +496,6 @@ describe('ServiceSetLink', () => {
     expect(t.calls).toEqual([])
     expect(await t.link.setAsk()).toBe(null)
     expect(await t.link.sshDir()).toBe(null)
+    expect(await t.link.wordsDue(SET)).toBe(false)
   })
 })

@@ -65,7 +65,13 @@ export interface MoveCheckDeps {
   ownTasks?(ids: string[]): Promise<Set<string>>
   /** Whether this server started the host command `jobId` (host-exec-jobs.ts startedRun): a run that names no task. */
   startedHere?(jobId: string): Promise<boolean>
+  now?(): number
+  sleep?(ms: number): Promise<void>
 }
+
+/** How long a stop's proof waits for a CLI that takes its time to exit after its SIGINT (drill round 3, R3-2: 8 s). */
+export const STOP_PROOF_MS = 30_000
+const STOP_PROOF_EVERY_MS = 2_000
 
 const LIVE_OR_FAILED = new Set(['running', 'idle', 'error'])
 
@@ -199,13 +205,23 @@ export async function stopProven(link: MoveCheckLink, id: string, d: MoveCheckDe
       : `session ${id}: its stop failed (${errText(e)})` }
   }
   if (res.hostLost) return { ok: false, why: `session ${id}: its host read as lost, so its stop is not proven` }
-  if (res.status !== 'terminated' || (res.stopRequest && res.stopRequest.state !== 'confirmed')) {
-    return { ok: false, why: `session ${id}: the shared daemon did not confirm its stop (${res.stopRequest?.state ?? res.status})` }
+  const state = res.stopRequest?.state ?? (res.status === 'terminated' ? 'confirmed' : res.status)
+  const unconfirmed = `session ${id}: the shared daemon did not confirm its stop (${state})`
+  if (state !== 'confirmed' && state !== 'pending') return { ok: false, why: unconfirmed }
+  // A stop still pending, or a CLI still held, may be a CLI slow to exit: its CLI gone, within a bound, is the proof.
+  const clock = d.now ?? Date.now
+  const sleep = d.sleep ?? ((ms: number) => new Promise<void>((r) => { const t = setTimeout(r, ms); t.unref?.() }))
+  const until = clock() + STOP_PROOF_MS
+  for (;;) {
+    const h = await (d.holder ?? defaultHolder)(link, id)
+    if (h.state === 'free') return { ok: true }
+    if (h.state === 'too-old') return { ok: false, why: `session ${id}: the shared daemon cannot prove its CLI is gone (no cli-holder-v1)` }
+    if (clock() >= until) {
+      if (state === 'pending') return { ok: false, why: unconfirmed }
+      return { ok: false, why: `session ${id}: ${h.state === 'held' ? `a CLI of it still runs (${h.detail ?? 'live'})` : `the host did not say its CLI is gone (${h.detail ?? h.state})`}` }
+    }
+    await sleep(STOP_PROOF_EVERY_MS)
   }
-  const h = await (d.holder ?? defaultHolder)(link, id)
-  if (h.state === 'free') return { ok: true }
-  if (h.state === 'too-old') return { ok: false, why: `session ${id}: the shared daemon cannot prove its CLI is gone (no cli-holder-v1)` }
-  return { ok: false, why: `session ${id}: ${h.state === 'held' ? `a CLI of it still runs (${h.detail ?? 'live'})` : `the host did not say its CLI is gone (${h.detail ?? h.state})`}` }
 }
 
 /** Other work of this Walnut still on the shared daemon, in words; null when none. */
@@ -279,8 +295,9 @@ export async function takeTriggerMemory(link: MoveCheckLink, ids: readonly strin
       const r = await link.send('triggers.state.snapshot', { home: link.home, triggerId }, 15_000)
       if (r.ok === false) throw new Error(`trigger ${triggerId}: the shared daemon did not answer for its memory (${String(r.error ?? 'no answer')})`)
       if (r.supported === true && r.state && typeof r.digest === 'string') {
-        // An entry already past its time could be reported again from this copy: it is not carried (snapshot core).
-        if (Number(r.seenReliableUntil) > Date.now()) out.push({ triggerId, state: r.state as Record<string, unknown>, digest: r.digest })
+        // Carried whatever its entries' age: the shared daemon skips every seen id until a fire prunes it, and the
+        // set's daemon reads the same memory the same way. An entry past 30 days is not a reason to report it again.
+        out.push({ triggerId, state: r.state as Record<string, unknown>, digest: r.digest })
         break
       }
       const reason = String(r.reason ?? '')

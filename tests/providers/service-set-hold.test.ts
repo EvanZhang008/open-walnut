@@ -13,13 +13,14 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-set-hold-tes
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { pastSetHold, SetHold, setHoldKind } from '../../src/providers/service-set-hold.js'
 import { setServiceConfigPaths } from '../../src/providers/service-set-leader.js'
+import { linkFailureKind } from '../../src/providers/link-failure.js'
 
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('setHoldKind: every command that starts work there is held', () => {
-  it('start and send are refused (the runner keeps them pending); every other work command and the pushes that start work wait', () => {
-    for (const cmd of ['start', 'send']) expect(setHoldKind(cmd, {}), cmd).toBe('refuse')
-    for (const cmd of ['acpStart', 'acpNewSession', 'acpSend', 'acpSteer', 'acpRespond', 'oneshot.run', 'oneshot.prewarm', 'exec.run', 'exec.script', 'sendRaw', 'bridgeResume',
+  it('send is refused (the runner keeps it pending); a start, every other work command and the pushes that start work wait', () => {
+    expect(setHoldKind('send', {})).toBe('refuse')
+    for (const cmd of ['start', 'acpStart', 'acpNewSession', 'acpSend', 'acpSteer', 'acpRespond', 'oneshot.run', 'oneshot.prewarm', 'exec.run', 'exec.script', 'sendRaw', 'bridgeResume',
       'server.configure', 'triggers.configure', 'jobs.configure']) {
       expect(setHoldKind(cmd, {}), cmd).toBe('wait')
     }
@@ -37,7 +38,7 @@ describe('SetHold', () => {
   it('refuses, waits for the release, lets the move\'s own commands pass, and counts work under way', async () => {
     const h = new SetHold()
     h.set(true)
-    await expect(h.admit('start', {}, () => new Error('held'))).rejects.toThrow('held')
+    await expect(h.admit('send', {}, () => new Error('held'))).rejects.toThrow('held')
     let went = false
     const waiting = h.admit('acpStart', {}, () => new Error('held')).then((done) => { went = true; return done })
     const own = await h.admit('server.configure', pastSetHold({}), () => new Error('held'))
@@ -68,14 +69,19 @@ describe('SetHold', () => {
 })
 
 describe('DaemonConnection.send holds by kind (the one place)', () => {
-  it('while held: start throws the link-down words, an ACP start and a trigger push wait and then go, reads go at once', async () => {
+  it('while held: send throws the link-down words (tagged no-link), a start, an ACP start and a trigger push wait and then go, reads go at once', async () => {
     const conn = new DaemonConnection('devbox', null)
     const went: string[] = []
     vi.spyOn(conn as unknown as { sendAdmitted: (cmd: string) => Promise<unknown> }, 'sendAdmitted').mockImplementation(async (cmd: string) => { went.push(cmd); return { ok: true } })
     const hold = (conn as unknown as { _setHold: SetHold })._setHold
     hold.set(true)
     expect(conn.serviceSetHeld).toBe(true)
-    await expect(conn.send('start', { sid: 's' })).rejects.toThrow(/DaemonConnection not connected to devbox/)
+    const refused = await conn.send('send', { sid: 's' }).catch((e: unknown) => e)
+    expect(String(refused)).toMatch(/DaemonConnection not connected to devbox/)
+    expect(linkFailureKind(refused)).toBe('no-link')
+    // Drill round 3, R3-1: a session started during the hold waits for the release, then starts
+    // where the link reaches (the set's daemon after the flip), never refused into an error.
+    const start = conn.send('start', { sid: 'fresh' })
     const acp = conn.send('acpStart', { sid: 'a' })
     const push = conn.send('triggers.configure', { home: '/h' })
     const exec = conn.send('agent.start', { engine: 'codex' })
@@ -83,8 +89,8 @@ describe('DaemonConnection.send holds by kind (the one place)', () => {
     await conn.send('server.configure', pastSetHold({ home: '/h', spec: null }))
     expect(went).toEqual(['getState', 'server.configure'])
     hold.set(false)
-    await Promise.all([acp, push, exec])
-    expect(went.slice(2).sort()).toEqual(['acpStart', 'agent.start', 'triggers.configure'])
+    await Promise.all([start, acp, push, exec])
+    expect(went.slice(2).sort()).toEqual(['acpStart', 'agent.start', 'start', 'triggers.configure'])
   })
 })
 

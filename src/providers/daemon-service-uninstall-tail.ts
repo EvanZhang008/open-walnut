@@ -8,6 +8,7 @@
  *   - a boot-setup marker that tells the server not to set it up again (remote-boot-start.ts
  *     BOOT_SETUP_MARKER); a later install wins,
  *   - the default set: the claim on its place (service-set-choice.ts releaseSetOwner; review round 2, H-L2),
+ *     when a service config was there to remove (round 3, L-H3),
  *   - a set: its own dir once nothing of it runs (service-set-remove.ts), judged at the runtime dir the
  *     removed unit pinned (its WALNUT_DAEMON_DIR; review round 2, H-L3); else it says why it stays.
  */
@@ -41,7 +42,9 @@ export async function afterServiceUninstall(o: UninstallTailInput): Promise<SetR
   await removeServiceMode(root).catch(() => { /* the entry reads a doubt as the daemon */ })
   await fs.writeFile(path.join(root, 'boot-setup'), `v=uninstall at=${Date.now()} result=removed\n`, { mode: 0o600 }).catch(() => {})
   if (!o.set.id) {
-    await releaseSetOwner(root).catch((error: unknown) => o.say(`walnut daemon: the claim on the default service's place stays: ${String(error)}\n`))
+    // Only when a service config was there to remove (review round 3, L-H3): an uninstall that found none
+    // (another scope's) leaves the claim of the service that runs, and says nothing more than before.
+    if (o.unitConfig !== null) await releaseSetOwner(root).catch((error: unknown) => o.say(`walnut daemon: the claim on the default service's place stays: ${String(error)}\n`))
     return null
   }
   const pinned = o.unitConfig ? readDaemonServiceDir(o.platform, o.unitConfig) : null

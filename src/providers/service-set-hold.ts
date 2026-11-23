@@ -6,9 +6,11 @@
  * goes through it, so no caller is missed (review round 1, B3: the hold covered only `start` and
  * `send`, and an ACP start, a one-shot or a host_exec run went on to the shared daemon).
  *
- *   refuse  `start`, `send`: refused in the words of a link that is down, so the runner keeps the
- *           rows pending under its host-away words and sends them on the release (its contract).
- *   wait    every other command that starts or feeds work (ACP, one-shot, host_exec, a raw write)
+ *   refuse  `send`: refused in the words of a link that is down, so the runner keeps the rows
+ *           pending under its host-away words and sends them on the release (its contract).
+ *   wait    a `start` (a session started during the hold has no runner row to keep it: refused, it
+ *           ended in error and never ran; drill round 3, R3-1), and every other command that starts
+ *           or feeds work (ACP, one-shot, host_exec, a raw write)
  *           and the per-Walnut pushes that start work there (server.configure, triggers.configure,
  *           jobs.configure): it waits for the release and then goes to whatever the link reaches,
  *           the set's service after a move, the shared daemon after a put-back. The move's own
@@ -26,10 +28,10 @@ export function pastSetHold(params: Record<string, unknown>): Record<string, unk
   return { ...params, [PAST_SET_HOLD]: true }
 }
 
-const REFUSED = new Set(['start', 'send'])
+const REFUSED = new Set(['send'])
 /** Commands that start or feed work in a session, an ACP worker, a one-shot or a host command. */
 const WORK = new Set([
-  'sendRaw', 'bridgeResume', 'setMode', 'appendUserMarker', 'turns.restore',
+  'start', 'sendRaw', 'bridgeResume', 'setMode', 'appendUserMarker', 'turns.restore',
   'acpStart', 'acpNewSession', 'acpSend', 'acpSteer', 'acpRespond', 'acpSetConfigOption',
   'oneshot.run', 'oneshot.prewarm', 'exec.run', 'exec.script',
 ])

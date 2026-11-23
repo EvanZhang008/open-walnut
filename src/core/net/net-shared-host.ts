@@ -6,6 +6,12 @@
  * `net.status` says nothing of the list there, so it cannot be merged: this leader got on it by
  * joining, and pushes nothing there. This Walnut's own set's daemon (the link after a move) runs this
  * Walnut's own walnut-net and still gets its list. Flag off: nothing changes.
+ *
+ * Review round 3, S4: the host's CLI gave this Walnut the DEFAULT set (record set ''): the default
+ * service and its walnut-net are this Walnut's own, whoever else was seen on its daemon. With no record
+ * yet, another Walnut seen there within SERVED_LATELY_MS (about a later Walnut's pairing time) counts;
+ * a longer window cut a single owner's pushes for days. A relay move always pushes (the caller says so):
+ * a machine left on the old relay is cut off.
  */
 import { WALNUT_HOME } from '../../constants.js'
 
@@ -17,9 +23,13 @@ export interface SharedHostLink {
   readonly daemonServes?: { walnuts: Record<string, number> } | null
 }
 
+/** Another Walnut seen on the default's daemon this recently, with no set record yet: its walnut-net is that Walnut's. */
+export const SERVED_LATELY_MS = 30 * 60_000
+
 /** Flag on, and the daemon `conn` reaches on host `name` runs another Walnut's walnut-net. */
-export async function walnutNetOfAnother(name: string, conn: SharedHostLink, now = Date.now()): Promise<boolean> {
-  const [{ hostServiceSets, hostServiceSetsWanted }, { SHARED_WINDOW_MS, walnutKeyOf }] = await Promise.all([
+export async function walnutNetOfAnother(name: string, conn: SharedHostLink, opts: { now?: number; relayMoved?: boolean } = {}): Promise<boolean> {
+  const now = opts.now ?? Date.now()
+  const [{ hostServiceSets, hostServiceSetsWanted }, { walnutKeyOf }] = await Promise.all([
     import('../../providers/service-set-leader.js'), import('../../providers/daemon-shared.js'),
   ])
   if (!(await hostServiceSetsWanted())) return false
@@ -27,9 +37,11 @@ export async function walnutNetOfAnother(name: string, conn: SharedHostLink, now
   const hello = conn.serviceSet ?? ''
   // A set's daemon: this Walnut's own when the record names it, else another Walnut's.
   if (hello) return hello !== record?.set
-  // The default's daemon: another Walnut holds it when this Walnut has a set of its own there.
-  if (record?.set) return true
-  // Or its record of served Walnuts names another lately (the rule daemon-shared.ts keeps a shared daemon by).
+  // The default's daemon: another Walnut holds it when this Walnut has a set of its own there, and
+  // this Walnut does when the host gave it the default set.
+  if (record) return record.set !== ''
+  // No record yet: its record of served Walnuts names another just now, unless the relay moved.
+  if (opts.relayMoved) return false
   const ours = walnutKeyOf(WALNUT_HOME)
-  return Object.entries(conn.daemonServes?.walnuts ?? {}).some(([k, at]) => k !== ours && now - at < SHARED_WINDOW_MS)
+  return Object.entries(conn.daemonServes?.walnuts ?? {}).some(([k, at]) => k !== ours && now - at < SERVED_LATELY_MS)
 }

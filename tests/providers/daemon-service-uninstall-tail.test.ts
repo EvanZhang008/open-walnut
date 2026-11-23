@@ -36,7 +36,7 @@ describe('afterServiceUninstall', () => {
     const def = serviceSet('linux', home, '', { runtimeDir: runtime })
     fs.writeFileSync(path.join(def.installRoot, LAUNCHER_SCRIPT_NAME), '#!/bin/sh\n')
     fs.mkdirSync(path.join(def.installRoot, LAUNCHER_DIR_NAME))
-    expect(await afterServiceUninstall({ home, uid: 1000, platform: 'linux', set: def, unitConfig: null, say })).toBe(null)
+    expect(await afterServiceUninstall({ home, uid: 1000, platform: 'linux', set: def, unitConfig: '[Service]\nExecStart=/x\n', say })).toBe(null)
     expect(await readSetOwner(def.installRoot)).toBe(null)
     expect(fs.existsSync(path.join(def.installRoot, SET_OWNER_FILE))).toBe(false)
     expect(fs.existsSync(path.join(def.installRoot, LAUNCHER_SCRIPT_NAME))).toBe(false)
@@ -45,6 +45,17 @@ describe('afterServiceUninstall', () => {
     // An older Walnut installs a plain default (no claim, no mode) and its daemon serves it.
     fs.writeFileSync(path.join(runtime, SERVES_FILE), JSON.stringify({ version: 'v', twin: 'binary', capabilities: [], walnuts: { [walnutKeyOf(OLD_HOME)]: Date.now() } }))
     expect((await choose()).set.id).toBe('aaaaaaaaaaaaaaaa')
+  })
+
+  it('review round 3 L-H3: an uninstall that removed no service config (another scope\'s service runs) keeps the claim on the default\'s place', async () => {
+    const choose = () => chooseServiceSet({ platform: 'linux', home, walnutId: A, serveHome: path.join(home, 'data-a'), defaultRuntimeDir: runtime, uid: 1000, claim: true })
+    expect((await choose()).claimed).toBe(true)
+    const def = serviceSet('linux', home, '', { runtimeDir: runtime })
+    const claim = await readSetOwner(def.installRoot)
+    expect(claim).not.toBe(null)
+    expect(await afterServiceUninstall({ home, uid: 1000, platform: 'linux', set: def, unitConfig: null, say })).toBe(null)
+    expect(await readSetOwner(def.installRoot)).toEqual(claim)
+    expect(said).toEqual([])
   })
 
   it('review round 2 H-L3: a set\'s dir is judged at the runtime dir the removed unit pinned, and that dir goes with it', async () => {

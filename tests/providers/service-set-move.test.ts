@@ -398,8 +398,8 @@ describe('service set move: review round 2', () => {
   it('M3: a journal that does not drain gives everything back before the flip', async () => {
     const h = fakeHost()
     h.live.shared.set('s1', false)
-    const out = await runMove(h.deps({ drainJournal: async () => { h.log.push('drain'); throw new Error('2 of its records did not apply') } }))
-    expect(out).toMatchObject({ result: 'gave_up', why: expect.stringMatching(/offline journal .* not drained \(2 of its records/) })
+    const out = await runMove(h.deps({ drainJournal: async () => { h.log.push('drain'); throw new Error('records of it are still there') } }))
+    expect(out).toMatchObject({ result: 'gave_up', why: expect.stringMatching(/offline journal .* not drained \(records of it are still/) })
     const seq = h.log.filter((l) => !l.startsWith('store:'))
     expect(seq.slice(seq.indexOf('stop:s1'))).toEqual(['stop:s1', 'drain', 'restore', 'release', 'report:gave_up'])
     expect(h.log).not.toContain('flip')

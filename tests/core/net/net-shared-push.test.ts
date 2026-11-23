@@ -17,6 +17,8 @@ const SET = '0123456789abcdef'
 const h = vi.hoisted(() => ({
   hostSends: [] as Array<Record<string, unknown>>,
   conn: {} as Record<string, unknown>,
+  /** The relay choice this machine's walnut-net runs on (a different one is a relay move). */
+  running: 'own' as string,
 }))
 
 vi.mock('../../../src/core/config-manager.js', () => ({
@@ -36,7 +38,7 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
   }),
   dropDaemonConnection: () => true,
 }))
-vi.mock('../../../src/core/net/net-seen.js', () => ({ machineLinks: async () => ({}), runningChoice: async () => 'own', waitForModes: async () => true, noteSeen: async () => {} }))
+vi.mock('../../../src/core/net/net-seen.js', () => ({ machineLinks: async () => ({}), runningChoice: async () => h.running, waitForModes: async () => true, noteSeen: async () => {} }))
 vi.mock('../../../src/core/net/net-rows.js', () => ({
   joinedOf: () => ({}), localMembers: () => [], markRemoving: async () => {}, netRows: () => [], removalsPending: async () => [], setJoined: async () => {}, netHostname: (name: string) => name,
   reconcileHosts: async () => ({ added: [], removed: [] }),
@@ -63,11 +65,11 @@ afterEach(() => {
   resetNetForTest(); vi.unstubAllGlobals()
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   fs.rmSync(dir, { recursive: true, force: true })
-  h.hostSends = []; h.conn = {}
+  h.hostSends = []; h.conn = {}; h.running = 'own'
 })
 
-/** A daemon another Walnut used an hour ago, as its record of served Walnuts says. */
-const sharedServes = () => ({ version: 'v', twin: null, capabilities: [], walnuts: { [walnutKeyOf(WALNUT_HOME)]: Date.now(), '/home/other/.open-walnut': Date.now() - 3600_000 } })
+/** A daemon another Walnut used `agoMs` ago (ten minutes: it is pairing now), as its record of served Walnuts says. */
+const sharedServes = (agoMs = 10 * 60_000) => ({ version: 'v', twin: null, capabilities: [], walnuts: { [walnutKeyOf(WALNUT_HOME)]: Date.now(), '/home/other/.open-walnut': Date.now() - agoMs } })
 const pushed = async () => { await syncNet(); await new Promise((r) => setTimeout(r, 50)); return h.hostSends }
 
 describe('drill N2: the connect push never replaces another Walnut\'s walnut-net list', () => {
@@ -98,6 +100,27 @@ describe('drill N2: the connect push never replaces another Walnut\'s walnut-net
     await hostServiceSets.write('net:box', null)
     h.hostSends = []
     h.conn = { serviceSet: '', daemonServes: { version: 'v', twin: null, capabilities: [], walnuts: { [walnutKeyOf(WALNUT_HOME)]: Date.now() } } }
+    expect(await pushed()).toHaveLength(1)
+  })
+})
+
+describe('review round 3, S4: this Walnut\'s own default walnut-net is never taken for another Walnut\'s', () => {
+  beforeEach(() => { process.env.WALNUT_HOST_SERVICE_SETS = '1' })
+
+  it('the host gave this Walnut the default set (record set \'\'): its list goes, whoever else was seen there just now', async () => {
+    await hostServiceSets.write('net:box', { at: Date.now(), set: '' })
+    h.conn = { serviceSet: '', daemonServes: sharedServes(60_000) }
+    expect(await pushed()).toHaveLength(1)
+  })
+
+  it('no record: another Walnut seen there over half an hour ago is no reason to push nothing', async () => {
+    h.conn = { serviceSet: '', daemonServes: sharedServes(3600_000) }
+    expect(await pushed()).toHaveLength(1)
+  })
+
+  it('a relay move always pushes, even while another Walnut was seen there just now and no record says whose it is', async () => {
+    h.running = 'public'
+    h.conn = { serviceSet: '', daemonServes: sharedServes(60_000) }
     expect(await pushed()).toHaveLength(1)
   })
 })

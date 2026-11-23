@@ -5,7 +5,8 @@
  * first install has nothing running to hand over. The leader then moves its sessions there
  * (service-set-move.ts). With this build's executable on the host (withServiceExecutable).
  */
-import { runServiceInstall, withServiceExecutable, type RemoteDaemonUpdateIo, type ServiceDaemonSource } from './daemon-service-update.js'
+import { DAEMON_VERSION_ARGS, runServiceInstall, withServiceExecutable, type RemoteDaemonUpdateIo, type ServiceDaemonSource } from './daemon-service-update.js'
+import { shq } from './daemon-net-update-io.js'
 import { serviceSetWords, type SetAsk } from './service-set-leader.js'
 import { isServiceSetId, parseServiceSetLine, serviceSetRuntimeDir } from './service-set.js'
 
@@ -57,6 +58,21 @@ export function provisionServiceSet(source: ServiceDaemonSource, expectedVersion
   return withServiceExecutable(source, expectedVersion, io, (executable) => provisionWith(executable, io, ask))
 }
 
+/**
+ * The shell that runs `walnut daemon <words>` with this build's copy in the set's install root (the
+ * build its install put there: versions/<sha>/, the first that names `expected`), its JSON answer on
+ * stdout; a set with no such copy answers `no_build`.
+ */
+export function setCliCommand(set: string, expected: string, words: string): string {
+  if (!isServiceSetId(set)) throw new Error('not a service set id')
+  const versions = `"$HOME/.open-walnut-host/walnuts/${set}/daemon/versions"`
+  return [
+    `x=; for f in ${versions}/*/*; do [ -x "$f" ] || continue; [ "$("$f" ${DAEMON_VERSION_ARGS} 2>/dev/null | tail -n 1)" = ${shq(expected)} ] && { x=$f; break; }; done`,
+    `[ -n "$x" ] || { echo '{"ok":false,"code":"no_build","message":"this Walnut\\u0027s build is not in its set on the host"}'; exit 0; }`,
+    `"$x" walnut daemon ${words} 2>/dev/null || true`,
+  ].join('\n')
+}
+
 /** What leaving a host needs (leaveServiceSet); the link gives each. */
 export interface LeaveDeps {
   /** This Walnut's set there (16 hex): only that one is removed, never the default or another's. */
@@ -64,10 +80,16 @@ export interface LeaveDeps {
   ask: SetAsk
   /** This Walnut's live sessions there: the set is removed once none is in a turn. */
   sessions(): Promise<Array<{ inTurn: boolean }>>
+  /**
+   * Stop each of them on the set's daemon and prove its CLI gone (service-set-move-checks.ts stopProven):
+   * an uninstall would leave their CLIs running on as orphans and the set's dir kept (drill round 3, R3-5).
+   * Why each one not proven stays; none: [].
+   */
+  stopSessions(): Promise<string[]>
   send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown>
   /** The set the link's hello names now ('' the default's daemon, another Walnut's or the machine's). */
   helloSet(): string
-  /** The set's own `walnut daemon` line (service-set-move-link.ts setCliCommand) run on the host. */
+  /** The set's own `walnut daemon` line (setCliCommand) run on the host. */
   runSetCli(words: string, timeoutMs: number): Promise<string>
   now(): number
   sleep(ms: number): Promise<void>
@@ -78,7 +100,8 @@ export interface LeaveDeps {
  * Leave a host (the leader drops it): wait, bounded, until none of this Walnut's sessions there is in
  * a turn; stop this Walnut's follower on the set's daemon (`server.configure {home, spec:null}`, best
  * effort as the move's stopFollower: an uninstall under a running follower would leave its process
- * to the service stop alone); then `walnut daemon uninstall --yes --walnut <id>`, which removes only
+ * to the service stop alone); stop this Walnut's sessions there, each proven gone (stopSessions); then, once
+ * `status` names this set, `walnut daemon uninstall --yes --walnut <id>`, which removes only
  * this set: its boot item, then its own dir (root, runtime, and its own walnut-net state) once nothing
  * of the set runs there (service-set-remove.ts; a CLI of it still running keeps the dir, and the
  * answer says so). The answer must name the same set. Then the set's walnut-net is stopped if its
@@ -96,15 +119,29 @@ export async function leaveServiceSet(d: LeaveDeps): Promise<{ ok: boolean; why:
     if (d.now() >= until) return { ok: false, why: 'a turn of this Walnut\'s sessions there ran the whole wait; nothing was removed' }
     await d.sleep(15_000)
   }
+  // The host's CLI must pick this set before anything is removed: a set that lost its install marks
+  // would have the uninstall fall to the default, another Walnut's service (review round 3, L-N3).
+  const before = parseServiceSetLine(await d.runSetCli(`status${words}`, 30_000).catch(() => ''))
+  if (before !== d.set) return { ok: false, why: `before the uninstall the host named ${before === null ? 'no set' : `set ${before || 'default'}`}, not this Walnut's own (${d.set}); nothing was removed` }
   await d.send('server.configure', { home: d.ask.home, spec: null }, 15_000).catch(() => undefined)
+  const left = await d.stopSessions().catch((err: Error) => [`its sessions there were not stopped (${err.message})`])
+  const onSet = d.helloSet() === d.set
   const said = await d.runSetCli(`uninstall --yes${words}`, 120_000).catch((err: Error) => `uninstall: ${err.message}`)
+  const named = parseServiceSetLine(said)
+  // Over the host network the uninstall runs through the set's own daemon, which it stops: its reply
+  // can be lost with the link. A lost reply, then a link that no longer reaches the set, is the set gone
+  // (review round 3, L-H2).
+  if (named === null && onSet) {
+    if (d.helloSet() === d.set) await d.sleep(2_000)
+    if (d.helloSet() !== d.set) return { ok: true, why: 'this Walnut\'s own service set was removed from the host (its reply was lost as its daemon stopped)' }
+  }
   // Only on the set's own daemon: on the default's this would turn off the machine's walnut-net.
   if (d.helloSet() === d.set) await d.send('net.configure', { enabled: false }, 30_000).catch(() => undefined)
-  const named = parseServiceSetLine(said)
   if (named !== d.set) return { ok: false, why: `the host named ${named === null ? 'no set' : `set ${named || 'default'}`}, not this Walnut's own (${d.set})` }
   let answer: { ok?: unknown; setDir?: { removed?: unknown; why?: unknown } } = {}
   try { answer = JSON.parse(said.slice(said.indexOf('{'))) } catch { /* no answer */ }
   const ok = answer.ok === true
   const kept = answer.setDir && answer.setDir.removed === false ? `; its dir stays (${String(answer.setDir.why ?? 'no reason')})` : ''
-  return { ok, why: ok ? `this Walnut's own service set was removed from the host${kept}` : `the uninstall did not go through: ${said.trim().slice(-300)}` }
+  const running = left.length ? `; not stopped first: ${left.slice(0, 3).join('; ')}` : ''
+  return { ok, why: ok ? `this Walnut's own service set was removed from the host${kept}${running}` : `the uninstall did not go through: ${said.trim().slice(-300)}` }
 }

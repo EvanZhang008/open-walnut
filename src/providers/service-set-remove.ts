@@ -82,7 +82,8 @@ async function stillRuns(set: ServiceSet, runtimeDirs: string[], d: Checks): Pro
     if (live.length) return `${live.length} CLI${plural(live.length, '', 's')} of the set still run${plural(live.length, 's', '')} (${live.slice(0, 3).join(', ')}); stop ${plural(live.length, 'it', 'them')} and uninstall again`
   }
   const followers = path.join(set.installRoot, HOST_SERVER_STATE_DIR)
-  const names = await fs.readdir(followers).catch(() => [] as string[])
+  const names = await namesOf(followers)
+  if (names === null) return 'its followers\' dir does not read'
   for (const name of names.filter((n) => /^server-.*\.pid$/.test(n))) {
     let held
     try { held = await readJson(path.join(followers, name)) } catch { return `its follower's pid file ${name} does not read` }
@@ -93,6 +94,7 @@ async function stillRuns(set: ServiceSet, runtimeDirs: string[], d: Checks): Pro
   // A detached run lives while the process ps named at its start holds its pid; one listed before ps
   // named it (lstart empty), or whose start ps cannot read now, counts as alive.
   const detached = path.join(set.installRoot, DETACHED_RUNS_STATE_DIR)
+  if ((await namesOf(detached)) === null) return 'its detached runs\' dir does not read'
   const runs: string[] = []
   for (const kind of DETACHED_KINDS) {
     for (const e of await readRegistry(detached, kind)) {
@@ -103,6 +105,11 @@ async function stillRuns(set: ServiceSet, runtimeDirs: string[], d: Checks): Pro
   }
   if (runs.length) return `${runs.length} detached run${plural(runs.length, '', 's')} of the set still run${plural(runs.length, 's', '')} (${runs.slice(0, 3).join(', ')}); stop ${plural(runs.length, 'it', 'them')} and uninstall again`
   return null
+}
+
+/** A dir's names: none when it is not there, null when it is there and does not read (review round 3, L-H4: kept then). */
+async function namesOf(dir: string): Promise<string[] | null> {
+  try { return await fs.readdir(dir) } catch (err) { return (err as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null }
 }
 
 /** Remove the set's own dir when nothing of it runs; the default set is never removed here. */

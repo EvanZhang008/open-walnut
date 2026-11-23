@@ -44,7 +44,11 @@ function link(o: { alive?: string[]; states?: Record<string, unknown>; caps?: st
 }
 
 const live = (over: Partial<SessionSnapshot> = {}) => ({ ok: true, exists: true, alive: true, snapshot: snap(over) })
+/** A clock the proof's waits advance (no real time passes). */
+let clock = 0
 const deps = (records: SessionRecord[], o: { inTurn?: string[]; outliving?: Record<string, string[]>; cron?: string[]; holder?: Record<string, CliHolderAnswer>; terminate?: (id: string) => Promise<TerminateResult> } = {}): MoveCheckDeps => ({
+  now: () => clock,
+  sleep: async (ms) => { clock += ms },
   records: async () => records,
   runner: async () => ({
     inTurn: (id) => (o.inTurn?.includes(id) ? true : null),
@@ -121,10 +125,29 @@ describe('stopProven (B4)', () => {
   it('a lost host, an unconfirmed stop or a refused stop (armed crons) is no proof', async () => {
     const lost = deps([rec('s', 'idle')], { terminate: async (id) => ({ status: 'terminated', sessionId: id, hostLost: { host: 'h', at: '' } }) })
     expect(await stopProven(quiet().l, 's', lost)).toMatchObject({ ok: false, why: expect.stringMatching(/host read as lost/) })
-    const pending = deps([rec('s', 'idle')], { terminate: async (id) => ({ status: 'pending', sessionId: id, stopRequest: { id: 'r', requestedAt: '', state: 'pending' } }) })
+    const pending = deps([rec('s', 'idle')], { holder: { s: { state: 'held', detail: 'live pid 7' } }, terminate: async (id) => ({ status: 'pending', sessionId: id, stopRequest: { id: 'r', requestedAt: '', state: 'pending' } }) })
     expect(await stopProven(quiet().l, 's', pending)).toMatchObject({ ok: false, why: expect.stringMatching(/did not confirm its stop \(pending\)/) })
+    const failed = deps([rec('s', 'idle')], { terminate: async (id) => ({ status: 'pending', sessionId: id, stopRequest: { id: 'r', requestedAt: '', state: 'failed' } }) })
+    expect(await stopProven(quiet().l, 's', failed)).toMatchObject({ ok: false, why: expect.stringMatching(/did not confirm its stop \(failed\)/) })
     const cron = deps([rec('s', 'idle')], { terminate: async () => { throw Object.assign(new Error('crons'), { extra: { code: 'cron_owner' } }) } })
     expect(await stopProven(quiet().l, 's', cron)).toMatchObject({ ok: false, why: expect.stringMatching(/owns scheduled crons/) })
+  })
+
+  it('drill round 3, R3-2: a CLI that takes its time to exit after its stop (pending, still held) is proven once it is gone, within the bound', async () => {
+    for (const state of ['pending', 'confirmed']) {
+      let asked = 0
+      const d = deps([rec('s', 'idle')], { terminate: async (id) => ({ status: state === 'pending' ? 'pending' : 'terminated', sessionId: id, stopRequest: { id: 'r', requestedAt: '', state } }) })
+      // Held for the first 8 s (four looks two seconds apart), then gone.
+      d.holder = async () => (asked++ < 4 ? { state: 'held', detail: 'live pid 7' } : { state: 'free' })
+      const started = clock
+      expect(await stopProven(quiet().l, 's', d), state).toEqual({ ok: true })
+      expect(clock - started).toBe(8_000)
+    }
+    // Held past the bound: no proof, and the wait was the bound.
+    const always = deps([rec('s', 'idle')], { holder: { s: { state: 'held', detail: 'live pid 7' } } })
+    const started = clock
+    expect(await stopProven(quiet().l, 's', always)).toMatchObject({ ok: false, why: 'session s: a CLI of it still runs (live pid 7)' })
+    expect(clock - started).toBe(30_000)
   })
 
   it('judged again right before its stop: a session that became busy is not stopped', async () => {

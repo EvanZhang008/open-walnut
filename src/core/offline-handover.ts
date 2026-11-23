@@ -74,6 +74,12 @@ export interface HandoverResult {
   failed: number;
   /** The host is revoked here: its journal was not read and stays on the host until it is allowed again. */
   held?: true;
+  /**
+   * Records of this home are still on the host after the drain: one waits for its retry or
+   * a reservation, a kind this Mac does not take was left, or the rounds ran out. Absent: the
+   * drain's last read found the journal empty.
+   */
+  pending?: true;
 }
 
 /** A queued write that did not land, told to the session that made it. */
@@ -243,7 +249,7 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   // Registered before anything can write the log: a resend never takes a live drain's log.
   letters.openDrainLog(batch.conflicts.drainId);
   try {
-    await drainRounds(batch, measureHostClock, hostClockOffset);
+    if (!(await drainRounds(batch, measureHostClock, hostClockOffset)) || batch.retryIn !== null) result.pending = true;
   } finally {
     // How full the host's journal got while this Mac was away: a Walnut Health item, never awaited.
     if (batch.fill) void noteJournalFill(conn.hostKey, batch.fill);
@@ -317,12 +323,12 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   return result;
 }
 
-/** The drain's rounds: take what the host hands over, ack what was taken, until it is empty. */
+/** The drain's rounds: take what the host hands over, ack what was taken, until it is empty. True once a read found it empty. */
 async function drainRounds(
   batch: Batch,
   measureHostClock: typeof import('./offline-merge/host-clock.js').measureHostClock,
   hostClockOffset: typeof import('./offline-merge/host-clock.js').hostClockOffset,
-): Promise<void> {
+): Promise<boolean> {
   const { conn, v2, result } = batch;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     // Revoked while this drain runs: the rounds left stay on the host, unread and unacked (N3).
@@ -334,7 +340,7 @@ async function drainRounds(
     if (v2) measureHostClock(conn.hostKey, sentAt, Date.now(), reply.now);
     batch.offset = hostClockOffset(conn.hostKey) ?? 0;
     const records = ((Array.isArray(reply.records) ? reply.records : []) as OfflineRecord[]).slice().sort((a, b) => a.seq - b.seq);
-    if (records.length === 0) break;
+    if (records.length === 0) return true;
     result.rounds++;
     result.records += records.length;
     const acked: number[] = [];
@@ -371,8 +377,9 @@ async function drainRounds(
       if (upTo > 0) await conn.send('offline.ack', { home: WALNUT_HOME, upTo }, RPC_TIMEOUT_MS);
     }
     // A stop waits for its backoff; a round that acked nothing (unknown kinds only) ends here.
-    if (stopped || acked.length === 0) break;
+    if (stopped || acked.length === 0) return false;
   }
+  return false;
 }
 
 /** One drain's state across its rounds. */

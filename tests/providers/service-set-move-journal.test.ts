@@ -1,6 +1,6 @@
 /**
  * Review round 2, M3: before the flip a move drains this Walnut's offline journal on the shared
- * daemon to empty (a handover that starts after any running one, every record applied), else it
+ * daemon to empty (a handover that starts after any running one, whose last read found nothing), else it
  * gives up: records left there are never drained again once the link reaches the set, and a trigger
  * one of them holds stays armed there and can resume a moved session on the shared daemon.
  *
@@ -51,10 +51,19 @@ describe('M3: the move drains this Walnut\'s journal on the shared daemon first'
     expect(handover.order).toEqual(['earlier-ended', 'drain'])
   })
 
-  it('records that did not apply, a revoked host or a drain past its bound are no drain', async () => {
+  it('S2: records still on the host (a retry backoff, a reservation wait, rounds run out) are no drain', async () => {
+    handover.result = { ...handover.result, records: 3, failed: 0, pending: true }
+    await expect(conn(['offline-host-v1']).drainJournalForMove(5_000)).rejects.toThrow(/records of it are still there/)
+  })
+
+  it('L-M1: records refused or given up are lettered and acked: an empty journal passes', async () => {
     handover.result = { ...handover.result, records: 3, failed: 2 }
-    await expect(conn(['offline-host-v1']).drainJournalForMove(5_000)).rejects.toThrow(/2 of its records did not apply/)
-    handover.result = { ...handover.result, failed: 0, held: true }
+    await conn(['offline-host-v1']).drainJournalForMove(5_000)
+    expect(handover.order).toEqual(['drain'])
+  })
+
+  it('a revoked host or a drain past its bound are no drain', async () => {
+    handover.result = { ...handover.result, held: true }
     await expect(conn(['offline-host-v1']).drainJournalForMove(5_000)).rejects.toThrow(/revoked here/)
     handover.running = new Promise(() => {})
     await expect(conn(['offline-host-v1']).drainJournalForMove(50)).rejects.toThrow(/did not end within/)

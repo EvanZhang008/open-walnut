@@ -27,6 +27,8 @@ const h = vi.hoisted(() => ({
   leave: null as null | ((boundMs: number) => Promise<unknown>),
   seen: [] as unknown[][],
   kept: [] as string[][],
+  /** More fields of the link (its hello's set, its record of served Walnuts). */
+  connExtra: {} as Record<string, unknown>,
 }))
 
 vi.mock('../../../src/core/config-manager.js', () => ({
@@ -48,6 +50,7 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
     send: async (cmd: string, body: Record<string, unknown>) => { h.hostSends.push({ cmd, body }); return { ok: true } },
     netEndpointNow: async () => SET_EP,
     ...(h.leave ? { leaveServiceSet: (boundMs: number) => h.leave!(boundMs) } : {}),
+    ...h.connExtra,
   }),
   dropDaemonConnection: () => { h.order.push('drop-connection'); return true },
 }))
@@ -67,6 +70,8 @@ vi.mock('../../../src/core/net/net-where.js', async (importOriginal) => {
 
 import { removeMachine, resetNetForTest, syncNet } from '../../../src/core/net/net-mac.js'
 import { hostServiceSets } from '../../../src/providers/service-set-leader.js'
+import { walnutKeyOf } from '../../../src/providers/daemon-shared.js'
+import { WALNUT_HOME } from '../../../src/constants.js'
 
 // The companion's list: this Mac, the machine, and the set's endpoint it registered (until a DELETE took one off).
 const members = () => [{ id: MAC, name: 'Mac', role: 'mac' }, { id: BOX, name: 'box', role: 'host' }, { id: SET_EP, name: 'box-set', role: 'host' }].filter((m) => !h.deleted.has(m.id))
@@ -75,7 +80,7 @@ let dir = ''
 const saved: Record<string, string | undefined> = {}
 beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'net-set-remove-'))
-  for (const k of ['WALNUT_SERVICE_SET_FILE', 'WALNUT_SERVICE_SET_MOVE_FILE', 'WALNUT_NET_ACTIVE']) saved[k] = process.env[k]
+  for (const k of ['WALNUT_SERVICE_SET_FILE', 'WALNUT_SERVICE_SET_MOVE_FILE', 'WALNUT_NET_ACTIVE', 'WALNUT_HOST_SERVICE_SETS']) saved[k] = process.env[k]
   process.env.WALNUT_SERVICE_SET_FILE = path.join(dir, 'sets.json')
   process.env.WALNUT_SERVICE_SET_MOVE_FILE = path.join(dir, 'moves.json')
   process.env.WALNUT_NET_ACTIVE = '1'
@@ -96,15 +101,16 @@ afterEach(() => {
   resetNetForTest(); vi.unstubAllGlobals()
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   fs.rmSync(dir, { recursive: true, force: true })
-  Object.assign(h, { macConfigs: [], hostSends: [], fetches: [], deleted: new Set(), deleteStatus: 200, order: [], conn: 'up', leave: null, seen: [], kept: [] })
+  Object.assign(h, { macConfigs: [], hostSends: [], fetches: [], deleted: new Set(), deleteStatus: 200, order: [], conn: 'up', leave: null, seen: [], kept: [], connExtra: {} })
 })
 
 const dialled = () => ((h.macConfigs.at(-1)?.members ?? []) as Array<{ id: string; addrs?: string[] }>)
 
 describe('N1: Remove of a machine where this Walnut has its own service set', () => {
   it('the set leaves first, while the link still reaches it, and the machine\'s walnut-net (another Walnut\'s) is never turned off', async () => {
-    h.leave = async () => { h.order.push('leave'); return { ok: true } }
-    await removeMachine('box')
+    h.leave = async () => { h.order.push('leave'); return { ok: true, why: 'this Walnut\'s own service set was removed from the host' } }
+    // Round 3, L-N2: Remove's answer says what came of the set.
+    expect(await removeMachine('box')).toEqual({ removed: 'box', serviceSet: 'this Walnut\'s own service set was removed from the host' })
     expect(h.order.indexOf('leave')).toBeGreaterThanOrEqual(0)
     expect(h.order.indexOf('leave')).toBeLessThan(h.order.indexOf(`drop-row:${BOX.slice(0, 4)}`))
     expect(h.order.indexOf('leave')).toBeLessThan(h.order.indexOf('drop-connection'))
@@ -158,5 +164,26 @@ describe('N3: the set\'s endpoint is dialled where it was last seen', () => {
     expect(h.seen[0]![0]).toBe('box')
     expect(h.seen[0]![1]).toBe(SET_EP)
     expect(h.seen[0]![3]).toEqual({ via: 'box' })
+  })
+})
+
+describe('review round 3, L-N1: a Remove never turns off a walnut-net another Walnut runs', () => {
+  const turnedOff = () => h.hostSends.some((x) => x.cmd === 'net.configure' && x.body.enabled === false)
+  const servedBy = (other: boolean) => ({ serviceSet: '', daemonServes: { version: 'v', twin: null, capabilities: [], walnuts: { [walnutKeyOf(WALNUT_HOME)]: Date.now(), ...(other ? { '/home/other/.open-walnut': Date.now() - 60_000 } : {}) } } })
+
+  it('flag on, no set record yet, another Walnut on the machine\'s daemon just now: the machine is not told to stop its walnut-net', async () => {
+    process.env.WALNUT_HOST_SERVICE_SETS = '1'
+    await hostServiceSets.write('net:box', null)
+    h.connExtra = servedBy(true)
+    await removeMachine('box')
+    expect(turnedOff()).toBe(false)
+  })
+
+  it('this Walnut alone there: told to stop, as before', async () => {
+    process.env.WALNUT_HOST_SERVICE_SETS = '1'
+    await hostServiceSets.write('net:box', null)
+    h.connExtra = servedBy(false)
+    await removeMachine('box')
+    expect(turnedOff()).toBe(true)
   })
 })

@@ -224,6 +224,19 @@ export function helloServiceSet(hello: object): string {
 
 export type LinkStanding = 'unknown' | 'default' | 'own' | 'shared'
 
+/**
+ * Does a daemon update's line name the Walnut (`--walnut …`, the host's CLI picks the set)? Its tail,
+ * snapshot, probation and marker watch `set`, the set the link reaches ('' the default). With the set
+ * still unknown after the first look (an older host, or a look that failed) on the default's daemon,
+ * the words could make the CLI update this Walnut's own set while all of those watch the default
+ * (review round 2, H2): the line is today's then, so the line and its watchers name the same set.
+ * The next look finds the set, and the update after it names the Walnut. Both paths use it (SSH:
+ * daemon-connection.ts updateManagedDaemon, through ServiceSetLink.wordsDue).
+ */
+export function setWordsDue(ask: SetAsk | null | undefined, standing: LinkStanding, set: string): boolean {
+  return !!ask && !(standing === 'unknown' && !set)
+}
+
 /** Where the link stands for this Walnut's service on the host; 'unknown' with the experiment off or nothing kept. */
 export function linkStanding(record: Pick<HostSetRecord, 'set'> | null | undefined, helloSet: string | null, wanted: boolean): LinkStanding {
   if (!wanted || !record) return 'unknown'

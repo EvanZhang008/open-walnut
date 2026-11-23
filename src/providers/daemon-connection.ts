@@ -68,7 +68,7 @@ import { hostServiceOfferWanted, serviceLauncherWanted } from './service-launche
 import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type UnreadUpdate } from './daemon-update-readback.js'
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
-import { NetDaemonUpdater, setWordsDue, type NetUpdateState } from './daemon-net-update.js'
+import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type UpdateClaim } from './daemon-update-claim.js'
 import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-set-leader.js'
 import { ServiceSetLink } from './service-set-move-link.js'
@@ -896,6 +896,8 @@ export class DaemonConnection {
   private _helloServiceSet = ''
   /** SSH: the set whose runtime dir `_remoteDir` is ('' the default's dirs): its service config is probed and updated. */
   private _remoteSet = ''
+  /** Host network: the endpoint the last dial went to (service-set-move-link.ts dialled). */
+  private _netDialled: string | null = null
   /** A service set move holds this host's work (service-set-hold.ts): starts and sends wait as for a host that is away. */
   private readonly _setHold = new SetHold()
   private _serviceSetLink: ServiceSetLink | null = null
@@ -1739,6 +1741,7 @@ export class DaemonConnection {
       setHold: (on) => { this._setHold.set(on) },
       // Only the runner's delivery of what waited (review round 1, low 12): not every connect listener.
       redeliver: () => { if (this._connected && !this._destroyed) redeliverHostRows(this.hostKey, this) },
+      dialled: () => (this.setLinkKind === 'net' ? this._netDialled : this._remoteDir || null),
       triggerIds: () => [...this.lastTriggerDefHashes.keys()],
       drainJournal: (boundMs) => this.drainJournalForMove(boundMs),
       home: WALNUT_HOME,
@@ -1750,8 +1753,9 @@ export class DaemonConnection {
 
   /**
    * A service set move: this Walnut's offline journal on the daemon the link reaches is drained to
-   * empty (a handover that began after everything stopped, all of it applied), or it throws. Undrained
-   * records would never be drained again once the link reaches the set (review round 2, M3).
+   * empty (a handover that began after everything stopped, whose last read found nothing of this home),
+   * or it throws. Undrained records would never be drained again once the link reaches the set (review
+   * round 2, M3; round 3, S2). A record refused or given up is lettered and acked, so it holds nothing.
    */
   private async drainJournalForMove(boundMs: number): Promise<void> {
     if (this.isReadOnlyRemote || !this.hasCapability('offline-host-v1')) return
@@ -1766,7 +1770,7 @@ export class DaemonConnection {
     const r = await Promise.race([run(), late]).finally(() => clearTimeout(timer))
     if (r === 'late') throw new Error(`its drain did not end within ${Math.round(boundMs / 1000)} s`)
     if (r.held) throw new Error('the host is revoked here, so its journal stays there')
-    if (r.failed > 0) throw new Error(`${r.failed} of its records did not apply`)
+    if (r.pending) throw new Error('records of it are still there (one waits for its retry, or the drain ran out of rounds)')
   }
 
   /**
@@ -3190,7 +3194,8 @@ export class DaemonConnection {
     // refused in the words of a link that is down (the runner keeps it pending and sends it on the
     // release), any other work and the pushes that start work there wait for the release.
     // Not held: counted and sent in this same tick, as before.
-    const admitted = !this._setHold.on ? this._setHold.track(cmd, params) : await this._setHold.admit(cmd, params, () => new Error(`DaemonConnection not connected to ${this.hostKey}: its sessions are moving to this Walnut's own service there; the message is kept and goes out once they are`))
+    // A refusal never left: tagged no-link, as a command sent with nothing connected.
+    const admitted = !this._setHold.on ? this._setHold.track(cmd, params) : await this._setHold.admit(cmd, params, () => markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}: its sessions are moving to this Walnut's own service there; the message is kept and goes out once they are`), 'no-link'))
     try {
       return await this.sendAdmitted(cmd, params, timeoutMs)
     } finally { admitted() }
@@ -5059,6 +5064,21 @@ export class DaemonConnection {
    * gave no readable answer.
    */
   private async checkDaemonRunning(opts: { strict?: boolean; deferUpgrade?: boolean; revived?: boolean } = {}): Promise<number | null> {
+    const port = await this.checkDaemonRunningInDir(opts)
+    if (port !== null || !this._remoteSet) return port
+    // Review round 3, S3: this Walnut's own set's runtime dir holds neither its service config nor a
+    // daemon (the set uninstalled by hand, the box rebuilt). Nothing is ever deployed there: a daemon
+    // with no set env would take this Walnut's triggers, jobs and follower beside the shared one. The
+    // move is undone here, before anything is pushed, and this same connect takes today's dir.
+    const gone = { dir: this._remoteDir, set: this._remoteSet }
+    log.session.warn('DaemonConnection: this Walnut\'s service set is gone from the host; the move is undone and today\'s dir is dialled', { host: this.hostKey, ...gone })
+    await this.serviceSetLink?.setGoneAt(gone.dir)
+    await this.resolveRemoteDir()
+    if (this._remoteSet) throw new Error(`${this.hostKey}: this Walnut's service set has no daemon and no service at ${gone.dir}, and the link still points there; Walnut deploys nothing there and retries the connect`)
+    return this.checkDaemonRunningInDir(opts)
+  }
+
+  private async checkDaemonRunningInDir(opts: { strict?: boolean; deferUpgrade?: boolean; revived?: boolean }): Promise<number | null> {
     // A connect serves a live daemon as it is and decides its update once connected:
     // the upload never holds the host dark (startDeferredUpgrade).
     const defer = opts.deferUpgrade === true && !this.isReadOnlyRemote
@@ -5168,7 +5188,8 @@ export class DaemonConnection {
       // This connection stopped an unmanaged daemon moments ago on a determined
       // answer (a postponed update going ahead), and this is the reconnect that
       // replaces it: refusing would leave the host dark until a probe answers.
-      if (!sshErr && this.takeRecentUnmanagedStop()) {
+      // Never in a set's dir: no daemon is deployed there (S3), and an unanswered probe is no "absent".
+      if (!sshErr && !this._remoteSet && this.takeRecentUnmanagedStop()) {
         log.session.info('DaemonConnection: no service answer, but this connection just stopped an unmanaged daemon; deploying its replacement', {
           host: this.hostKey, reason: service.undetermined,
         })
@@ -5198,7 +5219,8 @@ export class DaemonConnection {
 
     // Strict mode (reconnect path): SSH itself failed — propagate so callers can
     // retry/rebuild ControlMaster instead of misdiagnosing as "daemon died".
-    if (opts.strict) {
+    // A set's dir likewise: a failed probe there is never read as a set that is gone (S3).
+    if (opts.strict || this._remoteSet) {
       throw (binarySshErr ?? fileSshErr) as Error
     }
     // Non-strict (initial connect): treat SSH failure as absent → deploy.
@@ -6162,7 +6184,7 @@ export class DaemonConnection {
         ...(serve ? { serve } : {}),
         // Service sets: the line names this Walnut, the tail watches the set's service, and the set the host names is kept;
         // with the set still unknown after the look, today's line, as the tail watches the default (setWordsDue, H2).
-        ...(sets && !setWordsDue(await this.serviceSetLink!.setAsk(), sets.standing, set) ? {} : await this.serviceSetUpdateWords(set)),
+        ...(this.serviceSetLink && !(await this.serviceSetLink.wordsDue(set)) ? {} : await this.serviceSetUpdateWords(set)),
         // The upload may have taken minutes: work that started meanwhile holds the swap.
         onStaged: async () => {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
@@ -6806,6 +6828,8 @@ export class DaemonConnection {
    * followed by the one it replaced (its kept files), and the build waits a day.
    */
   private async deployAndStart(): Promise<number> {
+    // A service set's runtime dir is its service's alone: nothing unmanaged is ever started there (review round 3, S3).
+    if (this._remoteSet) throw new Error(`${this.hostKey}: Walnut never deploys a daemon into its service set's dir (${this._remoteDir})`)
     await this.loadPendingReplace()
     let previous = this._previous?.stopped && this._previous.dir === this._remoteDir ? this._previous : null
     let replacing = this._replacing?.dir === this._remoteDir ? this._replacing : null
@@ -8374,6 +8398,7 @@ export class DaemonConnection {
     // This Walnut's own service set there has a walnut-net endpoint of its own once moved (service-set-move-link.ts).
     const endpoint = await this.netEndpointNow()
     if (!endpoint) throw new Error(`${this.hostKey} has no host network id; add it again from Settings > Remote Hosts`)
+    this._netDialled = endpoint
     this.setPhase('tunnel')
     const { netForwardPort, explainNetDialFailure } = await import('../core/hosts/net-link.js')
     const port = await netForwardPort(endpoint, this.hostKey)

@@ -52,7 +52,7 @@ import type { DaemonLinkKind } from './daemon-update-paths.js'
 import type { ServesAs, ServiceModeAsk } from './one-service-mode.js'
 import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy } from './daemon-update-claim.js'
-import { serviceSetWords, type LinkStanding, type SetAsk } from './service-set-leader.js'
+import { serviceSetWords, setWordsDue, type LinkStanding, type SetAsk } from './service-set-leader.js'
 import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
 
 export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
@@ -68,18 +68,8 @@ export type NetUpdateSkip =
   // The task that asked for it may no longer have it run (its grant was revoked, the host closed).
   | 'refused'
 
-/**
- * Does a daemon update's line name the Walnut (`--walnut …`, the host's CLI picks the set)? Its tail,
- * snapshot, probation and marker watch `set`, the set the link reaches ('' the default). With the set
- * still unknown after the first look (an older host, or a look that failed) on the default's daemon,
- * the words could make the CLI update this Walnut's own set while all of those watch the default
- * (review round 2, H2): the line is today's then, so the line and its watchers name the same set.
- * The next look finds the set, and the update after it names the Walnut. Both paths use it (SSH:
- * daemon-connection.ts updateManagedDaemon).
- */
-export function setWordsDue(ask: SetAsk | null | undefined, standing: LinkStanding, set: string): boolean {
-  return !!ask && !(standing === 'unknown' && !set)
-}
+/** The one rule of both update paths for the `--walnut` words (service-set-leader.ts). */
+export { setWordsDue }
 
 /** Daemon commands the update runs on the host. */
 export const NET_UPDATE_CAPABILITIES = ['host-exec-v1', 'fs-write-part-v1', 'service-update-v1'] as const

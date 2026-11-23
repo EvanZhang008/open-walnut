@@ -12,7 +12,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { endHostLink, endsLinkWhenLeft, hostsThatLeft } from '../../../src/core/hosts/host-link-end.js'
+import { endHostLink, endsLinkWhenLeft, hostsThatLeft, removedFromSettings } from '../../../src/core/hosts/host-link-end.js'
 import { exitOwnedControlMaster } from '../../../src/providers/ssh-control-master.js'
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
@@ -30,6 +30,18 @@ describe('which hosts left, and whose link ends', () => {
     expect(endsLinkWhenLeft('__local__')).toBe(false)
     expect(endsLinkWhenLeft('__cloudbox__')).toBe(false)
     expect(endsLinkWhenLeft('direct:http://x')).toBe(false)
+  })
+
+  it('drill round 3, R3-4: Remove is judged by config.yaml itself; a host the ~/.ssh/config merge brings back as off was still removed', async () => {
+    const found = { devbox: { hostname: 'devbox', discovered: true, enabled: false, connect: 'ask' } }
+    // Removed from the file, merged back from ~/.ssh/config as a found host that is off.
+    expect(await removedFromSettings('devbox', found, async () => ({ hosts: {} }))).toBe(true)
+    // Turned off: its row is still in the file.
+    expect(await removedFromSettings('devbox', found, async () => ({ hosts: { devbox: { enabled: false } } }))).toBe(false)
+    // Gone from the merged rows too: removed without a read.
+    expect(await removedFromSettings('devbox', {}, async () => { throw new Error('never read') })).toBe(true)
+    // A file that cannot be read decides nothing.
+    expect(await removedFromSettings('devbox', found, async () => null)).toBe(false)
   })
 
   it('drops the pooled connection and ends the terminal master', async () => {
@@ -54,6 +66,10 @@ describe('which hosts left, and whose link ends', () => {
     calls.length = 0
     await endHostLink('devbox', deps)
     expect(calls).toEqual(['drop devbox', 'term devbox'])
+    // Judged from the rows after the change (R3-4): a row gone from them is a Remove.
+    calls.length = 0
+    await endHostLink('devbox', deps, { rows: {} })
+    expect(calls).toEqual(['leave devbox true', 'drop devbox', 'term devbox'])
     // A leave that throws never holds the link's end.
     calls.length = 0
     await endHostLink('devbox', { ...deps, leaveServiceSet: async () => { throw new Error('boom') } }, { removed: true })
@@ -135,8 +151,9 @@ describe('guard: a host that left Settings has its link ended', () => {
   it('the server ends the link of each host it tombstones, in the same loop', () => {
     const src = fs.readFileSync(path.join(ROOT, 'src/web/server.ts'), 'utf8')
     expect(src).toMatch(/for \(const host of hostsThatLeft\(before, after\)\) \{\s*pushHostRemoved\(host\)\s*(\/\/[^\n]*\n\s*)*void endHostLink\(host[,)]/)
-    // A host whose row is gone is removed (its own service set leaves too); one turned off is not.
-    expect(src).toMatch(/void endHostLink\(host, undefined, \{ removed: !Object\.hasOwn\(hostDefs, host\) \}\)/)
+    // A host whose row is gone from config.yaml is removed (its own service set leaves too); one turned
+    // off is not: judged from the rows inside endHostLink (removedFromSettings, R3-4).
+    expect(src).toMatch(/void endHostLink\(host, undefined, \{ rows: hostDefs \}\)/)
   })
 
   it('the row words say what Turn off and Remove do (no "sessions stop", no link kept)', () => {
