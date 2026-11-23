@@ -2,9 +2,9 @@
  * What the top of a chat shows of its task's Threads (experiment top_thread, TopThread.tsx), kept
  * apart from the component so the strip and the tests read it without React. Pure.
  */
-import type { ActionItem, ActionKind } from '@open-walnut/user-status';
+import type { ActionItem } from '@open-walnut/user-status';
 import { orderedForHim, threadCountLabel } from '@open-walnut/thread-view';
-import { threadsForHim } from '@open-walnut/thread-groups';
+import { HELD_BY_THREAD, threadsForHim } from '@open-walnut/thread-groups';
 import type { OrgThread } from '@/api/org-threads';
 
 /** Where the top's Hide is kept (utils/view-memory.ts): one choice for every chat, kept over a reload and across devices. */
@@ -17,23 +17,11 @@ export function topThreads(threads: readonly OrgThread[] | null, now: number): O
 }
 
 /**
- * Which Action needed items a thread can hold, so the top draws that decision once, as the
- * thread (2026-11-21, the user, on a chat whose top showed the same question twice, the task's
- * own ask card over its thread card holding that ask, exasperated). Every kind is named:
- * a new kind must say whether a thread can hold it (tests/web/top-thread.test.ts holds each).
- *   letter  a thread opened from a decision letter (opener letter, its id the ref) or holding it (letter)
- *   ask     the task's own ask on its thread (threads_one_card: heldAsk, askId = the decision id)
- *   choice  a Board choice a leader's thread holds (choice: its Board and id)
- *   question, permission, approval  live prompts and approvals: no thread holds them; they lead the top
+ * Which Action needed items a thread can hold, so a decision is drawn once, as the thread: the
+ * server's rule (src/core/org/thread-holds.ts), which also marks each item its listed thread holds
+ * (`ActionItem.thread`) for the task rows. Every kind is named (tests/web/top-thread.test.ts).
  */
-export const HELD_BY_THREAD: Record<ActionKind, ((it: ActionItem, t: OrgThread) => boolean) | null> = {
-  letter: (it, t) => (t.opener?.from === 'letter' && t.opener.ref === it.id) || (!!t.letter && !t.letter.done && !t.letter.off && t.letter.id === it.id),
-  ask: (it, t) => t.heldAsk?.id === it.id || t.askId === it.id,
-  choice: (it, t) => !!t.choice && !t.choice.done && !t.choice.off && t.choice.id === it.id && (!it.board || t.choice.board === it.board),
-  question: null,
-  permission: null,
-  approval: null,
-};
+export { HELD_BY_THREAD };
 
 /**
  * The task's Action needed items that are not one of the threads the top shows (`listed`,
@@ -90,7 +78,25 @@ export function decisionsElsewhere(list: readonly OrgThread[], i: number, items:
  * None when no thread holds a decision or waits on him. Pure.
  */
 export function hiddenAsk<T extends OrgThread>(list: readonly T[], items: readonly ActionItem[]): T | undefined {
-  return list.find((t) => items.some((it) => HELD_BY_THREAD[it.kind]?.(it, t))) ?? list.find((t) => t.state === 'needs');
+  return holdingThreads(list, items)[0] ?? list.find((t) => t.state === 'needs');
+}
+
+/** The listed threads that hold one of `items`, in the list's order, each once (the hidden line names the first). Pure. */
+export function holdingThreads<T extends OrgThread>(list: readonly T[], items: readonly ActionItem[]): T[] {
+  return list.filter((t) => items.some((it) => HELD_BY_THREAD[it.kind]?.(it, t)));
+}
+
+/**
+ * What a task row draws of its items (2026-11-23, the user, on one question drawn as a thread card and
+ * again as a question card under its row, then his pick "两处都改"): one line for each thread the
+ * server found holding an awake item (`thread`, src/core/org/thread-holds.ts), in the items' order,
+ * each once; the full card for the rest, a snoozed one with its time included. Pure.
+ */
+export function rowAsks(items: readonly ActionItem[], now: number): { lines: Array<{ id: string; title: string }>; onCard: (it: ActionItem) => boolean } {
+  const onCard = (it: ActionItem) => !it.thread || !awakeAt(it, now);
+  const lines = new Map<string, { id: string; title: string }>();
+  for (const it of items) if (!onCard(it) && !lines.has(it.thread!.id)) lines.set(it.thread!.id, it.thread!);
+  return { lines: [...lines.values()], onCard };
 }
 
 /** The hidden line's words: "16 threads (1 needs you)", "3 threads (2 need you)", "2 threads". */

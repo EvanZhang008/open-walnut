@@ -18,7 +18,7 @@
  * it and marked, thread-focus.ts), as a click on its title does (2026-11-21, a review on his data:
  * the words stopped mid-line, and the title only folded the card in a room too small to show it).
  */
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { sharedAnswers, threadCountLabel } from '@open-walnut/thread-view';
@@ -142,15 +142,11 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
     const asking = hiddenAsk(list, decisions);
     return (
       <div className="top-thread is-hidden" data-testid="top-thread" data-hidden="true" data-count={n}>
-        <button type="button" className="top-thread-line" data-testid="top-thread-show" aria-expanded={false} onClick={() => setHidden(false)}
-          title="Show the first thread above the chat">
-          <i className={`top-thread-dot${asking ? ' is-needs' : ''}`} aria-hidden="true" />
+        <FoldedLine testId="top-thread-show" title="Show the first thread above the chat" needs={!!asking} onShow={() => setHidden(false)}>
           <span className="top-thread-line-count" data-testid="top-thread-count">{hiddenLine(list)}</span>
           {/* The question it waits on stays in sight in this one line, never redrawn by the strip. */}
           {asking && <><span aria-hidden="true">{' · '}</span><span className="top-thread-line-title" data-testid="top-thread-hidden-title">{asking.title}</span></>}
-          <span aria-hidden="true">{' · '}</span>
-          <span className="top-thread-show">Show</span>
-        </button>
+        </FoldedLine>
       </div>
     );
   }
@@ -180,5 +176,18 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
           name={orgDisplayTitle(task)} now={at} snoozed={false} owner={task} focused={focused === t.id} {...(readWhole ? { onReadWhole: readWhole } : {})} />
       </ul>
     </div>
+  );
+}
+
+/** One folded line above the chat, its dot (red when it waits on him), its words and Show: the top's
+ *  hidden line and the strip's (actions/SessionActionStrip.tsx) are the same line. */
+export function FoldedLine({ testId, title, needs, onShow, children }: { testId: string; title: string; needs: boolean; onShow: () => void; children: ReactNode }) {
+  return (
+    <button type="button" className="top-thread-line" data-testid={testId} aria-expanded={false} onClick={onShow} title={title}>
+      <i className={`top-thread-dot${needs ? ' is-needs' : ''}`} aria-hidden="true" />
+      {children}
+      <span aria-hidden="true">{' · '}</span>
+      <span className="top-thread-show">Show</span>
+    </button>
   );
 }

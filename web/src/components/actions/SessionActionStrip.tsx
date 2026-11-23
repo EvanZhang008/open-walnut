@@ -10,11 +10,15 @@
  */
 import { memo, useLayoutEffect, useRef } from 'react';
 import type { Task } from '@open-walnut/core';
+import type { ActionItem } from '@open-walnut/user-status';
 import { keepsThreads } from '@open-walnut/keeps-threads';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
 import { TopThread, useTopCursor, useTopThreads } from '@/components/org/TopThread';
-import { awakeAt, stripItems } from '@/components/org/top-thread-model';
+import { AgentText } from '@/components/common/AgentText';
+import { taskTextSource } from '@/utils/agent-text-source';
+import { TOP_HIDDEN_VIEW, awakeAt, stripItems } from '@/components/org/top-thread-model';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useNow } from '@/components/approvals/ApprovalPrompts';
 import { ActionNeeded } from './ActionNeeded';
 
@@ -32,11 +36,53 @@ export const SessionActionStrip = memo(function SessionActionStrip({ task, sessi
   return <PlainStrip task={task} sessionId={sessionId} />;
 });
 
+/**
+ * Hide folds everything above the chat to one line each, the strip's and the top thread's, kept in the
+ * view memory for every chat (TOP_HIDDEN_VIEW), so a question that comes later stays folded too, its
+ * words in the line (2026-11-23, the user, on a question card that took half his small screen:
+ * asking for a way to collapse it).
+ */
+function useTopHidden(): [boolean, (v: boolean) => void] {
+  return usePageView(TOP_HIDDEN_VIEW.page, TOP_HIDDEN_VIEW.name, false, isBoolean);
+}
+
+/**
+ * The strip folded: one line that names its first item and how many more, and Show. The question is
+ * the agent's words, drawn by the shared renderer beside the Show button, never inside a button (its
+ * links open on their own); a click elsewhere on the line shows the card too.
+ */
+function StripLine({ task, items, onShow }: { task: Task; items: readonly ActionItem[]; onShow: () => void }) {
+  const first = items[0];
+  if (!first) return null;
+  const more = items.length - 1;
+  return (
+    <div className="top-thread is-hidden action-strip-line" data-testid="action-strip-line" data-count={items.length}>
+      <div className="top-thread-line" onClick={(e) => { if (!(e.target as HTMLElement).closest('a')) onShow(); }}>
+        <i className="top-thread-dot is-needs" aria-hidden="true" />
+        <AgentText compact inline {...taskTextSource(task, 'needs')} className="top-thread-line-title" text={first.summary} testId="action-strip-line-title" />
+        {more > 0 && <><span aria-hidden="true">{' · '}</span><span className="top-thread-line-count">{more} more</span></>}
+        <button type="button" className="btn btn-link btn-sm action-strip-show" data-testid="action-strip-show" aria-expanded={false}
+          onClick={(e) => { e.stopPropagation(); onShow(); }} title="Show what it asks above the chat">Show</button>
+      </div>
+    </div>
+  );
+}
+
 /** The strip of a task with no Threads on top: its items, none he snoozed until its time (the clock brings it back). */
 function PlainStrip({ task, sessionId }: { task: Task; sessionId: string }) {
   const now = useNow(30_000);
-  if (!(task.user_status?.actions ?? []).some((it) => awakeAt(it, now))) return null;
-  return <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => awakeAt(it, now)} />;
+  const [hidden, setHidden] = useTopHidden();
+  const awake = (task.user_status?.actions ?? []).filter((it) => awakeAt(it, now));
+  if (!awake.length) return null;
+  // The same room as the top of a chat with Threads (top-thread.css .session-top): at most a third of
+  // the body, its card scrolling inside it, never half the window.
+  return (
+    <div className="session-top is-strip-only" data-testid="session-top">
+      {hidden
+        ? <StripLine task={task} items={awake} onShow={() => setHidden(false)} />
+        : <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => awakeAt(it, now)} onHide={() => setHidden(true)} />}
+    </div>
+  );
 }
 
 /**
@@ -118,12 +164,15 @@ function SessionTop({ task, sessionId, actions, threadsOpen }: { task: Task; ses
   const items = actions && task.phase !== 'COMPLETE' ? stripItems(all, list, at) : [];
   const topShown = list.length > 0 && !threadsOpen;
   const shown = items.length > 0 || topShown;
+  const [hidden, setHidden] = useTopHidden();
   const room = useTopRoom(shown);
   // Nothing to show draws nothing: an empty first child would still move the chat under the glass header.
   if (!shown) return null;
   return (
     <div className="session-top" data-testid="session-top" ref={room}>
-      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => stripItems([it], list, at).length > 0} />}
+      {items.length > 0 && (hidden
+        ? <StripLine task={task} items={items} onShow={() => setHidden(false)} />
+        : <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => stripItems([it], list, at).length > 0} onHide={() => setHidden(true)} />)}
       {topShown && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} cursor={cursor} decisions={actions && task.phase !== 'COMPLETE' ? all : []} />}
     </div>
   );

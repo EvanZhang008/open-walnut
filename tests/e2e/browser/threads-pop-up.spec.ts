@@ -75,9 +75,9 @@ async function openLead(page: Page): Promise<void> {
 
 const card = (page: Page) => page.locator(`[data-testid="org-thread"][data-thread-id="${ids.thread}"]`)
 
-async function shot(page: Page, name: string): Promise<void> {
+async function shot(page: Page, name: string, scope = page.getByTestId('org-rail')): Promise<void> {
   fs.mkdirSync(SHOTS, { recursive: true })
-  await page.getByTestId('org-rail').screenshot({ path: `${SHOTS}/threads-pop-up-${name}-${test.info().project.name}.png` })
+  await scope.screenshot({ path: `${SHOTS}/threads-pop-up-${name}-${test.info().project.name}.png` })
 }
 
 async function startSession(request: APIRequestContext, taskId: string, fixtureRoot: string): Promise<string> {
@@ -180,8 +180,9 @@ test('on: the subtask\'s thread shows on its lead, and his reply there wakes the
   // Once the subtask has his words, the card leaves the lead's list: nothing waits on him there.
   await expect(card(page)).toHaveCount(0, { timeout: 20_000 })
   // He opens the subtask from the lead's Tasks: his words are in its chat.
-  const side = page.getByRole('group', { name: 'Threads, Tasks or Brief' })
-  await side.getByRole('button', { name: /^Tasks/ }).click()
+  // The side bar's views are tabs since the choice controls became one set (18510bbab3, 2026-11-22).
+  const side = page.getByRole('tablist', { name: /^Threads(, Tasks or Brief| or Tasks)$/ })
+  await side.getByRole('tab', { name: /^Tasks/ }).click()
   const row = page.getByRole('button', { name: new RegExp(`^Task status foundation ${STAMP}`) }).first()
   // Its turn on his words has ended, so it may sit in the folded Waiting group.
   if (!(await row.isVisible())) await page.getByRole('button', { name: /^Waiting\b/ }).last().click()
@@ -440,6 +441,12 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     const pill = page.getByTestId('org-pill-threads')
     const badge = page.locator(`[data-testid="org-channel"][data-key="${rowKey(PROJECT)}"] [data-testid="org-channel-badge"]`)
     await expect(page.locator(`[data-testid="org-thread-group"][data-group="needs"] [data-thread-id="${second}"]`)).toBeVisible({ timeout: 20_000 })
+    // The Threads beside the chat: the top draws none of them again (2026-11-23, the user: "两处都改").
+    await expect(top).toHaveCount(0)
+    // The side bar hidden, the top shows them.
+    const toggle = page.getByTestId('org-detail').getByTestId('org-rail-toggle')
+    await toggle.click()
+    await expect(page.getByTestId('org-rail')).toHaveCount(0)
     // Step the top to the newer of the two (newest first): the one he answers.
     const pos = top.getByTestId('top-thread-pos')
     await expect(pos).toHaveText(/^\d+ \/ \d+$/, { timeout: 20_000 })
@@ -450,7 +457,7 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     const at = Number((await pos.textContent())!.split('/')[0])
     await expect(pill).toHaveAttribute('data-threads', String(n))
     await expect(badge).toHaveAttribute('data-threads', String(n), { timeout: 20_000 })
-    await shot(page, '7-top-before')
+    await shot(page, '7-top-before', page.getByTestId('org-detail'))
     const inTop = top.locator(`[data-testid="org-thread"][data-thread-id="${second}"]`)
     await inTop.getByTestId('org-thread-popped-input').click()
     await page.keyboard.type(WORDS, { delay: 10 })
@@ -460,7 +467,10 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     await expect(pos).toHaveText(`${Math.min(at, n - 1)} / ${n - 1}`)
     await expect(pill).toHaveAttribute('data-threads', String(n - 1))
     await expect(badge).toHaveAttribute('data-threads', String(n - 1), { timeout: 20_000 })
-    // His reply is still on its way, and the Threads view keeps the card in Working with his words.
+    // His reply is still on its way, and the Threads view keeps the card in Working with his words;
+    // shown again, the side bar takes the top's place.
+    await toggle.click()
+    await expect(top).toHaveCount(0, { timeout: 10_000 })
     const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; messages: Array<{ text: string; delivery?: { state: string } }> }> }
     expect(file.threads.find((t) => t.id === second)?.messages.find((m) => m.text === WORDS)?.delivery?.state).not.toBe('delivered')
     const working = page.locator('[data-testid="org-thread-group"][data-group="working"]')

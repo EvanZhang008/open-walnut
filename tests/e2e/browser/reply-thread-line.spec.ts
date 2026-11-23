@@ -237,9 +237,12 @@ test('top_thread on: a line about a thread the top lists steps the top to it', a
   await loadHome(page)
   await openLead(page)
   const top = chat(page).getByTestId('top-thread')
-  await expect(top).toHaveAttribute('data-count', '2', { timeout: 30_000 })
+  // The side bar shows the Threads: the top draws none of them again (2026-11-23, the user: "两处都改").
+  await expect(page.locator('[data-testid="org-threads"] [data-testid="org-thread"]').first()).toBeVisible({ timeout: 30_000 })
+  await expect(top).toHaveCount(0)
   await showTasks(page.getByTestId('org-detail'))
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
+  await expect(top).toHaveAttribute('data-count', '2', { timeout: 30_000 })
   const shown = await top.getAttribute('data-thread-id')
   const other = shown === folders ? ids.opened : folders
   const words = other === folders ? FOLDERS : SHORTCUT
@@ -256,7 +259,9 @@ test('top_thread on: a line about a thread the top lists steps the top to it', a
   await lineUnder(page, words).getByTestId('msg-reply-thread-open').click()
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   await expect(page.locator(`[data-testid="org-threads"] [data-testid="org-thread"][data-thread-id="${other}"]`)).toHaveAttribute('data-focused', 'true')
-  // The top's Hide is kept for every chat: put it back.
+  // The Threads beside it: the top's line is gone too. The top's Hide is kept for every chat: put it back.
+  await expect(top).toHaveCount(0)
+  await showTasks(page.getByTestId('org-detail'))
   await top.getByTestId('top-thread-show').click()
   await expect(top).not.toHaveAttribute('data-hidden', 'true')
   await flag(request, false, 'top_thread')

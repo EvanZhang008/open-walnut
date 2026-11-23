@@ -73,6 +73,9 @@ export interface ActionItem {
   board?: string;
   /** Snoozed by the user until this time (ISO); absent when it is not. */
   snoozedUntil?: string;
+  /** The task's listed thread that holds it (org/thread-holds.ts markHeldItems): the decision is that
+   *  thread, so a task row draws one line that opens it instead of a second card. Absent when none does. */
+  thread?: { id: string; title: string };
 }
 
 /** One snooze of one item (Task.action_snoozes). */

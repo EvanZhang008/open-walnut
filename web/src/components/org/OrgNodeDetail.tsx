@@ -537,7 +537,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
             <ReplyThreadContext.Provider value={replyHost}>
-              <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} onSessionClick={onOpenSession} />
+              <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} threadsBeside={threadsShown} onSessionClick={onOpenSession} />
             </ReplyThreadContext.Provider>
           </div>
         ) : (

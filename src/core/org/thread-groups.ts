@@ -13,6 +13,8 @@ import { USER_STATE_LABELS } from '../user-status.js';
 import { inAcknowledged, isKnown, placedSinceAck } from './thread-known.js';
 
 // The web reads a thread he acknowledged at work (isKnown) through this module (@open-walnut/thread-groups), the one it groups by.
+// It reads which items a thread holds here too (thread-holds.ts), the server's rule for the same.
+export { HELD_BY_THREAD, holderOf, type HoldingThread } from './thread-holds.js';
 export { ACK_DECIDING_LINE, ackCardLine, backFromKnown, inAcknowledged, isKnown, placedSinceAck, type AckPlaced, type AckWaits } from './thread-known.js';
 
 /**

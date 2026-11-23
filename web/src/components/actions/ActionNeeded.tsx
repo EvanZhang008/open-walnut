@@ -128,12 +128,14 @@ const settled: AnswerSettle = () => {};
 /** One thing a task asks of the user, as the one ask card (AskCard.tsx): what it asks, a line of
  *  why, the box to type in and its buttons, Snooze last. `onAnswer` marks it answered the moment an
  *  answer goes (the block's own pages); alone it waits for the status to drop it. */
-export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below, threadId, answered, pager }: {
+export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below, threadId, answered, pager, hide }: {
   task: Task; item: ActionItem; onAnswer?: (id: string, said?: string) => AnswerSettle; failure?: AnswerFailure;
   /** Answered from here: its words stay, its answer is the line that says what was said. */
   answered?: AnsweredAsk;
   /** The block's "‹ 1/3 ›", beside Snooze. */
   pager?: ReactNode;
+  /** The strip's Hide, beside Snooze: it folds the strip to one line (SessionActionStrip.tsx). */
+  hide?: ReactNode;
   /** Its own card is in the chat below (a session's strip, its own live prompt): point at it. */
   below?: boolean;
   /** Drawn on the thread that holds this ask (core/org/thread-report-ask.ts): the answer is filed under it. */
@@ -204,7 +206,7 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
         {note ? <div className="org-answer-error" role="alert" data-testid="action-snooze-note">{note}</div> : null}
       </>}
       answer={answer}
-      tools={snooze || pager ? <>{pager}{snooze}</> : undefined}
+      tools={snooze || pager || hide ? <>{pager}{hide}{snooze}</> : undefined}
     />
   );
 });
@@ -213,8 +215,11 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
  *  click opens the task: a click inside never reaches it), 'card' (a Threads card) or 'strip' (under
  *  a session's title bar, where that session's own live prompt points at its card below). Every
  *  variant shows one ask at a time, the same pages. */
-export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId, accepts }: {
+export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId, accepts, onHide }: {
   task: Task; variant?: 'row' | 'strip' | 'card'; sessionId?: string;
+  /** The strip only: its Hide, which folds it to one line above the chat (2026-11-23, the user, on a
+   *  question card that took half his small screen: asking for a way to collapse it). */
+  onHide?: () => void;
   /** Only the task's items this place shows (the strip above a top thread leaves out the ones that
    *  are threads); answered pages kept from another place obey it too. */
   accepts?: (item: ActionItem) => boolean;
@@ -278,6 +283,10 @@ export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', 
         onFocus={() => { focusInside.current = true; }}
         onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focusInside.current = false; }}>
         <AskCard key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]} pager={pager}
+          {...(strip && onHide ? { hide: (
+            <button type="button" className="btn btn-sm action-strip-hide" data-testid="action-strip-hide"
+              onClick={onHide} title="Fold it to one line above the chat">Hide <span aria-hidden="true">{'˄'}</span></button>
+          ) } : {})}
           {...(book.answered[item.id] ? { answered: book.answered[item.id] } : {})}
           below={strip && !!sessionId && item.sessionId === sessionId && ANSWERS[item.kind] === 'prompt'} />
       </div>

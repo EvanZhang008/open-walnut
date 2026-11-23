@@ -468,6 +468,9 @@ interface SessionPanelProps {
   onHostBoard?: () => void;
   /** What an empty conversation says instead of "No conversation history found" (a router's page: why it is empty). */
   emptyHistory?: ReactNode;
+  /** The host shows this task's Threads beside the chat (the Org page's side bar): the top of the chat
+   *  draws none of them again, as with its own Threads view open (2026-11-23, the user: "两处都改"). */
+  threadsBeside?: boolean;
   /** Whether the conversation has anything to show, once its history has answered (SessionChatHistory). */
   onHistoryShown?: (hasContent: boolean) => void;
   /**
@@ -518,7 +521,7 @@ const carriedTitles = new Map<string, string>();
 /** How long a chat waits for the rest of a burst of events before it re-reads its record. */
 const RECORD_REREAD_COALESCE_MS = 250;
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory, onHistoryShown }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory, threadsBeside = false, onHistoryShown }: SessionPanelProps) {
   countRender('SessionPanelBody');
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
@@ -4240,7 +4243,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         <div className="session-panel-body" ref={bodyRef}>
           {/* What its task asks the user, right under the title bar (experiment action_needed_everywhere):
               the body's first flow child, so the glass header's offset rule places it. */}
-          {session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} threadsOpen={activeView === 'threads'} />}
+          {session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} threadsOpen={threadsBeside || activeView === 'threads'} />}
           {/* A transferred task names the other end in one quiet line (the header row is precious). */}
           <TransferLinks task={sessionTask} className="xfer-links-panel" testId="session-transfer-links" />
           {/* A phone says one plain sentence for a session that is gone (N29). */}

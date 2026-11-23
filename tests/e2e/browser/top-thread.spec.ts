@@ -4,6 +4,8 @@
  * only has 1, not right, I think top only show one but will show how many left, but thread will
  * show all ... also top can be hide, and when hide people can also have a button show it").
  *
+ *  0. While the side bar shows those Threads, the top above the chat draws none of them again
+ *     (2026-11-23, the user: "两处都改"); hiding the side bar brings the top back, showing it takes it away.
  *  1. A VP with five threads for him (two need him, three to read): above its chat the top shows
  *     "1 / 5", 5 being the header's count and the Threads list's, and its first card is the
  *     Threads list's first, one that needs him. › and ‹ step to the list's next one and back. Its
@@ -14,7 +16,7 @@
  *  3. Hide: one line, "5 threads (2 need you) · Show"; still hidden after a reload; Show brings it back.
  *  3b. A card whose words run past the top's room: the cut block fades at its end, and Show all
  *     (or a click on its title) opens it whole in the Threads view beside the chat, scrolled to and
- *     marked, while the top keeps its bound height and never folds into nothing. With the Threads
+ *     marked, and the top goes; back in the top it keeps its bound height. With the Threads
  *     in their groups (brief_off), the card's top, its title first, sits at the top of the pane,
  *     never its middle, also from the pane scrolled far down (2026-11-21, a review on his data:
  *     Show all landed mid-card, the title out of sight, once wholly above the view).
@@ -187,15 +189,24 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   await loadHome(page)
   await openLead(page)
 
-  // 1. "1 / 5": the header's count, the Threads list's count; the first is the list's first, one that needs him.
+  // 1. The side bar shows the Threads: the top above the chat draws none of them again (2026-11-23,
+  // the user, on one question drawn beside the chat and above it: "两处都改").
   const chat = page.getByTestId('org-chat')
   const top = topOf(chat)
-  await expect(top.getByTestId('top-thread-pos')).toHaveText('1 / 5', { timeout: 30_000 })
-  await expect(page.getByTestId('org-pill-threads')).toHaveAttribute('data-threads', '5')
+  await expect(page.getByTestId('org-pill-threads')).toHaveAttribute('data-threads', '5', { timeout: 30_000 })
   await expect(paneCards(page)).toHaveCount(5)
   const paneIds = await paneCards(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-thread-id')))
   // The ones that need him lead the list, newest first, then the ones to read.
   expect(paneIds).toEqual([...ids.needs].reverse().concat([...ids.read].reverse()))
+  await expect(chat.getByTestId('session-top')).toHaveCount(0)
+  await expect(top).toHaveCount(0)
+  await shot(page, '0-beside', page.getByTestId('org-detail'))
+  // The side bar hidden: "1 / 5", the header's count, the Threads list's count; the first is the
+  // list's first, one that needs him.
+  const toggle = page.getByTestId('org-detail').getByTestId('org-rail-toggle')
+  await toggle.click()
+  await expect(page.getByTestId('org-rail')).toHaveCount(0)
+  await expect(top.getByTestId('top-thread-pos')).toHaveText('1 / 5', { timeout: 30_000 })
   await expect(top).toHaveAttribute('data-thread-id', paneIds[0]!)
   await expect(top.getByTestId('org-thread')).toHaveAttribute('data-state', 'needs')
   await expect(top.getByTestId('top-thread-left')).toHaveText('4 more')
@@ -234,7 +245,6 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   await expect(page.getByTestId('org-pill-threads')).toHaveAttribute('data-threads', '6', { timeout: 30_000 })
   await expect(top.getByTestId('top-thread-pos')).toHaveText('2 / 6')
   await expect(top).toHaveAttribute('data-thread-id', paneIds[0]!)
-  await expect(paneCards(page).first()).toHaveAttribute('data-thread-id', late)
 
   // 2. He replies in the top card, typing as a person does.
   const replied = paneIds[0]!
@@ -251,7 +261,6 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   await expect(top.getByTestId('top-thread-pos')).toHaveText('2 / 5', { timeout: 30_000 })
   await expect(top).toHaveAttribute('data-thread-id', paneIds[1]!)
   await expect(page.getByTestId('org-pill-threads')).toHaveAttribute('data-threads', '5')
-  await expect(paneCards(page)).toHaveCount(5)
   await shot(page, '3-replied', page.getByTestId('org-detail'))
 
   // 3. Hide: one line that counts them; kept over a reload; Show brings it back.
@@ -272,6 +281,11 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   await expect(again.getByTestId('top-thread-pos')).toHaveText('1 / 5')
   await expect(again).toHaveAttribute('data-thread-id', late)
   await shot(page, '5-shown-again', page.getByTestId('org-detail'))
+  // The side bar shown again: its Threads list leads with the new one, and the top goes.
+  await page.getByTestId('org-detail').getByTestId('org-rail-toggle').click()
+  await expect(paneCards(page).first()).toHaveAttribute('data-thread-id', late, { timeout: 15_000 })
+  await expect(paneCards(page)).toHaveCount(5)
+  await expect(again).toHaveCount(0)
   expect(pageErrors).toEqual([])
   await keepVideo(page, 'vp')
 })
@@ -294,6 +308,12 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   await openLead(page)
   const detail = page.getByTestId('org-detail')
   const top = topOf(page.getByTestId('org-chat'))
+  const rail = page.getByTestId('org-rail')
+  const toggle = detail.getByTestId('org-rail-toggle')
+  // The side bar shows the Threads, so the top waits for it to be hidden (2026-11-23, "两处都改").
+  await expect(rail.getByTestId('org-thread').first()).toBeVisible({ timeout: 30_000 })
+  await expect(top).toHaveCount(0)
+  await toggle.click()
   await expect(top).toHaveAttribute('data-thread-id', thread.id, { timeout: 30_000 })
   const room = (await top.boundingBox())!
   // Its words are cut: the block fades at its end, and the bar offers Show all.
@@ -302,9 +322,9 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   expect(mask).toContain('linear-gradient')
   await expect(top.getByTestId('top-thread-whole')).toBeVisible()
   await shot(page, '8-clipped', detail)
-  // Show all: the Threads beside the chat bring the card into view and mark it.
+  // Show all: the side bar opens on the Threads, brings the card into view and marks it; the top,
+  // whose card is now beside the chat, goes.
   await top.getByTestId('top-thread-whole').click()
-  const rail = page.getByTestId('org-rail')
   const inRail = rail.locator(`[data-testid="org-thread"][data-thread-id="${thread.id}"]`)
   await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
   await expect(inRail).toBeInViewport()
@@ -312,9 +332,13 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   expect((await inRail.boundingBox())!.height).toBeGreaterThan((await rail.boundingBox())!.height)
   await expectTopAtTop(inRail)
   await expect(inRail.getByTestId('org-thread-reply')).toContainText('Bed 30')
+  await expect(top).toHaveCount(0)
   await shot(page, '9-show-all', detail)
-  // From the pane scrolled far down (Done's cards under it): a click on its title brings its top to
-  // the pane's top the same; the top neither folds nor grows.
+  // The pane scrolled far down (Done's cards under it), then the side bar hidden: the top comes back,
+  // and a click on its title opens the side bar again on that card, its top at the pane's top. The
+  // side bar is drawn anew when it opens, so this no longer starts from the scrolled pane: while the
+  // side bar shows the Threads the top draws none (2026-11-23), and a click from far down in an open
+  // pane has no top card to come from.
   await expect(inRail).not.toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
   await rail.getByTestId('org-thread').last().evaluate((el) => {
     let s: HTMLElement | null = el.parentElement
@@ -322,10 +346,9 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
     if (!s) throw new Error('the Threads pane does not scroll')
     s.scrollTop = s.scrollHeight
   })
-  await top.getByTestId('org-thread-head').click()
-  await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
-  await expectTopAtTop(inRail)
-  await shot(page, '9b-show-all-from-done', detail)
+  await toggle.click()
+  await expect(top).toHaveAttribute('data-thread-id', thread.id, { timeout: 15_000 })
+  // Back in the top, the card keeps its bound height, never folded into nothing nor grown.
   await expect(top.getByTestId('org-thread-messages')).toHaveCount(0)
   await expect(top.getByTestId('org-thread-reply')).toBeVisible()
   const after = (await top.boundingBox())!
@@ -333,6 +356,11 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   // Scrolled to its end, the block no longer fades.
   await top.locator('[data-clipped="true"]').first().evaluate((el) => { el.scrollTop = el.scrollHeight })
   await expect(top.getByTestId('org-thread-reply')).not.toHaveAttribute('data-clipped', 'true')
+  await top.getByTestId('org-thread-head').click()
+  await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
+  await expectTopAtTop(inRail)
+  await expect(top).toHaveCount(0)
+  await shot(page, '9b-show-all-from-done', detail)
   await patch(request, `/api/v1/tasks/${ids.lead}/threads/${thread.id}`, { close: 'acked' })
   await setFlags(request, { brief_off: false })
   expect(pageErrors).toEqual([])
@@ -368,7 +396,8 @@ test('a task with Threads on: its letter still shows above its thread; the switc
   await setFlags(request, { top_thread: false })
   await expect(top).toHaveCount(0, { timeout: 30_000 })
   await expect(strip.locator('[data-testid="action-item"][data-kind="letter"]')).toBeVisible()
-  await expect(panel.getByTestId('session-top')).toHaveCount(0)
+  // Today's strip alone, in the same room above the chat (a third of it at most, 2026-11-23).
+  await expect(panel.getByTestId('session-top')).toHaveClass(/\bis-strip-only\b/)
   await shot(page, '7-task-off', panel)
   expect(pageErrors).toEqual([])
   await keepVideo(page, 'task')

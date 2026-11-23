@@ -137,6 +137,12 @@ describe('the task\'s ask lives on its thread', () => {
     // The other thread reads as stored: no Done, no second ask.
     expect(threads.find((t) => t.id === PRACTICE)).toMatchObject({ state: 'answered' })
     expect(threads.find((t) => t.id === PRACTICE)?.heldAsk).toBeUndefined()
+    // The item says which thread holds it (org/thread-holds.ts), so its row draws one line to that
+    // thread, never a second card (2026-11-23, the user: "两处都改"); the next derive reads the place.
+    await vi.waitFor(async () => {
+      await derive()
+      expect((await getTask(taskId)).user_status!.actions?.find((i) => i.kind === 'ask')?.thread).toEqual({ id: READING, title: held.title })
+    }, { timeout: 15_000, interval: 300 })
   })
 
   it('the next answer asks nothing: the thread reads what its line says', async () => {
@@ -190,6 +196,9 @@ describe('the task\'s ask lives on its thread', () => {
     const threads = await threadsRead()
     expect(threads.find((t) => t.id === PRACTICE)).toMatchObject({ state: 'answered' })
     expect(threads.every((t) => !t.heldAsk && !('one_card' in t))).toBe(true)
+    // No thread holds its ask now: its item says none, so its row draws the card.
+    await derive()
+    expect((await getTask(taskId)).user_status!.actions?.some((i) => i.thread) ?? false).toBe(false)
     await updateTaskRaw(taskId, { phase: 'IN_PROGRESS' }, { source: 'test' })
     const fake = fakeSession(() => 'FOR_USER_STATE: working\nFOR_USER_NOW: Reading.')
     await settleStatusQuestion(SID, 10_000)
