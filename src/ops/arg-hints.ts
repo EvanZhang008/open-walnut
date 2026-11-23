@@ -217,6 +217,14 @@ function descriptionOf(schema: unknown): string {
  * still refused, never joined for it.
  */
 export function invalidTypeHint(root: Shape, data: unknown, path: PropertyKey[], expected: unknown): string {
+  if (expected === 'array' && path.length) {
+    // The other way round: a list key given one string (thread_create supersedes "th-...").
+    const value = valueAt(data, path)
+    const key = path[path.length - 1]
+    if (typeof value !== 'string' || typeof key !== 'string') return ''
+    const items = value.split(',').map((v) => v.trim()).filter(Boolean)
+    return `; ${key} takes a list, e.g. ${JSON.stringify(items.length ? items : [value])}, not a string`
+  }
   if (expected !== 'string' || path.length === 0) return ''
   const value = valueAt(data, path)
   if (!Array.isArray(value) || value.length === 0) return ''

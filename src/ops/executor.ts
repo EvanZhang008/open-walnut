@@ -470,7 +470,12 @@ export function parseOpArgs(
     parsed = z.object(op.input).strict().safeParse(input)
   }
   if (!parsed.success) {
-    const issues = parsed.error.issues.map((i) => {
+    // zod still runs a list's size check on a value of the wrong type, and words it for that value
+    // ("expected string to have <=12 characters" for a string given where a list of 12 goes): the
+    // wrong type is the whole story there (2026-11-23, thread_create supersedes).
+    const wrongType = new Set(parsed.error.issues.filter((i) => i.code === 'invalid_type').map((i) => i.path.join('.')))
+    const told = parsed.error.issues.filter((i) => !((i.code === 'too_big' || i.code === 'too_small') && wrongType.has(i.path.join('.'))))
+    const issues = told.map((i) => {
       // A "did you mean" never stands alone: the keys the object takes follow it, so a wrong guess costs no round trip.
       const hint = i.code === 'unrecognized_keys'
         ? unknownKeyHint(op.input, input, i.path, i.keys)
