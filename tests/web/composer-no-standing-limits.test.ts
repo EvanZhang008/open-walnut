@@ -86,6 +86,8 @@ const LIMIT_TEXT = /`[^`]*\$\{\s*(formatBytes\()?MAX_(IMAGES|FILES|FILE_BYTES|IM
 
 /** Each line (trimmed) that writes a limit into a text, and when it shows. */
 const SAID_WHEN_HIT: Record<string, string> = {
+  'components/common/image-attachments.ts|if (left.over > 0) parts.push(`Only ${MAX_IMAGES} pictures fit in one message; ${left.over === 1 ? \'1 was\' : `${left.over} were`} not added`);':
+    'leftOutNotice: beside the picture strip, only after an add left pictures past the count out',
   'api/file-upload.ts|if (size > MAX_FILE_BYTES) throw new FileUploadError(`Files can be at most ${formatBytes(MAX_FILE_BYTES)}`, \'too_large\');':
     'an upload refused for its size, said on that file\'s card as its error',
   'components/common/composer-attachments.ts|left.push(picture ? `Only ${MAX_IMAGES} images fit in one message`':
