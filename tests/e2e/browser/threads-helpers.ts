@@ -588,6 +588,29 @@ export async function settledScrollTop(history: Locator): Promise<number> {
  *  event reached the page (2026-10-31, probe: the scroll at 68 ms, pointerdown
  *  at 72 ms; a click by coordinates moved nothing). A test that checks the
  *  timeline stays where the reader was clicks this way. */
+/**
+ * Presses the timeline's "Load earlier turns" until `isThere` holds (the turn a spec needs is
+ * rendered); with no such button, scrolls the timeline to its top unless `scrollTop: false`.
+ * A DOM click: the timeline holds its bottom, so a scrolled click can miss. The click is
+ * bounded: a button that unmounted between the count and the click (its page had loaded) made
+ * an unbounded locator.evaluate wait for a button that never came back, past the whole poll
+ * (2026-11-23, the review sidebar spec's "waiting on the predicate" with the turn on screen).
+ */
+export async function loadEarlierUntil(
+  history: Locator, isThere: () => Promise<boolean>, opts: { timeout: number; scrollTop?: boolean },
+): Promise<void> {
+  await expect.poll(async () => {
+    if (await isThere()) return true
+    const more = history.getByRole('button', { name: 'Load earlier turns', exact: true })
+    if (await more.count()) {
+      await more.first().evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 1_000 }).catch(() => { /* gone: loaded */ })
+    } else if (opts.scrollTop !== false) {
+      await history.evaluate((el) => { el.scrollTop = 0 })
+    }
+    return false
+  }, { timeout: opts.timeout, intervals: [300] }).toBe(true)
+}
+
 export async function clickInPlace(page: Page, target: Locator): Promise<void> {
   await expect(target).toBeInViewport()
   const b = (await target.boundingBox())!

@@ -7,7 +7,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, switchView, test } from './threads-helpers'
+import { centreInHistory, loadEarlierUntil, openThreadsSession, passageRects, resetThreadsFixture, switchView, test } from './threads-helpers'
 import { buildMapSession, MAP_PASSAGES, MAP_SESSION, MAP_TITLES } from './threads-fixture'
 
 const MAP_TASK = 'pw-task-threads-map'
@@ -52,16 +52,8 @@ async function open(page: Page, height: number): Promise<Locator> {
 /** The passage's reply rendered: it sits behind "Load earlier turns". */
 async function ensurePassage(panel: Locator, phrase: string): Promise<void> {
   const history = panel.locator('.session-history')
-  await expect.poll(async () => {
-    const found = await panel.evaluate((root, needle) => Array.from(root.querySelectorAll('.session-history [data-message-id] .session-msg-content'))
-      .some((b) => (b.textContent ?? '').includes(needle)), phrase)
-    if (found) return true
-    const more = history.getByRole('button', { name: 'Load earlier turns', exact: true })
-    // A DOM click: the timeline holds its bottom, so a scrolled click can miss.
-    if (await more.count()) await more.first().evaluate((el) => (el as HTMLElement).click())
-    else await history.evaluate((el) => { el.scrollTop = 0 })
-    return false
-  }, { timeout: 30_000, intervals: [300] }).toBe(true)
+  await loadEarlierUntil(history, () => panel.evaluate((root, needle) => Array.from(root.querySelectorAll('.session-history [data-message-id] .session-msg-content'))
+    .some((b) => (b.textContent ?? '').includes(needle)), phrase), { timeout: 30_000 })
 }
 
 /** The card's head is below the panel header and the topmost thing at its ×. */

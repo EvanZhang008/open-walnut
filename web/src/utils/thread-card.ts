@@ -184,7 +184,8 @@ export const ENLARGED_MIN_SHARE = 0.7;
  * is what is on screen below that top (`visible`, the part of the box the panel
  * header leaves), at most `maxRoom`; when less than ENLARGED_MIN_HEIGHT (or
  * ENLARGED_MIN_SHARE of the visible box) is left there, the card moves up just
- * enough to have it.
+ * enough to have it. A review card whose top lies under the header (above
+ * `visible.top`) opens its card 8px below the header instead.
  */
 export function placeCardOver(
   anchor: CardAnchorRect, visible: { top: number; bottom: number }, maxRoom: number,
@@ -195,7 +196,10 @@ export function placeCardOver(
   const width = Math.min(Math.max(CARD_ENLARGED_WIDTH, Math.round(anchor.right - anchor.left)), span);
   const wide = Math.min(Math.max(CARD_GROWN_WIDTH, width), span);
   const want = Math.min(maxRoom, Math.max(ENLARGED_MIN_HEIGHT, Math.round((visible.bottom - visible.top) * ENLARGED_MIN_SHARE)));
-  let top = anchor.top;
+  // Never under the panel's glass header: a selected review card goes level with its passage,
+  // which can lie under the header, and a card there had its title, full-screen key and close
+  // under the header's controls (2026-11-23: a click on the full-screen key hit the mode pill).
+  let top = Math.max(anchor.top, visible.top + 8);
   if (visible.bottom - 12 - top < want) top = Math.max(visible.top + 8, visible.bottom - 12 - want);
   const maxHeight = Math.round(Math.max(want, Math.min(maxRoom, visible.bottom - 12 - top)));
   top = Math.max(0, Math.round(top));

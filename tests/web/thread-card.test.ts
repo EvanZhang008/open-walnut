@@ -153,6 +153,12 @@ describe('placeCardOver (a review card enlarged in place)', () => {
     expect(p.top).toBe(778 - 12 - p.maxHeight);
     expect(placeCardOver({ ...review, top: 380 }, { top: 80, bottom: 480 }, 600).maxHeight).toBe(ENLARGED_MIN_HEIGHT);
   });
+  it('a review card whose top lies under the header opens its card below the header', () => {
+    // The selected review card goes level with its passage, which can be under the glass header.
+    const p = placeCardOver({ ...review, top: 30, bottom: 150 }, visible, 760);
+    expect(p.top).toBe(visible.top + 8);
+    expect(p.maxHeight).toBe(Math.min(760, 980 - 12 - p.top));
+  });
   it('stays below the header on a short box, and narrows to what is left of the right edge', () => {
     const p = placeCardOver({ top: 200, bottom: 260, left: 300, right: 420 }, { top: 80, bottom: 400 }, 300);
     expect(p.top).toBe(88);

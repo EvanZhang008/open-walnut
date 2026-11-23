@@ -16,7 +16,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { leaveFullscreen } from './draft-helpers'
-import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture, test } from './threads-helpers'
+import { centreInHistory, clickInPlace, loadEarlierUntil, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { REVIEW_COUNT, REVIEW_FOLLOW_MAIN, REVIEW_FOLLOW_OLD_MAIN, REVIEW_FOLLOW_OLD_SESSION, REVIEW_FOLLOW_OLD_TASK, REVIEW_FOLLOW_SESSION, REVIEW_FOLLOW_TASK, REVIEW_MIXED_PASSAGES, REVIEW_MIXED_READY, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
 const SHOTS = () => `/tmp/ask-review/e2e/${test.info().project.name}`
@@ -63,14 +63,7 @@ async function goFullscreen(panel: Locator): Promise<void> {
   await expect(panel).toHaveClass(/open-walnut-fullscreen/)
   const history = panel.locator('.session-history')
   const first = reviewPassage(0).slice(0, 30)
-  await expect.poll(async () => {
-    if (await history.getByText(first).count()) return true
-    const more = history.getByRole('button', { name: 'Load earlier turns', exact: true })
-    // A DOM click: the timeline holds its bottom, so a scrolled click can miss.
-    if (await more.count()) await more.first().evaluate((el) => (el as HTMLElement).click())
-    else await history.evaluate((el) => { el.scrollTop = 0 })
-    return false
-  }, { timeout: 20_000, intervals: [300] }).toBe(true)
+  await loadEarlierUntil(history, async () => (await history.getByText(first).count()) > 0, { timeout: 20_000 })
 }
 
 /** A real wheel, as a reader scrolls: the timeline holds its bottom against a
@@ -994,12 +987,7 @@ test.describe('asks on turns that are not loaded', () => {
 
     // Load the turn: its two asks get their cards and the bar, which folds to a band
     // counting them.
-    await expect.poll(async () => {
-      if (await history.getByText(REVIEW_OLD_PASSAGES[0].slice(0, 20)).count()) return true
-      const more = history.getByRole('button', { name: 'Load earlier turns', exact: true })
-      if (await more.count()) await more.first().evaluate((el) => (el as HTMLElement).click())
-      return false
-    }, { timeout: 20_000, intervals: [300] }).toBe(true)
+    await loadEarlierUntil(history, async () => (await history.getByText(REVIEW_OLD_PASSAGES[0].slice(0, 20)).count()) > 0, { timeout: 20_000, scrollTop: false })
     await expect(sidebarCards(panel)).toHaveCount(2, { timeout: 15_000 })
     const bar = panel.locator('[data-testid="thread-review-bar"]')
     await bar.click()
