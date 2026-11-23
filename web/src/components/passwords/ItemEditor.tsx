@@ -77,9 +77,9 @@ function GeneratorButton({ onUse }: { onUse: (pw: string) => void }) {
   const close = () => setGeneratorPopoverOpen(false)
   return (
     <>
-      <button ref={trigger} type="button" className="btn btn-icon" aria-label="Generate a password" title="Generate" aria-expanded={generatorPopoverOpen}
+      <button ref={trigger} type="button" className="btn btn-icon" aria-label="Generate a password" title="Generate" aria-haspopup="dialog" aria-expanded={generatorPopoverOpen}
         onClick={() => setGeneratorPopoverOpen((o) => !o)}><DiceIcon /></button>
-      <PasswordsPopover open={generatorPopoverOpen} onClose={close} triggerRef={trigger} minHeight={260}>
+      <PasswordsPopover label="Password generator" open={generatorPopoverOpen} onClose={close} triggerRef={trigger} minHeight={260}>
         <GeneratorPanel onUse={(pw) => { onUse(pw); close() }} />
       </PasswordsPopover>
     </>

@@ -6471,26 +6471,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .mention-skeleton .sk-icon { width: 14px; height: 14px; }
 .mention-skeleton .sk-line { width: 55%; height: 10px; }
 @keyframes mentionShimmer { to { background-position: -200% 0; } }
-.mention-hintbar {
-  display: flex;
-  gap: 12px;
-  padding: 5px 10px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.mention-hintbar b {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: var(--font-size-xs);
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-xs);
-  padding: 0 4px;
-  margin-right: 2px;
-}
 
 /* A purely semantic hit has no highlighted characters: the snippet says WHY. */
 .mention-summary { opacity: 0.85; font-style: italic; }
@@ -14371,15 +14351,6 @@ a.task-kebab-info:hover {
 }
 .fmp-error { color: var(--error); }
 
-.file-mention-hint {
-  display: flex;
-  gap: 12px;
-  padding: 5px 8px;
-  border-top: 1px solid var(--border);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  flex-shrink: 0;
-}
 
 /* ===== Session Path Selector (popover above chat input) ===== */
 
@@ -14999,21 +14970,6 @@ a.task-kebab-info:hover {
 }
 
 /* Key hints row — lives below the list so the search placeholder can state purpose. */
-.sps-keys-hint {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  border-top: 1px solid var(--border);
-}
-.sps-keys-hint kbd {
-  font-family: 'SF Mono', Menlo, monospace;
-  font-size: 9px;
-  padding: 0 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-secondary);
-}
 
 /* ── Shared pin-tier picker (PinTierPicker) ──
    One control for every create surface that shows a tier row (the Quick Task
@@ -19076,13 +19032,14 @@ a.tag-chip:hover .tag-chip-value,
   text-align: left;
 }
 .notes-chat-switcher-item:hover { background: var(--bg-hover); }
-.notes-chat-switcher-item.active { background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 600; }
+/* The current chat, as the model picker marks its pick: the words in the accent, no fill. */
+.notes-chat-switcher-item.active,
+.notes-chat-switcher-item.active .notes-chat-switcher-item-label { color: var(--accent-text); }
 .notes-chat-switcher-item.error { color: var(--error); }
+/* A chat's name is read whole: it wraps, never cut. */
 .notes-chat-switcher-item-label {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 /* Labeled group headers — the kind of chat (Walnut Agent / Claude Code) is
    stated outright, never implied by an icon or a bare divider. */

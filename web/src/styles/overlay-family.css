@@ -37,6 +37,10 @@
 
   --overlay-radius: var(--radius-md);
   --overlay-row-radius: var(--radius-sm);
+  /* A menu's one-line row: 6 px above and below an 18 px line. */
+  --overlay-row-height: 30px;
+  --overlay-row-pad-y: 6px;
+  --overlay-row-pad-x: 12px;
   --dialog-radius: var(--radius-lg);
   --overlay-border: var(--border-strong);
   /* Light enough to lift a menu off the page, not to cover the work under it (2026-11-22 final audit:
@@ -117,6 +121,45 @@ html .wn-menu > :is(button, a) {
   border-radius: var(--overlay-row-radius);
 }
 
+/* ONE row height for every menu: a one-line row is --overlay-row-height tall whatever its menu
+   (2026-11-23, the UI audit: 54 menus drew their rows at eleven heights from 24 to 36 px; the user:
+   "all of it should be consistent"). A row keeps its own side padding, type size and content; the
+   family sets its height, its top and bottom room and its line. A row of two lines by design (a
+   name over a description) or a row of controls grows past it. Every row class of a menu is in this
+   list or named in tests/web/menu-row-family.test.ts with why it is not. */
+html :is(.wn-menu, .wn-overlay) :is(
+  .task-kebab-item, .task-kebab-project-opt, .wn-context-menu-item,
+  .chat-plus-menu-item, .chat-send-menu-item, .composer-overflow-item,
+  .agent-menu-item, .cmd-menu-item, .model-picker-row, .pw-menu-item,
+  .mic-history-menu-item, .mic-retry-item, .thread-menu-item, .trigger-picker-option, .trigger-picker-row,
+  .notes-chat-switcher-item, .notes-format-block-item, .notes-tag-item, .tag-autocomplete-item,
+  .sfe-path-suggest-item, .sdc-item, .session-taskbar-more-row, .draft-v6-wm-row,
+  .leader-sub-row, .tp-pri-opt, .tp-cols-opt, .fb-item, .dm-row,
+  .cal-cal-option, .cal-cals-row, .kanban-menu-row, .kanban-changes-row, .mail-rules-picker-option,
+  .dm-view
+),
+html .wn-menu:is(.notes-context-menu, .cal-ctx-menu) > button {
+  min-height: var(--overlay-row-height);
+  height: auto;
+  padding-top: var(--overlay-row-pad-y);
+  padding-bottom: var(--overlay-row-pad-y);
+  line-height: 18px;
+  box-sizing: border-box;
+}
+
+/* A plain action menu (a list of things to do, no pickers or trees) also has one side padding, so its
+   words start at the same place in every such menu (the 2026-11-23 review: the agent and command
+   card menus sat 14 px in, the passwords New menu 10 px, the task menu 12 px). */
+html :is(.wn-menu, .wn-overlay) :is(
+  .task-kebab-item, .wn-context-menu-item, .chat-plus-menu-item, .chat-send-menu-item,
+  .agent-menu-item, .cmd-menu-item, .pw-menu-item, .mic-history-menu-item, .notes-chat-switcher-item,
+  .kanban-menu-row
+),
+html .wn-menu:is(.notes-context-menu, .cal-ctx-menu) > button {
+  padding-left: var(--overlay-row-pad-x);
+  padding-right: var(--overlay-row-pad-x);
+}
+
 html .wn-dialog {
   border-radius: var(--dialog-radius);
 }
@@ -152,6 +195,51 @@ html .wn-dialog-foot {
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
+}
+
+/* The key hints at the foot of a menu, picker or palette (the folder picker, the draft's Where menu,
+   the notes command palette, the quick bar): ONE footer and ONE key cap everywhere (2026-11-23, the
+   UI audit: four footers had four paddings, three type sizes and filled, outlined and bare keys).
+   A surface whose rows sit further in sets --menu-foot-pad-x so its hints line up with them. */
+html .wn-menu-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-height: 32px;
+  padding: 6px var(--menu-foot-pad-x, 12px);
+  box-sizing: border-box;
+  border-top: 1px solid var(--border);
+  font-size: var(--font-size-xs);
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+
+/* One hint: its key, then the word for what it does (KeyHints.tsx). */
+html .wn-key-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* A key is outlined, never filled: the word beside it (what the key does) reads first (the audit,
+   2026-11-22: filled caps outweighed their words in the quick bar's foot). */
+html .wn-key {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--fg-muted);
+  text-align: center;
 }
 
 html .wn-tip {

@@ -92,7 +92,7 @@ export const QuickBarResults = forwardRef<QuickBarResultsHandle, {
             <span className="qb-result-title wn-title">{row.title}</span>
             {row.sub && <span className="qb-result-sub">{row.sub}</span>}
           </span>
-          {i === cursor && <kbd className="qb-key">↵</kbd>}
+          {i === cursor && <kbd className="qb-key wn-key">↵</kbd>}
         </button>
       ))}
     </div>

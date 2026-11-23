@@ -43,6 +43,7 @@ import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList, type PathListEmpty } from './path-selector/PathList';
 import { freshLauncherMeta } from './task-meta-constants';
 import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
+import { KeyHints } from '@/components/common/KeyHints';
 
 export interface QuickStartPath {
   cwd: string;
@@ -965,9 +966,7 @@ export function SessionPathSelector({
 
       {/* Key hints live here (not in the placeholder) so the placeholder can say
           what the popover is FOR — new users scan purpose first, keys later. */}
-      <div className="sps-keys-hint">
-        <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> select or use path · <kbd>→</kbd> complete · <kbd>⇧Enter</kbd> use it · <kbd>Esc</kbd> close
-      </div>
+      <KeyHints className="sps-keys-hint" hints={[['↑↓', 'navigate'], ['Enter', 'select or use path'], ['→', 'complete'], ['⇧Enter', 'use it'], ['Esc', 'close']]} />
 
     </div>
   );

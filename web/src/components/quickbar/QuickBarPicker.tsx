@@ -157,7 +157,7 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
                     <span className="qb-mode-row-name wn-title">{m.action}</span>
                     <span className="qb-mode-row-about">{m.about}</span>
                   </span>
-                  <span className="qb-mode-row-hint">or type <kbd className="qb-key">{m.keywords[0]}</kbd> then <kbd className="qb-key">tab</kbd></span>
+                  <span className="qb-mode-row-hint">or type <kbd className="qb-key wn-key">{m.keywords[0]}</kbd> then <kbd className="qb-key wn-key">tab</kbd></span>
                 </div>
               );
             })}
@@ -188,7 +188,7 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
                   <span className={`qb-person-line${p.needs > 0 || p.state === 'needs' ? ' qb-person-needs' : ''}`}>
                     {personLine(p)}
                   </span>
-                  {!query.trim() && num < 9 && <kbd className="qb-key qb-person-key">⌘{num + 1}</kbd>}
+                  {!query.trim() && num < 9 && <kbd className="qb-key wn-key qb-person-key">⌘{num + 1}</kbd>}
                 </div>
               );
             })}

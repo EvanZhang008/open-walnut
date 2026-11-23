@@ -35,6 +35,7 @@ import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { useMoreBelow } from '@/hooks/useMoreBelow';
 import { recordRecentFolder, getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
 import { joinPath, parentPath, relativeTo, normalizePath, parseQuery } from './mention-path';
+import { KeyHints } from '@/components/common/KeyHints';
 
 /**
  * The preview, loaded the first time a file is previewed: it brings the editors and the highlighter,
@@ -552,25 +553,9 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
           )}
         </div>
 
-        <div className="file-mention-hint">
-          {recentsMode ? (
-            <>
-              <span>↑↓ move</span>
-              <span>⏎ open folder</span>
-              <span>⌘⏎ select</span>
-              <span>esc close</span>
-            </>
-          ) : (
-            <>
-              <span>↑↓ move</span>
-              <span>→/⏎ open dir</span>
-              <span>← parent</span>
-              <span>⌘⏎ select</span>
-              <span>@? find folders</span>
-              <span>esc close</span>
-            </>
-          )}
-        </div>
+        <KeyHints className="file-mention-hint" hints={recentsMode
+          ? [['↑↓', 'move'], ['⏎', 'open folder'], ['⌘⏎', 'select'], ['esc', 'close']]
+          : [['↑↓', 'move'], ['→/⏎', 'open dir'], ['←', 'parent'], ['⌘⏎', 'select'], ['@?', 'find folders'], ['esc', 'close']]} />
       </div>
     );
   },

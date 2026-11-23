@@ -46,7 +46,7 @@ export function QuickBarFoot({
       </span>
     );
   } else if (mode === 'send' && typedMode) {
-    left = <span className="qb-foot-idle"><kbd className="qb-key">tab</kbd> {typedMode.mode.action}{typedMode.rest ? <> for “{typedMode.rest}”</> : null}</span>;
+    left = <span className="qb-foot-idle"><kbd className="qb-key wn-key">tab</kbd> {typedMode.mode.action}{typedMode.rest ? <> for “{typedMode.rest}”</> : null}</span>;
   } else if (mode === 'send' && empty) {
     // The empty box's other modes are things to start, not a value to pick (the bar shows this
     // line only here, and each mode then has its own chip and Esc back): buttons, then one muted
@@ -75,7 +75,7 @@ export function QuickBarFoot({
   else keys = <>{!typedMode && <><Key k="tab" />more </>}{switchTo !== undefined && <span className="qb-switch-key" title={`Shift-Tab: send to ${switchTo?.title ?? 'CEO'}`}><Key k="⇧tab" /><span className="qb-switch-name">{shortName(switchTo)}</span> </span>}<Key k="↵" />send{canCapture && <> <Key k="⇧⌘S" />screenshot</>} <Key k="esc" />close</>;
 
   return (
-    <div className="qb-foot">
+    <div className="qb-foot wn-menu-foot">
       {left}
       {/* A phone has no keyboard: the key hints only crowded its modes off the bar's edge. */}
       {!phone && <span className="qb-keys">{keys}</span>}
@@ -91,7 +91,7 @@ function shortName(p: QuickPerson | null): string {
 }
 
 export function Key({ k }: { k: string }) {
-  return <kbd className="qb-key">{k}</kbd>;
+  return <kbd className="qb-key wn-key">{k}</kbd>;
 }
 
 export function MicGlyph({ level }: { level: number }) {

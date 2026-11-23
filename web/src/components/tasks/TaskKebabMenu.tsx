@@ -521,6 +521,8 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
         <button
           ref={btnRef}
           className={`task-kebab-project-current${open ? ' open' : ''}`}
+          aria-haspopup="menu"
+          aria-expanded={open}
           onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
         >
           <span className="task-kebab-project-current-name">

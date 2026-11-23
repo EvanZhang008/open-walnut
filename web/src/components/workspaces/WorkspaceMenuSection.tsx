@@ -261,6 +261,8 @@ export function WorkspaceMenuSection({ task, afterAction }: {
         <button
           ref={btnRef}
           className={`task-kebab-project-current${open ? ' open' : ''}`}
+          aria-haspopup="menu"
+          aria-expanded={open}
           data-testid="workspace-menu-row"
           onClick={(e) => {
             e.stopPropagation();

@@ -85,7 +85,10 @@
 .btn[aria-haspopup]:not([aria-haspopup='false'])[aria-expanded='true'],
 .btn[aria-pressed='true']:hover:not(:disabled):not([aria-disabled='true']),
 .btn[data-on='true']:hover:not(:disabled):not([aria-disabled='true']),
-.btn[aria-haspopup]:not([aria-haspopup='false'])[aria-expanded='true']:hover:not(:disabled):not([aria-disabled='true']) {
+.btn[aria-haspopup]:not([aria-haspopup='false'])[aria-expanded='true']:hover:not(:disabled):not([aria-disabled='true']),
+/* A trigger drawn as a title rather than a key (the notes chat switcher) is on the same way while open. */
+.notes-chat-switcher-trigger[aria-expanded='true'],
+.notes-chat-switcher-trigger[aria-expanded='true']:hover {
   /* Half the accent: still clear where the accent is the chat's dark grey. */
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   background: var(--accent-subtle);

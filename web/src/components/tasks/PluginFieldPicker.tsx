@@ -231,6 +231,8 @@ function PluginFieldRow({ task, field, afterAction }: {
         <button
           ref={btnRef}
           className={`task-kebab-project-current${open ? ' open' : ''}`}
+          aria-haspopup="menu"
+          aria-expanded={open}
           onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
         >
           <span className="task-kebab-project-current-name">{current ?? 'Set…'}</span>
@@ -293,6 +295,8 @@ export function PluginFieldPill({ task, field }: {
       <button
         ref={btnRef}
         className={`btn btn-sm${!current ? ' btn-ghost' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
         title={current ? `${field.label}: ${current}` : `Set ${field.label.toLowerCase()}`}
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
       >

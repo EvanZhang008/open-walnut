@@ -17,7 +17,7 @@ const SID = (browserName: string) => `pw-background-bar-${browserName}`
 test.setTimeout(150_000)
 test.use({ viewport: { width: 1512, height: 920 }, deviceScaleFactor: 1 })
 
-type Drawn = { rows: MenuShapeRow[]; chevronless: string[]; glyphs: string[] }
+type Drawn = { rows: MenuShapeRow[]; chevronless: string[]; glyphs: string[]; offHeight: string[] }
 
 /** The menu's first level as the shape sees it, plus the expanding rows that lack the shared chevron. */
 async function drawn(menu: Locator): Promise<Drawn> {
@@ -25,6 +25,7 @@ async function drawn(menu: Locator): Promise<Drawn> {
     const rows: Array<{ kind: string; danger?: boolean; label?: string }> = []
     const chevronless: string[] = []
     const glyphs: string[] = []
+    const offHeight: string[] = []
     const ROW = '.task-kebab-item, .chat-plus-menu-item, .task-pin-shortcuts, .task-kebab-panels, .wn-context-menu-item'
     const shown = (el: HTMLElement) => getComputedStyle(el).display !== 'none' && el.getClientRects().length > 0
     const walk = (el: Element) => {
@@ -42,6 +43,10 @@ async function drawn(menu: Locator): Promise<Drawn> {
             if (key.matches('[aria-expanded], [aria-haspopup]') && !key.querySelector('.wn-disclosure-chevron')) chevronless.push(label)
           }
           if (/[▶▸▾›]/.test(label)) glyphs.push(label)
+          // ONE row height (overlay-family.css, --overlay-row-height): a one-line row of words is 30 px;
+          // a row that holds keys of its own (the Pin row's shortcuts) grows past it.
+          const h = Math.round(c.getBoundingClientRect().height)
+          if (c.matches('.task-kebab-item, .chat-plus-menu-item, .wn-context-menu-item') && !c.querySelector('button, input, [role="switch"]') && h !== 30) offHeight.push(`${label} (${h} px)`)
           // One drawn icon and one line of words: an icon slot holds an <svg>, never a typed character.
           for (const slot of Array.from(c.querySelectorAll<HTMLElement>('.task-kebab-icon, .chat-plus-menu-key'))) {
             if (slot.closest(ROW) === c && !slot.querySelector('svg') && slot.textContent!.trim()) glyphs.push(`${label} (icon "${slot.textContent!.trim()}")`)
@@ -56,7 +61,7 @@ async function drawn(menu: Locator): Promise<Drawn> {
       }
     }
     walk(root)
-    return { rows: rows as MenuShapeRow[], chevronless, glyphs }
+    return { rows: rows as MenuShapeRow[], chevronless, glyphs, offHeight }
   })
 }
 
@@ -65,6 +70,7 @@ function judge(id: string, d: Drawn) {
   expect(menuShapeProblems(d.rows), `${id}: ${line}`).toEqual([])
   expect(d.chevronless, `${id}: rows that open more without the shared chevron`).toEqual([])
   expect(d.glyphs, `${id}: a hand-drawn arrow glyph on a row`).toEqual([])
+  expect(d.offHeight, `${id}: one-line rows off the family's row height`).toEqual([])
   // Big enough to be a big menu: the check above really ran.
   expect(d.rows.filter((r) => r.kind === 'item' || r.kind === 'group').length, `${id}: ${line}`).toBeGreaterThanOrEqual(8)
 }

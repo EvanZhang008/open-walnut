@@ -23,6 +23,7 @@ import type { DraftRowUpdate, DraftWhere } from './useDraftWhere';
 import { autoNote, detectProjectForFolder, draftHostFor, ownHostOf } from './draft-work-in';
 import { folderSections, isPathQuery, shownPath, typedPathView, type MenuFolderRow } from './draft-where-menu';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
+import { KeyHints } from '@/components/common/KeyHints';
 
 interface Pickable { id: string; pick: () => void; complete?: string }
 
@@ -224,10 +225,9 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
         ))}
         {!pathMode && query.trim() && !sections.length && <EmptyState size="row" title="No folder matches" hint="Type a path: / or ~" />}
       </div>
-      <div className="draft-v6-wm-foot" aria-hidden="true">
-        <kbd className="draft-v6-kbd">↑↓</kbd> move <kbd className="draft-v6-kbd">Enter</kbd> pick <kbd className="draft-v6-kbd">→</kbd> open a level
+      <KeyHints className="draft-v6-wm-foot" hints={[['↑↓', 'move'], ['Enter', 'pick'], ['→', 'open a level']]}>
         <span className="draft-v6-wm-count">{where.dirs.length} {where.dirs.length === 1 ? 'folder' : 'folders'}</span>
-      </div>
+      </KeyHints>
     </div>
   );
 }

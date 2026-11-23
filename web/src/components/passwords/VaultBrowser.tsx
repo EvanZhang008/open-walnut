@@ -45,8 +45,8 @@ function NewItemButton({ onPick }: { onPick: (t: VaultItemType) => void }) {
   const close = () => setNewMenuOpen(false)
   return (
     <>
-      <button ref={trigger} type="button" className="btn btn-icon pw-new-btn" aria-label="New item" title="New item" aria-expanded={newMenuOpen} onClick={() => setNewMenuOpen((o) => !o)}><PlusIcon /></button>
-      <PasswordsPopover open={newMenuOpen} onClose={close} triggerRef={trigger} menu minHeight={120}>
+      <button ref={trigger} type="button" className="btn btn-icon pw-new-btn" aria-label="New item" title="New item" aria-haspopup="menu" aria-expanded={newMenuOpen} onClick={() => setNewMenuOpen((o) => !o)}><PlusIcon /></button>
+      <PasswordsPopover label="New item" open={newMenuOpen} onClose={close} triggerRef={trigger} menu minHeight={120}>
         {NEW_TYPES.map((t) => (
           <button key={t} type="button" role="menuitem" className="pw-menu-item" onClick={() => { close(); onPick(t) }}>New {typeLabel(t).toLowerCase()}</button>
         ))}
@@ -60,10 +60,10 @@ function GeneratorToolButton() {
   const trigger = useRef<HTMLButtonElement>(null)
   return (
     <>
-      <button ref={trigger} type="button" className="pw-side-item" aria-expanded={generatorPopoverOpen} onClick={() => setGeneratorPopoverOpen((o) => !o)}>
+      <button ref={trigger} type="button" className="pw-side-item" aria-haspopup="dialog" aria-expanded={generatorPopoverOpen} onClick={() => setGeneratorPopoverOpen((o) => !o)}>
         <span className="pw-side-icon"><DiceIcon /></span><span className="pw-side-label">Generator</span>
       </button>
-      <PasswordsPopover open={generatorPopoverOpen} onClose={() => setGeneratorPopoverOpen(false)} triggerRef={trigger} minHeight={260} align="left">
+      <PasswordsPopover label="Password generator" open={generatorPopoverOpen} onClose={() => setGeneratorPopoverOpen(false)} triggerRef={trigger} minHeight={260} align="left">
         <GeneratorPanel />
       </PasswordsPopover>
     </>

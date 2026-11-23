@@ -103,8 +103,11 @@
   background: var(--bg-secondary);
   color: var(--fg);
 }
-.oc-card-btn { flex: 1; align-items: center; gap: 8px; padding: 2px 4px; border-radius: var(--radius-sm); /* shape: the main area of an org chart card, a card not a key */ }
+.oc-card-btn { flex: 1; align-items: center; gap: 10px; padding: 2px 4px; border-radius: var(--radius-sm); /* shape: the main area of an org chart card, a card not a key */ }
 .oc-card-btn:hover { background: var(--bg-secondary); }
+/* An avatar's state dot stands 2 px past its corner: its ring takes the sheet's own surface, and the
+   card's 10 px gap keeps it clear of the name beside it. */
+.org-sheet .org-state-dot { border-color: var(--bg-elevated, var(--card-bg)); }
 .oc-card-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .oc-card-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 650; font-size: var(--font-size-md); }
 /* A name is read whole: it wraps, never cut off (2026-11-06, the user: "just show the name"). */

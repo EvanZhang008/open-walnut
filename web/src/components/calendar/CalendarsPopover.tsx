@@ -135,6 +135,7 @@ export function CalendarsPopover({ anchorEl, onClose, hiddenEvents = [], onShowE
             <button
               ref={hiddenBtnRef}
               type="button"
+              aria-haspopup="dialog"
               className="cal-cals-row cal-hidden-events-btn"
               aria-expanded={hiddenOpen}
               aria-label={`Hidden events (${hiddenEvents.length})`}

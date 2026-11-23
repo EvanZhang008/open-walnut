@@ -548,20 +548,6 @@ mark.notes-search-mark {
   font-size: 14px;
   color: var(--accent);
 }
-.notes-cmdk-footer {
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
-.notes-cmdk-footer kbd {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 1px 4px;
-}
 
 /* ── /notes empty state — newcomer on-ramp (§3.6½) ─────────────────────── */
 

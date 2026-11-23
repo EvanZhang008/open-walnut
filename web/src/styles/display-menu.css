@@ -17,7 +17,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 28px;
+  /* Its height is the family's one menu row (overlay-family.css). */
   padding: 0 8px;
   border: none;
   border-radius: var(--radius-sm); /* shape: a menu row */

@@ -198,15 +198,12 @@
   animation-fill-mode: forwards;
 }
 
+/* The family's key-hint footer (wn-menu-foot); the bar's rows sit 16 px in, so its hints do too, and
+   its status line and keys stay on one line. */
 .qb-foot {
-  display: flex;
-  align-items: center;
+  --menu-foot-pad-x: 16px;
+  flex-wrap: nowrap;
   gap: 12px;
-  min-height: 34px;
-  padding: 6px 16px 8px;
-  border-top: 1px solid var(--qb-line);
-  font-size: var(--font-size-sm);
-  color: var(--qb-muted);
 }
 
 .qb-foot > span:first-child {
@@ -239,19 +236,9 @@
   text-overflow: ellipsis; /* meta: a name inside the one-line key hints of the foot; its tooltip names it whole */
 }
 
-/* A key is outlined, never filled: the word beside it (what the key does) reads first (the audit,
-   2026-11-22: the filled caps outweighed their words in the foot). */
+/* The family's key cap (wn-key); here only its room from the word before it. */
 .qb-key {
-  display: inline-block;
-  min-width: 18px;
-  padding: 1px 5px;
   margin-left: 6px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--qb-line);
-  background: transparent;
-  font: 500 var(--font-size-xs)/15px -apple-system, BlinkMacSystemFont, sans-serif;
-  color: var(--qb-muted);
-  text-align: center;
 }
 
 .qb-avatar {

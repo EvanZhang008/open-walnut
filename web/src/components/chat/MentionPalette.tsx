@@ -86,6 +86,7 @@ import {
   type MentionSourceRow,
 } from './mention-sources-model';
 import { sessionStatusStore } from '@/stores/session-status-store';
+import { KeyHints } from '@/components/common/KeyHints';
 
 export interface MentionPaletteHandle {
   /** Move selection by delta (wraps across all groups). */
@@ -649,15 +650,15 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
               ? <>{order === 'entities-first' ? <>{entityGroups}{topGroups}{filesGroup}</> : <>{filesGroup}{entityGroups}{topGroups}</>}{belowGroups}</>
               : sourceTab}
         </div>
-        <div className="mention-hintbar">
-          <span><b>↑↓</b> move</span>
-          {tabs.length > 1 && <span><b>⇥</b> source</span>}
-          {tabs.length <= 1 && entitiesEnabled && filesEnabled && <span><b>⇥</b> group</span>}
-          <span><b>⏎</b> reference</span>
-          {onAll && filesEnabled && <span><b>←</b> parent</span>}
-          {onAll && filesEnabled && <span><b>@?</b> recents</span>}
-          <span><b>esc</b> close</span>
-        </div>
+        <KeyHints className="mention-hintbar" hints={[
+          ['↑↓', 'move'],
+          tabs.length > 1 && ['⇥', 'source'],
+          tabs.length <= 1 && entitiesEnabled && filesEnabled && ['⇥', 'group'],
+          ['⏎', 'reference'],
+          onAll && filesEnabled && ['←', 'parent'],
+          onAll && filesEnabled && ['@?', 'recents'],
+          ['esc', 'close'],
+        ]} />
       </div>
     );
   },

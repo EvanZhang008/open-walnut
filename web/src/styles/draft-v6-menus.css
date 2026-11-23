@@ -45,16 +45,6 @@
 .draft-v6-wm-search.is-small { height: 40px; }
 .draft-v6-wm-field { flex: 1; min-width: 0; }
 .draft-v6-wm-path { font-family: var(--font-mono); font-size: var(--font-size-sm); }
-.draft-v6-kbd {
-  display: inline-block;
-  padding: 0 4px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  line-height: 18px;
-}
 .draft-v6-wm-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -126,19 +116,7 @@
 .draft-v6-wm-crumbs .draft-v6-crumb { font-weight: 400; }
 /* A row's own small key (the family's btn-sm, DraftWhereMenu); this only lays it out. */
 .draft-v6-mini { flex: none; }
-.draft-v6-wm-foot {
-  flex: none;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 6px;
-  min-height: 32px;
-  padding: 6px 12px;
-  box-sizing: border-box;
-  border-top: 1px solid var(--border);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
+/* The foot is the family's key-hint footer (wn-menu-foot, overlay-family.css). */
 .draft-v6-wm-count { margin-left: auto; }
 
 /* The packages of a code source, right under the Auto row. */
