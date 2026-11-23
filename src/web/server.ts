@@ -5260,7 +5260,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // a later Connect signs in again (core/hosts/host-link-end.ts).
         for (const host of hostsThatLeft(before, after)) {
           pushHostRemoved(host)
-          void endHostLink(host)
+          // Removed (its row is gone), not turned off: this Walnut's own service set there leaves too.
+          void endHostLink(host, undefined, { removed: !Object.hasOwn(hostDefs, host) })
         }
         // One a read added gets its frame now: its last phase change may have found no row.
         for (const host of after) if (!before.has(host)) pushHostFrame(host, hostDefs[host])

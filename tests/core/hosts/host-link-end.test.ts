@@ -42,6 +42,24 @@ describe('which hosts left, and whose link ends', () => {
     expect(calls).toEqual(['drop devbox', 'term devbox'])
   })
 
+  it('a removed host\'s own service set leaves first, while the link is still up; a turned off one keeps it (review round 2, N1)', async () => {
+    const calls: string[] = []
+    const deps = {
+      dropConnection: (h: string) => { calls.push(`drop ${h}`); return true },
+      endTerminalMaster: async (h: string) => { calls.push(`term ${h}`); return true },
+      leaveServiceSet: async (h: string, boundMs: number) => { calls.push(`leave ${h} ${boundMs > 0}`) },
+    }
+    await endHostLink('devbox', deps, { removed: true })
+    expect(calls).toEqual(['leave devbox true', 'drop devbox', 'term devbox'])
+    calls.length = 0
+    await endHostLink('devbox', deps)
+    expect(calls).toEqual(['drop devbox', 'term devbox'])
+    // A leave that throws never holds the link's end.
+    calls.length = 0
+    await endHostLink('devbox', { ...deps, leaveServiceSet: async () => { throw new Error('boom') } }, { removed: true })
+    expect(calls).toEqual(['drop devbox', 'term devbox'])
+  })
+
   it('a failure in one step still runs the other, and never throws', async () => {
     const calls: string[] = []
     const r = await endHostLink('devbox', {
@@ -116,7 +134,9 @@ describe('guard: a host that left Settings has its link ended', () => {
 
   it('the server ends the link of each host it tombstones, in the same loop', () => {
     const src = fs.readFileSync(path.join(ROOT, 'src/web/server.ts'), 'utf8')
-    expect(src).toMatch(/for \(const host of hostsThatLeft\(before, after\)\) \{\s*pushHostRemoved\(host\)\s*void endHostLink\(host\)/)
+    expect(src).toMatch(/for \(const host of hostsThatLeft\(before, after\)\) \{\s*pushHostRemoved\(host\)\s*(\/\/[^\n]*\n\s*)*void endHostLink\(host[,)]/)
+    // A host whose row is gone is removed (its own service set leaves too); one turned off is not.
+    expect(src).toMatch(/void endHostLink\(host, undefined, \{ removed: !Object\.hasOwn\(hostDefs, host\) \}\)/)
   })
 
   it('the row words say what Turn off and Remove do (no "sessions stop", no link kept)', () => {

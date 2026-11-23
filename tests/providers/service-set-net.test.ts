@@ -201,7 +201,7 @@ describe('walnut daemon net-id and net-forget (host side)', () => {
   const uids = new Map<string, number>()
   const uidOf = (home: string) => { if (!uids.has(home)) uids.set(home, uid++); return uids.get(home)! }
   afterAll(() => { for (const u of uids.values()) fs.rmSync(`/tmp/open-walnut-set-${u}-${SET}`, { recursive: true, force: true }) })
-  async function setDaemon(home: string, hello: Record<string, unknown>) {
+  async function setDaemon(home: string, hello: Record<string, unknown>, o: { silent?: string } = {}) {
     const set = serviceSet('linux', home, SET, { uid: uidOf(home) })
     fs.mkdirSync(set.installRoot, { recursive: true })
     fs.writeFileSync(path.join(set.installRoot, 'walnut-launcher.sh'), '#!/bin/sh\n')
@@ -212,6 +212,7 @@ describe('walnut daemon net-id and net-forget (host side)', () => {
     wss.on('connection', (ws) => ws.on('message', (raw) => {
       const m = JSON.parse(raw.toString()) as Record<string, unknown>
       got.push(m)
+      if (m.cmd === o.silent) return
       const answer = m.cmd === 'hello' ? { ok: true, ...hello }
         : m.cmd === 'net.configure' ? { ok: true, endpointId: netKey('set-net-set'), running: true }
           : { ok: true, running: true, node: { addrs: ['192.168.1.9:50123'] } }
@@ -297,6 +298,66 @@ describe('walnut daemon net-id and net-forget (host side)', () => {
     } finally { await new Promise<void>((r) => server.close(() => r())) }
     expect(await forgetDefaultNetMember('nope', home)).toMatchObject({ ok: false, code: 'bad_member' })
     expect(await forgetDefaultNetMember(macA.id, path.join(root, 'no-net'))).toEqual({ ok: true, changed: false })
+  })
+
+  /** The default's net dir under a fresh home, with `members` on its list and no walnut-net running. */
+  function defaultNet(name: string, members: unknown[]) {
+    const home = path.join(root, name)
+    const dir = dirOf(home)
+    fs.mkdirSync(dir, { recursive: true })
+    const cfg = { version: 1, key: path.join(dir, 'net.key'), relays: [], relayRoots: [], members, control: path.join(dir, 'none.sock') }
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n')
+    return { home, dir, cfg, file: path.join(dir, 'config.json') }
+  }
+
+  it('N-L1: a write by the other Walnut\'s supervisor between the read and the rename is kept (read again, then retried)', async () => {
+    const other = { id: netKey('set-net-other-mac'), name: 'other-mac', accept: true }
+    const newcomer = { id: netKey('set-net-newcomer'), name: 'newcomer', accept: false }
+    const n = defaultNet('forget-race', [other, macA, boxA])
+    const answer = await forgetDefaultNetMember(macA.id, n.home, {
+      beforeReplace: (attempt) => { if (attempt === 0) fs.writeFileSync(n.file, JSON.stringify({ ...n.cfg, members: [other, macA, boxA, newcomer] }, null, 2) + '\n') },
+    })
+    expect(answer).toMatchObject({ ok: true, changed: true })
+    expect((JSON.parse(fs.readFileSync(n.file, 'utf8')) as { members: unknown[] }).members).toEqual([other, boxA, newcomer])
+  })
+
+  it('N-L2: the last config the default\'s walnut-net came up on loses the entry too (its roll back never puts it back)', async () => {
+    const other = { id: netKey('set-net-other-mac'), name: 'other-mac', accept: true }
+    const n = defaultNet('forget-good', [other, macA])
+    const good = path.join(n.dir, 'config.last-good.json')
+    fs.writeFileSync(good, JSON.stringify({ ...n.cfg, members: [other, macA] }, null, 2) + '\n')
+    expect(await forgetDefaultNetMember(macA.id, n.home)).toMatchObject({ ok: true, changed: true })
+    expect((JSON.parse(fs.readFileSync(good, 'utf8')) as { members: unknown[] }).members).toEqual([other])
+    // A last-good without the entry is never written.
+    const n2 = defaultNet('forget-good-2', [other, macA])
+    fs.writeFileSync(path.join(n2.dir, 'config.last-good.json'), JSON.stringify({ ...n2.cfg, members: [other] }))
+    const kept = snapshot(n2.dir)[path.join(n2.dir, 'config.last-good.json')]
+    expect(await forgetDefaultNetMember(macA.id, n2.home)).toMatchObject({ ok: true, changed: true })
+    expect(snapshot(n2.dir)[path.join(n2.dir, 'config.last-good.json')]).toBe(kept)
+  })
+
+  it('N-L6: a `cmd` key in the leader\'s request never changes the command the set\'s daemon is sent', async () => {
+    const home = path.join(root, 'netid-cmd')
+    const d = await setDaemon(home, { serviceSet: SET })
+    try {
+      await serviceSetNetId({ ...input(home), request: { ...request, cmd: 'hello' } })
+      expect(d.got.map((m) => m.cmd)).toEqual(['hello', 'net.configure', 'net.status'])
+    } finally { await d.close() }
+  })
+
+  it('N-L4: the host side ends within one budget the leader still waits for', async () => {
+    const { NET_ID_BUDGET_MS } = await import('../../src/providers/service-set-net.js')
+    const { NET_ID_TIMEOUT_MS } = await import('../../src/providers/service-set-net-pair.js')
+    // The leader waits past the host's whole budget plus the line's own start (an upload is before it).
+    expect(NET_ID_TIMEOUT_MS).toBeGreaterThanOrEqual(NET_ID_BUDGET_MS + 15_000)
+    const home = path.join(root, 'netid-slow')
+    const d = await setDaemon(home, { serviceSet: SET }, { silent: 'net.configure' })
+    try {
+      const started = Date.now()
+      const { answer } = await serviceSetNetId({ ...input(home), budgetMs: 600 })
+      expect(answer).toMatchObject({ ok: false })
+      expect(Date.now() - started).toBeLessThan(4_000)
+    } finally { await d.close() }
   })
 })
 
@@ -407,9 +468,9 @@ describe('the leader\'s own walnut-net list (core/net/net-service-sets.ts)', () 
       const shared = netKey('records-shared')
       await hostServiceSets.write('net:box', { at: Date.now(), set: SET })
       await hostServiceSets.write('ssh:other', { at: Date.now(), set: SET })
-      expect(await serviceSetNetMembers()).toEqual({ add: [], drop: new Set() })
+      expect(await serviceSetNetMembers()).toEqual({ add: [], drop: new Set(), gone: [] })
       expect(await markServiceSetNetPaired('net:box', SET, { endpoint: own, addrs: ['10.0.0.9:5000'], shared })).toBe(true)
-      expect(await serviceSetNetMembers()).toEqual({ add: [{ id: own, name: 'box-set', accept: false, addrs: ['10.0.0.9:5000'] }], drop: new Set() })
+      expect(await serviceSetNetMembers()).toEqual({ add: [{ id: own, name: 'box-set', accept: false, addrs: ['10.0.0.9:5000'] }], drop: new Set(), gone: [] })
       await markServiceSetMoved('net:box', SET)
       expect((await serviceSetNetMembers()).drop).toEqual(new Set([shared]))
       expect(setNetMemberName('net:my host/1')).toBe('my-host-1-set')

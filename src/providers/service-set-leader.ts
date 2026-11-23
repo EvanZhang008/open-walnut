@@ -124,6 +124,18 @@ export async function markServiceSetMoved(place: string, set: string, now = Date
 }
 
 /**
+ * The host's set is not what answers there any more (review round 2, M6: the set was uninstalled by
+ * hand or the box rebuilt, and a daemon naming no set answers at the set's dir): the move is undone
+ * on this leader, so the link takes today's dir choice again and a later look installs and moves anew.
+ */
+export async function clearServiceSetMoved(place: string): Promise<void> {
+  const before = await hostServiceSets.read(place).catch(() => null)
+  if (!movedToSet(before)) return
+  const { movedAt: _m, ...rest } = before
+  await hostServiceSets.write(place, { ...rest, at: Date.now() })
+}
+
+/**
  * Keep the set a `walnut daemon` output names for `place`; null when it names none (an older host:
  * nothing is kept and nothing changes). A runtime dir already known for the same set is kept.
  */
@@ -160,13 +172,15 @@ export async function markServiceSetNetLeft(place: string, set: string, now = Da
   await hostServiceSets.write(place, { ...before, at: now, netSharedLeftAt: now })
 }
 
-/** Forget a set's walnut-net on this leader (leaving the host): the record keeps the set, not its endpoint. */
-export async function forgetServiceSetNet(place: string): Promise<string | null> {
-  const before = await hostServiceSets.read(place).catch(() => null)
-  if (!before?.netEndpoint) return null
-  const { netEndpoint, netAddrs: _a, netShared: _s, netSharedLeftAt: _l, ...rest } = before
-  await hostServiceSets.write(place, { ...rest, at: Date.now() })
-  return netEndpoint
+/**
+ * Pairing did not go through after its record was written (the companion refused the endpoint): the
+ * record gets back the pairing facts it had before, if it still names `endpoint` (nothing wrote since).
+ */
+export async function unmarkServiceSetNetPaired(place: string, endpoint: string, before: HostSetRecord | null): Promise<void> {
+  const now = await hostServiceSets.read(place).catch(() => null)
+  if (!now || now.netEndpoint !== endpoint) return
+  const { netEndpoint: _e, netAddrs: _a, netShared: _s, netSharedLeftAt: _l, ...rest } = now
+  await hostServiceSets.write(place, { ...rest, ...(before?.set === now.set ? netFacts(before) : {}) })
 }
 
 /** The member name of a host's set endpoint (a companion takes a plain alias only: net-store.ts NAME_RE). */
@@ -175,21 +189,31 @@ export function setNetMemberName(place: string): string {
   return `${host || 'host'}-set`
 }
 
+export interface SetNetMembers {
+  /** Each paired set's endpoint, dialled (never let in), with the addresses its pairing answered (and, in a sync, where it was last seen). */
+  add: Array<{ id: string; name: string; accept: false; addrs?: string[]; relays?: string[] }>
+  /** Once a host moved, the shared endpoint this leader no longer dials. */
+  drop: Set<string>
+  /** Paired sets of hosts this leader no longer has (a Remove whose companion DELETE did not go through): to forget. */
+  gone: Array<{ place: string; id: string }>
+}
+
 /**
- * What this leader's own walnut-net lists for the service sets it paired with (core/net/net-mac.ts):
- * each set's endpoint, dialled (never let in), and, once a host moved, the shared endpoint it no longer dials.
+ * What this leader's own walnut-net lists for the service sets it paired with (core/net/net-mac.ts).
+ * `present` says which hosts this leader still has (all, when not given). Throws when the records
+ * cannot be read: an empty answer would let a sync take each set endpoint for a machine.
  */
-export async function serviceSetNetMembers(): Promise<{ add: Array<{ id: string; name: string; accept: false; addrs?: string[] }>; drop: Set<string> }> {
-  const add: Array<{ id: string; name: string; accept: false; addrs?: string[] }> = []
-  const drop = new Set<string>()
-  for (const [place, r] of await hostServiceSets.list().catch(() => [])) {
+export async function serviceSetNetMembers(present: (host: string) => boolean = () => true): Promise<SetNetMembers> {
+  const out: SetNetMembers = { add: [], drop: new Set<string>(), gone: [] }
+  for (const [place, r] of await hostServiceSets.list({ strict: true })) {
     if (!place.startsWith('net:') || !r.set || !r.netEndpoint) continue
-    add.push({ id: r.netEndpoint, name: setNetMemberName(place), accept: false, ...(r.netAddrs?.length ? { addrs: r.netAddrs } : {}) })
-    if (movedToSet(r) && r.netShared) drop.add(r.netShared)
+    if (!present(place.slice('net:'.length))) { out.gone.push({ place, id: r.netEndpoint }); continue }
+    out.add.push({ id: r.netEndpoint, name: setNetMemberName(place), accept: false, ...(r.netAddrs?.length ? { addrs: r.netAddrs } : {}) })
+    if (movedToSet(r) && r.netShared) out.drop.add(r.netShared)
   }
   // A set endpoint of one host is never dropped as another's shared one.
-  for (const a of add) drop.delete(a.id)
-  return { add, drop }
+  for (const a of out.add) out.drop.delete(a.id)
+  return out
 }
 
 /** The set a hello names: its `serviceSet` (a set's service), else '' (the default set, or an older host). */

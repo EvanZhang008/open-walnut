@@ -223,3 +223,18 @@ describe('host sightings write only when the normalized address set changes', ()
     expect(writes).toBe(1)
   })
 })
+
+describe('a service set\'s own endpoint is noted for the host it belongs to (review round 2, N3)', () => {
+  const SET_EP = 'c'.repeat(64)
+  it('noted while the host row it is reached through is listed, never for a host that is gone or being removed', async () => {
+    // No row names it: not noted on its own.
+    expect(await noteWhere(SET_EP, { addrs: ['192.0.2.7:5'] })).toBe(false)
+    expect(await noteWhere(SET_EP, { addrs: ['192.0.2.7:5'] }, { via: 'box' })).toBe(true)
+    expect(whereOf((await stored()).net)[SET_EP]).toEqual({ addrs: ['192.0.2.7:5'] })
+    expect(await noteWhere(SET_EP, { addrs: ['192.0.2.8:5'] }, { via: 'gone' })).toBe(false)
+    const doc = await stored()
+    ;(doc.net as Record<string, unknown>).removing = [HOST]
+    await fs.writeFile(CONFIG_FILE, yaml.dump(doc))
+    expect(await noteWhere(SET_EP, { addrs: ['192.0.2.8:5'] }, { via: 'box' })).toBe(false)
+  })
+})

@@ -19,12 +19,21 @@
  *                   host_exec runs of this Walnut's tasks (exec.list).
  *   dropWalnutScope this Walnut's triggers and plugin jobs on the shared daemon emptied, the way the
  *                   leader configures them (triggers.configure, jobs.configure for its home), so
- *                   that daemon neither checks nor fires them nor resumes a session for a fire.
+ *                   that daemon neither checks nor fires them nor resumes a session for a fire;
+ *                   none left armed (a trigger a journal record holds is armed again by the daemon)
+ *                   and no fire undelivered.
+ *   moveBlocker     a shared daemon the move must not touch at all: one older than the per-Walnut
+ *                   split (no walnut-scope-v1: an empty set there clears every Walnut's triggers,
+ *                   review round 2, M5), or one that cannot hand over this Walnut's triggers' memory.
+ *   takeTriggerMemory / seedTriggerMemory  each disarmed trigger's exact state (its seen items and
+ *                   cursor) from the shared daemon (triggers.state.snapshot), handed to the set's
+ *                   daemon before the triggers are pushed there (triggers.state.seed), so their first
+ *                   check there does not report every item again (review round 2, M2).
  *   stopFollowerThere  this Walnut's follower there stopped and proven off (server.status).
  */
 import type { SessionRecord } from '../core/types.js'
 import type { TerminateResult } from '../core/sessions/session-lifecycle.js'
-import { hostWorkFrom, HOST_WORK_TIMEOUT_MS } from '../core/sessions/host-work.js'
+import { hostWorkFrom, HOST_WORK_TIMEOUT_MS, type HostWork } from '../core/sessions/host-work.js'
 import { OUTLIVING_SOURCES, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { CliHolderAnswer } from './remote-session-manager.js'
@@ -54,6 +63,8 @@ export interface MoveCheckDeps {
   holder?(link: MoveCheckLink, sid: string): Promise<CliHolderAnswer>
   /** Which of these task ids are this Walnut's. */
   ownTasks?(ids: string[]): Promise<Set<string>>
+  /** Whether this server started the host command `jobId` (host-exec-jobs.ts startedRun): a run that names no task. */
+  startedHere?(jobId: string): Promise<boolean>
 }
 
 const LIVE_OR_FAILED = new Set(['running', 'idle', 'error'])
@@ -83,6 +94,10 @@ async function defaultTerminate(id: string): Promise<TerminateResult> {
   return terminateSession(id, { by: 'walnut' })
 }
 
+async function defaultStartedHere(jobId: string): Promise<boolean> {
+  return !!(await import('../core/hosts/host-exec-jobs.js')).startedRun(jobId)
+}
+
 async function defaultOwnTasks(ids: string[]): Promise<Set<string>> {
   const { listTasksByIds } = await import('../core/task-manager.js')
   return new Set((await listTasksByIds(ids)).map((t) => t.id))
@@ -96,6 +111,25 @@ async function aliveOnDaemon(link: MoveCheckLink): Promise<Set<string>> {
   const r = await link.send('list', {}, 10_000)
   if (r.ok === false || !Array.isArray(r.sessions)) throw new Error(`the shared daemon did not list its sessions (${String(r.error ?? 'no list')})`)
   return new Set((r.sessions as Array<{ sid?: unknown; alive?: unknown }>).filter((s) => s.alive === true && typeof s.sid === 'string').map((s) => s.sid as string))
+}
+
+/** Fields a snapshot of a daemon that can say what outlives a turn always carries (daemon-fold.ts assembleSnapshot). */
+const FULL_SNAPSHOT = ['detachedBgCount', 'teamActive', 'cronActive', 'wakeupAt'] as const
+
+/**
+ * Why the host's answer cannot prove a live session quiet: no snapshot, an older daemon's snapshot
+ * missing what outlives a turn, a line it was sent and has not answered, an open prompt. Null: it can.
+ * The move reads any doubt as busy, never as quiet (review round 2, M1).
+ */
+function notProvenQuiet(resp: Record<string, unknown>): string | null {
+  const snap = resp.snapshot as Record<string, unknown> | null | undefined
+  if (!snap || !(Number(snap.v) > 0)) return 'the shared daemon gives no snapshot of it'
+  const missing = FULL_SNAPSHOT.filter((k) => !(k in snap))
+  if (missing.length) return `the shared daemon is too old to say what outlives its turn (no ${missing.join(', ')})`
+  const quiet = resp.quiet as { lineAwaitingAnswer?: unknown; promptOpen?: unknown } | undefined
+  if (quiet?.lineAwaitingAnswer === true) return 'a line it was sent is not answered yet'
+  if (quiet?.promptOpen === true) return 'a prompt of it is open'
+  return null
 }
 
 /** One session judged: null when nothing of it runs on the host. */
@@ -114,7 +148,7 @@ async function judge(link: MoveCheckLink, r: SessionRecord, listedAlive: boolean
   } catch (e) {
     return { id, busy: say(`the shared daemon did not answer for it (${errText(e)})`) }
   }
-  const work = resp.ok === true && resp.exists === false && !listedAlive ? { alive: false } : hostWorkFrom(resp as Parameters<typeof hostWorkFrom>[0])
+  const work: HostWork | null = resp.ok === true && resp.exists === false && !listedAlive ? { alive: false, working: false } : hostWorkFrom(resp as Parameters<typeof hostWorkFrom>[0])
   if (!work) return { id, busy: say('the shared daemon cannot say what it does') }
   if (!work.alive && !listedAlive) {
     // The daemon holds no live CLI of it: proven by the host's one owner record, else it runs elsewhere.
@@ -123,9 +157,11 @@ async function judge(link: MoveCheckLink, r: SessionRecord, listedAlive: boolean
     if (h.state === 'held') return { id, blocks: say(`a CLI of it runs on the host outside the shared daemon (${h.detail ?? 'live'})`) }
     return { id, busy: say(`the host cannot say whether a CLI of it runs (${h.state}${h.detail ? `: ${h.detail}` : ''})`) }
   }
-  if ('inTurn' in work && work.inTurn) return { id, busy: say('in a turn') }
-  const there = 'outliving' in work ? work.outliving ?? [] : []
+  if (work.inTurn) return { id, busy: say('in a turn') }
+  const there = work.outliving ?? []
   if (there.length) return { id, busy: say(workWords(there)) }
+  const doubt = notProvenQuiet(resp)
+  if (doubt) return { id, busy: say(doubt) }
   return { id }
 }
 
@@ -133,7 +169,8 @@ async function judge(link: MoveCheckLink, r: SessionRecord, listedAlive: boolean
 export async function moveSessions(link: MoveCheckLink, d: MoveCheckDeps = {}): Promise<MoveSession[]> {
   const alive = await aliveOnDaemon(link)
   const records = (await (d.records ?? defaultRecords)())
-    .filter((s) => s.host === link.hostKey && !s.archived && (LIVE_OR_FAILED.has(s.process_status) || alive.has(s.claudeSessionId)))
+    // An archived record whose CLI the daemon still lists alive is moved too (review round 2, M-L5).
+    .filter((s) => s.host === link.hostKey && ((!s.archived && LIVE_OR_FAILED.has(s.process_status)) || alive.has(s.claudeSessionId)))
   const out: MoveSession[] = []
   for (const r of records) {
     const j = await judge(link, r, alive.has(r.claudeSessionId), d)
@@ -183,26 +220,87 @@ export async function openWorkThere(link: MoveCheckLink, d: MoveCheckDeps = {}):
     return `the shared daemon did not list its host commands (${errText(e)})`
   }
   if (!Array.isArray(reply.jobs)) return 'the shared daemon did not list its host commands'
-  const running = (reply.jobs as Array<{ running?: unknown; taskId?: unknown }>)
-    .filter((j) => j.running === true && typeof j.taskId === 'string' && j.taskId).map((j) => j.taskId as string)
-  if (running.length === 0) return null
-  const own = await (d.ownTasks ?? defaultOwnTasks)([...new Set(running)])
-  const mine = running.filter((t) => own.has(t)).length
+  const jobs = (reply.jobs as Array<{ running?: unknown; taskId?: unknown; jobId?: unknown }>).filter((j) => j.running === true)
+  const running = jobs.filter((j) => typeof j.taskId === 'string' && j.taskId).map((j) => j.taskId as string)
+  // A run that names no task is this Walnut's when this server started it (review round 2, M-L5).
+  let mine = 0
+  for (const j of jobs) if (!(typeof j.taskId === 'string' && j.taskId) && typeof j.jobId === 'string' && await (d.startedHere ?? defaultStartedHere)(j.jobId)) mine++
+  if (running.length === 0 && mine === 0) return null
+  const own = running.length ? await (d.ownTasks ?? defaultOwnTasks)([...new Set(running)]) : new Set<string>()
+  mine += running.filter((t) => own.has(t)).length
   return mine > 0 ? `${mine} host_exec run${mine === 1 ? '' : 's'} of this Walnut's tasks still run${mine === 1 ? 's' : ''} there` : null
+}
+
+export const WALNUT_SCOPE_CAPABILITY = 'walnut-scope-v1'
+const SNAPSHOT_CAPABILITY = 'trigger-state-snapshot-v1'
+const SEED_CAPABILITY = 'trigger-state-seed-v1'
+
+/** Why the move must not touch this shared daemon at all; null when it may. Asked before anything changes. */
+export async function moveBlocker(link: Pick<MoveCheckLink, 'hasCapability'>, triggerIds: readonly string[]): Promise<string | null> {
+  // An older daemon keeps one trigger and job set for every Walnut: emptying "ours" empties the other's.
+  if (!link.hasCapability(WALNUT_SCOPE_CAPABILITY)) return `the shared daemon is older than the per-Walnut split (no ${WALNUT_SCOPE_CAPABILITY}), so dropping this Walnut's triggers there would clear the other Walnut's too`
+  if (triggerIds.length && !link.hasCapability(SNAPSHOT_CAPABILITY)) return `the shared daemon cannot hand over what this Walnut's triggers remember (no ${SNAPSHOT_CAPABILITY}), so they would report every item again`
+  return null
 }
 
 /** Empty this Walnut's triggers and plugin jobs on the shared daemon (for its home only). Throws when not done. */
 export async function dropWalnutScope(link: MoveCheckLink): Promise<void> {
   const home = link.home
+  if (!link.hasCapability(WALNUT_SCOPE_CAPABILITY)) throw new Error(`the shared daemon has no ${WALNUT_SCOPE_CAPABILITY}`)
   const t = await link.send('triggers.configure', { config: { version: 1, triggers: [] }, home }, 30_000)
   if (t.ok !== true) throw new Error(`the shared daemon did not drop this Walnut's triggers (${String(t.error ?? 'no answer')})`)
   const pending = (Array.isArray(t.released) ? t.released as Array<{ pending?: unknown }> : []).filter((r) => Number(r?.pending) > 0)
   // A released clock with fires nobody acked would be started there by the daemon itself.
   if (pending.length) throw new Error(`${pending.length} clock routine${pending.length === 1 ? '' : 's'} there still had fires to deliver`)
+  // A trigger a journal record holds is armed again even by an empty set; a fire not acked stays there.
+  // (A daemon that does not count them answers neither: its journal was drained before, M3.)
+  if (Number(t.armed) > 0) throw new Error(`${Number(t.armed)} of this Walnut's triggers there stay armed (held by its offline journal)`)
+  if (Number(t.draining) > 0) throw new Error(`${Number(t.draining)} of this Walnut's triggers there still have fires to deliver`)
   if (!link.hasCapability('plugin-jobs-v1')) return
   const walnutId = await link.walnutId()
   const j = await link.send('jobs.configure', { home, spec: { v: 1, home, walnutId, jobs: [] } }, 30_000)
   if (j.ok !== true) throw new Error(`the shared daemon did not drop this Walnut's plugin jobs (${String(j.error ?? 'no answer')})`)
+}
+
+/** One disarmed trigger's exact state on the shared daemon (a triggers.state.snapshot reply's state and digest). */
+export interface TriggerMemory { triggerId: string; state: Record<string, unknown>; digest: string }
+
+/** Refusals that pass with a short wait (the disarm just happened). */
+const SNAPSHOT_SOON = new Set(['check_running', 'host_delivery_in_flight', 'draining', 'armed'])
+/** Refusals that mean there is nothing to carry. */
+const SNAPSHOT_NOTHING = new Set(['state_missing', 'state_stale'])
+
+/** Each of `ids`' memory on the shared daemon, after the drop. Throws when one cannot be taken (the move gives up). */
+export async function takeTriggerMemory(link: MoveCheckLink, ids: readonly string[], sleep: (ms: number) => Promise<void>): Promise<TriggerMemory[]> {
+  if (!ids.length || !link.hasCapability(SNAPSHOT_CAPABILITY)) return []
+  const out: TriggerMemory[] = []
+  for (const triggerId of ids) {
+    for (let i = 0; ; i++) {
+      const r = await link.send('triggers.state.snapshot', { home: link.home, triggerId }, 15_000)
+      if (r.ok === false) throw new Error(`trigger ${triggerId}: the shared daemon did not answer for its memory (${String(r.error ?? 'no answer')})`)
+      if (r.supported === true && r.state && typeof r.digest === 'string') {
+        // An entry already past its time could be reported again from this copy: it is not carried (snapshot core).
+        if (Number(r.seenReliableUntil) > Date.now()) out.push({ triggerId, state: r.state as Record<string, unknown>, digest: r.digest })
+        break
+      }
+      const reason = String(r.reason ?? '')
+      if (SNAPSHOT_NOTHING.has(reason)) break
+      if (!SNAPSHOT_SOON.has(reason) || i >= 4) throw new Error(`trigger ${triggerId}: its memory could not be taken (${reason || 'no answer'})`)
+      await sleep(2_000)
+    }
+  }
+  return out
+}
+
+/** Hand the memory to the set's daemon (the link reaches it now), before its triggers are pushed there. Throws on the first that does not land. */
+export async function seedTriggerMemory(link: MoveCheckLink, memory: readonly TriggerMemory[]): Promise<void> {
+  if (!memory.length) return
+  if (!link.hasCapability(SEED_CAPABILITY)) throw new Error(`the set's daemon takes no trigger memory (no ${SEED_CAPABILITY})`)
+  for (const m of memory) {
+    const r = await link.send('triggers.state.seed', { home: link.home, triggerId: m.triggerId, state: m.state, digest: m.digest }, 15_000)
+    // `state_exists`: the set already keeps its own (an earlier move there): it is kept.
+    if (r.ok !== true || (r.seeded !== true && r.reason !== 'state_exists')) throw new Error(`trigger ${m.triggerId}: ${String(r.reason ?? r.error ?? 'no answer')}`)
+  }
 }
 
 /** Stop this Walnut's follower on the shared daemon and see it off. Throws when it may still run. */

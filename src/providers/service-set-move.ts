@@ -13,16 +13,22 @@
  *             what passed just before the hold, stop its follower there (it could start work by
  *             itself), and look again. A running turn is never stopped. At the bound, or on an
  *             ACP session (its stop cannot be proven): give up, keep everything as it is, report.
- *   holding   each session is judged again and stopped the normal way, and its CLI proven gone
- *             (the daemon's cli.holder: pid and start time); then this Walnut's triggers and
- *             plugin jobs there are emptied. Sessions this leader does not know as its own are
- *             never touched. Anything not proven: the shared daemon gets back what was taken
- *             (the link dials it again), the hold is released, and the try gives up.
+ *   holding   this Walnut's triggers and plugin jobs there are emptied first (so no fire there
+ *             resumes a session about to stop: review round 2, M-L1), and each trigger's memory is
+ *             taken (its seen items and cursor); each session is judged again and stopped the
+ *             normal way, and its CLI proven gone (the daemon's cli.holder: pid and start time);
+ *             then this Walnut's offline journal there is drained to empty (M3). Sessions this
+ *             leader does not know as its own are never touched. Anything not proven: the shared
+ *             daemon gets back what was taken (the link dials it again), the hold is released,
+ *             and the try gives up.
  *   flipped   the link is pointed at the set's service (SSH: its runtime dir; net: the set's own
  *             walnut-net endpoint), and the link is dialled again: its hello must name the set.
- *             Then the move is confirmed (net: this leader leaves the shared walnut-net's list), the
- *             held work is released there, and the stopped sessions resume there on their next
- *             message (--resume, as after any stop).
+ *             Then the move is kept as done, the triggers' memory is handed to the set's daemon
+ *             before their push (it waits for the release), the held work is released there right
+ *             away, and only then the follow-ups run (net: this leader leaves the shared
+ *             walnut-net's list; review round 2, X1: run before the release, its own command
+ *             waited for the release that waited for it). The stopped sessions resume there on
+ *             their next message (--resume, as after any stop).
  *   done      the leader no longer speaks for its home on the shared daemon; that daemon, its
  *             launcher and its boot item are left exactly as they are (the other Walnut's).
  *   reverted  the set's service did not answer in time: the link is pointed back, dialled again,
@@ -107,7 +113,8 @@ export type MoveOutcome =
   | { result: 'moved'; stopped: string[] }
   | { result: 'gave_up'; why: string; stopped: string[]; failures?: number; final?: boolean; nextTryAt?: number }
   | { result: 'reverted'; why: string; stopped: string[]; failures?: number; final?: boolean; nextTryAt?: number }
-  | { result: 'not_due'; why: string }
+  /** `nextTryAt`: when the try that is not due yet is (none after the last try). */
+  | { result: 'not_due'; why: string; nextTryAt?: number }
 
 export interface MoveDeps {
   /** The set this Walnut's service is on there (16 hex). */
@@ -128,18 +135,26 @@ export interface MoveDeps {
   drained(boundMs: number): Promise<boolean>
   /** Release it: it goes to whatever the link reaches now. */
   release(): void
+  /** Why the move cannot be made on this daemon at all (it would touch another Walnut's): null when it can. Asked before anything is touched. */
+  blocker?(): Promise<string | null>
   /** Stop this Walnut's follower on the shared daemon and see it off; throws when it may still run. */
   stopFollower(): Promise<void>
-  /** Empty this Walnut's triggers and plugin jobs on the shared daemon; throws when not done. */
+  /** Empty this Walnut's triggers and plugin jobs on the shared daemon, and take each trigger's memory; throws when not done. */
   dropScope(): Promise<void>
+  /** This Walnut's offline journal on the shared daemon drained to empty; throws when not. */
+  drainJournal?(): Promise<void>
+  /** After the set answered, before the release: the triggers' memory taken at the drop goes to the set's daemon (best effort). */
+  carry?(): Promise<void>
   /** A try that gave up after the follower stop: the shared daemon gets back this Walnut's follower, triggers and jobs (the link dials it again). */
   restore(): Promise<void>
   /** Host network: pair with the set's own walnut-net first; throws when not done (nothing touched yet). */
   pair?(): Promise<void>
-  /** Point the link at the set's service; unflip points it back (idempotent); confirm keeps the flip. */
+  /** Point the link at the set's service; unflip points it back (idempotent); confirm keeps the flip (local only, no host command). */
   flip(): Promise<void>
   unflip(): Promise<void>
   confirm(): Promise<void>
+  /** After the release: what the move leaves behind on the host (net: this leader off the shared walnut-net's list); tried again at the next look. */
+  afterMove?(): Promise<void>
   /** Drop the link and dial again; the set the new hello names ('' the default), or null with no hello within `boundMs`. */
   reconnect(boundMs: number): Promise<string | null>
   report(outcome: MoveOutcome): void
@@ -172,11 +187,13 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
   let r = await d.store.read().catch(() => null)
   if (r && (r.set !== d.set || r.link !== d.link)) r = null
   const failed = r && (r.phase === 'gave_up' || r.phase === 'reverted')
+  // Not due is reported too: a reconnect's look replaced the timer of the next try, which is set again (review round 2, M4).
+  const notDue = (o: MoveOutcome): MoveOutcome => { d.report(o); return o }
   if (failed && !d.force && (r!.failures ?? 1) >= MOVE_MAX_TRIES) {
-    return { result: 'not_due', why: `the move failed ${r!.failures} times in a row (last: ${r!.why ?? ''}); Walnut tries again when an update names the set` }
+    return notDue({ result: 'not_due', why: `the move failed ${r!.failures} times in a row (last: ${r!.why ?? ''}); Walnut tries again when an update names the set` })
   }
   if (failed && !d.force && (r!.nextTryAt ?? 0) > d.now()) {
-    return { result: 'not_due', why: `the last try ${r!.phase === 'gave_up' ? 'gave up' : 'was put back'} (${r!.why ?? ''}); tried again later` }
+    return notDue({ result: 'not_due', why: `the last try ${r!.phase === 'gave_up' ? 'gave up' : 'was put back'} (${r!.why ?? ''}); tried again later`, nextTryAt: r!.nextTryAt })
   }
   // A flip a restart left while the link reaches the shared daemon did not hold: point it back first.
   if (r?.phase === 'flipped') await d.unflip().catch(() => {})
@@ -200,6 +217,8 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     return out
   }
   await save({})
+  const blocked = await (d.blocker?.() ?? Promise.resolve(null)).catch((e) => errText(e))
+  if (blocked) return end({ result: 'gave_up', why: `${blocked}; nothing was stopped`, stopped: rec.stopped })
   if (d.pair) {
     try {
       await d.pair()
@@ -241,51 +260,74 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     await d.sleep(d.pollMs ?? POLL_MS)
   }
 
-  // holding: the work waits; each session stops the normal way and its CLI is proven gone, judged
-  // again right before its stop; then this Walnut's triggers and plugin jobs there are emptied.
+  // holding: the work waits. This Walnut's triggers and plugin jobs there are emptied first (no fire
+  // there resumes a session about to stop), then each session stops the normal way and its CLI is
+  // proven gone, judged again right before its stop, then its offline journal there is drained.
   const giveUp = async (why: string): Promise<MoveOutcome> => {
     await d.restore().catch(() => {})
     d.release()
     return end({ result: 'gave_up', why, stopped: rec.stopped })
   }
-  await save({ phase: 'holding' })
-  for (const s of quiet) {
-    const res = await d.stop(s.id).catch((e): StopResult => ({ ok: false, why: `session ${s.id}: ${errText(e)}` }))
-    if (!res.ok) {
-      return giveUp(`${res.why}${res.busy ? ' right before its stop' : ''}; the sessions stopped so far resume on the shared daemon`)
-    }
-    await save({ stopped: [...new Set([...rec.stopped, s.id])] })
-  }
+  let flipping = false
+  let done = false
   try {
-    await d.dropScope()
-  } catch (e) {
-    return giveUp(`this Walnut's triggers and plugin jobs on the shared daemon were not dropped (${errText(e)})`)
-  }
+    await save({ phase: 'holding' })
+    try {
+      await d.dropScope()
+    } catch (e) {
+      return await giveUp(`this Walnut's triggers and plugin jobs on the shared daemon were not dropped (${errText(e)}); nothing was stopped`)
+    }
+    for (const s of quiet) {
+      const res = await d.stop(s.id).catch((e): StopResult => ({ ok: false, why: `session ${s.id}: ${errText(e)}` }))
+      if (!res.ok) {
+        return await giveUp(`${res.why}${res.busy ? ' right before its stop' : ''}; the sessions stopped so far resume on the shared daemon`)
+      }
+      await save({ stopped: [...new Set([...rec.stopped, s.id])] })
+    }
+    try {
+      await d.drainJournal?.()
+    } catch (e) {
+      return await giveUp(`this Walnut's offline journal on the shared daemon is not drained (${errText(e)}); the sessions stopped so far resume on the shared daemon`)
+    }
 
-  // flipped: on disk before the flip, so a restart in between points it back.
-  await save({ phase: 'flipped' })
-  let flipError: string | null = null
-  try { await d.flip() } catch (e) { flipError = errText(e) }
-  const got = flipError === null ? await d.reconnect(reconnectMs).catch(() => null) : null
-  if (got === d.set) {
-    await save({ phase: 'done', why: undefined, nextTryAt: undefined, failures: undefined })
-    await d.confirm().catch(() => { /* its follow-ups (net: leaving the shared list) are tried again at the next look */ })
+    // flipped: on disk before the flip, so a restart in between points it back.
+    await save({ phase: 'flipped' })
+    flipping = true
+    let flipError: string | null = null
+    try { await d.flip() } catch (e) { flipError = errText(e) }
+    const got = flipError === null ? await d.reconnect(reconnectMs).catch(() => null) : null
+    if (got === d.set) {
+      await save({ phase: 'done', why: undefined, nextTryAt: undefined, failures: undefined })
+      done = true
+      await d.confirm().catch(() => {})
+      await d.carry?.().catch(() => {})
+      // Released right after the done record (X1): nothing after this waits for the hold.
+      d.release()
+      await d.afterMove?.().catch(() => { /* tried again at the next look */ })
+      const outcome: MoveOutcome = { result: 'moved', stopped: rec.stopped }
+      d.report(outcome)
+      return outcome
+    }
+    return await putBack(d, reconnectMs, flipError, got, (why) => end({ result: 'reverted', why, stopped: rec.stopped }))
+  } catch (e) {
+    // A store that would not write (or any other throw) after the follower stopped: the shared daemon
+    // gets back what was taken, or the flip is pointed back, and the hold is released (review round 2, M-L3).
+    if (done) { /* the move holds; nothing to give back */ } else if (flipping) { await d.unflip().catch(() => {}); await d.reconnect(reconnectMs).catch(() => null) } else await d.restore().catch(() => {})
     d.release()
-    const outcome: MoveOutcome = { result: 'moved', stopped: rec.stopped }
-    d.report(outcome)
-    return outcome
+    throw e
   }
-  // Never leave the host unreachable: back to the shared daemon (it gets this Walnut's follower,
-  // triggers and jobs again on that connect), the held work released there.
+}
+
+/** Never leave the host unreachable: back to the shared daemon (it gets this Walnut's follower, triggers and jobs again on that connect), the held work released there. */
+async function putBack(d: MoveDeps, reconnectMs: number, flipError: string | null, got: string | null, end: (why: string) => Promise<MoveOutcome>): Promise<MoveOutcome> {
   await d.unflip().catch(() => {})
   await d.reconnect(reconnectMs).catch(() => null)
   d.release()
-  const why = flipError
+  return end(flipError
     ? `the flip to this Walnut's own service did not go through (${flipError})`
     : got === null
       ? `this Walnut's own service did not answer within ${Math.round(reconnectMs / 1000)} s`
-      : `the link reached ${got ? `set ${got}` : 'the default daemon'}, not this Walnut's own service`
-  return end({ result: 'reverted', why, stopped: rec.stopped })
+      : `the link reached ${got ? `set ${got}` : 'the default daemon'}, not this Walnut's own service`)
 }
 
 /**

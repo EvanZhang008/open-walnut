@@ -17,7 +17,7 @@ import { noteWhere } from './net-where.js'
  * 2026-11-04: a PC seen on n0's relay while this Mac ran public relays was not kept, so once
  * a companion was paired and this Mac moved to its relay, the PC (away then) was never found.
  */
-export async function noteSeen(local: Daemon, conn: Daemon, name: string, endpoint: string, ours: string[]): Promise<void> {
+export async function noteSeen(local: Daemon, conn: Daemon, name: string, endpoint: string, ours: string[], o: { via?: string } = {}): Promise<void> {
   try {
     const [st, mine] = await Promise.all([
       conn.send('net.status', {}, 10_000) as Promise<{ node?: { addrs?: unknown; homeRelay?: unknown } | null }>,
@@ -32,7 +32,7 @@ export async function noteSeen(local: Daemon, conn: Daemon, name: string, endpoi
     // Its relay is kept only when it is one of this Mac's own (net-where.ts relayToKeep).
     const home = typeof st.node?.homeRelay === 'string' ? st.node.homeRelay : null
     // Keep the full sighting until noteWhere compares it with the stored address book.
-    if (await noteWhere(endpoint, { addrs: [...(at ? [at] : []), ...own], home, ours: [...ours, ...running], self: own })) log.session.info('net: noted where a machine is', { host: name, at, home })
+    if (await noteWhere(endpoint, { addrs: [...(at ? [at] : []), ...own], home, ours: [...ours, ...running], self: own }, o)) log.session.info('net: noted where a machine is', { host: name, at, home })
   } catch (err) { log.session.debug('net: could not read where a machine is', { host: name, error: (err as Error).message }) }
 }
 

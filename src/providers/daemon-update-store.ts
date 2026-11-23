@@ -90,6 +90,18 @@ export class KeyedUpdateStore<T extends { at: number }> {
     } catch { return {} }
   }
 
+  /** The same, but only an absent file reads as empty. */
+  private async readAllStrict(file: string): Promise<Record<string, unknown>> {
+    let text: string
+    try { text = await fsp.readFile(file, 'utf8') } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
+      throw err
+    }
+    const parsed = JSON.parse(text) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${file} holds no record map`)
+    return parsed as Record<string, unknown>
+  }
+
   /** Still within its time: a clock set back counts the same distance, so an entry never lasts much longer. */
   fresh(entry: { at: number } | null | undefined, now = Date.now()): boolean {
     return !!entry && (Math.abs(now - entry.at) < this.maxAgeMs || this.lasting(entry as T))
@@ -117,11 +129,15 @@ export class KeyedUpdateStore<T extends { at: number }> {
     return legacy
   }
 
-  /** This machine's entries still within their time, by key (`net:<host>`, ...); none in a test run that names no file. */
-  async list(): Promise<Array<[string, T]>> {
+  /**
+   * This machine's entries still within their time, by key (`net:<host>`, ...); none in a test run
+   * that names no file. `strict`: a file that exists but does not read throws instead of reading as
+   * empty (a caller that acts on what is missing, core/net/net-service-sets.ts).
+   */
+  async list(opts: { strict?: boolean } = {}): Promise<Array<[string, T]>> {
     const file = this.file()
     if (!file) return []
-    const all = await this.readAll(file)
+    const all = opts.strict ? await this.readAllStrict(file) : await this.readAll(file)
     const prefix = await machineKey('')
     const out: Array<[string, T]> = []
     for (const [k, e] of Object.entries(all)) {

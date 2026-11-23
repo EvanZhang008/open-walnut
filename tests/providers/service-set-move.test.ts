@@ -87,7 +87,7 @@ describe('service set move', () => {
     expect(out).toEqual({ result: 'moved', stopped: ['s1', 's2'] })
     // The follower is stopped right after the hold (it could start work there by itself), before the
     // sessions are judged again and stopped; the triggers and jobs go last, before the flip.
-    expect(h.log.filter((l) => !l.startsWith('store:'))).toEqual(['hold', 'follower-off', 'stop:s1', 'stop:s2', 'drop-scope', 'flip', 'reconnect', 'confirm', 'release', 'report:moved'])
+    expect(h.log.filter((l) => !l.startsWith('store:'))).toEqual(['hold', 'follower-off', 'drop-scope', 'stop:s1', 'stop:s2', 'flip', 'reconnect', 'confirm', 'release', 'report:moved'])
     // The done record is on disk before the confirm (low 11).
     expect(h.log.indexOf('store:done')).toBeLessThan(h.log.indexOf('confirm'))
     expect(h.record()).toMatchObject({ phase: 'done', set: SET, stopped: ['s1', 's2'] })
@@ -186,7 +186,8 @@ describe('service set move', () => {
     // The shared daemon gets back what the hold took, then the work is released; nothing flips.
     const seq = h.log.filter((l) => !l.startsWith('store:'))
     expect(seq.slice(seq.indexOf('stop:s2'))).toEqual(['stop:s2', 'restore', 'release', 'report:gave_up'])
-    expect(h.log).not.toContain('drop-scope')
+    // Review round 2, M-L1: the triggers there were dropped before the first stop (the restore gives them back).
+    expect(seq.indexOf('drop-scope')).toBeLessThan(seq.indexOf('stop:s1'))
     expect(h.log).not.toContain('flip')
   })
 
@@ -369,5 +370,55 @@ describe('service set move', () => {
     release()
     expect(await a).toEqual(await b)
     expect(n).toBe(1)
+  })
+})
+
+describe('service set move: review round 2', () => {
+  it('X1: the held work is released right after the done record and the memory hand-over, before the follow-ups on the host', async () => {
+    const h = fakeHost()
+    h.live.shared.set('s1', false)
+    const out = await runMove(h.deps({
+      carry: async () => { h.log.push('carry') },
+      afterMove: async () => { h.log.push('after-move') },
+    }))
+    expect(out).toMatchObject({ result: 'moved' })
+    const seq = h.log.filter((l) => !l.startsWith('store:'))
+    expect(seq.slice(seq.indexOf('reconnect'))).toEqual(['reconnect', 'confirm', 'carry', 'release', 'after-move', 'report:moved'])
+    expect(h.log.indexOf('store:done')).toBeLessThan(h.log.indexOf('release'))
+  })
+
+  it('M5: a shared daemon the move must not touch gives it up before the hold, nothing stopped or dropped', async () => {
+    const h = fakeHost()
+    h.live.shared.set('s1', false)
+    const out = await runMove(h.deps({ blocker: async () => 'the shared daemon is older than the per-Walnut split (no walnut-scope-v1)' }))
+    expect(out).toMatchObject({ result: 'gave_up', why: expect.stringMatching(/no walnut-scope-v1\); nothing was stopped/) })
+    expect(h.log.some((l) => l === 'hold' || l === 'drop-scope' || l.startsWith('stop:'))).toBe(false)
+  })
+
+  it('M3: a journal that does not drain gives everything back before the flip', async () => {
+    const h = fakeHost()
+    h.live.shared.set('s1', false)
+    const out = await runMove(h.deps({ drainJournal: async () => { h.log.push('drain'); throw new Error('2 of its records did not apply') } }))
+    expect(out).toMatchObject({ result: 'gave_up', why: expect.stringMatching(/offline journal .* not drained \(2 of its records/) })
+    const seq = h.log.filter((l) => !l.startsWith('store:'))
+    expect(seq.slice(seq.indexOf('stop:s1'))).toEqual(['stop:s1', 'drain', 'restore', 'release', 'report:gave_up'])
+    expect(h.log).not.toContain('flip')
+  })
+
+  it('M-L3: a store that throws after the follower stopped gives the shared daemon its things back and releases', async () => {
+    const h = fakeHost()
+    h.live.shared.set('s1', false)
+    const d = h.deps()
+    const write = d.store.write
+    d.store.write = async (r) => { if (r?.phase === 'holding') throw new Error('disk full'); await write(r) }
+    await expect(runMove(d)).rejects.toThrow(/disk full/)
+    const seq = h.log.filter((l) => !l.startsWith('store:'))
+    expect(seq).toEqual(['hold', 'follower-off', 'restore', 'release'])
+  })
+
+  it('M4: a try not due yet says when it is, so a reconnect\'s look can wait for it', async () => {
+    const h = fakeHost()
+    h.setRecord({ v: 1, at: h.now, set: SET, link: 'net', phase: 'gave_up', startedAt: h.now, stopped: [], failures: 1, nextTryAt: h.now + 3600_000 })
+    expect(await runMove(h.deps())).toMatchObject({ result: 'not_due', nextTryAt: h.now + 3600_000 })
   })
 })

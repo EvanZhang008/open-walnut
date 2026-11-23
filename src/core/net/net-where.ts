@@ -130,14 +130,18 @@ export function relayToKeep(home: string | null | undefined, ours: string[], was
  * Note where a machine was seen: `home` is the relay it reports it is on (absent: the relay
  * kept stays). Only a machine this Mac lists (a host row or `net.joined`) and none being
  * removed, checked in the same config write, so a Remove is never undone (Remove drops the
- * row before it forgets the machine). True when it changed.
+ * row before it forgets the machine). `via`: the host whose link reaches `endpoint` (its own
+ * service set's endpoint, net-service-sets.ts), noted while that host's row is listed and not being
+ * removed. True when it changed.
  */
-export async function noteWhere(endpoint: string, seen: { addrs: string[]; home?: string | null; ours?: string[]; self?: string[] }): Promise<boolean> {
+export async function noteWhere(endpoint: string, seen: { addrs: string[]; home?: string | null; ours?: string[]; self?: string[] }, o: { via?: string } = {}): Promise<boolean> {
   const { modifyConfigDoc } = await import('../config-store.js')
   return modifyConfigDoc((doc) => {
     const net = netDoc(doc)
     const removing = Array.isArray(net.removing) ? net.removing : []
-    const listed = netRows((doc.hosts ?? {}) as HostRows).some(([, h]) => h.endpoint === endpoint) || !!joinedOf(net)[endpoint]
+    const rows = netRows((doc.hosts ?? {}) as HostRows)
+    const via = o.via ? rows.find(([name]) => name === o.via)?.[1] : undefined
+    const listed = rows.some(([, h]) => h.endpoint === endpoint) || !!joinedOf(net)[endpoint] || (!!via && !removing.includes(via.endpoint))
     if (!listed || removing.includes(endpoint)) return { write: false, result: false }
     const all = whereOf(net)
     const was = all[endpoint] ?? {}

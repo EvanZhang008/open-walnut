@@ -15,6 +15,10 @@
  * they end on the host's own idle timer, or keep their history for the next connect. The words
  * on the row say so (RemoteHostSshRow.tsx).
  *
+ * A host REMOVED (not turned off) takes this Walnut's own service set there with it first, while the
+ * link still reaches it, bounded (host-set-leave.ts): the set's service is removed from the host and
+ * its pairing is forgotten here and on the cloud companion. Its other sessions stay as above.
+ *
  * The cloud companion's row comes and goes with the pairing and the companion's answer, never
  * with a person's Turn off, so it is not ended here.
  */
@@ -26,7 +30,12 @@ export interface HostLinkEndDeps {
   dropConnection: (host: string) => boolean
   /** End the host's terminal master. True when one was running. */
   endTerminalMaster: (host: string) => Promise<boolean>
+  /** A removed host's own service set leaves first (host-set-leave.ts). */
+  leaveServiceSet: (host: string, boundMs: number) => Promise<unknown>
 }
+
+/** How long a removed host's own service set gets to leave before its link ends anyway. */
+export const SET_LEAVE_BOUND_MS = 90_000
 
 /** The hosts in `before` that `after` no longer shows (removed or turned off). */
 export function hostsThatLeft(before: ReadonlySet<string>, after: ReadonlySet<string>): string[] {
@@ -38,10 +47,15 @@ export function endsLinkWhenLeft(host: string): boolean {
   return !!host && host !== '__local__' && host !== CLOUD_BOX_HOST_ALIAS && !host.startsWith('direct:')
 }
 
-/** End Walnut's own link to a host that left Settings. Never throws. */
-export async function endHostLink(host: string, deps?: Partial<HostLinkEndDeps>): Promise<{ connection: boolean; terminal: boolean }> {
+/** End Walnut's own link to a host that left Settings (`removed`: for good, not turned off). Never throws. */
+export async function endHostLink(host: string, deps?: Partial<HostLinkEndDeps>, o: { removed?: boolean } = {}): Promise<{ connection: boolean; terminal: boolean }> {
   if (!endsLinkWhenLeft(host)) return { connection: false, terminal: false }
   const d = { ...(await defaultDeps()), ...deps }
+  if (o.removed) {
+    try { await d.leaveServiceSet(host, SET_LEAVE_BOUND_MS) } catch (err) {
+      log.session.warn('host left Settings: its own service set could not be left', { host, error: (err as Error).message })
+    }
+  }
   let connection = false
   let terminal = false
   try { connection = d.dropConnection(host) } catch (err) {
@@ -55,13 +69,15 @@ export async function endHostLink(host: string, deps?: Partial<HostLinkEndDeps>)
 }
 
 async function defaultDeps(): Promise<HostLinkEndDeps> {
-  const [{ dropDaemonConnection }, { terminalControlSocket }, { exitOwnedControlMaster }] = await Promise.all([
+  const [{ dropDaemonConnection }, { terminalControlSocket }, { exitOwnedControlMaster }, { leaveHostServiceSet }] = await Promise.all([
     import('../../providers/daemon-connection.js'),
     import('../../web/terminal/spawn.js'),
     import('../../providers/ssh-control-master.js'),
+    import('./host-set-leave.js'),
   ])
   return {
     dropConnection: dropDaemonConnection,
     endTerminalMaster: (host) => exitOwnedControlMaster(terminalControlSocket(host), host),
+    leaveServiceSet: leaveHostServiceSet,
   }
 }

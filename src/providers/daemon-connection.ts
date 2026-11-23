@@ -68,7 +68,7 @@ import { hostServiceOfferWanted, serviceLauncherWanted } from './service-launche
 import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type UnreadUpdate } from './daemon-update-readback.js'
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
-import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
+import { NetDaemonUpdater, setWordsDue, type NetUpdateState } from './daemon-net-update.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type UpdateClaim } from './daemon-update-claim.js'
 import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-set-leader.js'
 import { ServiceSetLink } from './service-set-move-link.js'
@@ -1730,17 +1730,57 @@ export class DaemonConnection {
       sharedEndpoint: () => this.sshTarget?.endpoint ?? null,
       workUnderWay: () => this._setHold.inFlight,
       drained: (boundMs) => this._setHold.drained(boundMs),
-      run: (command, timeoutMs) => (this.setLinkKind === 'net' ? createNetUpdateIo(this, {}).run(command, timeoutMs) : this.sshExec(command, timeoutMs)),
+      // The set's CLI lines are the move's own commands too: over the host network they ride exec.run, past the hold (review round 2, X1).
+      run: (command, timeoutMs) => (this.setLinkKind === 'net'
+        ? createNetUpdateIo({ send: (cmd, params, t) => this.send(cmd, pastSetHold(params ?? {}), t) }, {}).run(command, timeoutMs)
+        : this.sshExec(command, timeoutMs)),
       provision: (ask) => this.provisionServiceSet(ask),
       relink: (boundMs) => this.relinkForServiceSet(boundMs),
       setHold: (on) => { this._setHold.set(on) },
       // Only the runner's delivery of what waited (review round 1, low 12): not every connect listener.
       redeliver: () => { if (this._connected && !this._destroyed) redeliverHostRows(this.hostKey, this) },
+      triggerIds: () => [...this.lastTriggerDefHashes.keys()],
+      drainJournal: (boundMs) => this.drainJournalForMove(boundMs),
       home: WALNUT_HOME,
       walnutId: async () => (await import('../core/device-auth.js')).getInstanceId(),
       notice: (key, text) => { void serviceSetNotice(this.hostKey, key, text) },
     }, {}, () => this.getExpectedDaemonVersion())
     return this._serviceSetLink
+  }
+
+  /**
+   * A service set move: this Walnut's offline journal on the daemon the link reaches is drained to
+   * empty (a handover that began after everything stopped, all of it applied), or it throws. Undrained
+   * records would never be drained again once the link reaches the set (review round 2, M3).
+   */
+  private async drainJournalForMove(boundMs: number): Promise<void> {
+    if (this.isReadOnlyRemote || !this.hasCapability('offline-host-v1')) return
+    const { runOfflineHandover, runningHandover } = await import('../core/offline-handover.js')
+    const run = async () => {
+      // One that began earlier may have missed the last records: this one starts after it.
+      await runningHandover(this.journalName())?.catch(() => undefined)
+      return runOfflineHandover(await this.handoverConnection())
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<'late'>((r) => { timer = setTimeout(() => r('late'), boundMs); timer.unref?.() })
+    const r = await Promise.race([run(), late]).finally(() => clearTimeout(timer))
+    if (r === 'late') throw new Error(`its drain did not end within ${Math.round(boundMs / 1000)} s`)
+    if (r.held) throw new Error('the host is revoked here, so its journal stays there')
+    if (r.failed > 0) throw new Error(`${r.failed} of its records did not apply`)
+  }
+
+  /**
+   * Settings > Remove of this host: this Walnut's own service set there leaves, bounded, and is forgotten
+   * here and on the companion (service-set-move-link.ts leave; core/hosts/host-set-leave.ts). Null when
+   * no set is possible on this link.
+   */
+  leaveServiceSet(boundMs: number): Promise<{ ok: boolean; why: string }> | null {
+    return this.serviceSetLink?.leave(boundMs) ?? null
+  }
+
+  /** Host network: the endpoint this link dials (its own service set's once moved, else the host row's). */
+  async netEndpointNow(): Promise<string | null> {
+    return (await this.serviceSetLink?.netEndpoint().catch(() => null)) ?? this.sshTarget?.endpoint ?? null
   }
 
   /** The update line's part for service sets: the Walnut named, the set's tail, and the set the host names kept. */
@@ -6120,8 +6160,9 @@ export class DaemonConnection {
         // A build that failed holds its day before the staging dir (its record) is removed.
         onBuildFailed: (error) => this.recordRealDirFail({ expected, at: Date.now(), reason: error.message.slice(0, 300) }),
         ...(serve ? { serve } : {}),
-        // Service sets: the line names this Walnut, the tail watches the set's service, and the set the host names is kept.
-        ...(await this.serviceSetUpdateWords(set)),
+        // Service sets: the line names this Walnut, the tail watches the set's service, and the set the host names is kept;
+        // with the set still unknown after the look, today's line, as the tail watches the default (setWordsDue, H2).
+        ...(sets && !setWordsDue(await this.serviceSetLink!.setAsk(), sets.standing, set) ? {} : await this.serviceSetUpdateWords(set)),
         // The upload may have taken minutes: work that started meanwhile holds the swap.
         onStaged: async () => {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
@@ -8331,8 +8372,7 @@ export class DaemonConnection {
    */
   private async dialNetHost(): Promise<void> {
     // This Walnut's own service set there has a walnut-net endpoint of its own once moved (service-set-move-link.ts).
-    const own = await this.serviceSetLink?.netEndpoint().catch(() => null)
-    const endpoint = own ?? this.sshTarget?.endpoint
+    const endpoint = await this.netEndpointNow()
     if (!endpoint) throw new Error(`${this.hostKey} has no host network id; add it again from Settings > Remote Hosts`)
     this.setPhase('tunnel')
     const { netForwardPort, explainNetDialFailure } = await import('../core/hosts/net-link.js')

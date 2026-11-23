@@ -24,7 +24,7 @@ import { WebSocket } from '#ws'
 import { setTimeout as delay } from 'node:timers/promises'
 import { performance } from 'node:perf_hooks'
 import { ID_RE, netStateDir } from './net-config-core.js'
-import { netControlCall, netControlPath, writeFileAtomic } from './net-control.js'
+import { netControlCall, netControlPath } from './net-control.js'
 import { chooseServiceSet } from './service-set-choice.js'
 import { serviceSetIdOf, serviceSetLine } from './service-set.js'
 import { accountInfo } from '../lib/account.js'
@@ -37,6 +37,12 @@ export const SERVICE_SET_NET_ACTIONS: readonly string[] = [NET_ID_ACTION, NET_FO
 /** How long the set's daemon may take to listen, and its walnut-net to come up (a first one downloads its build). */
 const DOOR_WAIT_MS = 30_000
 const NET_UP_WAIT_MS = 200_000
+/**
+ * The whole of `net-id` on the host, every wait above within it: the leader waits this long plus the
+ * line's start (service-set-net-pair.ts NET_ID_TIMEOUT_MS), so it never gives up on a pairing the
+ * host still finishes. net-binary.ts FETCH_TIMEOUT_MS (180 s) fits in it with the door and hello.
+ */
+export const NET_ID_BUDGET_MS = 230_000
 
 type Answer = { ok: true } & Record<string, unknown> | { ok: false; code: string; message: string }
 
@@ -113,6 +119,8 @@ export interface NetIdInput {
   defaultRuntimeDir?: string
   doorWaitMs?: number
   netWaitMs?: number
+  /** The whole run's bound (NET_ID_BUDGET_MS). */
+  budgetMs?: number
 }
 
 /** `net-id`: the set's walnut-net configured with the leader's list and running; its endpoint id. */
@@ -124,21 +132,25 @@ export async function serviceSetNetId(i: NetIdInput): Promise<{ set: string; ans
   })
   const set = choice.set
   if (!set.id) return { set: '', answer: refuse('default_set', 'this Walnut holds the default service here: it keeps the machine\'s walnut-net, nothing to pair') }
-  const port = await doorPort(set.runtimeDir, i.doorWaitMs ?? DOOR_WAIT_MS)
+  // Every wait below ends at the run's one deadline.
+  const deadline = performance.now() + (i.budgetMs ?? NET_ID_BUDGET_MS)
+  const left = (ms: number) => Math.max(1, Math.min(ms, deadline - performance.now()))
+  const port = await doorPort(set.runtimeDir, left(i.doorWaitMs ?? DOOR_WAIT_MS))
   if (port === null) return { set: set.id, answer: refuse('not_running', `this Walnut's own service is not running here (no ${path.join(set.runtimeDir, 'daemon.port')})`) }
   // The hello first, alone: a daemon that is not this set's (the machine's default one) is asked nothing more.
-  const hello = (await askDoor(port, [{ cmd: 'hello' }], 15_000))?.[0]
+  const hello = (await askDoor(port, [{ cmd: 'hello' }], left(15_000)))?.[0]
   if (!hello) return { set: set.id, answer: refuse('no_answer', 'this Walnut\'s own service did not answer on its door') }
   if (hello.serviceSet !== set.id) return { set: set.id, answer: refuse('not_set_daemon', `the daemon on ${path.join(set.runtimeDir, 'daemon.port')} is not this Walnut's own service`) }
-  const conf = (await askDoor(port, [{ cmd: 'net.configure', ...i.request }], NET_UP_WAIT_MS))?.[0]
+  // The command last: a `cmd` key in the request never changes what is asked.
+  const conf = (await askDoor(port, [{ ...i.request, cmd: 'net.configure' }], left(NET_UP_WAIT_MS)))?.[0]
   if (!conf) return { set: set.id, answer: refuse('no_answer', 'this Walnut\'s own service did not answer net.configure') }
   if (conf.ok !== true || typeof conf.endpointId !== 'string' || !ID_RE.test(conf.endpointId)) {
     return { set: set.id, answer: refuse('net_configure', `its walnut-net did not take the list: ${String(conf.error ?? 'no endpoint id')}`) }
   }
   // Running, and its addresses (a first walnut-net may still be downloading its build).
-  const end = performance.now() + (i.netWaitMs ?? NET_UP_WAIT_MS)
+  const end = Math.min(deadline, performance.now() + (i.netWaitMs ?? NET_UP_WAIT_MS))
   for (;;) {
-    const st = (await askDoor(port, [{ cmd: 'net.status' }], 10_000))?.[0]
+    const st = (await askDoor(port, [{ cmd: 'net.status' }], left(10_000)))?.[0]
     const node = st?.node as { addrs?: unknown } | null | undefined
     if (st?.running === true) {
       const addrs = Array.isArray(node?.addrs) ? (node!.addrs as unknown[]).filter((a): a is string => typeof a === 'string').slice(0, 16) : []
@@ -149,20 +161,58 @@ export async function serviceSetNetId(i: NetIdInput): Promise<{ set: string; ans
   }
 }
 
+/** `members` without `member`'s entry, or null when the config does not read or has no such entry. */
+function withoutMember(text: string, member: string): string | null {
+  let cfg: Record<string, unknown>
+  try { cfg = JSON.parse(text) as Record<string, unknown> } catch { return null }
+  if (!cfg || typeof cfg !== 'object' || !Array.isArray(cfg.members)) return null
+  const members = cfg.members as Array<{ id?: unknown }>
+  const rest = members.filter((m) => m?.id !== member)
+  return rest.length === members.length ? null : JSON.stringify({ ...cfg, members: rest }, null, 2) + '\n'
+}
+
+/**
+ * Write `text` over `file` only while it still holds `was`: read again right before the rename, so
+ * a write by the default's own supervisor (another Walnut's) in between is never lost. False when it changed.
+ */
+function replaceIfUnchanged(file: string, was: string, text: string): boolean {
+  const tmp = `${file}.tmp-${process.pid}-forget`
+  fs.writeFileSync(tmp, text, { mode: 0o600 })
+  let now: string | null = null
+  try { now = fs.readFileSync(file, 'utf8') } catch { /* gone */ }
+  if (now !== was) { fs.rmSync(tmp, { force: true }); return false }
+  fs.renameSync(tmp, file)
+  return true
+}
+
+const FORGET_TRIES = 5
+
 /** `net-forget`: the default set's walnut-net lets `member` in no longer (only that entry; nothing else changes). */
-export async function forgetDefaultNetMember(member: string, home = os.homedir()): Promise<Answer> {
+export async function forgetDefaultNetMember(member: string, home = os.homedir(), t: { beforeReplace?: (attempt: number) => void } = {}): Promise<Answer> {
   if (!ID_RE.test(member)) return refuse('bad_member', 'the member must be an endpoint id')
   const dir = netStateDir({ serviceStateDir: null, prodDaemon: true, daemonDir: '/', home })
   const file = path.join(dir, 'config.json')
-  let before: string
-  try { before = fs.readFileSync(file, 'utf8') } catch { return { ok: true, changed: false } }
-  let cfg: Record<string, unknown>
-  try { cfg = JSON.parse(before) as Record<string, unknown> } catch { return refuse('unreadable', `${file} does not read; it is left as it is`) }
-  const members = Array.isArray(cfg.members) ? cfg.members as Array<{ id?: unknown }> : []
-  const rest = members.filter((m) => m?.id !== member)
-  if (rest.length === members.length) return { ok: true, changed: false }
-  const text = JSON.stringify({ ...cfg, members: rest }, null, 2) + '\n'
-  writeFileAtomic(file, text)
+  let before = ''
+  let text: string | null = null
+  for (let attempt = 0; ; attempt++) {
+    try { before = fs.readFileSync(file, 'utf8') } catch { return { ok: true, changed: false } }
+    try { JSON.parse(before) } catch { return refuse('unreadable', `${file} does not read; it is left as it is`) }
+    text = withoutMember(before, member)
+    if (text === null) return { ok: true, changed: false }
+    t.beforeReplace?.(attempt)
+    if (replaceIfUnchanged(file, before, text)) break
+    if (attempt + 1 >= FORGET_TRIES) return refuse('busy', `${file} kept changing while this member was taken off; it is left as it is`)
+  }
+  // The config its walnut-net last came up on: its supervisor puts that back on a failed start or a
+  // refused reload, which must not bring the entry back.
+  const good = path.join(dir, 'config.last-good.json')
+  for (let attempt = 0; attempt < FORGET_TRIES; attempt++) {
+    let was: string
+    try { was = fs.readFileSync(good, 'utf8') } catch { break }
+    const next = withoutMember(was, member)
+    if (next === null || replaceIfUnchanged(good, was, next)) break
+  }
+  const cfg = JSON.parse(text) as Record<string, unknown>
   const control = typeof cfg.control === 'string' && path.isAbsolute(cfg.control) ? cfg.control : netControlPath(dir)
   let res: Record<string, unknown>
   try {
@@ -173,7 +223,7 @@ export async function forgetDefaultNetMember(member: string, home = os.homedir()
   }
   if (res.ok !== true && res.error !== 'shutting down') {
     // Refused: the file goes back to what that walnut-net runs, as its own supervisor does (net-core.ts reload).
-    if (fs.readFileSync(file, 'utf8') === text) writeFileAtomic(file, before)
+    replaceIfUnchanged(file, text, before)
     return refuse('reload_refused', `the machine's walnut-net refused the list without this member: ${String(res.error ?? 'invalid')}`)
   }
   return { ok: true, changed: true, reloaded: true }

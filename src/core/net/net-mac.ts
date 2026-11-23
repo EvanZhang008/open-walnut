@@ -60,7 +60,7 @@ const state: NetState = { enabled: false, macId: null, companion: false, relay: 
 // told first, while this Mac still reaches them the old way.
 let appliedRelay: RelayChoice | null = null
 
-async function companionPaired(): Promise<boolean> {
+export async function companionPaired(): Promise<boolean> {
   const { getCloudPairingEndpointAsync } = await import('../pairing-targets.js')
   // Strict: an unreadable pairing fails the sync; read as "none" it would move every
   // machine to another relay than this Mac's.
@@ -196,13 +196,19 @@ async function pushToHost(name: string, endpoint: string, s: NetState): Promise<
   if (!conn?.connected || !conn.hasCapability('net-v1') || removing.has(endpoint)) return
   // An older daemon drops the relay mode and would run with no relay at all: it keeps the
   // companion's relay it has until it is updated.
+  const { walnutNetOfAnother } = await import('./net-shared-host.js')
   if (s.relay !== 'own' && !conn.hasCapability('net-join-v1')) {
     log.session.warn('net: a machine is too old for this relay choice; it keeps the one it has', { host: name, relay: s.relay })
+  } else if (await walnutNetOfAnother(name, conn)) {
+    // Its walnut-net is another Walnut's: a list from here would replace that Walnut's (net-shared-host.ts).
+    log.session.debug('net: a machine whose walnut-net another Walnut runs is handed no list from here', { host: name })
   } else {
     try { await conn.send('net.configure', hostConfig(s), 20_000) } catch (err) { log.session.warn('net: could not hand a machine its member list', { host: name, error: (err as Error).message }) }
   }
   const local = await localDaemon().catch(() => null)
-  if (local) await noteSeen(local, conn, name, endpoint, relaysOfChoice(s.relay, s.relays))
+  // Noted under the endpoint the link dials now: its own service set's once moved (net-service-sets.ts).
+  const dialled = (await Promise.resolve(conn.netEndpointNow?.()).catch(() => null)) ?? endpoint
+  if (local) await noteSeen(local, conn, name, dialled, relaysOfChoice(s.relay, s.relays), dialled === endpoint ? {} : { via: name })
 }
 
 /** The machines to hand the list to: every net host row but those a Remove is taking out. */
@@ -277,11 +283,15 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
         state.relayRoots = []
       }
       // A service set's own endpoint is no machine of its own (no host row): its host dials it (net-service-sets.ts).
-      const { serviceSetMembersNow, withServiceSetMembers } = await import('./net-service-sets.js')
-      const sets = await serviceSetMembersNow()
-      state.members = state.members.filter((m) => !sets.add.some((a) => a.id === m.id))
-      // Each machine is dialled where it was last seen too.
-      state.members = withWhere(state.members, ((await getConfig()) as { net?: unknown }).net, relaysOfChoice(state.relay, state.relays))
+      // A store that does not read throws here, before reconcileHosts could take one for a machine.
+      const { serviceSetMembersNow, setEndpointIds, withServiceSetMembers, withSetWhere } = await import('./net-service-sets.js')
+      const setRecords = await serviceSetMembersNow()
+      const setIds = setEndpointIds(setRecords)
+      state.members = state.members.filter((m) => !setIds.has(m.id))
+      // Each machine, and each set endpoint, is dialled where it was last seen too.
+      const where = ((await getConfig()) as { net?: unknown }).net
+      state.members = withWhere(state.members, where, relaysOfChoice(state.relay, state.relays))
+      const sets = withSetWhere(setRecords, where, relaysOfChoice(state.relay, state.relays))
       // A new relay: the machines first, while this Mac still reaches them the old way.
       const relayMoved = appliedRelay !== null && appliedRelay !== state.relay
       // The machines go first, so this Mac must be able to follow: an older walnut-net here
@@ -305,7 +315,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
         await Promise.all(adopt.map((entry) => connectHostNow(entry.host)))
       }
       if (changed.added.length || changed.removed.length) log.session.info('net: hosts updated from the member list', changed)
-      await keepWhere(new Set(state.members.map((m) => m.id)))
+      await keepWhere(new Set([...state.members.map((m) => m.id), ...sets.add.map((a) => a.id)]))
       if (!relayMoved) void pushToHosts({ ...state })
       state.syncedAt = Date.now()
       state.error = null
@@ -430,6 +440,9 @@ export function stopNet(): void {
   offConnected = null
 }
 
+/** How long Remove gives this Walnut's own service set on the machine to leave (the route's deadline is 60 s). */
+const SET_LEAVE_BOUND_MS = 25_000
+
 /** Take a machine out: it stops its walnut-net, the companion forgets it, this Mac drops its host row. */
 export async function removeMachine(host: string): Promise<{ removed: string }> {
   const { getConfig } = await import('../config-manager.js')
@@ -461,6 +474,11 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
         throw new NetError(res.status, e.code, e.message)
       }
     }
+    // This Walnut's own service set there leaves next, while the link still reaches it (bounded, best
+    // effort), and its endpoint goes from the companion's list and from here (core/hosts/host-set-leave.ts).
+    // The machine's walnut-net is then another Walnut's: it is never turned off from here.
+    const { leaveHostServiceSet } = await import('../hosts/host-set-leave.js')
+    const set = await leaveHostServiceSet(host, SET_LEAVE_BOUND_MS)
     // Then the machine, while this Mac still reaches it (its own walnut-net still lists it):
     // it stops its walnut-net, which ends the link this very command rides, so the reply
     // may never come. Away, it is not told; it reaches nobody anyway (the relay refuses it,
@@ -468,7 +486,9 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
     try {
       const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
       const conn = peekDaemonConnection(host)
-      if (conn?.connected && conn.hasCapability('net-v1')) {
+      if (set.own) {
+        log.session.info('net: a machine with this Walnut\'s own service set is taken out; its own walnut-net stays', { host, left: set.ok, why: set.why })
+      } else if (conn?.connected && conn.hasCapability('net-v1')) {
         const told = await conn.send('net.configure', { enabled: false }, 10_000).catch((err: Error) => ({ ok: false, error: err.message }))
         log.session.info('net: told a machine it is out', { host, ok: (told as { ok?: boolean }).ok, error: (told as { error?: string }).error })
       } else {

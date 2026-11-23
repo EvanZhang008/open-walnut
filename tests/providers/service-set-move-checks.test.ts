@@ -149,7 +149,7 @@ describe('openWorkThere (should-fix 12)', () => {
 
 describe('dropWalnutScope (B6)', () => {
   it('empties this Walnut\'s triggers and plugin jobs for its home, the way the leader configures them', async () => {
-    const { l, sent } = link({ caps: ['plugin-jobs-v1'] })
+    const { l, sent } = link({ caps: ['plugin-jobs-v1', 'walnut-scope-v1'] })
     await dropWalnutScope(l)
     expect(sent).toEqual([
       { cmd: 'triggers.configure', params: { config: { version: 1, triggers: [] }, home: HOME } },
@@ -158,8 +158,8 @@ describe('dropWalnutScope (B6)', () => {
   })
 
   it('a released clock with fires still to deliver, or a refusal, is no drop', async () => {
-    await expect(dropWalnutScope(link({ replies: { 'triggers.configure': { ok: true, released: [{ id: 'c', pending: 2 }] } } }).l)).rejects.toThrow(/1 clock routine there still had fires/)
-    await expect(dropWalnutScope(link({ caps: ['plugin-jobs-v1'], replies: { 'jobs.configure': { ok: false, error: 'no' } } }).l)).rejects.toThrow(/plugin jobs \(no\)/)
+    await expect(dropWalnutScope(link({ caps: ['walnut-scope-v1'], replies: { 'triggers.configure': { ok: true, released: [{ id: 'c', pending: 2 }] } } }).l)).rejects.toThrow(/1 clock routine there still had fires/)
+    await expect(dropWalnutScope(link({ caps: ['plugin-jobs-v1', 'walnut-scope-v1'], replies: { 'jobs.configure': { ok: false, error: 'no' } } }).l)).rejects.toThrow(/plugin jobs \(no\)/)
   })
 })
 
@@ -175,5 +175,39 @@ describe('stopFollowerThere (should-fix 7)', () => {
     const none = link({})
     await stopFollowerThere(none.l, sleep)
     expect(none.sent).toEqual([])
+  })
+})
+
+describe('moveSessions: review round 2', () => {
+  it('M1: a live session the host cannot prove quiet is busy, never quiet (no snapshot, an older snapshot, a line not answered, an open prompt)', async () => {
+    const old = snap() as unknown as Record<string, unknown>
+    delete old.detachedBgCount
+    delete old.wakeupAt
+    const quiet = (over: Record<string, unknown>) => ({ ...live(), quiet: { turnActive: false, lineAwaitingAnswer: false, promptOpen: false, ...over } })
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ ok: true, exists: true, alive: true }, /no snapshot/],
+      [{ ok: true, exists: true, alive: true, snapshot: old }, /too old to say what outlives its turn \(no detachedBgCount, wakeupAt\)/],
+      [quiet({ lineAwaitingAnswer: true }), /a line it was sent is not answered yet/],
+      [quiet({ promptOpen: true }), /a prompt of it is open/],
+    ]
+    for (const [state, why] of cases) {
+      const { l } = link({ states: { s: state } })
+      expect(await moveSessions(l, deps([rec('s', 'idle')])), JSON.stringify(state)).toEqual([{ id: 's', busy: expect.stringMatching(why) }])
+    }
+    const { l } = link({ states: { s: quiet({}) } })
+    expect(await moveSessions(l, deps([rec('s', 'idle')]))).toEqual([{ id: 's' }])
+  })
+
+  it('should-fix 12 / M-L5: a host command that names no task holds the move when this server started it; one it did not start does not', async () => {
+    const jobs = { 'exec.list': { ok: true, jobs: [{ running: true, taskId: null, jobId: 'hx-mine' }, { running: true, taskId: null, jobId: 'hx-theirs' }] } }
+    const started = { ...deps([]), startedHere: async (id: string) => id === 'hx-mine' }
+    expect(await openWorkThere(link({ caps: ['host-exec-v1'], replies: jobs }).l, started)).toBe('1 host_exec run of this Walnut\'s tasks still runs there')
+    const none = { ...deps([]), startedHere: async () => false }
+    expect(await openWorkThere(link({ caps: ['host-exec-v1'], replies: jobs }).l, none)).toBe(null)
+  })
+
+  it('M-L5: an archived record whose CLI the daemon still lists alive is moved too', async () => {
+    const { l } = link({ alive: ['a'], states: { a: live() } })
+    expect(await moveSessions(l, deps([rec('a', 'stopped', { archived: true } as Partial<SessionRecord>), rec('b', 'idle', { archived: true } as Partial<SessionRecord>)]))).toEqual([{ id: 'a' }])
   })
 })

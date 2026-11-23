@@ -7,23 +7,27 @@
  *   1. `walnut daemon net-id --walnut … --request <list>` on the host, by this build's copy in the
  *      set: the set's daemon takes the leader's member list (the one every joined machine gets, so
  *      this leader is let in) and starts the set's walnut-net; the answer is its endpoint id and addresses;
- *   2. with a cloud companion, the endpoint goes on its member list (its relay lets members on);
- *   3. the endpoint is kept on the host's set record, and this leader's own walnut-net lists it as a
- *      host member it dials (core/net/net-service-sets.ts).
+ *   2. the endpoint is kept on the host's set record first, so a sync from here on takes it for the
+ *      set's (never for a machine of its own that gets a host row);
+ *   3. with a cloud companion, the endpoint goes on its member list (its relay lets members on; a
+ *      refusal takes the record back), and this leader's own walnut-net lists it as a host member it
+ *      dials (core/net/net-service-sets.ts).
  * Anything not done throws: the move does not start, and nothing of the shared daemon was touched.
  *
  * The flip is then only which endpoint the link dials (service-set-move-link.ts netEndpoint); the
  * endpoint dialled before stays a member until the move is confirmed. After it, this leader takes
  * itself off the shared walnut-net's list (`net-forget`, only its own entry) and drops that endpoint
- * from its own. Leaving the host forgets the set's endpoint here and on the companion.
+ * from its own. Leaving the host (a Remove) forgets the set's endpoint on the companion first, then
+ * the host's whole record here (forgetSetNet).
  */
-import { NET_FORGET_ACTION, NET_ID_ACTION, encodeNetRequest } from './service-set-net.js'
-import { forgetServiceSetNet, hostServiceSets, markServiceSetNetLeft, markServiceSetNetPaired, movedToSet, serviceSetWords, setNetMemberName, type SetAsk } from './service-set-leader.js'
+import { NET_FORGET_ACTION, NET_ID_ACTION, NET_ID_BUDGET_MS, encodeNetRequest } from './service-set-net.js'
+import { hostServiceSets, markServiceSetNetLeft, markServiceSetNetPaired, movedToSet, serviceSetWords, setNetMemberName, unmarkServiceSetNetPaired, type SetAsk } from './service-set-leader.js'
 import { parseServiceSetLine } from './service-set.js'
+import { serviceSetMoves } from './service-set-move.js'
 
 const NET_ID = /^[0-9a-f]{64}$/
-/** The set's daemon may download its walnut-net build first (net-binary.ts FETCH_TIMEOUT_MS is 180 s). */
-const NET_ID_TIMEOUT_MS = 240_000
+/** The host side ends within NET_ID_BUDGET_MS (a first walnut-net download included); the line's own start comes on top. */
+export const NET_ID_TIMEOUT_MS = NET_ID_BUDGET_MS + 20_000
 
 /** What pairing and its undo use; the link and core/net/net-service-sets.ts give each. */
 export interface NetPairDeps {
@@ -64,8 +68,14 @@ export async function pairServiceSetNet(d: NetPairDeps): Promise<{ endpoint: str
   const endpoint = a.endpointId
   if (endpoint === d.shared) throw new Error('the set answered the endpoint the link reaches already, not one of its own')
   const addrs = Array.isArray(a.addrs) ? a.addrs.filter((x): x is string => typeof x === 'string').slice(0, 16) : []
-  await d.register(endpoint, setNetMemberName(d.place))
+  const before = await hostServiceSets.read(d.place).catch(() => null)
   if (!(await markServiceSetNetPaired(d.place, d.set, { endpoint, addrs, shared: d.shared }))) throw new Error('the host\'s set record changed meanwhile')
+  try {
+    await d.register(endpoint, setNetMemberName(d.place))
+  } catch (err) {
+    await unmarkServiceSetNetPaired(d.place, endpoint, before)
+    throw err
+  }
   await d.apply()
   return { endpoint, addrs }
 }
@@ -85,10 +95,17 @@ export async function leaveSharedNet(d: Pick<NetPairDeps, 'place' | 'set' | 'run
   await markServiceSetNetLeft(d.place, d.set)
 }
 
-/** Leaving the host: the set's endpoint is no member here and on the companion any more. */
+/**
+ * Leaving the host: the companion forgets the set's endpoint first (throws when it did not: the record
+ * stays, and the next sync tries again, net-service-sets.ts), then the host's whole record goes here,
+ * so this leader's walnut-net dials it no more (`apply`).
+ */
 export async function forgetSetNet(d: Pick<NetPairDeps, 'place' | 'unregister' | 'apply'>): Promise<void> {
-  const endpoint = await forgetServiceSetNet(d.place)
-  if (!endpoint) return
-  await d.unregister(endpoint)
-  await d.apply()
+  const r = await hostServiceSets.read(d.place)
+  if (!r) return
+  if (r.netEndpoint) await d.unregister(r.netEndpoint)
+  await hostServiceSets.write(d.place, null)
+  // A move record of the host is no try to resume, nor a done move to dial by, if the host comes back.
+  await serviceSetMoves.write(d.place, null).catch(() => {})
+  if (r.netEndpoint) await d.apply()
 }
