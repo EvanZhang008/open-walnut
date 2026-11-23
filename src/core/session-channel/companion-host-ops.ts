@@ -10,6 +10,11 @@
  *                   LISTENER_CALLS), answered by the same route table and checks the leader's calls
  *                   go through. While the Mac answers, each route relays to it as before: one path
  *                   at a time. Every answer of this path carries `viaHost: true` (additive).
+ *   pictures        a send's or an answer's pictures are saved on the host first, by its daemon's
+ *                   `image.save` over the host's own bridge, the way a phone picture for a session on
+ *                   another machine has always gone (sessions/cloud-images.ts): the same folder, names,
+ *                   caps and header, so the words reach the CLI exactly as a legacy send's do. Only
+ *                   the small words ride the listener link; no picture rides it.
  *   refuse          a session a host claimed, the Mac away, but its link down (or sessions turned
  *                   off for the companion): a clear refusal (hostRoute), never the daemon's direct
  *                   path around its judge
@@ -21,6 +26,7 @@ import { listenerLinked, callListenedHost, ListenerNotLinked, standingRow, stand
 import { hostJudgedAlias, hostUnreachableSentence } from './host-judged-direct.js'
 import type { LiveState } from './host-api.js'
 import type { SessionRecord } from '../types.js'
+import type { SessionImage } from '../sessions/cloud-images.js'
 
 const MAC_ALIAS = '__local__'
 /**
@@ -189,12 +195,40 @@ async function call(t: OperatedSession, path: string, body: unknown, timeoutMs: 
   }
 }
 
-/** A phone's text send, queued on the host under the phone's message id (a retry is queued once). */
-export async function sendViaHost(t: OperatedSession, o: { text: string; messageId: string; timeoutMs: number }): Promise<HostAnswer> {
+/**
+ * Pictures for a session its host runs, saved on that host before its words go (saveImagesViaBridge:
+ * the daemon's narrow `image.save`, its folder, its names and its caps). The bridge is the host's own:
+ * its token is bound to the alias the listener link stands for (bridge-registry.ts tokenBoundAlias),
+ * so a picture lands only on the session's host. A picture that cannot be saved sends nothing: a
+ * reason a retry will not fix is a 400 with its code, as a legacy send answers it; a host whose bridge
+ * did not answer is `bridge_offline`, which the phone retries with the same message id.
+ */
+async function picturesOnHost(t: OperatedSession, images: SessionImage[]): Promise<{ ok: true; paths: string[] } | { ok: false; answer: HostAnswer }> {
+  const [{ saveImagesViaBridge, CloudImageError }, { hostDisplayName }] = await Promise.all([import('../sessions/cloud-images.js'), import('../hosts/host-display-name.js')])
+  try {
+    return { ok: true, paths: await saveImagesViaBridge(t.alias, t.row.claudeSessionId, images, t.row.host_label) }
+  } catch (err) {
+    if (err instanceof CloudImageError) return { ok: false, answer: v1Error(400, err.code, err.message) }
+    return { ok: false, answer: v1Error(503, 'bridge_offline', `${hostDisplayName(t.alias, t.row.host_label)} could not take the pictures right now; retrying automatically`) }
+  }
+}
+
+/**
+ * A phone's send, queued on the host under the phone's message id (a retry is queued once). Its
+ * pictures are saved on the host first and named at the head of the words (withImagePaths), as a
+ * legacy send's are; `timeoutMs` is the host's time to answer the send itself, after them.
+ */
+export async function sendViaHost(t: OperatedSession, o: { text: string; messageId: string; timeoutMs: number; images?: SessionImage[] }): Promise<HostAnswer> {
   const sid = t.row.claudeSessionId
+  let text = o.text
+  if (o.images?.length) {
+    const saved = await picturesOnHost(t, o.images)
+    if (!saved.ok) return saved.answer
+    text = (await import('../sessions/cloud-images.js')).withImagePaths(text, saved.paths)
+  }
   const body = {
-    sessionId: sid, message: o.text, ...(t.row.taskId ? { taskId: t.row.taskId } : {}),
-    queued: [{ id: o.messageId, message: o.text, sentBy: 'person' as const }], busSource: 'mobile',
+    sessionId: sid, message: text, ...(t.row.taskId ? { taskId: t.row.taskId } : {}),
+    queued: [{ id: o.messageId, message: text, sentBy: 'person' as const }], busSource: 'mobile',
   }
   const r = await call(t, '/host-api/sessions/send', body, o.timeoutMs)
   return r.ok ? { status: 202, body: { messageId: o.messageId, viaHost: true } } : r.answer
@@ -211,8 +245,9 @@ export async function interruptViaHost(t: OperatedSession, timeoutMs = 15_000): 
 /**
  * The phone's answer to a prompt: checked as the Mac's route checks it, then the session's own
  * `resolvePermissionRequest` on the host (which first proves the request is pending on that session).
- * Pictures are not carried this way: an answer with pictures is refused, so the phone can send it
- * once the Mac is back.
+ * Its pictures (inline, or this box's uploads made inline: answer-pictures.ts) go as an answer's do
+ * while the companion leads a host (leader/host-session-control.ts withPictures): saved on the host
+ * and named at the head of the last answer, for an allowed answer with answers.
  */
 export async function permissionViaHost(t: OperatedSession, b: Record<string, unknown>, timeoutMs = 20_000): Promise<HostAnswer> {
   const { requestId, allow, message, optionId, answers } = b
@@ -222,10 +257,21 @@ export async function permissionViaHost(t: OperatedSession, b: Record<string, un
   if (answers !== undefined && (typeof answers !== 'object' || answers === null || Array.isArray(answers) || Object.values(answers).some((v) => typeof v !== 'string'))) {
     return v1Error(400, 'bad_request', 'answers must be an object mapping question to answer string')
   }
-  if (b.images !== undefined || b.imageRefs !== undefined) return v1Error(409, 'images_need_mac', IMAGES_NEED_MAC)
   const { isAcpEngine } = await import('../agents/engine-registry.js')
   const acp = isAcpEngine(t.row.engine)
-  const patch = answers !== undefined && Object.keys(answers as object).length > 0 ? { answers } : undefined
+  let given = answers as Record<string, string> | undefined
+  let pictures = 0
+  if (!acp && allow && given && Object.keys(given).length > 0 && (b.images !== undefined || b.imageRefs !== undefined)) {
+    const [{ inlineAnswerPictures }, { withAnswerImagePaths }] = await Promise.all([import('../answer-pictures.js'), import('../sessions/cloud-images.js')])
+    const inline = await inlineAnswerPictures(b)
+    if (inline.length > 0) {
+      const saved = await picturesOnHost(t, inline)
+      if (!saved.ok) return saved.answer
+      given = withAnswerImagePaths(given, saved.paths)
+      pictures = saved.paths.length
+    }
+  }
+  const patch = given !== undefined && Object.keys(given).length > 0 ? { answers: given } : undefined
   // The session's own parameters (claude-code-session.ts, acp-session.ts); a trailing one left out is
   // absent there, an inner one null (JSON carries no undefined).
   const raw: unknown[] = acp ? [requestId, allow, optionId] : [requestId, allow, message, patch, optionId]
@@ -239,8 +285,5 @@ export async function permissionViaHost(t: OperatedSession, b: Record<string, un
     return r.answer
   }
   if (r.body.value !== true) return v1Error(503, 'bridge_offline', 'Permission answer was not confirmed by the session host; retry the same request')
-  return { status: 200, body: { status: 'resolved', requestId, allow, viaHost: true } }
+  return { status: 200, body: { status: 'resolved', requestId, allow, viaHost: true, ...(pictures > 0 ? { pictures } : {}) } }
 }
-
-/** What the phone shows for pictures to a session its host runs while the Mac is away (the host's send route takes text only). */
-export const IMAGES_NEED_MAC = 'Pictures for this session need your Mac, which is away. Send them again once it is back; text messages still go through.'

@@ -37,8 +37,6 @@ export interface HostControlDeps {
 }
 
 const CONTROL_TIMEOUT_MS = 20_000
-/** Per picture: up to ~14 MB of base64 over the bridge WS (cloud-images.ts). */
-const IMAGE_SAVE_TIMEOUT_MS = 30_000
 /** An answer takes the chat's limit (core/answer-pictures.ts). */
 const MAX_ANSWER_PICTURES = 5
 
@@ -123,40 +121,28 @@ export function createHostSessionControl(deps: HostControlDeps) {
 
   /**
    * An answer's pictures (inline, as the route hands them over): saved on the host with
-   * `image.save`, as a phone send's are, and named at the head of the last answer, so the CLI
-   * reads them in the same tool result as the words. A picture the host cannot take fails the
-   * answer with the reason, never drops it: the card stays open to answer again.
+   * `image.save`, as a phone send's are (cloud-images.ts saveImagesViaBridge), and named at the head
+   * of the last answer, so the CLI reads them in the same tool result as the words. A picture the
+   * host cannot take fails the answer with the reason, never drops it: the card stays open to answer again.
    */
   async function withPictures(t: LeadHost, answers: Record<string, string>, images: unknown): Promise<{ ok: true; answers: Record<string, string>; pictures: number } | { ok: false; answer: HostControlAnswer }> {
     const list = Array.isArray(images) ? images as unknown[] : []
-    const keys = Object.keys(answers)
-    if (list.length === 0 || keys.length === 0) return { ok: true, answers, pictures: 0 }
+    if (list.length === 0 || Object.keys(answers).length === 0) return { ok: true, answers, pictures: 0 }
     // Every picture goes or the answer is refused with the reason: none is left out or cut off.
     if (list.length > MAX_ANSWER_PICTURES) {
       return { ok: false, answer: answer(400, 'too_many_images', `This answer has ${list.length} pictures and one answer takes at most ${MAX_ANSWER_PICTURES}.`) }
     }
     const bad = list.findIndex((i) => !i || typeof (i as { data?: unknown }).data !== 'string' || typeof (i as { mediaType?: unknown }).mediaType !== 'string')
     if (bad >= 0) return { ok: false, answer: answer(400, 'image_invalid', `Picture ${bad + 1} of ${list.length} has no picture data (it needs base64 \`data\` and a \`mediaType\`).`) }
-    const paths: string[] = []
-    for (const img of list as Array<{ data: string; mediaType: string }>) {
-      let saved: Record<string, unknown>
-      try {
-        saved = await deps.request(t.host, 'image.save', { data: img.data, mediaType: img.mediaType }, IMAGE_SAVE_TIMEOUT_MS)
-      } catch (err) {
-        return { ok: false, answer: answer(503, 'bridge_offline', `Could not reach ${t.host}: ${err instanceof Error ? err.message : String(err)}`) }
-      }
-      if (saved.ok === true && typeof saved.path === 'string') { paths.push(saved.path); continue }
-      const reason = String(saved.error ?? 'unknown')
-      return {
-        ok: false,
-        answer: reason.startsWith('unknown command')
-          ? answer(400, 'images_need_daemon_upgrade', `The daemon on ${t.host} predates image support; it upgrades on its next connect to your Mac.`)
-          : answer(502, 'image_upload_failed', `${t.host} could not save the picture (${reason}).`),
-      }
+    const { saveImagesViaBridge, withAnswerImagePaths, CloudImageError } = await import('../sessions/cloud-images.js')
+    let paths: string[]
+    try {
+      paths = await saveImagesViaBridge(t.host, t.row.id, list as Array<{ data: string; mediaType: string }>, undefined, deps.request)
+    } catch (err) {
+      if (err instanceof CloudImageError) return { ok: false, answer: answer(err.code === 'images_need_daemon_upgrade' ? 400 : 502, err.code, err.message) }
+      return { ok: false, answer: answer(503, 'bridge_offline', `Could not reach ${t.host}: ${err instanceof Error ? err.message : String(err)}`) }
     }
-    const { withImagePaths } = await import('../sessions/cloud-images.js')
-    const last = keys[keys.length - 1]!
-    return { ok: true, answers: { ...answers, [last]: withImagePaths(answers[last]!, paths) }, pictures: paths.length }
+    return { ok: true, answers: withAnswerImagePaths(answers, paths), pictures: paths.length }
   }
 
   /** POST /sessions/:id/permission. Same result shape as the Mac's. */

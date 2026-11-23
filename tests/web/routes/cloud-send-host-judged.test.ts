@@ -5,7 +5,9 @@
  *   - the host path runs after the stop gate and the send ledger: a stop the Mac has not confirmed
  *     holds it, and a retry of a message a direct delivery may have run is never sent again
  *   - its outcome goes in the ledger: a retry after it, by either path, is answered, never sent twice
- *   - never the daemon's direct send: pictures and a link that is down get a refusal the phone shows
+ *   - never the daemon's direct send: a link that is down gets a refusal the phone shows
+ *   - pictures go with the words to the host (land 8): the route hands them to sendViaHost, which
+ *     saves them on the host first (companion-host-ops.ts); before, they were refused 409 images_need_mac
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -24,7 +26,7 @@ const SID = 'host-judged-sid-1'
 const k = vi.hoisted(() => ({
   stopRequest: undefined as { id: string; state: string } | undefined,
   route: { kind: 'none' } as Record<string, unknown>,
-  sends: [] as Array<{ text: string; messageId: string }>,
+  sends: [] as Array<{ text: string; messageId: string; images?: unknown[] }>,
   answer: { status: 202 } as { status: number; maybeTaken?: true },
 }))
 vi.mock('../../../src/core/session-projection.js', async (orig) => ({
@@ -39,8 +41,8 @@ vi.mock('../../../src/core/session-channel/companion-host-ops.js', async (orig) 
   hostRoute: async () => k.route,
   // The same answer for a caller that asks only whether the host operates it.
   hostOperated: async () => (k.route.kind === 'operated' ? k.route.t : null),
-  sendViaHost: async (_t: unknown, o: { text: string; messageId: string }) => {
-    k.sends.push({ text: o.text, messageId: o.messageId })
+  sendViaHost: async (_t: unknown, o: { text: string; messageId: string; images?: unknown[] }) => {
+    k.sends.push({ text: o.text, messageId: o.messageId, ...(o.images ? { images: o.images } : {}) })
     return k.answer.status === 202 ? { status: 202, body: { messageId: o.messageId, viaHost: true } }
       : { status: k.answer.status, body: { error: { code: 'bridge_offline', message: 'no answer' } }, ...(k.answer.maybeTaken ? { maybeTaken: true } : {}) }
   },
@@ -104,12 +106,13 @@ describe('a send through the host keeps the gates of every other path (M1)', () 
 })
 
 describe('never the daemon\'s direct send (M2)', () => {
-  it('pictures get a 409 that says they need the Mac', async () => {
-    const r = await send({ text: 'look', messageId: 'qm-mobile-b1', images: [{ data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', mediaType: 'image/png' }] })
-    expect(r.status).toBe(409)
-    expect(r.body.error).toMatchObject({ code: 'images_need_mac' })
-    expect(r.body.error.message).toMatch(/your Mac/)
-    expect(k.sends).toEqual([])
+  it('pictures go with the words through the host, never the direct path (land 8)', async () => {
+    const png = { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', mediaType: 'image/png' }
+    const r = await send({ text: 'look', messageId: 'qm-mobile-b1', images: [png, png] })
+    expect(r.status, JSON.stringify(r.body)).toBe(202)
+    expect(r.body).toMatchObject({ messageId: 'qm-mobile-b1', viaHost: true })
+    expect(k.sends).toEqual([{ text: 'look', messageId: 'qm-mobile-b1', images: [png, png] }])
+    expect((await readSendOutcome(SID, 'qm-mobile-b1'))?.state).toBe('relayed')
     expect(directCalls()).toEqual([])
   })
 

@@ -55,7 +55,8 @@ const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
   'web/routes/sessions.ts': 'calls', // the session start and send routes: buildSessionImageContext
   'core/send-queue.ts': 'calls',
   'core/send-queue-sweep.ts': 'calls',
-  'core/leader/host-session-control.ts': 'calls',
+  'core/leader/host-session-control.ts': 'calls', // withAnswerImagePaths: a prompt's answer with pictures, the companion leading the host
+  'core/session-channel/companion-host-ops.ts': 'calls', // a send or an answer with pictures to a session its host judges, the Mac away
   'lib/composed-framing.ts': 'reads', // splitAttachmentHeaders: the pictures stay ahead of the words, the framing after them comes off
   'core/session-hooks/builtins.ts': 'reads', // a comment about titles
   'core/sessions/transcript-from-jsonl.ts': 'reads', // a comment
@@ -78,7 +79,7 @@ const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
 // `Images\|Files` and `Video \(stills`: a hand-written parser's regex names the header that way
 // (2026-11-20: three parsers of their own knew only pictures and files, so a recorded video's
 // stills were not copied to a session's host and its words showed as the person's).
-const NAMES = /IMAGES_ATTACHED_LINE|FILES_ATTACHED_LINE|(?:Images|Files) attached|Images\|Files|Video (?:stills|narration)|Video \(stills|The user attached|attachmentHeaderBlock\(|imageContextBlock\(|buildSessionImageContext\(|withImagePaths\(|withFilePaths\(|videoClipBlocks\(/
+const NAMES = /IMAGES_ATTACHED_LINE|FILES_ATTACHED_LINE|(?:Images|Files) attached|Images\|Files|Video (?:stills|narration)|Video \(stills|The user attached|attachmentHeaderBlock\(|imageContextBlock\(|buildSessionImageContext\(|withImagePaths\(|withAnswerImagePaths\(|withFilePaths\(|videoClipBlocks\(/
 
 function srcFiles(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -117,7 +118,7 @@ describe('every file that writes or names an attachment header is listed', () =>
   it('a file that calls a builder really calls one listed here, and builds no header by hand', () => {
     for (const [rel, role] of Object.entries(KNOWN)) {
       const src = readFileSync(path.join(SRC, rel), 'utf8')
-      if (role === 'calls') expect(src, rel).toMatch(/withImagePaths\(|withFilePaths\(|attachmentHeaderBlock\(|imageContextBlock\(|buildSessionImageContext\(/)
+      if (role === 'calls') expect(src, rel).toMatch(/withImagePaths\(|withAnswerImagePaths\(|withFilePaths\(|attachmentHeaderBlock\(|imageContextBlock\(|buildSessionImageContext\(/)
       if (role === 'calls' || role === 'builds') {
         // The header line is written only by lib/attachment-headers.ts, never as a literal (comments aside).
         const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')

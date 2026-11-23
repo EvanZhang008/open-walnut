@@ -33,16 +33,25 @@ export class CloudImageError extends Error {
 /** Per picture: up to ~14 MB of base64 over the bridge WS. */
 const IMAGE_SAVE_TIMEOUT_MS = 30_000;
 
+/** A command to a host's daemon over its bridge (bridge-registry.ts bridgeRequest's shape). */
+export type HostBridgeRequest = (host: string, cmd: string, params: Record<string, unknown>, timeoutMs: number) => Promise<Record<string, unknown>>;
+
 /**
  * Save each picture on the host. Throws CloudImageError with a precise code
  * (never silently drops one); a transport failure (no bridge, a timeout, the
  * bridge going away) propagates as it is, and is the kind a held send waits out.
+ * Every companion path that hands a session pictures saves them here: a phone
+ * send (cloud-session-send.ts, the held-send sweep), a prompt's answer while the
+ * companion leads the host (leader/host-session-control.ts), and both for a
+ * session its host judges (session-channel/companion-host-ops.ts).
  */
-export async function saveImagesViaBridge(host: string, sessionId: string, images: SessionImage[], label?: unknown): Promise<string[]> {
-  const { bridgeRequest } = await import('../../web/ws/bridge-registry.js');
+export async function saveImagesViaBridge(
+  host: string, sessionId: string, images: SessionImage[], label?: unknown, request?: HostBridgeRequest,
+): Promise<string[]> {
+  const send = request ?? (await import('../../web/ws/bridge-registry.js')).bridgeRequest;
   const savedPaths: string[] = [];
   for (const img of images) {
-    const saved = await bridgeRequest(host, 'image.save', { data: img.data, mediaType: img.mediaType }, IMAGE_SAVE_TIMEOUT_MS);
+    const saved = await send(host, 'image.save', { data: img.data, mediaType: img.mediaType }, IMAGE_SAVE_TIMEOUT_MS);
     if (saved.ok === true && typeof saved.path === 'string') {
       savedPaths.push(saved.path);
       continue;
@@ -68,6 +77,14 @@ export { IMAGES_ATTACHED_LINE };
 /** The message text naming the saved files (the primary box's own format). */
 export function withImagePaths(text: string, savedPaths: string[]): string {
   return `${attachmentHeaderBlock('images', savedPaths)}${text}`;
+}
+
+/** An answer set with the saved pictures named in front of its LAST answer (the card offers them beside that one). */
+export function withAnswerImagePaths(answers: Record<string, string>, savedPaths: string[]): Record<string, string> {
+  const keys = Object.keys(answers);
+  const last = keys[keys.length - 1];
+  if (last === undefined || savedPaths.length === 0) return answers;
+  return { ...answers, [last]: withImagePaths(answers[last]!, savedPaths) };
 }
 
 /**

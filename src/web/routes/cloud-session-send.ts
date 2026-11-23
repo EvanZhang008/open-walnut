@@ -479,9 +479,10 @@ async function cloudSendOnce(
 /**
  * A send of a session its host judges, the Mac away (hostRoute): queued on that host under the
  * phone's message id (the host's queue takes an id once, so a retry, or the Mac's relay of the same
- * id later, is queued once there), its outcome recorded in the ledger like a relay's. Never the
- * daemon's direct send behind its judge's back: with its link down, or for pictures (the host's
- * send route takes text), a refusal the phone shows. False: not this path.
+ * id later, is queued once there), its outcome recorded in the ledger like a relay's. Its pictures are
+ * saved on the host first, as a legacy send's are (companion-host-ops.ts sendViaHost). Never the
+ * daemon's direct send behind its judge's back: with its link down, a refusal the phone shows.
+ * False: not this path.
  */
 async function sendThroughHost(
   res: Response, sessionId: string, text: string, images: SessionImage[], messageId: string,
@@ -491,11 +492,10 @@ async function sendThroughHost(
   const route = await ops.hostRoute(sessionId)
   if (route.kind === 'none') return false
   if (route.kind === 'refuse') { sendError(res, route.status, route.code, route.message); return true }
-  if (images.length > 0) { sendError(res, 409, 'images_need_mac', ops.IMAGES_NEED_MAC); return true }
   const queue = await import('../../core/send-queue.js')
   // A direct delivery of it may have run (send-direct-gate.ts): sending it again could run it twice.
   if (prior === 'direct-intent') { sendError(res, 409, 'delivery_unknown', queue.unknownFateMessage('the session\'s host')); return true }
-  const a = await ops.sendViaHost(route.t, { text, messageId, timeoutMs: Math.max(1_000, answerBy - Date.now()) })
+  const a = await ops.sendViaHost(route.t, { text, messageId, images, timeoutMs: Math.max(1_000, answerBy - Date.now()) })
   if (a.status === 202) await queue.markSendOutcome(sessionId, messageId, 'relayed')
   else if (a.maybeTaken) await queue.markSendOutcome(sessionId, messageId, 'maybe-relayed')
   res.status(a.status).json(a.body)

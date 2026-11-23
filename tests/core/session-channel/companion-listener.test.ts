@@ -20,9 +20,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-companion-listener'))
-const k = vi.hoisted(() => ({ upserts: [] as any[], macHere: false, off: false, copy: [] as Array<Record<string, unknown>> }))
+const k = vi.hoisted(() => ({
+  upserts: [] as any[], macHere: false, off: false, copy: [] as Array<Record<string, unknown>>,
+  // The host's bridge as the companion's image saves reach it (cloud-images.ts saveImagesViaBridge).
+  bridge: [] as Array<[string, string, Record<string, unknown>]>,
+  bridgeAnswer: (_n: number): Record<string, unknown> | Error => ({ ok: true }),
+}))
 vi.mock('../../../src/web/routes/events-v1.js', () => ({ handleBridgeMobileEvent: (_k: string, row: unknown) => { k.upserts.push(row) } }))
-vi.mock('../../../src/web/ws/bridge-registry.js', async (orig) => ({ ...(await orig<object>()), bridgeForHost: () => ({ connected: k.macHere }) }))
+vi.mock('../../../src/web/ws/bridge-registry.js', async (orig) => ({
+  ...(await orig<object>()),
+  bridgeForHost: () => ({ connected: k.macHere }),
+  bridgeRequest: async (host: string, cmd: string, params: Record<string, unknown>) => {
+    k.bridge.push([host, cmd, params])
+    const a = k.bridgeAnswer(k.bridge.length)
+    if (a instanceof Error) throw a
+    return a
+  },
+}))
 vi.mock('../../../src/core/replication/kinds/gate.js', async (orig) => ({ ...(await orig<object>()), copyKindOff: async (kind: string) => k.off && kind === 'sessions' }))
 vi.mock('../../../src/core/session-projection.js', async (orig) => ({
   ...(await orig<object>()),
@@ -72,6 +86,8 @@ beforeEach(() => {
   _resetCompanionListenerForTesting()
   closeAllSseChannels()
   sse.length = 0; upserts.length = 0; k.macHere = false; k.off = false; k.copy = []
+  k.bridge.length = 0
+  k.bridgeAnswer = (n) => ({ ok: true, path: `/home/dev/.walnut/images/mobile/pic-${n}.png` })
   phoneOn(['s1', 'b1', 'zz'])
 })
 afterEach(() => { vi.useRealTimers() })
@@ -196,6 +212,77 @@ describe('operating a host\'s session through its link', () => {
     expect(answer(200, { ok: false, error: 'not_pending' }).body.args).toEqual(['r0', false])
     expect((await q).status).toBe(404)
     expect((await permissionViaHost(t, { requestId: 'r1' })).status).toBe(400)
+  })
+})
+
+describe('pictures for a host\'s session go as a legacy send\'s do (land 8)', () => {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const pics = (n: number) => Array.from({ length: n }, () => ({ data: PNG, mediaType: 'image/png' }))
+  const header = (paths: string[]) => `[Images attached \u2014 use the Read tool to view them]\n${paths.map((p) => `- ${p}`).join('\n')}\n\n`
+  async function operated() {
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    const answer = (status: number, body: unknown) => {
+      const call = l.sent.filter((f) => f.op === 'call').pop()
+      l.frame({ ch: 'door', op: 'reply', id: call.id, status, body })
+      return call
+    }
+    return { l, t: listenedRow('s1')!, answer }
+  }
+
+  it('a send with 3 pictures saves each on the host by its own bridge, then the words name them under the images header', async () => {
+    const { t, answer } = await operated()
+    const p = sendViaHost(t, { text: 'look at these', messageId: 'qm-mobile-p3', timeoutMs: 1000, images: pics(3) })
+    await settle()
+    expect(k.bridge.map(([host, cmd, params]) => [host, cmd, params.mediaType, params.data])).toEqual(pics(3).map(() => ['devbox', 'image.save', 'image/png', PNG]))
+    const paths = [1, 2, 3].map((n) => `/home/dev/.walnut/images/mobile/pic-${n}.png`)
+    const words = `${header(paths)}look at these`
+    const call = answer(200, { ok: true })
+    expect(call.body).toMatchObject({ sessionId: 's1', message: words, queued: [{ id: 'qm-mobile-p3', message: words, sentBy: 'person' }], busSource: 'mobile' })
+    expect(await p).toEqual({ status: 202, body: { messageId: 'qm-mobile-p3', viaHost: true } })
+  })
+
+  it('a picture the host cannot take sends nothing: the legacy codes, and bridge_offline when its bridge did not answer', async () => {
+    const { l, t } = await operated()
+    const calls = () => l.sent.filter((f) => f.op === 'call').length
+    k.bridgeAnswer = (n) => (n === 2 ? { ok: false, error: 'image.save: too large (EFBIG)' } : { ok: true, path: `/x/${n}.png` })
+    const big = await sendViaHost(t, { text: 'a', messageId: 'qm-mobile-p4', timeoutMs: 1000, images: pics(3) })
+    expect(big.status).toBe(400)
+    expect(big.body.error).toMatchObject({ code: 'image_upload_failed' })
+    expect(String((big.body.error as { message: string }).message)).toMatch(/too large/)
+    k.bridgeAnswer = () => ({ ok: false, error: 'unknown command: image.save' })
+    expect((await sendViaHost(t, { text: 'a', messageId: 'qm-mobile-p5', timeoutMs: 1000, images: pics(1) })).body.error).toMatchObject({ code: 'images_need_daemon_upgrade' })
+    k.bridgeAnswer = () => new Error('bridge for devbox is not connected')
+    const off = await sendViaHost(t, { text: 'a', messageId: 'qm-mobile-p6', timeoutMs: 1000, images: pics(1) })
+    expect(off.status).toBe(503)
+    expect(off.body.error).toMatchObject({ code: 'bridge_offline' })
+    expect(off.maybeTaken).toBeUndefined()
+    expect(calls()).toBe(0)
+  })
+
+  it('a text send touches no bridge', async () => {
+    const { t, answer } = await operated()
+    const p = sendViaHost(t, { text: 'hi', messageId: 'qm-mobile-p7', timeoutMs: 1000 })
+    await settle()
+    answer(200, { ok: true })
+    expect((await p).status).toBe(202)
+    expect(k.bridge).toEqual([])
+  })
+
+  it('a prompt\'s answer with pictures names them at the head of the last answer, as the lead host path does', async () => {
+    const { t, answer } = await operated()
+    const p = permissionViaHost(t, { requestId: 'r1', allow: true, answers: { 'Which?': 'A', 'When?': 'Friday' }, images: pics(2) }, 1000)
+    await settle()
+    const paths = [1, 2].map((n) => `/home/dev/.walnut/images/mobile/pic-${n}.png`)
+    expect(answer(200, { ok: true, value: true }).body.args).toEqual(['r1', true, null, { answers: { 'Which?': 'A', 'When?': `${header(paths)}Friday` } }])
+    expect(await p).toEqual({ status: 200, body: { status: 'resolved', requestId: 'r1', allow: true, viaHost: true, pictures: 2 } })
+    // A refusal, or an answer with no answers, carries no pictures (the lead host path's rule).
+    const q = permissionViaHost(t, { requestId: 'r2', allow: false, images: pics(1) }, 1000)
+    await settle()
+    expect(answer(200, { ok: true, value: true }).body.args).toEqual(['r2', false])
+    expect((await q).status).toBe(200)
+    expect(k.bridge).toHaveLength(2)
   })
 })
 
