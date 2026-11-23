@@ -85,7 +85,7 @@ export async function stopLeftovers(base) {
   const { pin, stillPinned, signalPinned } = _signalSafetyForTesting
   if (!base || base.length < 8) return []
   let listing = ''
-  try { listing = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8', timeout: 10_000 }) } catch { return [] }
+  try { listing = execFileSync('ps', ['-ax', '-o', 'pid=', '-o', 'command='], { encoding: 'utf8', timeout: 10_000, maxBuffer: 64 << 20 }) } catch { return [] }
   const found = []
   for (const line of listing.split('\n')) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(line)
