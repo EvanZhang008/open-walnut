@@ -301,8 +301,9 @@ test('a search box (MicInput): dictated words land in it and filter; Enter while
   const field = search.locator('xpath=..')
   const mic = field.locator('.mic-btn').first()
   await expect(mic).toBeVisible()
-  // The mic sits inside the box's right edge.
-  const box = await search.boundingBox()
+  // The mic sits inside the box's right edge. The box a person sees is the field around the
+  // words (SearchField's wn-field); the input is only the words' part of it.
+  const box = await field.boundingBox()
   const at = await mic.boundingBox()
   expect(box && at && at.x >= box.x && at.x + at.width <= box.x + box.width + 1).toBe(true)
   await search.click()

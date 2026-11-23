@@ -1212,15 +1212,15 @@ test('the Scratchpad is a side bar in its own rail group, right of the agenda on
 
     const toggle = page.getByTestId('sidebar-toggle-scratchpad');
     // Home's panels hold only what opens on Home. The Ask Walnut toggle is always there now
-    // (home-panel-flags.ts). Org is a page with its own entry, outside the group. The side
-    // bars open beside any page, so they are a group of their own after Org, and the only
-    // place either toggle appears in the rail.
+    // (home-panel-flags.ts). Org is a page with its own entry, the rail's first row. The side
+    // bars open beside any page, so they are a group of their own right after Home's group,
+    // and the only place either toggle appears in the rail.
     await expect(page.locator('.sidebar-home-panels .sidebar-link .sidebar-label'))
       .toHaveText(['Task panel', 'Quick question']);
     const sideBars = page.getByRole('group', { name: 'Side panels' });
     await expect(sideBars.locator('.sidebar-link .sidebar-label')).toHaveText(['Agenda', 'Scratchpad']);
     await expect(sideBars.locator('.sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
-    await expect(page.locator('.sidebar-nav > [data-testid="sidebar-org"] + .sidebar-side-bar-group')).toHaveCount(1);
+    await expect(page.locator('.sidebar-nav > .sidebar-home-group + .sidebar-side-bar-group')).toHaveCount(1);
     for (const name of ['Agenda', 'Scratchpad']) {
       await expect(page.locator('.sidebar-nav .sidebar-link .sidebar-label', { hasText: name })).toHaveCount(1);
     }
