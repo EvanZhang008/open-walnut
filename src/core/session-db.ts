@@ -22,7 +22,7 @@ import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import { isHostReplica } from './server-role.js';
 import { mergeLeaderCopy, rowOwnedHere } from './sessions/session-row-owner.js';
-import { claimStart, isClaimed, noteClaimAdopted, releaseClaim } from './sessions/starting-claims.js';
+import { claimStart, isClaimed, releaseClaim } from './sessions/starting-claims.js';
 import { prepared } from '../lib/sqlite-prepared.js';
 import { reopenIfWiped } from '../lib/sqlite-wiped.js';
 import type { SessionRecord } from './types.js';
@@ -413,33 +413,118 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
   };
   let keptOwn = 0;
   let skippedOwn = 0;
+  let disowned = 0;
   handle.transaction(() => {
     for (const id of change.removeIds ?? []) {
       if (ownRow(id)) { keptOwn++; continue; }
       del.run(id);
+      forgetLeaderDisown(handle, id);
     }
     for (const r of change.rows ?? []) {
-      const mine = ownRow(r.claudeSessionId);
+      const sid = r.claudeSessionId;
+      const mine = ownRow(sid);
       // A row the leader holds as this host's own that this host removed (it renamed or dropped
       // it, and the leader has not applied that yet): never stored again, or it would read as an
       // own row and come back to the leader as a session born again.
-      if (!mine && own && rowOwnedHere(r, own) && ownRowGoneLately(r.claudeSessionId)) { skippedOwn++; continue; }
+      if (!mine && own && rowOwnedHere(r, own) && ownRowGoneLately(sid)) { skippedOwn++; continue; }
       // A session a start handed this host (starting-claims.ts): any copy of its row, even one from
       // before the leader marked it this host's, comes down as this host's, so the own-row writer
       // takes the session's first writes whatever order the copy and the start arrive in.
-      const src = !mine && own && isClaimed(r.claudeSessionId) ? claimedCopy(r, own) : r;
-      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : src);
+      const claimed = !mine && own && isClaimed(sid) && claimable(r, own);
+      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : claimed ? claimedCopy(r, own) : r);
       const bound: Record<string, unknown> = {};
       for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
       ins.run(bound);
+      // The row is this host's here while the leader's version says it is not: kept, so the host
+      // can give the row back to it once no session of this host holds it (stranded-own-rows.ts).
+      if ((mine || claimed) && !rowOwnedHere(r, own)) { noteLeaderDisown(handle, r); disowned++; }
+      else forgetLeaderDisown(handle, sid);
     }
   }).immediate();
+  if (disowned > 0) try { disownNotice?.(); } catch { /* the sweep runs on its own clock too */ }
   return { keptOwn, skippedOwn };
 }
 
 /** A copied row as this host's own (host = its key, judge 'host'): the leader's mark, before its copy says it. */
 function claimedCopy(r: SessionRecord, hostKey: string): SessionRecord {
   return { ...r, host: hostKey, judge: 'host' };
+}
+
+/** A start may claim only a row of no host or of this one: the leader hands a seed only to its own host (handSeedToHost). */
+function claimable(r: Pick<SessionRecord, 'host'>, hostKey: string): boolean {
+  return !r.host || r.host === hostKey;
+}
+
+// ── The leader's version of an own row that says it is not this host's ──
+//
+// The host's copy merges the leader's copy of an own row (mergeLeaderCopy) and so loses what the
+// leader says of the row's owner: a start that failed (takeSeedBack on the leader), a host that
+// stopped between a start's claim and its answer, a claim of a row the leader never marked. Each
+// leaves a row this host holds as its own while no session here runs it. The leader's latest
+// version of such a row is kept here, on disk with the copy, until the row is the leader's again
+// or the leader's copy names it this host's (stranded-own-rows.ts reads it).
+
+let disownNotice: (() => void) | null = null;
+
+/** Called after a copy kept a leader version that disowns an own row (host-boot.ts: the sweep runs soon). */
+export function setLeaderDisownNotice(fn: (() => void) | null): void {
+  disownNotice = fn;
+}
+
+function noteLeaderDisown(handle: DatabaseType, leader: SessionRecord): void {
+  prepared(handle, 'INSERT OR REPLACE INTO session_leader_disowns (claude_session_id, row, at) VALUES (?, ?, ?)')
+    .run(leader.claudeSessionId, JSON.stringify(leader), Date.now());
+}
+
+function forgetLeaderDisown(handle: DatabaseType, sid: string): void {
+  prepared(handle, 'DELETE FROM session_leader_disowns WHERE claude_session_id = ?').run(sid);
+}
+
+/**
+ * The own rows of this host whose leader version says they are not this host's: each with that
+ * version (`leader`, and `key` to hand it back with). A kept version whose row is no longer this
+ * host's own goes.
+ */
+export function ownRowsTheLeaderDisowns(): Array<{ row: SessionRecord; leader: SessionRecord; key: string }> {
+  const hostKey = ownRowHostKey();
+  if (!hostKey) return [];
+  const handle = applyHandle ??= openCopyApplyConnection();
+  const kept = handle.prepare('SELECT claude_session_id AS sid, row FROM session_leader_disowns').all() as Array<{ sid: string; row: string }>;
+  if (kept.length === 0) return [];
+  const get = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
+  const out: Array<{ row: SessionRecord; leader: SessionRecord; key: string }> = [];
+  const stale: string[] = [];
+  for (const k of kept) {
+    const raw = get.get(k.sid) as Record<string, any> | undefined;
+    const row = raw ? rowToSession(raw) : null;
+    let leader: SessionRecord | null = null;
+    try { leader = JSON.parse(k.row) as SessionRecord; } catch { /* unreadable: dropped below */ }
+    if (!row || !leader || !rowOwnedHere(row, hostKey) || rowOwnedHere(leader, hostKey)) { stale.push(k.sid); continue; }
+    out.push({ row, leader, key: k.row });
+  }
+  if (stale.length > 0) handle.transaction(() => { for (const sid of stale) forgetLeaderDisown(handle, sid); }).immediate();
+  return out;
+}
+
+/**
+ * Give an own row back to the leader: the leader's version `key` (ownRowsTheLeaderDisowns) becomes
+ * the row, in one transaction that checks first that the row is still this host's own, that no
+ * newer leader version came, and that no start claimed the session since. False: it did not.
+ */
+export function handOwnRowBack(sid: string, key: string): boolean {
+  const hostKey = ownRowHostKey();
+  if (!hostKey || !sid) return false;
+  const handle = applyHandle ??= openCopyApplyConnection();
+  return handle.transaction(() => {
+    if (isClaimed(sid)) return false;
+    const now = handle.prepare('SELECT row FROM session_leader_disowns WHERE claude_session_id = ?').pluck().get(sid) as string | undefined;
+    if (now !== key) return false;
+    const raw = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(sid) as Record<string, any> | undefined;
+    if (!raw || !rowOwnedHere(rowToSession(raw), hostKey)) return false;
+    writeCopyRow(handle, sessionToRow(JSON.parse(key) as SessionRecord));
+    forgetLeaderDisown(handle, sid);
+    return true;
+  }).immediate();
 }
 
 function writeCopyRow(handle: DatabaseType, raw: Record<string, unknown>): void {
@@ -454,37 +539,35 @@ function writeCopyRow(handle: DatabaseType, raw: Record<string, unknown>): void 
  * this host's from its first write. A copy of its row already here that is not this host's yet (an
  * older version of the leader's seed) becomes this host's now, on the copy's own connection, so the
  * own-row writer takes the runner's first write of it; a copy that comes later does the same
- * (applySessionCopy). Nothing to do off a host that runs its sessions.
+ * (applySessionCopy). The leader's version it adopted is kept (noteLeaderDisown), so a start that
+ * ends without a session gives the row back as the leader has it now. A row of another host is
+ * never claimed. Nothing to do off a host that runs its sessions.
  */
 export function claimStartingRow(sid: string): void {
   const key = ownRowHostKey();
   if (!key || !sid) return;
-  claimStart(sid);
   const handle = applyHandle ??= openCopyApplyConnection();
   handle.transaction(() => {
     const raw = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(sid) as Record<string, any> | undefined;
-    if (!raw) return;
-    const rec = rowToSession(raw);
-    if (rowOwnedHere(rec, key)) return;
-    const row = sessionToRow(claimedCopy(rec, key));
-    writeCopyRow(handle, row);
-    noteClaimAdopted(sid, raw, String(row.payload ?? ''));
+    const rec = raw ? rowToSession(raw) : null;
+    if (rec && !claimable(rec, key)) {
+      log.session.warn('host start: the row a start names is another host\'s; not claimed', { sessionId: sid, host: rec.host });
+      return;
+    }
+    claimStart(sid);
+    if (!rec || rowOwnedHere(rec, key)) return;
+    writeCopyRow(handle, sessionToRow(claimedCopy(rec, key)));
+    noteLeaderDisown(handle, rec);
   }).immediate();
 }
 
 /**
- * The start of `sid` ended without a session here: the claim goes, and a copied row it made this
- * host's goes back to what the copy had, unless something wrote the row since (a session that came
- * up after all keeps it).
+ * The start of `sid` ended without a session here: the claim goes. A row it made this host's goes
+ * back to the leader's version through the sweep of rows the leader disowns (stranded-own-rows.ts),
+ * which checks first that no session here holds it.
  */
 export function releaseStartingRow(sid: string): void {
-  const c = releaseClaim(sid);
-  if (!c?.before || !ownRowHostKey()) return;
-  const handle = applyHandle ??= openCopyApplyConnection();
-  handle.transaction(() => {
-    const now = handle.prepare('SELECT payload FROM sessions WHERE claude_session_id = ?').pluck().get(sid) as string | undefined;
-    if (now === c.wrote) writeCopyRow(handle, c.before!);
-  }).immediate();
+  releaseClaim(sid);
 }
 
 // ── The cloud companion's copy of the Mac's sessions (stage 2c of
@@ -1029,6 +1112,11 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS session_leader_drops (
     claude_session_id TEXT PRIMARY KEY,
     host_id TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS session_leader_disowns (
+    claude_session_id TEXT PRIMARY KEY,
+    row TEXT NOT NULL,
     at INTEGER NOT NULL
   );
 `;

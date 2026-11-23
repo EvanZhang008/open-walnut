@@ -38,6 +38,7 @@ import { createHostSessionRoutes, type HostSessionRoutes } from './host-routes.j
 import { liveStateOf, type LiveRunnerLike } from './host-live.js'
 import { startHostResendFamily, turnEndStamp, turnOfOwnSession, type HostResendFamily } from './host-resend.js'
 import { installSessionPort } from '../sessions/session-port.js'
+import { heldOnThisHost, startStrandedSweep, type StrandedSweep } from '../sessions/stranded-own-rows.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
 import { hasLocalDaemon, isHostReplica } from '../server-role.js'
 import { WALNUT_HOME } from '../../constants.js'
@@ -53,6 +54,7 @@ export interface HostSessions {
   resend: HostResendFamily
   dialer: HostDialer
   companion: CompanionDialer
+  stranded: StrandedSweep
 }
 
 let current: HostSessions | null = null
@@ -112,7 +114,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   // The own rows this host removed, kept on disk next to the log (gone-rows.ts).
   const gone = await GoneRows.open(dir, o.walnutId)
   // The copy's store is read only here: rows of this host's own sessions go through the own-row writer.
-  const { allowOwnRowWrites, noteOwnRowGone, setOwnRowsGoneStore, claimStartingRow, releaseStartingRow } = await import('../session-db.js')
+  const { allowOwnRowWrites, noteOwnRowGone, setOwnRowsGoneStore, claimStartingRow, releaseStartingRow, setLeaderDisownNotice } = await import('../session-db.js')
   allowOwnRowWrites(o.hostKey)
   setOwnRowsGoneStore(gone)
   // The emitter is made just below; the leader's resync asks reach it once it is.
@@ -149,6 +151,18 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     log: say,
   })
   installSessionPort(port)
+  // Own rows no session here holds while the leader says they are not this host's go back to the
+  // leader's version (stranded-own-rows.ts): at boot, on a clock, after a copy that disowns one, and
+  // at a failed start's release.
+  const stranded = startStrandedSweep({
+    held: (row) => heldOnThisHost(row, {
+      runnerHolds: (sid) => !!(runner.findSessionByClaudeId?.(sid) || runner.findAcpSession?.(sid)),
+      runtimeAlive: runtimeHoldsCli,
+    }),
+    onHandedBack: (sids) => emitter.disown(sids),
+    log: say,
+  })
+  setLeaderDisownNotice(() => stranded.poke())
   // Before the emitter subscribes: at a turn end each retrier takes it first, then the emitter stamps it.
   const resend = await startHostResendFamily({ say })
   await emitter.start()
@@ -177,7 +191,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     },
     spillDir: path.join(dir, 'prompts'),
     // A start the leader handed names its session: that row is this host's from its first write.
-    claim: { take: claimStartingRow, release: releaseStartingRow },
+    claim: { take: claimStartingRow, release: (sid) => { releaseStartingRow(sid); void stranded.run(sid).catch(() => {}) } },
     // A session this host runs: the emitter knows it, or its row says so (a start whose row is just written).
     owns: async (sid) => {
       if (emitter.owns(sid)) return true
@@ -204,9 +218,11 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     routes: () => current?.routes ?? null,
     log: say,
   })
-  current = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion }
+  current = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded }
   // The session runner may reach the runtime in this process from now on (the own-sessions link).
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
+  // The boot pass: a row a start claimed before this service stopped (its claim was in memory only).
+  void stranded.run().catch(() => {})
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
   return current
 }
@@ -218,13 +234,34 @@ export async function stopHostSessions(): Promise<void> {
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
   c.dialer.stop()
   c.companion.stop()
+  c.stranded.stop()
   c.emitter.stop()
   c.resend.stop()
   c.routes.close()
   installSessionPort(null)
-  const { allowOwnRowWrites, setOwnRowsGoneStore } = await import('../session-db.js')
+  const { allowOwnRowWrites, setOwnRowsGoneStore, setLeaderDisownNotice } = await import('../session-db.js')
+  setLeaderDisownNotice(null)
   allowOwnRowWrites(null)
   setOwnRowsGoneStore(null)
   await c.gone.flush()
   await c.log.close()
+}
+
+/**
+ * The runtime's word on a session's CLI (its `status` answer through the own-sessions link): alive,
+ * dead, or null when the link or the answer did not come within a few seconds.
+ */
+async function runtimeHoldsCli(sid: string): Promise<boolean | null> {
+  const dc = await import('../../providers/daemon-connection.js')
+  const { getLocalDaemonConnection } = await import('../../providers/local-daemon-dial.js')
+  const { statusReplyAlive } = await import('../../providers/daemon-status-reply.js')
+  const within = <T>(p: Promise<T>, ms: number): Promise<T | null> => new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), ms)
+    t.unref?.()
+    p.then((v) => { clearTimeout(t); resolve(v) }, () => { clearTimeout(t); resolve(null) })
+  })
+  const conn = dc.getConnectedDaemonConnection('__local__') ?? await within(getLocalDaemonConnection(), 3_000)
+  if (!conn) return null
+  const reply = await within(conn.send('status', { sid }, 3_000), 3_500)
+  return reply ? statusReplyAlive(reply as { ok?: unknown; exists?: unknown; alive?: unknown }) : null
 }

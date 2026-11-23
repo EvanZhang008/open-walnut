@@ -4,7 +4,8 @@
  * leader marked its seed row this host's before it sent the start (host-judged-runner.ts
  * handSeedToHost), but the host's copy of that row may still be an older version, from before the
  * mark, and may come down before or after the start (replication rounds). session-db.ts reads this
- * list to treat the row as this host's own in either order (claimStartingRow, applySessionCopy).
+ * list to treat the row as this host's own in either order (claimStartingRow, applySessionCopy), and the
+ * sweep that gives a row back to the leader leaves a claimed one alone (stranded-own-rows.ts).
  *
  * Bounded: a claim lasts CLAIM_TTL_MS, long past any start; at most CLAIM_MAX are kept.
  */
@@ -12,15 +13,7 @@
 export const CLAIM_TTL_MS = 10 * 60_000
 const CLAIM_MAX = 2_000
 
-interface Claim {
-  at: number
-  /** The row as the copy had it before the claim made it this host's (a raw store row), to put back if the start fails. */
-  before?: Record<string, unknown>
-  /** The payload the claim wrote, to tell whether anything wrote the row since. */
-  wrote?: string
-}
-
-const claims = new Map<string, Claim>()
+const claims = new Map<string, { at: number }>()
 
 export function claimStart(sid: string, now = Date.now()): void {
   if (!sid) return
@@ -36,17 +29,12 @@ export function isClaimed(sid: string, now = Date.now()): boolean {
   return true
 }
 
-/** The claim made `sid`'s copied row this host's: what it was, and what the claim wrote. */
-export function noteClaimAdopted(sid: string, before: Record<string, unknown>, wrote: string): void {
-  const c = claims.get(sid)
-  if (c) { c.before = before; c.wrote = wrote }
-}
-
-/** The start is over without a session here: the claim goes, with what it adopted (if anything). */
-export function releaseClaim(sid: string): Claim | null {
-  const c = claims.get(sid) ?? null
+/**
+ * The start is over without a session here: the claim goes. What it adopted is given back by the
+ * sweep of rows the leader disowns (stranded-own-rows.ts), from the leader version kept on disk.
+ */
+export function releaseClaim(sid: string): void {
   claims.delete(sid)
-  return c
 }
 
 export function _resetStartingClaimsForTesting(): void {

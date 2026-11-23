@@ -98,6 +98,8 @@ export interface HostEmitter {
   noteDrop(sids: Iterable<string>, opts?: { answer?: boolean }): void
   /** Is `sid` one of this host's own sessions? */
   owns(sid: string): boolean
+  /** These rows are the leader's again (stranded-own-rows.ts): no longer own, and no record for them (the leader has its row). */
+  disown(sids: Iterable<string>): void
   /** This host's own session of `taskId` (the newest row seen), or null. */
   ownSessionOfTask(taskId: string): string | null
   /** Write every pending `live` record now (tests, a stop). */
@@ -343,6 +345,15 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
           lastLive.set(sid, { key: GONE_KEY, full: GONE_KEY, at: now() })
           append(sid, 'live', { state: { gone: true } })
         } else if (last) lastLive.set(sid, last)
+      }
+    },
+    disown(sids) {
+      for (const sid of sids) {
+        own.delete(sid)
+        lastRows.delete(sid)
+        lastLive.delete(sid)
+        const t = liveTimers.get(sid)
+        if (t) { clearTimeout(t); liveTimers.delete(sid) }
       }
     },
     noteDrop(sids, opts) {

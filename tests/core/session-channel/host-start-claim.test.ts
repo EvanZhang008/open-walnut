@@ -24,7 +24,8 @@ import * as tracker from '../../../src/core/session-tracker.js'
 import { EventBus } from '../../../src/core/event-bus.js'
 import { FactLog } from '../../../src/core/session-channel/fact-log.js'
 import { createHostEmitter, type HostEmitter } from '../../../src/core/session-channel/host-emitter.js'
-import { _resetStartingClaimsForTesting } from '../../../src/core/sessions/starting-claims.js'
+import { _resetStartingClaimsForTesting, isClaimed } from '../../../src/core/sessions/starting-claims.js'
+import { handBackStrandedRows, heldOnThisHost } from '../../../src/core/sessions/stranded-own-rows.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
 const KEY = 'devbox'
@@ -70,6 +71,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   _resetStartingClaimsForTesting()
+  runnerHas.clear()
+  runtimeSays.clear()
   dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'host-start-claim-'))
   log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
   bus = new EventBus()
@@ -96,6 +99,20 @@ function emitSteps(sid: string, from: number, n: number): void {
 async function logged(sid: string): Promise<string[]> {
   await log.flush()
   return (await log.read(0)).filter((r) => r.sid === sid).map((r) => (r.name === 'row' ? (r.data as { born?: boolean }).born ? 'row:born' : 'row' : r.name))
+}
+
+/** What the runner and the runtime hold in each test (stranded-own-rows.ts heldOnThisHost). */
+const runnerHas = new Set<string>()
+const runtimeSays = new Map<string, boolean | null>()
+
+/** One pass of the sweep that gives rows no session here holds back to the leader's version. */
+function sweep(only?: string): Promise<string[]> {
+  return handBackStrandedRows({
+    held: (row) => heldOnThisHost(row, {
+      runnerHolds: (sid) => runnerHas.has(sid),
+      runtimeAlive: async (sid) => (runtimeSays.has(sid) ? runtimeSays.get(sid)! : false),
+    }),
+  }, only)
 }
 
 /** The runner's own writes of its session's row, as the host's port makes them (host-port.ts: this host's key). */
@@ -147,6 +164,7 @@ describe('a start the leader handed this host claims its session\'s row', () => 
     sessionDb.claimStartingRow(SID_FAILED)
     expect((await tracker.getSessionByClaudeId(SID_FAILED))?.judge).toBe('host')
     sessionDb.releaseStartingRow(SID_FAILED)
+    expect(await sweep(SID_FAILED)).toEqual([SID_FAILED])
     const row = await tracker.getSessionByClaudeId(SID_FAILED)
     expect(row?.judge).toBeUndefined()
     // The leader's again: its copy is no longer merged as this host's, and the host cannot write it.
@@ -157,5 +175,120 @@ describe('a start the leader handed this host claims its session\'s row', () => 
     sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(SID_UNCLAIMED)] })
     await expect(tracker.updateSessionRecord(SID_UNCLAIMED, { activity: 'writing' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)
     expect((await tracker.getSessionByClaudeId(SID_UNCLAIMED))?.judge).toBeUndefined()
+  })
+})
+
+/** The leader's seed after handSeedToHost: marked this host's. */
+const markedSeed = (sid: string): SessionRecord => ({ ...preJudgeSeed(sid), judge: 'host' } as SessionRecord)
+/** The leader's row after takeSeedBack: its own again, the start's failure written on it. */
+const takenBack = (sid: string): SessionRecord => ({ ...preJudgeSeed(sid), process_status: 'error', errorMessage: 'spawn failed' } as SessionRecord)
+const sidN = (n: number): string => `bbbbbbbb-00${String(n).padStart(2, '0')}-4000-8000-0000000001${String(n).padStart(2, '0')}`
+
+describe('a row this host holds as its own that no session here runs goes back to the leader\'s version', () => {
+  it('claim with no row, the copy comes during the start, the start fails: the row is the leader\'s again', async () => {
+    const sid = sidN(1)
+    sessionDb.claimStartingRow(sid)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(sid)] })
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+    sessionDb.releaseStartingRow(sid)
+    expect(await sweep(sid)).toEqual([sid])
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
+    await expect(tracker.updateSessionRecord(sid, { activity: 'writing' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)
+    // The leader's later copies come down as plain copies.
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [{ ...preJudgeSeed(sid), title: 'Renamed' } as SessionRecord] })
+    expect(await tracker.getSessionByClaudeId(sid)).toMatchObject({ title: 'Renamed' })
+  })
+
+  it('the marked seed came during the start and the leader then took it back: its copy gives the row back', async () => {
+    const sid = sidN(2)
+    sessionDb.claimStartingRow(sid)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [markedSeed(sid)] })
+    sessionDb.releaseStartingRow(sid)
+    // The leader still says it is this host's: nothing to give back yet.
+    expect(await sweep(sid)).toEqual([])
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [takenBack(sid)] })
+    expect(await sweep(sid)).toEqual([sid])
+    expect(await tracker.getSessionByClaudeId(sid)).toMatchObject({ process_status: 'error', errorMessage: 'spawn failed' })
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
+  })
+
+  it('the leader\'s marked seed reached the host with no start at all, then was taken back: the row goes back too', async () => {
+    const sid = sidN(3)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [markedSeed(sid)] })
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [takenBack(sid)] })
+    expect(await sweep(sid)).toEqual([sid])
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
+  })
+
+  it('a host that stopped between the claim and the answer gives the row back at its next boot', async () => {
+    const sid = sidN(4)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(sid)] })
+    sessionDb.claimStartingRow(sid)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [{ ...preJudgeSeed(sid), human_note: 'newest' } as SessionRecord] })
+    // The service stops: its claims were in memory, the row it made its own is on disk.
+    _resetStartingClaimsForTesting()
+    sessionDb.closeDb()
+    tracker._resetSessionTrackerForTesting()
+    sessionDb.allowOwnRowWrites(KEY)
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+    // The boot pass.
+    expect(await sweep(sid)).toEqual([sid])
+    const row = await tracker.getSessionByClaudeId(sid)
+    expect(row?.judge).toBeUndefined()
+    // The newest leader version the host saw, not the one at the claim.
+    expect(row?.human_note).toBe('newest')
+  })
+
+  it('a row whose session is alive here stays this host\'s, whatever the leader says', async () => {
+    const sid = sidN(5)
+    sessionDb.claimStartingRow(sid)
+    await runnerWrites(sid)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(sid)] })
+    // Still starting (claimed).
+    expect(await sweep(sid)).toEqual([])
+    sessionDb.releaseStartingRow(sid)
+    // The runner holds it.
+    runnerHas.add(sid)
+    expect(await sweep(sid)).toEqual([])
+    // The runner let it go but the runtime still owns its CLI, or cannot be asked.
+    runnerHas.delete(sid)
+    runtimeSays.set(sid, true)
+    expect(await sweep(sid)).toEqual([])
+    runtimeSays.set(sid, null)
+    expect(await sweep(sid)).toEqual([])
+    expect(await tracker.getSessionByClaudeId(sid)).toMatchObject({ host: KEY, judge: 'host', pid: 4242 })
+    await tracker.updateSessionRecord(sid, { activity: 'thinking' })
+    // Its CLI is gone too: now it goes back.
+    runtimeSays.set(sid, false)
+    expect(await sweep(sid)).toEqual([sid])
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
+  })
+
+  it('a row the leader names this host\'s again is never given back', async () => {
+    const sid = sidN(6)
+    sessionDb.claimStartingRow(sid)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(sid)] })
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [markedSeed(sid)] })
+    sessionDb.releaseStartingRow(sid)
+    expect(await sweep(sid)).toEqual([])
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+  })
+
+  it('a start claims no row of another host (L1): the row stays as it is, and a later copy is not claimed either', async () => {
+    const sid = sidN(7)
+    const other = { ...preJudgeSeed(sid), host: 'otherbox' } as SessionRecord
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [other] })
+    sessionDb.claimStartingRow(sid)
+    expect(isClaimed(sid)).toBe(false)
+    expect(await tracker.getSessionByClaudeId(sid)).toMatchObject({ host: 'otherbox' })
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBeUndefined()
+    // No row yet, and the copy that comes names another host: not claimed as this host's.
+    const sid2 = sidN(8)
+    sessionDb.claimStartingRow(sid2)
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [{ ...preJudgeSeed(sid2), host: 'otherbox' } as SessionRecord] })
+    expect(await tracker.getSessionByClaudeId(sid2)).toMatchObject({ host: 'otherbox' })
+    expect((await tracker.getSessionByClaudeId(sid2))?.judge).toBeUndefined()
   })
 })
