@@ -94,7 +94,7 @@
 /* Inline-block, its parts inline: a selection copies it as "@Name" on the line, with no breaks. */
 .topic-mention {
   display: inline-block; max-width: 100%; margin: 0 1px; padding: 1px 6px 1px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  border: 0; border-radius: var(--radius-lg); /* shape: a mention inside text */ vertical-align: -4px; cursor: pointer; text-align: left;
+  border: 0; border-radius: var(--label-radius); /* shape: a mention inside text, a label */ vertical-align: -4px; cursor: pointer; text-align: left;
   background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
   font: inherit; font-size: var(--font-size-md); font-weight: 500; line-height: 18px;
 }

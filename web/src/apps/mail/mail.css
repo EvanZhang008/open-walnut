@@ -331,7 +331,7 @@
   /* 4px, so the glyph lands in the pane's one glyph column at 12px. See the hierarchy note below. */
   padding: 6px 8px 6px 4px;
   border: none;
-  border-radius: var(--radius-xs); /* shape: a mailbox row of the mail sidebar, a row not a key */
+  border-radius: var(--radius-sm); /* shape: a mailbox row of the mail sidebar, a row not a key */
   background: none;
   color: var(--fg-secondary);
   font-size: var(--font-size-md);

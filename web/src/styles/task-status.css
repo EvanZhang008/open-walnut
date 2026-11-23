@@ -61,7 +61,7 @@
    a button with a caret; only needs-you, working and done colour the word. */
 button.task-status-badge {
   border: none;
-  border-radius: var(--radius-full) var(--radius-full);
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg-secondary);
   font: inherit;

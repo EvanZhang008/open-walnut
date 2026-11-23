@@ -8644,7 +8644,7 @@ body.walnut-dragging {
 .session-panel-title-meta {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
@@ -29516,7 +29516,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   max-width: none;
   margin: 0 0 4px;
   padding: 0 0 0 10px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: docked in the rail the notice is a row or a tile, not a key */
   border-color: var(--border);
   box-shadow: none;
 }
