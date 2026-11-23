@@ -23,6 +23,8 @@
  * "please hold until <absolute path>" keeps the turn running until that file exists (a
  * test reads the running turn, then releases it): "echo: released <path>". An interrupt
  * control request (Walnut's Stop) ends such a held turn at once: "echo: interrupted".
+ * "please stream <n> lines at <r> per second" writes a busy turn's output (streamLines, for
+ * scripts/bench-host-judged-sessions.mts): "echo: streamed <what it wrote, by kind>".
  *
  * Copied into the cluster's own bin dir, so its command line names that dir.
  */
@@ -146,6 +148,11 @@ function runNext() {
     stopHeld = () => { clearInterval(gate); stopHeld = null; finish('echo: interrupted') }
     return
   }
+  const stream = /^please stream (\d+) lines at (\d+) per second$/i.exec(words.trim())
+  if (stream) {
+    streamLines(Number(stream[1]), Number(stream[2]), (n) => finish(`echo: streamed ${JSON.stringify(n)}`))
+    return
+  }
   setTimeout(() => finish(`echo: ${words}`), THINK_MS)
   function finish(reply) {
     const message = {
@@ -162,6 +169,52 @@ function runNext() {
     busy = false
     runNext()
   }
+}
+/**
+ * "please stream <n> lines at <r> per second": a busy turn's output, paced at r lines a second, in
+ * whole steps of 13 lines as the real CLI writes them with --include-partial-messages: a message
+ * start, a text block (start, 8 text deltas, stop), the assistant message (that text and a tool
+ * call) and the tool's result, 16 KB every tenth step (a file read), a few hundred bytes otherwise.
+ * `done` gets what was written, by kind, for the reader to check what arrived.
+ */
+function streamLines(total, perSecond, done) {
+  const n = { lines: 0, steps: 0, deltas: 0, toolUses: 0, toolResults: 0, big: 0 }
+  const pending = []
+  const words = 'the build reads its config then walks every package and checks each lockfile against '
+  const step = () => {
+    const i = n.steps++
+    const msgId = `msg_${crypto.randomBytes(6).toString('hex')}`
+    const toolId = `toolu_${crypto.randomBytes(8).toString('hex')}`
+    const ev = (event) => ({ type: 'stream_event', event, parent_tool_use_id: null, uuid: crypto.randomUUID() })
+    pending.push(ev({ type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: 'mock-model', content: [], usage: { input_tokens: 1, output_tokens: 1 } } }))
+    pending.push(ev({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }))
+    let text = ''
+    for (let k = 0; k < 8; k++) {
+      const piece = `${words.slice(k * 10, k * 10 + 10)}(${i}.${k}) `
+      text += piece
+      pending.push(ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } }))
+      n.deltas++
+    }
+    pending.push(ev({ type: 'content_block_stop', index: 0 }))
+    const read = i % 10 === 9
+    const input = read ? { file_path: `/work/src/module-${i}.ts` } : { command: `npm test -- --shard ${i}` }
+    pending.push({ type: 'assistant', message: { id: msgId, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }, { type: 'tool_use', id: toolId, name: read ? 'Read' : 'Bash', input }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 8 } }, parent_tool_use_id: null, uuid: crypto.randomUUID() })
+    n.toolUses++
+    const body = read ? `export const line = ${'x'.repeat(60)}\n`.repeat(200).slice(0, 16_000) : `PASS shard ${i}: 41 tests, 0 failed\n`.repeat(8)
+    if (read) n.big++
+    pending.push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: body }] }, parent_tool_use_id: null, uuid: crypto.randomUUID() })
+    n.toolResults++
+  }
+  const start = Date.now()
+  const timer = setInterval(() => {
+    const due = Math.min(total, Math.floor(((Date.now() - start) / 1000) * perSecond))
+    while (n.lines < due || (pending.length > 0 && n.lines >= total)) {
+      if (pending.length === 0) step()
+      out(pending.shift())
+      n.lines++
+    }
+    if (n.lines >= total && pending.length === 0) { clearInterval(timer); done(n) }
+  }, 20)
 }
 /** Prompts this CLI asked and waits on (request id -> its answer). */
 const waiting = new Map()

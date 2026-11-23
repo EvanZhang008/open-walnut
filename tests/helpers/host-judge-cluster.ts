@@ -29,6 +29,9 @@
  *         GET /drops?host=   the deletes of the host's sessions it has not answered yet
  *         GET /acp?sid=      what the Mac's runner answers for an ACP session (findAcpSession)
  *         GET /parses?sid=   how many CLI lines of it this process parsed (line-parse-count.ts)
+ *         GET /counts?sid=   its bus events here by `name|source`, counted
+ *         GET /loop?reset=   this process's event-loop delay since the last reset (max, p99, p50, mean ms)
+ *         GET /profile?start=1, then ?to=<file>   a CPU profile of this process between the two (node:inspector)
  *         GET /judge?sid=    judgeOf and the judging host
  *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts
  *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
@@ -71,15 +74,25 @@ import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
 
 const url = (f: string) => JSON.stringify('file://' + path.join(ROOT, f))
 
-/** The bus recorder both probes run: one global subscriber, a bounded list. */
-const RECORDER = `
+/**
+ * The bus recorder both probes run: one global subscriber, a bounded list, and a count of each
+ * session's events by name and source. `count`: the counts only (no copy, no hash of any event),
+ * for a bench that measures the process it runs in (scripts/bench-host-judged-sessions.mts).
+ */
+const recorder = (mode: 'full' | 'count' = 'full') => `
 const crypto = await import('node:crypto')
 const busMod = await import(${url('src/core/event-bus.ts')})
 const recorded = []
+const counted = new Map()
 busMod.bus.subscribe('cluster-probe-recorder', (e) => {
   const d = e.data
   const sid = d && typeof d === 'object' ? (d.sessionId ?? d.claudeSessionId) : undefined
   if (typeof sid !== 'string' || !sid) return
+  const per = counted.get(sid) ?? {}
+  const key = e.name + '|' + e.source
+  per[key] = (per[key] ?? 0) + 1
+  counted.set(sid, per)
+  if (${JSON.stringify(mode)} === 'count') return
   const text = JSON.stringify(d ?? null) ?? 'null'
   recorded.push({ name: e.name, sid, at: e.timestamp, seenAt: Date.now(), source: e.source, late: e.late === true, hash: crypto.createHash('sha256').update(text).digest('hex'), ...(text.length <= 4000 ? { data: d } : {}) })
   if (recorded.length > 50000) recorded.splice(0, 10000)
@@ -112,8 +125,10 @@ const serveProbe = (routes, extra) => new Promise((resolve) => {
 `
 
 /** The Mac's probe, run in its boot script (replica-cluster.ts macBoot `extra`; `c` is its constants module). */
-export const MAC_PROBE = `
-${RECORDER}
+const macProbe = (record: 'full' | 'count') => `
+${recorder(record)}
+const eld = (await import('node:perf_hooks')).monitorEventLoopDelay({ resolution: 1 })
+eld.enable()
 const lpc = await import(${url('src/providers/line-parse-count.ts')})
 const jo = await import(${url('src/core/sessions/judge-of.ts')})
 const lb = await import(${url('src/core/session-channel/leader-boot.ts')})
@@ -136,6 +151,28 @@ ${SERVE('probeFile')}
 await serveProbe({
   '/events': (q) => eventsOf(q.get('sid')),
   '/parses': (q) => ({ parses: lpc.lineParsesOf(q.get('sid')) }),
+  '/counts': (q) => counted.get(q.get('sid')) ?? {},
+  '/loop': (q) => {
+    const ms = (ns) => Math.round(ns / 1e4) / 100
+    const r = { maxMs: ms(eld.max), p99Ms: ms(eld.percentile(99)), p50Ms: ms(eld.percentile(50)), meanMs: ms(eld.mean), samples: eld.count }
+    if (q.get('reset')) eld.reset()
+    return r
+  },
+  '/profile': async (q) => {
+    if (!globalThis.__probeProfiler) {
+      const s = new (await import('node:inspector')).Session()
+      s.connect()
+      const post = (m) => new Promise((res, rej) => s.post(m, {}, (e, r) => (e ? rej(e) : res(r))))
+      await post('Profiler.enable')
+      globalThis.__probeProfiler = post
+    }
+    const post = globalThis.__probeProfiler
+    // The stall recorder's profile may run already (its interval is the sampling's: WALNUT_STALL_PROFILE_INTERVAL_US); this one overlaps it.
+    if (q.get('start')) { await post('Profiler.start'); return { started: true } }
+    const { profile } = await post('Profiler.stop')
+    ;(await import('node:fs')).writeFileSync(q.get('to'), JSON.stringify(profile))
+    return { written: q.get('to'), samples: profile.samples.length }
+  },
   '/judge': (q) => ({ judge: jo.judgeOf(q.get('sid')), host: jo.judgingHostOf(q.get('sid')) }),
   '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')) } },
   '/link': async (q) => ({ connected: (await import(${url('src/core/host-server/index.ts')})).hostServerLink(q.get('host')) !== null }),
@@ -162,7 +199,7 @@ sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, acpWorkerBundl
 const { getHostReplicaLeaderDoor } = await import(${url('src/web/server.ts')})
 const door = getHostReplicaLeaderDoor()
 const boot = await import(${url('src/core/session-channel/host-boot.ts')})
-${RECORDER}
+${recorder()}
 const net = await import('node:net')
 const doorPort = await new Promise((resolve) => {
   const s = net.createServer((sock) => door && door.accept(sock))
@@ -341,6 +378,8 @@ export interface HostJudgeClusterOptions {
   hostEnv?: Record<string, string>
   /** More of the Mac's env (WALNUT_LEADER_SESSION_CHANNELS=0: a leader from before the session channel). */
   macEnv?: Record<string, string>
+  /** What the Mac's recorder keeps ('count': the counts only, /events answers nothing; for a bench that measures the Mac). */
+  macRecord?: 'full' | 'count'
   /** More of the Mac's config.yaml lines, and code its boot script runs after the probe. */
   macConfigExtra?: readonly string[]
   macBootExtra?: string
@@ -354,7 +393,7 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
     twin: 'standalone',
     ...(o.linkProxy ? { linkProxy: true } : {}),
     hostService: { env: (d) => ({ ...hostJudgeServiceEnv(d), ...(o.hostEnv ?? {}) }), after: hostJudgeServiceProbe() },
-    macBootExtra: MAC_PROBE + (o.macBootExtra ?? ''),
+    macBootExtra: macProbe(o.macRecord ?? 'full') + (o.macBootExtra ?? ''),
     macConfigExtra: [
       ...(o.macSwitch === false ? [] : ['experimental:', '  host_runs_sessions: true']),
       ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : []),
@@ -427,7 +466,7 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
     },
     waitHostProbe: async (notPid, timeoutMs) => { host = await waitHostProbe(notPid, timeoutMs); return host },
     standby: async (s) => {
-      const leader = await startStandbyLeader(c, { data: s.data, port: s.port, extra: MAC_PROBE, ...(s.env ? { env: s.env } : {}) })
+      const leader = await startStandbyLeader(c, { data: s.data, port: s.port, extra: macProbe('full'), ...(s.env ? { env: s.env } : {}) })
       standbys.push(leader)
       const file = path.join(path.dirname(s.data), 'mac-probe.json')
       const at = await waitFor(() => { const m = readFile(file); return m?.probe && m.pid === leader.pid ? m.probe as number : null }, 60_000, 'the standby\'s probe')
