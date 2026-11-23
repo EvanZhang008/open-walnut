@@ -580,7 +580,9 @@ export async function getSessionQueuePayload(sessionId: string): Promise<{ messa
   // The line state is read after the rows: a row taken and answered in between reads
   // waiting for this one read (liveLineWordsOf).
   const { queueRowView, liveLineWordsOf } = await import('./queue-row-view.js');
-  const rows = await withoutWalnutRows(await getQueue(sessionId));
+  // Rows not in the queue yet (a move, a host hand, the spool) still read as waiting here (session-queue-transit.ts).
+  const { rowsOnTheWay } = await import('../session-queue-transit.js');
+  const rows = [...await withoutWalnutRows(await getQueue(sessionId)), ...await withoutWalnutRows(await rowsOnTheWay(sessionId))];
   const live = await liveLineWordsOf(sessionId);
   // A row held for a cold session's next wake reads as queued, with why and until when (cold-hold.ts).
   const { presentColdHolds } = await import('./cold-hold.js');

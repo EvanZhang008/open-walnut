@@ -16,6 +16,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('sessions-json', 'sessions.json', 'file', 'The pre-SQLite session store, still read by its migration', { legacy: true }),
   rebuild('sessions-dir', 'sessions', 'dir', 'Older session projection and transcript-tail copies, rebuilt from the session store'),
   lead('session-queue', 'session-message-queue.json', 'file', 'Messages queued for sessions that were not ready to take them'),
+  lead('session-queue-spool', 'session-message-queue.json.spool', 'dir', 'Messages stored beside the queue while its file could not be written, merged into it once it can'),
   lead('session-requests', 'session-requests.json', 'file', 'Reply requests between sessions and their deadlines'),
   lead('hint-registry-since', 'hint-registry-since.json', 'file', 'When this home first ran the hint registry (older session rows predate it)'),
   lead('session-audit', 'session-audit.jsonl', 'file', 'Audit log of session actions', { appendOnly: true }),

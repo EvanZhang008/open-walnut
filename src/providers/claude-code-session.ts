@@ -5735,7 +5735,9 @@ export class ClaudeCodeSession {
       this._spawnLineRow = sessionPort().messages.loadMessageQueue().then(({ enqueueMessage, START_RECOVERY_HELD_REASON }) =>
         enqueueMessage(sid, line.text, { heldReason: START_RECOVERY_HELD_REASON, ...(line.uuid ? { userUuid: line.uuid, lineUuid: line.uuid } : {}) }),
       ).then(async (row) => { await this.settleIfUnowned(sid, offer); return row.id }, (err) => {
-        log.session.error('start recovery: holding the first line failed', {
+        // Not stored: the start keeps carrying it, so the next recovery or respawn still has it.
+        if (this._spawnFirstLine === null) this._spawnFirstLine = line
+        log.session.error('start recovery: holding the first line failed; the start keeps it', {
           sessionId: sid, taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
         })
         return null
@@ -14024,7 +14026,20 @@ export class SessionRunner {
     }, ['main-ai'], { source: 'session-runner' })
 
     if (data.message) {
-      const queued = await enqueueMessage(sid, data.message)
+      // The session is spawned: a first line that cannot be stored yet is stored later, never
+      // thrown (a failed start would be started again, a second session for the same line).
+      const queued = await enqueueMessage(sid, data.message).catch((err: unknown) => {
+        log.session.error('acp: the first line could not be stored; it is tried again until it is', {
+          sessionId: sid, taskId: data.taskId, error: err instanceof Error ? err.message : String(err),
+        })
+        const message = data.message!
+        void sessionPort().messages.loadMessageQueue()
+          .then(({ enqueueUntilStored }) => enqueueUntilStored(sid, message))
+          .then(() => this.drainAcpQueue(session, sid))
+          .catch(() => {})
+        return null
+      })
+      if (!queued) return { claudeSessionId: sid, title }
       bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
         sessionId: sid,
         messageId: queued.id,

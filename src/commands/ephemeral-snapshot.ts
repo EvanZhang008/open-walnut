@@ -232,6 +232,20 @@ const SESSION_QUEUE_STORE_FILE = 'session-message-queue.json'
  */
 export function dropSnapshotQueuedMessages(snapshotDir: string): number {
   const file = path.join(snapshotDir, SESSION_QUEUE_STORE_FILE)
+  return dropSnapshotQueueSpool(file) + dropSnapshotQueueStore(file)
+}
+
+/** The enqueue's spool (core/session-queue-spool.ts): production's rows waiting for its queue. */
+function dropSnapshotQueueSpool(file: string): number {
+  const dir = `${file}.spool`
+  let rows = 0
+  try { rows = fs.readdirSync(dir).filter((n) => n.endsWith('.json')).length } catch { return 0 }
+  try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* checked below */ }
+  if (fs.existsSync(dir)) throw new Error(`could not remove the copied session queue spool ${dir}`)
+  return rows
+}
+
+function dropSnapshotQueueStore(file: string): number {
   if (!fs.existsSync(file)) return 0
   const failClosed = (why: string): number => {
     process.stderr.write(`ephemeral: removing the copied session queue (${why})\n`)
@@ -240,7 +254,7 @@ export function dropSnapshotQueuedMessages(snapshotDir: string): number {
     if (fs.existsSync(file)) throw new Error(`could not remove the copied session queue ${file}`)
     return 0
   }
-  let store: { queues?: unknown; cancelled?: unknown }
+  let store: { queues?: unknown; cancelled?: unknown; transit?: unknown }
   try {
     store = JSON.parse(fs.readFileSync(file, 'utf-8'))
   } catch (err) {
@@ -248,15 +262,23 @@ export function dropSnapshotQueuedMessages(snapshotDir: string): number {
   }
   if (!store || typeof store !== 'object' || Array.isArray(store)) return failClosed('not a queue store')
   const queues = store.queues
-  if (queues === undefined && store.cancelled === undefined) return 0
+  // Rows on their way between queues (core/session-queue-transit.ts) are production's too: a test
+  // server that placed them would deliver production's messages to a real session or host.
+  if (queues === undefined && store.cancelled === undefined && store.transit === undefined) return 0
   if (queues !== undefined && (!queues || typeof queues !== 'object' || Array.isArray(queues))) return failClosed('queues is not a map')
   let dropped = 0
   for (const rows of Object.values((queues ?? {}) as Record<string, unknown>)) {
     dropped += Array.isArray(rows) ? rows.length : 1
   }
-  if (dropped === 0 && store.cancelled === undefined) return 0
+  const transit = store.transit
+  if (transit !== undefined && (!transit || typeof transit !== 'object' || Array.isArray(transit))) return failClosed('transit is not a map')
+  for (const t of Object.values((transit ?? {}) as Record<string, { rows?: unknown }>)) {
+    dropped += t && Array.isArray(t.rows) ? t.rows.length : 1
+  }
+  if (dropped === 0 && store.cancelled === undefined && store.transit === undefined) return 0
   store.queues = {}
   delete store.cancelled
+  delete store.transit
   try {
     const tmp = `${file}.${process.pid}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(store, null, 2))

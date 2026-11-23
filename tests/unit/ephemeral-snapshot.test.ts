@@ -89,6 +89,20 @@ describe('dropSnapshotQueuedMessages', () => {
     expect(store).toEqual({ version: 1, queues: {}, settled: { 'qm-0': 'uuid-0' }, relay: { 'qm-mobile-1': ['taken', 1] } })
   })
 
+  // A test server that placed production's rows on the way (a host hand, a move) or its spool
+  // would deliver them to a real session or host (the 2026-10-24 class).
+  it('drops the rows on their way between queues and the enqueue spool too', () => {
+    fs.writeFileSync(queueFile(), JSON.stringify({
+      version: 1, queues: {},
+      transit: { 'host-1': { from: 'sid-a', kind: 'host', pid: 1, boot: 'b', at: 1, rows: [row('qm-t1', 'sid-a', 'pending'), row('qm-t2', 'sid-a', 'pending')] } },
+    }))
+    fs.mkdirSync(`${queueFile()}.spool`)
+    fs.writeFileSync(path.join(`${queueFile()}.spool`, 'qm-s1.json'), JSON.stringify(row('qm-s1', 'sid-b', 'pending')))
+    expect(dropSnapshotQueuedMessages(dir)).toBe(3)
+    expect(JSON.parse(fs.readFileSync(queueFile(), 'utf-8'))).toEqual({ version: 1, queues: {} })
+    expect(fs.existsSync(`${queueFile()}.spool`)).toBe(false)
+  })
+
   it.each([undefined, {}, { 'sid-a': [row('qm-1', 'sid-a', 'pending')] }])('removes copied cancellation recovery evidence even without pending rows: %j', queues => {
     fs.writeFileSync(queueFile(), JSON.stringify({
       version: 1, queues,

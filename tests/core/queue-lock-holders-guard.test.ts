@@ -39,7 +39,7 @@ vi.mock('../../src/utils/fs.js', async (importOriginal) => {
 
 import { WALNUT_HOME, SESSION_QUEUE_FILE } from '../../src/constants.js'
 import {
-  editMessage, enqueueMessage, getQueue, markNextProcessing, markProcessing, requeueUnanswered, resetCache, withUndeliveredMessageGuard,
+  editMessage, enqueueMessage, getQueue, markNextProcessing, markProcessing, QueueNotStoredError, requeueUnanswered, resetCache, withUndeliveredMessageGuard,
 } from '../../src/core/session-message-queue.js'
 import { mutateStore, pendingReplayCount } from '../../src/core/session-queue-store.js'
 
@@ -71,24 +71,54 @@ describe('the queue file is written only for a change, and every change reaches 
     expect(writes.count).toBe(afterPick)
   })
 
-  it('an older message whose write failed is never overtaken by a newer one: both land, in order', async () => {
+  // 2026-11-23, the user: a message is never lost, a restart or crash included. A row only the
+  // cache held (flushed about 2 s later) was lost by a crash in that window while its sender had
+  // been told it was queued.
+  it('an enqueue whose write fails is written again before its sender hears "queued", never kept in memory only', async () => {
     writes.fail = 1
+    const row = await enqueueMessage('s1', 'so do u agree that we put it inside the plugin')
+    expect(pendingReplayCount()).toBe(0)
+    expect(onDisk().s1.map((m) => m.id)).toEqual([row.id])
+  })
+
+  it('a relayed row whose write keeps failing tells its sender, and no row lives only in memory', async () => {
+    writes.fail = 10
+    await expect(enqueueMessage('s1', 'from the phone', { id: 'qm-mobile-1', relayTaken: true }))
+      .rejects.toBeInstanceOf(QueueNotStoredError)
+    writes.fail = 0
+    expect(await getQueue('s1')).toEqual([])
+    expect(pendingReplayCount()).toBe(0)
+    // The sender sends again, and it lands once.
+    resetCache()
+    const row = await enqueueMessage('s1', 'from the phone', { id: 'qm-mobile-1', relayTaken: true })
+    expect(onDisk().s1.map((m) => m.id)).toEqual([row.id])
+  })
+
+  it('a burst of enqueues is written together (group commit), every row once, in order', async () => {
+    const before = writes.count
+    const rows = await Promise.all(Array.from({ length: 20 }, (_, i) => enqueueMessage('s1', `burst ${i}`)))
+    expect(onDisk().s1.map((m) => m.id)).toEqual(rows.map((r) => r.id))
+    expect(writes.count - before).toBeLessThan(20)
+  })
+
+  it('an older held change is never overtaken by a newer write: both land, in order', async () => {
     const older = await enqueueMessage('s1', 'so do u agree that we put it inside the plugin')
-    // The cache holds it; the disk does not yet.
-    expect((await getQueue('s1')).map((m) => m.id)).toEqual([older.id])
+    writes.fail = 1
+    await editMessage('s1', older.id, 'so do u agree that we put it inside the plugin?')
     expect(pendingReplayCount()).toBe(1)
     const newer = await enqueueMessage('s1', 'So do u know why they duplicate in the first place?')
     expect(pendingReplayCount()).toBe(0)
-    expect(onDisk().s1.map((m) => m.id)).toEqual([older.id, newer.id])
+    expect(onDisk().s1.map((m) => [m.id, m.message])).toEqual([[older.id, 'so do u agree that we put it inside the plugin?'], [newer.id, 'So do u know why they duplicate in the first place?']])
     // A fresh process reads both, and the older goes first.
     resetCache()
     expect((await markNextProcessing('s1')).map((m) => m.id)).toEqual([older.id])
   })
 
   it('a failed write with no later one reaches the disk by itself', async () => {
-    writes.fail = 1
     const row = await enqueueMessage('s1', 'nothing comes after me')
-    await vi.waitFor(() => expect(onDisk().s1?.map((m) => m.id)).toEqual([row.id]), { timeout: 8_000 })
+    writes.fail = 1
+    await editMessage('s1', row.id, 'edited, nothing comes after me')
+    await vi.waitFor(() => expect(onDisk().s1?.map((m) => m.message)).toEqual(['edited, nothing comes after me']), { timeout: 8_000 })
   })
 
   it('a lock held past one wait round is waited for, and the write lands', async () => {
@@ -109,7 +139,6 @@ describe('a change held for the disk is the change that was made, never the muta
   const writeDisk = (queues: Record<string, unknown[]>) => fs.writeFileSync(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues }))
 
   it('a strict take that failed leaves the row pending, in memory and on disk', async () => {
-    writes.fail = 1
     const queued = await enqueueMessage('s1', 'never written to the CLI')
     writes.fail = 1
     await expect(markProcessing('s1', null)).rejects.toThrow(/EIO/)
@@ -141,9 +170,11 @@ describe('a change held for the disk is the change that was made, never the muta
     expect((await markNextProcessing('s1'))[0].id).toBe(b.id)
   })
 
-  it('an older held enqueue goes in before a newer one another process wrote', async () => {
+  it('an older held row goes in before a newer one another process wrote', async () => {
+    // A best-effort re-insert (revertToPending's), held for the disk.
+    const older = { id: 'qm-held-older', sessionId: 's1', message: 'older', status: 'pending' as const, enqueuedAt: new Date().toISOString() }
     writes.fail = 1
-    const older = await enqueueMessage('s1', 'older')
+    await mutateStore((s) => { (s.queues.s1 ??= []).push({ ...older }) })
     writeDisk({ s1: [{ ...older, id: 'qm-external-newer', message: 'newer', enqueuedAt: new Date(Date.parse(older.enqueuedAt) + 1000).toISOString() }] })
     await flush()
     expect(onDisk().s1.map((m) => m.message)).toEqual(['older', 'newer'])
@@ -168,17 +199,20 @@ describe('a change held for the disk is the change that was made, never the muta
     expect(onDisk().s1[0]).toMatchObject({ id: row.id, message: 'fixed text', status: 'parked', parkedReason: 'folder gone', stopFence: 7 })
   })
 
-  it('an enqueue whose write landed and then threw leaves what another writer did to the row since', async () => {
+  it('an enqueue whose write landed and then threw is read back as stored, and its resend is the same row', async () => {
     writes.failAfter = 1
-    const row = await enqueueMessage('s1', 'landed')
+    await enqueueMessage('s1', 'landed', { id: 'qm-mobile-landed' })
+    expect(onDisk().s1.map((m) => m.id)).toEqual(['qm-mobile-landed'])
     writeDisk({ s1: [{ ...onDisk().s1[0], status: 'parked', parkedReason: 'folder gone' }] })
+    const again = await enqueueMessage('s1', 'landed', { id: 'qm-mobile-landed' })
     await flush()
-    expect(onDisk().s1).toMatchObject([{ id: row.id, status: 'parked', parkedReason: 'folder gone' }])
+    expect(onDisk().s1).toMatchObject([{ id: again.id, status: 'parked', parkedReason: 'folder gone' }])
   })
 
   it('a write that landed and then threw is not applied twice', async () => {
-    writes.failAfter = 1
     const row = await enqueueMessage('s1', 'one user message')
+    writes.failAfter = 1
+    await editMessage('s1', row.id, 'one user message, edited')
     await flush()
     expect(onDisk().s1.filter((m) => m.id === row.id)).toHaveLength(1)
   })

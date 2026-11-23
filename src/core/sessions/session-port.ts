@@ -76,6 +76,7 @@ export type ConfigManagerPort = Pick<ConfigManager, 'getConfig'>;
 export type SessionQueuePort = Pick<MessageQueue,
   | 'START_RECOVERY_HELD_REASON'
   | 'enqueueMessage'
+  | 'enqueueUntilStored'
   | 'getAllSessionsWithPending'
   | 'getQueue'
   | 'holdForStartRecovery'

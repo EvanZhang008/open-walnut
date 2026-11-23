@@ -129,12 +129,33 @@ export interface QueueStore {
   settled?: Record<string, string>;
   /** Original rows cancelled in the same durable transaction as their removal, retained for a later taken word. */
   cancelled?: Record<string, Record<string, { rows: QueuedMessage[] }>>;
+  /**
+   * Rows on their way from one queue to another (session-queue-transit.ts): an engine switch or a
+   * move between taking them off the old session and putting them on the new one, a host hand
+   * while the host has not said it took them. Keyed by the move's own id. A row is always in
+   * exactly one place in this file, a queue or here, never only in the memory of the code moving it.
+   */
+  transit?: Record<string, QueueTransit>;
+}
+
+/** Rows a move took out of `from`'s queue and has not put anywhere yet (QueueStore.transit). */
+export interface QueueTransit {
+  from: string;
+  /** Who moves them, which says where a restart puts them (session-queue-transit.ts settleStrandedTransits). */
+  kind: 'switch' | 'host';
+  /** The process that took them, and its boot (a random id per process): a live owner keeps them. */
+  pid: number;
+  boot?: string;
+  /** Where they go, once known (a switch's new session): their panel shows them there too. */
+  to?: string;
+  /** When they were first taken, epoch ms. */
+  at: number;
+  rows: QueuedMessage[];
 }
 
 // ── In-memory cache (backed by disk) ──
 
 let store: QueueStore | null = null;
-let writeLock: Promise<void> = Promise.resolve();
 
 export function generateId(): string {
   const ts = Date.now();
@@ -196,6 +217,16 @@ export function normalizeShape(s: QueueStore): QueueStore {
       if (!Object.keys(lines).length) delete s.cancelled[sid];
     }
   }
+  if (s.transit !== undefined) {
+    if (!isRecord(s.transit)) delete s.transit;
+    else {
+      for (const [id, t] of Object.entries(s.transit)) {
+        if (!isRecord(t) || typeof t.from !== 'string' || !Array.isArray(t.rows)) { delete s.transit[id]; continue; }
+        t.rows = t.rows.filter((r) => r && typeof r.id === 'string');
+      }
+      if (!Object.keys(s.transit).length) delete s.transit;
+    }
+  }
   return s;
 }
 
@@ -217,7 +248,7 @@ export async function getStore(): Promise<QueueStore> {
  * which enqueues via sendMessageToSession), so persisting the in-memory cache
  * blindly could revert the other process's enqueue. Every mutation therefore
  * runs against a FRESH read under the cross-process file lock and the cache is
- * refreshed to the persisted result. The in-process chain on `writeLock` keeps
+ * refreshed to the persisted result. The in-process commit queue (`waiting`) keeps
  * same-process mutations FIFO (mkdir-lock polling is not).
  *
  * Three rules, from 2026-11-09 (a runaway delivery loop wrote this file 20 to 50
@@ -231,34 +262,94 @@ export async function getStore(): Promise<QueueStore> {
  *   the fresh read of the next write (`replays`, flushed soon by itself). Before,
  *   the next write read the file without it and replaced the cache: the change
  *   was lost, a queued message included.
+ * - A crash before that replay loses the change all the same, so a write that adds
+ *   a row its caller then reports as queued, or moves a row between queues, is
+ *   strict (2026-11-23): every enqueue (session-message-queue.ts enqueueMessage)
+ *   and every move (session-queue-transit.ts). strict=false is for changes whose
+ *   loss loses no row: a status, a park, a uuid, a row's removal. (The no-loss
+ *   re-insert of revertToPending and parkMessages, for a row a cleanup removed
+ *   while its delivery ran, stays best effort: it has no sender to tell, so it
+ *   waits for the disk in the replay rather than throw the row away.)
  */
-export async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false, durable = false): Promise<R> {
-  let result!: R;
-  const prev = writeLock;
-  let release!: () => void;
-  writeLock = new Promise<void>((r) => { release = r; });
-  await prev.catch(() => {});
+export function mutateStore<R>(fn: (s: QueueStore) => R, strict = false, durable = false, group = false): Promise<R> {
+  return new Promise<R>((resolve, reject) => {
+    waiting.push({ fn, strict, durable, group, resolve: resolve as (r: unknown) => void, reject });
+    if (!committing) void commitWaiting();
+  });
+}
+
+/**
+ * Group commit (2026-11-23): every enqueue is written and synced under the cross-process lock, so
+ * a burst written one by one queued behind itself (and a sender's own timeout said "retry" while
+ * its row still landed). Enqueues (`group`) that arrive while a write runs go into the next single
+ * write: one lock, one read, one write and one sync for all of them, in arrival order (FIFO). Every
+ * other mutation is still written alone: a delivery's take and its settle, written together, were
+ * resolved in one tick, and a runner read a row it had just taken as stranded.
+ */
+interface Waiting {
+  fn: (s: QueueStore) => unknown;
+  strict: boolean;
+  durable: boolean;
+  group: boolean;
+  resolve: (r: unknown) => void;
+  reject: (err: unknown) => void;
+}
+let waiting: Waiting[] = [];
+let committing = false;
+
+async function commitWaiting(): Promise<void> {
+  committing = true;
   try {
-    store = await persist(fn, (r) => { result = r; }, durable);
+    while (waiting.length > 0) {
+      let n = 1;
+      if (waiting[0].group) while (n < waiting.length && waiting[n].group) n++;
+      const batch = waiting.splice(0, n);
+      await commit(batch);
+    }
+  } finally {
+    committing = false;
+  }
+}
+
+async function commit(batch: Waiting[]): Promise<void> {
+  const results: unknown[] = [];
+  let fnThrew = false;
+  try {
+    store = await persist((s) => {
+      for (const w of batch) {
+        try { results.push(w.fn(s)); } catch (err) { fnThrew = true; throw err; }
+      }
+    }, () => {}, batch.some((w) => w.durable));
   } catch (err) {
+    // One mutation of several threw: each goes alone, so the others are not failed with it.
+    if (fnThrew && batch.length > 1) {
+      for (const w of batch) await commit([w]);
+      return;
+    }
     log.session.error('failed to persist session message queue', {
       error: err instanceof Error ? err.message : String(err),
-      replaysWaiting: replays.length + (strict ? 0 : 1),
+      replaysWaiting: replays.length + batch.filter((w) => !w.strict).length,
     });
-    if (strict) throw err;
-    // Disk write (or lock) failed: the cache takes it now, the next write puts it on disk.
-    const cache = await getStore();
-    const before = structuredClone(cache);
-    result = fn(cache);
-    // A change that changed nothing (the flush's own empty write) waits for nothing: only the
-    // changes still to reach the disk are kept, and their flush is tried again.
-    const patch = diffStore(before, cache);
-    if (patch.rows.length > 0 || patch.top.length > 0) replays.push(patch);
+    for (const w of batch) {
+      if (w.strict) { w.reject(err); continue; }
+      try {
+        // Disk write (or lock) failed: the cache takes it now, the next write puts it on disk.
+        const cache = await getStore();
+        const before = structuredClone(cache);
+        const result = w.fn(cache);
+        // A change that changed nothing (the flush's own empty write) waits for nothing: only the
+        // changes still to reach the disk are kept, and their flush is tried again.
+        const patch = diffStore(before, cache);
+        if (patch.rows.length > 0 || patch.top.length > 0) replays.push(patch);
+        w.resolve(result);
+      } catch (e) {
+        w.reject(e);
+      }
+    }
     if (replays.length > 0) scheduleReplayFlush();
-  } finally {
-    release();
+    return;
   }
-  return result;
+  batch.forEach((w, i) => w.resolve(results[i]));
 }
 
 /** Rounds of the file lock's own wait (10 s each) before a write gives up. */
@@ -417,9 +508,13 @@ export class QueueNotStoredError extends Error {
   }
 }
 
-/** A fresh read of the queue file, bypassing the cache (no lock, no write). */
-export async function readQueueFileFresh(): Promise<QueueStore> {
-  return normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
+/**
+ * A fresh read of the queue file, bypassing the cache (no lock, no write). `readErrors: 'throw'`:
+ * a file that exists but cannot be read (EMFILE, EACCES) throws instead of reading as empty, for
+ * a caller that decides from what is NOT there.
+ */
+export async function readQueueFileFresh(opts?: { readErrors?: 'throw' }): Promise<QueueStore> {
+  return normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }, opts?.readErrors ? { readErrors: opts.readErrors } : undefined));
 }
 
 /**

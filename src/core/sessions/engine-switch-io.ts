@@ -74,25 +74,28 @@ export async function releaseMoveHeldRows(sessionId: string): Promise<number> {
   }, false, true);
 }
 
-/** Take the old session's waiting rows out of its queue (a row already in a CLI stays). */
-export async function takeQueuedRows(sessionId: string): Promise<HeldRow[]> {
-  const { mutateStore } = await import('../session-queue-store.js');
-  return mutateStore((s) => {
-    const rows = s.queues[sessionId] ?? [];
-    const take = rows.filter((r) => r.status !== 'processing' && !r.lineInDoubt);
-    if (take.length === 0) return [];
-    // Out of any queue from now until putQueuedRows: that wait is the move's (queue-held-spans.ts).
-    const now = Date.now();
-    for (const r of take) stampTaken(r, now);
-    s.queues[sessionId] = rows.filter((r) => !take.includes(r));
-    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
-    return take;
-  }, false, true);
+/**
+ * Take the old session's waiting rows out of its queue (a row already in a CLI stays) into the
+ * switch's transit (session-queue-transit.ts), in one strict write: from here until putQueuedRows
+ * they wait in the queue file under `switchId`, never only in this run's memory, so a crash or a
+ * failed write in between loses none (a restart places them: engine-switch-watch.ts). Throws, with
+ * the rows still in the old queue, when the write fails.
+ */
+export async function takeQueuedRows(sessionId: string, switchId: string, to?: string): Promise<HeldRow[]> {
+  const { takeIntoTransit } = await import('../session-queue-transit.js');
+  // Out of any queue from now until putQueuedRows: that wait is the move's (queue-held-spans.ts).
+  const now = Date.now();
+  return takeIntoTransit(switchId, 'switch', sessionId, (r) => r.status !== 'processing' && !r.lineInDoubt, (r) => stampTaken(r, now), to);
 }
 
-export async function putQueuedRows(sessionId: string, rows: HeldRow[]): Promise<void> {
-  if (rows.length === 0) return;
-  const { mutateStore } = await import('../session-queue-store.js');
+/**
+ * Put the switch's held rows (`rows`, the caller's versions of what its transit holds) on
+ * `sessionId`'s queue and end the transit, in one strict write; how many went in. Idempotent: a restart that resumes
+ * a switch may put the same rows again. `release`: a row held for a move is deliverable again.
+ * Throws, with the rows still in the transit, when the write fails (landHeldRows hands that to the sweep).
+ */
+export async function putQueuedRows(sessionId: string, rows: HeldRow[], switchId: string, opts?: { release?: boolean }): Promise<number> {
+  const { landTransit } = await import('../session-queue-transit.js');
   // A row's stop fence names a stop of the session it waited in: it takes the fence of the
   // session it goes to now, so a delivery does not park it as one a stop came ahead of (a
   // restored session's stop that was withdrawn, a new session with no stop yet). Under a
@@ -100,17 +103,32 @@ export async function putQueuedRows(sessionId: string, rows: HeldRow[]): Promise
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const stop = (await getSessionByClaudeId(sessionId).catch(() => null))?.stopRequest;
   const fence = stop?.state === 'pending' ? undefined : (stop?.id ?? null);
-  await mutateStore((s) => {
-    // Idempotent: a restart that resumes a switch may put the same rows again.
-    const have = new Set((s.queues[sessionId] ?? []).map((r) => r.id));
-    const now = Date.now();
-    const moved = rows.filter((r) => !have.has(r.id)).map((r) => {
+  const now = Date.now();
+  return landTransit(switchId, sessionId, {
+    rows,
+    prepare: (row) => {
+      const r = opts?.release ? releaseMoveHeld(row) : row;
       const { lineUuid: _l, lineTries: _t, lineTracked: _k, stopFence: own, ...rest } = closeTaken(r, now);
       const f = fence === undefined ? own : fence;
       return { ...rest, ...(f ? { stopFence: f } : {}), sessionId };
-    });
-    s.queues[sessionId] = [...(s.queues[sessionId] ?? []), ...moved];
-  }, false, true);
+    },
+  });
+}
+
+/**
+ * putQueuedRows that never throws: a put that fails leaves the rows in the switch's transit, on
+ * disk, and the sweep places them (session-queue-transit.ts settleStrandedTransits), retrying
+ * until they land. True when they went in now.
+ */
+export async function landHeldRows(sessionId: string, rows: HeldRow[], switchId: string, opts?: { release?: boolean }): Promise<boolean> {
+  try {
+    await putQueuedRows(sessionId, rows, switchId, opts);
+    return true;
+  } catch (err) {
+    const { abandonTransit } = await import('../session-queue-transit.js');
+    abandonTransit(switchId, err);
+    return false;
+  }
 }
 
 /**

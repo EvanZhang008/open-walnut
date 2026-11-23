@@ -60,6 +60,7 @@ const ALLOWED_MODULES: Record<string, string> = {
   './sessions/session-stop.js': 'stop fence read from the local session record',
   './sessions/wake-policy.js': 'pure check of the row\'s notice envelopes, and the in-memory hold for one that asks nothing (its file write is never awaited)',
   './sessions/cold-hold.js': 'cache-aware delivery: reads the session record and this queue file, and writes this queue file',
+  './session-queue-spool.js': 'the enqueue\'s local spool files next to this queue file (a resend of a spooled id, a write that keeps failing)',
 }
 
 /** Calls awaited on the path to SESSION_SEND, each with why it stays local. */
@@ -89,6 +90,11 @@ const ALLOWED_AWAITS: Record<string, string> = {
   'sessionStops.fence': 'session-stop.ts: the stop request on the local session record',
   'settledLineUuid': 'session-queue-lines.ts: local queue store',
   'mutateStore': 'session-queue-store.ts: the local queue file under its lock',
+  'storeRow': 'this file: the enqueue\'s write of the local queue file, its retries, and the local spool',
+  'spool.spooledRow': 'session-queue-spool.ts: reads one local spool file (only while the spool exists)',
+  'readQueueFileFresh': 'session-queue-store.ts: reads the local queue file back after a failed write',
+  '<not a call: new Promise((r) => setTimeout(r, ENQUEUE_RETRY_MS[attempt]))>': 'this file: the short local wait before a failed queue write is tried again',
+  'spoolRow': 'session-queue-spool.ts: writes one local spool file',
   'place.markTold': 'place-notice.ts: local session record write',
   'digest.markTold': 'org-store.ts: local org store write',
   'restart.markTold': 'restart-notice.ts: local session record write',

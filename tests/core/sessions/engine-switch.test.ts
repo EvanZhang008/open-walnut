@@ -112,7 +112,9 @@ import { frameStartText } from '../../../src/core/sessions/send-frame.js';
 import { linkSession, updateTaskRaw } from '../../../src/core/task-manager.js';
 import { taskConversation } from '../../../src/core/sessions/task-session-claim.js';
 import { createSessionRequest, getSessionRequest } from '../../../src/core/session-requests.js';
-import { getStore, mutateStore } from '../../../src/core/session-queue-store.js';
+import { getStore, mutateStore, readQueueFileFresh } from '../../../src/core/session-queue-store.js';
+import { takeQueuedRows } from '../../../src/core/sessions/engine-switch-io.js';
+import { resetTransitState, settleStrandedTransits } from '../../../src/core/session-queue-transit.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { __setOwnerViewForTesting, type OwnerView } from '../../../src/core/sessions/replaced-session.js';
 
@@ -962,6 +964,47 @@ describe('engine switch inside a task', () => {
     expect(res).toMatchObject({ state: 'done', host: 'devbox' });
     expect(edges.starts[0]).toMatchObject({ engine: 'codex', host: 'devbox', cwd: '/home/me/repo' });
     edges.hostEngines = {};
+  });
+
+  // 2026-11-23, the user: a message is never lost, a restart or crash included. The switch's held
+  // rows wait in the queue file (session-queue-transit.ts), never only in the switch's memory.
+  it('a restart between taking the old session\'s rows and putting them anywhere loses none', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    await mutateStore((s) => {
+      s.queues[sid] = [{ id: 'qm-cut', sessionId: sid, message: 'typed before the crash', status: 'pending', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    // The switch retired the old session and took its rows; then the server died.
+    await updateSessionRecord(sid, { archived: true, archive_reason: 'engine_switched:codex' } as never);
+    await takeQueuedRows(sid, 'es-cut');
+    await updateTaskRaw(taskId, { engine_switch: { id: 'es-cut', state: 'switching', at: new Date().toISOString(), from_session_id: sid, to: { engine: 'codex' } } } as never);
+    expect((await readQueueFileFresh()).queues[sid]).toBeUndefined();
+    resetTransitState();
+
+    await resumeEngineSwitches();
+    // The old session is the task's again, with its row (the switch, pending again, may then run
+    // and carry it on): the row is in exactly one queue, and nothing waits on the way.
+    await vi.waitFor(async () => {
+      const disk = await readQueueFileFresh();
+      expect(disk.transit).toBeUndefined();
+      expect(Object.values(disk.queues).flat().map((r) => r.message)).toEqual(['typed before the crash']);
+      expect((await getTask(taskId)).engine_switch?.state).not.toBe('switching');
+    }, { timeout: 5_000 });
+  });
+
+  it('rows a finished switch left on the way go to the session that holds the task now', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Go on.', source: 'ui' });
+    // A put the switch could not write (or a crash before it): its rows still wait under the switch's id.
+    await mutateStore((s) => {
+      s.queues[sid] = [{ id: 'qm-late', sessionId: sid, message: 'stranded on the old session', status: 'pending', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    await takeQueuedRows(sid, 'es-stranded');
+    resetTransitState();
+    await settleStrandedTransits({ switches: true });
+    const disk = await readQueueFileFresh();
+    expect(disk.transit).toBeUndefined();
+    expect(disk.queues[sid]).toBeUndefined();
+    expect(disk.queues[res.sessionId!]?.map((r) => r.message)).toEqual(['stranded on the old session']);
   });
 
   it('a task with no conversation yet just starts on the engine', async () => {

@@ -184,7 +184,7 @@ describe('a move a server stop cuts short is paused for the next boot', () => {
     expect(restart).not.toMatch(/state: 'failed'/)
     expect(restart).toContain("sw.state !== 'switching'")
     const watch = read('src/core/sessions/engine-switch-watch.ts')
-    const resume = body(watch, 'export async function resumeEngineSwitches(')
+    const resume = body(watch, 'async function resumeSwitches(')
     expect(resume).toContain("sw.state !== 'pending' && sw.state !== 'switching'")
     // A cut run took over only by the new session's own record, and its unconfirmed start is stopped first.
     expect(resume).toMatch(/tookOver\(/)
@@ -272,17 +272,18 @@ describe('a long transfer waits out a dropped link', () => {
     expect(exec).toContain('return noLinkWait(() => handOver(')
     // What outlives the run (a start, a send, a queue that delivers) never carries the wait: none of
     // it is in execute or prepare, and restore puts rows back outside it.
-    const LONG = /\b(startSessionForTask|sendMessageToSession|putQueuedRows|releaseMoveHeldRows)\(/
+    const LONG = /\b(startSessionForTask|sendMessageToSession|putQueuedRows|landHeldRows|releaseMoveHeldRows)\(/
     expect(exec).not.toMatch(LONG)
     expect(body(src, 'async function prepare(')).not.toMatch(LONG)
     const r = body(src, 'async function restore(')
-    expect(r.slice(r.indexOf('noLinkWait('))).toMatch(/putQueuedRows\([\s\S]*releaseMoveHeldRows\(/)
+    expect(r.slice(r.indexOf('noLinkWait('))).toMatch(/landHeldRows\([\s\S]*releaseMoveHeldRows\(/)
     expect(r.slice(0, r.indexOf('noLinkWait('))).not.toMatch(LONG)
     // The new session holds the task and its messages before the source's cleanup runs.
     const hand = body(src, 'async function handOver(')
     expect(hand.indexOf('flight.handedOver = true')).toBeGreaterThan(0)
     expect(hand.indexOf('flight.handedOver = true')).toBeLessThan(hand.indexOf('clearMovedCopies('))
-    expect(hand.indexOf('putQueuedRows(')).toBeLessThan(hand.indexOf('clearMovedCopies('))
+    expect(hand.indexOf('landHeldRows(')).toBeGreaterThan(0)
+    expect(hand.indexOf('landHeldRows(')).toBeLessThan(hand.indexOf('clearMovedCopies('))
     const leavers = SOURCES.filter((f) => /\bnoLinkWait\(/.test(f.text) && f.rel !== 'src/core/transfer/link-wait.ts').map((f) => f.rel).sort()
     expect(leavers).toEqual(['src/core/sessions/endpoint-wait.ts', file, 'src/core/sessions/task-start.ts'])
     expect(read('src/core/sessions/endpoint-wait.ts')).toContain('noLinkWait(() => probeModelEndpoint(')

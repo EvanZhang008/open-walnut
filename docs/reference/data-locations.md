@@ -49,6 +49,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/sessions.sqlite` | leader-data | no | Sessions: every session record and its history index |
 | `~/.open-walnut/sessions/` | rebuildable | no | Older session projection and transcript-tail copies, rebuilt from the session store |
 | `~/.open-walnut/session-message-queue.json` | leader-data | no | Messages queued for sessions that were not ready to take them |
+| `~/.open-walnut/session-message-queue.json.spool/` | leader-data | no | Messages stored beside the queue while its file could not be written, merged into it once it can |
 | `~/.open-walnut/session-requests.json` | leader-data | no | Reply requests between sessions and their deadlines |
 | `~/.open-walnut/hint-registry-since.json` | leader-data | no | When this home first ran the hint registry (older session rows predate it) |
 | `~/.open-walnut/session-audit.jsonl` | leader-data | no | Audit log of session actions |

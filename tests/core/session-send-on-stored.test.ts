@@ -60,13 +60,17 @@ describe('onStored', () => {
     expect(await rowsOnDisk()).toEqual([ROUTINE_ID])
   })
 
-  it('is never told when the disk refused the row: the send fails instead of living in the cache', async () => {
+  // 2026-11-23: a queue file that refuses the row sends it to the spool, synced, never the cache
+  // alone; the send is stored, and the queue takes it once it can be written (session-queue-spool.ts).
+  it('is told only once the row is on disk: a refused queue write stores it in the spool', async () => {
     const onStored = vi.fn()
     disk.refuseQueue = true
-    await expect(sendMessageToSession(SID, 'Reflect on the day.', { source: 'routine-trigger', messageId: ROUTINE_ID, onStored }))
-      .rejects.toThrow()
-    expect(onStored).not.toHaveBeenCalled()
-    disk.refuseQueue = false
+    await sendMessageToSession(SID, 'Reflect on the day.', { source: 'routine-trigger', messageId: ROUTINE_ID, onStored })
+    expect(onStored).toHaveBeenCalledTimes(1)
     expect(await rowsOnDisk()).toEqual([])
+    disk.refuseQueue = false
+    const { drainQueueSpool } = await import('../../src/core/session-queue-spool.js')
+    await drainQueueSpool()
+    expect(await rowsOnDisk()).toEqual([ROUTINE_ID])
   })
 })

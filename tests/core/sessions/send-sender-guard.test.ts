@@ -84,7 +84,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/context-full-recovery.ts': 1,
   // Two refused turns in a row: the note that names the new model and resends what got no answer (an agent's).
   'src/core/sessions/safeguard-switch.ts': 1,
-  'src/core/session-message-queue.ts': 1,          // the queue's own enqueue inside sendMessageToSession
+  'src/core/session-message-queue.ts': 2,          // the queue's own enqueue inside sendMessageToSession, and enqueueUntilStored's retry of it
   'src/core/sessions/adopt-notice.ts': 1,
   'src/core/sessions/title-topic-notice.ts': 1,       // a task whose title gained a topic is told, as Walnut's notice
   'src/core/org/reflection/pipeline.ts': 1,          // a node's reflection corrects a session it manages, as Walnut's note

@@ -23,7 +23,7 @@ import type { SessionHistoryMessage } from '../session-history.js';
 import type { EngineSwitchState, SessionEngine, SessionRecord } from '../types.js';
 import { log } from '../../logging/index.js';
 import type { EngineSwitchResult } from './engine-switch.js';
-import { putQueuedRows, stashSwitchContext, type HeldRow } from './engine-switch-io.js';
+import { landHeldRows, stashSwitchContext, type HeldRow } from './engine-switch-io.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { normalizeHost } from '../transfer/planner.js';
 import { isSupersededSession } from './engine-switch-marker.js';
@@ -196,7 +196,8 @@ export async function resumeEarlier(
     await tracker.updateSessionRecord(old.claudeSessionId, { supersededBy: prev.claudeSessionId }).catch(() => {});
     const { retargetRequestsToSession } = await import('../session-requests.js');
     movedRequests = await retargetRequestsToSession(old.claudeSessionId, prev.claudeSessionId).catch(() => 0);
-    await putQueuedRows(prev.claudeSessionId, held);
+    // A put that fails leaves them in the switch's transit, which the sweep puts here.
+    await landHeldRows(prev.claudeSessionId, held, state.id);
     await tm.updateTaskRaw(taskId, {
       // The task is on the engine its user picked now: a fallback start's note is done.
       engine_fallback: null,

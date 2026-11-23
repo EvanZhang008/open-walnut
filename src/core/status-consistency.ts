@@ -194,8 +194,11 @@ export async function runStatusCheck(nowMs = Date.now(), opts: { send?: boolean 
         kind: 'trigger',
         attrs: { from: 'Walnut: status check', note: 'your park waits on nothing outside' },
         body: parkNoteBody(m),
-      }), { source: WAIT_UNTIL_SEND_SOURCE, taskId: m.taskId }).catch((err) => {
-        log.task.warn('status check: park note not delivered', { taskId: m.taskId, error: err instanceof Error ? err.message : String(err) });
+      }), { source: WAIT_UNTIL_SEND_SOURCE, taskId: m.taskId }).catch(async (err) => {
+        // Not stored: not told either, so the next pass sends it again.
+        delete keep[m.taskId];
+        await fsp.writeFile(TOLD_FILE(), JSON.stringify(keep)).catch(() => {});
+        log.task.warn('status check: park note not delivered; the next pass sends it again', { taskId: m.taskId, error: err instanceof Error ? err.message : String(err) });
       });
     }
   } catch (err) {

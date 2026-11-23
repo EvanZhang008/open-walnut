@@ -134,6 +134,17 @@ async function tellExpired(taskId: string, sw: EngineSwitchState, error: string)
  * `interrupted` note, whose pieces already set up the rerun reuses.
  */
 export async function resumeEngineSwitches(): Promise<number> {
+  try {
+    return await resumeSwitches();
+  } finally {
+    // Every switch a restart cut is settled (or its resume threw): rows any move left on the
+    // way are placed now, and the sweep keeps trying those that do not land.
+    const { settleStrandedTransits } = await import('../session-queue-transit.js');
+    await settleStrandedTransits({ switches: true }).catch(() => 0);
+  }
+}
+
+async function resumeSwitches(): Promise<number> {
   const { listTasks, updateTaskRaw } = await import('../task-manager.js');
   const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
   // The running markers an earlier server left: its switches ended with it (the deploy hold).
@@ -145,6 +156,19 @@ export async function resumeEngineSwitches(): Promise<number> {
     if (!sw || (sw.state !== 'pending' && sw.state !== 'switching')) continue;
     n++;
     if (sw.state === 'switching') {
+      // Its held rows wait in the switch's transit in the queue file (session-queue-transit.ts); an
+      // older server kept them on the task (`held_rows`): those go into the transit first, and a
+      // failure leaves the switch as it is for the next boot rather than the rows nowhere.
+      if (sw.held_rows?.length) {
+        const { adoptIntoTransit } = await import('../session-queue-transit.js');
+        try {
+          await adoptIntoTransit(sw.id, 'switch', sw.from_session_id, sw.held_rows as never[]);
+        } catch (err) {
+          log.session.warn('engine switch: its held messages could not be stored; it waits for the next boot', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
+          continue;
+        }
+      }
+      const { landHeldRows } = await import('./engine-switch-io.js');
       const { taskConversation } = await import('./task-session-claim.js');
       const active = await taskConversation(task.id);
       const { endUnconfirmedStarts, tookOver } = await import('./engine-switch-restart.js');
@@ -175,8 +199,7 @@ export async function resumeEngineSwitches(): Promise<number> {
         }
         const { retargetRequestsToSession } = await import('../session-requests.js');
         await retargetRequestsToSession(sw.from_session_id, to).catch(() => 0);
-        const { putQueuedRows } = await import('./engine-switch-io.js');
-        if (sw.held_rows?.length) await putQueuedRows(to, sw.held_rows as never[]).catch(() => {});
+        await landHeldRows(to, [], sw.id, { release: !!sw.move });
         await updateTaskRaw(task.id, {
           // The task is on the engine its user picked now: a fallback start's note is done.
           engine_fallback: null,
@@ -195,8 +218,7 @@ export async function resumeEngineSwitches(): Promise<number> {
       if (old) {
         const { linkSession } = await import('../task-manager.js');
         await linkSession(task.id, old.claudeSessionId).catch(() => {});
-        const { putQueuedRows } = await import('./engine-switch-io.js');
-        if (sw.held_rows?.length) await putQueuedRows(old.claudeSessionId, sw.held_rows as never[]).catch(() => {});
+        await landHeldRows(old.claudeSessionId, [], sw.id);
       }
       if (live) {
         const error = `A restart cut this ${sw.move ? 'move' : 'switch'} short, and the session it was starting could not be stopped (${live}), so it did not run again. The task stays on its session; stop that session, then ask again.`;

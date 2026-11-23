@@ -50,7 +50,7 @@ import { engineSwitchedReason, isSupersededSession } from './engine-switch-marke
 import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-resume.js';
 import { recordedSessionMode } from './acp-recorded-mode.js';
 import { hostGone } from './host-lost.js';
-import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
+import { hostPath, landHeldRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engine-switch-restart.js';
 import { interruptedByShutdown } from '../server-stopping.js';
 import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
@@ -447,18 +447,26 @@ export function runEngineSwitch(taskId: string, state: EngineSwitchState, opts: 
  * A message whose send resolved to the old session while the move was handing over lands there
  * after the move took its rows: it goes to the new session too, never stays on an archived one.
  */
-async function carryLateRows(taskId: string, from: string, to: string): Promise<void> {
+async function carryLateRows(taskId: string, from: string, to: string, attempt = 0): Promise<void> {
   try {
-    const late = (await takeQueuedRows(from)).map(releaseMoveHeld);
+    // Through a transit of its own: a crash or a failed put in between leaves them in the queue
+    // file, and the sweep puts them on the task's active session (session-queue-transit.ts).
+    const id = `late-${randomUUID()}`;
+    const late = await takeQueuedRows(from, id, to);
     if (late.length === 0) return;
-    await putQueuedRows(to, late);
+    if (!await landHeldRows(to, late, id, { release: true })) return;
     log.session.info('task move: messages that reached the old session late went to the new one', { taskId, from, to, rows: late.length });
     const { bus, EventNames } = await import('../event-bus.js');
     bus.emit(EventNames.SESSION_SEND, { sessionId: to, taskId, message: '' }, ['session-runner'], { source: 'engine-switch' });
   } catch (err) {
-    log.session.warn('task move: carrying late messages failed', { taskId, from, to, error: err instanceof Error ? err.message : String(err) });
+    // The take failed: the rows are still on the old session, and the carry is tried again.
+    log.session.warn('task move: carrying late messages failed; trying again', { taskId, from, to, attempt, error: err instanceof Error ? err.message : String(err) });
+    // No limit: a row on the archived session is delivered by nobody else.
+    setTimeout(() => { void carryLateRows(taskId, from, to, attempt + 1); }, Math.min(LATE_CARRY_RETRY_MS * 2 ** attempt, LATE_CARRY_MAX_MS)).unref?.();
   }
 }
+const LATE_CARRY_RETRY_MS = 30_000;
+const LATE_CARRY_MAX_MS = 5 * 60_000;
 
 export function isSwitching(taskId: string): boolean {
   return inFlight.has(taskId);
@@ -584,7 +592,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     }
     rows = await tracker.getSessionsForTask(taskId);
   } catch (err) {
-    if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), [], err);
+    if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), state.id, err);
     throw await fail(taskId, state, err);
   }
 
@@ -597,15 +605,23 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     await tracker.updateSessionRecord(old.claudeSessionId, {
       archived: true, archive_reason: engineSwitchedReason(engine), ...(left ? { leftContext: { ...left, at: new Date().toISOString() } } : {}),
     });
-    const taken = await takeQueuedRows(old.claudeSessionId);
-    if (taken.length > 0) {
-      await tm.updateTaskRaw(taskId, (cur) => (cur.engine_switch?.id === state.id ? { engine_switch: { ...cur.engine_switch, held_rows: taken } } : null), { source: 'engine-switch', emitEvent: true }).catch(() => {});
+    // Its waiting rows go into the switch's transit in the queue file (session-queue-transit.ts):
+    // a restart from here on finds them there, never only in this run's memory. A take that
+    // cannot be written leaves them on the old session, which stays the task's.
+    let taken: HeldRow[];
+    try {
+      taken = await takeQueuedRows(old.claudeSessionId, state.id);
+    } catch (err) {
+      await restore(taskId, old, undefined, new Date().toISOString(), state.id, err);
+      throw await fail(taskId, state, err, new EngineSwitchError(
+        `The session's waiting messages could not be stored for the ${state.move ? 'move' : 'switch'}: ${err instanceof Error ? err.message : String(err)}. The task stays on its session; ask again.`,
+        503, 'queue_not_stored'));
     }
     try {
       const { endReplacedSession } = await import('./replaced-session.js');
       await endReplacedSession(old, { taskId, ...(state.by ? { by: state.by } : {}) });
     } catch (err) {
-      await restore(taskId, old, undefined, new Date().toISOString(), taken, err);
+      await restore(taskId, old, undefined, new Date().toISOString(), state.id, err);
       throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err
         : new EngineSwitchError(err instanceof Error ? err.message : String(err), 409, 'old_session_live'));
     }
@@ -621,7 +637,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
       prepared = await prepare(task, old, rows, state, engine, host, retiredEarly);
     } catch (err) {
       // Retired early to stop its turn: it is the task's session again, unlocked and asked as before.
-      if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), [], err);
+      if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), state.id, err);
       throw await fail(taskId, state, err);
     }
     held = await retire(prepared.left);
@@ -631,7 +647,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     try {
       prepared = await prepare(task, old, rows, state, engine, host, false, progress);
     } catch (err) {
-      await restore(taskId, old, undefined, new Date().toISOString(), held, err);
+      await restore(taskId, old, undefined, new Date().toISOString(), state.id, err);
       throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(
         `The move to ${host === LOCAL_HOST ? 'this Mac' : host} did not happen: ${err instanceof Error ? err.message : String(err)}. The task stays where it was.`,
         typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 502,
@@ -688,13 +704,18 @@ async function handOver(
     }
     // A stop cut it: that stop may not have reached it (its link is down); the next boot stops it through its owner.
     progress.start = { ...(sessionId ? { session_id: sessionId } : {}), since: startedAt };
-    await restore(taskId, old, sessionId, startedAt, held, err);
+    await restore(taskId, old, sessionId, startedAt, state.id, err);
     throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
       ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${normalizeHost(old.host) === LOCAL_HOST ? 'this Mac' : old.host}; the copied work is kept at ${prepared.cwd ?? 'its task directory'}.`
       : `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,
       502, 'start_failed'), progress);
   }
 
+  // The held rows show under the new session too until they land there (session-queue-transit.ts).
+  if (held.length > 0) {
+    const { noteTransitTarget } = await import('../session-queue-transit.js');
+    await noteTransitTarget(state.id, sessionId);
+  }
   const at = new Date().toISOString();
   await tracker.updateSessionRecord(sessionId, {
     engineSwitch: {
@@ -715,10 +736,21 @@ async function handOver(
     // one that resolved to the old session before this).
     const flight = inFlight.get(taskId);
     if (flight) flight.handedOver = true;
-    held = [...held, ...(await takeQueuedRows(old.claudeSessionId))].map(releaseMoveHeld);
+    // Into the same transit as the retire's take: put below in the same write. One that fails
+    // leaves them on the old session, for carryLateRows to take after the move.
+    const late = await takeQueuedRows(old.claudeSessionId, state.id).catch((err: unknown) => {
+      log.session.warn('task move: taking the old session\'s late messages failed; they wait there', { taskId, error: err instanceof Error ? err.message : String(err) });
+      return [] as HeldRow[];
+    });
+    held = [...held, ...late].map(releaseMoveHeld);
   }
-  if (prepared.context) held = await stashSwitchContext(sessionId, prepared.context, state.id, held);
-  await putQueuedRows(sessionId, held);
+  const carried = prepared.context ? await stashSwitchContext(sessionId, prepared.context, state.id, held) : held;
+  // A put that fails leaves the rows in the transit for the sweep (without the carried context,
+  // which then waits on the record for the session's next message).
+  if (!await landHeldRows(sessionId, carried, state.id) && prepared.context && carried !== held) {
+    await stashSwitchContext(sessionId, prepared.context, state.id, []).catch(() => {});
+  }
+  held = carried;
   // The move is done: what it carried away from a shared checkout leaves it (backed up first),
   // after the new session holds the task and its messages.
   if (state.move && prepared.clearable) {
@@ -991,7 +1023,7 @@ async function detachFailedStart(taskId: string, old: SessionRecord, newSid: str
  * this server stops (`err` came from that stop), only a start that did not confirm is let go of:
  * the switch is paused (fail), and the next boot puts the old session back.
  */
-async function restore(taskId: string, old: SessionRecord, newSid: string | undefined, since: string, held: HeldRow[], err: unknown): Promise<void> {
+async function restore(taskId: string, old: SessionRecord, newSid: string | undefined, since: string, switchId: string, err: unknown): Promise<void> {
   await detachFailedStart(taskId, old, newSid, since);
   if (interruptedByShutdown(err)) return;
   const tracker = await import('../session-tracker.js');
@@ -1004,7 +1036,8 @@ async function restore(taskId: string, old: SessionRecord, newSid: string | unde
   }));
   // The old session's delivery outlives this run: it never carries the run's link wait.
   await noLinkWait(async () => {
-    await putQueuedRows(old.claudeSessionId, held);
+    // The switch's transit goes back (a put that fails leaves it to the sweep, which puts it here).
+    await landHeldRows(old.claudeSessionId, [], switchId);
     // Messages held during a failed move are the old session's again.
     if (await releaseMoveHeldRows(old.claudeSessionId)) {
       const { bus, EventNames } = await import('../event-bus.js');

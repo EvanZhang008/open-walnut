@@ -106,12 +106,12 @@ describe('a relayed message the Mac could not store (r4c F2)', () => {
     expect(await onDisk()).toEqual([mid])
   })
 
-  it('a write that landed before it failed: not_stored, and the retry finds the row (exactly once)', async () => {
+  it('a write that landed before it failed is read back: taken, and the retry finds the row (exactly once)', async () => {
     const { conn, sent } = makeConn()
     const mid = 'qm-mobile-not-stored-3'
     disk.fail = 'after'
     await fire(conn, 1, mid)
-    expect(sent[0]).toMatchObject({ errorKind: 'not_stored' })
+    expect(sent[0]).toMatchObject({ relayId: 1, result: { messageId: mid } })
     disk.fail = null
     expect(await onDisk()).toEqual([mid])
     await fire(conn, 2, mid)
@@ -119,9 +119,16 @@ describe('a relayed message the Mac could not store (r4c F2)', () => {
     expect(await onDisk()).toEqual([mid])
   })
 
-  it('a message that was not relayed keeps the old best-effort write (kept in memory, no error)', async () => {
+  // 2026-11-23, the user: a message is never lost, a restart or crash included. A row kept only
+  // in memory for a later flush was lost by a crash in that window, its sender told "queued".
+  it('a message that was not relayed goes to the spool when the queue cannot be written: on disk, never only in memory', async () => {
     disk.fail = 'before'
-    const msg = await enqueueMessage(SID, 'typed on the Mac')
-    expect((await getQueue(SID)).map((m) => m.id)).toEqual([msg.id])
+    const row = await enqueueMessage(SID, 'typed on the Mac')
+    expect(await getQueue(SID)).toEqual([])
+    // A restart once the disk takes writes again: the spooled row is queued, once.
+    disk.fail = null
+    resetCache()
+    await loadQueue()
+    expect(await onDisk()).toEqual([row.id])
   })
 })

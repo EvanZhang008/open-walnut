@@ -38,9 +38,10 @@ import {
 } from './relay-fates.js';
 import { parkRow } from './queue-held-spans.js';
 import {
-  compareEnqueueOrder, generateId, getStore, mutateStore, nextEnqueueSeq, QueueNotStoredError, resetCache,
+  compareEnqueueOrder, generateId, getStore, mutateStore, nextEnqueueSeq, QueueNotStoredError, readQueueFileFresh, resetCache,
   type QueuedMessage, type QueueStore,
 } from './session-queue-store.js';
+import { FileLockTimeoutError } from '../utils/file-lock.js';
 import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 import { staleTriggerText } from './routines/trigger-stale.js';
 import type { PendingInstructionNotice } from './sessions/instruction-notice.js';
@@ -74,7 +75,8 @@ export { removeTaken, requeueUnanswered, revertIfQueued, settledLineUuid, unmark
 
 /**
  * Load the queue from disk into memory. Call once at startup.
- * Resets any 'processing' messages back to 'pending' (crash recovery). A row
+ * Resets any 'processing' messages back to 'pending' (crash recovery), and puts back the rows a
+ * host hand left on the way (session-queue-transit.ts). A row
  * keeps its `lineUuid` and `lineTries`, so its next delivery goes out alone
  * under the same uuid and asks the daemon first: a line a live CLI already holds
  * is not written to it again.
@@ -98,6 +100,15 @@ export async function loadQueue(): Promise<void> {
   if (changed) {
     log.session.info('reset processing messages to pending after restart');
   }
+  // Lines an earlier server was handing to a host when it died are queued here again (a switch's
+  // rows wait for the switch resume, engine-switch-watch.ts): session-queue-transit.ts.
+  const { settleStrandedTransits } = await import('./session-queue-transit.js');
+  await settleStrandedTransits().catch(() => 0);
+  // Rows an enqueue put in the spool when the queue write failed (session-queue-spool.ts).
+  const { drainQueueSpool, spoolMayHoldRows, watchQueueSpool } = await import('./session-queue-spool.js');
+  if (spoolMayHoldRows()) await drainQueueSpool().catch(() => 0);
+  // Another process's spool (the `walnut start` CLI's, whose own clock died with it) is merged too.
+  watchQueueSpool();
 }
 
 /**
@@ -120,8 +131,6 @@ export async function enqueueMessage(
     waitsFor?: string;
     /** With heldReason: a cold hold's send (QueuedMessage.coldSend). */
     coldSend?: { source: string; endsWait?: true };
-    /** Written to disk before this returns, or throws (QueueNotStoredError): never a row only the cache holds. */
-    strict?: boolean;
     /**
      * With `id`: this queue takes the id once, ever (within the fates' horizon, relay-fates.ts):
      * its 'taken' fate is written with its row, and a later enqueue of the id, after the row ran or
@@ -159,13 +168,13 @@ export async function enqueueMessage(
     ...(opts?.closesPrompt ? { closesPrompt: true as const } : {}),
     ...(opts?.sentBy ? { sentBy: opts.sentBy } : {}),
   };
-  // A relayed row is written strictly: on a disk failure the companion is told
-  // (QueueNotStoredError) instead of the row living in this process alone.
-  const itemAction = opts?.id?.startsWith('qm-inbox-') === true || opts?.id?.startsWith('qm-route-') === true;
-  const relayed = opts?.relayTaken === true;
-  // Also a row whose sender acts on its being stored (a routine's sent mark, cron/sent-run.ts).
-  const strict = relayed || itemAction || opts?.strict === true;
-  const outcome = await mutateStore((s): { queueDepth: number; existing: QueuedMessage | null; refused?: true; ranAlready?: true } => {
+  // Every row is on disk (synced) before its sender hears "queued" (2026-11-23, the user: a
+  // message is never lost, a restart or crash included). A row only the cache held, flushed a
+  // moment later, was lost by a crash in that moment while its sender had been told it was
+  // queued. A failed write is tried again; then the row goes to the spool (session-queue-spool.ts),
+  // or, for a row whose fate goes with it (relayed, once-only), its sender is told
+  // (QueueNotStoredError) and sends again.
+  const write = (s: QueueStore): EnqueueOutcome => {
     if (demoAdmissionClosed()) return { queueDepth: 0, existing: null, refused: true };
     if (!s.queues[sessionId]) {
       s.queues[sessionId] = [];
@@ -180,9 +189,18 @@ export async function enqueueMessage(
       const existing = s.queues[sessionId].find((m) => m.id === opts.id);
       if (existing) return { queueDepth: s.queues[sessionId].length, existing };
     }
+    // This row's own earlier try landed (its write threw after the rename): not a second copy.
+    if (s.queues[sessionId].some((m) => m.id === msg.id)) return { queueDepth: s.queues[sessionId].length, existing: null };
     s.queues[sessionId].push(msg);
     return { queueDepth: s.queues[sessionId].length, existing: null };
-  }, strict, strict).catch((err: unknown) => { throw strict ? new QueueNotStoredError(err) : err; });
+  };
+  const spool = await import('./session-queue-spool.js');
+  // A resend of an id the spool holds is that row.
+  if (opts?.id && spool.spoolMayHoldRows()) {
+    const spooled = await spool.spooledRow(opts.id);
+    if (spooled?.sessionId === sessionId) return spooled;
+  }
+  const outcome = await storeRow(sessionId, msg, write, !(opts?.relayTaken || opts?.onceById));
   if (outcome.refused) throw new DemoAdmissionClosedError();
   if (outcome.ranAlready) {
     log.session.info('message enqueue skipped: this queue took the id once already', { sessionId, messageId: msg.id });
@@ -196,7 +214,68 @@ export async function enqueueMessage(
   }
   if (msg.sentBy === 'person' && !inherited) noteRecentHumanMessage(sessionId, opts?.recentText ?? message, msg.enqueuedAt);
   log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth: outcome.queueDepth });
+  // A write that works takes what an earlier failed one left in the spool.
+  if (!outcome.spooled && spool.spoolMayHoldRows()) void spool.drainQueueSpool().catch(() => 0);
   return msg;
+}
+
+type EnqueueOutcome = { queueDepth: number; existing: QueuedMessage | null; refused?: true; ranAlready?: true; spooled?: true };
+
+/** Tries of the queue write before the spool: a lock timeout already waited minutes, so it goes there at once. */
+const ENQUEUE_RETRY_MS = [100, 500];
+
+/**
+ * Write `msg` with `write` (strict, synced), trying a failed write again. A write that reached
+ * the disk and then threw counts as written (the file is read back for the row, so its sender
+ * never sends a second copy). Still not written: into the spool when `spoolable`, else
+ * QueueNotStoredError.
+ */
+async function storeRow(sessionId: string, msg: QueuedMessage, write: (s: QueueStore) => EnqueueOutcome, spoolable: boolean): Promise<EnqueueOutcome> {
+  let last: unknown;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await mutateStore(write, true, true, true);
+    } catch (err) {
+      last = err;
+      // Read back: a row that is there was written. A read that fails says nothing (the next try,
+      // which skips a row already there, finds out), never "absent".
+      const onDisk = await readQueueFileFresh({ readErrors: 'throw' }).then((s) => s.queues[sessionId]?.some((m) => m.id === msg.id), () => false);
+      if (onDisk) return { queueDepth: 0, existing: null };
+      if (err instanceof FileLockTimeoutError || attempt >= ENQUEUE_RETRY_MS.length) break;
+      await new Promise((r) => setTimeout(r, ENQUEUE_RETRY_MS[attempt]));
+    }
+  }
+  if (spoolable) {
+    // The gate the write itself checks: a stopping Demo spools nothing.
+    if (demoAdmissionClosed()) throw new DemoAdmissionClosedError();
+    try {
+      const { spoolRow } = await import('./session-queue-spool.js');
+      await spoolRow(msg);
+      return { queueDepth: 0, existing: null, spooled: true };
+    } catch (err) {
+      log.session.error('session message queue: the row could not be spooled either', { sessionId, messageId: msg.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  throw new QueueNotStoredError(last);
+}
+
+/**
+ * Enqueue `message` until it is stored, however long the disk fails: for a line Walnut itself
+ * carries whose start already happened (an ACP session spawned for it), where throwing would
+ * lose the line or start the session twice. Each try is enqueueMessage's own (retries, spool).
+ */
+export async function enqueueUntilStored(sessionId: string, message: string, opts?: Parameters<typeof enqueueMessage>[2]): Promise<QueuedMessage> {
+  // One id for every try: a try whose write landed unseen is the same row, never a second one.
+  const once = { ...opts, id: opts?.id ?? generateId() };
+  for (let wait = 1_000; ; wait = Math.min(wait * 2, 60_000)) {
+    try {
+      return await enqueueMessage(sessionId, message, once);
+    } catch (err) {
+      if (!(err instanceof QueueNotStoredError)) throw err;
+      log.session.warn('a line Walnut carries could not be stored yet; trying again', { sessionId, waitMs: wait, error: err.message });
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 // Who sent a row (QueuedMessage.sentBy), and the sources a person types into.
@@ -264,8 +343,8 @@ export async function sendMessageToSession(
     /**
      * Told the moment the row is on disk (or met the same id already queued), before anything else
      * this send waits for: the send is durable from here. A scheduled routine marks its run sent
-     * here (cron/sent-run.ts). With it the row is stored strictly: a disk failure throws instead
-     * of leaving the row in the cache for a later flush, which a kill would lose. Never called for
+     * here (cron/sent-run.ts). Every row is stored strictly (enqueueMessage): a disk failure throws
+     * instead of leaving the row in the cache for a later flush, which a kill would lose. Never called for
      * a notice that rides the next message (held-notices.ts holds it). Called, never awaited; a throw is only logged.
      */
     onStored?: (msg: QueuedMessage) => void;
@@ -427,9 +506,6 @@ export async function sendMessageToSession(
       ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.relayTaken ? { relayTaken: true } : {}),
-      // A row that carries held notices is stored strictly too: they leave their own file once it is
-      // stored (markTold), so a row left only in the cache by a disk failure would lose both at a kill.
-      ...(opts?.onStored || heldNotes ? { strict: true } : {}),
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
       ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
@@ -911,29 +987,29 @@ export async function revertToPending(messages: QueuedMessage[]): Promise<void> 
  * runner drains them. Rows ready to go (pending), and rows held for the turn's end or a cold wake,
  * which keep their hold there (sessions/handed-holds.ts); `heldOnly`: those alone. Any other held
  * row (parked, held for a move) stays here.
- * `put back`: the host did not take them (the same rows, in their place again).
+ * `putBack`: the host did not take them (the same rows, in their place again); `done`: it did.
+ * Until one of them, the lines wait in a transit in the queue file (session-queue-transit.ts),
+ * never only in this caller's memory: a crash before the host answers puts them back at the next
+ * start (the host takes an id once, so a resend of a line it took is a no-op). Throws, with the
+ * lines still queued, when the take cannot be written.
  */
-export async function takeLinesForHost(sessionId: string, opts?: { heldOnly?: boolean }): Promise<{ lines: QueuedMessage[]; putBack(): Promise<void> }> {
+export async function takeLinesForHost(sessionId: string, opts?: { heldOnly?: boolean }): Promise<{ lines: QueuedMessage[]; putBack(): Promise<void>; done(): Promise<void> }> {
   const { isHandedHold } = await import('./sessions/handed-holds.js');
+  const transit = await import('./session-queue-transit.js');
   const goes = (m: QueuedMessage) => isHandedHold(m) || (!opts?.heldOnly && m.status === 'pending');
-  const lines = await mutateStore((s) => {
-    const queue = s.queues[sessionId];
-    if (!queue) return [] as QueuedMessage[];
-    const taken = queue.filter(goes);
-    if (taken.length === 0) return taken;
-    s.queues[sessionId] = queue.filter((m) => !goes(m));
-    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
-    return taken;
-  }, false, true);
+  const id = transit.newTransitId('host');
+  const lines = await transit.takeIntoTransit(id, 'host', sessionId, goes);
+  if (lines.length === 0) transit.forgetTransit(id);
   return {
     lines,
+    // A put back that fails leaves them in the transit, and the sweep puts them back.
     putBack: async () => {
       if (lines.length === 0) return;
-      await mutateStore((s) => {
-        const queue = s.queues[sessionId] ?? (s.queues[sessionId] = []);
-        const ids = new Set(queue.map((m) => m.id));
-        queue.unshift(...lines.filter((m) => !ids.has(m.id)));
-      }, false, true);
+      await transit.landTransit(id, sessionId, { front: true }).catch((err: unknown) => transit.abandonTransit(id, err));
+    },
+    done: async () => {
+      if (lines.length === 0) return;
+      await transit.dropTransit(id);
     },
   };
 }
@@ -1007,14 +1083,19 @@ export async function isMessageQueued(sessionId: string, messageId: string): Pro
   return queue.some((m) => m.id === messageId);
 }
 
-/** The queued row with this id in any session's queue (a migration moves rows between ids), or null. */
+/**
+ * The queued row with this id in any session's queue (a migration moves rows between ids), or on
+ * its way to one (a move's or a host hand's transit, the enqueue's spool), or null: a row that is
+ * not delivered yet is never answered as delivered.
+ */
 export async function findQueuedMessage(messageId: string): Promise<QueuedMessage | null> {
   const s = await getStore();
   for (const queue of Object.values(s.queues)) {
     const row = queue.find((m) => m.id === messageId);
     if (row) return row;
   }
-  return null;
+  const { rowOnTheWay } = await import('./session-queue-transit.js');
+  return rowOnTheWay(messageId);
 }
 
 /**

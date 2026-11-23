@@ -774,6 +774,9 @@ memory/**/*.bak.*
 
 # Runtime ephemeral
 session-message-queue.json
+# The enqueue's spool (core/session-queue-spool.ts): rows this box's queue takes; another box
+# would drain and deliver them a second time.
+session-message-queue.json.spool/
 # Cron RUNTIME state (nextRunAtMs etc.) is machine-local — syncing it echoes a
 # stale due time back from the other box and re-fires jobs (2026-08-04 storm).
 # Job DEFINITIONS (cron-jobs.json) still sync.

@@ -116,7 +116,13 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     throw err
   }
   const { takeLinesForHost, parkMessages } = await import('../core/session-message-queue.js')
-  const taken = await takeLinesForHost(sid)
+  let taken: Awaited<ReturnType<typeof takeLinesForHost>>
+  try { taken = await takeLinesForHost(sid) } catch (err) {
+    // Not taken (the queue file could not be written): the lines are still queued here.
+    if (o.kick) stateOf(sid).kick = { source: o.source, endsWait: o.endsWait }
+    scheduleRedeliver(sid)
+    throw err
+  }
   const goesNow = taken.lines.some((m) => !heldOf(m))
   const kick = o.kick || goesNow
   if (taken.lines.length === 0 && !kick) { settle(sid); return }
@@ -153,6 +159,8 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   }
   const told = w.kick
   settle(sid)
+  // The host has them: their transit ends (session-queue-transit.ts).
+  await taken.done()
   if (taken.lines.length > 0) log.session.info('host-run session: its lines went to its host', { sessionId: sid, host, lines: taken.lines.length, kick })
   // The task is the leader's: its side of the send is done once the host took it (leader-tasks.ts).
   if (kick && told) {

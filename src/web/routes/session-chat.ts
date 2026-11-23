@@ -545,7 +545,9 @@ export function registerSessionChatRpc(): void {
     // text here: the web's bubbles strip it themselves and dedup against it (queuedRowText).
     const { queueRowFacts, liveLineWordsOf } = await import('../../core/sessions/queue-row-view.js')
     const sid = data.sessionId
-    const rows = await withoutWalnutRows(await getQueue(sid))
+    // Rows not in the queue yet (a move, a host hand, the spool) still read as waiting here (session-queue-transit.ts).
+    const { rowsOnTheWay } = await import('../../core/session-queue-transit.js')
+    const rows = [...await withoutWalnutRows(await getQueue(sid)), ...await withoutWalnutRows(await rowsOnTheWay(sid))]
     // Read after the rows: a row taken and answered in between is still listed and
     // reads waiting for this one read (queue-row-view.ts liveLineWordsOf).
     const live = await liveLineWordsOf(sid)
