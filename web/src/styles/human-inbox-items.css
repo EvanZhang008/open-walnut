@@ -48,7 +48,7 @@
 .hii-selector footer { border-top: 1px solid var(--border); padding-top: 8px; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .hii-selector footer > div { flex: 1 0 100%; }
 .hii-candidate { padding: 8px 0; border-bottom: 1px solid var(--border); }
-.hii-candidate-pick { display: block; text-align: left; padding: 8px; width: 100%; color: var(--fg); background: var(--bg-secondary); border: 1px solid transparent; border-radius: var(--radius-full); font: inherit; }
+.hii-candidate-pick { display: block; text-align: left; padding: 8px; width: 100%; color: var(--fg); background: var(--bg-secondary); border: 1px solid transparent; border-radius: var(--radius-sm); /* shape: a multi-line option row, a row not a key */ font: inherit; }
 .hii-candidate-pick[aria-pressed="true"] { border-color: var(--accent); }
 .hii-candidate-pick span, .hii-candidate-pick small { display: block; white-space: normal; overflow-wrap: anywhere; }
 .hii-candidate-pick small { margin-top: 4px; color: var(--fg-secondary); }

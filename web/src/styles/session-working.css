@@ -11,7 +11,7 @@
 .session-background-working:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: the focus ring of a status line follows the line */
 }
 
 /* The working line with the session's background work beside it (SessionWorkingIndicator). */

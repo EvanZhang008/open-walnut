@@ -95,7 +95,7 @@
 .op-card-main:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: the focus ring of a card follows the card */
 }
 
 .op-card-title {

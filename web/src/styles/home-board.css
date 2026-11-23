@@ -45,7 +45,7 @@
 .home-board-child .home-board-meta { margin-top: 4px; }
 .home-board-drag-preview { box-sizing: border-box; width: 100%; margin: 0; box-shadow: 0 8px 24px #0003; }
 .home-board-empty { padding: 20px 8px; color: var(--fg-muted); font-size: var(--font-size-sm); text-align: center; }
-.home-board-more { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--bg); color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); }
+.home-board-more { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); /* shape: a full-width more line, a row not a key */ background: var(--bg); color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); }
 .home-board-sheet button:disabled { opacity: .45; cursor: wait; }
 .home-board-error { display: flex; gap: 12px; align-items: center; width: 100%; min-width: 0; color: var(--error); font-size: var(--font-size-sm); }
 .home-board-error > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

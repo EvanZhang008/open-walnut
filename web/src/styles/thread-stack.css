@@ -271,7 +271,7 @@ html .thread-toast.wn-notice.wn-notice.is-bare { padding: 8px 10px 8px 14px; }
   margin: 10px 0 2px;
   padding: 2px 4px 2px 0;
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a turn's label row */
   background: transparent;
   color: var(--fg-muted);
   font: inherit;

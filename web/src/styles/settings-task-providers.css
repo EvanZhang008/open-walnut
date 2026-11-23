@@ -146,7 +146,7 @@
 
 .tp-link:focus-visible {
   outline: none;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: the focus ring of a text link */
   box-shadow: var(--settings-focus-ring);
 }
 

@@ -120,7 +120,6 @@
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border-radius: var(--label-radius);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -495,7 +494,7 @@
   padding: 0 3px;
   margin: 0 -3px;
   border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: an editable name, text not a key */
   background: none;
   color: inherit;
   font: inherit;

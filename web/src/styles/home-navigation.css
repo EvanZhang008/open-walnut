@@ -8,7 +8,7 @@
 .sidebar-home-panels { margin: -2px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--border); }
 .sidebar-home-panels .sidebar-link { padding: 6px 10px 6px 12px; font-size: var(--font-size-md); margin-bottom: 1px; }
 .sidebar-home-panels .sidebar-link svg { width: 16px; height: 16px; }
-.sidebar.collapsed .sidebar-home-group { border: 1px solid var(--border); border-radius: 10px; padding: 2px; margin: 0 -3px 4px; }
+.sidebar.collapsed .sidebar-home-group { border: 1px solid var(--border); border-radius: var(--radius-full); padding: 2px; margin: 0 -3px 4px; }
 .sidebar.collapsed .sidebar-home-group > .sidebar-link { margin-bottom: 0; }
 .sidebar.collapsed .sidebar-home-panels { margin: 0; padding: 0; border-left: 0; }
 .sidebar.collapsed .sidebar-home-panels .sidebar-link { padding: 7px 0; }
@@ -19,9 +19,16 @@
 .sidebar-group-caption { display: block; padding: 4px 12px 4px; font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted); }
 .sidebar-side-bar-group .sidebar-link { padding: 6px 10px 6px 12px; font-size: var(--font-size-md); margin-bottom: 1px; }
 .sidebar-side-bar-group .sidebar-link svg { width: 16px; height: 16px; margin: 0 1px; }
-.sidebar.collapsed .sidebar-side-bar-group { border: 1px solid var(--border); border-radius: 10px; padding: 2px; margin: 4px -3px; }
+.sidebar.collapsed .sidebar-side-bar-group { border: 1px solid var(--border); border-radius: var(--radius-full); padding: 2px; margin: 4px -3px; }
 .sidebar.collapsed .sidebar-group-caption { display: none; }
 .sidebar.collapsed .sidebar-side-bar-group .sidebar-link { padding: 7px 0; }
+/* The collapsed rail is a column of round keys (standard.md, "Shapes"): every item the same 36 px
+   circle, 2 px apart, so a picked one never touches its neighbour. */
+.sidebar.collapsed .sidebar-link,
+.sidebar.collapsed :is(.sidebar-home-group, .sidebar-home-panels, .sidebar-side-bar-group) .sidebar-link {
+  width: 36px; height: 36px; padding: 0; margin: 0 auto 2px; border-radius: var(--radius-full);
+}
+.sidebar.collapsed :is(.sidebar-home-group, .sidebar-home-panels, .sidebar-side-bar-group) .sidebar-link:last-child { margin-bottom: 0; }
 /* Open apps (experiment apps_stay_open, Sidebar.tsx): a row per app opened and not closed yet. */
 .sidebar-open-apps { margin: 6px 0 4px; padding-top: 6px; border-top: 1px solid var(--border); }
 .sidebar-open-app { position: relative; }
@@ -457,7 +464,7 @@
 /* A long project draws in batches; the next batch hangs off this row (list-batch.ts). Its
    text starts on the title column. */
 .todo-list-show-more {
-  display: flex; align-items: center; width: 100%; min-height: 28px; padding: 0 6px 0 28px; border: 0; border-radius: var(--radius-full);
+  display: flex; align-items: center; width: 100%; min-height: 28px; padding: 0 6px 0 28px; border: 0; border-radius: var(--radius-sm); /* shape: a full-width show-more line, a row not a key */
   background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
 }
 .todo-list-show-more:hover { color: var(--fg); background: var(--bg-hover); }

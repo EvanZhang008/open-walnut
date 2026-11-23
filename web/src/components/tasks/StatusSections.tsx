@@ -278,14 +278,14 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   // A row a usage limit holds says its reset on its own line, so its time slot stays empty (its
   // clock is Walnut's continue, a minute after the reset).
   const wake = snoozedUntil ? (
-    <span className="badge todo-item-due-pill todo-item-start-pill" title={`Snoozed ${untilWords(snoozedUntil)}`}><span>{untilWords(snoozedUntil)}</span></span>
+    <span className="badge badge-long todo-item-due-pill todo-item-start-pill" title={`Snoozed ${untilWords(snoozedUntil)}`}><span>{untilWords(snoozedUntil)}</span></span>
   ) : task.user_status?.limit && !isDone ? (
     // With the status sentences hidden (Display), the limit still shows: the pill a By project row
     // wears; with them shown, the sentence says it.
     showStatusLines ? null : <TaskLimitPill task={task} />
   ) : task.phase === 'WAITING' && task.wait_until && !isDone ? (
     <span
-      className="badge todo-item-due-pill todo-item-wait-pill"
+      className="badge badge-long todo-item-due-pill todo-item-wait-pill"
       data-testid="task-row-wait-until"
       title={`${!twoLine && reasonText ? `${reasonText}. ` : ''}Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}
     >

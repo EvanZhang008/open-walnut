@@ -4,8 +4,9 @@
  */
 export type BadgeTone = 'neutral' | 'accent' | 'warning' | 'error' | 'alert';
 
-export function badge(tone: BadgeTone = 'neutral', opts: { count?: boolean; paused?: boolean } = {}): string {
-  return ['badge', tone !== 'neutral' && `badge-${tone}`, opts.count && 'badge-count', opts.paused && 'badge-paused']
+/** `long`: a label that names a time or a sentence (Wait until ..., Due Mon 6:53) keeps a soft corner; every other label is round. */
+export function badge(tone: BadgeTone = 'neutral', opts: { count?: boolean; paused?: boolean; long?: boolean } = {}): string {
+  return ['badge', tone !== 'neutral' && `badge-${tone}`, opts.count && 'badge-count', opts.paused && 'badge-paused', opts.long && 'badge-long']
     .filter(Boolean)
     .join(' ');
 }

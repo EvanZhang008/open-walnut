@@ -284,7 +284,7 @@
 .thread-strip--failed .thread-strip-label { color: var(--error); text-transform: none; letter-spacing: 0; font-size: var(--font-size-md); }
 .thread-strip--failed .thread-strip-waiting { flex: 1; min-width: 0; }
 .thread-strip-text {
-  flex: 1; min-width: 0; padding: 2px 4px; border: 0; border-radius: var(--radius-full); background: transparent;
+  flex: 1; min-width: 0; padding: 2px 4px; border: 0; border-radius: var(--radius-xs); /* shape: a thread strip's text, a row not a key */ background: transparent;
   color: var(--fg); font: inherit; text-align: left; cursor: text;
 }
 .thread-strip-text:hover { background: var(--bg-hover); }

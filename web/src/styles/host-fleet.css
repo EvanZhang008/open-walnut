@@ -286,7 +286,7 @@
   cursor: pointer;
 }
 
-.hf-dash .hf-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-full); }
+.hf-dash .hf-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); /* shape: the focus ring of a text link */ }
 
 /* The hosts not connected: one line each. */
 .hf-dash .hf-off-list { padding: 4px 14px; }

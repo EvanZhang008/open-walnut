@@ -130,7 +130,7 @@ html body .wn-context-menu.rh-add-menu {
   min-height: 28px;
   padding: 5px 10px;
   border: 1px solid var(--settings-group-border);
-  border-radius: var(--radius-full);
+  border-radius: var(--label-radius);
   background: var(--bg);
   font-size: var(--font-size-sm);
   line-height: 16px;

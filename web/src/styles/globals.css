@@ -65,10 +65,10 @@
      segment, tab and label is round: a capsule, or a circle when it is square. What you type in or
      read (a box, a card, a menu, a row) keeps a soft corner from the scale above. */
   --radius-full: 999px;
-  /* A label with words (Trigger, Leader · 1, Wait until ...): a soft 4 px corner (2026-11-22, the
-     user: "the tag the squae like this is fine, as it is kind of long, but for the smaller change
-     round please"). A number alone is round (badge.css). */
-  --label-radius: var(--radius-xs);
+  /* A label is round too; only a long one that names a time ("Wait until Tomorrow 10:...", a due
+     date: .badge-long) keeps a soft 4 px corner (2026-11-22, the user: "the tag the squae like this
+     is fine, as it is kind of long, but for the smaller change round please"). */
+  --label-radius: var(--radius-full);
   /* The cards of one list (the ask card, the thread and review cards, approvals, side questions)
      share one corner and one padding (standard.md, "Cards"). */
   --ask-card-radius: var(--radius-lg);
@@ -414,7 +414,7 @@ textarea::placeholder { max-width: 100%; }
   transition: color 0.15s, background 0.15s;
   font-size: 14px;
   font-weight: 500;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a row of the open sidebar; the collapsed rail draws circles (home-navigation.css) */
   margin-bottom: 2px;
 }
 
@@ -3233,7 +3233,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   box-sizing: border-box;
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a full-width note toggle, a row not a key */
   background: var(--card-bg);
   color: var(--fg);
   font: inherit;
@@ -4550,7 +4550,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a folder row of the memory tree */
   margin: 1px 4px;
   max-width: calc(100% - 8px);
 }
@@ -9283,7 +9283,7 @@ body.walnut-dragging {
 }
 .vd-cat {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 5px 10px; font-size: var(--font-size-sm); border-radius: var(--radius-full);
+  padding: 5px 10px; font-size: var(--font-size-sm); border-radius: var(--radius-sm); /* shape: a category row of the display menu */
   background: var(--bg-secondary); border: 1px solid transparent;
   color: var(--fg-secondary); cursor: pointer;
   transition: all 0.1s; text-align: left;
@@ -10181,7 +10181,7 @@ body.walnut-dragging {
   padding: 3px 8px;
   margin-top: 2px;
   border: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: the focus ring of a full-width add line follows the line */
   background: transparent;
   color: var(--fg-muted);
   font-size: var(--font-size-sm);
@@ -12219,7 +12219,7 @@ body.walnut-dragging {
   min-width: 0;
   text-align: left;
   padding: 2px 4px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: a group heading's name, text not a key */
   transition: color 0.15s, background 0.15s;
 }
 
@@ -13514,7 +13514,7 @@ a.task-kebab-info:hover {
   font-weight: 500;
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a menu row */
   background: none;
   color: var(--fg);
   cursor: pointer;
@@ -23739,7 +23739,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border: none;
   cursor: pointer;
   padding: 0.35em 4px 0 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: a line number in a diff, text not a key */
   transition: background 0.1s, color 0.1s, opacity 0.1s;
 }
 .session-diff-rendered-lineno:hover {
@@ -25134,7 +25134,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 /* Custom labels rename inline — the label itself is the affordance. */
 button.focus-tiers-label-editable {
   background: transparent; border: none; color: var(--fg); cursor: text;
-  padding: 2px 4px; margin: -2px -4px; border-radius: var(--radius-full);
+  padding: 2px 4px; margin: -2px -4px; border-radius: var(--radius-xs); /* shape: an editable label, text not a key */
   font: inherit; font-size: 14px; font-weight: 400;
 }
 button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
@@ -27101,7 +27101,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   pointer-events: none;
   max-width: 220px;
   padding: 3px 8px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: the drag preview of a calendar event block, matches the block */
   background: color-mix(in srgb, var(--cal-chip-tint) 28%, var(--card-bg));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
   font-size: var(--font-size-sm);
@@ -27440,7 +27440,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   padding: 6px 8px;
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a row of the notification rail */
   font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
@@ -29540,7 +29540,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   flex-direction: column;
   gap: 2px;
   padding: 7px 0 5px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: an icon over a word in the collapsed rail, not a capsule */
   font-size: var(--font-size-xs);
   line-height: 1.1;
 }

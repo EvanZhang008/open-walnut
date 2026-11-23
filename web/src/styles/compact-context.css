@@ -9,7 +9,7 @@
   font-size: var(--font-size-sm);
 }
 .idle-compact-toggle .session-system-text { flex: 1 1 auto; min-width: 0; font-weight: 500; }
-.idle-compact-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-full); }
+.idle-compact-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-xs); /* shape: the focus ring of a full-width toggle row follows the row */ }
 .idle-compact-body {
   margin: 2px 0 6px;
   padding: 6px 0 6px 2px;

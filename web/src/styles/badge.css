@@ -78,8 +78,10 @@
 
 /* On an icon (a rail item's count), the one exception to the size: 16px tall, so the
    20px glyph under it still reads, with a ring of the surface around it. Its member places it. */
-/* A number alone (a count, the alert count, a rail icon's count) is round at any label corner. */
+/* A number alone (a count, the alert count, a rail icon's count) is round whatever --label-radius says;
+   a long label that names a time (Wait until ..., a due date) keeps a soft corner. */
 .badge:is(.badge-count, .badge-alert, .badge-corner) { border-radius: var(--radius-full); }
+.badge.badge-long { border-radius: var(--radius-xs); /* shape: a long label that names a time keeps a soft corner */ }
 .badge.badge-corner { --badge-h: 16px; padding: 0 4px; box-shadow: 0 0 0 2px var(--bg); }
 
 /* A state beside badges (a task's phase in a chat header): its icon and its word, never a box. */

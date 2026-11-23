@@ -102,11 +102,13 @@ glass". `tests/web/scroll-jump-button-guard.test.ts` fails on a jump button draw
 
 One shape family (2026-11-22, the user, of the 8 px corners every key had taken on: "我之前这样圆圆的多可爱！你现在把我变成什么都是方块块 ... 我想变成圆形"; and on 11-21: "所有东西都应该统一啊"):
 
-- **Everything you press is round, and so is a number alone**: a key (`.btn`, every variant), a
-  chip, a segmented control and its thumb, a tab that draws a box, a rail icon, a count. A label
-  with words (Trigger, Leader · 1, Wait until ...) keeps a soft 4 px corner, `--label-radius`
-  (the user, 11-22: "the tag the squae like this is fine, as it is kind of long, but for the
-  smaller change round please"). Round is
+- **Everything you press is round, and so is every short label**: a key (`.btn`, every variant),
+  a chip, a segmented control and its thumb, a tab that draws a box, a rail icon (the collapsed
+  rail is a column of 36 px circles), a badge, a count. Only a long label that names a time or a
+  sentence (Wait until Tomorrow 10:..., a due or start date: `badge({ long: true })`, class
+  `badge-long`) keeps a soft 4 px corner (the user, 11-22, of a header with "Wait until Tomorrow
+  10:...", "Web 2", "Trigger", "Leader · 1": "the tag the squae like this is fine, as it is kind of
+  long, but for the smaller change round please"). Round is
   `--radius-full`: a capsule, which is a circle when the thing is square (an icon key, a one-digit
   count). The input box's mic, attach and send keys were already circles.
 - **What you type in or read stays a soft rectangle**: the message box (20 px), a one-line box and
@@ -120,9 +122,10 @@ One shape family (2026-11-22, the user, of the 8 px corners every key had taken 
   `-toggle`, `-tab`, `-badge`, `-tag`, `-count`) and whose corner is short of round. Rows, cards,
   rails, bars and menus are told by their names (`-row`, `-card`, `-item`, ...); a row whose class
   is named like a key (`.org-channel`, `.todo-row-pill`) says so on its corner:
-  `border-radius: var(--radius-sm); /* shape: <why> */`. A label with words takes `--label-radius`
-  (4 px); a number alone (`badge-count`, `badge-alert`, `badge-corner`) is round. Its count is 0
-  in every file; a new one fails.
+  `border-radius: var(--radius-sm); /* shape: <why> */`, and so does a row's or card's focus ring.
+  A label's own class may take `--label-radius` (the badge's corner); a key may not. `roundRow`
+  fails on a row drawn round (`--radius-full` with its text at the left across the line or in a
+  column). Both counts are 0 in every file; a new one fails.
 
 ## Inputs
 
@@ -369,7 +372,7 @@ drawn by its own class (565 class names, 155 looks).
   (`web/src/styles/badge.css`, class list from `badge()` in `web/src/components/common/badge.ts`).
   Settings' `SettingsTag` follows it: a state tone (success, warning, error: Ready, Needs setup,
   Failed) draws the dot and word, neutral and accent (Built-in, Recommended) the badge.
-- One look: 18 px tall, a soft 4 px corner (`--label-radius`; a number alone, `badge-count`, is round: standard "Shapes"), padding 0 6 px, 11 px
+- One look: 18 px tall, round (`--label-radius`, a capsule; a circle at one digit; `badge-long`, a time or a sentence, 4 px: standard "Shapes"), padding 0 6 px, 11 px
   weight 500, normal case. A member class keeps only its place (flex, margin, max-width), never a
   fill, words colour, edge, corner, padding or type size.
 - Four tones from tokens: neutral (default, a grey tint, `--fg-secondary`), `badge-accent` (on, yours,
@@ -482,7 +485,7 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
 | Accent | `--accent`, `--accent-hover`, `--accent-subtle`, `--accent-text` |
 | Lines | `--border`, `--border-strong` |
 | State | `--success`, `--warning`, `--error`; their 10% fills `--success-subtle`, `--warning-subtle`, `--error-subtle` |
-| Corners | `--radius-full` (every key, chip, segment, tab and label: standard "Shapes"), `--radius-xs` 4 px (kbd, checkboxes), `--radius-sm` 8 px (rows, small boxes), `--radius-md` 12 px (inputs, menus), `--radius-lg` 16 px (cards) |
+| Corners | `--radius-full` (every key, chip, segment, tab and count: standard "Shapes"), `--label-radius` (a badge: round; `badge-long` 4 px), `--radius-xs` 4 px (kbd, checkboxes, a long label), `--radius-sm` 8 px (rows, small boxes), `--radius-md` 12 px (inputs, menus), `--radius-lg` 16 px (cards) |
 | Type | `--font-size-xs` 11 px (labels, badges), `--font-size-sm` 12 px (secondary text), `--font-size-md` 13 px (body, controls), `--font-size-lg` 15 px (card titles), `--font-size-xl` 17 px (section and dialog headings), `--font-size-2xl` 20 px (page titles); families `--font-sans`, `--font-mono` |
 | Depth | on a surface: `--shadow-sm` (a raised chip), `--shadow-md` (a hovered card), `--card-shadow`, `--card-shadow-hover`; floating: the overlay family's `--overlay-shadow`, `--dialog-shadow`; glass: `--glass-frost-*`, `--glass-legible-*` |
 | Layers | the overlay family's `--z-*` (`styles/overlay-family.css`) and its scrim `--overlay-scrim` |

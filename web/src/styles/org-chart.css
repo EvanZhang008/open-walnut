@@ -93,7 +93,7 @@
   background: var(--bg-secondary);
   color: var(--fg);
 }
-.oc-card-btn { flex: 1; align-items: center; gap: 8px; padding: 2px 4px; border-radius: var(--radius-full); }
+.oc-card-btn { flex: 1; align-items: center; gap: 8px; padding: 2px 4px; border-radius: var(--radius-sm); /* shape: the main area of an org chart card, a card not a key */ }
 .oc-card-btn:hover { background: var(--bg-secondary); }
 .oc-card-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .oc-card-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 650; font-size: var(--font-size-md); }
@@ -193,7 +193,7 @@
   min-width: 0;
   padding: 3px 4px;
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a project row of the org chart */
   background: none;
   color: inherit;
   font: inherit;
@@ -216,7 +216,7 @@
   min-width: 0;
   padding: 3px 4px;
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a task row of the org chart */
   background: none;
   color: inherit;
   font: inherit;
@@ -291,7 +291,7 @@
   html body .org-sheet { border-radius: 0; }
   .oc-vps { grid-template-columns: minmax(0, 1fr); }
 }
-.oc-card-btn:focus-visible, .oc-project-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-full); }
+.oc-card-btn:focus-visible, .oc-project-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-sm); /* shape: the focus ring of an org chart card or row follows it */ }
 
 /* Make a VP or a project, or set a VP's name and instructions (OrgNodeEditor.tsx). */
 .oc-form { width: min(480px, 100%); display: flex; flex-direction: column; gap: 10px; }

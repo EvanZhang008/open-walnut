@@ -333,7 +333,7 @@
   margin-top: 8px;
   padding: 6px 12px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a full-width add line, a row not a key */
   background: transparent;
   color: var(--accent);
   font-family: inherit;

@@ -18,7 +18,7 @@ export const WEB_SRC = path.join(__dirname, '../../web/src');
 /** The one home of the console's label (standard.md, "Status labels"). */
 export const LABEL_HOME = 'styles/badge.css';
 /** The label and its tones and forms: a compound made only of these is the label itself. */
-export const BADGE_FAMILY = new Set(['badge', 'badge-accent', 'badge-warning', 'badge-error', 'badge-alert', 'badge-paused', 'badge-count', 'badge-corner', 'badge-clickable']);
+export const BADGE_FAMILY = new Set(['badge', 'badge-accent', 'badge-warning', 'badge-error', 'badge-alert', 'badge-paused', 'badge-count', 'badge-corner', 'badge-clickable', 'badge-long']);
 
 /**
  * The button family (web/src/styles/buttons.css): a compound made only of these classes is the
@@ -195,7 +195,7 @@ const NO_PAINT = /^(none|transparent|inherit|initial|unset|0|currentColor)$/i;
 const KEY_NAME = /-(btn|button|pill|chip|toggle|tab|badge|tag|count)$/;
 const NOT_A_KEY = /(-(row|rows|card|block|rail|bar|head|header|item|cell|aside|drop|panel|menu|list|option|opt|seg|segs|entry|tile|line|section|preview|thumb|frame|daynum|title|result|link|caption|value|marker|text|checkbox|dir|file|attach)|^wn-(field|notice|overlay|dialog|input))$/;
 /** A corner that is round, flat or the parent's: everything else on a key is a square key. */
-const ROUND_CORNER = /^(var\(--radius-full\)|var\(--label-radius\)|50%|inherit|0|0px|none|initial|unset)$/; // a literal 999px is the token's job (pillRadius)
+const ROUND_CORNER = /^(var\(--radius-full\)|50%|inherit|0|0px|none|initial|unset)$/; // a literal 999px is the token's job (pillRadius)
 /** `border-radius: 8px; /* shape: <why, 10+ characters> *\/`: a class named like a key that is not one (a row's highlight). */
 export const SHAPE_MARK = /\/\*\s*shape:\s*[^*]{10,}\*\//;
 export function pressableClasses(): Set<string> {
@@ -219,14 +219,28 @@ export function pressableClasses(): Set<string> {
 /** `.my-key { border-radius: 6px }`: a key, chip, tab or label drawn with a corner short of round. */
 export function isSquareKey(selector: string, radius: string, pressables: Set<string>): boolean {
   const v = radius.replace(/\s*!important$/, '').trim();
-  if (v.split(/\s+/).every((x) => ROUND_CORNER.test(x))) return false;
+  const label = /^var\(--label-radius\)$/.test(v);
+  if (!label && v.split(/\s+/).every((x) => ROUND_CORNER.test(x))) return false;
   if (/(input-key|input-radius|choice-radius-box)/.test(v)) return false; // the input box's own keys and the tab's focus ring
   if (/\[aria-orientation=['"]?vertical/.test(selector)) return false; // a vertical tab list is a list of rows
   if (selector.includes('::')) return false; // a mark drawn inside the key (a tick, a ring), not the key
   const parts = compounds(selector);
   const cls = classesOf(parts[parts.length - 1] ?? '');
   if (cls.some((c) => NOT_A_KEY.test(c))) return false;
-  return cls.some((c) => c === 'btn' || c === 'badge' || pressables.has(c) || KEY_NAME.test(c));
+  const isKey = cls.some((c) => c === 'btn' || c === 'badge' || pressables.has(c) || KEY_NAME.test(c));
+  // The label corner is a label's: a key that writes it is a square key in a label's name.
+  if (label) return isKey && !cls.some((c) => c === 'badge' || /-(badge|tag|pill|chip)$/.test(c));
+  return isKey;
+}
+
+/**
+ * A row drawn round (2026-11-22 review: menu rows, tree rows and option rows that became
+ * stadiums): one rule gives `--radius-full` to something laid out as a row, its text at the left
+ * across the whole line or in a column. A key centres its label; a row keeps its container's corner.
+ */
+export function isRoundRow(decls: { prop: string; value: string }[]): boolean {
+  const has = (p: string, re: RegExp) => decls.some((d) => d.prop === p && re.test(d.value.replace(/\s*!important$/, '').trim()));
+  return has('border-radius', /var\(--radius-full\)/) && has('text-align', /^(left|start)$/) && (has('width', /^100%$/) || has('display', /^block$/) || has('flex-direction', /column/));
 }
 
 /**
@@ -349,6 +363,7 @@ export type Counts = {
   ownLabel: Record<string, number>;
   cardBg: Record<string, number>;
   squareKey: Record<string, number>;
+  roundRow: Record<string, number>;
 } & Record<TokenKind, Record<string, number>>;
 
 /** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
@@ -402,7 +417,7 @@ export function isBareButton(tag: string): boolean {
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {}, ownLabel: {}, cardBg: {}, squareKey: {} } as Counts;
+  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {}, ownLabel: {}, cardBg: {}, squareKey: {}, roundRow: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   const parts = inputParts();
@@ -428,6 +443,7 @@ export function countAll(): Counts {
       if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value) && !META_MARK.test(lines[d.line - 1] ?? '')) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
       if (sels.some(isCard) && offCardFill(decls)) bump(out.cardBg, rel);
+      if (isRoundRow(decls)) bump(out.roundRow, rel);
       if (rel !== LABEL_HOME && ((decls.some((d) => paintsLabel(d.prop, d.value)) && sels.some(isOwnLabel)) || (sels.some(isBoxedLabelName) && drawsBox(decls)))) bump(out.ownLabel, rel);
     }
   }

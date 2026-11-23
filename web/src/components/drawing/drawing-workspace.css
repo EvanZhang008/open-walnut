@@ -108,7 +108,7 @@
   min-width: 0;
   padding: 6px 8px;
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a two-line file entry of a list, a row not a key */
   background: transparent;
   color: var(--fg);
   text-align: left;

@@ -93,7 +93,7 @@ button.task-status-badge:hover { background: var(--bg-hover); }
   gap: 6px;
   padding: 3px 4px;
   border: none;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a toggle row of the status card */
   background: transparent;
   color: var(--fg);
   font: inherit;

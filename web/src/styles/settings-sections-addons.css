@@ -65,7 +65,7 @@
 .settings-addons-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: the focus ring of a text link */
 }
 
 /* Pairing QR: rows of the caller's group, the code centered, at most 200px. */

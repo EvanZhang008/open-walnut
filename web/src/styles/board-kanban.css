@@ -149,7 +149,7 @@
 @media (prefers-reduced-motion: reduce) { .board-kanban .kanban-key-ghost.is-tilted { transform: none; } }
 .board-kanban .kanban-card.is-key-lifted { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .board-kanban .kanban-add-task {
-  display: inline-flex; align-items: center; gap: 6px; align-self: stretch; padding: 5px 6px; border: 0; border-radius: var(--radius-full);
+  display: inline-flex; align-items: center; gap: 6px; align-self: stretch; padding: 5px 6px; border: 0; border-radius: var(--radius-sm); /* shape: the lane's add-a-task line, a row not a key */
   background: none; color: var(--kb-muted); font: inherit; font-size: var(--font-size-sm); cursor: pointer; text-align: left;
 }
 .board-kanban .kanban-add-task:hover { background: var(--bg-hover); color: var(--fg); }

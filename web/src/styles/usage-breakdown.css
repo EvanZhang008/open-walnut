@@ -133,7 +133,7 @@
 .usage-ec-open { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--fg); font: inherit; text-align: left;
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-ec-open:hover { text-decoration: underline; }
-.usage-ec-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-full); }
+.usage-ec-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); /* shape: the focus ring of a block link follows the block */ }
 .usage-ec-sub { display: block; margin-top: 2px; font-size: var(--font-size-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
 .usage-ec-partial { margin-left: 3px; font-size: var(--font-size-xs); color: var(--fg-muted); font-weight: 500; }
 .usage-ec-which { display: inline-flex; }

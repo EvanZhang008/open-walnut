@@ -41,7 +41,7 @@
   min-height: 28px;
   padding: 0 8px;
   border: none;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a menu row */
   background: transparent;
   color: var(--fg);
   font-size: var(--font-size-md);
@@ -253,7 +253,7 @@
   height: 28px;
   padding: 0 8px;
   border: none;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a menu row */
   background: transparent;
   color: var(--fg-secondary);
   font-size: var(--font-size-md);

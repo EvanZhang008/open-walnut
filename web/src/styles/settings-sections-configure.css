@@ -154,7 +154,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: a hook row's disclosure, a row not a key */
 }
 
 .hook-row-disclose:focus-visible {

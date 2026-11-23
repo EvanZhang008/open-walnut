@@ -96,7 +96,7 @@
 }
 button.file-card-open { cursor: pointer; }
 .file-card.is-openable:hover { background: var(--bg-hover); }
-button.file-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-full); }
+button.file-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); /* shape: the focus ring of a file card follows the card */ }
 .file-card-meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 /* The file's name wraps in full (.wn-title); its size and kind under it are metadata. */
 .file-card-name {

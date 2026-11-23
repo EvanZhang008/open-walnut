@@ -311,7 +311,7 @@
   color: var(--fg);
   background: none;
   border: none;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs); /* shape: a search result row */
   cursor: pointer;
 }
 .tdp-dep-result:hover { background: var(--bg-secondary); }

@@ -247,7 +247,7 @@
   min-width: 0;
   padding: 3px 6px;
   border: none;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm); /* shape: a tree heading, a row not a key */
   background: none;
   font: inherit;
   font-size: var(--font-size-sm);

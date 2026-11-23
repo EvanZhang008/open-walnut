@@ -42,7 +42,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, isSquareKey, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
+import { countAll, isSquareKey, isRoundRow, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -107,7 +107,18 @@ describe('UI standard: one look per kind of control', () => {
     expect(files, `Draw a key round (border-radius: var(--radius-full)); a row named like a key says so: /* shape: <why> */\n${files.join('\n')}`).toEqual([]);
   });
 
+  it('roundRow: no row, menu row or option row is drawn as a capsule', () => {
+    const files = Object.entries(now.roundRow).map(([f, n]) => `web/src/${f}: ${n}`);
+    expect(files, `A row keeps its container's corner (var(--radius-sm) for a list or menu row): standard.md "Shapes"\n${files.join('\n')}`).toEqual([]);
+    const d = (prop: string, value: string) => ({ prop, value });
+    expect(isRoundRow([d('border-radius', 'var(--radius-full)'), d('width', '100%'), d('text-align', 'left')])).toBe(true);
+    expect(isRoundRow([d('border-radius', 'var(--radius-full)'), d('width', '100%'), d('justify-content', 'center')])).toBe(false);
+    expect(isRoundRow([d('border-radius', 'var(--radius-sm)'), d('width', '100%'), d('text-align', 'left')])).toBe(false);
+  });
+
   it('tells a square key from a row, a label and the input box', () => {
+    expect(isSquareKey('.my-thing-btn', 'var(--label-radius)', new Set())).toBe(true);
+    expect(isSquareKey('.my-chip', 'var(--label-radius)', new Set())).toBe(false);
     const keys = new Set(['org-ask-tool']);
     expect(isSquareKey('.my-thing-btn', '6px', keys)).toBe(true);
     expect(isSquareKey('.org-ask-tool:hover', 'var(--radius-sm)', keys)).toBe(true);

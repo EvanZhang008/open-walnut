@@ -1320,12 +1320,12 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <AwaySyncMark item={task} />
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
-            <span className="badge todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
+            <span className="badge badge-long todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
               <span>▶︎ {startDateLabel}</span>
             </span>
           )}
           {dueDateLabel && (
-            <span className={`${badge(dueDateOverdue ? 'error' : 'neutral')} todo-item-due-pill`} title={task.due_date ? `Due: ${task.due_date}` : undefined}>
+            <span className={`${badge(dueDateOverdue ? 'error' : 'neutral', { long: true })} todo-item-due-pill`} title={task.due_date ? `Due: ${task.due_date}` : undefined}>
               <span>{dueDateLabel}</span>
             </span>
           )}
@@ -1335,7 +1335,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <TaskFallbackTag task={task} />
           {task.phase === 'WAITING' && task.wait_until && !task.user_status?.limit && (
             <span
-              className="badge todo-item-due-pill todo-item-wait-pill"
+              className="badge badge-long todo-item-due-pill todo-item-wait-pill"
               data-testid="task-row-wait-until"
               title={`Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}
             >

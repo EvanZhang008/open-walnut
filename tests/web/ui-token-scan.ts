@@ -8,7 +8,7 @@
  *   - rawColour: a literal colour in a colour property (or a custom property outside the theme's
  *     :root blocks), outside a var() fallback. Shadows are shadowLiteral's.
  *   - radiusNotToken: a corner written as a length (8px), not var(--radius-*); 0 and % are fine.
- *   - pillRadius: a corner of 99px or more (a pill). The standard draws controls at 8 px.
+ *   - pillRadius: a corner of 99px or more written as a length: a round key takes var(--radius-full).
  *   - fontSizeOffScale: a font size not from var(--font-size-*) (also in the `font` shorthand).
  *   - shadowLiteral: a blurred box-shadow written literally (rings and inset hairlines are fine).
  *   - zIndexLiteral: a z-index number other than -1, 0 or 1 (a layer belongs to --z-*).
