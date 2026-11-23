@@ -33,6 +33,10 @@ const ALLOWED: Record<string, { components: string[]; why: string }> = {
     components: ['TaskActionMenuItems'],
     why: 'a draft column\'s menu sets the launch meta of a task that does not exist yet',
   },
+  'components/sessions/SessionMenuOpen.tsx': {
+    components: ['WatchMenuItem'],
+    why: 'the Org node\'s header keys (Watch, Locate, Minimize, Tags) are its session menu\'s first rows (2026-11-23, the user\'s pick of the header\'s layouts); the task rows below leave Watch out, so it is drawn once',
+  },
 };
 
 function walk(dir: string, out: string[] = []): string[] {
