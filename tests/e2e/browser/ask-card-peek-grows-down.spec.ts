@@ -18,7 +18,6 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { asksOf, presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
-import { expectRestored, expectWidensInPlace } from './truncation-peek-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -43,6 +42,14 @@ const askOf = (row: Locator) => asksOf(row).locator('[data-testid="action-item"]
 async function openNeeds(page: Page): Promise<{ row: Locator; card: Locator }> {
   await isolateUiPrefs(page)
   await presetPanelDesign(page, 'status')
+  // A side-list width, as beside a session: alone on Home's row the panel grows to a readable list
+  // (MainPage's todoAlone) and nothing in the card is cut, so nothing opens. A dragged width holds
+  // in both layouts.
+  await page.addInitScript(() => {
+    for (const k of ['open-walnut-todo-width', 'open-walnut-todo-width-alone']) {
+      localStorage.setItem(k, '30'); localStorage.setItem(`${k}:dragged`, '1')
+    }
+  })
   await loadHome(page)
   await setStatusSectionOpen(page, 'needs', true)
   const row = await showSectionCard(page, 'needs', made[0])
@@ -151,8 +158,9 @@ test('hovering the ask card\'s text opens it downward in its column, at most 1.5
   expectInColumn(open, before.box, 'hover')
   expect(open.expanded).toBe(true)
   expect(open.detailClamp, 'open, the detail is not clamped').toMatch(/none|unset/)
-  expect(open.questionClamp, 'open, the question is not clamped').toMatch(/none|unset/)
-  expect(open.overflowY).toEqual(['auto', 'auto'])
+  // Only a cut text opens (since 4824a55c5 the question keeps three lines of its own, which this
+  // one fits in): the detail scrolls in itself past its share, the question reads whole as it is.
+  expect(open.overflowY[1]).toBe('auto')
   // At this width both texts open whole within the 1.5x room.
   for (const k of ['question', 'detail'] as const) expect(open.scroll[k].height, `${k} opens whole`).toBeLessThanOrEqual(open.scroll[k].client + 1)
   // Every word the card holds is in sight (the row's item keeps its detail to 240 characters).
@@ -221,16 +229,19 @@ test('in a narrow column the opened card stays at 1.5 times its height; the rest
   expect(Math.abs((await cardState(card)).box.height - before.box.height), 'back to its closed height').toBeLessThanOrEqual(1)
 })
 
-test('the task\'s one-line title row above the card still widens over the panes beside it', async ({ page }) => {
+// A task's title is never cut any more (d670f86000): it wraps whole, so hovering it has nothing to show.
+test('the task\'s title above the card wraps whole, and hovering it widens nothing', async ({ page }) => {
   const { row } = await openNeeds(page)
   await page.mouse.move(1, 1)
   const title = row.locator('.todo-pinned-title, .status-card-title, [data-testid="task-title"]').first()
-  expect(await title.evaluate((el) => el.scrollWidth > el.clientWidth + 1), 'the title is cut').toBe(true)
+  await expect(title).toContainText(TITLE)
+  expect(await title.evaluate((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1), 'the title is whole').toBe(false)
   const before = (await row.boundingBox())!
   await title.hover({ position: { x: 20, y: 5 } })
-  await expectWidensInPlace(row, before, { label: 'title row' })
-  await page.mouse.move(1, 1)
-  await expectRestored(row, before, 'title row')
+  await page.waitForTimeout(600)
+  const after = (await row.boundingBox())!
+  for (const k of ['x', 'width'] as const) expect(Math.abs(after[k] - before[k]), `title row ${k} kept`).toBeLessThanOrEqual(1)
+  expect(await page.locator('[data-peek-placeholder]').count()).toBe(0)
 })
 
 test('on a touch screen a tap on the card\'s text opens it, a tap again closes it', async ({ browser }: { browser: Browser }) => {
