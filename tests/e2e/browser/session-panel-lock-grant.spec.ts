@@ -45,6 +45,8 @@ const viewTrigger = (page: Page) => page.locator('.todo-panel .todo-panel-toolba
 const viewMenu = (page: Page) => page.locator('.fb-menu')
 const panelsGroup = (page: Page) => viewMenu(page).locator('.dm-row[data-view-option="session-panels"]')
 const panelsSeg = (page: Page) => panelsGroup(page).locator('.dm-seg[aria-label="Session columns"]')
+// The picked segment: the row is the shared SegmentedControl (radio segments, aria-checked) since 18510bbab3.
+const pickedPanels = (page: Page) => panelsSeg(page).locator('.dm-seg-btn[role="radio"][aria-checked="true"]')
 
 /** Open a session as a home column through the finder (⌘⇧O → type → click). */
 async function openViaFinder(page: Page, query: string, sid: string): Promise<void> {
@@ -73,25 +75,23 @@ async function savedCount(page: Page): Promise<string | undefined> {
 
 /**
  * The menu sits under its own trigger (the sliders button), not at a spot measured while the
- * task panel was still sliding open. The filter row opens with the menu, right under the
- * toolbar, and the menu hangs under that row: the row's top within a few px below the trigger,
- * the menu's top within a few px below the row, and the menu overlapping the trigger
+ * task panel was still sliding open. Opening the menu adds no filter row (aa054f717b: the menu
+ * hangs from the Display button, never from a row that comes with it): no row is drawn, the
+ * menu's top is within a few px below the trigger, and the menu overlaps the trigger
  * horizontally (the panel-left placement runs from the task panel's edge across the trigger).
  */
 async function expectMenuUnderTrigger(page: Page): Promise<void> {
   // The menu slides in from 4px up over 120ms (`tp-pop-in`): measure the resting box.
   await expect.poll(() => viewMenu(page).evaluate((el) => el.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0)
+  // No chip, no view name (All) and no search: the filter row has nothing to say, and opening Display adds none.
+  await expect(page.locator('.todo-panel .fb-row')).toHaveCount(0)
   const trigger = await viewTrigger(page).boundingBox()
-  const row = await page.locator('.todo-panel .fb-row').boundingBox()
   const menu = await viewMenu(page).boundingBox()
   expect(trigger).not.toBeNull()
-  expect(row).not.toBeNull()
   expect(menu).not.toBeNull()
   expect(trigger!.width).toBeGreaterThan(0)
-  expect(row!.y).toBeGreaterThanOrEqual(trigger!.y + trigger!.height)
-  expect(row!.y).toBeLessThan(trigger!.y + trigger!.height + 16)
-  expect(menu!.y).toBeGreaterThanOrEqual(row!.y + row!.height)
-  expect(menu!.y).toBeLessThan(row!.y + row!.height + 12)
+  expect(menu!.y).toBeGreaterThanOrEqual(trigger!.y + trigger!.height)
+  expect(menu!.y).toBeLessThan(trigger!.y + trigger!.height + 12)
   expect(menu!.x).toBeLessThanOrEqual(trigger!.x)
   expect(menu!.x + menu!.width).toBeGreaterThan(trigger!.x)
 }
@@ -145,7 +145,7 @@ test('three pinned panels: the next session opens a 4th column and the count bec
   // Every picker agrees with the screen: the Display menu shows 4 selected.
   await viewTrigger(page).click()
   await expect(viewMenu(page)).toBeVisible()
-  await expect(panelsSeg(page).locator('[aria-pressed="true"]')).toHaveText(['4'])
+  await expect(pickedPanels(page)).toHaveText(['4'])
   await page.keyboard.press('Escape')
   await expect(viewMenu(page)).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01-fourth-column.png`, fullPage: false })
@@ -201,13 +201,13 @@ test('"See your setting" on the hint opens the Display menu beside New task on t
   await expect(panelsGroup(page)).toBeInViewport()
   // The row pulses so the eye lands on it (3s), and it already reads 4.
   await expect(panelsGroup(page)).toHaveClass(/dm-row-flash/)
-  await expect(panelsSeg(page).locator('[aria-pressed="true"]')).toHaveText(['4'])
+  await expect(pickedPanels(page)).toHaveText(['4'])
   await expectMenuUnderTrigger(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/05-view-menu-highlight.png`, fullPage: false })
 
   // Lowering it here is the "reduce" path: 3 evicts the free column, the 3 pins stay.
   await panelsSeg(page).locator('.dm-seg-btn', { hasText: /^3$/ }).click()
-  await expect(panelsSeg(page).locator('[aria-pressed="true"]')).toHaveText(['3'], { timeout: 20_000 })
+  await expect(pickedPanels(page)).toHaveText(['3'], { timeout: 20_000 })
   await expect(homeColumns(page)).toHaveCount(3, { timeout: 10_000 })
   await expect(lockedButtons(page)).toHaveCount(3)
   await expect(column(page, SERVICE.id)).toHaveCount(0)

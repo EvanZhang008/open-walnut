@@ -112,7 +112,8 @@ test('dense history, view tools, fork recovery and reopen retain a usable compos
   expect(forkBox.x).toBeGreaterThanOrEqual(originalBox.x + originalBox.width - 1)
   expect(forkBox.height).toBeGreaterThan(700)
   await fork.locator('.draft-model-select').click()
-  await expect(child.locator('[title="A fork keeps the source session provider"]').first()).toBeDisabled()
+  // The rail's title names the engine first since ea800b085f ("Codex: <why>"); the whole reason is its accessible description.
+  await expect(child.getByTestId('provider-rail').locator('[aria-description="A fork keeps the source session provider"]').first()).toBeDisabled()
   await child.keyboard.press('Escape')
   let attempts = 0
   await child.route('**/api/sessions/pw-vscode-session/fork', route => {

@@ -58,7 +58,7 @@
  * Chromium, and with PW_WEBKIT=1 --project webkit, WebKit (the Mac app).
  */
 import fs from 'node:fs/promises'
-import { test, expect, type Locator, type Page, type Route, type WebSocketRoute } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request, type Route, type WebSocketRoute } from '@playwright/test'
 import { closeSessionKebab, openSessionKebab } from './session-kebab-helpers'
 import { leadForPage, openSubtaskRow } from './board-view-helpers'
 
@@ -147,7 +147,10 @@ async function socketThroughTest(page: Page): Promise<TestSocket> {
   })
   await page.reload()
   await page.waitForLoadState('networkidle')
-  expect(sock.sockets.length, 'the page socket runs through the test').toBeGreaterThan(0)
+  // The socket opens when the app mounts (useWebSocket), which on a busy host comes after networkidle,
+  // as Home does in beforeEach: wait for Home, then for its socket.
+  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => sock.sockets.length, { message: 'the page socket runs through the test' }).toBeGreaterThan(0)
   return sock
 }
 
@@ -273,12 +276,23 @@ async function checkFoldedRows(page: Page, panel: Locator, ready: boolean) {
 }
 
 /**
- * The narrowest column of the narrow ladder (260 to 420) where Files stays on the row while Fork,
+ * The narrowest column of the narrow ladder (280 to 420) where Files stays on the row while Fork,
  * Watch and Locate are drawn (waiting, or as spacers): the tests that aim at Files use it. Since the
  * header keys joined the button family (2026-11-22, wider keys) a 340 px row with Fork folds Files
  * into "...", which is intended; at 420 Fork, Changed and Files are on the row.
  */
 const AIM_PX = 420
+/**
+ * The narrow ladder's first rung: Home's column floor (HOME_COLUMN_MIN_PX in web/src/pages/columnSizing.ts,
+ * 3e6f9d73df). Below about 272 px the row cannot hold what never leaves it (Fork as the top item, "...",
+ * and the five fixed 28 px keys since 1fe4084c48: 244 px), so its chip box clips before any record lands.
+ */
+const NARROWEST_PX = 280
+/**
+ * A column where a session with no task has Files and Terminal on the row: with the 28 px window keys
+ * (1fe4084c48) Changed, Files, Terminal and four keys need about 320 px of row, past a 340 px column's 312.
+ */
+const TASKLESS_PX = 380
 
 /** Draw every session column at `px` wide from here on (the next column opens at that width). */
 async function clampColumns(page: Page, px: number) {
@@ -612,8 +626,18 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* storage off */ }
   })
+  // Home reads the finder's recent list when it mounts (warmSessionSearch), and every record in that
+  // answer is a copy the page keeps and a panel draws from in its first frame (peekSessionRecord). On a
+  // busy host Home mounts seconds after networkidle, so a session a test seeds before that answer rode
+  // it in and its panel opened with the record a test means to hold. Seed only once it has answered.
+  let warmRead: Request | null = null
+  page.on('request', (r) => { if (/\/api\/sessions\/recent\?limit=/.test(r.url())) warmRead = r })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
+  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 30_000 })
+  await expect.poll(async () => !!warmRead && (await warmRead.response()) !== null, {
+    timeout: 30_000, message: "Home's read of the recent sessions has answered",
+  }).toBe(true)
 })
 
 test('a click aimed at Files while the session record loads opens Files', async ({ page }) => {
@@ -793,7 +817,9 @@ test('a plan session: Plan is on the row from the first frame, after the chips e
 
 test('in a narrow column nothing moves into the "..." menu when the record lands, open after open', async ({ page }) => {
   test.setTimeout(120_000)
-  for (const [i, width] of [260, 300, 340, 380, 420].entries()) {
+  // The ladder starts at Home's column floor (NARROWEST_PX): with the 28 px window keys (1fe4084c48)
+  // a 260 px column's 232 px row cannot hold Fork, "..." and the five fixed keys, so it clips already.
+  for (const [i, width] of [NARROWEST_PX, 300, 340, 380, 420].entries()) {
     let reading = `${width}px: no reading`
     await clampColumns(page, width)
     const hold = await holdRecord(page, SESSION_ID)
@@ -805,8 +831,8 @@ test('in a narrow column nothing moves into the "..." menu when the record lands
       await settle(page)
       const rowWidth = await panel.locator('.session-meta-row-2').evaluate((row) => Math.round(row.getBoundingClientRect().width))
       const before = await rowBoxes(panel)
-      // At 260px a control folded into "..." that waits for the record waits there too, saying why.
-      if (width === 260) await checkFoldedRows(page, panel, false)
+      // At the narrowest a control folded into "..." that waits for the record waits there too, saying why.
+      if (width === NARROWEST_PX) await checkFoldedRows(page, panel, false)
       hold.release()
       await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeAttached({ timeout: 15_000 })
       // Watch and Locate are fixed window buttons: on the row at every width, never folded.
@@ -816,7 +842,7 @@ test('in a narrow column nothing moves into the "..." menu when the record lands
       }
       await settle(page)
       const after = await rowBoxes(panel)
-      if (width === 260) await checkFoldedRows(page, panel, true)
+      if (width === NARROWEST_PX) await checkFoldedRows(page, panel, true)
       const diff = moved(before, after)
       const appeared = Object.keys(after).filter((id) => !(id in before) && id !== 'time')
       reading = `${width}px (row ${rowWidth}px): shown ${Object.keys(before).join(',')} | moved ${JSON.stringify(diff)} | appeared ${JSON.stringify(appeared)}`
@@ -908,7 +934,7 @@ test('a record that fails to load leaves the chips in place, saying why they can
 })
 
 test('a session known to have no task shows no Fork or Board, before or after its record', async ({ page }) => {
-  await clampColumns(page, 340)
+  await clampColumns(page, TASKLESS_PX)
   const hold = await holdRecord(page, TASKLESS.id)
   try {
     // The finder's list names the session and says it has no task, so the panel knows on its first frame.
@@ -916,16 +942,16 @@ test('a session known to have no task shows no Fork or Board, before or after it
     await expect(panel.locator('[data-header-id="close"]')).toBeVisible()
     await expect.poll(() => hold.held(), { message: 'the record is still on its way' }).toBeGreaterThan(0)
     await settle(page)
-    await expectNoTaskControls(panel, '340px, record held')
+    await expectNoTaskControls(panel, `${TASKLESS_PX}px, record held`)
     const before = await rowBoxes(panel)
     await shootHeader(page, panel, '5-taskless-held')
 
     hold.release()
     await expect(panel.locator('.session-panel-badge', { hasText: 'Loading...' })).toHaveCount(0, { timeout: 15_000 })
     await settle(page)
-    await expectNoTaskControls(panel, '340px, record loaded')
+    await expectNoTaskControls(panel, `${TASKLESS_PX}px, record loaded`)
     const after = await rowBoxes(panel)
-    console.log(`TASKLESS ${test.info().project.name} 340px: held ${shown(before)} | loaded ${shown(after)} | moved ${JSON.stringify(moved(before, after))}`)
+    console.log(`TASKLESS ${test.info().project.name} ${TASKLESS_PX}px: held ${shown(before)} | loaded ${shown(after)} | moved ${JSON.stringify(moved(before, after))}`)
     expect(moved(before, after), 'nothing on the row moves when the record lands').toEqual([])
     await shootHeader(page, panel, '6-taskless-loaded')
 
