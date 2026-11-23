@@ -26,23 +26,31 @@ async function denyAllWaiting(request: APIRequestContext): Promise<void> {
  * Hold the fixture's approvals for this file (serial) or for each test (any other file). With
  * `clear`, each test starts and ends with none waiting (a request another file or an earlier run
  * left would take the corner), and the clearing runs inside the lock, never beside another file.
+ *
+ * Without `clear` the hold still ends with none waiting: nothing a holder made outlives its hold.
+ * 2026-11-23, main: ask-card-words-shown's request waited its whole ten minutes after that file
+ * ended, and its card in the corner took the clicks and the composer's room from the next file
+ * (composer-controls-overflow, 9 tests red).
  */
 export function holdApprovalsLock(scope: 'file' | 'test', opts: { clear?: boolean } = {}): void {
+  // Deny what still waits, then let the lock go (it goes even if the deny fails).
+  const releaseCleared = async (request: APIRequestContext) => {
+    try { await denyAllWaiting(request) } finally { lock.release() }
+  }
   if (scope === 'file') {
-    lock.hold('file')
+    test.beforeAll(() => lock.acquire())
     if (opts.clear) {
       test.beforeEach(async ({ request }) => { await denyAllWaiting(request) })
       test.afterEach(async ({ request }) => { await denyAllWaiting(request) })
     }
+    test.afterAll(async ({ request }) => { await releaseCleared(request) })
     return
   }
   test.beforeEach(async ({ request }) => {
     await lock.acquire()
     if (opts.clear) await denyAllWaiting(request)
   })
-  test.afterEach(async ({ request }) => {
-    try { if (opts.clear) await denyAllWaiting(request) } finally { lock.release() }
-  })
+  test.afterEach(async ({ request }) => { await releaseCleared(request) })
 }
 
 /**

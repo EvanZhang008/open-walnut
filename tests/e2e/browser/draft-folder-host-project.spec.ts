@@ -67,7 +67,8 @@ test('a folder a project owns reads Folder/Host and Project; a new folder reads 
   await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(owned)} · This Mac`)
   const title = await draftCwdPill(panel).getAttribute('title')
   expect(title).toContain(`Folder: ${owned}`)
-  expect(title).toContain('Host: Local (this machine)')
+  // 1927539cc8 names the local host "This Mac" everywhere, its tooltip too (it read "Local (this machine)").
+  expect(title?.split('\n')).toContain('Host: This Mac')
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${OWNER}`)
   await expect(draftProjectPill(panel)).not.toHaveClass(/draft-project-chip-new/)
   await expect(draftProjectPill(panel)).toHaveAttribute('title', `Tasks from this folder file under ${OWNER}. Change it in More.`)

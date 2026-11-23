@@ -45,6 +45,16 @@ describe('approvals lock', () => {
     expect(wrong).toEqual([]);
   });
 
+  it('the lock is let go only after what still waits is denied, at both scopes', () => {
+    // 2026-11-23: a file-scoped hold without `clear` left its request waiting ten minutes, and its
+    // corner card took the next file's clicks. Every release goes through releaseCleared.
+    const helper = fs.readFileSync(path.join(DIR, 'approvals-lock.ts'), 'utf8');
+    expect(helper).not.toMatch(/lock\.hold\(/);
+    expect(helper.match(/lock\.release\(\)/g) ?? []).toHaveLength(1);
+    expect(helper).toMatch(/releaseCleared = async[^\n]*\n\s*try \{ await denyAllWaiting\(request\) \} finally \{ lock\.release\(\) \}/);
+    expect(helper.match(/await releaseCleared\(request\)/g) ?? []).toHaveLength(2);
+  });
+
   it('no spec clears the waiting approvals itself: only the lock\'s clear does, inside the lock', () => {
     // A loop over the list that answers each one, the shape both copies had.
     const own = users.filter((f) => /for \(const \w+ of approvals\)[^\n]*\/answer/.test(code(f)));

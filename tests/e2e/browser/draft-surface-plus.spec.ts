@@ -381,8 +381,12 @@ test('the toolbar says "New task" until the search would be too narrow to read',
   // reachable as a compact plus when the task panel has almost no horizontal room.
   // Pin syncable layout prefs before boot: other serial specs drag this same panel,
   // and the fixture server can otherwise hydrate their saved width into our context.
+  // Home's row is empty here, and since d670f86000 an empty row grows the panel to a readable list
+  // (MainPage's todoAlone) unless its width was dragged: pin that layout's width at 25% too.
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-todo-width', '25')
+    localStorage.setItem('open-walnut-todo-width-alone', '25')
+    localStorage.setItem('open-walnut-todo-width-alone:dragged', '1')
     localStorage.setItem('open-walnut-sidebar-collapsed', 'true')
   })
   // A 25% panel of a 2400px window is 600px: room for every label beside a readable search.
