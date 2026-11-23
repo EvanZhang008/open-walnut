@@ -505,12 +505,13 @@ test('a full screen sheet lies beside the side bar, and a narrow window keeps it
   await openOrg(page)
   await agendaToggle(page).click()
   await expect(agendaPane(page)).toBeVisible()
-  // What the sheets read for the page area's left edge is the side bar's right edge.
+  // What the sheets read for the page area's left edge is the side bar's right edge. It is
+  // written only while a sheet is on screen (fullscreen-area.ts: a write restyles the whole
+  // document), so it is read below, once the sheet shows.
   const gap = () => page.evaluate(() => {
     const left = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fullscreen-left')) || 0
     return Math.round(left - document.querySelector('[data-testid="page-side-bar"]')!.getBoundingClientRect().right)
   })
-  await expect.poll(gap).toBe(0)
 
   // The node on screen may have no side bar of its own: pick one that has, while the window is
   // wide (CI, 2026-11-09: the narrow window's old overlay lay over the channel list and took
@@ -535,13 +536,13 @@ test('a full screen sheet lies beside the side bar, and a narrow window keeps it
   const area = (await page.locator('.main-content-row > .app-content-area').boundingBox())!
   expect(area.width, `the page keeps room beside the side bar (${JSON.stringify(e)})`).toBeGreaterThanOrEqual(Math.min(420, (1000 - e.barLeft) / 2) - 1)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await expect.poll(gap, 'the full screen area starts at the side bar\'s right edge').toBe(0)
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-org-narrow.png` })
 
   // A real full screen sheet (the Org node's side bar) leaves the side bar usable.
   await expect(full).toBeVisible()
   await full.click()
   await expect(page.locator('.open-walnut-fullscreen')).toBeVisible()
+  await expect.poll(gap, 'the full screen area starts at the side bar\'s right edge').toBe(0)
   const hit = await page.evaluate(() => {
     const side = document.querySelector('[data-testid="page-side-bar"]')!.getBoundingClientRect()
     const sheet = document.querySelector('.open-walnut-fullscreen')!.getBoundingClientRect()

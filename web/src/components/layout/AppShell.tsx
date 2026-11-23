@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { TaskUndoProvider } from '@/undo/TaskUndoContext';
 import { ShortcutsHelpHost } from '@/keyboard/ShortcutsHelp';
 import { KeyboardCommandsHost } from '@/keyboard/KeyboardCommandsHost';
@@ -33,6 +33,9 @@ import { AwayLine } from './AwayLine';
 import { ConnectionLine } from './ConnectionLine';
 import { PageSideBar } from './PageSideBar';
 import { SIDE_BAR_LAYOUT_EVENT, pageAreaLeft } from './page-side-bar';
+import { fullscreenArea } from './fullscreen-area';
+import { slideFrom } from '@/utils/layout-slide';
+import { traceInteraction } from '@/utils/interaction-timer';
 import { ScratchpadHost } from './ScratchpadHost';
 import '@/styles/phone-layout.css';
 import '@/styles/phone-fixes.css';
@@ -107,6 +110,8 @@ function AppShellInner({ children }: AppShellProps) {
   // which stays usable like the rail (fullscreen-tab.css reads --fullscreen-left;
   // 0 on a phone). It is the side bar's right edge while it shows, beside the page.
   const mainRef = useRef<HTMLElement>(null);
+  // The page's slide under way after a rail toggle (below), ended early when a sheet goes full screen.
+  const runningSlide = useRef<Animation | null>(null);
   // The window's one scratchpad editor (ScratchpadHost) mounts with the first wide layout and then
   // stays, through a switch to the phone layout too: unmounting it there ended a save under way and
   // lost the words typed after it. A phone that never was wide never loads it.
@@ -117,15 +122,17 @@ function AppShellInner({ children }: AppShellProps) {
     const main = mainRef.current;
     const area = contentRef.current;
     if (!main || !area) return;
-    const root = document.documentElement;
-    const publish = () => root.style.setProperty('--fullscreen-left', `${pageAreaLeft(main)}px`);
-    publish();
-    const ro = new ResizeObserver(publish);
+    // Written only while a full screen sheet reads it (fullscreen-area.ts): a custom property
+    // on <html> restyles the whole document, 57 to 96 ms a write in the Mac app, and this
+    // fires on every frame the page area changes width.
+    const unbind = fullscreenArea.bind(() => pageAreaLeft(main), () => runningSlide.current?.finish());
+    const moved = () => fullscreenArea.moved();
+    const ro = new ResizeObserver(moved);
     ro.observe(main);
     ro.observe(area);
-    window.addEventListener('resize', publish);
-    window.addEventListener(SIDE_BAR_LAYOUT_EVENT, publish);
-    return () => { ro.disconnect(); window.removeEventListener('resize', publish); window.removeEventListener(SIDE_BAR_LAYOUT_EVENT, publish); };
+    window.addEventListener('resize', moved);
+    window.addEventListener(SIDE_BAR_LAYOUT_EVENT, moved);
+    return () => { unbind(); ro.disconnect(); window.removeEventListener('resize', moved); window.removeEventListener(SIDE_BAR_LAYOUT_EVENT, moved); };
   }, []);
   const sidebarRef = useRef<HTMLElement>(null);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
@@ -288,7 +295,39 @@ function AppShellInner({ children }: AppShellProps) {
     };
   }, [closeSidebar, isMobileSidebar, sidebarOpen]);
 
+  // The rail's width changes in one layout and the page slides to its new place on the
+  // compositor (utils/layout-slide.ts): a transition on the width laid the whole page out
+  // on every frame. `slideFromLeft` is the page's left edge at the click.
+  const shellRef = useRef<HTMLDivElement>(null);
+  const slideFromLeft = useRef<number | null>(null);
+  const slidesRunning = useRef(0);
+  useLayoutEffect(() => {
+    const from = slideFromLeft.current;
+    slideFromLeft.current = null;
+    const main = mainRef.current;
+    const shell = shellRef.current;
+    // A sheet that is full screen is fixed to the window: a transform on the page would
+    // carry it along, so the rail snaps under it.
+    if (from === null || !main || !shell || isMobileSidebar || fullscreenArea.inUse()) return;
+    const slide = slideFrom(main, from);
+    if (!slide) return;
+    slidesRunning.current += 1;
+    runningSlide.current = slide;
+    shell.classList.add('is-sliding');
+    const done = () => {
+      if (runningSlide.current === slide) runningSlide.current = null;
+      slidesRunning.current -= 1;
+      if (slidesRunning.current === 0) shell.classList.remove('is-sliding');
+    };
+    slide.finished.then(done, done);
+    return () => slide.cancel();
+  }, [sidebarCollapsed, isMobileSidebar]);
+
   const toggleSidebarCollapse = useCallback(() => {
+    // In the log as `[perf] interaction {name: sidebar-toggle, ms}`: the click to the first
+    // painted frame, in the build the user runs.
+    traceInteraction('sidebar-toggle');
+    slideFromLeft.current = mainRef.current?.getBoundingClientRect().left ?? null;
     setSidebarCollapsed((prev) => {
       const next = !prev;
       try {
@@ -299,7 +338,7 @@ function AppShellInner({ children }: AppShellProps) {
   }, []);
 
   return (
-    <div className="app-shell app-shell-navigation">
+    <div ref={shellRef} className="app-shell app-shell-navigation">
       {/* The phone's top bar (hidden on wider screens): the drawer's menu button and
           the name of the page on screen. It sits outside <main> so it stays usable
           while the open drawer makes <main> inert, and above the drawer so the same

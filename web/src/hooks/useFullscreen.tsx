@@ -12,6 +12,7 @@ import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { fileCardOpenInFullscreen, selectionToolbarOpen } from '@/utils/file-card-escape';
 import { log } from '@/utils/log';
 import { usePhoneLayout } from './usePhoneLayout';
+import { useFullscreenArea } from '@/components/layout/fullscreen-area';
 import {
   bindFullscreen, claimFullscreen, clearFullscreen, detachFullscreen, fullscreenHeldBy,
   keepsAcrossRoutes, newFullscreenId, releaseFullscreen, sheetPlace, subscribeFullscreen,
@@ -142,6 +143,8 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   const phoneSurface = options.phoneLayer === true && phone;
   const shownFullscreen = isFullscreen && !phoneSurface;
   const active = shownFullscreen && !away;
+  // The sheet's rules read --fullscreen-left, written only while a sheet asks for it.
+  useFullscreenArea(shownFullscreen);
   const leave = useCallback(() => { if (tab) releaseFullscreen(id, place); else setOwnFlag(false); }, [tab, id, place]);
 
   // Timed: "I click outside to get out and it takes like 3 seconds" was reported

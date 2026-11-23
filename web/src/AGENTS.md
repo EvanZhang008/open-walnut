@@ -24,6 +24,15 @@ show inline after the open ones, other completed hits that show the query fold i
 
 ## Invariants you must not break (even without reading the skill)
 
+- **Motion never lays the page out on every frame** (`utils/layout-slide.ts`,
+  `components/layout/fullscreen-area.ts`). No transition or keyframes on a layout property
+  (width, height, margins, padding, offsets, flex, grid tracks) of a panel, column or page:
+  change the layout once and move with `transform` or fade with `opacity`. No
+  `style.setProperty` on `<html>` or `<body>` from a path that runs while the page moves: a
+  custom property there is inherited by every element, so one write restyles the whole
+  document (57 to 96 ms in the Mac app, 2026-11-22: the sidebar's 250 ms slide drew 3 frames).
+  `--fullscreen-left` is written only while a sheet that reads it shows (`useFullscreenArea`).
+  Ratchet: `tests/web/layout-animation-guard.test.ts`.
 - **A press keeps its control** (`components/settings/inputs/press-keeps-target.ts`). The browser
   clicks only what is under both the press and the release; a Settings row that changes height
   between them (a receipt's few seconds running out) moves the control from under a still
@@ -395,7 +404,7 @@ show inline after the open ones, other completed hits that show the query fold i
   `open-walnut-home-*-visible` flags); every other page gets `PageSideBar` on its left edge inside
   `.main-content-row` (AppShell), the same `CompanionColumn`. What is open and the width are kept per
   page in view memory (`page-side-bar.ts`, `side-bar.view` per `sideBarPageOf`), it is a column at
-  every width (a narrow window shrinks it first, the page keeps half the row; never laid over the page), and `--fullscreen-left` is the side bar's right edge while it
+  every width (a narrow window shrinks it first, the page keeps half the row; never laid over the page), and `--fullscreen-left` (written while a sheet is full screen) is the side bar's right edge while it
   shows (`pageAreaLeft`), so a full screen sheet lies beside it and it stays usable like the rail. The
   window has ONE scratchpad editor (`ScratchpadHost`, one `useGlobalNotes`), moved as a DOM box into the
   slot of the column that shows it: two editors meant two savers, and a line typed on Home whose save

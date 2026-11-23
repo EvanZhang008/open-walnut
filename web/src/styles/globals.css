@@ -457,16 +457,28 @@ textarea::placeholder { max-width: 100%; }
   object-fit: contain;
 }
 
-/* Sidebar collapse */
-
-.sidebar {
-  transition: width 0.25s ease;
-}
+/* Sidebar collapse: the rail's width changes in ONE layout and the page slides to its new
+   place with a transform (AppShell, utils/layout-slide.ts). A transition on the width laid
+   out the whole page on every frame: 35 to 50 ms a frame in the Mac app, so the slide drew
+   a handful of frames. Only the labels' opacity fades. */
 
 .sidebar-label {
   white-space: nowrap;
   overflow: hidden;
-  transition: opacity 0.2s ease, width 0.2s ease;
+  transition: opacity 0.2s ease;
+}
+
+/* While the page slides: it paints over the rail it is uncovering (so it needs its own
+   surface), and what it carries past the window's edge is cut off, not scrolled to. A press
+   in those 220 ms goes to the rail under the page, where the control will be, not to the
+   page passing over it. */
+.app-shell.is-sliding {
+  overflow-x: clip;
+}
+
+.app-shell.is-sliding > .main-content {
+  background: var(--bg);
+  pointer-events: none;
 }
 
 .sidebar-collapse-btn { flex-shrink: 0; }

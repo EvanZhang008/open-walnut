@@ -95,6 +95,7 @@ import { keepReadingPlace } from '@/utils/reading-place';
 import { lineSurfaceOf } from '@/utils/reading-line-dom';
 import { useFileReadingPlace, type ReadingSeen } from '@/components/common/use-file-reading-place';
 import { pressBelowText } from '@/utils/blank-press';
+import { useFullscreenArea } from '@/components/layout/fullscreen-area';
 
 /** A ⌘S (or the banner's Try again) that never reached the server. */
 const SAVE_RETRY_MESSAGE = "Can't reach Walnut right now. Your text is still in the editor: press Try again once Walnut is running.";
@@ -317,6 +318,8 @@ export function FileContentView({
   const sourceModeRef = useRef({ key: `${host ?? 'local'} ${filePath}`, source: false });
   // Fullscreen the preview (md/html) — CSS-fixed overlay, no remount.
   const [fullscreen, setFullscreen] = useState(false);
+  // .fv-fullscreen reads --fullscreen-left, written only while a sheet asks for it.
+  useFullscreenArea(fullscreen);
   // Full screen hides the sheet under this one (fullscreen-tab.css) by visibility: its
   // chat's marks must not paint on this document in WebKit.
   useHidesHighlights(fullscreen);

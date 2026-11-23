@@ -42,6 +42,7 @@ import type { CanvasMenu, DrawingCanvasHandle, ExcalidrawCanvasProps } from './E
 const DrawingAssistant = lazy(() => import('./DrawingAssistant'));
 import { usePageTheme } from './usePageTheme';
 import { useOverlayRoom } from './canvas-overlay';
+import { useFullscreenArea } from '@/components/layout/fullscreen-area';
 import './drawing-workspace.css';
 
 export interface DrawingWorkspaceState {
@@ -228,6 +229,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [keptFullScreen, setKeptFullScreen] = usePageView<boolean>('drawing', view.fullScreenKey ?? 'fullScreenUnkept', false, isBoolean);
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
   const [fullScreen, setFullScreen] = view.fullScreenKey ? [keptFullScreen, setKeptFullScreen] : [previewFullScreen, setPreviewFullScreen];
+  // [data-fullscreen] reads --fullscreen-left, written only while a sheet asks for it.
+  useFullscreenArea(fullScreen);
   // Where "New drawing" sketches here: the composer's draft, else this place's own key.
   const newKey = sketchKey ?? newSketchKey(scopeId);
 
