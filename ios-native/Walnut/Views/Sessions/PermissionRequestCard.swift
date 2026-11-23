@@ -509,11 +509,11 @@ struct PermissionRequestCard: View {
             }
             .multilineTextAlignment(.leading)
         }
-        // A choice of the question: the family's option row (round, hairline); armed once, a
-        // blue ring says the next tap saves it.
+        // A choice of the question: the family's option row (a long key: the field corner,
+        // hairline); armed once, a blue ring on the same corner says the next tap saves it.
         .buttonStyle(.walnut(.option(recommended: false)))
         .overlay(
-            Capsule(style: .continuous)
+            WalnutButtonStyle.optionShape
                 .strokeBorder(Theme.tint, lineWidth: armed == choice.id ? 1.5 : 0)
         )
         .disabled(isOff(choice))
@@ -793,11 +793,11 @@ struct AskUserQuestionCard: View {
             }
             .multilineTextAlignment(.leading)
         }
-        // The family's round option row, as on the permission card and the thread card; a picked
-        // one wears the blue ring.
+        // The family's option row, as on the permission card and the thread card; a picked
+        // one wears the blue ring on the row's own corner.
         .buttonStyle(.walnut(.option(recommended: false)))
         .overlay {
-            Capsule(style: .continuous)
+            WalnutButtonStyle.optionShape
                 .strokeBorder(Theme.tint, lineWidth: picked ? 1.5 : 0)
         }
         .disabled(answering)

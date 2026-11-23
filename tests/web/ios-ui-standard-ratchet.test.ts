@@ -92,6 +92,21 @@ describe('iOS UI standard: one look per kind of control', () => {
     expect(one(['.background(', '    on ? Theme.tint : Color(.tertiarySystemFill),'].join('\n')).tintFill).toBe(1)
     expect(one('.foregroundStyle(on ? Theme.tint : .secondary)').tintFill).toBe(0)
     expect(one('struct Pressable<Label: View>: ButtonStyle {').ownButtonStyle).toBe(1)
+    // A long block is a rounded rectangle; only a small key or tag is round.
+    expect(one(['Text(t)', '    .frame(maxWidth: .infinity, minHeight: 44)', '    .background(Theme.controlFill, in: Capsule(style: .continuous))'].join('\n')).wideCapsule).toBe(1)
+    expect(one(['Button { } label: { Text(t) }', '    .buttonStyle(.walnut(.option(recommended: false)))', '    .overlay(', '        Capsule(style: .continuous)', '            .strokeBorder(Theme.tint, lineWidth: 1.5)'].join('\n')).wideCapsule).toBe(1)
+    expect(one(['Button("Go") { }', '    .buttonStyle(.walnut(.primary, fullWidth: true))', '    .clipShape(Capsule())'].join('\n')).wideCapsule).toBe(1)
+    expect(one(['Text(t)', '    .frame(maxWidth: .infinity)', '    .background(Theme.controlFill, in: WalnutButtonStyle.optionShape)'].join('\n')).wideCapsule).toBe(0)
+    expect(one(['Text(t)', '    .padding(.horizontal, 8)', '    .background(Theme.controlFill, in: Capsule())'].join('\n')).wideCapsule).toBe(0)
+    expect(one(['Text(t)', '    .frame(maxWidth: .infinity) // ui-standard-ok: one of three keys on a line', '    .background(Theme.controlFill, in: Capsule())'].join('\n')).wideCapsule).toBe(0)
+  })
+
+  it('the family draws a long key (an option row, a full-width key) as a rounded rectangle, a small one round', () => {
+    const buttons = fs.readFileSync(path.join(IOS_ROOT, 'Walnut/Views/Shared/DesignSystem/WalnutButtonStyle.swift'), 'utf8')
+    expect(buttons).toMatch(/if case \.option = role \{ return AnyShape\(optionShape\) \}/)
+    expect(buttons).toMatch(/fullWidth \? AnyShape\(optionShape\) : AnyShape\(Capsule\(style: \.continuous\)\)/)
+    expect(buttons).toMatch(/static var optionShape: RoundedRectangle \{ Theme\.Radius\.shape\(Theme\.Radius\.md\) \}/)
+    expect(buttons).toMatch(/let shape = Self\.shape\(role, fullWidth: fullWidth\)/)
   })
 
   it('the design system exists, and its own files are the only ones exempt', () => {

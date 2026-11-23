@@ -3,7 +3,8 @@
  * WalnutAutoFill, WalnutWidgets), each way a view draws a control
  * that is not the design system's (the iOS column of .claude/skills/walnut-ui-requirements/standard.md):
  *
- * (A `Capsule()` is not counted: what you press and every tag is round, standard.md "Shapes".)
+ * (A `Capsule()` is not counted: what you press and every tag is round, standard.md "Shapes",
+ * unless it is long: see wideCapsule.)
  *   - literalColour: a colour written as numbers (`Color(red:)`, `UIColor(white:)`, `0xRRGGBB`) or a
  *     system hue (`.red`, `.orange`, ...) where a `Theme` colour belongs.
  *   - literalFont: `.system(size: <number>)`: text takes a text style, a glyph `Theme.Glyph`.
@@ -17,6 +18,9 @@
  *   - ownEmptyState: the system's `ContentUnavailableView`, where `WalnutEmptyState` belongs.
  *   - tintFill: a solid `Theme.tint` fill (`.background(Theme.tint`, or `cond ? Theme.tint :` in a
  *     background): words on it read at 3.7:1 in dark; a solid fill is `Theme.accent`.
+ *   - wideCapsule: a capsule drawn around something that spans its line (`.frame(maxWidth:
+ *     .infinity)`, an option row or a full-width family key, in the same modifier chain): a long
+ *     block is a rounded rectangle, only a small key or tag is round (Evan, 2026-11-22: "long and square is fine, small must be round").
  *
  * A line that has to keep its shape (a drag handle, a camera's shutter) says why with a
  * `ui-standard-ok: <why>` comment on that line.
@@ -37,6 +41,7 @@ export const IOS_KINDS = [
   'ownReplyBox',
   'ownEmptyState',
   'tintFill',
+  'wideCapsule',
 ] as const
 export type IosKind = (typeof IOS_KINDS)[number]
 export type IosCounts = Record<IosKind, Record<string, number>>
@@ -59,7 +64,7 @@ const COLOUR_TABLES = [
 
 const OK = /ui-standard-ok:/
 
-const PATTERNS: Record<Exclude<IosKind, 'ownReplyBox' | 'tintFill'>, RegExp[]> = {
+const PATTERNS: Record<Exclude<IosKind, 'ownReplyBox' | 'tintFill' | 'wideCapsule'>, RegExp[]> = {
   literalColour: [
     /\b(?:Color|UIColor)\s*\(\s*(?:red|white|hue|displayP3)\s*:/,
     /\b0x[0-9A-Fa-f]{6}\b/,
@@ -99,6 +104,9 @@ const BOX = new RegExp(
 /** A solid tint fill: `.background(Theme.tint`, or a `cond ? Theme.tint :` inside a background. */
 const TINT_FILL = /\.background\(\s*Theme\.tint\b(?!\.)/
 const TINT_TERNARY = /\?\s*Theme\.tint\b(?!\.)\s*:/
+/** A line that makes its view span the line, and a capsule drawn around a view. */
+const SPANS = /\.frame\([^)]*\bmaxWidth:\s*\.infinity|\.walnut\(\s*\.option\b|\.walnut\(.*\bfullWidth:\s*true/
+const CAPSULE_AROUND = /(?:\.(?:background|overlay|clipShape|contentShape)\s*[({][^)]*?|\bin:\s*)Capsule\b/
 
 /** The code of each line: comments gone, string contents kept (a URL's `//` is not a comment). */
 export function codeLines(src: string): string[] {
@@ -153,6 +161,18 @@ export function countFile(rel: string, src: string): Record<IosKind, number> {
     if (TINT_FILL.test(line)
       || (TINT_TERNARY.test(line) && (/\.(?:background|fill)\(/.test(line) || /\.(?:background|fill)\(\s*$/.test(lines[i - 1] ?? '')))) {
       counts.tintFill++
+    }
+    if (SPANS.test(line)) {
+      // The rest of this modifier chain: the lines that go on with a `.modifier`, and the shape
+      // an `.overlay(` or `.background {` opens on the next line.
+      const chain: string[] = [line]
+      for (let j = i + 1; j < lines.length && j < i + 10; j++) {
+        const opens = /[({]\s*$/.test(lines[j - 1])
+        if (!/^\s*\./.test(lines[j]) && !opens) break
+        chain.push(lines[j])
+      }
+      const marked = chain.some((l) => OK.test(l))
+      if (!marked && CAPSULE_AROUND.test(chain.join(' '))) counts.wideCapsule++
     }
     if (FIELD.test(line)) {
       // A field whose own box is drawn within the next lines of its modifier chain.

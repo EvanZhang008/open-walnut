@@ -13,7 +13,12 @@ import SwiftUI
 /// - `option`: a choice of a question, a full-width row with a hairline; the recommended one is
 ///   filled blue like `primary`.
 ///
-/// All of them: round (a capsule, standard.md "Shapes"), a 44 pt control (a small one draws 32 pt and keeps a
+/// Shape (standard.md "Shapes"): a small key is round (a capsule); a long one, an option row or a
+/// full-width key, is a rounded rectangle at the field corner (`Theme.Radius.md`), as every long
+/// block (Evan, 2026-11-22: "long and square is fine, small must be round"). `shape(_:fullWidth:)`
+/// gives it, so a ring drawn over a key (an armed or picked option) follows its corner.
+///
+/// All of them: a 44 pt control (a small one draws 32 pt and keeps a
 /// 44 pt touch), `Theme.TextSize.control` words, 0.5 opacity when disabled.
 struct WalnutButtonStyle: ButtonStyle {
     enum Role: Equatable {
@@ -32,8 +37,17 @@ struct WalnutButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The family's shape for a key of this role and width.
+    static func shape(_ role: Role, fullWidth: Bool = false) -> AnyShape {
+        if case .option = role { return AnyShape(optionShape) }
+        return fullWidth ? AnyShape(optionShape) : AnyShape(Capsule(style: .continuous))
+    }
+
+    /// A long key's shape: an option row, a full-width key, and the ring drawn over one.
+    static var optionShape: RoundedRectangle { Theme.Radius.shape(Theme.Radius.md) }
+
     func makeBody(configuration: Configuration) -> some View {
-        let shape = Capsule(style: .continuous)
+        let shape = Self.shape(role, fullWidth: fullWidth)
         let height = role == .tool
             ? (size == .small ? Theme.Control.toolHeight : Theme.Control.smallHeight)
             : (size == .small ? Theme.Control.smallHeight : Theme.Control.height)
@@ -54,7 +68,8 @@ struct WalnutButtonStyle: ButtonStyle {
             .background(fill(pressed: configuration.isPressed), in: shape)
             .overlay {
                 if case .option(recommended: false) = role {
-                    shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
+                    // An option row's own shape (an inset border needs the concrete shape).
+                    Self.optionShape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
                 }
             }
             // A disabled main action turns grey with light grey words (a faded blue under faded

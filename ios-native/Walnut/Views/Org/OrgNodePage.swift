@@ -408,7 +408,8 @@ struct OrgNodeBar: View {
                         }
                     }
                     .frame(maxWidth: .infinity, minHeight: compact ? 44 : 36)
-                    .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: Capsule(style: .continuous))
+                    // One of three keys sharing a line: a small key, so round.
+                    .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: Capsule(style: .continuous)) // ui-standard-ok: one of three keys on a line
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -476,7 +477,8 @@ struct OrgNodeViewPicker: View, Equatable {
                 .font(.body.weight(.medium))
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, minHeight: 44)
-                .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: Capsule(style: .continuous))
+                // The one key of its line, so long: the field corner, as every long block.
+                .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: WalnutButtonStyle.optionShape)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

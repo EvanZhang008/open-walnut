@@ -9,7 +9,9 @@ import SwiftUI
 /// rule, so each view picked any corner (15 different ones). Then (2026-11-22, the user): the round
 /// look was cute, controls should be round, not squares. The rule (standard.md, "Shapes"): what you
 /// press and every tag is round (a capsule; a square one a circle); what you type or read in is a
-/// rounded rectangle from the corners below; no corner in between on a key.
+/// rounded rectangle from the corners below; no corner in between on a key. A long key (an option
+/// row, a full-width key) is a long block: `Radius.md`, never a capsule (2026-11-23, the user:
+/// long and square is fine, small must be round).
 extension Theme {
     /// Corners of surfaces (cards, fields, boxes, list rows). A control, a chip and a badge are never
     /// given one of these: they are round.

@@ -80,5 +80,6 @@
     "Walnut/Views/Tasks/TasksView.swift": 1,
     "WalnutAutoFill/AutoFillRootView.swift": 4
   },
-  "tintFill": {}
+  "tintFill": {},
+  "wideCapsule": {}
 }

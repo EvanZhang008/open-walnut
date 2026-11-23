@@ -585,7 +585,7 @@ or button shape.
 | Action | `.btn` | `.walnut(.secondary)`: `tertiarySystemFill`, primary words |
 | Tool | `.ask-card-tools .btn` | `.walnut(.tool)`: no fill, `Theme.secondaryOnCard`; a menu's label is `WalnutMenuLabel` ("Snooze ▾") |
 | Destructive | `.btn-danger` | `.walnut(.destructive)`: the grey fill, `Theme.dangerText` words |
-| Option | `AskOptions` row | `.walnut(.option(recommended:))` with `WalnutOptionLabel`: full width, hairline, the recommended one solid blue with "Recommended" at its right |
+| Option | `AskOptions` row | `.walnut(.option(recommended:))` with `WalnutOptionLabel`: full width, hairline, a 12 pt corner (a long key: `WalnutButtonStyle.optionShape`, never a capsule), the recommended one solid blue with "Recommended" at its right |
 | Chip, filter | none | `.walnutChip(selected:)`: round, 32 pt drawn, 44 pt touch; selected is `Theme.chipSelected` (a step stronger than `tintSoft`) with a blue hairline and primary words. A chip row that can be wider than the screen scrolls sideways, and a filter that is on says so in the list |
 | Badge | `.badge` | `WalnutBadge` (round, `Theme.TextSize.xs` semibold, one tone); a state is `WalnutStatusLabel` (dot and word) |
 | Card | `AskCardFrame`, `NoticeCard` | `.walnutCard()` (grouped fill, `Theme.Radius.card` 16, hairline); `frosted: true` for a card that asks; a notice is the shared notice card (`Theme.Radius.notice` 14, as on the web and the Mac) |
@@ -599,12 +599,15 @@ Corners of surfaces `Theme.Radius.xs/sm/md/lg/card/notice` = 4 / 8 / 12 / 16 / 1
 web's scale (`Theme.TextSize.xs...xxl` = caption2 11, caption 12, footnote 13, subheadline 15, body 17,
 title3 20), so they grow with Dynamic Type; a glyph of fixed size is `Theme.Glyph`. Spacing is the web's
 2 pt grid (`Theme.Space`). Shapes as on the web ("Shapes"): what you press and every tag is round (a capsule; a square one a circle),
-what you type or read in is a rounded rectangle from `Theme.Radius`, and no corner in between on a key. No system `.bordered` / `.borderedProminent`: the OS
+what you type or read in is a rounded rectangle from `Theme.Radius`, and no corner in between on a key. A long key
+(one that spans its line or takes two lines: an option row, a full-width key) is a long block, so it takes the 12 pt corner
+(`WalnutButtonStyle.optionShape`), never a capsule, which on it reads as an oval (2026-11-23, the user's "长的方的可以，小的要圆":
+long and square is fine, small must be round); the ratchet's `wideCapsule` counts a capsule in a chain that spans its line. No system `.bordered` / `.borderedProminent`: the OS
 picks their shape (a capsule on iOS 26).
 
 `tests/web/ios-ui-standard-ratchet.test.ts` counts, per Swift file, each view that still draws its own
 (literalColour, literalFont, radiusLiteral, systemButtonStyle, ownButtonStyle, ownReplyBox,
-ownEmptyState; `tests/web/ios-ui-standard-baseline.json`), and the counts only go down. A line that must
+ownEmptyState, tintFill, wideCapsule; `tests/web/ios-ui-standard-baseline.json`), and the counts only go down. A line that must
 keep its shape (a sheet's grabber, a camera shutter) says why with `// ui-standard-ok: <why>`.
 
 ## What exists today that breaks this (the ratchet counts them)
