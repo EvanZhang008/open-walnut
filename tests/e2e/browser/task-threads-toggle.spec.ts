@@ -114,17 +114,11 @@ test('a leader turns Threads on from its menu, files his asks there, and turns t
   await expect(chip).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(async () => (await api<{ task: { threads_on?: boolean } }>('GET', `/api/tasks/${leader}`)).task.threads_on).toBe(true)
   await expect(pane.getByTestId('org-threads-empty')).toBeVisible()
-  // Nothing in it yet: one short line, New topic (when topics are on) on the same row, and the pane
-  // narrow so the chat keeps the room (2026-11-22, UI audit: the empty pane took half the window).
+  // Nothing in it yet: one short line, and the pane narrow so the chat keeps the room (2026-11-22,
+  // UI audit: the empty pane took half the window). No New topic: a topic is not a thread (2026-11-23).
   const empty = pane.getByTestId('org-threads-empty')
   await expect(empty).toHaveText('Nothing open yet')
-  const emptyBox = (await empty.boundingBox())!
-  const newTopic = pane.getByTestId('org-threads-new-topic')
-  if (await newTopic.count()) {
-    const b = (await newTopic.boundingBox())!
-    expect(Math.abs((b.y + b.height / 2) - (emptyBox.y + emptyBox.height / 2)), 'New topic sits on the line').toBeLessThan(12)
-    await expect(pane.getByTestId('org-threads-topic-bar')).toHaveCount(0)
-  }
+  await expect(pane.getByTestId('org-threads-new-topic')).toHaveCount(0)
   const paneBox = (await pane.boundingBox())!
   const chatBox = (await panel.locator('.session-panel-chat-col').boundingBox())!
   expect(paneBox.width, 'the empty pane is narrow').toBeLessThanOrEqual(300)

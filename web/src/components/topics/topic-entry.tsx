@@ -1,14 +1,15 @@
 /**
  * The ways into a topic from the rest of the app (experiment `topics`), each one line where it is
  * used: the "Add to topic…" row of the task ⋮ menu, of the Org row menu and of the org chart's node
- * menu; a "+ New topic" button; and opening a topic, which selects it on the Org page.
+ * menu; a "+ New topic" button (the Org list's Topics heading); and opening a topic, which selects it
+ * on the Org page. Never in a Threads view: a topic is not a thread (2026-11-23).
  * With the experiment off every one of them renders nothing.
  */
 import { ICON_PLUS } from '@/components/common/Icons';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { orgDisplayTitle, orgProjectNode } from '@open-walnut/org-tree';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import type { ContextMenuItem } from '@/utils/context-menu';
 import { openAddToTopic, openNewTopic, type PickedMember } from './topic-dialogs';
 import { orgRef, taskRef, topicKey } from './topic-model';
@@ -29,32 +30,6 @@ export function orgNodeMember(row: { key: string; kind?: string; name: string; v
 
 export const taskMember = (task: Pick<Task, 'id' | 'title'> & Partial<Pick<Task, 'project' | 'org_role' | 'org_name'>>): PickedMember =>
   ({ ref: taskRef(task.id), name: orgDisplayTitle(task) });
-
-/** A Threads view's own node as a member: the CEO and a VP as org nodes (the topic follows the node), any other task as itself. */
-export function nodeMember(task: Pick<Task, 'id' | 'title' | 'project' | 'org_role' | 'org_name'>): PickedMember {
-  const name = orgDisplayTitle(task);
-  if (task.org_role === 'main') return { ref: orgRef('main'), name };
-  if (task.org_role === 'lead') return { ref: orgRef(orgProjectNode(task.project)), name };
-  return taskMember(task);
-}
-
-type ThreadsOwner = Pick<Task, 'id' | 'title' | 'project' | 'org_role' | 'org_name'> | undefined;
-
-/** The Threads view's "+ New topic", its node already picked; on the empty view's one line (OrgThreadsByState ThreadsEmpty). */
-export function ThreadsNewTopic({ owner }: { owner: ThreadsOwner }) {
-  return <NewTopicButton members={owner ? [nodeMember(owner)] : []} testId="org-threads-new-topic" />;
-}
-
-/** The Threads view's row of actions above its cards: "+ New topic". */
-export function ThreadsTopicBar({ owner }: { owner: ThreadsOwner }) {
-  const on = useTopicsOn();
-  if (!on) return null;
-  return (
-    <div className="org-threads-bar" data-testid="org-threads-topic-bar">
-      <ThreadsNewTopic owner={owner} />
-    </div>
-  );
-}
 
 /** The task ⋮ menu's row (TaskMenuRows): this task into an open topic or a new one. */
 export function AddToTopicMenuItem({ task, afterAction }: { task: Pick<Task, 'id' | 'title' | 'project' | 'org_role' | 'org_name'>; afterAction: () => void }) {

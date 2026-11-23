@@ -72,7 +72,6 @@ import { threadBadge } from './thread-badge';
 import { ThreadState } from './ThreadState';
 import { PoppedThreadCard } from './PoppedThreadCard';
 import { TopicThreadBadge } from '@/components/topics/TopicThreadBadge';
-import { ThreadsTopicBar } from '@/components/topics/topic-entry';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { ThreadChoiceAnswer, answersChoice } from './ThreadChoiceAnswer';
 import { askThreadFocus, useFocusedThread } from './thread-focus';
@@ -457,7 +456,9 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
     else if (snoozedIds.has(t.id)) setShowSnoozed(true);
     else if (hidden.some((x) => x.id === t.id)) setShowHidden(true);
   });
-  // Nothing in either view: the empty line carries New topic (ThreadsEmpty), no bar above it.
+  // Nothing in either view: one empty line (ThreadsEmpty). A new topic starts from the Org list's
+  // Topics heading or a task's menu, never here: a topic is not a thread (2026-11-23, the user, on
+  // "+ New topic" in the Threads view: "Topic is topic").
   const nothing = all !== null && !state.error && (groups ? !THREAD_GROUPS.some((g) => groups[g].length > 0) : !open.length && !hidden.length && !snoozed.length);
   const card = (t: OrgThread, copy?: WatchingCopy) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id && !copy} listed={listedIds.has(t.id)} {...(copy ? { copy } : {})} />;
   // Watching: his watched threads, each also drawn in its own group below (a thread of a task
@@ -468,8 +469,6 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   );
   return (
     <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
-      {/* Nothing at all: New topic sits on the empty view's one line instead (ThreadsEmpty). */}
-      {!nothing && <ThreadsTopicBar owner={owner} />}
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
       {groups && all !== null && <OrgThreadsByState watching={watchingList} groups={groups} opened={opened} onOpen={openFold} card={(t) => card(t)} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
@@ -481,7 +480,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
             {`Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`}
           </p>
         )
-        : <ThreadsEmpty name={name} owner={owner} />)}
+        : <ThreadsEmpty name={name} />)}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map((t) => card(t))}</ul>}
       {snoozed.length > 0 && (
         <DisclosureButton expanded={showSnoozed} className="org-threads-closed-toggle" data-testid="org-threads-snoozed" onClick={() => setShowSnoozed(!showSnoozed)}>

@@ -4,7 +4,7 @@
    only the answers he has not reacted to yet (the rule beside them). */
 .org-threads { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; }
 .org-threads-empty { margin: 4px 0; font-size: var(--font-size-md); color: var(--fg-muted); }
-/* Nothing at all (ThreadsEmpty): the short line and New topic on one row. */
+/* Nothing at all (ThreadsEmpty): the short line on its row. */
 .org-threads-empty-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .org-threads-empty-row > .org-threads-empty { margin: 0; }
 .org-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

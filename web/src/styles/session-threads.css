@@ -57,8 +57,7 @@
   padding: 4px 4px 12px;
 }
 
-/* Nothing in the view (ThreadsEmpty, no card at all): the pane narrows to its one line and New
-   topic, and the chat beside it takes the rest of the row over its dragged width (2026-11-22, UI
+/* Nothing in the view (ThreadsEmpty, no card at all): the pane narrows to its one line, and the chat beside it takes the rest of the row over its dragged width (2026-11-22, UI
    audit: the empty pane still took half the window). A phone shows one pane at a time, and a
    collapsed chat leaves the row to the pane, so neither narrows. */
 .session-panel:not(.is-phone-layer) .session-panel-split.is-changed-open:not(.is-chat-collapsed):has(> .session-panel-diff-col > .session-threads-pane .org-threads-empty-row):not(:has(> .session-panel-diff-col > .session-threads-pane .org-thread)) > .session-panel-diff-col:has(> .session-threads-pane) {

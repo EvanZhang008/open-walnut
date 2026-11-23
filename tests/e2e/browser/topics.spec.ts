@@ -346,8 +346,10 @@ test('the topic thread on the VP Threads view wears the members and opens the to
   const badge = card.getByTestId('topic-thread-badge')
   await expect(badge).toHaveAttribute('data-topic-id', ids.topic)
   await expect(badge.getByTestId('topic-stack')).toBeVisible()
-  // The Threads view offers a new topic with this VP already picked.
-  await expect(detail.getByTestId('org-threads-new-topic')).toBeVisible()
+  // A topic starts from the Org list's Topics heading, never from the Threads view: a topic is not
+  // a thread (2026-11-23, the user, on "+ New topic" in the Threads view: "Topic is topic").
+  await expect(detail.getByTestId('org-threads-new-topic')).toHaveCount(0)
+  await expect(list(page).getByTestId('org-topic-new')).toBeVisible()
   await shot(page, 'thread-card')
   await badge.getByTestId('topic-thread-open').click()
   await expect(chat(page)).toHaveAttribute('data-topic-id', ids.topic)

@@ -20,7 +20,6 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { DisclosureButton } from '@/components/controls';
 import type { Task } from '@open-walnut/core';
 import type { OrgThread } from '@/api/org-threads';
-import { ThreadsNewTopic } from '@/components/topics/topic-entry';
 import { FOLDED_GROUPS, FOR_HIM_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
 import { MOVE_NOTE_MS, shownGroups, useThreadMoves, type ThreadMove } from './thread-moves';
 
@@ -56,18 +55,16 @@ function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove
 }
 
 /**
- * A node's Threads with nothing in them: one short line and "+ New topic" beside it, never a long
- * sentence under a lone button (2026-11-22, UI audit: the empty pane beside a chat took half the
+ * A node's Threads with nothing in them: one short line, never a long sentence under a lone button (2026-11-22, UI audit: the empty pane beside a chat took half the
  * window). What the view is for is its hover text; the session pane narrows to it
  * (session-threads.css). Both views draw it (OrgThreads, and this one under brief_off).
  */
-export function ThreadsEmpty({ name, owner }: { name: string; owner: Task | undefined }) {
+export function ThreadsEmpty({ name }: { name: string }) {
   return (
     <div className="org-threads-empty-row" data-testid="org-threads-empty-row">
       <p className="org-threads-empty" data-testid="org-threads-empty" title={`Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread`}>
         Nothing open yet
       </p>
-      <ThreadsNewTopic owner={owner} />
     </div>
   );
 }
@@ -103,7 +100,7 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
     if (!last || !hadFocus.current || !lost) return;
     (wasTyping.current ? headOf(rootRef.current, last.from) : rootRef.current?.querySelector<HTMLElement>(`[data-moved-id="${CSS.escape(last.id)}"] button`))?.focus({ preventScroll: true });
   }, [moves]);
-  if (!THREAD_GROUPS.some((g) => groups[g].length > 0)) return <ThreadsEmpty name={name} owner={owner} />;
+  if (!THREAD_GROUPS.some((g) => groups[g].length > 0)) return <ThreadsEmpty name={name} />;
   // Show opens the card's group, brings the card's top into view and hands the focus to that
   // group's head, so a keyboard keeps its place.
   const show = (m: ThreadMove) => {
