@@ -22,7 +22,7 @@ test('WebKit wide composer leaves full model and Bypass inline, Note and btw as 
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
   await expect(directControl(panel, 'btw')).toBeVisible();
-  await expect(directControl(panel, 'note')).toHaveText('Session note');
+  await expect(directControl(panel, 'note')).toHaveText('Notes');
   await addButton(panel).click();
   const menu = addMenu(panel);
   await expect(addRow(panel, 'output')).toBeVisible();

@@ -135,7 +135,7 @@ test('note is labeled and edits in place without a second input outline', async 
   const note = 'Morgan\nPlease include the minimum limit increase as well.'
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: note } })
   const panel = await openSeededSessionOnHome(page)
-  const bar = panel.getByRole('region', { name: 'Session note', exact: true })
+  const bar = panel.getByRole('region', { name: 'Notes', exact: true })
   await expect(bar.locator('.session-notes-label')).toHaveText('Note')
   // The note is the composer card's top band: inside the same box as the textarea.
   await expect(panel.locator('.session-panel-input .chat-input-box > .session-notes')).toHaveCount(1)
@@ -176,7 +176,7 @@ test('a long note wraps, scrolls only vertically, and is tidied when the editor 
   const note = `\nnext ideally we can provide traffic shift, but how to do it, ${'like this '.repeat(12)}not the async, \n\nasync can only be controlled through gradual rollout, ${long}${long}${long}\n\nor sync can also have a single service, many pods\n\n\n\n2. Update design, review\n3. update plan, and break down the implementor\n\n\n`
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: note } })
   const panel = await openSeededSessionOnHome(page)
-  const bar = panel.getByRole('region', { name: 'Session note', exact: true })
+  const bar = panel.getByRole('region', { name: 'Notes', exact: true })
   // Read view: the leading blank line is not drawn, the view stays within 3 lines.
   const preview = bar.locator('.session-notes-preview')
   await expect(preview).toContainText('next ideally')

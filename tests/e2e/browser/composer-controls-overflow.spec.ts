@@ -20,7 +20,7 @@ test('wide composer keeps only full model and mode inline; add menu holds reply 
   await expectSingleRow(panel);
 
   await expect(directControl(panel, 'btw')).toBeVisible();
-  await expect(directControl(panel, 'note')).toHaveText('Session note');
+  await expect(directControl(panel, 'note')).toHaveText('Notes');
   await addButton(panel).click();
   await expect(addRow(panel, 'output')).toContainText('Rich');
   await expect(addRow(panel, 'btw')).toHaveCount(0);
@@ -207,14 +207,14 @@ test('a tight column folds Note and btw into the add menu before the model pill 
   await shootComposer(panel, 'folded');
 
   await addButton(panel).click();
-  await expect(addRow(panel, 'btw')).toContainText('Side chat');
+  await expect(addRow(panel, 'btw')).toContainText('btw');
   await addRow(panel, 'btw').click();
   await expect(addMenu(panel)).toHaveCount(0);
   await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toHaveCount(0);
   await addButton(panel).click();
-  await expect(addRow(panel, 'note')).toHaveText('Session note');
+  await expect(addRow(panel, 'note')).toHaveText('Notes');
   await addRow(panel, 'note').click();
   await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
   await page.keyboard.press('Escape');

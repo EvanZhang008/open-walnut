@@ -476,7 +476,7 @@ describe('sideThreadLabel', () => {
 
   it('never renders an empty chip', () => {
     expect(sideThreadLabel({ id: 'st-x', threadSessionId: 'fork-x', createdAt: 'x' }))
-      .toBe('Side chat');
+      .toBe('btw');
   });
 });
 
@@ -493,7 +493,7 @@ describe('deriveThreadTitle', () => {
   });
 
   it('never produces an empty label', () => {
-    expect(deriveThreadTitle('   ')).toBe('Side chat');
+    expect(deriveThreadTitle('   ')).toBe('btw');
   });
 });
 

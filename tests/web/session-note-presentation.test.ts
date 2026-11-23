@@ -10,7 +10,7 @@ const css = readFileSync(path.join(root, 'web/src/styles/globals.css'), 'utf8');
 
 describe('session note presentation', () => {
   it('labels reference notes, without presenting an unexplained delivery dot', () => {
-    expect(note).toContain('aria-label="Session note"');
+    expect(note).toContain('aria-label={SESSION_NOTE_LABEL}');
     expect(note).toContain("{expanded ? 'Done' : 'Edit'}");
     expect(note).not.toContain('session-notes-dot');
     expect(css).not.toContain('.session-notes-dot');

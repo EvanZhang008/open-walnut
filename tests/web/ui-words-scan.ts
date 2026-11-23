@@ -39,7 +39,6 @@ export const RAW_ID: RegExp[] = [
 /** A second name for a concept of the word list (standard.md, "Words"), and the one to use. */
 export const SECOND_NAMES: Array<{ re: RegExp; use: string }> = [
   { re: /\bside threads?\b/i, use: 'side chat' },
-  { re: /^\s*btw\s*$/i, use: 'Side chat' },
   { re: /\bbuiltin\b/i, use: 'Built-in' },
   { re: /^\s*built in\s*$/i, use: 'Built-in' },
   { re: /\b(?:save|saved|saving) as (?:a )?todo\b/i, use: 'task' },

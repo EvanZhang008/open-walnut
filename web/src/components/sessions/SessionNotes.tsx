@@ -196,7 +196,7 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
       ref={cardRef}
       className={`session-notes${hasNote ? ' session-notes--has-note' : ''}${expanded ? ' is-editing' : ''}`}
       role="region"
-      aria-label="Session note"
+      aria-label={SESSION_NOTE_LABEL}
       // Keyboard escape hatches: Tab out to a REAL element → collapse (keyboard
       // parity with outside-click); Escape → collapse. relatedTarget=null blurs
       // (unmount race, window switch) deliberately do nothing — see above.

@@ -531,7 +531,7 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
    | a unit of work on the board | task (subtask under it) | todo, ticket, job |
    | an agent run on a task | session | conversation, agent run |
    | one subject of the user's requests to a node | thread | topic (a topic is a group chat with members, its own thing) |
-   | a question asked beside a session, kept out of it | side chat | side thread, btw |
+   | a question asked beside a session, kept out of it | side chat; its button and header read "btw", the session note's "Notes" (the user's names, 2026-11-23) | side thread |
    | a task's states | Needs you, To read, Working, Waiting (one task: Waiting or Snoozed), Not started, Completed | Need action, Needs action, Needs attention, Done (for a task) |
    | a thread's groups | Needs you, Waiting, Closed | |
    | the machine Walnut's server runs on | This Mac, else its host name | local, `__local__` |

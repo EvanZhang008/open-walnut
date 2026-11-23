@@ -50,7 +50,8 @@ describe('UI standard: plain words', () => {
     expect(hasRawId('Runs on __local__')).toBe(true);
     expect(hasRawId('Opus 5.5 with a 1M context')).toBe(false);
     expect(secondNameOf('Open side threads')).toBe('side chat');
-    expect(secondNameOf('btw')).toBe('Side chat');
+    // "btw" is the side chat button's own name (the user, 2026-11-23), not a second name.
+    expect(secondNameOf('btw')).toBeNull();
     expect(secondNameOf('Builtin (read-only)')).toBe('Built-in');
     expect(secondNameOf('Built-in apps')).toBeNull();
     const kinds = (src: string) => scanFile('x.tsx', src).map((h) => h.kind);

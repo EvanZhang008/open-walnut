@@ -238,7 +238,7 @@ export async function forceAllVisibleGeometry(panel: Locator): Promise<{ lines: 
 
 /** The names SessionPanel gives its five controls. */
 export const CTRL_NAMES: Record<string, string> = {
-  mode: 'Permission mode', model: 'Model', output: 'Reply style', btw: 'Side chat', note: 'Session note',
+  mode: 'Permission mode', model: 'Model', output: 'Reply style', btw: 'btw', note: 'Notes',
 };
 
 /** Crop the composer block. `lift` reaches further up the panel, for a shot that

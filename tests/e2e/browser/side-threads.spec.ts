@@ -276,7 +276,7 @@ async function openParentColumn(page: Page): Promise<Locator> {
  *  controls bar's own pill is visually hidden and carries the count, so it is read,
  *  never clicked; the composer's direct "btw" button (same class, no count) opens it. */
 const btwPill = (panel: Locator): Locator =>
-  panel.locator('.composer-controls-bar .side-question-pill', { hasText: 'Side chat' }).first()
+  panel.locator('.composer-controls-bar .side-question-pill', { hasText: 'btw' }).first()
 
 async function openDrawer(panel: Locator): Promise<Locator> {
   await directControl(panel, 'btw').click()
@@ -361,7 +361,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // A note annotates an existing thread, so the pill is absent until one exists.
   await expect(composer.locator('.session-notes-pill')).toHaveCount(0)
   // NO recursive "btw": the drawer must never host another side-thread pill.
-  await expect(popover.locator('.side-question-pill', { hasText: 'Side chat' })).toHaveCount(0)
+  await expect(popover.locator('.side-question-pill', { hasText: 'btw' })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/drawer-composer.png`, fullPage: true })
 
   await drawerInput(popover).pressSequentially('why does ', { delay: 20 })
@@ -382,7 +382,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // With a live thread the Note pill joins the row (its subject now exists), and
   // there is STILL no nested "btw".
   await expect(composer.locator('.session-notes-pill')).toBeVisible({ timeout: 15_000 })
-  await expect(popover.locator('.side-question-pill', { hasText: 'Side chat' })).toHaveCount(0)
+  await expect(popover.locator('.side-question-pill', { hasText: 'btw' })).toHaveCount(0)
   // THE assertion this spec exists for: the answer streams into the DRAWER.
   await expect(body.getByText(answerFor(FIRST_Q), { exact: false }).first())
     .toBeVisible({ timeout: 60_000 })
