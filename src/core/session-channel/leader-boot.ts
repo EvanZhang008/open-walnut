@@ -186,10 +186,15 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   active = side
   standing = standingNow
   // The door hosts dial into, and their credentials (host-door.ts, leader-issue.ts).
-  const [{ startHostDoor, pushDoorsToDialed }, issue, { setLeaderDoorOpen }, { pooledMachineIdOf }, { standbyRunner }, { isFollower }, { getConfig }] = await Promise.all([
+  const [{ startHostDoor, pushDoorsToDialed }, issue, { setLeaderDoorOpen }, { pooledMachineIdOf, liveSameDaemonHosts }, { standbyRunner }, { isFollower }, { getConfig }] = await Promise.all([
     import('./host-door.js'), import('./leader-issue.js'), import('../leader-doors.js'), import('../../providers/daemon-connection.js'),
     import('../standby/runner.js'), import('../server-role.js'), import('../config-manager.js'),
   ])
+  // A ban is of the machine: a key is read with its machine id and the other keys of its daemon
+  // (revoked-hosts.ts revokedAs), from what the links already hold (never a dial or a file read).
+  const [{ setRevokedHostResolver }, { daemonTwinsOfNow }] = await Promise.all([import('./revoked-hosts.js'), import('../hosts/daemon-twins.js')])
+  const machineIdOf = (hostKey: string): string | null => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey)
+  setRevokedHostResolver({ machineOf: machineIdOf, aliasesOf: (hostKey) => [...daemonTwinsOfNow(hostKey), ...liveSameDaemonHosts(hostKey)] })
   // The ban read again at boot, at a revoke event here, at a config write and every minute (a ban
   // another process wrote): a host whose standing changed is cut, or may link again (noteRevoked).
   const revokedWatch = await issue.watchRevokedHosts((changed) => { for (const k of changed) side.noteRevoked(k) }, REVOKED_RECHECK_MS, (err) => {
@@ -227,7 +232,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     flagOn: hostRunsSessionsAnyNow,
     doorUrls,
     // The machine id the host's daemon link said in its hello (the link the manager holds, else the pooled one).
-    machineIdOf: (hostKey) => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey),
+    machineIdOf,
     openStream: async (hostKey, purpose) => {
       const link = hostServer.hostServerLink(hostKey)
       if (!link) throw new Error(`the host ${hostKey} is not connected`)
@@ -274,7 +279,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   }
   // A revoke or an allow made from a route (leader-issue.ts revokeHostDoorNow, allowHostDoorNow).
   issue.setDoorHostHooks({
-    machineIdOf: (hostKey) => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey),
+    machineIdOf,
     recheck: (hostKey) => {
       issuer.refresh()
       for (const v of hostServer.peekHostServerViews()) if (v.hostKey === hostKey) lookIssue(v)
@@ -322,6 +327,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     issue.setRevokeStandbySync(null)
     issue.setDoorHostHooks(null)
     revokedWatch.stop()
+    setRevokedHostResolver(null)
     setQueuedRowLedger(null)
     stopDoor()
     side.stop()

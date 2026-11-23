@@ -172,6 +172,11 @@ export function daemonTwinGroups(rows: TwinRows): string[][] {
   return out
 }
 
+/** The other aliases of `host`'s daemon in the last snapshot, by the rows last read in full (a sync read: a ban, revoked-hosts.ts). */
+export function daemonTwinsOfNow(host: string): string[] {
+  return daemonTwinGroups(lastRows).find((g) => g.includes(host))?.filter((a) => a !== host) ?? []
+}
+
 /**
  * Each alias of a daemon that is not the one the person uses for it, with that one. The one used is
  * a row that can be used now (preferredAlias); a group with none stays as it is.

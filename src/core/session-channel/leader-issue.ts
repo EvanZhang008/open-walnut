@@ -17,9 +17,9 @@
  * A host whose door was revoked (revokeHostDoorNow) is issued nothing until it is allowed again
  * (allowHostDoorNow), whatever its link says, and its session channel is cut on every link: the
  * leader side neither keeps nor takes one, and applies nothing such a link sent (leader-apply.ts),
- * read from hostRevokedNow. A start aimed at it fails on every path, its sessions' relayed calls
- * are refused and its journal is held on it (revoked-hosts.ts names each reader; what is left:
- * REVOKED_STILL_REACHES). The cache is read again at boot, at each act here, on a revoke event and
+ * read from hostRevokedNow, under any name of its machine. Every way it reaches this leader is a row
+ * of revoked-reach.ts REVOKED_REACH, refused (a start, its relays, its journal held on it, its
+ * streams) or still reaching with the reason (the leader's own aims at it). The cache is read again at boot, at each act here, on a revoke event and
  * every minute (leader-boot.ts), so a ban another process writes holds here within a minute.
  * After an allow the host's kept records come in as they are: its channel log was never acked,
  * so its next link sends it again, judged by the rules of then. Going back to a release older than the ban lifts it: that release
@@ -36,7 +36,7 @@ import { requestOverStream, type HostCallAnswer } from './leader-links.js'
 import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js'
 import { foundHostUnadopted, type FoundFlags } from '../hosts/found-hosts.js'
 import { hostSwitchNow } from './switch.js'
-import { setRevokedHosts } from './revoked-hosts.js'
+import { hostAliasesNow, setRevokedHosts } from './revoked-hosts.js'
 import type { Duplex } from 'node:stream'
 import type { PermitPair } from './channel.js'
 
@@ -249,7 +249,10 @@ export { hostRevokedNow } from './revoked-hosts.js'
 
 /** Read the revoked hosts from the credential records again (at boot, at each act, a revoke event, a recheck): the hosts whose standing changed. */
 export async function refreshRevokedHosts(): Promise<string[]> {
-  return setRevokedHosts((await hostCredentials()).filter((r) => r.revoked && r.hostKey).map((r) => r.hostKey!))
+  const revoked = (await hostCredentials()).filter((r) => r.revoked && r.hostKey).map((r) => ({ hostKey: r.hostKey!, machineId: r.machineId ?? null }))
+  // A ban holds for every alias of the machine: the twin snapshot (core/hosts/daemon-twins.ts) is read before it is judged.
+  if (revoked.length > 0) await import('../hosts/daemon-twins.js').then((m) => m.daemonTwinsReady()).catch(() => { /* its key and machine id still hold */ })
+  return setRevokedHosts(revoked)
 }
 
 /**
@@ -307,27 +310,17 @@ export async function revokeHostDoorNow(hostKey: string, by: string): Promise<{ 
   return { revoked: true, closed: out.closed.length, standbySynced: await syncStandbyBounded() }
 }
 
-/**
- * What a revoked host still gets from this leader, said in the revoke's answer: the leader's own
- * daemon link of a host in its config is not the door, and a revoke does not end it. What a revoke
- * does end: the door and its key, the session channel (nothing the host says is applied), new starts
- * on every path, its sessions' relayed calls, and its journal's drain (held on the host until an allow).
- */
-export const REVOKED_STILL_REACHES: readonly string[] = [
-  "the leader's daemon link while the host is in the config: its hello and reports, and the copies the leader sends it (tasks, notes, memory)",
-  'messages and stops to sessions this leader itself runs there (the legacy path), until they end',
-  'host_exec, host_copy and host MCP calls that a person or a session here aims at it',
-  'to end all of it, remove the host from the config or turn it off',
-]
-
 /** Allow `hostKey` again after a revoke: it is checked now, so a host on its link is issued a fresh key at once. */
 export async function allowHostDoorNow(hostKey: string, by: string): Promise<{ allowed: boolean; standbySynced: boolean }> {
   const was = await allowHostDoor(hostKey, { by })
   if (!was) return { allowed: false, standbySynced: true }
   await noteDoorActed(hostKey)
   const standbySynced = await syncStandbyBounded()
-  try { hooks?.recheck(hostKey) } catch { /* checked at its next view */ }
+  // Every name of its machine: the allow lifted the machine's ban (host-credentials.ts hostRecordsIn).
+  const names = [hostKey, ...hostAliasesNow(hostKey).aliases]
+  for (const k of names) { try { if (k !== hostKey) hooks?.cut?.(k); hooks?.recheck(k) } catch { /* checked at its next view */ } }
   // The journal its link held while it was revoked (offline-handover.ts) drains now, not at the next copy.
-  try { (await import('../../providers/daemon-connection.js')).getConnectedDaemonConnection(hostKey)?.drainJournalSoon() } catch { /* the next connect drains it */ }
+  const daemons = await import('../../providers/daemon-connection.js')
+  for (const k of names) { try { daemons.getConnectedDaemonConnection(k)?.drainJournalSoon() } catch { /* the next connect drains it */ } }
   return { allowed: true, standbySynced }
 }

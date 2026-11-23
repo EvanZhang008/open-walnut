@@ -103,6 +103,8 @@ import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { getOpOwner, opNames } from '../ops/registry.js'
 import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
+// A leaf (zero imports): the ban of a revoked host, under any name of its machine.
+import { HostRevokedError, revokedAs } from '../core/session-channel/revoked-hosts.js'
 import { notLinuxSentence, classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
 import { PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
@@ -3332,6 +3334,26 @@ export class DaemonConnection {
     return false
   }
 
+  /** When each kind of relay a revoked host brought was last logged (revokedRelay). */
+  private revokedLoggedAt = new Map<string, number>()
+
+  /**
+   * What this host's daemon brings to this leader while the host is revoked, under any name of its
+   * machine (session-channel/revoked-reach.ts, the `daemon-event:` and `stream:` rows refused): the
+   * refusal's sentence, or null when it may run. Logged once per kind every 10 minutes.
+   */
+  private revokedRelay(kind: string): string | null {
+    if (this.hostKey === '__local__') return null
+    const as = revokedAs(this.hostKey)
+    if (!as) return null
+    const now = Date.now()
+    if (now - (this.revokedLoggedAt.get(kind) ?? 0) >= 10 * 60_000) {
+      this.revokedLoggedAt.set(kind, now)
+      log.session.info('DaemonConnection: refused what a revoked host brought; nothing ran', { host: this.hostKey, kind, revokedAs: as })
+    }
+    return new HostRevokedError(this.hostKey, `${kind} refused, nothing ran`, as).message
+  }
+
   /**
    * Answer a daemon-relayed STT request (phone voice input arriving over the
    * cloud bridge while this box holds the transcription engine). Runs the
@@ -3345,6 +3367,8 @@ export class DaemonConnection {
     const audio = event.audio
     const format = event.format
     if (typeof relayId !== 'number' || typeof audio !== 'string' || typeof format !== 'string') return
+    const revoked = this.revokedRelay('stt-request')
+    if (revoked) { try { await this.send('stt-result', { relayId, error: revoked }) } catch { /* the daemon times it out */ } return }
     let reply: Record<string, unknown>
     try {
       const { getConfig } = await import('../core/config-manager.js')
@@ -3384,6 +3408,8 @@ export class DaemonConnection {
     const action = (event as unknown as { action?: unknown }).action
     const params = (event as unknown as { params?: unknown }).params
     if (typeof relayId !== 'number' || typeof action !== 'string') return
+    const revoked = this.revokedRelay('launch-request')
+    if (revoked) { try { await this.send('launch-result', { relayId, error: revoked, errorKind: 'host_revoked' }) } catch { /* the daemon times it out */ } return }
     let reply: Record<string, unknown>
     try {
       const { handleLaunchRelayRequest } = await import('../core/sessions/mobile-launch.js')
@@ -3425,6 +3451,8 @@ export class DaemonConnection {
     const sessionId = (event as unknown as { sessionId?: unknown }).sessionId
     const params = (event as unknown as { params?: unknown }).params
     if (typeof relayId !== 'number' || typeof action !== 'string') return
+    const revoked = this.revokedRelay('control-request')
+    if (revoked) { try { await this.send('control-result', { relayId, error: revoked, errorKind: 'forbidden' }) } catch { /* the daemon times it out */ } return }
     // A test server attached read only never runs the real Walnut's session controls.
     if (this.isReadOnlyRemote) {
       log.session.warn('DaemonConnection: control relay refused, this is a test server attached read only', { host: this.hostKey, relayId, action })
@@ -3488,6 +3516,8 @@ export class DaemonConnection {
     const messageId = (event as unknown as { messageId?: unknown }).messageId
     const stopFence = (event as unknown as { stopFence?: unknown }).stopFence ?? null
     if (typeof relayId !== 'number') return
+    const revoked = this.revokedRelay('message-request')
+    if (revoked) { try { await this.send('message-result', { relayId, error: revoked, errorKind: 'host_revoked' }) } catch { /* the daemon times it out */ } return }
     // Not stored here: a test server attached read only is not where the phone's message
     // belongs, and 'not_stored' makes the companion keep it and ask again (a daemon
     // with 'client-role-v1' never sends it here at all).
@@ -4085,14 +4115,17 @@ export class DaemonConnection {
         // A machine's hub forward ('hub-forward-v1'): into a port this Walnut's config opens to
         // this host, on its own 127.0.0.1 (core/hosts/hub-ports.ts), or refused with why.
         accept: (info) => (info.from === 'follower' ? (stream) => { void this.plugFollowerStream(stream) }
-          : info.from === 'companion' ? companionStreamAcceptor(this.hostKey, info.sid)
-            : info.from === 'hub' ? acceptHubStream(this.hostKey, info) : null),
+          : info.from === 'companion' ? (this.revokedRelay('stream:companion') ? null : companionStreamAcceptor(this.hostKey, info.sid))
+            : info.from === 'hub' ? (this.revokedRelay('stream:hub') ? null : acceptHubStream(this.hostKey, info)) : null),
       })
     }
     return this.streams
   }
 
   private async plugFollowerStream(stream: Duplex): Promise<void> {
+    // A revoked host's own server reaches this leader no more (its forwarded writes, its reads).
+    const revoked = this.revokedRelay('stream:follower')
+    if (revoked) { stream.destroy(new Error(revoked)); return }
     const { getExposeRuntime } = await import('../web/expose-runtime.js')
     const port = getExposeRuntime()?.openPort() ?? null
     if (!port) {
@@ -8350,6 +8383,8 @@ export class DaemonConnection {
    */
   private dispatchTriggerEvent(event: DaemonEvent): Promise<void> {
     return (async () => {
+      // A revoked host's fires stay unacked in its daemon until it is allowed again (revoked-reach.ts).
+      if (this.revokedRelay(event.ev)) return
       const { getTriggerEventSink } = await import('../core/routines/trigger-bridge.js')
       // Likewise: a '__local__' instance the pool let go of during the import delivers nothing.
       if (this.localDialAbandoned()) return
@@ -11393,6 +11428,15 @@ export function getConnectedDaemonConnection(hostKey: string): DaemonConnection 
 export function sameDaemonHosts(hostKey: string): Promise<string[]> {
   const own = pooledFor(hostKey)
   return sameDaemonHostsOf(hostKey, own?.liveInstanceId ?? null)
+}
+
+/** The other aliases whose live link reaches the same daemon process as `hostKey`'s (their hellos named it): a sync read, no record. */
+export function liveSameDaemonHosts(hostKey: string): string[] {
+  const live = pooledFor(hostKey)?.liveInstanceId ?? null
+  if (!live) return []
+  const out = new Set<string>()
+  for (const conn of connectionPool.values()) if (conn.host !== hostKey && conn.liveInstanceId === live) out.add(conn.host)
+  return [...out]
 }
 
 /**

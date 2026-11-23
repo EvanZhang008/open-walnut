@@ -36,6 +36,7 @@ import { closeGoingAway } from '../../lib/ws-going-away.js'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { HostRequestNotSent, type ChannelSocket } from './leader-links.js'
 import { doorKeysOf, hostCredentialName, hostCredentialOf, MACHINE_ID_RE, type DoorKey } from './host-credentials.js'
+import { hostRevokedNow } from './revoked-hosts.js'
 import { DOOR_CLOSE, DOOR_SECRET_RE, doorSecret, hostDoorProof, isDoorFrame, leaderDoorProof, proofsEqual, type DoorFrame } from './door-wire.js'
 import type { LeaderStanding } from './leader-boot.js'
 
@@ -211,7 +212,8 @@ export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps, 
     revokesAtHello = revokes.get(hostCredentialName(f.machineId)) ?? 0
     const rec = await hostCredentialOf(f.machineId).catch(() => null)
     const configured = !!rec?.hostKey && await Promise.resolve(d.configured?.(rec.hostKey) ?? true).catch(() => false)
-    keys = rec && configured ? doorKeysOf(rec, now()) : []
+    // A ban of its machine under another of its names counts too (revoked-hosts.ts).
+    keys = rec && configured && !hostRevokedNow(rec.hostKey) ? doorKeysOf(rec, now()) : []
     if (phase === 'done') return
     if (!rec || keys.length === 0) {
       // Counted (a guess at machine ids is a guess); a host the user removed dials it only every few minutes.
@@ -271,6 +273,7 @@ async function stillStands(machineId: string, hostKey: string, keyId: string, d:
   const rec = await hostCredentialOf(machineId)
   if (!rec || rec.hostKey !== hostKey) return false
   if (!(await Promise.resolve(d.configured?.(hostKey) ?? true))) return false
+  if (hostRevokedNow(hostKey)) return false
   return doorKeysOf(rec, (d.now ?? Date.now)()).some((k) => k.keyId === keyId)
 }
 

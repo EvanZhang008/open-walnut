@@ -55,6 +55,7 @@ import { handStart, linesNotOthers, noteLinesHanded } from '../../../src/core/se
 import { _resetJudgeOfForTesting, judgingHostOf, noteHostJudged } from '../../../src/core/sessions/judge-of.js'
 import { _resetRefusedSessionsForTesting } from '../../../src/core/session-channel/refused-sessions.js'
 import * as routeTable from '../../../src/replica/route-table.js'
+import { hostRevokedNow, setRevokedHostResolver, setRevokedHosts } from '../../../src/core/session-channel/revoked-hosts.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -268,6 +269,8 @@ beforeEach(async () => {
 afterEach(async () => {
   side?.stop()
   side = null
+  setRevokedHosts([])
+  setRevokedHostResolver(null)
   await log?.close().catch(() => {})
   log = null
   await fsp.rm(dir, { recursive: true, force: true })
@@ -314,7 +317,7 @@ const attempts = new Set<string>()
 interface Rig { applied: Array<{ via: string; sids: string[]; data?: unknown }>; link: ReturnType<typeof socketTo>; channel: HostChannel; revoked: { now: boolean } }
 
 /** The leader side with the real transaction, store and judge memo, linked to a host channel of `devbox`. */
-async function rig(): Promise<Rig> {
+async function rig(o: { revoked?: (hostKey: string) => boolean } = {}): Promise<Rig> {
   log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
   const channel = new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => [] })
   const applied: Rig['applied'] = []
@@ -335,7 +338,7 @@ async function rig(): Promise<Rig> {
     noteHostJudged: (sid, host) => { note('noteHostJudged', null, sid); noteHostJudged(sid, host) },
     ownerOf: judgingHostOf,
     taskOf: (sid) => sessionTaskAndEngineInStore(sid)?.taskId,
-    revoked: () => revoked.now,
+    revoked: o.revoked ?? (() => revoked.now),
     scopeIds: (_host, sid, key, ids) => (key === 'attemptId' ? ids.filter((a) => attempts.has(a)) : linesNotOthers(sid, ids)),
     backoffMs: () => 20,
     log: () => {},
@@ -451,6 +454,32 @@ it('nothing of a revoked host applies: its link closes, and a socket it dials is
   const again = socketTo(r.channel)
   expect(side!.adopt('devbox', again.sock)).toBe(false)
   expect(again.closed()).toBe(true)
+})
+
+it('a ban of another name of the host\'s machine holds on its channel: its facts are not applied, its link closes, its socket is not taken', async () => {
+  await handStart('devbox', 'later', { taskId: 't-own' })
+  // The leader side reads the real ban (leader-boot.ts hands it hostRevokedNow); `devbox`'s hello names machine m-devbox.
+  const r = await rig({ revoked: hostRevokedNow })
+  setRevokedHostResolver({ machineOf: (k) => (k === 'devbox' ? 'm-devbox' : null), aliasesOf: () => [] })
+  // Revoked as `devbox-net`, the machine's other row, while `devbox`'s records are on their way.
+  setRevokedHosts([{ hostKey: 'devbox-net', machineId: 'm-devbox' }])
+  const before = r.applied.length
+  sendAll(r, 'later')
+  await until(() => r.link.closed())
+  await side!.idle('devbox')
+  expect(r.applied.slice(before)).toEqual([])
+  expect(await getSessionByClaudeId('later')).toBeNull()
+  const again = socketTo(r.channel)
+  expect(side!.adopt('devbox', again.sock)).toBe(false)
+})
+
+it('a revoke of another name of the machine cuts this name\'s link at once (noteRevoked judges every link)', async () => {
+  const r = await rig({ revoked: hostRevokedNow })
+  setRevokedHostResolver({ machineOf: () => null, aliasesOf: (k) => (k === 'devbox' ? ['devbox-net'] : []) })
+  setRevokedHosts([{ hostKey: 'devbox-net' }])
+  side!.noteRevoked('devbox-net')
+  expect(r.link.closed()).toBe(true)
+  expect(side!.linked('devbox')).toBe(false)
 })
 
 it('a revoke made now closes the host\'s link at once (leader-issue.ts calls noteRevoked)', async () => {

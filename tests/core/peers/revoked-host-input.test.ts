@@ -4,8 +4,10 @@
  *   - its sessions' relayed `walnut` calls run nothing (peers/capability-router.ts);
  *   - its journal is held, not dropped: nothing is read or acked, so every record stays on the host
  *     and the first drain after an allow takes them in (offline-handover.ts).
+ * A ban is of the machine: under another name of it (an alias of one daemon, or a key whose hello
+ * names the revoked machine) all of it is refused too.
  * A start aimed at it is in tests/providers/host-judged-runner.test.ts; its channel in
- * tests/core/session-channel/host-data-ownership-ratchet.test.ts.
+ * tests/core/session-channel/host-data-ownership-ratchet.test.ts; its door in host-credentials.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
@@ -23,7 +25,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', () => ({ deliverToSes
 import { handleGatewayCapability } from '../../../src/core/peers/capability-router.js'
 import { runOfflineHandover, type HandoverConnection } from '../../../src/core/offline-handover.js'
 import { _setLedgerFileForTesting } from '../../../src/core/offline-merge/ledger.js'
-import { setRevokedHosts } from '../../../src/core/session-channel/revoked-hosts.js'
+import { HostRevokedError, assertHostNotRevoked, hostRevokedNow, revokedAs, setRevokedHostResolver, setRevokedHosts } from '../../../src/core/session-channel/revoked-hosts.js'
 import type { OfflineRecord } from '../../../src/providers/offline-host-core.js'
 
 const SID = 'eeeeeeee-7777-4777-8777-777777777778'
@@ -59,6 +61,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   setRevokedHosts([])
+  setRevokedHostResolver(null)
   _setLedgerFileForTesting(null)
   fs.rmSync(dir, { recursive: true, force: true })
 })
@@ -93,5 +96,45 @@ describe('a revoked host\'s journal', () => {
     expect(r.held).toBeUndefined()
     expect(executeOp).toHaveBeenCalledTimes(2)
     expect(journal).toEqual([])
+  })
+})
+
+/** `devbox-a` is revoked; `devbox-b` is the same machine by its hello, `devbox-a-net` another row of the same daemon. */
+function banOneAlias(): void {
+  setRevokedHosts([{ hostKey: 'devbox-a', machineId: 'm-devbox' }])
+  setRevokedHostResolver({
+    machineOf: (k) => (k === 'devbox-a' || k === 'devbox-b' ? 'm-devbox' : null),
+    aliasesOf: (k) => (k === 'devbox-a-net' ? ['devbox-a'] : []),
+  })
+}
+
+describe('a ban of one alias', () => {
+  it('names every alias of the machine as revoked, and says under which name', () => {
+    banOneAlias()
+    expect(revokedAs('devbox-a')).toBe('devbox-a')
+    expect(revokedAs('devbox-a-net')).toBe('devbox-a')
+    expect(revokedAs('devbox-b')).toBe('machine:m-devbox')
+    expect(revokedAs('devbox-c')).toBeNull()
+    expect(revokedAs('__local__')).toBeNull()
+    expect(() => assertHostNotRevoked('devbox-a-net', 'The session was not started')).toThrow(/devbox-a-net is revoked \(another name of the revoked host devbox-a\)/)
+    expect(() => assertHostNotRevoked('devbox-b', 'x')).toThrow(HostRevokedError)
+    // A resolver that cannot read its links names nothing more: the key itself still counts.
+    setRevokedHostResolver({ machineOf: () => { throw new Error('gone') }, aliasesOf: () => { throw new Error('gone') } })
+    expect(hostRevokedNow('devbox-b')).toBe(false)
+    expect(hostRevokedNow('devbox-a')).toBe(true)
+  })
+
+  it('refuses the other aliases\' relayed calls, and holds their journals, with no daemon names given', async () => {
+    banOneAlias()
+    for (const host of ['devbox-b', 'devbox-a-net']) {
+      const out = await handleGatewayCapability('tools.call', SID, { name: 'task_list', args: {} }, host)
+      expect(out, host).toMatchObject({ ok: false, error: { code: 'host_revoked' } })
+      const journal = [held(1)]
+      const asked: string[] = []
+      expect(await runOfflineHandover(link(host, journal, asked)), host).toMatchObject({ held: true })
+      expect(asked).toEqual([])
+    }
+    expect(executeOp).not.toHaveBeenCalled()
+    expect((await handleGatewayCapability('tools.call', SID, { name: 'task_list', args: {} }, 'devbox-c')).ok).toBe(true)
   })
 })

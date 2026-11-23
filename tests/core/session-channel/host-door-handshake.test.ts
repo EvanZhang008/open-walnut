@@ -147,6 +147,18 @@ describe('the leader\'s door', () => {
     expect(adopted).toHaveLength(0)
   })
 
+  it('closes 4004 for a machine banned under another of its names, even before its record says so', async () => {
+    const { setRevokedHostResolver, setRevokedHosts } = await import('../../../src/core/session-channel/revoked-hosts.js')
+    const url = await leaderDoor()
+    const { verifyKey } = await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
+    setRevokedHosts([{ hostKey: 'devbox-net' }])
+    setRevokedHostResolver({ machineOf: () => null, aliasesOf: (k) => (k === 'devbox' ? ['devbox-net'] : []) })
+    try {
+      expect((await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })).code).toBe(4004)
+      expect(adopted).toHaveLength(0)
+    } finally { setRevokedHosts([]); setRevokedHostResolver(null) }
+  })
+
   it('closes 4001 on a wrong host proof, and on any frame before the auth, adopting nothing', async () => {
     const url = await leaderDoor()
     await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })

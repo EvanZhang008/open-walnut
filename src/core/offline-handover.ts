@@ -214,6 +214,7 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   // or acked, so the host keeps every record, and the first drain after an allow takes them in
   // (session-channel/revoked-hosts.ts; host-doors.ts says so in the revoke's answer).
   const { hostRevokedNow } = await import('./session-channel/revoked-hosts.js');
+  // Under any name of its machine (revoked-hosts.ts); the daemon's own names too, as this link worked them out.
   if (hostRevokedNow(conn.hostKey) || (conn.aliases ?? []).some((a) => hostRevokedNow(a))) {
     const now = Date.now();
     if (now - (heldLoggedAt.get(conn.hostKey) ?? 0) >= HELD_LOG_EVERY_MS) {

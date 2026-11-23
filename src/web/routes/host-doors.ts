@@ -2,12 +2,15 @@
  * /api/host-doors: the door credentials this leader issues its hosts (core/session-channel/
  * host-credentials.ts, leader-issue.ts), one host at a time.
  *
- *   GET  /:hostKey          { hostKey, revoked, at?, by?, allowed?, credentials }   (never a key)
+ *   GET  /:hostKey          { hostKey, revoked, at?, by?, as?, allowed?, credentials }   (never a key)
  *   POST /:hostKey/revoke   a ban: its key is dropped, its door socket closes, its session channel
  *                           is cut on every link (nothing it sends is applied), a start aimed at it
  *                           fails on every path, its sessions' relayed calls are refused, its journal
  *                           is held on it, and nothing is issued to it until an allow → the GET's
- *                           answer, `closed` and `stillReaches` (leader-issue.ts REVOKED_STILL_REACHES)
+ *                           answer, `closed`, `refused` and `stillReaches` (both from one table:
+ *                           revoked-reach.ts REVOKED_REACH). A ban is of the host's machine: under
+ *                           any of its names (aliases of one daemon), the GET says `as` when the
+ *                           ban was made under another name, and an allow under any name lifts it
  *   POST /:hostKey/allow    let it be issued a key again (at its next link check, at once when linked)
  *                           → the GET's answer and `allowedNow` (false: it was not revoked). What the
  *                           host kept while revoked comes in as it is: its journal drains, and the
@@ -51,18 +54,22 @@ function hostKeyOf(req: Request, res: Response): string | null {
 async function refusedCaller(req: Request, res: Response, hostKey: string): Promise<boolean> {
   const origin = requestOrigin(req)
   // Through fromHost: a call relayed over another alias of the same daemon is that host's too.
-  const { fromHost } = await import('../../core/hosts/session-host-origin.js')
-  if (origin !== UNKNOWN_ORIGIN && !(await fromHost(hostKey, origin))) return false
+  // And one whose hello names the same machine (revoked-hosts.ts sameMachine): a ban is of the machine.
+  const [{ fromHost }, { sameMachine }] = await Promise.all([import('../../core/hosts/session-host-origin.js'), import('../../core/session-channel/revoked-hosts.js')])
+  const viaSameMachine = origin.startsWith('host:') && sameMachine(origin.slice('host:'.length), hostKey)
+  if (origin !== UNKNOWN_ORIGIN && !viaSameMachine && !(await fromHost(hostKey, origin))) return false
   log.web.warn('host door: a revoke or allow was refused (it came through the host itself, or from an unknown origin)', { host: hostKey, origin })
   res.status(403).json({ error: `A host's door is revoked or allowed from this leader or another machine, never through ${hostKey} itself.`, code: 'own_host' })
   return true
 }
 
+/** The door of `hostKey`'s machine, under whichever of its names its record was issued (`as`: the name of the ban when it is another). */
 async function doorOf(hostKey: string) {
-  const { hostCredentials, revokedHostIn } = await import('../../core/session-channel/host-credentials.js')
-  const recs = (await hostCredentials()).filter((d) => d.hostKey === hostKey)
-  const revoked = revokedHostIn(recs, hostKey)
+  const { hostCredentials, hostRecordsIn, revokedHostIn } = await import('../../core/session-channel/host-credentials.js')
+  const recs = hostRecordsIn(await hostCredentials(), hostKey)
+  const ban = revokedHostIn(recs, hostKey)
   const allowed = recs.find((d) => d.allowed)?.allowed
+  const revoked = ban ? { at: ban.at, by: ban.by, ...(ban.as !== hostKey ? { as: ban.as } : {}) } : null
   return { hostKey, revoked: !!revoked, ...(revoked ?? {}), ...(allowed ? { allowed } : {}), credentials: recs.filter((d) => !!d.verifyKey).length }
 }
 
@@ -78,14 +85,16 @@ hostDoorsRouter.post('/:hostKey/revoke', async (req: Request, res: Response, nex
     const hostKey = hostKeyOf(req, res)
     if (!hostKey || await refusedCaller(req, res, hostKey)) return
     const by = await changedBy(req)
-    const { revokeHostDoorNow, REVOKED_STILL_REACHES } = await import('../../core/session-channel/leader-issue.js')
+    const [{ revokeHostDoorNow }, { REVOKED_STILL_REACHES, REVOKED_REFUSED }] = await Promise.all([
+      import('../../core/session-channel/leader-issue.js'), import('../../core/session-channel/revoked-reach.js'),
+    ])
     const out = await revokeHostDoorNow(hostKey, by)
     if (!out.revoked) {
       res.status(404).json({ error: `${hostKey} holds no door credential here and has not linked yet; there is nothing to revoke`, code: 'no_door_credential' })
       return
     }
     log.web.info('host door: a host was revoked', { host: hostKey, by, closed: out.closed })
-    res.json({ ...(await doorOf(hostKey)), closed: out.closed, stillReaches: REVOKED_STILL_REACHES, standbySynced: out.standbySynced })
+    res.json({ ...(await doorOf(hostKey)), closed: out.closed, refused: REVOKED_REFUSED, stillReaches: REVOKED_STILL_REACHES, standbySynced: out.standbySynced })
   } catch (err) { next(err) }
 })
 

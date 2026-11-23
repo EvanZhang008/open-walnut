@@ -389,10 +389,10 @@ export function createLeaderSide(deps: LeaderSideDeps) {
      * none is made or taken until it is allowed; an allowed one is linked again when it is wanted.
      */
     noteRevoked(hostKey: string): void {
-      const s = hosts.get(hostKey)
-      if (!s || stopped) return
-      if (isRevoked(hostKey)) closeLink(s, 'revoked')
-      else ensure(hostKey)
+      if (stopped) return
+      // A ban is of the machine: every link judged again, so another name of it is cut too (revoked-hosts.ts).
+      for (const s of hosts.values()) if (isRevoked(s.key)) closeLink(s, 'revoked')
+      if (hosts.has(hostKey) && !isRevoked(hostKey)) ensure(hostKey)
     },
     /** Ask `hostKey` for these rows whole now, past the rate limit (a start's answer named a session whose born row was refused). */
     resyncNow(hostKey: string, sids: readonly string[]): void {

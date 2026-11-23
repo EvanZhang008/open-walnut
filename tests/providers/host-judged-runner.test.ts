@@ -531,6 +531,23 @@ describe('a start hands the host its session, and only that one (handed-sessions
     } finally { setRevokedHosts([]) }
   })
 
+  it('a start aimed at another name of a revoked machine fails the same way, on both paths', async () => {
+    const { setRevokedHostResolver, setRevokedHosts } = await import('../../src/core/session-channel/revoked-hosts.js')
+    const h = harness()
+    const f = fakeSide()
+    // Revoked as `devbox-net`, another row of the same daemon; the start names `devbox`.
+    setRevokedHosts([{ hostKey: 'devbox-net', machineId: 'm-devbox' }])
+    setRevokedHostResolver({ machineOf: () => null, aliasesOf: (k) => (k === 'devbox' ? ['devbox-net'] : []) })
+    try {
+      setHostJudgeProbe((host) => host === 'devbox')
+      await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')).rejects.toThrow(/the host devbox is revoked \(another name of the revoked host devbox-net\)/)
+      setHostJudgeProbe(() => false)
+      await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')).rejects.toThrow(/the host devbox is revoked/)
+      expect(f.sent).toEqual([])
+      expect(handsNow()).toEqual([])
+    } finally { setRevokedHosts([]); setRevokedHostResolver(null) }
+  })
+
   it('a transfer attempt counts as started only on the host its start went to (R2-S1, fork-init)', async () => {
     const h = harness()
     setHostJudgeProbe((host) => host === 'devbox')
