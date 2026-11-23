@@ -24,7 +24,7 @@ import { cancelWorkspaceStart, fetchScripts, rerunTaskSetup, retryTaskWorkspace,
 import { log } from '@/utils/log';
 import { hostName, setupWaitsForYou, workspaceOf, workspaceStateLabel } from './workspace-text';
 import { ScriptRunCard } from './ScriptRunCard';
-import { Breakable } from './Breakable';
+import { Breakable } from '@/components/common/Breakable';
 import { ProjectScriptsDialog } from './ProjectScriptsDialog';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import '@/styles/workspaces.css';

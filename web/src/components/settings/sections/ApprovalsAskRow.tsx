@@ -12,10 +12,11 @@
  * Only the person's own window moves it (routes/config.ts refuses an agent), on any device they are
  * signed in on: no extra ask to turn it off.
  */
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SettingsRow } from '../SettingsSection';
 import { EmptyState } from '../../common/EmptyState';
+import { Breakable } from '@/components/common/Breakable';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { APPROVALS_SWITCH_LABEL, listApprovals, type Approval } from '@/api/approvals';
@@ -99,16 +100,21 @@ function UnaskedList({ off }: { off: boolean }) {
           <ul className="approvals-unasked-list">
             {shown.map(({ lead: a, all: same }) => {
               // One scannable row: what happened (a path's folders moved out), its time in its own
-              // column; under it the task and the folders as one cut-able line, the count under the time.
+              // column; under it the task and the folders, quiet and whole (a folder path wraps after
+              // its separators, never cut: 2026-11-22, the audit's third look), the count under the time.
               const { text, dirs } = splitPaths(a.what);
-              const meta = [a.requester.taskTitle, ...dirs].filter(Boolean).join(' · ');
+              const meta = [a.requester.taskTitle, ...dirs].filter((m): m is string => !!m);
               return (
                 <li key={a.id} data-testid="settings-approvals-unasked-item" data-count={same.length}>
                   <details>
                     <summary>
-                      <span className="approvals-unasked-what wn-title" title={text === a.what ? undefined : a.what}>{text}</span>
+                      <span className="approvals-unasked-what wn-title">{text}</span>
                       <time className="approvals-unasked-when wn-fixed" dateTime={whenOf(a)} data-testid="settings-approvals-unasked-when">{timeAgo(whenOf(a), { long: true })}</time>
-                      {meta && <span className="approvals-unasked-meta wn-meta" data-testid="settings-approvals-unasked-meta">{meta}</span>}
+                      {meta.length > 0 && (
+                        <span className="approvals-unasked-meta" data-testid="settings-approvals-unasked-meta">
+                          {meta.map((m, i) => <Fragment key={i}>{i > 0 && ' · '}{dirs.includes(m) ? <Breakable text={m} /> : m}</Fragment>)}
+                        </span>
+                      )}
                       {same.length > 1 && <span className="approvals-unasked-count wn-fixed">{same.length} times</span>}
                     </summary>
                     <dl className="approvals-unasked-more-info">

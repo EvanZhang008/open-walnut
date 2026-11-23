@@ -2,7 +2,9 @@
  * 2026-11-22, the UI audit's second look: three panes lost what their first screen showed.
  * - Settings > Sessions: the default model and effort rows (three lines of help each, an "as last
  *   seen" line) and the default mode row stacked under its help pushed the engine checkboxes off.
- *   Every row above them keeps a help of one short line; the rest is the row's hover (`title`).
+ *   Every row above them keeps a help of one short line; the rest opens under it from the row's
+ *   "More" (SettingsRow `more`). Its third look: the rest moved into a `title` hover lost Default
+ *   effort's last seen efforts and what "Wait for the reset" means, so a hover alone is refused.
  * - Remote Hosts: one live host's card stretched across the pane put its rings 300px apart and
  *   pushed Details down. A card as wide as the pane reads in two columns.
  * The Org list's fold of six Directors is guarded in org-leaders.test.ts.
@@ -71,10 +73,15 @@ describe('Settings > Sessions keeps the engine checkboxes on the first screen', 
     expect(read('web/src/styles/settings-rows.css')).toMatch(/\.settings-row\.settings-row-wraps\s*\{[^}]*flex-wrap: wrap/)
   })
 
-  it('the "as last seen" efforts are the row\'s hover, not another line of help', () => {
-    const src = read('web/src/components/settings/sections/ClaudeLaunchDefaultsRow.tsx')
-    expect(src).not.toMatch(/default-claude-effort-observed/)
-    expect(src).toMatch(/title=\{`[\s\S]*?as last seen/)
+  it('what a row\'s one line leaves out opens on the page from its More, never only a hover', () => {
+    const fallback = 'web/src/components/settings/sections/FallbackEngineRow.tsx'
+    for (const f of [...rows, fallback]) expect(read(f), f).not.toMatch(/^\s*title=/m)
+    expect(read('web/src/components/settings/sections/ClaudeLaunchDefaultsRow.tsx'))
+      .toMatch(/more=\{<>[\s\S]*?wins over it[\s\S]*?data-testid="default-claude-effort-observed"[\s\S]*?as last seen/)
+    expect(read(fallback)).toMatch(/more=\{<span data-testid="fallback-engine-more">[\s\S]*?wait for the reset[\s\S]*?once its usage resets/)
+    const row = read('web/src/components/settings/SettingsSection.tsx')
+    expect(row).toMatch(/<DisclosureButton inline className="settings-row-more"[^>]*aria-controls=\{moreId\}/)
+    expect(row).toMatch(/hasMore && moreOpen && <div className="settings-row-help settings-row-more-body" id=\{moreId\}/)
   })
 })
 

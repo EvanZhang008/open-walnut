@@ -41,11 +41,20 @@ describe('Files with no file open', () => {
   })
 })
 
-/** The Notes tree's stored width yields to the reader the same way (2026-11-22: 497 px in a 456 px page). */
+/**
+ * The Notes tree's stored width yields to the reader the same way (2026-11-22: 497 px in a 456 px
+ * page), and the tree sits at its rows' own width: the stored width is only its most, so four
+ * folders no longer hold an empty column at a width dragged long ago (the same day's audit).
+ */
 describe('Notes tree in a narrow page', () => {
-  it('is capped to a share of the page and drags from the width on screen', () => {
+  it('sits at its rows\' width, at least its minimum, at most the dragged width or 45% of the page', () => {
     const rule = css.match(/\n\.notes-tree-pane \{[^}]*\}/)?.[0] ?? ''
-    expect(rule).toMatch(/max-width:\s*45%/)
+    expect(rule).toMatch(/width:\s*fit-content/)
+    expect(rule).toMatch(/min-width:\s*min\(220px,\s*45%\)/)
+    expect(rule).toMatch(/max-width:\s*min\(var\(--notes-tree-max, \d+px\),\s*45%\)/)
+    expect(notes).toMatch(/\['--notes-tree-max' as string\]: `\$\{listWidth\}px`/)
+  })
+  it('drags from the width on screen', () => {
     expect(notes).toMatch(/startWidthRef\.current = Math\.min\(listWidthRef\.current, listPaneRef\.current\?\.getBoundingClientRect\(\)\.width/)
   })
 })

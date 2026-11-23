@@ -47,19 +47,16 @@ export interface StoreCardProps {
 
 export function StoreCard({ testId, icon, name, badge, line, note, parts, status, statusGlyph, control, kind, onSelect, open, dim, data }: StoreCardProps) {
   return (
-    // The pointer resting on the card opens its clamped texts as a whole card, widened in the top
-    // layer over a placeholder (utils/truncation-peek.ts), so its grid row never moves.
-    <div className={`apps-card${dim ? ' apps-card-dim' : ''}`} data-peek-row="" data-testid={testId} data-card-tone={status.tone} {...data}>
+    <div className={`apps-card${dim ? ' apps-card-dim' : ''}`} data-testid={testId} data-card-tone={status.tone} {...data}>
       <div className="apps-card-top">
         <span className="apps-card-icon">{icon}</span>
         <div className="apps-card-text">
-          <button type="button" className="apps-card-main" onClick={onSelect} data-testid={`${testId}-details`} data-peek-through="">
+          <button type="button" className="apps-card-main" onClick={onSelect} data-testid={`${testId}-details`}>
             <span className="apps-card-name wn-title">{name}</span>
           </button>
           {badge}
-          {/* A description, not a name: clamped to a few lines (apps-page.css), read whole on the
-              detail page or when the card opens. */}
-          <div className="apps-card-line">{line}</div>
+          {/* Shown whole, wrapping: the cards of a row share the tallest one's height (apps-page.css). */}
+          <div className="apps-card-line wn-title">{line}</div>
           {note && <div className="apps-card-note">{note}</div>}
         </div>
       </div>

@@ -45,7 +45,7 @@ export function ClaudeDefaultModeRow({ config }: { config: Config }) {
   // (the audit's second look: stacked under three lines of help, it pushed the engine list off).
   return <SettingsRow label="Claude Code default mode" htmlFor="claude-default-mode" error={error} className="settings-row-wraps"
     help="New sessions use Claude Code's mode on that machine, or Auto if none."
-    title="Projects and sessions can differ."
+    more="Projects and sessions can have a mode of their own, which wins over this one."
     control={<span className="settings-captioned-fields">
       <label className="settings-field-caption" htmlFor="claude-default-mode-host">Machine</label>
       <select id="claude-default-mode-host" aria-label="Default mode host" className="settings-select" value={host} disabled={busy}

@@ -172,6 +172,13 @@ test('Settings: the fallback engine and its model save, read back after a reload
   await expect(page.getByTestId('fallback-model-row')).toHaveCount(0)
   await expect(select.locator('option').first()).toHaveText('Wait for the reset')
   await expect(page.getByTestId('fallback-engine-help')).toHaveText('New tasks use it while the default engine is out of usage.')
+  // The rest of the help is on the page, under the row's More, never only a hover (2026-11-22).
+  await expect(page.getByTestId('fallback-engine-more')).toHaveCount(0)
+  await row.getByTestId('settings-row-more').click()
+  await expect(row.getByTestId('settings-row-more')).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByTestId('fallback-engine-more')).toContainText('Wait for the reset: new tasks start on the default engine once its usage resets')
+  await row.getByTestId('settings-row-more').click()
+  await expect(page.getByTestId('fallback-engine-more')).toHaveCount(0)
   await expect(select.locator('option[value="claude"]')).toHaveText(/^Claude Code, another model/)
 
   await select.selectOption('codex')

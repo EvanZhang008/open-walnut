@@ -12,10 +12,10 @@ import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
 /**
  * The grid of store cards, the same in every section (built-ins, each source, Get more). Cards read
  * left to right, top to bottom, and the cards of one row share its height, so their footers
- * (status, Sidebar, Open) line up across the row. A long description is clamped to a few lines on
- * the card and read whole in place on hover or on the detail page (2026-11-22, the UI audit: packed
- * cards of their own heights left ragged columns, a short card under a long one started the next
- * row's cards out of order, and Open no longer lined up beside Open).
+ * (status, Sidebar, Open) line up across the row. Every description is shown whole (2026-11-22, the
+ * UI audit: packed cards of their own heights left ragged columns and Open no longer lined up
+ * beside Open; then descriptions clamped to 3 lines hid the end of four of them, readable only on
+ * hover with no sign of it).
  */
 export function AppsGrid({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return <div className={className ? `apps-grid ${className}` : 'apps-grid'} {...rest} />

@@ -2,7 +2,8 @@
 .approvals-unasked-list { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .approvals-unasked-list li { min-width: 0; }
 /* One scannable row: what happened | its time (own column, right edge); under it the task and the
-   folders on one line (.wn-meta, cut first, peeked on hover) | the count (2026-11-22 audit). */
+   folders, quiet and whole, wrapping after a path's separators (Breakable) | the count (2026-11-22
+   audit; its third look: cut to one line, the folders could only be read from a hover). */
 .approvals-unasked-list summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -19,7 +20,7 @@
 .approvals-unasked-more-info dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .approvals-unasked-more-info pre { margin: 0; max-height: 160px; overflow: auto; white-space: pre-wrap; font-size: var(--font-size-sm); font-family: var(--font-mono); }
 .approvals-unasked-what { font-size: var(--font-size-md); color: var(--fg); overflow-wrap: anywhere; }
-.approvals-unasked-meta { grid-column: 1; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.approvals-unasked-meta { grid-column: 1; min-width: 0; font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 .approvals-unasked-when, .approvals-unasked-count {
   grid-column: 2;
   justify-self: end;

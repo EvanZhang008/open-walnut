@@ -9,9 +9,10 @@
  *   Default model    [Not set (Claude Code decides: Opus 5.5) v]
  *   Default effort   [Not set (Claude Code decides)           v]
  *
- * Each row's help is one short line; the rest (who wins, Claude Code's own effort as last seen)
- * is the row's hover, so the engine checkboxes below stay on the first screen (2026-11-22, the
- * audit's second look: three lines of help here pushed them off). Saves on pick, like Default engine.
+ * Each row's help is one short line and the rest (who wins, Claude Code's own effort as last seen)
+ * opens under it from its "More", so the engine checkboxes below stay on the first screen and
+ * nothing is only a hover (2026-11-22, the audit's second and third looks). Saves on pick, like
+ * Default engine.
  */
 import { useEffect, useState } from 'react';
 import type { Config } from '@open-walnut/core';
@@ -67,7 +68,7 @@ export function ClaudeLaunchDefaultsRow({ config, save }: { config: Config; save
         label="Default model"
         htmlFor="default-claude-model"
         help="Sessions with no model of their own start on it."
-        title="Not set: Claude Code's own setting decides. A pick at create, a switch in the session and a project's own default win."
+        more="Not set: Claude Code's own setting decides. A model picked when the task is created, a switch in the session or a project's own default wins over it."
         error={model.error}
         data-testid="default-claude-model-row"
         control={
@@ -82,8 +83,10 @@ export function ClaudeLaunchDefaultsRow({ config, save }: { config: Config; save
         label="Default effort"
         htmlFor="default-claude-effort"
         help="Sessions with no effort of their own start at it."
-        title={`A task, session or project pick wins. Not set: Claude Code decides.${seen ? `\nClaude Code's own effort, as last seen: ${seen}` : ''}`}
-        data-observed={seen || undefined}
+        more={<>
+          A task, session or project pick wins over it. Not set: Claude Code decides.
+          {seen && <span className="settings-row-more-line" data-testid="default-claude-effort-observed">Claude Code&apos;s own effort, as last seen: {seen}</span>}
+        </>}
         error={effort.error}
         data-testid="default-claude-effort-row"
         control={

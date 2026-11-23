@@ -150,6 +150,9 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     const quietWhat = `Post the changelog ${stamp()}`
     const quiet = await builtin(request, quietWhat)
     expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'browserOutward' })
+    // An upload's long source path, to read whole in the record below.
+    const pathDir = `~/.local/state/garden/tasks/${stamp()}/promo/clips/summer-bakery-tour/`
+    expect((await builtin(request, `Upload ${pathDir}demo.mp4 from this computer into example.org`)).approval).toMatchObject({ status: 'approved' })
     await page.waitForTimeout(1500)
     await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${quiet.approval.id}"]`)).toHaveCount(0)
 
@@ -171,17 +174,27 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     // A row opens to what it was: the command and who asked.
     const row = page.getByTestId('settings-approvals-unasked-item').filter({ hasText: quietWhat })
     // One scannable row: what happened first, its time in its own column at the right edge, the task
-    // on one cut-able line under it (2026-11-22 audit: long paths and faint times in one block).
+    // under it (2026-11-22 audit: long paths and faint times in one block).
     const cells = await row.locator('summary').evaluate((el) => {
       const box = (q: string) => el.querySelector(q)!.getBoundingClientRect()
       const meta = el.querySelector('.approvals-unasked-meta')
       return { row: el.getBoundingClientRect(), what: box('.approvals-unasked-what'), when: box('.approvals-unasked-when'),
-        metaWrap: meta ? getComputedStyle(meta).whiteSpace : 'nowrap' }
+        metaWrap: meta ? getComputedStyle(meta).whiteSpace : 'normal' }
     })
     expect(Math.abs(cells.when.right - cells.row.right)).toBeLessThanOrEqual(1)
     expect(cells.when.left).toBeGreaterThanOrEqual(cells.what.right)
     expect(Math.abs(cells.when.top - cells.what.top)).toBeLessThanOrEqual(3)
-    expect(cells.metaWrap).toBe('nowrap')
+    expect(cells.metaWrap).toBe('normal')
+    // The upload's row names the file; its folders sit under it whole, quiet, wrapping after a "/"
+    // and never cut (the audit's third look: cut to one line, they were only a hover away).
+    const upload = page.getByTestId('settings-approvals-unasked-item').filter({ hasText: 'Upload demo.mp4 from this computer' })
+    const uploadMeta = upload.getByTestId('settings-approvals-unasked-meta')
+    await expect(uploadMeta).toContainText(pathDir)
+    expect(await uploadMeta.evaluate((el) => ({
+      cut: getComputedStyle(el).textOverflow === 'ellipsis' || el.scrollWidth > el.clientWidth + 1,
+      breaks: el.querySelectorAll('wbr').length,
+    }))).toMatchObject({ cut: false })
+    expect(await uploadMeta.evaluate((el) => el.querySelectorAll('wbr').length)).toBeGreaterThan(5)
     await row.locator('summary').click()
     await expect(row).toContainText('this computer')
     // The row says a walnut approve in the person's own script always asks.

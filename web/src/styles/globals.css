@@ -6620,6 +6620,19 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* The row folded Side chat / Session note into "+" (ComposerControlsBar data-direct-folded): a small
+   dot on "+" says more waits in it (2026-11-22 review: nothing hinted where the two buttons went). */
+.chat-input-controls:has(.composer-controls-bar[data-direct-folded='true']) .chat-plus-group:has(> .chat-plus-btn:not(.active):not(:disabled))::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  pointer-events: none;
+}
 .chat-plus-menu {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -27126,10 +27139,12 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* The raw technical line, behind a toggle. It used to BE the card body ("[web]
    {\"holders\":[{\"pid\":22198…"), which is a log file with a red dot. */
 .nfc-card-detail { margin-top: 5px; }
-/* Details, then who it came from on the same line; the source gives up its room first. */
-.nfc-card-foot { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Details, then who it came from on the same line when it fits beside it, else on the next. */
+.nfc-card-foot { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 2px; min-width: 0; }
 .nfc-card-foot > .nfc-detail-toggle { flex: none; }
-.nfc-card-foot > .nfc-row-source { flex: 1 1 0; min-width: 0; margin-top: 0; }
+/* At its own width: a source too long to sit beside Details takes the next line whole, rather than
+   being cut earlier than it was on its own line (2026-11-22 review). */
+.nfc-card-foot > .nfc-row-source { flex: 0 1 auto; min-width: 0; margin-top: 0; }
 
 .nfc-card-sub {
   margin-top: 5px;

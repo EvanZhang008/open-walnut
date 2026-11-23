@@ -21,6 +21,7 @@ import {
 import { EngineSettingRow } from '@/components/settings/sections/EngineSettingRows';
 import { log } from '@/utils/log';
 import { SearchField } from '@/components/common/SearchField';
+import { Breakable } from '@/components/common/Breakable';
 
 const SLOW_LOAD_MS = 2000;
 const SKELETON_ROWS = 6;
@@ -422,22 +423,6 @@ function StatusSlot({ banner, onDismissBanner, saved }: {
   );
 }
 
-/**
- * A path with a break opportunity after every slash, so a long one wraps
- * at a segment boundary instead of splitting `settings.json` mid-token. The
- * text content is unchanged (`<wbr>` adds no characters).
- */
-function PathText({ path }: { path: string }) {
-  const parts = path.split('/');
-  return (
-    <>
-      {parts.map((part, i) => (
-        <span key={i}>{i > 0 ? '/' : ''}{part}{i < parts.length - 1 && <wbr />}</span>
-      ))}
-    </>
-  );
-}
-
 export function EngineSettingsFooter(props: FooterProps) {
   const { view, lastWrite, banner, onDismissBanner, hostText, cwdShort, isLocalHost, existedAtOpen, onOpenPath } = props;
   const files = view?.files ?? [];
@@ -475,9 +460,9 @@ export function EngineSettingsFooter(props: FooterProps) {
                     <span className="engine-settings-file-label">{file.label}</span>
                     {isLocalHost && onOpenPath ? (
                       <button type="button" className="engine-settings-file-open" title={`Open ${file.path}`} onClick={() => onOpenPath(file.path)}>
-                        <code><PathText path={shortPath} /></code>
+                        <code><Breakable text={shortPath} /></code>
                       </button>
-                    ) : <code title={file.path}><PathText path={shortPath} /></code>}
+                    ) : <code title={file.path}><Breakable text={shortPath} /></code>}
                     {!file.exists && <span className="engine-settings-file-missing"> (not created yet)</span>}
                     {created && <span className="engine-settings-file-created">created just now</span>}
                     {file.error && <span className="engine-settings-file-error">{file.error}</span>}

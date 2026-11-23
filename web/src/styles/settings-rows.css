@@ -173,6 +173,12 @@
 
 .settings-row-copy code,
 .settings-group-footer code,
+/* A row's "More" (SettingsRow `more`): at the end of its help line, the line's own size, and the
+   rest of the help opens under that line; each sentence of it on its own line. */
+.settings-row-help > .settings-row-more { margin-left: 4px; vertical-align: baseline; color: var(--accent-text); }
+.settings-row-more-body { white-space: pre-line; }
+.settings-row-more-line { display: block; }
+
 .settings-row-help code {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);

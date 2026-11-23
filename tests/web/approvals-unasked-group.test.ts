@@ -4,6 +4,8 @@
  * lines read as a wall).
  */
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { groupSame, splitPaths } from '../../web/src/components/settings/sections/ApprovalsAskRow.js'
 import type { Approval } from '../../web/src/api/approvals.js'
 
@@ -51,5 +53,19 @@ describe('splitPaths', () => {
     for (const what of ['Gave the password "garden.example" to "Bakery": sign in', 'Open https://example.org/a/b in the browser', 'Post the and/or note']) {
       expect(splitPaths(what)).toEqual({ text: what, dirs: [] })
     }
+  })
+})
+
+// The folders are shown whole under the row, wrapping after a "/" (2026-11-22, the audit's third
+// look: on one cut line with a hover peek, an upload's source path could not be read).
+describe('the meta line under a step', () => {
+  const src = readFileSync(join(__dirname, '../../web/src/components/settings/sections/ApprovalsAskRow.tsx'), 'utf8')
+  const css = readFileSync(join(__dirname, '../../web/src/styles/approvals-ask-row.css'), 'utf8')
+  it('is never cut: no one-line meta class, the folders breakable, no ellipsis in its rule', () => {
+    const meta = src.match(/<span className="approvals-unasked-meta[^"]*"/)?.[0] ?? ''
+    expect(meta).toBe('<span className="approvals-unasked-meta"')
+    expect(src).toMatch(/dirs\.includes\(m\) \? <Breakable text=\{m\} \/>/)
+    const rule = css.match(/\.approvals-unasked-meta \{[^}]*\}/)?.[0] ?? ''
+    expect(rule).not.toMatch(/ellipsis|nowrap|line-clamp/)
   })
 })

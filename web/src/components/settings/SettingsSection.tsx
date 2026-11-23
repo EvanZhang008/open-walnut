@@ -37,7 +37,7 @@ import {
   useSettingsPane,
   useSettingsPaneChrome,
 } from './settings-pane-context'
-import { DisclosureChevron } from '@/components/controls'
+import { DisclosureButton, DisclosureChevron } from '@/components/controls'
 import { LoadingState } from '../common/EmptyState'
 import { CopyButton } from './inputs/CopyButton'
 import { SettingsButtonSize } from './inputs/SettingsButton'
@@ -299,6 +299,11 @@ export interface SettingsRowProps extends Omit<HTMLAttributes<HTMLElement>, 'chi
   label?: ReactNode
   /** One sentence under the label, 12.5px muted. */
   help?: ReactNode
+  /** The rest of the help: a small "More" at the end of the help line opens it in place under the
+   *  line, so the row's first screen stays one line and nothing it explains lives only in a hover
+   *  (2026-11-22, the audit's third look: Default effort's last seen efforts and what "Wait for the
+   *  reset" means were moved into a `title` nobody could find). */
+  more?: ReactNode
   /** The control, right-aligned at the group edge. */
   control?: ReactNode
   htmlFor?: string
@@ -323,6 +328,7 @@ export interface SettingsRowProps extends Omit<HTMLAttributes<HTMLElement>, 'chi
 export function SettingsRow({
   label,
   help,
+  more,
   control,
   htmlFor,
   indent,
@@ -345,6 +351,9 @@ export function SettingsRow({
     (anchor ? ' settings-row-anchored' : '') +
     (className ? ` ${className}` : '')
   const hasControl = hasContent(control) || hasContent(actions)
+  const hasMore = hasContent(more)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreId = useId()
   const row = (
     <article
       className={classes}
@@ -366,7 +375,18 @@ export function SettingsRow({
           ) : (
             <span className="settings-row-label">{label}</span>
           ))}
-        {hasContent(help) && <p className="settings-row-help">{help}</p>}
+        {(hasContent(help) || hasMore) && (
+          <p className="settings-row-help">
+            {help}
+            {hasMore && (
+              <DisclosureButton inline className="settings-row-more" expanded={moreOpen} aria-controls={moreId}
+                onClick={() => setMoreOpen((v) => !v)} data-testid="settings-row-more">
+                {moreOpen ? 'Less' : 'More'}
+              </DisclosureButton>
+            )}
+          </p>
+        )}
+        {hasMore && moreOpen && <div className="settings-row-help settings-row-more-body" id={moreId} data-testid="settings-row-more-body">{more}</div>}
         {children}
       </div>
       {hasControl && (

@@ -112,7 +112,7 @@
   gap: 12px;
 }
 /* Cards of one row stretch to its height (the grid's default), and each card's footer sits at its
-   bottom (.apps-card-foot), so Open lines up beside Open; descriptions are clamped below. */
+   bottom (.apps-card-foot), so Open lines up beside Open; every description is shown whole. */
 .apps-card-img { width: 20px; height: 20px; }
 .apps-lock {
   display: inline-grid;
@@ -168,7 +168,7 @@
 .apps-card-main:focus-visible { outline: none; }
 .apps-card-main:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-md); /* shape: the focus ring of an app card follows the card */ }
 /* The name and the line under it are .wn-title (text-fit.css): shown whole, wrapping, never cut to
-   two lines (standard.md rule 11); each card keeps its own height in the packed grid above. */
+   a few lines (standard.md rule 11); the cards of a row share the tallest one's height. */
 .apps-card-name {
   display: block;
   font-weight: 600;
@@ -185,20 +185,19 @@
 }
 .apps-card-main + .apps-card-badge { margin-left: 6px; }
 .apps-card-text:has(> .apps-card-badge) > .apps-card-main { display: inline-block; max-width: calc(100% - 34px); vertical-align: top; }
-/* A card's description and its "Includes ..." note are body text, not its name: each is clamped to a
-   few lines so one long description no longer sets the whole row's height. The pointer on the card
-   opens them (utils/truncation-peek.ts) and the detail page shows them whole. */
-.apps-card-line,
-.apps-card-note {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
+.apps-card-line {
+  margin-top: 2px;
   font-size: var(--font-size-sm);
+  line-height: 16px;
   color: var(--fg-muted);
 }
-.apps-card-line { margin-top: 2px; line-height: 16px; -webkit-line-clamp: 3; line-clamp: 3; }
-.apps-card-note { margin-top: 4px; line-height: 15px; -webkit-line-clamp: 2; line-clamp: 2; }
+.apps-card-note {
+  margin-top: 4px;
+  font-size: var(--font-size-sm);
+  line-height: 15px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
 /* An app of several parts (Calendar and its Agenda side bar): one row each, with its own
    switch, above the footer. The rows sit over the card's stretched button (z-index), so a
    switch never opens the detail page. */

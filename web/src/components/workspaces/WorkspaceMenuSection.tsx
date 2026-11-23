@@ -15,7 +15,7 @@
  * (rendered here) say how it went.
  */
 import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
-import { Breakable } from './Breakable';
+import { Breakable } from '@/components/common/Breakable';
 import { unwatchSetupRun, watchSetupRun } from './cleanup-notices';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { createPortal } from 'react-dom';
