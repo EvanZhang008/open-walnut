@@ -414,7 +414,7 @@
   "web/src/pages/DashboardPage.tsx": [15, 0],
   "web/src/pages/MemoryPage.tsx": [4, 0],
   "web/src/pages/NotesPage.tsx": [20, 0],
-  "web/src/pages/OrgPage.tsx": [17, 2],
+  "web/src/pages/OrgPage.tsx": [16, 2],
   "web/src/pages/PluginAppPage.tsx": [2, 0],
   "web/src/pages/SettingsPage.tsx": [2, 1],
   "web/src/pages/useColumnCompleteClose.ts": [5, 0],

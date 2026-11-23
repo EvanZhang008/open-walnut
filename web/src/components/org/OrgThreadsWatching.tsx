@@ -8,7 +8,7 @@
  * the thread's `watched.at` (the task Watching's order, tasks/status-sections.ts watchReorder). It
  * opens unfolded; a fold he makes lasts while he is here, never remembered (the other groups' rule).
  */
-import { memo, useCallback, useMemo, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
+import { memo, useMemo, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy, type AnimateLayoutChanges, defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -17,6 +17,7 @@ import { ICON_EYE_FILLED } from '@/components/common/Icons';
 import type { OrgThread } from '@/api/org-threads';
 import { watchReorder } from '../tasks/status-sections';
 import { isBoolean, usePageView } from '@/utils/view-memory';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 
 /**
  * The card drawn a second time, in Watching (OrgThreads.tsx ThreadCard): its element ids get a suffix
@@ -60,7 +61,7 @@ export function OrgThreadsWatching({ threads, card, onReorder }: {
   const [open, setOpen] = usePageView('org', 'threads.watchingOpen', true, isBoolean);
   const sensors = useSensors(useSensor(PointerSensor, DRAG));
   const ids = useMemo(() => threads.map((t) => t.id), [threads]);
-  const onDragEnd = useCallback((e: DragEndEvent) => {
+  const onDragEnd = useLeanCallback((e: DragEndEvent) => {
     const to = e.over ? ids.indexOf(String(e.over.id)) : -1;
     if (to < 0 || String(e.active.id) === String(e.over?.id)) return;
     const writes = watchingReorder(threads, String(e.active.id), to, Date.now());
