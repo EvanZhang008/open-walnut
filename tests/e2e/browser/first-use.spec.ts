@@ -485,8 +485,10 @@ test('a config read started before Not now cannot bring the answered question ba
   try {
     events.push('config:changed', {});
     await heldConfig.requested.promise;
-    // Consent now starts its own fresh GET: distinguish the two replies by their snapshot,
-    // not the shared URL, and let the fresh answer land before releasing the older one.
+    // Consent now starts its own fresh GET: distinguish the two replies by their snapshot, not
+    // the shared URL. The page never has one URL in flight twice (api/same-read-turn.ts), so the
+    // fresh read goes out only once the older one ended: the older answer lands first, and the
+    // read the answer started (its own generation) is the one that counts.
     const freshResponse = page.waitForResponse(async response =>
       new URL(response.url()).pathname === '/api/config'
       && (await response.json()).config.hosts['devbox-1'].connect === 'not_now');
@@ -494,14 +496,22 @@ test('a config read started before Not now cannot bring the answered question ba
       new URL(response.url()).pathname === '/api/config'
       && (await response.json()).config.hosts['devbox-1'].connect === 'ask');
     await foundRow(page, 'devbox-1').getByRole('button', { name: 'Not now', exact: true }).click();
-    await freshResponse;
     await expect(foundRow(page, 'devbox-1')).toHaveCount(0);
-    heldConfig.release.resolve();
-    const response = await staleResponse;
-    expect((await response.json()).config.hosts['devbox-1'].connect).toBe('ask');
-    await response.finished();
-    // Give fetch/React the next paints before the negative assertion; no fixed sleep.
-    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    // Hold the fresh read too, so the older answer is judged on its own while it is the last one in.
+    const heldFresh = fixture.holdNextConfigRead();
+    try {
+      heldConfig.release.resolve();
+      const response = await staleResponse;
+      expect((await response.json()).config.hosts['devbox-1'].connect).toBe('ask');
+      await response.finished();
+      await heldFresh.requested.promise;
+      // Give fetch/React the next paints before the negative assertion; no fixed sleep.
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(foundRow(page, 'devbox-1')).toHaveCount(0);
+    } finally {
+      heldFresh.release.resolve();
+    }
+    await (await freshResponse).finished();
     await expect(foundRow(page, 'devbox-1')).toHaveCount(0);
     await expect(foundRow(page, 'devbox-2')).toContainText(`Connect to ${fixture.hosts['devbox-2'].label}?`);
     expect(fixture.answers).toEqual([{ host: 'devbox-1', answer: 'not_now' }]);
