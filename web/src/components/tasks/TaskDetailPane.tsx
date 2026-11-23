@@ -187,9 +187,9 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
   }, [task.id]);
 
   const source = getIntegrationMeta(integrations, task.source);
-  const { sourceByName } = useProjectRegistry();
+  const { sourceByName, loaded: registryLoaded } = useProjectRegistry();
   const keptText = keptLine(
-    syncStanding(task, sourceByName.get((task.project ?? '').trim().toLowerCase())),
+    syncStanding(task, sourceByName.get((task.project ?? '').trim().toLowerCase()), registryLoaded),
     (s) => getIntegrationMeta(integrations, s)?.name ?? s,
   );
   // A session the server no longer has is not a row (it would read "Loading…" forever).

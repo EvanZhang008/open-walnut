@@ -40,6 +40,16 @@ enum SyncStanding: Equatable {
         return false
     }
 
+    var isChecking: Bool {
+        if case .checking = self { return true }
+        return false
+    }
+
+    /// Why a task kept local offers no Sync when its project syncs nowhere now (the web's keptLine).
+    static func projectSyncsNowhere(_ service: String) -> String {
+        "Its project does not sync to an outside service now, so it can only go to \(service) from a project that does."
+    }
+
     /// The short state the menu's Sync row reads ("Syncs to X", "Local, not in X").
     func summary(_ name: (String) -> String) -> String {
         switch self {

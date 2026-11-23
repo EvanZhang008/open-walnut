@@ -140,6 +140,32 @@ test('a synced task turns local from its menu, keeps its content, and syncs back
   expect((await getTask(task.id)).sync_hold).toBeUndefined()
 })
 
+test('a task kept local in a project that syncs nowhere offers no Sync, and says why', async ({ page }) => {
+  // A held task that left its project's service behind (here: moved to a local project; a project
+  // made local keeps its tasks' holds the same way, hold-owner.ts). Sending it would answer 409
+  // project_local, so the menu says why instead of offering it.
+  const { task } = await api<{ task: ApiTask }>('POST', '/api/tasks', { title: `Ledger notes ${stamp()}`, project: PROJECT, pinned: false })
+  litter.push(task.id)
+  await api('POST', `/api/v1/tasks/${task.id}/make-local`, { outside: 'keep' })
+  const home = `Shelf ${stamp()}`
+  await api('PATCH', `/api/tasks/${task.id}`, { project: home })
+  await expect.poll(async () => (await getTask(task.id)).project).toBe(home)
+  expect((await getTask(task.id)).sync_hold).toMatchObject({ target: SERVICE })
+  // The server's own answer, the one the menu no longer offers.
+  const refused = await fetch(`${API}/api/v1/tasks/${task.id}/sync-to-project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  expect(refused.status).toBe(409)
+
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: home })
+  await openHome(page)
+  const menu = await openRowMenu(page, task.id)
+  await expect(menu.getByTestId('kebab-sync')).toHaveAttribute('data-sync-kind', 'kept')
+  await menu.getByTestId('kebab-sync-toggle').click()
+  await expect(menu.getByTestId('kebab-sync-line')).toContainText('Its project does not sync to an outside service now')
+  await expect(menu.getByTestId('kebab-sync-to-project')).toHaveCount(0)
+  await menu.screenshot({ path: `${SHOTS}/${engine()}-2b-kept-project-local-menu.png` })
+})
+
 test('the draft column\'s Sync chip: Local by default in a project that syncs, the service when flipped', async ({ page }) => {
   await page.setViewportSize({ width: 1800, height: 1000 })
   await loadHome(page)

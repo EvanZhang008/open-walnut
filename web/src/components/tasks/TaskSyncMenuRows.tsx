@@ -41,10 +41,10 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
   onError?: (message: string) => void;
 }) {
   const integrations = useIntegrations();
-  const { sourceByName } = useProjectRegistry();
+  const { sourceByName, loaded: registryLoaded } = useProjectRegistry();
   const [expanded, setExpanded] = useState(false);
   const notify = useOptionalNotifications()?.notify;
-  const standing = syncStanding(task, sourceByName.get((task.project ?? '').trim().toLowerCase()));
+  const standing = syncStanding(task, sourceByName.get((task.project ?? '').trim().toLowerCase()), registryLoaded);
   if (standing.kind === 'local') return null;
   const name = (source: string) => getIntegrationMeta(integrations, source)?.name ?? source;
   const service = name(standing.service);
@@ -103,7 +103,8 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
                 </button>
               </>
             )}
-            {standing.kind !== 'synced' && (
+            {/* A task whose project syncs nowhere now has nothing to send it to (the server's 409 project_local): the line above says why. */}
+            {(standing.kind === 'checking' || (standing.kind === 'kept' && standing.projectSyncs)) && (
               <button type="button" className="task-kebab-item" data-testid="kebab-sync-to-project"
                 title={`Send this task to ${service} now`}
                 onClick={(e) => { e.stopPropagation(); run('sync to project', () => syncTaskToProject(task.id)); }}>

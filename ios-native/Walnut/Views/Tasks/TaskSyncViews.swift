@@ -41,11 +41,16 @@ struct TaskSyncMenu: View {
                     Label("Make local, neutralize it in \(service)", systemImage: "eye.slash")
                 }
                 .accessibilityIdentifier("tasks.sync.makeLocal.neutralize")
-            } else {
+            } else if standing.isChecking || store.projectSources.isEmpty || store.projectService(task.project) != nil {
+                // Sources not read yet: offered, the server decides.
                 Button { run { await store.syncToProject(taskId: id) } } label: {
                     Label("Sync to \(service)", systemImage: "arrow.up.circle")
                 }
                 .accessibilityIdentifier("tasks.sync.toProject")
+            } else {
+                // Its project syncs nowhere now (made local, or moved): the server answers 409
+                // project_local, so there is nothing to send it to (the web's TaskSyncMenuRows).
+                Text(SyncStanding.projectSyncsNowhere(service))
             }
             if standing.outsideCopyKept {
                 Button { run { await store.changeOutsideCopy(taskId: id, action: .archive) } } label: {
