@@ -7,10 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { Task } from '@open-walnut/core';
 import { adoptLegacyPins, pinsOfNode, setNodePins, type OrgPin } from '../../web/src/components/org/org-side-columns';
-import { keptByRow } from '../../web/src/components/org/org-task-tabs';
-import type { ChannelRow } from '../../web/src/components/org/org-channels-model';
 import { createStripWriter, healedLayoutValue, LAYOUT_FIELDS, readColumns, writeColumns } from '../../web/src/utils/layout-record';
 
 class MemStore {
@@ -78,16 +75,6 @@ describe('org pins per node', () => {
       { id: 'task:personal', locked: true, node: 'project:personal' },
       { id: 'task:a1', locked: true, node: A },
     ]);
-  });
-
-  it('the list hangs a task only locked under the node it was locked beside', () => {
-    const row = (key: string, project: string) => ({ key, kind: 'project', name: project, project }) as unknown as ChannelRow;
-    const rows = [row(A, 'alpha'), row(B, 'beta')];
-    const task = { id: 't1', title: 't1', project: 'alpha', status: 'todo' } as unknown as Task;
-    expect([...keptByRow(null, rows, [task], ['t1']).keys()]).toEqual([A]);
-    expect([...keptByRow(null, rows, [task], ['t1'], new Map([['t1', B]])).keys()]).toEqual([B]);
-    // A node the list has no row for (a router) leaves it under its project's row.
-    expect([...keptByRow(null, rows, [task], ['t1'], new Map([['t1', 'router:x']])).keys()]).toEqual([A]);
   });
 
   it('the record keeps each pin\'s node through a write, a read, a crash heal and a second window', () => {

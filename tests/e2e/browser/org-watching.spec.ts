@@ -7,14 +7,13 @@
  *     server keeps it
  *   - the Watching section lists the node's watched work in watch order, each with its own state's
  *     dot, and a watched open task is drawn there only, not again in its state's section
- *   - the Org list shows them under the node's chat row; a click opens the task beside the page,
- *     × (or Delete) stops watching it there
+ *   - the Org list hangs nothing under a node's row (2026-11-22, the user: "We need to be super
+ *     simple"): the row is its avatar and its name; a watched task opens beside the page from Watching
  *   - Home's Watching lists what the Org page watches; a watch made elsewhere (Home, an agent)
  *     shows on the Org page without a reload
  *   - a refused watch goes back
- *   - a task whose session panel is locked (beside the Org page, or on Home) hangs under its row
- *     too, each row saying why with an eye, a lock, or both; unlocked and not watched, it goes
- *     ("if a taks is lock also show here, show icon of watch or lock")
+ *   - a task whose session panel is locked (beside the Org page, or on Home) stands beside its node,
+ *     locked; on a narrow window it waits as a tab at the edge
  * The fixture is shared, so this file makes its own project and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -64,7 +63,8 @@ async function openNode(page: Page): Promise<void> {
 }
 
 const rail = (page: Page) => page.getByTestId('org-rail')
-const listWatched = (page: Page, node: string) => page.locator(`[data-testid="org-watched"][data-key="${node}"] [data-testid="org-watched-item"]`)
+/** The Org list draws no task under a row: no kept rows anywhere in it. */
+const listKept = (page: Page) => page.locator('.org-list [data-testid="org-watched"], .org-list [data-testid="org-watched-item"]')
 const railItem = (page: Page, id: string) => page.getByTestId('org-rail').locator(`.org-task-item:has([data-testid="org-task-row"][data-task-id="${id}"])`)
 
 test.describe.configure({ mode: 'serial' })
@@ -94,7 +94,7 @@ test.afterAll(async ({ request }) => {
   }
 })
 
-test('a row\'s eye watches it; the Watching section lists them first, in order; the list shows them under the chat; Home lists them too', async ({ page, request }) => {
+test('a row\'s eye watches it; the Watching section lists them first, in order; the list stays one plain row; Home lists them too', async ({ page, request }) => {
   test.setTimeout(180_000)
   await openNode(page)
   // Nothing watched yet: no Watching section (an empty section is left out), and no "Pinned" anywhere.
@@ -131,24 +131,14 @@ test('a row\'s eye watches it; the Watching section lists them first, in order; 
   for (const id of [ids.a, ids.b]) await expect(taskRow(rail(page), id)).toHaveCount(1)
   await expect(taskRow(rail(page), ids.c, 'notstarted')).toBeVisible()
 
-  // The list: the same tasks under the node's row, a little in from the row's own name.
-  const children = listWatched(page, NODE)
-  await expect(children).toHaveCount(2)
-  await expect(children.first()).toContainText(`Order new ladders ${STAMP}`)
-  const rowBox = (await page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`).boundingBox())!
-  const nameBox = (await page.locator(`[data-testid="org-channel"][data-key="${NODE}"] .org-channel-name`).boundingBox())!
-  const childBox = (await children.first().locator('.org-watched-title').boundingBox())!
-  expect(childBox.x).toBeGreaterThan(rowBox.x + 8)
-  expect(childBox.x).toBeLessThan(nameBox.x)
-  expect(childBox.y).toBeGreaterThan(rowBox.y + rowBox.height - 4)
-  // Under its VP only, never a second time under the CEO.
-  await expect(page.locator(`[data-testid="org-watched"][data-key="main"] [data-task-id="${ids.a}"]`)).toHaveCount(0)
+  // The list: nothing hangs under the node's row; the row is its name (and a dot only for threads).
+  await expect(listKept(page)).toHaveCount(0)
+  await expect(page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)).toHaveText(new RegExp(`^${PROJECT}( VP)?$`))
   await page.locator('.org-list').screenshot({ path: `test-results/org-watching-list-${test.info().project.name}.png` })
   await page.getByTestId('org-rail').screenshot({ path: `test-results/org-watching-rail-${test.info().project.name}.png` })
 
-  // A click opens the task beside the page; the Org page stays.
-  await children.first().getByTestId('org-watched-open').click()
-  await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
+  // A watched task opens beside the page from the node's Tasks; the Org page stays.
+  await openTaskFromRail(page, ids.b, () => expect(page.getByTestId('org-side')).toBeVisible({ timeout: 3_000 }))
   await expect(page).toHaveURL(/\/org\?/)
 
   // Home's Watching lists the same two.
@@ -159,23 +149,20 @@ test('a row\'s eye watches it; the Watching section lists them first, in order; 
   for (const id of [ids.a, ids.b]) await showSectionCard(panel, 'watching', id)
 })
 
-test('× in the list stops watching; a watch made elsewhere shows without a reload; a refused watch goes back', async ({ page, request }) => {
+test('Watching\'s eye stops watching; a watch made elsewhere shows without a reload; a refused watch goes back', async ({ page, request }) => {
   test.setTimeout(180_000)
   await openNode(page)
-  const children = listWatched(page, NODE)
-  await expect(children).toHaveCount(2, { timeout: 30_000 })
-  const first = children.first()
+  await expect(sectionCount(rail(page), 'watching')).toHaveText('2', { timeout: 30_000 })
+  const first = railItem(page, ids.b)
   await first.hover()
-  await first.getByTestId('org-watched-stop').click()
-  await expect(children).toHaveCount(1)
+  await first.getByTestId('org-watch-toggle').click()
   await expect.poll(() => watchedAt(request, ids.b)).toBeNull()
   await expect(sectionCount(rail(page), 'watching')).toHaveText('1')
 
-  // Home's eye (another window) watches one: the node's section and its row show it at once.
+  // Home's eye (another window) watches one: the node's section shows it at once.
   const res = await request.patch(`/api/v1/tasks/${ids.c}`, { data: { watched_at: new Date().toISOString() } })
   expect(res.ok(), await res.text()).toBe(true)
-  await expect(page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.c}"]`)).toBeVisible({ timeout: 30_000 })
-  await expect(sectionCount(rail(page), 'watching')).toHaveText('2')
+  await expect(sectionCount(rail(page), 'watching')).toHaveText('2', { timeout: 30_000 })
   await expect(taskRow(rail(page), ids.c, 'watching')).toBeVisible()
 
   // A refused watch shows on the click, then goes back.
@@ -187,34 +174,28 @@ test('× in the list stops watching; a watch made elsewhere shows without a relo
   await item.hover()
   await item.getByTestId('org-watch-toggle').click()
   await expect(item.getByTestId('org-watch-toggle')).toHaveAttribute('aria-pressed', 'false', { timeout: 15_000 })
-  await expect(children).toHaveCount(2)
+  await expect(sectionCount(rail(page), 'watching')).toHaveText('2')
   await page.unroute(`**/api/tasks/${ids.b}`)
 
-  // Stop one from the Watching section: it leaves the section and the list, back under Not started.
-  const last = railItem(page, ids.a)
-  await last.hover()
-  await last.getByTestId('org-watch-toggle').click()
-  await expect(children).toHaveCount(1)
-  await expect.poll(() => watchedAt(request, ids.a)).toBeNull()
+  // Stop the rest from the Watching section: each goes back under Not started.
+  for (const id of [ids.a, ids.c]) {
+    const row = railItem(page, id)
+    await row.hover()
+    await row.getByTestId('org-watch-toggle').click()
+    await expect.poll(() => watchedAt(request, id)).toBeNull()
+  }
   await expect(taskRow(rail(page), ids.a, 'notstarted')).toBeVisible()
-
-  // From the keyboard: a watched task in the list is an option; Delete stops watching it.
-  const item_c = page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.c}"] [data-testid="org-watched-open"]`)
-  await expect(item_c).toHaveAttribute('role', 'option')
-  await item_c.focus()
-  await page.keyboard.press('Delete')
-  await expect(item_c).toHaveCount(0)
-  // Nothing watched now: the Watching section is gone.
+  // Nothing watched now: the Watching section is gone, and the list never had a row for them.
   await expect(taskSection(rail(page), 'watching')).toHaveCount(0)
-  await expect(page.locator(`[data-testid="org-watched"][data-key="${NODE}"]`)).toHaveCount(0)
-  await expect.poll(() => watchedAt(request, ids.c)).toBeNull()
+  await expect(listKept(page)).toHaveCount(0)
 })
 
-test('a locked session panel hangs its task under the row with a lock; eye and lock when both; unlocked, it goes', async ({ page, request }) => {
+test('a locked session panel stands beside its node, from the Org page or Home; unlocked, it goes', async ({ page }) => {
   test.setTimeout(240_000)
   await page.setViewportSize({ width: 1600, height: 900 })
   await openNode(page)
-  const kept = page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.d}"]`)
+  // The list hangs nothing under a row, locked or watched (2026-11-22): the strip is where a lock shows.
+  const kept = listKept(page)
   await expect(kept).toHaveCount(0)
 
   // Beside the Org page: open the task and lock its panel.
@@ -223,49 +204,17 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   await openTaskFromRail(page, ids.d, () => expect(side).toHaveAttribute('data-session-id', ids.dSid, { timeout: 3_000 }))
   await side.locator('.session-panel-lock').click()
   await expect(side).toHaveClass(/is-locked/)
-  await expect(kept).toHaveCount(1)
-  await expect(kept).toHaveAttribute('data-locked', 'true')
-  const why = kept.getByTestId('org-watched-why')
-  await expect(why).toHaveAttribute('data-why', 'lock')
-  // Open beside the page: a light tint of the selected row's accent, and never a frame.
-  await expect(kept).toHaveAttribute('data-open', 'true')
-  const look = await kept.evaluate((e) => { const c = getComputedStyle(e); return { bg: c.backgroundColor, outline: c.outlineStyle, border: c.borderTopStyle } })
-  expect(look.bg).not.toBe('rgba(0, 0, 0, 0)')
-  expect(look.outline).toBe('none')
-  expect(look.border).toBe('none')
-  // Only a watch has a ×: a lock is undone where it was made.
-  await expect(kept.getByTestId('org-watched-stop')).toHaveCount(0)
-  // The reason sits on the row's guide line, before the state dot, small and apart from it; the
-  // title keeps its place a little in from the row's name.
-  const [whyBox, dot, title, group, name] = await Promise.all([
-    why.boundingBox(), kept.locator('.org-watched-open > i').boundingBox(), kept.locator('.org-watched-title').boundingBox(),
-    page.locator(`[data-testid="org-watched"][data-key="${NODE}"]`).boundingBox(),
-    page.locator(`[data-testid="org-channel"][data-key="${NODE}"] .org-channel-name`).boundingBox(),
-  ])
-  expect(whyBox!.x + whyBox!.width).toBeLessThanOrEqual(dot!.x)
-  expect(whyBox!.height).toBeLessThanOrEqual(16)
-  expect(Math.abs(whyBox!.x + whyBox!.width / 2 - group!.x)).toBeLessThanOrEqual(2)
-  expect(title!.x).toBeLessThan(name!.x)
-
-  // Watched too: the eye and the lock in one glyph, and × stops only the watch.
-  const res = await request.patch(`/api/v1/tasks/${ids.d}`, { data: { watched_at: new Date().toISOString() } })
-  expect(res.ok(), await res.text()).toBe(true)
-  await expect(why).toHaveAttribute('data-why', 'both', { timeout: 30_000 })
-  await kept.hover()
-  await kept.getByTestId('org-watched-stop').click()
-  await expect.poll(() => watchedAt(request, ids.d)).toBeNull()
-  await expect(why).toHaveAttribute('data-why', 'lock')
-  await expect(kept).toHaveCount(1)
-
-  // Unlocked and not watched: gone at once.
-  await side.locator('.session-panel-lock').click()
   await expect(kept).toHaveCount(0)
+
+  // Unlocked: it stays open beside the node, no longer locked.
+  await side.locator('.session-panel-lock').click()
+  await expect(side).not.toHaveClass(/is-locked/)
   // Closed: a panel left open beside the node would come back with it (org-free-panel-kept.spec.ts);
   // from here on the panel beside the node is the one Home locks.
   await side.locator('.session-panel-close').first().click()
   await expect(side).toHaveCount(0)
 
-  // On Home: a locked column of the task's session hangs it under its row the same way.
+  // On Home: a locked column of the task's session stands beside its node the same way.
   // One column of the task's session on Home (the saved layout record, written once).
   await page.evaluate((sid) => localStorage.setItem('open-walnut-layout:home-columns', JSON.stringify({ v: 1, value: [{ id: sid, locked: false }] })), ids.dSid)
   await page.reload()
@@ -276,8 +225,8 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   await expect(column.locator('.session-panel-lock.is-locked')).toBeVisible()
   await page.getByTestId('sidebar-org').click()
   await page.getByTestId('org-search').fill(PROJECT)
-  await expect(kept).toHaveCount(1, { timeout: 30_000 })
-  await expect(why).toHaveAttribute('data-why', 'lock')
+  await expect(page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)).toBeVisible({ timeout: 30_000 })
+  await expect(kept).toHaveCount(0)
   // The node shows the panel Home locked beside its chat, locked, whatever was clicked before
   // (2026-11-04, the user: "when i clcik [the VP], the lcok view is not there, the lock should always
   // show for that vp"): its row, another node and back, a reload.
@@ -313,7 +262,7 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   await page.setViewportSize({ width: 1600, height: 900 })
   await expect(homePanel).toBeVisible()
   await expect(homePanel).toHaveClass(/is-locked/)
-  // Unlocked here it leaves this page at once, its kept row with it, while Home keeps its lock.
+  // Unlocked here it leaves this page at once, while Home keeps its lock.
   await homePanel.locator('.session-panel-lock').click()
   await expect(homePanel).toHaveCount(0)
   await expect(kept).toHaveCount(0)
@@ -352,111 +301,4 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   await page.getByTestId('org-search').fill(PROJECT)
   await expect(page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)).toBeVisible()
   await expect(kept).toHaveCount(0)
-})
-
-// 2026-11-17, the user: "when I click this little lock in the sidebar, it can unlock". The lock on a
-// kept row is a button: it unlocks the panel the way the panel's own lock does, the row stays with an
-// open lock, a second click (or Enter / Space) locks it again, and a click never opens the row.
-test('the lock on a kept row unlocks its panel and locks it again, from any node', async ({ page }) => {
-  test.setTimeout(240_000)
-  // A beat between steps when a demo video is recorded, so each change can be seen.
-  const beat = () => (process.env.ORG_LOCK_DEMO ? page.waitForTimeout(900) : Promise.resolve())
-  await page.setViewportSize({ width: 1600, height: 900 })
-  await openNode(page)
-  const kept = page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.d}"]`)
-  const lock = kept.getByTestId('org-watched-why')
-  const side = page.locator(`[data-testid="org-side"][data-session-id="${ids.dSid}"]`)
-  await openTaskFromRail(page, ids.d, () => expect(side).toBeVisible({ timeout: 3_000 }))
-  await side.locator('.session-panel-lock').click()
-  await expect(side).toHaveClass(/is-locked/)
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-  await beat()
-
-  // Hover: it says what a click does, and looks clickable.
-  await lock.hover()
-  await expect(lock).toHaveAttribute('title', 'Unlock')
-  expect(await lock.evaluate((e) => getComputedStyle(e).cursor)).toBe('pointer')
-  await beat()
-  // Unlock: the panel stays open, unlocked; the row stays, with an open lock.
-  await lock.click()
-  await expect(side).toBeVisible()
-  await expect(side).not.toHaveClass(/is-locked/)
-  await expect(kept).toHaveCount(1)
-  await expect(kept).toHaveAttribute('data-relock', 'true')
-  await expect(lock).toHaveAttribute('data-why', 'unlocked')
-  await expect(lock).toHaveAttribute('title', 'Lock')
-  await beat()
-  // Keyboard: Enter locks it again, and the panel's own lock agrees.
-  await lock.focus()
-  await page.keyboard.press('Enter')
-  await expect(side).toHaveClass(/is-locked/)
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-  await expect(kept).not.toHaveAttribute('data-relock', 'true')
-  await beat()
-  // Unlocked here, then locked again at the panel: the row forgets it was undone here, so a later
-  // unlock at the panel takes it away as before.
-  await lock.click()
-  await expect(lock).toHaveAttribute('data-why', 'unlocked')
-  await side.locator('.session-panel-lock').click()
-  await expect(side).toHaveClass(/is-locked/)
-  await expect(kept).not.toHaveAttribute('data-relock', 'true')
-  await side.locator('.session-panel-lock').click()
-  await expect(kept).toHaveCount(0)
-  await side.locator('.session-panel-lock').click()
-  await expect(side).toHaveClass(/is-locked/)
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-
-  // From another node: the row hangs under its own node in the list; a click unlocks without
-  // opening anything, Space locks again, and back at the node its panel is locked beside the chat.
-  const nodeRow = page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)
-  await page.getByTestId('org-channel-main').click()
-  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', 'main')
-  await page.getByTestId('org-search').fill(PROJECT)
-  await expect(side).toHaveCount(0)
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-  await beat()
-  await lock.click()
-  await expect(lock).toHaveAttribute('data-why', 'unlocked')
-  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', 'main')
-  await expect(side).toHaveCount(0)
-  await beat()
-  // Back to the node and away again: the row keeps what it was.
-  await nodeRow.click()
-  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', NODE)
-  await expect(lock).toHaveAttribute('data-why', 'unlocked')
-  await expect(side.and(page.locator('.is-locked'))).toHaveCount(0)
-  await beat()
-  await page.getByTestId('org-channel-main').click()
-  await page.getByTestId('org-search').fill(PROJECT)
-  await expect(lock).toHaveAttribute('data-why', 'unlocked')
-  await lock.focus()
-  await page.keyboard.press(' ')
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', 'main')
-  await beat()
-  await nodeRow.click()
-  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', NODE)
-  await expect(side).toBeVisible({ timeout: 30_000 })
-  await expect(side).toHaveClass(/is-locked/)
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-  await beat()
-
-  // A lock Home holds: unlocked from the row it leaves this page only (Home keeps its lock), and a
-  // second click brings it back beside the node, locked.
-  await side.locator('.session-panel-lock').click()
-  await expect(kept).toHaveCount(0)
-  await page.evaluate((sid) => localStorage.setItem('open-walnut-layout:home-columns', JSON.stringify({ v: 1, value: [{ id: sid, locked: true }] })), ids.dSid)
-  await page.reload()
-  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', NODE, { timeout: 30_000 })
-  await expect(side).toHaveClass(/is-locked/, { timeout: 30_000 })
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-  await lock.click()
-  await expect(side).toHaveCount(0)
-  await expect(lock).toHaveAttribute('data-why', 'unlocked')
-  expect(await page.evaluate(() => localStorage.getItem('open-walnut-layout:home-columns'))).toMatch(/"locked":true/)
-  await lock.click()
-  await expect(side).toBeVisible({ timeout: 30_000 })
-  await expect(side).toHaveClass(/is-locked/)
-  await expect(lock).toHaveAttribute('data-why', 'lock')
-  await page.evaluate(() => localStorage.removeItem('open-walnut-layout:home-columns'))
 })

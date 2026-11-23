@@ -360,4 +360,20 @@ final class ChatOrgModelTests: XCTestCase {
             state: .waiting, needs: 2, working: 0, open: 5, ledProjects: [], line: "Waiting", threadsBadge: 0
         )), "Ops, VP, Waiting, 0 threads")
     }
+
+    func testARowWearsOneRedDotOnlyForThreadsOrAsks() {
+        func row(needs: Int, threads: Int?) -> ChatOrgModel.Row {
+            ChatOrgModel.Row(
+                id: "project:ops", kind: .vp, name: "Ops", contactId: "x", project: "Operations",
+                state: .waiting, needs: needs, working: 3, open: 5, ledProjects: [], line: "Waiting", threadsBadge: threads
+            )
+        }
+        // A node's own row: its threads decide, asks under it do not; a grey 0 is no dot.
+        XCTAssertTrue(ChatDrawerOrgList.hasDot(row(needs: 0, threads: 2)))
+        XCTAssertFalse(ChatDrawerOrgList.hasDot(row(needs: 2, threads: 0)))
+        // A row with no Threads of its own: what it asks.
+        XCTAssertTrue(ChatDrawerOrgList.hasDot(row(needs: 1, threads: nil)))
+        // Working work alone is no dot (the green count is gone).
+        XCTAssertFalse(ChatDrawerOrgList.hasDot(row(needs: 0, threads: nil)))
+    }
 }

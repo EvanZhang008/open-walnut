@@ -4,8 +4,8 @@
  * at least one open task under it (its team). They are listed by the project they belong to, the
  * VP's projects in the chart's order (2026-11-20, the user: "那个 project 下面有 leader 就放在那个
  * project 下面"): VP -> project -> leader -> the leaders under it. A project with no leader is left
- * out, and a VP with one project still names it. The Org list and the Org chart draw the same groups
- * (OrgLeaders.tsx), behind the `org_leaders` experiment.
+ * out, and a VP with one project still names it. The Org chart draws the groups (OrgLeaders.tsx) and
+ * the list's DIRECTORS section their rows (OrgDirectorSection.tsx), behind the `org_leaders` experiment.
  *
  * Who is listed is the shared Director rule (src/core/org/org-directors.ts directorsOf): a leader is a
  * Director by default, the user may make any task one (Task.director 'yes') or take a leader off
@@ -104,25 +104,6 @@ export function foldGroups(groups: readonly LeaderGroup[], showProjects: boolean
   return [{ key: '*', project: '', name: '', leaders: groups.flatMap((g) => g.leaders) }];
 }
 
-/**
- * The first `first` Directors of an opened fold, whole groups cut where the count runs out, and how
- * many it leaves for "N more". Hiding a single one saves nothing (its "1 more" line is as tall as
- * the row), so up to `first + 1` all show.
- */
-export function firstLeaders(groups: readonly LeaderGroup[], first: number): { groups: readonly LeaderGroup[]; hidden: number } {
-  const total = leaderTotal(groups);
-  if (total <= first + 1) return { groups, hidden: 0 };
-  const out: LeaderGroup[] = [];
-  let left = first;
-  for (const g of groups) {
-    if (left <= 0) break;
-    const leaders = g.leaders.slice(0, left);
-    left -= leaders.length;
-    out.push(leaders.length === g.leaders.length ? g : { ...g, leaders });
-  }
-  return { groups: out, hidden: total - first };
-}
-
 /** Every Director, a Director's own Directors right after it: the DIRECTORS section's rows (one level). */
 export const flatDirectors = (groups: readonly LeaderGroup[]): LeaderNode[] => groups.flatMap((g) => [...allLeaders(g.leaders)]);
 
@@ -137,12 +118,6 @@ const hits = (l: LeaderNode, words: readonly string[]) => words.every((w) => l.t
 export function leadersMatch(groups: readonly LeaderGroup[], q: string): boolean {
   const words = wordsOf(q);
   return !!words.length && groups.some((g) => [...allLeaders(g.leaders)].some((l) => hits(l, words)));
-}
-
-/** A search for `q` finds a leader somewhere under this one: its fold shows open while it does. */
-export function subsMatch(leader: LeaderNode, q: string): boolean {
-  const words = wordsOf(q);
-  return !!words.length && [...allLeaders(leader.subs)].some((l) => hits(l, words));
 }
 
 /** One row of the DIRECTORS section (OrgDirectorSection): a Director and the VP it is under. */

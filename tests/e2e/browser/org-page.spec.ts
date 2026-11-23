@@ -25,6 +25,9 @@ import { openSection, openTasksBy, showTasks, taskRow, taskSection, expectChatSh
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
+/** A row of the Org list draws only its avatar, its name and a red dot (2026-11-22); its line, its
+ *  state and its counts are in its hover (`title`), one line each. */
+const hoverLine = (line: string) => new RegExp(`(^|\\n)${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|\\n)`)
 const ALPHA = `Org page alpha ${STAMP}`
 const BETA = `Org page beta ${STAMP}`
 const BOARD_TEXT = `Alpha board ${STAMP}`
@@ -107,14 +110,14 @@ test.afterAll(async ({ request }) => {
 test('the sidebar opens Main and the leads; a lead\'s red is its threads, its tasks\' asks are in its Tasks', async ({ page }) => {
   await openOrg(page)
   await expect(page.getByTestId('org-channel-main')).toBeVisible()
-  // The CEO's and a VP's own row count their threads, "0" in grey (2026-11-03, the user: "the
-  // little red should be thread instead of need u ... even if no thread, show 0 thread").
-  await expect(page.getByTestId('org-channel-main').getByTestId('org-channel-badge')).toHaveAttribute('title', /^\d+ threads?$/)
+  // The CEO's and a VP's own row: a red dot for its threads, never its tasks' asks, and no dot (no
+  // grey "0") with none (2026-11-03, the user: "the little red should be thread instead of need u";
+  // 2026-11-22: "the number of red change to simpel red dot").
   const alpha = row(page, ALPHA)
-  await expect(alpha.getByTestId('org-channel-latest')).toHaveText(`Asks you: Alpha ask ${STAMP}`, { timeout: 30_000 })
-  await expect(alpha.getByTestId('org-channel-badge')).toHaveText('0')
-  await expect(alpha.getByTestId('org-channel-badge')).toHaveClass(/is-none/)
-  await expect(alpha.getByTestId('org-channel-badge')).toHaveAttribute('title', '0 threads')
+  await expect(alpha).toHaveAttribute('title', hoverLine(`Asks you: Alpha ask ${STAMP}`), { timeout: 30_000 })
+  await expect(alpha.getByTestId('org-channel-dot')).toHaveCount(0)
+  // The row draws its name and nothing else.
+  await expect(alpha).toHaveText(ALPHA)
   await expect(alpha).not.toHaveAttribute('data-state', 'alert')
 
   await alpha.click()
@@ -224,7 +227,7 @@ test('search, a pick that survives a reload, live state, the keyboard, and the o
   await expect(row(page, BETA)).toHaveAttribute('data-state', 'quiet')
   turns.push(await startRunningTurn(request, ids.beta))
   await expect(row(page, BETA)).toHaveAttribute('data-state', 'working', { timeout: 30_000 })
-  await expect(row(page, BETA).getByTestId('org-channel-latest')).toHaveText(`Working on: Beta solo ${STAMP}`)
+  await expect(row(page, BETA)).toHaveAttribute('title', hoverLine(`Working on: Beta solo ${STAMP}`))
 
   // Up and Down move the pick. The list re-sorts live (the other browser project shares the
   // fixture), so the row under Main is read before the key, and the focused row must be the pick.
@@ -281,7 +284,7 @@ test('the rows hold still under the pointer, and take their new order once it le
   const touched = await request.patch(`/api/tasks/${lowerId}`, { data: { title: `Touched ${STAMP}` } })
   expect(touched.ok(), await touched.text()).toBe(true)
   // The page has the change (the row's line names the new title) and still keeps its order.
-  await expect(row(page, lower).getByTestId('org-channel-latest')).toContainText(`Touched ${STAMP}`, { timeout: 30_000 })
+  await expect(row(page, lower)).toHaveAttribute('title', new RegExp(`Touched ${STAMP}`), { timeout: 30_000 })
   const during = await order()
   expect(during.indexOf(rowKey(lower))).toBeGreaterThan(during.indexOf(rowKey(upper)))
 
@@ -312,11 +315,11 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await page.getByTestId('org-search').fill(project)
   const r = row(page, project)
   await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
-  await expect(r.getByTestId('org-channel-badge')).toHaveText('1')
-  // The line says what the user is asked; the task it is about is beside it.
+  // One red dot, its count in its label (a project with no VP: what it asks).
+  await expect(r.getByTestId('org-channel-dot')).toHaveAttribute('aria-label', '1 Needs you')
+  // The hover says what the user is asked, the task it is about first.
   // Led by what to do with it (2026-11-03): a Board choice is a decision.
-  await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Decide: \S/)
-  await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Renewal ${STAMP}: Decide: `))
+  await expect(r).toHaveAttribute('title', new RegExp(`\\nRenewal ${STAMP}: Decide: \\S`))
   await r.click()
   await expect(page.getByTestId('org-detail-counts')).toContainText('1 Needs you')
   // Listed on its own chat too: the chat does not show a Board's choice.
@@ -358,8 +361,7 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await page.getByTestId('org-search').fill(project)
   const r = row(page, project)
   await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
-  await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Decide: \S/)
-  await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Lease ${STAMP}: Decide: `))
+  await expect(r).toHaveAttribute('title', new RegExp(`\\nLease ${STAMP}: Decide: \\S`))
   await r.click()
   await expectChatShown(page)
   await showTasks(page)
@@ -519,7 +521,7 @@ test('the Inbox is a VP like any project: its row offers its VP, and once contac
   await expect(head).toHaveText(/^VPs · \d+$/)
   expect(await head.evaluate((h, el) => !!el && !!(h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING), await inbox.elementHandle())).toBe(true)
   const vps = Number((await head.innerText()).replace(/\D+/g, ''))
-  await expect(page.getByTestId('org-channel-main').getByTestId('org-channel-latest')).toContainText(`${vps} VPs`)
+  await expect(page.getByTestId('org-channel-main')).toHaveAttribute('title', new RegExp(`\\b${vps} VPs\\b`))
   await inbox.click()
   await expect(inbox).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('org-detail-title')).toHaveText('Inbox VP')
@@ -536,7 +538,7 @@ test('the Inbox is a VP like any project: its row offers its VP, and once contac
   // The row now has its VP to talk to: no more Make a VP (its chat starts, or waits for a click).
   await expect(page.locator('[data-testid="org-chat-start"][data-state="no-vp"]')).toHaveCount(0, { timeout: 30_000 })
   await expect(page.getByTestId('org-detail-title')).toHaveText('Inbox VP')
-  // A VP's own row counts its threads, as every VP's does.
-  await expect(inbox.getByTestId('org-channel-badge')).toHaveAttribute('title', /^\d+ threads?$/, { timeout: 30_000 })
+  // A VP's own row: its threads in its hover (a dot only above 0), as every VP's.
+  await expect(inbox).toHaveAttribute('title', /(^|\n|: )\d+ threads?\b/, { timeout: 30_000 })
   await expect(page.getByTestId('org-no-contact')).toHaveCount(0)
 })

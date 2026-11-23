@@ -3,7 +3,8 @@
  * chart, the routers, a moved project, the leaders and the task rows): its character
  * (useOrgAvatars), the default one or the one picked for it. Only an Org node wears one (the CEO,
  * a VP, a router, a leader or Director; 2026-11-23, the user): for any other task it draws
- * nothing, so a plain task reads as a task wherever it is listed.
+ * nothing, so a plain task reads as a task wherever it is listed. The Org list draws it plain
+ * (`plain`: no state mark on its corner; the list is avatar, name and a dot, OrgListRow.tsx).
  */
 import type { ChannelRow, ChannelState } from './org-channels-model';
 import { rowTaskId } from './org-channels-model';
@@ -30,8 +31,8 @@ export function NodeAvatar({ taskId, name, size, state, className = '' }: NodeAv
   );
 }
 
-export function OrgAvatar({ row, size = 34 }: { row: ChannelRow; size?: number }) {
+export function OrgAvatar({ row, size = 34, plain = false }: { row: ChannelRow; size?: number; plain?: boolean }) {
   return (
-    <NodeAvatar taskId={rowTaskId(row)} name={row.name} size={size} state={row.state} />
+    <NodeAvatar taskId={rowTaskId(row)} name={row.name} size={size} {...(plain ? {} : { state: row.state })} />
   );
 }

@@ -138,8 +138,7 @@ describe('ratchets: every Org node count reads the one derivation', () => {
   it('every Needs you count on the Org page goes through askCount (the cards come from each task\'s user_status)', () => {
     // Each place that counts asks for a number the user reads, with where its cards come from.
     expect(scan([ORG_DIR], /\baskCount\([^)]*\)/g), 'a new Needs you count: list it here, from the row\'s alerts or the tabs').toEqual([
-      'web/src/components/org/OrgChannelList.tsx: askCount(row.alerts)', // a list row's badge (no threads badge)
-      'web/src/components/org/OrgRouterSection.tsx: askCount(row.alerts)', // a router row's badge
+      'web/src/components/org/OrgListRow.tsx: askCount(row.alerts)', // a list row's dot (a row with no Threads of its own: a router, a project with no VP)
       'web/src/components/org/org-channels-model.ts: askCount(mainAlerts)', // the CEO row's `needs`
       'web/src/components/org/org-channels-model.ts: askCount(alerts)', // a project row's `needs`
       'web/src/components/org/org-channels-model.ts: askCount(r.alerts)', // the CEO row: the asks under every VP

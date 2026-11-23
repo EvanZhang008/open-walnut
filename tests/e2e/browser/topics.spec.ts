@@ -172,7 +172,8 @@ test('on: a topic made from the Org page with two tasks and the VP; a message, a
   await expect(mine).not.toHaveClass(/is-sending/, { timeout: 15_000 })
   await expect.poll(async () => (await readTopic(request, ids.topic)).messages.some((m) => m.author === 'human' && m.text === words)).toBe(true)
   // The row's last line moved on: the message, or Walnut's line after it (these tasks have no session to wake).
-  await expect(row.getByTestId('org-topic-last')).not.toHaveText('No messages yet', { timeout: 15_000 })
+  // (The row draws only its title since 2026-11-22: its last line is in its hover.)
+  await expect(row).not.toHaveAttribute('title', /No messages yet/, { timeout: 15_000 })
   await expect(mine.getByTestId('topic-message-reach')).toContainText('not woken', { timeout: 15_000 })
 
   // "@" lists the members; Enter picks the highlighted one into the box.

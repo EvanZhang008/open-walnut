@@ -412,7 +412,7 @@ test('on, Threads by state: a card below snoozed says until when, and its Unsnoo
 // it, but the thread don't go away ... I have to manually click next", and on the VP's row, a red
 // "1 thread" with no such card in its Threads ("It show 1 but there isn't any"). His reply makes the
 // card the task's move at once: it leaves the top (the next card takes its place, no click), the top's
-// N, the header and the row's badge drop by one, and the Threads view keeps it in Working with his words.
+// N, the header and the row's dot count drop by one, and the Threads view keeps it in Working with his words.
 test('on, top of the chat: his reply on a card below leaves the top and every count at once, the next card in its place', async ({ page, request }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
@@ -439,7 +439,9 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     await openLead(page)
     const top = page.getByTestId('org-chat').getByTestId('top-thread')
     const pill = page.getByTestId('org-pill-threads')
-    const badge = page.locator(`[data-testid="org-channel"][data-key="${rowKey(PROJECT)}"] [data-testid="org-channel-badge"]`)
+    // The row's red dot (OrgListRow): its label is the count ("2 threads"); n >= 2, so it stays.
+    const badge = page.locator(`[data-testid="org-channel"][data-key="${rowKey(PROJECT)}"] [data-testid="org-channel-dot"]`)
+    const threads = (k: number) => `${k} thread${k === 1 ? '' : 's'}`
     await expect(page.locator(`[data-testid="org-thread-group"][data-group="needs"] [data-thread-id="${second}"]`)).toBeVisible({ timeout: 20_000 })
     // The Threads beside the chat: the top draws none of them again (2026-11-23, the user: "两处都改").
     await expect(top).toHaveCount(0)
@@ -456,7 +458,7 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     await expect(top).toHaveAttribute('data-thread-id', second)
     const at = Number((await pos.textContent())!.split('/')[0])
     await expect(pill).toHaveAttribute('data-threads', String(n))
-    await expect(badge).toHaveAttribute('data-threads', String(n), { timeout: 20_000 })
+    await expect(badge).toHaveAttribute('aria-label', threads(n), { timeout: 20_000 })
     await shot(page, '7-top-before', page.getByTestId('org-detail'))
     const inTop = top.locator(`[data-testid="org-thread"][data-thread-id="${second}"]`)
     await inTop.getByTestId('org-thread-popped-input').click()
@@ -466,7 +468,7 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     await expect(top).not.toHaveAttribute('data-thread-id', second, { timeout: 5_000 })
     await expect(pos).toHaveText(`${Math.min(at, n - 1)} / ${n - 1}`)
     await expect(pill).toHaveAttribute('data-threads', String(n - 1))
-    await expect(badge).toHaveAttribute('data-threads', String(n - 1), { timeout: 20_000 })
+    await expect(badge).toHaveAttribute('aria-label', threads(n - 1), { timeout: 20_000 })
     // His reply is still on its way, and the Threads view keeps the card in Working with his words;
     // shown again, the side bar takes the top's place.
     await toggle.click()

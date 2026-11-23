@@ -3,6 +3,9 @@ import { loadHome } from './draft-helpers';
 import { isolateUiPrefs } from './todo-panel-helpers';
 import { discoverBrowserFixture } from './codex-test-audit';
 
+// An Org row draws only its avatar, its name and a dot (2026-11-22); its line is in its hover.
+const hoverHas = (text: string) => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
 test.setTimeout(180_000);
 test('a linked review decision has one task ask and a lead-thread pointer that restores after owner changes', async ({ page, request }, testInfo) => {
   const stamp = `${Date.now().toString(36)}-${process.pid}`;
@@ -46,7 +49,7 @@ test('a linked review decision has one task ask and a lead-thread pointer that r
     await expect(card.getByTestId('org-thread-reply')).toHaveCount(0);
     await expect(card.getByTestId('org-thread-task')).toHaveCount(0);
     await expect(card).not.toContainText(ask);
-    await expect(page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`)).toContainText('Asked in Security review owner');
+    await expect(page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`)).toHaveAttribute('title', hoverHas('Asked in Security review owner'));
     // Ordinary user navigation, scrolling and opening the conversation keep the owning task intact.
     await card.scrollIntoViewIfNeeded();
     await page.setViewportSize({ width: 1100, height: 800 });
@@ -108,26 +111,26 @@ test('a lead entry distinguishes a worker decision from a result, an answer and 
     await page.getByTestId('sidebar-org').click();
     const channel = page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`);
     await channel.click();
-    await expect(channel).toContainText('Asked in Decision action owner');
-    await expect(channel).not.toContainText('Choose one supplier?');
+    await expect(channel).toHaveAttribute('title', hoverHas('Asked in Decision action owner'));
+    await expect(channel).not.toHaveAttribute('title', hoverHas('Choose one supplier?'));
     for (const [status, line] of [
       [{ state: 'read', toRead: 'result', waitingOn: 'The result is ready' }, 'Can close: The result is ready'],
       [{ state: 'waiting', toRead: 'answer', waitingOn: 'It answered your question' }, 'Take a look: It answered your question'],
     ] as const) {
       statuses.set(owner, { ...status, at: new Date().toISOString() });
       await page.reload();
-      await expect(channel).toContainText(line);
-      await expect(channel).not.toContainText('Asked in');
+      await expect(channel).toHaveAttribute('title', hoverHas(line));
+      await expect(channel).not.toHaveAttribute('title', hoverHas('Asked in'));
       await channel.click();
-      await expect(channel).toContainText(line);
+      await expect(channel).toHaveAttribute('title', hoverHas(line));
       await channel.screenshot({ path: testInfo.outputPath(`${status.toRead}-action.png`) });
-      await expect(channel).toContainText(line);
+      await expect(channel).toHaveAttribute('title', hoverHas(line));
     }
     statuses.set(owner, quiet);
     statuses.set(lead, { state: 'needs', source: 'session', ask: 'Choose the garden budget?', at: new Date().toISOString() });
     await page.reload();
-    await expect(channel).toContainText('Decide: Choose the garden budget?');
-    await expect(channel).not.toContainText('Asked in');
+    await expect(channel).toHaveAttribute('title', hoverHas('Decide: Choose the garden budget?'));
+    await expect(channel).not.toHaveAttribute('title', hoverHas('Asked in'));
     await channel.click();
     await page.screenshot({ path: testInfo.outputPath('own-decision.png') });
     expect(errors).toEqual([]);

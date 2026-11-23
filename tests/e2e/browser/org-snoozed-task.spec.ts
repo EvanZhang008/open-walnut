@@ -68,8 +68,9 @@ test.afterAll(async ({ request }) => {
 test('a snoozed task is not Needs you on the Org page; its date passing brings it back', async ({ page, request }) => {
   await openOrg(page)
   const row = page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.toLowerCase()}"]`)
-  // A VP's own row: its badge is its threads (none here), never its tasks' asks.
-  await expect(row.getByTestId('org-channel-badge')).toHaveText('0', { timeout: 30_000 })
+  // A VP's own row: its dot is its threads (none here, so no dot), never its tasks' asks.
+  await expect(row).toHaveAttribute('title', /(^|\n|: )0 threads\b/, { timeout: 30_000 })
+  await expect(row.getByTestId('org-channel-dot')).toHaveCount(0)
   await row.click()
   const detail = page.getByTestId('org-detail')
   const counts = detail.getByTestId('org-detail-counts')

@@ -15,8 +15,10 @@ enum ChatDrawerView: String, CaseIterable, Identifiable {
     static let storageKey = "chat.drawer.view"
 }
 
-/// The drawer's org view: the CEO on top, then one row per VP, each with its live status the
-/// way the web Org page shows it (`ChatOrgModel`). A tap opens that node's chat.
+/// The drawer's org view: the CEO on top, then one row per VP, as plain as the web Org list: the
+/// avatar, the name and one red dot when its threads (or asks) wait on the user (2026-11-22, the
+/// user: "just show name of vp icon, read dot for thread"). Its state, line and counts are in the
+/// VoiceOver label (`accessibilityText`, from `ChatOrgModel`). A tap opens that node's chat.
 ///
 /// With Directors on (`DirectorsSettings.enabled`), each VP's Directors show in the layout the
 /// user picked (`ChatDirectorsModel`): folded under the VP, or in a section after the VPs. A long
@@ -141,6 +143,13 @@ struct ChatDrawerOrgList: View {
         }
         return parts.joined(separator: ", ")
     }
+
+    /// The row's red dot: on the CEO's and a VP's own row its threads for him, else what it asks of
+    /// him (as on the web's `rowDot`). A count of 0 draws nothing.
+    static func hasDot(_ row: ChatOrgModel.Row) -> Bool {
+        if let t = row.threadsBadge { return t > 0 }
+        return row.needs > 0
+    }
 }
 
 /// A VP row's long press while Directors are on: New Director. No menu at all otherwise.
@@ -168,27 +177,25 @@ struct ChatOrgRowView: View {
     let row: ChatOrgModel.Row
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    /// At the accessibility sizes a row wraps instead of cutting its state off.
+    /// At the accessibility sizes a name wraps instead of being cut.
     private var lines: Int { typeSize.isAccessibilitySize ? 3 : 1 }
 
     var body: some View {
         HStack(spacing: 10) {
             avatar
-            VStack(alignment: .leading, spacing: 2) {
-                // The projects a VP also leads are no "+N" beside the name (2026-11-22, the user:
-                // "why the fuck is +7 +1, remove"); VoiceOver still reads them (accessibility label).
-                Text(verbatim: row.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(lines)
-                // A watched thread named on the line wears the Threads card's eye.
-                (row.lineWatched ? Text("\(Image(systemName: "eye.fill")) \(Text(verbatim: row.line))") : Text(verbatim: row.line))
-                    .font(.caption)
-                    .foregroundStyle(row.state == .needs ? UserStatePill.textColor(.needs) : .secondary)
-                    .lineLimit(lines)
-            }
+            // Only the name: no line under it, no count, no time and no state mark (2026-11-22, the
+            // user: "We need to be super simple"); VoiceOver reads the rest (accessibility label).
+            Text(verbatim: row.name)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(lines)
             Spacer(minLength: 4)
-            badge
+            if ChatDrawerOrgList.hasDot(row) {
+                Circle()
+                    .fill(UserStatePill.color(.needs))
+                    .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -204,38 +211,9 @@ struct ChatOrgRowView: View {
             .foregroundStyle(ceo ? Theme.onTint : .white)
             .frame(width: 34, height: 34)
             .background(ceo ? Theme.accent : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
-            .overlay(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(row.state == .waiting ? Color(.systemGray) : UserStatePill.color(row.state))
-                    .frame(width: 11, height: 11)
-                    .overlay(Circle().stroke(Color(.secondarySystemBackground), lineWidth: 2))
-                    .offset(x: 2, y: 2)
-            }
     }
 
     static func color(_ rgb: Int) -> Color {
         Color(red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255)
-    }
-
-    @ViewBuilder
-    private var badge: some View {
-        // The CEO's and a VP's own row: its threads, red, else "0" in grey (as on the web).
-        if let t = row.threadsBadge {
-            count(t, color: t > 0 ? UserStatePill.color(.needs) : Color(.systemGray3))
-        } else if row.needs > 0 {
-            count(row.needs, color: UserStatePill.color(.needs))
-        } else if row.kind == .vp, row.working > 0 {
-            count(row.working, color: UserStatePill.color(.working))
-        }
-    }
-
-    private func count(_ n: Int, color: Color) -> some View {
-        Text(verbatim: "\(n)")
-            .font(.caption.weight(.bold))
-            .monospacedDigit()
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7)
-            .frame(minWidth: 22, minHeight: 20)
-            .background(color, in: Capsule())
     }
 }

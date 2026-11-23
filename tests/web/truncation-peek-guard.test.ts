@@ -77,7 +77,7 @@ describe('a task row whose text is cut off expands as a whole', () => {
     for (const f of ['components/org/OrgThreads.tsx', 'components/tasks/HomeBoardSheet.tsx']) expect(rows.has(f), f).toBe(true);
     // The rows of the first report wrap their titles now (`.wn-title`: titles never cut, only
     // metadata), so the scan finds no cut title in them; they stay marked, since their metadata can cut.
-    for (const f of ['components/tasks/StatusSections.tsx', 'components/tasks/TodoPanel.tsx', 'components/tasks/FocusSatelliteCards.tsx', 'components/tasks/WorkerFoldTree.tsx', 'components/org/OrgChannelList.tsx', 'components/org/OrgTaskRail.tsx']) {
+    for (const f of ['components/tasks/StatusSections.tsx', 'components/tasks/TodoPanel.tsx', 'components/tasks/FocusSatelliteCards.tsx', 'components/tasks/WorkerFoldTree.tsx', 'components/org/OrgTaskRail.tsx']) {
       expect(fs.readFileSync(path.join(WEB_SRC, f), 'utf8'), f).toContain('data-peek-row=""');
     }
   });

@@ -163,7 +163,8 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await expect(c1.getByTestId('org-thread-state')).toHaveText('Working')
   await expect(c1.getByTestId('org-thread-reply').locator('strong')).toHaveText('Build Threads')
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"]`)).toContainText(`Build Threads ${STAMP}`)
-  await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] i`)).toHaveCount(1)
+  // Its live status mark (TaskStateIcon), the one status icon everywhere.
+  await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] .task-state-icon`)).toHaveCount(1)
 
   // A second ask right after the first is the same conversation: it joins the first thread at once
   // (core/org/threads-model.ts SAME_CONVERSATION_MS), never a card of its own.
@@ -383,8 +384,10 @@ test('a thread waiting on him leads the VP\'s row and header, and the header has
   await loadHome(page)
   await page.getByTestId('sidebar-org').click()
   const row = page.locator(`[data-testid="org-channel"][data-key="${rowKey(LED)}"]`)
-  // The lead's own status names the thread (the server's status sync), and the row reads it first.
-  await expect(row.getByTestId('org-channel-latest')).toHaveText(new RegExp(`^\\d+ threads?: ${title}$`), { timeout: 30_000 })
+  // The lead's own status names the thread (the server's status sync), and the row's hover reads it
+  // first (the row itself draws only its name and its red dot, 2026-11-22).
+  await expect(row).toHaveAttribute('title', new RegExp(`\\n\\d+ threads?: ${title}(\\n|$| \\(a watched thread\\))`), { timeout: 30_000 })
+  await expect(row.getByTestId('org-channel-dot')).toHaveCount(1)
   await expect(row).toHaveAttribute('data-state', 'alert')
   await row.click()
   const counts = page.getByTestId('org-detail').getByTestId('org-detail-counts')
@@ -936,8 +939,8 @@ test('Watch puts a thread on his Watching list and leaves it in its place; the n
   await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^1 in progress/)
   if ((await page.getByTestId('org-threads-hidden').getAttribute('aria-expanded')) !== 'true') await page.getByTestId('org-threads-hidden').click()
   await expect(page.getByTestId('org-thread-list-hidden').locator('[data-thread-id="th-00000000d003"]').getByTestId('org-thread-watched')).toHaveText(/^Watched by /)
-  // The Org list's row names a watched thread with the eye.
-  await expect(page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"] .org-channel-watch`)).toBeVisible({ timeout: 20_000 })
+  // The Org list's row says so in its hover (it draws no pin since 2026-11-22).
+  await expect(page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"]`)).toHaveAttribute('title', /\(a watched thread\)/, { timeout: 20_000 })
 
   // Unwatch his from its own card: it leaves Watching and stays in its place.
   await c2.getByTestId('org-thread-watch').click()
@@ -951,7 +954,7 @@ test('Watch puts a thread on his Watching list and leaves it in its place; the n
 // this thread" (a 72-character message, not a short ok), and both of the VP's closes were refused.
 test('he asks the lead in its chat to close a thread it opened: the lead closes it quoting him, and the card goes', async ({ page, request }) => {
   const res = await request.post(`/api/v1/tasks/${ids.lead}/threads/open`, {
-    data: { title: `Yearly learning budget ${STAMP}`, text: 'Decide: the yearly learning budget lapses on Dec 31. My pick: let it lapse unless there is a course you want.', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' },
+    data: { title: `Yearly learning budget ${STAMP}`, text: 'Decide: the yearly learning budget lapses on Dec 31. My pick: let it lapse unless there is a course you want.', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call', separate_reason: 'A budget decision of its own, not the header pick.' },
     headers: { 'x-walnut-caller-sid': ids.leadSid },
   })
   expect(res.status(), await res.text()).toBe(201)

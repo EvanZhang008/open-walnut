@@ -12,15 +12,10 @@
  * rows through the list's own key handler, which counts them after the VPs.
  */
 import type React from 'react';
-import { timeAgo } from '@/utils/time';
-import { stateCountLabel } from '@open-walnut/user-status';
-import { askCount, type ChannelRow, type ChannelState } from './org-channels-model';
+import type { ChannelRow } from './org-channels-model';
 import { OrgAvatar } from './OrgAvatar';
+import { OrgListRow, rowDot, rowHover } from './OrgListRow';
 import { ICON_PLUS } from '@/components/common/Icons';
-
-const STATE_LABEL: Record<ChannelState, string> = {
-  alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Paused',
-};
 
 export const ROUTERS_SECTION_LABEL = 'Routers';
 
@@ -29,51 +24,27 @@ export function routersHeading(count: number): string {
   return `${ROUTERS_SECTION_LABEL} · ${count}`;
 }
 
-/** "5m", "3h", "2d" (the list's short clock, kept here so this section imports no list code). */
-function shortAgo(ms: number, now: number): string {
-  if (!ms) return '';
-  const mins = Math.max(0, Math.floor((now - ms) / 60_000));
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
 /** A right-click on a router row: the list's row menu (org-row-menu.ts). */
 type RouterMenu = (e: React.MouseEvent, target: { row: ChannelRow }) => void;
 
+/** The list's one plain row (OrgListRow); its area, Paused or Active and its VPs (buildChannels'
+ *  line) are in its hover. */
 function RouterRow({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void; onMenu?: RouterMenu }) {
-  const own = askCount(row.alerts);
   return (
-    <button
-      type="button"
-      role="option"
-      aria-selected={selected}
-      className={`org-channel is-router${selected ? ' is-selected' : ''}${row.unread ? ' is-unread' : ''}`}
+    <OrgListRow
+      avatar={<OrgAvatar row={row} plain />}
+      name={row.name}
+      dot={rowDot(row)}
+      selected={selected}
+      className="is-router"
       data-testid="org-channel-router"
       data-key={row.key}
       data-kind="router"
       data-state={row.state}
-      title={`${row.name}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
+      title={rowHover(row, now)}
       onClick={() => onSelect(row.key)}
       onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
-    >
-      <OrgAvatar row={row} />
-      <span className="org-channel-mid">
-        <span className="org-channel-top">
-          <span className="org-channel-name wn-title">{row.name}</span>
-          <span className="org-channel-tail wn-fixed">
-            <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
-            {own > 0 && <span className="badge badge-count badge-alert org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>}
-          </span>
-        </span>
-        {/* Its area, Paused or Active (or that it runs its own loop), and how many VPs it links to (buildChannels writes the line). */}
-        <span className={`org-channel-latest wn-title${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-router-line">
-          {row.latest}
-        </span>
-      </span>
-    </button>
+    />
   );
 }
 

@@ -16,10 +16,10 @@
  *    second window follows well inside a second with nothing held.
  *
  * Scenario matrix:
- *  1. Acknowledge with the write held: the row's badge and the Threads tab count drop inside
+ *  1. Acknowledge with the write held: the row's dot label and the Threads tab count drop inside
  *     INSTANT_MS with zero responses answered; after the release the echoes do not put it back.
- *  2. a write the server refuses: the badge and the card come back, with the reason.
- *  3. two windows, nothing held: the other window's badge follows inside OTHER_WINDOW_MS.
+ *  2. a write the server refuses: the dot's count and the card come back, with the reason.
+ *  3. two windows, nothing held: the other window's dot follows inside OTHER_WINDOW_MS.
  *  4. acted on again while the first write is still out (snooze the second thread): both count.
  * The fixture is shared, so this file makes its own project and removes what it made.
  */
@@ -50,10 +50,12 @@ async function post<T>(request: APIRequestContext, url: string, data: unknown, h
   return (await res.json()) as T
 }
 
-/** The node opens a thread that waits on the user, as its thread_create op does. */
+/** The node opens a thread with an answer for the user to read, as its thread_create op does: it
+ *  counts on his row and its card has Acknowledge (a Needs you card answers in its ask row instead,
+ *  with no Acknowledge, since 2026-11-20). */
 async function openThread(request: APIRequestContext, title: string): Promise<string> {
   const { thread } = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.lead}/threads/open`,
-    { title, text: `${title}: which way?`, state: 'needs', user_kind: 'user_own', user_kind_why: 'It is his own calendar to decide' }, { 'x-walnut-caller-sid': ids.leadSid })
+    { title, text: `${title}: the answer is in.`, from: 'node', state: 'answered' }, { 'x-walnut-caller-sid': ids.leadSid })
   return thread.id
 }
 
@@ -72,7 +74,9 @@ async function removeTask(request: APIRequestContext, id: string): Promise<void>
   }
 }
 
-const badge = (page: Page) => page.locator(`[data-testid="org-channel"][data-key="${rowKey}"] [data-testid="org-channel-badge"]`)
+// The row's red dot (OrgListRow): its label is the count his view shows ("2 threads").
+const badge = (page: Page) => page.locator(`[data-testid="org-channel"][data-key="${rowKey}"] [data-testid="org-channel-dot"]`)
+const threads = (n: number | string) => `${n} thread${Number(n) === 1 ? '' : 's'}`
 const card = (page: Page, id: string) => page.locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
 const tabCount = (page: Page) => page.getByTestId('org-detail').getByTestId('org-top-threads').locator('.org-top-count')
 
@@ -135,14 +139,14 @@ test('the node row follows an Acknowledge before the server has answered, and th
   const c = await openThread(request, `Dot C ${STAMP}`)
   await expect.poll(() => shownThreads(request), { timeout: 30_000 }).toBe(3)
   await openNode(page)
-  await expect(badge(page)).toHaveAttribute('data-threads', '3', { timeout: 30_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', threads('3'), { timeout: 30_000 })
   await expect(card(page, a)).toBeVisible()
   await expect(tabCount(page)).toHaveText('3')
 
   const hold = await holdThreadWrites(page)
   await card(page, a).getByTestId('org-thread-ack').click()
   // The claim: the row outside the card has moved while the write is still on the wire.
-  await expect(badge(page)).toHaveAttribute('data-threads', '2', { timeout: INSTANT_MS })
+  await expect(badge(page)).toHaveAttribute('aria-label', threads('2'), { timeout: INSTANT_MS })
   await expect(tabCount(page)).toHaveText('2', { timeout: INSTANT_MS })
   expect(hold.answered(), 'the server answered before the row moved: the row may have followed the server').toBe(0)
   expect(await shownThreads(request), 'the server still counts 3: nothing reached it').toBe(3)
@@ -150,7 +154,7 @@ test('the node row follows an Acknowledge before the server has answered, and th
 
   // Scenario 4: a second action while the first write is still out.
   await card(page, b).getByTestId('org-thread-ack').click()
-  await expect(badge(page)).toHaveAttribute('data-threads', '1', { timeout: INSTANT_MS })
+  await expect(badge(page)).toHaveAttribute('aria-label', threads('1'), { timeout: INSTANT_MS })
   expect(hold.answered()).toBe(0)
 
   await hold.release()
@@ -158,7 +162,7 @@ test('the node row follows an Acknowledge before the server has answered, and th
   await expect.poll(() => shownThreads(request), { timeout: 15_000 }).toBe(1)
   // Every echo has had time to land (the write's event, the derived status, the list re-read).
   await page.waitForTimeout(2_500)
-  await expect(badge(page)).toHaveAttribute('data-threads', '1')
+  await expect(badge(page)).toHaveAttribute('aria-label', threads('1'))
   await expect(tabCount(page)).toHaveText('1')
   await expect(card(page, c)).toBeVisible()
 })
@@ -168,16 +172,16 @@ test('a write the server refuses puts the count back and says so', async ({ page
   const d = await openThread(request, `Dot D ${STAMP}`)
   await expect.poll(() => shownThreads(request), { timeout: 30_000 }).toBe(before)
   await openNode(page)
-  await expect(badge(page)).toHaveAttribute('data-threads', String(before), { timeout: 30_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', threads(String(before)), { timeout: 30_000 })
   await page.route(`**/api/v1/tasks/${ids.lead}/threads/*`, async (route) => {
     if (route.request().method() !== 'PATCH') return route.continue()
     await new Promise((r) => setTimeout(r, 1_200))
     await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 'internal', message: 'disk full' } }) })
   })
   await card(page, d).getByTestId('org-thread-ack').click()
-  await expect(badge(page)).toHaveAttribute('data-threads', String(before - 1), { timeout: INSTANT_MS })
+  await expect(badge(page)).toHaveAttribute('aria-label', threads(String(before - 1)), { timeout: INSTANT_MS })
   // Refused: the row and the card are back, and the page says it did not save.
-  await expect(badge(page)).toHaveAttribute('data-threads', String(before), { timeout: 10_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', threads(String(before)), { timeout: 10_000 })
   await expect(card(page, d).getByTestId('org-thread-ack')).toBeVisible()
   await expect(page.getByTestId('org-detail')).toContainText('did not save')
   expect(await shownThreads(request)).toBe(before)
@@ -190,12 +194,12 @@ test('another window follows inside a second, with nothing held', async ({ page,
   await openNode(page)
   const other = await context.newPage()
   await openNode(other)
-  await expect(badge(page)).toHaveAttribute('data-threads', String(before), { timeout: 30_000 })
-  await expect(badge(other)).toHaveAttribute('data-threads', String(before), { timeout: 30_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', threads(String(before)), { timeout: 30_000 })
+  await expect(badge(other)).toHaveAttribute('aria-label', threads(String(before)), { timeout: 30_000 })
 
   await card(page, e).getByTestId('org-thread-ack').click()
   // The other window only has the server to learn it from: the fast lane, then the push.
-  await expect(badge(other)).toHaveAttribute('data-threads', String(before - 1), { timeout: OTHER_WINDOW_MS })
+  await expect(badge(other)).toHaveAttribute('aria-label', threads(String(before - 1)), { timeout: OTHER_WINDOW_MS })
   await expect(card(other, e).getByTestId('org-thread-ack')).toHaveCount(0, { timeout: 5_000 })
   await other.close()
 })

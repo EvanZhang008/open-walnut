@@ -81,10 +81,11 @@ describe('threads come first', () => {
     expect(main.state).not.toBe('alert')
   })
 
-  it('the list badge of a node is its threads, grey at 0; the chart\'s cards wear the list\'s own avatar and its state dot', () => {
+  it('the list dot of a node is its threads, none at 0; the chart\'s cards wear the list\'s own avatar and its state dot', () => {
     const read = (f: string) => fs.readFileSync(path.join(__dirname, '../../web/src/components/org', f), 'utf8')
-    const list = read('OrgChannelList.tsx')
-    expect(list).toMatch(/row\.threadsBadge !== undefined[\s\S]{0,200}is-alert' : 'is-none'/)
+    // The list row's dot (OrgListRow rowDot): a node's own threads above 0, never its asks (2026-11-22: a dot, no grey 0).
+    const row = read('OrgListRow.tsx')
+    expect(row).toMatch(/if \(row\.threadsBadge !== undefined\) return row\.threadsBadge > 0 \? threadCountLabel\(row\.threadsBadge\) : null;/)
     // The chart's red is the avatar's corner dot, the row's state (its threads, the test above),
     // never a sign of its own drawn by another rule.
     const chart = read('OrgChartVp.tsx')

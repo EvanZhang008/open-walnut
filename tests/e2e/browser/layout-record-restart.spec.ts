@@ -365,14 +365,13 @@ test.describe('Org', () => {
     await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}*`])
     await page.screenshot({ path: `${SHOTS}/7-org-pins-after-reload.png`, scale: 'css' })
 
-    // A task of the first VP locked beside the second stands only there, and the list hangs its lock
-    // under the second VP's row, where its panel is.
+    // A task of the first VP locked beside the second stands only there, where its panel is (the
+    // list hangs nothing under a row since 2026-11-22: the strip is where a lock shows).
     await pickNode(page, rowKeyB, PROJECT_B)
     await openBeside(page, `task:${ids.beta}`)
     await side(page).filter({ has: page.getByTestId('org-side-title').filter({ hasText: `Pin beta ${STAMP}` }) }).getByTestId('org-side-lock').click()
     await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.beta}*`, `task:${ids.gamma}*`])
-    await expect(page.locator(`[data-testid="org-watched"][data-key="${rowKeyB}"] [data-testid="org-watched-item"][data-task-id="${ids.beta}"]`)).toBeVisible()
-    await expect(page.locator(`[data-testid="org-watched"][data-key="${rowKey}"] [data-testid="org-watched-item"][data-task-id="${ids.beta}"]`)).toHaveCount(0)
+    await expect(page.locator('[data-testid="org-watched"]')).toHaveCount(0)
     await pickNode(page, rowKey, PROJECT)
     await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}*`])
     await pickNode(page, rowKeyB, PROJECT_B)

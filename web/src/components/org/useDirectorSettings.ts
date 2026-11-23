@@ -18,18 +18,19 @@ export const DIRECTORS_LAYOUT_LABEL = 'Where Directors show';
 export const DIRECTORS_PROJECTS_LABEL = 'Group Directors by project';
 
 export const DIRECTORS_LAYOUT_OPTIONS: ReadonlyArray<SegmentedOption<DirectorsLayout>> = [
-  { value: 'fold', label: 'Under each VP', testId: 'directors-layout-fold', title: 'A folded "N directors" line under each VP; open it to see them' },
-  { value: 'sections', label: 'Own section', testId: 'directors-layout-sections', title: 'A Directors section after the VPs, one row per Director' },
+  { value: 'fold', label: 'Org chart', testId: 'directors-layout-fold', title: 'On the Org chart, a folded "N directors" line under each VP; the list stays one row per VP' },
+  { value: 'sections', label: 'Also in the list', testId: 'directors-layout-sections', title: 'A Directors section after the VPs too, one row per Director' },
 ];
 
-/** One line per choice: what it means. */
+/** One line per choice: what it means. The list draws nothing under a VP's row (2026-11-22, the user:
+ *  "We need to be super simple"), so the stored 'fold' now means the chart only. */
 export function directorsLayoutHelp(layout: DirectorsLayout): string {
   return layout === 'sections'
-    ? 'A Directors section after the VPs, one row per Director, the size of a VP row.'
-    : 'A folded "N directors" line under each VP; open it to see them.';
+    ? 'On the Org chart, and a Directors section after the VPs in the list, one row per Director.'
+    : 'On the Org chart: a folded "N directors" line under each VP; open it to see them.';
 }
 
-export const DIRECTORS_PROJECTS_HELP = 'In the "N directors" line (and in the Org chart), each project\'s Directors sit under its name. Off: one list, in their order.';
+export const DIRECTORS_PROJECTS_HELP = 'In the Org chart\'s "N directors" line, each project\'s Directors sit under its name. Off: one list, in their order.';
 
 export function useDirectorSettings() {
   const on = useExperimental('org_leaders');

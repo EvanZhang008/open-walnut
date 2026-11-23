@@ -8,9 +8,8 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree, type OrgTaskLike } from '../../src/core/org/org-tree.js'
 import { buildChannels } from '../../web/src/components/org/org-channels-model.js'
 import { vpCards } from '../../web/src/components/org/org-chart-model.js'
-import { directorProjectsByVp, directorRows, directorsLabel, firstLeaders, flatDirectors, foldGroups, leaderGroups, leaderTotal, leadersMatch, sourcesOf, subsMatch } from '../../web/src/components/org/org-leaders.js'
+import { directorProjectsByVp, directorRows, directorsLabel, flatDirectors, foldGroups, leaderGroups, leaderTotal, leadersMatch, sourcesOf } from '../../web/src/components/org/org-leaders.js'
 import type { ChannelRow } from '../../web/src/components/org/org-channels-model.js'
-import type { LeaderNode } from '../../web/src/components/org/org-leaders.js'
 
 let n = 0
 const t = (project: string, over: Partial<OrgTaskLike> = {}): OrgTaskLike => {
@@ -95,10 +94,6 @@ describe('leaders under a VP', () => {
     expect(leadersMatch(groups, 'resolver')).toBe(true)
     expect(leadersMatch(groups, 'pipeline nothing')).toBe(false)
     expect(leadersMatch(groups, '  ')).toBe(false)
-    // The fold above a deeper match opens; one with nothing under it that matches does not.
-    const top = groups[0]!.leaders[0]!
-    expect(subsMatch(top, 'resolver')).toBe(true)
-    expect(subsMatch(top, 'pipeline')).toBe(false)
   })
 
   it('with the project names off, the fold is one group with no name, in the same order', () => {
@@ -112,21 +107,6 @@ describe('leaders under a VP', () => {
     const flat = foldGroups(groups, false)
     expect(flat.map((g) => [g.name, g.leaders.map((l) => l.title)])).toEqual([['', ['Hall team', 'Annex team']]])
     expect(foldGroups([], false)).toEqual([])
-  })
-
-  // 2026-11-22, the UI audit: one VP's opened team pushed every other VP off the list's first screen.
-  it('an opened fold in the list shows its first Directors, whole groups cut where the count runs out', () => {
-    const leader = (id: string): LeaderNode => ({ id, title: id, state: 'working', stateText: 'Working', leads: 1, watched: false, subs: [] })
-    const g = (key: string, ids: string[]) => ({ key, project: key, name: key, leaders: ids.map(leader) })
-    const groups = [g('A', ['a1', 'a2']), g('B', ['b1', 'b2']), g('C', ['c1', 'c2'])]
-    const cut = firstLeaders(groups, 3)
-    expect(cut.hidden).toBe(3)
-    expect(cut.groups.map((x) => [x.name, x.leaders.map((l) => l.id)])).toEqual([['A', ['a1', 'a2']], ['B', ['b1']]])
-    // A group shown whole is the same object; a fold with one more than the cap shows all ("1 more" saves no line).
-    expect(cut.groups[0]).toBe(groups[0])
-    const four = [g('A', ['a1', 'a2']), g('B', ['b1', 'b2'])]
-    expect(firstLeaders(four, 3)).toEqual({ groups: four, hidden: 0 })
-    expect(firstLeaders([], 3)).toEqual({ groups: [], hidden: 0 })
   })
 
   it('the DIRECTORS section: one level, by VP in the list order, a Director\'s own Directors right after it', () => {

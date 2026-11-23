@@ -28,8 +28,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ICON_LOCK } from '@/components/common/Icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { useKeptLockToggle } from '@/components/org/useKeptLockToggle';
-import { keptByRow, lockedTaskIds, slotTask, slotTaskIds, taskRowKey } from '@/components/org/org-task-tabs';
+import { slotTask, slotTaskIds, taskRowKey } from '@/components/org/org-task-tabs';
 import { buildOrgTree } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
@@ -52,12 +51,13 @@ import { vpCards } from '@/components/org/org-chart-model';
 import { OptionPickerFlyout, useCursorFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
 import { orgRowMenu, type OrgRowPick } from '@/components/org/org-row-menu';
 import { askNewDirector } from '@/components/org/director-actions';
+import { useOrgSettings } from '@/components/org/useOrgSettings';
 import { useAvatarEditor } from '@/components/org/useAvatarEditor';
 import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/OrgNodeDetail';
 import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
-  adoptLegacyPins, homeLocksFor, homeSlotKey, HOME_OFF_MAX, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, pinsOfNode, readNodeOpen,
+  adoptLegacyPins, homeLocksFor, HOME_OFF_MAX, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, pinsOfNode, readNodeOpen,
   setNodePins, writeNodeOpen, type OrgPin, type SameSession,
 } from '@/components/org/org-side-columns';
 import { usePageView } from '@/utils/view-memory';
@@ -132,7 +132,7 @@ function useMinuteNow(): number {
 const FIRST_LOAD_RETRY_MS = 5_000;
 
 export function OrgPage() {
-  const { tasks, loading: tasksLoading, error: tasksError, refetch: refetchTasks, showOperationError, update: updateTaskInStore, refetch, predictStatus } = useTasksContext();
+  const { tasks, loading: tasksLoading, error: tasksError, refetch: refetchTasks, showOperationError, refetch, predictStatus } = useTasksContext();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   const now = useMinuteNow();
@@ -177,7 +177,6 @@ export function OrgPage() {
     seen: (taskId) => setFailedAnswers((prev) => without(prev, taskId)),
   }), [failedAnswers, predictStatus]);
   // Stopping a watch from the Org list: Home's eye, the same write (WatchToggle), shown on the click.
-  const unwatch = useCallback((taskId: string) => { void updateTaskInStore(taskId, { watched_at: '' }); }, [updateTaskInStore]);
   // A hold ends when the task asks again or its session's prompt moves (a new ask shows at once).
   useEffect(() => {
     setAnswered((prev) => settleHolds(prev, allTasks, (t) => promptKey(probe(t)), Date.now()));
@@ -348,7 +347,7 @@ export function OrgPage() {
   const [homeOff, setHomeOff] = usePageView<string[]>('org', HOME_OFF_VIEW, [], isStringArray);
   const rowKeyOf = useMemo(() => taskRowKey(channels.main, channels.rows), [channels.main, channels.rows]);
   // Only where they fit beside the chat: a window that lays side panels over the node never covers its
-  // chat with them unasked (the VP: "don't squeeze the chat away"); its kept row still opens one.
+  // chat with them unasked (the VP: "don't squeeze the chat away"); they wait as tabs at its edge (docked).
   const overlays = useSyncExternalStore(onOverlayChange, overlaysNow, () => false);
   const homeHere = useMemo(
     () => (phone || topicId ? [] : homeLocksFor(selected.key, homeLocks, tasks, rowKeyOf, new Set(homeOff))),
@@ -372,22 +371,13 @@ export function OrgPage() {
     () => orgStripView([...fromHome, ...shownPins.filter((p) => !fromHome.some((h) => h.id === p.id))], openParam, sameSession),
     [fromHome, shownPins, openParam, sameSession],
   );
-  // A Home lock taken off this page is no longer listed here as kept either.
-  const homeLocksHere = useMemo(() => homeLocks.filter((s) => !homeOff.includes(homeSlotKey(s.id))), [homeLocks, homeOff]);
   const docked = useMemo(() => (!overlays ? [] : homeHere
     .filter((h) => !strip.some((c) => c.id === h.id || sameSession(c.id, h.id)))
     .flatMap((slot) => { const task = slotTask(slot.id, tasks); return task ? [{ slot, task }] : []; })),
   [overlays, homeHere, strip, sameSession, tasks]);
-  const lockedIds = useMemo(() => lockedTaskIds([...pins, ...homeLocksHere], shownTasks), [pins, homeLocksHere, shownTasks]);
-  // A task only locked hangs under the node it was locked beside (its first pin's), where its panel stands.
-  const lockedAt = useMemo(() => {
-    const at = new Map<string, string>();
-    for (const p of pins) { const task = p.node ? slotTask(p.id, shownTasks) : undefined; if (task && !at.has(task.id)) at.set(task.id, p.node!); }
-    return at;
-  }, [pins, shownTasks]);
 
-  // A kept row whose task is open beside this page wears a light tint (2026-11-03, the user: no frame,
-  // "if this page shows it, highlight its background a little ... very elegant").
+  // A Director's row whose task is open beside this page wears a light tint (2026-11-03, the user: no
+  // frame, "if this page shows it, highlight its background a little ... very elegant").
   const openTaskIds = useMemo(() => new Set(slotTaskIds(phone ? (openParam ? [{ id: openParam, locked: false }] : []) : strip, shownTasks)), [phone, openParam, strip, shownTasks]);
   // A phone shows one panel from the URL and never touches the desktop's saved strip.
   const [writeStrip] = useState(() => createStripWriter('orgColumns'));
@@ -571,14 +561,6 @@ export function OrgPage() {
     if (wasPinned && target && id !== openParam && !(openParam && sameSession(id, openParam))) openSide(target);
   }, [shownPins, strip, openParam, sameSession, openSide, homeIdsOf, closePanel, selected.key, topicId]);
 
-  // A kept row's lock unlocks and locks again like the panel's own (useKeptLockToggle); a row
-  // unlocked there stays, with an open lock, until the page closes.
-  const keptLock = useKeptLockToggle({ tasks: shownTasks, locked: lockedIds, pins, setPins, homeLocks: homeLocksHere, homeOff, setHomeOff, strip, togglePanelLock });
-  const kept = useMemo(
-    () => keptByRow(channels.main, channels.rows, shownTasks, lockedIds, lockedAt, keptLock.relockable),
-    [channels.main, channels.rows, shownTasks, lockedIds, lockedAt, keptLock.relockable],
-  );
-  const keptOf = useCallback((row: ChannelRow) => kept.get(row.key) ?? [], [kept]);
 
   /** Talk to a task off this page: its session on home, or a composer bound to it (MainPage). */
   const chatOnHome = useCallback((taskId: string) => {
@@ -614,10 +596,18 @@ export function OrgPage() {
   const picker = useCursorFlyout<OrgRowPick>();
   // "Edit name and avatar…" on every row that stands for a task.
   const avatarEditor = useAvatarEditor(channels.rows);
+  // A VP's "New Director…": its input in the list's DIRECTORS section with that layout, else on the
+  // Org chart, where its Directors are (the list draws no fold under a VP).
+  const directorsInList = useOrgSettings().settings.directorsLayout === 'sections';
+  const newDirector = useCallback((key: string) => {
+    if (directorsInList) { askNewDirector(key, 'list'); return; }
+    askNewDirector(key, 'chart');
+    openChart();
+  }, [directorsInList, openChart]);
   const rowMenu = useCallback((target: ChannelMenuTarget, point: CursorPoint, origin: HTMLElement | null): ContextMenuItem[] =>
-    orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin), newDirector: leaders.directors ? (key) => askNewDirector(key, 'list') : undefined, editAvatar: avatarEditor.edit }),
+    orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin), newDirector: leaders.directors ? newDirector : undefined, editAvatar: avatarEditor.edit }),
   // eslint-disable-next-line react-hooks/exhaustive-deps -- picker.open only sets its state
-  [cards, select, openChart, leaders.directors, avatarEditor.edit]);
+  [cards, select, openChart, leaders.directors, newDirector, avatarEditor.edit]);
 
   // The two dividers of the page itself (2026-11-02, the user, pointing at the line before an opened
   // task: "this line need ot move the bar"): the list's right edge and the opened tasks' left edge,
@@ -672,10 +662,7 @@ export function OrgPage() {
           onSelect={select}
           onOpenChart={() => openChart()}
           onNewRouter={() => setRouterSetup(true)}
-          keptOf={keptOf}
           openTaskIds={openTaskIds}
-          onToggleLock={keptLock.toggle}
-          onUnwatch={unwatch}
           {...(leaders.directors ? { directors: leaders.directors } : {})}
           now={now}
         />

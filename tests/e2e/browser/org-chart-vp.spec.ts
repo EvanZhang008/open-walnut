@@ -274,18 +274,22 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(channel(A)).toHaveAttribute('title', new RegExp(`Also leads ${B}`))
   expect(await page.locator('[data-testid="org-channel"]').evaluateAll((rows) => rows.flatMap((r) =>
     [...r.querySelectorAll('*')].filter((e) => !e.children.length && /^\+\d+$/.test(e.textContent?.trim() ?? '')).map((e) => `${r.getAttribute('data-key')}: ${e.textContent}`))), 'a "+N" on an Org row').toEqual([])
-  // B is under "Archived" at the bottom, folded, saying where it went; it came in live.
+  // B is under "Archived" at the bottom, folded, its hover saying where it went; it came in live.
   const moved = page.getByTestId('org-moved-toggle')
   await expect(moved).toHaveText(/^.?Archived · \d+$/)
   await expect(moved).toHaveAttribute('aria-expanded', 'false')
   await expect(page.getByTestId('org-moved-row')).toHaveCount(0)
   await moved.click()
   const movedB = page.locator(`[data-testid="org-moved-row"][data-key="project:${B.toLowerCase()}"]`)
-  await expect(movedB.getByTestId('org-moved-line')).toHaveText(new RegExp(`^Moved to the ${A} VP`))
+  // The row draws only its name (2026-11-22); where it went is its hover.
+  await expect(movedB.locator('.org-channel-name')).toHaveText(B)
+  await expect(movedB).toHaveAttribute('title', new RegExp(`is led by the ${A} VP now`))
   // A click opens the VP that has it now.
   await movedB.click()
   await expect(channel(A)).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByTestId('org-detail-led')).toHaveText(`Leads ${A}, ${B}`)
+  // The header names what it leads only on hover, no line of its own (2026-11-23, the user).
+  await expect(page.getByTestId('org-detail-led')).toHaveCount(0)
+  await expect(page.getByTestId('org-detail-title')).toHaveAttribute('title', new RegExp(`Leads ${A}, ${B}`))
 })
 
 test('a drag onto the drop zone creates a dedicated VP again; the menu asks the same without a drag', async ({ page, request }) => {
@@ -375,7 +379,7 @@ test('a right-click on an Org row opens Walnut\'s menu, kept short: open it, mov
 
   // A VP row: open it on its tasks (All tasks). The VPs it could move under are one row, not a row each.
   await channel(B).click({ button: 'right' })
-  await expect(menu.getByRole('menuitem')).toHaveText(['Open chat', 'Open tasks', 'Move under another VP…'])
+  await expect(menu.getByRole('menuitem')).toHaveText(['Open chat', 'Open tasks', 'Edit name and avatar…', 'Move under another VP…'])
   await expect(menu).not.toContainText(`${A} VP`)
   await menu.getByText('Open tasks', { exact: true }).click()
   await expect(menu).toHaveCount(0)

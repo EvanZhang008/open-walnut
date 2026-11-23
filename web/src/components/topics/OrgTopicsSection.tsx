@@ -1,11 +1,12 @@
 /**
  * The Org list's Topics (experiment `topics`): a heading with "+ New topic", then one row per open
- * topic, newest first: its members' stacked avatars, its title, when it last moved, and its last
- * line ("Name: words"). A click selects it like a node (`topic:<id>`), and the page shows its chat
+ * topic, newest first, as the list's one plain row (OrgListRow): its members' stacked avatars and its
+ * title; when it last moved and its last line ("Name: words") are in its hover. A click selects it like a node (`topic:<id>`), and the page shows its chat
  * (TopicChat). Inside the list's listbox it is a group of options, like the Routers. The rows come
  * from useOrgTopicRows, which the list also reads, so Up and Down walk them in the order drawn.
  */
-import { shortAgo } from '@/components/org/OrgChannelList';
+import { OrgListRow } from '@/components/org/OrgListRow';
+import { timeAgo } from '@/utils/time';
 import type { TopicSummary } from '@/api/topics';
 import { openTopics, shortName, topicKey } from './topic-model';
 import { GroupAvatar } from './TopicAvatars';
@@ -29,6 +30,13 @@ export function useOrgTopicRows(query: string): OrgTopicRows {
   return { on, rows: openTopics(list ?? []).filter((t) => matches(t, words)), error };
 }
 
+/** A topic row's hover: its title, when it last moved, and its last line. */
+export function topicHover(t: TopicSummary, now: number): string {
+  const at = t.last?.at ?? t.updatedAt;
+  const moved = at ? timeAgo(at, { now }) : '';
+  return [`${t.title}${moved ? `, moved ${moved}` : ''}`, t.last ? `${shortName(t.last.author)}: ${t.last.text}` : 'No messages yet'].join('\n');
+}
+
 export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
   topics: OrgTopicRows;
   selectedKey: string | null;
@@ -47,32 +55,20 @@ export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
       {rows.map((t) => {
         const key = topicKey(t.id);
         const selected = selectedKey === key;
-        const at = Date.parse(t.last?.at ?? t.updatedAt) || 0;
         return (
           <div key={t.id} className="org-channel-wrap" role="presentation">
-            <button
-              type="button"
-              role="option"
-              aria-selected={selected}
-              className={`org-channel is-topic${selected ? ' is-selected' : ''}`}
+            <OrgListRow
+              avatar={<GroupAvatar members={t.members} size={34} />}
+              name={t.title}
+              selected={selected}
+              className="is-topic"
               data-testid="org-topic"
               data-peek-row=""
               data-key={key}
               data-topic-id={t.id}
-              title={t.title}
+              title={topicHover(t, now)}
               onClick={() => onSelect(key)}
-            >
-              <GroupAvatar members={t.members} size={34} />
-              <span className="org-channel-mid">
-                <span className="org-channel-top">
-                  <span className="org-channel-name">{t.title}</span>
-                  <span className="org-channel-time">{shortAgo(at, now)}</span>
-                </span>
-                <span className="org-channel-latest" data-testid="org-topic-last">
-                  {t.last ? `${shortName(t.last.author)}: ${t.last.text}` : 'No messages yet'}
-                </span>
-              </span>
-            </button>
+            />
           </div>
         );
       })}

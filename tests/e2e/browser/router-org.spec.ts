@@ -225,10 +225,9 @@ for (const area of AREAS) {
 
     const row = routerRow(page, mine.taskId);
     await expect(row).toHaveAttribute('aria-selected', 'true');
-    // The row names its area by name, never by its id.
-    await expect(row.getByTestId('org-router-line')).toHaveText(new RegExp(`^${area.label} · Paused · `));
-    await expect(row).toContainText('Paused');
-    await expect(row).toContainText(`${area.links.length} VP link${area.links.length === 1 ? '' : 's'}`);
+    // The row draws only its name (2026-11-22); its hover names its area by name, never by its id.
+    await expect(row.locator('.org-channel-name')).toHaveText(name);
+    await expect(row).toHaveAttribute('title', new RegExp(`\\n${area.label} · Paused · ${area.links.length} VP link${area.links.length === 1 ? '' : 's'}(\\n|$)`));
     // A router is its own row, never a VP row, and has no Tasks, Brief or Threads side bar.
     expect(await page.getByTestId('org-channel').filter({ hasText: name }).count()).toBe(0);
     await expect(page.getByTestId('org-rail-toggle')).toHaveCount(0);
@@ -267,7 +266,7 @@ for (const area of AREAS) {
     await watch.reload(async () => { await expect(page.getByTestId('org-routers')).toBeVisible({ timeout: 60_000 }); });
     await expect(routerRow(page, mine.taskId)).toHaveAttribute('aria-selected', 'true');
     await expect(routerRow(page, mine.taskId)).toContainText(nameOf[area.id]!);
-    await expect(routerRow(page, mine.taskId)).toContainText('Paused');
+    await expect(routerRow(page, mine.taskId)).toHaveAttribute('title', /Paused/);
     await capture(page, { path: `${SHOTS}/${area.id}-created.png` });
     expect(watch.errors).toEqual([]);
   });
@@ -289,7 +288,7 @@ test('an area that has its router opens it: no POST, no new node, the draft stay
   expect(lastVp && routersHead && routersHead.y >= lastVp.y + lastVp.height - 0.5).toBe(true);
   await page.getByTestId('org-new-router').click();
   const form = page.getByTestId('org-router-setup');
-  await form.getByRole('radio', { name: 'Personal', exact: true }).check();
+  await form.getByRole('radio', { name: /^Personal( \(has a router\))?$/ }).check();
   await expect(form.getByTestId('router-setup-existing')).toHaveAttribute('data-task-id', personal);
   await expect(form.getByTestId('router-setup-create')).toHaveCount(0);
   // The offer replaces the new-router fields: no name to type, no VP list above the button.
@@ -297,9 +296,9 @@ test('an area that has its router opens it: no POST, no new node, the draft stay
   await expect(form.getByTestId('router-setup-vp')).toHaveCount(0);
   await expect(form.getByTestId('router-setup-open-existing')).toBeInViewport();
   // Work has its router too.
-  await form.getByRole('radio', { name: 'Work', exact: true }).check();
+  await form.getByRole('radio', { name: /^Work( \(has a router\))?$/ }).check();
   await expect(form.getByTestId('router-setup-existing')).toHaveAttribute('data-task-id', routerOf.work!);
-  await form.getByRole('radio', { name: 'Personal', exact: true }).check();
+  await form.getByRole('radio', { name: /^Personal( \(has a router\))?$/ }).check();
   await form.getByTestId('router-setup-open-existing').click();
   await expect(form).toHaveCount(0);
   await expect(routerRow(page, personal)).toHaveAttribute('aria-selected', 'true');
@@ -340,11 +339,11 @@ test('Work router links: a failed save keeps the edit, the retry drops one VP, a
   expect(await saveOutcome(page)).toBe('saved');
   await expect.poll(async () => (await taskOf(work)).router_links ?? []).toEqual([vp.a]);
   await expect(page.getByTestId('org-router-summary')).toContainText('1 VP link');
-  await expect(routerRow(page, work)).toContainText('1 VP link');
+  await expect(routerRow(page, work)).toHaveAttribute('title', /1 VP link(\n|$)/);
 
   await watch.reload(async () => { await expect(page.getByTestId('org-routers')).toBeVisible({ timeout: 60_000 }); });
   await expect(routerRow(page, work)).toHaveAttribute('aria-selected', 'true');
-  await expect(routerRow(page, work)).toContainText('1 VP link');
+  await expect(routerRow(page, work)).toHaveAttribute('title', /1 VP link(\n|$)/);
   await openSettings(page);
   await expect(linkBox(page, vp.a)).toBeChecked();
   await expect(linkBox(page, vp.b)).not.toBeChecked();
@@ -379,7 +378,7 @@ test('Personal router pause: a failed resume stays paused everywhere, the real r
   expect(await saveOutcome(page)).toMatch(/^error: /);
   expect(failed).toBe(1);
   await expect(page.getByTestId('org-router-paused')).not.toBeChecked();
-  await expect(routerRow(page, personal)).toContainText('Paused');
+  await expect(routerRow(page, personal)).toHaveAttribute('title', /Paused/);
   expect((await taskOf(personal)).router_paused).toBe(true);
   expect(await registryPaused()).toBe(true);
 
@@ -391,8 +390,9 @@ test('Personal router pause: a failed resume stays paused everywhere, the real r
   expect(await registryPaused()).toBe(false);
   await expect.poll(async () => (await wakeJob(personal))?.enabled ?? null).toBe(true);
   expect((await wakeJob(personal))?.executor?.config?.areaId).toBe('personal');
-  await expect(routerRow(page, personal)).toContainText('Ready');
-  await expect(routerRow(page, personal)).not.toContainText('Paused');
+  // The row draws only its name (2026-11-22); its state is in its hover.
+  await expect(routerRow(page, personal)).toHaveAttribute('title', /Ready/);
+  await expect(routerRow(page, personal)).not.toHaveAttribute('title', /Paused/);
   await expect(page.getByTestId('org-router-summary')).toContainText('Ready for new items');
   // The page's state line follows the save: running or not yet started, and how mail reaches it.
   await expect(page.getByTestId('org-router-overview-state')).toHaveText(/^(Running|Not running yet)/);
@@ -411,7 +411,7 @@ test('Personal router pause: a failed resume stays paused everywhere, the real r
   await expect.poll(async () => (await taskOf(personal)).router_paused).toBe(true);
   expect(await registryPaused()).toBe(true);
   await expect.poll(async () => (await wakeJob(personal))?.enabled ?? null).toBe(false);
-  await expect(routerRow(page, personal)).toContainText('Paused');
+  await expect(routerRow(page, personal)).toHaveAttribute('title', /Paused/);
   await capture(page, { path: `${SHOTS}/personal-paused-again.png` });
   expect(watch.errors).toEqual([]);
 });

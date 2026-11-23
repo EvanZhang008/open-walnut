@@ -122,7 +122,7 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
  *  u ... even if no thread, show 0 thread"); its tasks' asks are in its Tasks. Each number says what
  *  it counts (2026-11-21, a review on his data: "8 threads" over a Threads list whose All chip read 61,
  *  "32 Waiting / snoozed" beside a Waiting / Snoozed chip of 38): the threads pill counts the threads
- *  for him (Needs you and Done, thread-groups.ts threadsForHim), "for you"; the pills after "Tasks"
+ *  for him (Needs you and Done, thread-groups.ts threadsForHim), "for you"; the pills after it (no label of their own: 2026-11-23, a lone "Tasks" read as nothing)
  *  count its tasks, not threads. They are quiet keys (.btn-ghost): a line of counts, not a toolbar. */
 function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; keepsThreads: boolean; threads?: ThreadCounts; onThreads?: () => void }) {
   const shown = threads?.shown ?? 0;
@@ -145,7 +145,6 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
           <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)} for you
         </button>
       )}
-      {keepsThreads && headerPills(tabs, approvals, keepsThreads).length > 0 && <span className="org-pills-label" data-testid="org-pills-tasks-label">Tasks</span>}
       {headerPills(tabs, approvals, keepsThreads).map((p) => pill(p.tab, p.n))}
     </span>
   );
@@ -429,6 +428,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   /** The chat's header goes into the node's (SessionPanel headerSlot): its status and its kebab. */
   const [chatTools, setChatTools] = useState<HTMLElement | null>(null);
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
+  // A VP made only to put projects under leads no work of its own while its home has none.
+  const leads = row.led?.length ? [...(row.vpOnly && !row.node?.counts.open ? [] : [row.name]), ...row.led.map((l) => l.name)] : [];
+  const headTitle = [title, leads.length ? `Leads ${leads.join(', ')}` : '', lastMoved ? `Moved ${lastMoved}` : ''].filter(Boolean).join('\n');
   // Every ask the Needs you count holds is a row, the node's own first (2026-10-31: a count with
   // "Its ask is in the chat." under it left the user hunting for it).
   const alertsShown = useMemo(() => ownAskFirst(tabs.needs, row.contactId), [tabs.needs, row.contactId]);
@@ -481,19 +483,15 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     <div ref={detailRef} className="org-detail" data-testid="org-detail" data-key={row.key}>
       <header className="org-detail-head">
         {onBack && <button type="button" className="org-back" onClick={onBack} aria-label="Back to the org">‹</button>}
-        <OrgAvatar row={row} size={40} />
+        {/* No state mark on the avatar, and the projects it leads and its last move only on hover
+            (2026-11-22/23, the user: "no fucking the ! mark", "why we need Leads Walnut, Walnut-Idea
+            · moved just now???"). */}
+        <OrgAvatar row={row} size={40} plain />
         <div className="org-detail-who">
-          <h2 className="org-detail-title wn-title" data-testid="org-detail-title">{title}</h2>
+          <h2 className="org-detail-title wn-title" data-testid="org-detail-title" title={headTitle}>{title}</h2>
           <div className="org-detail-sub">
             <CountPills tabs={tabs} onOpen={openTab} approvals={approvals.length} keepsThreads={keepsBrief} threads={keepsBrief ? threadsCounted : undefined} onThreads={() => { setRailHidden(false); pickTop('threads'); }} />
-            {!!row.led?.length && (
-              <span className="org-detail-led org-muted" data-testid="org-detail-led">
-                {/* A VP made only to put projects under leads no work of its own while its home has none. */}
-                Leads {[...(row.vpOnly && !row.node?.counts.open ? [] : [row.name]), ...row.led.map((l) => l.name)].join(', ')}
-              </span>
-            )}
             {isRouter && <span className="org-muted" data-testid="org-detail-router-role">Router</span>}
-            {lastMoved && <span className="org-muted">· moved {lastMoved}</span>}
           </div>
         </div>
         <div className="org-detail-tools" data-testid="org-detail-tools">

@@ -76,9 +76,8 @@ describe('the panels Home locked, beside their node', () => {
     // Where they do not fit beside the chat they wait as tabs at the edge, never laid over the chat.
     expect(page).toMatch(/const fromHome = useMemo\(\(\) => \(overlays \? \[\] : homeHere\)/)
     expect(page).toMatch(/data-testid="org-locked-dock-item"/)
-    // Unlocked or closed on the Org page, one leaves it, and its kept row with it.
+    // Unlocked or closed on the Org page, one leaves it.
     expect(page).toMatch(/if \(homeIdsOf\(id\)\.length && strip\.some\(\(c\) => c\.id === id && c\.locked\)\) \{ closePanel\(id\); return; \}/)
-    expect(page).toMatch(/lockedTaskIds\(\[\.\.\.pins, \.\.\.homeLocksHere\]/)
     // The strip holds the node's own pins (org-pins-per-node.test.ts) beside Home's.
     expect(page).toMatch(/orgStripView\(\[\.\.\.fromHome, \.\.\.shownPins\.filter/)
     expect(page).toMatch(/const own = strip\.filter\(\(s\) => !fromHome\.some/)

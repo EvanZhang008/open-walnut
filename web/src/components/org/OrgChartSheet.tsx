@@ -366,7 +366,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                   onOpenChat={() => pick(c.key)}
                   line={nowLine(c.projects, byId)}
                   more={nodeMore(c, `More for ${theVp(c.name)}`)}
-                  {...(leadersOn ? { leaders: <OrgLeaders groups={leaderGroups(sourcesOf(c.projects), byId)} projects={c.projects} showProjects={settings.directorsShowProjects !== false} surface="chart" vpKey={c.key} vpName={c.name} onLeave={onClose} /> } : {})}
+                  {...(leadersOn ? { leaders: <OrgLeaders groups={leaderGroups(sourcesOf(c.projects), byId)} projects={c.projects} showProjects={settings.directorsShowProjects !== false} vpKey={c.key} vpName={c.name} onLeave={onClose} /> } : {})}
                 >
                   <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${theVp(c.name)} leads`} hidden={c.projects.length === 0}>
                     {c.projects.map((p) => (

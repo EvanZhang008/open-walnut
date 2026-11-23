@@ -1,8 +1,5 @@
-/* The leaders under a VP (OrgLeaders.tsx): one quiet line, folded, in the Org list and the Org chart. */
+/* The leaders under a VP (OrgLeaders.tsx): one quiet line, folded, in the Org chart. */
 .org-leaders { display: flex; flex-direction: column; min-width: 0; }
-/* In the list: on the row's guide line, as the kept rows are (org-rail.css .org-watched), and one line with them. */
-.org-leaders.is-list { margin: -2px 0 4px 25px; padding-left: 4px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); }
-.org-watched + .org-leaders.is-list { margin-top: -4px; }
 /* In a chart card: under the name, above the projects, its "▸" in the projects' fold column (org-chart.css .oc-chevron). */
 .org-leaders.is-chart { padding: 0 4px 6px 2px; }
 .org-leaders.is-chart .org-leaders-chevron { color: var(--fg-secondary); }
@@ -10,9 +7,6 @@
 
 /* The fold is the shared DisclosureButton; these only place it. */
 .org-leaders-toggle { width: max-content; max-width: 100%; }
-/* In the list the chevron sits on the guide line, where a kept row's eye sits (its fill hides the line). */
-.org-leaders.is-list .org-leaders-toggle > .wn-disclosure-chevron { width: 13px; margin-left: -8.25px; border-radius: var(--radius-xs); background: var(--bg-secondary); }
-.org-leaders.is-list .org-leaders-toggle:hover > .wn-disclosure-chevron { background: transparent; }
 
 .org-leaders-group { display: flex; flex-direction: column; min-width: 0; }
 .org-leaders-project { padding: 4px 2px 2px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
@@ -21,7 +15,6 @@
    UI audit). On the 2px grid: the first line's middle is 13px down the row; every mark below is placed on it. */
 .org-leader { display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-xs); }
 .org-leader:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
-.org-leader[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 /* The fold is the shared icon DisclosureButton (20 px); a row with nothing under it keeps the room. */
 .org-leader-fold { flex: none; }
 .org-leader-fold.is-none { width: 20px; }
@@ -31,8 +24,6 @@
 }
 .org-leader-open > i { flex: none; width: 6px; height: 6px; margin-top: 8px; border-radius: 50%; }
 .org-leader-open > .org-leader-avatar { margin-top: 1px; }
-/* A list dragged narrow gives a Director's words the avatar's room: the dot still says its state. */
-@container org-list (max-width: 240px) { .org-leader-open > .org-leader-avatar { display: none; } }
 /* The title takes the whole row (.wn-title wraps it); its tail (the eye, "leads N") floats right on the title's
    last line, or under it when that line is full: a count column that never narrows the words. */
 .org-leader-open > .org-leader-title { flex: 1 1 0; padding-top: 2px; line-height: 18px; overflow-wrap: break-word; }
@@ -41,14 +32,6 @@
 .org-leader-eye svg { width: 12px; height: 12px; }
 .org-leader-leads { color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 18px; }
 .org-leader-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-
-/* "N more" / "Show fewer" after an opened fold's first Directors in the list, level with "+ New Director". */
-.org-leaders-more {
-  display: flex; align-items: center; width: max-content; max-width: 100%; padding: 2px 6px 2px 14px; line-height: 20px;
-  border: 0; border-radius: var(--radius-sm); /* shape: a row of the Org list's fold, a row not a key */ background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
-}
-.org-leaders-more:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg); }
-.org-leaders-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* "+ New Director": the last row of an opened fold and of the DIRECTORS section (OrgNewDirector.tsx). */
 .org-new-director {
@@ -77,7 +60,6 @@
 /* The DIRECTORS section (OrgDirectorSection.tsx, the "sections" layout): a row the size of a VP's. */
 .org-avatar.is-director { width: 26px; height: 26px; margin: 4px; border-radius: 50%; font-size: var(--font-size-xs); }
 .org-channel.is-director.is-open { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.org-director-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; vertical-align: 1px; }
 .org-directors-new { padding: 2px 0 4px; }
 .org-directors-new .org-new-director { padding-left: 8px; }
 .org-directors-new .org-new-director-form { padding-left: 6px; }

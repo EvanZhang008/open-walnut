@@ -54,10 +54,12 @@
   color: var(--fg-muted);
 }
 
+/* One row of the Org list, the same for every kind (OrgListRow.tsx): avatar, name, and a red dot
+   when something there waits on the user. Flat, the CEO's row too (2026-11-22, the user: "why coe is
+   a pill other is not, let's kee consistant"); the selected row is the accent tint. */
 .org-channel {
   display: flex;
-  /* Names and the line under them wrap (.wn-title): the avatar and the count stay at the top. */
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   width: 100%;
   padding: 7px 8px;
@@ -72,71 +74,24 @@
 .org-channel:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .org-channel.is-selected { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .org-channel:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.org-channel.is-main {
-  margin: 2px 0 4px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md); /* shape: the CEO card at the top of the Org list, a card not a key */
-  background: var(--bg);
-}
-.org-channel.is-main.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
-.org-channel-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-/* The name's line: the name (.wn-title, wraps), then its tail (+N, the time, the count badge) as one
-   group level with the name's FIRST line (both 20px tall). A list too narrow for the name and the tail
-   side by side moves the whole tail under the name, at the line's end, before it breaks a word of the
-   name (2026-11-21, the UI audit: the badge sat below the first line, beside the avatar's middle). */
-.org-channel-top { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 6px; line-height: 20px; }
-/* Sized by its words (auto, not a fixed 8em): a short name keeps the tail on its line in a narrow list. */
-.org-channel-top > .org-channel-name { flex: 1 1 auto; overflow-wrap: break-word; }
-.org-channel-tail { display: flex; align-items: center; gap: 6px; height: 20px; margin-left: auto; }
-.org-detail-led { font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.org-detail-led::before { content: '· '; }
+/* The name wraps (.wn-title) rather than cut. */
 .org-channel-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
   font-weight: 600;
   font-size: var(--font-size-md);
+  line-height: 20px;
 }
-.org-channel.is-unread .org-channel-name::after {
-  content: '';
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-left: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  vertical-align: middle;
-}
-.org-channel-time { flex: none; margin-left: auto; font-size: var(--font-size-sm); color: var(--fg-muted); }
-.org-channel-latest {
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-}
-.org-channel-watch { display: inline-flex; vertical-align: -2px; margin-right: 4px; color: var(--accent); }
-.org-channel-watch svg { width: 12px; height: 12px; }
-
-/* In the name's tail (.org-channel-tail): level with the name's first line. */
-.org-badge {
+/* Threads (or asks) for the user: one red dot, never a number (2026-11-22, the user: "the number of
+   red change to simpel red dot"). The count is its label and in the row's hover. */
+.org-channel-dot {
   flex: none;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error);
 }
-.org-badge.is-alert { background: var(--error); color: var(--on-accent); }
-/* A node's "0 threads": its count stays, in grey. */
-.org-badge.is-none {
-  background: color-mix(in srgb, var(--fg-muted) 16%, transparent);
-  color: var(--fg-muted);
-}
-.org-badge.is-working {
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  color: color-mix(in srgb, var(--success) 70%, var(--fg));
-}
-/* A row's count is a `.badge-count`: solid red (`badge-alert`) for what needs the user, grey else. */
-.org-badge { flex: none; }
 
 .org-avatar {
   position: relative;
@@ -259,10 +214,10 @@
   font-size: 16px;
   font-weight: 600;
 }
-.org-detail-sub { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: var(--font-size-sm); }
-.org-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }
-/* "Tasks" before the task pills: they count tasks, the threads pill before them threads for him. */
-.org-pills-label { align-self: center; margin-left: 4px; color: var(--fg-muted); font-size: var(--font-size-xs); }
+.org-detail-sub { margin-top: 2px; display: flex; flex-wrap: wrap; gap: 0 5px; align-items: center; font-size: var(--font-size-sm); }
+/* The counts read as one quiet line that wraps tight, no air between its lines (2026-11-23, the user:
+   "why looks so bad... so any whie space"). */
+.org-pills { display: inline-flex; flex-wrap: wrap; gap: 0 2px; }
 /* Each count is a small family key that opens its tab in the Task view; its dot is the tab's colour. */
 .org-pills i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 
@@ -465,27 +420,13 @@
 
 /* Projects another VP took over: folded at the bottom of the list. */
 .org-moved { margin-top: 8px; border-top: 1px solid var(--border); }
-.org-moved-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 5px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.org-moved-row:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
-.org-moved-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.org-moved-row .org-channel-name { color: var(--fg-muted); font-weight: 500; }
+/* An archived row is the list's one row (.org-channel), muted and a little shorter. */
+.org-channel.is-moved { padding-top: 5px; padding-bottom: 5px; }
+.org-channel.is-moved .org-channel-name { color: var(--fg-muted); font-weight: 500; }
 .org-avatar.is-moved { opacity: 0.6; }
 
 /* A right-click opens Walnut's menu: no word selected under it (WebKit selects one). */
-.org-channel, .org-moved-row { -webkit-user-select: none; user-select: none; }
+.org-channel { -webkit-user-select: none; user-select: none; }
 
 /* A name the user renames in place (OrgEditableName). */
 .org-name-edit {

@@ -1,8 +1,8 @@
 /**
- * The Directors under each VP for the Org list (OrgLeaders.tsx, OrgDirectorSection.tsx), from the
+ * The Directors under each VP for the Org list's DIRECTORS section (OrgDirectorSection.tsx), from the
  * chart's own cards so the list and the chart list the same projects in the same order, and the VP's
- * projects a New Director may go to. Off while the `org_leaders` experiment is off: no line, and
- * search finds what it found before.
+ * projects a New Director may go to. Off while the `org_leaders` experiment is off: no section, and
+ * search finds what it found before (on, a search also finds the VP of a Director it finds).
  */
 import { useMemo } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';

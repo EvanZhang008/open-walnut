@@ -1,8 +1,8 @@
 /**
  * The Org list's DIRECTORS section: the "sections" Directors layout (Settings → Org; 2026-11-20, the
- * user's "P1"). After the VPs, a heading "Directors · N", then every Director as a row of its own, the
- * size of a VP's row: a smaller round avatar in its VP's letter and colour, its title, and "<VP> · <state>"
- * with the state's dot. By VP in the list's order, then the tree's order; a Director under a Director
+ * user's "P1"). After the VPs, a heading "Directors · N", then every Director as the list's one plain
+ * row (OrgListRow): a smaller round avatar in its VP's letter and colour and its title; its state and
+ * its VP are in its hover and its label (2026-11-22, the user: "We need to be super simple"). By VP in the list's order, then the tree's order; a Director under a Director
  * is just the next row (no indent, no fold). A click opens it beside the page, a right-click opens the
  * same menu as in the fold (director-actions.ts), and the section ends with "+ New Director", whose
  * picker lists every VP's projects; a VP's "New Director…" opens it on that VP's first project.
@@ -14,7 +14,7 @@ import { useEffect, useState, type MouseEvent } from 'react';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import { type ChannelRow, shownName } from './org-channels-model';
 import { NodeAvatar } from './OrgAvatar';
-import { TAB_DOT } from './org-task-tabs';
+import { OrgListRow } from './OrgListRow';
 import { directorRows, type LeaderGroup, type LeaderNode } from './org-leaders';
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
 import { OrgNewDirector } from './OrgNewDirector';
@@ -53,32 +53,22 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
         const open = openTaskIds?.has(d.id);
         return (
           <div key={d.id} className="org-channel-wrap" role="presentation">
-            <button
-              type="button"
-              role="option"
-              aria-selected={false}
+            <OrgListRow
+              avatar={<NodeAvatar taskId={d.id} name={vp.name} size={26} className="is-director" />}
+              name={d.title}
+              // A Director that needs the user wears the list's one red dot.
+              dot={d.state === 'needs' ? state : null}
               aria-current={open || undefined}
-              className={`org-channel is-director${open ? ' is-open' : ''}`}
+              className={`is-director${open ? ' is-open' : ''}`}
               data-testid="org-director-row"
               data-task-id={d.id}
               data-vp={vp.key}
               data-state={d.state}
               aria-label={`${d.title}: Director under ${vpName}, ${state}, leads ${d.leads}${d.watched ? ', watched' : ''}`}
-              title={`${d.title}: ${state}`}
+              title={`${d.title}: ${state} · ${vpName}`}
               onClick={() => actions.openTask(d.id)}
               onContextMenu={(e) => onMenu(e, d)}
-            >
-              {/* Its own avatar with the experiment on; off, its VP's letters, as before. */}
-              <NodeAvatar taskId={d.id} name={vp.name} size={26} className="is-director" />
-              <span className="org-channel-mid">
-                <span className="org-channel-top">
-                  <span className="org-channel-name wn-title">{d.title}</span>
-                </span>
-                <span className="org-channel-latest wn-meta" data-testid="org-director-line">
-                  <i className="org-director-dot" style={{ background: TAB_DOT[d.state] }} aria-hidden="true" />{state} · {vpName}
-                </span>
-              </span>
-            </button>
+            />
           </div>
         );
       })}

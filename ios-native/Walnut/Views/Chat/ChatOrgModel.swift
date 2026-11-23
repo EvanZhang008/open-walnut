@@ -6,9 +6,9 @@ import Foundation
 ///   rows    a project under another project's VP folds into that VP's row (its counts are the
 ///           VP's), so a VP leading five projects is one row; the Inbox has no VP and no row here
 ///   threads the CEO's and a VP's own Threads (the user's own requests to it, `user_status.threads`)
-///           are its badge and its red (2026-11-03, the user: "the little red should be thread
-///           instead of need u ... even if no thread, show 0 thread"): the badge counts the ones
-///           his view shows, "0" in grey, and the line names them first ("1 thread: <title>");
+///           are its red (2026-11-03, the user: "the little red should be thread instead of
+///           need u"): one red dot while his view shows any (2026-11-22: a dot, never a number;
+///           none at 0), and the spoken line names them first ("1 thread: <title>");
 ///           a task's ask under such a row is in its Tasks, never the node's red
 ///   state   needs    on the CEO's and a VP's own row: a thread for him; on any other row a
 ///                    task's status (`user_status`)
@@ -35,19 +35,19 @@ enum ChatOrgModel {
         /// The project a VP's contact is asked for when it has none yet.
         let project: String
         let state: UserState
-        /// What needs the user here (the badge), the same count the web row shows.
+        /// What needs the user here (the row's red dot, and its VoiceOver count), as on the web row.
         let needs: Int
         let working: Int
         let open: Int
-        /// The VP's projects besides its own (shown as "+N").
+        /// The VP's projects besides its own (read by VoiceOver, not drawn).
         let ledProjects: [String]
-        /// One line under the name.
+        /// What is happening there, in words: read by VoiceOver (the row draws only the name).
         let line: String
         /// The node's own Threads that hold something for the user (nil = none shown).
         var threads: WalnutThreadCounts? = nil
-        /// `line` names a thread he (or the node) watches: the row wears the eye (web `latestWatched`).
+        /// `line` names a thread he (or the node) watches: VoiceOver says so (web `latestWatched`).
         var lineWatched = false
-        /// The CEO's and a VP's own row: its badge, the threads his view shows (0 included).
+        /// The CEO's and a VP's own row: the threads his view shows (0 included); above 0, its red dot.
         var threadsBadge: Int? = nil
     }
 
