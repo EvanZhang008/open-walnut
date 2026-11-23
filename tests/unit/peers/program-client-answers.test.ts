@@ -113,17 +113,19 @@ const BUILDERS = new Set(['toolsCallLine', 'toolsCallLineWithin'])
 const passThrough = (e: ts.Expression): boolean =>
   ts.isObjectLiteralExpression(e) && !prop(e, 'name') && e.properties.length > 0 && e.properties.every((p) => ts.isSpreadAssignment(p))
 
-/** The initializer of the variable an identifier names, in the functions around it. */
+/** The initializer of the variable an identifier names, in the functions around it (never one inside another function). */
 function declarationOf(id: ts.Identifier): ts.Expression | undefined {
   for (let fn = enclosingFn(id); fn; fn = enclosingFn(fn)) {
-    let found: ts.Expression | undefined
+    // The nearest one before it: a function may declare the same name in several blocks.
+    let found: ts.VariableDeclaration | undefined
     const look = (e: ts.Node) => {
-      if (found) return
-      if (ts.isVariableDeclaration(e) && ts.isIdentifier(e.name) && e.name.text === id.text && e.initializer) found = e.initializer
-      else ts.forEachChild(e, look)
+      if (e !== fn && ts.isFunctionLike(e)) return
+      if (ts.isVariableDeclaration(e) && ts.isIdentifier(e.name) && e.name.text === id.text && e.initializer
+        && e.end <= id.pos && (!found || e.pos > found.pos)) found = e
+      ts.forEachChild(e, look)
     }
     look(fn)
-    if (found) return found
+    if (found) return found.initializer
   }
   return undefined
 }
@@ -155,7 +157,9 @@ function sendersIn(file: string): Sender[] {
     // A frame: { v: 1, op: 'tools.call', sid, args: {...} }.
     if (ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && n.name.text === 'op' && isToolsCall(n.initializer) && ts.isObjectLiteralExpression(n.parent)) {
       const a = prop(n.parent, 'args')
-      add(n, a && ts.isPropertyAssignment(a) ? objectsOf(a.initializer) : null)
+      // `args` handed in (the builder's own parameter): checked where each caller built it.
+      const handedIn = !!a && ts.isShorthandPropertyAssignment(a) && !declarationOf(a.name)
+      if (!handedIn) add(n, a && ts.isPropertyAssignment(a) ? objectsOf(a.initializer) : null)
     }
     // A helper's call: request('tools.call', {...}), gateway(socket, sid, 'tools.call', {...}).
     if (ts.isCallExpression(n)) {
@@ -168,7 +172,7 @@ function sendersIn(file: string): Sender[] {
       if (ts.isIdentifier(given)) {
         // Built beside it (`const args = ...`), else a parameter: the caller that built it is checked where it did.
         const made = declarationOf(given)
-        if (made) add(n, callArgsIn(made))
+        if (made && !passThrough(unwrap(made))) add(n, callArgsIn(made))
       } else if (!passThrough(given)) add(n, objectsOf(given))
     }
     // The op chosen into a variable (`const op = ... 'tools.call' ...`): the arguments built beside it.
@@ -222,7 +226,7 @@ function twinSenders(): Sender[] {
 }
 
 const senders = walk(SRC)
-  .filter((f) => fs.readFileSync(f, 'utf8').includes('tools.call') && !f.endsWith('daemon-source.ts'))
+  .filter((f) => /tools\.call|toolsCallLine/.test(fs.readFileSync(f, 'utf8')) && !f.endsWith('daemon-source.ts'))
   .flatMap(sendersIn)
   .concat(twinSenders())
 

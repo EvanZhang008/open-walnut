@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { getOp } from '../../src/ops/index.js'
-import { agentAnswer as answerOn, answerPolicy } from '../../src/ops/answer.js'
+import { agentAnswer as answerOn, answerPolicy, ANSWER_CEILING_CHARS } from '../../src/ops/answer.js'
 import type { WalnutOp } from '../../src/ops/registry.js'
 
 /** Each op's own shape under its own cap, as an MCP tool answers it (answer-policy.test.ts holds every op to the CLI's smaller cap too). */
@@ -481,8 +481,9 @@ describe('approval_list and approval_wait', () => {
     expect((few.approvals as unknown[])).toHaveLength(3)
   })
 
-  it('approval_wait answers the decision with the detail cut to a head; a single_use one keeps its detail and digest for approval_consume', () => {
-    expect(answerPolicy(op('approval_wait'))).toMatchObject({ kind: 'content', max: 4_000 })
+  it('approval_wait answers the decision with the detail cut to a head; a single_use one is answered whole for approval_consume', () => {
+    // Room for a single-use record whole (its asker checks every field: cli-core.ts singleUseProblem).
+    expect(answerPolicy(op('approval_wait'))).toMatchObject({ kind: 'content', max: ANSWER_CEILING_CHARS })
     const result = mapped('approval_wait', { approval: approval(2, 'approved'), used: true }) as Rec
     const a = answer('approval_wait', { id: 'ap-2', token: 't' }, result)
     expect(a).toMatchObject({ used: true, approval: { id: 'ap-2', status: 'approved' }, outcome: result.outcome, next: result.next })
@@ -490,8 +491,9 @@ describe('approval_list and approval_wait', () => {
     const single = mapped('approval_wait', { approval: approval(1, 'approved'), used: true }) as Rec
     const s = answer('approval_wait', { id: 'ap-1', token: 't' }, single)
     expect(s).toMatchObject({ approval: { id: 'ap-1', singleUse: true, digest: 'a'.repeat(64) } })
-    // Its detail is kept as far as the cap allows (a very long one is still cut by it).
-    expect(String((s.approval as Rec).detail).length).toBeGreaterThan(200)
+    // The record as Walnut keeps it: its detail whole, and the fields the asker checks (2026-11-23, apr-kCUkpVWwmbBH).
+    expect((s.approval as Rec).detail).toBe((single.approval as Rec).detail)
+    expect(s.approval).toEqual(single.approval)
   })
 })
 
