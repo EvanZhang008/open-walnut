@@ -44,7 +44,7 @@ class Leader {
 let clockOffset = 0
 beforeEach(() => { clockOffset = 0 })
 
-function connect(host: HostChannel, leader: Leader, opts: { cutAfterSeq?: number } = {}) {
+function connect(host: HostChannel, leader: Leader, opts: { cutAfterSeq?: number; onCaughtUp?: (hostId: string) => void } = {}) {
   let up = true
   let hostSide: ReturnType<HostChannel['attach']> | null = null
   let leaderSide: ReturnType<typeof attachLeaderChannel> | null = null
@@ -72,6 +72,7 @@ function connect(host: HostChannel, leader: Leader, opts: { cutAfterSeq?: number
     apply: async (_h, recs, next) => { leader.applied.push(...recs); leader.cursor = next },
     applyRows: async (_h, rows, next) => { leader.snapshots++; for (const r of rows) leader.rows.set(r.claudeSessionId, r); leader.cursor = next },
     onFlow: (_h, _sid, _name, data) => { leader.flows.push(String((data as { text?: string }).text)) },
+    ...(opts.onCaughtUp ? { onCaughtUp: opts.onCaughtUp } : {}),
   })
   hostSide = host.attach(toLeader)
   return { cut, get up() { return up }, idle: () => leaderSide!.idle(), resync: (sids: string[]) => leaderSide!.resync(sids) }
@@ -119,6 +120,48 @@ describe('exactly once across a cut after any record', () => {
       await log.close()
     })
   }
+})
+
+describe('the leader hears once per link that it caught up with the host\'s log', () => {
+  it('after the apply that reached the head the hello named, never before and never again on that link', async () => {
+    const { log, host } = await hostOf()
+    for (let i = 1; i <= 5; i++) log.append('s1', 'session:tool-use', { i })
+    await log.flush()
+    const leader = new Leader()
+    leader.cursor = { logId: log.logId, seq: 2 }
+    const at: number[] = []
+    const link = connect(host, leader, { onCaughtUp: () => at.push(leader.applied.length) })
+    await until(() => at.length > 0)
+    expect(at).toEqual([3])
+    log.append('s1', 'session:tool-use', { i: 6 })
+    await log.flush()
+    await until(() => leader.applied.length === 4)
+    await link.idle()
+    expect(at).toEqual([3])
+    link.cut()
+    // A leader already at the head hears it right after its resume; a new link says it again.
+    const again: number[] = []
+    const second = connect(host, leader, { onCaughtUp: () => again.push(leader.applied.length) })
+    await until(() => again.length > 0)
+    expect(again).toEqual([4])
+    second.cut()
+    await log.close()
+  })
+
+  it('a leader that asked for rows first hears it after the rows (and the records after them) applied', async () => {
+    const { log, host } = await hostOf()
+    for (let i = 1; i <= 3; i++) log.append('s1', 'session:tool-use', { i })
+    await log.flush()
+    const leader = new Leader()
+    leader.cursor = { logId: 'an-older-log', seq: 9 }
+    const at: number[] = []
+    const link = connect(host, leader, { onCaughtUp: () => at.push(leader.snapshots) })
+    await until(() => at.length > 0)
+    expect(at).toEqual([1])
+    expect(leader.cursor?.seq).toBe(3)
+    link.cut()
+    await log.close()
+  })
 })
 
 describe('a host the leader knew under another log', () => {

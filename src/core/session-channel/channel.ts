@@ -294,6 +294,12 @@ export interface LeaderChannelOptions {
    */
   applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor, frame: { at: number; gone: string[] }): Promise<void>
   onFlow?(hostId: string, sid: string, name: string, data: unknown, to?: string[]): void
+  /**
+   * Once per link: what the host's log held at its hello is applied here (the position reached its
+   * head), so the leader's rows of that host are current. Called inside the apply chain, after the
+   * apply that got there.
+   */
+  onCaughtUp?(hostId: string): void
   /** How old a record must be, on this leader's clock, when it is applied to read as late (default 60 s). */
   lateMs?: number
   ackEveryMs?: number
@@ -322,6 +328,13 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
   let chain: Promise<void> = Promise.resolve()
   let ackTimer: ReturnType<typeof setTimeout> | null = null
   let open = true
+  /** The host log's head its hello named, until the position reaches it (then null: said once). */
+  let helloHead: number | null = null
+  const noteCaughtUp = (): void => {
+    if (helloHead === null || !cursor || cursor.seq < helloHead) return
+    helloHead = null
+    try { o.onCaughtUp?.(hostId) } catch (err) { o.onLog?.('warn', 'session channel: the caught-up handler failed', { hostId, error: err instanceof Error ? err.message : String(err) }) }
+  }
   /**
    * The facts frames queued behind the apply that runs now, not started yet: a facts frame that
    * arrives while they wait joins them, so they apply in one call (one transaction on the leader),
@@ -358,7 +371,11 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           // A host this leader knew under another log (set up again, its log lost): -1, so it sends
           // its rows first (channel header). A host it never heard of replays its log from the start.
           const p = o.permit()
-          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: p.permitNumber, epoch: p.epoch, logId, after: known || !c ? cursor.seq : -1 })
+          const after = known || !c ? cursor.seq : -1
+          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: p.permitNumber, epoch: p.epoch, logId, after })
+          helloHead = Number.isFinite(frame.head) ? frame.head : 0
+          // A rows frame comes first when the leader asked for them (-1), whatever the position.
+          if (after >= 0) noteCaughtUp()
         })
       } else if (frame.op === 'rows') {
         serial(async () => {
@@ -369,6 +386,7 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           cursor = next
           rowsAt = Math.max(rowsAt, Number(frame.rowsAt) || 0)
           scheduleAck()
+          noteCaughtUp()
         })
       } else if (frame.op === 'facts') {
         noteHostClock(frame.sentAt)
@@ -395,6 +413,7 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           await o.apply(hostId, recs, next)
           cursor = next
           scheduleAck()
+          noteCaughtUp()
         })
         waiting = batch
       } else if (frame.op === 'flow') {

@@ -95,6 +95,18 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       holder: permit?.runtime.status().record?.holder ?? permit?.machine ?? ownMachine,
     }
   }
+  // M3: the turn ends a stop of this leader's left unsaid (committed, the phase not written), per
+  // host, once its link applied what its log held (its rows current here), and only marks made
+  // before this start (turn-ends.ts).
+  const bootAt = Date.now()
+  const reconciled = new Set<string>()
+  const reconcileTurnEnds = (hostId: string): void => {
+    if (reconciled.has(hostId)) return
+    reconciled.add(hostId)
+    void import('./turn-ends.js').then((m) => m.reconcileHostTurnEnds({ hostId, before: bootAt, log: (level, msg, data) => log.session[level](msg, { host: hostId, ...data }) })).catch((err: unknown) => {
+      log.session.warn('session channel: the boot reconcile of host turn ends failed', { host: hostId, error: err instanceof Error ? err.message : String(err) })
+    })
+  }
   const side = createLeaderSide({
     walnutId: async () => getInstanceId(),
     permit: (hostId) => standingNow(hostId).pair,
@@ -137,6 +149,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       // The stops of completed tasks that did not reach this host (sessions/host-judged-complete.ts).
       void import('../sessions/host-judged-complete.js').then((m) => m.retryCompletionStopsFor(host)).catch(() => {})
     },
+    onCaughtUp: reconcileTurnEnds,
     log: (level, msg, data) => log.session[level](msg, data),
   })
   active = side
@@ -233,10 +246,6 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       void side.dropOnHost(host)
     }
   }, { global: true, interest: [EventNames.SESSION_DELETED] })
-  // M3: the turn ends a stop of this leader's left unsaid (committed, the phase not written) set their tasks' phases now, before the links (turn-ends.ts).
-  void import('./turn-ends.js').then((m) => m.reconcileHostTurnEnds({ log: (level, msg, data) => log.session[level](msg, data) })).catch((err: unknown) => {
-    log.session.warn('session channel: the boot reconcile of host turn ends failed', { error: err instanceof Error ? err.message : String(err) })
-  })
   for (const view of hostServer.peekHostServerViews()) look(view)
   log.session.info('session channels: the leader side is on (hosts that name session-judge-v1 run their sessions)')
   return () => {

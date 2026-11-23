@@ -40,10 +40,15 @@ export function turnEndWorkContinues(data: unknown): boolean {
   return d.teamActive === true || d.backgroundActive === true || d.detachedBgActive === true || d.wakeupPending === true
 }
 
+/** A turn-end event (whatever edge it says, if any). */
+export function isTurnEndName(name: string): name is TurnEndEdge {
+  return name === 'session:result' || name === 'session:error'
+}
+
 /** The phase edge of a turn-end event of `name`, or null when it moves no phase. */
 export function turnEndEdgeOf(name: string, data: unknown): TurnEndEdge | null {
   const d = (data ?? {}) as TurnEndData
-  if (name !== 'session:result' && name !== 'session:error') return null
+  if (!isTurnEndName(name)) return null
   const taken = stampedTakenBy(d)
   if (taken && (TURN_RETRY_TRAITS as Record<string, { keepsPhase: boolean } | undefined>)[taken]?.keepsPhase) return null
   if (name === 'session:result') {

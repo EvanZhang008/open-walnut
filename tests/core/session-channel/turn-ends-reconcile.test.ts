@@ -17,7 +17,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-turn-ends-reconcile'))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { _resetSessionTrackerForTesting, applyHostChannelBatch, createSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
+import { _resetSessionTrackerForTesting, applyHostChannelBatch, createSessionRecord, getSessionByClaudeId, loadChannelCursor } from '../../../src/core/session-tracker.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import * as taskDb from '../../../src/core/task-db.js'
 import * as tm from '../../../src/core/task-manager.js'
@@ -129,6 +129,27 @@ describe('the boot reconcile of host turn ends', () => {
     expect(await phaseOf(legacyTask)).toBe('IN_PROGRESS')
   })
 
+  it('a later turn end with no edge (a retrier took it) removes the older mark; one with an edge replaces it', async () => {
+    const taskId = await inProgressTask('Superseded')
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h9', born: true, patch: born('h9', taskId), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h9', edge: 'session:error', seq: 2 }] })
+    expect(turnEndMarks().map((m) => m.edge)).toEqual(['session:error'])
+    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h9', edge: 'session:result', seq: 3 }] })
+    expect(turnEndMarks().map((m) => m.edge)).toEqual(['session:result'])
+    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 4 }, turnEnds: [{ sid: 'h9', edge: null, seq: 4 }] })
+    expect(turnEndMarks()).toEqual([])
+  })
+
+  it('only the named host\'s marks made before the boot are looked at', async () => {
+    const a = await inProgressTask('Host A')
+    const b = await inProgressTask('Host B')
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'ha', born: true, patch: born('ha', a), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'ha', edge: 'session:result', seq: 2 }] })
+    await applyHostChannelBatch({ hostId: 'devbox-b', rows: [{ sid: 'hb', born: true, patch: { ...born('hb', b), host: 'devbox-b' }, seq: 1 }], renames: [], cursor: { logId: 'L2', seq: 2 }, turnEnds: [{ sid: 'hb', edge: 'session:result', seq: 2 }] })
+    expect((await reconcileHostTurnEnds({ hostId: HOST, before: 0 })).looked).toBe(0)
+    expect(await reconcileHostTurnEnds({ hostId: HOST, before: Date.now() + 1 })).toEqual({ looked: 1, applied: ['ha'] })
+    expect(await phaseOf(b)).toBe('IN_PROGRESS')
+    expect(turnEndMarks().map((m) => m.sid)).toEqual(['hb'])
+  })
+
   it('a turn end at or below the stored position (a link before this one applied it) marks nothing again', async () => {
     const taskId = await inProgressTask('Applied before')
     await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h5', born: true, patch: born('h5', taskId), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 5 } })
@@ -193,5 +214,82 @@ describe('through the leader side: a host\'s turn end applied, the leader stoppe
     expect(r.applied).toEqual(['h6'])
     expect(await phaseOf(taskId)).toBe('NEED_ACTION')
     expect(await phaseOf(other)).toBe('IN_PROGRESS')
+  })
+})
+
+describe('S1: the reconcile waits for the host\'s first catch-up after the boot', () => {
+  let side: LeaderSide | null = null
+  let dir = ''
+  let log: FactLog | null = null
+  afterEach(async () => {
+    side?.stop(); side = null
+    await log?.close().catch(() => {}); log = null
+    if (dir) await fsp.rm(dir, { recursive: true, force: true })
+  })
+
+  it('a host that ran a new turn while the leader was down: the rows are current when the reconcile runs, and the phase is left alone', async () => {
+    const taskId = await inProgressTask('Host went on')
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'turn-ends-s1-'))
+    log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
+    log.append('h8', 'row', { born: true, patch: born('h8', taskId) })
+    log.append('h8', 'session:result', { sessionId: 'h8', taskId, result: 'first turn' })
+    const channel = new HostChannel({ log, walnutId: 'w1', hostId: HOST, ownRows: async () => [] })
+    const dial = async (): Promise<ChannelSocket> => {
+      let onMsg: ((t: string) => void) | null = null
+      let onClose: (() => void) | null = null
+      const h = channel.attach({ send: (f) => setImmediate(() => onMsg?.(JSON.stringify(f))), close: () => setImmediate(() => onClose?.()) })
+      return {
+        send: (text) => setImmediate(() => { const f = JSON.parse(text); if (isChannelFrame(f)) h.onFrame(f) }),
+        close: () => h.onClose(),
+        onMessage: (fn) => { onMsg = fn },
+        onClose: (fn) => { onClose = fn },
+      }
+    }
+    const makeSide = (onCaughtUp?: (host: string) => void) => createLeaderSide({
+      walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), switchNow: async () => () => true,
+      openStream: async () => { throw new Error('in memory') }, dial,
+      applyBatch: applyHostChannelBatch, loadCursor: async (h) => loadChannelCursor(h),
+      emit: () => {}, noteLive: () => {}, noteRename: () => {}, noteHostJudged: () => {},
+      ownerOf: () => HOST, backoffMs: () => 20, log: () => {}, ...(onCaughtUp ? { onCaughtUp } : {}),
+    })
+    // The first leader applies the turn end and stops before saying it: a mark.
+    side = makeSide()
+    await side.noteHost(HOST, { connected: true, judges: true })
+    const end = Date.now() + 15_000
+    while (turnEndMarks().length === 0) {
+      if (Date.now() > end) throw new Error('the batch was not applied')
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    side.stop(); side = null
+    // While the leader is down the host's session runs a new turn (a queued message).
+    log.append('h8', 'row', { patch: { process_status: 'running', statusRevision: 2 } })
+    await new Promise((r) => setTimeout(r, 5))
+    const bootAt = Date.now()
+    // The next boot: the reconcile runs when the link caught up, so it reads the running row.
+    const seen: Array<{ host: string; status: string | undefined }> = []
+    let ran: Promise<unknown> | null = null
+    side = makeSide((host) => {
+      ran = getSessionByClaudeId(host === HOST ? 'h8' : '').then((r) => { seen.push({ host, status: r?.process_status }) })
+        .then(() => reconcileHostTurnEnds({ hostId: host, before: bootAt }))
+    })
+    await side.noteHost(HOST, { connected: true, judges: true })
+    while (!ran) {
+      if (Date.now() > end) throw new Error('the link never caught up')
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    const r = await ran
+    expect(seen).toEqual([{ host: HOST, status: 'running' }])
+    expect(r).toEqual({ looked: 1, applied: [] })
+    expect(await phaseOf(taskId)).toBe('IN_PROGRESS')
+  })
+})
+
+describe('the leader boot wires the reconcile per host, after its catch-up', () => {
+  it('leader-boot.ts runs reconcileHostTurnEnds only from onCaughtUp, named by host and the boot time', async () => {
+    const src = await fsp.readFile(new URL('../../../src/core/session-channel/leader-boot.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/onCaughtUp: reconcileTurnEnds/)
+    const calls = src.match(/reconcileHostTurnEnds\(\{[^}]*/g) ?? []
+    expect(calls.length).toBe(1)
+    expect(calls[0]).toMatch(/hostId, before: bootAt/)
   })
 })

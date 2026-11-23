@@ -26,7 +26,7 @@ import { channelClassOf, sessionIdOf } from './event-classes.js'
 import { EventNames } from '../event-bus.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { SESSION_JUDGE_CAP } from './switch.js'
-import { turnEndEdgeOf } from '../sessions/turn-end-edge.js'
+import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
 import type { HostTurnEnd } from './turn-ends.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
@@ -74,6 +74,8 @@ export interface LeaderSideDeps {
   noteHostJudged(sid: string, host: string): void
   /** The channel to `hostId` linked (its hello): what waits here for that host goes now (host-judged-send.ts). */
   onLinked?(hostId: string): void
+  /** What `hostId`'s log held at the link's hello is applied: this leader's rows of that host are current (channel.ts onCaughtUp). */
+  onCaughtUp?(hostId: string): void
   backoffMs?(attempt: number): number
   callTimeoutMs?: number
   startTimeoutMs?: number
@@ -178,8 +180,8 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       else if (r.name === 'drop') drops.push(r.sid)
       else {
         check.add(r.sid)
-        const edge = channelClassOf(r.name) === 'fact' && sessionIdOf(r.name, r.data) === r.sid ? turnEndEdgeOf(r.name, r.data) : null
-        if (edge) turnEnds.push({ sid: r.sid, edge, seq: r.seq })
+        // Every turn end of the session counts: one with no edge (a retrier took it, work goes on) still supersedes an older mark.
+        if (channelClassOf(r.name) === 'fact' && sessionIdOf(r.name, r.data) === r.sid && isTurnEndName(r.name)) turnEnds.push({ sid: r.sid, edge: turnEndEdgeOf(r.name, r.data), seq: r.seq })
       }
     }
     const applied = await deps.applyBatch({ hostId, rows, renames, cursor: next, ...(drops.length ? { drops } : {}), ...(check.size ? { check: [...check] } : {}), ...(turnEnds.length ? { turnEnds } : {}) })
@@ -326,6 +328,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         if (!hostsOwn(hostId || hostKey, sid, new Set()) || sessionIdOf(name, data) !== sid) return
         try { deps.emit(name, data, { late: false, ...(to ? { to } : {}) }) } catch { /* a flow event is never kept */ }
       },
+      onCaughtUp: (hostId) => deps.onCaughtUp?.(hostId || hostKey),
       onLog: deps.log,
     })
     s.channel = channel

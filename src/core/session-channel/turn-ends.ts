@@ -10,7 +10,11 @@
  * (turn-end-edge.ts: the edge, and the leader's time of the commit), and the leader's turn-end
  * handler removes it once it ran, whatever it decided (held for a retrier, a quiet turn, the main
  * agent, applied: clearingTurnEndMarks), so a mark that stands means only "the handler never ran".
- * At the leader's boot `reconcileHostTurnEnds` looks at each such mark once:
+ * A newer turn end of the same session in a later batch replaces its mark, or removes it when it
+ * moves no phase (a retrier took it). After the leader's boot, once a host's link has applied what
+ * that host's log held at its hello (channel.ts onCaughtUp: the host's rows here are current, so a
+ * turn the host ran while this leader was down reads as it is), `reconcileHostTurnEnds` looks at each
+ * of that host's marks made before this process started, once:
  *
  *   the session's row is gone, no longer this host's, has no task, or runs a turn again   nothing
  *   the task's phase moved at or after the mark (the handler did it, or anyone since)   nothing
@@ -22,28 +26,37 @@
  * write itself says, and a second boot finds no mark: idempotent and cheap. A phase already reached
  * moves nothing, so no notice fires twice. The table lives in sessions.sqlite (session-db.ts
  * SCHEMA_SQL); an older leader never reads it.
+ *
+ * It replays the phase only. The live session:error path also clears the task's session slot and
+ * raises the error card; a lost error edge set here leaves the slot pointing at the failed session
+ * and no card (the session's own page still shows its error, and the next start takes the slot).
  */
 import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { prepared } from '../../lib/sqlite-prepared.js'
 import { getDb } from '../session-db.js'
 import type { TurnEndEdge } from '../sessions/turn-end-edge.js'
 
-/** One turn end of a batch: its session, the edge it says, its record's place in the host's log. */
-export interface HostTurnEnd { sid: string; edge: TurnEndEdge; seq: number }
+/**
+ * One turn end of a batch: its session, the edge it says (null: it moves no phase, a retrier took it
+ * or the work goes on, so it only supersedes an older mark), its record's place in the host's log.
+ */
+export interface HostTurnEnd { sid: string; edge: TurnEndEdge | null; seq: number }
 
 export interface TurnEndMark { sid: string; hostId: string; edge: TurnEndEdge; at: number }
 
-/** Inside the channel's apply transaction: keep `sid`'s turn end (the newest one stands). */
-export function noteTurnEndIn(handle: DatabaseType, hostId: string, sid: string, edge: TurnEndEdge, at: number): void {
-  prepared(handle, 'INSERT OR REPLACE INTO session_turn_ends (claude_session_id, host_id, edge, at) VALUES (?, ?, ?, ?)').run(sid, hostId, edge, at)
+/** Inside the channel's apply transaction: keep `sid`'s turn end (the newest one stands; one with no edge only removes the older). */
+export function noteTurnEndIn(handle: DatabaseType, hostId: string, sid: string, edge: TurnEndEdge | null, at: number): void {
+  if (edge === null) prepared(handle, 'DELETE FROM session_turn_ends WHERE claude_session_id = ?').run(sid)
+  else prepared(handle, 'INSERT OR REPLACE INTO session_turn_ends (claude_session_id, host_id, edge, at) VALUES (?, ?, ?, ?)').run(sid, hostId, edge, at)
 }
 
-/** Every mark, oldest first. */
-export function turnEndMarks(): TurnEndMark[] {
+/** Every mark (or `hostId`'s, made before `before`), oldest first. */
+export function turnEndMarks(o: { hostId?: string; before?: number } = {}): TurnEndMark[] {
   const handle = getDb()
   if (!handle) return []
   const rows = handle.prepare('SELECT claude_session_id AS sid, host_id AS hostId, edge, at FROM session_turn_ends ORDER BY at, claude_session_id').all() as TurnEndMark[]
-  return rows.filter((r) => r.edge === 'session:result' || r.edge === 'session:error')
+  return rows.filter((r) => (r.edge === 'session:result' || r.edge === 'session:error')
+    && (o.hostId === undefined || r.hostId === o.hostId) && (o.before === undefined || r.at < o.before))
 }
 
 /** The leader's handler of `sid`'s turn end ran (it began at `startedAt`): its mark goes, not a newer one. */
@@ -76,10 +89,13 @@ export interface ReconcileResult { looked: number; applied: string[] }
 
 type Log = (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 
-/** The boot pass (see the header). Never throws; one mark that fails never stops the others. */
-export async function reconcileHostTurnEnds(o: { log?: Log } = {}): Promise<ReconcileResult> {
+/**
+ * The boot pass (see the header), for `hostId`'s marks made before `before` (this process's start)
+ * when named. Never throws; one mark that fails never stops the others.
+ */
+export async function reconcileHostTurnEnds(o: { log?: Log; hostId?: string; before?: number } = {}): Promise<ReconcileResult> {
   const say: Log = o.log ?? (() => {})
-  const marks = turnEndMarks()
+  const marks = turnEndMarks({ ...(o.hostId !== undefined ? { hostId: o.hostId } : {}), ...(o.before !== undefined ? { before: o.before } : {}) })
   const applied: string[] = []
   if (marks.length === 0) return { looked: 0, applied }
   const [{ getSessionByClaudeId }, { getTask }, { applySessionPhase }, { judgedByHost }] = await Promise.all([
