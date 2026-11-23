@@ -81,6 +81,7 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'peer',          // another task's task_send
   'program-run',   // phase.ts PROGRAM_RUN_SEND_SOURCE: a plugin job's own task_send, as an outside caller's plain one ('peer')
   'walnut-notify', // a subtask's status notice, a trigger-health note
+  'held-notes',    // sessions/held-notices-sweep.ts HELD_NOTES_SOURCE: notes that asked for no reply, held past the max hold
   'auto-continue', // session-auto-continue.ts AUTO_CONTINUE_SOURCE
   'auto-recover',  // sessions/auto-recover-env.ts AUTO_RECOVER_SOURCE
   'brief-refresh', // sessions/brief-refresh.ts: the user opened a node whose Brief is stale
@@ -91,10 +92,10 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'context-compact', // sessions/context-full-recovery.ts: the same quiet /compact, for a full context
 ]);
 
-/** Sends Walnut makes only to ask for words (a Brief, a check of a Board choice): the wait they
+/** Sends Walnut makes only to ask for words (a Brief, a check of a Board choice), or to hand over held notes: the wait they
  *  interrupt comes back at the turn end whatever held it, its clock included, because nothing the
  *  task waited for came (2026-10-31: a look at a parked lead lost the clock it had set). */
-const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'thread-recheck', 'idle-compact', 'context-compact']);
+const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'thread-recheck', 'idle-compact', 'context-compact', 'held-notes']);
 
 /**
  * The cause a WAITING → IN_PROGRESS edge records, or null when its turn ends the wait for good.

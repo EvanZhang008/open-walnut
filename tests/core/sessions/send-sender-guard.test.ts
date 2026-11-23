@@ -78,6 +78,7 @@ const CALL_SITES: Record<string, number> = {
   // A host that runs its sessions queues the lines its leader queued, as stored there (a person's as
   // typed, the rest framed by the leader's send; one that still reads as a person's framed here).
   'src/core/sessions/handed-holds.ts': 1,
+  'src/core/sessions/held-notices-sweep.ts': 1,
   // Walnut's idle compaction: the bare `/compact` command, passed unframed (send-frame.ts), as a quiet turn.
   'src/core/sessions/idle-compaction.ts': 1,
   // "Prompt is too long" recovery: its bare `/compact` (unframed, a quiet turn) and the resend note, both agents'.

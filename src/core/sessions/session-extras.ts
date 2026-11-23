@@ -562,12 +562,14 @@ export async function executeCompactSession(
 /** List a session's pending/processing queued messages. */
 /**
  * The queue rows a person's queue strip shows: Walnut's own quiet commands (its /compact) are no
- * message of his, and the phone's strip would draw one as his (sessions/walnut-commands.ts).
+ * message of his, and the phone's strip would draw one as his (sessions/walnut-commands.ts). A kept
+ * quiet row (held notes, quiet-turn.ts) carries someone's words: shown like a Walnut notice, with
+ * its Retry when a Stop sets it aside.
  */
 export async function withoutWalnutRows<T extends { id: string; message: string }>(rows: T[]): Promise<T[]> {
-  const { isQuietRowId } = await import('./quiet-turn.js');
+  const { isKeptQuietRowId, isQuietRowId } = await import('./quiet-turn.js');
   const { walnutCommandNotice } = await import('./walnut-commands.js');
-  return rows.filter((m) => !isQuietRowId(m.id) && !walnutCommandNotice(m.message));
+  return rows.filter((m) => !(isQuietRowId(m.id) && !isKeptQuietRowId(m.id)) && !walnutCommandNotice(m.message));
 }
 
 export async function getSessionQueuePayload(sessionId: string): Promise<{ messages: unknown[] }> {

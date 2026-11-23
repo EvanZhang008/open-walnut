@@ -52,7 +52,7 @@ import { frameAsWalnut, frameForSource, frameLooseText } from './sessions/send-f
 import { ambientTestRun } from './test-run.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
-import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
+import { endQuietTurn, isKeptQuietRowId, isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
 import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly, withoutAiOnly } from '../lib/ai-only-envelope.js';
 import { forgetBriefsTold } from './sessions/app-brief.js';
 import { keepLeadingFrame } from './sessions/queue-edit-frame.js';
@@ -373,6 +373,12 @@ export async function sendMessageToSession(
      * message of notices that ask nothing is held for the session's next message.
      */
     wakeReason?: string;
+    /**
+     * Store the line as it is, with none of Walnut's notes in front of it and no held row put back in
+     * line with it (they wait for the next message): a quiet turn's line (held-notices-sweep.ts), which
+     * a rider would turn into a line that is not its row alone.
+     */
+    bare?: boolean;
   },
 ): Promise<QueuedMessage> {
   // A stopping Demo takes no send, a timer's wake or retry included, before any side effect (sessions/demo-admission.ts).
@@ -455,13 +461,16 @@ export async function sendMessageToSession(
   // A slash command must start its line or the CLI no longer reads it as one: Walnut's notes wait
   // for the next message (each is told only when the row holds it, below).
   const slashCommand = body.trimStart().startsWith('/');
+  // A line that goes as it is, with no note of Walnut's in front of it (a slash command, or a quiet
+  // turn's line, opts.bare): those notes, and the held rows a send puts back in line, wait for the next message.
+  const bare = slashCommand || opts?.bare === true;
   // App state leads: an App's AI-only brief counts only at the head of a line (lib/ai-only-envelope.ts).
   // Every word of Walnut's notes sits inside an envelope: loose words in front of the body read as the
   // person's (sessions/send-frame.ts frameLooseText). A note with nothing loose is unchanged.
   const rider = (t: string | null | undefined): string | undefined => (t ? frameLooseText(t) : undefined);
   const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].map(rider).filter(Boolean).join('\n\n');
   const lead = [notes, rider(switchContext?.text)].filter(Boolean).join('\n\n');
-  const enqueueText = lead && !slashCommand ? `${lead}\n\n${body}` : body;
+  const enqueueText = lead && !bare ? `${lead}\n\n${body}` : body;
   /** Mark told each note `carrier` (stored as row `rowId`) holds; App state and held notices it does not are put back. */
   const tellCarried = async (carrier: string, rowId?: string): Promise<void> => {
     // Each note as the row holds it (framed where it had loose words).
@@ -513,7 +522,7 @@ export async function sendMessageToSession(
   const heldCold = mayWait && await coldHold.sessionIsCold(sessionId) ? coldHold.COLD_HOLD_REASON : undefined;
   // Not in front of a slash command (it must start its line), nor for a move or a running turn's
   // hold: those rows wait for the next line that goes, or the sweep sends them.
-  const released = heldCold || heldForMove || heldForTurn || slashCommand ? null : await coldHold.releaseColdHolds(sessionId, 'a message that goes now');
+  const released = heldCold || heldForMove || heldForTurn || bare ? null : await coldHold.releaseColdHolds(sessionId, 'a message that goes now');
   let msg: QueuedMessage;
   try {
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
@@ -603,7 +612,8 @@ export async function sendMessageToSession(
 
   // Tell UI so the message appears immediately in the session panel. A quiet turn's row is Walnut's
   // own upkeep, not a message: the panel shows its note instead, and its history row says what it was.
-  if (!isQuietRowId(msg.id)) bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
+  // A kept quiet row carries someone's words: shown like any Walnut notice, so a Stop's Retry reaches it.
+  if (!isQuietRowId(msg.id) || isKeptQuietRowId(msg.id)) bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
     sessionId,
     messageId: msg.id,
     message,
@@ -671,7 +681,8 @@ export async function markProcessing(
     if (!queue) return [];
     for (let i = queue.length - 1; i >= 0; i--) {
       const m = queue[i]!;
-      if (m.status !== 'pending' || !isQuietRowId(m.id)) continue;
+      // A quiet row that carries someone's words is never dropped: past its quiet turn it is a normal row.
+      if (m.status !== 'pending' || !isQuietRowId(m.id) || isKeptQuietRowId(m.id)) continue;
       const others = queue.some((o) => o !== m && (o.status === 'pending' || o.status === 'processing'));
       if (m.id === liveQuietRow && !others && !opts?.midTurn) continue;
       queue.splice(i, 1);
@@ -726,6 +737,9 @@ export async function markProcessing(
   if (pending.length === 0) return [];
   // The take marker names these rows whichever way the line goes out.
   noteLineCarries(sessionId, pending[0].lineUuid, pending.map((m) => m.id));
+  // The quiet turn's (kept) row going into a turn that runs, or in line with others: that turn is a
+  // real one, never kept quiet. Ended first, while the row is processing, so nothing sends it again.
+  if (liveQuietRow && pending.some((m) => m.id === liveQuietRow) && (opts?.midTurn || pending.length > 1)) endQuietTurn(sessionId, 'mid-turn');
   // A line that is not the quiet turn's own row alone is a real turn (sessions/quiet-turn.ts).
   noteQuietTurnDelivery(sessionId, pending.map((m) => m.id));
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });

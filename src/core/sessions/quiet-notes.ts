@@ -14,10 +14,17 @@
  * (held-notices-store.ts): a restart keeps what waits, and each note is written there before its
  * send is answered. A note is held once by its message id, so a replay of the same send holds
  * nothing more.
+ *
+ * Never held past the cold hold's max (2026-11-23, the Reflection audit: five notes from the Walnut
+ * VP waited 1 to 6.5 h, one to a task that completed without ever reading it). Once the oldest note
+ * held for a target waited COLD_HOLD_MAX_MS (cold-hold.ts, the same clock and lap as a cold
+ * session's held queue rows), every quiet note held for it goes in ONE message that wakes it once,
+ * or, when its task is complete, is recorded not delivered and its sender told
+ * (held-notices-sweep.ts deliverDueQuietNotes).
  */
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import { holdFoldedNotice, noteKnown } from './held-notices.js';
-import { WHOLE_HELD_MAX_BYTES, keptWhole, storeLoading, wholeBytesHeld } from './held-notices-store.js';
+import { QUIET_NOTE_KEY, WHOLE_HELD_MAX_BYTES, keptWhole, storeLoading, storeOpened, wholeBytesHeld } from './held-notices-store.js';
 
 /** The rider outcome (lib/history-walnut-riders.ts RIDER_NOTICE_OUTCOMES, iOS riderOutcomes). */
 export const QUIET_NOTES_OUTCOME = 'quiet-notes';
@@ -37,6 +44,8 @@ export function asksNothing(input: { wake?: boolean; text: string; automation?: 
   return input.automation === true && NO_REPLY_RE.test(input.text.trim());
 }
 
+export type QuietNoteBy = 'session' | 'script' | 'walnut';
+
 export interface QuietNotePart {
   at: number; title?: string; text: string;
   /** The note's message id: held once by it, and op_result reads its fate by it. */
@@ -45,6 +54,12 @@ export interface QuietNotePart {
   from?: string;
   /** The target's task, named in that notice. */
   task?: string;
+  /**
+   * Who sent it: a session (a task's wake=false note), a script (an automation's no-reply note) or
+   * Walnut itself (its own wake=false notice, e.g. title-topic-notice.ts). Walnut's own only ride:
+   * they never go out on their own past the max hold (held-notices-sweep.ts deliverDueQuietNotes).
+   */
+  by?: QuietNoteBy;
   /** The sending session's task: where its sender is told when that session is gone. */
   fromTask?: string;
   /**
@@ -138,8 +153,11 @@ export function holdQuietNote(sessionId: string, sender: { key: string; label: s
     // (a task's own note is read, and kept, whole).
     const chars = [...part.text];
     const kept = !keptWhole(part) && chars.length > QUIET_NOTE_TEXT_MAX + 1 ? { ...part, text: chars.slice(0, QUIET_NOTE_TEXT_MAX + 1).join('') } : part;
-    return holdFoldedNotice<QuietNotePart>(sessionId, `quiet-note:${sender.key}`, kept,
-      (parts, dropped) => renderQuietNotes(sender.label, parts, dropped), { now: part.at }).then(() => ({ duplicate: false }));
+    const held = holdFoldedNotice<QuietNotePart>(sessionId, `${QUIET_NOTE_KEY}${sender.key}`, kept,
+      (parts, dropped) => renderQuietNotes(sender.label, parts, dropped), { now: part.at });
+    // The cold hold's lap delivers it once it waited COLD_HOLD_MAX_MS (on the server, which keeps the file).
+    if (storeOpened()) void import('./cold-hold.js').then((m) => m.noteQuietHold()).catch(() => {});
+    return held.then(() => ({ duplicate: false }));
   };
   // Right after boot, a replay is told apart from a new note only once the file is read.
   const loading = storeLoading();

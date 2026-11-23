@@ -6,7 +6,8 @@
  * notice to a parent, no summary), pushes nothing to a phone and reads as no
  * running turn in the user's status. Its cost is still recorded.
  *
- * In memory, keyed by session, and bound to the one queue row that carries it:
+ * In memory, keyed by session, and bound to the one queue row that carries it (a row that carries
+ * someone's words, KEPT_QUIET_ROW_PREFIX, is never dropped: past its quiet turn it is a normal row):
  * begun just before the send, it lasts until the turn's result or error has been
  * seen and every reader had time to ask (`GRACE_MS`). It ends at once when
  * anything else is sent to the session, when a line goes out that is not its row
@@ -21,8 +22,11 @@
  */
 import { log } from '../../logging/index.js';
 
-/** 'idle-compact': sessions/idle-compaction.ts; 'context-compact': sessions/context-full-recovery.ts. */
-export type QuietTurnKind = 'idle-compact' | 'context-compact';
+/**
+ * 'idle-compact': sessions/idle-compaction.ts; 'context-compact': sessions/context-full-recovery.ts;
+ * 'held-notes': notes that asked for no reply, past their max hold (held-notices-sweep.ts).
+ */
+export type QuietTurnKind = 'idle-compact' | 'context-compact' | 'held-notes';
 
 interface QuietTurn {
   kind: QuietTurnKind;
@@ -99,6 +103,17 @@ export function beginQuietTurn(sessionId: string, kind: QuietTurnKind, source: s
 export const QUIET_ROW_PREFIX = 'qm-quiet-';
 export function isQuietRowId(id: string): boolean {
   return id.startsWith(QUIET_ROW_PREFIX);
+}
+
+/**
+ * A quiet row that carries words someone sent (held-notices-sweep.ts: notes held past their max
+ * hold) starts so. Never dropped: a Walnut command's quiet row is stale once its quiet turn is gone,
+ * but this one, whose quiet turn ended or was forgotten (another send, a restart, a failed write put
+ * it back), goes out as a normal row, on its own or in line with others.
+ */
+export const KEPT_QUIET_ROW_PREFIX = `${QUIET_ROW_PREFIX}kept-`;
+export function isKeptQuietRowId(id: string): boolean {
+  return id.startsWith(KEPT_QUIET_ROW_PREFIX);
 }
 
 /** The row of the session's quiet turn, while one runs. */

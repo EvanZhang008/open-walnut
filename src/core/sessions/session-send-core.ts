@@ -1064,6 +1064,11 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
       label: caller.kind === 'session' ? label : `${label} (on ${host}, not your user)`,
     }, {
       at: Date.now(), ...(input.title ? { title: input.title } : {}), text: body, mid: noteId,
+      // Who sent it: only a session's or a script's note goes out on its own past the max hold, never
+      // Walnut's own (held-notices-sweep.ts deliverDueQuietNotes).
+      // In the order its label is picked: an App's or a named automation's note is a script's.
+      by: caller.kind === 'session' ? 'session'
+        : (caller.kind === 'external' && caller.app) || input.callerLabel ? 'script' : walnutSends ? 'walnut' : 'script',
       // A task's own note is kept whole and never dropped by age or the fold cap (quiet-notes.ts).
       ...(caller.kind === 'session' ? {
         from: caller.record.claudeSessionId, whole: true, ...(caller.record.taskId ? { fromTask: caller.record.taskId } : {}),

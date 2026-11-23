@@ -19,7 +19,8 @@
  *    back in line in front of it, in the same send (session-message-queue.ts sendMessageToSession);
  *  - any send while the session is warm or running, and the sweep finding it so (a turn it started by
  *    itself, a background job's notice): the cache is warm, so the rows cost a warm read;
- *  - the oldest held row reaching COLD_HOLD_MAX_MS (the sweep);
+ *  - the oldest held row reaching COLD_HOLD_MAX_MS (the sweep; the same lap delivers quiet notes
+ *    held for a session's next message once the oldest waited as long: held-notices-sweep.ts);
  *  - a person's Send now on one of them, or an agent's (send-now.ts): every held row goes with it.
  * A Stop sets them aside like every row it stops (session-queue-park.ts setAsideHeld).
  */
@@ -88,7 +89,8 @@ export async function heldViewOf(sessionId: string, messageId: string): Promise<
   return presentColdHolds(await getQueue(sessionId)).find((m) => m.id === messageId);
 }
 
-async function turnRunning(sessionId: string, processStatus: string | undefined): Promise<boolean> {
+/** Does the session run a turn now (its record says so, or the runner does)? */
+export async function turnRunning(sessionId: string, processStatus: string | undefined): Promise<boolean> {
   if (processStatus === 'running') return true;
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
   return sessionRunner.isTurnRunning(sessionId);
@@ -158,9 +160,21 @@ export async function releaseAndSend(sessionId: string, why: string): Promise<nu
 
 let sweep: ReturnType<typeof setInterval> | null = null;
 let lap: Promise<void> | null = null;
+/** The queue file may hold a cold-held row: the next lap reads it (a lap that finds none stops reading). */
+let queueMayHold = true;
 
 /** A row was held: the sweep runs until no session holds one. */
 export function noteColdHold(_sessionId: string): void {
+  queueMayHold = true;
+  armSweep();
+}
+
+/**
+ * A quiet note was held (quiet-notes.ts), or a restart kept some: the same lap delivers every quiet
+ * note held for a target once the oldest waited COLD_HOLD_MAX_MS (held-notices-sweep.ts
+ * deliverDueQuietNotes), and runs while any is held. It reads the queue file only while that holds a row.
+ */
+export function noteQuietHold(): void {
   armSweep();
 }
 
@@ -179,13 +193,24 @@ function armSweep(): void {
 export async function sweepColdHolds(now = Date.now()): Promise<void> {
   if (lap) await lap.catch(() => {});
   lap = (async () => {
-    const store = await readQueueFileFresh();
-    const { waitsWhenCold } = await import('./wake-policy.js');
     let holding = 0;
+    // Quiet notes held past the max hold go out the same way (held-notices-sweep.ts).
+    try {
+      const { deliverDueQuietNotes } = await import('./held-notices-sweep.js');
+      holding += await deliverDueQuietNotes(now);
+    } catch (err) {
+      log.session.warn('cold hold: held quiet notes could not be looked at', { error: err instanceof Error ? err.message : String(err) });
+      holding++;
+    }
+    const readQueue = queueMayHold;
+    queueMayHold = false;
+    const store = readQueue ? await readQueueFileFresh() : { queues: {} as Record<string, QueuedMessage[]> };
+    const { waitsWhenCold } = await import('./wake-policy.js');
     for (const [sid, rows] of Object.entries(store.queues)) {
       const held = rows.filter(isColdHold);
       if (held.length === 0) continue;
       holding++;
+      queueMayHold = true;
       try {
         const due = held.some((r) => coldHoldReleaseAt(r) <= now);
         if (due) await releaseAndSend(sid, 'the oldest held message reached its max hold');
@@ -219,4 +244,5 @@ export async function startColdHold(): Promise<void> {
 export function stopColdHold(): void {
   if (sweep) clearInterval(sweep);
   sweep = null;
+  queueMayHold = true;
 }

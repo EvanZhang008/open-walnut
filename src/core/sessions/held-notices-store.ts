@@ -93,6 +93,8 @@ export interface PartMeta {
   told?: Array<Pick<DropTell, 'callerSid' | 'mid' | 'reason'> & Partial<DropTell>>;
   /** A topic's fold (topics/topic-text.ts FoldPart): its posts go back unread when it is dropped. */
   topic?: string;
+  /** A quiet note's sender kind (quiet-notes.ts QuietNoteBy): see goesAlone. */
+  by?: string;
 }
 
 /** A dropped note whose sender is a session: told by held-notices-sweep.ts flushDropTells. */
@@ -103,6 +105,26 @@ export interface DropTell {
   /** The dropped note's message id: its fate says so when no session can be told. */
   mid?: string;
   fromTask?: string;
+}
+
+/**
+ * The key prefix every quiet note waits under, one key per sender (quiet-notes.ts): a session's
+ * wake=false note or a script's no-reply note. Only these go out on their own once they waited
+ * COLD_HOLD_MAX_MS (held-notices-sweep.ts deliverDueQuietNotes); Walnut's own notices only ride.
+ */
+export const QUIET_NOTE_KEY = 'quiet-note:';
+/** The key Walnut's own wake=false notices wait under (session-send-core.ts: `Walnut (<source>)@<host>`). */
+const WALNUT_QUIET_KEY = `${QUIET_NOTE_KEY}Walnut (`;
+
+/**
+ * Does this held part go out on its own once it waited the max hold: a quiet note a session or a
+ * script sent, never Walnut's own (they ride and wake nothing). A part from before `by` was kept
+ * reads Walnut's by its key.
+ */
+export function goesAlone(key: string, part: unknown): boolean {
+  if (!key.startsWith(QUIET_NOTE_KEY)) return false;
+  const by = metaOf(part).by;
+  return by === undefined ? !key.startsWith(WALNUT_QUIET_KEY) : by !== 'walnut';
 }
 
 export const held = new Map<string, Map<string, Held>>();
@@ -245,12 +267,42 @@ export function pruneFates(now = Date.now()): boolean {
   return changed;
 }
 
+/**
+ * When the oldest quiet note held for `sid` that goes out on its own (goesAlone) was sent (its part's
+ * own `at`, kept on disk), or null.
+ */
+export function oldestQuietAt(sid: string): number | null {
+  let oldest: number | null = null;
+  for (const [key, v] of held.get(sid) ?? []) {
+    for (const p of v.parts ?? []) {
+      if (!goesAlone(key, p)) continue;
+      const at = metaOf(p).at ?? v.at;
+      if (typeof at === 'number' && Number.isFinite(at) && (oldest === null || at < oldest)) oldest = at;
+    }
+  }
+  return oldest;
+}
+
+/**
+ * Why the quiet notes held for a session still wait past their max hold (op_result's held_note says
+ * it), as the last lap found them: said only while the same oldest note waits.
+ */
+const quietWaitWhy = new Map<string, { why: string; oldest: number }>();
+export function setQuietWaitWhy(sid: string, why: string | null): void {
+  const oldest = oldestQuietAt(sid);
+  if (why && oldest !== null) quietWaitWhy.set(sid, { why, oldest }); else quietWaitWhy.delete(sid);
+}
+export function quietWaitWhyOf(sid: string): string | undefined {
+  const w = quietWaitWhy.get(sid);
+  return w && w.oldest === oldestQuietAt(sid) ? w.why : undefined;
+}
+
 /** Where a note with this message id waits now, or null. */
-export function waitingNote(mid: string): { sid: string; key: string; at: number } | null {
+export function waitingNote(mid: string): { sid: string; key: string; at: number; part: unknown } | null {
   const find = (sid: string, entries: Iterable<[string, Held]>) => {
     for (const [key, v] of entries) {
       const part = v.parts?.find((p) => metaOf(p).mid === mid);
-      if (part) return { sid, key, at: metaOf(part).at ?? v.at };
+      if (part) return { sid, key, at: metaOf(part).at ?? v.at, part };
     }
     return null;
   };
@@ -373,6 +425,11 @@ export function openStore(): Promise<void> {
   return loading;
 }
 
+/** Whether this process opened the file (the server): only it delivers what waited too long. */
+export function storeOpened(): boolean {
+  return opened;
+}
+
 /** Null when reads may go on now (loaded, or never opened); else the load to wait for. */
 export function storeLoading(): Promise<void> | null {
   return loading && !loaded ? loading : null;
@@ -464,6 +521,7 @@ export function clearNow(removeFile = true): void {
   fates.clear();
   tells.length = 0;
   tellsOut.clear();
+  quietWaitWhy.clear();
   opened = false;
   writable = true;
   loaded = false;

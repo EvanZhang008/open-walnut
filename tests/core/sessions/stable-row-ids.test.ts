@@ -144,6 +144,7 @@ const CALLERS: Record<string, { kind: 'resend' | 'unique' | 'event' | 'forward';
   'src/core/org/thread-reply.ts': { kind: 'unique', why: 'qm-reply-<uuid>' },
   'src/core/router/wake.ts': { kind: 'unique', why: 'a fresh nonce per wake' },
   'src/core/sessions/idle-compaction.ts': { kind: 'unique', why: 'idle-compact-<uuid>' },
+  'src/core/sessions/held-notices-sweep.ts': { kind: 'unique', why: 'qm-quiet-kept-held-notes-<uuid>: one line of held quiet notes' },
   'src/core/sessions/context-full-recovery.ts': { kind: 'unique', why: 'context-compact-<uuid>, qm-context-resend-<uuid>' },
   'src/core/sessions/safeguard-switch.ts': { kind: 'unique', why: 'qm-safeguard-switch-<uuid>' },
   'src/core/session-auto-recover.ts': { kind: 'unique', why: 'qm-recover-<uuid>, or the released row it sends again' },

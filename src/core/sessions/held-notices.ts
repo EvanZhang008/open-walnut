@@ -18,11 +18,14 @@
  * pushed out by newer ones and never expired by age: only its target being gone with no session
  * going on for it drops it. A note that is dropped (a script's by its age limit or the cap, any by
  * its session gone) is recorded so (op_result reads it by its message id) and its sending session
- * is told (held-notices-sweep.ts); that tell is kept on disk until it is delivered.
+ * is told (held-notices-sweep.ts); that tell is kept on disk until it is delivered. A quiet note
+ * (quiet-notes.ts) never waits past COLD_HOLD_MAX_MS for a target that can take a message: it then
+ * goes on its own (held-notices-sweep.ts deliverDueQuietNotes).
  */
 import {
-  FOLD_PARTS_MAX, HOLD_MAX_MS, expiredByAge, fateOf, held, metaOf, persist, queueTell, recordFate, setFolded,
-  setPushedOutHandler, slotOf, storeLoading, taken, takeTells, waitingNote, mergeOlder, clearNow, type DropTell, type Held,
+  FOLD_PARTS_MAX, HOLD_MAX_MS, QUIET_NOTE_KEY, expiredByAge, goesAlone, fateOf, held, metaOf, oldestQuietAt, persist, queueTell,
+  quietWaitWhyOf, recordFate, setFolded, setPushedOutHandler, slotOf, storeLoading, taken, takeTells, waitingNote, mergeOlder,
+  clearNow, type DropTell, type Held,
 } from './held-notices-store.js';
 import { log } from '../../logging/index.js';
 
@@ -33,6 +36,7 @@ export const DROP_WHY = {
   age: `it waited ${HOLD_MAX_MS / 86_400_000} days and its target sent no message in that time`,
   gone: 'its target session is gone (it was removed or closed with nothing taking over)',
   pushed: `${FOLD_PARTS_MAX} newer notes from you waited for the same target, and only the newest ${FOLD_PARTS_MAX} are kept`,
+  complete: 'not delivered: its task was complete, so its session was not woken for a note that asked for no reply',
 } as const;
 
 let tellTimer: ReturnType<typeof setTimeout> | null = null;
@@ -171,7 +175,7 @@ let nextToken = 1;
  * "Delivered" means stored in a row of the session's queue; a row withdrawn later still reads so.
  */
 export async function pendingHeldNotices(sessionId: string, now = Date.now()): Promise<{
-  text: string; release: () => void; markTold: (row?: string) => void;
+  text: string; release: () => void; markTold: (row?: string) => Promise<void>;
 } | null> {
   // The first send after boot carries what waited before the restart.
   const loading = storeLoading();
@@ -205,7 +209,8 @@ export async function pendingHeldNotices(sessionId: string, now = Date.now()): P
       putBack(token);
       void persist();
     },
-    markTold: (row) => {
+    // Resolves once they are off the file (a caller that must not send them twice after a crash awaits it).
+    markTold: async (row) => {
       if (settled) return;
       settled = true;
       // Put back meanwhile (held-notices-sweep.ts: a message that said nothing for minutes): they
@@ -221,7 +226,7 @@ export async function pendingHeldNotices(sessionId: string, now = Date.now()): P
       }
       // The delivery ledger: these notes are where the row that carries them is (sessions/delivery-ledger.ts).
       if (mids.length) void import('./delivery-ledger.js').then((l) => l.recordDelivery({ step: 'carried', ...(row ? { id: row } : {}), sessionId, ids: mids })).catch(() => {});
-      void persist();
+      await persist();
     },
   };
 }
@@ -269,7 +274,14 @@ export async function heldNoteState(mid: string): Promise<{
   const loading = storeLoading();
   if (loading) await loading;
   const waiting = waitingNote(mid);
-  if (waiting) return { message_id: mid, state: 'waiting', at: new Date(waiting.at).toISOString(), session_id: waiting.sid };
+  if (waiting) {
+    return {
+      message_id: mid, state: 'waiting', at: new Date(waiting.at).toISOString(), session_id: waiting.sid,
+      ...(waiting.key.startsWith(QUIET_NOTE_KEY) ? {
+        why: goesAlone(waiting.key, waiting.part) ? await quietWaitWhy(waiting.sid) : 'Walnut\'s own notice: it rides its target\'s next message and wakes nothing',
+      } : {}),
+    };
+  }
   const f = fateOf(mid);
   if (f) {
     return {
@@ -278,6 +290,15 @@ export async function heldNoteState(mid: string): Promise<{
     };
   }
   return { message_id: mid, state: 'unknown' };
+}
+
+/** Why a quiet note still waits: the lap's last word on its target, else when it goes at the latest. */
+async function quietWaitWhy(sid: string): Promise<string> {
+  const said = quietWaitWhyOf(sid);
+  if (said) return said;
+  const { COLD_HOLD_MAX_MS } = await import('./cold-hold.js');
+  const oldest = oldestQuietAt(sid) ?? Date.now();
+  return `it rides its target's next message, or goes on its own at ${new Date(oldest + COLD_HOLD_MAX_MS).toISOString()}`;
 }
 
 /** Test seam: forget every held notice (and the file, when this process opened it). */

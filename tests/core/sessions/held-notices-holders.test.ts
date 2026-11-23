@@ -33,6 +33,8 @@ const HOLDERS: Record<string, How> = {
   // The tells that a note was dropped: on disk until told, tried again while telling fails (2026-11-23).
   'src/core/sessions/held-notices-store.ts#tells': { durable: 'held-notices.json' },
   'src/core/sessions/held-notices-store.ts#tellsOut': { durable: 'held-notices.json' },
+  'src/core/sessions/held-notices-store.ts#quietWaitWhy': { 'no-text': 'why a quiet note past its max hold still waits, for op_result; the next lap after a restart says it again' },
+  'src/core/sessions/held-notices-sweep.ts#quietRetryAt': { 'no-text': 'when a failed delivery of quiet notes is tried again; a restart only tries sooner' },
   'src/core/sessions/held-notices-sweep.ts#goneSince': { 'no-text': 'when a sweep lap first found a session gone; a restart only means one more lap before what waits for it is moved or dropped' },
   // Status lines and turn notices of the tasks a node follows.
   'src/core/sessions/status-riding.ts#riding': { durable: 'status-riding.json' },
