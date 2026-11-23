@@ -142,29 +142,6 @@
 .org-thread-group-head { display: inline-flex; align-items: baseline; gap: 6px; margin: 4px 0 0; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
 .org-thread-group-head:focus { outline: none; }
 .org-thread-group-count { font-weight: 400; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-/* A folded group sticks to the bottom of the pane while the cards scroll above it, the heads
-   stacked in order: each sits one head above the folded groups after it (--org-thread-fold-from-end,
-   set per section). On arrival the pane shows Needs you, Done and every fold along its bottom edge
-   (2026-11-21: under twelve long Done cards the folds were several screens down, out of sight).
-   One fixed height, so the stacked heads meet exactly; the pane's own colour, so no card shows
-   through; a line on top parts them from the cards. An opened group scrolls with the list. */
-.org-thread-group.is-folded {
-  --org-thread-fold-h: 32px;
-  position: sticky;
-  bottom: calc(var(--org-thread-fold-from-end, 0) * var(--org-thread-fold-h));
-  box-sizing: border-box;
-  height: var(--org-thread-fold-h);
-  justify-content: center;
-  border-top: 1px solid var(--border);
-  background: var(--bg);
-}
-/* The top of the stack fades the card under it into the pane, so it reads as scrolled under,
-   not cut (2026-11-22 review). */
-.org-thread-group:not(.is-folded) + .org-thread-group.is-folded::before {
-  content: ''; position: absolute; left: 0; right: 0; top: -17px; height: 16px;
-  background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none;
-}
-
 /* The card a chat message's thread line opened (sessions/reply-thread-line.tsx), marked a moment. */
 .org-thread.is-focused { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s ease; }
 

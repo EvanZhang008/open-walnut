@@ -354,7 +354,7 @@ const foldHeads = (page: Page) => page.getByTestId('org-thread-groups').evaluate
   })
 })
 
-test('with many long Done cards, every folded head is in view on arrival, stacked at the pane bottom, and a click opens it', async ({ page, request }) => {
+test('with many long Done cards, the folded heads come after them and show only once he scrolls down', async ({ page, request }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   // Done long enough to fill several screens: twelve cards, each a long summary.
@@ -369,25 +369,22 @@ test('with many long Done cards, every folded head is in view on arrival, stacke
   await expect.poll(async () => (await drawn(page)).find((g) => g.group === 'read')?.cards.length ?? 0, { timeout: 20_000 }).toBeGreaterThanOrEqual(12)
   const folded = (await drawn(page)).filter((g) => !g.open).map((g) => g.group)
   expect(folded.length).toBeGreaterThanOrEqual(2)
-  // On arrival (no scroll): the pane scrolls, yet every folded head is inside it, in order, stacked
-  // with no gap at its bottom edge (the last folded group lowest).
+  // On arrival the folds are below the Done cards, out of the pane: they are not pinned to its
+  // bottom (2026-11-23, the user: "只有我当 scroll 到下面的时候，它才会显示").
   const heads = await foldHeads(page)
   expect(heads.map((h) => h.group)).toEqual(folded)
   expect(heads[0].scrolls, 'the Done cards overflow the pane').toBe(true)
-  for (const h of heads) expect(h.inPane, `${h.group} head in the pane: ${JSON.stringify(h)}`).toBe(true)
-  for (let i = 1; i < heads.length; i++) expect(Math.abs(heads[i].top - heads[i - 1].bottom), `${heads[i].group} sits right under ${heads[i - 1].group}`).toBeLessThanOrEqual(1)
-  expect(heads.at(-1)!.portBottom - heads.at(-1)!.bottom).toBeLessThanOrEqual(1)
+  for (const h of heads) expect(h.inPane, `${h.group} head is below the cards on arrival: ${JSON.stringify(h)}`).toBe(false)
+  for (const g of folded) expect(await group(page, g).evaluate((el) => getComputedStyle(el).position)).toBe('static')
+  // Scrolled down to them, they are there, one under the other, and a click opens one.
+  await head(page, folded.at(-1)!).scrollIntoViewIfNeeded()
   for (const g of folded) await expect(head(page, g)).toBeInViewport()
-  await page.getByTestId('org-rail').screenshot({ path: `${SHOTS}/thread-groups-7-stacked-folds-${test.info().project.name}.png` })
-  // One click on a stacked head opens its group; its head goes to the top, its cards under it.
+  await page.getByTestId('org-rail').screenshot({ path: `${SHOTS}/thread-groups-7-folds-after-done-${test.info().project.name}.png` })
   const first = folded[0]
   await head(page, first).click()
   await expect(group(page, first)).toHaveAttribute('data-open', 'true')
   await expect(head(page, first)).toHaveAttribute('aria-expanded', 'true')
   await expect(group(page, first).getByTestId('org-thread').first()).toBeInViewport({ timeout: 5_000 })
-  // An opened group scrolls with the list; the folds still folded keep their place at the bottom.
-  await expect(group(page, first)).not.toHaveClass(/is-folded/)
-  for (const h of await foldHeads(page)) expect(h.inPane, `${h.group} still in the pane`).toBe(true)
   await head(page, first).click()
   await expect(group(page, first)).toHaveAttribute('data-open', 'false')
   expect(pageErrors).toEqual([])

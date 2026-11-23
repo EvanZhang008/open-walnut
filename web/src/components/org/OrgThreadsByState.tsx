@@ -9,16 +9,14 @@
  * OrgThreads so a thread line or Show can open a fold). A group with no card draws nothing. Each
  * thread is drawn by the same card every Threads surface uses (OrgThreads ThreadItem), passed in.
  *
- * A folded group's head sticks to the bottom of the pane while the list scrolls above it, the heads
- * stacked in their order (the last folded group lowest): on arrival the pane shows Needs you, Done
- * and every fold along its bottom edge, one click from its cards (2026-11-21, three reviews on his
- * data: the folds sat under every Done card, several screens down, so nobody saw they existed). An
- * opened group scrolls with the list. Styles: org-threads.css `.org-thread-group.is-folded`.
+ * The folded groups come after Done in the list and scroll with it: they show only once he scrolls
+ * down to them (2026-11-23, the user: "只有我当 scroll 到下面的时候，它才会显示 ... 它其实没有那么
+ * 重要"; they had been pinned along the pane's bottom since 2026-11-22).
  *
  * A card that leaves a group on screen leaves a line in its place for a few seconds (thread-moves.ts).
  */
 import { focusUnlessTyping } from '@/utils/focus-unless-typing';
-import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { DisclosureButton } from '@/components/controls';
 import type { Task } from '@open-walnut/core';
 import type { OrgThread } from '@/api/org-threads';
@@ -112,9 +110,6 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
     onShowThread?.(m.id);
     requestAnimationFrame(() => headOf(rootRef.current, m.to)?.focus({ preventScroll: true }));
   };
-  // The folded groups drawn (each with a card) and still folded, in order: how many come after one.
-  const stuckOrder = FOLDED_GROUPS.filter((g) => groups[g].length > 0 && !shown.has(g));
-  const stuckAfter = (g: ThreadGroup) => stuckOrder.length - 1 - stuckOrder.indexOf(g);
   return (
     <div
       ref={rootRef} className="org-thread-groups" data-testid="org-thread-groups"
@@ -127,9 +122,6 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
         const open = shown.has(g);
         const notes = open ? moves.filter((m) => m.from === g) : [];
         if (!list.length && !notes.length) return null;
-        // A folded group's head sticks to the pane's bottom, above the folded groups drawn after it.
-        const stuck = folds && !open;
-        const fromEnd = stuck ? stuckAfter(g) : 0;
         // Each line stands where its card stood, among the cards still there.
         const items: ReactNode[] = open ? list.map(card) : [];
         for (const m of [...notes].sort((a, b) => b.index - a.index)) items.splice(Math.min(m.index, items.length), 0, <MoveNote key={moveKey(m)} m={m} onShow={show} onDone={dismiss} />);
@@ -137,8 +129,7 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
         const count = <span className="org-thread-group-count" data-testid="org-thread-group-count">{list.length}</span>;
         return (
           <section
-            key={g} className={`org-thread-group${stuck ? ' is-folded' : ''}`} data-testid="org-thread-group" data-group={g} data-open={open ? 'true' : 'false'}
-            style={stuck ? { '--org-thread-fold-from-end': fromEnd } as CSSProperties : undefined}
+            key={g} className="org-thread-group" data-testid="org-thread-group" data-group={g} data-open={open ? 'true' : 'false'}
           >
             {folds
               ? (

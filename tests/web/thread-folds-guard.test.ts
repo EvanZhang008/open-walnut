@@ -40,10 +40,11 @@ describe('every Threads group has its place: open or folded', () => {
   it('the web draws the open groups, then the folded ones, with no filter row', () => {
     const view = read(BY_STATE)
     expect(view).toContain('[...FOR_HIM_GROUPS, ...FOLDED_GROUPS].map(')
-    // Each fold head is the shared Disclosure, and a folded group's head sticks to the pane's bottom.
+    // Each fold head is the shared Disclosure, in the list after Done: it scrolls with the list and is
+    // never pinned to the pane (2026-11-23, the user: "只有我当 scroll 到下面的时候，它才会显示").
     expect(view).toContain('<DisclosureButton block expanded={open}')
-    expect(view).toContain("'--org-thread-fold-from-end'")
-    expect(read('web/src/styles/org-threads.css')).toMatch(/\.org-thread-group\.is-folded \{[^}]*position: sticky;[^}]*bottom: calc\(var\(--org-thread-fold-from-end/)
+    expect(view).not.toContain('--org-thread-fold-from-end')
+    expect(read('web/src/styles/org-threads.css')).not.toMatch(/\.org-thread-group[^{]*\{[^}]*position:\s*(sticky|fixed)/)
     expect(fs.existsSync(path.join(root, 'web/src/components/org/ThreadsFilterBar.tsx'))).toBe(false)
     for (const f of [BY_STATE, THREADS]) {
       const src = read(f)
