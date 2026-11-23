@@ -88,6 +88,12 @@ test('add a login with the generator, reveal it, change it and see its history',
   await editor.getByRole('button', { name: 'Generate a password' }).click()
   const generated = await page.getByTestId('pw-gen-value').innerText()
   expect(generated.length).toBeGreaterThanOrEqual(16)
+  // Every key in the generator is the button family's round key (2026-11-23: its Copy was read as a
+  // rounded square in a review): a corner at least half the key's height.
+  const genKeys = await page.locator('.pw-gen .btn').evaluateAll((els) => els.map((e) => ({ name: e.textContent?.trim(), r: parseFloat(getComputedStyle(e).borderTopLeftRadius), h: e.getBoundingClientRect().height })))
+  expect(genKeys.length).toBeGreaterThanOrEqual(2)
+  for (const k of genKeys) expect(k.r, `${k.name}: corner ${k.r} on a ${k.h} px key`).toBeGreaterThanOrEqual(k.h / 2)
+  await page.locator('.pw-gen').screenshot({ path: test.info().outputPath('generator.png') })
   await page.getByRole('button', { name: 'Use this password' }).click()
   await expect(editor.getByLabel('Password', { exact: true })).toHaveValue(generated)
   await expect(editor.locator('.pw-meter-text')).toHaveText(/strong/i)
