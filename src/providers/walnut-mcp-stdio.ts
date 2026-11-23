@@ -39,6 +39,9 @@ export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', 
 /** How long `tools/list` waits on the hub's catalog (the client waits on it to connect). */
 export const MCP_LIST_TIMEOUT_MS = 15_000
 
+/** How long the word that this session was given a short list (tellShort) may take; nobody waits on it. */
+export const MCP_SHORT_REPORT_MS = 5_000
+
 /** How often a list that came back short (no hub, an older hub) is asked for again. */
 export const MCP_LIST_RETRY_MS = 60_000
 
@@ -102,6 +105,9 @@ export interface WalnutMcpDeps {
 }
 
 type McpTool = Record<string, unknown>
+
+/** Why a session was given fewer tools than its whole list (tellShort). */
+export type ShortWhy = 'away' | 'slow' | 'partial' | 'short'
 
 /** Where a session's last whole tool list is kept, so a process started while the hub is away still lists it. */
 export interface ToolListCache {
@@ -264,7 +270,7 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
   const listAnswerMs = deps.listAnswerMs ?? mcpListAnswerMs()
   let retry: ReturnType<typeof setTimeout> | null = null
   let spillSeq = 0
-  const fetchList = async (): Promise<{ tools: McpTool[]; full: boolean; partial: boolean } | { error: string }> => {
+  const fetchList = async (): Promise<{ tools: McpTool[]; full: boolean; partial: boolean; offline: boolean } | { error: string; away: boolean }> => {
     let resp: GatewayResponse
     try {
       // `listing: 'role'`: this server's instructions say how to reach a tool it does not list, so
@@ -272,19 +278,41 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
       // hub ignores it and lists everything; every tool still runs by name (callTool below).
       resp = await deps.request('tools.list', { schemas: true, listing: 'role' }, MCP_LIST_TIMEOUT_MS)
     } catch (err) {
-      return { error: `Walnut's tool list did not arrive: ${err instanceof Error ? err.message : String(err)}` }
+      return { error: `Walnut's tool list did not arrive: ${err instanceof Error ? err.message : String(err)}`, away: false }
     }
-    if (!resp.ok) return { error: deps.formatError(resp.error).join('\n') }
+    if (!resp.ok) return { error: deps.formatError(resp.error).join('\n'), away: resp.error.code === 'hub_unreachable' }
     const rows = Array.isArray(resp.result.ops) ? resp.result.ops as HubOpRow[] : []
     // `partial`: read while the hub's plugins load (capability-router.ts), so their tools are missing.
     const partial = resp.result.partial === true
-    return { tools: rows.map(mcpToolOf), full: rows.length > 0 && rows.every((r) => r.inputSchema) && !partial, partial }
+    return { tools: rows.map(mcpToolOf), full: rows.length > 0 && rows.every((r) => r.inputSchema) && !partial, partial, offline: resp.result.offline === true }
+  }
+  // The client was given fewer tools than its whole list (none, or a list without the plugins'
+  // tools, and nothing kept to fill it): the session runs without them until the list changes.
+  // Once the whole list is here the hub is told (tellShort), and the real-use monitor counts it
+  // (usage_watch errors, usage-watch/gateway-record.ts) with why: `away` (the hub said it is
+  // away, or a host's offline set answered), `slow` (no answer within the early wait), `partial`
+  // (its plugins still loading), `short` (anything else). 2026-11-23: a daily count read every
+  // list change Claude Code records (a role's shorter list, a retired tool) as lost tools; on that
+  // day none of its 71 changes left a session without them. Only this side knows it at the source.
+  // A process that ends before the whole list comes tells nothing: such a gap is not counted.
+  let short: { at: number; given: number; why: ShortWhy } | null = null
+  const answerShort = (id: JsonRpcRequest['id'], tools: McpTool[], why: ShortWhy) => {
+    short ??= { at: Date.now(), given: tools.length, why }
+    return replyOk(id, { tools })
+  }
+  const tellShort = (full: number) => {
+    const s = short
+    short = null
+    if (!s || s.given >= full) return
+    // A word for the monitor, never waited on: an older hub ignores `report` and answers its catalog.
+    void deps.request('tools.list', { report: { short_list: { given: s.given, full, ms: Date.now() - s.at, why: s.why } } }, MCP_SHORT_REPORT_MS).catch(() => {})
   }
   /** A whole list arrived: it is the list from now on, and kept for this session's next process. */
   const gotFull = (tools: McpTool[]) => {
     fullList = tools
     // Whatever whole list this host's hub gave (a follower's may be smaller than the leader's) is kept.
     deps.listCache?.write(tools)
+    tellShort(tools.length)
   }
   /** Ask again later: soon for a hub still loading its plugins, else at the slow pace. */
   const scheduleRetry = (partial = false) => {
@@ -454,9 +482,9 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
           return replyOk(msg.id, { tools: [...got.tools, ...kept.filter((t) => !fresh.has(t.name))] })
         }
         if (kept && (!got || !('tools' in got) || kept.length >= got.tools.length)) return replyOk(msg.id, { tools: kept })
-        if (got && 'tools' in got) return replyOk(msg.id, { tools: got.tools })
+        if (got && 'tools' in got) return answerShort(msg.id, got.tools, got.offline ? 'away' : got.partial ? 'partial' : 'short')
         if (!deps.notify && got) return replyErr(msg.id, -32603, got.error)
-        return replyOk(msg.id, { tools: [] })
+        return answerShort(msg.id, [], !got ? 'slow' : got.away ? 'away' : 'short')
       }
       case 'tools/call': {
         const key = requestKey(msg.id)

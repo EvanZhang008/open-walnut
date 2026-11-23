@@ -76,7 +76,8 @@ describe('walnut mcp-server handler', () => {
       formatError,
       listRetryMs: 5,
       notify: (m) => notified.push(m),
-      request: async () => {
+      request: async (_op, args) => {
+        if (args.report) return { ok: true, result: { recorded: true } }
         calls++
         if (calls === 1) return { ok: false, error: { code: 'hub_unreachable', message: 'no primary' } }
         if (calls === 2) return { ok: true, result: { ops: [{ name: 'task_get', signature: 'id' }] } }
@@ -207,7 +208,7 @@ describe('walnut mcp-server handler', () => {
       const notified: string[] = []
       const handle = createWalnutMcpHandler({
         formatError, listAnswerMs: 20, listRetryMs: 60_000, partialRetryMs: 5, notify: (m) => notified.push(m),
-        request: () => (++calls === 1
+        request: (_op, args) => (args.report ? Promise.resolve({ ok: true, result: { recorded: true } }) : ++calls === 1
           ? new Promise((resolve) => { release = () => resolve({ ok: true, result: { ops: [tool('task_get')], partial: true } }) })
           : Promise.resolve({ ok: true, result: { ops: [tool('task_get'), tool('slack_search')] } })),
       })
@@ -216,6 +217,105 @@ describe('walnut mcp-server handler', () => {
       await waitFor(() => notified.length > 0)
       expect(calls).toBe(2)
       expect(names(await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' }))).toEqual(['task_get', 'slack_search'])
+    })
+
+    /**
+     * The class: every answer that gives the session fewer tools than its whole list (none; a partial
+     * or offline list with nothing kept to fill it) is told to the hub once that list is here, so the
+     * real-use monitor counts how often a session ran without them (usage-watch/gateway-record.ts).
+     * An answer that gave it all it had (a whole list, the kept one) is never told.
+     */
+    describe('a session given fewer tools than its list is told to the hub once that list is here', () => {
+      const run = async (opts: { kept?: Record<string, unknown>[]; first: (release: () => void) => Promise<GatewayResponse>; late?: GatewayResponse }) => {
+        const reports: Array<Record<string, unknown>> = []
+        const notified: string[] = []
+        let calls = 0
+        let release: () => void = () => {}
+        const released = new Promise<void>((r) => { release = r })
+        const handle = createWalnutMcpHandler({
+          formatError, listAnswerMs: 20, listRetryMs: 5, partialRetryMs: 5, notify: (m) => notified.push(m),
+          ...(opts.kept ? { listCache: memCache(opts.kept) } : {}),
+          request: async (_op, args) => {
+            if (args.report) { reports.push(args.report as Record<string, unknown>); return { ok: true, result: { recorded: true } } }
+            if (++calls === 1) return opts.first(release)
+            await released
+            return opts.late ?? { ok: true, result: { ops: [tool('task_get'), tool('task_send'), tool('slack_search')] } }
+          },
+        })
+        const first = names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))
+        release()
+        await waitFor(() => notified.length > 0)
+        if (!opts.kept) await waitFor(() => reports.length > 0)
+        await new Promise((r) => setTimeout(r, 30))
+        return { first, reports: reports.map((r) => r.short_list as Record<string, unknown>), notified }
+      }
+
+      it('none given (a hub past the early answer, nothing kept): told once, given 0 of the whole list', async () => {
+        const r = await run({ first: async (release) => { await new Promise((res) => setTimeout(res, 60)); release(); return { ok: true, result: { ops: [tool('task_get'), tool('task_send'), tool('slack_search')] } } } })
+        expect(r.first).toEqual([])
+        expect(r.reports).toEqual([{ given: 0, full: 3, ms: expect.any(Number), why: 'slow' }])
+      })
+
+      it('none given (the hub away, nothing kept): told once the hub is back', async () => {
+        const r = await run({ first: async () => ({ ok: false, error: { code: 'hub_unreachable', message: 'away' } }) })
+        expect(r.first).toEqual([])
+        expect(r.reports).toEqual([{ given: 0, full: 3, ms: expect.any(Number), why: 'away' }])
+      })
+
+      it('none given (the host daemon not answering, nothing kept): told as short', async () => {
+        const r = await run({ first: async () => { throw new Error('connect ENOENT agent-gateway.sock') } })
+        expect(r.first).toEqual([])
+        expect(r.reports).toEqual([{ given: 0, full: 3, ms: expect.any(Number), why: 'short' }])
+      })
+
+      it('a partial list with nothing kept: told with what it had', async () => {
+        const r = await run({ first: async () => ({ ok: true, result: { ops: [tool('task_get')], partial: true } }) })
+        expect(r.first).toEqual(['task_get'])
+        expect(r.reports).toEqual([{ given: 1, full: 3, ms: expect.any(Number), why: 'partial' }])
+      })
+
+      it('a short offline set with nothing kept: told with what it had', async () => {
+        const r = await run({ first: async () => ({ ok: true, result: { ops: [{ name: 'task_get', signature: 'id' }, { name: 'task_send', signature: 'to, text' }], offline: true } }) })
+        expect(r.first).toEqual(['task_get', 'task_send'])
+        expect(r.reports).toEqual([{ given: 2, full: 3, ms: expect.any(Number), why: 'away' }])
+      })
+
+      it('the kept list given while the hub is away: never told', async () => {
+        const r = await run({ kept: [tool('task_get'), tool('task_send'), tool('slack_search')], first: async () => ({ ok: false, error: { code: 'hub_unreachable', message: 'away' } }) })
+        expect(r.first).toEqual(['task_get', 'task_send', 'slack_search'])
+        expect(r.reports).toEqual([])
+      })
+
+      it('a whole first list, and a role\'s shorter whole list after a longer kept one: never told', async () => {
+        const reports: unknown[] = []
+        for (const kept of [undefined, [tool('task_get'), tool('task_send'), tool('slack_search'), tool('brief_read')]]) {
+          const handle = createWalnutMcpHandler({
+            formatError, listAnswerMs: 2_000, listRetryMs: 5, notify: () => {}, ...(kept ? { listCache: memCache(kept) } : {}),
+            request: async (_op, args) => {
+              if (args.report) { reports.push(args.report); return { ok: true, result: { recorded: true } } }
+              return { ok: true, result: { ops: [tool('task_get'), tool('task_send')] } }
+            },
+          })
+          expect(names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))).toEqual(['task_get', 'task_send'])
+        }
+        // A report would be sent while the whole list is taken, before the answer: none was.
+        expect(reports).toEqual([])
+      })
+
+      it('a hub that does not take the word (an older one, or none) changes nothing for the session', async () => {
+        const notified: string[] = []
+        let calls = 0
+        const handle = createWalnutMcpHandler({
+          formatError, listAnswerMs: 20, listRetryMs: 5, notify: (m) => notified.push(m),
+          request: async (_op, args) => {
+            if (args.report) throw new Error('socket closed')
+            return ++calls === 1 ? { ok: false, error: { code: 'hub_unreachable', message: 'away' } } : { ok: true, result: { ops: [tool('task_get')] } }
+          },
+        })
+        expect(names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))).toEqual([])
+        await waitFor(() => notified.length > 0)
+        expect(names(await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' }))).toEqual(['task_get'])
+      })
     })
 
     it('the early answer comes 2 s inside the client\'s own MCP_TIMEOUT when that is shorter', () => {

@@ -54,6 +54,8 @@ export interface CapabilityRouterDeps {
   listingRole?: (callerSid: string) => Promise<import('../../ops/op-groups.js').ToolListing | undefined>;
   /** True when the plugins' ops may still be missing from a list read now (pluginsStillLoading); tests inject it. */
   pluginsLoading?: () => Promise<boolean>;
+  /** The task of a caller session, for the real-use monitor's count of a short list (tests inject it). */
+  taskOfCaller?: (callerSid: string) => Promise<string | undefined>;
 }
 
 /** How long a schemas tools.list waits for a plugin walk under way before it answers without the rest. */
@@ -194,6 +196,15 @@ async function handleHistoryFetch(payload: Record<string, unknown>, host: string
  * and the answer lists the groups, so the CLI prints the catalog by group.
  */
 async function handleToolsList(payload: Record<string, unknown>, host: string, callerSid: string, deps: CapabilityRouterDeps): Promise<CapabilityOutcome> {
+  // A host's MCP server says its session was given fewer tools than its whole list for a while
+  // (walnut-mcp-stdio.ts tellShort): counted for the real-use monitor, nothing listed back.
+  if (payload.report !== undefined) {
+    // Only a session's own server says it: a caller with no session (a bare `walnut`) counts nothing.
+    if (!callerSid || isExternalCallerSid(callerSid)) return { ok: true, result: { recorded: false } };
+    const { recordShortToolList } = await import('../usage-watch/gateway-record.js');
+    const taskOf = deps.taskOfCaller ?? (async (sid: string) => (await (await import('../session-tracker.js')).getSessionByClaudeId(sid))?.taskId ?? undefined);
+    return { ok: true, result: { recorded: await recordShortToolList(callerSid, host, payload.report, taskOf) } };
+  }
   const { areaOpsForCaller } = await import('../router/gateway-policy.js');
   const areaOps = await areaOpsForCaller(callerSid);
   const { listOps, getOpOwner } = await import('../../ops/index.js');
