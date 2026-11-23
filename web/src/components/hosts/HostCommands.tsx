@@ -32,21 +32,23 @@ function CommandChip({ command }: { command: string }) {
   );
 }
 
-export function HostCommands({ commands, testId }: { commands: readonly string[]; testId?: string }) {
+/** `wrap`: the box spans the text column and wraps a long command instead of scrolling it (host-status.css). */
+export function HostCommands({ commands, testId, wrap }: { commands: readonly string[]; testId?: string; wrap?: boolean }) {
+  const cls = wrap ? 'hc hc--wrap' : 'hc';
   const [open, setOpen] = useState(false);
   const list = commands.filter((c) => typeof c === 'string' && c.trim());
   if (list.length === 0) return null;
   const demo = demoCommandCopy(list);
   if (demo.kind !== 'normal') {
     return (
-      <div className="hc" data-testid={testId} data-demo="note">
+      <div className={cls} data-testid={testId} data-demo="note">
         <span className="text-sm text-muted" role="note">{demo.note}</span>
       </div>
     );
   }
   const rest = list.slice(1);
   return (
-    <div className="hc" data-testid={testId}>
+    <div className={cls} data-testid={testId}>
       <CommandChip command={list[0]} />
       {rest.length > 0 && (
         <button type="button" tabIndex={0} className="hc-other" aria-expanded={open} onClick={() => setOpen((v) => !v)}>

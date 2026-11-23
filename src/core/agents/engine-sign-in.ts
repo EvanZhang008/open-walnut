@@ -149,6 +149,17 @@ export interface EngineSignInStatus {
   checkedAt: string
 }
 
+/**
+ * The engine's CLI on `host` (null: every host) reads signed in or not: messages its sessions
+ * parked for want of the sign-in go out once it is (sessions/agent-wait-resend.ts). `confirmed`:
+ * a person's own step, which sends them even when a status read already said signed in.
+ */
+function noteSignedIn(engine: string, host: string | null, signedIn: boolean, confirmed = false): void {
+  void import('../sessions/agent-wait-resend.js')
+    .then((m) => m.noteEngineSignedIn(engine, host, signedIn, { confirmed }))
+    .catch((err) => log.web.warn('engine sign-in: sending the messages that waited failed', { engine, host, error: err instanceof Error ? err.message : String(err) }))
+}
+
 function installLine(spec: EngineSignInSpec): string {
   return `curl -fsSL ${spec.installerUrl} | bash`
 }
@@ -186,6 +197,7 @@ export async function engineSignInStatus(engine: string, host: string, opts: { f
   const account = (r.account ?? null) as { signedIn?: boolean | null; detail?: string } | null
   const google = typeof account?.signedIn === 'boolean' ? account.signedIn : null
   const method = apiKey.set ? 'api-key' as const : google ? 'google' as const : null
+  if (method || google === false) noteSignedIn(engine, host, !!method)
   return {
     ...base, apiKey, install, installed: true, version: typeof r.version === 'string' ? r.version : null, google, method,
     signIn: (r.signIn ?? null) as SignInView | null,
@@ -232,6 +244,7 @@ export async function finishEngineSignIn(engine: string, host: string, id: strin
   }
   log.web.info('engine signed in', { engine, host, id })
   forgetEngineAvailability(engine, host)
+  noteSignedIn(engine, host, true, true)
   return engineSignInStatus(engine, host, { fresh: true })
 }
 
@@ -323,5 +336,7 @@ export async function setEngineApiKey(engine: string, key: string | null): Promi
     return { write: true, result: undefined }
   })
   log.web.info(key === null ? 'engine api key removed' : 'engine api key saved', { engine })
+  // The key signs every host's sessions of the engine in.
+  if (key !== null) noteSignedIn(engine, null, true, true)
   return { set: key !== null }
 }

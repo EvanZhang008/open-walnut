@@ -14372,9 +14372,11 @@ export class SessionRunner {
       } else if (err instanceof EngineSignInRequiredError) {
         // The engine's CLI on that host is not signed in: no retry can sign it in, so the turn
         // waits for the user's Retry, and the chat offers the sign-in in Settings for that host.
-        // The rows are parked, so the chat's Discard drops them; their own row says why (saidOnMessage).
-        await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
-        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message, {})
+        // The rows are parked, waiting for that host's sign-in (they go out by itself once it signs in, or on
+        // the chat's Retry; Discard drops them); their own row says why (saidOnMessage).
+        const verdict = classifyDeliveryFailure(err)
+        await parkMessages(rows, verdict).catch(() => {})
+        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message, { waitsFor: verdict.waitsFor })
         bus.emit(EventNames.SESSION_ERROR, {
           sessionId: deliverySessionId, error: err.message, errorKind: 'delivery_failed' as const, parked: true, saidOnMessage: true, signIn: err.signIn,
         }, ['main-ai'], { source: 'session-runner' })

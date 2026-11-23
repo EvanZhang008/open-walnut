@@ -281,18 +281,20 @@
   100% { background-color: transparent; }
 }
 
-/* A row reached by deep link from another page (the strip's "Adjust panels"):
-   the person has not seen this pane yet, so pulse twice and ring the row. */
+/* A row reached by deep link from another page (the strip's "Adjust panels", the chat's
+   "Open Settings to sign in"): the person has not seen this pane yet, so it pulses twice, a soft
+   tint and nothing more (no solid block, no accent ring: standard.md rule 5, SKILL.md rules 9, 19).
+   The target may be a block of rows (a host and its sign-in line): the tint covers all of it. */
 .settings-anchor-flash-strong {
   animation: settings-anchor-flash-strong 3000ms ease-out;
   border-radius: var(--radius-sm);
 }
 
 @keyframes settings-anchor-flash-strong {
-  0%, 20% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 2px var(--accent); }
-  40% { background-color: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 2px transparent; }
-  60% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 2px var(--accent); }
-  100% { background-color: transparent; box-shadow: 0 0 0 2px transparent; }
+  0%, 20% { background-color: color-mix(in srgb, var(--accent) 12%, transparent); }
+  40% { background-color: color-mix(in srgb, var(--accent) 4%, transparent); }
+  60% { background-color: color-mix(in srgb, var(--accent) 12%, transparent); }
+  100% { background-color: transparent; }
 }
 
 /* ── Pane-level states: config error, plugin off, section crash ── */

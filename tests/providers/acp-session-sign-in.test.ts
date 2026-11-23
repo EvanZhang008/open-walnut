@@ -77,7 +77,7 @@ describe('a start refused for a missing sign-in', () => {
   it('waits for the user\'s Retry, said in the same words', () => {
     const words = notSignedInWords('antigravity', 'devbox')
     const err = new EngineSignInRequiredError(words, 'antigravity', 'devbox', 'devbox')
-    expect(classifyDeliveryFailure(err)).toEqual({ kind: 'permanent', code: 'sign_in_required', reason: words })
+    expect(classifyDeliveryFailure(err)).toEqual({ kind: 'permanent', code: 'sign_in_required', reason: words, waitsFor: 'engine_sign_in' })
     expect(err.signIn).toEqual({ engine: 'antigravity', host: 'devbox', hostName: 'devbox' })
   })
 

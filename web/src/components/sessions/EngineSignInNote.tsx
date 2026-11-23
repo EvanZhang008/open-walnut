@@ -1,7 +1,8 @@
 /**
  * The chat's side of an engine CLI that is not signed in on the session's host (server words:
- * src/core/agents/engine-sign-in-words.ts). Under a message that waits for Retry it says so with
- * "Open Settings to sign in", Retry and Discard; as a session error line it says so with the same
+ * src/core/agents/engine-sign-in-words.ts). Under a message that waits for the sign-in (it goes
+ * out by itself once the host signs in, sessions/agent-wait-resend.ts) it says so with "Open
+ * Settings to sign in", Retry and Discard; as a session error line it says so with the same
  * link. The link opens Settings > Sessions at that host's sign-in row and opens its sign-in there
  * (engine-sign-in-model.ts openEngineSignIn), through the router: no page load.
  */
@@ -21,8 +22,10 @@ function useOpenSignIn(signIn: NotSignedIn, host: string | undefined, sessionId?
 }
 
 /** Under a message the host refused for want of a sign-in: it waits for Retry (today's Retry and Discard). */
-export function EngineSignInNote({ signIn, host, sessionId, onRetry, onDiscard }: {
+export function EngineSignInNote({ signIn, host, sessionId, waits, onRetry, onDiscard }: {
   signIn: NotSignedIn;
+  /** The row waits for the sign-in (QueuedMessage.waitsFor 'engine_sign_in'): it goes out by itself then. */
+  waits?: boolean;
   /** The session's host key ('__local__' for this machine). */
   host: string;
   sessionId?: string;
@@ -32,7 +35,7 @@ export function EngineSignInNote({ signIn, host, sessionId, onRetry, onDiscard }
   const open = useOpenSignIn(signIn, host, sessionId);
   return (
     <div className="thread-queue-note session-msg-held-note session-msg-agent-wait" role="status" data-engine-sign-in={signIn.engine}>
-      <div>{signIn.line}</div>
+      <div>{signIn.line}{waits ? ' Sign in and this message goes out by itself.' : ''}</div>
       {/* The button family (styles/buttons.css): the way on is the one action key, Retry and Discard the quiet ones. */}
       <div className="session-msg-queued-actions">
         <button type="button" className="btn btn-sm" onClick={open} data-testid="engine-sign-in-open-settings">Open Settings to sign in</button>

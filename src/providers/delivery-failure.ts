@@ -80,8 +80,9 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   // Claude Code cannot run on the host yet: every retry fails the same way until the
   // user installs it, so the message waits, said plainly, for their Retry.
   // An engine's CLI on the host is not signed in: every retry is refused the same way until the
-  // user signs it in (Settings), so the message waits, said plainly, for their Retry.
-  if (err instanceof EngineSignInRequiredError) return { kind: 'permanent', code: 'sign_in_required', reason: err.message };
+  // user signs it in (Settings), so the message waits, and goes out by itself once that host signs
+  // in (sessions/agent-wait-resend.ts, rule 'engine-signed-in'); a Retry still sends it at once.
+  if (err instanceof EngineSignInRequiredError) return { kind: 'permanent', code: 'sign_in_required', reason: err.message, waitsFor: ENGINE_SIGN_IN_WAIT };
   if (err instanceof ClaudeRuntimeMissingError) return { kind: 'permanent', code: 'claude_missing', reason: err.waitingReason, waitsFor: err.errorKind };
   // A test server refusing a session it did not start: retrying changes nothing.
   if (err instanceof InheritedSessionRefusedError || isInheritedSessionText(message)) return { kind: 'permanent', code: 'inherited_session', reason: reason.replace(/^inherited_session:\s*/, '') };
@@ -250,6 +251,9 @@ export function holderPidOf(text: unknown): number | undefined {
  * session/new answered auth_required; core/agents/engine-sign-in.ts signs it in). `signIn` names
  * the engine and host, so the chat can offer the sign-in in Settings for that host.
  */
+/** The kind a message refused for want of an engine's sign-in waits on (QueuedMessage.waitsFor). */
+export const ENGINE_SIGN_IN_WAIT = 'engine_sign_in';
+
 export class EngineSignInRequiredError extends Error {
   readonly code = 'ENGINE_SIGN_IN';
   constructor(message: string, readonly engine: string, readonly host: string, readonly hostName: string) {

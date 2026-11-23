@@ -217,13 +217,14 @@ const isAgentWaitRow = (m: QueuedMessage): boolean => !!m.waitsFor
  * wins), and a deleted row is gone. `onlyWithPending`: only when another row of the
  * session is going out now (it rides ahead of it, in its own order). `match`: the rows
  * another wait sends the same way (an engine setting changed, sessions/engine-config-resend.ts).
- * Returns the ids.
+ * `kinds`: only rows waiting on one of these (the wait that ended). Returns the ids.
  */
 export async function unparkAgentWaitRows(
-  sessionId: string, stopFence: string | null, opts?: { onlyWithPending?: boolean; match?: (m: QueuedMessage) => boolean },
+  sessionId: string, stopFence: string | null, opts?: { onlyWithPending?: boolean; match?: (m: QueuedMessage) => boolean; kinds?: readonly string[] },
 ): Promise<string[]> {
   const match = opts?.match ?? isAgentWaitRow;
-  const ids = await unparkWhere(sessionId, (msg) => match(msg) && (msg.stopFence ?? null) === stopFence, opts?.onlyWithPending === true);
+  const kinds = opts?.kinds;
+  const ids = await unparkWhere(sessionId, (msg) => match(msg) && (!kinds || (!!msg.waitsFor && kinds.includes(msg.waitsFor))) && (msg.stopFence ?? null) === stopFence, opts?.onlyWithPending === true);
   if (ids.length > 0) log.session.info(opts?.match ? 'parked messages sent again: what held them changed' : 'parked messages sent again: the agent can run now', { sessionId, messageIds: ids });
   return ids;
 }

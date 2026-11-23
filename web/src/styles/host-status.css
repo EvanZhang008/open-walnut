@@ -125,6 +125,24 @@
   user-select: all;
 }
 .hc .setup-copy-btn { flex: none; }
+/* The wrapped look (HostCommands `wrap`, and every command in a Remote Hosts row's details): the
+   box takes the text column's width and wraps a long command (no scrollbar, never cut off), its
+   Copy beside it. */
+.rh-details .hc-row, .hc--wrap .hc-row { align-items: flex-start; gap: 8px; width: 100%; }
+.rh-details .hc-chip, .hc--wrap .hc-chip {
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid var(--settings-group-border);
+  border-radius: var(--radius-sm); /* shape: a command you read, a code block not a label */
+  background: var(--bg);
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* A label that never changes its button's width (Retry / Retrying..., Copy / Copied):
    the longest labels it may show sit hidden in the same grid cell. */

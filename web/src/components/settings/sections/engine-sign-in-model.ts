@@ -20,7 +20,7 @@ export function hasSignInUi(engine: string): engine is SignInEngine {
   return Object.hasOwn(ENGINE_SIGN_IN_UI, engine);
 }
 
-export type RowAction = 'sign-in' | 'sign-out' | 'remove-key' | 'install' | 'check';
+export type RowAction = 'sign-in' | 'sign-out' | 'install' | 'check';
 
 export interface RowView {
   tone: NoticeTone;
@@ -42,10 +42,11 @@ export function rowView(s: EngineSignInStatus, engine: SignInEngine): RowView {
   if (s.needsDaemonUpdate) return { tone: 'warn', word: 'Daemon needs update', action: null, title: title ?? 'Its Walnut daemon updates on its next connect.' };
   if (s.state === 'signed_in') {
     if (s.method === 'api-key') {
-      // A key in the host's own environment is not Walnut's to remove.
-      return s.apiKey.source === 'settings'
-        ? { tone: 'ok', word: 'Signed in with API key', action: 'remove-key', actionLabel: 'Remove key' }
-        : { tone: 'ok', word: 'Signed in with API key', action: null, title: `The ${ui.keyName} is set in this host's own environment.` };
+      // The key is the group's own row (every machine's); one in the host's own environment is not Walnut's.
+      return {
+        tone: 'ok', word: 'Signed in with API key', action: null,
+        title: s.apiKey.source === 'settings' ? `Its sessions use the ${ui.keyName} set below.` : `The ${ui.keyName} is set in this host's own environment.`,
+      };
     }
     return { tone: 'ok', word: `Signed in with ${ui.account}`, action: 'sign-out', actionLabel: 'Sign out' };
   }
@@ -109,9 +110,21 @@ export function signInGroupId(engine: string): string {
   return `${ENGINE_SIGN_IN_ROW_PREFIX}${engine}`;
 }
 
+/** The engine's API key row (one for every machine). */
+export function signInKeyRowId(engine: string): string {
+  return `${ENGINE_SIGN_IN_ROW_PREFIX}${engine}--api-key`;
+}
+
+/** The API key as Walnut's settings hold it: set when any host reads it from there (it is one setting). */
+export function settingsKeySet(hosts: readonly Pick<EngineSignInStatus, 'apiKey'>[]): boolean {
+  return hosts.some((h) => h.apiKey.set && h.apiKey.source === 'settings');
+}
+
 // ── The chat's deep link: open Settings at a host's row and open its sign-in ──
 
-export interface SignInRequest { engine: string; host?: string; hostName?: string; nonce: number }
+export interface SignInRequest { engine: string; host?: string; hostName?: string; nonce: number; at: number }
+/** An ask not taken by then is dropped: it never opens a sign-in later by itself. */
+export const SIGN_IN_REQUEST_TTL_MS = 60_000;
 let request: SignInRequest | null = null;
 let nonce = 0;
 const listeners = new Set<() => void>();
@@ -129,7 +142,7 @@ export function requestNames(req: Pick<SignInRequest, 'engine' | 'host' | 'hostN
  * Settings page only lands on the row and never starts a sign-in by itself.
  */
 export function openEngineSignIn(navigate: (to: string) => void, target: { engine: string; host?: string; hostName?: string }): void {
-  request = { ...target, nonce: ++nonce };
+  request = { ...target, nonce: ++nonce, at: Date.now() };
   for (const l of listeners) l();
   navigate(`/settings#${encodeURIComponent(target.host ? signInRowId(target.engine, target.host) : signInGroupId(target.engine))}`);
 }
@@ -138,12 +151,24 @@ export function useSignInRequest(): SignInRequest | null {
   return useSyncExternalStore((cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; }, () => request, () => request);
 }
 
-/** Take the pending ask if it names this row (it is then gone). */
-export function takeSignInRequest(s: Pick<EngineSignInStatus, 'engine' | 'host' | 'hostName'>): SignInRequest | null {
+/** Take the pending ask if it names this row (it is then gone). An ask past its time is gone too. */
+export function takeSignInRequest(s: Pick<EngineSignInStatus, 'engine' | 'host' | 'hostName'>, now = Date.now()): SignInRequest | null {
+  if (request && now - request.at > SIGN_IN_REQUEST_TTL_MS) request = null;
   if (!request || !requestNames(request, s)) return null;
   const taken = request;
   request = null;
   return taken;
+}
+
+/**
+ * The engine's hosts were read: an ask for this engine naming none of them is dropped (a host
+ * removed, or a name the list does not know), so it never opens a sign-in later by itself.
+ */
+export function expireSignInRequest(engine: string, hosts: readonly Pick<EngineSignInStatus, 'engine' | 'host' | 'hostName'>[]): boolean {
+  if (!request || request.engine !== engine || hosts.some((h) => requestNames(request!, h))) return false;
+  request = null;
+  for (const l of listeners) l();
+  return true;
 }
 
 /** Test hook. */

@@ -6033,6 +6033,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       signIn={parseNotSignedIn(m.failedError)!}
       host={sessionHost || '__local__'}
       sessionId={sessionId}
+      waits={m.waitsFor === 'engine_sign_in'}
       onRetry={() => onRetryFailed?.(m.queueId)}
       onDiscard={() => (m.parked ? onDeleteQueued?.(m.queueId) : onDismissFailed?.(m.queueId))}
     />

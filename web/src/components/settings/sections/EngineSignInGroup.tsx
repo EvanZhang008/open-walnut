@@ -12,7 +12,8 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { log } from '@/utils/log';
 import { engineSignInHosts, type EngineSignInStatus } from '@/api/engine-sign-in';
 import { EngineSignInRow } from './EngineSignInRow';
-import { ENGINE_SIGN_IN_UI, signInGroupId, useSignInRequest, type SignInEngine } from './engine-sign-in-model';
+import { EngineApiKeyRow } from './EngineApiKeyRow';
+import { ENGINE_SIGN_IN_UI, expireSignInRequest, settingsKeySet, signInGroupId, useSignInRequest, type SignInEngine } from './engine-sign-in-model';
 
 export function EngineSignInGroup({ engine }: { engine: SignInEngine }) {
   const ui = ENGINE_SIGN_IN_UI[engine];
@@ -20,6 +21,7 @@ export function EngineSignInGroup({ engine }: { engine: SignInEngine }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const request = useSignInRequest();
+  const [keyFocus, setKeyFocus] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -27,6 +29,8 @@ export function EngineSignInGroup({ engine }: { engine: SignInEngine }) {
       const r = await engineSignInHosts(engine);
       setHosts(r.hosts);
       setError(null);
+      // The chat's ask for a host this list does not hold ends here (it never starts a sign-in later).
+      if (expireSignInRequest(engine, r.hosts)) log.info('settings', 'engine sign-in link named no listed host: dropped', { engine });
     } catch (err) {
       log.warn('settings', 'engine sign-in hosts read failed', { engine, error: String(err) });
       setError(`Could not read the hosts: ${err instanceof Error ? err.message : String(err)}`);
@@ -48,8 +52,12 @@ export function EngineSignInGroup({ engine }: { engine: SignInEngine }) {
       data-testid={`engine-sign-in-group-${engine}`}
     >
       {hosts?.map((s) => (
-        <EngineSignInRow key={s.host} engine={engine} status={s} onStatus={onStatus} onKeyChanged={() => void load()} request={request} />
+        <EngineSignInRow key={s.host} engine={engine} status={s} onStatus={onStatus} onUseKey={() => setKeyFocus((n) => n + 1)} request={request} />
       ))}
+      {/* The key is one setting for every machine: one row, after the machines. */}
+      {hosts && hosts.length > 0 && (
+        <EngineApiKeyRow engine={engine} set={settingsKeySet(hosts)} host={hosts[0]!.host} onChanged={() => void load()} focusNonce={keyFocus} />
+      )}
       {!hosts && !error && <SettingsRow label="Reading the hosts..." />}
       {error && (
         <SettingsRow

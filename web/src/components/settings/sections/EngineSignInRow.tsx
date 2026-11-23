@@ -1,8 +1,12 @@
 /**
  * One host's row in "<Engine> sign-in" (EngineSignInGroup): its state as a dot and a word, its
  * one action, and, while a sign-in is open, ONE compact row under it: the account's link, the
- * pasted code and Finish (or the API key and Save), with the other way in as a text link. The
- * two views keep the same field and button widths, so switching moves nothing.
+ * pasted code and Finish, with "Use a <key> instead" leading to the group's one API key row (the
+ * key is one setting for every machine, EngineApiKeyRow).
+ *
+ * Every step that answers late is read against the row's generation: a Cancel moves it on, so a
+ * link that arrives after it is ended on the host at once, and a code refused after it starts
+ * nothing new.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SettingsRow } from '../SettingsSection';
@@ -11,8 +15,7 @@ import { NoticeStatus } from '@/components/common/NoticeCard';
 import { HostCommands } from '@/components/hosts/HostCommands';
 import { log } from '@/utils/log';
 import {
-  cancelEngineSignIn, engineInstallStatus, engineSignInStatus, finishEngineSignIn, removeEngineApiKey,
-  saveEngineApiKey, signOutEngine, startEngineInstall, startEngineSignIn,
+  cancelEngineSignIn, engineInstallStatus, engineSignInStatus, finishEngineSignIn, signOutEngine, startEngineInstall, startEngineSignIn,
   type EngineSignInLink, type EngineSignInStatus,
 } from '@/api/engine-sign-in';
 import {
@@ -20,32 +23,31 @@ import {
   type SignInEngine, type SignInRequest,
 } from './engine-sign-in-model';
 
-type Busy = 'start' | 'finish' | 'sign-out' | 'key' | 'install' | 'check' | null;
-/** Both submit keys reserve the widest label either shows, so the field left of them never moves. */
-const SUBMIT_RESERVE = ['Signing in...', 'Saving...'];
-const INSTALL_POLL_MS = 3_000;
+type Busy = 'start' | 'finish' | 'sign-out' | 'install' | 'check' | null;
+const INSTALL_POLL_MS = 2_000;
 
-export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, request }: {
+export function EngineSignInRow({ engine, status, onStatus, onUseKey, request }: {
   engine: SignInEngine;
   status: EngineSignInStatus;
   onStatus: (s: EngineSignInStatus) => void;
-  /** The API key is one setting for every host: the group reads every row again. */
-  onKeyChanged: () => void;
+  /** "Use a <key> instead": the group's API key row takes over (this row's sign-in is ended). */
+  onUseKey: () => void;
   /** The chat's "Open Settings to sign in" naming some host (the row takes it if it is this one). */
   request: SignInRequest | null;
 }) {
   const ui = ENGINE_SIGN_IN_UI[engine];
   const { host, hostName } = status;
-  const [mode, setMode] = useState<'idle' | 'google' | 'key'>(status.signIn ? 'google' : 'idle');
   const [link, setLink] = useState<EngineSignInLink | null>(status.signIn);
+  const [open, setOpen] = useState(!!status.signIn);
   const [code, setCode] = useState('');
-  const [key, setKey] = useState('');
   const [busy, setBusy] = useState<Busy>(status.install.state === 'running' ? 'install' : null);
   const [error, setError] = useState<string | null>(null);
   const [codeBad, setCodeBad] = useState(false);
   const alive = useRef(true);
   // Set again on every mount: StrictMode mounts twice, and a flag cleared by the first unmount left every answer unread.
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  /** Moves on at every Cancel: an answer of an older generation changes nothing here. */
+  const gen = useRef(0);
   const ctx = { engine, host };
 
   const run = useCallback(async <T,>(what: Exclude<Busy, null>, work: () => Promise<T>): Promise<T | undefined> => {
@@ -62,12 +64,20 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
     }
   }, [engine, host, hostName]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** A link that came back for a sign-in this row no longer waits on (a Cancel came first): ended on the host. */
+  const dropLate = (late: EngineSignInLink) => {
+    log.info('settings', 'engine sign-in link came after a cancel: ending it', { ...ctx, id: late.id });
+    void cancelEngineSignIn(engine, host, late.id).catch((err: unknown) => log.warn('settings', 'engine sign-in cancel failed', { ...ctx, id: late.id, error: String(err) }));
+  };
+
   const startGoogle = useCallback(async (restart = false) => {
+    const g = gen.current;
     const started = await run('start', () => startEngineSignIn(engine, host, restart));
-    if (!started || !alive.current) return;
+    if (!started) return;
+    if (g !== gen.current || !alive.current) return dropLate(started);
     log.info('settings', 'engine sign-in link ready', { ...ctx, id: started.id, reused: started.reused === true });
     setLink(started);
-    setMode('google');
+    setOpen(true);
   }, [run, engine, host]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const check = useCallback(async () => {
@@ -83,51 +93,53 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
     void (async () => {
       const s = status.state === 'unknown' ? await check() : status;
       if (s?.state === 'not_signed_in' && !s.signIn) await startGoogle();
-      else if (s?.signIn) { setLink(s.signIn); setMode('google'); }
+      else if (s?.signIn) { setLink(s.signIn); setOpen(true); }
     })();
   }, [request?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // An install runs on the host: follow it, then read the host again.
+  // An install runs on the host: follow it, then read the host again before the row lets go of "Installing".
   useEffect(() => {
     if (busy !== 'install') return;
-    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
-      if (stop) return;
       try {
         const st = await engineInstallStatus(engine, host);
-        if (stop) return;
-        if (st.state === 'running') { setTimeout(() => void tick(), INSTALL_POLL_MS); return; }
+        if (!alive.current) return;
+        if (st.state === 'running') { timer = setTimeout(() => void tick(), INSTALL_POLL_MS); return; }
         log.info('settings', 'engine install ended', { ...ctx, state: st.state, exitCode: st.exitCode ?? null });
-        if (st.state === 'failed') setError(`The install on ${hostName} failed${st.error ? `: ${st.error}` : st.exitCode != null ? ` (exit ${st.exitCode})` : ''}.`);
-        setBusy(null);
         const s = await engineSignInStatus(engine, host, true).catch(() => null);
-        if (s && !stop) onStatus(s);
+        if (!alive.current) return;
+        if (st.state === 'failed') setError(`The install on ${hostName} failed${st.error ? `: ${st.error}` : st.exitCode != null ? ` (exit ${st.exitCode})` : ''}.`);
+        if (s) onStatus(s);
+        setBusy(null);
       } catch (err) {
-        if (stop) return;
+        if (!alive.current) return;
         setBusy(null);
         setError(refusalWords(err, 'install', hostName));
       }
     };
-    const t = setTimeout(() => void tick(), INSTALL_POLL_MS);
-    return () => { stop = true; clearTimeout(t); };
+    timer = setTimeout(() => void tick(), INSTALL_POLL_MS);
+    return () => { if (timer) clearTimeout(timer); };
   }, [busy === 'install']); // eslint-disable-line react-hooks/exhaustive-deps
 
   const close = async () => {
+    gen.current += 1;
     const id = link?.id;
-    setMode('idle'); setLink(null); setCode(''); setKey(''); setError(null); setCodeBad(false);
+    setOpen(false); setLink(null); setCode(''); setError(null); setCodeBad(false);
     // The host ends a waiting sign-in by itself after a while too: a cancel it did not hear is said in the log only.
     if (id) await cancelEngineSignIn(engine, host, id).catch((err: unknown) => log.warn('settings', 'engine sign-in cancel failed', { ...ctx, id, error: String(err) }));
   };
 
   // The CLI ended that sign-in (a refused code, a timeout): a new one, its link behind the same words; Finish waits for it.
-  const renewLink = async () => {
+  const renewLink = async (g: number) => {
     setBusy('start');
     try {
       const fresh = await startEngineSignIn(engine, host, true);
-      if (alive.current) setLink(fresh);
+      if (g !== gen.current || !alive.current) return dropLate(fresh);
+      setLink(fresh);
     } catch (e) {
       log.warn('settings', 'engine sign-in restart failed', { ...ctx, error: String(e) });
-      if (alive.current) setError(refusalWords(e, 'start', hostName));
+      if (alive.current && g === gen.current) setError(refusalWords(e, 'start', hostName));
     } finally {
       if (alive.current) setBusy((b) => (b === 'start' ? null : b));
     }
@@ -135,6 +147,7 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
 
   const finish = async () => {
     if (!link || !code.trim()) return;
+    const g = gen.current;
     setCodeBad(false);
     setBusy('finish');
     setError(null);
@@ -142,31 +155,23 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
       const { status: s } = await finishEngineSignIn(engine, host, link.id, code.trim());
       if (!alive.current) return;
       log.info('settings', 'engine signed in', { ...ctx, method: s.method });
-      setMode('idle'); setLink(null); setCode('');
+      // Signed in is the host's truth, a Cancel pressed meanwhile or not.
       onStatus(s);
+      if (g === gen.current) { setOpen(false); setLink(null); setCode(''); }
     } catch (err) {
       const why = refusalCode(err);
-      log.warn('settings', 'engine sign-in code refused', { ...ctx, code: why });
-      if (!alive.current) return;
+      log.warn('settings', 'engine sign-in code refused', { ...ctx, code: why, late: g !== gen.current });
+      if (!alive.current || g !== gen.current) return;
       setError(refusalWords(err, 'finish', hostName));
       setCodeBad(why === 'bad_code' || why === 'invalid_code');
       // The CLI ended that sign-in: a new link waits behind "Open Google sign-in" for the next code.
-      if (codeEndsSignIn(why)) void renewLink();
+      if (codeEndsSignIn(why)) void renewLink(g);
     } finally {
       if (alive.current) setBusy((b) => (b === 'finish' ? null : b));
     }
   };
 
-  const saveKey = async () => {
-    if (!key.trim()) return;
-    const r = await run('key', () => saveEngineApiKey(engine, key.trim(), host));
-    if (!r || !alive.current) return;
-    log.info('settings', 'engine api key saved', ctx);
-    if (link) void cancelEngineSignIn(engine, host, link.id).catch(() => {});
-    setMode('idle'); setLink(null); setKey('');
-    if (r.status) onStatus(r.status);
-    onKeyChanged();
-  };
+  const useKey = () => { void close(); onUseKey(); };
 
   const act = async () => {
     const view = rowView(status, engine);
@@ -174,12 +179,7 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
     if (view.action === 'check') return void check();
     if (view.action === 'sign-out') {
       const r = await run('sign-out', () => signOutEngine(engine, host));
-      if (r) { log.info('settings', 'engine signed out', ctx); onStatus(r.status); }
-      return;
-    }
-    if (view.action === 'remove-key') {
-      const r = await run('key', () => removeEngineApiKey(engine, host));
-      if (r) { log.info('settings', 'engine api key removed', ctx); if (r.status) onStatus(r.status); onKeyChanged(); }
+      if (r && alive.current) { log.info('settings', 'engine signed out', ctx); onStatus(r.status); }
       return;
     }
     if (view.action === 'install') {
@@ -190,22 +190,19 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
   };
 
   const view = rowView(status, engine);
-  const open = mode !== 'idle';
   const installing = busy === 'install';
-  const busyLabel = installing ? `Installing on ${hostName}...` : busy === 'start' ? 'Opening...' : busy === 'sign-out' ? 'Signing out...'
-    : busy === 'check' ? 'Checking...' : busy === 'key' && !open ? 'Removing...' : undefined;
+  const busyLabel = installing ? `Installing on ${hostName}...` : busy === 'start' && !open ? 'Opening...' : busy === 'sign-out' ? 'Signing out...'
+    : busy === 'check' ? 'Checking...' : undefined;
   const actionLabel = error && view.action === 'install' ? 'Try again' : view.actionLabel;
-  const rowError = open ? null : error;
-  const stepError = open ? error : null;
 
   return (
-    <div className="settings-addons-rows" data-testid={`engine-sign-in-${host}`} data-state={status.state} data-mode={mode}>
+    // The whole host (its row and its sign-in line) is the deep link's target, so the landing points at both.
+    <div className="settings-addons-rows" id={signInRowId(engine, host)} data-testid={`engine-sign-in-${host}`} data-state={status.state} data-open={open ? 'true' : 'false'}>
       <SettingsRow
-        anchor={signInRowId(engine, host)}
         // This machine is "This Mac" at a row's start (the server says "this Mac" for a sentence).
         label={host === '__local__' ? hostName.charAt(0).toUpperCase() + hostName.slice(1) : hostName}
         help={<NoticeStatus tone={installing ? 'live' : view.tone} title={view.title}>{installing ? 'Installing' : view.word}</NoticeStatus>}
-        error={rowError}
+        error={open ? null : error}
         control={open
           ? <SettingsButton onClick={() => void close()} data-testid="engine-sign-in-cancel">Cancel</SettingsButton>
           : view.action && (
@@ -219,9 +216,9 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
           )}
         data-testid="engine-sign-in-row"
       >
-        {view.installCommand && !open && <HostCommands commands={[view.installCommand]} testId="engine-sign-in-install-command" />}
+        {view.installCommand && <HostCommands wrap commands={[view.installCommand]} testId="engine-sign-in-install-command" />}
       </SettingsRow>
-      {mode === 'google' && (
+      {open && (
         <SettingsRow
           indent
           label={link
@@ -229,9 +226,9 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
                 onClick={() => log.info('settings', 'engine sign-in link opened', { ...ctx, id: link.id })}>Open {ui.account} sign-in ↗</a>
             : <span className="settings-addons-muted">Getting a new link...</span>}
           help={<>Paste the code it shows.{' '}
-            <SettingsButton variant="text" onClick={() => { setMode('key'); setError(null); setCodeBad(false); }} data-testid="engine-sign-in-use-key">Use a {ui.keyName} instead</SettingsButton></>}
-          error={stepError}
-          state={stepError ? 'error' : undefined}
+            <SettingsButton variant="text" onClick={useKey} data-testid="engine-sign-in-use-key">Use a {ui.keyName} instead</SettingsButton></>}
+          error={error}
+          state={error ? 'error' : undefined}
           control={(
             <span className="settings-control-cluster">
               <input
@@ -248,37 +245,8 @@ export function EngineSignInRow({ engine, status, onStatus, onKeyChanged, reques
                 onKeyDown={(e) => { if (e.key === 'Enter') void finish(); }}
                 data-testid="engine-sign-in-code"
               />
-              <SettingsButton variant="primary" disabled={!code.trim() || !link || busy === 'start'} busy={busy === 'finish'} busyLabel="Signing in..." reserve={SUBMIT_RESERVE}
+              <SettingsButton variant="primary" disabled={!code.trim() || !link || busy === 'start'} busy={busy === 'finish'} busyLabel="Signing in..."
                 onClick={() => void finish()} data-testid="engine-sign-in-finish">Finish</SettingsButton>
-            </span>
-          )}
-          data-testid="engine-sign-in-step"
-        />
-      )}
-      {mode === 'key' && (
-        <SettingsRow
-          indent
-          label={ui.keyName}
-          help={<>Only {ui.name} uses it.{' '}
-            <SettingsButton variant="text" onClick={() => { setMode('google'); setError(null); if (!link) void startGoogle(); }} data-testid="engine-sign-in-use-google">Use {ui.account} sign-in instead</SettingsButton></>}
-          error={stepError}
-          state={stepError ? 'error' : undefined}
-          control={(
-            <span className="settings-control-cluster">
-              <input
-                className="settings-input settings-input--short"
-                type="password"
-                aria-label={ui.keyName}
-                autoComplete="off"
-                spellCheck={false}
-                data-no-draft="secret"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void saveKey(); }}
-                data-testid="engine-sign-in-key"
-              />
-              <SettingsButton variant="primary" disabled={!key.trim()} busy={busy === 'key'} busyLabel="Saving..." reserve={SUBMIT_RESERVE}
-                onClick={() => void saveKey()} data-testid="engine-sign-in-save-key">Save</SettingsButton>
             </span>
           )}
           data-testid="engine-sign-in-step"

@@ -25,8 +25,12 @@ import { bus, EventNames } from '../event-bus.js';
 import { AGENT_CANNOT_RUN_KINDS } from '../hosts/host-problem.js';
 import { cliHostOf } from './session-row-owner.js';
 
-/** When Walnut sends a row waiting on that kind: the host reads runnable (agentRunnable). */
-export type AgentWaitRule = 'host-runnable';
+/**
+ * When Walnut sends a row waiting on that kind: the host reads runnable (agentRunnable), or
+ * the session's engine signed in on that host (core/agents/engine-sign-in.ts: a finished
+ * sign-in, the engine's API key saved, or a status read that turned to signed in).
+ */
+export type AgentWaitRule = 'host-runnable' | 'engine-signed-in';
 
 /**
  * Every readiness kind a row can wait on, and the rule that sends it. A kind with no rule
@@ -38,7 +42,14 @@ export const AGENT_WAIT_RESEND: Readonly<Record<string, AgentWaitRule>> = {
   claude_needs_node: 'host-runnable',
   claude_error: 'host-runnable',
   claude_not_logged_in: 'host-runnable',
+  // providers/delivery-failure.ts ENGINE_SIGN_IN_WAIT
+  engine_sign_in: 'engine-signed-in',
 };
+
+/** The waiting kinds one rule sends. */
+function kindsOf(rule: AgentWaitRule): string[] {
+  return Object.entries(AGENT_WAIT_RESEND).filter(([, r]) => r === rule).map(([kind]) => kind);
+}
 
 /** The slice of a readiness answer (local or remote) the rule reads. */
 export interface AgentReadinessView {
@@ -55,9 +66,13 @@ export function agentRunnable(r: AgentReadinessView | undefined): boolean {
 
 /**
  * Put the host's waiting rows back in line and drive delivery. Returns the ids sent
- * again (rows settled as already ran are not among them).
+ * again (rows settled as already ran are not among them). `rule` picks which waits end
+ * (the host runnable by default); `engine` keeps it to sessions on that engine; a null
+ * `hostKey` is every host (an engine's API key, one setting for all of them).
  */
-export async function resendAgentWaitRows(hostKey: string): Promise<string[]> {
+export async function resendAgentWaitRows(hostKey: string | null, opts: { rule?: AgentWaitRule; engine?: string } = {}): Promise<string[]> {
+  const rule = opts.rule ?? 'host-runnable';
+  const kinds = kindsOf(rule);
   const { sessionsWithAgentWaitRows, getQueue, removeProcessed, unparkAgentWaitRows } = await import('../session-message-queue.js');
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const { sessionStops } = await import('./session-stop.js');
@@ -66,12 +81,13 @@ export async function resendAgentWaitRows(hostKey: string): Promise<string[]> {
   for (const sessionId of await sessionsWithAgentWaitRows()) {
     try {
       const record = await getSessionByClaudeId(sessionId);
-      if (!record || record.archived || cliHostOf(record) !== hostKey) continue;
+      if (!record || record.archived || (hostKey !== null && cliHostOf(record) !== hostKey)) continue;
+      if (opts.engine && (record.engine ?? 'claude') !== opts.engine) continue;
       // A Stop waiting for its host: nothing goes out until it is settled.
       const fence = await sessionStops.fence(sessionId).catch(() => undefined);
       if (fence === undefined) continue;
       const waiting = (await getQueue(sessionId)).filter((m) => m.status === 'parked' && !!m.waitsFor
-        && AGENT_WAIT_RESEND[m.waitsFor] === 'host-runnable' && (m.stopFence ?? null) === fence);
+        && AGENT_WAIT_RESEND[m.waitsFor] === rule && (m.stopFence ?? null) === fence);
       if (waiting.length === 0) continue;
       // A line that went out before (lineTries) and that the daemon says ran: settled, not sent twice.
       const ran: string[] = [];
@@ -83,7 +99,7 @@ export async function resendAgentWaitRows(hostKey: string): Promise<string[]> {
         await removeProcessed(sessionId, ran);
         bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, { sessionId, count: ran.length, messageIds: ran }, ['main-ai'], { source: 'agent-ready' });
       }
-      const ids = await unparkAgentWaitRows(sessionId, fence);
+      const ids = await unparkAgentWaitRows(sessionId, fence, { kinds });
       if (ids.length === 0) continue;
       sent.push(...ids);
       log.session.info('the agent can run now: sending the messages that waited for it', { sessionId, hostKey, messageIds: ids });
@@ -111,6 +127,27 @@ export function noteAgentReadiness(hostKey: string, runnable: boolean): Promise<
   return run;
 }
 
+const lastSignedIn = new Map<string, boolean>();
+
+/**
+ * The engine's CLI on `hostKey` (null: every host) is signed in now: its sessions' rows that waited
+ * for that go out, once per turn to signed in. `confirmed`: a person's own step (a finished sign-in,
+ * a saved key) sends them whatever was known before; a status read sends them only on a turn
+ * from not signed in, so a host that keeps refusing never loops.
+ */
+export function noteEngineSignedIn(engine: string, hostKey: string | null, signedIn: boolean, opts: { confirmed?: boolean } = {}): Promise<string[]> | undefined {
+  const key = `${engine}\u0000${hostKey ?? '*'}`;
+  const was = lastSignedIn.get(key);
+  lastSignedIn.set(key, signedIn);
+  if (!signedIn || (was === true && !opts.confirmed)) return undefined;
+  const chainKey = `sign-in:${key}`;
+  const run = (chains.get(chainKey) ?? Promise.resolve()).catch(() => {})
+    .then(() => resendAgentWaitRows(hostKey, { rule: 'engine-signed-in', engine }));
+  chains.set(chainKey, run);
+  void run.finally(() => { if (chains.get(chainKey) === run) chains.delete(chainKey); }).catch(() => {});
+  return run;
+}
+
 /** Server wiring: watch this machine's and every remote host's readiness. Returns an unsubscribe. */
 export async function wireAgentWaitResend(): Promise<() => void> {
   const { onLocalClaudeChange, getLocalClaude } = await import('../hosts/local-readiness.js');
@@ -126,5 +163,6 @@ export async function wireAgentWaitResend(): Promise<() => void> {
 /** Test seam. */
 export function resetAgentWaitResendForTests(): void {
   lastRunnable.clear();
+  lastSignedIn.clear();
   chains.clear();
 }

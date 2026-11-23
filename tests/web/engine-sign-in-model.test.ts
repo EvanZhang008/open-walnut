@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   BAD_CODE_WORDS, __resetSignInRequestForTests, codeEndsSignIn, openEngineSignIn, refusalWords, requestNames, rowView,
-  signInGroupId, signInRowId, takeSignInRequest,
+  SIGN_IN_REQUEST_TTL_MS, expireSignInRequest, settingsKeySet, signInGroupId, signInKeyRowId, signInRowId, takeSignInRequest,
 } from '../../web/src/components/settings/sections/engine-sign-in-model'
 import type { EngineSignInStatus } from '../../web/src/api/engine-sign-in'
 import { ApiError } from '../../web/src/api/api-error'
@@ -34,10 +34,19 @@ describe('a host row at rest', () => {
     expect(rowView(status({ state: 'signed_in', method: 'google', google: true }), 'antigravity'))
       .toMatchObject({ tone: 'ok', word: 'Signed in with Google', action: 'sign-out', actionLabel: 'Sign out' })
     expect(rowView(status({ state: 'signed_in', method: 'api-key', apiKey: { set: true, source: 'settings' } }), 'antigravity'))
-      .toMatchObject({ tone: 'ok', word: 'Signed in with API key', action: 'remove-key', actionLabel: 'Remove key' })
-    // A key in the host's own environment is not Walnut's to remove.
-    expect(rowView(status({ state: 'signed_in', method: 'api-key', apiKey: { set: true, source: 'host-env' } }), 'antigravity'))
-      .toMatchObject({ word: 'Signed in with API key', action: null })
+      .toMatchObject({ tone: 'ok', word: 'Signed in with API key', action: null })
+    expect(rowView(status({ state: 'signed_in', method: 'api-key', apiKey: { set: true, source: 'settings' } }), 'antigravity').title).toMatch(/set below/)
+    // A key in the host's own environment is not Walnut's to remove either, and the row says where it is.
+    const env = rowView(status({ state: 'signed_in', method: 'api-key', apiKey: { set: true, source: 'host-env' } }), 'antigravity')
+    expect(env).toMatchObject({ word: 'Signed in with API key', action: null })
+    expect(env.title).toMatch(/own environment/)
+  })
+
+  it('reads the one key row from any host: the key is one setting for every machine', () => {
+    expect(signInKeyRowId('antigravity')).toBe('engine-sign-in-antigravity--api-key')
+    expect(settingsKeySet([status(), status({ host: 'b', apiKey: { set: true, source: 'settings' } })])).toBe(true)
+    expect(settingsKeySet([status({ apiKey: { set: true, source: 'host-env' } })])).toBe(false)
+    expect(settingsKeySet([])).toBe(false)
   })
 
   it('offers the install with its command only where the host can run it', () => {
@@ -94,6 +103,20 @@ describe("the chat's link to a host's sign-in", () => {
     expect(went[1]).toBe(`/settings#${signInGroupId('antigravity')}`)
     expect(requestNames({ engine: 'antigravity', hostName: 'this Mac' }, status({ host: '__local__', hostName: 'this Mac' }))).toBe(true)
     expect(requestNames({ engine: 'codex', hostName: 'this Mac' }, status({ host: '__local__', hostName: 'this Mac' }))).toBe(false)
+  })
+
+  it('is dropped once the list names no such host, and after its time: it never opens a sign-in later by itself', () => {
+    openEngineSignIn(() => {}, { engine: 'antigravity', host: 'gone-box' })
+    expect(expireSignInRequest('codex', [status({ engine: 'codex' as never, host: 'x' })])).toBe(false)
+    expect(expireSignInRequest('antigravity', [status({ host: 'devbox' })])).toBe(true)
+    // The host joins later: the ask is gone, so nothing opens by itself.
+    expect(takeSignInRequest(status({ host: 'gone-box' }))).toBeNull()
+
+    openEngineSignIn(() => {}, { engine: 'antigravity', host: 'devbox' })
+    expect(expireSignInRequest('antigravity', [status({ host: 'devbox' })])).toBe(false)
+    expect(takeSignInRequest(status({ host: 'devbox' }), Date.now() + SIGN_IN_REQUEST_TTL_MS + 1)).toBeNull()
+    openEngineSignIn(() => {}, { engine: 'antigravity', host: 'devbox' })
+    expect(takeSignInRequest(status({ host: 'devbox' }), Date.now() + 1_000)?.host).toBe('devbox')
   })
 
   it('opens Settings > Sessions at that row, a host alias with a port included', () => {

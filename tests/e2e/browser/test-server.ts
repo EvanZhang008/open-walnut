@@ -29,6 +29,7 @@ import { GIT_GLANCE_SESSION, gitGlanceDemoIdPair, gitGlanceJsonl, gitGlanceRecor
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 import { fixtureHome, fixtureRealHome } from './fixture-home'
+import { setUpFakeAgy } from './fake-agy-fixture'
 import { buildCompareFixture, compareFixtureTask } from './compare-fixture'
 import { writeHealthMonitorSeed } from './health-monitor-fixture'
 import { REAL_VOICE_STT, realVoiceInstall } from './real-voice-fixture'
@@ -193,11 +194,12 @@ writeOwnerPid(tmpBase)
   await fs.writeFile(path.join(binDir, 'fake-gh'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fakeGh)} "$@"\n`, { mode: 0o755 })
   process.env.WALNUT_GH_BIN = path.join(binDir, 'fake-gh')
   process.env.WALNUT_FAKE_GH_DIR = path.join(tmpBase, 'fake-gh')
-  // Antigravity's CLI: the stand-in (tests/fixtures/antigravity/fake-agy.mjs) that signs in with the
-  // code "good" and keeps its sign-in in this home, so Settings' sign-in never meets a real account.
-  const fakeAgy = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../fixtures/antigravity/fake-agy.mjs')
-  await fs.writeFile(path.join(binDir, 'fake-agy'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fakeAgy)} "$@"\n`, { mode: 0o755 })
-  process.env.WALNUT_ANTIGRAVITY_PATH = path.join(binDir, 'fake-agy')
+  // Antigravity's CLI: the stand-in that signs in with the code "good", at a path a spec knows too, and
+  // a curl that answers its installer URL only (fake-agy-fixture.ts), so Settings' sign-in and Install
+  // never meet a real account or the network.
+  const agy = setUpFakeAgy({ runtime: process.execPath, pathVar: process.env.PATH ?? '', home: tmpBase })
+  process.env.WALNUT_ANTIGRAVITY_PATH = agy.WALNUT_ANTIGRAVITY_PATH
+  process.env.PATH = `${agy.toolsDir}${path.delimiter}${process.env.PATH ?? ''}`
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`
 }
 

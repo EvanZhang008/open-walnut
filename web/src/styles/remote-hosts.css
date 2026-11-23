@@ -121,22 +121,7 @@ html body .wn-context-menu.rh-add-menu {
 /* A command's Copy and Check again sit on the command's first line, not centred on its block. */
 .rh-details .rh-readiness-line { align-items: flex-start; }
 .rh-details .rh-readiness-actions { min-height: 28px; }
-/* One command look: the box wraps (no scrollbar), its Copy is the page's one Copy button. */
-.rh-details .hc-row { align-items: flex-start; gap: 8px; width: 100%; }
-.rh-details .hc-chip {
-  flex: 1 1 auto;
-  box-sizing: border-box;
-  min-height: 28px;
-  padding: 5px 10px;
-  border: 1px solid var(--settings-group-border);
-  border-radius: var(--radius-sm); /* shape: a command you read, a code block not a label */
-  background: var(--bg);
-  font-size: var(--font-size-sm);
-  line-height: 16px;
-  overflow: visible;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
+/* The command box wraps here (no scrollbar): HostCommands' wrapped look, host-status.css. */
 /* One link look in Details: the page's text buttons (accent, no underline until hover). */
 .rh-details :is(.hc-other, .hft-details) {
   padding: 0;
