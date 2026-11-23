@@ -6,24 +6,23 @@
    audit; its third look: cut to one line, the folders could only be read from a hover). */
 .approvals-unasked-list summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 16px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   row-gap: 1px;
   align-items: baseline;
-  cursor: pointer;
-  list-style: none;
 }
-.approvals-unasked-list summary::-webkit-details-marker { display: none; }
+/* The shared fold chevron (choice-controls.css) takes its own column, beside the first line. */
+.approvals-unasked-list summary::before { grid-column: 1; grid-row: 1; position: relative; top: 0.2em; }
 .approvals-unasked-list summary:hover .approvals-unasked-what { text-decoration: underline; }
 .approvals-unasked-more-info { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 4px; font-size: var(--font-size-md); }
 .approvals-unasked-more-info dt { color: var(--fg-muted); }
 .approvals-unasked-more-info dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .approvals-unasked-more-info pre { margin: 0; max-height: 160px; overflow: auto; white-space: pre-wrap; font-size: var(--font-size-sm); font-family: var(--font-mono); }
-.approvals-unasked-what { font-size: var(--font-size-md); color: var(--fg); overflow-wrap: anywhere; }
-.approvals-unasked-meta { grid-column: 1; min-width: 0; font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
+.approvals-unasked-what { grid-column: 2; font-size: var(--font-size-md); color: var(--fg); overflow-wrap: anywhere; }
+.approvals-unasked-meta { grid-column: 2; min-width: 0; font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 .approvals-unasked-when, .approvals-unasked-count {
-  grid-column: 2;
+  grid-column: 3;
   justify-self: end;
+  padding-left: 16px;
   font-size: var(--font-size-sm);
   color: var(--fg-secondary);
   font-variant-numeric: tabular-nums;

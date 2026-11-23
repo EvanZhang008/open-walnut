@@ -225,14 +225,11 @@
   align-items: center;
   gap: 4px;
   padding: 4px 2px;
-  list-style: none;
-  cursor: pointer;
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--fg-muted);
 }
 
-.engine-settings-popover-group > summary::-webkit-details-marker { display: none; }
 .engine-settings-popover-group > summary:hover { color: var(--fg); }
 
 .engine-settings-popover-group[open] {

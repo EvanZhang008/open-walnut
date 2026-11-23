@@ -7,7 +7,6 @@
   background: var(--bg-secondary);
 }
 .bg-tasks-light-prompt > summary {
-  cursor: pointer;
   padding: 6px 10px;
   font-size: var(--font-size-sm);
   color: var(--fg-secondary);

@@ -23,8 +23,7 @@
 .am-note { margin: 6px 0 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .am-fold { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .am-fold > summary {
-  cursor: pointer; padding: 8px 12px; font-size: var(--font-size-md); font-weight: 600; color: var(--fg);
-  list-style-position: inside;
+  padding: 8px 12px; font-size: var(--font-size-md); font-weight: 600; color: var(--fg);
 }
 .am-fold[open] > summary { border-bottom: 1px solid var(--border); }
 .am-fold-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }

@@ -4,6 +4,8 @@
  * read from aria-expanded). `DisclosureButton` is the whole control; a header that is already a
  * button of its own (a row with a count and actions) puts `DisclosureChevron` inside it and sets
  * aria-expanded on itself.
+ * A native `<details><summary>` needs neither: every summary draws this chevron by CSS (its
+ * ::before, choice-controls.css); one that holds DisclosureChevron as its first child shows that one.
  *
  * `MenuCaret` is the other mark: the small down chevron of a key that opens a menu or picker
  * ("Plan v", "Snooze v"). It points down and flips while the menu is open (`.btn[aria-expanded]

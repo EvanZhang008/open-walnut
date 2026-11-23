@@ -24,7 +24,7 @@
 .first-use-card .setup-lead { line-height: 1.6; }
 .first-use-card .ab-local-x { display: none; }
 .first-use-alternatives { margin-top: 16px; }
-.first-use-alternatives summary { cursor: pointer; color: var(--fg-muted); font-size: var(--font-size-md); }
+.first-use-alternatives summary { color: var(--fg-muted); font-size: var(--font-size-md); }
 .first-use-alternatives .setup-alt { margin-top: 12px; }
 .first-use-footnote { margin-top: 24px; color: var(--fg-muted); font-size: var(--font-size-sm); line-height: 1.5; }
 .found-host-prompts { border-top: 1px solid var(--border); padding: 12px; background: var(--bg-secondary); color: var(--fg); }

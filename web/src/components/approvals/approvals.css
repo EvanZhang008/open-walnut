@@ -91,7 +91,6 @@
 }
 
 .approval-detail summary {
-  cursor: pointer;
   color: var(--fg-secondary);
   font-size: var(--font-size-sm);
 }

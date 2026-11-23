@@ -2377,32 +2377,11 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   margin-top: 8px;
 }
 
+/* Its chevron is every summary's (choice-controls.css). */
 .provenance-details > summary {
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
-  cursor: pointer;
-  list-style: none;
   user-select: none;
-}
-
-.provenance-details > summary::-webkit-details-marker { display: none; }
-
-/* The shared fold chevron, drawn by CSS on a <summary> (--wn-chevron, choice-controls.css). */
-.provenance-details > summary::before {
-  content: '';
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-right: 5px;
-  vertical-align: -0.15em;
-  background: currentColor;
-  -webkit-mask: var(--wn-chevron) center / contain no-repeat;
-  mask: var(--wn-chevron) center / contain no-repeat;
-  transition: transform 0.15s ease;
-}
-
-.provenance-details[open] > summary::before {
-  transform: rotate(90deg);
 }
 
 .provenance-details > summary:hover {
@@ -20567,7 +20546,6 @@ a.file-link:hover {
 .session-terminal-ssh-detail { font-family: var(--font-mono); }
 .session-terminal-plain-text code { color: var(--accent); }
 .session-terminal-plain-details { margin-top: 4px; color: var(--fg-muted); }
-.session-terminal-plain-details summary { cursor: pointer; }
 .session-terminal-plain-details pre,
 .session-terminal-ssh-detail {
   margin: 4px 0 0;
@@ -21408,7 +21386,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 /* Guidance behind one click. Closed by default: the grant works without it. */
 .permission-why { margin-top: 10px; }
 .permission-why > summary {
-  cursor: pointer;
   color: var(--accent);
   font-size: var(--font-size-sm);
   width: fit-content;
@@ -23577,12 +23554,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
    standard 400 weight label (F10, F24). */
 .devices-error { color: var(--error); font-size: var(--font-size-md); margin: 0; }
 
-/* Non-phone credentials (this Mac, simulators) collapse out of the way. */
-.devices-others > summary {
-  font-size: var(--font-size-sm); color: var(--fg-secondary); cursor: pointer; padding: 2px 0;
-}
-.devices-others > summary:hover { color: var(--fg); }
-
 .devices-target {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
   padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
@@ -23678,8 +23649,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   font-size: var(--font-size-sm); padding: 4px 8px; background: var(--bg-secondary); border-radius: 6px;
 }
 
-.cloud-log > summary { font-size: var(--font-size-sm); color: var(--fg-secondary); cursor: pointer; }
-.cloud-log > summary:hover { color: var(--fg); }
 .cloud-log-body {
   margin: 8px 0 0; padding: 10px 12px; max-height: 260px; overflow: auto;
   background: var(--bg-secondary); border-radius: var(--radius-sm);

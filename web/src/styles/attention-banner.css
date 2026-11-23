@@ -213,7 +213,7 @@
    visible on the card in both themes. */
 .nfc-local-claude .setup-command { background: color-mix(in srgb, var(--fg) 7%, transparent); }
 .nfc-local-claude .setup-command:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
-.setup-other-ways > summary { cursor: pointer; width: fit-content; font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.setup-other-ways > summary { width: fit-content; font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .setup-other-ways > summary:hover { color: var(--fg); }
 .setup-other-ways > :not(summary) { margin: 6px 0 0; }
 .setup-alt.setup-alt-stack { flex-direction: column; align-items: flex-start; gap: 4px; }

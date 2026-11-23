@@ -24,6 +24,8 @@
  *  5. an inline SVG that draws a chevron by hand (one open two-arm line of equal arms).
  * One known holdout, counted so it only falls: the session timeline's StepIcon chevron.
  * That a picker key wears MenuCaret and carries aria-haspopup is menu-key-mark-guard.test.ts.
+ * That every native <summary> wears the same chevron (one rule, choice-controls.css) is
+ * summary-mark-guard.test.ts.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'

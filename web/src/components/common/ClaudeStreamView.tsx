@@ -106,7 +106,7 @@ export const ClaudeStreamView = memo(function ClaudeStreamView({
               {item.block.message}
               {detail && (
                 <details style={{ marginTop: 2, fontSize: 11, opacity: 0.75 }}>
-                  <summary style={{ cursor: 'pointer' }}>details</summary>
+                  <summary>details</summary>
                   <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 4 }}>{detail}</pre>
                 </details>
               )}
@@ -122,7 +122,7 @@ export const ClaudeStreamView = memo(function ClaudeStreamView({
               className="claude-stream-thinking"
               style={{ margin: '6px 0', opacity: 0.7, fontStyle: 'italic', fontSize: 13, borderLeft: '2px solid rgba(128,128,128,0.3)', paddingLeft: 8 }}
             >
-              <summary style={{ cursor: 'pointer', userSelect: 'none' }}>thinking…</summary>
+              <summary style={{ userSelect: 'none' }}>thinking…</summary>
               <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{item.content}</div>
             </details>
           );

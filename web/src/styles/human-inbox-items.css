@@ -8,7 +8,7 @@
 .hii-summary { font-size: var(--font-size-sm); line-height: 1.45; white-space: pre-wrap; display: flex; flex-direction: column; min-width: 0; }
 .hii-source { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: var(--font-size-xs); color: var(--fg-secondary); }
 .hii-source-details, .hii-receipt-details, .hii-operation-details { font-size: var(--font-size-xs); margin: 6px 0; min-width: 0; }
-.hii-item summary, .hii-selector summary { cursor: pointer; color: var(--fg-secondary); }
+.hii-item summary, .hii-selector summary { color: var(--fg-secondary); }
 .hii-item code, .hii-selector code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .hii-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; }
 .hii-action { font: inherit; font-size: var(--font-size-xs); color: var(--fg); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-full); padding: 6px; min-height: 28px; max-width: 100%; }

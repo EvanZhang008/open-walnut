@@ -213,11 +213,6 @@
   color: var(--fg-muted);
 }
 
-.empty-state-detail > summary {
-  cursor: pointer;
-  list-style-position: inside;
-}
-
 .empty-state-detail-text {
   display: block;
   margin-top: 4px;

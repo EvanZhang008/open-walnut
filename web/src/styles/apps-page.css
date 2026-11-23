@@ -465,7 +465,7 @@
   border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.18);
 }
-.apps-make-manual summary { cursor: pointer; font-weight: 500; }
+.apps-make-manual summary { font-weight: 500; }
 .apps-make-manual p { margin: 8px 0 0; font-size: var(--font-size-md); opacity: 0.92; }
 .apps-make-manual pre {
   margin: 6px 0 8px;

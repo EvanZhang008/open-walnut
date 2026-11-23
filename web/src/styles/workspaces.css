@@ -240,7 +240,7 @@
   white-space: nowrap;
 }
 .script-run-progress { color: var(--fg-muted); }
-.script-run-output summary { cursor: pointer; color: var(--fg-muted); font-size: var(--font-size-xs); user-select: none; }
+.script-run-output summary { color: var(--fg-muted); font-size: var(--font-size-xs); user-select: none; }
 .script-run-output summary:hover { color: var(--fg); }
 .script-run-output pre {
   margin: 4px 0 0;

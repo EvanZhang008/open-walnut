@@ -804,8 +804,41 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
 /* A row that opens its rows in place turns its chevron down; a row that opens a menu or panel
    beside it (aria-haspopup) keeps it pointing at that menu. */
 [aria-expanded='true']:not([aria-haspopup]) > .wn-disclosure-chevron,
+details[open] > summary > .wn-disclosure-chevron,
 .wn-disclosure-chevron.is-open {
   transform: rotate(90deg);
+}
+
+/* Every <summary> (ours, a plugin's, or HTML a model wrote into a reply) wears DisclosureChevron's
+   chevron, never the browser's own filled triangle: right when closed, down while its <details> is
+   open. Zero specificity, so a site only places it (a grid column, a nudge). A summary that puts
+   DisclosureChevron in its markup as its first child shows that one alone.
+   Guard: tests/web/summary-mark-guard.test.ts. */
+:where(summary) {
+  list-style: none;
+  cursor: pointer;
+}
+:where(summary)::-webkit-details-marker {
+  display: none;
+}
+:where(summary)::before {
+  content: '';
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-inline-end: 0.35em;
+  vertical-align: -0.2em;
+  background: var(--fg-muted);
+  -webkit-mask: var(--wn-chevron) center / contain no-repeat;
+  mask: var(--wn-chevron) center / contain no-repeat;
+  transition: transform 160ms ease-out;
+}
+:where(details[open] > summary)::before {
+  transform: rotate(90deg);
+}
+:where(summary:has(> .wn-disclosure-chevron))::before {
+  content: none;
 }
 
 /* MenuCaret (a key that opens a menu): its box at zero specificity, so a site's own slot class wins,
@@ -838,6 +871,7 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   .wn-chip,
   .wn-check,
   .wn-disclosure-chevron,
+  summary::before,
   .wn-menu-caret,
   .toggle-switch.settings-switch,
   .toggle-switch.settings-switch .toggle-thumb {

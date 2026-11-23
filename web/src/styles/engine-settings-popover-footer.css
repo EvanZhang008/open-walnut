@@ -169,14 +169,10 @@
   width: max-content;
   max-width: 100%;
   margin-left: auto;
-  cursor: pointer;
   color: var(--fg-muted);
   line-height: 1.45;
   white-space: nowrap;
-  list-style: none;
 }
-
-.engine-settings-popover .engine-settings-files > summary::-webkit-details-marker { display: none; }
 
 .engine-settings-popover .engine-settings-files > summary:hover { color: var(--fg); }
 
