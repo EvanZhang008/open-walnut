@@ -56,7 +56,6 @@ defineOp({
     + 'there, checked: do not copy it again. running:true means still copying: host_copy_result with its copyId waits for it, '
     + 'and the same call again joins that copy, never a second one.',
   // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  retiredInput: ['from_path', 'to_path'],
   renamedInput: [{ from: 'from_path', to: 'from' }, { from: 'to_path', to: 'to' }],
   input: {
     from: z.string().min(1).describe('The file on the sending host: an absolute path or ~/...'),

@@ -24,14 +24,14 @@ import { answerByHeader } from '../lib/answer-by.js'
 import { CALLER_UNPROVEN_HEADER } from '../lib/caller-unproven.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
 const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person' | 'agent'; pluginId?: string; unproven?: true }>()
-import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
+import { getOp, getOpOwner, type HttpBinding, type WalnutOp } from './registry.js'
 import { defaultAddressNote, demoApiHeaders, getSelfApiRoot, getSelfCallToken, walnutApiTarget } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
 import {
   LOCAL_ORIGIN, ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
 import { selfCallRefusal } from './origin-policy.js'
-import { declaredKeysNote, invalidTypeHint, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
+import { declaredKeysNote, inferRenames, invalidTypeHint, renameNote, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
 import { FULL_ARG, agentAnswer, answerFit, cutTextRefusal, takeFullArg, type AnswerFit, type AnswerSurface } from './answer.js'
@@ -404,34 +404,52 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-/** `raw` without the fields `op` retired (WalnutOp.retiredInput); copies only what it changes. */
-function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<string, unknown> {
+/**
+ * `raw` with the op's own other names moved to their keys (WalnutOp.renamedInput) and the fields
+ * it retired dropped (WalnutOp.retiredInput); copies only what it changes. `renamed` lists each
+ * move for the answer's note.
+ */
+function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): { input: Record<string, unknown>; renamed: [string, string][] } {
   let out = raw
+  const renamed: [string, string][] = []
   const own = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
   // Both names given with different values: the other name is kept, so the call is refused for it.
   const conflicting = new Set<string>()
-  const carry = (o: Record<string, unknown>, from: string, to: string, max: number | undefined): Record<string, unknown> => {
-    if (!own(o, from)) return o
+  const carry = (o: Record<string, unknown>, from: string, to: string, max: number | undefined): { o: Record<string, unknown>; moved: boolean } => {
+    if (!own(o, from)) return { o, moved: false }
     const value = o[from]
     // Another name for the key (no max): the value as it came, judged by the key's own schema.
     if (max === undefined) {
-      if (!own(o, to)) return { ...o, [to]: value }
-      if (JSON.stringify(o[to]) !== JSON.stringify(value)) conflicting.add(from)
-      return o
+      const { [from]: _other, ...rest } = o
+      if (!own(o, to)) return { o: { ...rest, [to]: value }, moved: true }
+      if (JSON.stringify(o[to]) !== JSON.stringify(value)) { conflicting.add(from); return { o, moved: false } }
+      return { o: rest, moved: false }
     }
     // A retired field's text an older caller still sends: kept under its new name, cut to fit.
-    if (typeof value !== 'string' || !value.trim() || own(o, to)) return o
-    return { ...o, [to]: Array.from(value.trim()).slice(0, max).join('') }
+    if (typeof value !== 'string' || !value.trim() || own(o, to)) return { o, moved: false }
+    return { o: { ...o, [to]: Array.from(value.trim()).slice(0, max).join('') }, moved: true }
   }
   for (const r of op.renamedInput ?? []) {
     const cut = r.from.indexOf('[].')
-    if (cut < 0) { out = carry(out, r.from, r.to, r.max); continue }
+    if (cut < 0) {
+      const c = carry(out, r.from, r.to, r.max)
+      out = c.o
+      if (c.moved) renamed.push([r.from, r.to])
+      continue
+    }
     const list = r.from.slice(0, cut)
     const items = out[list]
     if (!Array.isArray(items)) continue
     const field = r.from.slice(cut + 3)
     const toField = r.to.slice(r.to.indexOf('[].') + 3)
-    out = { ...out, [list]: items.map((i) => isPlainObject(i) ? carry(i, field, toField, r.max) : i) }
+    let moved = false
+    out = { ...out, [list]: items.map((i) => {
+      if (!isPlainObject(i)) return i
+      const c = carry(i, field, toField, r.max)
+      moved ||= c.moved
+      return c.o
+    }) }
+    if (moved) renamed.push([r.from, r.to])
   }
   for (const path of op.retiredInput ?? []) {
     const cut = path.indexOf('[].')
@@ -452,32 +470,53 @@ function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<st
       return rest
     })
   }
-  return out
+  return { input: out, renamed }
 }
 
 /**
- * Validate `rawArgs` against `op`'s input exactly as every surface does: a
- * retired field is dropped, any other unknown key is refused (with a "did you
- * mean" hint when the intended key is clear, and always the keys it takes:
- * src/ops/arg-hints.ts). Nothing is coerced; the one rewrite is a schema's own
- * transform, such as isoDateTime() adding `:00` seconds (src/lib/zod-rules.ts).
+ * Validate `rawArgs` against `op`'s input exactly as every surface does. A key under another
+ * name is read as the key it means: the op's own other names (renamedInput) always, and an
+ * unknown top-level key whose meaning is certain (a spelling, another name for the task, thread
+ * or letter the call is about, a usual other name: src/ops/arg-hints.ts) when the call then
+ * validates; `renamed` lists which name was read as which, for the answer's note. A retired field is dropped. Any other
+ * unknown key is refused, from the call as it came, with a "did you mean" hint when the intended
+ * key is clear and always the keys it takes. No value is coerced: the rewrites are a read count
+ * over its most read as the most (count-cap.ts, `capNote`) and a schema's own transform,
+ * such as isoDateTime() adding `:00` seconds (src/lib/zod-rules.ts).
  */
 export function parseOpArgs(
   op: WalnutOp,
   rawArgs: Record<string, unknown> | undefined,
-): { ok: true; args: Record<string, unknown>; capNote?: string } | { ok: false; message: string; invalidArgs: true } {
+): { ok: true; args: Record<string, unknown>; renamed?: [string, string][]; capNote?: string } | { ok: false; message: string; invalidArgs: true } {
   const raw = rawArgs ?? {}
-  let input = isPlainObject(raw) ? dropRetiredInput(op, raw) : raw
+  const own = isPlainObject(raw) ? dropRetiredInput(op, raw) : { input: raw, renamed: [] }
   // Before zod, which walks every entry of a record or an unbounded list (lib/zod-rules.ts).
-  const oversized = oversizedCollection(input)
+  const oversized = oversizedCollection(own.input)
   if (oversized) return { ok: false, message: `Invalid arguments for ${op.name}: ${oversized}: more than ${COLLECTION_MAX} entries`, invalidArgs: true }
-  let parsed = z.object(op.input).strict().safeParse(input)
-  // A read-size count over its most is read as the most, and the answer says so (count-cap.ts).
-  const capped = parsed.success || op.tags?.readonly !== true ? null : capOverCounts(input, parsed.error.issues)
-  if (capped) {
-    input = capped.input
-    parsed = z.object(op.input).strict().safeParse(input)
+  const check = (given: unknown) => {
+    const parsed = z.object(op.input).strict().safeParse(given)
+    // A read-size count over its most is read as the most, and the answer says so (count-cap.ts).
+    const capped = parsed.success || op.tags?.readonly !== true ? null : capOverCounts(given, parsed.error.issues)
+    return capped ? { input: capped.input as unknown, capped, parsed: z.object(op.input).strict().safeParse(capped.input) } : { input: given, capped, parsed }
   }
+  // Walnut's own op, not a plugin's that only shares a name prefix: the id names apply (arg-hints.ts).
+  const core = getOpOwner(op.name) === 'core' && getOp(op.name) === op
+  const first = check(own.input)
+  let done = first
+  let renamed = own.renamed
+  if (!first.parsed.success && isPlainObject(own.input)) {
+    // An unknown top-level key whose meaning is certain is read as that key, if the call then validates.
+    const unknown = first.parsed.error.issues.flatMap((i) => (i.code === 'unrecognized_keys' && i.path.length === 0 ? i.keys : []))
+    const moves = unknown.length ? inferRenames(op.name, op.input, own.input, unknown, core) : []
+    if (moves.length) {
+      const input: Record<string, unknown> = { ...own.input }
+      // The same value under both names reads once, as renamedInput does: dropped, nothing to note.
+      for (const m of moves) { if (!m.dup) input[m.to] = input[m.from]; delete input[m.from] }
+      const second = check(input)
+      if (second.parsed.success) { done = second; renamed = [...renamed, ...moves.filter((m) => !m.dup).map((m): [string, string] => [m.from, m.to])] }
+    }
+  }
+  const { parsed, capped, input } = done
   if (!parsed.success) {
     // zod still runs a list's size check on a value of the wrong type, and words it for that value
     // ("expected string to have <=12 characters" for a string given where a list of 12 goes): the
@@ -487,15 +526,18 @@ export function parseOpArgs(
     const issues = told.map((i) => {
       // A "did you mean" never stands alone: the keys the object takes follow it, so a wrong guess costs no round trip.
       const hint = i.code === 'unrecognized_keys'
-        ? unknownKeyHint(op.input, input, i.path, i.keys)
-          + unknownKeyNotes(op.input, i.path, i.keys)
+        ? unknownKeyHint(op.input, input, i.path, i.keys, op.name, core)
+          + unknownKeyNotes(op.input, i.path, i.keys, op.name)
           + declaredKeysNote(op.input, i.path, i.path.length ? `${op.name} ${i.path.join('.')}` : op.name)
         : i.code === 'invalid_type' ? invalidTypeHint(op.input, input, i.path, i.expected) : ''
       return `${i.path.join('.') || '(root)'}: ${i.message}${hint}`
     }).join('; ')
     return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}`, invalidArgs: true }
   }
-  return { ok: true, args: parsed.data as Record<string, unknown>, ...(capped ? { capNote: countCapNote(op.name, capped.capped) } : {}) }
+  return {
+    ok: true, args: parsed.data as Record<string, unknown>,
+    ...(renamed.length ? { renamed } : {}), ...(capped ? { capNote: countCapNote(op.name, capped.capped) } : {}),
+  }
 }
 
 /**
@@ -594,8 +636,11 @@ export async function executeOp(
     return once && op.handler ? withEarlierWrites(outcome, base, prov) : outcome
   }
   const outcome = once ? await runOnce(once, op.name, args, explicitSid, run) : await run()
-  // A read-size count read as its most says so (count-cap.ts), to every caller.
-  const notes = parsed.capNote ? [parsed.capNote] : []
+  // A key read under its right name, or a read-size count read as its most, says so (parseOpArgs), to every caller.
+  const moved = parsed.renamed ? renameNote(op.name, parsed.renamed) : undefined
+  // A refusal after a key was read under its right name says so too, or the caller cannot tell what it was told about.
+  if (!outcome.ok && moved) return { ...outcome, message: `${outcome.message} (${moved})` }
+  const notes = [...(moved ? [moved] : []), ...(parsed.capNote ? [parsed.capNote] : [])]
   // Text a session hands on gets one line back when it names a draft in a temp dir (tmp-draft-path.ts)
   // or, for the user, an id with no link to open it (missing-links.ts).
   if (!human && !pluginId) notes.push(...await handedTextNotes(op.name, args, outcome, origin, explicitSid))

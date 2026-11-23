@@ -27,7 +27,7 @@ describe('a park writes no letter', () => {
     expect(z.object(update.input).strict().safeParse({ id: 't1', phase: 'WAITING', wait_report: 'x' }).success).toBe(false)
     // Not offered, but a stray one from an older caller becomes waiting_on, never a refused park
     // (tests/unit/ops/retired-input.test.ts).
-    expect(parseOpArgs(update, { id: 't1', phase: 'WAITING', wait_report: 'x' })).toEqual({ ok: true, args: { id: 't1', phase: 'WAITING', waiting_on: 'x' } })
+    expect(parseOpArgs(update, { id: 't1', phase: 'WAITING', wait_report: 'x' })).toMatchObject({ ok: true, args: { id: 't1', phase: 'WAITING', waiting_on: 'x' } })
     const bulk = z.object(getOp('task_update_bulk')!.input).strict()
     expect(bulk.safeParse({ updates: [{ id: 't1', phase: 'WAITING', wait_report: 'x' }] }).success).toBe(false)
     expect(bulk.safeParse({ updates: [{ id: 't1', phase: 'WAITING', wait_until: '2d' }] }).success).toBe(true)

@@ -221,7 +221,7 @@ describe('walnut mcp --core', () => {
       // A client that calls an unlisted op by its own name still reaches it.
       const direct = await client.callTool({ name: 'walnut_status', arguments: {} })
       expect(direct.isError).toBeFalsy()
-      const bad = await client.callTool({ name: 'tool_call', arguments: { name: 'task_list', args: { query: 'x' } } })
+      const bad = await client.callTool({ name: 'tool_call', arguments: { name: 'task_list', args: { query: 'x', limit: 'many' } } })
       expect(bad.isError).toBe(true)
       expect(textOf(bad)).toContain('did you mean "q"?')
     } finally { await close() }

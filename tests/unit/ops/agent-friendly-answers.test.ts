@@ -15,7 +15,7 @@ const REMOTE = hostOrigin('remote-dev')
 
 describe('an argument mistake is the caller\'s to fix, and says the fix', () => {
   it('a wrong argument name comes back as bad_request with the right name, never "internal"', async () => {
-    const r = await handleGatewayCapability('tools.call', 'sid-x', { name: 'task_get', args: { task: 'abc' } }, '__local__', { throttle: new PeerThrottle(), cloudMode: false })
+    const r = await handleGatewayCapability('tools.call', 'sid-x', { name: 'task_get', args: { ident: 'abc' } }, '__local__', { throttle: new PeerThrottle(), cloudMode: false })
     expect(r).toMatchObject({ ok: false, error: { code: 'bad_request' } })
     expect(JSON.stringify(r)).toContain('did you mean')
   })

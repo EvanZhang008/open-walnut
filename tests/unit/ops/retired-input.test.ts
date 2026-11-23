@@ -22,7 +22,10 @@ describe('parseOpArgs drops a retired field and nothing else', () => {
   it('task_update keeps the park, and its wait_report text becomes waiting_on (what the park gate reads)', () => {
     const raw = { id: 't1', phase: 'WAITING', wait_until: '2d', wait_report: 'PR 123 is pushed.' }
     const r = parseOpArgs(op('task_update'), raw)
-    expect(r).toEqual({ ok: true, args: { id: 't1', phase: 'WAITING', wait_until: '2d', waiting_on: 'PR 123 is pushed.' } })
+    expect(r).toEqual({
+      ok: true, args: { id: 't1', phase: 'WAITING', wait_until: '2d', waiting_on: 'PR 123 is pushed.' },
+      renamed: [['wait_report', 'waiting_on']],
+    })
     // The caller's object is never edited in place.
     expect(raw.wait_report).toBe('PR 123 is pushed.')
   })
@@ -56,7 +59,7 @@ describe('parseOpArgs drops a retired field and nothing else', () => {
     })
     expect(r).toEqual({ ok: true, args: { updates: [
       { id: 't1', phase: 'WAITING', waiting_on: 'a' }, { id: 't2', title: 'Rename' }, { id: 't3', phase: 'WAITING', waiting_on: 'c' },
-    ] } })
+    ] }, renamed: [['updates[].wait_report', 'updates[].waiting_on']] })
     const typo = parseOpArgs(op('task_update_bulk'), { updates: [{ id: 't1', wait_report: 'a', titel: 'x' }] })
     expect(typo.ok).toBe(false)
     if (!typo.ok) expect(typo.message).toContain('titel')

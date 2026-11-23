@@ -581,6 +581,8 @@ defineOp({
     'and must appear exactly once unless replace_all is true. Reads the note itself, so ' +
     'expectedHash is optional: pass the contentHash you read earlier and the edit refuses to run ' +
     'if the note changed since. Returns { path, replacements, contentHash, updatedAt }.',
+  // 2026-11-23: the names of the same two arguments in another common edit tool.
+  renamedInput: [{ from: 'old_string', to: 'old_str' }, { from: 'new_string', to: 'new_str' }],
   input: {
     path: z.string().min(1).optional().describe('Vault-relative note path (or a note title)'),
     id: z.string().min(1).optional().describe('Frontmatter note id from note_search (n_...) — use either id or path'),

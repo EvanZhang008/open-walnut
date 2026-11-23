@@ -1011,9 +1011,8 @@ defineOp({
     + '`content`; `append` adds `content` as a new timestamped entry at the end. This is the note on the task, not a '
     + 'notes-vault page (that is note_write). Before a replace, read the whole note: '
     + 'task_get {"id":"<id>","fields":["note"],"_full":true} (a plain task_get cuts a long note).',
-  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  retiredInput: ['task_id'],
-  renamedInput: [{ from: 'task_id', to: 'id' }],
+  // 2026-11-23: a name agents sent for content in real use (task_id is read as id by every task op: arg-hints.ts).
+  renamedInput: [{ from: 'note', to: 'content' }],
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     content: z.string().max(200_000).describe('Markdown: the whole note (replace) or the entry to add (append)'),
@@ -1212,7 +1211,6 @@ defineOp({
   // The receipt never echoes the text written.
   answer: { kind: 'receipt', max: 800, whole: 'agent_skill_read {"name":"<name>"}' },
   // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  retiredInput: ['text'],
   renamedInput: [{ from: 'text', to: 'content' }],
   input: {
     name: z.string().min(1).max(48).describe('Skill name: lowercase letters, digits and dashes'),
@@ -1256,7 +1254,6 @@ defineOp({
   // The receipt never echoes the text written.
   answer: { kind: 'receipt', max: 800, whole: 'agent_memory_read {}' },
   // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  retiredInput: ['text'],
   renamedInput: [{ from: 'text', to: 'content' }],
   input: {
     content: z.string().max(40_000).describe('Markdown: the entry to add (append) or the whole file (replace); with file, the whole note ("" removes it)'),
@@ -1408,7 +1405,6 @@ defineOp({
     'as no longer needed (they leave the inbox with that reason); one that must still reach the user goes back with ' +
     'human_inbox_mark archived:false. ' + RECEIPT_WORDS,
   // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  retiredInput: ['summary'],
   renamedInput: [{ from: 'summary', to: 'result' }],
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
@@ -1466,7 +1462,6 @@ defineOp({
     'Items a close left for the user (409 owed_to_user) are settled with them, and then a session must give a note of 10+ ' +
     'characters saying how the user\'s items were handled.',
   // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  retiredInput: ['reason'],
   renamedInput: [{ from: 'reason', to: 'note' }],
   input: {
     id: z.string().min(1).describe('The Partial task (id or unique prefix)'),

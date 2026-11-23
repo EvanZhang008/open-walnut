@@ -37,6 +37,29 @@ describe('ops registry — shape contract', () => {
     }
   })
 
+  // 2026-11-23: Claude Code cuts an MCP tool description at 4,096 characters ("Tool
+  // "human_inbox_send" description truncated from 4130 to 4096 chars"), so the rules at its end
+  // never reached the model. Held on what each MCP surface sends: the in-process server
+  // (src/mcp/tools.ts) and a host's stdio server built from the hub's catalog row (mcpToolOf).
+  it('every op description as an MCP client receives it fits in 4,096 characters', async () => {
+    const { registerWalnutTools } = await import('../../src/mcp/tools.js')
+    const { mcpToolOf } = await import('../../src/providers/walnut-mcp-stdio.js')
+    const MCP_DESCRIPTION_MAX = 4_096
+    const sent = new Map<string, string>()
+    const server = {
+      registerTool: (name: string, def: { description?: string }) => { sent.set(`mcp:${name}`, def.description ?? '') },
+      server: { setRequestHandler: () => {} },
+    }
+    registerWalnutTools(server as never)
+    for (const op of listOps({ includeDeprecated: true })) {
+      const row = mcpToolOf({ name: op.name, title: op.title, description: op.description, inputSchema: { type: 'object' } })
+      sent.set(`stdio:${op.name}`, String(row.description))
+    }
+    expect(sent.size).toBeGreaterThan(listOps().length)
+    const over = [...sent].filter(([, d]) => d.length > MCP_DESCRIPTION_MAX).map(([name, d]) => `${name}: ${d.length}`)
+    expect(over, 'tighten the wording (keep every rule) or move detail into a parameter description').toEqual([])
+  })
+
   it('destructive ops never allow the remote (gateway) transport, unless the route bounds the remote caller', () => {
     // task_merge (2026-10-02): a remote session merges only its own work; the
     // merge route checks that itself (core/sessions/merge-reach.ts), so the

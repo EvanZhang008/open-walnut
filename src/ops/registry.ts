@@ -89,8 +89,10 @@ export interface WalnutOp {
    * Retired fields whose text an older caller's write still needs, kept under the field that took
    * their place when the caller did not send that one (cut to `max` characters): `{ from, to, max }`,
    * with `list[].field` paths as in retiredInput. Applied before retiredInput drops `from`.
-   * With no `max`: another name agents send for `to`, moved as it came (any value, never cut) and
-   * judged by `to`'s schema; given under both names with different values, the call is refused.
+   * With no `max`: another name agents send for `to`, moved as it came (any value, never cut, no
+   * retiredInput entry needed) and judged by `to`'s schema; given under both names with different
+   * values, the call is refused. Every move is named in the answer's walnut_note. Spellings and the
+   * usual names of a task, thread or letter id need no entry here (src/ops/arg-hints.ts).
    */
   renamedInput?: readonly { from: string; to: string; max?: number }[]
   /** Default executor: one HTTP call against /api/v1. */

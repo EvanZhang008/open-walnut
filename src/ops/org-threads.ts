@@ -342,9 +342,9 @@ defineOp({
     + 'after he reacted: known "<tm-id>" or "all", or close "acked" or "dropped" (user_words quoting him when he asked for it); '
     + 'the same subject as another open thread: {"id":"th-...","merge_into":"th-..."} alone. '
     + `A refusal names the call that goes through. Answers a receipt; thread_get reads the thread. ${RULES_IN_PROMPT} ${THREADS_OPTIONS_RULE} ${WORD_TO_USER_RULE}`,
-  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  retiredInput: ['summary', 'thread_id'],
-  renamedInput: [{ from: 'summary', to: 'reply' }, { from: 'thread_id', to: 'id' }],
+  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones
+  // (thread_id is read as id by every thread op: arg-hints.ts).
+  renamedInput: [{ from: 'summary', to: 'reply' }],
   input: UPDATE_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)
@@ -402,6 +402,8 @@ defineOp({
     + 'a team\'s question only he can settle, news he asked to hear about): its first post is yours, shown as opened by you and where from, and his reply is filed under it. '
     + 'It waits on him (needs, the default), so it names user_kind and user_kind_why: {"title":"<a few words>","text":"<the post>","from":"mail","reply":"<what he decides and what you recommend>",'
     + `"user_kind":"<kind>","user_kind_why":"<why>","options":[...]}; state answered when it only tells him a result. ${RULES_IN_PROMPT} ${THREADS_OPTIONS_RULE} ${WORD_TO_USER_RULE}`,
+  // 2026-11-23: the card's summary is reply, as thread_update reads it.
+  renamedInput: [{ from: 'summary', to: 'reply' }],
   input: CREATE_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)

@@ -118,9 +118,9 @@ defineOp({
   bind: { method: 'POST', path: '/messages' },
   mapResult: ({ body, args }) => sendOutcome(body, args),
   // Answered a check that is gone (2026-11-17): a session that still passes it, or a queued call replayed, is not refused.
-  retiredInput: ['same_deliverable', 'message', 'task_id', 'id'],
+  retiredInput: ['same_deliverable'],
   // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
-  renamedInput: [{ from: 'message', to: 'text' }, { from: 'task_id', to: 'to' }, { from: 'id', to: 'to' }],
+  renamedInput: [{ from: 'message', to: 'text' }, { from: 'task_id', to: 'to' }, { from: 'id', to: 'to' }, { from: 'task', to: 'to' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 

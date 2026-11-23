@@ -376,7 +376,7 @@ describe('memory and note writes answer receipts', () => {
 describe('search takes the arguments agents send, and answers short rows', () => {
   it('a list for types, and query for q', async () => {
     const parsed = parseOpArgs(op('search'), { query: 'deploy failures', types: ['task', 'session'] })
-    expect(parsed).toEqual({ ok: true, args: { q: 'deploy failures', types: ['task', 'session'] } })
+    expect(parsed).toEqual({ ok: true, args: { q: 'deploy failures', types: ['task', 'session'] }, renamed: [['query', 'q']] })
     const paths: string[] = []
     await op('search').handler!(parsed.ok ? parsed.args : {}, async (_m, p) => { paths.push(p); return { results: [] } })
     expect(paths[0]).toContain('types=task%2Csession')
