@@ -574,7 +574,10 @@ export function claimStartingRow(sid: string, leaderRow?: SessionRecord): void {
     claimStart(sid);
     if (!rec || rowOwnedHere(rec, key)) return;
     writeCopyRow(handle, sessionToRow(claimedCopy(rec, key)));
-    noteLeaderDisown(handle, rec);
+    // The leader's version as the leader holds it: a resume's row it marked this host's is no
+    // disown (the stranded sweep must not hand it back); a copy from before its mark is one.
+    if (leaderRow && given && rowOwnedHere(leaderRow, key)) forgetLeaderDisown(handle, sid);
+    else noteLeaderDisown(handle, rec);
   }).immediate();
 }
 

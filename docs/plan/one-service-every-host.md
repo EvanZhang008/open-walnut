@@ -446,11 +446,17 @@ permission prompts still name Walnut.
 - **A hand-over whose answer is lost** (a start or a resume, `src/providers/host-handover.ts`) is neither the
   host's for sends nor the leader's: its lines wait on the leader, never sent, refused or parked, until the
   host's row of the session comes (the channel clears the hand-over's mark in the same transaction; the lines
-  then go to the host once, by their ids) or the lost check decides. That check resumes a session here only
-  when the host's runtime says no CLI of it runs there; else it waits on and says so in Walnut Health. The
-  mark is on disk (`session_host_handovers` in sessions.sqlite), so a leader that restarts in the window
-  checks it again at boot. A host takes a row as its own only by a claim (a start or a resume it took) or its
-  own writer, never from the leader's copy alone.
+  then go to the host once, by their ids) or the lost check decides. That check asks the host: it holds the
+  session (the host's), or it does not and its runtime runs no CLI of it (a start fails and its waiting lines
+  park with why, a resume runs here once); anything else waits on and says so in Walnut Health. The mark is
+  on disk (`session_host_handovers` in sessions.sqlite), so a leader that restarts in the window checks it
+  again, its clock running from the host's first channel link after the boot. A host takes a row as its own
+  only by a claim (a start or a resume it took) or its own writer, never from the leader's copy alone.
+- **A host that no longer holds a session it judges** (its store was reset, it gave the row back) answers
+  its sends, interrupts and calls `not_own_session`. Outside a hand-over that is no refusal: the leader asks
+  once more, and a second no makes the session the leader's again, at rest; its next delivery hands it to
+  the host again with the claim and the at-rest checks (`confirmHostDisowns` in
+  `src/providers/host-judged-send.ts`). The waiting message goes once, never parked.
 - **Rolling back, in order.** Each step can stop there; each later one is safe without the earlier.
   1. One host: `hosts.<name>.runs_sessions: false` in the leader's config (no restart). New starts on
      that host take today's path at once; the sessions it already runs keep running and reporting

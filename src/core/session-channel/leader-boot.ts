@@ -18,6 +18,7 @@ import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
 import { forgetHostResumes, noteHostResumes } from './resume-hosts.js'
+import { NOT_OWN_SESSION } from './host-api.js'
 import type { PermitPair } from './channel.js'
 import { leaderPermitNumberForHosts, runningLeaderPermit } from './leader-permit.js'
 
@@ -148,6 +149,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     startsInFlight: hostStartsInFlight,
     // Lines that did not reach a host (its link was down, an answer lost) go again when it links.
     onLinked: (host) => {
+      // The clocks of hand-overs re-armed at boot count from this first link (host-handover.ts).
+      void import('../../providers/host-handover.js').then((m) => m.noteHostLinked(host)).catch(() => {})
       void import('../../providers/host-judged-send.js').then((m) => m.redeliverWaitingFor(host)).catch((err: unknown) => {
         log.session.warn('host-run sessions: redelivering what waited for a host failed', { host, error: err instanceof Error ? err.message : String(err) })
       })
@@ -219,7 +222,11 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     return { dialed, routed: told, failed }
   }
   setHostJudgeProbe((host) => side.hostJudges(host))
-  remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body))
+  // A runner call the host refuses because it does not own the session: the same recovery as a send's.
+  remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body).catch((err: unknown) => {
+    if (err instanceof Error && err.message.endsWith(`: ${NOT_OWN_SESSION}`)) void import('../../providers/host-judged-send.js').then((m) => m.confirmHostDisowns(body.sid, host)).catch(() => {})
+    throw err
+  }))
   const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown; sessionSide?: { state?: unknown } | null } | null }) => {
     const connected = hostServer.hostServerLink(view.hostKey) !== null
     void side.noteHost(view.hostKey, { connected, judges: view.phase === 'running' && reportJudges(view.server) })

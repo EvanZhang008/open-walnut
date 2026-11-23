@@ -14,7 +14,8 @@ import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-judged-runner'))
-vi.mock('../../src/providers/daemon-connection.js', () => ({ disconnectAllDaemons: vi.fn() }))
+// The host's runtime runs no CLI of a session (a lost start's check asks it: host-handover.ts hostVerdict).
+vi.mock('../../src/providers/daemon-connection.js', () => ({ disconnectAllDaemons: vi.fn(), probeDaemonSession: vi.fn(async () => ({ alive: false })) }))
 vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: vi.fn() }))
 
 import { SID, harness, probeSetup, probeTeardown, settle } from '../helpers/runner-probe-harness.js'
@@ -34,7 +35,7 @@ import { getRegisteredSessionManager } from '../../src/providers/session-manager
 
 const HOST_SID = '50000000-0000-4000-8000-0000000000c1'
 
-function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean } = {}) {
+function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean; notOwn?: boolean } = {}) {
   const sent: Array<{ op: string; host: string; body: Record<string, unknown> }> = []
   const calls: Array<{ host: string } & HostCallBody> = []
   const side = {
@@ -45,7 +46,8 @@ function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean } = {
       if (o.refuse) return { ok: false, error: 'no claude here' }
       return { ok: true, sessionId: (body.preassignedSessionId as string | undefined) ?? 'started-on-host', title: 'Host title' }
     },
-    sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return o.refuse ? { ok: false, error: 'busy' } : { ok: true } },
+    // `notOwn`: a host that does not hold the session (it never took the start) says so.
+    sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return o.notOwn ? { ok: false, error: 'not_own_session' } : o.refuse ? { ok: false, error: 'busy' } : { ok: true } },
     interruptOnHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'interrupt', host, body }); return { ok: true } },
     callHost: async (host: string, body: HostCallBody) => { calls.push({ host, ...body }); return body.member === 'isBackgroundWorkActive' ? true : body.member === 'markExpectedTeardown' ? { undoId: 'u-1' } : null },
   }
@@ -110,8 +112,8 @@ describe('a host-judged session', () => {
     const refused = fakeSide({ refuse: true })
     bus.emit(EventNames.SESSION_SEND, { sessionId: HOST_SID, message: 'hello' }, ['*'], { source: 'mobile' })
     await vi.waitFor(() => expect(refused.sent).toHaveLength(1))
-    await settle(30)
-    expect((await getQueue(HOST_SID)).map((m) => m.id)).toEqual(['qm-host-1'])
+    // Put back once the refusal is read (a loaded machine takes longer than a fixed pause).
+    await vi.waitFor(async () => expect((await getQueue(HOST_SID)).map((m) => m.id)).toEqual(['qm-host-1']))
     const { sent } = fakeSide()
     bus.emit(EventNames.SESSION_SEND, { sessionId: HOST_SID, message: 'hello' }, ['*'], { source: 'mobile' })
     await vi.waitFor(() => expect(sent).toHaveLength(1))
@@ -171,7 +173,7 @@ describe('a host-judged session', () => {
     expect(hostStartsInFlight().has(seeded)).toBe(false)
   })
 
-  async function seededStart(o: { notSent?: boolean; lost?: boolean }) {
+  async function seededStart(o: { notSent?: boolean; lost?: boolean; notOwn?: boolean }) {
     const h = harness()
     setHostJudgeProbe((host) => host === 'devbox')
     const { createSessionRecord } = await import('../../src/core/session-tracker.js')
@@ -192,10 +194,10 @@ describe('a host-judged session', () => {
     expect(isRemoteJudgedSession(h.runner.findSessionByClaudeId(seeded))).toBe(false)
   })
 
-  it('MF1: a start whose answer was lost and whose born row never comes is taken back and fails when its wait runs out', async () => {
+  it('MF1: a start whose answer was lost and whose born row never comes is taken back and fails when its wait runs out (the host does not hold it, its runtime runs no CLI of it)', async () => {
     process.env.WALNUT_HOST_START_LOST_MS = '60'
     try {
-      const { h, seeded } = await seededStart({ lost: true })
+      const { h, seeded } = await seededStart({ lost: true, notOwn: true })
       const r = await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
       expect(r.claudeSessionId).toBe(seeded)
       expect((await getSessionByClaudeId(seeded))?.judge).toBe('host')
@@ -205,6 +207,17 @@ describe('a host-judged session', () => {
         expect(row).toMatchObject({ process_status: 'error', status_reason: 'api_error' })
       })
       expect(hostStartsInFlight().has(seeded)).toBe(false)
+    } finally { delete process.env.WALNUT_HOST_START_LOST_MS }
+  })
+
+  it('S-B: a lost answer whose host holds the session when the wait runs out is the host\'s, never failed', async () => {
+    process.env.WALNUT_HOST_START_LOST_MS = '60'
+    try {
+      const { h, seeded } = await seededStart({ lost: true })
+      await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
+      await vi.waitFor(() => expect(hostStartsInFlight().has(seeded)).toBe(false))
+      await new Promise((r) => setTimeout(r, 150))
+      expect(await getSessionByClaudeId(seeded)).toMatchObject({ judge: 'host', process_status: 'idle', status_reason: 'awaiting_spawn' })
     } finally { delete process.env.WALNUT_HOST_START_LOST_MS }
   })
 

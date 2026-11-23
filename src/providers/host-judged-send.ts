@@ -16,6 +16,10 @@
  *              (the host took it, the leader timed out) never runs twice
  *   refused    the host answered no three times in a row: the rows that would run park here with the
  *              host's reason (a person retries them); a link that fails is never a refusal
+ *   disowned   the host answers that it does not own the session, outside any hand-over (its store lost
+ *              the row, it gave the row back): no refusal either. Asked once more (confirmHostDisowns),
+ *              a second no takes the session back as the leader's, at rest, and its lines go by the
+ *              leader's next delivery, which hands it over again with the claim (host-resume.ts)
  *   hand-over  while a start or a resume of the session waits for its host's answer (host-handover.ts
  *              handOverPending), nothing goes and nothing counts: the lines wait here, and go once
  *              the host's answer or row ends the window (releaseLinesAfterHandOver), or are the
@@ -30,7 +34,7 @@ import { heldOf } from '../core/sessions/handed-holds.js'
 import type { QueuedLine } from '../core/session-channel/host-api.js'
 import type { QueuedMessage } from '../core/session-queue-store.js'
 import { NOT_OWN_SESSION } from '../core/session-channel/host-api.js'
-import { handOverPending } from './host-handover.js'
+import { askHostOwns, handOverPending, takeSessionBack } from './host-handover.js'
 
 /** Waits before each retry of a session's waiting lines; the last one repeats for good. */
 export const REDELIVER_MS = [5_000, 30_000, 120_000, 600_000]
@@ -158,6 +162,12 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     // A hand-over of it began while this send was out: the host does not own it yet, which is no
     // refusal; the lines wait for the hand-over's end.
     if (a.error === NOT_OWN_SESSION && handOverPending(sid)) { waitForHandOver(sid, o); return }
+    // The host does not hold it: never a refusal. Asked again; a second no takes it back here.
+    if (a.error === NOT_OWN_SESSION) {
+      if (o.kick) w.kick = { source: o.source, endsWait: o.endsWait || w.kick?.endsWait === true }
+      void confirmHostDisowns(sid, host).then((back) => { if (!back && judgingHostOf(sid) === host) scheduleRedeliver(sid) })
+      return
+    }
     w.refusals++
     const why = a.error ?? 'no reason given'
     if (w.refusals >= REFUSALS_BEFORE_PARK) {
@@ -186,6 +196,36 @@ function waitForHandOver(sid: string, o: DeliverOpts): void {
   if (w.timer) { clearTimeout(w.timer); w.timer = null }
   if (o.kick) w.kick = { source: o.source, endsWait: o.endsWait || w.kick?.endsWait === true }
   log.session.info('host-run session: its lines wait here until its host answers the hand-over', { sessionId: sid })
+}
+
+const confirming = new Set<string>()
+
+/** How long before the host is asked again whether it owns a session it said it does not (tests shorten it). */
+function disownConfirmMs(): number {
+  const n = Number(process.env.WALNUT_HOST_DISOWN_CONFIRM_MS)
+  return Number.isFinite(n) && n >= 0 ? n : 2_000
+}
+
+/**
+ * `host` answered that it does not own `sid` (a send, an interrupt, a runner call), outside any
+ * hand-over. Asked once more a moment later (askHostOwns); a second no takes the session back as
+ * the leader's, at rest (host-handover.ts takeSessionBack). Every answer of that class comes here.
+ * True: taken back.
+ */
+export async function confirmHostDisowns(sid: string, host: string): Promise<boolean> {
+  if (!sid || confirming.has(sid) || handOverPending(sid) || judgingHostOf(sid) !== host) return false
+  confirming.add(sid)
+  try {
+    await new Promise((r) => setTimeout(r, disownConfirmMs()))
+    if (handOverPending(sid) || judgingHostOf(sid) !== host) return false
+    if ((await askHostOwns(sid, host)) !== false) return false
+    if (handOverPending(sid) || judgingHostOf(sid) !== host) return false
+    log.session.warn('host-run session: its host does not hold it any more; it is the leader\'s again, and its next delivery hands it over again', { sessionId: sid, host })
+    await takeSessionBack(sid, host)
+    return true
+  } finally {
+    confirming.delete(sid)
+  }
 }
 
 /** The hand-over of `sid` ended with the host having it: what waited for it goes now. */

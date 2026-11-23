@@ -25,8 +25,9 @@ import { remoteJudgedSession, type RemoteJudgedSession } from './remote-judged-s
 import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { StartBody, StartBundle } from '../core/session-channel/host-api.js'
 import { claimHostStarted, hostStartedSaid, noteHostSessionStarted } from '../core/session-channel/leader-tasks.js'
-import { _resetHostJudgedSendForTesting, forwardSend, inOrder } from './host-judged-send.js'
-import { _resetHostHandOverForTesting, armLostStartCheck, handOverAnswered, handOverPending, handStartToHost, takeStartBack } from './host-handover.js'
+import { _resetHostJudgedSendForTesting, confirmHostDisowns, forwardSend, inOrder } from './host-judged-send.js'
+import { NOT_OWN_SESSION } from '../core/session-channel/host-api.js'
+import { _resetHostHandOverForTesting, armLostStartCheck, handOverAnswered, handOverPending, handStartToHost, startLostHooks, takeStartBack } from './host-handover.js'
 
 type AnyFn = (...args: any[]) => any
 type Proto = Record<string, unknown>
@@ -97,6 +98,7 @@ export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
       if (event.name === EventNames.SESSION_INTERRUPT) {
         return inOrder(sid, async () => {
           const a = await (await leaderSide()).interruptOnHost(host, body)
+          if (a.ok !== true && a.error === NOT_OWN_SESSION) void confirmHostDisowns(sid, host)
           if (a.ok !== true) throw new Error(`the host ${host} refused the interrupt: ${a.error ?? 'no reason given'}`)
         })
       }
@@ -223,7 +225,7 @@ export async function startOnJudgingHost<T extends StartData>(
     // says it started, the host's own row says how it ended (R2-H2). When no born row comes while
     // the start is in flight, the host never took it: the seed is taken back and fails then.
     if (typeof seeded === 'string' && seeded) {
-      armLostStartCheck(seeded, host, handed, why, { onLost })
+      armLostStartCheck(seeded, host, handed, why, startLostHooks(seeded, host, onLost))
       log.session.warn('host start: no answer from the host; the session stays the host\'s and its channel tells what became of it', { sessionId: seeded, host, error: why })
       void commit(seeded).catch(() => {})
       return { claudeSessionId: seeded, title: '' }

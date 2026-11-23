@@ -26,9 +26,10 @@
  *              legacy for a while, so the same delivery never asks again).
  *   no answer  the window stays open (sends wait, host-judged-send.ts) until the host's row says it
  *              took the resume (what waited goes to it once) or the lost check decides; that check
- *              asks the host's runtime first and resumes here only when the CLI runs nowhere there,
- *              else it waits on and says so in Walnut Health. Never both. A leader restart in the
- *              window arms the check again (rearmHandOversAtBoot).
+ *              asks the host (host-handover.ts hostVerdict) and resumes here only when the host says
+ *              it does not own the session and its runtime runs no CLI of it, else it waits on and
+ *              says so in Walnut Health. Never both. A leader restart in the window arms the check
+ *              again (rearmHandOversAtBoot).
  *
  * With no host taking a resume (the switch off) resumeHostOf answers null without a row read, and
  * the delivery runs exactly as before.
@@ -42,9 +43,8 @@ import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { claimHostStarted, unclaimHostStarted } from '../core/session-channel/leader-tasks.js'
 import { anyHostResumesSessions } from '../core/session-channel/resume-hosts.js'
 import { isHandedHold } from '../core/sessions/handed-holds.js'
-import { healthConditions, hostLabel } from '../core/notifications/health-items.js'
 import { startGoesToHost } from './host-judged-runner.js'
-import { armLostStartCheck, handOverAnswered, handStartToHost, rearmHandOvers, takeStartBack, type LostHooks } from './host-handover.js'
+import { armLostStartCheck, cliOnHost, handOverAnswered, handStartToHost, hostVerdict, rearmHandOvers, startLostHooks, takeStartBack, type LostHooks } from './host-handover.js'
 import { queuedLineOf } from './host-judged-send.js'
 
 /** Why a legacy session is not handed to its host now (each keeps today's legacy delivery). */
@@ -169,50 +169,20 @@ async function restFacts(sid: string, r: RunnerRest): Promise<{ facts: RestFacts
   }
 }
 
-/** The host's runtime on the CLI of `sid`, through this leader's daemon link to it. */
-async function cliOnHost(host: string, sid: string): Promise<boolean | null> {
-  try {
-    const { probeDaemonSession } = await import('./daemon-connection.js')
-    const probe = await probeDaemonSession(host, sid)
-    return probe ? probe.alive : null
-  } catch {
-    return null
-  }
-}
-
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-/** A resume whose answer was lost and whose host may run it: one Walnut Health item per session. */
-const unanswered = healthConditions('host-resume')
-const unansweredKey = (sid: string) => `host-resume-unanswered:${sid}`
-
 /**
- * What a lost check does with a resume (host-handover.ts): the host's row in time, it is the host's;
- * none, it asks the host's runtime, and resumes here only when the CLI runs nowhere there.
+ * What a lost check does with a resume (host-handover.ts): the host's row in time, or the host saying
+ * it holds the session, it is the host's; else it resumes here only when the host says it does not
+ * own it and its runtime runs no CLI of it (hostVerdict).
  */
 function resumeHooks(sid: string, host: string, r: RunnerRest): LostHooks {
-  const key = unansweredKey(sid)
   return {
-    onBorn: () => { r.dropDeadWrapper(sid); void unanswered.recover(key) },
-    stillRuns: async () => {
-      const alive = await cliOnHost(host, sid)
-      if (alive === false) return false
-      void unanswered.raise(key, async () => {
-        const label = await hostLabel(host)
-        return {
-          kind: 'operation-error', severity: 'warning', category: 'Sessions', host,
-          title: `A session handed to ${label} has no answer yet`,
-          body: `Walnut handed the session to ${label} to resume it there and got no answer. ${alive ? 'Its CLI runs there' : `${label} does not say whether its CLI runs`}, so Walnut does not run it here too: its messages wait until ${label} answers, and Walnut asks again later.`,
-          detail: `host resume of ${sid} on ${host}: no answer and no row from the host; its runtime says ${alive === null ? 'nothing' : 'the CLI runs'}`,
-          dedupKey: key, recoveryKey: key, sessionId: sid,
-        }
-      })
-      return true
-    },
+    onBorn: () => r.dropDeadWrapper(sid),
+    verdict: () => hostVerdict(sid, host),
     onLost: async () => {
       holdLegacy(sid)
       unclaimHostStarted(sid)
-      void unanswered.recover(key)
       log.session.warn('host resume: the host never took a resume whose answer was lost; delivered here as legacy', { sessionId: sid, host })
       r.deliverHere(sid)
     },
@@ -293,11 +263,12 @@ export async function resumeAtRestOnHost(sid: string, host: string, r: RunnerRes
  */
 export async function rearmHandOversAtBoot(runner?: BootRunner): Promise<number> {
   const r = runner ?? (await import('./claude-code-session.js')).sessionRunner
+  const { activeLeaderSide } = await import('../core/session-channel/leader-boot.js')
   return rearmHandOvers((m) => {
-    if (m.kind === 'start') return { onLost: (err) => r.failLostHostStart(m.sid, err) }
+    if (m.kind === 'start') return startLostHooks(m.sid, m.host, (err) => r.failLostHostStart(m.sid, err))
     claimHostStarted(m.sid)
     return resumeHooks(m.sid, m.host, r.resumeView())
-  })
+  }, (host) => { const side = activeLeaderSide(); return typeof side?.linked === 'function' && side.linked(host) })
 }
 
 /** The runner a boot arms the hand-overs with (claude-code-session.ts SessionRunner). */
@@ -308,5 +279,4 @@ export interface BootRunner {
 
 export function _resetHostResumeForTesting(): void {
   heldLegacy.clear()
-  unanswered.reset()
 }

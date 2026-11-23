@@ -5,8 +5,9 @@
  *
  * The known ones: a new start or fork (handleStart, which goes to the host by startGoesToHost before
  * it gets here), a Restart without a message (restartThrough: a Restart stays legacy), and the two
- * resumes of a delivery in processNextNow, after resumeAtRestOnHost. A new call site fails here
- * until it goes through processNextNow or is listed with why.
+ * resumes of a delivery in processNextNow, after resumeAtRestOnHost; and one ACP prompt, no CLI.
+ * Matched by call shape (any receiver), so a new call site fails here, whatever its variable is
+ * called, until it goes through processNextNow or is listed with why.
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -18,6 +19,8 @@ const KNOWN: Record<string, number> = {
   handleStart: 1,
   restartThrough: 1,
   processNextNow: 2,
+  // Not a CLI: an ACP session's prompt, through its contract (ACP sessions stay the leader's).
+  drainAcpPrompt: 1,
 }
 
 /** The method each line of the class body belongs to (its last two-space-indented signature). */
@@ -29,8 +32,10 @@ function sendSites(src: string): Record<string, number> {
     const m = sig.exec(line)
     if (m && !/^\s*(if|for|while|switch|return)\b/.test(line.trim())) method = m[1]
     if (/^\s*(\/\/|\*)/.test(line)) continue
-    // A ClaudeCodeSession's send: a session object, never an ACP contract's prompt.
-    if (/\b(session|target|targetSession)\.send\(/.test(line)) out[method] = (out[method] ?? 0) + 1
+    // Every `.send(` by its call shape, whatever the receiver is called (a ClaudeCodeSession's send
+    // spawns or resumes a CLI): each is listed by the method it is in.
+    const n = line.match(/[\w$)\]]\s*\??\.send\(/g)?.length ?? 0
+    if (n > 0) out[method] = (out[method] ?? 0) + n
   }
   return out
 }
@@ -44,7 +49,7 @@ describe('the runner starts a CLI of a session only where the hand-over to its h
     const src = readFileSync(FILE, 'utf8')
     const body = src.slice(src.indexOf('private async processNextNow('))
     const ask = body.indexOf('resumeAtRestOnHost(')
-    const firstSend = body.search(/\b(session|targetSession)\.send\(/)
+    const firstSend = body.search(/[\w$)\]]\s*\??\.send\(/)
     expect(ask).toBeGreaterThan(0)
     expect(ask).toBeLessThan(firstSend)
   })

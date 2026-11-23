@@ -35,6 +35,7 @@ import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { installHostJudgedRouting, routeHostJudgedEvent, startGoesToHost, startOnJudgingHost } from './host-judged-runner.js'
+import { setLeaderDelivery } from './host-handover.js'
 import { resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
 import { execHostOf } from '../core/sessions/session-row-owner.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
@@ -12459,6 +12460,8 @@ export class SessionRunner {
   startupRecoveryDone: Promise<void> = Promise.resolve()
 
   init(reconnectable?: SessionRecord[]): void {
+    // A session taken back from a host that no longer holds it is delivered by this runner (host-handover.ts).
+    setLeaderDelivery((sid) => { this.processNext(sid).catch((err) => log.session.warn('processNext failed for a session taken back from its host', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })) })
     // Reconnect to surviving sessions + startup recovery (async)
     const startupRecovery = async () => {
       // What earlier servers saw of each host's link, before any queued row is delivered

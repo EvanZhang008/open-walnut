@@ -24,7 +24,7 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 import { SID, harness, probeSetup, probeTeardown, settle, type Harness } from '../helpers/runner-probe-harness.js'
 import { notAtRestReason, resumeHostOf, _resetHostResumeForTesting, type RestFacts } from '../../src/providers/host-resume.js'
 import { _resetHostJudgedRunnerForTesting, noteHostStartBorn } from '../../src/providers/host-judged-runner.js'
-import { _resetHostHandOverForTesting, handOverPending } from '../../src/providers/host-handover.js'
+import { HOST_START_LOST_REASON, _resetHostHandOverForTesting, handOverPending, handStartToHost, noteHostLinked } from '../../src/providers/host-handover.js'
 import { _resetHostJudgedSendForTesting, _waitingForTesting, redeliverWaitingFor } from '../../src/providers/host-judged-send.js'
 import { rearmHandOversAtBoot } from '../../src/providers/host-resume.js'
 import { clearHandOverMark } from '../../src/core/session-channel/handover-marks.js'
@@ -35,7 +35,7 @@ import { _setActiveLeaderSideForTesting, _setHostResumesForTesting } from '../..
 import { _resetHostSessionTasksForTesting } from '../../src/core/session-channel/leader-tasks.js'
 import { _resetRemoteJudgedSessionsForTesting } from '../../src/providers/remote-judged-session.js'
 import { HostRequestNotSent, type LeaderSide } from '../../src/core/session-channel/leader-side.js'
-import { getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { enqueueMessage, getQueue } from '../../src/core/session-message-queue.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 
@@ -70,7 +70,7 @@ describe('the at-rest decision', () => {
   })
 })
 
-function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean; sendAnswer?: Record<string, unknown> } = {}) {
+function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean; sendAnswer?: Record<string, unknown>; interruptAnswer?: Record<string, unknown>; unlinked?: boolean } = {}) {
   const sent: Array<{ op: string; host: string; body: Record<string, any> }> = []
   const side = {
     startOnHost: async (host: string, body: Record<string, unknown>) => {
@@ -82,8 +82,10 @@ function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean; send
     },
     // A host that does not own the session yet answers its sends so (host-routes.ts NOT_OWN_SESSION).
     sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return o.sendAnswer ?? { ok: true } },
-    interruptOnHost: async () => ({ ok: true }),
+    interruptOnHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'interrupt', host, body }); return o.interruptAnswer ?? { ok: true } },
     callHost: async () => null,
+    // The host's session channel is linked (a re-armed hand-over's clock runs at once).
+    linked: () => o.unlinked !== true,
   }
   _setActiveLeaderSideForTesting(side as unknown as LeaderSide)
   return { sent }
@@ -172,10 +174,10 @@ describe('a send to a legacy session at rest on a host that judges', () => {
     expect((await getSessionByClaudeId(SID))?.judge).toBeUndefined()
   })
 
-  it('a lost answer with no born row: nothing runs here until the lost-start time, then the legacy resume, once', async () => {
+  it('a lost answer with no born row: nothing runs here until the lost-start time, then (the host does not hold it) the legacy resume, once', async () => {
     process.env.WALNUT_HOST_START_LOST_MS = '150'
     const h = await legacyAtRest()
-    const { sent } = fakeSide({ lost: true })
+    const { sent } = fakeSide({ lost: true, sendAnswer: { ok: false, error: 'not_own_session' } })
     kick()
     await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
     await vi.waitFor(async () => expect((await getQueue(SID)).map((m) => `${m.id}:${m.status}`)).toEqual(['qm-rest-1:pending']))
@@ -330,7 +332,8 @@ describe('S2: the lost check resumes here only when the host\'s runtime runs no 
   it.each<[string, { alive: boolean } | null]>([['its CLI runs there', { alive: true }], ['the host\'s runtime gives no answer', null]])('%s: it waits on, nothing runs here', async (_name, answer) => {
     process.env.WALNUT_HOST_START_LOST_MS = '120'
     const h = await legacyAtRest()
-    fakeSide({ lost: true })
+    // The host says it does not own it: the runtime's word decides.
+    fakeSide({ lost: true, sendAnswer: { ok: false, error: 'not_own_session' } })
     kick()
     await vi.waitFor(() => expect(handOverPending(SID)).toBe(true))
     probe.answer = answer
@@ -401,5 +404,104 @@ describe('S4: the runner lets go of every object of a session it hands over', ()
     h.runner.resumeView().dropDeadWrapper(SID)
     expect(found(h)).toBe(1)
     expect(h.session).toBeInstanceOf(ClaudeCodeSession)
+  })
+})
+
+describe('S-A: a host-judged session whose host no longer holds it is never stuck', () => {
+  beforeEach(() => { process.env.WALNUT_HOST_DISOWN_CONFIRM_MS = '20' })
+  afterEach(() => { delete process.env.WALNUT_HOST_DISOWN_CONFIRM_MS })
+  const NOT_OWN = { ok: false, error: 'not_own_session' }
+
+  /** A session the host resumed: host-judged, its hand-over answered. */
+  async function hostJudged() {
+    const h = await legacyAtRest()
+    fakeSide()
+    kick()
+    await vi.waitFor(async () => expect((await getSessionByClaudeId(SID))?.judge).toBe('host'), { timeout: 5_000 })
+    await vi.waitFor(async () => expect(await getQueue(SID)).toEqual([]), { timeout: 5_000 })
+    await vi.waitFor(() => expect(handOverPending(SID)).toBe(false), { timeout: 5_000 })
+    return h
+  }
+
+  it('a send its host refuses as not its own, confirmed once, takes it back; the next delivery hands it over again with the line, once, never parked', async () => {
+    const h = await hostJudged()
+    const { sent } = fakeSide({ sendAnswer: NOT_OWN })
+    await enqueueMessage(SID, 'after the reset', { id: 'qm-rest-3', sentBy: 'person' })
+    bus.emit(EventNames.SESSION_SEND, { sessionId: SID, message: 'after the reset' }, ['*'], { source: 'ui' })
+    await vi.waitFor(() => expect(sent.filter((x) => x.op === 'start')).toHaveLength(1), { timeout: 5_000 })
+    const again = sent.find((x) => x.op === 'start')!.body
+    expect(again).toMatchObject({ resumeSessionId: SID })
+    expect((again.queued as Array<{ id: string }>).map((l) => l.id)).toEqual(['qm-rest-3'])
+    await vi.waitFor(async () => expect(await getQueue(SID)).toEqual([]))
+    expect((await getSessionByClaudeId(SID))?.judge).toBe('host')
+    // The send, then the one confirmation: never counted as a refusal, never parked, never run here.
+    expect(sent.filter((x) => x.op === 'send')).toHaveLength(2)
+    expect(_waitingForTesting(SID).refusals).toBe(0)
+    expect(h.resumes).toEqual([])
+  })
+
+  it('a host that holds it after all (the second answer is yes) keeps it', async () => {
+    await hostJudged()
+    let calls = 0
+    _setActiveLeaderSideForTesting({
+      startOnHost: async () => { throw new Error('no start expected') },
+      sendToHost: async () => (++calls === 1 ? NOT_OWN : { ok: true }),
+      interruptOnHost: async () => ({ ok: true }), callHost: async () => null,
+    } as unknown as LeaderSide)
+    await enqueueMessage(SID, 'still yours', { id: 'qm-rest-4', sentBy: 'person' })
+    bus.emit(EventNames.SESSION_SEND, { sessionId: SID, message: 'still yours' }, ['*'], { source: 'ui' })
+    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(2), { timeout: 5_000 })
+    await settle(80)
+    expect((await getSessionByClaudeId(SID))?.judge).toBe('host')
+    expect(judgingHostOf(SID)).toBe('devbox')
+  })
+
+  it('an interrupt refused the same way goes through the same recovery', async () => {
+    await hostJudged()
+    fakeSide({ interruptAnswer: NOT_OWN, sendAnswer: NOT_OWN })
+    bus.emit(EventNames.SESSION_INTERRUPT, { sessionId: SID }, ['*'], { source: 'ui' })
+    await vi.waitFor(async () => expect((await getSessionByClaudeId(SID))?.judge).toBeUndefined(), { timeout: 5_000 })
+    expect(judgingHostOf(SID)).toBeNull()
+  })
+})
+
+describe('S-B, N1: a start re-armed at boot', () => {
+  const SEED = '30000000-0000-4000-8000-0000000000b7'
+  /** A start handed to devbox whose answer never came, then a leader restart. */
+  async function restartedWithStart() {
+    process.env.WALNUT_HOST_START_LOST_MS = '100'
+    await legacyAtRest()
+    await createSessionRecord(SEED, '', 'test', '/w', { host: 'devbox', initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn' } as never)
+    expect(await handStartToHost(SEED, 'devbox', 'start')).toBe(true)
+    await enqueueMessage(SEED, 'while it starts', { id: 'qm-seed-1', sentBy: 'person' })
+    _resetHostHandOverForTesting({ keepDisk: true })
+    _resetJudgeOfForTesting()
+    const failed = vi.fn(async () => {})
+    return { failed, runner: { resumeView: () => { throw new Error('no resume here') }, failLostHostStart: failed } }
+  }
+
+  it('its clock waits for the host\'s first link; then the host says it holds it: the host\'s, never failed', async () => {
+    const { failed, runner } = await restartedWithStart()
+    const { sent } = fakeSide({ unlinked: true })
+    expect(await rearmHandOversAtBoot(runner as never)).toBe(1)
+    await settle(300)
+    // No link yet: nothing asked, nothing failed.
+    expect(handOverPending(SEED)).toBe(true)
+    expect(sent).toEqual([])
+    noteHostLinked('devbox')
+    await vi.waitFor(() => expect(handOverPending(SEED)).toBe(false), { timeout: 3_000 })
+    expect(failed).not.toHaveBeenCalled()
+    expect((await getSessionByClaudeId(SEED))?.judge).toBe('host')
+  })
+
+  it('the host does not hold it and its runtime runs no CLI of it: it fails, and the line sent meanwhile parks with why', async () => {
+    const { failed, runner } = await restartedWithStart()
+    fakeSide({ sendAnswer: { ok: false, error: 'not_own_session' } })
+    await rearmHandOversAtBoot(runner as never)
+    noteHostLinked('devbox')
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1), { timeout: 3_000 })
+    expect((await getSessionByClaudeId(SEED))?.judge).toBeUndefined()
+    await vi.waitFor(async () => expect((await getQueue(SEED)).map((m) => `${m.id}:${m.status}`)).toEqual(['qm-seed-1:parked']))
+    expect((await getQueue(SEED))[0].parkedReason).toMatch(new RegExp(`^${HOST_START_LOST_REASON}`))
   })
 })

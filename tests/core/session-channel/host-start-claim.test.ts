@@ -211,6 +211,16 @@ describe('a start the leader handed this host claims its session\'s row', () => 
     expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
   })
 
+  it('S-A: a resume\'s row the leader marked this host\'s is never handed back by the sweep (a service restart after the CLI ended)', async () => {
+    const sid = 'aaaaaaaa-0010-4010-8010-000000000010'
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(sid)] })
+    sessionDb.claimStartingRow(sid, { ...preJudgeSeed(sid), process_status: 'stopped', judge: 'host' } as SessionRecord)
+    sessionDb.releaseStartingRow(sid)
+    // Nothing of it runs here now, as after a restart: still this host's, as the leader says.
+    expect(await sweep(sid)).toEqual([])
+    expect((await tracker.getSessionByClaudeId(sid))?.judge).toBe('host')
+  })
+
   it('a row no start claimed stays the leader\'s: the own-row writer still refuses it', async () => {
     sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(SID_UNCLAIMED)] })
     await expect(tracker.updateSessionRecord(SID_UNCLAIMED, { activity: 'writing' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)

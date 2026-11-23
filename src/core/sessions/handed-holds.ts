@@ -61,10 +61,6 @@ export function heldEnqueueOptions(line: Pick<QueuedLine, 'held'>): { heldReason
  */
 export async function queueLinesOnHost(sid: string, lines: readonly QueuedLine[], source: string): Promise<void> {
   const [{ enqueueMessage, getQueue, withdrawQueuedLines }, { frameAsWalnut, frameForSource }] = await Promise.all([import('../session-message-queue.js'), import('./send-frame.js')])
-  if (lines.some((l) => !heldEnqueueOptions(l).heldReason)) {
-    const { releaseColdHolds } = await import('./cold-hold.js')
-    await releaseColdHolds(sid, 'a message that goes now')
-  }
   const reasons = new Set<string>()
   // All or nothing: the rows queued here before one failed are taken back, so a failure the leader
   // answers by delivering the lines itself (a resume it falls back from) leaves none to run here too.
@@ -86,6 +82,12 @@ export async function queueLinesOnHost(sid: string, lines: readonly QueuedLine[]
   } catch (err) {
     await withdrawQueuedLines(sid, added).catch(() => 0)
     throw err
+  }
+  // Only once every line is queued (a failure leaves the holds as they were). The held rows keep
+  // their place, in front of the lines just queued.
+  if (lines.some((l) => !heldEnqueueOptions(l).heldReason)) {
+    const { releaseColdHolds } = await import('./cold-hold.js')
+    await releaseColdHolds(sid, 'a message that goes now')
   }
   if (reasons.has(AFTER_TURN_REASON)) (await import('./queue-after-turn.js')).noteAfterTurnHold(sid)
   if (reasons.has(COLD_HOLD_REASON)) (await import('./cold-hold.js')).noteColdHold(sid)
