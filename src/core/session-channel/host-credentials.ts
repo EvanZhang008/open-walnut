@@ -25,7 +25,7 @@
 import { notifyRevoked } from '../device-auth.js'
 import { isHostCredentialRecord, newDeviceId, readRegistryAndRevoked, updateAuth, type DeviceRecord } from '../device-store.js'
 import { doorKeyId, doorSecret } from './door-wire.js'
-import { hostAliasesNow, revokedAsIn } from './revoked-hosts.js'
+import { hostAliasesNow, isOwnMachine, machineRevokedNow, revokedAsIn, stickyAliasesOf, type RevokedRecord } from './revoked-hosts.js'
 
 /** How long a replaced key is still taken after a rotation. */
 export const PREVIOUS_GRACE_MS = 10 * 60_000
@@ -65,24 +65,43 @@ export function credentialDue(rec: Pick<DeviceRecord, 'issuedAt'> | null, now = 
 }
 
 /**
- * The door records that are `hostKey`'s: issued to it, to another key of its machine (its aliases),
- * or to its machine (revoked-hosts.ts hostAliasesNow: what the leader's links hold now). One machine
- * keeps one record, bound to the key it was first issued to; a revoke or an allow under any of its
- * names acts on that record, so a ban never depends on the name it was made under.
+ * The door records that are `hostKey`'s: issued to it, to another key of the same daemon (its
+ * aliases, revoked-hosts.ts hostAliasesNow), or banned with it (a key the ban named, or one judged
+ * its alias since: revokedAs). One machine keeps one record, bound to the key it was first issued
+ * to; a revoke or an allow under any of these names acts on that record. A record that matches only
+ * by the machine id `hostKey`'s hello says is not here: that id is the host's own word, and a
+ * revoke never drags another host's record in by it (N1 of the C7 review; machineOnlyRecordsIn).
  */
 export function hostRecordsIn(devices: readonly DeviceRecord[], hostKey: string): DeviceRecord[] {
-  const { machine, aliases } = hostAliasesNow(hostKey)
-  return devices.filter((d) => isHostCredentialRecord(d) && (d.hostKey === hostKey || (!!d.hostKey && aliases.includes(d.hostKey)) || (!!machine && d.machineId === machine)))
+  const { aliases } = hostAliasesNow(hostKey)
+  const bannedAs = revokedAsIn(revokedRecordsOf(devices), hostKey)
+  const names = new Set([hostKey, ...aliases, ...(bannedAs ? [bannedAs] : [])])
+  // A ban that named `hostKey` when it was made (its `keys`) holds that record for it too.
+  const namedBy = (d: DeviceRecord) => !!d.revoked?.keys?.includes(hostKey)
+  return devices.filter((d) => isHostCredentialRecord(d) && !!d.hostKey && (names.has(d.hostKey) || namedBy(d)))
+}
+
+/** Records of another key that `hostKey`'s hello claims the machine of (not its to revoke: said as `skipped`). */
+export function machineOnlyRecordsIn(devices: readonly DeviceRecord[], hostKey: string): DeviceRecord[] {
+  const { machine } = hostAliasesNow(hostKey)
+  if (!machine) return []
+  const mine = new Set(hostRecordsIn(devices, hostKey))
+  return devices.filter((d) => isHostCredentialRecord(d) && d.machineId === machine && !mine.has(d))
+}
+
+/** The revoked door records, as the ban reads them (revoked-hosts.ts). */
+export function revokedRecordsOf(devices: readonly DeviceRecord[]): RevokedRecord[] {
+  return devices.filter((d) => isHostCredentialRecord(d) && d.revoked && d.hostKey)
+    .map((d) => ({ hostKey: d.hostKey!, machineId: d.machineId ?? null, keys: d.revoked!.keys ?? [] }))
 }
 
 /** `hostKey`'s door was revoked, under any name of its machine: the time, who did it and the key it was revoked as (null: not revoked). */
 export function revokedHostIn(devices: readonly DeviceRecord[], hostKey: string): { at: string; by: string; as: string } | null {
-  const revoked = devices.filter((d) => isHostCredentialRecord(d) && d.revoked && d.hostKey)
-  const as = revokedAsIn(revoked.map((d) => ({ hostKey: d.hostKey!, machineId: d.machineId ?? null })), hostKey)
+  const as = revokedAsIn(revokedRecordsOf(devices), hostKey)
   if (!as) return null
-  const rec = revoked.find((d) => (as.startsWith('machine:') ? d.machineId === as.slice('machine:'.length) : d.hostKey === as))
-  // Named by the key its record was issued to (a machine's ban reads as that host's).
-  return rec?.revoked ? { ...rec.revoked, as: rec.hostKey ?? as } : null
+  const rec = devices.filter((d) => d.hostKey === as)
+    .find((d) => isHostCredentialRecord(d) && d.revoked)
+  return rec?.revoked ? { at: rec.revoked.at, by: rec.revoked.by, as } : null
 }
 
 /** Is `hostKey`'s door revoked now, under any name of its machine? */
@@ -121,7 +140,9 @@ export async function mintHostCredential(o: { machineId: string; walnutId: strin
     const old = auth.devices.find((d) => d.name === name)
     if (old && !isHostCredentialRecord(old)) throw new Error(`${name} is another kind of record here; not replaced`)
     if (old?.hostKey && old.hostKey !== o.hostKey) throw new HostKeyMismatch(o.machineId, old.hostKey, o.hostKey)
-    if (old?.revoked || revokedHostIn(auth.devices, o.hostKey)) throw new HostDoorRevoked(o.hostKey)
+    // Banned as its key, any name of it, or by the machine id it asks for (a key whose hello changed its id gets nothing: S1).
+    if (old?.revoked || revokedHostIn(auth.devices, o.hostKey) || machineRevokedNow(o.machineId)
+      || auth.devices.some((d) => isHostCredentialRecord(d) && d.revoked && d.machineId === o.machineId)) throw new HostDoorRevoked(o.hostKey)
     const record: DeviceRecord = {
       name, id: old?.id ?? newDeviceId(), tokenHash: '', createdAt: old?.createdAt ?? issuedAt, kind: 'machine', issuer: 'leader',
       machineId: o.machineId, walnutId: o.walnutId, hostKey: o.hostKey, verifyKey, issuedAt,
@@ -172,25 +193,24 @@ export async function dropHostCredential(machineId: string): Promise<boolean> {
  * `revoked`: false when there is nothing to hold it on (no record, no machine id); `closed`: the
  * records whose key was dropped now.
  */
-export async function revokeHostDoor(hostKey: string, o: { by: string; machineId?: string | null; now?: number }): Promise<{ revoked: boolean; closed: string[] }> {
+export async function revokeHostDoor(hostKey: string, o: { by: string; machineId?: string | null; now?: number }): Promise<{ revoked: boolean; closed: string[]; skipped: string[] }> {
   if (!hostKey) throw new Error('no host key')
   const at = new Date(o.now ?? Date.now()).toISOString()
   const out = await updateAuth((auth) => {
+    const none = { persist: false, result: { revoked: false, closed: [] as string[], names: [] as string[], skipped: [] as string[] } }
     // Its machine's record, under whichever of its names it was issued (hostRecordsIn).
     let mine = hostRecordsIn(auth.devices, hostKey)
-    if (mine.length === 0 && o.machineId && MACHINE_ID_RE.test(o.machineId)) {
+    // A record whose only tie to this key is the machine id its hello claims: never banned by it (N1).
+    const skipped = machineOnlyRecordsIn(auth.devices, hostKey).map((d) => d.hostKey ?? d.name)
+    if (mine.length === 0 && o.machineId && MACHINE_ID_RE.test(o.machineId) && !isOwnMachine(o.machineId)) {
       const name = hostCredentialName(o.machineId)
       const held = auth.devices.find((d) => d.name === name)
-      // A record of another kind under that name: not a host's to ban.
-      if (held && !isHostCredentialRecord(held)) return { persist: false, result: { revoked: false, closed: [] as string[], names: [] as string[] } }
-      if (held) mine = [held]
-      else {
-        const mark: DeviceRecord = { name, id: newDeviceId(), tokenHash: '', createdAt: at, kind: 'machine', issuer: 'leader', machineId: o.machineId, hostKey }
-        auth.devices = [...auth.devices, mark]
-        mine = [mark]
-      }
+      if (held) return { ...none, result: { ...none.result, skipped: isHostCredentialRecord(held) && held.hostKey ? [held.hostKey] : skipped } }
+      const mark: DeviceRecord = { name, id: newDeviceId(), tokenHash: '', createdAt: at, kind: 'machine', issuer: 'leader', machineId: o.machineId, hostKey }
+      auth.devices = [...auth.devices, mark]
+      mine = [mark]
     }
-    if (mine.length === 0) return { persist: false, result: { revoked: false, closed: [] as string[], names: [] as string[] } }
+    if (mine.length === 0) return { ...none, result: { ...none.result, skipped } }
     const closed: string[] = []
     for (const d of mine) {
       if (d.verifyKey || d.previous) closed.push(d.name)
@@ -198,13 +218,35 @@ export async function revokeHostDoor(hostKey: string, o: { by: string; machineId
       delete d.previous
       delete d.issuedAt
       delete d.allowed
-      d.revoked ??= { at, by: o.by }
+      // The machine's other config keys known now are the person's facts from here on (S1).
+      const keys = new Set([...(d.revoked?.keys ?? []), hostKey, ...hostAliasesNow(hostKey).aliases, ...hostAliasesNow(d.hostKey!).aliases, ...stickyAliasesOf(d.hostKey!)])
+      keys.delete(d.hostKey!)
+      d.revoked = { ...(d.revoked ?? { at, by: o.by }), keys: [...keys].sort() }
     }
-    return { persist: true, result: { revoked: true, closed, names: mine.map((d) => d.name) } }
+    return { persist: true, result: { revoked: true, closed, names: mine.map((d) => d.name), skipped } }
   })
   // Every record it banned: a socket still linked on a key a moment ago is closed too.
   if (out.revoked) notifyRevoked(out.names)
-  return { revoked: out.revoked, closed: out.closed }
+  return { revoked: out.revoked, closed: out.closed, skipped: out.skipped }
+}
+
+/**
+ * The keys judged aliases of the ban on `hostKey`'s record since it was made (revoked-hosts.ts
+ * stickyAliasesOf), written into it, so a restart keeps them banned. True when it wrote any.
+ */
+export async function keepBannedAliases(hostKey: string, keys: readonly string[]): Promise<boolean> {
+  if (keys.length === 0) return false
+  return updateAuth((auth) => {
+    let wrote = false
+    for (const d of auth.devices) {
+      if (!isHostCredentialRecord(d) || d.hostKey !== hostKey || !d.revoked) continue
+      const next = new Set([...(d.revoked.keys ?? []), ...keys.filter((k) => k && k !== hostKey)])
+      if (next.size === (d.revoked.keys ?? []).length) continue
+      d.revoked = { ...d.revoked, keys: [...next].sort() }
+      wrote = true
+    }
+    return { persist: wrote, result: wrote }
+  })
 }
 
 /** Allow `hostKey` again after a revoke, under any name of its machine: its marks go (`allowed` says by whom), and its next link check issues it a fresh key. True when it was revoked. */

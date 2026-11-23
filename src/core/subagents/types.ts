@@ -26,6 +26,8 @@ export type LightSubagentErrorCode =
   | 'engine_unavailable'
   | 'model_unavailable'
   | 'host_unreachable'
+  /** The host it was aimed at is revoked (session-channel/revoked-hosts.ts). */
+  | 'host_revoked'
   | 'too_many'
   | 'not_found'
   | 'timed_out'

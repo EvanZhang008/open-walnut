@@ -25,6 +25,7 @@ import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition, type ExposeRunsOn, 
 import { foundHostWaits } from '../hosts/found-hosts.js'
 import { joinedTwins } from '../hosts/joined-twins.js'
 import { inHostTerms } from '../hosts/host-display-name.js'
+import { hostRevokedNow } from '../session-channel/revoked-hosts.js'
 
 export const RUN_ON_HERE = 'here'
 
@@ -97,13 +98,14 @@ export function exposePlacement(runOn: unknown, def: ExposeProviderDefinition | 
   if (chosen) {
     const host = hostAt(hosts, chosen)
     // A host removed since it was picked: back here, where the person can see it.
-    if (usable(host)) return { where: 'host', hostKey: chosen, label: hostLabel(chosen, host), auto: false }
+    // A revoked host carries none of this Walnut's traffic (session-channel/revoked-reach.ts `expose`): back here.
+    if (usable(host) && !hostRevokedNow(chosen)) return { where: 'host', hostKey: chosen, label: hostLabel(chosen, host), auto: false }
     return { where: 'here', auto: false }
   }
   for (const key of alwaysOnHosts(def, hosts)) {
     const host = hostAt(hosts, key)!
     // Turned off by hand: the person said no server there.
-    if (host.server?.enabled === false) continue
+    if (host.server?.enabled === false || hostRevokedNow(key)) continue
     return { where: 'host', hostKey: key, label: hostLabel(key, host), auto: true }
   }
   return { where: 'here', auto: true }

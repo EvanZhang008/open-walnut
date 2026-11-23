@@ -263,6 +263,12 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
   // Another host: the one host_exec would run on, under the same grant (it is as strong as a command there).
   const away = req.host?.trim() ? await awayHost(sid, req.host.trim(), prompt) : null
   const host = away?.host ?? ownHost
+  // A revoked host gets nothing, before any copy of the caller's work goes there (session-channel/revoked-reach.ts `op:subagent_run`).
+  const { revokedAs, HostRevokedError } = await import('../session-channel/revoked-hosts.js')
+  const bannedAs = revokedAs(host)
+  if (bannedAs) {
+    throw new LightSubagentError('host_revoked', new HostRevokedError(host, 'The subagent was not started', bannedAs).message, 403)
+  }
   const { acpSupposedFullAccess } = await import('../../providers/acp-permission-posture.js')
   // The slot is taken with no await before it, and handed to the run with none after the
   // check: starts at once never pass the limit together.

@@ -287,7 +287,9 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     if (!bundles.startsWith('/')) throw new Error('jobs.status named no bundle dir')
     const current = Array.isArray(st.jobs) ? st.jobs as PluginJobStatus[] : []
     // A host taken out of Settings, Hosts runs nothing for this Walnut any more.
-    const known = hostKey === LOCAL_HOST || (await deps.hosts()).some((h) => h.key === hostKey)
+    // Nor a revoked host: its jobs are taken off it, and no plugin's settings go there (session-channel/revoked-reach.ts `cmd:jobs.configure`).
+    const revoked = (await import('../session-channel/revoked-hosts.js')).hostRevokedNow(hostKey)
+    const known = !revoked && (hostKey === LOCAL_HOST || (await deps.hosts()).some((h) => h.key === hostKey))
     // A plugin set to run on another alias of this daemon runs here too: it is the same machine.
     const runsHere = new Set(names?.aliases ?? [hostKey])
     const jobs = await desiredFor(hostKey, handle, known ? plugins : [], current, bundles, rec, runsHere)

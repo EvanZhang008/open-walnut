@@ -50,6 +50,7 @@ import { engineSwitchedReason, isSupersededSession } from './engine-switch-marke
 import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-resume.js';
 import { recordedSessionMode } from './acp-recorded-mode.js';
 import { hostGone } from './host-lost.js';
+import { revokedWhy } from '../session-channel/revoked-hosts.js';
 import { hostPath, landHeldRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engine-switch-restart.js';
 import { interruptedByShutdown } from '../server-stopping.js';
@@ -301,6 +302,9 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
   }
   const oldHost = normalizeHost(old.host);
   const host = req.host !== undefined ? normalizeHost(req.host) : oldHost;
+  // Before the old session stops or its work is packed for the host (revoked-reach.ts op:task_move).
+  const revoked = revokedWhy(host, 'The task was not moved');
+  if (revoked) throw new EngineSwitchError(revoked, 403, 'host_revoked');
   const move = host !== oldHost;
   if (!move && req.host !== undefined && resolveEngine(old.engine) === engine) {
     throw new EngineSwitchError(`This task already runs on ${host === LOCAL_HOST ? 'this Mac' : host}`, 400, 'same_host');

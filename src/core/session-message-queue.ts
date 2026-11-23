@@ -641,6 +641,26 @@ export class SendNoLongerWantedError extends Error {
 }
 
 /**
+ * The revoked host a session runs on, or null (session-channel/revoked-reach.ts `send`): its queue then
+ * hands out only a person's own lines; every other row is parked with why (a peer's, a routine's, a
+ * recovery's), so nothing automated reaches a host the person revoked. Read only while a ban stands.
+ */
+async function revokedHostOfSession(sessionId: string): Promise<string | null> {
+  const { anyHostRevoked, revokedAs } = await import('./session-channel/revoked-hosts.js');
+  if (!anyHostRevoked()) return null;
+  const host = (await import('./session-db.js')).sessionJudgeInStore(sessionId)?.host ?? null;
+  return host && revokedAs(host) ? host : null;
+}
+
+/** Park every pending row of `queue` a person did not type, on revoked host `host` (revokedHostOfSession). */
+function parkAutomatedOnRevoked(queue: QueuedMessage[], host: string | null): void {
+  if (!host) return;
+  for (const m of queue) {
+    if (m.status === 'pending' && m.sentBy !== 'person') parkRow(m, `Not sent: the host ${host} is revoked; only your own messages reach a session already running there. Allow the host again, then Retry.`);
+  }
+}
+
+/**
  * Mark the next deliverable run of 'pending' messages for a session as 'processing'.
  * Returns the messages that were marked (the batch to send to Claude).
  * Returns empty array if no pending messages.
@@ -669,6 +689,7 @@ export async function markProcessing(
 ): Promise<QueuedMessage[]> {
   // A stopping Demo hands no row to a live write or a cold --resume: the rows stay pending (sessions/demo-admission.ts).
   if (demoAdmissionClosed()) return [];
+  const revokedOn = await revokedHostOfSession(sessionId);
   // A session spawned before its default instructions changed learns the changed
   // lines on the first line frozen for it (sessions/instruction-notice.ts). Read before the lock, and
   // only when a fresh row waits to be frozen.
@@ -689,6 +710,7 @@ export async function markProcessing(
       dropped.push(m.id);
     }
     if (queue.length === 0) { delete s.queues[sessionId]; return []; }
+    parkAutomatedOnRevoked(queue, revokedOn);
     if (stopFence !== undefined) {
       for (const message of queue) {
         if (message.status !== 'pending' || (message.stopFence ?? null) === stopFence) continue;
@@ -769,10 +791,12 @@ async function pendingTaskRouting(sessionId: string): Promise<PendingInstruction
 export async function markNextProcessing(sessionId: string): Promise<QueuedMessage[]> {
   if (demoAdmissionClosed()) return [];
   const routing = await pendingTaskRouting(sessionId);
+  const revokedOn = await revokedHostOfSession(sessionId);
   const picked = await mutateStore((s) => {
     if (demoAdmissionClosed()) return null;
     const queue = s.queues[sessionId];
     if (!queue) return null;
+    parkAutomatedOnRevoked(queue, revokedOn);
     if (queue.some((message) => message.status === 'processing')) return null;
 
     const next = queue.find((message) => message.status === 'pending');

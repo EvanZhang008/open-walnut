@@ -15,6 +15,7 @@
  */
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionEngine, type SessionMode, type SessionRecord, type Task } from '../types.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
+import { revokedWhy } from '../session-channel/revoked-hosts.js';
 
 export const LOCAL_HOST = '__local__';
 export type TransferMode = 'carry' | 'brief';
@@ -117,6 +118,9 @@ export function planTransfer(
   if (host !== LOCAL_HOST && !knownHosts.has(host)) {
     throw new TransferError(`Unknown host: ${host}`, 400, 'unknown_host');
   }
+  // Before any workspace byte or conversation is packed for it (revoked-reach.ts op:task_transfer).
+  const revoked = revokedWhy(host, 'The work was not moved');
+  if (revoked) throw new TransferError(revoked, 403, 'host_revoked');
   const blocker = engineHostBlocker(engine, host);
   if (blocker) throw new TransferError(blocker, 409, 'engine_host_unsupported');
 

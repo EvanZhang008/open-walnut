@@ -5,7 +5,9 @@
  * reports, and a stream its own server opens toward the leader. The ban is of the machine, so the
  * link is refused under another name of it too (here `devbox-b`, whose hello names the machine of
  * the revoked `devbox-a`). Each relay is answered with the reason, so the phone and the daemon
- * hear it at once; a trigger fire stays unacked on the host.
+ * hear it at once; a trigger fire stays unacked on the host. And it is pushed none of this Walnut's
+ * copies (its tasks, notes and memory, its replica, skills and triggers), and the bridge goes to it
+ * turned off, with no machine token (S2 of the C7 review).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
@@ -14,6 +16,10 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-revoked-relay'))
 const enqueue = vi.hoisted(() => vi.fn())
 vi.mock('../../src/core/session-tracker.js', () => ({ getSessionByClaudeId: enqueue, updateSessionRecord: enqueue, updateSessionRecordConditionally: enqueue }))
+const bridgeConfig = vi.hoisted(() => vi.fn(async () => ({ enabled: true, token: 'machine-token' })))
+vi.mock('../../src/integrations/cloud-bridge-config.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/integrations/cloud-bridge-config.js')>()), getBridgeConfigForHost: bridgeConfig,
+}))
 
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { setRevokedHostResolver, setRevokedHosts } from '../../src/core/session-channel/revoked-hosts.js'
@@ -47,7 +53,7 @@ describe('a revoked host\'s daemon link, under another name of its machine', () 
     expect(sent.map((s) => [s.cmd, s.params.relayId, s.params.errorKind ?? null])).toEqual([
       ['stt-result', 1, null], ['launch-result', 2, 'host_revoked'], ['control-result', 3, 'forbidden'], ['message-result', 4, 'host_revoked'],
     ])
-    for (const s of sent) expect(String(s.params.error)).toMatch(/the host devbox-b is revoked \(its machine is revoked\)/)
+    for (const s of sent) expect(String(s.params.error)).toMatch(/the host devbox-b is revoked \(another name of the revoked host devbox-a\)/)
     // Nothing read a session or queued a message.
     expect(enqueue).not.toHaveBeenCalled()
   })
@@ -66,5 +72,50 @@ describe('a revoked host\'s daemon link, under another name of its machine', () 
     const closed = new Promise<Error | undefined>((r) => { stream.on('error', (e) => r(e)); stream.on('close', () => r(undefined)) })
     await conn('devbox-b').call('plugFollowerStream', stream)
     expect(String((await closed)?.message)).toMatch(/stream:follower refused, nothing ran: the host devbox-b is revoked/)
+  })
+})
+
+describe('a revoked host\'s daemon link is pushed none of this Walnut\'s copies', () => {
+  const PUSHES = ['pushHostSlice', 'pushHostReplica', 'pushSkillSync', 'pushTriggersNow'] as const
+  function linked(hostKey: string) {
+    const l = conn(hostKey)
+    const raw = l.c as unknown as { _capabilities: string[]; _connected: boolean; daemonNames: () => Promise<{ keeper: string; aliases: string[] }> }
+    raw._capabilities = ['offline-host-v1', 'host-replica-v1', 'attachment-copy-v1', 'skill-sync-v2', 'triggers-v1']
+    raw._connected = true
+    raw.daemonNames = async () => ({ keeper: hostKey, aliases: [] })
+    const asked = vi.spyOn(l.c, 'hasCapability')
+    return { ...l, asked }
+  }
+
+  it('returns at the ban, before it reads what the daemon can take or sends anything', async () => {
+    setRevokedHosts([{ hostKey: 'devbox-a', machineId: 'm-devbox' }])
+    setRevokedHostResolver({ machineOf: (k) => (k === 'devbox-b' ? 'm-devbox' : null), aliasesOf: () => [] })
+    for (const push of PUSHES) {
+      const { c, sent, asked } = linked('devbox-b')
+      await (c as unknown as Record<string, () => unknown>)[push]()
+      expect(asked, push).not.toHaveBeenCalled()
+      expect(sent, push).toEqual([])
+    }
+    // Another host goes on to its capability checks (the pushes run as before).
+    for (const push of PUSHES) {
+      const { c, asked } = linked('devbox-c')
+      void (c as unknown as Record<string, () => unknown>)[push]()
+      expect(asked, push).toHaveBeenCalled()
+    }
+  })
+
+  it('pushes the bridge turned off, never reading or minting a machine token for it', async () => {
+    setRevokedHosts(['devbox-a'])
+    bridgeConfig.mockClear()
+    const off = linked('devbox-a')
+    off.c.pushBridgeConfig()
+    await vi.waitFor(() => expect(off.sent.map((s) => s.cmd)).toEqual(['bridge.configure']))
+    expect(off.sent[0]!.params).toMatchObject({ enabled: false })
+    expect(JSON.stringify(off.sent[0]!.params)).not.toMatch(/machine-token/)
+    expect(bridgeConfig).not.toHaveBeenCalled()
+    const on = linked('devbox-c')
+    on.c.pushBridgeConfig()
+    await vi.waitFor(() => expect(on.sent.map((s) => s.cmd)).toEqual(['bridge.configure']))
+    expect(bridgeConfig).toHaveBeenCalledWith('devbox-c')
   })
 })

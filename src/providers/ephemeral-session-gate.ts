@@ -10,6 +10,7 @@ import { readDemoOwnership, writeDemoOwnership } from './demo-session-ownership.
 import { resolveAgentCommand } from './agent-command-map.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { ThisServer } from '../core/server-self-name.js'
+import { assertHostNotRevoked } from '../core/session-channel/revoked-hosts.js'
 
 /**
  * Where a refused session came from, as far as this server knows: `outside` when its own store
@@ -73,6 +74,9 @@ const INPUT_COMMANDS = new Set([
   'send', 'sendRaw', 'appendUserMarker', 'setMode', 'bridgeResume', 'turns.restore',
   'acpSend', 'acpSteer', 'acpRespond', 'acpCancel', 'acpSetConfigOption',
 ])
+
+/** The commands that run a new process on a host: refused on a revoked one (revoked-reach.ts). */
+export const REVOKED_REFUSES_COMMANDS: ReadonlySet<string> = new Set(['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'bridgeResume'])
 
 const k = (...parts: string[]) => parts.join('\u0000')
 /** A thread one of this server's own ACP runs answered with on `host`, under any adapter. */
@@ -150,6 +154,10 @@ function refuse(id: string, cmd: string): never {
 /** Throws before `cmd` is sent if it may not run; returns the attempt its reply may confirm. */
 export function gateSessionCommand(scope: GateScope, cmd: string, params: Record<string, unknown>, enabled: boolean = IS_EPHEMERAL): GateAttempt | undefined {
   const canonicalCommand = canonical(cmd, params)
+  // A revoked host runs no new process of this Walnut: a start, a cold --resume, an ACP start and a
+  // one-shot run are refused here, every source and path alike (session-channel/revoked-reach.ts `cmd:` rows).
+  const spawns = !!canonicalCommand && REVOKED_REFUSES_COMMANDS.has(canonicalCommand)
+  if (spawns) assertHostNotRevoked(scope.host, `${canonicalCommand} refused, nothing ran`)
   if (canonicalCommand && (INPUT_COMMANDS.has(canonicalCommand)
     || ['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'exec.run', 'exec.script'].includes(canonicalCommand))) assertDemoAdmission()
   if (skipped(scope, enabled)) return undefined

@@ -50,24 +50,29 @@ function hostKeyOf(req: Request, res: Response): string | null {
   return null
 }
 
-/** A revoke or an allow of `hostKey` that came through that host's own link, or from nowhere known: refused. */
+/**
+ * A revoke or an allow of `hostKey` that came through that host's own link, through any name of its
+ * machine, through any host a ban covers now (a revoked host never revokes or allows anything, under
+ * whatever name it calls from: S1 of the C7 review), or from nowhere known: refused.
+ */
 async function refusedCaller(req: Request, res: Response, hostKey: string): Promise<boolean> {
   const origin = requestOrigin(req)
-  // Through fromHost: a call relayed over another alias of the same daemon is that host's too.
-  // And one whose hello names the same machine (revoked-hosts.ts sameMachine): a ban is of the machine.
-  const [{ fromHost }, { sameMachine }] = await Promise.all([import('../../core/hosts/session-host-origin.js'), import('../../core/session-channel/revoked-hosts.js')])
-  const viaSameMachine = origin.startsWith('host:') && sameMachine(origin.slice('host:'.length), hostKey)
-  if (origin !== UNKNOWN_ORIGIN && !viaSameMachine && !(await fromHost(hostKey, origin))) return false
-  log.web.warn('host door: a revoke or allow was refused (it came through the host itself, or from an unknown origin)', { host: hostKey, origin })
-  res.status(403).json({ error: `A host's door is revoked or allowed from this leader or another machine, never through ${hostKey} itself.`, code: 'own_host' })
+  // fromHost: a call relayed over another alias of the same daemon is that host's too.
+  const [{ fromHost }, { revokedAs, sameMachine }] = await Promise.all([import('../../core/hosts/session-host-origin.js'), import('../../core/session-channel/revoked-hosts.js')])
+  const via = origin.startsWith('host:') ? origin.slice('host:'.length) : ''
+  const covered = !!via && (revokedAs(via) !== null || sameMachine(via, hostKey))
+  if (origin !== UNKNOWN_ORIGIN && !covered && !(await fromHost(hostKey, origin))) return false
+  log.web.warn('host door: a revoke or allow was refused (it came through the host itself, a revoked host, or from an unknown origin)', { host: hostKey, origin })
+  res.status(403).json({ error: `A host's door is revoked or allowed from this leader or another machine that is not revoked, never through ${hostKey} itself.`, code: 'own_host' })
   return true
 }
 
 /** The door of `hostKey`'s machine, under whichever of its names its record was issued (`as`: the name of the ban when it is another). */
 async function doorOf(hostKey: string) {
   const { hostCredentials, hostRecordsIn, revokedHostIn } = await import('../../core/session-channel/host-credentials.js')
-  const recs = hostRecordsIn(await hostCredentials(), hostKey)
-  const ban = revokedHostIn(recs, hostKey)
+  const all = await hostCredentials()
+  const recs = hostRecordsIn(all, hostKey)
+  const ban = revokedHostIn(all, hostKey)
   const allowed = recs.find((d) => d.allowed)?.allowed
   const revoked = ban ? { at: ban.at, by: ban.by, ...(ban.as !== hostKey ? { as: ban.as } : {}) } : null
   return { hostKey, revoked: !!revoked, ...(revoked ?? {}), ...(allowed ? { allowed } : {}), credentials: recs.filter((d) => !!d.verifyKey).length }
@@ -90,11 +95,16 @@ hostDoorsRouter.post('/:hostKey/revoke', async (req: Request, res: Response, nex
     ])
     const out = await revokeHostDoorNow(hostKey, by)
     if (!out.revoked) {
-      res.status(404).json({ error: `${hostKey} holds no door credential here and has not linked yet; there is nothing to revoke`, code: 'no_door_credential' })
+      // A record only the machine id this key's hello claims ties to it is another host's: named, not banned (N1).
+      const skipped = out.skipped.length ? `; its daemon names the machine of ${out.skipped.join(', ')}, which is not banned by this key: revoke that host by its own name` : ''
+      res.status(404).json({ error: `${hostKey} holds no door credential here and has not linked yet; there is nothing to revoke${skipped}`, code: 'no_door_credential', ...(out.skipped.length ? { skipped: out.skipped } : {}) })
       return
     }
     log.web.info('host door: a host was revoked', { host: hostKey, by, closed: out.closed })
-    res.json({ ...(await doorOf(hostKey)), closed: out.closed, refused: REVOKED_REFUSED, stillReaches: REVOKED_STILL_REACHES, standbySynced: out.standbySynced })
+    res.json({
+      ...(await doorOf(hostKey)), closed: out.closed, refused: REVOKED_REFUSED, stillReaches: REVOKED_STILL_REACHES, standbySynced: out.standbySynced,
+      ...(out.skipped.length ? { skipped: out.skipped } : {}), ...(out.tunnelBack ? { tunnel: 'the tunnel ran there; it runs here again' } : {}),
+    })
   } catch (err) { next(err) }
 })
 

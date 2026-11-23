@@ -489,3 +489,14 @@ it('a revoke made now closes the host\'s link at once (leader-issue.ts calls not
   expect(r.link.closed()).toBe(true)
   expect(side!.linked('devbox')).toBe(false)
 })
+
+it('an alias learned while a ban stands is cut at the next recheck with nothing changed (N2: leader-boot.ts passes "")', async () => {
+  const r = await rig({ revoked: hostRevokedNow })
+  setRevokedHosts([{ hostKey: 'devbox-net' }])
+  side!.noteRevoked('')
+  expect(r.link.closed()).toBe(false)
+  // The twin snapshot (or a hello) now ties `devbox` to the banned key; the ban itself did not change.
+  setRevokedHostResolver({ machineOf: () => null, aliasesOf: (k) => (k === 'devbox' ? ['devbox-net'] : []) })
+  side!.noteRevoked('')
+  expect(r.link.closed()).toBe(true)
+})

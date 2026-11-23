@@ -33,6 +33,7 @@ import { log } from '../logging/index.js'
 import { getConnectedDaemonConnection, getDirectDaemonConnection, readDaemonLineFate, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, cliStoppedBeforeFirstLine, cliStoppedSentence, startFailureSentence, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
+import { HostRevokedError } from '../core/session-channel/revoked-hosts.js'
 import { linkFailureKind, markLinkFailure } from './link-failure.js'
 import type { LineFate } from './line-fate-core.js'
 import { CloudSessionLink } from './cloud-session-link.js'
@@ -1067,7 +1068,7 @@ export class RemoteSessionManager implements SessionManager {
     } catch (err) {
       // A budget or test-server gate refusal is an answer: nothing was written, so later lines are not held behind it.
       if (isSessionStopSuperseded(err) || err instanceof BudgetPausedError || err instanceof BudgetCheckingError
-        || err instanceof InheritedSessionRefusedError) throw err
+        || err instanceof InheritedSessionRefusedError || err instanceof HostRevokedError) throw err
       if (err instanceof SendOutcomeUnknownError || err instanceof SendHeldError) {
         this._heldThrough = this._writeSeq
         log.session.warn('RemoteSessionManager: send outcome unknown', { host: this.hostKey, sid, error: err.message })

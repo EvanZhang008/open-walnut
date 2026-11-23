@@ -655,6 +655,16 @@ The full rollback order, and what a straight downgrade does, are in "A session a
 reads a revoked host's record as never issued and issues it a fresh key. Remove a revoked host from the
 config before going back, or revoke it again after going forward.
 
+What a revoke ends and what it keeps is one table, `src/core/session-channel/revoked-reach.ts`, and
+the revoke's answer reads it back (`refused`, `stillReaches`). In short: a ban is of the machine
+under every config key it had when it was made, and every key judged its alias since, whatever its
+daemon says later. It runs no new process there (`gateSessionCommand` refuses each start, cold
+`--resume`, ACP start and one-shot run), moves no work there (task start, move, transfer, subagent),
+pushes it none of this Walnut's copies, secrets, plugin jobs or a bridge token (the bridge goes to it
+turned off), and moves the tunnel back here. Only a person's own lines and a stop reach a session
+already running there; every automated row is parked with why. The leader's own commands there
+(exec, files, git) stay: the host cannot begin one.
+
 ## Keep the twins in sync, and auto-deploy
 
 **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.

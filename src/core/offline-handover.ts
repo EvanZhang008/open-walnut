@@ -203,6 +203,12 @@ async function lostSessionWindow(sid: string): Promise<{ from: number; to: numbe
   }
 }
 
+/** Is the host this drain reads revoked, under any name of its machine (revoked-hosts.ts; the daemon's own names too, as this link worked them out)? */
+async function drainRevoked(conn: HandoverConnection): Promise<boolean> {
+  const { hostRevokedNow } = await import('./session-channel/revoked-hosts.js');
+  return hostRevokedNow(conn.hostKey) || (conn.aliases ?? []).some((a) => hostRevokedNow(a));
+}
+
 /** The last time a held drain was logged, per host: a revoked host's link asks on every copy round. */
 const heldLoggedAt = new Map<string, number>();
 const HELD_LOG_EVERY_MS = 10 * 60_000;
@@ -213,9 +219,7 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   // person did while this Mac was away, and dropping them would lose that work. Nothing is read
   // or acked, so the host keeps every record, and the first drain after an allow takes them in
   // (session-channel/revoked-hosts.ts; host-doors.ts says so in the revoke's answer).
-  const { hostRevokedNow } = await import('./session-channel/revoked-hosts.js');
-  // Under any name of its machine (revoked-hosts.ts); the daemon's own names too, as this link worked them out.
-  if (hostRevokedNow(conn.hostKey) || (conn.aliases ?? []).some((a) => hostRevokedNow(a))) {
+  if (await drainRevoked(conn)) {
     const now = Date.now();
     if (now - (heldLoggedAt.get(conn.hostKey) ?? 0) >= HELD_LOG_EVERY_MS) {
       heldLoggedAt.set(conn.hostKey, now);
@@ -321,6 +325,8 @@ async function drainRounds(
 ): Promise<void> {
   const { conn, v2, result } = batch;
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    // Revoked while this drain runs: the rounds left stay on the host, unread and unacked (N3).
+    if (round > 0 && await drainRevoked(conn)) { batch.result.held = true; return; }
     const sentAt = Date.now();
     const reply = await conn.send('offline.drain', { home: WALNUT_HOME, ...(v2 ? { kinds: [...APPLIED_V2_KINDS] } : {}) }, RPC_TIMEOUT_MS);
     if (reply.ok === false) throw new Error(String(reply.error ?? 'offline.drain refused'));

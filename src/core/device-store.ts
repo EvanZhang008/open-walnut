@@ -106,9 +106,10 @@ export interface DeviceRecord {
   /**
    * A host door credential: its host was revoked (host-credentials.ts revokeHostDoor), by whom and
    * when. The record then holds no key, the door lets it in no more, and nothing is issued to that
-   * host until someone allows it again (allowHostDoor).
+   * host until someone allows it again (allowHostDoor). `keys`: the machine's other config keys the
+   * ban named (known when it was made, or judged its aliases since): banned whatever the host says.
    */
-  revoked?: { at: string; by: string }
+  revoked?: { at: string; by: string; keys?: string[] }
   /** A host door credential: the last allow after a revoke, by whom and when. */
   allowed?: { at: string; by: string }
 }

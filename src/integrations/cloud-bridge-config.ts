@@ -383,6 +383,8 @@ export async function getPrimaryMachineToken(
  */
 export async function getBridgeConfigForHost(hostAlias: string): Promise<BridgeConfigPayload> {
   if (isFollower()) return { enabled: false }
+  // A revoked host is never minted or handed a machine token (session-channel/revoked-reach.ts `copy:pushBridgeConfig`).
+  if ((await import('../core/session-channel/revoked-hosts.js')).hostRevokedNow(hostAlias)) return { enabled: false }
   const cfg = await getConfig()
   if (cfg.cloud_bridge?.enabled === false) return { enabled: false }
 

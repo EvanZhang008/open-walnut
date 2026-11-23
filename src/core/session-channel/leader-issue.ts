@@ -31,12 +31,12 @@
  * (host-door.ts pushDoorsToDialed); leader-boot.ts pushHostDoors does both.
  */
 import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH, HOST_DOOR_CAP, cleanDoorUrls, doorKeyId } from './door-wire.js'
-import { allowHostDoor, credentialDue, dropHostCredential, hostCredentialOf, hostCredentials, hostDoorRevoked, HostDoorRevoked, mintHostCredential, revokeHostDoor } from './host-credentials.js'
+import { allowHostDoor, credentialDue, dropHostCredential, hostCredentialOf, hostCredentials, hostDoorRevoked, HostDoorRevoked, keepBannedAliases, mintHostCredential, revokedRecordsOf, revokeHostDoor } from './host-credentials.js'
 import { requestOverStream, type HostCallAnswer } from './leader-links.js'
 import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js'
 import { foundHostUnadopted, type FoundFlags } from '../hosts/found-hosts.js'
 import { hostSwitchNow } from './switch.js'
-import { hostAliasesNow, setRevokedHosts } from './revoked-hosts.js'
+import { anyHostRevoked, hostAliasesNow, setRevokedHosts, stickyAliasesOf } from './revoked-hosts.js'
 import type { Duplex } from 'node:stream'
 import type { PermitPair } from './channel.js'
 
@@ -249,10 +249,17 @@ export { hostRevokedNow } from './revoked-hosts.js'
 
 /** Read the revoked hosts from the credential records again (at boot, at each act, a revoke event, a recheck): the hosts whose standing changed. */
 export async function refreshRevokedHosts(): Promise<string[]> {
-  const revoked = (await hostCredentials()).filter((r) => r.revoked && r.hostKey).map((r) => ({ hostKey: r.hostKey!, machineId: r.machineId ?? null }))
+  const records = await hostCredentials()
+  const revoked = revokedRecordsOf(records)
   // A ban holds for every alias of the machine: the twin snapshot (core/hosts/daemon-twins.ts) is read before it is judged.
   if (revoked.length > 0) await import('../hosts/daemon-twins.js').then((m) => m.daemonTwinsReady()).catch(() => { /* its key and machine id still hold */ })
-  return setRevokedHosts(revoked)
+  const changed = setRevokedHosts(revoked)
+  // A key judged an alias of a ban since it was made is written into the ban's record: a restart keeps it banned (S1).
+  for (const r of revoked) {
+    const more = stickyAliasesOf(r.hostKey).filter((k) => !(r.keys ?? []).includes(k))
+    if (more.length > 0) await keepBannedAliases(r.hostKey, more).catch(() => { /* the next recheck writes it */ })
+  }
+  return changed
 }
 
 /**
@@ -264,7 +271,8 @@ export async function watchRevokedHosts(onChanged: (hostKeys: string[]) => void,
   const recheck = async (): Promise<void> => {
     let changed: string[]
     try { changed = await refreshRevokedHosts() } catch (err) { onError(err); return }
-    if (changed.length > 0) onChanged(changed)
+    // While any ban stands every link is judged again (an alias learned since: N2), not only on a change.
+    if (changed.length > 0 || anyHostRevoked()) onChanged(changed)
   }
   await recheck()
   const timer = setInterval(() => { void recheck() }, everyMs)
@@ -290,6 +298,16 @@ async function syncStandbyBounded(): Promise<boolean> {
 async function noteDoorActed(hostKey: string): Promise<void> {
   await refreshRevokedHosts().catch(() => { /* the last read stands until the next */ })
   try { hooks?.cut?.(hostKey) } catch { /* the next view of the host does it */ }
+  // A tunnel placed on a revoked host comes back here (core/expose/placement.ts reads the ban).
+  void import('../../web/expose-runtime.js').then((m) => m.getExposeRuntime()?.reconcile()).catch(() => { /* its next check places it */ })
+}
+
+/** Did the tunnel run on `hostKey`'s machine (the revoke's answer says it comes back here)? */
+async function tunnelRanOn(hostKey: string): Promise<boolean> {
+  try {
+    const on = (await import('../../web/expose-runtime.js')).getExposeRuntime()?.status().runsOn?.hostKey
+    return !!on && (on === hostKey || hostAliasesNow(hostKey).aliases.includes(on))
+  } catch { return false }
 }
 
 /**
@@ -301,13 +319,14 @@ async function noteDoorActed(hostKey: string): Promise<void> {
  * config, or turning it off, ends that. `standbySynced`: false when the standby batch did not end
  * in time (a leader switch right after could still hold the old record there).
  */
-export async function revokeHostDoorNow(hostKey: string, by: string): Promise<{ revoked: boolean; closed: number; standbySynced: boolean }> {
+export async function revokeHostDoorNow(hostKey: string, by: string): Promise<{ revoked: boolean; closed: number; standbySynced: boolean; skipped: string[]; tunnelBack: boolean }> {
   // With the switch off nothing is issued anyway: only the records there are get the mark (no new one).
   const on = (await hostSwitchNow())(hostKey)
   const out = await revokeHostDoor(hostKey, { by, machineId: on ? hooks?.machineIdOf(hostKey) ?? null : null })
-  if (!out.revoked) return { revoked: false, closed: 0, standbySynced: true }
+  if (!out.revoked) return { revoked: false, closed: 0, standbySynced: true, skipped: out.skipped, tunnelBack: false }
+  const tunnelBack = await tunnelRanOn(hostKey)
   await noteDoorActed(hostKey)
-  return { revoked: true, closed: out.closed.length, standbySynced: await syncStandbyBounded() }
+  return { revoked: true, closed: out.closed.length, standbySynced: await syncStandbyBounded(), skipped: out.skipped, tunnelBack }
 }
 
 /** Allow `hostKey` again after a revoke: it is checked now, so a host on its link is issued a fresh key at once. */
@@ -321,6 +340,16 @@ export async function allowHostDoorNow(hostKey: string, by: string): Promise<{ a
   for (const k of names) { try { if (k !== hostKey) hooks?.cut?.(k); hooks?.recheck(k) } catch { /* checked at its next view */ } }
   // The journal its link held while it was revoked (offline-handover.ts) drains now, not at the next copy.
   const daemons = await import('../../providers/daemon-connection.js')
-  for (const k of names) { try { daemons.getConnectedDaemonConnection(k)?.drainJournalSoon() } catch { /* the next connect drains it */ } }
+  const secrets = await import('../secrets/fleet-secrets.js')
+  for (const k of names) {
+    // Its secrets were withheld while it was revoked (fleet-secrets.ts reconcileHost): brought in line now.
+    void secrets.reconcileHost(k).catch(() => { /* its next connect reconciles */ })
+    try {
+      const link = daemons.getConnectedDaemonConnection(k)
+      link?.drainJournalSoon()
+      // And the copies it was refused (revoked-reach.ts `copy:` rows): its replica, skills, triggers and bridge.
+      link?.pushCopiesAgain()
+    } catch { /* the next connect drains and copies */ }
+  }
   return { allowed: true, standbySynced }
 }

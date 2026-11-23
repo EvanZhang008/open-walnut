@@ -1089,6 +1089,8 @@ async function startInNewWorkspace(
       + `A workspace is for new work: task_create with workspace, or task_transfer {"id":"${task.id}"} to move this work.`, 409);
   }
   const place = await resolveTaskLaunchReadOnly(task, { ...params, workspace: undefined });
+  // Nor a workspace made there first (revoked-reach.ts `op:task_start`).
+  (await import('../session-channel/revoked-hosts.js')).assertHostNotRevoked(place.host, 'The workspace was not made');
   if (place.createTaskDir) {
     throw new QuickStartError(`Task ${task.id} has no folder of its own for a workspace to copy (only its task directory): pass cwd (an existing folder, usually a repository).`, 400);
   }
@@ -1232,6 +1234,8 @@ async function prepareLaunch(task: Task, params: SessionStartParams, area?: Rout
     };
   }
   const launch = await resolveTaskLaunchReadOnly(task, params);
+  // A revoked host gets nothing, before its folder or task directory is made there (session-channel/revoked-reach.ts `op:task_start`).
+  (await import('../session-channel/revoked-hosts.js')).assertHostNotRevoked(launch.host, 'The session was not started');
   if (params.createCwd && !launch.createTaskDir) {
     // Same sanitize rule as the quick-start route: this path may ride a daemon RPC.
     if (/[;&|`$(){}!<>]/.test(launch.cwd)) throw new QuickStartError('invalid characters in cwd', 400);

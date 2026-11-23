@@ -1980,6 +1980,8 @@ export class DaemonConnection {
    * take phone traffic meant for the real Walnut.
    */
   pushBridgeConfig(): void {
+    // A revoked host gets the bridge turned off, never a machine token (revoked-reach.ts `copy:pushBridgeConfig`).
+    const off = this.revokedReach('copy:pushBridgeConfig') !== null
     if (IS_EPHEMERAL || this.ownSessionsOnly) return
     // In-flight guard: a slow configure RPC + the 5-min re-push tick must not
     // stack overlapping pushes against the same daemon. One asked for meanwhile
@@ -1991,7 +1993,7 @@ export class DaemonConnection {
         const { getBridgeConfigForHost } = await import('../integrations/cloud-bridge-config.js')
         // One bridge per daemon, under one name from every link to it (daemonKeeperAlias).
         const { keeper } = await this.daemonNames()
-        const cfg = await getBridgeConfigForHost(keeper)
+        const cfg = off ? { enabled: false as const } : await getBridgeConfigForHost(keeper)
         // Push disabled too — an operator turning the bridge off must reach
         // daemons that already hold a persisted bridge.json.
         // `home` names this Walnut's own link on a daemon several Walnuts share
@@ -2113,6 +2115,8 @@ export class DaemonConnection {
   private skillSyncInFlight = false
 
   pushSkillSync(): void {
+    // A revoked host is given none of this Walnut's data (revoked-reach.ts `copy:pushSkillSync`).
+    if (this.revokedReach('copy:pushSkillSync')) return
     if (this.pushesNoLeaderState) return
     if (this._capabilities && !this.hasCapability('skill-sync-v2')) return
     if (this.skillSyncInFlight) return
@@ -2200,6 +2204,8 @@ export class DaemonConnection {
    */
   pushTriggersNow(): Promise<void> {
     if (this.pushesNoLeaderState) return Promise.resolve()
+    // A revoked host is armed with none of this Walnut's checks and prompts (revoked-reach.ts `copy:pushTriggers`).
+    if (this.revokedReach('copy:pushTriggers')) return Promise.resolve()
     if (this._capabilities && !this.hasCapability('triggers-v1')) return Promise.resolve()
     if (this.triggersPushInFlight && this.triggersPushDone) { this.triggersPushRerun = true; return this.triggersPushDone }
     this.triggersPushInFlight = true
@@ -2415,6 +2421,8 @@ export class DaemonConnection {
    * per push was a round trip per change to every host.
    */
   pushHostSlice(): void {
+    // A revoked host is given none of this Walnut's data (revoked-reach.ts `copy:pushHostSlice`).
+    if (this.revokedReach('copy:pushHostSlice')) return
     if (this.pushesNoLeaderState) return
     // Only on a daemon that said it has it (hello runs before any push): a copy
     // pushed to anything else is a command it answers "unknown".
@@ -2687,6 +2695,8 @@ export class DaemonConnection {
    * Mac's own daemon shares the vault's disk, and nothing there reads a copy.
    */
   pushHostReplica(): void {
+    // A revoked host is given none of this Walnut's data (revoked-reach.ts `copy:pushHostReplica`).
+    if (this.revokedReach('copy:pushHostReplica')) return
     if (this.pushesNoLeaderState || !this._connected || !this.hasCapability('host-replica-v1')) return
     const attachments = this.hostKey !== '__local__' && this.hasCapability('attachment-copy-v1')
     // 'host-replica-moves-v1': the copy takes the files that moved as moves (core/replication/manifest-moves.ts).
@@ -2694,6 +2704,14 @@ export class DaemonConnection {
     void import('../core/host-replica.js')
       .then((m) => m.syncHostReplica({ hostKey: this.hostKey, attachments, moves, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) }))
       .catch((err) => log.session.warn('DaemonConnection: host replica round failed', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) }))
+  }
+
+  /** A revoked host allowed again: every copy it was refused goes now (leader-issue.ts allowHostDoorNow). */
+  pushCopiesAgain(): void {
+    if (!this._connected) return
+    this.lastTriggersPushHash = null
+    for (const cmd of ['host.slice', 'skills.sync', 'triggers.configure', 'hooks.configure', 'bridge.configure']) this.repushCopy(cmd)
+    this.pushHostReplica()
   }
 
   /** Drain this daemon's journal on the next host-slice round (a revoked host allowed again: offline-handover.ts held it). */
@@ -3334,15 +3352,16 @@ export class DaemonConnection {
     return false
   }
 
-  /** When each kind of relay a revoked host brought was last logged (revokedRelay). */
+  /** When each kind of relay a revoked host brought was last logged (revokedReach). */
   private revokedLoggedAt = new Map<string, number>()
 
   /**
-   * What this host's daemon brings to this leader while the host is revoked, under any name of its
-   * machine (session-channel/revoked-reach.ts, the `daemon-event:` and `stream:` rows refused): the
-   * refusal's sentence, or null when it may run. Logged once per kind every 10 minutes.
+   * What this host's daemon brings to this leader, or this leader would push to it, while the host is
+   * revoked under any name of its machine (session-channel/revoked-reach.ts, the `daemon-event:`,
+   * `stream:` and `copy:` rows refused): the refusal's sentence, or null when it may run. Logged once
+   * per kind every 10 minutes.
    */
-  private revokedRelay(kind: string): string | null {
+  private revokedReach(kind: string): string | null {
     if (this.hostKey === '__local__') return null
     const as = revokedAs(this.hostKey)
     if (!as) return null
@@ -3367,7 +3386,7 @@ export class DaemonConnection {
     const audio = event.audio
     const format = event.format
     if (typeof relayId !== 'number' || typeof audio !== 'string' || typeof format !== 'string') return
-    const revoked = this.revokedRelay('stt-request')
+    const revoked = this.revokedReach('stt-request')
     if (revoked) { try { await this.send('stt-result', { relayId, error: revoked }) } catch { /* the daemon times it out */ } return }
     let reply: Record<string, unknown>
     try {
@@ -3408,7 +3427,7 @@ export class DaemonConnection {
     const action = (event as unknown as { action?: unknown }).action
     const params = (event as unknown as { params?: unknown }).params
     if (typeof relayId !== 'number' || typeof action !== 'string') return
-    const revoked = this.revokedRelay('launch-request')
+    const revoked = this.revokedReach('launch-request')
     if (revoked) { try { await this.send('launch-result', { relayId, error: revoked, errorKind: 'host_revoked' }) } catch { /* the daemon times it out */ } return }
     let reply: Record<string, unknown>
     try {
@@ -3451,7 +3470,7 @@ export class DaemonConnection {
     const sessionId = (event as unknown as { sessionId?: unknown }).sessionId
     const params = (event as unknown as { params?: unknown }).params
     if (typeof relayId !== 'number' || typeof action !== 'string') return
-    const revoked = this.revokedRelay('control-request')
+    const revoked = this.revokedReach('control-request')
     if (revoked) { try { await this.send('control-result', { relayId, error: revoked, errorKind: 'forbidden' }) } catch { /* the daemon times it out */ } return }
     // A test server attached read only never runs the real Walnut's session controls.
     if (this.isReadOnlyRemote) {
@@ -3516,7 +3535,7 @@ export class DaemonConnection {
     const messageId = (event as unknown as { messageId?: unknown }).messageId
     const stopFence = (event as unknown as { stopFence?: unknown }).stopFence ?? null
     if (typeof relayId !== 'number') return
-    const revoked = this.revokedRelay('message-request')
+    const revoked = this.revokedReach('message-request')
     if (revoked) { try { await this.send('message-result', { relayId, error: revoked, errorKind: 'host_revoked' }) } catch { /* the daemon times it out */ } return }
     // Not stored here: a test server attached read only is not where the phone's message
     // belongs, and 'not_stored' makes the companion keep it and ask again (a daemon
@@ -4115,8 +4134,8 @@ export class DaemonConnection {
         // A machine's hub forward ('hub-forward-v1'): into a port this Walnut's config opens to
         // this host, on its own 127.0.0.1 (core/hosts/hub-ports.ts), or refused with why.
         accept: (info) => (info.from === 'follower' ? (stream) => { void this.plugFollowerStream(stream) }
-          : info.from === 'companion' ? (this.revokedRelay('stream:companion') ? null : companionStreamAcceptor(this.hostKey, info.sid))
-            : info.from === 'hub' ? (this.revokedRelay('stream:hub') ? null : acceptHubStream(this.hostKey, info)) : null),
+          : info.from === 'companion' ? (this.revokedReach('stream:companion') ? null : companionStreamAcceptor(this.hostKey, info.sid))
+            : info.from === 'hub' ? (this.revokedReach('stream:hub') ? null : acceptHubStream(this.hostKey, info)) : null),
       })
     }
     return this.streams
@@ -4124,7 +4143,7 @@ export class DaemonConnection {
 
   private async plugFollowerStream(stream: Duplex): Promise<void> {
     // A revoked host's own server reaches this leader no more (its forwarded writes, its reads).
-    const revoked = this.revokedRelay('stream:follower')
+    const revoked = this.revokedReach('stream:follower')
     if (revoked) { stream.destroy(new Error(revoked)); return }
     const { getExposeRuntime } = await import('../web/expose-runtime.js')
     const port = getExposeRuntime()?.openPort() ?? null
@@ -8384,7 +8403,7 @@ export class DaemonConnection {
   private dispatchTriggerEvent(event: DaemonEvent): Promise<void> {
     return (async () => {
       // A revoked host's fires stay unacked in its daemon until it is allowed again (revoked-reach.ts).
-      if (this.revokedRelay(event.ev)) return
+      if (this.revokedReach(event.ev)) return
       const { getTriggerEventSink } = await import('../core/routines/trigger-bridge.js')
       // Likewise: a '__local__' instance the pool let go of during the import delivers nothing.
       if (this.localDialAbandoned()) return

@@ -296,6 +296,8 @@ export function reconcileHost(host: string): Promise<void> {
   if (running) return running.then(() => reconcileHost(h))
   const run = (async () => {
     if (!(await fleetSecretsActive())) return
+    // A revoked host is sent no secret, new or rotated; an allow brings its copies in line (leader-issue.ts allowHostDoorNow; session-channel/revoked-reach.ts `cmd:secrets.put`).
+    if ((await import('../session-channel/revoked-hosts.js')).hostRevokedNow(h)) return
     const fleet = readFleet()
     // Shared here, or a copy here that may still exist (sent, or a send whose answer was lost).
     const relevant = Object.entries(fleet.secrets).filter(([, m]) => m.hosts.includes(h)

@@ -99,6 +99,26 @@ describe('a revoked host\'s journal', () => {
   })
 })
 
+describe('a revoke while a drain runs (N3)', () => {
+  it('holds the rounds left: what was acked stays applied, the rest stays on the host unread', async () => {
+    const journal = [held(1), held(2)]
+    const asked: string[] = []
+    const conn = link('devbox-a', journal, asked)
+    const send = conn.send
+    // One record a round; the revoke lands between the first round's ack and the second.
+    conn.send = async (cmd, params, ms) => {
+      if (cmd === 'offline.drain') { asked.push(cmd); return { ok: true, records: journal.slice(0, 1), more: journal.length > 1 } }
+      const out = await send(cmd, params, ms)
+      if (cmd === 'offline.ack') setRevokedHosts(['devbox-a'])
+      return out
+    }
+    expect(await runOfflineHandover(conn)).toMatchObject({ held: true })
+    expect(asked.filter((c) => c === 'offline.drain')).toHaveLength(1)
+    expect(executeOp).toHaveBeenCalledTimes(1)
+    expect(journal.map((r) => r.seq)).toEqual([2])
+  })
+})
+
 /** `devbox-a` is revoked; `devbox-b` is the same machine by its hello, `devbox-a-net` another row of the same daemon. */
 function banOneAlias(): void {
   setRevokedHosts([{ hostKey: 'devbox-a', machineId: 'm-devbox' }])
@@ -113,14 +133,16 @@ describe('a ban of one alias', () => {
     banOneAlias()
     expect(revokedAs('devbox-a')).toBe('devbox-a')
     expect(revokedAs('devbox-a-net')).toBe('devbox-a')
-    expect(revokedAs('devbox-b')).toBe('machine:m-devbox')
+    expect(revokedAs('devbox-b')).toBe('devbox-a')
     expect(revokedAs('devbox-c')).toBeNull()
     expect(revokedAs('__local__')).toBeNull()
     expect(() => assertHostNotRevoked('devbox-a-net', 'The session was not started')).toThrow(/devbox-a-net is revoked \(another name of the revoked host devbox-a\)/)
     expect(() => assertHostNotRevoked('devbox-b', 'x')).toThrow(HostRevokedError)
-    // A resolver that cannot read its links names nothing more: the key itself still counts.
+    // A resolver that cannot read its links names nothing more: the key itself still counts, and so
+    // does a key already judged its alias (S1: kept for the life of the ban).
     setRevokedHostResolver({ machineOf: () => { throw new Error('gone') }, aliasesOf: () => { throw new Error('gone') } })
-    expect(hostRevokedNow('devbox-b')).toBe(false)
+    expect(hostRevokedNow('devbox-c')).toBe(false)
+    expect(hostRevokedNow('devbox-b')).toBe(true)
     expect(hostRevokedNow('devbox-a')).toBe(true)
   })
 

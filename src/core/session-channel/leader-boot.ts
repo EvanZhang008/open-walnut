@@ -97,7 +97,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     import('./door-wire.js'),
     import('../session-db.js'),
   ])
-  const [{ linesNotOthers, noteLinesHanded }, { hostRevokedNow }, { setQueuedRowLedger }, { hostRunsSessionsAnyNow }] = await Promise.all([
+  const [{ linesNotOthers, noteLinesHanded }, { hostRevokedNow, anyHostRevoked }, { setQueuedRowLedger }, { hostRunsSessionsAnyNow }] = await Promise.all([
     import('./handed-sessions.js'), import('./revoked-hosts.js'), import('../session-message-queue.js'), import('./switch.js'),
   ])
   // Every queue row's session, while any host runs its sessions (only then can a host's fact name
@@ -194,10 +194,11 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   // (revoked-hosts.ts revokedAs), from what the links already hold (never a dial or a file read).
   const [{ setRevokedHostResolver }, { daemonTwinsOfNow }] = await Promise.all([import('./revoked-hosts.js'), import('../hosts/daemon-twins.js')])
   const machineIdOf = (hostKey: string): string | null => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey)
-  setRevokedHostResolver({ machineOf: machineIdOf, aliasesOf: (hostKey) => [...daemonTwinsOfNow(hostKey), ...liveSameDaemonHosts(hostKey)] })
+  // This leader's own machine id is never a banned machine (a home copied to another box shares it: N1).
+  setRevokedHostResolver({ machineOf: machineIdOf, aliasesOf: (hostKey) => [...daemonTwinsOfNow(hostKey), ...liveSameDaemonHosts(hostKey)], ownMachine: () => ownMachine || null })
   // The ban read again at boot, at a revoke event here, at a config write and every minute (a ban
   // another process wrote): a host whose standing changed is cut, or may link again (noteRevoked).
-  const revokedWatch = await issue.watchRevokedHosts((changed) => { for (const k of changed) side.noteRevoked(k) }, REVOKED_RECHECK_MS, (err) => {
+  const revokedWatch = await issue.watchRevokedHosts((changed) => { for (const k of changed.length > 0 ? changed : ['']) side.noteRevoked(k) }, REVOKED_RECHECK_MS, (err) => {
     log.session.warn('host door: reading the revoked hosts failed', { error: err instanceof Error ? err.message : String(err) })
   })
   const recheckRevoked = revokedWatch.recheck
@@ -269,6 +270,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown; sessionSide?: { state?: unknown } | null } | null }) => {
     const connected = hostServer.hostServerLink(view.hostKey) !== null
     void side.noteHost(view.hostKey, { connected, judges: view.phase === 'running' && reportJudges(view.server) })
+    // A host seen while a ban stands may be a name of the banned machine its hello just told: every link is judged again (N2).
+    if (anyHostRevoked()) side.noteRevoked(view.hostKey)
     noteHostResumes(view.hostKey, view.phase === 'running' && reportResumes(view.server), view.phase === 'running' && reportResumesAcp(view.server))
     lookIssue(view)
     // A host that stood down, or waits on a channel this leader has not opened: Walnut Health (host-side-health.ts).

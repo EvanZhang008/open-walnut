@@ -169,9 +169,15 @@ describe('issuing a host its door credential', () => {
       // The records alone, as another process (a CLI, a standby that took over) would write them.
       await revokeHostDoor('devbox', { by: 'human', machineId: MACHINE })
       await vi.waitFor(() => expect(hostRevokedNow('devbox')).toBe(true), { timeout: 2000, interval: 10 })
+      // A recheck with nothing changed still judges the links again while the ban stands (N2).
+      const before = changes.length
+      await watch.recheck()
+      expect(changes.slice(before)).toContainEqual([])
       await allowHostDoor('devbox', { by: 'human' })
       await vi.waitFor(() => expect(hostRevokedNow('devbox')).toBe(false), { timeout: 2000, interval: 10 })
-      expect(changes).toEqual([['devbox'], ['devbox']])
+      // Each change once; while a ban stands every tick also calls with none changed, so an alias
+      // learned since is cut (N2 of the C7 review: leader-boot.ts noteRevoked on each).
+      expect(changes.filter((c) => c.length > 0)).toEqual([['devbox'], ['devbox']])
     } finally { watch.stop(); setRevokedHosts([]) }
   })
 

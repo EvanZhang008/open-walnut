@@ -92,6 +92,36 @@ describe('/api/host-doors', () => {
     expect((await hostCredentialOf(MACHINE))?.revoked).toBeUndefined()
   })
 
+  it('an alias that later tells a new machine id is still the banned host: its call cannot allow it, nor its door be minted (S1)', async () => {
+    await mintHostCredential({ machineId: MACHINE, walnutId: 'w'.repeat(32), hostKey: 'devbox-w' })
+    let says = MACHINE
+    setRevokedHostResolver({ machineOf: (k) => (k === 'devbox-w' ? MACHINE : k === 'devbox-x' ? says : null), aliasesOf: (k) => (k === 'devbox-w' && says === MACHINE ? ['devbox-x'] : []) })
+    const rv = await request(app).post('/api/host-doors/devbox-w/revoke').send({})
+    expect(rv.body).toMatchObject({ revoked: true })
+    expect(rv.body.skipped).toBeUndefined()
+    // The ban named the alias known then: kept in the record.
+    expect((await hostCredentialOf(MACHINE))?.revoked?.keys).toEqual(['devbox-x'])
+    // Its daemon now says a new machine id and no twin: still refused, a GET says so, a mint for it is refused.
+    says = 'e5'.repeat(16)
+    setRevokedHosts([])
+    _resetDeviceAuthForTesting()
+    const { refreshRevokedHosts } = await import('../../../src/core/session-channel/leader-issue.js')
+    await refreshRevokedHosts()
+    for (const verb of ['allow', 'revoke']) {
+      expect((await request(app).post(`/api/host-doors/devbox-w/${verb}`).set('x-walnut-origin', 'host:devbox-x').send({})).status, verb).toBe(403)
+    }
+    expect((await request(app).get('/api/host-doors/devbox-x')).body).toMatchObject({ revoked: true, as: 'devbox-w' })
+    await expect(mintHostCredential({ machineId: says, walnutId: 'w'.repeat(32), hostKey: 'devbox-x' })).rejects.toThrow()
+    // Nor a mint under any key for the banned machine id.
+    await expect(mintHostCredential({ machineId: MACHINE, walnutId: 'w'.repeat(32), hostKey: 'freshkey' })).rejects.toThrow()
+    // Any other revoked host's call is refused too, whichever host it names.
+    await mintHostCredential({ machineId: 'f6'.repeat(16), walnutId: 'w'.repeat(32), hostKey: 'third' })
+    expect((await request(app).post('/api/host-doors/third/revoke').set('x-walnut-origin', 'host:devbox-x').send({})).status).toBe(403)
+    // The person allows it: every name of it is free again.
+    expect((await request(app).post('/api/host-doors/devbox-w/allow').send({})).body).toMatchObject({ allowedNow: true })
+    expect((await request(app).get('/api/host-doors/devbox-x')).body).toMatchObject({ revoked: false })
+  })
+
   it('a host that holds no credential and has not linked: 404, nothing written; a bad host key: 400', async () => {
     const r = await request(app).post('/api/host-doors/nowhere/revoke').send({})
     expect(r.status).toBe(404)

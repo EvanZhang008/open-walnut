@@ -20,6 +20,7 @@ import { CwdMissingError } from './cwd-check.js';
 import { AcpSessionNotNativeError } from './acp-native-guard.js';
 import { isSessionStopSuperseded } from '../core/sessions/session-stop.js';
 import { InheritedSessionRefusedError, isInheritedSessionText } from './ephemeral-session-gate.js';
+import { HostRevokedError } from '../core/session-channel/revoked-hosts.js';
 import { thisServer } from '../core/server-self-name.js';
 import { DaemonFrameTooLargeError, FRAME_TOO_LARGE } from './daemon-frame-cap.js';
 
@@ -28,7 +29,7 @@ export type DeliveryFailureKind = 'permanent' | 'transient';
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing' | 'history_unavailable';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing' | 'history_unavailable' | 'host_revoked';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
   /**
@@ -78,6 +79,8 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   if (err instanceof ClaudeRuntimeMissingError) return { kind: 'permanent', code: 'claude_missing', reason: err.waitingReason, waitsFor: err.errorKind };
   // A test server refusing a session it did not start: retrying changes nothing.
   if (err instanceof InheritedSessionRefusedError || isInheritedSessionText(message)) return { kind: 'permanent', code: 'inherited_session', reason: reason.replace(/^inherited_session:\s*/, '') };
+  // A revoked host runs nothing new and takes no automated line (revoked-reach.ts): the same answer until an allow.
+  if (err instanceof HostRevokedError) return { kind: 'permanent', code: 'host_revoked', reason: `Not sent: ${reason}` };
   // Another process holds the session on its host: every retry is refused the
   // same way until that process ends, so the batch waits for the user's Retry.
   if (err instanceof SessionHeldElsewhereError) return { kind: 'permanent', code: 'session_live', reason: err.message.slice(0, HELD_REASON_MAX) };
