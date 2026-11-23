@@ -5,18 +5,31 @@
  * flow are said on the phone's stream of that session with the stream's own frame names
  * (session-event-sse.ts); calls go out as call frames and come back with the host's answer, shaped
  * as the phone's routes answer.
+ *
+ * Review round 1 of land 5b: a link stands only for ids the copy does not place elsewhere and no
+ * other link claimed (H1); the push feed hears a row only while the Mac is away, over the copy's
+ * fields (M3); sessions turned off here show and operate nothing (M4); a closed link's rows are
+ * unknown, then gone, and a revoke forgets them (L2); a phone that opens mid-turn gets the turn (L6);
+ * one turn-start reset per turn (L7).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-companion-listener'))
-const { upserts } = vi.hoisted(() => ({ upserts: [] as any[] }))
-vi.mock('../../../src/web/routes/events-v1.js', () => ({ handleBridgeMobileEvent: (_k: string, row: unknown) => { upserts.push(row) } }))
+const k = vi.hoisted(() => ({ upserts: [] as any[], macHere: false, off: false, copy: [] as Array<Record<string, unknown>> }))
+vi.mock('../../../src/web/routes/events-v1.js', () => ({ handleBridgeMobileEvent: (_k: string, row: unknown) => { k.upserts.push(row) } }))
+vi.mock('../../../src/web/ws/bridge-registry.js', async (orig) => ({ ...(await orig<object>()), bridgeForHost: () => ({ connected: k.macHere }) }))
+vi.mock('../../../src/core/replication/kinds/gate.js', async (orig) => ({ ...(await orig<object>()), copyKindOff: async (kind: string) => k.off && kind === 'sessions' }))
+vi.mock('../../../src/core/session-projection.js', async (orig) => ({
+  ...(await orig<object>()),
+  readSessionProjection: async () => ({ version: 1, exportedAt: new Date().toISOString(), sessions: k.copy }),
+}))
+const upserts = k.upserts
 
 import { EventEmitter } from 'node:events'
 import { attachSse, closeAllSseChannels } from '../../../src/web/sse-channels.js'
-import { _resetCompanionListenerForTesting, attachHostListener, listenedRow, listenedRows } from '../../../src/core/session-channel/companion-listener.js'
-import { interruptViaHost, joinListenedRows, listenedDetail, permissionViaHost, sendViaHost } from '../../../src/core/session-channel/companion-host-ops.js'
+import { _resetCompanionListenerForTesting, attachHostListener, forgetHostListener, LINK_GRACE_MS, listenedRow, standingRow, standingRows } from '../../../src/core/session-channel/companion-listener.js'
+import { hostOperated, hostRoute, interruptViaHost, joinListenedRows, listenedDetail, permissionViaHost, sendViaHost, streamedByListener } from '../../../src/core/session-channel/companion-host-ops.js'
 
 const WALNUT = 'ab'.repeat(16)
 const row = (sid: string, over: Record<string, unknown> = {}) => ({ claudeSessionId: sid, taskId: 't1', judge: 'host', host: 'devbox', process_status: 'idle', startedAt: 'a', lastActiveAt: 'b', ...over })
@@ -24,10 +37,10 @@ let current: { idle(): Promise<void> } | null = null
 /** The link's frames are applied (its serial chain), and a call frame went out. */
 const settle = async () => { await current?.idle(); await new Promise((r) => setTimeout(r, 10)) }
 
-function link() {
+function link(alias = 'devbox') {
   const sent: any[] = []
   const closed: Array<[number, string]> = []
-  const h = attachHostListener('devbox', WALNUT, { send: (t) => sent.push(JSON.parse(t)), close: (c, w) => closed.push([c, w]) })
+  const h = attachHostListener(alias, WALNUT, { send: (t) => sent.push(JSON.parse(t)), close: (c, w) => closed.push([c, w]) })
   current = h
   const frame = (f: unknown) => h.onText(JSON.stringify(f))
   return { h, sent, closed, frame }
@@ -35,7 +48,7 @@ function link() {
 
 /** What the phone's streams of these sessions got: one fake SSE response each, its frames parsed. */
 const sse: Array<{ key: string; event: string; data: any }> = []
-function phoneOn(...sids: string[]): void {
+function phoneOn(sids: string[], o: { replay?: boolean } = {}): void {
   for (const sid of sids) {
     const key = `session:${sid}`
     const req = Object.assign(new EventEmitter(), { header: () => undefined, query: {}, method: 'GET', originalUrl: '/x' })
@@ -47,11 +60,17 @@ function phoneOn(...sids: string[]): void {
         return true
       },
     }
-    attachSse(key, req as never, res as never, { replay: false })
+    attachSse(key, req as never, res as never, { replay: o.replay ?? false })
   }
 }
 
-beforeEach(() => { _resetCompanionListenerForTesting(); closeAllSseChannels(); sse.length = 0; upserts.length = 0; phoneOn('s1', 'b1', 'zz') })
+beforeEach(() => {
+  _resetCompanionListenerForTesting()
+  closeAllSseChannels()
+  sse.length = 0; upserts.length = 0; k.macHere = false; k.off = false; k.copy = []
+  phoneOn(['s1', 'b1', 'zz'])
+})
+afterEach(() => { vi.useRealTimers() })
 
 describe('what a host\'s listener link tells', () => {
   it('keeps the host\'s own judged rows only, and answers its hello with listen alone', async () => {
@@ -60,7 +79,7 @@ describe('what a host\'s listener link tells', () => {
     l.frame({ ch: 'sf', op: 'rows', rows: [row('s1'), row('s2', { host: 'otherbox' }), row('s3', { judge: undefined }), row('../x')], upTo: 2, rowsAt: 2, logId: 'L' })
     await settle()
     expect(l.sent).toEqual([{ ch: 'sf', op: 'listen', walnutId: WALNUT }])
-    expect(listenedRows().map((r) => r.row.claudeSessionId)).toEqual(['s1'])
+    expect((await standingRows()).map((r) => r.row.claudeSessionId)).toEqual(['s1'])
     expect(upserts.map((u) => u.id)).toEqual(['s1'])
   })
 
@@ -107,8 +126,9 @@ describe('what a host\'s listener link tells', () => {
     ] })
     l.frame({ ch: 'sf', op: 'flow', sid: 's1', name: 'session:result', data: { sessionId: 's1' } })
     await settle()
-    expect(sse.map((e) => [e.key, e.event])).toEqual([['session:s1', 'text-delta'], ['session:s1', 'tool'], ['session:s1', 'turn-end']])
-    expect(sse[0]!.data).toEqual({ delta: 'echo: hi' })
+    // The first word of a turn opens it on the stream (one reset), then its frames.
+    expect(sse.map((e) => [e.key, e.event])).toEqual([['session:s1', 'turn-start'], ['session:s1', 'text-delta'], ['session:s1', 'tool'], ['session:s1', 'turn-end']])
+    expect(sse[1]!.data).toEqual({ delta: 'echo: hi' })
   })
 
   it('joins the rows into the phone\'s list: a row the copy lacks is added', async () => {
@@ -117,7 +137,10 @@ describe('what a host\'s listener link tells', () => {
     await settle()
     const joined = await joinListenedRows([{ id: 's1', host: 'devbox', task_title: 'From the copy', process_status: 'stopped' }])
     expect(joined.map((r) => r.id)).toEqual(['s1', 's9'])
-    expect(joined[0]).toMatchObject({ task_title: 'From the copy' })
+    expect(joined[0]).toMatchObject({ task_title: 'From the copy', process_status: 'idle' })
+    // While the Mac answers, its own list stands: no row joined, none replaced.
+    k.macHere = true
+    expect(await joinListenedRows([{ id: 's1', host: 'devbox', process_status: 'stopped' }])).toEqual([{ id: 's1', host: 'devbox', process_status: 'stopped' }])
   })
 })
 
@@ -169,5 +192,109 @@ describe('operating a host\'s session through its link', () => {
     expect(answer(200, { ok: false, error: 'not_pending' }).body.args).toEqual(['r0', false])
     expect((await q).status).toBe(404)
     expect((await permissionViaHost(t, { requestId: 'r1' })).status).toBe(400)
+  })
+})
+
+describe('which ids a link may stand for (review H1)', () => {
+  it('refuses a row whose id the copy places on another host or on the Mac: list, detail, send and stream stay as they were', async () => {
+    k.copy = [{ id: 'a1', host: 'otherbox', task_title: 'On another host' }, { id: 'm1', host: '', task_title: 'On the Mac' }, { id: 's1', host: 'devbox' }]
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('a1'), row('m1'), row('s1'), row('n1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    l.frame({ ch: 'sf', op: 'facts', recs: [{ seq: 2, sid: 'a2', name: 'row', data: { born: true, patch: row('a2') } }] })
+    k.copy.push({ id: 'a2', host: 'otherbox' })
+    await settle()
+    expect((await standingRows()).map((t) => t.row.claudeSessionId).sort()).toEqual(['n1', 's1'])
+    for (const sid of ['a1', 'm1', 'a2']) {
+      expect(await standingRow(sid), sid).toBeNull()
+      expect(await hostOperated(sid), sid).toBeNull()
+      expect((await hostRoute(sid)).kind, sid).toBe('none')
+      expect(await streamedByListener(sid), sid).toBeNull()
+    }
+    const list = [{ id: 'a1', host: 'otherbox', task_title: 'On another host' }, { id: 'm1', host: '', task_title: 'On the Mac' }]
+    const joined = await joinListenedRows(list)
+    expect(joined.slice(0, 2)).toEqual(list)
+    expect(upserts.map((u) => u.id).sort()).toEqual(['n1', 's1'])
+  })
+
+  it('a second link cannot take an id another link claimed first', async () => {
+    const first = link('otherbox')
+    first.frame({ ch: 'sf', op: 'rows', rows: [row('x1', { host: 'otherbox' })], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    const second = link('devbox')
+    second.frame({ ch: 'sf', op: 'rows', rows: [row('x1'), row('s1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    expect((await standingRow('x1'))?.alias).toBe('otherbox')
+    expect((await standingRows()).map((t) => `${t.alias}:${t.row.claudeSessionId}`).sort()).toEqual(['devbox:s1', 'otherbox:x1'])
+  })
+})
+
+describe('the push feed and the setting (review M3, M4)', () => {
+  it('pushes a host row only while the Mac is away, over the copy row\'s own fields', async () => {
+    k.copy = [{ id: 's1', host: 'devbox', task_title: 'From the copy', pinned: true, host_label: 'Dev box', process_status: 'stopped' }]
+    k.macHere = true
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    expect(upserts).toEqual([])
+    k.macHere = false
+    l.frame({ ch: 'sf', op: 'facts', recs: [{ seq: 2, sid: 's1', name: 'row', data: { patch: { process_status: 'running' } } }] })
+    await settle()
+    expect(upserts).toHaveLength(1)
+    expect(upserts[0]).toMatchObject({ id: 's1', task_title: 'From the copy', pinned: true, host_label: 'Dev box', process_status: 'running' })
+  })
+
+  it('with sessions turned off here, no host row joins a list or a push, and nothing is operated', async () => {
+    k.off = true
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1', { process_status: 'running' })], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    expect(upserts).toEqual([])
+    expect(await joinListenedRows([])).toEqual([])
+    expect(await hostOperated('s1')).toBeNull()
+    expect(await streamedByListener('s1')).toBeNull()
+    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', code: 'not_kept_here' })
+  })
+})
+
+describe('a link that closes, or whose credential is revoked (review L2)', () => {
+  it('leaves its rows unknown (never operated, a send refused, not the direct path), then drops them; its claim stays', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    l.frame({ ch: 'sf', op: 'facts', recs: [{ seq: 2, sid: 's1', name: 'live', data: { state: { turnRunning: false } } }] })
+    await current?.idle()
+    l.h.onClose()
+    expect(await hostOperated('s1')).toBeNull()
+    expect(await standingRows()).toEqual([])
+    expect((await standingRow('s1'))?.live).toBeNull()
+    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', code: 'host_unreachable' })
+    vi.advanceTimersByTime(LINK_GRACE_MS + 1)
+    expect(listenedRow('s1')).toBeNull()
+    expect(await hostRoute('s1')).toMatchObject({ kind: 'refuse', code: 'host_unreachable' })
+  })
+
+  it('a revoke forgets the host\'s rows and claims at once', async () => {
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('s1')], upTo: 1, rowsAt: 1, logId: 'L' })
+    await settle()
+    forgetHostListener('devbox')
+    expect(listenedRow('s1')).toBeNull()
+    expect((await hostRoute('s1')).kind).toBe('none')
+  })
+})
+
+describe('the phone\'s stream of a turn (review L6, L7)', () => {
+  it('a phone that opens mid-turn gets the turn so far; one turn-start reset however the row and the words arrive', async () => {
+    const l = link()
+    l.frame({ ch: 'sf', op: 'rows', rows: [row('m2')], upTo: 1, rowsAt: 1, logId: 'L' })
+    // The words before the row's running patch: the turn opens on the first word, the patch opens nothing more.
+    l.frame({ ch: 'sf', op: 'flow', sid: 'm2', name: 'session:text-delta', data: { sessionId: 'm2', delta: 'so far' } })
+    l.frame({ ch: 'sf', op: 'facts', recs: [{ seq: 2, sid: 'm2', name: 'row', data: { patch: { process_status: 'running' } } }] })
+    l.frame({ ch: 'sf', op: 'flow', sid: 'm2', name: 'session:text-delta', data: { sessionId: 'm2', delta: ' and on' } })
+    await settle()
+    phoneOn(['m2'], { replay: true })
+    const frames = sse.filter((e) => e.key === 'session:m2')
+    expect(frames.map((e) => e.event)).toEqual(['turn-start', 'text-delta', 'text-delta'])
+    expect(frames.filter((e) => e.event === 'text-delta').map((e) => e.data.delta).join('')).toBe('so far and on')
   })
 })

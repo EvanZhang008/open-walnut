@@ -103,7 +103,8 @@ describe('the listener door', () => {
     expect(r.frames[1]).toEqual({ ch: 'sf', op: 'listen', walnutId: WALNUT })
     // Nothing else: no resume, no ack, no resync.
     expect(r.frames.map((f) => f.op)).toEqual(['welcome', 'listen'])
-    expect(listenedRow('s1')).toMatchObject({ alias: 'devbox', row: { claudeSessionId: 's1' }, live: { turnRunning: false } })
+    // Read as the socket closes: the row stays for the grace (its live state is unknown once the close is taken, review L2).
+    expect(listenedRow('s1')).toMatchObject({ alias: 'devbox', row: { claudeSessionId: 's1' } })
   })
 
   it('closes a socket whose token no longer stands at its recheck', async () => {

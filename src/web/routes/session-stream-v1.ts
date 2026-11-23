@@ -215,10 +215,9 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
       // A session its host judges, its host linked to this companion: the host's own facts and
       // flow say this stream (core/session-channel/companion-listener.ts), never the daemon's
       // jsonl tail around its judge.
-      const { listenedRow, listenerLinked } = await import('../../core/session-channel/companion-listener.js')
-      const listened = listenedRow(sessionId)
-      if (listened && listenerLinked(listened.alias)) {
-        const processStatus = listened.row.process_status ?? ''
+      const listened = await (await import('../../core/session-channel/companion-host-ops.js')).streamedByListener(sessionId)
+      if (listened) {
+        const processStatus = listened.processStatus
         attachSse(channelKey(sessionId), req, res, {
           onAttach: (write) => { write('bridge-online', {}); if (processStatus) write('status', { processStatus }) },
         })

@@ -97,9 +97,10 @@ export async function resolveCloudSessionHost(sessionId: string): Promise<CloudS
   }
 
   // A session its host judges, as that host's listener link told it (session-channel/companion-listener.ts):
-  // also one born while the Mac was away, which no copy has.
-  const { listenedRow } = await import('../session-channel/companion-listener.js');
-  const listened = listenedRow(sessionId);
+  // also one born while the Mac was away, which no copy has. Only one the link stands for
+  // (standsFor: the copy does not place it on another host, no other link claimed it).
+  const { standingRow } = await import('../session-channel/companion-listener.js');
+  const listened = await standingRow(sessionId);
   if (listened) {
     const r = listened.row;
     return {
