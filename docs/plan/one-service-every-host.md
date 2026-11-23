@@ -450,8 +450,12 @@ permission prompts still name Walnut.
   names `session-resume-acp-v1` (else it stays legacy): nothing moves, since its worker, its journal and the
   engine's own thread already live in the host's daemon; the host attaches it from the same row (its
   runtime id, journal cursor, mode and model) and resumes it there. Its runtime is asked for the worker by
-  the row's runtime id, the leader's ACP object counts live while it holds anything, and an ACP send asks
-  before it attaches the session (an attach starts a worker) (tests: `host-resume-acp.test.ts`, A1 to A4 in
+  the row's runtime id, on both ends the runner's ACP object counts live only while it holds anything, and
+  every attach of the session asks first, since an attach starts its worker: a send, a delivery, and a read
+  that attaches (the panel's controls, the model catalog), which hands it over with no line waiting and is
+  answered by the host's proxy. A Restart and a self-report stay where the session ran. An attach the
+  hand-over overtakes is let go, its worker left to the host (tests: `host-resume-acp.test.ts`,
+  `host-resume-acp-attach.test.ts`, the attach list in `host-resume-entry-ratchet.test.ts`, A1 to A4 in
   `host-judge-legacy-acp-resume-e2e.test.ts`).
 - **A hand-over whose answer is lost** (a start or a resume, `src/providers/host-handover.ts`) is neither the
   host's for sends nor the leader's: its lines wait on the leader, never sent, refused or parked, until the

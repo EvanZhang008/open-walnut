@@ -84,6 +84,11 @@ export interface RestFacts extends RunnerFacts {
   lineOut: boolean
   /** A line waits to go (a pending row, a handed hold): with none, nothing is handed over. */
   linesWaiting: boolean
+  /**
+   * An ACP session's ask whose caller attaches it next (no object of it in the runner): an attach
+   * starts its worker, so it is handed over with no line waiting too.
+   */
+  attaching?: boolean
   /** The host's runtime: its CLI runs (true), does not (false), or no answer (null). */
   cli?: boolean | null
 }
@@ -103,7 +108,7 @@ export function notAtRestReason(f: RestFacts): NotAtRest | null {
   if (f.row.stopRequest?.state === 'pending') return 'stop_pending'
   if (f.transferRunning) return 'transfer_running'
   if (f.lineOut) return 'line_out'
-  if (!f.linesWaiting) return 'nothing_waiting'
+  if (!f.linesWaiting && !(f.attaching === true && isAcpEngine(f.row.engine ?? undefined))) return 'nothing_waiting'
   if (f.cli === true) return 'cli_alive'
   if (f.cli === null) return 'cli_unknown'
   return null
@@ -251,16 +256,30 @@ const asking = new Map<string, Promise<boolean>>()
  * waited finds the session handed by the one before it (its host judges it, or the hand-over waits
  * for the host's word), and that is a true too: what it would deliver is the hand-over's.
  */
-export function resumeAtRestOnHost(sid: string, host: string, r: RunnerRest): Promise<boolean> {
-  const run = (asking.get(sid) ?? Promise.resolve(false)).catch(() => false)
-    .then(() => (judgingHostOf(sid) !== null || handOverPending(sid) ? true : resumeNow(sid, host, r)))
+export function resumeAtRestOnHost(sid: string, host: string, r: RunnerRest, o: { attaching?: boolean } = {}): Promise<boolean> {
+  const before = asking.get(sid)
+  const run = (before ?? Promise.resolve(false)).catch(() => false).then(() => {
+    if (judgingHostOf(sid) !== null || handOverPending(sid)) return true
+    // One that waited asks again whether its host is to be asked at all: the ask before it may have
+    // held the session legacy (a refusal), or the host stopped naming what it takes meanwhile.
+    if (before && askedHostNow(sid) !== host) return false
+    return resumeNow(sid, host, r, o)
+  })
   asking.set(sid, run)
   void run.catch(() => false).then(() => { if (asking.get(sid) === run) asking.delete(sid) })
   return run
 }
 
-async function resumeNow(sid: string, host: string, r: RunnerRest): Promise<boolean> {
-  const { facts, row, transferRunning } = await restFacts(sid, r)
+/** The host a delivery to `sid` asks now (resumeHostOf; for an ACP row also its ACP capability). */
+function askedHostNow(sid: string): string | null {
+  let row: ReturnType<typeof sessionTaskAndEngineInStore>
+  try { row = sessionTaskAndEngineInStore(sid) } catch { return null }
+  return isAcpEngine((row?.engine ?? undefined) as SessionRecord['engine']) ? acpResumeHostOf(sid) : resumeHostOf(sid)
+}
+
+async function resumeNow(sid: string, host: string, r: RunnerRest, o: { attaching?: boolean }): Promise<boolean> {
+  const { facts: read, row, transferRunning } = await restFacts(sid, r)
+  const facts: RestFacts = { ...read, attaching: o.attaching === true }
   let why = notAtRestReason(facts)
   if (!why) why = notAtRestReason({ ...facts, cli: await cliOnHost(host, sid) })
   if (!why) await r.unparkWaiting(sid).catch(() => {})

@@ -2629,10 +2629,11 @@ sessionsRouter.get('/:sessionId/model-catalog', async (req: Request, res: Respon
       res.status(409).json({ error: `${caps.displayName} ACP session is not available` })
       return
     }
-    const catalog = session.modelCatalog
+    // A session its host runs answers from its mirrored state, empty until the host first reports.
+    const catalog = session.modelCatalog as typeof session.modelCatalog | undefined
     res.json({
-      models: catalog.availableModels,
-      currentModelId: catalog.currentModelId ?? record.acpModel,
+      models: catalog?.availableModels ?? [],
+      currentModelId: catalog?.currentModelId ?? record.acpModel,
       source: 'acp',
     })
   } catch (err) {

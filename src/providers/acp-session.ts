@@ -805,6 +805,8 @@ export class AcpSession {
   private _committedV: number
   private _cursorSeeded = false
   private _cursorCommit: Promise<void> = Promise.resolve()
+  /** Cursor commits chained and not ended yet (cursorCommitting). */
+  private _cursorPending = 0
   private _establishing: Promise<string> | null = null
   private _turnHadError = false
   /** The adapter ends a quota-exhausted turn with a refusal (its initialize says who it is): no safeguard stop. */
@@ -903,6 +905,14 @@ export class AcpSession {
     return this._active && !this._turnActive && this._backgroundWork.length > 0 ? ['background'] : []
   }
   get hasPendingPermission(): boolean { return this._pendingPermissions.size > 0 }
+  /** A record write of its cursor or turn state is chained and not done (host-resume.ts: not at rest yet). */
+  get cursorCommitting(): boolean { return this._cursorPending > 0 }
+
+  /** Count the commit just chained onto _cursorCommit until it ends (the chain never rejects). */
+  private trackCursorCommit(): void {
+    this._cursorPending++
+    void this._cursorCommit.finally(() => { this._cursorPending-- })
+  }
   /** True while we hold a live daemon connection and an established worker —
    * i.e. `activity === 'processing'` is trustworthy, not a stale flag. */
   get workerLive(): boolean { return this._active && (this.conn?.connected ?? false) }
@@ -1204,6 +1214,7 @@ export class AcpSession {
       // Nobody will carry on for it: the task is handed back as the turn's end would have.
       this.handBackAfterBackgroundWork('background-wake-failed')
     })
+    this.trackCursorCommit()
   }
 
   /** The turn's end skipped its hand-back while its own command ran (detachedBgActive): apply it now. */
@@ -2923,6 +2934,7 @@ export class AcpSession {
         error: error instanceof Error ? error.message : String(error),
       })
     })
+    this.trackCursorCommit()
   }
 
   private commitPromptAcceptance(
@@ -2956,6 +2968,7 @@ export class AcpSession {
         error: error instanceof Error ? error.message : String(error),
       })
     })
+    this.trackCursorCommit()
     return commit
   }
 

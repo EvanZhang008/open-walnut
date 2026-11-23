@@ -24,7 +24,7 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 import { SID, harness, probeSetup, probeTeardown, settle, type Harness } from '../helpers/runner-probe-harness.js'
 import { acpResumeHostOf, notAtRestReason, _resetHostResumeForTesting, type RestFacts } from '../../src/providers/host-resume.js'
 import { _resetHostJudgedRunnerForTesting } from '../../src/providers/host-judged-runner.js'
-import { _resetJudgeOfForTesting, judgingHostOf, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
+import { _resetJudgeOfForTesting, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
 import { _setHostResumesForTesting, _setHostSwitchForTesting, forgetHostResumes } from '../../src/core/session-channel/resume-hosts.js'
 import { _resetHostSessionTasksForTesting } from '../../src/core/session-channel/leader-tasks.js'
@@ -86,27 +86,39 @@ function fakeSide(o: { refuse?: boolean } = {}) {
 }
 
 /** A stand-in for the runner's ACP object of the session (what its at-rest test and its drop read). */
-function acpObject(o: { active?: boolean; processing?: boolean; prompt?: boolean } = {}) {
+function acpObject(o: { active?: boolean; processing?: boolean; prompt?: boolean; afterTurn?: boolean; committing?: boolean } = {}) {
   return {
     sessionId: SID, runtimeId: RUNTIME, active: o.active === true, activity: o.processing ? 'processing' : 'idle',
-    hasPendingPermission: o.prompt === true, outlivingWork: [], canSteer: false, hasTaken: () => false, detach: vi.fn(),
-    // Its lifecycle contract, for a delivery that stays legacy (the runner's acpContract): sent nowhere.
-    establish: async () => SID, send: async () => {}, abortTurn: async () => {},
+    hasPendingPermission: o.prompt === true, outlivingWork: o.afterTurn ? ['background'] : [], cursorCommitting: o.committing === true,
+    canSteer: false, hasTaken: () => false, detach: vi.fn(),
+    // Its lifecycle contract, for a delivery that stays legacy (the runner's acpContract): sent nowhere here.
+    establish: async () => SID, send: vi.fn(async () => {}), abortTurn: async () => {},
   }
 }
+
+/** The runner's ACP bookkeeping the at-rest test reads (claude-code-session.ts acpHoldsAnything). */
+type AcpBooks = {
+  acpAttachPromises: Map<string, Promise<unknown>>
+  acpAttachingSessions: Set<unknown>
+  acpRowTakes: Map<string, number>
+  acpDeliverySettlements: Map<string, Promise<void>>
+  acpAbortInProgress: Set<string>
+  drainAcpQueue(session: unknown, sid: string, o?: { asked?: boolean }): Promise<void>
+}
+const books = (h: Harness) => h.internals as unknown as AcpBooks
 
 type AcpMap = Map<string, ReturnType<typeof acpObject>>
 const acpMap = (h: Harness) => (h.internals as unknown as { acpSessions: AcpMap }).acpSessions
 
 /** A legacy Codex session of devbox that ended: its record stopped, a line waiting for it. */
-async function acpAtRest(o: { object?: ReturnType<typeof acpObject> } = {}): Promise<Harness> {
+async function acpAtRest(o: { object?: ReturnType<typeof acpObject>; noLine?: boolean } = {}): Promise<Harness> {
   const h = harness({ running: false })
   Object.assign(h.session, { _active: false, _transport: undefined, pid: null })
   await updateSessionRecord(SID, { host: 'devbox', process_status: 'stopped', pid: undefined, engine: 'codex', acpRuntimeId: RUNTIME } as never)
   if (o.object) { acpMap(h).set(RUNTIME, o.object); acpMap(h).set(SID, o.object) }
   h.runner.init()
   await settle(100)
-  await enqueueMessage(SID, 'hello codex', { id: 'qm-acp-1', sentBy: 'person' })
+  if (!o.noLine) await enqueueMessage(SID, 'hello codex', { id: 'qm-acp-1', sentBy: 'person' })
   return h
 }
 
@@ -228,6 +240,100 @@ describe('a send to a legacy ACP session at rest', () => {
   })
 })
 
+describe('every holder of the runner\'s ACP object keeps it legacy (acpHoldsAnything)', () => {
+  const never = new Promise<never>(() => {})
+  it.each<[string, (h: Harness, obj: ReturnType<typeof acpObject>) => void, Parameters<typeof acpObject>[0]?]>([
+    ['work after its turn (outlivingWork)', () => {}, { afterTurn: true }],
+    ['a cursor commit in flight', () => {}, { committing: true }],
+    ['an attach in flight (its promise)', (h) => { books(h).acpAttachPromises.set(SID, never) }],
+    ['an attach in flight (its establish)', (h, obj) => { books(h).acpAttachingSessions.add(obj) }],
+    ['a row taken for delivery', (h) => { books(h).acpRowTakes.set(SID, 1) }],
+    ['a delivery settling', (h) => { books(h).acpDeliverySettlements.set(SID, never) }],
+    ['an abort in progress', (h) => { books(h).acpAbortInProgress.add(RUNTIME) }],
+  ])('%s', async (_name, hold, o) => {
+    const object = acpObject(o)
+    const h = await acpAtRest({ object })
+    hold(h, object)
+    const { sent } = fakeSide()
+    // The drain's own ask (no send's ask before it), which every holder must stop.
+    await books(h).drainAcpQueue(object, SID).catch(() => {})
+    await settle(100)
+    expect(sent).toEqual([])
+    expect(acpMap(h).get(SID)).toBe(object)
+    expect((await getSessionByClaudeId(SID))?.judge).toBeUndefined()
+  })
+})
+
+describe('the drain of an object left here', () => {
+  it('delivers nothing for a session its host judges now (a dropped object\'s timer)', async () => {
+    const object = acpObject()
+    const h = await acpAtRest({ object })
+    fakeSide()
+    noteHostJudged(SID, 'devbox')
+    await books(h).drainAcpQueue(object, SID)
+    expect(object.send).not.toHaveBeenCalled()
+    expect((await getQueue(SID)).map((m) => m.status)).toEqual(['pending'])
+  })
+
+  it('an object holding nothing asks before it would start a worker (the drain after a death): handed over', async () => {
+    const object = acpObject()
+    const h = await acpAtRest({ object })
+    const { sent } = fakeSide()
+    await books(h).drainAcpQueue(object, SID)
+    expect(sent.filter((s) => s.op === 'start')).toHaveLength(1)
+    expect(object.send).not.toHaveBeenCalled()
+    expect(acpMap(h).size).toBe(0)
+  })
+})
+
+describe('a read of a session whose object here holds nothing (the panel opened after a stop)', () => {
+  it('hands it to its host, lines or none, and answers with the host\'s proxy', async () => {
+    const object = acpObject()
+    const h = await acpAtRest({ object, noLine: true })
+    const { sent } = fakeSide()
+    const got = await h.runner.findOrAttachAcpSession(SID) as unknown as { hostJudged?: boolean }
+    expect(sent.filter((s) => s.op === 'start')).toHaveLength(1)
+    expect(sent[0].body.queued).toEqual([])
+    expect(got.hostJudged).toBe(true)
+    expect(acpMap(h).size).toBe(0)
+  })
+
+  it('an object that holds something is answered here, nothing asked', async () => {
+    const object = acpObject({ active: true })
+    const h = await acpAtRest({ object, noLine: true })
+    const { sent } = fakeSide()
+    expect(await h.runner.findOrAttachAcpSession(SID)).toBe(object)
+    expect(sent).toEqual([])
+    expect(probe.acpCalls).toEqual([])
+  })
+})
+
+describe('a processNext and a send asking at once', () => {
+  it('hand it over once, and neither delivers here', async () => {
+    const object = acpObject()
+    const h = await acpAtRest({ object })
+    const { sent } = fakeSide()
+    kick()
+    void (h.internals.processNext(SID) as Promise<void>).catch(() => {})
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await settle(300)
+    expect(sent.filter((s) => s.op === 'start')).toHaveLength(1)
+    expect(object.send).not.toHaveBeenCalled()
+    expect(judgingHostOf(SID)).toBe('devbox')
+  })
+
+  it('one that waited behind a refusal is held legacy and asks the host nothing more', async () => {
+    const object = acpObject()
+    const h = await acpAtRest({ object })
+    const { sent } = fakeSide({ refuse: true })
+    kick()
+    void (h.internals.processNext(SID) as Promise<void>).catch(() => {})
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await settle(400)
+    expect(sent.filter((s) => s.op === 'start')).toHaveLength(1)
+  })
+})
+
 describe('a host attaches an ACP session from its own row to its own daemon', () => {
   it('every AcpSession the runner builds from a row names its host as this server reaches it (execHostOf)', async () => {
     const { readFileSync } = await import('node:fs')
@@ -248,5 +354,60 @@ describe('a host attaches an ACP session from its own row to its own daemon', ()
       expect(cfg).not.toMatch(/\b(record|rec|row)\.host\b/)
     }
     expect(builds.some((cfg) => cfg.includes('execHostOf(record)'))).toBe(true)
+  })
+})
+
+describe('the host\'s own at-rest check of a resume (host-boot.ts runtimeHoldsCli)', () => {
+  const conn = (answers: Record<string, unknown>) => {
+    const asked: Array<{ cmd: string; params: Record<string, unknown> }> = []
+    return { asked, send: async (cmd: string, params: Record<string, unknown>) => { asked.push({ cmd, params }); return answers[cmd] ?? null } }
+  }
+  const acpRow = { engine: 'codex' as const, acpRuntimeId: RUNTIME }
+
+  it.each<[string, Record<string, unknown>, boolean | null]>([
+    ['its worker runs here: not at rest', { acpState: { ok: true, result: {} } }, true],
+    ['no worker of it here: at rest', { acpState: { ok: false, errorKind: 'no_worker' } }, false],
+    ['a worker being adopted: no word', { acpState: { ok: false, errorKind: 'worker_adopting' } }, null],
+  ])('an ACP row, asked by its runtime id: %s', async (_name, answers, want) => {
+    const { runtimeHoldsCli } = await import('../../src/core/session-channel/host-boot.js')
+    const c = conn(answers)
+    expect(await runtimeHoldsCli(SID, acpRow, c)).toBe(want)
+    expect(c.asked).toEqual([{ cmd: 'acpState', params: { sid: RUNTIME } }])
+  })
+
+  it('an ACP row with no runtime id is no word (refused), and the runtime is not asked', async () => {
+    const { runtimeHoldsCli } = await import('../../src/core/session-channel/host-boot.js')
+    const c = conn({})
+    expect(await runtimeHoldsCli(SID, { engine: 'codex' }, c)).toBeNull()
+    expect(c.asked).toEqual([])
+  })
+
+  it('a native row (or none) is asked by `status`, as before', async () => {
+    const { runtimeHoldsCli } = await import('../../src/core/session-channel/host-boot.js')
+    const c = conn({ status: { ok: true, exists: true, alive: true } })
+    expect(await runtimeHoldsCli(SID, null, c)).toBe(true)
+    expect(c.asked).toEqual([{ cmd: 'status', params: { sid: SID } }])
+  })
+})
+
+describe('the host refuses a resume while anything of it runs there (host-boot.ts resumeNotAtRest)', () => {
+  const runtime = (reply: unknown) => ({ send: vi.fn(async () => reply) })
+  const leaderRow = { claudeSessionId: SID, engine: 'codex', acpRuntimeId: RUNTIME } as never
+
+  it('its worker runs in this host\'s runtime: refused', async () => {
+    const { resumeNotAtRest } = await import('../../src/core/session-channel/host-boot.js')
+    expect(await resumeNotAtRest(SID, leaderRow, { holds: () => false, rowOf: async () => null, runtime: runtime({ ok: true }) })).toMatch(/its CLI runs/)
+  })
+  it('the runner holds something of it: refused, the runtime not asked', async () => {
+    const { resumeNotAtRest } = await import('../../src/core/session-channel/host-boot.js')
+    const r = runtime({ ok: false, errorKind: 'no_worker' })
+    expect(await resumeNotAtRest(SID, leaderRow, { holds: () => true, rowOf: async () => null, runtime: r })).toMatch(/runner/)
+    expect(r.send).not.toHaveBeenCalled()
+  })
+  it('no row in the resume: this host\'s own copy names the runtime id', async () => {
+    const { resumeNotAtRest } = await import('../../src/core/session-channel/host-boot.js')
+    const r = runtime({ ok: false, errorKind: 'no_worker' })
+    expect(await resumeNotAtRest(SID, undefined, { holds: () => false, rowOf: async () => leaderRow, runtime: r })).toBeNull()
+    expect(r.send).toHaveBeenCalledWith('acpState', { sid: RUNTIME }, 3_000)
   })
 })

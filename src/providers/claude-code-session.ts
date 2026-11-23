@@ -34,7 +34,7 @@ import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
-import { installHostJudgedRouting, routeHostJudgedEvent, startGoesToHost, startOnJudgingHost } from './host-judged-runner.js'
+import { hostJudgedSession, installHostJudgedRouting, routeHostJudgedEvent, startGoesToHost, startOnJudgingHost } from './host-judged-runner.js'
 import { handOverPending, setLeaderDelivery } from './host-handover.js'
 import { judgingHostOf } from '../core/sessions/judge-of.js'
 import { acpResumeHostOf, resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
@@ -12637,7 +12637,7 @@ export class SessionRunner {
           if (!acpSession && !this.sdkSessionMap.has(sendData.sessionId)) {
             // Server restarted since this ACP session was created? Re-attach from
             // the record (its engine says ACP) — journal replay restores the stream.
-            acpSession = await this.maybeAttachAcpSession(sendData.sessionId)
+            acpSession = await this.maybeAttachAcpSession(sendData.sessionId, { asked: true })
           }
           if (acpSession) {
             // ACP prompts are one-at-a-time (the worker rejects a prompt while a
@@ -12656,7 +12656,7 @@ export class SessionRunner {
               }
             }
             const providerSessionId = acpSession.sessionId ?? sendData.sessionId
-            await this.drainAcpQueue(acpSession, providerSessionId)
+            await this.drainAcpQueue(acpSession, providerSessionId, { asked: true })
             void this.syncPhaseAfterSend(providerSessionId, sendSource, endsWait)
           } else if (this.sdkSessionMap.has(sendData.sessionId)) {
             // Route to SDK if this session is tracked as an SDK session
@@ -13514,10 +13514,17 @@ export class SessionRunner {
    * send hit the live worker (or lazy-resume via session/load). Returns
    * undefined for non-ACP records — callers fall through to the native path.
    */
-  private async maybeAttachAcpSession(sessionId: string): Promise<AcpSession | undefined> {
+  private async maybeAttachAcpSession(sessionId: string, o: { asked?: boolean } = {}): Promise<AcpSession | undefined> {
     if (this.acpDestroyed) return undefined
     const attached = this.findAcpSession(sessionId)
     if (attached) return attached
+    // An attach starts the session's worker here: a legacy session at rest on a host whose service
+    // resumes ACP sessions goes to that host instead (host-resume.ts), lines or none. `asked`: the
+    // caller asked just now (a delivery), or keeps it legacy on purpose (a Restart, a self-report).
+    if (!o.asked) {
+      const host = acpResumeHostOf(sessionId)
+      if (host && await this.acpResumesOnHost(sessionId, host, undefined, { attaching: true })) return undefined
+    }
     const {
       getAcpIdentityReplacementTarget,
       getSessionByClaudeId,
@@ -13532,6 +13539,9 @@ export class SessionRunner {
     const pending = this.acpAttachPromises.get(sessionId)
       ?? this.acpAttachPromises.get(runtimeKey)
     if (pending) return pending
+    // Its host took it while this read the row (a hand-over's last check saw no attach in flight):
+    // checked in the same tick as the attach is marked in flight, so the two never both go on.
+    if (this.hostHasSession(sessionId)) return undefined
     const epoch = this.acpLifecycleEpoch
     const attaching = this.attachAcpSessionFromRecord(sessionId, epoch, initialRecord)
     this.acpAttachPromises.set(sessionId, attaching)
@@ -13620,6 +13630,14 @@ export class SessionRunner {
       }
       const currentRecord = await getSessionByClaudeId(establishedId)
         ?? await getSessionByClaudeId(sessionId)
+      // Its host took it meanwhile: this object goes, the worker stays (the host's, by the same
+      // runtime id in the same daemon), and nothing of it is linked here.
+      if (this.hostHasSession(establishedId) || this.hostHasSession(sessionId)) {
+        for (const [key, candidate] of this.acpSessions) if (candidate === session) this.acpSessions.delete(key)
+        session.detach()
+        log.session.info('acp: an attach its host took meanwhile was let go', { sessionId: establishedId, runtimeId: session.runtimeId })
+        return undefined
+      }
       if (this.acpDestroyed
         || epoch !== this.acpLifecycleEpoch
         || !currentRecord
@@ -13767,7 +13785,19 @@ export class SessionRunner {
 
   /** Find a live ACP session or lazily attach it from its durable record. */
   async findOrAttachAcpSession(sessionId: string): Promise<AcpSession | undefined> {
-    return this.findAcpSession(sessionId) ?? await this.maybeAttachAcpSession(sessionId)
+    const found = this.findAcpSession(sessionId)
+    // An object here that holds nothing (its worker stopped or reaped) starts a worker for what is
+    // asked of it next: the same ask as an attach (the panel's first read, say, after a stop).
+    if (found && !this.acpHoldsAnything(sessionId)) {
+      const host = acpResumeHostOf(sessionId)
+      if (host && await this.acpResumesOnHost(sessionId, host, undefined, { attaching: true })) return this.hostProxyOf(sessionId)
+    }
+    return found ?? await this.maybeAttachAcpSession(sessionId) ?? this.hostProxyOf(sessionId)
+  }
+
+  /** Handed to its host (by an attach's ask, or meanwhile): its host's proxy answers for it. */
+  private hostProxyOf(sessionId: string): AcpSession | undefined {
+    return this.hostHasSession(sessionId) ? hostJudgedSession(sessionId, 'acp') as unknown as AcpSession | undefined : undefined
   }
 
   /**
@@ -13849,7 +13879,8 @@ export class SessionRunner {
       }
     }
 
-    const acp = this.findAcpSession(sessionId) ?? await this.maybeAttachAcpSession(sessionId)
+    // A self-report asks the session that just ended a turn: it stays where it ran (never handed).
+    const acp = this.findAcpSession(sessionId) ?? await this.maybeAttachAcpSession(sessionId, { asked: true })
     if (!acp) throw new Error(`No live session found for self-report: ${sessionId}`)
     const request = this.acpContract(acp).requestTurnCompleteSelfReport
     if (!request) {
@@ -14114,10 +14145,17 @@ export class SessionRunner {
    * stays queued and re-drains when the turn's SESSION_RESULT lands
    * (processNext routes back here) — the pre-steering behavior.
    */
-  private async drainAcpQueue(session: AcpSession, sessionId: string): Promise<void> {
+  private async drainAcpQueue(session: AcpSession, sessionId: string, o: { asked?: boolean } = {}): Promise<void> {
     // Its host runs it now, or a hand-over of it waits for the host's word (host-resume.ts): an
     // object of it left here (a timer of a dropped one) delivers nothing; its lines are the host's.
     if (this.hostHasSession(session.sessionId ?? sessionId)) return
+    // An object holding nothing (its worker stopped or died: the attach's own drain, the drain after
+    // a death) would start a worker here for the next line: the same ask as a delivery's first.
+    if (!o.asked && !this.acpHoldsAnything(session.sessionId ?? sessionId)) {
+      const sid = session.sessionId ?? sessionId
+      const host = acpResumeHostOf(sid)
+      if (host && await this.acpResumesOnHost(sid, host, undefined)) return
+    }
     try {
       await this.awaitNativeReinitialization(sessionId)
     } catch (err) {
@@ -16214,7 +16252,8 @@ export class SessionRunner {
     const record = await getSessionByClaudeId(sessionId)
     if (!record) throw new Error(`reinitialize: no session record for ${sessionId}`)
     if (isAcpEngine(record.engine)) {
-      const session = await this.findOrAttachAcpSession(sessionId)
+      // A Restart stays legacy, as a native one does (host-resume.ts): never a hand-over.
+      const session = this.findAcpSession(sessionId) ?? await this.maybeAttachAcpSession(sessionId, { asked: true })
       if (!session) throw new Error('ACP session is not available for restart')
       const restartIds = new Set([sessionId, session.runtimeId])
       for (const id of restartIds) this.acpAbortInProgress.add(id)
@@ -16468,9 +16507,19 @@ export class SessionRunner {
   }
 
   /**
+   * Does this runner hold anything of `sid` that a resume elsewhere would run beside (host-resume.ts,
+   * on the leader and on the host alike: host-boot.ts): a live native process, or an ACP object that
+   * holds something.
+   */
+  holdsSessionForResume(sid: string): boolean {
+    return this.nativeHoldsLive(sid) || this.acpHoldsAnything(sid)
+  }
+
+  /**
    * Does this runner's ACP object of `sid` hold anything (host-resume.ts reads one that holds nothing
    * as at rest): a worker it started or adopted, a turn, a prompt, work after its turn, an attach, a
-   * row in flight or an abort. A stopped or reaped one holds nothing; its host's runtime is asked too.
+   * row in flight, an abort, or a cursor commit in flight (the row's journal cursor is not final yet).
+   * A stopped or reaped one holds nothing; its host's runtime is asked too.
    */
   private acpHoldsAnything(sid: string): boolean {
     if (this.acpAttachPromises.has(sid)) return true
@@ -16478,7 +16527,7 @@ export class SessionRunner {
     if (!s) return false
     const ids = [sid, s.sessionId ?? sid, s.runtimeId]
     return s.active || s.activity === 'processing' || s.hasPendingPermission || s.outlivingWork.length > 0
-      || this.acpAttachingSessions.has(s)
+      || s.cursorCommitting === true || this.acpAttachingSessions.has(s)
       || ids.some((id) => this.acpDeliverySettlements.has(id) || (this.acpRowTakes.get(id) ?? 0) > 0 || this.acpAbortInProgress.has(id))
   }
 
@@ -16488,10 +16537,11 @@ export class SessionRunner {
   }
 
   /** An ACP send's ask (host-resume.ts): the same as processNextNow's, its stop fence read from the row. */
-  private async acpResumesOnHost(sid: string, host: string, sendSource: string | undefined): Promise<boolean> {
+  private async acpResumesOnHost(sid: string, host: string, sendSource: string | undefined, o: { attaching?: boolean } = {}): Promise<boolean> {
     const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const fence = (await getSessionByClaudeId(sid).catch(() => null))?.stopRequest?.id ?? null
-    return resumeAtRestOnHost(sid, host, this.restView(fence, sendSource))
+    // No object of it here: the delivery attaches next, which starts a worker, lines or none.
+    return resumeAtRestOnHost(sid, host, this.restView(fence, sendSource), { attaching: o.attaching ?? !this.findAcpSession(sid) })
   }
 
   /** The source of the send that asked for a session's next delivery (handleSend), until that delivery reads it. */
@@ -16513,7 +16563,7 @@ export class SessionRunner {
       sendSource,
       sdk: (sid) => this.sdkSessionMap.has(sid),
       // An ACP object counts only while it holds something: a stopped or reaped one is at rest.
-      wrapperLive: (sid) => this.nativeHoldsLive(sid) || this.acpHoldsAnything(sid),
+      wrapperLive: (sid) => this.holdsSessionForResume(sid),
       wrapperState: (sid) => {
         const w = this.ownWrapperOf(sid)
         const a = this.findAcpSession(sid)
@@ -16529,7 +16579,7 @@ export class SessionRunner {
       dropDeadWrapper: (sid) => {
         // The same test the hand-over passed (wrapperLive above): every object of it that holds no
         // live process goes, its transport let go (the CLI is the host's now), so no lookup answers it.
-        if (this.nativeHoldsLive(sid) || this.acpHoldsAnything(sid)) return
+        if (this.holdsSessionForResume(sid)) return
         for (const [key, s] of this.sessions) {
           if (s.sessionId !== sid) continue
           try { s.detach() } catch { /* it goes anyway */ }
@@ -16963,7 +17013,7 @@ export class SessionRunner {
     // A legacy session at rest on a host whose service runs sessions: that host resumes it, and it is
     // host-judged from then on (host-resume.ts). Null (the switch off for its host): as before.
     const resumeHost = resumeHostOf(sessionId)
-    if (resumeHost && await resumeAtRestOnHost(sessionId, resumeHost, this.restView(stopFence, sendSource))) return
+    if (resumeHost && await resumeAtRestOnHost(sessionId, resumeHost, this.restView(stopFence, sendSource), { attaching: !this.findAcpSession(sessionId) })) return
     if (this.nativeSessionReinitializations.has(sessionId)) {
       log.session.info('processNext: waiting for explicit session restart before delivery', { sessionId })
       try {
@@ -16978,9 +17028,9 @@ export class SessionRunner {
 
     // ACP sessions have their own drain (one prompt per turn, no FIFO/--resume).
     const acpSession = this.findAcpSession(sessionId)
-      ?? await this.maybeAttachAcpSession(sessionId)
+      ?? await this.maybeAttachAcpSession(sessionId, { asked: true })
     if (acpSession) {
-      return this.drainAcpQueue(acpSession, acpSession.sessionId ?? sessionId)
+      return this.drainAcpQueue(acpSession, acpSession.sessionId ?? sessionId, { asked: true })
     }
     // An ACP record that did not attach is never drained down the Claude path (acp-native-guard.ts).
     // A server that is stopping leaves the rows queued: the next boot attaches and drains them. Any

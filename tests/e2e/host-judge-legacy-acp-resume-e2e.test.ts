@@ -8,7 +8,9 @@
  *   A1 legacy   the switch off: an ACP session (OpenCode's slot) starts on devbox the legacy way (the
  *               Mac's runner drives the worker in the host's daemon), answers, and is stopped
  *   A2 off      still off: a send to it resumes it the legacy way, as before
- *   A3 on       the switch on: a send to the stopped session goes to the host, whose service attaches
+ *   A3 on       the switch on: the user opens the session's panel (GET /controls, which attaches an ACP
+ *               session) and then types; the panel's attach hands it to the host (no worker starts on
+ *               the Mac's side), and the send goes to the host, whose service attaches
  *               the same session from the same row (its runtime id, its journal) and resumes it in
  *               its own daemon; the row is the host's, the answer comes back once over the channel,
  *               and the Mac holds no ACP object of it any more
@@ -101,8 +103,16 @@ describe.skipIf(!RUN)('a legacy ACP session at rest is resumed by its host\'s se
     await stop()
   }, 300_000)
 
-  it('A3: with the switch on, the host resumes the stopped ACP session from the same row; it is the host\'s', async () => {
+  it('A3: with the switch on, the panel opens, then a send: the host resumes the stopped ACP session from the same row; it is the host\'s', async () => {
     await setSwitch(true)
+    // The panel's first read (useSessionControls): an attach of the session, which goes to the host.
+    const controls = await h.c.mac('GET', `/api/sessions/${sid}/controls`)
+    expect(controls.status, JSON.stringify(controls.json)).toBe(200)
+    await waitFor(async () => (await macRow())?.judge === 'host', 60_000, 'the panel\'s attach to hand the session to the host').catch(fail)
+    // The host's runner attached it and runs its worker; the Mac's has no ACP object of it.
+    await waitFor(async () => (await h.host(`/acp?sid=${sid}`)).workerLive === true, 60_000, 'the host\'s worker of it').catch(fail)
+    expect(await macAcp()).toMatchObject({ found: true, hostJudged: true })
+    expect(resultsOn(await channelEvents(), 'ACP round host')).toEqual([])
     await send('ACP round host')
     await waitFor(async () => resultsOn(await channelEvents(), 'ACP round host').length > 0, 120_000, 'the resumed ACP answer over the channel').catch(fail)
     expect(h.c.logs().mac).toContain('host resume: the host resumes the session; it is host-judged from now on')

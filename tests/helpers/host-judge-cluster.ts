@@ -304,8 +304,8 @@ await serveProbe({
     const held = globalThis.__clusterHeldSids ??= new Set()
     if (!globalThis.__clusterHeldPatched) {
       globalThis.__clusterHeldPatched = true
-      const own = sessionRunner.holdsLiveSession
-      sessionRunner.holdsLiveSession = function (sid) { return held.has(sid) || own.call(this, sid) }
+      const own = sessionRunner.holdsSessionForResume
+      sessionRunner.holdsSessionForResume = function (sid) { return held.has(sid) || own.call(this, sid) }
     }
     if (q.get('on') === '0') held.delete(q.get('sid'))
     else held.add(q.get('sid'))

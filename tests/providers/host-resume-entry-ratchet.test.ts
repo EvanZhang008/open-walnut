@@ -12,7 +12,7 @@
  * called, until it goes through processNextNow or is listed with why.
  */
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 const FILE = path.resolve(import.meta.dirname, '../../src/providers/claude-code-session.ts')
@@ -67,5 +67,72 @@ describe('the runner starts a CLI of a session only where the hand-over to its h
     // processNextNow's ask comes before its ACP attach too.
     const body = src.slice(src.indexOf('private async processNextNow('))
     expect(body.indexOf('resumeAtRestOnHost(')).toBeLessThan(body.indexOf('maybeAttachAcpSession('))
+  })
+
+})
+
+/**
+ * Every attach of an ACP session, by file and (in the runner) by method: an attach starts the
+ * session's worker where it runs, so each one goes through the resume decision (maybeAttachAcpSession
+ * asks unless the caller says `asked: true`), or says here why it keeps the session where it is.
+ */
+const ATTACHES: Record<string, string> = {
+  // The runner's own entries.
+  'src/providers/claude-code-session.ts#findOrAttachAcpSession': 'the public attach: asks (attaching), answers the host\'s proxy once handed',
+  'src/providers/claude-code-session.ts#init': 'the bus handler, SESSION_SEND\'s ACP branch: asked just before (acpResumesOnHost), so `asked: true`',
+  'src/providers/claude-code-session.ts#processNextNow': 'asked just before (resumeAtRestOnHost, attaching), so `asked: true`',
+  'src/providers/claude-code-session.ts#requestTurnCompleteSelfReport': 'a self-report asks the session that just ended a turn: it stays where it ran, `asked: true`',
+  'src/providers/claude-code-session.ts#performNativeReinitialize': 'a Restart stays legacy, as a native one does: `asked: true`',
+  // Through findOrAttachAcpSession (so through the decision).
+  'src/web/routes/sessions.ts': 'the model catalog (a read): asks, the host\'s proxy answers once handed',
+  'src/core/sessions/session-controls.ts': 'a model switch: asks; once handed, the proxy forwards it to the host',
+  'src/core/sessions/session-lifecycle.ts': 'a mode change, a permission answer, restoring pending permissions: each asks',
+  'src/core/sessions/session-extras.ts': 'the panel\'s controls, read and set: each asks',
+  'src/core/subagents/on-host.ts': 'a subagent\'s session attached on use: asks',
+  'src/core/session-hooks/builtins.ts': 'a foreground title prompt: asks (a background sweep never attaches: noColdAttach)',
+}
+
+/** Every ACP attach call outside its definitions, keyed by file (and the runner's method). */
+function attachSites(): Record<string, number> {
+  const root = path.resolve(import.meta.dirname, '../..')
+  const out: Record<string, number> = {}
+  const sig = /^ {2}(?:(?:private|public|protected|static|async|override)\s+)*([A-Za-z_$][\w$]*)\s*[(<]/
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) { walk(p); continue }
+      if (!/\.tsx?$/.test(e.name)) continue
+      const rel = path.relative(root, p)
+      let method = ''
+      for (const line of readFileSync(p, 'utf8').split('\n')) {
+        const m = sig.exec(line)
+        if (m && !/^\s*(if|for|while|switch|return)\b/.test(line.trim())) method = m[1]
+        if (/^\s*(\/\/|\*)/.test(line)) continue
+        // Calls only: a definition (`async findOrAttachAcpSession(sessionId: string)`) or an interface member is none.
+        const n = line.match(/(?:\.|\bawait\s+this\.)\s*(?:findOrAttachAcpSession|maybeAttachAcpSession)\(/g)?.length ?? 0
+        if (n === 0) continue
+        const key = rel === 'src/providers/claude-code-session.ts' ? `${rel}#${method}` : rel
+        out[key] = (out[key] ?? 0) + n
+      }
+    }
+  }
+  walk(path.join(root, 'src'))
+  return out
+}
+
+describe('every attach of an ACP session is listed with why', () => {
+  it('a new attach entry fails here until it goes through the resume decision or says why it does not', () => {
+    const found = attachSites()
+    // The host's own runner call route (host-routes.ts) attaches the host's own sessions, which no
+    // host resumes: listed apart.
+    delete found['src/core/session-channel/host-routes.ts']
+    expect(Object.keys(found).sort()).toEqual(Object.keys(ATTACHES).sort())
+  })
+
+  it('the runner\'s entries that skip the ask are exactly the ones that asked just before or stay legacy', () => {
+    const src = readFileSync(FILE, 'utf8')
+    const asked = src.match(/maybeAttachAcpSession\([^)]*\{ asked: true \}\)/g) ?? []
+    expect(asked).toHaveLength(4)
+    expect(src).toMatch(/return found \?\? await this\.maybeAttachAcpSession\(sessionId\) \?\? this\.hostProxyOf\(sessionId\)\n/)
   })
 })
