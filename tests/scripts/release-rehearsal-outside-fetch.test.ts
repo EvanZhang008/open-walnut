@@ -89,10 +89,23 @@ describe('every outside GET of the rehearsals goes through outsideFetch', () => 
     expect(got).toBeNull()
   })
 
+  // Allowed: the Walnut under test (`w.base`, `this.base`, or its loopback address written out:
+  // 2026-11-23, the host-judged rehearsals' `http://127.0.0.1:${port}` read as outside), and the
+  // local registry's pass-through of npm's own request (npm tries again itself).
+  const ALLOWED = [/\$\{(w|this)\.base\}/, /fetch\(`\$\{upstream\}\$\{req\.url\}`/, /\b(fetch|fetchImpl)\(\s*[`'"]https?:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/`'"]/]
+  const outsideCall = (line: string) => /\b(fetch|fetchImpl)\(/.test(line) && !ALLOWED.some((re) => re.test(line))
+
+  it('a loopback call is the Walnut under test; every other address is outside', () => {
+    expect(outsideCall('const r = await fetch(`http://127.0.0.1:${port}/api/system/health`)')).toBe(false)
+    expect(outsideCall("await fetch('http://localhost:3000/x')")).toBe(false)
+    expect(outsideCall('await fetch(`${w.base}/api/tasks`)')).toBe(false)
+    expect(outsideCall('await fetch(`https://registry.npmjs.org/${name}`)')).toBe(true)
+    expect(outsideCall('await fetch(url)')).toBe(true)
+    // A loopback-looking host name is still outside.
+    expect(outsideCall('await fetch(`http://127.0.0.1.example.com/x`)')).toBe(true)
+  })
+
   it('no rehearsal or release download script calls fetch for an outside service directly', () => {
-    // Allowed: the Walnut under test (`w.base`, `this.base`), and the local registry's
-    // pass-through of npm's own request (npm tries again itself).
-    const allowed = [/\$\{(w|this)\.base\}/, /fetch\(`\$\{upstream\}\$\{req\.url\}`/]
     const offenders: string[] = []
     // The release scripts that download read through it too: 2026-11-10, CI run 42831643140, the
     // Node archive build's own three tries spanned 16 s and failed the required Archive job.
@@ -105,8 +118,7 @@ describe('every outside GET of the rehearsals goes through outsideFetch', () => 
       const file = path.relative(REPO, abs)
       fs.readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
         if (/^\s*(\*|\/\/)/.test(line)) return
-        if (!/\b(fetch|fetchImpl)\(/.test(line)) return
-        if (!allowed.some((re) => re.test(line))) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+        if (outsideCall(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
       })
     }
     expect(offenders).toEqual([])
