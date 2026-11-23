@@ -77,6 +77,28 @@ describe('host call entry twin wiring', () => {
   // there; with no socket peer the bun twin could not vouch for its run, so the leader capped each
   // bypass start at default. Only the gateway socket's kernel peer vouches for a job's run
   // (jobCallerVouched), so every other door into handleGatewayLine hands a job's line back first.
+  // The whole class: every caller whose proof is the kernel's word on the process holding the
+  // gateway socket. A door with no socket peer (the host call entry) cannot give that word, so each
+  // read of the peer is listed here with its rule for such a door. A new read fails until it is.
+  it('every read of a caller\'s process names its rule for a door with no socket peer', () => {
+    const reads = [...standalone.matchAll(/(\w+)\(socketPeerPid\(/g)].map((m) => m[1]).sort()
+    expect(reads, 'a new proof read from the socket peer: give it a rule for the host call entry and list it here').toEqual([
+      'gatewayCallerIdentity', // a session's sid: the entry's run token proves it instead (fd null skips the read)
+      'gatewayCallerProof', // an approval's caller proof: the entry hands the line back (caller_proof_on_socket)
+      'jobCallerVouched', // a plugin job's run: follower.gateway hands the line back (job_on_socket)
+    ])
+    const gw = fnBody(standalone, 'handleGatewayLine')
+    expect(gw.indexOf('if (fd === null) return sendSessionGatewayLine(')).toBeGreaterThan(0)
+    expect(gw.indexOf('if (fd === null) return sendSessionGatewayLine(')).toBeLessThan(gw.indexOf('gatewayCallerIdentity(socketPeerPid(fd)'))
+    const entry = read('src/replica/host-call-entry.ts')
+    const proofBack = entry.indexOf("unavailable(res, 503, 'caller_proof_on_socket'")
+    expect(proofBack).toBeGreaterThan(0)
+    expect(proofBack).toBeLessThan(entry.indexOf("deps.request('follower.gateway'"))
+    expect(fnBody(standalone, 'cmdFollowerGateway')).toContain("errorKind: 'job_on_socket'")
+    // The JS twin reads no process at all (it never vouches and sends no proof).
+    expect(source).not.toContain('socketPeerPid(')
+  })
+
   it('the bun twin hands a plugin job\'s line back from every door that has no gateway socket peer', () => {
     // Every call, whatever its arguments are named (the definition left out): its third is the peer.
     const calls = [...standalone.matchAll(/(?<!function )handleGatewayLine\(\s*[^,()]+,\s*[^,()]+,\s*([^,)]+)/g)]
