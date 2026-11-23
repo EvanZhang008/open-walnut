@@ -17,6 +17,7 @@ import {
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
+import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 import { ACP_UPGRADE_HOLD_MAX_MS, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import { buildBackoffSettled } from '../../src/providers/daemon-build-backoff.js'
@@ -758,6 +759,51 @@ describe('NetDaemonUpdater', () => {
     release()
     await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
     u.stop()
+  })
+
+  describe('one update per daemon, whichever host name reaches it (daemon-update-claim.ts, 2026-11-23)', () => {
+    // Earlier tests' updates leave their settle window behind: each case starts with no claim.
+    beforeEach(() => resetDaemonUpdateClaims())
+    afterEach(() => resetDaemonUpdateClaims())
+
+    it('another name of the daemon updating it: nothing goes up, asked again later; once it ends badly, this one goes', async () => {
+      const peer = await claimDaemonUpdate('studio-ssh', async () => ['studio-mac', 'studio-ssh'])
+      if ('heldBy' in peer) throw new Error('the peer could not claim')
+      const { u, update, conn } = updater({ sameDaemon: async () => ['studio-mac', 'studio-ssh'] })
+      u.schedule(0)
+      await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+      expect(u.state.message).toContain('studio-ssh reaches the same daemon and is updating it, or just did')
+      expect(update).not.toHaveBeenCalled()
+      // Not a byte of the build went up: only the host_exec and service reads at most.
+      expect(conn.sends.filter((c) => c === 'fs.writePart')).toEqual([])
+      peer.release(false)
+      await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+      expect(update).toHaveBeenCalledTimes(1)
+      u.stop()
+    })
+
+    it('its own update holds the other names while it runs and for the settle window after it went through', async () => {
+      let release!: () => void
+      const update = vi.fn(() => new Promise<void>((r) => { release = r }))
+      const { u } = updater({ update, sameDaemon: async () => ['studio-mac', 'studio-ssh'] })
+      expect((await u.request()).phase).toBe('running')
+      expect(await claimDaemonUpdate('studio-ssh', async () => ['studio-mac'])).toEqual({ heldBy: 'studio-mac' })
+      release()
+      await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+      // Went through: the SSH name, whose own read may still show the old build, waits.
+      expect(await claimDaemonUpdate('studio-ssh', async () => ['studio-mac'])).toEqual({ heldBy: 'studio-mac' })
+      u.stop()
+    })
+
+    it('a failed update frees the daemon for its other names at once', async () => {
+      const update = vi.fn(async () => { throw new Error('the update did not start detached from the daemon') })
+      const { u } = updater({ update, sameDaemon: async () => ['studio-mac', 'studio-ssh'] })
+      await u.request()
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+      const next = await claimDaemonUpdate('studio-ssh', async () => ['studio-mac'])
+      expect('heldBy' in next).toBe(false)
+      u.stop()
+    })
   })
 
   it('reads the target with the probe, and sends a compiled server\'s walnut file as its gz', async () => {

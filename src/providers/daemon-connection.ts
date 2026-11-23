@@ -69,6 +69,7 @@ import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type Unrea
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
+import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type UpdateClaim } from './daemon-update-claim.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
@@ -1550,6 +1551,7 @@ export class DaemonConnection {
       },
       cooldownMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS,
       fence: () => this.fenceFileChanges(),
+      sameDaemon: () => this.daemonNamesOrOwn(),
       // The host's mode rides this update as it rides the SSH one (one-service-mode.ts): one decision for every link.
       mode: {
         read: () => this.serviceModeNow(),
@@ -2325,7 +2327,7 @@ export class DaemonConnection {
    * daemon keeps ONE bridge and ONE read copy per Walnut, so each link must push the same ones.
    */
   async daemonNames(): Promise<{ keeper: string; aliases: string[] }> {
-    const aliases = await this.sameDaemonHosts().catch(() => [this.hostKey])
+    const aliases = await this.daemonNamesOrOwn()
     if (aliases.length < 2) return { keeper: this.hostKey, aliases: [this.hostKey] }
     // A config that cannot be read keeps the name last worked out for these aliases: a guess
     // would rename the daemon's bridge until the next push.
@@ -3288,6 +3290,34 @@ export class DaemonConnection {
     const oldest = second - Math.ceil(DaemonConnection.PROBE_SENDING_LOOKBACK_MS / 1000)
     while (this.sentPerSecond.length > 0 && this.sentPerSecond[0][0] < oldest) this.sentPerSecond.shift()
   }
+  /**
+   * The one rule for "this Mac is still sending on this link's path, so its silence is a queue, not
+   * a dead far side" (every liveness closer asks it: the read probe, the quiet check, the ping loop;
+   * tests/providers/daemon-link-busy-rule.test.ts holds them to it). 2026-11-23: a host_exec quiet
+   * check closed clouddev 2 s after the read probe kept it for an upload in flight, and a read probe
+   * closed clouddev while olddev's 34 MB daemon update went up through the same relay connection.
+   * Bytes of every host network link count for each of them: on this Mac they all leave through its
+   * one walnut-net. Only for CROSS_LINK_BUSY_MAX_MS after this link last heard anything, though: a
+   * machine that went away while another link uploads for minutes is closed, not kept up by bytes
+   * that never were its own (2026-11-23 review). A check after a wake or a network change (not
+   * answered since) never counts them: bytes sent then went into the old path and say nothing of the new one.
+   */
+  private busySending(kind: 'read' | 'check' | 'ping'): boolean {
+    if (kind === 'check' && !this.provenSinceSignal()) return false
+    const lookback = DaemonConnection.PROBE_SENDING_LOOKBACK_MS
+    const heard = this.lastHeardAt()
+    const heardLately = heard > 0 && Date.now() - heard < DaemonConnection.CROSS_LINK_BUSY_MAX_MS
+    // The ping loop's misses are the bound on a dead link: frozen only while it heard lately.
+    if (kind === 'ping' && !heardLately) return false
+    let sent = this.sentOnLinkWithin(lookback)
+    if (this.isNetHost && heardLately) {
+      for (const other of connectionPool.values()) {
+        if (other !== this && other._connected && other.isNetHost) sent += other.sentOnLinkWithin(lookback)
+      }
+    }
+    return sent >= DaemonConnection.PROBE_SENDING_BYTES
+  }
+
   /** Bytes this Mac put on the session link's path within the last `ms`. */
   private sentOnLinkWithin(ms: number): number {
     const from = Math.floor((Date.now() - ms) / 1000)
@@ -5010,10 +5040,38 @@ export class DaemonConnection {
    * surfaced as ECONNRESET on every in-flight session).
    */
 
+  /** Every host name of this daemon (sameDaemonHosts); just this one when they cannot be read. */
+  private async daemonNamesOrOwn(): Promise<string[]> {
+    return this.sameDaemonHosts().catch(() => [this.hostKey])
+  }
+
+  /**
+   * Another host name of this daemon holds its update (daemon-update-claim.ts): asked again in a
+   * minute, by when the daemon runs the new build. True: held, nothing goes up from here.
+   */
+  private peerUpdateHolds(expected: string, remoteVersion: string, heldBy: string | null): boolean {
+    if (!heldBy) return false
+    this.postponeUpgrade(peerUpdatingWhy(heldBy), expected, remoteVersion, { steady: true })
+    return true
+  }
+
+  /** Claim this daemon's update for this call before the first byte goes up; true: another name holds it. */
+  private async claimOrHold(expected: string, remoteVersion: string, held: { claim: UpdateClaim | null }): Promise<boolean> {
+    if (held.claim) return false
+    const got = await claimDaemonUpdate(this.hostKey, () => this.daemonNamesOrOwn())
+    if ('heldBy' in got) return this.peerUpdateHolds(expected, remoteVersion, got.heldBy)
+    held.claim = got
+    return false
+  }
+
   private async shouldUpgradeDaemon(
     remotePath: string, service?: RemoteServiceTakeover, gate?: () => UpgradeHold,
     liveRuntime?: RemoteRuntime | 'unknown' | null,
   ): Promise<boolean> {
+    // The update claim this call takes on the way (claimOrHold), its own: a reconnect's check may
+    // run beside a postponed one's recheck. A replacement keeps it for the other names' settle
+    // window (released true where it returns true); any other end frees it (the finally).
+    const held: { claim: UpdateClaim | null } = { claim: null }
     // Ephemeral attach-only: never upgrade (which would --stop the production
     // daemon). Version skew between the ephemeral's binary and production's is
     // expected and must not trigger a restart of the shared singleton.
@@ -5083,9 +5141,10 @@ export class DaemonConnection {
         if (remoteVersion !== expected || modeDue) {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
+          if (await this.claimOrHold(expected, remoteVersion, held)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           if (updated === 'held') return false
-          if (updated) { this.noteDaemonReplaced(); return true }
+          if (updated) { this.noteDaemonReplaced(); held.claim?.release(true); return true }
           // No safe user-level service is known. Keep serving without publishing a retry as an error.
           log.session.info(
             'DaemonConnection: managed daemon update not available for this service; the running daemon keeps serving',
@@ -5151,6 +5210,7 @@ export class DaemonConnection {
       if (await this.acpTurnsOpen(expected, remoteVersion)) return false
       // A host_exec run ends with the daemon: asked before the upload too, so a 2 h run is not paid an upload a minute.
       if (await this.execRunsOpen(expected, remoteVersion)) return false
+      if (this.peerUpdateHolds(expected, remoteVersion, await daemonUpdateHeldBy(this.hostKey, () => this.daemonNamesOrOwn()))) return false
       if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
       // The new daemon's checkpoints first, while this one still serves; the
       // gate is asked again after it, right before the stop.
@@ -5180,6 +5240,8 @@ export class DaemonConnection {
         return false
       }
       this._keepFail = null
+      // Claimed for every name of this daemon before the first byte of the new build goes up.
+      if (await this.claimOrHold(expected, remoteVersion, held)) return false
       try {
         await this.stageUpgrade(liveRuntime)
         this._stageFail = null
@@ -5242,6 +5304,7 @@ export class DaemonConnection {
       }
       this._lastUpgradeAttempt = { expected, at: Date.now() }
       this.noteDaemonReplaced()
+      held.claim?.release(true)
       return true
     } catch (error) {
       // An attempt that ended before the stop: the build that keeps serving goes back on the disk.
@@ -5254,6 +5317,8 @@ export class DaemonConnection {
         this.postponeUpgrade(`the version check did not finish (${detail.slice(0, 200)})`, expected, remoteVersion)
       }
       return false
+    } finally {
+      held.claim?.release(false)
     }
   }
 
@@ -9973,7 +10038,7 @@ export class DaemonConnection {
       const relayQuiet = relay !== null && !relay()
       // A read's probe only: after a wake or a network change (a check), bytes sent before it went
       // into the old path and say nothing of the new one (review: the check must still close fast).
-      const sending = kind === 'read' && this.sentOnLinkWithin(DaemonConnection.PROBE_SENDING_LOOKBACK_MS) >= DaemonConnection.PROBE_SENDING_BYTES
+      const sending = this.busySending(kind)
       const closing = this.noSsh && !superseded && !relayQuiet && !heardSome && !sending
       // Unproven since a signal, the deadline came from the old path's round trips: one more window.
       const confirm = closing && !confirmed && !this.provenSinceSignal()
@@ -10126,6 +10191,8 @@ export class DaemonConnection {
   /** What this Mac put on the link within PROBE_SENDING_LOOKBACK_MS that says it is busy sending, not dead. */
   static PROBE_SENDING_BYTES = 256 * 1024
   static PROBE_SENDING_LOOKBACK_MS = 10_000
+  /** Other host network links' bytes hold this one up for at most this long after it last heard anything (busySending). */
+  static CROSS_LINK_BUSY_MAX_MS = 45_000
   /** Round trips kept (the longest of them is the link's). */
   private static readonly RTT_SAMPLES_KEPT = 8
   /** A longer "round trip" is a sleep or a stall, not the link. */
@@ -10276,7 +10343,12 @@ export class DaemonConnection {
       // the process is awake — sleep of any length costs at most one tick.
       // 3x instead of 2x also absorbs transient event-loop stalls at boot
       // (index rebuild, session recovery) that used to cascade into mass reattach.
-      if (this._pongPending && !heardFrom) {
+      // Still sending on its path (busySending): the pong waits behind those bytes, so the tick
+      // neither counts a miss nor clears the ones before. Other links' bytes count only shortly
+      // after this one last heard anything (CROSS_LINK_BUSY_MAX_MS), so a machine that went away is still closed.
+      if (this._pongPending && !heardFrom && this.busySending('ping')) {
+        // held
+      } else if (this._pongPending && !heardFrom) {
         this._missedPongs += 1
         if (this._missedPongs >= 3) {
           log.session.warn('DaemonConnection: no pong received, connection stale', {

@@ -11,10 +11,11 @@
  *     startedAt; a request (host_daemon_update) is never held.
  * All SSH is stubbed at sshExec; no process, socket or tunnel is created.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DaemonConnection, remoteServiceProbePaths } from '../../src/providers/daemon-connection.js'
 import { decideNetUpdate, type NetUpdateFacts } from '../../src/providers/daemon-net-update.js'
 import { DAEMON_UPDATE_MIN_GAP_MS, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from '../../src/providers/daemon-update-gap.js'
+import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 
 const GAP = DAEMON_UPDATE_MIN_GAP_MS
 const EXPECTED = 'walnut-daemon-expected00'
@@ -172,5 +173,43 @@ describe('a host network machine\'s daemon', () => {
     for (const over of [{ daemonAgeMs: GAP + 1 }, { daemonAgeMs: 5 * 60_000, requested: true }, { daemonAgeMs: null }, { daemonAgeMs: 60_000, gapHeldForMs: GAP }]) {
       expect(decideNetUpdate(facts(over)), JSON.stringify(over)).toMatchObject({ go: true })
     }
+  })
+})
+
+// 2026-11-23: one daemon reached as two hosts (a host network entry and an SSH entry for the same
+// machine) was updated by both, each against the other's lock (daemon-update-claim.ts).
+describe('an SSH host whose daemon another host name also reaches', () => {
+  // Earlier tests' updates leave their settle window behind: each case starts with no claim.
+  beforeEach(() => resetDaemonUpdateClaims())
+  afterEach(() => resetDaemonUpdateClaims())
+
+  it('while the other name updates it, nothing goes up or stops here; once that ended badly, this one updates it', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    const seen = host(c, OLD, '25:00')
+    vi.spyOn(priv(c), 'sameDaemonHosts').mockResolvedValue(['devbox', 'devbox-net'])
+    const postpone = vi.spyOn(priv(c), 'postponeUpgrade')
+    const peer = await claimDaemonUpdate('devbox-net', async () => ['devbox', 'devbox-net'])
+    if ('heldBy' in peer) throw new Error('the peer could not claim')
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
+    expect(seen.filter((s) => s === 'DEPLOY')).toEqual([])
+    expect(stops(seen)).toEqual([])
+    expect(postpone.mock.calls.map((a) => a[0])).toContain('devbox-net reaches the same daemon and is updating it, or just did')
+    peer.release(false)
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
+    expect(stops(seen)).toHaveLength(1)
+    // Replaced here: the other name waits out the settle window instead of starting the same update.
+    expect(await claimDaemonUpdate('devbox-net', async () => ['devbox'])).toEqual({ heldBy: 'devbox' })
+  })
+
+  it('an update that stopped before the stop frees the claim at once', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    host(c, OLD, '25:00')
+    vi.spyOn(priv(c), 'sameDaemonHosts').mockResolvedValue(['devbox', 'devbox-net'])
+    // The trial run of the staged build fails: the running daemon keeps serving.
+    vi.spyOn(priv(c), 'trialStaged').mockResolvedValue('it did not answer')
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
+    expect('heldBy' in (await claimDaemonUpdate('devbox-net', async () => ['devbox']))).toBe(false)
   })
 })

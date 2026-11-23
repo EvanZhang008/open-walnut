@@ -52,6 +52,7 @@ import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, 
 import type { DaemonLinkKind } from './daemon-update-paths.js'
 import type { ServesAs, ServiceModeAsk } from './one-service-mode.js'
 import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
+import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy } from './daemon-update-claim.js'
 
 export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
 
@@ -221,6 +222,8 @@ export interface NetUpdaterDeps {
   cooldownMs: number
   /** Overdue: hold this server's file changes to the host while the swap runs (DaemonConnection); returns the release. */
   fence?: () => () => void
+  /** Every host name that reaches this daemon (DaemonConnection.sameDaemonHosts): one update claim for all of them. */
+  sameDaemon?: () => Promise<string[]>
   /** The gap between automatic replacements (daemon-update-gap.ts); default from the env. */
   minGapMs?: number
   autofixOff?: () => Promise<string | null>
@@ -447,6 +450,9 @@ export class NetDaemonUpdater {
     if (first.go === false) return this.skipped(first, trigger)
     // Its runner may still be in its check; a second update would swap the service under it.
     if (this.launched.unread) return this.postpone('the previous daemon update is still running on the host')
+    // Another host name of this daemon is updating it (daemon-update-claim.ts): nothing goes up from here.
+    const peer = await daemonUpdateHeldBy(c.host, () => this.sameDaemonNames())
+    if (peer) return this.postpone(peerUpdatingWhy(peer))
     const expected = facts.expected!
     if (behind.overdue && this.overdueNoted !== expected) {
       this.overdueNoted = expected
@@ -505,18 +511,24 @@ export class NetDaemonUpdater {
     if (no) return this.skipped({ go: false, skip: 'refused', why: no }, trigger)
     const from = c.daemonVersion
     const asked: ServesAs | null = serve ? (serve.on ? 'walnut-serve' : 'daemon') : null
-    log.session.info('DaemonConnection: updating a host network machine\'s daemon over its link', {
-      host: c.host, from, expected, scope: scope.scope, target: decision.target, source: 'file' in src ? 'daemon binary' : `walnut file ${src.id}`, trigger,
-      ...(asked ? { mode: asked } : {}),
-    })
-    this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
+    // Claimed for every name of this daemon before the first upload byte; the lookups above took time.
+    const claim = await claimDaemonUpdate(c.host, () => this.sameDaemonNames())
+    if ('heldBy' in claim) return this.postpone(peerUpdatingWhy(claim.heldBy))
+    // Kept for the settle window once the update went through, or may still run on the host (its answer lost).
+    let claimKept = false
     try {
+      log.session.info('DaemonConnection: updating a host network machine\'s daemon over its link', {
+        host: c.host, from, expected, scope: scope.scope, target: decision.target, source: 'file' in src ? 'daemon binary' : `walnut file ${src.id}`, trigger,
+        ...(asked ? { mode: asked } : {}),
+      })
+      this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
       await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file, base: facts.serviceExecutable } : { binary: null, gz: src.gz, base: facts.serviceExecutable }, expected, io, scope.scope, {
         overBusy: goesOver,
         // The build's hold before its record (the staging dir) is removed on the host.
         onBuildFailed: (error) => this.buildDidNotStay(expected, error.message.slice(0, 300)),
         ...(serve ? { serve } : {}),
       })
+      claimKept = true
     } catch (err) {
       // The upload was paid for: the next try waits a cooldown, it is not a failure.
       // Read from its record after the launch too (a probation, the install lock): answered, and no failure.
@@ -534,6 +546,8 @@ export class NetDaemonUpdater {
       if (buildFailed) void this.buildDidNotStay(expected, msg.slice(0, 300))
       // Unanswered: the record stays on the host, read when it is back; any other end is read already.
       if (!(err instanceof NetUpdateUnansweredError)) this.launched.answered()
+      // The answer never came: the update may still run there, so the other names wait it out too.
+      else claimKept = true
       // 2026-11-04: deferred on the host (launchd starting no jobs in a dark wake), so nothing changed there: no failure, asked again after the cooldown.
       if (deferredAt >= 0) { this.launched.outcome(expected, null); return this.postpone(msg.slice(deferredAt), this.d.cooldownMs) }
       // The daemon refused before it changed anything (busy, or its drain ran out): asked again,
@@ -587,7 +601,7 @@ export class NetDaemonUpdater {
       this.retryAt = (this.d.now ?? Date.now)() + retryInMs
       if (!this.stopped) this.later(0)
       return this.set('failed', msg)
-    } finally { release?.() }
+    } finally { release?.(); claim.release(claimKept) }
     this.failed = null
     this.linkCuts = null
     this.stageFails = null
@@ -631,6 +645,12 @@ export class NetDaemonUpdater {
   private hostBusy(): Promise<string | null> {
     const c = this.d.conn
     return (this.d.busy ?? (async () => await execRunsHold(c, c.host) ?? await acpTurnsHoldOverLink(c, (this.d.now ?? Date.now)())))()
+  }
+
+  /** Every host name of this daemon (sameDaemonHosts), this one included; just this one when unknown. */
+  private async sameDaemonNames(): Promise<string[]> {
+    const host = this.d.conn.host
+    try { return [...new Set([host, ...(this.d.sameDaemon ? await this.d.sameDaemon() : [])])] } catch { return [host] }
   }
 
   private postpone(reason: string, delayMs = this.d.recheckMs ?? 60_000): NetUpdateState {

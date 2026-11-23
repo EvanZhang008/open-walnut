@@ -107,4 +107,19 @@ describe('every daemon link kind has an update path or a reasoned exemption', ()
       expect(d.go === true, kind).toBe(covered)
     }
   })
+
+  // 2026-11-23: clouddev (host network) and newdev (SSH) are one daemon; each path updated it on its
+  // own, 4.66 GB went up in a day for updates that failed on the other's lock (daemon-update-claim.ts).
+  // A remote kind's update reaches a daemon another host name may also reach: it claims the update
+  // for all of them first. This Mac's own daemon is its LocalDaemon's alone (exempt here, not claimed).
+  it('every remote kind that updates a daemon claims the update for all its names first', () => {
+    const LOCAL_ONLY = new Set(['local'])
+    for (const kind of DAEMON_LINK_KINDS) {
+      const entry = DAEMON_UPDATE_PATHS[kind]
+      if (!('path' in entry) || LOCAL_ONLY.has(kind)) continue
+      const files = [...new Set(entry.code.map((c) => c.file))]
+      const claims = files.filter((f) => /\bclaimDaemonUpdate\(/.test(read(f)))
+      expect(claims, `${kind}: one of ${files.join(', ')} calls claimDaemonUpdate`).not.toEqual([])
+    }
+  })
 })

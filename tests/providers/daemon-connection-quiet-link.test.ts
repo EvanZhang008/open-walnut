@@ -110,6 +110,73 @@ describe('a quiet link, asked again', () => {
     } finally { await idle.done() }
   }, 40_000)
 
+  it('a quiet check with no wake or network change since (host_exec asks one) leaves a host network link this Mac is still sending on up (2026-11-23)', async () => {
+    const { conn, proxy, done } = await linked('pcbox-check', true)
+    try {
+      await wireQuiet(conn)
+      proxy.setMode('slow', { delayMs: 1_500, bytesPerSec: 256 * 1024, shared: true, queueBytes: 64 * 1024 })
+      void conn.send('fs.writePart', { path: '/tmp/q', offset: 0, data: 'A'.repeat(3 * 1024 * 1024) }, 60_000).catch(() => null)
+      await sleep(300)
+      expect(await conn.recheckQuiet({ quietMs: 0, deadlineMs: 600 })).toBe('silent')
+      await sleep(200)
+      expect(conn.connected).toBe(true)
+    } finally { await done() }
+  }, 40_000)
+
+  it('an upload on one host network link keeps another one\'s probe from closing it: on this Mac both leave through one walnut-net (2026-11-23)', async () => {
+    const uploading = await linked('netbox-a', true)
+    const quiet = await linked('netbox-b', true)
+    setPooledConnectionForTest('netbox-a', uploading.conn)
+    setPooledConnectionForTest('netbox-b', quiet.conn)
+    try {
+      await wireQuiet(quiet.conn)
+      // B's pong comes late (its path is full); nothing goes up on B itself, A carries an upload.
+      quiet.proxy.setMode('slow', { delayMs: 1_500, bytesPerSec: 256 * 1024, shared: true, queueBytes: 64 * 1024 })
+      void uploading.conn.send('fs.writePart', { path: '/tmp/q', offset: 0, data: 'A'.repeat(3 * 1024 * 1024) }, 60_000).catch(() => null)
+      await sleep(300)
+      expect(await quiet.conn.probeLiveness(600)).toBe(false)
+      await sleep(200)
+      expect(quiet.conn.connected).toBe(true)
+    } finally {
+      for (const h of ['netbox-a', 'netbox-b']) setPooledConnectionForTest(h, null)
+      await uploading.done(); await quiet.done()
+    }
+    // An SSH link's bytes are its own path's: they hold no host network link up.
+    const ssh = await linked('sshbox')
+    const lone = await linked('netbox-c', true)
+    setPooledConnectionForTest('sshbox', ssh.conn)
+    setPooledConnectionForTest('netbox-c', lone.conn)
+    try {
+      await wireQuiet(lone.conn)
+      lone.proxy.setMode('slow', { delayMs: 1_500, bytesPerSec: 256 * 1024, shared: true, queueBytes: 64 * 1024 })
+      void ssh.conn.send('fs.writePart', { path: '/tmp/q', offset: 0, data: 'A'.repeat(3 * 1024 * 1024) }, 60_000).catch(() => null)
+      await sleep(300)
+      expect(await lone.conn.probeLiveness(600)).toBe(false)
+      await vi.waitFor(() => expect(lone.conn.connected).toBe(false), { timeout: 5000 })
+    } finally {
+      for (const h of ['sshbox', 'netbox-c']) setPooledConnectionForTest(h, null)
+      await ssh.done(); await lone.done()
+    }
+    // Another link's bytes hold this one up only shortly after it last heard anything: a machine
+    // that went away while another link uploads for minutes is still closed (2026-11-23 review).
+    const busy = await linked('netbox-d', true)
+    const gone = await linked('netbox-e', true)
+    setPooledConnectionForTest('netbox-d', busy.conn)
+    setPooledConnectionForTest('netbox-e', gone.conn)
+    try {
+      await wireQuiet(gone.conn)
+      gone.proxy.setMode('slow', { delayMs: 1_500, bytesPerSec: 256 * 1024, shared: true, queueBytes: 64 * 1024 })
+      vi.spyOn(gone.conn, 'lastHeardAt').mockReturnValue(Date.now() - DaemonConnection.CROSS_LINK_BUSY_MAX_MS - 1_000)
+      void busy.conn.send('fs.writePart', { path: '/tmp/q', offset: 0, data: 'A'.repeat(3 * 1024 * 1024) }, 60_000).catch(() => null)
+      await sleep(300)
+      expect(await gone.conn.probeLiveness(600)).toBe(false)
+      await vi.waitFor(() => expect(gone.conn.connected).toBe(false), { timeout: 5000 })
+    } finally {
+      for (const h of ['netbox-d', 'netbox-e']) setPooledConnectionForTest(h, null)
+      await busy.done(); await gone.done()
+    }
+  }, 80_000)
+
   it('after a network change, a host network link that went dark is closed even while this Mac was sending on it (review)', async () => {
     const { conn, proxy, done } = await linked('pcbox-moved', true)
     try {
