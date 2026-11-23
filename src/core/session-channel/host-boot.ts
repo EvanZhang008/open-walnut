@@ -281,28 +281,60 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
  * not dial again once their link drops (host-dialer.ts, companion-dialer.ts); the sessions it runs,
  * its fact log and the leader's own link to its channel go on. Returns the stop of the following.
  */
-export async function followHostSwitch(o: StartHostSessionsOptions): Promise<() => void> {
+export async function followHostSwitch(o: StartHostSessionsOptions): Promise<() => Promise<void>> {
   const say = o.log ?? (() => {})
   const [{ hostRunsSessionsAny }, { getConfig }, { onConfigCopyChanged }] = await Promise.all([
     import('./switch.js'), import('../config-manager.js'), import('../replication/kinds/config.js'),
   ])
+  return followSwitch({
+    isOn: async () => hostRunsSessionsAny(await getConfig().catch(() => null)) || hostRanSessions(o.walnutId, o.stateDir),
+    isUp: () => current !== null,
+    start: async () => { await startHostSessions(o) },
+    stop: stopHostSessions,
+    onChange: onConfigCopyChanged,
+    log: say,
+  })
+}
+
+/**
+ * The following itself (followHostSwitch), over seams for tests: look now, and at every change
+ * until up. Its stop waits for a start still in flight and then stops what it brought up, so a
+ * stop of the server during a late start leaves no dialer or timer running (review round 1, N1).
+ */
+export async function followSwitch(d: {
+  isOn(): Promise<boolean>
+  isUp(): boolean
+  start(): Promise<void>
+  stop(): Promise<void>
+  onChange(fn: () => void): () => void
+  log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
+}): Promise<() => Promise<void>> {
   let starting: Promise<void> | null = null
   let stopped = false
+  let startedHere = false
   const look = (): Promise<void> => {
-    if (stopped || current) return Promise.resolve()
+    if (stopped || d.isUp()) return Promise.resolve()
     starting ??= (async () => {
-      const on = hostRunsSessionsAny(await getConfig().catch(() => null)) || hostRanSessions(o.walnutId, o.stateDir)
-      if (!on || stopped || current) return
-      await startHostSessions(o)
+      const on = await d.isOn()
+      if (!on || stopped || d.isUp()) return
+      await d.start()
+      startedHere = d.isUp()
     })().catch((err: unknown) => {
-      say('warn', 'host sessions: not started; the leader runs this host\'s sessions as before', { error: err instanceof Error ? err.message : String(err) })
+      d.log?.('warn', 'host sessions: not started; the leader runs this host\'s sessions as before', { error: err instanceof Error ? err.message : String(err) })
     }).finally(() => { starting = null })
     return starting
   }
   await look()
-  if (current) return () => {}
-  const off = onConfigCopyChanged(() => { void look().then(() => { if (current) off() }) })
-  return () => { stopped = true; off() }
+  let off: (() => void) | null = null
+  if (!d.isUp()) off = d.onChange(() => { void look().then(() => { if (d.isUp()) { off?.(); off = null } }) })
+  return async () => {
+    stopped = true
+    off?.(); off = null
+    const inFlight = starting
+    if (inFlight) await inFlight
+    // A start that finished after the stop began: what it brought up goes too.
+    if (startedHere && d.isUp()) await d.stop()
+  }
 }
 
 export async function stopHostSessions(): Promise<void> {

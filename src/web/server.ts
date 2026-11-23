@@ -705,7 +705,7 @@ let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = nul
 let hostSessionsRoutes: (() => import('../core/session-channel/host-routes.js').HostSessionRoutes | null) | null = null
 let hostSessionsCaps: (() => string[]) | null = null
 let hostSessionsSide: (() => Record<string, unknown> | null) | null = null
-let stopHostSwitchFollow: (() => void) | null = null
+let stopHostSwitchFollow: (() => Promise<void>) | null = null
 /** A host replica's front (replica/front.ts): follower link, presence, dispatcher. Null elsewhere. */
 let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
 /** The away writes of a host replica (WP10): its overlay timer, copy watcher and RPC answer, stopped with the server. */
@@ -7786,8 +7786,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   const searchCopy = searchCopyHandle
   await shutdownStep('search copy', () => searchCopy?.stop())
   searchCopyHandle = null
-  stopHostSwitchFollow?.()
+  // A start still in flight finishes first, and what it brought up stops (host-boot.ts followSwitch).
+  const stopFollow = stopHostSwitchFollow
   stopHostSwitchFollow = null
+  if (stopFollow) await shutdownStep('host switch follow', stopFollow)
   if (hostSessionsRoutes) {
     hostSessionsRoutes = null
     hostSessionsCaps = null

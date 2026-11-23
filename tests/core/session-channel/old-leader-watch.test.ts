@@ -171,3 +171,41 @@ describe('standing down in judge-of: a host judges none of its own rows, the lea
     expect(judgedHereRecords([legacy])).toEqual([legacy])
   })
 })
+
+describe('N1: the stop of the switch following waits for a late start and stops what it brought up', () => {
+  it('a stop while a start is in flight leaves nothing up', async () => {
+    const { followSwitch } = await import('../../../src/core/session-channel/host-boot.js')
+    let up = false
+    let on = false
+    let change: (() => void) | null = null
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const calls: string[] = []
+    const stop = await followSwitch({
+      isOn: async () => on,
+      isUp: () => up,
+      start: async () => { calls.push('start'); await gate; up = true },
+      stop: async () => { calls.push('stop'); up = false },
+      onChange: (fn) => { change = fn; return () => { change = null } },
+    })
+    expect(up).toBe(false)
+    on = true
+    change!()
+    await new Promise((r) => setTimeout(r, 0))
+    // The server stops while the start still runs.
+    const stopping = stop()
+    release()
+    await stopping
+    expect(calls).toEqual(['start', 'stop'])
+    expect(up).toBe(false)
+    expect(change).toBeNull()
+  })
+
+  it('a stop with nothing started stops nothing', async () => {
+    const { followSwitch } = await import('../../../src/core/session-channel/host-boot.js')
+    const calls: string[] = []
+    const stop = await followSwitch({ isOn: async () => false, isUp: () => false, start: async () => { calls.push('start') }, stop: async () => { calls.push('stop') }, onChange: () => () => {} })
+    await stop()
+    expect(calls).toEqual([])
+  })
+})
