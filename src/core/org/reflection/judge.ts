@@ -137,7 +137,7 @@ export function judgePrompt(input: JudgeInput): string {
     ...(input.pains?.length ? ['', 'PAINS (his complaints already in the registry, id then title):', ...input.pains.map((p) => `${p.id} ${p.title}`)] : []),
     ...(input.askText ? ['', 'THE ASK (what Needs you showed him, in the task\'s own words):', input.askText] : []),
     ...(input.evidenceText !== undefined
-      ? ['', 'THE USER\'S MESSAGES OF THE LAST 48 HOURS (in this task and its lead\'s threads: what he already said yes to or answered):', input.evidenceText || '(none)']
+      ? ['', 'THE USER\'S MESSAGES FROM 48 HOURS BEFORE THE ASK ON (in this task and its lead\'s threads: what he already said yes to or answered):', input.evidenceText || '(none)']
       : []),
     '', 'THE SESSION (oldest first):', input.turnsText || '(no turns)',
   ].join('\n');
