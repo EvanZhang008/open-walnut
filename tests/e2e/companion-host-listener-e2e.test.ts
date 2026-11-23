@@ -23,11 +23,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { BUN, HOST_KEY, WINDOWS, waitFor } from '../helpers/replica-cluster.js'
 import { writeClusterLogs } from '../helpers/replica-cluster-reads.js'
-import { startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type PhoneStream, type ProbeEvent } from '../helpers/host-judge-cluster.js'
-import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
+import { factsAtBothEnds, startHostJudgeCluster, untilFactsStill, type HostFactRecord, type HostJudgeCluster, type PhoneStream, type ProbeEvent } from '../helpers/host-judge-cluster.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
-const hash = (d: unknown) => crypto.createHash('sha256').update(JSON.stringify(d ?? null) ?? 'null').digest('hex')
 
 describe.skipIf(!RUN)('the phone operates a host-judged session through the companion while the Mac is away', () => {
   let h: HostJudgeCluster
@@ -142,18 +140,11 @@ describe.skipIf(!RUN)('the phone operates a host-judged session through the comp
 
   it('P6: the Mac woken has every fact once and in order, and the companion relays to it again', async () => {
     h.c.wakeMac()
-    let last = -1
-    let since = 0
-    await waitFor(async () => {
-      const head = (await hostFacts()).head
-      if (head !== last) { last = head; since = Date.now(); return false }
-      return Date.now() - since >= 1_000 && ((await h.mac(`/cursor?host=${HOST_KEY}`)).cursor?.seq ?? 0) >= head
-    }, 120_000, 'the Mac\'s cursor at the host\'s head', 200).catch(fail)
-    const log = (await hostFacts()).recs.filter((r) => r.sid === sid && channelClassOf(r.name) === 'fact')
-    const mac = (await channelEvents(sid)).filter((e) => channelClassOf(e.name) === 'fact')
-    const host = log.map((r) => `${r.name}:${r.refs ? 'cut' : hash(r.data).slice(0, 12)}`)
-    const seen = mac.map((e, i) => `${e.name}:${log[i]?.refs ? 'cut' : e.hash.slice(0, 12)}`)
-    expect(seen, `host: ${host.join(' ')}\nmac:  ${seen.join(' ')}`).toEqual(host)
+    await untilFactsStill(h, { timeoutMs: 120_000 }).catch(fail)
+    const f = factsAtBothEnds((await hostFacts()).recs, await h.mac(`/events?sid=${sid}`), sid)
+    expect(f.started.map((e) => e.source), JSON.stringify(f.started)).toHaveLength(1)
+    expect(f.seen, `host: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
+    const mac = f.mac
     for (const text of ['echo: ROUND phone', 'echo: interrupted', 'echo: ran make check']) {
       expect(mac.filter((e) => e.name === 'session:result' && String(e.data?.result ?? '').includes(text)), text).toHaveLength(1)
     }

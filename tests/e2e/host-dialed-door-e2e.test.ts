@@ -17,21 +17,21 @@
  *   D3 start   the daemon link still cut: a new start reaches the host over the dialed socket, its
  *              stream reaches the Mac, and an interrupt stops its running turn there
  *
+ *   K2 slow    a start the host answers late (its born row reaches the Mac first, as on a loaded
+ *              host): session:started is said once, from the born row, and every host fact once
+ *
  * Facts are compared by identity as in host-judged-session-cluster-e2e.test.ts: each record of
  * the host's log (seq order, its name and a hash of its data) against the Mac's bus events of the
- * channel.
+ * channel, with session:started, the Mac's own word, counted apart (factsAtBothEnds).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
-import crypto from 'node:crypto'
 import path from 'node:path'
 import { BUN, HOST_KEY, waitFor } from '../helpers/replica-cluster.js'
 import { logSince, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
-import { startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
-import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
+import { factsAtBothEnds, startHostJudgeCluster, untilFactsStill, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
-const hash = (d: unknown) => crypto.createHash('sha256').update(JSON.stringify(d ?? null) ?? 'null').digest('hex')
 
 describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real process', () => {
   let h: HostJudgeCluster
@@ -44,21 +44,16 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
   const resultOn = (events: ProbeEvent[], text: string) => events.find((e) => e.name === 'session:result' && String(e.data?.result ?? '').includes(text))
   const say = (why: string) => `${why}\n--- mac ---\n${h.c.logs().mac.slice(-6000)}\n--- replica ---\n${h.c.logs().replica.slice(-6000)}`
 
-  /** Every fact of `s` in the host's log against the Mac's channel events of it, once the log is still and the Mac's cursor at its head. */
+  /**
+   * Every fact of `s` in the host's log against the Mac's events of it, once the log is still and the
+   * Mac's cursor at its head (host-judge-cluster.ts factsAtBothEnds): each once and in order, and one
+   * session:started, whichever of the start's answer and its born row said it.
+   */
   async function sameFacts(s: string): Promise<{ host: string[]; seen: string[] }> {
-    let last = -1
-    let since = 0
-    await waitFor(async () => {
-      const head = (await hostFacts()).head
-      if (head !== last) { last = head; since = Date.now(); return false }
-      return Date.now() - since >= 1_000 && ((await h.mac(`/cursor?host=${HOST_KEY}`)).cursor?.seq ?? 0) >= head
-    }, 60_000, 'the host\'s log to be still and the Mac\'s cursor at its head', 200)
-    const log = (await hostFacts()).recs.filter((r) => r.sid === s && channelClassOf(r.name) === 'fact')
-    const mac = (await channelEvents(s)).filter((e) => channelClassOf(e.name) === 'fact')
-    return {
-      host: log.map((r) => `${r.name}:${r.refs ? 'cut' : hash(r.data).slice(0, 12)}`),
-      seen: mac.map((e, i) => `${e.name}:${log[i]?.refs ? 'cut' : e.hash.slice(0, 12)}`),
-    }
+    await untilFactsStill(h)
+    const f = factsAtBothEnds((await hostFacts()).recs, (await h.mac(`/events?sid=${s}`)) as ProbeEvent[], s)
+    expect(f.started.map((e) => `${e.source}@${e.seenAt}`), JSON.stringify(f.started)).toHaveLength(1)
+    return f
   }
 
   beforeAll(async () => {
@@ -172,5 +167,22 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
     }
     expect(await h.mac(`/parses?sid=${s2}`)).toEqual({ parses: 0 })
     h.c.mendLink()
+  }, 400_000)
+
+  it('K2: a start the host answers late, so its born row reaches the Mac before the answer, says session:started once and every host fact once', async () => {
+    const t = await h.c.mac('POST', '/api/tasks', { title: 'Slow to start', project: 'Acme' })
+    expect(t.status, JSON.stringify(t.json)).toBe(201)
+    // The host answers this start 3 s late, its session up and its born row long on its way (the probe's /slow-start).
+    expect(await h.host('/slow-start?ms=3000')).toEqual({ ok: true, ms: 3000 })
+    const st = await h.c.mac('POST', `/api/v1/tasks/${t.json.task.id}/start`, { host: HOST_KEY, cwd: hostCwd, mode: 'bypass', message: 'ROUND slow start' })
+    expect(st.status, JSON.stringify(st.json)).toBe(202)
+    const s3 = st.json.sessionId as string
+    await waitFor(async () => resultOn(await channelEvents(s3), 'echo: ROUND slow start'), 120_000, 'the answer of a slow start').catch((err) => { throw new Error(say(String(err))) })
+    const f = await sameFacts(s3)
+    // Said from the born row: the order this test is about did happen.
+    const started = ((await h.mac(`/events?sid=${s3}`)) as ProbeEvent[]).filter((e) => e.name === 'session:started')
+    expect(started[0]!.source, JSON.stringify(started)).toBe('host-channel')
+    expect(started[0]!.data).toMatchObject({ sessionId: s3, taskId: t.json.task.id, host: HOST_KEY })
+    expect(f.seen, `host: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
   }, 400_000)
 })

@@ -22,17 +22,14 @@
  *               host-judge-mixed-versions-e2e.test.ts is that host)
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BUN, HOST_KEY, waitFor } from '../helpers/replica-cluster.js'
 import { hostStream, logSince, sessionCliEnv, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
-import { startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
-import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
+import { factsAtBothEnds, startHostJudgeCluster, untilFactsStill, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
 const IDLE_KILL_MS = 8_000
-const hash = (d: unknown) => crypto.createHash('sha256').update(JSON.stringify(d ?? null) ?? 'null').digest('hex')
 const KILLED = 'idle scan: killing idle session (no subscribers, no output)'
 
 describe.skipIf(!RUN)('rolling the switch back while a host runs a session, and the host\'s idle scan with the leader away', () => {
@@ -120,19 +117,11 @@ describe.skipIf(!RUN)('rolling the switch back while a host runs a session, and 
     await waitFor(async () => (await macRow(sid))?.process_status === 'stopped', 60_000, 'the Mac to read it stopped').catch(fail)
     expect((await h.host(`/row?sid=${sid}`)).row?.process_status).toBe('stopped')
     await waitFor(() => sessionCliEnv(h.c, sid) === null, 30_000, 'its CLI to end on the host').catch(fail)
-    // Every fact, from the switch on through its end: once, in order.
-    let last = -1
-    let since = 0
-    await waitFor(async () => {
-      const head = (await h.host('/facts?after=0')).head
-      if (head !== last) { last = head; since = Date.now(); return false }
-      return Date.now() - since >= 1_000 && ((await h.mac(`/cursor?host=${HOST_KEY}`)).cursor?.seq ?? 0) >= head
-    }, 60_000, 'the Mac\'s cursor at the host\'s head', 200).catch(fail)
-    const log = ((await h.host('/facts?after=0')).recs as HostFactRecord[]).filter((r) => r.sid === sid && channelClassOf(r.name) === 'fact')
-    const mac = (await channelEvents(sid)).filter((e) => channelClassOf(e.name) === 'fact')
-    const host = log.map((r) => `${r.name}:${r.refs ? 'cut' : hash(r.data).slice(0, 12)}`)
-    const seen = mac.map((e, i) => `${e.name}:${log[i]?.refs ? 'cut' : e.hash.slice(0, 12)}`)
-    expect(seen, `host: ${host.join(' ')}\nmac:  ${seen.join(' ')}`).toEqual(host)
+    // Every fact, from the switch on through its end: once, in order, and one session:started.
+    await untilFactsStill(h).catch(fail)
+    const f = factsAtBothEnds((await h.host('/facts?after=0')).recs, await h.mac(`/events?sid=${sid}`), sid)
+    expect(f.started.map((e) => e.source), JSON.stringify(f.started)).toHaveLength(1)
+    expect(f.seen, `host: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
     // A new start still goes the legacy way.
     expect((await h.mac(`/side?host=${HOST_KEY}`)).judges).toBe(false)
   }, 400_000)

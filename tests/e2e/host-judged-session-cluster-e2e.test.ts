@@ -25,22 +25,20 @@
  *                Mac does their task side from the facts): no refused or failed write in its log
  *
  * Facts are compared by identity: each record of the host's log (seq order, its name and a hash
- * of its data) against the Mac's bus events of the channel (order of emit, the same two).
+ * of its data) against the Mac's bus events of the channel (order of emit, the same two), with
+ * session:started, the Mac's own word, counted apart (host-judge-cluster.ts factsAtBothEnds).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
-import crypto from 'node:crypto'
 import path from 'node:path'
 import { BUN, HOST_KEY, waitFor } from '../helpers/replica-cluster.js'
 import { hostStream, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
-import { startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
+import { factsAtBothEnds, startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
 import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
 /** The channel's default (channel.ts attachLeaderChannel lateMs). */
 const LATE_MS = 60_000
-
-const hash = (d: unknown) => crypto.createHash('sha256').update(JSON.stringify(d ?? null) ?? 'null').digest('hex')
 
 describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real process', () => {
   let h: HostJudgeCluster
@@ -58,16 +56,14 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
   const say = (why: string) => `${why}\n--- mac ---\n${h.c.logs().mac.slice(-6000)}\n--- replica ---\n${h.c.logs().replica.slice(-6000)}`
 
   /**
-   * Every fact of `s` in the host's log against the Mac's channel events of it, whole session: the
-   * same names and data in the same order (`seen` equals `host`) is each fact once and in order.
-   * When they are equal, `log[i]` and `mac[i]` are the same fact on both ends.
+   * Every fact of `s` in the host's log against the Mac's channel events of it, whole session
+   * (factsAtBothEnds): the same names and data in the same order is each fact once and in order, and
+   * the Mac said session:started once. When they are equal, `log[i]` and `mac[i]` are the same fact.
    */
   async function sameFacts(s: string) {
-    const log = factsOf((await hostFacts(0)).recs, s)
-    const mac = (await channelEvents(s)).filter((e) => channelClassOf(e.name) === 'fact')
-    const host = log.map((r) => `${r.name}:${r.refs ? 'cut' : hash(r.data).slice(0, 12)}`)
-    const seen = mac.map((e, i) => `${e.name}:${log[i]?.refs ? 'cut' : e.hash.slice(0, 12)}`)
-    return { log, mac, host, seen }
+    const f = factsAtBothEnds((await hostFacts(0)).recs, await macEvents(s), s)
+    expect(f.started.map((e) => e.source), JSON.stringify(f.started)).toHaveLength(1)
+    return f
   }
   /** The host's log still for a second, and the Mac's cursor at its head: both ends hold the same records. */
   async function quiet(): Promise<void> {

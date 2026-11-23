@@ -20,18 +20,15 @@
  *               none of B's turns, while B keeps the host
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from '../../src/lib/sqlite.js'
 import { BUN, HOST_KEY, waitFor } from '../helpers/replica-cluster.js'
 import { writeClusterLogs } from '../helpers/replica-cluster-reads.js'
-import { startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
+import { factIds, isHostFact, seenAsFacts, startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
 import { copyLeaderData, freePort, type StandbyLeader } from '../helpers/standby-leader.js'
-import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
-const hash = (d: unknown) => crypto.createHash('sha256').update(JSON.stringify(d ?? null) ?? 'null').digest('hex')
 
 describe.skipIf(!RUN)('a host\'s leader moves from A to a standby B over a copy of A\'s data', () => {
   let h: HostJudgeCluster
@@ -42,14 +39,11 @@ describe.skipIf(!RUN)('a host\'s leader moves from A to a standby B over a copy 
   let portB = 0
   let copied = 0
 
-  const eventsOn = async (read: (p: string) => Promise<any>, s: string) => ((await read(`/events?sid=${s}`)) as ProbeEvent[]).filter((e) => e.source === 'host-channel' && channelClassOf(e.name) === 'fact')
+  const eventsOn = async (read: (p: string) => Promise<any>, s: string) => ((await read(`/events?sid=${s}`)) as ProbeEvent[]).filter((e) => e.source === 'host-channel' && isHostFact(e.name))
   const hostFacts = async (): Promise<{ head: number; permitPair: { permitNumber: number; epoch: number }; recs: HostFactRecord[] }> => h.host('/facts?after=0')
   const resultIn = (events: ProbeEvent[], text: string) => events.find((e) => e.name === 'session:result' && String(e.data?.result ?? '').includes(text))
   const say = (why: string) => `${why}\n--- A ---\n${h.c.logs().mac.slice(-5000)}\n--- B ---\n${b?.leader.log().slice(-5000) ?? ''}\n--- replica ---\n${h.c.logs().replica.slice(-6000)}`
   const fail = (err: unknown) => { throw new Error(say(String(err))) }
-  /** The host's facts of `s` as identities, and a reader's channel events of it beside them, by position. */
-  const ids = (recs: HostFactRecord[]) => recs.map((r) => `${r.name}:${r.refs ? 'cut' : hash(r.data).slice(0, 12)}`)
-  const seenAs = (events: ProbeEvent[], recs: HostFactRecord[]) => events.map((e, i) => `${e.name}:${recs[i]?.refs ? 'cut' : e.hash.slice(0, 12)}`)
 
   beforeAll(async () => {
     portB = await freePort()
@@ -112,16 +106,16 @@ describe.skipIf(!RUN)('a host\'s leader moves from A to a standby B over a copy 
     expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
     await waitFor(async () => resultIn(await eventsOn(b!.probe, sid), 'echo: ROUND on B'), 120_000, 'the answer of B\'s send on B').catch(fail)
     await waitFor(async () => ((await b!.probe(`/cursor?host=${HOST_KEY}`)).cursor?.seq ?? 0) >= (await hostFacts()).head, 60_000, 'B\'s cursor at the host\'s head').catch(fail)
-    const all = (await hostFacts()).recs.filter((r) => r.sid === sid && channelClassOf(r.name) === 'fact')
+    const all = (await hostFacts()).recs.filter((r) => r.sid === sid && isHostFact(r.name))
     const before = all.filter((r) => r.seq <= copied)
     const after = all.filter((r) => r.seq > copied)
     const onB = await eventsOn(b!.probe, sid)
-    expect(seenAs(onB, after), `host: ${ids(after).join(' ')}`).toEqual(ids(after))
+    expect(seenAsFacts(onB, after), `host: ${factIds(after).join(' ')}`).toEqual(factIds(after))
     expect(resultIn(onB, 'echo: ROUND gap'), 'the gap\'s turn reached B').toBeTruthy()
     // A's part, read once A runs again (its bus heard nothing after it stopped).
     h.c.wakeMac()
     const onA = await eventsOn(h.mac, sid)
-    expect(seenAs(onA, before), `host: ${ids(before).join(' ')}`).toEqual(ids(before))
+    expect(seenAsFacts(onA, before), `host: ${factIds(before).join(' ')}`).toEqual(factIds(before))
     expect(before.length + after.length).toBe(all.length)
   }, 400_000)
 

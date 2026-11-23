@@ -12,8 +12,8 @@
  *                the runtime through the own-sessions link, the production path; and a probe in its
  *                process (the module the entry imports once its server answers)
  *
- * The probes only read, but for the Mac's /delete (and the host's door port is the leader door
- * itself, for a send made on the host while the Mac is away).
+ * The probes only read, but for the Mac's /delete and the host's /slow-start (and the host's door
+ * port is the leader door itself, for a send made on the host while the Mac is away).
  *
  * The host's ACP engines run the scripted adapter (tests/providers/mock-acp-agent.mjs) through an
  * ACP worker built from this checkout (acp-worker-bundle.ts): the setTestAcpArtifacts seam, as the
@@ -40,6 +40,8 @@
  *         GET /live          is a leader linked and caught up
  *         GET /dialer        is the host's door dialer linked, and does it hold a door credential (never its token)
  *         GET /companion     is the host's link to its companion's listener door up
+ *         GET /slow-start?ms= the host's next start answers its leader `ms` late, its session up
+ *                            and its born row written (a loaded host's order): the probe's one write
  *
  * `companion`: a real cloud companion too (tests/helpers/cloud-box-replica.ts), paired with the Mac
  * before the Mac boots, as a first bridge push leaves a pairing: the Mac's `cloud` remote and its
@@ -58,12 +60,14 @@
  * is forced off is one from before it (it names no session-judge-v1), a Mac with
  * WALNUT_LEADER_SESSION_CHANNELS=0 a leader from before the channel.
  */
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ROOT, WINDOWS, startReplicaCluster, waitFor, type ReplicaCluster } from './replica-cluster.js'
+import { HOST_KEY, ROOT, WINDOWS, startReplicaCluster, waitFor, type ReplicaCluster } from './replica-cluster.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from './cloud-box-replica.js'
 import { startStandbyLeader, type StandbyLeader } from './standby-leader.js'
+import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
 
 const url = (f: string) => JSON.stringify('file://' + path.join(ROOT, f))
 
@@ -183,6 +187,19 @@ await serveProbe({
     return { linked: !!boot.hostSessionsRunning()?.dialer.linked(), holds: !!held, doors: held ? held.doors : [] }
   },
   '/companion': () => ({ linked: !!boot.hostSessionsRunning()?.companion.linked() }),
+  // The next start the host's runner makes answers 'ms' late, its session already up (its born row
+  // already written): the order a loaded host can take. The probe's one write to the host.
+  '/slow-start': (q) => {
+    const ms = Number(q.get('ms') || 0)
+    const own = sessionRunner.startSession
+    sessionRunner.startSession = async function (...args) {
+      sessionRunner.startSession = own
+      const r = await own.apply(this, args)
+      await new Promise((res) => setTimeout(res, ms))
+      return r
+    }
+    return { ok: true, ms }
+  },
   '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
 }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
 `
@@ -202,6 +219,44 @@ function hostJudgeServiceEnv(d: { hostDaemon: string }): Record<string, string> 
 /** `at`: the event's timestamp (a late host fact keeps when it happened); `seenAt`: when this process's bus delivered it. */
 export interface ProbeEvent { name: string; sid: string; at: number; seenAt: number; source: string; late: boolean; hash: string; data?: any }
 export interface HostFactRecord { seq: number; opId: string; at: number; sid: string; sseq: number; name: string; data: any; refs?: Record<string, unknown> }
+
+const factHash = (d: unknown): string => crypto.createHash('sha256').update(JSON.stringify(d ?? null) ?? 'null').digest('hex')
+
+/**
+ * A record of the host's log a leader says again as it is: a fact (event-classes.ts), but for
+ * session:started. That one is the leader's own word, said once by whichever comes first, the start's
+ * answer (source `session-runner`) or the host's born row of it (source `host-channel`; leader-side.ts,
+ * claimHostStarted), so it is no record of the host's log (a native start's own names no id there).
+ * Which one says it depends on timing; that it is said once does not (factsAtBothEnds `started`).
+ */
+export const isHostFact = (name: string): boolean => channelClassOf(name) === 'fact' && name !== 'session:started'
+/** Each record as its identity: its name and a hash of its data (a cut record, `refs`, by name only). */
+export const factIds = (recs: HostFactRecord[]): string[] => recs.map((r) => `${r.name}:${r.refs ? 'cut' : factHash(r.data).slice(0, 12)}`)
+/** A leader's events as the identities of `recs` by position: equal to factIds(recs) when each came once and in order. */
+export const seenAsFacts = (events: ProbeEvent[], recs: HostFactRecord[]): string[] => events.map((e, i) => `${e.name}:${recs[i]?.refs ? 'cut' : e.hash.slice(0, 12)}`)
+
+/**
+ * The host's facts of `s` against a leader's channel events of it (`events`: everything its probe's
+ * /events heard of `s`, any source), by identity and position: `seen` equals `host` when each fact
+ * reached that leader once and in order; `started` is every session:started of `s` its bus heard.
+ */
+export function factsAtBothEnds(recs: HostFactRecord[], events: ProbeEvent[], s: string): { log: HostFactRecord[]; mac: ProbeEvent[]; host: string[]; seen: string[]; started: ProbeEvent[] } {
+  const log = recs.filter((r) => r.sid === s && isHostFact(r.name))
+  const mac = events.filter((e) => e.sid === s && e.source === 'host-channel' && isHostFact(e.name))
+  return { log, mac, host: factIds(log), seen: seenAsFacts(mac, log), started: events.filter((e) => e.sid === s && e.name === 'session:started') }
+}
+
+/** Until the host's log is still for a second and the reader's cursor (the Mac's by default) is at its head. */
+export async function untilFactsStill(h: Pick<HostJudgeCluster, 'host' | 'mac'>, o: { cursorOf?: (p: string) => Promise<any>; timeoutMs?: number } = {}): Promise<void> {
+  const cursorOf = o.cursorOf ?? h.mac
+  let last = -1
+  let since = 0
+  await waitFor(async () => {
+    const head = (await h.host('/facts?after=0')).head
+    if (head !== last) { last = head; since = Date.now(); return false }
+    return Date.now() - since >= 1_000 && ((await cursorOf(`/cursor?host=${HOST_KEY}`)).cursor?.seq ?? 0) >= head
+  }, o.timeoutMs ?? 60_000, 'the host\'s log to be still and the reader\'s cursor at its head', 200)
+}
 
 function getJson(port: number, p: string, method = 'GET', body?: unknown): Promise<{ status: number; json: any }> {
   return new Promise((resolve, reject) => {
