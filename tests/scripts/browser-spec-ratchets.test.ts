@@ -406,7 +406,9 @@ describe('specs that open a gated Settings pane', () => {
   // `primary` (Tailscale and the tunnel under Phones & Cloud) is closed only on a cloud
   // companion's own console: every fixture server is a primary, so no spec sets a fact for it,
   // and a spec that stubs `cloud: true` does so to see those entries gone.
-  const FACT_OF_GATE: Record<string, string | null> = { 'mac-access': 'macAccess', primary: null }
+  // `focus-workspace` (Settings > Focus) opens only with experiment focus_workspace on: a spec that
+  // opens it turns the experiment on (`focus_workspace: true` in its config).
+  const FACT_OF_GATE: Record<string, string | null> = { 'mac-access': 'macAccess', primary: null, 'focus-workspace': 'focus_workspace' }
   /** A shared helper that sets the gate's fact for the spec that calls it. */
   const HELPER_OF_GATE: Record<string, string> = { 'mac-access': 'routeMacConsole(' }
   const opens = (text: string, id: string) => text.includes(`settings-nav-${id}'`)
