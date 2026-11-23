@@ -1,6 +1,6 @@
 /**
  * Why a host gets no offer of the one Walnut service (src/providers/one-service-mode.ts), while it
- * is wanted for the host (in_process_daemon on or the host in `host_service_offer`, with
+ * is wanted for the host (the host in `host_service_offer`, with
  * service_launcher on; service-launcher-flag.ts hostServiceOfferWanted): no follower of this Walnut there, no
  * launcher yet, no walnut file of this build for it, or a switch that did not take. Walnut Health's
  * (audience.ts: no needsYou, never a popup), one item per host, said again only when the reason

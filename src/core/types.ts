@@ -1839,10 +1839,9 @@ export interface Config {
   hosts_warmup?: {
     enabled?: boolean;
   };
-  /** The hosts (keys of `hosts`) this leader offers their one Walnut service to while the
-   *  experiment `in_process_daemon` is off (src/providers/service-launcher-flag.ts
-   *  hostServiceOfferWanted). Absent or empty: only the experiment offers it. Temporary, until
-   *  the old two-program path on a host is removed. */
+  /** The hosts (keys of `hosts`) this leader offers their one Walnut service to, one by one, whatever
+   *  `in_process_daemon` says (src/providers/service-launcher-flag.ts hostServiceOfferWanted). Absent
+   *  or empty: no host is offered it. Temporary, until the old two-program path on a host is removed. */
   host_service_offer?: string[];
   /** Found hosts (core/hosts/found-hosts.ts): set once the server decided the found
    *  hosts an older Walnut left; from then on a newly found host waits for the

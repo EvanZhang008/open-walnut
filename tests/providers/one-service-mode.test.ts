@@ -161,8 +161,8 @@ describe('serviceModeWantNow', () => {
   })
 })
 
-// a3b land 2 review M4: the host offer is the in_process_daemon experiment, read live, and not the
-// per-process switch of this computer's own runtime (WALNUT_IN_PROCESS_DAEMON).
+// The host offer is the config list host_service_offer, read live, per host; neither in_process_daemon
+// nor the per-process switch of this computer's own runtime (WALNUT_IN_PROCESS_DAEMON) offers a host anything.
 describe('hostServiceOfferWanted', () => {
   const KEYS = ['WALNUT_HOST_SERVICE_OFFER', 'WALNUT_IN_PROCESS_DAEMON'] as const
   let saved: Record<string, string | undefined> = {}
@@ -185,31 +185,32 @@ describe('hostServiceOfferWanted', () => {
     await expect((await withExperiment(false))('devbox')).resolves.toBe(false)
   })
 
-  it('follows the experiment as it is now; its own switch decides for one process', async () => {
+  // 2026-11-23: in_process_daemon on offered every host under the launcher (a macOS host that had never
+  // run the service among them) and taking a host out of the list changed nothing. The list alone decides.
+  it('in_process_daemon offers no host anything: only the list does, one host by one', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     process.env.WALNUT_IN_PROCESS_DAEMON = '0'
-    await expect((await withExperiment(true))('devbox')).resolves.toBe(true)
-    process.env.WALNUT_HOST_SERVICE_OFFER = '0'
-    await expect((await withExperiment(true))('devbox')).resolves.toBe(false)
-  })
-
-  // The leader's list of hosts (config host_service_offer): the service on those hosts only, with the experiment off.
-  it('with the experiment off, a host in host_service_offer is offered and one not in it is not', async () => {
-    delete process.env.WALNUT_HOST_SERVICE_OFFER
-    const offer = await withConfig({ experimental: { in_process_daemon: false, service_launcher: true }, host_service_offer: ['devbox'] })
-    await expect(offer('devbox')).resolves.toBe(true)
-    await expect(offer('gpu-box')).resolves.toBe(false)
+    for (const on of [true, false]) {
+      const offer = await withConfig({ experimental: { in_process_daemon: on, service_launcher: true }, host_service_offer: ['devbox'] })
+      await expect(offer('devbox'), `experiment ${on}`).resolves.toBe(true)
+      await expect(offer('gpu-box'), `experiment ${on}`).resolves.toBe(false)
+    }
+    // A host taken out of the list is not offered, with this computer's runtime still in process.
+    await expect((await withConfig({ experimental: { in_process_daemon: true }, host_service_offer: [] }))('devbox')).resolves.toBe(false)
     // The process's own switch still decides alone.
+    process.env.WALNUT_HOST_SERVICE_OFFER = '1'
+    await expect((await withExperiment(false))('devbox')).resolves.toBe(true)
     process.env.WALNUT_HOST_SERVICE_OFFER = '0'
-    await expect(offer('devbox')).resolves.toBe(false)
+    await expect((await withConfig({ experimental: { in_process_daemon: true }, host_service_offer: ['devbox'] }))('devbox')).resolves.toBe(false)
   })
 
-  it('no list, an empty one or a hand-edited non-list: the experiment alone decides, as before the list', async () => {
+  it('no list, an empty one or a hand-edited non-list offers no host, whatever the experiment says', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     for (const list of [undefined, [], 'devbox', { devbox: true }, null]) {
-      const cfg = (on: boolean) => ({ experimental: { in_process_daemon: on }, ...(list === undefined ? {} : { host_service_offer: list }) })
-      await expect((await withConfig(cfg(false)))('devbox'), JSON.stringify(list)).resolves.toBe(false)
-      await expect((await withConfig(cfg(true)))('devbox'), JSON.stringify(list)).resolves.toBe(true)
+      for (const on of [false, true]) {
+        const cfg = { experimental: { in_process_daemon: on }, ...(list === undefined ? {} : { host_service_offer: list }) }
+        await expect((await withConfig(cfg))('devbox'), `${JSON.stringify(list)} ${on}`).resolves.toBe(false)
+      }
     }
   })
 
@@ -249,9 +250,4 @@ describe('hostServiceOfferWanted', () => {
     expect(i.launcherWanted).not.toHaveBeenCalled()
   })
 
-  it('the experiment on offers every host, listed or not', async () => {
-    delete process.env.WALNUT_HOST_SERVICE_OFFER
-    const offer = await withConfig({ experimental: { in_process_daemon: true }, host_service_offer: ['devbox'] })
-    await expect(offer('gpu-box')).resolves.toBe(true)
-  })
 })

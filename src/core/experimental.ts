@@ -251,7 +251,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'in_process_daemon',
     name: 'Sessions run inside Walnut\'s own process',
-    description: 'This computer\'s sessions, host commands and triggers are run by Walnut\'s own process instead of a separate background program: Walnut calls them directly, with nothing between. Running sessions are picked up when you turn this on or off (it applies at the next start of Walnut). With "A launcher keeps each host\'s daemon running" on too, each of your hosts is offered the same: its session daemon and its Walnut server become one Walnut service there, switched at its next daemon update (and back when you turn this off). Off: a separate background program runs them, as before.',
+    description: 'This computer\'s sessions, host commands and triggers are run by Walnut\'s own process instead of a separate background program: Walnut calls them directly, with nothing between. Running sessions are picked up when you turn this on or off (it applies at the next start of Walnut). It changes nothing on your hosts. Off: a separate background program runs them, as before.',
     summary: 'Walnut runs this computer\'s sessions and triggers itself, not in a separate program. Applies when Walnut next starts.',
     default: false,
   },

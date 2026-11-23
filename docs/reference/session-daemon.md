@@ -464,9 +464,9 @@ empty). The served record (`daemon.serves.json`) keys the home the Walnut speaks
 
 ## The Walnut service on a host
 
-Behind the experiments `in_process_daemon` and `service_launcher` (both off by default), a host can
-run its session daemon and one Walnut's follower server as ONE process: the Walnut service. With
-them off every host runs two programs, the daemon and the follower child it starts, as before.
+Behind the experiment `service_launcher` (off by default) and the config list `host_service_offer`, a
+host can run its session daemon and one Walnut's follower server as ONE process: the Walnut service.
+A host not in the list runs two programs, the daemon and the follower child it starts, as before.
 
 **One process.** The launcher still runs `<install root>/versions/<sha>/<file> --service`, the same
 command line. That entry first reads `<install root>/service-mode.json` (`src/binary/service-entry.ts`,
@@ -523,12 +523,13 @@ Walnut's update is told `not_service_owner` and carries the mode over to the new
 that serves as this Walnut's service, the host-server manager starts no separate follower there, and
 the hosts page and Settings say "Walnut service" (only for this Walnut's own: `servesThisWalnut`).
 
-The offer is the same `in_process_daemon` experiment that runs the Mac's own sessions in process: one
-choice, read live from the config for the offer, per host (`hostServiceOfferWanted(hostKey)` in
-`src/providers/service-launcher-flag.ts`, the one function every part of the offer reads), never
-through `inProcessDaemonWanted()`, whose `WALNUT_IN_PROCESS_DAEMON` switch is one process's own
-runtime and must not switch every host (`WALNUT_HOST_SERVICE_OFFER=1|0` decides the offer alone for
-one process). A switch whose update ran is recorded per host and build
+The offer is per host: a host gets it only while its key is in `host_service_offer`, read live from
+the config (`hostServiceOfferWanted(hostKey)` in `src/providers/service-launcher-flag.ts`, the one
+function every part of the offer reads), and a host taken out of the list goes back to two programs at
+its next update. `in_process_daemon`, which runs the Mac's own sessions in process, offers no host
+anything (2026-11-23: with it on, every host under the launcher was offered at its next update, a
+macOS host that had never run the service among them, and no host could be put back alone).
+`WALNUT_HOST_SERVICE_OFFER=1|0` decides the offer alone for one process. A switch whose update ran is recorded per host and build
 (`daemon-update-mode-asked.json` in `WALNUT_HOME/local/`, `daemon-update-store.ts`): a host whose service chose the other mode, or whose update failed after
 its swap, is not asked again with that build, across leader restarts; a try the host held, deferred
 or refused as busy is asked again. A host replica never holds a `__local__` DaemonConnection
@@ -543,10 +544,10 @@ leaves it (`tests/providers/replica-own-sessions-link.test.ts`).
 
 **Offering chosen hosts only: `host_service_offer`.** A leader config item (not an experiment),
 `host_service_offer: [<host key>, ...]`, the keys of `hosts`, set with `PUT /api/config`. A host in
-the list is offered the service while `in_process_daemon` is off (still with `service_launcher` on),
+the list is offered the service, whatever `in_process_daemon` says (still with `service_launcher` on),
 and gets all of the offer: the walnut file staged in its slot, `--serve`, and its Walnut Health
-items. Nothing else of the experiment turns on: the Mac's own runtime stays a program, and home-move
-declarations and same-machine aliases stay off (so move the data dir only with the host out of the
+items. The list turns nothing else on: with `in_process_daemon` off the Mac's own runtime stays a
+program, and home-move declarations and same-machine aliases stay off (so move the data dir only with the host out of the
 list, or the moved Walnut cannot switch the old home's service back). A host taken out of the list
 gets `--no-serve` at its next update. An absent or empty list changes nothing. An older leader keeps
 the key: config reads and writes carry top-level keys they do not know. The item is temporary, until
