@@ -44,11 +44,6 @@ enum Theme {
     static let brand = Color(dynamic: brandColor)
     static let brandColor = UIColor(light: 0x8B5A2B, dark: 0xC99659)
 
-    /// An ask card's one main action and its recommended option (`AskCardKeys`): the web's blue
-    /// `--accent` (#007AFF) a shade deeper, so its white words read at 4.5:1 or more in light and dark.
-    static let askAccent = Color(dynamic: askAccentColor)
-    static let askAccentColor = UIColor(light: 0x006EE6, dark: 0x0A6CE0)
-
     static let success = Color(dynamic: UIColor(light: 0x34C759, dark: 0x30D158))
     static let warning = Color(dynamic: UIColor(light: 0xFF9F0A, dark: 0xFFD60A))
     static let danger = Color(dynamic: dangerColor)

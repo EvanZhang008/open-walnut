@@ -18,8 +18,9 @@ struct ComposerSuggestList: View {
                 Divider()
                 content(trigger)
             }
-            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(.separator), lineWidth: 0.5))
+            // A menu's corner (`Theme.Radius.md`).
+            .background(Color(.systemBackground), in: Theme.Radius.shape(Theme.Radius.md))
+            .overlay(Theme.Radius.shape(Theme.Radius.md).stroke(Color(.separator), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("composer.suggest.list")
@@ -36,10 +37,9 @@ struct ComposerSuggestList: View {
                 .accessibilityIdentifier("composer.suggest.header")
             Spacer(minLength: 0)
             Button { controller.dismiss() } label: {
-                Image(systemName: "xmark").font(.caption.weight(.semibold)).frame(width: 32, height: 28)
+                Image(systemName: "xmark").font(Theme.TextSize.sm.weight(.semibold))
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .buttonStyle(.walnut(.tool, size: .small))
             .accessibilityLabel("Close the list")
             .accessibilityIdentifier("composer.suggest.close")
         }

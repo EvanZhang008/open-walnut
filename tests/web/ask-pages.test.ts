@@ -9,7 +9,7 @@
  *   - an answered page stays, marked, until no open ask is left; a later ask starts afresh
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ActionItem } from '@open-walnut/user-status';
 import { anyOpen, liveMarks, pageIndex, pagesOf, type AnsweredAsk } from '../../web/src/components/actions/ask-pages';
@@ -155,10 +155,10 @@ describe('the phone draws the same card, one page at a time', () => {
     expect(swift).toMatch(/AccessibilityNotification\.Announcement\(ActionNeededModel\.placeText/);
   });
 
-  it('the look: frosted, 18pt continuous corners, a hairline, the dot, quiet keys', () => {
-    expect(swift).toMatch(/\.background\(\.ultraThinMaterial, in: RoundedRectangle\(cornerRadius: Self\.corner, style: \.continuous\)\)/);
-    expect(swift).toMatch(/private static let corner: CGFloat = 18/);
-    expect(swift).toMatch(/\.strokeBorder\(Color\.primary\.opacity/);
+  it('the look: the family frosted card, the dot, quiet keys', () => {
+    // The phone's one card (standard.md, iOS column): frosted for a card that asks, no corner of its own.
+    expect(swift).toMatch(/\.walnutCard\(frosted: true\)/);
+    expect(swift).not.toMatch(/\.ultraThinMaterial|cornerRadius:/);
     expect(swift).toMatch(/Circle\(\)[\s\S]{0,200}Theme\.warning[\s\S]{0,200}\.frame\(width: 7, height: 7\)/);
     expect(swift).not.toMatch(/\.buttonStyle\(\.bordered(Prominent)?\)/);
   });
@@ -175,32 +175,35 @@ describe('the phone\'s cards take the button family (2026-11-21, the user: "2 is
   // as full-width rows, the recommended one blue, at most one blue key a card, every other key
   // grey, the box under the keys, then the tools (pager, Snooze, pin) at the right.
   const IOS = join(__dirname, '../../ios-native/Walnut');
-  const family = readFileSync(join(IOS, 'Views/Shared/AskCardKeys.swift'), 'utf8');
   const ask = readFileSync(join(IOS, 'Views/Tasks/ActionNeededView.swift'), 'utf8');
   const threads = readFileSync(join(IOS, 'Views/Org/OrgThreadsView.swift'), 'utf8');
   const card = /struct OrgThreadCard: View \{[\s\S]*?\n\}\n/.exec(threads)?.[0] ?? '';
 
-  it('one home for the look: the keys, the option rows, Snooze', () => {
-    expect(family).toMatch(/struct AskChipStyle: ButtonStyle \{\s*var main = false/);
-    expect(family).toMatch(/struct AskOptionStyle: ButtonStyle \{\s*var recommended = false/);
-    expect(family).toMatch(/\.frame\(maxWidth: \.infinity, minHeight: AskCardKeys\.height, alignment: \.leading\)/);
-    expect(family).toMatch(/strokeBorder\(Color\(uiColor: \.separator\)/);
-    expect(family).toMatch(/static let corner: CGFloat = 8/);
-    expect(family).toMatch(/main \? Theme\.askAccent/);
-    expect(family).toMatch(/recommended \? Theme\.askAccent/);
-    expect(family).toMatch(/\.lineLimit\(1\)\s*\.truncationMode\(\.tail\)/);
-    expect(family).toMatch(/Image\(systemName: "chevron\.down"\)/);
-    expect(readFileSync(join(IOS, 'Views/Shared/ReplyBox.swift'), 'utf8')).toMatch(/cornerRadius: AskCardKeys\.corner/);
-    for (const src of [ask, card]) expect(src).not.toMatch(/struct Ask\w+Style: ButtonStyle/);
+  it('one home for the look: the phone button family, no style of its own', () => {
+    // standard.md, "The phone (iOS column)": every key, option row and tool is WalnutButtonStyle.
+    for (const src of [ask, card]) {
+      expect(src).not.toMatch(/:\s*(Primitive)?ButtonStyle\b/);
+      expect(src).not.toMatch(/\.buttonStyle\(\.(bordered|borderedProminent|borderless)\)/);
+      expect(src).toMatch(/WalnutMenuLabel\(title: /);
+    }
+    expect(existsSync(join(IOS, 'Views/Shared/AskCardKeys.swift'))).toBe(false);
+    // The words box is the one message box's corner.
+    expect(readFileSync(join(IOS, 'Views/Shared/ReplyBox.swift'), 'utf8')).toMatch(/in: MessageBox\.shape\)/);
   });
 
   it('options are rows, and each card has at most one blue key', () => {
-    expect(ask).toMatch(/\.buttonStyle\(AskOptionStyle\(recommended: o\.recommended == true\)\)/);
-    expect(card).toMatch(/\.buttonStyle\(AskOptionStyle\(recommended: o\.recommended == true\)\)/);
-    expect(ask.match(/AskChipStyle\(main: true\)/g)).toHaveLength(1);
-    expect(card.match(/AskChipStyle\(main: true\)/g)).toHaveLength(1);
-    expect(card).toMatch(/onEdit\(\.acknowledge\)[^\n]*\n\s*\.buttonStyle\(AskChipStyle\(main: true\)\)/);
-    expect(card).not.toMatch(/\.buttonStyle\(\.bordered(Prominent)?\)/);
+    expect(ask).toMatch(/WalnutOptionLabel\(label: o\.label, detail: o\.detail, recommended: o\.recommended == true\)\s*\}\s*\.buttonStyle\(\.walnut\(\.option\(recommended: o\.recommended == true\)\)\)/);
+    expect(card).toMatch(/WalnutOptionLabel\(label: o\.label, detail: o\.detail, recommended: o\.recommended == true\)\s*\}\s*\.buttonStyle\(\.walnut\(\.option\(recommended: o\.recommended == true\)\)\)/);
+    // One main action: an approval's Review; a thread's Acknowledge, only on a card with no choices.
+    expect(ask.match(/\.walnut\(\.primary/g)).toHaveLength(1);
+    expect(ask).toMatch(/Button\("Review"\)[^\n]*\n\s*\.buttonStyle\(\.walnut\(\.primary, size: \.small\)\)/);
+    expect(card.match(/\.walnut\(\.primary/g)).toHaveLength(1);
+    expect(card).toMatch(/onEdit\(\.acknowledge\)[^\n]*\n\s*\.buttonStyle\(\.walnut\(\.primary, size: \.small/);
+    expect(card).toMatch(/else if !known && !waitsOnHim \{/);
+    expect(card).toMatch(/if waitsOnHim, canFollowUp, !choices\.isEmpty \{/);
+    // The tools on the last line are the family's quiet tool.
+    expect(ask).toMatch(/WalnutMenuLabel\(title: "Snooze"\)\s*\}\s*\.buttonStyle\(\.walnut\(\.tool, size: \.small\)\)/);
+    expect(card).toMatch(/private var watchButton[\s\S]{0,400}\.buttonStyle\(\.walnut\(\.tool, size: \.small\)\)/);
   });
 
   it('the order: options and keys, then the box, then the tools', () => {

@@ -192,10 +192,10 @@ private struct SnoozeBody: Encodable { let until: String? }
 private struct SnoozeAnswer: Decodable { let task_id: String? }
 
 /// The card (2026-11-20, the user, of the ten designs: "I mean 1 is good let's do it", the web's
-/// ask-card.css): the frosted material, 18pt continuous corners with a hairline and a white top
-/// edge, a 7pt orange dot for "needs you". Its answer (2026-11-21, of ten whole-card designs: "2 is
-/// good", `AskCardKeys`): the options as a list of rows, the one main action blue, the box under
-/// them, "Snooze ▾" as quiet text at the right of the last line. One ask at a time ("max shoudl 1 decision, and can left and
+/// ask-card.css): the family's frosted card (`.walnutCard(frosted: true)`), a 7pt orange dot for
+/// "needs you". Its answer (2026-11-21, of ten whole-card designs: "2 is good"), drawn with the
+/// phone's one button family (`WalnutButtonStyle`): the options as a list of rows, the one main
+/// action blue, the box under them, "Snooze ▾" as a quiet tool at the right of the last line. One ask at a time ("max shoudl 1 decision, and can left and
 /// right"): each ask is its own page with its own words, options and box, "‹ 1/3 ›" beside Snooze
 /// pages through them, and an answered page stays, marked with what was said.
 struct ActionNeededView: View {
@@ -204,7 +204,6 @@ struct ActionNeededView: View {
     var onOpenSession: () -> Void = {}
 
     @Environment(TasksStore.self) private var store: TasksStore?
-    @Environment(\.colorScheme) private var scheme
 
     /// Answered from here: kept, marked with what was said, until no open ask is left.
     @State private var answered: [String: ActionNeededModel.Answered] = [:]
@@ -216,8 +215,6 @@ struct ActionNeededView: View {
     @State private var notes: [String: String] = [:]
     /// One id per letter reply until it is taken, so a retry after a lost answer is the same reply.
     @State private var replyIDs: [String: String] = [:]
-
-    private static let corner: CGFloat = 18
 
     /// The marks that still hold: the same id asked again with new words is a new, open ask.
     private var marks: [String: ActionNeededModel.Answered] { ActionNeededModel.liveMarks(items, answered: answered) }
@@ -235,18 +232,8 @@ struct ActionNeededView: View {
                     Text(error).font(.caption2).foregroundStyle(Theme.decideText)
                 }
             }
-            .padding(EdgeInsets(top: 12, leading: 12, bottom: 8, trailing: 12))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
-            .overlay {
-                // A hairline all round, and the white top edge of the notices' glass.
-                RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(scheme == .dark ? 0.16 : 0.1), lineWidth: 0.5)
-                RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
-                    .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.14 : 0.8), .clear], startPoint: .top, endPoint: .center), lineWidth: 1)
-                    .blendMode(.plusLighter)
-            }
-            .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
+            // The family's card that asks: frosted, `Theme.Radius.card` corners, a hairline.
+            .walnutCard(frosted: true)
             // Paged by its two arrows only for now. A sideways swipe (the web's) waits until it is
             // proven on the simulator not to set off the row's own swipe actions (a full swipe right
             // marks the task Done, BoardRowGestures) or the Tasks drawer's leftward close.
@@ -336,10 +323,9 @@ struct ActionNeededView: View {
                     Button {
                         Task { await snooze(item, nil) }
                     } label: {
-                        Label("Unsnooze", systemImage: "clock").font(.footnote)
+                        Label("Unsnooze", systemImage: "clock")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(.walnut(.tool, size: .small))
                     .accessibilityIdentifier("action.unsnooze.\(item.id)")
                 }
             } else {
@@ -367,9 +353,9 @@ struct ActionNeededView: View {
                 Button(p.label) { Task { await snooze(item, p.until) } }
             }
         } label: {
-            AskSnoozeLabel()
+            WalnutMenuLabel(title: "Snooze")
         }
-        .foregroundStyle(.secondary)
+        .buttonStyle(.walnut(.tool, size: .small))
         .accessibilityIdentifier("action.snooze.\(item.id)")
     }
 
@@ -379,26 +365,22 @@ struct ActionNeededView: View {
         if count > 1 {
             let pages = self.pages
             HStack(spacing: 0) {
-                Button { go(-1, pages: pages, from: index) } label: {
-                    Image(systemName: "chevron.left").frame(width: 28, height: 28).contentShape(Rectangle())
-                }
+                Button { go(-1, pages: pages, from: index) } label: { Image(systemName: "chevron.left") }
                 .disabled(index == 0)
                 .accessibilityLabel("Previous decision")
                 .accessibilityIdentifier("action.page.prev.\(task.id)")
                 Text("\(index + 1)/\(count)")
-                    .font(.caption.monospacedDigit())
+                    .font(Theme.TextSize.sm.monospacedDigit())
+                    .foregroundStyle(Theme.secondaryOnCard)
                     .accessibilityHidden(true)
                     .accessibilityIdentifier("action.page.at.\(task.id)")
-                Button { go(1, pages: pages, from: index) } label: {
-                    Image(systemName: "chevron.right").frame(width: 28, height: 28).contentShape(Rectangle())
-                }
+                Button { go(1, pages: pages, from: index) } label: { Image(systemName: "chevron.right") }
                 .disabled(index >= count - 1)
                 .accessibilityLabel("Next decision")
                 .accessibilityIdentifier("action.page.next.\(task.id)")
             }
-            .buttonStyle(.plain)
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
+            // The arrows are the family's quiet tools (28pt drawn, a 44pt touch).
+            .buttonStyle(.walnut(.tool, size: .small))
         }
     }
 
@@ -409,25 +391,25 @@ struct ActionNeededView: View {
         switch ActionNeededModel.answer(item) {
         case .approvalSheet:
             Button("Review") { Task { await ApprovalCenter.shared.open(id: item.id) } }
-                .buttonStyle(AskChipStyle(main: true))
+                .buttonStyle(.walnut(.primary, size: .small))
         case .letterOptions:
             optionRows(item.options ?? []) { o in await answerLetter(item, o) }
         case .promptOptions:
             optionRows(item.options ?? []) { o in await answerQuestion(item, o) }
         case .openSession:
             Button("Open") { onOpenSession() }
-                .buttonStyle(AskChipStyle())
+                .buttonStyle(.walnut(.secondary, size: .small))
         }
     }
 
     /// Each option a row of its own, full width; the recommended one blue.
     private func optionRows(_ options: [WalnutAskOption], pick: @escaping @MainActor (WalnutAskOption) async -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             ForEach(options) { o in
                 Button { Task { await pick(o) } } label: {
-                    AskOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
+                    WalnutOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
                 }
-                .buttonStyle(AskOptionStyle(recommended: o.recommended == true))
+                .buttonStyle(.walnut(.option(recommended: o.recommended == true)))
             }
         }
     }

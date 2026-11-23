@@ -93,20 +93,4 @@ final class ActionNeededTests: XCTestCase {
         XCTAssertEqual(options[0].recommended, true)
         XCTAssertNil(options[1].detail)
     }
-
-    /// The card's keys and option rows (2026-11-21, "2 is good"): a full touch target, the words
-    /// box's height, 8pt corners, and white words on the blue main key at 4.5:1 or more.
-    func testTheButtonFamilyIsReadableAndTappable() {
-        XCTAssertGreaterThanOrEqual(AskCardKeys.height, 44)
-        XCTAssertEqual(AskCardKeys.corner, 8)
-        for style in [UIUserInterfaceStyle.light, .dark] {
-            let fill = Theme.askAccentColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            XCTAssertTrue(fill.getRed(&r, green: &g, blue: &b, alpha: &a))
-            func channel(_ v: CGFloat) -> Double { let v = Double(v); return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
-            let lum = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
-            let ratio = 1.05 / (lum + 0.05)
-            XCTAssertGreaterThanOrEqual(ratio, 4.5, "white on the blue key is \(ratio):1 in \(style == .dark ? "dark" : "light")")
-        }
-    }
 }

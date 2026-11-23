@@ -727,7 +727,7 @@ struct OrgThreadCard: View {
             }
             // Its choices and keys first, the box under them (2026-11-20, the user: "butotn shoudl be
             // before inbox"), then Snooze and the watch eye at the right of the last line (2026-11-21, the
-            // user's pick of ten whole-card designs: "2 is good", `AskCardKeys`).
+            // user's pick of ten whole-card designs: "2 is good"), all in the phone's one button family.
             optionButtons
             keys
             if canFollowUp, !closed { followUpBox }
@@ -950,13 +950,13 @@ struct OrgThreadCard: View {
     @ViewBuilder
     private var optionButtons: some View {
         if waitsOnHim, canFollowUp, !choices.isEmpty {
-            // Each a row of its own, full width; the recommended one blue (`AskOptionStyle`).
-            VStack(alignment: .leading, spacing: 6) {
+            // Each a row of its own, full width; the recommended one blue (the family's option).
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
                 ForEach(choices) { o in
                     Button { pickedKey = choicesKey; onPick(o.label) } label: {
-                        AskOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
+                        WalnutOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
                     }
-                    .buttonStyle(AskOptionStyle(recommended: o.recommended == true))
+                    .buttonStyle(.walnut(.option(recommended: o.recommended == true)))
                     .disabled(busy || pickedKey == choicesKey)
                     .accessibilityIdentifier("org.thread.option.\(o.id)")
                 }
@@ -977,14 +977,14 @@ struct OrgThreadCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button { onEdit(.reopen) } label: { actionLabel("Reopen", fullWidth: false) }
-                    .buttonStyle(AskChipStyle())
+                    .buttonStyle(.walnut(.secondary, size: .small))
                     .disabled(busy)
                     .accessibilityIdentifier("org.thread.reopen")
             }
         } else if !known && !waitsOnHim {
             // Acknowledged already: the AI places it (server thread-known.ts), no second button.
             Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: wide) }
-                .buttonStyle(AskChipStyle(main: true))
+                .buttonStyle(.walnut(.primary, size: .small, fullWidth: wide))
                 .disabled(busy)
                 .accessibilityIdentifier("org.thread.ack")
         }
@@ -1006,13 +1006,11 @@ struct OrgThreadCard: View {
 
     private var watchButton: some View {
         Button { onEdit(.watch(!watched)) } label: {
+            // Blue while it watches: the accent of a selected thing, on the family's quiet tool.
             Image(systemName: watched ? "eye.fill" : "eye")
-                .font(.footnote)
-                .foregroundStyle(watched ? Theme.tint : .secondary)
-                .frame(width: 36, height: AskCardKeys.toolHeight)
-                .contentShape(Rectangle())
+                .foregroundStyle(watched ? Theme.tint : Theme.secondaryOnCard)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.walnut(.tool, size: .small))
         .accessibilityLabel(watched ? "Stop watching" : "Watch")
         .accessibilityIdentifier("org.thread.watch")
     }
@@ -1055,7 +1053,7 @@ struct OrgThreadCard: View {
         }
     }
 
-    /// "Snooze ▾" (or "Snoozed ▾"), quiet text like the ask card's.
+    /// "Snooze ▾" (or "Snoozed ▾"), the family's quiet tool as on the ask card.
     private var snoozeMenu: some View {
         Menu {
             snoozeChoices
@@ -1064,9 +1062,9 @@ struct OrgThreadCard: View {
                 Button("Unsnooze") { onEdit(.snooze("")) }
             }
         } label: {
-            AskSnoozeLabel(text: snoozed ? "Snoozed" : "Snooze")
+            WalnutMenuLabel(title: snoozed ? "Snoozed" : "Snooze")
         }
-        .foregroundStyle(.secondary)
+        .buttonStyle(.walnut(.tool, size: .small))
         .accessibilityIdentifier("org.thread.snooze")
     }
 
