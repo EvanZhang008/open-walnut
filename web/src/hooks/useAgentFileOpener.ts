@@ -9,7 +9,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { fetchSession, peekSessionRecord } from '@/api/sessions';
 import { log } from '@/utils/log';
 import { openFileAnywhere } from '@/utils/open-anywhere';
-import { openFromSource, renderContextOf, sessionTextSource, sourceFailReasonOfUnknown, sourceFailureText, sourceHostOf, sourceSessionId, type AgentTextSource, type RenderContext, type SourceFailReason } from '@/utils/agent-text-source';
+import { anywhereRequest, openFromSource, renderContextOf, sessionTextSource, sourceHostOf, sourceSessionId, type AgentTextSource, type RenderContext } from '@/utils/agent-text-source';
 
 export interface AgentFileOpener {
   onFileOpen?: (path: string, line?: number, term?: undefined, endLine?: number) => void;
@@ -18,7 +18,7 @@ export interface AgentFileOpener {
   fileSessionId?: string;
   /** What the renderer may use now (no request): cwd, image host, whether pictures load. */
   render: RenderContext;
-  /** The writer is unknown: every path, a relative one included, goes to onFileOpen (which refuses it). */
+  /** The writer is unknown: every path, a relative one included, goes to onFileOpen (every machine is asked). */
   refusesAll?: true;
 }
 
@@ -32,12 +32,12 @@ export function useAgentFileOpener(src: AgentTextSource | undefined): AgentFileO
   const fileSessionId = sourceSessionId(src);
   // A Map read of the record this page already holds; never a request.
   const { cwd: renderCwd, host: renderHost, images } = renderContextOf(src, peekSessionRecord);
-  // An unknown source is identified by why it is unknown, never by the object: a click must not
-  // act on a source object from an earlier render.
-  const unknownWhy: SourceFailReason | undefined = kind === 'unknown' ? sourceFailReasonOfUnknown(src) : undefined;
+  // The hint task of an unknown writer is part of its identity: a click must not act on a source
+  // object from an earlier render.
+  const hintTask = kind === 'unknown' ? (src?.taskId || src?.task?.id || '') : '';
   const taskId = src?.task?.id;
   const seq = useRef(0);
-  const sourceKey = `${kind}|${host ?? ''}|${sid ?? ''}|${unknownWhy ?? ''}|${taskId ?? ''}`;
+  const sourceKey = `${kind}|${host ?? ''}|${sid ?? ''}|${hintTask}|${taskId ?? ''}`;
   // The source the surface shows now, set at commit: a passive effect ran too late, so an answer
   // landing between the new source's commit and its cleanup still opened the old source's file.
   const shown = useRef(sourceKey);
@@ -46,28 +46,25 @@ export function useAgentFileOpener(src: AgentTextSource | undefined): AgentFileO
     shown.current = sourceKey;
     return () => { seq.current++; };
   }, [sourceKey]);
-  const reopen = useRef<AgentFileOpener['onFileOpen']>(undefined);
   const onFileOpen = useCallback((path: string, line?: number, _term?: undefined, endLine?: number) => {
     const mine = ++seq.current;
     const live = () => mine === seq.current && shown.current === sourceKey;
-    const failed = (sessionId: string, error: string, reason: SourceFailReason) => {
-      log.warn('file-open', 'path not opened: its source host is unknown', { sessionId, path, error, reason });
-      if (!live()) return;
-      openFileAnywhere({
-        path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}), sourceFailure: sourceFailureText(reason), sourceReason: reason,
-        ...(reason === 'lookup' ? { retry: () => reopen.current?.(path, line, undefined, endLine) } : {}),
-      });
-    };
-    // Nothing to read for an unknown writer: refuse at once, whatever the path looks like.
-    if (kind === 'unknown') { failed('', 'source not recorded', unknownWhy ?? 'unrecorded'); return; }
+    const req = { path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}) };
+    // An unknown writer: every machine is asked, its task's first; never a question to the person.
+    if (kind === 'unknown') {
+      log.info('file-open', 'path of an unrecorded writer: looking on every machine', { path, taskId: hintTask });
+      openFileAnywhere(anywhereRequest({ unknownSource: true, ...(hintTask ? { taskId: hintTask } : {}) }, req));
+      return;
+    }
     const source = kind === 'host' ? { host: host ?? '' } : sid ? { sessionId: sid } : undefined;
-    void openFromSource(source, { path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}) }, {
+    void openFromSource(source, req, {
       lookup: { peek: peekSessionRecord, fetch: fetchSession },
-      open: (req) => { if (live()) openFileAnywhere(req); },
-      fail: ({ sessionId, error, reason }) => failed(sessionId, error, reason),
+      open: (r) => {
+        if (r.anywhere) log.info('file-open', 'path of a session Walnut cannot read now: looking on every machine', { sessionId: sid ?? '', path });
+        if (live()) openFileAnywhere(r.anywhere && taskId && !r.taskId ? { ...r, taskId } : r);
+      },
     });
-  }, [kind, host, sid, unknownWhy, sourceKey]);
-  useLayoutEffect(() => { reopen.current = onFileOpen; }, [onFileOpen]);
+  }, [kind, host, sid, hintTask, taskId, sourceKey]);
   return useMemo(() => kind === 'none' ? NO_SOURCE : {
     onFileOpen,
     ...(host ? { fileHost: host } : {}),

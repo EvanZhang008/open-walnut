@@ -432,36 +432,6 @@ export function boardPathSource(
   return source ?? unknown;
 }
 
-/** A path's copy once the click read its machine: `host` as the session record has it, '' for this machine. */
-export interface BoardResolvedSource {
-  host?: string;
-  /** Where the copy is: "Board page", "Reply by … in …", "Answer in …". */
-  label: string;
-  /** The writing session's title, else its task's (never a session id). */
-  title?: string;
-}
-
-/** One button of the source chooser: a machine ('' = this one) and every copy written there. */
-export interface BoardHostChoice {
-  host: string;
-  details: string[];
-}
-
-const LOCAL_HOST_NAMES = new Set(['', 'local', '__local__']);
-
-/** Copies on the same machine are one choice; a single result opens at once. */
-export function boardHostChoices(resolved: readonly BoardResolvedSource[]): BoardHostChoice[] {
-  const byHost = new Map<string, string[]>();
-  for (const r of resolved) {
-    const host = r.host && !LOCAL_HOST_NAMES.has(r.host) ? r.host : '';
-    const detail = r.title ? `${r.label} (${r.title})` : r.label;
-    const details = byHost.get(host) ?? [];
-    if (!details.includes(detail)) details.push(detail);
-    byHost.set(host, details);
-  }
-  return [...byHost].map(([host, details]) => ({ host, details }));
-}
-
 export function boardChoiceFileSource(ownerId: string, choice: BoardChoice): BoardFileSource {
   return writerSource(ownerId, choice.text_by ?? 'human', choice.text_session_id);
 }

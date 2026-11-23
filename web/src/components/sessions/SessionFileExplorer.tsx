@@ -104,7 +104,7 @@ interface SessionFileExplorerProps {
   barRightSlot?: ReactNode;
   /** The clicked file lives on `host`, not on the session's own host: the toolbar
    *  names where it is opened from (useClickedPathOpener). */
-  onHostNote?: { host?: string; sessionHost?: string };
+  onHostNote?: { host?: string; sessionHost?: string; found?: boolean };
   /** No host has the clicked path: this line shows above the tree instead of a
    *  stand-in folder (useClickedPathOpener's missingPathLine). */
   missingNote?: string;
@@ -1637,7 +1637,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         <span
           className="badge sfe-host-chip"
           data-testid="sfe-host-chip"
-          title={`This file is on ${fileHostName}; the session runs on ${sessionHostName}.`}
+          title={onHostNote.found ? `Walnut found this file on ${fileHostName}.` : `This file is on ${fileHostName}; the session runs on ${sessionHostName}.`}
         >
           <span>on {fileHostName}</span>
         </span>

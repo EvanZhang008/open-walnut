@@ -56,7 +56,6 @@ const SESSION_FILES: Record<string, string> = {
   'utils/demo-generation.ts': 'a confirmed Demo resets this tab storage when its isolated data generation changes',
   'utils/layout-record.ts': 'adopts the pre-record sessionStorage keys once',
   'components/drawing/drawing-store.ts': "the id of this tab, so two open tabs never write over each other's unsaved drawing; the drafts themselves are in localStorage",
-  'utils/path-machine-memory.ts': "the machine this tab's user named for a path whose writer Walnut did not record: a per-tab answer to a question, not Home or Org layout",
   'utils/scroll-debug.ts': 'a debug timer',
   'utils/stale-assets.ts': 'reload bookkeeping of one tab',
   'components/quickbar/useQuickReceipts.ts': 'the quick bar receipts of this tab that could still lose words (waiting, failed, held, sending), kept across a reload of this tab only; a relaunch counts them as unsaved work first (utils/unsaved-work.ts)',
@@ -83,7 +82,6 @@ const SESSION_KEYS: Record<string, string> = {
   'open-walnut-crash-log': 'crash log',
   'open_walnut_scroll_debug_t0': 'debug timer',
   'open-walnut-skip-prefs-merge': 'one-boot skip flag',
-  'walnut.pathMachine.v1': "the machines this tab's user named for paths with no recorded writer",
 };
 
 /** Files that draw Home or Org. */

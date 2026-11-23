@@ -118,24 +118,19 @@ describe('a file lookup lives only as long as its click and its surface', () => 
     expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/d.ts', host: 'devbox' })
   })
 
-  it('a failed lookup opens an error-only preview with no host, and the next press retries', async () => {
+  it('a failed lookup looks the path up on every machine, never this one first, and the next press asks the session again', async () => {
     await mount({ sessionId: 's1' })
     latest!.onFileOpen!('/home/me/a.ts')
     h.pending[0]!.reject(new Error('timeout'))
     await flush()
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({
-      path: '/home/me/a.ts',
-      sourceFailure: expect.stringContaining('No file was read'),
-      sourceReason: 'lookup',
-      retry: expect.any(Function),
-    })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', anywhere: true })
     h.openFileAnywhere.mockReset()
     latest!.onFileOpen!('/home/me/a.ts', 2)
     await answer(1, 'devbox')
     expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', line: 2, host: 'devbox' })
   })
 
-  it('an unrecorded writer opens neither an absolute nor a relative path, asks nothing, and says why', async () => {
+  it('an unrecorded writer asks nothing and looks an absolute or a relative path up on every machine', async () => {
     await mount({ unknownSource: true })
     expect(latest!.render).toEqual({ images: false })
     // The shared click handler hands it relative paths too (useEntityClickHandler relativeToOpener).
@@ -148,22 +143,17 @@ describe('a file lookup lives only as long as its click and its surface', () => 
       await flush()
       expect(h.fetchSession).not.toHaveBeenCalled()
       expect(h.peekSessionRecord).not.toHaveBeenCalled()
-      // The chooser keeps the position for an explicit machine choice, with no host or read yet.
-      expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path, line: 3, sourceFailure: expect.stringMatching(/did not record which session wrote/), sourceReason: 'unrecorded' })
-      const text = h.openFileAnywhere.mock.calls[0]![0].sourceFailure as string
-      expect(text).toContain('No file was read')
-      expect(text).not.toMatch(/unavailable|retry/i)
+      // No host, no failure text, no question: the position rides with the every-machine request.
+      expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path, line: 3, anywhere: true })
     }
   })
 
-  it('an unknown source keeps the line range for an explicit machine choice without reading anything', async () => {
-    await mount({ unknownSource: true })
+  it('an unknown source keeps the line range and names its task first, without reading anything', async () => {
+    await mount({ unknownSource: true, taskId: 't7' })
     latest!.onFileOpen!('/home/me/a.ts', 3, undefined, 8)
     await flush()
     expect(h.fetchSession).not.toHaveBeenCalled()
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({
-      path: '/home/me/a.ts', line: 3, endLine: 8, sourceFailure: expect.stringContaining('No file was read'), sourceReason: 'unrecorded',
-    })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', line: 3, endLine: 8, anywhere: true, taskId: 't7' })
   })
 
   it('an unknown source keeps one opener across renders (no stale object), and a recorded writer replaces it', async () => {
@@ -188,34 +178,28 @@ describe('a file lookup lives only as long as its click and its surface', () => 
     expect(h.openFileAnywhere).not.toHaveBeenCalled()
   })
 
-  it('an unknown source is never filled in from the task\'s current session', async () => {
+  it('an unknown source is never filled in from the task\'s current session, only its task is named', async () => {
     await mount({ unknownSource: true, task: { id: 't1', title: 'T', session_id: 's-new', session_ids: ['s-new'] } as never })
     latest!.onFileOpen!('/home/me/a.ts')
     await flush()
     expect(h.fetchSession).not.toHaveBeenCalled()
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', sourceFailure: expect.stringContaining('No file was read'), sourceReason: 'unrecorded' })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', anywhere: true, taskId: 't1' })
   })
 
-  it('a failed lookup offers a retry; a session that is gone says so without one', async () => {
-    await mount({ sessionId: 's1' })
+  it('a session that is gone or unreadable asks every machine, its source\'s task first', async () => {
+    await mount({ sessionId: 's1', task: { id: 't1', title: 'T', session_ids: [] } as never })
     latest!.onFileOpen!('/home/me/a.ts')
     h.pending[0]!.reject(new Error('timeout'))
     await flush()
-    expect(h.openFileAnywhere.mock.calls[0]![0].sourceFailure).toMatch(/try again/)
-    expect(h.openFileAnywhere.mock.calls[0]![0].sourceReason).toBe('lookup')
-    expect(typeof h.openFileAnywhere.mock.calls[0]![0].retry).toBe('function')
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', anywhere: true, taskId: 't1' })
     h.openFileAnywhere.mockReset()
     latest!.onFileOpen!('/home/me/a.ts')
     h.pending[1]!.resolve(null)
     await flush()
-    const gone = h.openFileAnywhere.mock.calls[0]![0].sourceFailure as string
-    expect(gone).toContain('No file was read')
-    expect(gone).not.toMatch(/retry|try again/)
-    expect(h.openFileAnywhere.mock.calls[0]![0].sourceReason).toBe('gone')
-    expect(h.openFileAnywhere.mock.calls[0]![0].retry).toBeUndefined()
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', anywhere: true, taskId: 't1' })
   })
 
-  it('a failed lookup after unmount opens no error preview', async () => {
+  it('a failed lookup after unmount opens nothing', async () => {
     await mount({ sessionId: 's1' })
     latest!.onFileOpen!('/home/me/a.ts')
     await act(async () => { root!.unmount() })

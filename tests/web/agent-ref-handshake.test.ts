@@ -7,6 +7,7 @@ const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
 vi.mock('../../web/src/utils/open-anywhere', () => ({ openFileAnywhere: vi.fn(), openLetterAnywhere: vi.fn() }));
 const { OpenAgentRefPage, OPEN_REF_PATIENCE_MS } = await import('../../web/src/pages/OpenAgentRefPage');
 const { AGENT_REF_CHANNEL, claimAgentRef, registerAgentRef } = await import('../../web/src/utils/agent-ref-open');
+const { openFileAnywhere } = await import('../../web/src/utils/open-anywhere');
 
 const token = 'ab'.repeat(16);
 const href = `http://localhost:3457/open-ref#token=${token}&kind=letter&id=lt-abc1234-9f3k`;
@@ -33,6 +34,7 @@ let unregister: (() => void) | undefined;
 let close: ReturnType<typeof vi.fn>;
 let replace: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  (openFileAnywhere as unknown as ReturnType<typeof vi.fn>).mockClear();
   deliveries.length = 0;
   posts.length = 0;
   channels.clear();
@@ -110,7 +112,7 @@ describe('agent reference hand-off acknowledgement', () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it('an expired file token never offers a source-less open or probes a guessed machine', async () => {
+  it('an expired file token offers one Open that looks the file up on every machine once the source document does not answer', async () => {
     window.location.href = `http://localhost:3457/open-ref#token=${token}&kind=file&path=%2Frepo%2Fa.txt`;
     vi.useFakeTimers();
     try {
@@ -118,10 +120,16 @@ describe('agent reference hand-off acknowledgement', () => {
       await deliver();
       // A normal hand-off ends inside a second: the window says only that it is opening, never a sentence that reads as a fault.
       expect(host.textContent).toContain('Opening in Walnut');
-      expect(host.textContent).not.toContain('reopen it and click the path again');
+      expect(host.textContent).not.toContain('looks for this file on every machine');
+      expect((openFileAnywhere as unknown as ReturnType<typeof vi.fn>).mock.calls).toEqual([]);
       await act(async () => { vi.advanceTimersByTime(OPEN_REF_PATIENCE_MS + 10); });
-      expect(host.textContent).toContain('reopen it and click the path again');
-      expect(host.querySelector('button')).toBeNull();
+      expect(host.textContent).toContain('Open looks for this file on every machine');
+      // Never by itself: only the press opens it.
+      expect((openFileAnywhere as unknown as ReturnType<typeof vi.fn>).mock.calls).toEqual([]);
+      const button = host.querySelector('button')!;
+      expect(button.textContent).toBe('Open');
+      await act(async () => { button.dispatchEvent(new window.Event('click', { bubbles: true })); });
+      expect((openFileAnywhere as unknown as ReturnType<typeof vi.fn>).mock.calls).toEqual([[{ path: '/repo/a.txt', anywhere: true }]]);
       expect(close).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

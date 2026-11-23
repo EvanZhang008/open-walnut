@@ -10,8 +10,8 @@
  *   his words the user's own: the primary
  *
  * Never the node's current session, and never a message's `sid` (where his words went, not who
- * answered): a block with no writer recorded reads `unknownSource`, so its paths open nowhere and
- * its pictures do not load until the user picks a machine.
+ * answered): a block with no writer recorded reads `unknownSource`, so its paths are looked up on
+ * every machine (the writing task's first, when known) and its pictures stay links.
  */
 import type { AgentTextSource } from '@/utils/agent-text-source';
 import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
@@ -30,7 +30,11 @@ export const THREAD_WORDS_SOURCE: AgentTextSource = PRIMARY;
 /** Where a thread's summary came from: its recorded writer only. */
 export function threadSummarySource(t: Pick<OrgThread, 'reply_by' | 'reply_sid' | 'reply_host'>): AgentTextSource {
   if (t.reply_by === 'human') return PRIMARY;
-  return bySession(t.reply_sid, t.reply_host);
+  const src = bySession(t.reply_sid, t.reply_host);
+  // A summary a task wrote with no session recorded (a turn-end status line): its task's machines
+  // are asked first, then every other (2026-11-23: a VP's Done card asked Evan to pick a machine).
+  const task = t.reply_by?.startsWith('task:') ? t.reply_by.slice(5) : '';
+  return src.unknownSource && task ? { ...src, taskId: task } : src;
 }
 
 /** Where a node's answer came from: the session it was read from. */

@@ -319,37 +319,22 @@ describe('the Board frame (its own document, so it sends them up)', () => {
     // A task writer with no saved session is unknown too: its task's session now may run elsewhere.
     expect(stored).toMatch(/if \(source\.sourceFailure \|\| \(!source\.primary && !source\.sessionId\)\) \{ ambiguous = true; return; \}/)
     expect(stored).toMatch(/if \(ambiguous \|\| sources\.size === 0\) \{ openBoardFile\(req, \{ taskId: ownerId, sourceFailure: true \}\); return; \}/)
-    // One source opens at once; several read their machines on this click (the chooser shows at once,
-    // pending), then one machine opens there and several ask the user in the parent page, never in the frame.
-    expect(stored).toMatch(/if \(choices\.length === 1\) \{ openBoardFile\(req, choices\[0\]!\.source\); return; \}/)
-    expect(stored).toContain('openBoardFile(req, choices, { nonce, sourceKey });')
-    expect(stored).not.toMatch(/setFileChoices\(\{/)
+    // One writer opens at once; several (or none saved) are never a question: openBoardFile looks the path
+    // up on every machine (2026-11-23, Evan: "Why walnut not auto pic the host it need me to pick").
+    expect(stored).toContain('openBoardFile(req, [...sources.values()]);')
+    expect(stored).not.toMatch(/setFileChoices|fileChoices|boardHostChoices/)
+    expect(pane).not.toMatch(/PathSourceChooser|setFileChoices|fileChoices|cancelFileChoices|boardHostChoices|BoardResolvedSource/)
+    expect(fs.existsSync(path.join(WEB, 'components/common/PathSourceChooser.tsx')), 'the machine chooser is gone').toBe(false)
+    expect(fs.existsSync(path.join(WEB, 'utils/path-machine-memory.ts')), 'the remembered machine pick is gone').toBe(false)
     expect(read('components/inbox/LetterReader.tsx')).toContain('fileView.sourceOnly')
     // The sender's machine first, the other machines when it lacks the file: a letter relays evidence paths.
     expect(read('components/inbox/LetterView.tsx')).not.toContain('sourceOnly: true')
     expect(read('components/sessions/SessionPanel.tsx')).toContain('{ host: target.host, sourceOnly: target.sourceOnly }')
-    // The choice is bound to this document and these threads: a replaced page or thread list hides it.
-    expect(pane).toMatch(/\{fileChoices\?\.nonce === nonce && fileChoices\.ownerId === ownerId && fileChoices\.sourceKey === sourceKey && <PathSourceChooser/)
     // Owner, document and sources fence every open in the commit itself (a layout cleanup, never a passive
-    // effect), and clear the chooser in the same step; each open also checks the key it was made under.
+    // effect); each open also checks the key it was made under.
     expect(pane).toContain('const fileKey = JSON.stringify([ownerId, nonce, sourceKey]);')
-    expect(pane).toMatch(/useLayoutEffect\(\(\) => \{\s*fileKeyRef\.current = fileKey;\s*return \(\) => \{ fileSeq\.current\+\+; setFileChoices\(null\); \};\s*\}, \[fileKey\]\);/)
+    expect(pane).toMatch(/useLayoutEffect\(\(\) => \{\s*fileKeyRef\.current = fileKey;\s*return \(\) => \{ fileSeq\.current\+\+; \};\s*\}, \[fileKey\]\);/)
     expect(pane).not.toMatch(/useEffect\(\(\) => \(\) => \{ fileSeq/)
-    const use = pane.slice(pane.indexOf('<PathSourceChooser'), pane.indexOf('/>', pane.indexOf('<PathSourceChooser')))
-    // A pick only clears the choice (its open keeps the click's fence); Cancel outdates the reads.
-    expect(use).toMatch(/onPick=\{\(\) => setFileChoices\(null\)\}\s*onCancel=\{cancelFileChoices\}/)
-    expect(use).toContain('hosts={fileChoices.hosts}')
-    expect(pane).toContain('const cancelFileChoices = () => { fileSeq.current++; setFileChoices(null); };')
-    const chooser = read('components/common/PathSourceChooser.tsx')
-    const dialog = chooser.slice(chooser.indexOf('<ConfirmDialog'), chooser.indexOf('onCancel={onCancel}', chooser.indexOf('<ConfirmDialog')) + 'onCancel={onCancel}'.length)
-    expect(dialog).toContain('title="Choose the path\'s source"')
-    // Each button names its machine first; it clears the choice, then opens through the click that read the machines.
-    expect(dialog).toMatch(/onClick=\{\(\) => \{\s*const \{ open \} = pick;\s*onPick\(\);\s*open\(\);/)
-    expect(dialog).toContain("{`${hostLabel(pick.host || '__local__')}: ${pick.details.join('; ')}`}")
-    expect(dialog).not.toMatch(/sessionId|disabled/)
-    // While the machines are read the dialog says so and Cancel works.
-    expect(dialog).toContain('Finding the machine each one is on')
-    expect(dialog).toMatch(/onConfirm=\{onCancel\}\s*onCancel=\{onCancel\}/)
     expect(frame).toContain('var defineProperty = Object.defineProperty;')
     expect(frame).toContain('var createObject = Object.create;')
     expect(frame).toContain('var descriptor = createObject(null);')
@@ -359,8 +344,8 @@ describe('the Board frame (its own document, so it sends them up)', () => {
     // A known writer's machine is asked first, never alone (tests/web/source-only-callers.test.ts).
     expect(read('utils/agent-text-source.ts')).not.toMatch(/sourceOnly: (true|!)/)
     expect(read('components/common/AnywhereFileViewer.tsx')).toContain('req.sourceOnly')
-    expect(read('components/common/FileViewer.tsx')).toContain('const lookOnly = picked ? true : sourceOnly;')
-    expect(read('components/common/FileViewer.tsx')).toContain('{ host: lookHost, sourceOnly: lookOnly }')
+    // A person's own look-alone flag still reaches the viewer's lookup; the every-machine request is its own path.
+    expect(read('components/common/FileViewer.tsx')).toContain('{ host: askedHost, sourceOnly }')
     expect(frame).toContain('var messageSources = new WeakMap()')
     expect(frame).toContain('messageSources.get(node)')
     expect(frame).toContain("var msg = row.getAttribute('data-id') || ''")
@@ -372,52 +357,41 @@ describe('the Board frame (its own document, so it sends them up)', () => {
     expect(pane).not.toMatch(/str\('(host|taskId|task|sessionId|author)'\)[^\n]*openBoardFile/)
     // The only openFileAnywhere calls left are inside openBoardFile, behind its seq guard.
     const start = pane.indexOf('const openBoardFile = useCallback(')
-    const end = pane.indexOf('}, [store?.tasks, ownerId]); // eslint-disable-line', start)
+    const end = pane.indexOf('}, []);', start)
     expect(start).toBeGreaterThan(0)
     expect(end).toBeGreaterThan(start)
     const opener = pane.slice(start, end)
     const outside = (pane.slice(0, start) + pane.slice(end)).match(/openFileAnywhere\(/g) ?? []
     expect(outside, 'a bare openFileAnywhere outside openBoardFile').toEqual([])
-    expect(opener).toMatch(/openFromSource\(src, req, \{\s*lookup: \{ peek: peekSessionRecord, fetch: fetchSession \}/)
-    expect(opener).toMatch(/open: \(r\) => \{ if \(current\(\)\) openFileAnywhere\(r\); \}/)
+    // Several writers, a text that names no single writer, and a writer with no saved session all go
+    // to the every-machine lookup (the writing task first); none of them asks the person or the pane's session.
+    const everywhereAt = opener.indexOf('const everywhere = (why: string) => {')
+    expect(everywhereAt).toBeGreaterThan(0)
+    expect(opener).toContain('openFileAnywhere(anywhereRequest({ unknownSource: true, ...(taskOf ? { taskId: taskOf } : {}) }, req, hints));')
+    expect(opener).toContain(".map((s) => (s.primary ? '__local__' : s.sessionId ?? '')).filter(Boolean);")
+    expect(opener).toContain("if (!one) { everywhere('several writers'); return; }")
+    expect(opener).toContain("if (one.sourceFailure) { everywhere('the saved text names no single writer'); return; }")
     // A person's text was saved on the primary: it opens there and never borrows the pane's session.
-    const primaryAt = opener.indexOf("if (source.primary) { openVia({ host: '__local__' }); return; }")
-    expect(primaryAt).toBeGreaterThan(0)
-    // The stored session of the post comes next, with no task read.
-    const sessionAt = opener.indexOf('if (source.sessionId) { openVia({ sessionId: source.sessionId }); return; }')
+    const primaryAt = opener.indexOf("one.primary ? { host: '__local__' }")
+    expect(primaryAt).toBeGreaterThan(everywhereAt)
+    // The stored session of the post comes next; no saved session: every machine, never the task's session
+    // now nor the pane's (either may run elsewhere).
+    const sessionAt = opener.indexOf('one.sessionId ? { sessionId: one.sessionId } : null')
     expect(sessionAt).toBeGreaterThan(primaryAt)
-    // No saved session: unknown. Never the task's session now, nor the pane's: either may run elsewhere.
-    const noneAt = opener.indexOf('failed(NO_SAVED_SESSION);')
+    const noneAt = opener.indexOf("if (!src) { everywhere('no saved writing session'); return; }")
     expect(noneAt).toBeGreaterThan(sessionAt)
-    expect(opener).not.toMatch(/fetchTask\(|resolveTaskSessionId\(|\bsessionId \?|ownerId === taskId|store\?\.tasks\.find\(\(t\) => t\.id === s(?:ource)?\.taskId\)\s*\?\?/)
-    // Several sources: every one's machine is read on this click, fenced like one source; any machine
-    // that cannot be told fails the open; copies merged per host, one host opens there with no file probe.
-    const among = opener.slice(opener.indexOf('async function openAmong('))
-    expect(among.length).toBeGreaterThan(30)
-    expect(opener).toContain('if (Array.isArray(target)) { void openAmong(target, bind); return; }')
-    expect(among).toContain('if (!s.sessionId) throw new Error(NO_SAVED_SESSION);')
-    // Records this page already holds first, with no request: all known and one machine opens with no dialog.
-    const knownAt = among.indexOf('try { now = known(); }')
-    const pendingAt = among.indexOf('setFileChoices({ req, nonce: bind.nonce, ownerId, sourceKey: bind.sourceKey, hosts: null });')
-    const fetchAt = among.indexOf('peekSessionRecord(sid) ?? await fetchSession(sid)')
-    expect(among).toMatch(/const record = peekSessionRecord\(sidOf\(s\)\);\s*if \(!record\) return null;/)
-    expect(among).toContain('if (now) { offer(now); return; }')
-    expect(knownAt).toBeGreaterThan(0)
-    expect(pendingAt, 'the pending dialog only once some machine is unknown').toBeGreaterThan(knownAt)
-    expect(fetchAt, 'a session read only after the pending dialog shows').toBeGreaterThan(pendingAt)
-    expect(among).toContain("if (!record) throw new Error('session not found');")
-    expect(among.match(/if \(!current\(\)\) return;/g)?.length).toBe(2)
-    expect(among).toContain('const hosts = boardHostChoices(resolved);')
-    expect(among).toMatch(/if \(hosts\.length === 1\) \{[\s\S]{0,120}openVia\(\{ host: hosts\[0\]!\.host \}\);/)
-    expect(among).toContain('open: () => openVia({ host: h.host })')
-    expect(among).not.toMatch(/openFileAnywhere\(|files\/locate|fileExists/)
-    expect(opener).toContain("openFileAnywhere({ ...req, sourceFailure: BOARD_SOURCE_UNKNOWN, sourceReason: 'unrecorded' });")
+    expect(opener).not.toMatch(/fetchTask\(|resolveTaskSessionId\(|(?<![.\w])sessionId \?|ownerId === taskId|store\?\.tasks\.find\(\(t\) => t\.id === s(?:ource)?\.taskId\)\s*\?\?/)
+    expect(opener).not.toMatch(/sourceFailure: BOARD_SOURCE_UNKNOWN|sourceReason|retry|files\/locate|fileExists/)
+    // One source reads its machine through the shared opener, which falls back to every machine itself.
+    expect(opener).toMatch(/openFromSource\(src, req, \{\s*lookup: \{ peek: peekSessionRecord, fetch: fetchSession \}/)
+    expect(opener).toMatch(/open: \(r\) => \{ if \(current\(\)\) openFileAnywhere\(r\.anywhere && !r\.taskId \? \{ \.\.\.r, taskId: one\.taskId \} : r\); \},/)
+    expect(opener.match(/openFileAnywhere\(/g)?.length, 'only the every-machine call and the fenced one').toBe(2)
     // A replaced document cancels a lookup just as unmounting does: every check, async ones included, reads both.
     expect(opener).toContain('const key = fileKeyRef.current;')
     expect(opener).toContain('const current = () => mine === fileSeq.current && key === fileKeyRef.current;')
-    expect(opener.match(/const current = /g)?.length, 'one fence for the single and the several-source paths').toBe(1)
-    // A newer open also drops a source choice still on screen.
-    expect(pane).toMatch(/if \(d\.t\.startsWith\('wn-board:open-'\)[^\n]*\) \{ fileSeq\.current\+\+; setFileChoices\(null\); \}/)
+    expect(opener.match(/const current = /g)?.length, 'one fence for every path').toBe(1)
+    // A newer open outdates a path lookup still in flight.
+    expect(pane).toMatch(/if \(d\.t\.startsWith\('wn-board:open-'\) \|\| d\.t === 'wn-board:link-menu'\) fileSeq\.current\+\+;/)
   })
 })
 
@@ -425,25 +399,32 @@ describe('the Brief (its opener lives in useBriefFileOpener.tsx)', () => {
   const brief = read('components/org/OrgBrief.tsx')
   const opener = read('components/org/useBriefFileOpener.tsx')
 
-  it('OrgBrief opens its paths through the hook and draws its chooser', () => {
+  it('OrgBrief opens its paths through the hook, with no chooser of its own', () => {
     expect(brief).toMatch(/import \{[^}]*\buseBriefFileOpener\b[^}]*\} from '\.\/useBriefFileOpener'/)
-    expect(brief).toContain('const onFileOpen = useBriefFileOpener(owner?.id, text, textSources, tasks);')
+    expect(brief).toContain('const onFileOpen = useBriefFileOpener(owner?.id, text, textSources);')
     expect(brief).toContain('useEntityClickHandler(undefined, onFileOpen.open, undefined, undefined, true)')
-    expect(brief).toContain('{onFileOpen.dialog}')
+    expect(brief).not.toContain('onFileOpen.dialog')
     // No second opener in the view itself.
     expect(brief).not.toMatch(/openFileAnywhere\(|openFromSource\(|fetchSession\(/)
   })
 
-  it('the hook reads the committed letter, fences every open, and keeps a refused path\'s position', () => {
+  it('the hook reads the committed letter, fences every open, and sends unknown or several writers to every machine', () => {
     expect(opener).toMatch(/const latest = useCommittedRef\(shown\);/)
     expect(opener).not.toMatch(/^ {2}\w+\.current = /m)
-    expect(opener).toMatch(/useLayoutEffect\(\(\) => \{\s*setChoices\(null\);\s*return \(\) => \{ seq\.current\+\+; \};\s*\}, \[sourceKey\]\);/)
+    expect(opener).toMatch(/useLayoutEffect\(\(\) => \(\) => \{ seq\.current\+\+; \}, \[sourceKey\]\);/)
     expect(opener).toContain('const current = () => mine === seq.current && latest.current.sourceKey === key;')
     expect(opener.match(/const current = /g)?.length).toBe(1)
-    expect(opener).toMatch(/if \(current\(\)\) \{\s*openFileAnywhere\(\{\s*\.\.\.req, sourceFailure: sourceFailureText\(reason\), sourceReason: reason,/)
-    expect(opener).toMatch(/open: \(r\) => \{ if \(current\(\)\) openFileAnywhere\(r\); \}/)
-    expect(opener.match(/openFileAnywhere\(/g)?.length, 'only the two fenced calls').toBe(2)
-    expect(opener).toMatch(/<PathSourceChooser[\s\S]*?onPick=\{\(\) => setChoices\(null\)\}\s*onCancel=\{cancel\}/)
-    expect(opener).toContain('const cancel = () => { seq.current++; setChoices(null); };')
+    // One recorded writer: its machine first, through the shared opener, behind the fence.
+    expect(opener).toContain('if (only && !writerTextSource(only).unknownSource) {')
+    expect(opener).toMatch(/open: \(r\) => \{ if \(current\(\)\) openFileAnywhere\(r\.anywhere && taskId && !r\.taskId \? \{ \.\.\.r, taskId \} : r\); \},/)
+    // No recorded writer or several: every machine, the first writing task's (else the owner's) first.
+    expect(opener).toContain("const writerTask = writers.map((w) => (w.by.startsWith('task:') ? w.by.slice(5) : '')).find(Boolean);")
+    expect(opener).toContain('openFileAnywhere(anywhereRequest({ unknownSource: true, ...((writerTask || taskId) ? { taskId: writerTask || taskId } : {}) }, req, hints));')
+    expect(opener).toContain("const hints = writers.map((w) => (w.by === 'human' ? '__local__' : w.sessionId ?? '')).filter(Boolean);")
+    expect(opener.match(/openFileAnywhere\(/g)?.length, 'only the two calls: the fenced one and the every-machine one').toBe(2)
+    // Never a question to the person: no chooser, no dialog, no per-task list, and the hook returns only `open`.
+    expect(opener).not.toMatch(/PathSourceChooser|ConfirmDialog|setChoices|sourceFailure|sourceReason|boardHostChoices|\bdialog\b/)
+    expect(opener).toContain('return { open };')
+    expect(fs.existsSync(path.join(WEB, 'components/common/PathSourceChooser.tsx')), 'the machine chooser is gone').toBe(false)
   })
 })

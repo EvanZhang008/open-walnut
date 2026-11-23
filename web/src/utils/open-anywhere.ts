@@ -20,7 +20,6 @@
  * `onClick={e => e.stopPropagation()}`) cannot swallow the click, and decides
  * after the dispatch, when every surface has had its turn.
  */
-import type { SourceFailReason } from '@/utils/agent-text-source';
 import { useEffect } from 'react';
 import { locatePath } from '@/api/files';
 import { isPopoutPath } from '@/popout/openPopout';
@@ -37,11 +36,13 @@ export interface OpenFileRequest {
   endLine?: number;
   host?: string;
   sourceOnly?: boolean;
-  sourceFailure?: string;
-  /** Why the machine is unknown (`sourceFailure` is its words): a pick answers all but a failed lookup. */
-  sourceReason?: SourceFailReason;
-  /** A failed lookup only: opens the same path again, so the viewer can offer a retry. */
-  retry?: () => void;
+  /** The writer's machine is unknown: every machine is asked and the file opens from the one that
+   *  has it (files-locate.ts `anywhere`); never a question to the person. */
+  anywhere?: boolean;
+  /** With `anywhere`: the task the words belong to, whose machines are asked first. */
+  taskId?: string;
+  /** With `anywhere`: the sessions that wrote the words ('__local__' the person), asked first of all. */
+  hintSessions?: string[];
 }
 
 export function openFileAnywhere(req: OpenFileRequest): void {

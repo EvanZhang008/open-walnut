@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AGENT_REF_CHANNEL, openAgentRef, parseAgentRef } from '@/utils/agent-ref-open';
 import { randomId } from '@/utils/random-id';
+import { openFileAnywhere } from '@/utils/open-anywhere';
 
 export const OPEN_REF_PATIENCE_MS = 2500;
 
@@ -19,6 +20,14 @@ export function OpenAgentRefPage() {
     const timer = setTimeout(() => setWaitedLong(true), OPEN_REF_PATIENCE_MS);
     return () => clearTimeout(timer);
   }, [expiredFile]);
+  // The source document did not answer (closed or reloaded): one press looks the file up on every
+  // machine, instead of waiting on it (2026-11-23, Evan: "Why walnut not auto pic the host"). A press,
+  // never by itself: a link in a page must not open a file the person did not ask for.
+  const openAnywhere = () => {
+    if (!parsed || parsed.ref.kind !== 'file') return;
+    const { path, line, endLine } = parsed.ref;
+    openFileAnywhere({ path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}), anywhere: true });
+  };
   useEffect(() => { if (parsed) window.history.replaceState(window.history.state, '', '/open-ref'); }, [parsed]);
   useEffect(() => {
     if (!confirmed || !parsed || expiredFile) return;
@@ -52,9 +61,10 @@ export function OpenAgentRefPage() {
     {!parsed ? <p>This reference is not valid.</p> : <>
       <p>{parsed.ref.kind === 'file' ? parsed.ref.path : parsed.ref.id}</p>
       {!opened && (expiredFile
-        ? <p role="status">{waitedLong
-          ? 'Waiting for the source document. If it was closed or reloaded, reopen it and click the path again. Walnut will not guess which machine holds this file.'
-          : 'Opening in Walnut…'}</p>
+        ? (waitedLong
+          ? <><p role="status">The source document did not answer. Open looks for this file on every machine.</p>
+            <button type="button" onClick={openAnywhere}>Open</button></>
+          : <p role="status">Opening in Walnut…</p>)
         : <button type="button" onClick={() => setConfirmed(true)}>Open</button>)}
     </>}
   </main>;

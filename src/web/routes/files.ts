@@ -409,18 +409,14 @@ filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextF
 })
 
 /**
- * GET /api/files/locate?ref=&cwd=&host=&sessionId= -> LocateResult
+ * GET /api/files/locate?ref=&cwd=&host=&sessionId=[&anywhere=1&taskId=] -> LocateResult
  *
  * Where a clicked path lives, on the session's host or any other (files-locate.ts).
  */
 filesRouter.get('/locate', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { locateClickedPath } = await import('./files-locate.js')
-    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
-    res.json(await locateClickedPath({
-      ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId),
-      sourceOnly: req.query.sourceOnly === '1',
-    }))
+    const { locateClickedPath, locateRequestOf } = await import('./files-locate.js')
+    res.json(await locateClickedPath(locateRequestOf(req.query)))
   } catch (err) {
     if (err instanceof FilesOpError) {
       res.status(err.statusCode).json({ error: err.message })

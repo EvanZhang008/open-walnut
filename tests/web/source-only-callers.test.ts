@@ -40,7 +40,7 @@ const settersIn = (text: string): string[] =>
 
 /** Each file that may set it, and why. */
 const ALLOWED: Record<string, string> = {
-  'web/src/components/common/FileViewer.tsx': 'a machine the person picked for an unknown writer is looked up alone (`picked ? true`)',
+  'web/src/api/files.ts': 'the request itself: sends the caller\'s flag, and leaves an every-machine lookup out when a machine was named alone',
   'web/src/components/common/AnywhereFileViewer.tsx': 'passes a request\'s own flag to the viewer',
   'web/src/components/inbox/LetterReader.tsx': 'passes a letter target\'s own flag to the viewer',
   'web/src/components/sessions/SessionPanel.tsx': 'passes a letter target\'s own flag to the lookup',

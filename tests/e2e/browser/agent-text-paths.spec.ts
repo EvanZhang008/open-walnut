@@ -3,7 +3,7 @@ import { test, expect, type BrowserContext, type Locator, type Page } from '@pla
 import { discoverBrowserFixture } from './codex-test-audit';
 import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video';
 import { press as click } from './real-press';
-import { closeLinkedLetter, dragSelect, openSessionBoard, showPointer, tabTo } from './agent-text-entry-helpers';
+import { closeLinkedLetter, dragSelect, expectNoMachineChoice, openSessionBoard, showPointer, tabTo } from './agent-text-entry-helpers';
 import { leadForPage } from './board-view-helpers';
 import { sessionComposer } from './session-composer';
 
@@ -360,7 +360,7 @@ test('Board page and stored posts use the same file and letter links after typin
     const frame = page.frameLocator('.task-board-frame');
     for (const [link, wanted] of [[frame.locator('p a[data-walnut-ref="file"]').first(), picture], [frame.getByRole('link', { name: 'Source lines' }), document], [frame.locator('walnut-thread a.file-link').first(), picture]] as const) {
       await click(page, link);
-      await expect(page.getByRole('dialog', { name: "Choose the path's source", exact: true })).toHaveCount(0);
+      await expectNoMachineChoice(page);
       const viewer = page.locator('.file-viewer-overlay');
       await expect(viewer).toBeVisible({ timeout: 30_000 });
       if (wanted === picture) await expectImage(page);
@@ -417,15 +417,24 @@ test('a tokenless reference never opens a file without an explicit user click', 
   await closeFile(page);
 });
 
-test('an expired document file reference asks for its source again and never reads a guessed copy', async ({ page }) => {
+test('an expired document file reference opens nothing by itself; one press on Open looks the file up on every machine', async ({ page }) => {
   const files: string[] = [];
   page.on('request', (req) => { if (/\/api\/(?:files\/|file-content|file-raw|local-image)/.test(req.url())) files.push(req.url()); });
   await page.setContent(`<a href="${base}/open-ref#token=0123456789abcdef0123456789abcdef&kind=file&path=${encodeURIComponent(document)}">Open old reference</a>`);
   await click(page, page.getByRole('link', { name: 'Open old reference', exact: true }));
-  await expect(page.getByRole('status').filter({ hasText: 'Waiting for the source document' })).toContainText('reopen it and click the path again');
-  await expect(page.getByRole('button', { name: 'Open', exact: true })).toHaveCount(0);
+  const status = page.getByRole('status').filter({ hasText: 'The source document did not answer' });
+  await expect(status).toContainText('Open looks for this file on every machine');
+  await expect(page.getByRole('button', { name: 'Open', exact: true })).toBeVisible();
+  // A link in a page never opens a file by itself: nothing was read before the press.
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0);
   expect(files).toEqual([]);
+  await click(page, page.getByRole('button', { name: 'Open', exact: true }));
+  await expect(page.locator('.file-viewer-overlay .cm-content')).toContainText('Line two', { timeout: 30_000 });
+  await expectNoMachineChoice(page);
+  const locates = files.map((u) => new URL(u)).filter((u) => u.pathname === '/api/files/locate');
+  expect(locates.length, 'the press asked every machine').toBeGreaterThan(0);
+  expect(locates.every((u) => u.searchParams.get('anywhere') === '1' && !u.searchParams.has('host') && !u.searchParams.has('sourceOnly'))).toBe(true);
+  await closeFile(page);
 });
 
 test.afterEach(async ({ page, context }, info) => {

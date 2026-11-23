@@ -106,7 +106,7 @@ export function OrgBrief({ owner, tasks, name, now, folded, fresh, updating }: P
   useLayoutEffect(() => {
     if (bodyRef.current) applyBriefMoves(bodyRef.current, moves, added);
   }, [html, moves, added]);
-  const onFileOpen = useBriefFileOpener(owner?.id, text, textSources, tasks);
+  const onFileOpen = useBriefFileOpener(owner?.id, text, textSources);
   const onClick = useEntityClickHandler(undefined, onFileOpen.open, undefined, undefined, true);
 
   if (!brief?.text || !html) {
@@ -125,7 +125,6 @@ export function OrgBrief({ owner, tasks, name, now, folded, fresh, updating }: P
         {updating && <span className="org-brief-updating" data-testid="org-brief-updating"> · Updating…</span>}
       </div>
       <div ref={bodyRef} className="org-brief-body markdown-body" data-testid="org-brief-body" onClick={onClick} dangerouslySetInnerHTML={html} />
-      {onFileOpen.dialog}
     </div>
   );
 }

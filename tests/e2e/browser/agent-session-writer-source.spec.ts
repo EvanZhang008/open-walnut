@@ -27,7 +27,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
-import { AGENT_TEXT_BASE as base, click, closeFile, openApp, openTaskSession, showPointer, tabTo, taskWithReply } from './agent-text-entry-helpers'
+import { AGENT_TEXT_BASE as base, click, closeFile, expectNoMachineChoice, openApp, openTaskSession, showPointer, tabTo, taskWithReply } from './agent-text-entry-helpers'
 import { CONT_ASK, addEarlierAsks, openAsk } from './ask-chat-earlier-helpers'
 import { EARLIER_CONT_SESSION } from './chat-earlier-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'
@@ -68,20 +68,20 @@ test.beforeAll(async () => {
 // ── The remote host's answers, and what the page asked for ──
 
 const FILE_API = /^\/api\/(?:file-content$|file-raw\/|local-image$|files\/(?:locate|list|list-many|exists)$)/
-type Touch = { api: string; host: string; path: string }
+type Touch = { api: string; host: string; path: string; anywhere: boolean; named: boolean }
 
 function touchOf(req: Request): Touch | null {
   const url = new URL(req.url())
   if (!FILE_API.test(url.pathname)) return null
   if (url.pathname.startsWith('/api/file-raw/')) {
     const [, , , host, ...rest] = url.pathname.split('/')
-    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/') }
+    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), anywhere: false, named: true }
   }
   let body: { paths?: string[]; host?: string } = {}
   if (req.method() === 'POST') { try { body = req.postDataJSON() ?? {} } catch { /* not JSON */ } }
   const q = url.searchParams
   const p = q.get('ref') ?? q.get('path') ?? body.paths?.find((x) => x === DOC || x === SHOT || x === path.dirname(DOC)) ?? ''
-  return { api: url.pathname.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: p }
+  return { api: url.pathname.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: p, anywhere: q.get('anywhere') === '1', named: q.has('host') || !!body.host }
 }
 
 const ours = (t: Touch) => t.path === DOC || t.path === SHOT || t.path === path.dirname(DOC)
@@ -131,6 +131,8 @@ interface Net {
   remote(api?: string): string[]
   /** File reads other than pictures (the person's own picture in the fixture loads from here by design). */
   reads(): string[]
+  /** The locate requests for a seeded path, in order. */
+  locates(): Touch[]
   errors: string[]
 }
 
@@ -153,6 +155,7 @@ async function watchNet(page: Page): Promise<Net> {
     primary: (api) => touches().filter((t) => LOCAL.has(t.host) && (!api || t.api === api)).map(line),
     remote: (api) => touches().filter((t) => t.host === REMOTE && (!api || t.api === api)).map(line),
     reads: () => touches().filter((t) => t.api !== 'local-image').map(line),
+    locates: () => touches().filter((t) => t.api === 'files/locate'),
   }
 }
 
@@ -222,12 +225,20 @@ async function expectPrimaryText(page: Page, viewer: Locator = page.locator('.fi
   await expect(viewer.locator('.cm-content')).not.toContainText('Remote')
 }
 
-/** Nothing is read anywhere, and the viewer says the writer was not recorded. */
-async function expectRefused(page: Page): Promise<void> {
-  const failure = page.getByTestId('file-viewer-source-error')
-  await expect(failure).toBeVisible({ timeout: 20_000 })
-  await expect(failure).toContainText('No file was read')
-  await settle(page)
+/**
+ * A press on words whose writer is unknown: Walnut asks every machine itself (`anywhere`, no host
+ * named), opens the file where it is found (this machine's copy in the fixture), and never shows a
+ * machine to pick. The remote host is not asked for it.
+ */
+async function pressUnknownWriter(page: Page, link: Locator): Promise<void> {
+  const before = { locates: net.locates().length, remote: net.remote().length }
+  await click(page, link)
+  await expectPrimaryText(page)
+  await expectNoMachineChoice(page)
+  const locates = net.locates().slice(before.locates)
+  expect(locates.length, 'the press asked every machine').toBeGreaterThan(0)
+  expect(locates.every((t) => t.anywhere && !t.named), 'anywhere, no machine named').toBe(true)
+  expect(net.remote().slice(before.remote), 'the remote host was not asked for it').toEqual([])
   await page.keyboard.press('Escape')
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
 }
@@ -273,7 +284,7 @@ async function openTool(page: Page, panel: Locator, run: string, name: string): 
 
 // ── Tests ──
 
-test('(1) a remote peer\'s note opens and draws on its saved host; a sender Walnut cannot name reads nothing', async ({ page }) => {
+test('(1) a remote peer\'s note opens and draws on its saved host; a sender Walnut cannot name is looked up on every machine', async ({ page }) => {
   const panel = await openFixture(page)
   const card = await openCard(page, panel, 'WS_PEER_REMOTE note')
   const body = card.locator('.provenance-body')
@@ -290,13 +301,10 @@ test('(1) a remote peer\'s note opens and draws on its saved host; a sender Waln
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   expect(net.primary('file-content'), 'nothing of the remote note was read on this machine').toEqual([])
 
-  // Claude Code's own delivery names no session and no host: no picture, and a press reads nothing.
-  const before = net.reads().length
+  // Claude Code's own delivery names no session and no host: no picture, and a press asks every machine.
   const unknown = await openCard(page, panel, 'Unknown notes')
   await expect(pictures(unknown)).toHaveCount(0)
-  await click(page, docLink(unknown.locator('.provenance-body')))
-  await expectRefused(page)
-  expect(net.reads().slice(before), 'zero bytes read for an unknown writer').toEqual([])
+  await pressUnknownWriter(page, docLink(unknown.locator('.provenance-body')))
 })
 
 test('(2) this session\'s own send opens its words on this machine, never on its remote target', async ({ page }) => {
@@ -344,7 +352,7 @@ test('(3) a task\'s earlier session draws and opens its rows on that session\'s 
   await expect(block.locator('img[src*="local-image"]:not([src*="host="])')).toHaveCount(0)
 })
 
-test('(4) an injected skill dump has no writer: no picture, and a press reads nothing', async ({ page }) => {
+test('(4) an injected skill dump has no writer: no picture, and a press asks every machine, never the person', async ({ page }) => {
   const panel = await openFixture(page)
   // The skill line's own row, not the "Received 1 message" fold around it.
   const skill = runRow(panel, 'Loaded skill ws-source')
@@ -353,10 +361,7 @@ test('(4) an injected skill dump has no writer: no picture, and a press reads no
   const row = skill.body
   await expect(row.getByText('WS_INJECTED')).toBeVisible()
   await expect(pictures(row)).toHaveCount(0)
-  const before = net.reads().length
-  await click(page, docLink(row))
-  await expectRefused(page)
-  expect(net.reads().slice(before), 'zero bytes read').toEqual([])
+  await pressUnknownWriter(page, docLink(row))
 })
 
 test('(5) a remote session\'s own reply, tool output and Read picture draw from its host', async ({ page }) => {
@@ -513,18 +518,16 @@ test('(9) a plan inherited from a remote writer draws nothing from this machine 
   expect(net.primary('file-content'), 'nothing of the inherited plan was read on this machine').toEqual([])
 })
 
-test('(10) a plan whose writer Walnut no longer knows reads no file at all', async ({ page }) => {
+test('(10) a plan whose writer Walnut no longer knows draws no picture and opens its files from whichever machine has them', async ({ page }) => {
   await inheritPlan(page, 'pw-ws-missing-plan-writer')
   const panel = await openFixture(page)
   const card = await planCard(page, panel, 'WS_INHERITED_PLAN')
   await expect(pictures(card)).toHaveCount(0)
-  await click(page, docLink(card))
-  await expectRefused(page)
+  await pressUnknownWriter(page, docLink(card))
   const popover = await openPopover(page, card)
   await expect(pictures(popover)).toHaveCount(0)
-  await click(page, docLink(popover))
-  await expect(page.getByTestId('file-viewer-source-error')).toBeVisible({ timeout: 20_000 })
-  expect(net.reads(), 'zero file reads on either host').toEqual([])
+  await pressUnknownWriter(page, docLink(popover))
+  expect(net.remote(), 'the remote host was never asked').toEqual([])
 })
 
 // ── A reply while it streams and once it lands; a phone chat's earlier rows ──
@@ -587,7 +590,7 @@ test('(11) a remote session\'s reply draws its picture from the same host while 
   }
 })
 
-test('(12) a phone chat\'s earlier row names no writer: no picture, no read, and a press asks which machine', async ({ page }) => {
+test('(12) a phone chat\'s earlier row names no writer: no picture, no read before a press, and a press finds the file itself', async ({ page }) => {
   await page.route((url) => url.pathname === `/api/v1/sessions/${EARLIER_CONT_SESSION}/chat-earlier`, async (route) => {
     const res = await route.fetch()
     const body = (await res.json()) as { messages?: unknown[] }
@@ -604,19 +607,7 @@ test('(12) a phone chat\'s earlier row names no writer: no picture, no read, and
   expect(net.primary(), 'nothing loaded or probed on this machine before a press').toEqual([])
   expect(net.remote(), 'nor on the remote host').toEqual([])
 
-  await click(page, docLink(row))
-  const failure = page.getByTestId('file-viewer-source-error')
-  await expect(failure).toBeVisible({ timeout: 20_000 })
-  await expect(failure).toContainText('No file was read')
-  const choice = page.getByTestId('file-source-choice')
-  await expect(choice).toBeVisible()
-  await settle(page)
-  expect(net.reads(), 'zero reads before a machine is picked').toEqual([])
-  await page.screenshot({ path: `${SHOTS}/12-choose-machine.png` })
-
-  // The person names this machine: only then is it read, and nothing is asked of the other host.
-  await click(page, choice.getByTestId('file-source-local'))
-  await expectPrimaryText(page)
-  await closeFile(page)
-  expect(net.remote(), 'only the picked machine was asked').toEqual([])
+  await pressUnknownWriter(page, docLink(row))
+  await page.screenshot({ path: `${SHOTS}/12-opened-without-choosing.png` })
+  expect(net.remote(), 'the remote host was never asked').toEqual([])
 })

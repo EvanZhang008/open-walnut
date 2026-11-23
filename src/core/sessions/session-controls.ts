@@ -1586,14 +1586,11 @@ export async function handleSessionControlRelay(
       }
       case 'server.files.locate': {
         // Where a clicked path lives, on any of the primary's hosts (files-locate.ts).
-        const [{ locateClickedPath }, { FilesOpError }] = await Promise.all([
+        const [{ locateClickedPath, locateRequestOf }, { FilesOpError }] = await Promise.all([
           import('../../web/routes/files-locate.js'), import('../../web/routes/files.js'),
         ]);
-        const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
         try {
-          result = await locateClickedPath({
-            ref: p.ref, cwd: str(p.cwd), host: str(p.host), sessionId: str(p.sessionId), sourceOnly: p.sourceOnly === true,
-          }) as unknown as Record<string, unknown>;
+          result = await locateClickedPath(locateRequestOf(p)) as unknown as Record<string, unknown>;
         } catch (err) {
           if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
           throw err;

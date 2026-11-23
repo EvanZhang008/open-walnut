@@ -16,7 +16,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
 import {
-  AGENT_TEXT_BASE as base, click, closeFile, expectAskShownOnce, openApp, rowAsk, sessionColumn, setReport, showPointer, tabTo, taskWithReply,
+  AGENT_TEXT_BASE as base, click, closeFile, expectAskShownOnce, expectNoMachineChoice, openApp, rowAsk, sessionColumn, setReport, showPointer, tabTo, taskWithReply,
 } from './agent-text-entry-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { LS_PANEL_DESIGN_KEY } from './status-section-helpers'
@@ -103,7 +103,7 @@ test.afterAll(async ({ request }) => {
 
 // ── The remote host's answers, the session read's timing, and what the page asked ──
 
-type Touch = { api: string; host: string; path: string; method: string }
+type Touch = { api: string; host: string; path: string; method: string; anywhere: boolean; named: boolean; taskId: string | null }
 
 class Gate {
   mode: 'pass' | 'down' | 'hold' = 'pass'
@@ -122,13 +122,13 @@ function touchOf(req: Request): Touch | null {
   if (!FILE_API.test(api)) return null
   if (api.startsWith('/api/file-raw/')) {
     const [, , , host, ...rest] = api.split('/')
-    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method() }
+    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method(), anywhere: false, named: true, taskId: null }
   }
   let body: { paths?: string[]; host?: string } = {}
   if (req.method() === 'POST') { try { body = req.postDataJSON() ?? {} } catch { /* not JSON */ } }
   const q = url.searchParams
   const target = q.get('ref') ?? q.get('path') ?? body.paths?.find((p) => p === doc || p === dir) ?? ''
-  return { api: api.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method() }
+  return { api: api.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method(), anywhere: q.get('anywhere') === '1', named: q.has('host') || !!body.host, taskId: q.get('taskId') }
 }
 
 const ours = (t: Touch) => t.path === doc || t.path === dir
@@ -177,6 +177,8 @@ interface Net {
   /** Every file request for the seeded path, either host. */
   files(): string[]
   remote(): string[]
+  /** The locate requests for the seeded path, in order. */
+  locates(): Touch[]
   writes: string[]
   errors: string[]
 }
@@ -205,6 +207,7 @@ async function watchNet(page: Page): Promise<Net> {
     primary: () => touches().filter((t) => LOCAL.has(t.host)).map(line),
     files: () => touches().map(line),
     remote: () => touches().filter((t) => t.host === REMOTE).map(line),
+    locates: () => touches().filter((t) => t.api === 'files/locate'),
   }
 }
 
@@ -379,74 +382,56 @@ test('a person\'s ask opens on the primary with no session read, though the task
   expect(net.remote(), 'nothing was asked of the remote host').toEqual([])
 })
 
-test('an ask whose writer Walnut did not record opens nothing on any host and says the source was not recorded', async ({ page }) => {
+/** The press asked every machine itself: anywhere, no machine named, and read this machine's copy where the fixture holds it. */
+function expectAskedAnywhere(since: number): Touch[] {
+  const locates = net.locates().slice(since)
+  expect(locates.length, 'the press asked every machine').toBeGreaterThan(0)
+  expect(locates.every((t) => t.anywhere && !t.named), 'anywhere, no machine named').toBe(true)
+  return locates
+}
+
+test('an ask whose writer Walnut did not record opens where Walnut finds the file, with no machine to pick and no notice', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.unknownNeeds)
   await expectAskShownOnce(panel, card, ids.unknownNeeds)
   const link = needsLink(panel, 'unknownNeeds')
   for (const press of ['pointer', 'Enter'] as const) {
+    const since = net.locates().length
     if (press === 'pointer') await click(page, link)
     else {
       await tabTo(page, page.locator('.todo-search-input'), link)
       await page.keyboard.press('Enter')
     }
-    const failure = page.getByTestId('file-viewer-source-error')
-    await expect(failure).toBeVisible({ timeout: 20_000 })
-    await expect(failure).toContainText('did not record which session wrote')
-    await expect(failure).toContainText('No file was read')
-    await expect(failure).not.toContainText(/unavailable|retry|try again/i)
-    await expect(failure).toHaveAttribute('role', 'status')
-    await expect(page.getByTestId('file-viewer-source-retry')).toHaveCount(0)
-    await settle(page)
+    await expectPrimaryText(page)
+    await expectNoMachineChoice(page)
+    expectAskedAnywhere(since)
     await page.keyboard.press('Escape')
     await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   }
   await rowUntouched(page, 'unknownNeeds')
   expect(net.lookups(), 'no session was read, the task\'s own included').toBe(0)
-  expect(net.files(), 'nothing was looked up or read on either host').toEqual([])
+  expect(net.remote(), 'nothing was asked of the remote host').toEqual([])
 })
 
-test('a session read that fails reads no file and offers a retry; after closing, the next press opens the writer\'s host', async ({ page }) => {
+test('a session read that fails opens the path where Walnut finds it, never a notice; once the session answers, the next press opens the writer\'s host', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.remoteNeeds)
   await expectAskShownOnce(panel, card, ids.remoteNeeds)
   net.gate.mode = 'down'
   await click(page, needsLink(panel, 'remoteNeeds'))
-  const failure = page.getByTestId('file-viewer-source-error')
-  await expect(failure).toBeVisible({ timeout: 20_000 })
-  await expect(failure).toContainText("Couldn't open the path")
-  await expect(failure).toContainText('No file was read')
-  await expect(failure).toContainText('try again')
-  await expect(failure).toHaveAttribute('role', 'alert')
-  await expect(page.getByTestId('file-viewer-source-retry')).toBeVisible()
-  await settle(page)
+  await expectPrimaryText(page)
+  await expectNoMachineChoice(page)
   expect(net.lookups()).toBe(1)
-  expect(net.files(), 'nothing was looked up or read on either host').toEqual([])
-  await page.keyboard.press('Escape')
-  await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
+  const asked = expectAskedAnywhere(0)
+  expect(asked.every((t) => !t.named), 'no machine was named while the writer was unreadable').toBe(true)
+  expect(net.remote(), 'nothing was asked of the remote host while its session was unreadable').toEqual([])
+  await closeFile(page)
 
   net.gate.mode = 'pass'
   await click(page, needsLink(panel, 'remoteNeeds'))
   await expectRemoteText(page)
   await closeFile(page)
   expect(net.lookups()).toBe(2)
-  expect(net.primary()).toEqual([])
-})
-
-test('Try again after a failed session read opens the writer\'s host with no second press on the link', async ({ page }) => {
-  const panel = await homeWithStatusLines(page)
-  const card = await sectionCard(page, panel, 'needs', ids.remoteNeeds)
-  await expectAskShownOnce(panel, card, ids.remoteNeeds)
-  net.gate.mode = 'down'
-  await click(page, needsLink(panel, 'remoteNeeds'))
-  await expect(page.getByTestId('file-viewer-source-error')).toBeVisible({ timeout: 20_000 })
-  expect(net.files(), 'nothing was read before the retry').toEqual([])
-  net.gate.mode = 'pass'
-  await click(page, page.getByTestId('file-viewer-source-retry'))
-  await expectRemoteText(page)
-  expect(net.lookups()).toBe(2)
-  expect(net.primary()).toEqual([])
-  await closeFile(page)
 })
 
 test('a session read still out when a person rewrites the ask opens nothing late; the new words open on the primary', async ({ page, request }) => {

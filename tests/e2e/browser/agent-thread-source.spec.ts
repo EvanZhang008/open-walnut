@@ -9,7 +9,8 @@
 //     host's copy on the first press, reading nothing here and no session record;
 //  2. in one conversation: an answer read from the remote session (its picture loads from that host,
 //     its path opens there), an answer kept before writers were recorded (no picture loads anywhere,
-//     its path opens nowhere and says why, no file read on either host), and the user's own words
+//     its path is looked up on every machine and opens where found, never asking which machine,
+//     and no picture loads before the press), and the user's own words
 //     with the same path and picture (his picture and his path are this machine's);
 //  3. no page error, no file write on either host.
 //
@@ -26,7 +27,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type APIRequestContext, type Locator, type Page, type Request, type Route } from '@playwright/test'
-import { AGENT_TEXT_BASE as base, click, closeFile, openApp, showPointer } from './agent-text-entry-helpers'
+import { AGENT_TEXT_BASE as base, click, closeFile, expectNoMachineChoice, openApp, showPointer } from './agent-text-entry-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
@@ -149,7 +150,7 @@ test.afterAll(async ({ request }) => {
 
 const FILE_API = /^\/api\/(?:file-content$|file-raw\/|local-image$|files\/(?:locate|list|list-many|exists)$)/
 const LOCAL = new Set(['', 'local', '__local__'])
-type Touch = { api: string; host: string; path: string; method: string }
+type Touch = { api: string; host: string; path: string; method: string; anywhere: boolean; named: boolean }
 
 function touchOf(req: Request): Touch | null {
   const url = new URL(req.url())
@@ -157,13 +158,13 @@ function touchOf(req: Request): Touch | null {
   if (!FILE_API.test(api)) return null
   if (api.startsWith('/api/file-raw/')) {
     const [, , , host, ...rest] = api.split('/')
-    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method() }
+    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method(), anywhere: false, named: true }
   }
   let body: { paths?: string[]; host?: string } = {}
   if (req.method() === 'POST') { try { body = req.postDataJSON() ?? {} } catch { /* not JSON */ } }
   const q = url.searchParams
   const target = q.get('ref') ?? q.get('path') ?? body.paths?.find((p) => p === doc || p === picture || p === dir) ?? ''
-  return { api: api.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method() }
+  return { api: api.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method(), anywhere: q.get('anywhere') === '1', named: q.has('host') || !!body.host }
 }
 
 const ours = (t: Touch) => t.path === doc || t.path === picture || t.path === dir
@@ -214,6 +215,8 @@ interface Net {
   files(): string[]
   /** The same, on this machine, less inline pictures: what a press opened or looked up here. */
   opens(): string[]
+  /** The locate requests for the seeded paths, in order. */
+  locates(): Touch[]
   lookups(): number
   writes: string[]
   errors: string[]
@@ -232,6 +235,7 @@ async function watchNet(page: Page): Promise<Net> {
     writes, errors,
     files: () => touches().map(line),
     opens: () => touches().filter((t) => LOCAL.has(t.host) && t.api !== 'local-image').map(line),
+    locates: () => touches().filter((t) => t.api === 'files/locate'),
     lookups: () => seen.filter((r) => r.method() === 'GET' && new URL(r.url()).pathname === `/api/sessions/${REMOTE_SID}`).length,
   }
 }
@@ -290,7 +294,7 @@ async function settle(page: Page): Promise<void> {
 
 // ── Tests ──
 
-test('an unknown Brief relative link reads no file or session before the source is chosen', async ({ page }) => {
+test('an unknown Brief relative link reads no session, asks no machine to pick, and says it cannot know whose folder it is in', async ({ page }) => {
   await openThreads(page)
   await click(page, page.getByTestId('org-top-brief'))
   const link = page.getByTestId('org-brief-body').locator('a.file-link').filter({ hasText: 'Relative notes' })
@@ -304,7 +308,8 @@ test('an unknown Brief relative link reads no file or session before the source 
   const reads: string[] = []
   page.on('request', (req) => {
     const url = new URL(req.url())
-    if (FILE_API.test(url.pathname)) reads.push(req.url())
+    // The press itself asks the server once (anywhere); any other file route is a read of some machine.
+    if (FILE_API.test(url.pathname) && !(url.pathname === '/api/files/locate' && url.searchParams.get('anywhere') === '1' && !url.searchParams.has('host'))) reads.push(req.url())
     if (!url.pathname.startsWith('/api/sessions/')) return
     // The page polls its session lists on its own clock (status and git batches, model catalogs): those name no
     // writer. A read of one other session's record or history, which is what a guess would make, is caught.
@@ -312,10 +317,13 @@ test('an unknown Brief relative link reads no file or session before the source 
     if (req.method() !== 'GET' || (!ownChat(url.pathname) && !list)) reads.push(req.url())
   })
   await click(page, link)
-  await expect(page.getByTestId('file-viewer-source-error')).toContainText('No file was read')
+  const missing = page.getByTestId('file-viewer-missing')
+  await expect(missing).toContainText('it is a relative path', { timeout: 20_000 })
+  await expect(missing).toContainText('does not know which session')
+  await expectNoMachineChoice(page)
   await expect(page.locator('.file-viewer-line')).toHaveText(':2')
   await settle(page)
-  expect(reads, 'no writer or path was guessed').toEqual([])
+  expect(reads, 'no writer or path was guessed, no machine read').toEqual([])
   await closeFile(page)
 })
 
@@ -333,7 +341,7 @@ test('a summary the remote session wrote opens on its host on the first press, a
   expect(net.files().some((f) => f.includes(`file-content host=${REMOTE} ${doc}`))).toBe(true)
 })
 
-test('in one conversation each block opens from its own writer: the remote answer there, the unrecorded one nowhere, his words here', async ({ page }) => {
+test('in one conversation each block opens from its own writer: the remote answer there, the unrecorded one wherever Walnut finds it, his words here', async ({ page }) => {
   const list = await openThreads(page)
   const talk = card(list, ids.talk)
   await expect(talk).toBeVisible({ timeout: 20_000 })
@@ -363,13 +371,18 @@ test('in one conversation each block opens from its own writer: the remote answe
   await closeFile(page)
   expect(net.opens(), 'the remote answer read nothing here').toEqual([])
 
-  // The unrecorded answer's path: nothing read on either host, and the viewer says why.
-  const before = net.files().length
+  // The unrecorded answer's path: every machine is asked, none named, and the file opens where it is found
+  // (this machine's copy here); the person is never asked which machine.
+  const before = net.locates().length
+  const remoteBefore = net.files().filter((f) => f.includes(`host=${REMOTE}`)).length
   await click(page, docIn(unrecorded))
   const viewer = page.locator('.file-viewer-overlay')
-  await expect(viewer).toContainText('did not record which session wrote these words', { timeout: 20_000 })
-  await settle(page)
-  expect(net.files().slice(before), 'no machine was guessed').toEqual([])
+  await expectViewerText(page, 'Primary line two', 'Remote')
+  await expectNoMachineChoice(page)
+  const asked = net.locates().slice(before)
+  expect(asked.length, 'the press asked every machine').toBeGreaterThan(0)
+  expect(asked.every((t) => t.anywhere && !t.named), 'anywhere, no machine named').toBe(true)
+  expect(net.files().filter((f) => f.includes(`host=${REMOTE}`)), 'the remote host was not asked for it').toHaveLength(remoteBefore)
   await page.keyboard.press('Escape')
   await expect(viewer).toHaveCount(0)
 

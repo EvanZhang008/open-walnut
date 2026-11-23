@@ -3,14 +3,15 @@
  *
  * An absolute path with no host opens on this machine first, so a remote session's `/home/me/a.ts`
  * opened a same-named file here. The source's host is asked first now: a known host, else the
- * session record read on the click only, and a session that cannot be read opens nothing. When the
+ * session record read on the click only. A writer Walnut did not record, or a session that cannot be
+ * read, is looked up on every machine (`anywhere`), never a question to the person. When the
  * writer's machine lacks the file, the user's other machines answer (2026-11-11: a VP relayed a
  * worker's video on another Mac, and its thread card read "Couldn't find … on Local").
  */
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { locatePath } from '../../web/src/api/files'
 import type { Task } from '@open-walnut/core'
-import { openFromSource, renderContextOf, renderCwdOf, sourceFailureText, sourceHostOf, sourceSessionId, type SessionHostLookup } from '../../web/src/utils/agent-text-source'
+import { openFromSource, renderContextOf, renderCwdOf, sourceHostOf, sourceSessionId, type SessionHostLookup } from '../../web/src/utils/agent-text-source'
 
 const task = (over: Partial<Task>): Task => ({ id: 't1', title: 'T', session_ids: [], ...over } as unknown as Task)
 const REQ = { path: '/home/me/src/a.ts', line: 3 }
@@ -48,7 +49,7 @@ describe('source-bound locate requests', () => {
 function deps(lookup: Partial<SessionHostLookup> = {}) {
   const peek = vi.fn(lookup.peek ?? (() => null))
   const fetch = vi.fn(lookup.fetch ?? (async () => null))
-  return { lookup: { peek, fetch }, open: vi.fn(), fail: vi.fn() }
+  return { lookup: { peek, fetch }, open: vi.fn() }
 }
 
 describe('where a path in agent text opens', () => {
@@ -62,28 +63,26 @@ describe('where a path in agent text opens', () => {
     }
   })
 
-  it('an external writer with no host opens nowhere; an explicitly recorded primary still opens there', async () => {
+  it('an external writer with no host is looked up everywhere; an explicitly recorded primary still opens there', async () => {
     const src = { sessionId: 'external' }
     const d = deps()
     expect(sourceHostOf(src)).toEqual({ kind: 'unknown' })
     expect(renderContextOf(src, d.lookup.peek)).toEqual({ images: false })
     await openFromSource(src, REQ, d)
-    expect(d.open).not.toHaveBeenCalled()
-    expect(d.fail).toHaveBeenCalledOnce()
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, anywhere: true })
     expect(d.lookup.fetch).not.toHaveBeenCalled()
     const local = deps()
     await openFromSource({ ...src, host: 'local' }, REQ, local)
     expect(local.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined })
   })
 
-  it('a task without a writing session opens no guessed machine and draws no image', async () => {
+  it('a task without a writing session guesses no machine: every machine is asked, its task first, and no image draws', async () => {
     const src = { task: task({}) }
     const d = deps()
     expect(sourceHostOf(src)).toEqual({ kind: 'unknown' })
     expect(renderContextOf(src, d.lookup.peek)).toEqual({ images: false })
     await openFromSource(src, REQ, d)
-    expect(d.open).not.toHaveBeenCalled()
-    expect(d.fail).toHaveBeenCalledOnce()
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, anywhere: true, taskId: 't1' })
     expect(d.lookup.fetch).not.toHaveBeenCalled()
   })
 
@@ -137,16 +136,19 @@ describe('where a path in agent text opens', () => {
     expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined })
   })
 
-  it('a session that cannot be read opens nothing on this machine and says so', async () => {
+  it('a session that cannot be read or is gone is looked up on every machine, never this one first', async () => {
     const failed = deps({ fetch: async () => { throw new Error('timeout') } })
     await openFromSource({ sessionId: 's1' }, REQ, failed)
-    expect(failed.open).not.toHaveBeenCalled()
-    expect(failed.fail).toHaveBeenCalledExactlyOnceWith({ sessionId: 's1', path: REQ.path, error: 'timeout', reason: 'lookup' })
+    expect(failed.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, anywhere: true })
 
     const gone = deps({ fetch: async () => null })
     await openFromSource({ task: task({ session_id: 's1' }) }, REQ, gone)
-    expect(gone.open).not.toHaveBeenCalled()
-    expect(gone.fail).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 's1', reason: 'gone' }))
+    expect(gone.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, anywhere: true, taskId: 't1' })
+
+    // An explicit taskId wins over the source's task; a host or look-alone flag never rides along.
+    const own = deps({ fetch: async () => null })
+    await openFromSource({ sessionId: 's1', taskId: 't9', task: task({}) }, { ...REQ, host: 'devbox', sourceOnly: true }, own)
+    expect(own.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, anywhere: true, taskId: 't9' })
   })
 
   it('reading the source for render asks nothing; relative paths render only with a known host', () => {
@@ -189,28 +191,24 @@ describe('a source whose writer Walnut did not record', () => {
     expect(peek).not.toHaveBeenCalled()
   })
 
-  it('opens neither an absolute nor a relative path, with no lookup and no source-less open', async () => {
+  it('looks up an absolute and a relative path on every machine, with no lookup and no source-less open', async () => {
     for (const path of ['/home/me/src/a.ts', 'src/a.ts']) {
       const d = deps({ fetch: async () => ({ host: 'devbox' }) })
       await openFromSource({ ...UNREC, task: task({ session_id: 's-new' }) }, { path }, d)
-      expect(d.open).not.toHaveBeenCalled()
+      expect(d.open).toHaveBeenCalledExactlyOnceWith({ path, anywhere: true, taskId: 't1' })
       expect(d.lookup.peek).not.toHaveBeenCalled()
       expect(d.lookup.fetch).not.toHaveBeenCalled()
-      expect(d.fail).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ path, reason: 'unrecorded' }))
     }
+    // With no task at all: still every machine, and no taskId to put first.
+    const d = deps()
+    await openFromSource(UNREC, { path: '/a/b.ts', line: 2, endLine: 4 }, d)
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ path: '/a/b.ts', line: 2, endLine: 4, anywhere: true })
   })
 
-  it('says the source was not recorded and nothing was read, never that a session is briefly away', () => {
-    const unrec = sourceFailureText('unrecorded')
-    expect(unrec).toMatch(/did not record which session wrote/)
-    expect(unrec).toContain('No file was read')
-    expect(unrec).not.toMatch(/unavailable|retry|again/i)
-    // Only a lookup that failed this time offers a retry.
-    expect(sourceFailureText('lookup')).toMatch(/try again/)
-    expect(sourceFailureText('lookup')).toContain('No file was read')
-    for (const r of ['no-session', 'gone'] as const) {
-      expect(sourceFailureText(r)).toContain('No file was read')
-      expect(sourceFailureText(r)).not.toMatch(/try again|retry/)
+  it('never asks the person to pick a machine: the failure vocabulary is gone', async () => {
+    const mod = await import('../../web/src/utils/agent-text-source')
+    for (const name of ['sourceFailureText', 'sourceFailReasonOfUnknown', 'sourceFailureNeedsPick']) {
+      expect(name in mod).toBe(false)
     }
   })
 })

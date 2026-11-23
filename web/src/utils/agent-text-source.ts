@@ -6,8 +6,11 @@
  * (useClickedPathOpener), so a remote session's `/home/me/a.ts` opened a same-named
  * file here instead. The source's host decides: a host the surface already knows
  * wins; else the session's record is read once, on the click (never on mount, no
- * cache of our own); a surface with no source opens as before. A session whose
- * record cannot be read never falls back to this machine: the caller says so.
+ * cache of our own); a surface with no source opens as before. Words whose writer is
+ * unknown (not recorded, a session gone or unreadable) are looked up on every machine
+ * (`anywhere`, files-locate.ts), the task they belong to first, and open from the one
+ * that has the file: the person is never asked to pick a machine (2026-11-23, Evan:
+ * "Why walnut not auto pic the host it need me to pick").
  */
 import type { Task } from '@open-walnut/core';
 import type { OpenFileRequest } from './open-anywhere';
@@ -23,9 +26,11 @@ export interface AgentTextSource {
   sessionId?: string;
   /** Its working directory, used to draw relative paths only when the host is known too. */
   cwd?: string;
-  /** Walnut did not record who wrote the words: they open nowhere and draw no picture, rather than
-   *  on a machine guessed from the task's current session (which may not be the writer). */
+  /** Walnut did not record who wrote the words: a path is looked up on every machine and no picture
+   *  loads by itself, rather than on a machine guessed from the task's current session. */
   unknownSource?: boolean;
+  /** The task the words belong to when their writer is unknown: its machines are asked first. */
+  taskId?: string;
 }
 
 const LOCAL_HOSTS = new Set(['', '__local__', 'local']);
@@ -116,50 +121,30 @@ export interface SessionHostLookup {
   fetch: (sessionId: string) => Promise<{ host?: string } | null>;
 }
 
-/** Why a path was not opened: the writer was never recorded, the task has no session, the
- *  session is gone, or reading it failed this time (the only one a retry may fix). */
-export type SourceFailReason = 'unrecorded' | 'no-session' | 'gone' | 'lookup';
-
-export function sourceFailReasonOfUnknown(src: AgentTextSource | undefined): SourceFailReason {
-  return src?.unknownSource || src?.sessionId === 'external' ? 'unrecorded' : 'no-session';
-}
-
-/** Every reason but a failed lookup is answered by naming a machine; only a failed lookup is retried. */
-export function sourceFailureNeedsPick(reason: SourceFailReason): boolean {
-  return reason !== 'lookup';
-}
-
-/** The preview's words for a path that was not opened. A reason answered by naming a machine reads
- *  as the question it is, not as a fault; only a failed lookup is an error, and it offers a retry. */
-export function sourceFailureText(reason: SourceFailReason): string {
-  switch (reason) {
-    case 'unrecorded':
-      return 'Walnut did not record which session wrote these words, so it will not guess which machine has this file. No file was read yet.';
-    case 'no-session':
-      return 'The task that wrote these words has no session that tells Walnut its machine, so it will not guess which machine has this file. No file was read yet.';
-    case 'gone':
-      return 'The session that wrote these words is no longer known to Walnut, so it will not guess which machine has this file. No file was read yet.';
-    case 'lookup':
-      return "Couldn't open the path: its source session could not be read just now, so Walnut cannot tell which machine it is on. No file was read. You can try again.";
-  }
+/**
+ * The request for a path whose writer's machine is unknown: every machine is asked, the
+ * task the words belong to first (its id, or the task directory the path is in).
+ */
+export function anywhereRequest(src: AgentTextSource | undefined, req: OpenFileRequest, hintSessions: readonly string[] = []): OpenFileRequest {
+  const taskId = src?.taskId || src?.task?.id;
+  const hints = [...new Set(hintSessions.filter(Boolean))];
+  // No machine of its own: a host or a look-alone flag would turn it back into a named machine.
+  const rest: OpenFileRequest = { ...req };
+  delete rest.host;
+  delete rest.sourceOnly;
+  return { ...rest, anywhere: true, ...(taskId ? { taskId } : {}), ...(hints.length ? { hintSessions: hints } : {}) };
 }
 
 export interface SourceOpenDeps {
   lookup: SessionHostLookup;
   open: (req: OpenFileRequest) => void;
-  /** The host could not be told: nothing was opened. */
-  fail: (info: { sessionId: string; path: string; error: string; reason: SourceFailReason }) => void;
 }
 
 /** Open `req` (no host of its own) from the source's host first, reading the session on this click only. */
 export async function openFromSource(src: AgentTextSource | undefined, req: OpenFileRequest, deps: SourceOpenDeps): Promise<void> {
   const s = sourceHostOf(src);
   if (s.kind === 'none') { deps.open(req); return; }
-  if (s.kind === 'unknown') {
-    const reason = sourceFailReasonOfUnknown(src);
-    deps.fail({ sessionId: '', path: req.path, error: reason === 'unrecorded' ? 'The writer of these words was not recorded.' : 'The source task has no writing session.', reason });
-    return;
-  }
+  if (s.kind === 'unknown') { deps.open(anywhereRequest(src, req)); return; }
   // The writer's machine is asked first and wins when it has the file; when it does not, the user's
   // other machines are asked, never this machine first (files-locate.ts). No `sourceOnly`: a lead
   // or Main relays a worker's evidence path, which lives on the worker's machine, not the writer's
@@ -168,14 +153,10 @@ export async function openFromSource(src: AgentTextSource | undefined, req: Open
   if (s.kind === 'host') { deps.open({ ...req, host: s.host }); return; }
   let record = deps.lookup.peek(s.sessionId);
   if (!record) {
-    try {
-      record = await deps.lookup.fetch(s.sessionId);
-    } catch (err) {
-      deps.fail({ sessionId: s.sessionId, path: req.path, error: err instanceof Error ? err.message : String(err), reason: 'lookup' });
-      return;
-    }
+    // A session gone or unreadable now names no machine: every machine is asked instead.
+    try { record = await deps.lookup.fetch(s.sessionId); } catch { record = null; }
   }
-  if (!record) { deps.fail({ sessionId: s.sessionId, path: req.path, error: 'session not found', reason: 'gone' }); return; }
+  if (!record) { deps.open(anywhereRequest(src, req)); return; }
   const host = record.host && !LOCAL_HOSTS.has(record.host) ? record.host : undefined;
   deps.open({ ...req, host });
 }
@@ -196,6 +177,12 @@ const lineSource = (l: { by: string; sessionId?: string }): AgentTextSource => (
  */
 export function taskTextSource(task: Task | null | undefined, field: TaskTextField): AgentTextSource {
   if (!task) return UNKNOWN;
+  const src = recordedTaskTextSource(task, field);
+  // An unknown writer still names its task: a path is looked up on that task's machines first.
+  return src.unknownSource ? { ...src, taskId: task.id } : src;
+}
+
+function recordedTaskTextSource(task: Task, field: TaskTextField): AgentTextSource {
   // An older server's payload lacks the writer fields: those words read unknown.
   const t = task;
   const us = t.user_status;

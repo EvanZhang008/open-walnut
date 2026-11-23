@@ -557,6 +557,8 @@ export interface LocateResponse {
   missing?: boolean;
   /** The hosts asked, by the names a person knows them (session's first). */
   checked?: string[];
+  /** `anywhere` only: hosts that could not answer now (the file may be there). */
+  unreachable?: string[];
   via?: string;
   line?: number;
   column?: number;
@@ -570,7 +572,7 @@ export interface LocateResponse {
  */
 export async function locatePath(
   ref: string,
-  ctx: { host?: string; cwd?: string; sessionId?: string; sourceOnly?: boolean } = {},
+  ctx: { host?: string; cwd?: string; sessionId?: string; sourceOnly?: boolean; anywhere?: boolean; taskId?: string; hintSessions?: readonly string[] } = {},
 ): Promise<LocateResponse> {
   const host = ctx.host && !['__local__', 'local'].includes(ctx.host) ? ctx.host : undefined;
   const params = new URLSearchParams({ ref });
@@ -578,6 +580,12 @@ export async function locatePath(
   if (ctx.cwd) params.set('cwd', ctx.cwd);
   if (ctx.sessionId) params.set('sessionId', ctx.sessionId);
   if (ctx.sourceOnly) params.set('sourceOnly', '1');
+  // The writer's machine is unknown: every machine is asked, the task's first (files-locate.ts).
+  if (ctx.anywhere && !host && !ctx.sourceOnly) {
+    params.set('anywhere', '1');
+    if (ctx.taskId) params.set('taskId', ctx.taskId);
+    if (ctx.hintSessions?.length) params.set('hintSessions', ctx.hintSessions.join(','));
+  }
   try {
     const res = await fetch(`/api/files/locate?${params}`);
     if (res.ok) {

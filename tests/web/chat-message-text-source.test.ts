@@ -7,12 +7,13 @@
  * from this machine, and a click opened a local FileViewer of its own on this machine's file. The
  * class is "every slot of a chat row that draws agent text": each takes the row's writer
  * (`textSource`, unknown when absent, never the route's target session) through
- * useAgentFileOpener, so an unknown writer reads no file and loads no picture until a machine is
- * chosen, and a writer the surface names opens and draws there.
+ * useAgentFileOpener, so an unknown writer reads no file and loads no picture, and its paths are looked up on
+ * every machine, and a writer the surface names opens and draws there.
  *
  * Fails when:
  *  - a mounted chat row loads a picture or reads a session record for an unknown writer, or a
- *    click on one of its paths opens anything but the shared "choose a machine" viewer;
+ *    click on one of its paths opens anything but the shared every-machine lookup
+ *    (`anywhere`, never a question to the person);
  *  - a named writer's pictures or clicks go to another machine than its own;
  *  - tool results lose their task, session or letter links;
  *  - ChatMessage.tsx draws a renderer slot without the writer's render context, clicks through
@@ -132,19 +133,19 @@ const toolResult = (el: Element) => [...el.querySelectorAll('.chat-tool-block-se
   .querySelector('.chat-tool-block-result')!
 
 describe('a chat row with no recorded writer', () => {
-  it('draws pictures as links, reads no record, and a click opens only the choose-a-machine viewer', async () => {
+  it('draws pictures as links, reads no record, and a click looks the path up on every machine', async () => {
     const el = await mount(blocksReply)
     expect(localImages(el)).toEqual([])
     expect(el.querySelector('a.letter-link[data-letter-id="lt-mvx2abcd-9f3k"]')).not.toBeNull()
     await click(fileLink(el, '/home/me/src/app.ts'))
     expect(opened).toHaveLength(1)
     expect(opened[0]).toMatchObject({ path: '/home/me/src/app.ts' })
-    expect(String(opened[0]!.sourceFailure)).toContain('No file was read')
+    expect(opened[0]).toMatchObject({ anywhere: true })
     expect(opened[0]!.host).toBeUndefined()
-    // The picture that did not load is a link, and refuses the same way.
+    // The picture that did not load is a link, and looks up the same way.
     await click(fileLink(el, '/home/me/shots/run.png'))
     expect(opened).toHaveLength(2)
-    expect(String(opened[1]!.sourceFailure)).toContain('No file was read')
+    expect(opened[1]).toMatchObject({ anywhere: true })
 
     await openTool(el)
     const result = toolResult(el)
@@ -156,15 +157,15 @@ describe('a chat row with no recorded writer', () => {
     parentClick.mockClear()
     await click(fileLink(result, '/home/me/shots/out.png'))
     expect(opened).toHaveLength(3)
-    expect(String(opened[2]!.sourceFailure)).toContain('No file was read')
+    expect(opened[2]).toMatchObject({ anywhere: true })
     // The result's handler took the click: the row around it does not open it a second time.
     expect(parentClick).not.toHaveBeenCalled()
 
-    // A relative path from an unknown writer is refused as written: no lookup on any host.
+    // A relative path from an unknown writer goes as written to the every-machine lookup: no session read.
     await click(el.querySelector('a.file-link[data-rel-path="src/app.ts"]'))
     expect(opened).toHaveLength(4)
     expect(opened[3]).toMatchObject({ path: 'src/app.ts' })
-    expect(String(opened[3]!.sourceFailure)).toContain('No file was read')
+    expect(opened[3]).toMatchObject({ anywhere: true })
 
     expect(h.peek).not.toHaveBeenCalled()
     expect(h.fetch).not.toHaveBeenCalled()
@@ -175,7 +176,7 @@ describe('a chat row with no recorded writer', () => {
     const el = await mount({ ...blocksReply, routeInfo: { direction: 'sent', event: 'session:send', sessionId: 'sid-target' } })
     expect(localImages(el)).toEqual([])
     await click(fileLink(el, '/home/me/src/app.ts'))
-    expect(String(opened[0]!.sourceFailure)).toContain('No file was read')
+    expect(opened[0]).toMatchObject({ anywhere: true })
     expect(h.peek).not.toHaveBeenCalled()
     expect(h.fetch).not.toHaveBeenCalled()
   })
@@ -199,7 +200,7 @@ describe('a chat row with no recorded writer', () => {
     const before = opened.length
     await click(fileLink(el, '/home/me/src/app.ts'))
     expect(opened).toHaveLength(before + 1)
-    expect(String(opened.at(-1)!.sourceFailure)).toContain('No file was read')
+    expect(opened.at(-1)).toMatchObject({ anywhere: true })
     expect(h.fetch).not.toHaveBeenCalled()
   })
 
@@ -222,7 +223,7 @@ describe('the task context attached to a message', () => {
     conversation_log: `### Session 1\n${pad(15)}\n### Session 2\nWrote /home/me/ctx/log-final.ts and /home/me/ctx/log.png`,
   }
 
-  it('shows each body whole, as links from no known machine: no picture, no read, and a click offers the choice', async () => {
+  it('shows each body whole, as links from no known machine: no picture, no read, and a click looks it up everywhere', async () => {
     const el = await mount({ role: 'user', content: 'Please look', timestamp: T, taskContext: ctx })
     await click(el.querySelector('.chat-task-context-toggle'))
     expect(el.textContent).not.toContain('[truncated]')
@@ -234,7 +235,7 @@ describe('the task context attached to a message', () => {
       await click(fileLink(el, p))
       expect(opened, p).toHaveLength(before + 1)
       expect(opened.at(-1), p).toMatchObject({ path: p })
-      expect(String(opened.at(-1)!.sourceFailure), p).toContain('No file was read')
+      expect(opened.at(-1), p).toMatchObject({ anywhere: true })
       expect(opened.at(-1)!.host, p).toBeUndefined()
     }
     expect(h.peek).not.toHaveBeenCalled()
@@ -260,7 +261,7 @@ describe('a chat row whose writer the surface names', () => {
     expect(opened.at(-1)).toMatchObject({ path: '/home/me/src/app.ts', host: 'devbox' })
     // The writer's machine first, the other machines when it lacks the file: never looked up alone.
     expect(opened.at(-1)!.sourceOnly).toBeUndefined()
-    expect(opened.at(-1)!.sourceFailure).toBeUndefined()
+    expect(opened.at(-1)!.anywhere).toBeUndefined()
     expect(h.fetch).not.toHaveBeenCalled()
   })
 

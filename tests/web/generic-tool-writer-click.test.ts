@@ -1,6 +1,6 @@
 /**
  * A tool card's result opens its paths through ONE handler with the tool writer's source: no host
- * and no session refuse with no read; a known host opens there once; the caller's opener keeps the
+ * and no session look the path up on every machine with no session read; a known host opens there once; the caller's opener keeps the
  * line; the row's handler around the card never opens the same click again.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -83,14 +83,15 @@ async function press(el: Element | null): Promise<void> {
 const fileLink = (el: Element) => el.querySelector(`.chat-tool-block-result a.file-link[data-file-path="${ABS}"]`)
 
 describe('a tool result opens with its writer', () => {
-  it('no host and no session: the path is refused with no read, a relative path is no link, a letter reads nothing', async () => {
+  it('no host and no session: the path is looked up everywhere with no session read, a relative path is no link, a letter reads nothing', async () => {
     let row = 0
     const el = await mount({}, () => { row++ })
     expect(el.querySelector('.chat-tool-block-result a.file-link[data-rel-path]'), 'a relative path with no writer is no link').toBeNull()
     await press(fileLink(el))
     expect(opened).toHaveLength(1)
     expect(opened[0]).toMatchObject({ path: ABS })
-    expect(String(opened[0]!.sourceFailure ?? '')).toContain('No file was read')
+    expect(opened[0]).toMatchObject({ anywhere: true })
+    expect(opened[0]!.host).toBeUndefined()
     expect(row, 'the row handler never took the path click').toBe(0)
     const rel = doc.createElement('a')
     rel.className = 'file-link'
@@ -101,7 +102,7 @@ describe('a tool result opens with its writer', () => {
     await press(rel)
     expect(opened).toHaveLength(2)
     expect(opened[1]).toMatchObject({ path: 'src/rel/file.ts' })
-    expect(String(opened[1]!.sourceFailure ?? '')).toContain('No file was read')
+    expect(opened[1]).toMatchObject({ anywhere: true })
     expect(row).toBe(0)
     await press(el.querySelector('.chat-tool-block-result a.letter-link'))
     expect(fileReads, 'zero file network for any of them').toEqual([])

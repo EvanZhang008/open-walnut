@@ -1,10 +1,10 @@
 /**
  * useBriefFileOpener (web/src/components/org/useBriefFileOpener.tsx), mounted: a path in the Brief
  * opens on the machine of whoever wrote it, read on the click only, and a lookup that answers late
- * opens nothing once the chooser was cancelled, the view unmounted, a newer click came, or the
- * letter or its sources changed (changed and back included). A newer task list only renames the
- * writers in the chooser. A render React never committed (a suspended transition) names no writer
- * and no label. An unrecorded writer opens no file and reads no session, keeping the position.
+ * opens nothing once the view unmounted, a newer click came, or the letter or its sources changed
+ * (changed and back included). A writer Walnut did not record, or writers on several machines, are
+ * never a question to the person: the path is looked up on every machine, the writing task's first
+ * (else the Brief owner's), keeping the position. A render React never committed names no writer.
  *
  * Real React over a linkedom document, as tests/web/agent-file-opener-lifetime.test.ts does. The
  * path-to-writers map (org-brief-sources.ts, tested on its own) is stubbed per letter and path.
@@ -30,14 +30,6 @@ vi.mock('@/utils/open-anywhere', () => ({ openFileAnywhere: h.openFileAnywhere, 
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 vi.mock('@/utils/markdown', () => ({ renderMarkdownWithRefs: (text: string) => text }))
 vi.mock('@/hooks/useEntityLabels', () => ({ useEntityLabelsVersion: () => 0 }))
-vi.mock('@/hooks/useHostDisplayLabel', () => ({ useHostDisplayLabels: () => (host: string) => `machine ${host}` }))
-vi.mock('@/components/common/ConfirmDialog', async () => {
-  const react = await import('../../web/node_modules/react/index.js')
-  return {
-    ConfirmDialog: ({ message, onCancel }: { message: unknown; onCancel: () => void }) => react.createElement('div', { 'data-testid': 'chooser' },
-      message as never, react.createElement('button', { type: 'button', 'data-testid': 'chooser-cancel', onClick: onCancel }, 'Cancel')),
-  }
-})
 vi.mock('../../web/src/components/org/org-brief-sources', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../web/src/components/org/org-brief-sources')>()),
   briefPathBlocks: () => null,
@@ -49,18 +41,16 @@ const { OrgBrief } = await import('../../web/src/components/org/OrgBrief')
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
 
 type Open = (path: string, line?: number, term?: undefined, endLine?: number) => void
-interface P { text: string; sources?: unknown; tasks: readonly Task[]; suspend?: boolean }
+interface P { text: string; sources?: unknown; suspend?: boolean }
 const never = new Promise<never>(() => {})
 let open: Open | null = null
 function Probe(p: P) {
-  const opener = useBriefFileOpener('owner-task-0001', p.text, p.sources ?? null, p.tasks)
+  const opener = useBriefFileOpener('owner-task-0001', p.text, p.sources ?? null)
   open = opener.open
   if (p.suspend) throw never
-  return opener.dialog
+  return null
 }
 
-const task = (id: string, title: string) => ({ id, title }) as Task
-const TASKS = [task('t1', 'Old one'), task('t2', 'Second')]
 const ONE = '/srv/one.ts'
 const TWO = '/srv/two.ts'
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
@@ -110,7 +100,7 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
   })
 
   it('mounting reads nothing; the click reads the writer\'s session once and opens on its machine', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     expect(h.fetchSession).not.toHaveBeenCalled()
     open!(ONE, 3)
     expect(h.fetchSession).toHaveBeenCalledExactlyOnceWith('s1')
@@ -118,22 +108,18 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: ONE, line: 3, host: 'devbox' })
   })
 
-  it('Cancel on the pending chooser outdates its reads: their late answers open nothing', async () => {
-    await mount({ text: 'A', tasks: TASKS })
-    open!(TWO)
+  it('writers on several machines are never a question: every machine is asked at once, the first writing task first', async () => {
+    await mount({ text: 'A' })
+    open!(TWO, 5)
     await flush()
-    expect(q('chooser')).toHaveLength(1)
-    expect(q('org-brief-file-source')).toHaveLength(0)
-    await click(q('chooser-cancel')[0]!)
-    expect(q('chooser')).toHaveLength(0)
-    await answer(0, 'devbox')
-    await answer(1, 'gpubox')
-    expect(h.openFileAnywhere).not.toHaveBeenCalled()
-    expect(q('chooser')).toHaveLength(0)
+    expect(h.fetchSession).not.toHaveBeenCalled()
+    expect(h.peekSessionRecord).not.toHaveBeenCalled()
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: TWO, line: 5, anywhere: true, taskId: 't1', hintSessions: ['s1', 's2'] })
+    expect(doc.body.textContent).toBe('')
   })
 
   it('an answer after unmount opens nothing', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     open!(ONE)
     await act(async () => { root!.unmount() })
     root = null
@@ -142,26 +128,26 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
   })
 
   it('an answer after the letter changed opens nothing', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     open!(ONE)
-    await rerender({ text: 'B', tasks: TASKS })
+    await rerender({ text: 'B' })
     await answer(0, 'devbox')
     expect(h.openFileAnywhere).not.toHaveBeenCalled()
   })
 
   it('an answer after the letter\'s sources changed opens nothing', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     open!(ONE)
-    await rerender({ text: 'A', sources: [{ start: 0, end: 1, by: 'human' }], tasks: TASKS })
+    await rerender({ text: 'A', sources: [{ start: 0, end: 1, by: 'human' }] })
     await answer(0, 'devbox')
     expect(h.openFileAnywhere).not.toHaveBeenCalled()
   })
 
   it('a letter that changed and came back (A, B, A) still outdates the click made on the first A', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     open!(ONE)
-    await rerender({ text: 'B', tasks: TASKS })
-    await rerender({ text: 'A', tasks: TASKS })
+    await rerender({ text: 'B' })
+    await rerender({ text: 'A' })
     await answer(0, 'devbox')
     expect(h.openFileAnywhere).not.toHaveBeenCalled()
     open!(ONE)
@@ -169,21 +155,16 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: ONE, host: 'devbox' })
   })
 
-  it('a replaced letter never restores its old chooser when the same letter returns', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+  it('a click on a path with several writers outdates a single-writer lookup still in flight', async () => {
+    await mount({ text: 'A' })
+    open!(ONE)
     open!(TWO)
     await answer(0, 'devbox')
-    await answer(1, 'gpubox')
-    expect(q('org-brief-file-source')).toHaveLength(2)
-    await rerender({ text: 'B', tasks: TASKS })
-    expect(q('chooser')).toHaveLength(0)
-    await rerender({ text: 'A', tasks: TASKS })
-    expect(q('chooser')).toHaveLength(0)
-    expect(h.openFileAnywhere).not.toHaveBeenCalled()
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: TWO, anywhere: true, taskId: 't1', hintSessions: ['s1', 's2'] })
   })
 
   it('of two clicks only the newer opens, whichever answers first', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     h.writers.set(`A|/srv/b.ts`, [{ by: 'task:t2', sessionId: 's2' }])
     open!(ONE)
     open!('/srv/b.ts')
@@ -192,21 +173,8 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/srv/b.ts', host: 'gpubox' })
   })
 
-  it('a newer task list of the same letter only renames the writers; the pick opens on its machine', async () => {
-    await mount({ text: 'A', tasks: TASKS })
-    open!(TWO, 7)
-    await rerender({ text: 'A', tasks: [task('t1', 'New one'), task('t2', 'Second')] })
-    await answer(0, 'devbox')
-    await answer(1, 'gpubox')
-    const picks = q('org-brief-file-source')
-    expect(picks.map((b) => b.textContent)).toEqual(['machine devbox: Words of New one', 'machine gpubox: Words of Second'])
-    await click(picks[0]!)
-    expect(q('chooser')).toHaveLength(0)
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: TWO, line: 7, host: 'devbox' })
-  })
-
   it('the mounted Brief sends raw relative links to its writer opener before any path lookup', async () => {
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     const text = '<a class="file-link" data-rel-path="src/notes.ts" data-cwd="/forged" data-file-line="4" data-file-end-line="9">Notes</a>'
     const owner = { id: 'owner-task-0001', brief: { text, at: new Date().toISOString() } } as Task
     await act(async () => {
@@ -221,34 +189,37 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     expect(h.fetchSession).not.toHaveBeenCalled()
     expect(h.peekSessionRecord).not.toHaveBeenCalled()
     expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({
-      path: 'src/notes.ts', line: 4, endLine: 9, sourceFailure: expect.stringContaining('No file was read'), sourceReason: 'unrecorded',
+      path: 'src/notes.ts', line: 4, endLine: 9, anywhere: true, taskId: 'owner-task-0001',
     })
   })
 
-  it('an unrecorded writer opens no file and reads no session, keeping the line and the range', async () => {
+  it('an unrecorded writer reads no session and asks every machine, keeping the line and the range', async () => {
     h.writers.set(`A|/srv/unknown.ts`, [{ by: 'task:t1' }, { by: 'task:t2', sessionId: 's2' }])
-    await mount({ text: 'A', tasks: TASKS })
+    h.writers.set(`A|/srv/lone.ts`, [{ by: 'task:t3' }])
+    await mount({ text: 'A' })
     open!('/srv/unknown.ts', 4, undefined, 9)
+    open!('/srv/lone.ts')
     open!('/srv/nowhere.ts', 2)
     expect(h.fetchSession).not.toHaveBeenCalled()
     expect(h.peekSessionRecord).not.toHaveBeenCalled()
     expect(h.openFileAnywhere.mock.calls).toEqual([
-      [{ path: '/srv/unknown.ts', line: 4, endLine: 9, sourceFailure: expect.stringContaining('No file was read'), sourceReason: 'unrecorded' }],
-      [{ path: '/srv/nowhere.ts', line: 2, sourceFailure: expect.stringContaining('No file was read'), sourceReason: 'unrecorded' }],
+      // The writer whose session was recorded is still a hint, asked first.
+      [{ path: '/srv/unknown.ts', line: 4, endLine: 9, anywhere: true, taskId: 't1', hintSessions: ['s2'] }],
+      [{ path: '/srv/lone.ts', anywhere: true, taskId: 't3' }],
+      // No writer found at all: the Brief owner's task is the hint.
+      [{ path: '/srv/nowhere.ts', line: 2, anywhere: true, taskId: 'owner-task-0001' }],
     ])
-    expect(q('chooser')).toHaveLength(0)
   })
 
-  it('a render React never committed names no writer and no label', async () => {
+  it('a render React never committed names no writer', async () => {
     h.writers.set(`C|${TWO}`, [{ by: 'task:t3', sessionId: 's3' }, { by: 'task:t4', sessionId: 's4' }])
-    await mount({ text: 'A', tasks: TASKS })
+    await mount({ text: 'A' })
     await act(async () => {
-      startTransition(() => root!.render(tree({ text: 'C', tasks: [task('t1', 'New one'), task('t2', 'Second')], suspend: true })))
+      startTransition(() => root!.render(tree({ text: 'C', suspend: true })))
     })
     open!(TWO)
-    expect(h.fetchSession.mock.calls.map(([sid]) => sid)).toEqual(['s1', 's2'])
-    await answer(0, 'devbox')
-    await answer(1, 'gpubox')
-    expect(q('org-brief-file-source').map((b) => b.textContent)).toEqual(['machine devbox: Words of Old one', 'machine gpubox: Words of Second'])
+    // The letter shown is still A: its writers (t1, t2), never the uncommitted C's.
+    expect(h.fetchSession).not.toHaveBeenCalled()
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: TWO, anywhere: true, taskId: 't1', hintSessions: ['s1', 's2'] })
   })
 })

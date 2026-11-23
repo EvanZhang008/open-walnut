@@ -106,7 +106,7 @@ export async function expectImage(page: Page): Promise<void> {
   await expect.poll(() => image.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0), { timeout: 30_000 }).toBe(true)
 }
 
-/** The open file fills the viewer's panel (tree on the left, file on the right), and a note above it is a row of its own, never a column beside it. */
+/** The open file fills the viewer's panel (tree on the left, file on the right). */
 export async function expectViewerFillsPanel(page: Page): Promise<void> {
   const panel = page.locator('.file-viewer-panel')
   const explorer = panel.locator('.session-file-explorer')
@@ -117,11 +117,19 @@ export async function expectViewerFillsPanel(page: Page): Promise<void> {
     if (!p || !e || !t) return false
     return e.width >= p.width - 4 && e.x <= p.x + 4 && t.x - p.x < p.width * 0.35
   }, { timeout: 10_000, message: 'the file, its tree and its preview use the whole panel' }).toBe(true)
-  const note = page.getByTestId('file-viewer-remembered')
-  if (await note.count()) {
-    const [n, e] = [await note.boundingBox(), await explorer.boundingBox()]
-    expect(n!.y + n!.height, 'the remembered-machine line is a row above the file, not a column beside it').toBeLessThanOrEqual(e!.y + 1)
+}
+
+/**
+ * Walnut never asks the person which machine holds a path (2026-11-23): no chooser, no machine
+ * buttons, no remembered-choice note, no "No file was read" notice or retry, and no per-tab memory.
+ */
+export async function expectNoMachineChoice(page: Page): Promise<void> {
+  for (const id of ['file-source-choice', 'file-source-local', 'file-source-host', 'file-viewer-source-error', 'file-viewer-source-retry', 'file-viewer-remembered', 'file-viewer-choose-another']) {
+    await expect(page.getByTestId(id), id).toHaveCount(0)
   }
+  await expect(page.getByText('Choose a machine')).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: "Choose the path's source", exact: true })).toHaveCount(0)
+  expect(await page.evaluate(() => Object.keys(sessionStorage).concat(Object.keys(localStorage)).filter((k) => k.includes('pathMachine'))), 'no per-tab machine memory').toEqual([])
 }
 
 export async function expectText(page: Page, words = 'Line two'): Promise<void> {

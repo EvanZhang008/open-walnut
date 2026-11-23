@@ -5,7 +5,7 @@ import path from 'node:path'
 import { expect, test } from '@playwright/test'
 import { ALL_INBOXES, deliver, getGroups, groupLine, startGroupsFixture, waitLabeled } from './mail-grouping-helpers'
 import { PANE, smartRow, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
-import { click, closeFile, dragSelect, expectImage, expectViewerFillsPanel, openApp, seedAgentFiles, showPointer, tabTo, type AgentFiles } from './agent-text-entry-helpers'
+import { click, closeFile, dragSelect, expectImage, expectNoMachineChoice, expectViewerFillsPanel, openApp, seedAgentFiles, showPointer, tabTo, type AgentFiles } from './agent-text-entry-helpers'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
@@ -67,43 +67,37 @@ test('a path in a group summary opens the file; the group line stays as it was',
   }
   // One line, as before: only the CSS cuts it.
   expect((await summary.boundingBox())!.height).toBeLessThan(24)
-  const failure = page.getByTestId('file-viewer-source-error')
-  const remembered = page.getByTestId('file-viewer-remembered')
-  // The first press reads nothing and asks which machine; the answer is the person's own.
+  // A press asks every machine itself and opens the picture: no machine to pick, nothing remembered,
+  // by pointer, by keyboard and after a resize.
+  const locates: URL[] = []
+  page.on('request', (r) => { const u = new URL(r.url()); if (u.pathname === '/api/files/locate') locates.push(u) })
+  const expectFoundAnywhere = async (presses: number) => {
+    await expectImage(page)
+    await expectNoMachineChoice(page)
+    expect(locates, 'each press asked once').toHaveLength(presses)
+    const last = locates[presses - 1]!
+    expect(last.searchParams.get('ref')).toBe(files.picture)
+    expect(last.searchParams.get('anywhere')).toBe('1')
+    expect(last.searchParams.has('host'), 'no machine named').toBe(false)
+  }
   await click(page, link)
-  await expect(failure).toContainText('No file was read')
-  await expect(failure).toHaveAttribute('role', 'status')
-  await click(page, page.getByTestId('file-source-local'))
-  await expectImage(page)
-  await expect(remembered).toHaveCount(0)
+  await expectFoundAnywhere(1)
+  await expectViewerFillsPanel(page)
   await closeFile(page)
   await untouched()
-  // The same path in the same tab opens on that machine at once, says whose choice it was, and
-  // never asks again on every press: by pointer, by keyboard and after a resize.
   await click(page, link)
-  await expectImage(page)
-  await expect(remembered).toContainText('the machine you chose for this path before')
-  await expectViewerFillsPanel(page)
-  await expect(failure).toHaveCount(0)
+  await expectFoundAnywhere(2)
   await closeFile(page)
   await untouched()
   await tabTo(page, smartRow(page, 'inbox'), link)
   await page.keyboard.press('Enter')
-  await expectImage(page)
-  await expect(remembered).toBeVisible()
+  await expectFoundAnywhere(3)
   await page.keyboard.press('Escape')
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   await untouched()
   await page.setViewportSize({ width: 1120, height: 720 })
   await click(page, link)
-  await expectImage(page)
-  await expect(remembered).toBeVisible()
-  // One press undoes it: the question comes back and the choice is the person's to make again.
-  await click(page, page.getByTestId('file-viewer-choose-another'))
-  await expect(remembered).toHaveCount(0)
-  await expect(failure).toContainText('No file was read')
-  await click(page, page.getByTestId('file-source-local'))
-  await expectImage(page)
+  await expectFoundAnywhere(4)
   await closeFile(page)
   await untouched()
   // Selecting the summary must not toggle its group.

@@ -27,7 +27,6 @@ import { ApiError, apiDelete, apiPost, apiPut } from '@/api/client';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import type { ImageAttachment } from '@/api/chat';
 import { ICON_REFRESH } from '@/components/common/Icons';
-import { PathSourceChooser } from '@/components/common/PathSourceChooser';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { resolveTaskToken } from '@/stores/entity-label-store';
@@ -42,9 +41,9 @@ import runtimeSections from './board-sections.frame.js?raw';
 import { BOARD_PHONE_CSS, BOARD_RUNTIME_CSS } from './board-runtime.css.ts';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import {
-  BOARD_SEEN_PREFIX, advanceSeen, boardFileSource, boardChoiceFileSource, boardHostChoices, boardMentionTokens, boardReferenceSources, boardWriterLabel, buildFrameRefs, frameRefsEqual, mentionFrameRefs, newBoardNonce, parseSeen,
+  BOARD_SEEN_PREFIX, advanceSeen, boardFileSource, boardChoiceFileSource, boardMentionTokens, boardReferenceSources, boardWriterLabel, buildFrameRefs, frameRefsEqual, mentionFrameRefs, newBoardNonce, parseSeen,
   safeExternalHref, threadAuthorIds, wrapBoardHtml, type BoardMessage, type BoardSectionSeen,
-  type BoardFileSource, type BoardHostChoice, type BoardResolvedSource, type BoardSeen, type FrameTask, type StoreTaskLike,
+  type BoardFileSource, type BoardSeen, type FrameTask, type StoreTaskLike,
 } from './board-model';
 import { boardBarTitle, boardOwnerId, projectTaskIds, taskLineage } from './board-items-model';
 import { BoardReplyDock, type BoardDockAnchor, type BoardReplyTarget } from './BoardReplyDock';
@@ -67,7 +66,7 @@ import { keepIfSame, NO_PROJECTS, projectsOfTeam, type ProjectOf } from './board
 import { openExternalLink, openInDefaultBrowser } from '@/plugins/link-handlers';
 import { showLinkMenu } from '@/plugins/LinkCaptureHost';
 import { openFileAnywhere, openLetterAnywhere, type OpenFileRequest } from '@/utils/open-anywhere';
-import { openFromSource, type AgentTextSource } from '@/utils/agent-text-source';
+import { anywhereRequest, openFromSource, type AgentTextSource } from '@/utils/agent-text-source';
 import { fetchSession, peekSessionRecord } from '@/api/sessions';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { linkAgentHtml } from '../../../../src/lib/agent-html-refs';
@@ -103,13 +102,6 @@ type FrameMsg = Record<string, unknown> & { t: string };
 
 /** One stored copy of a clicked path: its writer and where it sits on the Board. */
 type BoardSourceEntry = { source: BoardFileSource; label: string };
-/** A machine the user may open the path on; `open` is bound to the click that read the machines. */
-type BoardHostPick = BoardHostChoice & { open: () => void };
-
-/** A clicked path whose machine Walnut could not tell: nothing was read anywhere. */
-const BOARD_SOURCE_UNKNOWN = 'Walnut could not tell which machine wrote the words around this path, so it will not guess. No file was read yet.';
-/** Why a writer with no session saved beside its text opens nothing (logged, never guessed from its task). */
-const NO_SAVED_SESSION = 'The saved text has no writing session that identifies its machine.';
 
 export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSession, quietEmpty }: TaskBoardPaneProps) {
   const navigate = useNavigate();
@@ -280,101 +272,38 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
   }, [refs, store, taskId, openOnHome]);
 
   const fileSeq = useRef(0);
-  // `hosts` is null while the click still reads which machine each copy is on.
-  const [fileChoices, setFileChoices] = useState<{ req: OpenFileRequest; nonce: string; ownerId: string; sourceKey: string; hosts: BoardHostPick[] | null } | null>(null);
   // The owner, document and stored sources an open was started under (set in the commit, below).
   const fileKeyRef = useRef('');
-  // Cancel also outdates the machine reads still out for it.
-  const cancelFileChoices = () => { fileSeq.current++; setFileChoices(null); };
-  // The source comes from stored writers, never a host or session supplied by the frame.
-  // Several writers: each one's machine is read on this click; one machine opens at once, several ask.
-  const openBoardFile = useCallback((req: OpenFileRequest, target: BoardFileSource | BoardSourceEntry[], bind = { nonce: '', sourceKey: '' }) => {
+  // The source comes from stored writers, never a host or session supplied by the frame. One writer
+  // with a saved session opens from its machine first; anything else (no writer saved, several
+  // writers) looks the path up on every machine, the writing task's first, and opens it from the one
+  // that has it: never a question to the person (2026-11-23, Evan: "Why walnut not auto pic the host
+  // it need me to pick").
+  const openBoardFile = useCallback((req: OpenFileRequest, target: BoardFileSource | BoardSourceEntry[]) => {
     const mine = ++fileSeq.current;
     const key = fileKeyRef.current;
     // Still this click, and still the owner, document and sources it was made under (the async reads too).
     const current = () => mine === fileSeq.current && key === fileKeyRef.current;
-    // One plain sentence whatever went wrong (a session or task gone, a read that failed): retry advice would mislead on a 404.
-    const failed = (error: string) => {
-      const one = Array.isArray(target) ? undefined : target;
-      log.warn('board', 'board path not opened: its source machine is unknown', {
-        taskId: ownerRef.current, sourceTaskId: one?.taskId, sourceSessionId: one?.sessionId,
-        sources: Array.isArray(target) ? target.length : 1, path: req.path, error,
+    const one = Array.isArray(target) ? (target.length === 1 ? target[0]!.source : undefined) : target;
+    const everywhere = (why: string) => {
+      const taskOf = one?.taskId ?? (Array.isArray(target) ? target[0]?.source.taskId : undefined) ?? ownerRef.current;
+      log.info('board', 'board path with no single saved writer: looking on every machine', {
+        taskId: ownerRef.current, sourceTaskId: taskOf, sources: Array.isArray(target) ? target.length : 1, path: req.path, why,
       });
-      if (!current()) return;
-      openFileAnywhere({ ...req, sourceFailure: BOARD_SOURCE_UNKNOWN, sourceReason: 'unrecorded' });
+      // Every writer Walnut saved names its machine as a hint, asked first of all.
+      const hints = (Array.isArray(target) ? target.map((e) => e.source) : [target])
+        .map((s) => (s.primary ? '__local__' : s.sessionId ?? '')).filter(Boolean);
+      openFileAnywhere(anywhereRequest({ unknownSource: true, ...(taskOf ? { taskId: taskOf } : {}) }, req, hints));
     };
-    const openVia = (src: AgentTextSource) => {
-      void openFromSource(src, req, {
-        lookup: { peek: peekSessionRecord, fetch: fetchSession },
-        open: (r) => { if (current()) openFileAnywhere(r); },
-        fail: ({ error }) => failed(error),
-      });
-    };
-    if (Array.isArray(target)) { void openAmong(target, bind); return; }
-    const source = target;
-    if (source.sourceFailure) { failed('The saved text does not identify one source machine for this path.'); return; }
-    if (source.primary) { openVia({ host: '__local__' }); return; }
-    if (source.sessionId) { openVia({ sessionId: source.sessionId }); return; }
-    // No saved session: the task's session now (or this pane's) may run on another machine than the one the text was written on.
-    failed(NO_SAVED_SESSION);
-
-    // Every copy's machine from its saved session: records this page already holds first, so copies all known
-    // to sit on one machine open at once (no dialog, no read); otherwise the dialog says it is looking while
-    // each unknown session is read once, on this click (never on mount, never kept here).
-    // A copy whose machine cannot be told fails the whole open: it may be the one the user meant.
-    async function openAmong(entries: BoardSourceEntry[], bind: { nonce: string; sourceKey: string }): Promise<void> {
-      const titleOf = (id: string) => store?.tasks.find((t) => t.id === id)?.title;
-      const sidOf = (s: BoardFileSource): string => {
-        if (s.sourceFailure) throw new Error('The saved text does not identify one source machine for this path.');
-        if (!s.sessionId) throw new Error(NO_SAVED_SESSION);
-        return s.sessionId;
-      };
-      const resolvedFrom = (label: string, s: BoardFileSource, record: { host?: string; title?: string }): BoardResolvedSource =>
-        ({ host: record.host, label, title: record.title || titleOf(s.taskId) });
-      const known = (): BoardResolvedSource[] | null => {
-        const out: BoardResolvedSource[] = [];
-        for (const { source: s, label } of entries) {
-          if (s.primary) { out.push({ host: '', label }); continue; }
-          const record = peekSessionRecord(sidOf(s));
-          if (!record) return null;
-          out.push(resolvedFrom(label, s, record));
-        }
-        return out;
-      };
-      const ours = (cur: typeof fileChoices) => cur?.req === req;
-      const offer = (resolved: BoardResolvedSource[]) => {
-        const hosts = boardHostChoices(resolved);
-        if (hosts.length === 1) {
-          setFileChoices((cur) => (ours(cur) ? null : cur));
-          openVia({ host: hosts[0]!.host });
-          return;
-        }
-        const picks = hosts.map((h) => ({ ...h, open: () => openVia({ host: h.host }) }));
-        setFileChoices({ req, nonce: bind.nonce, ownerId, sourceKey: bind.sourceKey, hosts: picks });
-      };
-      let now: BoardResolvedSource[] | null;
-      try { now = known(); } catch (err) { failed(err instanceof Error ? err.message : String(err)); return; }
-      if (now) { offer(now); return; }
-      setFileChoices({ req, nonce: bind.nonce, ownerId, sourceKey: bind.sourceKey, hosts: null });
-      let resolved: BoardResolvedSource[];
-      try {
-        resolved = await Promise.all(entries.map(async ({ source: s, label }) => {
-          if (s.primary) return { host: '', label };
-          const sid = sidOf(s);
-          const record = peekSessionRecord(sid) ?? await fetchSession(sid);
-          if (!record) throw new Error('session not found');
-          return resolvedFrom(label, s, record);
-        }));
-      } catch (err) {
-        if (!current()) return;
-        setFileChoices((cur) => (ours(cur) ? null : cur));
-        failed(err instanceof Error ? err.message : String(err));
-        return;
-      }
-      if (!current()) return;
-      offer(resolved);
-    }
-  }, [store?.tasks, ownerId]); // eslint-disable-line react-hooks/exhaustive-deps -- the array is the store's identity
+    if (!one) { everywhere('several writers'); return; }
+    if (one.sourceFailure) { everywhere('the saved text names no single writer'); return; }
+    const src: AgentTextSource | null = one.primary ? { host: '__local__' } : one.sessionId ? { sessionId: one.sessionId } : null;
+    if (!src) { everywhere('no saved writing session'); return; }
+    void openFromSource(src, req, {
+      lookup: { peek: peekSessionRecord, fetch: fetchSession },
+      open: (r) => { if (current()) openFileAnywhere(r.anywhere && !r.taskId ? { ...r, taskId: one.taskId } : r); },
+    });
+  }, []);
 
   /**
    * The docked composer's Send: the user's thread message, stored and delivered to
@@ -487,7 +416,7 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
   const fileKey = JSON.stringify([ownerId, nonce, sourceKey]);
   useLayoutEffect(() => {
     fileKeyRef.current = fileKey;
-    return () => { fileSeq.current++; setFileChoices(null); };
+    return () => { fileSeq.current++; };
   }, [fileKey]);
   const openStoredFile = (req: OpenFileRequest) => {
     const sources = new Map<string, BoardSourceEntry>();
@@ -527,18 +456,14 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
     for (const [id, choice] of Object.entries(payload?.choices ?? {})) {
       if (choice.text && messagePaths.get(choice.text)?.has(req.path)) add(boardChoiceFileSource(ownerId, choice), `Answer in ${id}`);
     }
-    setFileChoices(null);
     if (ambiguous || sources.size === 0) { openBoardFile(req, { taskId: ownerId, sourceFailure: true }); return; }
-    const choices = [...sources.values()];
-    if (choices.length === 1) { openBoardFile(req, choices[0]!.source); return; }
-    // Several writers: copies on one machine open there; else the dialog (pending while unknown sessions are read).
-    openBoardFile(req, choices, { nonce, sourceKey });
+    openBoardFile(req, [...sources.values()]);
   };
   const onFrameMessage = useRef<(d: FrameMsg) => void>(() => undefined);
   onFrameMessage.current = (d: FrameMsg) => {
     const str = (k: string) => (typeof d[k] === 'string' ? d[k] as string : '');
     // Any newer open (a task, a letter, a session, a link) outdates a path lookup still in flight.
-    if (d.t.startsWith('wn-board:open-') || d.t === 'wn-board:link-menu') { fileSeq.current++; setFileChoices(null); }
+    if (d.t.startsWith('wn-board:open-') || d.t === 'wn-board:link-menu') fileSeq.current++;
     switch (d.t) {
       case 'wn-board:ready':
         frameReady.current = true;
@@ -671,12 +596,6 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
 
   return (
     <div className="task-board-pane" data-testid="task-board-pane">
-      {fileChoices?.nonce === nonce && fileChoices.ownerId === ownerId && fileChoices.sourceKey === sourceKey && <PathSourceChooser
-        path={fileChoices.req.path}
-        hosts={fileChoices.hosts}
-        onPick={() => setFileChoices(null)}
-        onCancel={cancelFileChoices}
-      />}
       <div className="task-board-bar" data-fit-header="">
         <span
           data-fit-title=""

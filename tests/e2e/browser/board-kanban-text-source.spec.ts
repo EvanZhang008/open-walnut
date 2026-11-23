@@ -22,7 +22,7 @@ import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, pickCardsView, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam } from './board-kanban-fixture'
 import { keepCornerToBoard } from './board-kanban-corner'
-import { click, closeFile, openSessionBoard, setReport } from './agent-text-entry-helpers'
+import { click, closeFile, expectNoMachineChoice, openSessionBoard, setReport } from './agent-text-entry-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -101,20 +101,20 @@ test.afterAll(async () => {
 
 const FILE_API = /^\/api\/(?:file-content$|file-raw\/|local-image$|files\/(?:locate|list|list-many|exists)$)/
 const LOCAL = new Set(['', 'local', '__local__'])
-type Touch = { api: string; host: string; path: string; method: string }
+type Touch = { api: string; host: string; path: string; method: string; anywhere: boolean; named: boolean }
 
 function touchOf(req: Request): Touch | null {
   const url = new URL(req.url())
   if (!FILE_API.test(url.pathname)) return null
   if (url.pathname.startsWith('/api/file-raw/')) {
     const [, , , host, ...rest] = url.pathname.split('/')
-    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method() }
+    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method(), anywhere: false, named: true }
   }
   let body: { paths?: string[]; host?: string } = {}
   if (req.method() === 'POST') { try { body = req.postDataJSON() ?? {} } catch { /* not JSON */ } }
   const q = url.searchParams
   const target = q.get('ref') ?? q.get('path') ?? body.paths?.find((p) => p === doc || p === dir) ?? ''
-  return { api: url.pathname.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method() }
+  return { api: url.pathname.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method(), anywhere: q.get('anywhere') === '1', named: q.has('host') || !!body.host }
 }
 
 function listing(p: string) {
@@ -273,24 +273,20 @@ test('a status ask a remote session wrote opens on that host, never through the 
   expect(primaryReads()).toEqual([])
 })
 
-for (const [slot, which] of [['summary', () => unknownCard], ['status ask', () => unknownAskCard]] as const) test(`a ${slot} whose writer was not recorded reads nothing and offers the machines; Local opens this machine's file`, async ({ page }) => {
+for (const [slot, which] of [['summary', () => unknownCard], ['status ask', () => unknownAskCard]] as const) test(`a ${slot} whose writer was not recorded is looked up on every machine and opens where it is found, never asking which`, async ({ page }) => {
   const id = which()
   const pane = await openBoard(page)
   const words = card(pane, id).getByTestId(slot === 'summary' ? 'kanban-card-summary' : 'kanban-card-status')
   await words.scrollIntoViewIfNeeded()
   await click(page, linkIn(words))
-  const failure = page.getByTestId('file-viewer-source-error')
-  await expect(failure).toBeVisible({ timeout: 20_000 })
-  await expect(failure).toContainText('No file was read')
-  const choice = page.getByTestId('file-source-choice')
-  await expect(choice).toContainText('Choose a machine')
-  await expect(choice.locator(`[data-testid="file-source-host"][data-host="${REMOTE}"]`)).toBeVisible()
+  await expectPrimaryText(page)
+  await expectNoMachineChoice(page)
   await settle(page)
-  expect(touches(), 'nothing was looked up or read before a machine was named').toEqual([])
+  const locates = touches().filter((t) => t.api === 'files/locate')
+  expect(locates.length, 'the press asked every machine').toBeGreaterThan(0)
+  expect(locates.every((t) => t.anywhere && !t.named), 'anywhere, no machine named').toBe(true)
   expect(sessionReads(team.sessions[id]!), 'the task\'s current session is no stand-in').toBe(0)
   expect(sessionReads(REMOTE_SID), 'the session the body named is not the writer').toBe(0)
-  await click(page, choice.getByTestId('file-source-local'))
-  await expectPrimaryText(page)
   expect(remoteReads()).toEqual([])
   await closeFile(page)
 })

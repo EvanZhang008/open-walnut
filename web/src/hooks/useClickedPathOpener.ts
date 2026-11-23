@@ -19,8 +19,8 @@ export interface ClickedPathTarget {
   host?: string;
   /** It lives on a host other than the one the click came from. */
   elsewhere: boolean;
-  /** No host has it: the hosts asked, for a plain "couldn't find" line. */
-  missing?: { checked: string[] };
+  /** No host has it: the hosts asked, for a plain "couldn't find" line, and those that did not answer. */
+  missing?: { checked: string[]; unreachable?: string[] };
   line?: number;
   endLine?: number;
   term?: string;
@@ -34,10 +34,24 @@ export interface ClickedPathContext {
   cwd?: string;
   sessionId?: string;
   sourceOnly?: boolean;
+  /** The writer's machine is unknown: every machine is asked (files-locate.ts `anywhere`). */
+  anywhere?: boolean;
+  /** With `anywhere`: the task the words belong to, whose machines are asked first. */
+  taskId?: string;
+  /** With `anywhere`: the sessions that wrote the words ('__local__' the person), asked first of all. */
+  hintSessions?: readonly string[];
 }
 
 /** The sentence a viewer shows for a path no host has. */
-export function missingPathLine(path: string, checked: readonly string[]): string {
+export function missingPathLine(path: string, checked: readonly string[], anywhere = false, unreachable: readonly string[] = []): string {
+  // A relative path whose writer is unknown has no folder to be read against: no machine was asked.
+  if (anywhere && !/^(\/|~(\/|$))/.test(path)) return `Couldn't open ${path}: it is a relative path, and Walnut does not know which session's folder it is in.`;
+  if (anywhere) {
+    const list = (names: readonly string[]) => names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+    const silent = unreachable.length ? `${list(unreachable)} did not answer, so the file may be there.` : '';
+    if (!checked.length) return silent ? `Couldn't look for ${path}: ${silent}` : `Couldn't look for ${path}: no machine could be asked.`;
+    return `Couldn't find ${path} on ${list(checked)}.${silent ? ` ${silent}` : ''}`;
+  }
   const where = checked.length <= 1
     ? (checked[0] ?? 'this machine')
     : `${checked.slice(0, -1).join(', ')} or ${checked[checked.length - 1]}`;
@@ -51,7 +65,10 @@ export async function locateClickedPath(
   pos: { line?: number; endLine?: number; term?: string } = {},
 ): Promise<ClickedPathTarget> {
   const fromHost = ctx.host && !['__local__', 'local'].includes(ctx.host) ? ctx.host : undefined;
-  const r = await locatePath(path, { host: fromHost, cwd: ctx.cwd, sessionId: ctx.sessionId, sourceOnly: ctx.sourceOnly });
+  const r = await locatePath(path, {
+    host: fromHost, cwd: ctx.cwd, sessionId: ctx.sessionId, sourceOnly: ctx.sourceOnly,
+    ...(ctx.anywhere ? { anywhere: true, ...(ctx.taskId ? { taskId: ctx.taskId } : {}), ...(ctx.hintSessions?.length ? { hintSessions: ctx.hintSessions } : {}) } : {}),
+  });
   const host = r.host && r.host !== '__local__' ? r.host : undefined;
   if (r.elsewhere) log.info('file-open', 'clicked path found on another host', { path: r.path, fromHost: fromHost ?? 'local', host: host ?? 'local' });
   // The click's own position wins; else whatever the reference carried.
@@ -61,7 +78,7 @@ export async function locateClickedPath(
     path: r.path,
     ...(host ? { host } : {}),
     elsewhere: host !== fromHost,
-    ...(r.missing ? { missing: { checked: r.checked ?? [] } } : {}),
+    ...(r.missing ? { missing: { checked: r.checked ?? [], ...(r.unreachable?.length ? { unreachable: r.unreachable } : {}) } } : {}),
     ...(line !== undefined ? { line } : {}),
     ...(endLine !== undefined ? { endLine } : {}),
     ...(pos.term ? { term: pos.term } : {}),

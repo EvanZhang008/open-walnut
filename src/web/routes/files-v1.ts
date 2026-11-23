@@ -86,21 +86,18 @@ filesV1Router.get('/files/list', async (req: Request, res: Response, next: NextF
   }
 })
 
-// GET /api/v1/files/locate?ref=&cwd=&host=&sessionId= — where a tapped path
+// GET /api/v1/files/locate?ref=&cwd=&host=&sessionId=[&anywhere=1&taskId=] — where a tapped path
 // lives: the session's host, else whichever of the user's other hosts has it
 // (files-locate.ts). The phone opens it from `host`; `missing` names the hosts asked.
 filesV1Router.get('/files/locate', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
-    const params = { ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId), sourceOnly: req.query.sourceOnly === '1' }
+    const { locateClickedPath, locateRequestOf, locateBodyOf } = await import('./files-locate.js')
+    const params = locateRequestOf(req.query)
     if (isCompanion()) {
-      const body: Record<string, unknown> = { ref: params.ref }
-      for (const k of ['cwd', 'host', 'sessionId'] as const) if (params[k]) body[k] = params[k]
-      if (params.sourceOnly) body.sourceOnly = true
-      await relayControlAction(res, 'server.files.locate', SERVER_RELAY_SID, body, 200)
+      await relayControlAction(res, 'server.files.locate', SERVER_RELAY_SID, locateBodyOf(params), 200)
       return
     }
-    const [{ locateClickedPath }, { FilesOpError }] = await Promise.all([import('./files-locate.js'), import('./files.js')])
+    const { FilesOpError } = await import('./files.js')
     try {
       res.json(await locateClickedPath(params))
     } catch (err) {

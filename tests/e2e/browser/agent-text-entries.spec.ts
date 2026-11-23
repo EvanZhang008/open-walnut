@@ -1,7 +1,7 @@
 // Agent words on Home rows, the wait card, the taskbar card, the extension pop-out and triage must open what they name, never the row.
 import { test, expect, type APIRequestContext, type APIResponse, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import {
-  AGENT_TEXT_BASE as base, click, closeFile, closeLinkedLetter, dragSelect, expectImage, expectText, expectAskShownOnce, expectViewerFillsPanel, openApp, openTaskSession,
+  AGENT_TEXT_BASE as base, click, closeFile, closeLinkedLetter, dragSelect, expectImage, expectNoMachineChoice, expectText, expectAskShownOnce, expectViewerFillsPanel, openApp, openTaskSession,
   rowAsk, seedAgentFiles, sessionColumn, setReport, showPointer, tabTo, taskWithReply, type AgentFiles,
 } from './agent-text-entry-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
@@ -564,29 +564,29 @@ test('triage history: the stored analysis links its file past the old preview cu
   // The newest record opens first; with no session behind it the stored analysis is its body.
   await folded(true)
   const full = section.locator('.triage-session-summary-full')
-  const reads: string[] = []
+  const locates: URL[] = []
   page.on('request', (r) => {
     const url = new URL(r.url())
-    if (/^\/api\/(?:files\/|file-content|file-raw\/|local-image)/.test(url.pathname)) reads.push(r.url())
+    if (url.pathname === '/api/files/locate') locates.push(url)
   })
-  const chooseLocal = async (count: number) => {
-    const choice = page.getByTestId('file-source-choice')
-    await expect(page.getByTestId('file-viewer-source-error')).toContainText('No file was read')
-    await expect(choice).toBeVisible()
-    await page.waitForTimeout(300)
-    expect(reads, 'an older analysis reads no file before choosing its machine').toHaveLength(count)
-    await click(page, choice.getByTestId('file-source-local'))
+  // An older analysis names no writer: a press asks every machine itself and opens the file, with no machine to pick.
+  const expectFoundAnywhere = async (count: number, ref: string) => {
+    expect(locates, 'one locate for the press').toHaveLength(count + 1)
+    const last = locates[count]!
+    expect(last.searchParams.get('ref')).toBe(ref)
+    expect(last.searchParams.get('anywhere')).toBe('1')
+    expect(last.searchParams.has('host'), 'no machine named').toBe(false)
+    expect(last.searchParams.has('sourceOnly'), 'not one machine alone').toBe(false)
+    await expectNoMachineChoice(page)
   }
   await click(page, full.locator(`a.file-link[data-file-path="${picture}"]`))
-  expect(reads, 'the first click did not guess a machine').toHaveLength(0)
-  await chooseLocal(0)
   await expectImage(page)
+  await expectFoundAnywhere(0, picture)
   await closeFile(page)
   await folded(true)
-  const beforeNotes = reads.length
   await click(page, full.locator(`a.file-link[data-file-path="${notes}"]`))
-  await chooseLocal(beforeNotes)
   await expectText(page)
+  await expectFoundAnywhere(1, notes)
   await closeFile(page)
   await click(page, full.locator('a.letter-link'))
   await expect(page.locator('.hib-reader')).toContainText('Triage fixture letter')
@@ -612,12 +612,11 @@ test('triage history: the stored analysis links its file past the old preview cu
   // The path lies below the preview's clamp, so open the record before pressing it again.
   await click(page, header)
   await folded(true)
-  // The same path in the same tab opens on the machine the person chose for it before, and says so.
+  // The same path again is found the same way: nothing is remembered, nothing is asked of the person.
   await click(page, full.locator(`a.file-link[data-file-path="${picture}"]`))
   await expectImage(page)
-  await expect(page.getByTestId('file-viewer-remembered')).toContainText('the machine you chose for this path before')
+  await expectFoundAnywhere(2, picture)
   await expectViewerFillsPanel(page)
-  await expect(page.getByTestId('file-viewer-source-error')).toHaveCount(0)
   await closeFile(page)
   await click(page, header)
   await folded(false)

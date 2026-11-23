@@ -29,15 +29,11 @@ a.letter-link:hover {
   color: var(--fg);
   background: var(--bg-secondary);
 }
-.file-viewer-source-failure { display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: auto; }
-.file-viewer-source-choices { display: flex; flex-direction: column; gap: 6px; font-size: var(--font-size-sm); color: var(--fg); }
-.file-viewer-source-choices-title { font-weight: 600; }
-.file-viewer-source-choices-hint { color: var(--fg-muted); }
-.file-viewer-source-choices-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.file-viewer-remembered { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; font-size: var(--font-size-sm); color: var(--fg-muted); border-bottom: 1px solid var(--border); }
 .file-viewer-panel .fv-html-toolbar { flex-wrap: wrap; }
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .file-viewer-panel .session-file-explorer-tree { min-width: 0; max-width: 28%; }
   .file-viewer-panel .session-file-explorer-toolbar { flex-wrap: wrap; }
   .file-viewer-panel .sfe-root-path { min-width: 60px; }
 }
+.file-viewer-missing { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.file-viewer-missing > .btn { margin: 0 12px; }

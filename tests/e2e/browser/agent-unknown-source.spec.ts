@@ -1,6 +1,6 @@
-// A path in agent words whose writer Walnut never recorded (an older summary): the press reads no
-// file anywhere and says so, and offers this machine and every known host as explicit choices.
-// Only the machine the person names is asked, and only it (`sourceOnly`); nothing is read before.
+// A path in agent words whose writer Walnut never recorded (an older summary): the press never asks
+// the person which machine; Walnut asks every machine itself (`locate?anywhere=1`, no host) and opens
+// the file where it is found, or says in one line that no machine has it. Nothing is read on mount.
 //
 // Real: the fixture server, a project whose AI summary names two files (the project detail pane
 // draws it as text of unknown source), the renderer, the opener and the viewer.
@@ -10,7 +10,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
-import { AGENT_TEXT_BASE as base, click, closeFile, expectImage, expectText, expectViewerFillsPanel, openApp, showPointer } from './agent-text-entry-helpers'
+import { AGENT_TEXT_BASE as base, click, closeFile, expectImage, expectNoMachineChoice, expectText, expectViewerFillsPanel, openApp, showPointer } from './agent-text-entry-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs, openProjectDetails, presetPanelView } from './todo-panel-helpers'
 
@@ -61,7 +61,7 @@ test.afterAll(async ({ request }) => {
 // ── What the page asked for the seeded files ──
 
 const FILE_API = /^\/api\/(?:file-content$|(?:v1\/)?file-raw\/|local-image$|file-history(?:\/|$)|(?:v1\/)?files\/(?:locate|list|list-many|exists)$)/
-type Touch = { api: string; host: string; path: string; sourceOnly: boolean }
+type Touch = { api: string; host: string; path: string; sourceOnly: boolean; anywhere: boolean; hostAsked: boolean; taskId: string | null }
 
 function touchOf(req: Request): Touch | null {
   const url = new URL(req.url())
@@ -69,13 +69,13 @@ function touchOf(req: Request): Touch | null {
   if (/^\/api\/(?:v1\/)?file-raw\//.test(url.pathname)) {
     const segment = url.pathname.startsWith('/api/v1/') ? 4 : 3
     const [host, ...rest] = url.pathname.split('/').slice(segment)
-    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), sourceOnly: false }
+    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), sourceOnly: false, anywhere: false, hostAsked: true, taskId: null }
   }
   let body: { paths?: string[]; host?: string } = {}
   if (req.method() === 'POST') { try { body = req.postDataJSON() ?? {} } catch { /* not JSON */ } }
   const q = url.searchParams
   const target = q.get('ref') ?? q.get('path') ?? body.paths?.find((p) => p.startsWith(dir)) ?? ''
-  return { api: url.pathname.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, sourceOnly: q.get('sourceOnly') === '1' }
+  return { api: url.pathname.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, sourceOnly: q.get('sourceOnly') === '1', anywhere: q.get('anywhere') === '1', hostAsked: q.has('host') || !!body.host, taskId: q.get('taskId') }
 }
 
 let seen: Touch[] = []
@@ -134,40 +134,29 @@ async function settle(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 800)))))
 }
 
-/** The press shows the error and the choices, and reads nothing on any host. */
-async function expectChoices(page: Page): Promise<Locator> {
-  const failure = page.getByTestId('file-viewer-source-error')
-  await expect(failure).toBeVisible({ timeout: 20_000 })
-  await expect(failure).toContainText('No file was read')
-  const choice = page.getByTestId('file-source-choice')
-  await expect(choice).toContainText('Choose a machine')
-  await expect(choice.getByTestId('file-source-local')).toHaveText('Local')
-  await expect(choice.locator(`[data-testid="file-source-host"][data-host="${REMOTE}"]`)).toBeVisible()
-  await expect(choice.locator('select')).toHaveCount(0)
-  await expect(choice.getByTestId('file-source-local')).toHaveAttribute('aria-pressed', 'false')
-  await settle(page)
-  expect(seen, 'nothing was looked up or read before a machine was named').toEqual([])
-  return choice
+/** The locates of this press: every one asks every machine (anywhere), none names a host or one machine alone. */
+function expectAskedAnywhere(): Touch[] {
+  const locates = seen.filter((t) => t.api === 'files/locate')
+  expect(locates.length).toBeGreaterThan(0)
+  expect(locates.every((t) => t.anywhere && !t.hostAsked && !t.sourceOnly), 'every machine was asked, none named').toBe(true)
+  return locates
 }
 
 // ── Tests ──
 
-test('an unknown-source path reads nothing until Local is chosen; the same path then opens there at once, says whose choice it was, and one press undoes it', async ({ page }) => {
+test('an unknown-source path opens at once where Walnut finds it, without asking which machine, and every press does the same', async ({ page }) => {
   const summary = await openSummary(page)
+  await settle(page)
+  expect(seen, 'drawing the summary read no file').toEqual([])
   await click(page, linkTo(summary, doc))
-  const choice = await expectChoices(page)
-  await click(page, choice.getByTestId('file-source-local'))
   await expectText(page, 'Line two from this machine')
-  await expect(page.getByTestId('file-viewer-source-error')).toHaveCount(0)
-  const locates = seen.filter((t) => t.api === 'files/locate')
-  expect(locates.length).toBeGreaterThan(0)
-  expect(locates.every((t) => t.sourceOnly && t.host === 'local'), 'Local asked this machine only').toBe(true)
+  await expectNoMachineChoice(page)
+  expectAskedAnywhere()
   expect(seen.some((t) => t.api === 'file-content' && t.path === doc && t.host === 'local'), 'the file was read here').toBe(true)
   expect(seen.filter((t) => t.host === REMOTE), 'the remote host was never asked').toEqual([])
   await closeFile(page)
 
-  // The same path in this tab opens on the machine the person named, and says so: Walnut guessed
-  // nothing, and the person is not asked the same question on every press.
+  // The same path again, with a line: nothing is remembered and nothing is asked of the person.
   seen = []
   const raw = summary.locator('a.file-link').filter({ hasText: 'Raw notes' });
   await expect(raw).toHaveAttribute('data-file-path', doc);
@@ -175,28 +164,13 @@ test('an unknown-source path reads nothing until Local is chosen; the same path 
   await click(page, raw);
   await expectText(page, 'Line two from this machine')
   await expect(page.locator('.file-viewer-line')).toHaveText(':2')
-  await expect(page.getByTestId('file-viewer-remembered')).toContainText('the machine you chose for this path before')
   await expectViewerFillsPanel(page)
-  await expect(page.getByTestId('file-viewer-source-error')).toHaveCount(0)
-  expect(seen.filter((t) => t.host === REMOTE), 'the remote host was never asked').toEqual([])
+  await expectNoMachineChoice(page)
+  expectAskedAnywhere()
   await closeFile(page)
-
-  // One press undoes it: nothing is read, and the choice is the person's again.
-  seen = []
-  await click(page, raw)
-  await click(page, page.getByTestId('file-viewer-choose-another'))
-  seen = []
-  await expectChoices(page)
-  await page.keyboard.press('Escape')
-  await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
-  // After the undo the path asks again.
-  await click(page, raw)
-  await expectChoices(page)
-  await page.keyboard.press('Escape')
-  await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
 })
 
-test('an unknown-source picture never loads by itself; Local shows this machine\'s picture', async ({ page }) => {
+test('an unknown-source picture never loads by itself; a press shows the picture from the machine that has it', async ({ page }) => {
   const summary = await openSummary(page)
   await expect(summary.locator('img'), 'unknown source draws the picture as a link').toHaveCount(0)
   const raw = summary.locator(`a.file-link[data-file-path="${picture}"]`).filter({ hasText: 'Raw design' })
@@ -208,10 +182,9 @@ test('an unknown-source picture never loads by itself; Local shows this machine\
   await settle(page)
   expect(seen, 'drawing the summary read no file').toEqual([])
   await click(page, raw)
-  const choice = await expectChoices(page)
-  await page.screenshot({ path: '/tmp/agent-session-source/unknown-picture-choices.png' })
-  await click(page, choice.getByTestId('file-source-local'))
   await expectImage(page)
+  await expectNoMachineChoice(page)
+  expectAskedAnywhere()
   await page.screenshot({ path: '/tmp/agent-session-source/unknown-picture-opened.png' })
   await page.waitForTimeout(500)
   const image = page.locator('.file-viewer-overlay img').first()
@@ -220,29 +193,61 @@ test('an unknown-source picture never loads by itself; Local shows this machine\
   await closeFile(page)
 })
 
-test('a named remote host is asked alone; its miss reads nothing here and keeps the choices for another machine', async ({ page }) => {
-  const remoteLocates: URL[] = []
+test('a path no machine has says so in one line, offers no machine to pick, and the next press asks again', async ({ page }) => {
+  const asked: URL[] = []
   const answer = async (route: Route) => {
     const url = new URL(route.request().url())
-    remoteLocates.push(url)
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ path: doc, host: REMOTE, found: false, missing: true, checked: ['Big remote host'] }) })
+    asked.push(url)
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ path: doc, found: false, missing: true, checked: ['This machine', 'Big remote host'] }) })
   }
-  const match = (url: URL) => url.pathname === '/api/files/locate' && url.searchParams.get('host') === REMOTE
+  const match = (url: URL) => url.pathname === '/api/files/locate' && url.searchParams.get('anywhere') === '1'
   await page.route(match, answer)
   const summary = await openSummary(page)
   await click(page, linkTo(summary, doc))
-  const choice = await expectChoices(page)
-  await click(page, choice.locator(`[data-testid="file-source-host"][data-host="${REMOTE}"]`))
-  await expect(page.getByTestId('file-viewer-missing')).toContainText('Couldn\'t find')
-  expect(remoteLocates).toHaveLength(1)
-  expect(remoteLocates[0]!.searchParams.get('sourceOnly')).toBe('1')
-  expect(remoteLocates[0]!.searchParams.get('ref')).toBe(doc)
-  expect(seen.filter((t) => t.host !== REMOTE), 'nothing was asked on this machine').toEqual([])
-  const kept = page.getByTestId('file-source-choice')
-  await expect(kept.locator(`[data-host="${REMOTE}"]`)).toHaveAttribute('aria-pressed', 'true')
+  const missing = page.getByTestId('file-viewer-missing')
+  await expect(missing).toBeVisible({ timeout: 20_000 })
+  await expect(missing).toHaveText(`Couldn't find ${doc} on This machine or Big remote host.`)
+  await expectNoMachineChoice(page)
+  expect(asked).toHaveLength(1)
+  expect(asked[0]!.searchParams.get('ref')).toBe(doc)
+  expect(asked[0]!.searchParams.has('host'), 'no machine named').toBe(false)
+  expect(asked[0]!.searchParams.has('sourceOnly'), 'not one machine alone').toBe(false)
+  await settle(page)
+  expect(seen.filter((t) => t.api !== 'files/locate'), 'nothing was read on any machine').toEqual([])
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   await page.unroute(match, answer)
 
-  await click(page, kept.getByTestId('file-source-local'))
+  // A press after the file shows up asks again and opens it: a miss is never remembered.
+  await click(page, linkTo(summary, doc))
   await expectText(page, 'Line two from this machine')
+  await expectNoMachineChoice(page)
+  await closeFile(page)
+})
+
+test('a machine that did not answer is named beside the miss, Try again asks every machine once more, and the file opens when it is found', async ({ page }) => {
+  const asked: URL[] = []
+  const silent = async (route: Route) => {
+    asked.push(new URL(route.request().url()))
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ path: doc, found: false, missing: true, checked: ['This machine'], unreachable: ['Big remote host'] }) })
+  }
+  const match = (url: URL) => url.pathname === '/api/files/locate' && url.searchParams.get('anywhere') === '1'
+  await page.route(match, silent)
+  const summary = await openSummary(page)
+  await click(page, linkTo(summary, doc))
+  const missing = page.getByTestId('file-viewer-missing')
+  await expect(missing).toHaveText(`Couldn't find ${doc} on This machine. Big remote host did not answer, so the file may be there.`, { timeout: 20_000 })
+  await expectNoMachineChoice(page)
+  const again = page.getByTestId('file-viewer-try-again')
+  await expect(again).toBeVisible()
+  expect(asked).toHaveLength(1)
+  // The host answers now: Try again asks every machine once more, still naming none, and opens the file.
+  await page.unroute(match, silent)
+  await click(page, again)
+  await expectText(page, 'Line two from this machine')
+  await expect(page.getByTestId('file-viewer-try-again')).toHaveCount(0)
+  await expectNoMachineChoice(page)
+  const locates = expectAskedAnywhere()
+  expect(locates.length).toBeGreaterThan(0)
   await closeFile(page)
 })

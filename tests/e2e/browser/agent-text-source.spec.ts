@@ -15,7 +15,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
 import {
-  AGENT_TEXT_BASE as base, click, closeFile, closeLetter, openApp, openDraftOnCwd, openSessionBoard, showCustomBoard, showPointer,
+  AGENT_TEXT_BASE as base, click, closeFile, closeLetter, expectNoMachineChoice, openApp, openDraftOnCwd, openSessionBoard, showCustomBoard, showPointer,
 } from './agent-text-entry-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
@@ -123,7 +123,7 @@ test.afterAll(async ({ request }) => {
 
 // ── The remote host's answers, the session read's timing, and what the page asked ──
 
-type Touch = { api: string; host: string; path: string; method: string }
+type Touch = { api: string; host: string; path: string; method: string; anywhere: boolean; named: boolean }
 
 class Gate {
   mode: 'pass' | 'down' | 'hold' = 'pass'
@@ -143,13 +143,13 @@ function touchOf(req: Request): Touch | null {
   if (/^\/api\/(?:v1\/)?file-raw\//.test(api)) {
     const index = api.startsWith('/api/v1/') ? 4 : 3
     const [host, ...rest] = api.split('/').slice(index)
-    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method() }
+    return { api: 'file-raw', host: decodeURIComponent(host!), path: '/' + rest.map(decodeURIComponent).join('/'), method: req.method(), anywhere: false, named: true }
   }
   let body: { paths?: string[]; host?: string } = {}
   if (req.method() === 'POST') { try { body = req.postDataJSON() ?? {} } catch { /* not JSON */ } }
   const q = url.searchParams
   const target = q.get('ref') ?? q.get('path') ?? body.paths?.find((p) => p === doc || p === picture || p === dir) ?? ''
-  return { api: api.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method() }
+  return { api: api.replace('/api/', ''), host: q.get('host') ?? body.host ?? 'local', path: target, method: req.method(), anywhere: q.get('anywhere') === '1', named: q.has('host') || !!body.host }
 }
 
 const ours = (t: Touch) => t.path === doc || t.path === picture || t.path === dir
@@ -207,6 +207,8 @@ interface Net {
   /** Every file request for the seeded paths, either host. */
   files(): string[]
   remote(): string[]
+  /** The locate requests for the seeded paths, in order. */
+  locates(): Touch[]
   writes: string[]
   errors: string[]
 }
@@ -237,6 +239,7 @@ async function watchNet(page: Page): Promise<Net> {
     opens: () => touches().filter((t) => LOCAL.has(t.host) && t.api !== 'local-image').map(line),
     files: () => touches().map(line),
     remote: () => touches().filter((t) => t.host === REMOTE).map(line),
+    locates: () => touches().filter((t) => t.api === 'files/locate'),
   }
 }
 
@@ -404,37 +407,32 @@ test('a reply another task wrote opens on its session\'s host on the first press
   expect(net.opens()).toEqual([])
 })
 
-test('a session read that fails reads no file on any host and shows why; after closing, the next press opens the session\'s host', async ({ page }) => {
+test('a session read that fails opens the path where Walnut finds it, never a notice; once the session answers, the next press opens the session\'s host', async ({ page }) => {
   await openApp(page)
   const center = await openInbox(page)
   const reader = await openLetter(page, center, subjects.peer)
   const turns = await peerTurns(reader)
   net.gate.mode = 'down'
   await click(page, docIn(turns.nth(0)))
-  const failure = page.getByTestId('file-viewer-source-error')
-  await expect(failure).toBeVisible({ timeout: 20_000 })
-  await expect(failure).toContainText("Couldn't open the path")
-  await expect(failure).toContainText('No file was read')
-  await expect.poll(() => failure.evaluate((el) => {
-    const r = el.getBoundingClientRect()
-    const hit = document.elementFromPoint(r.left + 20, r.top + r.height / 2)
-    return !!hit && (hit === el || el.contains(hit))
-  })).toBe(true)
+  await expectPrimaryText(page)
+  await expectNoMachineChoice(page)
   await settle(page)
   expect(net.lookups()).toBe(1)
-  expect(net.files(), 'nothing was looked up or read on either host').toEqual([])
-  if (process.env.AGENT_TEXT_SHOTS) await page.screenshot({ path: `${process.env.AGENT_TEXT_SHOTS}/source-unavailable.png` })
-  await page.keyboard.press('Escape')
-  await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
+  expect(net.remote(), 'the remote host was never asked while its session was unreadable').toEqual([])
+  const locates = net.locates()
+  expect(locates.length, 'the press asked every machine').toBeGreaterThan(0)
+  expect(locates.every((t) => t.anywhere && !t.named), 'anywhere, no machine named').toBe(true)
+  const readsHere = net.opens().length
+  await closeFile(page)
   await expect(reader).toBeVisible()
 
-  // The read answers again; closing the error and pressing its original link retries.
+  // The read answers again; the next press on the same link opens the session's host.
   net.gate.mode = 'pass'
   await click(page, docIn(turns.nth(0)))
   await expectRemoteText(page)
   await closeFile(page)
   expect(net.lookups()).toBe(2)
-  expect(net.opens()).toEqual([])
+  expect(net.opens(), 'the writer\'s host was read, this machine no more').toHaveLength(readsHere)
 })
 
 test('a session read that answers after the letter closed opens nothing; the next press opens at once', async ({ page }) => {
@@ -532,18 +530,21 @@ const boardHtml = (heading: string) => `<!doctype html><html><head><meta charset
 <walnut-choice id="source" title="Path source" options="yes:Use the notes,no:Skip"></walnut-choice>
 </body></html>`
 
-/** The chooser's buttons are machines: this one ("Local: …") or the remote host, each naming its copies after it. */
-const LOCAL_CHOICE = /^Local: /
-const REMOTE_CHOICE = /^(?!Local: )[^:]+: /
+/**
+ * A path several writers on several machines typed (or no single writer can be named) is never a
+ * question to the person: Walnut asks every machine itself (anywhere, no machine named, no session
+ * read) and opens the file where it is found, which in this fixture is this machine's copy.
+ */
+function expectAskedAnywhere(since: number): void {
+  const locates = net.locates().slice(since)
+  expect(locates.length, 'the press asked every machine').toBeGreaterThan(0)
+  expect(locates.every((t) => t.anywhere && !t.named), 'anywhere, no machine named').toBe(true)
+}
 
-async function chooseBoardHost(page: Page, where: 'local' | 'remote', copy: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: "Choose the path's source", exact: true });
-  await expect(dialog).toBeVisible();
-  const button = dialog.getByRole('button', { name: where === 'local' ? LOCAL_CHOICE : REMOTE_CHOICE });
-  await expect(button).toHaveCount(1);
-  await expect(button).toContainText(copy);
-  await expect(dialog, 'a source never reads as a session id').not.toContainText(REMOTE_SID);
-  await click(page, button);
+async function expectPrimaryPicture(page: Page): Promise<void> {
+  const image = page.locator('.file-viewer-overlay img[src*="/api/file-raw/"]').first()
+  await expect(image).toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => image.evaluate((el: HTMLImageElement, width) => el.complete && el.naturalWidth > 0 && el.naturalWidth !== width, remoteWidth)).toBe(true)
 }
 
 async function expectPrimaryText(page: Page): Promise<void> {
@@ -552,7 +553,7 @@ async function expectPrimaryText(page: Page): Promise<void> {
   await expect(viewer.locator('.cm-content')).not.toContainText('Remote')
 }
 
-test('a Board page path opens on its writer\'s machine and a post\'s path on the session that posted it; a path typed by two machines asks which; drawing reads no session, a cancelled read opens nothing late', async ({ page, request }) => {
+test('a Board page path opens on its writer\'s machine and a post\'s path on the session that posted it; a path typed by two machines is looked up on every machine, never asked; drawing reads no session, a cancelled read opens nothing late', async ({ page, request }) => {
   const remoteReads = () => net.remote().filter((f) => f.includes('file-content'))
   const litter: string[] = []
   try {
@@ -629,18 +630,18 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
       headers: { 'x-walnut-caller-sid': REMOTE_SID }, data: { edits: [{ old: 'old notes.txt"', new: 'notes.txt"' }] },
     }), 'remote deletion creates the shortened path')
     await expect.poll(async () => new URLSearchParams(new URL((await pageLink.getAttribute('href'))!, base).search || new URL((await pageLink.getAttribute('href'))!, base).hash.slice(1)).get('path'), { timeout: 20_000 }).toBe(doc)
-    const beforeDeletion = net.files().length
+    const beforeDeletion = net.locates().length
+    const remoteBeforeDeletion = remoteReads().length
     await click(page, pageLink)
-    const deletionChoices = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
-    await expect(deletionChoices).toBeVisible()
-    expect(net.files(), 'deleting characters cannot give the old writer the shortened path').toHaveLength(beforeDeletion)
-    await chooseBoardHost(page, 'remote', 'Board page')
-    await expectRemoteText(page)
+    await expectPrimaryText(page)
+    await expectNoMachineChoice(page)
+    expectAskedAnywhere(beforeDeletion)
+    expect(remoteReads(), 'deleting characters cannot give the old writer the shortened path').toHaveLength(remoteBeforeDeletion)
     await closeFile(page)
     await ok(await request.put(`/api/v1/tasks/${leader}/board`, { data: { html: boardHtml('Page title edited remotely') } }), 'restore the person source')
     // One path typed in parts: the person's text, one letter the remote session retyped, the person's
-    // text again (A, B, A). Saved spans like these used to fail every press; now the press reads both
-    // writers' machines and asks which one, probing no file before the choice.
+    // text again (A, B, A). Saved spans like these used to fail every press; now the press looks the path up
+    // on every machine and opens it, reading no session and asking nothing.
     const typo = doc.replace(/notes\.txt$/, 'nXtes.txt')
     await ok(await request.put(`/api/v1/tasks/${leader}/board`, { data: { html: boardHtml('Page title edited remotely').replace(doc, typo) } }), 'person writes the path with a typo')
     await expect.poll(async () => new URLSearchParams(new URL((await pageLink.getAttribute('href'))!, base).search || new URL((await pageLink.getAttribute('href'))!, base).hash.slice(1)).get('path'), { timeout: 20_000 }).toBe(typo)
@@ -655,18 +656,14 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     const covering = split.html_sources.filter((x) => x.start < at + doc.length && x.end > at)
     expect(covering.map((x) => x.by), 'the path is the person\'s, the remote session\'s, the person\'s').toEqual(['human', 'task:pw-task-remote-writer', 'human'])
     expect(covering[1]).toMatchObject({ sessionId: REMOTE_SID, end: covering[1]!.start + 1 })
-    for (const where of ['remote', 'local'] as const) {
-      const beforeSplit = net.files().length
+    for (const press of [1, 2]) {
+      const beforeSplit = net.locates().length
       const lookupsBefore = net.lookups()
       await click(page, pageLink)
-      const splitChoices = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
-      await expect(splitChoices.getByRole('button', { name: LOCAL_CHOICE })).toHaveText('Local: Board page')
-      await expect(splitChoices.getByRole('button', { name: REMOTE_CHOICE })).toContainText('Board page')
-      expect(net.files(), 'reading the writers\' machines probes no file').toHaveLength(beforeSplit)
-      expect(net.lookups(), 'at most one read of the remote session, on this press').toBeLessThanOrEqual(lookupsBefore + 1)
-      await chooseBoardHost(page, where, 'Board page')
-      if (where === 'remote') await expectRemoteText(page)
-      else await expectPrimaryText(page)
+      await expectPrimaryText(page)
+      await expectNoMachineChoice(page)
+      expectAskedAnywhere(beforeSplit)
+      expect(net.lookups(), `press ${press} read no session`).toBe(lookupsBefore)
       await closeFile(page)
     }
     await ok(await request.put(`/api/v1/tasks/${leader}/board`, { data: { html: boardHtml('Page title edited remotely') } }), 'restore original path source')
@@ -678,26 +675,23 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     }), 'remote path inserted')
     const inserted = frame.locator('#worker-notes a[data-walnut-ref="file"]')
     await expect(inserted).toBeVisible({ timeout: 20_000 })
-    const beforeAmbiguous = net.files().length
     for (const link of [inserted, pageLink]) {
+      const beforeAmbiguous = net.locates().length
       await click(page, link)
-      const choices = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
-      await expect(choices).toBeVisible()
-      expect(net.files(), 'a copied frame offset never selects a machine').toHaveLength(beforeAmbiguous)
-      await expect(choices.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
-      await page.keyboard.press('Escape')
-      await expect(choices).toHaveCount(0)
+      await expectPrimaryText(page)
+      await expectNoMachineChoice(page)
+      // A copied frame offset never selects a machine: every machine is asked, none named.
+      expectAskedAnywhere(beforeAmbiguous)
+      await closeFile(page)
     }
+    // An unrelated Board update while the file is open leaves it open.
     await click(page, inserted)
-    await ok(await request.put(`/api/v1/tasks/${leader}/board/marks/source-check`, { data: { note: 'Unrelated update while choosing a source' } }), 'mark changed while choosing')
-    await chooseBoardHost(page, 'remote', 'Board page')
-    await expectRemoteText(page)
+    await expectPrimaryText(page)
+    await ok(await request.put(`/api/v1/tasks/${leader}/board/marks/source-check`, { data: { note: 'Unrelated update while a file is open' } }), 'mark changed while a file is open')
+    await settle(page)
+    await expectPrimaryText(page)
     await closeFile(page)
-    await click(page, pageLink)
-    const changingSource = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
-    await expect(changingSource).toBeVisible()
-    await ok(await request.put(`/api/v1/tasks/${leader}/board`, { data: { html: boardHtml('Same text, new owner') } }), 'whole page changes the source choice')
-    await expect(changingSource).toHaveCount(0)
+    await ok(await request.put(`/api/v1/tasks/${leader}/board`, { data: { html: boardHtml('Same text, new owner') } }), 'whole page changes the source')
     await expect(frame.locator('#page-heading')).toHaveText('Same text, new owner', { timeout: 20_000 })
     await ok(await request.post(`/api/v1/tasks/${leader}/board/edits`, {
       headers: { 'x-walnut-caller-sid': REMOTE_SID }, data: { edits: [
@@ -706,10 +700,9 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     }), 'restore two sources')
     await expect(inserted).toBeVisible({ timeout: 20_000 })
     await click(page, pageLink)
+    await expectPrimaryText(page)
     await page.setViewportSize({ width: 1024, height: 720 })
     await expect(unsent).toHaveValue('Keep these words while the Board changes the column width.')
-    await chooseBoardHost(page, 'local', 'Board page')
-    await expectPrimaryText(page)
     await closeFile(page)
     await page.setViewportSize({ width: 1280, height: 900 })
     await ok(await request.post(`/api/v1/tasks/${leader}/board/edits`, {
@@ -824,9 +817,13 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
       return hit === el || !!hit && el.contains(hit)
     })).toBe(true)
+    // The summary's path is the remote writer's and the choice's words the person's: no single writer, so
+    // every machine is asked and this machine's picture opens.
+    const beforeSummary = net.locates().length
     await click(page, summaryLink)
-    await chooseBoardHost(page, 'remote', 'Board summary')
-    await expectRemotePicture(page)
+    await expectPrimaryPicture(page)
+    await expectNoMachineChoice(page)
+    expectAskedAnywhere(beforeSummary)
     await closeFile(page)
     await expect(choice).toHaveAttribute('data-folded', '')
     await ok(await request.post(`/api/v1/tasks/${leader}/board/edits`, {
@@ -842,12 +839,10 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await settle(page)
     net.reset()
     await click(page, summaryLink)
-    const cutChoice = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
-    await expect(cutChoice).toBeVisible()
+    await expectPrimaryPicture(page)
+    await expectNoMachineChoice(page)
     await settle(page)
-    expect(net.remote(), 'the shortened path cannot borrow the old writer before a choice').toEqual([])
-    await chooseBoardHost(page, 'remote', 'Board summary')
-    await expectRemotePicture(page)
+    expect(net.remote(), 'the shortened path cannot borrow the old writer').toEqual([])
     await closeFile(page)
     await ok(await request.post(`/api/v1/tasks/${leader}/board/edits`, {
       headers: { 'x-walnut-caller-sid': REMOTE_SID },
@@ -862,11 +857,10 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await settle(page)
     net.reset()
     await click(page, summaryLink)
-    await expect(cutChoice).toBeVisible()
+    await expectPrimaryPicture(page)
+    await expectNoMachineChoice(page)
     await settle(page)
-    expect(net.remote(), 'the early-terminated path asks before reading the old machine').toEqual([])
-    await chooseBoardHost(page, 'remote', 'Board summary')
-    await expectRemotePicture(page)
+    expect(net.remote(), 'the early-terminated path never reads the old machine').toEqual([])
     await closeFile(page)
     await ok(await request.post(`/api/v1/tasks/${leader}/board/edits`, {
       data: { edits: [{ old: ` summary="Encoded notes: ${picture}&#10x.bak"`, new: '' }] },
@@ -900,40 +894,32 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await settle(page)
     expect(net.lookups(), 'drawing the post read no session').toBe(0)
 
-    // Two writers on two machines: the press reads the post's session first, and says so while it waits.
-    // Closed with Escape while that read is out: the late answer opens nothing and asks nothing.
+    // Two writers on two machines (the person's page, the remote session's post): no session is read and
+    // nothing waits. Even with the session read held, the press asks every machine and opens at once.
     net.gate.mode = 'hold'
+    const beforePost = net.locates().length
     await click(page, postLink())
-    const pending = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
-    await expect(pending.getByRole('status')).toContainText('Finding the machine each one is on')
-    await expect.poll(() => net.gate.held, { timeout: 20_000 }).toBe(1)
-    await expect(pending.getByRole('button', { name: LOCAL_CHOICE })).toHaveCount(0)
-    const cancel = pending.getByRole('button', { name: 'Cancel', exact: true })
-    await expect(cancel, 'the pending dialog can always be left').toBeEnabled()
-    await expect(cancel).toBeFocused()
-    await page.keyboard.press('Escape')
-    await expect(pending).toHaveCount(0)
-    const late = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${REMOTE_SID}`)
-    net.gate.release()
-    expect((await late).ok()).toBe(true)
-    await settle(page)
-    await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
-    await expect(pending).toHaveCount(0)
-    expect(net.remote(), 'the late answer opened nothing').toEqual([])
-    expect(net.lookups()).toBe(1)
-
-    // Press again: the record is known now, so the machines are named at once, each first on its button.
-    await click(page, postLink())
-    await chooseBoardHost(page, 'remote', 'Reply by Remote writer fixture in notes')
-    await expectRemoteText(page)
+    await expectPrimaryText(page)
+    await expectNoMachineChoice(page)
+    expectAskedAnywhere(beforePost)
+    expect(net.gate.held, 'no session read waits on the press').toBe(0)
+    expect(net.lookups()).toBe(0)
     await closeFile(page)
-    expect(net.lookups()).toBe(1)
+    net.gate.release()
+    expect(net.remote(), 'the remote host was never asked').toEqual([])
+
+    // Press again: the same, from the first press to the last.
+    await click(page, postLink())
+    await expectPrimaryText(page)
+    await expectNoMachineChoice(page)
+    await closeFile(page)
+    expect(net.lookups()).toBe(0)
 
     // The same path on the page, after the post: still the page's writer, this machine.
     const remoteBefore = remoteReads().length
     await click(page, pageLink)
-    await chooseBoardHost(page, 'local', 'Board page')
     await expectPrimaryText(page)
+    await expectNoMachineChoice(page)
     await closeFile(page)
     expect(remoteReads()).toHaveLength(remoteBefore)
 
@@ -950,8 +936,8 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
 
     // ── The same page as an older Walnut stored it: a task writer with no session saved beside it ──
     // (no spans, no updated_session_id). That task's session now may run on another machine than the one
-    // that wrote the text, so the press reads no task, no session and no file, and opens nothing, even
-    // though the post's copy of the path still names its own session.
+    // that wrote the text, so the press names no machine, reads no task and no session: Walnut looks the
+    // path up on every machine and opens it where it is found.
     const olderTask = 'pw-task-001'
     const boardRoute = (url: URL) => url.pathname === `/api/v1/tasks/${leader}/board` && !url.searchParams.has('fields')
     const asOlder = async (route: Route) => {
@@ -979,16 +965,18 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
       await olderAnswer
       await expect(pageLink).toBeVisible({ timeout: 20_000 })
       await settle(page)
-      const filesBefore = net.files().length
+      const locatesBefore = net.locates().length
       const lookupsBefore = net.lookups()
+      const remoteBeforeOlder = net.remote().length
       const oldRange = frame.locator('#old-range a[data-walnut-ref="file"]')
       await expect(oldRange).toBeVisible()
       await click(page, oldRange)
-      await expect(page.locator('.file-viewer-overlay').getByTestId('file-viewer-source-error')).toContainText('No file was read', { timeout: 20_000 })
+      await expectPrimaryText(page)
       await expect(page.locator('.file-viewer-line')).toHaveText(':2')
-      await expect(page.getByRole('dialog', { name: "Choose the path's source", exact: true })).toHaveCount(0)
+      await expectNoMachineChoice(page)
       await settle(page)
-      expect(net.files(), 'an older task writer opens nothing on any machine').toHaveLength(filesBefore)
+      expectAskedAnywhere(locatesBefore)
+      expect(net.remote(), 'an older task writer asks the remote host nothing').toHaveLength(remoteBeforeOlder)
       expect(net.lookups(), 'and reads no session for it').toBe(lookupsBefore)
       expect(taskReads, 'and never reads the task to guess its machine').toEqual([])
       await closeFile(page)
@@ -1032,25 +1020,23 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await expect(frame.locator('#page-heading')).toHaveText('Written by a person again', { timeout: 20_000 })
     await settle(page)
     expect(await frame.locator('body').evaluate(() => (window as unknown as { nonceCaptured: boolean }).nonceCaptured)).toBe(false)
-    await expect(page.getByRole('dialog', { name: "Choose the path's source", exact: true })).toHaveCount(0)
+    await expectNoMachineChoice(page)
     await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
     const remoteAfter = remoteReads().length
     await click(page, pageLink)
-    await chooseBoardHost(page, 'local', 'Board page')
     await expectPrimaryText(page)
     await closeFile(page)
     expect(remoteReads()).toHaveLength(remoteAfter)
     // Copying a real post's DOM attributes cannot borrow that post's machine.
     await click(page, frame.locator('#forged-path'))
-    await chooseBoardHost(page, 'local', 'Board page')
     await expectPrimaryText(page)
     await closeFile(page)
     expect(remoteReads()).toHaveLength(remoteAfter)
-    // The post kept its own session through both page writes.
+    // The post kept its own session through both page writes: two writers still, so every machine is asked.
     await click(page, postLink())
-    await chooseBoardHost(page, 'remote', 'Reply by Remote writer fixture in notes')
-    await expectRemoteText(page)
+    await expectPrimaryText(page)
     await closeFile(page)
+    expect(remoteReads()).toHaveLength(remoteAfter)
     expect(net.lookups(), 'one session read since the fresh post-lifetime page').toBe(1)
     await expect(unsent).toHaveValue('Keep these words while the Board changes the column width.')
     await page.setViewportSize({ width: 1024, height: 720 })
@@ -1058,39 +1044,39 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await page.setViewportSize({ width: 1280, height: 900 })
     await expect(unsent).toHaveValue('Keep these words while the Board changes the column width.')
 
-    // ── The Board changes while the machines are read: the late answer opens nothing ──
-    // A fresh page holds no session record, so the press must read the post's session. While that read is
-    // held, the leader's only worker finishes: the open Board stays, as the reader opened it while the task
-    // led (an open Board stays until the reader leaves it, 2026-11-19; session-board-tab-lead-only.spec.ts D).
-    // Then the page is written again: the new version outdates the open in flight and closes its chooser
-    // (TaskBoardPane's layout cleanup, the one an unmount runs), with nobody dismissing it.
+    // ── The Board changes while the writer's session is read: the late answer opens nothing ──
+    // The page is the remote session's alone now, so one writer names the machine and its session is read.
+    // A fresh page holds no session record, so the press must read it. While that read is held, the
+    // leader's only worker finishes: the open Board stays, as the reader opened it while the task led
+    // (an open Board stays until the reader leaves it, 2026-11-19; session-board-tab-lead-only.spec.ts D).
+    // Then the page is written again: the new version outdates the open in flight, with nobody dismissing it.
+    await ok(await request.put(`/api/v1/tasks/${leader}/board`, {
+      headers: { 'x-walnut-caller-sid': REMOTE_SID }, data: { html: boardHtml('Written by the remote session again') },
+    }), 'board by the remote session again')
     await leaveFullscreen(page)
     await page.reload()
     pane = page.getByTestId('task-board-pane')
     if (!(await pane.isVisible())) pane = await openSessionBoard(page, panel)
     await showCustomBoard(pane)
-    await expect(postLink()).toBeVisible({ timeout: 20_000 })
+    await expect(frame.locator('#page-heading')).toHaveText('Written by the remote session again', { timeout: 20_000 })
+    await expect(pageLink).toBeVisible({ timeout: 20_000 })
     await settle(page)
     net.reset()
     net.gate.mode = 'hold'
-    await click(page, postLink())
-    const closing = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
-    await expect(closing.getByRole('status')).toContainText('Finding the machine each one is on')
+    await click(page, pageLink)
     await expect.poll(() => net.gate.held, { timeout: 20_000 }).toBe(1)
     await ok(await request.patch(`/api/tasks/${worker.id}`, { data: { phase: 'COMPLETE' } }), 'last worker completed while its path source is read')
     // The page hears the change over its socket within a beat; give it two, then judge.
     await page.waitForTimeout(2000)
     await expect(page.getByTestId('task-board-pane'), 'the Board the reader opened stays when the team finishes').toBeVisible()
-    await expect(closing.getByRole('status')).toContainText('Finding the machine each one is on')
     await ok(await request.put(`/api/v1/tasks/${leader}/board`, { data: { html: boardHtml('Written again while a source is read') } }), 'board written again while its path source is read')
-    await expect(closing).toHaveCount(0, { timeout: 20_000 })
     await expect(frame.locator('#page-heading')).toHaveText('Written again while a source is read', { timeout: 20_000 })
-    const lateAfterClose = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${REMOTE_SID}`)
+    const lateAfterChange = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${REMOTE_SID}`)
     net.gate.release()
-    expect((await lateAfterClose).ok()).toBe(true)
+    expect((await lateAfterChange).ok()).toBe(true)
     await settle(page)
     await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
-    await expect(closing).toHaveCount(0)
+    await expectNoMachineChoice(page)
     expect(net.remote(), 'the late answer after the Board changed opened nothing').toEqual([])
     expect(net.primary(), 'nor anything on this machine').toEqual([])
     expect(net.lookups()).toBe(1)

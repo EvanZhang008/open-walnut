@@ -4391,7 +4391,7 @@ rejected, 4096-char cap.
   sentence period or comma, or spelled with Windows separators. The position comes
   back as `line`/`column`/`endLine` — present even on a failed resolve, since the
   reference asked for it either way.
-- `GET /api/v1/files/locate?ref=&cwd=&host=[&sessionId=]` (additive, 2026-11) →
+- `GET /api/v1/files/locate?ref=&cwd=&host=[&sessionId=&anywhere=1&taskId=]` (additive, 2026-11) →
   `{ "path", "host"?, "hostName"?, "found", "elsewhere"?, "missing"?, "checked"?, "via"?,
     "line"?, "column"?, "endLine"? }` — where a tapped path lives. A session on one
   host often names a file on another (a Mac path in a Linux session). An absolute
@@ -4404,6 +4404,12 @@ rejected, 4096-char cap.
   first); a client says so instead of opening a stand-in. `found: false` without
   `missing` means the session's host could not answer now: open on it as before. A
   relative `ref` needs `cwd` and is resolved on the session's host only.
+  `anywhere=1` (additive, 2026-11-23), with no `host`: the writer of the words is not
+  known, so every host is asked, the hosts of `taskId`'s sessions (and of the task a
+  `.../open-walnut/tasks/<id>/` path names) first, and the path opens from the first
+  that has it (`elsewhere: true`, `via: "anywhere"`); a relative `ref` answers
+  `missing` with an empty `checked`. An older primary ignores it and answers as for
+  no `host`. A client never asks the person to pick a machine.
   REPLICA: relays as `server.files.locate`. An older primary answers 404: fall back
   to opening the path on the session's host.
 - `GET /api/v1/file-content?path=&host=` → `{ "content", "size",

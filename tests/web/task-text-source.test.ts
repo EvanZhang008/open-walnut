@@ -16,7 +16,9 @@ const task = (over: Record<string, unknown> = {}): Task => ({
   id: 't1', title: 'T', session_ids: ['s-old', CURRENT], session_id: CURRENT, exec_session_id: CURRENT, ...over,
 } as unknown as Task)
 const status = (us: Record<string, unknown>) => task({ user_status: { state: 'waiting', ...us } })
-const UNKNOWN: AgentTextSource = { unknownSource: true }
+// An unrecorded writer still names its task, so a path is looked up on that task's machines first.
+const UNKNOWN: AgentTextSource = { unknownSource: true, taskId: 't1' }
+const UNKNOWN_NO_TASK: AgentTextSource = { unknownSource: true }
 const PRIMARY: AgentTextSource = { host: '__local__' }
 const FIELDS: TaskTextField[] = ['report', 'waiting', 'needs', 'line', 'summary', 'lastWords', 'result', 'partial']
 
@@ -99,8 +101,8 @@ describe('the writer of a task\'s stored words', () => {
     for (const f of FIELDS) {
       expect(taskTextSource(bare, f), f).toEqual(UNKNOWN)
       expect(sourceHostOf(taskTextSource(bare, f)), f).toEqual({ kind: 'unknown' })
-      expect(taskTextSource(undefined, f), f).toEqual(UNKNOWN)
-      expect(taskTextSource(null, f), f).toEqual(UNKNOWN)
+      expect(taskTextSource(undefined, f), f).toEqual(UNKNOWN_NO_TASK)
+      expect(taskTextSource(null, f), f).toEqual(UNKNOWN_NO_TASK)
       // The helper never attaches the task: a renderer must not fall back to its session.
       expect(taskTextSource(bare, f).task, f).toBeUndefined()
     }
@@ -110,15 +112,22 @@ describe('the writer of a task\'s stored words', () => {
     const t = status({ now: 'see /home/me/plan.md', reportSessionId: 's-old' })
     const fetch = vi.fn(async (sid: string) => ({ host: sid === 's-old' ? 'old-box' : 'new-box' }))
     const open = vi.fn()
-    await openFromSource(taskTextSource(t, 'report'), { path: '/home/me/plan.md' }, { lookup: { peek: () => null, fetch }, open, fail: vi.fn() })
+    await openFromSource(taskTextSource(t, 'report'), { path: '/home/me/plan.md' }, { lookup: { peek: () => null, fetch }, open })
     expect(fetch).toHaveBeenCalledExactlyOnceWith('s-old')
     expect(open).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/plan.md', host: 'old-box' })
 
     // A person's report opens on the primary with no lookup, even when the task runs remotely now.
     const human = status({ now: 'x', reportBy: 'human', reportSessionId: CURRENT })
     const open2 = vi.fn()
-    await openFromSource(taskTextSource(human, 'report'), { path: '/home/me/plan.md' }, { lookup: { peek: () => null, fetch }, open: open2, fail: vi.fn() })
+    await openFromSource(taskTextSource(human, 'report'), { path: '/home/me/plan.md' }, { lookup: { peek: () => null, fetch }, open: open2 })
     expect(open2).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/plan.md', host: undefined })
+    expect(fetch).toHaveBeenCalledOnce()
+
+    // An unrecorded writer reads no session and looks the path up on every machine, its task first.
+    const unrecorded = status({ now: 'x', reportBy: 'self' })
+    const open3 = vi.fn()
+    await openFromSource(taskTextSource(unrecorded, 'report'), { path: '/home/me/plan.md', line: 3 }, { lookup: { peek: () => null, fetch }, open: open3 })
+    expect(open3).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/plan.md', line: 3, anywhere: true, taskId: 't1' })
     expect(fetch).toHaveBeenCalledOnce()
   })
 })

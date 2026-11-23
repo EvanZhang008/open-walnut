@@ -11,7 +11,7 @@ import '@/styles/agent-links.css';
 
 export function AnywhereFileViewer() {
   const [req, setReq] = useState<OpenFileRequest | null>(null);
-  // Every open is a fresh viewer, so a machine chosen for an earlier unknown-source path never carries over.
+  // Every open is a fresh viewer: a lookup still out for the previous path never draws in the next.
   const [generation, setGeneration] = useState(0);
   useEffect(() => {
     const onOpen = (e: Event) => {
@@ -34,9 +34,9 @@ export function AnywhereFileViewer() {
       {...(req.endLine ? { endLine: req.endLine } : {})}
       {...(req.host ? { host: req.host } : {})}
       {...(req.sourceOnly ? { sourceOnly: true } : {})}
-      {...(req.sourceFailure ? { sourceFailure: req.sourceFailure } : {})}
-      {...(req.sourceReason ? { sourceReason: req.sourceReason } : {})}
-      {...(req.retry ? { onRetry: req.retry } : {})}
+      {...(req.anywhere ? { anywhere: true } : {})}
+      {...(req.taskId ? { taskId: req.taskId } : {})}
+      {...(req.hintSessions?.length ? { hintSessions: req.hintSessions } : {})}
       onClose={() => setReq(null)}
     />
   );

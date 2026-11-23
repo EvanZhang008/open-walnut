@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
-  BOARD_FRAME_CSP, advanceSeen, boardFileSource, boardHostChoices, boardPathSource, boardReferenceSources, boardChoiceFileSource, boardMentionTokens, boardWriterLabel, buildFrameRefs, frameRefsEqual, mentionFrameRefs, mergeBoardMessage,
+  BOARD_FRAME_CSP, advanceSeen, boardFileSource, boardPathSource, boardReferenceSources, boardChoiceFileSource, boardMentionTokens, boardWriterLabel, buildFrameRefs, frameRefsEqual, mentionFrameRefs, mergeBoardMessage,
   newBoardNonce, parseSeen, safeExternalHref, threadAuthorIds, wrapBoardHtml, type BoardMessage,
 } from '../../web/src/components/board/board-model';
 import { adoptCandidates, adoptExclusions } from '../../web/src/components/tasks/adopt-candidates';
@@ -546,33 +546,6 @@ describe('boardReferenceSources: every writer of one stored reference', () => {
 
   it('boardPathSource still names one writer only when every reference has exactly one', () => {
     expect(boardPathSource('owner', new Map([[start, { path, end }]]), path, aba)).toEqual({ taskId: 'owner', sourceFailure: true });
-  });
-});
-
-describe('boardHostChoices: copies on one machine are one choice', () => {
-  it('merges every spelling of this machine and every copy on one remote host', () => {
-    expect(boardHostChoices([
-      { host: '', label: 'Board page' },
-      { host: '__local__', label: 'Reply by You in notes' },
-      { host: 'local', label: 'Board page' },
-    ])).toEqual([{ host: '', details: ['Board page', 'Reply by You in notes'] }]);
-    expect(boardHostChoices([
-      { host: 'devbox', label: 'Board page', title: 'Worker one' },
-      { host: 'devbox', label: 'Board page', title: 'Worker two' },
-      { host: 'devbox', label: 'Board page', title: 'Worker one' },
-    ])).toEqual([{ host: 'devbox', details: ['Board page (Worker one)', 'Board page (Worker two)'] }]);
-  });
-
-  it('keeps machines apart even when the titles are the same, in first-seen order', () => {
-    expect(boardHostChoices([
-      { host: 'devbox', label: 'Board page', title: 'Same title' },
-      { label: 'Board page', title: 'Same title' },
-      { host: 'other', label: 'Answer in source' },
-    ])).toEqual([
-      { host: 'devbox', details: ['Board page (Same title)'] },
-      { host: '', details: ['Board page (Same title)'] },
-      { host: 'other', details: ['Answer in source'] },
-    ]);
   });
 });
 

@@ -19,6 +19,13 @@
  *     relative path that only makes sense there.
  *  3. Nowhere: `missing` with the hosts that were asked, never a stand-in folder
  *     as shallow as `/`.
+ *
+ * Words whose writer Walnut did not record (`anywhere`) have no session host: every
+ * machine is asked, the hosts of the task the words or the path name first
+ * (`taskId`, a task directory's `<id>`), and the file opens from the one that has it.
+ * The person is never asked to pick a machine (2026-11-23, Evan: "Why walnut not
+ * auto pic the host it need me to pick", "or which task it is ... then walnut will
+ * take care find it").
  */
 
 import os from 'node:os'
@@ -36,6 +43,42 @@ export interface LocateRequest {
   host?: string
   sessionId?: string
   sourceOnly?: boolean
+  /** The writer is unknown: no session host, every machine is asked (locateAnywhere). */
+  anywhere?: boolean
+  /** A task the words belong to: its sessions' hosts are asked first when `anywhere`. */
+  taskId?: string
+  /** Sessions that wrote the words ('__local__' for the person on the primary): their hosts are
+   *  asked first of all when `anywhere` (several writers on a Board or a Brief). */
+  hintSessions?: string[]
+}
+
+/** The request as the web route, the v1 route and the replica relay hand it over. */
+export function locateRequestOf(q: Record<string, unknown>): LocateRequest {
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+  const flag = (v: unknown) => v === true || v === '1'
+  return {
+    ref: q.ref, cwd: str(q.cwd), host: str(q.host), sessionId: str(q.sessionId),
+    sourceOnly: flag(q.sourceOnly),
+    ...(flag(q.anywhere) ? { anywhere: true } : {}),
+    ...(str(q.taskId) ? { taskId: str(q.taskId) } : {}),
+    ...(hintsOf(q.hintSessions).length ? { hintSessions: hintsOf(q.hintSessions) } : {}),
+  }
+}
+
+/** Up to 20 session ids, from a comma list (the query) or an array (the relay). */
+function hintsOf(v: unknown): string[] {
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : []
+  return [...new Set(list.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean))].slice(0, 20)
+}
+
+/** The query string fields of a request, for a relay to the primary (only those set). */
+export function locateBodyOf(r: LocateRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = { ref: r.ref }
+  for (const k of ['cwd', 'host', 'sessionId', 'taskId'] as const) if (r[k]) body[k] = r[k]
+  if (r.sourceOnly) body.sourceOnly = true
+  if (r.anywhere) body.anywhere = true
+  if (r.hintSessions?.length) body.hintSessions = r.hintSessions
+  return body
 }
 
 export interface LocateResult {
@@ -52,6 +95,8 @@ export interface LocateResult {
   missing?: boolean
   /** Names of the hosts that were asked, as a person knows them (for `missing`). */
   checked?: string[]
+  /** `anywhere` only: hosts that could not answer now (down, dialing): the file may be there. */
+  unreachable?: string[]
   via?: string
   line?: number
   column?: number
@@ -72,14 +117,14 @@ function pathOrigin(p: string): 'mac' | 'linux' | null {
  * The hosts to ask besides the session's, in tie-break order. This machine is
  * a host like the others (absent key); a disabled host is not asked.
  */
-async function otherHosts(sessionHost: string | undefined, p: string): Promise<Array<{ key?: string; name: string }>> {
+async function otherHosts(sessionHost: string | undefined, p: string, withLocal = !!sessionHost): Promise<Array<{ key?: string; name: string }>> {
   const config = await getConfig()
   const { runsSessions } = await import('../../core/server-role.js')
   const remotes = Object.entries(config.hosts ?? {})
     .filter(([key, def]) => key !== sessionHost && def?.hostname && def.enabled !== false)
     .map(([key, def]) => ({ key, name: hostDisplayName(key, def.label) }))
   // A box where no session runs (the companion) holds none of their files (linkPathsExist answers nothing there anyway).
-  const local = sessionHost && runsSessions() ? [{ name: LOCAL_NAME }] : []
+  const local = withLocal && runsSessions() ? [{ name: LOCAL_NAME }] : []
   const localIsMac = os.platform() === 'darwin'
   const origin = pathOrigin(p)
   const localFirst = origin === null || (origin === 'mac') === localIsMac
@@ -103,6 +148,9 @@ async function existsOn(p: string, host: string | undefined): Promise<boolean | 
 const RESOLVE_BUDGET_MS = 4_000
 /** How long a host earlier in the order may still answer once a later one has the file. */
 const TIE_GRACE_MS = 300
+/** With no session host (`anywhere`), how long a host earlier in the order (a hint) may still
+ *  answer once a later one has the file: a hinted host that is down must not hold the click. */
+const ANYWHERE_GRACE_MS = 800
 
 /**
  * The first answer that has the file, in order: index `i` wins once it answers
@@ -112,7 +160,9 @@ const TIE_GRACE_MS = 300
  * machine, and its copy of a path both have (`/tmp/...`) is the one meant.
  * `hit` is -1 when none has it; `answers` is then complete.
  */
-function firstFound(asks: Promise<boolean | undefined>[]): Promise<{ hit: number; answers: (boolean | undefined)[] }> {
+function firstFound(asks: Promise<boolean | undefined>[], opts: { waitFirst?: boolean; graceMs?: number } = {}): Promise<{ hit: number; answers: (boolean | undefined)[] }> {
+  const waitFirst = opts.waitFirst ?? true
+  const graceMs = opts.graceMs ?? TIE_GRACE_MS
   return new Promise((resolve) => {
     const answers: (boolean | undefined)[] = new Array(asks.length)
     const settled: boolean[] = new Array(asks.length).fill(false)
@@ -124,16 +174,77 @@ function firstFound(asks: Promise<boolean | undefined>[]): Promise<{ hit: number
     const decide = (force: boolean) => {
       if (done) return
       const b = best()
-      if (b !== -1 && settled[0] && (force || settled.slice(0, b).every(Boolean))) {
+      if (b !== -1 && (settled[0] || !waitFirst) && (force || settled.slice(0, b).every(Boolean))) {
         done = true; clearTimeout(grace); resolve({ hit: b, answers }); return
       }
       if (settled.every(Boolean)) { done = true; clearTimeout(grace); resolve({ hit: -1, answers }); return }
-      if (b !== -1 && !grace) grace = setTimeout(() => { forced = true; decide(true) }, TIE_GRACE_MS)
+      if (b !== -1 && !grace) grace = setTimeout(() => { forced = true; decide(true) }, graceMs)
     }
     asks.forEach((ask, i) => {
       void ask.catch(() => undefined).then((a) => { answers[i] = a; settled[i] = true; decide(forced) })
     })
   })
+}
+
+/** The task a path in a Walnut task directory belongs to (`.../open-walnut/tasks/<id>/...`). */
+export function taskIdOfTaskDirPath(p: string): string | undefined {
+  return /\/open-walnut\/tasks\/([^/]+)\/./.exec(p)?.[1]
+}
+
+const LOCAL_KEYS = new Set(['', '__local__', 'local'])
+
+/**
+ * Host keys ('' = this machine) to ask first, in order: the writing sessions' hosts ('__local__'
+ * is the person on the primary), then the hosts the tasks' sessions ran on, newest session first.
+ * A task id counts only when it is a task's exact id (a path segment may be any word); an
+ * unknown id or session adds none.
+ */
+async function hintedHosts(sessionIds: readonly string[], taskIds: Array<string | undefined>): Promise<string[]> {
+  const out: string[] = []
+  const add = (host: string | undefined) => { const key = !host || LOCAL_KEYS.has(host) ? '' : host; if (!out.includes(key)) out.push(key) }
+  const [{ getTask }, { getSessionByClaudeId }] = await Promise.all([
+    import('../../core/task-manager.js'), import('../../core/session-tracker.js'),
+  ])
+  const ofSession = async (sid: string) => {
+    if (LOCAL_KEYS.has(sid)) { add(''); return }
+    const record = await getSessionByClaudeId(sid).catch(() => null)
+    if (record) add(record.host)
+  }
+  for (const sid of sessionIds) await ofSession(sid)
+  for (const id of new Set(taskIds.filter((x): x is string => !!x))) {
+    let task: Awaited<ReturnType<typeof getTask>>
+    try { task = await getTask(id) } catch { continue }
+    if (task.id !== id) continue
+    const sids = [task.session_id, task.exec_session_id, task.plan_session_id, ...[...(task.session_ids ?? [])].reverse()]
+    for (const sid of new Set(sids.filter((x): x is string => !!x))) await ofSession(sid)
+  }
+  return out
+}
+
+/**
+ * A path whose writer is unknown: every machine is asked at once, in order (the named task's
+ * hosts, then the host the path's shape points at), and the first that has it wins. A relative
+ * path means nothing without its writer's folder: it says so instead of guessing one.
+ */
+async function locateAnywhere(req: LocateRequest, p: string, absolute: boolean, pos: Pick<LocateResult, 'line' | 'column' | 'endLine'>): Promise<LocateResult> {
+  if (!absolute) return { path: p, found: false, missing: true, checked: [], ...pos }
+  const every = await otherHosts(undefined, p, true)
+  const hinted = await hintedHosts(req.hintSessions ?? [], [req.taskId, taskIdOfTaskDirPath(p)]).catch(() => [] as string[])
+  const rank = (o: { key?: string }) => { const i = hinted.indexOf(o.key ?? ''); return i < 0 ? hinted.length : i }
+  // A stable sort: hinted hosts first, the rest in the path's own order.
+  const order = every.map((o, i) => ({ o, i })).sort((a, b) => rank(a.o) - rank(b.o) || a.i - b.i).map((x) => x.o)
+  if (order.length === 0) return { path: p, found: false, missing: true, checked: [], ...pos }
+  // No host here is the writer's for sure: a hint that is down must not hold the click.
+  const { hit, answers } = await firstFound(order.map((o) => existsOn(p, o.key)), { waitFirst: false, graceMs: ANYWHERE_GRACE_MS })
+  if (hit >= 0) {
+    const o = order[hit]!
+    return { path: p, ...(o.key ? { host: o.key } : {}), hostName: o.name, found: true, elsewhere: true, via: 'anywhere', ...pos }
+  }
+  const unreachable = order.filter((_, i) => answers[i] !== false).map((o) => o.name)
+  return {
+    path: p, found: false, missing: true, checked: order.filter((_, i) => answers[i] === false).map((o) => o.name),
+    ...(unreachable.length ? { unreachable } : {}), ...pos,
+  }
 }
 
 export async function locateClickedPath(req: LocateRequest): Promise<LocateResult> {
@@ -152,6 +263,7 @@ export async function locateClickedPath(req: LocateRequest): Promise<LocateResul
   }
   const p = parsed.path
   const absolute = p.startsWith('/') || p === '~' || p.startsWith('~/')
+  if (req.anywhere && !host && !req.sourceOnly) return locateAnywhere(req, p, absolute, pos)
 
   // 1. The exact path, on every host at once.
   if (absolute) {
