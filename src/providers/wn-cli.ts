@@ -43,7 +43,7 @@ import { SKILL_POINTER, formatOpHelp, formatToolsTable, inGroup, type ToolGroupR
 import { failureOnStdout, gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
-import { cliAnswerText } from '../lib/tool-answer-size.js'
+import { PROGRAM_CLIENT, cliAnswerText } from '../lib/tool-answer-size.js'
 import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
 import {
   MCP_CLI_HELP, formatMcpServers, formatMcpToolHelp, formatMcpTools, isNotReadOnlyRefusal, parseMcpCliArgs,
@@ -834,7 +834,7 @@ async function runTriggerCheckViaGateway(
     // No wait: a check that meets no server is a quiet run that keeps its cursor (templateCheckGap,
     // below), and the next run picks up; waiting would only hold the check, which the daemon kills at 30 s.
     resp = await requestOverSocket(socketPath, toolsCallLine(sid,
-      { name: 'trigger_template_check', args: { template: parsed.template, params, input: templateCheckRequestInput(input) } },
+      { name: 'trigger_template_check', args: { template: parsed.template, params, input: templateCheckRequestInput(input) }, client: PROGRAM_CLIENT },
       'none', templateCheckReplyMs(performance.now())))
   } catch (err) {
     return gap('unreachable', `the Walnut daemon did not answer (${err instanceof Error ? err.message : String(err)})`)
@@ -1040,7 +1040,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         client: 'cli',
         ...testRunArg(),
       }
-      : parsed.kind === 'guide' ? { name: 'skill_read', args: { dirName: 'walnut' } }
+      : parsed.kind === 'guide' ? { name: 'skill_read', args: { dirName: 'walnut' }, client: 'cli' }
         // One-op catalog request: the hub answers with that op's full parameter
         // rows instead of the whole (much larger) catalog. An older hub ignores
         // `name` and returns everything — the render below still finds the row.
@@ -1217,7 +1217,7 @@ async function recordCardedCall(
       fields,
     }
     // No wait: display data only, and it must not hold the CLI's exit.
-    await requestOverSocket(socketPath, toolsCallLine(sid, { name: 'op_card_record', args: record, callId: newCallId() }, 'none', RECORD_TIMEOUT_MS))
+    await requestOverSocket(socketPath, toolsCallLine(sid, { name: 'op_card_record', args: record, callId: newCallId(), client: PROGRAM_CLIENT }, 'none', RECORD_TIMEOUT_MS))
   } catch { /* display data only */ }
 }
 
@@ -1291,7 +1291,8 @@ async function runMcpCli(argv: string[]): Promise<number> {
     // The call's id (src/lib/op-call-id.ts): a resend runs it at most once, op_result reads it.
     const callId = newCallId()
     // A call waits out a server restart as `walnut tools call` does.
-    const line = toolsCallLine(sid, { name, args, callId }, cliWaitMs())
+    // `walnut mcp` prints the answer to the agent, as `walnut tools call` does.
+    const line = toolsCallLine(sid, { name, args, callId, client: 'cli' }, cliWaitMs())
     try {
       const resp = await requestRidingRestart(socketPath, line)
       if (!resp.ok && resp.error.code === 'hub_timeout') process.stderr.write(lostCallLines(name, undefined, callId).join('\n') + '\n')
@@ -1447,7 +1448,9 @@ function gatewayOpCall(socketPath: string, sid: string) {
       // The daemon holds the call as long as a `walnut tools call` (cliWaitMs): a browser step that
       // waits for the person holds up to 25 s on the Mac, past the gateway's 20 s default
       // (2026-11-16: an upload the person approved came back "primary server timed out").
-      resp = await requestOverSocket(socketPath, toolsCallLine(sid, { name, args, callId, ...testRunArg() }, cliWaitMs()))
+      // A program reads the answer (PROGRAM_CLIENT): whole, as the same loop reads it on the Mac
+      // (2026-11-23: a cut approval_request answer lost its single-use envelope).
+      resp = await requestOverSocket(socketPath, toolsCallLine(sid, { name, args, callId, client: PROGRAM_CLIENT, ...testRunArg() }, cliWaitMs()))
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }
@@ -1551,7 +1554,7 @@ async function runWait(
   for (;;) {
     let resp: GatewayResponse
     try {
-      resp = await requestOverSocket(socketPath, toolsCallLineWithin(sid, { name: opName, args: { id: parsed.id } }, deadline - Date.now(), cliWaitMs()))
+      resp = await requestOverSocket(socketPath, toolsCallLineWithin(sid, { name: opName, args: { id: parsed.id }, client: PROGRAM_CLIENT }, deadline - Date.now(), cliWaitMs()))
     } catch (err) {
       // A transient hub/daemon hiccup must not abort a long wait — keep polling
       // until the budget runs out; only report the transport error at the end.
@@ -1611,7 +1614,7 @@ async function runWaitMany(
       if (settled.has(id)) continue
       let resp: GatewayResponse
       try {
-        resp = await requestOverSocket(socketPath, toolsCallLineWithin(sid, { name: id.startsWith('rq-') ? 'request_get' : 'task_get', args: { id } }, deadline - Date.now(), cliWaitMs()))
+        resp = await requestOverSocket(socketPath, toolsCallLineWithin(sid, { name: id.startsWith('rq-') ? 'request_get' : 'task_get', args: { id }, client: PROGRAM_CLIENT }, deadline - Date.now(), cliWaitMs()))
       } catch (err) {
         // Transient, as in the one-id wait: keep polling until the budget runs out.
         latest.set(id, { ...(latest.get(id) ?? {}), transportError: err instanceof Error ? err.message : String(err) })

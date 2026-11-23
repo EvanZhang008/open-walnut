@@ -261,7 +261,8 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
         call: async (name: string, args?: Record<string, unknown>): Promise<Record<string, unknown>> => {
           if (typeof name !== 'string' || !name) throw new Error('ops.call needs an op name')
           if (!socketPath) throw new Error('this job has no Walnut daemon to ask (WALNUT_AGENT_SOCKET is unset)')
-          return gateway(socketPath, sid, 'tools.call', { name, args: args && typeof args === 'object' ? args : {} })
+          // A job reads the answer as data: whole ('program', lib/tool-answer-size.ts PROGRAM_CLIENT; no import here).
+          return gateway(socketPath, sid, 'tools.call', { name, args: args && typeof args === 'object' ? args : {}, client: 'program' })
         },
         list: async (): Promise<unknown[]> => {
           if (!socketPath) throw new Error('this job has no Walnut daemon to ask (WALNUT_AGENT_SOCKET is unset)')

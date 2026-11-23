@@ -21,7 +21,7 @@ import { matchIdRef } from '../../lib/id-ref.js'
 import type { BackupLeader } from './backup-leader.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../../providers/daemon-frame-cap.js'
 import { gatewayErrorReplyFields, isExternalCallerSid } from '../../providers/gateway-core.js'
-import { surfaceOf, type AnswerSurface } from '../../ops/answer.js'
+import { agentSurfaceOf, type AnswerSurface } from '../../ops/answer.js'
 import { isCallId, messageIdOfCall } from '../../lib/op-call-id.js'
 
 export interface GatewayRequestFrame {
@@ -205,7 +205,7 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     const callId = isCallId(payload.callId) ? payload.callId : undefined
     // A session reads a receipt or capped content, held to what its client keeps (ops/answer.ts), as
     // through the Mac's gateway; a check script or a call no session made reads the result as it is.
-    const forAgent = callerSid && !isExternalCallerSid(callerSid) && !payload.triggerCaller ? surfaceOf(payload.client) : undefined
+    const forAgent = callerSid && !isExternalCallerSid(callerSid) && !payload.triggerCaller ? agentSurfaceOf(payload.client) : undefined
     const r = await deps.executeOp(name, args, { callerSid, callerHost: host, ...(callId ? { callId } : {}), ...(forAgent ? { forAgent } : {}) })
     // Its own call went out and got no answer: the caller hears the answer was lost, and names
     // the call. A refused connection ran nothing and stays `internal`.

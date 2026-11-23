@@ -1464,7 +1464,7 @@ function runWnMinimal(argv, stdinText) {
     if (sub !== undefined) { errOut('walnut: guide takes no arguments'); return exitWn(2); }
     guide = true;
     op = 'tools.call';
-    args = { name: 'skill_read', args: { dirName: 'walnut' } };
+    args = { name: 'skill_read', args: { dirName: 'walnut' }, client: 'cli' };
   }
   else if (head === 'tools') {
     // Minimal tools twin: list + call (+ help via a one-op list). Same hub
@@ -1596,6 +1596,8 @@ function runWnMinimal(argv, stdinText) {
     args = {
       name: waitId.indexOf('rq-') === 0 ? 'request_get' : 'task_get',
       args: { id: waitId },
+      // The wait reads the answer as data (wn-cli.ts PROGRAM_CLIENT): whole.
+      client: 'program',
     };
     wnWait = { id: waitId, deadline: Date.now() + waitTimeoutSecs * 1000 };
   } else { errOut('walnut: ' + usage); return exitWn(2); }

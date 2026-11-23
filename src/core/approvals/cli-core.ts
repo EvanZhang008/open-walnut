@@ -308,9 +308,15 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
     }
     if (singleUse) {
       const env = envelopeOf(asked.detail)
-      if (asked.singleUse !== true || !env || env.context !== args.detail) {
-        await io.call('approval_cancel', { id, token, reason: 'not made as a single-use approval' }).catch(() => undefined)
-        io.say('walnut approve: Walnut did not make it a single-use approval (an older Walnut?); withdrawn, not approved.')
+      // Which check failed, in the record and to the script: one reason for all three read as "not
+      // single-use" while the record said single-use (2026-11-23, apr-kCUkpVWwmbBH: a cut answer).
+      const problem = asked.singleUse !== true ? 'Walnut did not mark it single-use (an older Walnut?)'
+        : !env ? `the answer did not carry its single-use record whole (${typeof asked.detail === 'string' ? asked.detail.length : 0} characters of detail)`
+          : env.context !== args.detail ? 'the context Walnut kept differs from this run\'s'
+            : null
+      if (problem || !env) {
+        await io.call('approval_cancel', { id, token, reason: `not checked as single-use: ${problem}` }).catch(() => undefined)
+        io.say(`walnut approve: ${problem}; withdrawn, not approved.`)
         return APPROVE_EXIT.error
       }
       nonce = env.nonce

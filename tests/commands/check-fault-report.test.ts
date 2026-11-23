@@ -70,7 +70,7 @@ describe('a check\'s HTTP call the machine failed', () => {
     expect(r).toMatchObject({ ok: false, status: 507, code: 'disk_full' })
     await reportCheckOutcome(r, checkEnv(d.socket))
     // waitMs 0: built by the shared builder as a call that never waits (the daemon answers it itself).
-    expect(d.lines).toEqual([{ v: 1, op: 'tools.call', sid: 'trigger-check:abc', args: { name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID }, waitMs: 0 }])
+    expect(d.lines).toEqual([{ v: 1, op: 'tools.call', sid: 'trigger-check:abc', args: { name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID, client: 'program' }, waitMs: 0 }])
   })
 
   it('no server at all is server_away', async () => {
@@ -87,7 +87,7 @@ describe('a check\'s HTTP call the machine failed', () => {
     const answered = await executeOp('task_get', { id: 'task-1' }, { apiBase: ok, origin: LOCAL_ORIGIN })
     expect(answered.ok).toBe(true)
     await reportCheckOutcome(answered, checkEnv(d.socket))
-    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: null }, callId: CALL_ID }])
+    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: null }, callId: CALL_ID, client: 'program' }])
     const base = await api(404, { error: { code: 'not_found', message: 'no such task' } })
     const r = await executeOp('task_get', { id: 'nope' }, { apiBase: base, origin: LOCAL_ORIGIN })
     expect(r).toMatchObject({ ok: false, status: 404 })
@@ -113,7 +113,7 @@ describe('a check\'s HTTP call the machine failed', () => {
       p.on('close', resolve)
     })
     expect(code).not.toBe(0)
-    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID }])
+    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID, client: 'program' }])
   }, 60_000)
 
   it('a daemon that is gone costs nothing but the attempt', async () => {

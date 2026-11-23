@@ -182,6 +182,22 @@ describe('single-use: wait, check, consume', () => {
     const s = server({ asked: plain, answered: plain })
     expect(await runApprove(strict, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(s.names()).toEqual(['approval_request', 'approval_cancel'])
+    expect(s.calls[1].args.reason).toMatch(/did not mark it single-use/)
+  })
+
+  it('a single-use record whose envelope did not come back whole is withdrawn saying so, never "not single-use"', async () => {
+    // 2026-11-23, apr-kCUkpVWwmbBH: the answer was cut for an agent; the record itself was single-use.
+    const cut = { ...pendingRec(), detail: envelope().slice(0, 160) + '…' }
+    const s = server({ asked: cut, answered: cut })
+    expect(await runApprove(strict, io(s.call))).toBe(APPROVE_EXIT.error)
+    expect(s.names()).toEqual(['approval_request', 'approval_cancel'])
+    expect(s.calls[1].args.reason).toMatch(/did not carry its single-use record whole \(161 characters of detail\)/)
+    expect(says.join('\n')).toMatch(/did not carry its single-use record whole/)
+    // A context that differs from this run's says that.
+    const other = { ...pendingRec(), detail: envelope({ context: 'another step' }) }
+    const t = server({ asked: other, answered: other })
+    expect(await runApprove(strict, io(t.call))).toBe(APPROVE_EXIT.error)
+    expect(t.calls[1].args.reason).toMatch(/context Walnut kept differs/)
   })
 })
 
@@ -286,5 +302,33 @@ describe('the token file', () => {
     expect(fs.readdirSync(dir)).toEqual(['apr-t2.json'])
     removeToken('apr-t2', dir)
     expect(loadToken('apr-t2', dir)).toBeUndefined()
+  })
+})
+
+describe('the answers an agent reads are enough to check a single-use ask', () => {
+  // A host CLI that names no client (an older daemon) reads the answers shaped for an agent, and so
+  // does an agent running the steps itself: each keeps the record whole (2026-11-23, apr-kCUkpVWwmbBH:
+  // a cut answer lost the envelope). The sizes are the real record's: a context of about 950 characters.
+  it.each(['cli', 'mcp'] as const)('on the %s surface the loop asks, waits, checks and consumes', async (surface) => {
+    const { getOp } = await import('../../../src/ops/index.js')
+    const { agentAnswer } = await import('../../../src/ops/answer.js')
+    const bigDetail = JSON.stringify({ repo: '/work/repo', argv: ['git', 'push', 'origin', 'main'], sha: 'ab'.repeat(20), refs: 'refs/heads/main '.repeat(50) })
+    const big = (rec: Rec) => withDigest({ ...rec, detail: envelope({ context: bigDetail, why: 'Push the fix the task made, as asked.', context_summary: 'One push of one commit. '.repeat(15) }),
+      context: { why: 'Push the fix the task made, as asked.', whyFrom: 'asker', lastSteps: ['step one '.repeat(20), 'step two '.repeat(20)] },
+      requester: { ...requester, taskTitle: 'A daily deploy task with a long title '.repeat(3), ranBy: 'python3 gate.py', cwd: '/work/repo' } })
+    const asked = big(pendingRec())
+    const answered = approved(asked)
+    const shaped = (name: string, args: Record<string, unknown>, result: Rec): OpCallResult =>
+      ({ ok: true, result: agentAnswer(getOp(name)!, args, { ...result, outcome: 'x'.repeat(40), next: 'y'.repeat(120) }, false, surface) })
+    const calls: string[] = []
+    const call = async (name: string, args: Record<string, unknown>): Promise<OpCallResult> => {
+      calls.push(name)
+      if (name === 'approval_request') return shaped(name, args, { approval: asked, waitToken: 'tok-secret' })
+      if (name === 'approval_wait') return shaped(name, args, { approval: answered, used: false })
+      if (name === 'approval_consume') return shaped(name, args, { approval: { ...answered, consumedAt: new Date().toISOString() }, used: true })
+      return { ok: true, result: { approval: { ...asked, status: 'canceled' } } }
+    }
+    expect(await runApprove({ ...strict, detail: bigDetail }, io(call)), says.join('\n')).toBe(APPROVE_EXIT.approved)
+    expect(calls).toEqual(['approval_request', 'approval_wait', 'approval_consume'])
   })
 })

@@ -312,7 +312,7 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     for (;;) {
       let read: GatewayResponse | null = null
       // A read ends within what is left of the follow, and waits for a server only inside it.
-      try { read = await deps.request('tools.call', { name: 'op_result', args: { call_id: callId }, callId: newCallId() }, Math.max(1, until - Date.now())) } catch { /* the daemon away: read as lost */ }
+      try { read = await deps.request('tools.call', { name: 'op_result', args: { call_id: callId }, callId: newCallId(), client: 'mcp' }, Math.max(1, until - Date.now())) } catch { /* the daemon away: read as lost */ }
       if (!read) return null
       if (read.ok) {
         const b = (read.result ?? {}) as { state?: unknown; ok?: unknown; result?: unknown; message?: unknown; answer_withheld?: unknown }

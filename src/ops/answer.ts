@@ -23,7 +23,7 @@
  * Pure: the guard test runs it over every op.
  */
 import type { WalnutOp } from './registry.js'
-import { ANSWER_LIMITS, cliAnswerText } from '../lib/tool-answer-size.js'
+import { ANSWER_LIMITS, PROGRAM_CLIENT, cliAnswerText } from '../lib/tool-answer-size.js'
 
 export interface OpAnswer {
   /**
@@ -71,6 +71,13 @@ export const ANSWER_SURFACE_NAMES = Object.keys(ANSWER_SURFACES) as AnswerSurfac
 
 /** A caller that names no surface (an older CLI or daemon) is held to the smaller cap: a too-small answer costs one more call, a too-big one is lost. */
 export const surfaceOf = (v: unknown): AnswerSurface => (v === 'mcp' ? 'mcp' : 'cli')
+
+/**
+ * The surface a session's gateway call is shaped for, or none: a program (PROGRAM_CLIENT, wn-cli's
+ * own loops) reads the whole answer, as the same loop does on the Mac. Every gateway that shapes
+ * a session's answer asks this (capability-router.ts, backup-gateway.ts).
+ */
+export const agentSurfaceOf = (v: unknown): AnswerSurface | undefined => (v === PROGRAM_CLIENT ? undefined : surfaceOf(v))
 
 /** What one agent answer is held to: `max` in its surface's unit, measured by printedSize. */
 export interface AnswerFit { max: number; surface: AnswerSurface }

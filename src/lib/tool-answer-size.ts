@@ -10,9 +10,21 @@
 
 import { TOOL_ANSWER_MAX_CHARS } from './tool-answer-fit.js'
 
-export type ToolClient = 'mcp' | 'cli' | 'unknown'
+/**
+ * The client a program names when it reads an op's answer as data and prints only what it makes
+ * of it: wn-cli.ts's own loops (approve, pass, browser, wait, trigger-check) and a plugin job. Its
+ * answer is never shaped for an agent (ops/answer.ts), the same as the Mac's own CLI loops get
+ * from executeOp (2026-11-23: a single-use `walnut approve` on a remote host read a cut answer,
+ * missed its envelope and withdrew the ask as "not made as a single-use approval").
+ */
+export const PROGRAM_CLIENT = 'program'
 
-export const ANSWER_LIMITS: Readonly<Record<Exclude<ToolClient, 'unknown'>, { max: number; unit: 'chars' | 'bytes' }>> = {
+export type ToolClient = 'mcp' | 'cli' | typeof PROGRAM_CLIENT | 'unknown'
+
+/** A client that prints the answer to an agent. */
+export type AgentClient = 'mcp' | 'cli'
+
+export const ANSWER_LIMITS: Readonly<Record<AgentClient, { max: number; unit: 'chars' | 'bytes' }>> = {
   mcp: { max: 25_000, unit: 'chars' },
   cli: { max: 10_240, unit: 'bytes' },
 }
@@ -41,11 +53,13 @@ export function answerSize(result: unknown, client: ToolClient): { size: number;
     const size = compact.length > PRETTY_MEASURE_MAX ? Buffer.byteLength(compact, 'utf-8') : Buffer.byteLength(cliAnswerText(result), 'utf-8')
     return { size, overLimit: size > ANSWER_LIMITS.cli.max }
   }
+  // A program reads the answer itself: no agent's harness cuts it.
+  if (client === PROGRAM_CLIENT) return { size: compact.length, overLimit: false }
   // An older client names none: over the larger limit is over every client's (the CLI's pretty text
   // is longer than the compact one), so a 290 K answer reads over budget whoever asked.
   return { size: compact.length, overLimit: compact.length > ANSWER_LIMITS.mcp.max }
 }
 
 export function isToolClient(v: unknown): v is Exclude<ToolClient, 'unknown'> {
-  return v === 'mcp' || v === 'cli'
+  return v === 'mcp' || v === 'cli' || v === PROGRAM_CLIENT
 }

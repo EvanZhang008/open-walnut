@@ -20,6 +20,7 @@
 
 import { newCallId } from '../lib/op-call-id.js'
 import { toolsCallLine } from '../providers/gateway-request.js'
+import { PROGRAM_CLIENT } from '../lib/tool-answer-size.js'
 import { walnutApiTarget } from '../lib/self-api-root.js'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -138,7 +139,7 @@ export async function reportCheckOutcome(
     const conn = net.connect(socket)
     conn.on('connect', () => {
       // No wait: the daemon answers this one itself, at once (it is never relayed).
-      conn.write(JSON.stringify(toolsCallLine(sid, { name: CHECK_FAULT_OP, args: { kind }, callId: newCallId() }, 'none').req) + '\n')
+      conn.write(JSON.stringify(toolsCallLine(sid, { name: CHECK_FAULT_OP, args: { kind }, callId: newCallId(), client: PROGRAM_CLIENT }, 'none').req) + '\n')
     })
     conn.on('data', finish)
     conn.on('error', finish)

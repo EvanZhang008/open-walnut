@@ -103,7 +103,7 @@ describe('every client sends a call id with tools.call', () => {
     // (with the client's cancel signal, so a cancelled call is never sent late)
     expect(mcp.match(/deps\.request\('tools\.call', (?:spilled \? \{ name, argsFile: spilled, callId, client: 'mcp' \} : )?\{ name, args, callId, client: 'mcp' \}(?:, undefined, signal)?\)/g)?.length).toBe(2)
     // ... and the op_result read of a lost answer names that call, under an id of its own.
-    expect(mcp).toMatch(/deps\.request\('tools\.call', \{ name: 'op_result', args: \{ call_id: callId \}, callId: newCallId\(\) \}(?:, Math\.max\(1, until - Date\.now\(\)\))?\)/)
+    expect(mcp).toMatch(/deps\.request\('tools\.call', \{ name: 'op_result', args: \{ call_id: callId \}, callId: newCallId\(\), client: 'mcp' \}(?:, Math\.max\(1, until - Date\.now\(\)\))?\)/)
     expect(mcp.match(/deps\.request\('tools\.call'/g)?.length).toBe(3)
   })
 })

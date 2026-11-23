@@ -191,14 +191,16 @@ describe('backup gateway', () => {
     expect(LEADER_OPS).not.toContain('session_start')
   })
 
-  it('a session\'s MCP server is held to the MCP surface, its CLI and an older client to the CLI\'s, a call no session made to none', async () => {
+  it('a session\'s MCP server is held to the MCP surface, its CLI and an older client to the CLI\'s, a program and a call no session made to none', async () => {
     const seen: Array<unknown> = []
     const h = harness({ executeOp: async (_name, _args, ctx) => { seen.push((ctx as { forAgent?: unknown }).forAgent); return { ok: true, result: {} } } })
     await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' }, client: 'mcp' }))
     await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' }, client: 'cli' }))
     await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' } }))
     await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' } }, { callerSid: 'external' }))
-    expect(seen).toEqual(['mcp', 'cli', 'cli', undefined])
+    // A program (wn-cli's approve, pass, browser and wait loops) reads the answer whole, as on the Mac.
+    await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' }, client: 'program' }))
+    expect(seen).toEqual(['mcp', 'cli', 'cli', undefined, undefined])
   })
 
   it('an op the API refused says how it answered (api), unless the answer was lost: a check run reads it for machine faults', async () => {

@@ -3,6 +3,7 @@ import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
 import { clipText } from './doc-page.js';
+import { ANSWER_CEILING_CHARS } from './answer.js';
 
 /**
  * Approvals (core/approvals/): ask a person to say yes before a step goes on. A script
@@ -93,6 +94,10 @@ defineOp({
     terminal_session: z.string().max(120).optional().describe('Set by the walnut CLI in a task terminal Walnut opened; checked against the terminal\'s own process'),
   },
   bind: { method: 'POST', path: '/approvals' },
+  // A single-use ask is answered whole: its asker checks the envelope Walnut made (session, task,
+  // host, nonce, its own context) before anything runs, and a cut one reads as "not single-use"
+  // (2026-11-23, apr-kCUkpVWwmbBH). Its size is bounded by the detail's own 32,000.
+  answer: { kind: 'receipt', whole_for: (args) => args.single_use === true },
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), 'approval_wait with id and token (waitToken) until status is approved, denied, expired or canceled, or ' + OWN_WAIT_TURN_END + ': Walnut tells this session the answer.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -112,15 +117,18 @@ defineOp({
   bind: { method: 'POST', path: '/approvals/:id/wait' },
   timeoutMs: 20_000,
   // Content, not a receipt: its answer is the decision it waited for. The asker's own detail and
-  // context are cut to a head (it wrote them), except a single_use one's detail; the digest stays for approval_consume.
+  // context are cut to a head (it wrote them), except a single_use one's record; the digest stays for approval_consume.
   answer: {
     kind: 'content',
-    max: 4_000,
+    // Room for a single-use record whole (below); any other answer is a short row.
+    max: ANSWER_CEILING_CHARS,
     shape: ({ result }) => {
       const r = rec(result)
       if (!r.approval) return result
-      // A single_use approval is checked against its detail before approval_consume: that one keeps it.
-      return { ...r, approval: approvalRow(r.approval, rec(r.approval).singleUse === true) }
+      // A single_use approval is checked whole before approval_consume (its mode, asker, answer,
+      // digest, times and envelope: cli-core.ts singleUseProblem), so it is answered as it is.
+      if (rec(r.approval).singleUse === true) return result
+      return { ...r, approval: approvalRow(r.approval) }
     },
   },
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), (body as { approval?: { singleUse?: boolean } }).approval?.singleUse
@@ -140,6 +148,14 @@ defineOp({
     detail: z.string().min(1).max(32_000).describe('The original operation context rebuilt from its current state, without the server-generated envelope'),
   },
   bind: { method: 'POST', path: '/approvals/:id/consume' },
+  // What the asker reads: that it was used, and which approval (its row, the detail whole).
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = rec(result)
+      return r.approval ? { ...r, approval: approvalRow(r.approval, true) } : result
+    },
+  },
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, 'The approval was used once.', 'Run only this approved operation; a retry needs a new approval.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
