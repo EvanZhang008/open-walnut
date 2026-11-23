@@ -783,6 +783,13 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   padding: 0;
 }
 
+/* The same chevron for a spot only CSS can draw (a ::before or ::after, an editor's own markup):
+   `background: currentColor` (or a colour) masked by --wn-chevron, pointing right; turn it 90deg to
+   point down. Never a bordered box turned 45deg (tests/web/disclosure-mark-guard.test.ts). */
+:root {
+  --wn-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 3.5 10.5 8 6 12.5'/%3E%3C/svg%3E");
+}
+
 .wn-disclosure-chevron {
   flex: 0 0 auto;
   display: inline-flex;

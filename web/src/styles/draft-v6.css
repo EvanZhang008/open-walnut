@@ -245,7 +245,7 @@
 /* The send arrow's words: the family's quiet key (DraftV6Panel); this only lays it out. */
 .draft-v6-send-label { flex: none; }
 /* The model and the permission mode read as the design's controls: the row's own size and face,
-   with a chevron (the shared pills are a running session's small readouts). */
+   with their own menu caret (MenuCaret; the shared pills are a running session's small readouts). */
 .draft-session-panel.is-v6 .draft-actions-bar :is(.draft-model-select, .draft-mode-pill) {
   display: inline-flex;
   align-items: center;
@@ -255,16 +255,6 @@
   color: var(--fg-secondary);
 }
 .draft-session-panel.is-v6 .draft-actions-bar .draft-mode-pill .mode-toggle-pill-label { font-size: var(--font-size-md); font-family: inherit; }
-.draft-session-panel.is-v6 .draft-actions-bar :is(.draft-model-select, .draft-mode-pill)::after {
-  content: '';
-  flex: none;
-  width: 5px;
-  height: 5px;
-  margin: -2px 0 0 2px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(45deg);
-}
 .draft-v6-body.is-blocked .draft-v6-send-label { opacity: 0.45; }
 .draft-v6-start-why {
   position: absolute;

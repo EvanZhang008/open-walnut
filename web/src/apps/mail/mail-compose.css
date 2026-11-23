@@ -97,12 +97,12 @@
 .mail-compose-account.pick::after {
   content: '';
   flex: 0 0 auto;
-  width: 5px;
-  height: 5px;
-  margin-bottom: 2px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(45deg);
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  -webkit-mask: var(--wn-chevron) center / contain no-repeat;
+  mask: var(--wn-chevron) center / contain no-repeat;
+  transform: rotate(90deg);
   opacity: 0.6;
 }
 

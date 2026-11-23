@@ -95,12 +95,12 @@
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-nav-item:not(.settings-nav-page-link)::after {
     content: '';
     flex: none;
-    width: 8px;
-    height: 8px;
-    margin: 0 4px 0 4px;
-    border-right: 2px solid var(--fg-muted);
-    border-bottom: 2px solid var(--fg-muted);
-    transform: rotate(-45deg);
+    width: 14px;
+    height: 14px;
+    margin: 0 2px;
+    background: var(--fg-muted);
+    -webkit-mask: var(--wn-chevron) center / contain no-repeat;
+    mask: var(--wn-chevron) center / contain no-repeat;
   }
 
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-nav-trailing {

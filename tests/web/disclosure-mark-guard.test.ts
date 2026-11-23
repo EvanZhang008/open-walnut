@@ -30,7 +30,33 @@ export function findTriangles(src: string): number[] {
   return lines.flatMap((l, i) => (TRIANGLE.test(l) ? [i + 1] : []))
 }
 
+/**
+ * A chevron drawn in CSS as a bordered box turned 45deg (`border-right` + `border-bottom`, `rotate(45deg)`):
+ * the third way a fold or a caret was drawn (the v6 draft's Permissions key showed one beside its own
+ * caret, 2026-11-23). A spot only CSS can draw masks --wn-chevron (choice-controls.css) instead.
+ */
+export function findBoxChevrons(css: string): string[] {
+  const text = stripComments(css)
+  const out: string[] = []
+  for (const m of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const body = m[2]!
+    const borders = body.match(/border-(?:top|right|bottom|left)\s*:[^;]*solid/g) ?? []
+    if (borders.length >= 2 && /rotate\(\s*-?(?:45|135|225)deg\s*\)/.test(body)) out.push(m[1]!.trim())
+  }
+  return out
+}
+
 describe('disclosure marks: icons only, never a typed triangle', () => {
+  it('the CSS scan catches a bordered box turned into a chevron, and not the shared mask', () => {
+    expect(findBoxChevrons('.x::after { width: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }')).toEqual(['.x::after'])
+    expect(findBoxChevrons('.x::after { background: currentColor; mask: var(--wn-chevron) center / contain no-repeat; transform: rotate(90deg); }')).toEqual([])
+  })
+
+  it('no stylesheet draws a chevron from borders (mask --wn-chevron instead)', () => {
+    const hits = DIRS.flatMap((d) => walk(d, ['.css'])).flatMap((f) => findBoxChevrons(readFileSync(f, 'utf8')).map((sel) => `${relative(ROOT, f)}: ${sel.slice(0, 120)}`))
+    expect(hits, 'draw it with the shared chevron: background currentColor, mask var(--wn-chevron) (choice-controls.css)').toEqual([])
+  })
+
   it('the scan catches typed and escaped triangles and ignores comments', () => {
     // Test data in escapes: '\u25BE' small down, '\u25B8' small right, '\u25BC' down, '\u25B6\uFE0E' right as text.
     expect(findTriangles("<span>{'\u25BE'}</span>")).toEqual([1])

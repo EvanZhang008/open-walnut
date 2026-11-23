@@ -286,17 +286,18 @@
 }
 .notes-callout-fold-toggle:hover { background: var(--bg-hover); color: var(--fg); }
 .notes-callout-fold-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* Chevron: points down when open, right when folded. */
+/* The shared chevron (--wn-chevron, choice-controls.css): points down when open, right when folded. */
 .notes-callout-fold-toggle::before {
   content: '';
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: translateY(-2px) rotate(45deg);
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: var(--wn-chevron) center / contain no-repeat;
+  mask: var(--wn-chevron) center / contain no-repeat;
+  transform: rotate(90deg);
   transition: transform 0.15s ease;
 }
-.notes-callout-foldable.is-collapsed > .notes-callout-fold-toggle::before { transform: translateX(-1px) rotate(-45deg); }
+.notes-callout-foldable.is-collapsed > .notes-callout-fold-toggle::before { transform: none; }
 @media (prefers-reduced-motion: reduce) {
   .notes-callout-fold-toggle::before { transition: none; }
 }
