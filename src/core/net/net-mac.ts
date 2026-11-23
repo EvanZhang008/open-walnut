@@ -276,6 +276,10 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
         state.relays = []
         state.relayRoots = []
       }
+      // A service set's own endpoint is no machine of its own (no host row): its host dials it (net-service-sets.ts).
+      const { serviceSetMembersNow, withServiceSetMembers } = await import('./net-service-sets.js')
+      const sets = await serviceSetMembersNow()
+      state.members = state.members.filter((m) => !sets.add.some((a) => a.id === m.id))
       // Each machine is dialled where it was last seen too.
       state.members = withWhere(state.members, ((await getConfig()) as { net?: unknown }).net, relaysOfChoice(state.relay, state.relays))
       // A new relay: the machines first, while this Mac still reaches them the old way.
@@ -289,7 +293,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
         if (!modes) throw new NetError(409, 'net_too_old', "This machine's walnut-net is older than this Walnut; the relay changes once the new version is downloaded.")
       }
       if (relayMoved) await pushToHosts({ ...state })
-      const conf = await local.send('net.configure', macConfig(state), 30_000) as { ok?: boolean; error?: string }
+      const conf = await local.send('net.configure', withServiceSetMembers(macConfig(state), sets), 30_000) as { ok?: boolean; error?: string }
       if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
       const { verifiedAdoptions } = await import('./net-adopt.js')
@@ -520,6 +524,11 @@ export async function setRelay(pick: unknown): Promise<NetState> {
 
 export function netState(): NetState {
   return { ...state }
+}
+
+/** The list a joined machine is handed now (what a service set's walnut-net lets in), or null before a sync. */
+export function hostListNow(): Record<string, unknown> | null {
+  return state.enabled && state.syncedAt && state.macId ? hostConfig({ ...state }) : null
 }
 
 /** Tests. */

@@ -4,6 +4,8 @@
  * host-network links. One move at a time per host; its state is kept on this machine's disk next to
  * the host's other daemon facts, so a leader restart resumes it or cleanly gives it up.
  *
+ *   pairing   host network only: the set's own walnut-net is paired over the link as it is
+ *             (service-set-net-pair.ts). Not paired: give up before anything is touched.
  *   waiting   wait, at most waitMs (30 min), for a moment when nothing of this Walnut works there:
  *             no session in a turn or with work that outlives its turn (judged from a fresh read
  *             of the host, service-set-move-checks.ts), no host_exec run of its tasks, no command
@@ -16,11 +18,11 @@
  *             plugin jobs there are emptied. Sessions this leader does not know as its own are
  *             never touched. Anything not proven: the shared daemon gets back what was taken
  *             (the link dials it again), the hold is released, and the try gives up.
- *   flipped   the link is pointed at the set's service (SSH: its runtime dir; net: the walnut-net
- *             route of this leader's endpoint, with a revert on the host if it is not confirmed),
- *             and the link is dialled again: its hello must name the set. Then the route is
- *             confirmed, the held work is released there, and the stopped sessions resume there on
- *             their next message (--resume, as after any stop).
+ *   flipped   the link is pointed at the set's service (SSH: its runtime dir; net: the set's own
+ *             walnut-net endpoint), and the link is dialled again: its hello must name the set.
+ *             Then the move is confirmed (net: this leader leaves the shared walnut-net's list), the
+ *             held work is released there, and the stopped sessions resume there on their next
+ *             message (--resume, as after any stop).
  *   done      the leader no longer speaks for its home on the shared daemon; that daemon, its
  *             launcher and its boot item are left exactly as they are (the other Walnut's).
  *   reverted  the set's service did not answer in time: the link is pointed back, dialled again,
@@ -132,6 +134,8 @@ export interface MoveDeps {
   dropScope(): Promise<void>
   /** A try that gave up after the follower stop: the shared daemon gets back this Walnut's follower, triggers and jobs (the link dials it again). */
   restore(): Promise<void>
+  /** Host network: pair with the set's own walnut-net first; throws when not done (nothing touched yet). */
+  pair?(): Promise<void>
   /** Point the link at the set's service; unflip points it back (idempotent); confirm keeps the flip. */
   flip(): Promise<void>
   unflip(): Promise<void>
@@ -196,6 +200,13 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     return out
   }
   await save({})
+  if (d.pair) {
+    try {
+      await d.pair()
+    } catch (e) {
+      return end({ result: 'gave_up', why: `this Walnut's own walnut-net there is not paired (${errText(e)}); nothing was stopped`, stopped: rec.stopped })
+    }
+  }
 
   // waiting: a moment with nothing of this Walnut at work there, then the hold, the drain of what passed
   // just before it, the follower's stop (it could start work there by itself), and the same look again.
@@ -258,7 +269,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
   const got = flipError === null ? await d.reconnect(reconnectMs).catch(() => null) : null
   if (got === d.set) {
     await save({ phase: 'done', why: undefined, nextTryAt: undefined, failures: undefined })
-    await d.confirm().catch(() => { /* net: the set's service confirms it itself when its leader's link authenticates */ })
+    await d.confirm().catch(() => { /* its follow-ups (net: leaving the shared list) are tried again at the next look */ })
     d.release()
     const outcome: MoveOutcome = { result: 'moved', stopped: rec.stopped }
     d.report(outcome)

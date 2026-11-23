@@ -4772,8 +4772,6 @@ function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   try {
     const rec = leaderBook.configure({ home: cmd.home as string, walnutId: cmd.walnutId as string, backup: cmd.backup === true, drains: cmd.drains })
     bindGatewayClientHome(ws, rec.home)
-    // This set's own Walnut reached it: its pending walnut-net routes here stay (net-route.ts). Twin of daemon-source.ts.
-    if (SET_ID !== '') void netSupervisor.confirmRoutes(cmd.walnutId)
     const notTaken = moveNotTaken.get(cmd)
     // A home a declared move made an alias: the server hears the home this host keeps its Walnut
     // under, the one its words to this host's service name (one-service-mode.ts serviceModeAsk).
@@ -13474,7 +13472,8 @@ const daemonPorts = createDaemonPorts({
 // spawn, the net state dir (never under the synced data dir) and where walnut-net lives:
 // $WALNUT_NET_BIN (tests and a hand-built one), beside this executable, beside the daemon,
 // or the release build net-core.ts downloads into the net state.
-const NET_STATE_DIR = netStateDir({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR })
+// A service set's daemon has a network identity of its own, inside its set (net-config-core.ts).
+const NET_STATE_DIR = netStateDir({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR, setId: SET_ID })
 // This machine's stable id for hello (machine-id-core.ts), seeded from the data dir's older id;
 // null when it can be neither read nor made. Twin of daemon-source.ts.
 const DAEMON_MACHINE_ID: string | null = (() => {
@@ -13486,8 +13485,6 @@ const netSupervisor = createNetSupervisor({
   spawn: (command, args, opts) => spawn(command, args, opts),
   stateDir: NET_STATE_DIR,
   portFile: PORT_FILE,
-  // The service set whose members this daemon writes into walnut-net's config (service-set.ts); '' the default's.
-  setId: SET_ID,
   bin: () => resolveNetBinary({ dirs: [path.dirname(process.execPath), DAEMON_DIR, path.join(NET_STATE_DIR, 'bin')] }),
   log: (level, msg, data) => logMsg(level, msg, data),
 })

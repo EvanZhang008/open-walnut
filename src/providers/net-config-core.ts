@@ -21,10 +21,6 @@ export interface NetMember {
   addrs?: string[]
   /** Relays it was last seen on: it is reached there until it moves to this host's choice. */
   relays?: string[]
-  /** In the file only: the service set that wrote it (absent: the default set, as every older file). */
-  walnut?: string
-  /** In the file only: the port file of that set's daemon, where its streams go (absent: the top-level one). */
-  daemonPortFile?: string
 }
 
 export interface NetConfigureRequest {
@@ -92,14 +88,30 @@ export function parseNetConfig(req: NetConfigureRequest): { relayMode?: 'public'
   return { ...(mode === 'public' || mode === 'none' ? { relayMode: mode } : {}), relays: relays as string[], relayRoots: roots as string[], members }
 }
 
+/** The text of walnut-net's config.json for a checked request: the one rule every writer of it follows. */
+export function netConfigFileText(parsed: ReturnType<typeof parseNetConfig>, at: { self: string; keyFile: string; portFile: string; control: string }): string {
+  const cfg = {
+    version: NET_CONFIG_VERSION, key: at.keyFile, ...parsed,
+    // A member never lists this host itself.
+    members: parsed.members.filter((m) => m.id !== at.self),
+    daemonPortFile: at.portFile, control: at.control,
+  }
+  return JSON.stringify(cfg, null, 2) + '\n'
+}
+
 /**
  * This host's net state dir. ONE per account for the account's own daemon, whichever
  * way it runs (the login service, or the daemon a server or an SSH connect started):
  * the key is the machine's identity on the network, and a second key would cut the
  * machine off from every member that knows the first. A daemon in any other dir (a
  * test's, the companion's tunnel daemon) keeps its own beside it.
+ *
+ * A later Walnut's service set (service-set.ts, `setId` 16 hex) is another network identity
+ * on the same machine: its own dir inside the set, `~/.open-walnut-host/walnuts/<id16>/net`,
+ * so its own key, address, config, control socket and UDP port (walnut-net keeps the port
+ * beside its key). The default set's dir never changes, and the two never touch each other.
  */
-export function netStateDir(opts: { serviceStateDir?: string | null; prodDaemon: boolean; daemonDir: string; home?: string }): string {
+export function netStateDir(opts: { serviceStateDir?: string | null; prodDaemon: boolean; daemonDir: string; home?: string; setId?: string }): string {
   return netStateDirOf({ ...opts, home: opts.home ?? os.homedir(), join: path.join })
 }
 
@@ -107,7 +119,9 @@ export function netStateDir(opts: { serviceStateDir?: string | null; prodDaemon:
  * netStateDir's rule with its path join handed in: the source daemon twin inlines this
  * one (`__NET_STATE_DIR_OF__`), so its body references nothing at module scope.
  */
-export function netStateDirOf(opts: { serviceStateDir?: string | null; prodDaemon: boolean; daemonDir: string; home: string; join: (...parts: string[]) => string }): string {
+export function netStateDirOf(opts: { serviceStateDir?: string | null; prodDaemon: boolean; daemonDir: string; home: string; setId?: string; join: (...parts: string[]) => string }): string {
+  // A service set's own identity (service-set.ts serviceSetBase(home, id)/net); only a service runs in a set.
+  if (opts.serviceStateDir && opts.setId && /^[0-9a-f]{16}$/.test(opts.setId)) return opts.join(opts.home, '.open-walnut-host', 'walnuts', opts.setId, 'net')
   // Never XDG_STATE_HOME: a daemon a shell started may have it and the login service not,
   // and two paths would be two keys for one machine.
   if (opts.serviceStateDir || opts.prodDaemon) return opts.join(opts.home, '.local', 'state', 'open-walnut', 'net')
@@ -156,114 +170,4 @@ export function pruneNetBinaries(dir: string): void {
   const current = path.join(dir, netInstallName())
   const older = downloadedVersions(dir).filter((d) => d.file !== current)
   for (const { file } of older.slice(1)) { try { fs.rmSync(file, { force: true }) } catch { /* best effort */ } }
-}
-
-// ── Two Walnut services on one machine (service sets, src/providers/service-set.ts) ──
-// One walnut-net, one key, one config per machine; each service writes only its own set's
-// members. A member's `walnut` names its set ('' or absent: the default set, so every file an
-// older Walnut wrote is the default set's), and a non-default set's members carry its daemon's
-// port file, which walnut-net routes their streams to. The rest of the file (relays, the
-// top-level port file) is the default set's; a set writes it only when no file exists yet.
-
-const SET_ID_RE = /^[0-9a-f]{16}$/
-
-/** A service set id as the daemon is given it: '' (the default set) or 16 hex; null when it is neither. */
-export function netSetId(v: unknown): string | null {
-  if (v === undefined || v === null || v === '') return ''
-  return typeof v === 'string' && SET_ID_RE.test(v) ? v : null
-}
-
-type FileMember = Record<string, unknown>
-
-/** The set a member of the file belongs to. */
-function setOf(m: unknown): string {
-  const w = m && typeof m === 'object' ? (m as FileMember).walnut : undefined
-  return typeof w === 'string' ? w : ''
-}
-
-function configObject(text: string | null): Record<string, unknown> | null {
-  if (!text) return null
-  try {
-    const v = JSON.parse(text) as unknown
-    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null
-  } catch { return null }
-}
-
-function fileMembers(file: Record<string, unknown> | null): FileMember[] {
-  return file && Array.isArray(file.members) ? file.members.filter((m): m is FileMember => !!m && typeof m === 'object') : []
-}
-
-function configText(obj: Record<string, unknown>): string {
-  return JSON.stringify(obj, null, 2) + '\n'
-}
-
-/**
- * One machine listed by two sets: one entry stays, so walnut-net's member check and route are
- * not left to the order of the file. The one that lets it in wins; of two alike, the other
- * set's (already in the file), so two writers never take it from each other in turn.
- */
-function mergeMembers(own: NetMember[], others: FileMember[], ownFirst: boolean): unknown[] {
-  const mine = new Map(own.map((m) => [m.id, m]))
-  const dropOwn = new Set<string>()
-  const kept = others.filter((o) => {
-    const id = typeof o.id === 'string' ? o.id.toLowerCase() : ''
-    const m = mine.get(id)
-    if (!m) return true
-    if (m.accept && o.accept !== true) return false
-    dropOwn.add(id)
-    return true
-  })
-  const ownKept = own.filter((m) => !dropOwn.has(m.id))
-  return ownFirst ? [...ownKept, ...kept] : [...kept, ...ownKept]
-}
-
-export interface NetConfigWrite {
-  /** The file as it is now (null: none). */
-  current: string | null
-  /** The writing service's set ('' default). */
-  setId: string
-  /** This host's endpoint id: never one of its own members. */
-  self: string
-  keyFile: string
-  control: string
-  /** The writing daemon's port file. */
-  portFile: string
-  request: ReturnType<typeof parseNetConfig>
-}
-
-/**
- * The config text after one service's configure: its set's members replaced by the request's,
- * every other set's kept as the file has them. For the default set with no other set in the
- * file this is exactly the text Walnut wrote before sets.
- */
-export function netConfigText(w: NetConfigWrite): string {
-  const file = configObject(w.current)
-  const others = fileMembers(file).filter((m) => setOf(m) !== w.setId)
-  const own = w.request.members
-    .filter((m) => m.id !== w.self)
-    .map((m) => (w.setId ? { ...m, walnut: w.setId, daemonPortFile: w.portFile } : m))
-  const members = mergeMembers(own, others, w.setId === '')
-  if (w.setId === '' || !file) {
-    return configText({ version: NET_CONFIG_VERSION, key: w.keyFile, ...w.request, members, daemonPortFile: w.portFile, control: w.control })
-  }
-  // A set leaves the endpoint (key, relays) and the top-level port file to the default set.
-  return configText({
-    ...file, version: NET_CONFIG_VERSION, key: w.keyFile, members, control: w.control,
-    ...(typeof file.daemonPortFile === 'string' ? {} : { daemonPortFile: w.portFile }),
-  })
-}
-
-/** The config without one set's members (null: no readable file), and how many members remain. */
-export function netConfigWithout(current: string | null, setId: string): { text: string; remaining: number } | null {
-  const file = configObject(current)
-  if (!file) return null
-  const members = fileMembers(file).filter((m) => setOf(m) !== setId)
-  return { text: configText({ ...file, members }), remaining: members.length }
-}
-
-/** The configure request that puts one set's part of a config back (null: no readable file). */
-export function netRequestOf(current: string | null, setId: string): NetConfigureRequest | null {
-  const file = configObject(current)
-  if (!file) return null
-  return { relayMode: file.relayMode, relays: file.relays, relayRoots: file.relayRoots, members: fileMembers(file).filter((m) => setOf(m) === setId) }
 }

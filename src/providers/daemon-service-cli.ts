@@ -10,7 +10,7 @@ import { readDaemonServiceExecutable } from './daemon-service-config.js'
 import { serviceSet, serviceSetIdOf, serviceSetLine, type ServiceSet } from './service-set.js'
 import { chooseServiceSet } from './service-set-choice.js'
 import { removeServiceSetDir } from './service-set-remove.js'
-import { NET_ROUTE_ACTION, runNetRouteArgs } from './net-route.js'
+import { runServiceSetNetArgs, SERVICE_SET_NET_ACTIONS } from './service-set-net.js'
 import { accountInfo } from '../lib/account.js'
 import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
 import { createDaemonServiceManager, daemonServiceConfigPath, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
@@ -360,8 +360,8 @@ export const WALNUT_HOME_FLAG = '--walnut-home'
 
 
 export async function runDaemonServiceArgs(args: string[]): Promise<number> {
-  // `net-route` has words of its own and changes walnut-net's config, never the service (net-route.ts).
-  if (args[0] === NET_ROUTE_ACTION) return runNetRouteArgs(args.slice(1))
+  // `net-id` and `net-forget` have words of their own and touch a set's walnut-net, never a service (service-set-net.ts).
+  if (SERVICE_SET_NET_ACTIONS.includes(args[0] ?? '')) return runServiceSetNetArgs(args)
   const { action, options } = parseDaemonServiceArgs(args)
   return runDaemonServiceCli(action, options)
 }
@@ -407,7 +407,7 @@ export function parseDaemonServiceArgs(args: string[]): { action: string; option
 }
 
 export async function runDaemonServiceCli(action: string, options: DaemonServiceCliOptions): Promise<number> {
-  if (!['status', 'install', 'update', 'uninstall', 'restart', 'handback'].includes(action)) throw new Error('Expected daemon status, install, update, uninstall, restart, handback, or net-route')
+  if (!['status', 'install', 'update', 'uninstall', 'restart', 'handback'].includes(action)) throw new Error('Expected daemon status, install, update, uninstall, restart, handback, net-id or net-forget')
   if (process.platform !== 'linux' && process.platform !== 'darwin') throw new Error('Daemon services require Linux or macOS')
   if (action !== 'status' && !options.yes) throw new Error('This changes the host service. Repeat with --yes to confirm; running CLI sessions are not terminated.')
   if (options.scope && !['user', 'system', 'cron'].includes(options.scope)) throw new Error('Scope must be user, system or cron')

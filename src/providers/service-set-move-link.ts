@@ -11,6 +11,10 @@
  * and every other command that starts work there waits (service-set-hold.ts); the release asks the
  * runner to deliver the rows, to whatever the link reaches then.
  *
+ * On a host network link the set has a walnut-net identity of its own: the move first pairs with it
+ * over the link as it is (service-set-net-pair.ts), the flip is which endpoint the link dials, and
+ * the put-back dials the shared one again (still a member until the move is confirmed).
+ *
  * A host whose move is done stays this Walnut's set for this leader whatever the experiment says
  * later (review round 1, B7): its lines keep naming the Walnut and SSH keeps dialling the set's
  * runtime dir, so the other Walnut's default service is never updated from here; the experiment
@@ -22,6 +26,7 @@ import { moveOnce, moveReconnectMs, runMove, serviceSetMoves, settleMove, type M
 import { dropWalnutScope, moveSessions, openWorkThere, stopFollowerThere, stopProven, type MoveCheckLink } from './service-set-move-checks.js'
 import type { SetProvision } from './service-set-provision.js'
 import { isServiceSetId } from './service-set.js'
+import { forgetSetNet, leaveSharedNet, pairServiceSetNet, type NetPairDeps } from './service-set-net-pair.js'
 import { shq } from './daemon-net-update-io.js'
 import { DAEMON_VERSION_ARGS } from './daemon-service-update.js'
 
@@ -40,6 +45,8 @@ export interface SetLinkConn {
   workUnderWay(): number
   /** True once those are answered, false at `boundMs`. */
   drained(boundMs: number): Promise<boolean>
+  /** Host network: the endpoint the host's row names (the machine's walnut-net, the shared daemon's). */
+  sharedEndpoint(): string | null
   /** A shell line on the host (SSH exec, or the daemon's exec over the host network). */
   run(command: string, timeoutMs?: number): Promise<string>
   /** This build's executable on the host, then the set check and install (service-set-provision.ts). */
@@ -65,11 +72,11 @@ export interface SetLinkDeps {
   dropScope?(): Promise<void>
   stopFollower?(): Promise<void>
   endpointId?(): Promise<string | null>
+  /** This leader's host network side (core/net/net-service-sets.ts): its member list, the relay's list, its own walnut-net. */
+  net?: Pick<NetPairDeps, 'list' | 'register' | 'unregister' | 'apply'>
   now?(): number
   sleep?(ms: number): Promise<void>
   settleMs?: number
-  /** How long the host keeps a flipped net route that nobody confirms before it puts it back. */
-  revertAfterSeconds?: number
 }
 
 /** Provisioning at most this often per link while nothing changes (a status line, maybe an upload). */
@@ -98,9 +105,10 @@ export function setCliCommand(set: string, expected: string, words: string): str
   ].join('\n')
 }
 
-/** `walnut daemon net-route` for this leader's endpoint (net-route.ts on the host). */
-export function netRouteCommand(set: string, expected: string, args: string): string {
-  return setCliCommand(set, expected, `net-route ${args}`)
+/** This leader's host network side, from core/net/net-service-sets.ts (a test gives its own). */
+async function netSide(): Promise<Pick<NetPairDeps, 'list' | 'register' | 'unregister' | 'apply'>> {
+  const m = await import('../core/net/net-service-sets.js')
+  return { list: m.pairingList, register: m.registerSetEndpoint, unregister: m.unregisterSetEndpoint, apply: m.applyServiceSetMembers }
 }
 
 export class ServiceSetLink {
@@ -109,6 +117,8 @@ export class ServiceSetLink {
   private provisionedAt = 0
   /** SSH: the set's runtime dir while a move points the link there (before its record says done). */
   private sshOverride: string | null = null
+  /** Host network: the set's own endpoint while a move points the link there (before its record says done). */
+  private netOverride: string | null = null
   private standingNow: LinkStanding = 'unknown'
   /** The move holds this host's starts and sends now. */
   private holding = false
@@ -174,6 +184,41 @@ export class ServiceSetLink {
     return move?.set === record.set && move.phase === 'done' ? { dir: record.runtimeDir, set: record.set } : null
   }
 
+  /** Host network: the endpoint the link dials, when it is this Walnut's set's (null: the host row's). */
+  async netEndpoint(): Promise<string | null> {
+    if (this.c.kind() !== 'net' || !(await this.ask())) return null
+    if (this.netOverride) return this.netOverride
+    const record = await hostServiceSets.read(this.place).catch(() => null)
+    return movedToSet(record) && record.netEndpoint ? record.netEndpoint : null
+  }
+
+  /** This leader's host network side and the set's CLI line on this link: what pairing and its undo use. */
+  private async pairDeps(set: string): Promise<NetPairDeps> {
+    const expected = this.expected()
+    if (!expected) throw new Error('this server names no daemon build')
+    const ask = await this.ask()
+    if (!ask) throw new Error('this Walnut has no id the host can name a set by')
+    return {
+      place: this.place, set, ask, shared: this.c.sharedEndpoint(),
+      runSetCli: (words, timeoutMs) => this.c.run(setCliCommand(set, expected, words), timeoutMs),
+      ...(this.d.net ?? await netSide()),
+    }
+  }
+
+  /** After a confirmed net move: this leader leaves the shared walnut-net's list (once; tried again at each look). */
+  private async leaveShared(set: string): Promise<void> {
+    if (this.c.kind() !== 'net') return
+    const me = await (this.d.endpointId ?? localEndpointId)().catch(() => null)
+    await leaveSharedNet({ ...(await this.pairDeps(set)), me }).catch((err) => {
+      log.session.warn('service set: this leader is still on the shared walnut-net\'s list', { host: this.c.hostKey, error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  /** Leaving the host: its set's endpoint is no member of this leader's, nor of the companion's (service-set-provision.ts leaveServiceSet). */
+  async forgetNet(): Promise<void> {
+    await forgetSetNet({ place: this.place, ...(this.d.net ?? await netSide()) })
+  }
+
   /** A `walnut daemon` line this leader ran named a set (`service set: …`): keep it, and move when it is this Walnut's own. */
   async named(set: string | null, runtimeDir?: string): Promise<void> {
     if (set === null || !(await this.ask())) return
@@ -195,9 +240,10 @@ export class ServiceSetLink {
     let { standing, record } = await this.standingFor()
     if (standing === 'default') return
     if (standing === 'own') {
-      await settleMove({ set: record!.set, store: this.store(), confirm: () => this.confirmRoute(record!.set), now: this.now })
+      await settleMove({ set: record!.set, store: this.store(), confirm: async () => {}, now: this.now })
       await markServiceSetMoved(this.place, record!.set, this.now())
       this.c.notice(this.noticeKey, null)
+      await this.leaveShared(record!.set)
       return
     }
     // Unknown, or a set of its own while the link reaches another daemon: look (and install) first,
@@ -227,15 +273,6 @@ export class ServiceSetLink {
     return { read: () => serviceSetMoves.read(this.place), write: (r) => serviceSetMoves.write(this.place, r) }
   }
 
-  private async confirmRoute(set: string): Promise<void> {
-    if (this.c.kind() !== 'net') return
-    const member = await (this.d.endpointId ?? localEndpointId)()
-    const expected = this.expected()
-    if (!member || !expected) return
-    const walnutId = await this.c.walnutId()
-    await this.c.run(netRouteCommand(set, expected, `--walnut ${walnutId} --member ${member} --confirm`), 30_000)
-  }
-
   /** The link's part the shared daemon's checks use. */
   private get checkLink(): MoveCheckLink {
     const c = this.c
@@ -249,6 +286,8 @@ export class ServiceSetLink {
     const run = (): Promise<MoveOutcome> => runMove({
       set, link: kind, now: this.now, force, sleep,
       store: this.store(),
+      // Host network: the set's own walnut-net is paired first, over this link; not paired, no move.
+      ...(kind === 'net' ? { pair: async () => { await pairServiceSetNet(await this.pairDeps(set)) } } : {}),
       sessions: () => (this.d.sessions ? this.d.sessions(this.c.hostKey) : moveSessions(this.checkLink)),
       openWork: () => (this.d.openWork ?? (() => openWorkThere(this.checkLink)))(),
       stop: (id) => (this.d.stop ?? ((x: string) => stopProven(this.checkLink, x)))(id),
@@ -267,29 +306,21 @@ export class ServiceSetLink {
           this.sshOverride = record.runtimeDir
           return
         }
-        const member = await (this.d.endpointId ?? localEndpointId)()
-        const expected = this.expected()
-        if (!member) throw new Error('this machine\'s host network endpoint is not known')
-        if (!expected) throw new Error('this server names no daemon build')
-        const walnutId = await this.c.walnutId()
-        const said = await this.c.run(netRouteCommand(set, expected, `--walnut ${walnutId} --member ${member} --revert-after ${this.d.revertAfterSeconds ?? 120}`), 60_000)
-        const reply = parseRouteReply(said)
-        if (!reply.ok) throw new Error(`the host did not route this Walnut to its own service: ${reply.message}`)
+        const paired = await hostServiceSets.read(this.place).catch(() => null)
+        if (paired?.set !== set || !paired.netEndpoint) throw new Error('the set\'s own walnut-net is not paired')
+        this.netOverride = paired.netEndpoint
       },
       unflip: async () => {
-        if (kind === 'ssh') { this.sshOverride = null; return }
-        const member = await (this.d.endpointId ?? localEndpointId)()
-        const expected = this.expected()
-        if (!member || !expected) return
-        const walnutId = await this.c.walnutId()
-        // Over the link that reaches the host now; the host's own revert fires anyway if this one cannot go.
-        await this.c.run(netRouteCommand(set, expected, `--walnut ${walnutId} --member ${member} --revert`), 30_000).catch(() => '')
+        // The shared endpoint is still a member on both sides until the move is confirmed.
+        this.sshOverride = null
+        this.netOverride = null
       },
       confirm: async () => {
-        // The move's done record is on disk by now (low 11): the SSH dir comes from the host's record from here on.
+        // The move's done record is on disk by now (low 11): the dir or endpoint comes from the host's record from here on.
         await markServiceSetMoved(this.place, set, this.now())
         this.sshOverride = null
-        await this.confirmRoute(set)
+        this.netOverride = null
+        await this.leaveShared(set)
       },
       reconnect: (boundMs) => this.c.relink(boundMs),
       report: (o) => this.report(o),
@@ -316,16 +347,5 @@ export class ServiceSetLink {
     // The next try comes by itself at its time while the link stays up (drill D2: only a new connect looked again).
     if (!o.final && typeof o.nextTryAt === 'number') this.schedule(Math.max(0, o.nextTryAt - this.now()) + 1_000)
     this.c.notice(this.noticeKey, `This Walnut's sessions on ${host} stay on the service another Walnut runs there for now (${o.why}). ${again}`)
-  }
-}
-
-/** The JSON answer of `walnut daemon net-route`: ok, or why not. */
-export function parseRouteReply(said: string): { ok: boolean; message: string } {
-  const at = said.indexOf('{')
-  try {
-    const r = JSON.parse(said.slice(at)) as { ok?: unknown; error?: unknown; message?: unknown; code?: unknown; failure?: { message?: unknown } }
-    return { ok: r.ok === true, message: String(r.error ?? r.message ?? r.failure?.message ?? r.code ?? '') }
-  } catch {
-    return { ok: false, message: said.trim().split('\n').pop()?.slice(0, 200) || 'no answer' }
   }
 }

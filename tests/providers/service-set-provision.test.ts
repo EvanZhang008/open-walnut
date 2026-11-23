@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { leaveServiceSet, provisionWith, setRuntimeDirFrom } from '../../src/providers/service-set-provision.js'
-import { netRouteCommand, parseRouteReply, ServiceSetLink, type SetLinkConn } from '../../src/providers/service-set-move-link.js'
+import { ServiceSetLink, setCliCommand, type SetLinkConn } from '../../src/providers/service-set-move-link.js'
 import { hostServiceSets } from '../../src/providers/service-set-leader.js'
 import { serviceSetMoves } from '../../src/providers/service-set-move.js'
 import type { SetProvision } from '../../src/providers/service-set-provision.js'
@@ -75,7 +75,7 @@ describe('provisionWith', () => {
 })
 
 describe('leaveServiceSet', () => {
-  const base = (said: string, inTurn = false) => {
+  const base = (said: string, inTurn = false, hello = SET) => {
     const sent: string[] = []
     const params_: Array<Record<string, unknown>> = []
     let now = 0
@@ -85,17 +85,28 @@ describe('leaveServiceSet', () => {
         set: SET, ask, now: () => now, sleep: async (ms: number) => { now += ms },
         sessions: async () => [{ inTurn }],
         send: async (cmd: string, params: Record<string, unknown>) => { sent.push(cmd); params_.push(params); return {} },
+        helloSet: () => hello,
         runSetCli: async (words: string) => { sent.push(words); return said },
+        forgetNet: async () => { sent.push('forgetNet') },
         waitMs: 60_000,
       },
     }
   }
+  const UNINSTALL = `uninstall --yes --walnut ${WALNUT} --walnut-home /home/u/.open-walnut`
 
-  it('drill D4: stops its follower there and revokes its own net members, then uninstalls only its set', async () => {
+  it('drill D4: stops its follower there, uninstalls only its set, then stops the set\'s own walnut-net and forgets its endpoint', async () => {
     const b = base(`service set: ${SET}\n{"ok":true}`)
     expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
-    expect(b.sent).toEqual(['server.configure', 'net.configure', `uninstall --yes --walnut ${WALNUT} --walnut-home /home/u/.open-walnut`])
+    // Over a host network link the set's walnut-net carries the link itself: it is stopped after the uninstall's answer.
+    expect(b.sent).toEqual(['server.configure', UNINSTALL, 'net.configure', 'forgetNet'])
     expect(b.params[0]).toEqual({ home: '/home/u/.open-walnut', spec: null })
+    expect(b.params[1]).toEqual({ enabled: false })
+  })
+
+  it('option B: a link that reaches the shared daemon never turns the machine\'s walnut-net off; the set\'s endpoint is still forgotten here', async () => {
+    const b = base(`service set: ${SET}\n{"ok":true}`, false, '')
+    expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
+    expect(b.sent).toEqual(['server.configure', UNINSTALL, 'forgetNet'])
   })
 
   it('drill D4: a follower stop that fails does not hold the uninstall (best effort)', async () => {
@@ -103,7 +114,7 @@ describe('leaveServiceSet', () => {
     const send = b.deps.send
     b.deps.send = async (cmd: string, params: Record<string, unknown>) => { if (cmd === 'server.configure') { b.sent.push(cmd); throw new Error('timed out') } return send(cmd, params) }
     expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
-    expect(b.sent).toEqual(['server.configure', 'net.configure', `uninstall --yes --walnut ${WALNUT} --walnut-home /home/u/.open-walnut`])
+    expect(b.sent).toEqual(['server.configure', UNINSTALL, 'net.configure', 'forgetNet'])
   })
 
   it('drill D5: an uninstall that kept the set\'s dir says why', async () => {
@@ -124,16 +135,18 @@ describe('leaveServiceSet', () => {
   })
 })
 
-describe('the net route line', () => {
-  it('runs this build\'s copy from the set\'s install root, and reads the answer', () => {
-    const cmd = netRouteCommand(SET, 'walnut-daemon-abc', `--walnut ${WALNUT} --member ${'e'.repeat(64)} --confirm`)
+describe('the set\'s own CLI line', () => {
+  it('runs this build\'s copy from the set\'s install root', () => {
+    const cmd = setCliCommand(SET, 'walnut-daemon-abc', `net-forget --member ${'e'.repeat(64)}`)
     expect(cmd).toContain(`"$HOME/.open-walnut-host/walnuts/${SET}/daemon/versions"/*/*`)
-    expect(cmd).toContain(`walnut daemon net-route --walnut ${WALNUT} --member ${'e'.repeat(64)} --confirm`)
-    expect(() => netRouteCommand('bad', 'v', '')).toThrow()
-    expect(parseRouteReply(`service set: ${SET}\n{"ok":true,"state":"pending"}`)).toEqual({ ok: true, message: '' })
-    expect(parseRouteReply('{"ok":false,"code":"no_member","error":"not a member"}')).toEqual({ ok: false, message: 'not a member' })
+    expect(cmd).toContain(`walnut daemon net-forget --member ${'e'.repeat(64)}`)
+    expect(() => setCliCommand('bad', 'v', '')).toThrow()
   })
 })
+
+const ME = 'e'.repeat(64)
+const SHARED = 'd'.repeat(64)
+const SET_EP = 'a'.repeat(64)
 
 describe('ServiceSetLink', () => {
   let dir = ''
@@ -150,25 +163,38 @@ describe('ServiceSetLink', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  function conn(kind: 'ssh' | 'net', provision: SetProvision) {
+  function conn(kind: 'ssh' | 'net', provision: SetProvision, o: { netId?: string; setAnswers?: boolean } = {}) {
     let hello = ''
     let held = false
     const calls: string[] = []
+    const dialled: string[] = []
     let link!: ServiceSetLink
     const c: SetLinkConn = {
       hostKey: 'h', kind: () => kind, connected: true,
       helloSet: () => hello,
       send: async (cmd) => { calls.push(cmd); return { ok: true, status: { state: 'off' } } },
       hasCapability: (cap) => cap === 'host-server-v1',
+      sharedEndpoint: () => SHARED,
       workUnderWay: () => 0,
       drained: async () => true,
-      run: async (command) => { calls.push(command.includes('net-route') ? `net-route${command.split('net-route')[1]!.split(' 2>')[0]}` : command); return '{"ok":true}' },
+      run: async (command) => {
+        const words = /walnut daemon (net-id|net-forget)( --member [0-9a-f]+)?/.exec(command)
+        if (!words) { calls.push(command); return '{"ok":true}' }
+        calls.push(words[1] === 'net-id' ? 'net-id' : `net-forget${words[2]}`)
+        if (words[1] === 'net-forget') return '{"ok":true,"changed":true}'
+        return o.netId ?? `service set: ${SET}\n{"ok":true,"endpointId":"${SET_EP}","addrs":["10.0.0.5:41641"]}`
+      },
       provision: async () => { calls.push('provision'); return provision },
       relink: async () => {
         calls.push('relink')
-        // SSH: the dial goes where sshDir points now.
+        // SSH: the dial goes where sshDir points now; net: to the endpoint netEndpoint names (else the host row's).
         if (kind === 'ssh') hello = (await link.sshDir())?.set ?? ''
-        else hello = calls.some((x) => x.includes('--revert-after')) ? SET : ''
+        else {
+          const ep = (await link.netEndpoint()) ?? SHARED
+          dialled.push(ep)
+          hello = ep === SET_EP && o.setAnswers !== false ? SET : ''
+          if (ep === SET_EP && o.setAnswers === false) return null
+        }
         return hello
       },
       setHold: (on) => { held = on; calls.push(on ? 'hold' : 'release') },
@@ -180,11 +206,17 @@ describe('ServiceSetLink', () => {
     link = new ServiceSetLink(c, {
       sessions: async () => [{ id: 's1' }],
       stop: async (id) => { calls.push(`stop:${id}`); return { ok: true } },
-      endpointId: async () => 'e'.repeat(64),
+      endpointId: async () => ME,
+      net: {
+        list: () => ({ relayMode: 'public', relays: [], relayRoots: [], members: [{ id: ME, name: 'mac', accept: true }] }),
+        register: async (ep, name) => { calls.push(`register:${ep.slice(0, 4)}:${name}`) },
+        unregister: async (ep) => { calls.push(`unregister:${ep.slice(0, 4)}`) },
+        apply: async () => { calls.push('apply') },
+      },
       sleep: async () => {},
       settleMs: 0,
     }, () => 'walnut-daemon-abc')
-    return { link, calls, held: () => held, setHello: (h: string) => { hello = h } }
+    return { link, calls, dialled, held: () => held, setHello: (h: string) => { hello = h } }
   }
 
   it('ssh: the first look installs its set, the move runs, and the link then dials the set\'s runtime dir', async () => {
@@ -234,15 +266,71 @@ describe('ServiceSetLink', () => {
     expect(t.calls.indexOf('jobs.configure')).toBeLessThan(t.calls.indexOf('relink'))
   })
 
-  it('net: the flip runs net-route with this leader\'s endpoint and a put-back, then confirms', async () => {
+  it('net (option B): pairs with the set\'s own walnut-net first, flips by dialling its endpoint, then leaves only its own entry on the shared one', async () => {
     const t = conn('net', { set: SET, installed: true, ok: true })
     await t.link.check()
-    const routes = t.calls.filter((x) => x.startsWith('net-route'))
-    expect(routes).toEqual([
-      ` --walnut ${WALNUT} --member ${'e'.repeat(64)} --revert-after 120`,
-      ` --walnut ${WALNUT} --member ${'e'.repeat(64)} --confirm`,
-    ].map((r) => `net-route${r}`))
+    expect(t.calls).toEqual([
+      'provision',
+      // Pairing over the link to the shared daemon: the set's walnut-net takes this leader's list, the relay and this machine's walnut-net list it.
+      'net-id', `register:${SET_EP.slice(0, 4)}:h-set`, 'apply',
+      'hold', 'server.configure', 'server.status', 'stop:s1', 'triggers.configure',
+      'relink',
+      // Confirmed: this leader dials the shared endpoint no more, and takes only itself off its list.
+      'apply', `net-forget --member ${ME}`,
+      'release', 'redeliver', 'notice-clear',
+    ])
+    expect(t.dialled).toEqual([SET_EP])
+    expect(await t.link.netEndpoint()).toBe(SET_EP)
     expect(await serviceSetMoves.read('net:h')).toMatchObject({ phase: 'done' })
+    const r = await hostServiceSets.read('net:h')
+    expect(r).toMatchObject({ set: SET, netEndpoint: SET_EP, netAddrs: ['10.0.0.5:41641'], netShared: SHARED })
+    expect(typeof r?.movedAt).toBe('number')
+    expect(typeof r?.netSharedLeftAt).toBe('number')
+    // A later look on the moved host does not leave the shared list again.
+    await t.link.check()
+    expect(t.calls.filter((x) => x.startsWith('net-forget'))).toHaveLength(1)
+  })
+
+  it('net (option B): pairing not done means the move does not start and nothing is touched', async () => {
+    const t = conn('net', { set: SET, installed: true, ok: true }, { netId: `service set: ${SET}\n{"ok":false,"code":"not_running","message":"this Walnut's own service is not running here"}` })
+    await t.link.check()
+    expect(t.calls).toEqual(['provision', 'net-id', 'notice'])
+    expect(await serviceSetMoves.read('net:h')).toMatchObject({ phase: 'gave_up', stopped: [] })
+    expect((await serviceSetMoves.read('net:h'))?.why).toContain('not paired')
+    expect(await hostServiceSets.read('net:h')).not.toHaveProperty('netEndpoint')
+    expect(await t.link.netEndpoint()).toBe(null)
+    expect(t.held()).toBe(false)
+  })
+
+  it('net (option B): pairing that names the default set or the shared endpoint itself is no pairing', async () => {
+    for (const said of ['service set: default\n{"ok":false,"code":"default_set"}', `service set: ${SET}\n{"ok":true,"endpointId":"${SHARED}","addrs":[]}`]) {
+      const t = conn('net', { set: SET, installed: true, ok: true }, { netId: said })
+      await serviceSetMoves.write('net:h', null)
+      await t.link.check()
+      expect(t.calls).not.toContain('hold')
+      expect(t.calls.some((x) => x.startsWith('stop:') || x.startsWith('register'))).toBe(false)
+    }
+  })
+
+  it('net (option B): the set\'s service not answering puts the link back on the shared endpoint, still a member, and leaves nothing', async () => {
+    const t = conn('net', { set: SET, installed: true, ok: true }, { setAnswers: false })
+    await t.link.check()
+    // Flip (dial the set's endpoint), no answer, put back (the shared one), the held work released there.
+    expect(t.dialled).toEqual([SET_EP, SHARED])
+    expect(await t.link.netEndpoint()).toBe(null)
+    expect(await serviceSetMoves.read('net:h')).toMatchObject({ phase: 'reverted' })
+    expect(t.calls.some((x) => x.startsWith('net-forget'))).toBe(false)
+    expect(t.calls.filter((x) => x === 'apply')).toHaveLength(1)
+    expect(t.held()).toBe(false)
+  })
+
+  it('net (option B): leaving forgets the set\'s endpoint here and on the relay list', async () => {
+    const t = conn('net', { set: SET, installed: true, ok: true })
+    await t.link.check()
+    await t.link.forgetNet()
+    expect(t.calls.slice(-2)).toEqual([`unregister:${SET_EP.slice(0, 4)}`, 'apply'])
+    expect(await hostServiceSets.read('net:h')).not.toHaveProperty('netEndpoint')
+    expect(await t.link.netEndpoint()).toBe(null)
   })
 
   it('the default set: nothing moves', async () => {

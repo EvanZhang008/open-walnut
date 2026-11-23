@@ -203,10 +203,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/net-core.ts',
   'src/providers/net-binary.ts',
   'src/providers/net-config-core.ts',
-  // The record of the walnut-net route of a leader to its own service set (bundled into the daemon, net-core.cjs and
-  // daemon-service-cli.cjs), and `walnut daemon net-route` (daemon-service-cli.cjs).
-  'src/providers/net-route-record.ts',
-  'src/providers/net-route.ts',
+  'src/providers/net-control.ts',
   // The stable id of this machine, sent in hello (imported by the binary, inlined by the source twin).
   'src/providers/machine-id-core.ts',
   // A task on another host calling the MCP servers and web services of this host
@@ -334,6 +331,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/service-set.ts',
   'src/providers/service-set-choice.ts',
   'src/providers/service-set-remove.ts',
+  // The walnut-net identity of a service set, for its leader (walnut daemon net-id and net-forget, daemon-service-cli.cjs).
+  'src/providers/service-set-net.ts',
   'src/providers/daemon-shared.ts',
   // The account lookup daemon-service-cli.ts refuses a faked home with, bundled into its .cjs.
   'src/lib/account.ts',

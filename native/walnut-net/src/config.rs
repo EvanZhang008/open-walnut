@@ -55,7 +55,7 @@ pub struct Config {
     #[serde(default)]
     pub members: Vec<Member>,
     /// The file holding this host's daemon port (one number). Each accepted stream connects
-    /// to 127.0.0.1 on the port it holds at that moment, unless its member names its own.
+    /// to 127.0.0.1 on the port it holds at that moment.
     pub daemon_port_file: PathBuf,
     /// The control socket (a unix socket, mode 0600).
     pub control: PathBuf,
@@ -82,19 +82,6 @@ pub struct Member {
     /// this host's relay choice yet is still reached there.
     #[serde(default)]
     pub relays: Vec<String>,
-    /// The port file of the daemon this member's streams go to: a second Walnut's service on
-    /// this machine names its own. Absent: the top-level `daemonPortFile` (every config before
-    /// it). The config may also carry `walnut` (which service wrote the member); only the
-    /// daemons read that.
-    #[serde(default)]
-    pub daemon_port_file: Option<PathBuf>,
-}
-
-impl Member {
-    /// Where a stream from this member goes: its own daemon's port file, else `default`.
-    pub fn port_file<'a>(&'a self, default: &'a Path) -> &'a Path {
-        self.daemon_port_file.as_deref().unwrap_or(default)
-    }
 }
 
 impl Config {
@@ -344,25 +331,6 @@ mod tests {
         assert!(!none.same_endpoint(&custom_empty));
         let members = read_with(r#","relayMode":"public","members":[{"id":"x"}]"#).unwrap();
         assert!(public.same_endpoint(&members));
-    }
-
-    #[test]
-    fn a_member_may_name_its_own_daemon_port_file_and_unknown_member_fields_are_ignored() {
-        let id = SecretKey::from_bytes(&[4u8; 32]).public().to_string();
-        let id2 = SecretKey::from_bytes(&[5u8; 32]).public().to_string();
-        // `walnut` and a field no build reads yet: ignored, never a refusal. An older build reads
-        // `daemonPortFile` on a member the same way, so it routes that member to the top-level file.
-        let members = format!(
-            r#","members":[{{"id":"{id}","name":"set","accept":true,"walnut":"0123456789abcdef","daemonPortFile":"/run/b/daemon.port","later":1}},{{"id":"{id2}","name":"default","accept":true}}]"#
-        );
-        let c = read_with(&members).unwrap();
-        let m = c.member_map();
-        let set = m.values().find(|m| m.name == "set").unwrap();
-        let default = m.values().find(|m| m.name == "default").unwrap();
-        assert_eq!(set.daemon_port_file.as_deref(), Some(Path::new("/run/b/daemon.port")));
-        assert_eq!(default.daemon_port_file, None);
-        assert_eq!(set.port_file(&c.daemon_port_file), Path::new("/run/b/daemon.port"));
-        assert_eq!(default.port_file(&c.daemon_port_file), Path::new("p"));
     }
 
     fn hex_of(b: &[u8]) -> String {

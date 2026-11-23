@@ -145,13 +145,16 @@ describe.each(TWINS)('a service set\'s runtime, %s twin', (kind) => {
     expect(d.REGISTRY_FILE).toBe(`${HOME}/.local/share/open-walnut/daemon/sessions.json`)
   })
 
-  it('the machine\'s single copies stay the default set\'s; the hello names the set; walnut-net hears it', () => {
+  it('the machine\'s single copies stay the default set\'s; the hello names the set; a set has its own walnut-net identity', () => {
     const src = twinSource(kind)
     const shim = between(src, /function installUserWalnutShim\(\)/, /\n}\n/, 'installUserWalnutShim')
     expect(shim).toMatch(/if \(!IS_PROD_DAEMON_DIR\) return/)
     expect(src).toMatch(/if \(IS_PROD_DAEMON_DIR \|\| (daemonEnv|process\.env)\.WALNUT_LEGACY_STREAMS_DIR\) out\.push\(LEGACY_STREAMS_DIR\)/)
     expect(src).toMatch(/if \(!KEEPS_SESSIONS\) \{\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
     expect(src).toContain('...(SET_ID ? { serviceSet: SET_ID } : {}),')
-    expect(src).toMatch(/setId: SET_ID,/)
+    // Option B: the set's net state dir is its own (net-config-core.ts netStateDirOf), the supervisor is today's.
+    expect(src).toMatch(/NET_STATE_DIR = [\s\S]{0,1500}?home: HOME_DIR, setId: SET_ID[ ,]/)
+    expect(src).not.toMatch(/setId: SET_ID,\n/)
+    expect(src).not.toContain('confirmRoutes')
   })
 })

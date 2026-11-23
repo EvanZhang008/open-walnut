@@ -1727,6 +1727,7 @@ export class DaemonConnection {
       // The move's own commands pass its hold.
       send: (cmd, params, timeoutMs) => this.send(cmd, pastSetHold(params), timeoutMs) as Promise<Record<string, unknown>>,
       hasCapability: (cap) => this.hasCapability(cap),
+      sharedEndpoint: () => this.sshTarget?.endpoint ?? null,
       workUnderWay: () => this._setHold.inFlight,
       drained: (boundMs) => this._setHold.drained(boundMs),
       run: (command, timeoutMs) => (this.setLinkKind === 'net' ? createNetUpdateIo(this, {}).run(command, timeoutMs) : this.sshExec(command, timeoutMs)),
@@ -8329,7 +8330,9 @@ export class DaemonConnection {
    * port to that machine's daemon (core/hosts/net-link.ts), then hello as on any link.
    */
   private async dialNetHost(): Promise<void> {
-    const endpoint = this.sshTarget?.endpoint
+    // This Walnut's own service set there has a walnut-net endpoint of its own once moved (service-set-move-link.ts).
+    const own = await this.serviceSetLink?.netEndpoint().catch(() => null)
+    const endpoint = own ?? this.sshTarget?.endpoint
     if (!endpoint) throw new Error(`${this.hostKey} has no host network id; add it again from Settings > Remote Hosts`)
     this.setPhase('tunnel')
     const { netForwardPort, explainNetDialFailure } = await import('../core/hosts/net-link.js')

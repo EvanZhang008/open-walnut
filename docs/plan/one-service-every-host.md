@@ -424,11 +424,15 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   root, versions, launcher, boot item name, runtime dir, registry, streams, ports, sockets. The choice
   is the host's (`walnut daemon ... --walnut`), taken once with an atomic claim, and sticky.
 - **That set is production.** Its sessions survive a restart like the default one's.
-- **Shared, and only these three:** the machine id; the cli-owner records; the machine's network
-  address (one walnut-net, one key, members routed to their own Walnut's service).
+- **Shared, and only these two:** the machine id; the cli-owner records. The network is not shared: a
+  later Walnut's set runs its own walnut-net (own key, address, config, control socket, UDP port, in
+  `walnuts/<id16>/net/`); the machine's stays as it is. A host-network leader pairs with its set over
+  the link it already has (`walnut daemon net-id`), and no pairing means no move.
 - **The move off a shared daemon carries no live CLI over.** The leader waits, at most a bounded time,
   for a moment when none of its sessions there runs a turn; holds new work; stops them the normal way
-  and confirms each exited; flips its route; resumes them in its own service on their next message.
+  and confirms each exited; flips its link (net: dials the set's endpoint); resumes them in its own
+  service on their next message. Once a net move is confirmed it takes only itself off the machine's
+  walnut-net list.
   Each moved session reads its context once. A move that cannot finish (the wait runs out, the new
   service does not answer) is put back and reported; a running turn is never stopped. Sessions started
   after the flip go only to the new service. The shared daemon, its launcher and boot item are left as

@@ -11,7 +11,8 @@
  *   cronTag      # open-walnut-daemon <id16>
  *
  * R/run (the follower's run dir) and R/rt are siblings, never nested (replica/boot-guard.ts).
- * Shared on purpose by every set: the machine id, cli-owners and walnut-net.
+ * Shared on purpose by every set: the machine id and cli-owners. walnut-net is not: a set runs its own
+ * (net-config-core.ts netStateDir, `R/net`), and the machine's stays the default set's.
  *
  * The one place the service names and the default install root are spelled; daemon-service-config.ts
  * and daemon-service-boot-script.ts re-export them for their older importers. Imports only node:path:

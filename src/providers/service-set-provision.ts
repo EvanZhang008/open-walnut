@@ -65,8 +65,12 @@ export interface LeaveDeps {
   /** This Walnut's live sessions there: the set is removed once none is in a turn. */
   sessions(): Promise<Array<{ inTurn: boolean }>>
   send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown>
+  /** The set the link's hello names now ('' the default's daemon, another Walnut's or the machine's). */
+  helloSet(): string
   /** The set's own `walnut daemon` line (service-set-move-link.ts setCliCommand) run on the host. */
   runSetCli(words: string, timeoutMs: number): Promise<string>
+  /** Host network: the set's endpoint is no member of this leader's, nor on the companion's relay list (service-set-net-pair.ts forgetSetNet). */
+  forgetNet?(): Promise<void>
   now(): number
   sleep(ms: number): Promise<void>
   waitMs?: number
@@ -76,11 +80,13 @@ export interface LeaveDeps {
  * Leave a host (the leader drops it): wait, bounded, until none of this Walnut's sessions there is in
  * a turn; stop this Walnut's follower on the set's daemon (`server.configure {home, spec:null}`, best
  * effort as the move's stopFollower: an uninstall under a running follower would leave its process
- * to the service stop alone); revoke this set's walnut-net members (`net.configure {enabled:false}`:
- * the set's service removes only its own, net-core.ts leave); then `walnut daemon uninstall --yes --walnut <id>`,
- * which removes only this set: its boot item, then its own dir (root, runtime) once nothing of the set
- * runs there (service-set-remove.ts; a CLI of it still running keeps the dir, and the answer says so).
- * The answer must name the same set.
+ * to the service stop alone); then `walnut daemon uninstall --yes --walnut <id>`, which removes only
+ * this set: its boot item, then its own dir (root, runtime, and its own walnut-net state) once nothing
+ * of the set runs there (service-set-remove.ts; a CLI of it still running keeps the dir, and the
+ * answer says so). The answer must name the same set. Then the set's walnut-net is stopped if its
+ * daemon still answers (`net.configure {enabled:false}`, the set's own identity only: over a host
+ * network link that ends the link, so it comes after the uninstall), and its endpoint is forgotten
+ * here and on the companion's relay list. The machine's own walnut-net is never touched.
  */
 export async function leaveServiceSet(d: LeaveDeps): Promise<{ ok: boolean; why: string }> {
   if (!isServiceSetId(d.set)) return { ok: false, why: 'not a set of this Walnut\'s own: nothing is removed' }
@@ -92,8 +98,10 @@ export async function leaveServiceSet(d: LeaveDeps): Promise<{ ok: boolean; why:
     await d.sleep(15_000)
   }
   await d.send('server.configure', { home: d.ask.home, spec: null }, 15_000).catch(() => undefined)
-  await d.send('net.configure', { enabled: false }, 30_000).catch(() => undefined)
-  const said = await d.runSetCli(`uninstall --yes${words}`, 120_000)
+  const said = await d.runSetCli(`uninstall --yes${words}`, 120_000).catch((err: Error) => `uninstall: ${err.message}`)
+  // Only on the set's own daemon: on the default's this would turn off the machine's walnut-net.
+  if (d.helloSet() === d.set) await d.send('net.configure', { enabled: false }, 30_000).catch(() => undefined)
+  await d.forgetNet?.().catch(() => undefined)
   const named = parseServiceSetLine(said)
   if (named !== d.set) return { ok: false, why: `the host named ${named === null ? 'no set' : `set ${named || 'default'}`}, not this Walnut's own (${d.set})` }
   let answer: { ok?: unknown; setDir?: { removed?: unknown; why?: unknown } } = {}

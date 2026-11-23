@@ -6021,8 +6021,6 @@ function cmdLeaderConfigure(ws, id, cmd) {
   try {
     var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true, drains: cmd.drains });
     bindGatewayClientHome(ws, rec.home);
-    // This set's own Walnut reached it: its pending walnut-net routes here stay (net-route.ts). Twin of daemon-standalone.ts.
-    if (SET_ID !== '' && netSupervisor && typeof netSupervisor.confirmRoutes === 'function') void netSupervisor.confirmRoutes(cmd.walnutId);
     var notTaken = moveNotTaken.get(cmd);
     // A home a declared move made an alias: the server hears the home this host keeps its Walnut under. Twin of daemon-standalone.ts.
     var aliased = homeNamedAs.has(cmd);
@@ -15099,7 +15097,8 @@ try {
 // Mirrors daemon-standalone.ts.
 // This host's net state dir (net-config-core.ts netStateDirOf, inlined): its key, config, and
 // its hub forwards file. Mirrors daemon-standalone.ts.
-var NET_STATE_DIR = (__NET_STATE_DIR_OF__)({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR, join: path.join });
+// A service set's daemon has a network identity of its own, inside its set. Mirrors daemon-standalone.ts.
+var NET_STATE_DIR = (__NET_STATE_DIR_OF__)({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR, setId: SET_ID, join: path.join });
 // This machine's stable id for hello (machine-id-core.ts machineIdOf, inlined), seeded from the data
 // dir's older id; null when it can be neither read nor made. Mirrors daemon-standalone.ts.
 var DAEMON_MACHINE_ID = (function () {
@@ -15114,8 +15113,6 @@ try {
     spawn: function (command, args, opts) { return spawn(command, args, opts); },
     stateDir: NET_STATE_DIR,
     portFile: PORT_FILE,
-    // The service set whose members this daemon writes into walnut-net's config (service-set.ts); '' the default's.
-    setId: SET_ID,
     bin: function () { return netCore.resolveNetBinary({ dirs: [__dirname, DAEMON_DIR, path.join(NET_STATE_DIR, 'bin')] }); },
     log: function (level, msg, data) { logMsg(level, msg, data); },
   });

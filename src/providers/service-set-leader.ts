@@ -74,13 +74,37 @@ export interface HostSetRecord {
    * every line names the Walnut, SSH dials the set's runtime dir, and the record never expires (B7, should-fix 8).
    */
   movedAt?: number
+  /**
+   * Host network: the set's own walnut-net endpoint (its key inside the set), paired over the link to
+   * the shared daemon (service-set-net-pair.ts), and where this leader's walnut-net finds it.
+   */
+  netEndpoint?: string
+  netAddrs?: string[]
+  /** The endpoint the link dialled before the move (the shared daemon's walnut-net): no member of this leader's once moved. */
+  netShared?: string
+  /** When this leader took itself off the shared walnut-net's member list (after the move). */
+  netSharedLeftAt?: number
 }
+
+const NET_ID = /^[0-9a-f]{64}$/
 
 const validHostSet = (e: unknown): e is HostSetRecord => {
   const r = e as HostSetRecord
   return !!r && typeof r === 'object' && Number.isFinite(r.at) && (r.set === '' || isServiceSetId(r.set))
     && (r.runtimeDir === undefined || (typeof r.runtimeDir === 'string' && r.runtimeDir.startsWith('/')))
     && (r.movedAt === undefined || Number.isFinite(r.movedAt))
+    && (r.netEndpoint === undefined || NET_ID.test(r.netEndpoint)) && (r.netShared === undefined || NET_ID.test(r.netShared))
+    && (r.netAddrs === undefined || (Array.isArray(r.netAddrs) && r.netAddrs.every((a) => typeof a === 'string')))
+    && (r.netSharedLeftAt === undefined || Number.isFinite(r.netSharedLeftAt))
+}
+
+/** The pairing facts of a record (kept across every rewrite of the same set's record). */
+function netFacts(r: HostSetRecord | null | undefined): Partial<HostSetRecord> {
+  if (!r?.netEndpoint) return {}
+  return {
+    netEndpoint: r.netEndpoint, ...(r.netAddrs ? { netAddrs: r.netAddrs } : {}),
+    ...(r.netShared ? { netShared: r.netShared } : {}), ...(r.netSharedLeftAt !== undefined ? { netSharedLeftAt: r.netSharedLeftAt } : {}),
+  }
 }
 
 /** This Walnut's sessions moved into its own set there (the record's movedAt). */
@@ -109,8 +133,63 @@ export async function recordServiceSetFrom(place: string, output: string, runtim
   const before = await hostServiceSets.read(place).catch(() => null)
   const dir = set ? runtimeDir ?? (before?.set === set ? before.runtimeDir : undefined) : undefined
   const movedAt = set && before?.set === set ? before.movedAt : undefined
-  await hostServiceSets.write(place, { at: Date.now(), set, ...(dir ? { runtimeDir: dir } : {}), ...(movedAt !== undefined ? { movedAt } : {}) })
+  await hostServiceSets.write(place, {
+    at: Date.now(), set, ...(dir ? { runtimeDir: dir } : {}), ...(movedAt !== undefined ? { movedAt } : {}),
+    ...(set && before?.set === set ? netFacts(before) : {}),
+  })
   return set
+}
+
+/** The set's walnut-net is paired: its endpoint (and addresses) kept on the host's record, beside the one dialled so far. */
+export async function markServiceSetNetPaired(place: string, set: string, p: { endpoint: string; addrs: string[]; shared: string | null }, now = Date.now()): Promise<boolean> {
+  const before = await hostServiceSets.read(place).catch(() => null)
+  if (before?.set !== set || !NET_ID.test(p.endpoint)) return false
+  // A record that moved already keeps the endpoint it dialled before (the shared one is never the set's own).
+  const shared = before.netShared ?? (p.shared && p.shared !== p.endpoint ? p.shared : undefined)
+  await hostServiceSets.write(place, {
+    ...before, at: now, netEndpoint: p.endpoint, netAddrs: p.addrs.slice(0, 16),
+    ...(shared ? { netShared: shared } : {}), ...(before.netEndpoint === p.endpoint ? {} : { netSharedLeftAt: undefined }),
+  })
+  return true
+}
+
+/** This leader is off the shared walnut-net's member list (after the move). */
+export async function markServiceSetNetLeft(place: string, set: string, now = Date.now()): Promise<void> {
+  const before = await hostServiceSets.read(place).catch(() => null)
+  if (before?.set !== set) return
+  await hostServiceSets.write(place, { ...before, at: now, netSharedLeftAt: now })
+}
+
+/** Forget a set's walnut-net on this leader (leaving the host): the record keeps the set, not its endpoint. */
+export async function forgetServiceSetNet(place: string): Promise<string | null> {
+  const before = await hostServiceSets.read(place).catch(() => null)
+  if (!before?.netEndpoint) return null
+  const { netEndpoint, netAddrs: _a, netShared: _s, netSharedLeftAt: _l, ...rest } = before
+  await hostServiceSets.write(place, { ...rest, at: Date.now() })
+  return netEndpoint
+}
+
+/** The member name of a host's set endpoint (a companion takes a plain alias only: net-store.ts NAME_RE). */
+export function setNetMemberName(place: string): string {
+  const host = place.replace(/^[a-z]+:/, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 58)
+  return `${host || 'host'}-set`
+}
+
+/**
+ * What this leader's own walnut-net lists for the service sets it paired with (core/net/net-mac.ts):
+ * each set's endpoint, dialled (never let in), and, once a host moved, the shared endpoint it no longer dials.
+ */
+export async function serviceSetNetMembers(): Promise<{ add: Array<{ id: string; name: string; accept: false; addrs?: string[] }>; drop: Set<string> }> {
+  const add: Array<{ id: string; name: string; accept: false; addrs?: string[] }> = []
+  const drop = new Set<string>()
+  for (const [place, r] of await hostServiceSets.list().catch(() => [])) {
+    if (!place.startsWith('net:') || !r.set || !r.netEndpoint) continue
+    add.push({ id: r.netEndpoint, name: setNetMemberName(place), accept: false, ...(r.netAddrs?.length ? { addrs: r.netAddrs } : {}) })
+    if (movedToSet(r) && r.netShared) drop.add(r.netShared)
+  }
+  // A set endpoint of one host is never dropped as another's shared one.
+  for (const a of add) drop.delete(a.id)
+  return { add, drop }
 }
 
 /** The set a hello names: its `serviceSet` (a set's service), else '' (the default set, or an older host). */

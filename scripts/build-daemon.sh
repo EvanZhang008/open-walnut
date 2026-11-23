@@ -153,8 +153,7 @@ SOURCES=(
   src/providers/net-core.ts
   src/providers/net-binary.ts
   src/providers/net-config-core.ts
-  src/providers/net-route-record.ts
-  src/providers/net-route.ts
+  src/providers/net-control.ts
   src/providers/machine-id-core.ts
   src/providers/host-mcp-core.ts
   src/providers/host-http-core.ts
@@ -248,6 +247,7 @@ SOURCES=(
   src/providers/service-set.ts
   src/providers/service-set-choice.ts
   src/providers/service-set-remove.ts
+  src/providers/service-set-net.ts
   src/providers/daemon-shared.ts
   src/lib/account.ts
   src/lib/daemon-dir.ts

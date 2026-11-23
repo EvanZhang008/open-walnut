@@ -117,6 +117,19 @@ export class KeyedUpdateStore<T extends { at: number }> {
     return legacy
   }
 
+  /** This machine's entries still within their time, by key (`net:<host>`, ...); none in a test run that names no file. */
+  async list(): Promise<Array<[string, T]>> {
+    const file = this.file()
+    if (!file) return []
+    const all = await this.readAll(file)
+    const prefix = await machineKey('')
+    const out: Array<[string, T]> = []
+    for (const [k, e] of Object.entries(all)) {
+      if (k.startsWith(prefix) && this.valid(e) && this.fresh(e)) out.push([k.slice(prefix.length), e])
+    }
+    return out
+  }
+
   /** Keep (or with null, forget) the entry for `key`. Best effort: one that cannot be kept is in memory only. */
   write(key: string, entry: T | null): Promise<void> {
     const file = this.file()

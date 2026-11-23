@@ -98,6 +98,21 @@ describe('service set move', () => {
     expect(h.landed).toEqual([{ id: 's1', text: 'next', on: 'set' }])
   })
 
+  it('option B: a net move whose pairing is not done gives up before anything is held, stopped or flipped', async () => {
+    const h = fakeHost()
+    h.live.shared.set('s1', false)
+    const out = await runMove(h.deps({ pair: async () => { h.log.push('pair'); throw new Error('the set\'s walnut-net did not start') } }))
+    expect(out).toMatchObject({ result: 'gave_up', stopped: [] })
+    expect((out as { why: string }).why).toContain('not paired')
+    expect(h.log).toEqual(['store:waiting', 'pair', 'store:gave_up', 'report:gave_up'])
+    expect(h.live.shared.has('s1')).toBe(true)
+    // Paired: the move goes on as before, pairing first.
+    h.setRecord(null)
+    h.log.length = 0
+    expect(await runMove(h.deps({ pair: async () => { h.log.push('pair') } }))).toMatchObject({ result: 'moved', stopped: ['s1'] })
+    expect(h.log.slice(0, 3)).toEqual(['store:waiting', 'pair', 'hold'])
+  })
+
   it('gives up at the wait bound and never stops a session in a turn', async () => {
     const h = fakeHost()
     h.live.shared.set('busy', true)

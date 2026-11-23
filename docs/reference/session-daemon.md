@@ -539,27 +539,35 @@ a set already installed, then the claim file `set-owner.json`, then the default'
 another Walnut in `daemon.serves.json`) and prints `service set: default|<id16>`. A set's runtime keeps
 its sessions like the default one (`WALNUT_SERVICE_SET`, `KEEPS_SESSIONS`); the machine's single copies
 (the user PATH shim, `~/.open-walnut/tmp`) stay with the default set. Shared on purpose, and only:
-the machine id, the cli-owner records (one CLI per session on the host, whichever service asks) and
-walnut-net (one address and key; each member's streams go to its own Walnut's `daemonPortFile`;
-the service holding `ctl.sock` runs it and another takes over on the same key; a Walnut that leaves
-removes only its own members). A port stream never reaches another set's daemon door. Moving off a
+the machine id and the cli-owner records (one CLI per session on the host, whichever service asks).
+walnut-net is not shared: a set's daemon runs its own, with its own key, address, config, control
+socket and UDP port in `walnuts/<id16>/net/` (`netStateDir`), and the machine's
+(`~/.local/state/open-walnut/net`) stays exactly as it is, so a machine with one Walnut changes
+nothing. A host-network leader pairs with its set over the link it already holds to the shared daemon
+(`walnut daemon net-id`: the set's daemon takes the leader's member list and answers its endpoint;
+`src/providers/service-set-net-pair.ts`), keeps the endpoint on the host's record and lists it in its
+own walnut-net (with a cloud companion also on its relay list); no pairing, no move. A port stream
+never reaches another set's daemon door. Moving off a
 shared daemon does not carry live CLIs over (`src/providers/service-set-move.ts`): the leader waits
 (bounded) for a moment when nothing of it works there (no session in a turn or with work that outlives
 its turn, judged from the host's fresh `getState` and the runner; no host_exec run of its tasks; no
 command under way: `service-set-move-checks.ts`), holds every command that would start work there in
 `DaemonConnection.send` (`service-set-hold.ts`), stops its follower there, stops each session the normal
 way and proves its CLI gone (the daemon's `cli.holder`: pid and start time), empties its triggers and
-plugin jobs there (`triggers.configure`, `jobs.configure` for its home), flips the route (`walnut daemon
-net-route`, put back by itself unless confirmed) and resumes them in its own service on their next
-message; a move that cannot finish gives back what it took and is reported, and failures in a row back
+plugin jobs there (`triggers.configure`, `jobs.configure` for its home), flips the link (SSH: the set's
+runtime dir; net: the set's endpoint, the shared one put back when the set does not answer) and resumes
+them in its own service on their next message; once a net move is confirmed the leader drops the shared
+endpoint from its own list and takes only itself off the machine's walnut-net list (`walnut daemon
+net-forget`), never another's key, member or process; a move that cannot finish gives back what it took and is reported, and failures in a row back
 off and end after four tries. A host whose move is done stays this Walnut's set whatever the experiment
 says later (its lines keep `--walnut`, SSH keeps dialling the set's runtime dir).
 The shared daemon, its launcher and boot item stay as they are, the other Walnut's. Leaving a host
-(`leaveServiceSet`) stops this Walnut's follower there, revokes its walnut-net members, then runs
+(`leaveServiceSet`) stops this Walnut's follower there, then runs
 `walnut daemon uninstall --yes --walnut <id>`: the set's boot item goes, and its whole dir
-(`walnuts/<id16>/`, the staged versions included) goes too once its daemon, every CLI in its registry
-and its follower are gone (`src/providers/service-set-remove.ts`); otherwise the answer's `setDir`
-says what still runs.
+(`walnuts/<id16>/`, the staged versions and its walnut-net state included) goes too once its daemon,
+every CLI in its registry and its follower are gone (`src/providers/service-set-remove.ts`); otherwise
+the answer's `setDir` says what still runs. Then the set's own walnut-net is stopped if its daemon still
+answers (never the machine's), and the leader forgets its endpoint here and on the companion's relay list.
 
 **The follower calls the runtime directly.** In the service the follower link is
 `createDirectFollowerLink` (`src/core/link/follower-link-direct.ts`): it calls the runtime's
