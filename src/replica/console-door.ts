@@ -225,10 +225,17 @@ export function startConsoleDoor(o: ConsoleDoorOptions): ConsoleDoor {
     o.log('info', 'console door: open', { port: c.port, host: c.host, switchId: c.switchId, to: c.to })
   }
 
-  async function look(): Promise<void> {
-    if (stopped) return
+  // One look at a time, the read included: the tick and an explicit look() never both open.
+  let looking: Promise<void> | null = null
+  function look(): Promise<void> {
+    if (stopped) return Promise.resolve()
+    looking ??= lookOnce().finally(() => { looking = null })
+    return looking
+  }
+  async function lookOnce(): Promise<void> {
     if (opening) return opening
     const c = await readConsoleFileAsync(o.walnutId, dir)
+    if (stopped) return
     const refusal = !c ? 'no console file for this Walnut on this machine' : c.port === o.publicPort ? 'the console names this replica\'s own port'
       : consoleRefusal(c) ?? (o.knowsToken(c.token) ? null : 'this replica does not know the console device yet (or it was removed): its device copy comes from the leader')
     if (!c || refusal) {
@@ -259,6 +266,7 @@ export function startConsoleDoor(o: ConsoleDoorOptions): ConsoleDoor {
     async stop() {
       stopped = true
       clearInterval(tick)
+      await looking?.catch(() => {})
       await opening?.catch(() => {})
       await close('the replica stops')
     },

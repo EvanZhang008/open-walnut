@@ -23,8 +23,10 @@ and `console-credential.ts` (made at the handover), `src/replica/console-door.ts
    leads on. Later steps of the same kind (a host credential) go beside it in `before-handover.ts`.
    A console that will never stand is withdrawn (`withdrawConsole`): the handover refused after
    the mint, or cancelled, takes the device out of `auth.json` (its hash tombstoned) and removes
-   the file. A handover to a machine drops that machine's own console device (a switch back: it
-   leads now), and its console file goes when its leader starts (`side.ts`).
+   the file. A home that boots holding the permit does the same for its own machine's console
+   (`server.ts`): after a switch back A's `console-A` (which came back with B's data) and its
+   file go, and so does one minted for a handover that rolled back. Nothing else removes it, so
+   a switch back that is cancelled or refused leaves A's console standing.
 2. **The console stands** only while the handed-over home's own marker
    (`local/leader-switch/handed-over.json`) says `handed-over` in that switch. A cancelled switch
    removes the marker and a switch back moves the home aside: either ends it.
@@ -42,7 +44,14 @@ and `console-credential.ts` (made at the handover), `src/replica/console-door.ts
      machine's replica of <B> (pid N); ...`.
    - Started while the replica already serves (as this Walnut: `GET /api/v1/instance` names its
      id), it prints that line first and stays the same way, with the witnesses online or every
-     one of them out of reach. It never leads and opens nothing in the home.
+     one of them out of reach. It never leads and opens nothing in the home. A replica that only
+     waits for the port gets 5 s to take it; then the standby listens and gives the port up as
+     above.
+   - Its page checks `/api/health` every 2 s and loads again once the port no longer answers as
+     the standby, so the window moves to the console by itself (a failed check is only tried
+     again). Any page a browser opens on the standby is that page.
+   - While it holds no port it writes no pid file: it ends by its own marker check, never by
+     `LocalSide.stopStandby`'s signal.
    - When the console ends (the holder goes, or does not answer as this Walnut for a minute: a
      pid used again, another program on the port), it takes the port back as the standby and
      says `Walnut standby listening on http://localhost:<port>: ...`.
@@ -210,8 +219,8 @@ and exit order included: Swift stops its output reader at an exit without readin
 
 | Moment | What the app sees | What it does |
 |---|---|---|
-| only the standby runs (no replica yet) | `GET /` 200 (the standby page, refreshing every 15 s), the listening line | attaches to the server it started |
-| the standby gives its port up | its process stays (no exit); the port is the replica's a moment later | nothing: no restart, no spawn; the page loads from the replica |
+| only the standby runs (no replica yet) | `GET /` 200 (the standby page, which checks the port every 2 s), the listening line | attaches to the server it started |
+| the standby gives its port up | its process stays (no exit); the port is the replica's a moment later | nothing: no restart, no spawn; the standby page sees the console answer and loads it |
 | the replica has just taken over | `GET /` 200, `/api/config` with a login session it leaves alone | stays attached; a `walnut web` started now prints the console line and stays without the port |
 | the new leader is cut off | the replica's own page and copies, `GET /` 200 | stays attached; its watchdog only logs |
 | the replica stops (its daemon does not start it again) | its own process takes the port back as the standby | stays attached; the standby page loads |
@@ -225,7 +234,16 @@ update does nothing (`src/commands/update.ts`), so the home is not written. A pe
 `walnut update` there still installs, and writes its install record in the home as it does
 anywhere.
 
-One case stays the app's: after a crash of the app its `server.pid` still names the old standby;
+Limits that stay the app's or the console's:
+
+- **A fresh launch beside a running console** (the usual case after a login: the daemon starts
+  the replica, the app comes later) attaches without a child, so no standby stands by. If the
+  replica then stops and its daemon does not start it again, the window stays on a dead page
+  until the app's Retry, which starts the standby. Covering it needs the daemon to start the
+  standby, which this phase does not change.
+- **The console's page when the standby takes the port back**: an open console page is not told;
+  its requests get 409 `handed_over` until it is loaded again, and then it is the standby page.
+- After a crash of the app its `server.pid` still names the old standby;
 should the replica later get that pid, the app's orphan check (`isOwnServerCommand`, which accepts
 `web --replica`) would stop it, and the daemon starts it again. Unlikely, and only an app change
 fixes it.

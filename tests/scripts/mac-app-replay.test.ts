@@ -200,7 +200,7 @@ setInterval(() => {}, 1000)
     }
   })
 
-  it('the console replica dies while the app shows it: the app\'s own child takes the port back, nothing restarts', async () => {
+  it('the console replica dies while the app shows it: a standby already beside it takes the port back, nothing restarts', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mac-replay-'))
     const port = await freePort()
     const flag = path.join(dir, 'console-gone')
@@ -224,7 +224,10 @@ setInterval(() => {}, 1000)
     r.start()
     // Something answers at the port already: the app attaches to it without a child.
     expect(await until(() => r.attachedPort() === port, 15_000)).toBe(true)
-    // The app's child stands by (started by hand here, as the app does on a fresh start).
+    // A standby of the home already stands by beside the console. The app attached without a
+    // child here, so it is NOT the app's: started by hand, as one the app started before the
+    // replica took the port would be. An app that launched beside a running console has none,
+    // and a dead page until its Retry (docs/reference/leader-switch-console.md, limits).
     const seat = spawn(process.execPath, [file, String(port)], { stdio: 'ignore' })
     children.push(seat)
     await closeServer(replica)

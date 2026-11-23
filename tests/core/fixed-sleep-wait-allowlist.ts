@@ -725,4 +725,10 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/replica/follower-link-direct.test.ts", sleep: "await new Promise((x) => setTimeout(x, 40))", reason: "negative: a view naming another Walnut must not make the link follow" },
   { file: "tests/replica/follower-link-direct.test.ts", sleep: "await new Promise((x) => setTimeout(x, 50))", reason: "negative: a poll the drain refuses must not drop the link or its known view" },
   { file: "tests/replica/follower-link-direct.test.ts", sleep: "await new Promise((x) => setTimeout(x, 60))", reason: "negative: a seated link attaches no more" },
+  { file: "tests/core/leader/switch/console-handover.test.ts", sleep: "await new Promise((r) => setTimeout(r, 400))", reason: "negative: the standby that gave its port up must not end (the process the Mac app started stays)" },
+  { file: "tests/core/leader/switch/console-handover.test.ts", sleep: "await new Promise((r) => setTimeout(r, 600))", reason: "negative: a holder of another port must not make the standby give its port up" },
+  { file: "tests/core/leader/switch/console-handover.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: the standby must not give way again to a holder it distrusted" },
+  { file: "tests/scripts/mac-app-replay.test.ts", sleep: "await new Promise((x) => setTimeout(x, 1_500))", reason: "negative: after the console page loaded, no restart, error screen or exit follows" },
+  { file: "tests/scripts/mac-app-replay.test.ts", sleep: "await new Promise((x) => setTimeout(x, 2_500))", reason: "time under test: the gap with nothing on the port between the standby letting it go and the console taking it" },
+  { file: "tests/scripts/mac-app-replay.test.ts", sleep: "await new Promise((x) => setTimeout(x, 1_000))", reason: "negative: once the console serves, the app stops, restarts and exits nothing" },
 ]

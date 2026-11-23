@@ -56,7 +56,7 @@ export interface HomeEntry extends EntryBase {
    * `machine` entries, and on `rebuildable` ones the running daemon writes (its host server's
    * install, plugin job bundles). A home that handed the leader over keeps every other path of its
    * leader data and machine data byte for byte; these go on changing (home-kept.ts skips them and
-   * says so), and a promotion leaves them where they are (leader/switch: isMachineRuntimeEntry).
+   * says so), and a switch's promotion is to leave them where they are.
    * Backups and the standby copy never read it: they decide by their own rules and by the class,
    * as before (tests/core/home-manifest/daemon-state.test.ts).
    */

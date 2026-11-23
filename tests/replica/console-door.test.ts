@@ -240,6 +240,28 @@ describe('the console door', () => {
     expect(JSON.parse(r.body)).toEqual({ config: { ok: 1 }, loginSession: { ok: true, problems: [], checkedAt: null } })
   })
 
+  it('looks one at a time: looks at once open one listener, and a stop during a look leaves no holder and no listener', async () => {
+    const port = await freePort()
+    consoleAt(port)
+    marker('handed-over')
+    const logs: string[] = []
+    door = startConsoleDoor({ walnutId: WALNUT, publicPort: mainPort, app, mainServer: main, log: (_l, m) => { logs.push(m) }, knowsToken: (t) => known.has(t), dir, tickMs: 60_000 })
+    await Promise.all([door.look(), door.look(), door.look()])
+    expect(door.status().state).toBe('serving')
+    expect(logs.filter((m) => /open$/.test(m))).toHaveLength(1)
+    expect(logs.filter((m) => /taken/.test(m))).toEqual([])
+    await door.stop()
+    door = null
+    // Stopped while its first look still reads the console file.
+    const d2 = startConsoleDoor({ walnutId: WALNUT, publicPort: mainPort, app, mainServer: main, log: () => {}, knowsToken: (t) => known.has(t), dir, tickMs: 60_000 })
+    await d2.stop()
+    expect(d2.status().state).toBe('none')
+    expect(readHolder(WALNUT, dir)).toBeNull()
+    const s = net.createServer()
+    await new Promise<void>((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', () => resolve()) })
+    blockers.push(s)
+  })
+
   it('gives the port back when the console ends', async () => {
     const port = await freePort()
     consoleAt(port)

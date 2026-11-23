@@ -209,7 +209,7 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
       `exit ${back.code}; ${back.out.trim().split('\n').slice(-3).join(' | ')}`)
     c.add('the console door closed (no holder), the replica no longer listens at A\'s address', !readHolder(walnutId, cw.consoleDir), JSON.stringify(readHolder(walnutId, cw.consoleDir)))
     const left = consoleLeft(cw.a)
-    c.add('A leads again: its console file is gone and its own console device left the data (B dropped it at its handover)', left.files.length === 0 && !left.devices.includes(`console-${HOST_KEY_A}`), JSON.stringify(left))
+    c.add('A leads again: its console file is gone and its own console device left the data (A withdrew it when it booted to lead)', left.files.length === 0 && !left.devices.includes(`console-${HOST_KEY_A}`), JSON.stringify(left))
     return c
   } finally {
     if (stoppedB) try { process.kill(stoppedB, 'SIGCONT') } catch { /* gone */ }

@@ -9,6 +9,7 @@
  * (no boot policy column): it is this small HTTP listener on the server's port, which
  *   GET  /api/leader/status   says this machine leads nothing and who does: the machine the
  *                             witnesses name now (read live, read-only), else the one the marker names
+ *   GET  / (any page)         the standby page, which loads again by itself once the console has the port
  *   anything else             409 { code: 'handed_over', error: "this machine handed the leader to X (switch S)" }
  * and writes only its pid file beside the instance lock (machine-id.ts standbyServerFile),
  * outside the home. It sends nothing, fires nothing and claims nothing: no outward door is
@@ -24,7 +25,9 @@
  * running, so the app never sees it end. When the console ends (the replica stops, or never
  * answers as this Walnut for a minute) the standby takes the port back. It ends (`ended`) only
  * when this home no longer stands handed over in its switch (a switch back moved it aside) or
- * another standby of this home serves the port.
+ * another standby of this home serves the port. While it holds no port it writes no pid file
+ * (readStandbyServer finds none): a yielded standby is ended by its own marker check, never by
+ * a signal from LocalSide.stopStandby.
  */
 import fs from 'node:fs'
 import http from 'node:http'
@@ -105,6 +108,8 @@ export interface StandbyListener {
 const CONSOLE_LOOK_MS = 1_000
 /** How long a console replica holding this port may not answer as this Walnut before the standby takes the port back. */
 const CONSOLE_ANSWER_WAIT_MS = 60_000
+/** At a start, how long a replica that only waits for the port gets before the standby listens (and gives the port up as usual). */
+const CONSOLE_WAITING_START_MS = 5_000
 
 export interface ConsoleOnPort { holder: ConsoleHolder; console: HandedOverConsole }
 
@@ -235,7 +240,10 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
     // What the Mac app asks before it attaches (desktop/main.swift: GET / for a 200, then
     // GET /api/config for the login session): a 200, so it attaches to this standby and shows
     // its page instead of starting another server on the next port.
-    if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
+    // Any page a browser opens (a reload of the console's page once the standby has the port
+    // back included) is the standby page; the API below stays JSON.
+    const page = url === '/' || url === '/index.html' || (!url.startsWith('/api/') && /\btext\/html\b/.test(String(req.headers.accept ?? '')))
+    if (req.method === 'GET' && page) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       res.end(standbyPage(s))
       return
@@ -294,14 +302,17 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
   let line = ''
   const first = await consoleOnPort(s.home, o.port)
   if (first) {
-    const deadline = Date.now() + (o.answerWaitMs ?? CONSOLE_ANSWER_WAIT_MS)
+    // A replica that holds the port gets the whole answer wait; one that only waits for it (the
+    // port is free) a few seconds, then this standby listens and gives the port up as usual.
+    const answerWait = o.answerWaitMs ?? CONSOLE_ANSWER_WAIT_MS
+    const deadline = Date.now() + (first.holder.state === 'waiting' ? Math.min(answerWait, CONSOLE_WAITING_START_MS) : answerWait)
     let now: ConsoleOnPort | null = first
     while (now && !(await consoleAnswers(now.console)) && Date.now() < deadline) {
       await sleep(500)
       now = await consoleOnPort(s.home, o.port)
     }
     if (now && await consoleAnswers(now.console)) { state = 'yielded'; line = servedLine(now) }
-    else if (now) distrusted = holderKey(now)
+    else if (now && now.holder.state !== 'waiting') distrusted = holderKey(now)
   }
   if (state === 'serving') {
     try {
@@ -394,16 +405,26 @@ export function readStandbyServer(home: string, env: NodeJS.ProcessEnv = process
 
 const escapeHtml = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
+/**
+ * The page's own check, every 2 s: once this port no longer answers as the standby (this
+ * machine's replica serves the console here now), it loads again. A poll that fails (the second
+ * between the standby letting the port go and the replica taking it) is only tried again, where a
+ * meta refresh that failed would never fire again.
+ */
+const STANDBY_PAGE_POLL = `setInterval(function(){fetch('/api/health',{cache:'no-store'}).then(function(r){if(r.status>=500)return;return r.json().catch(function(){return null}).then(function(j){if(!j||j.standby!==true)location.reload()})}).catch(function(){})},2000)`
+
 /** The one page the standby serves: what happened, and where Walnut runs now. */
 function standbyPage(s: HandedOverStandby): string {
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>Walnut: standby</title>
+<html lang="en"><head><meta charset="utf-8"><title>Walnut: standby</title>
+<noscript><meta http-equiv="refresh" content="15"></noscript>
 <style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:36rem;margin:15vh auto;padding:0 1.5rem;color:#222}h1{font-size:1.3rem}code{font-size:.9em}</style>
 </head><body>
 <h1>This Walnut is on standby</h1>
 <p>${escapeHtml(s.message.charAt(0).toUpperCase() + s.message.slice(1))}.</p>
 <p>${s.leader ? `Open Walnut on <code>${escapeHtml(s.leader)}</code>, which leads now.` : 'Open Walnut on the machine that leads now.'} Nothing here changes while this machine waits: its data stays as it was handed over.</p>
 <p>To make this machine lead again, run <code>walnut leader switch --back</code> on the machine that leads.</p>
+<script>${STANDBY_PAGE_POLL}</script>
 </body></html>
 `
 }

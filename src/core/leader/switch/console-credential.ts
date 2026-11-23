@@ -14,9 +14,9 @@
  * The device is the console of this machine on the new leader, revocable as any device.
  *
  * A console that will never stand is withdrawn (withdrawConsole): a handover refused after the
- * mint and a cancel take the record and the file back. A handover to a machine drops that machine's
- * own console device (a switch back: its console was a replica's, and it leads now); its file goes
- * once it leads (side.ts).
+ * mint and a cancel take the record and the file back, and so does this home's own boot as the
+ * leader for real (server.ts: a switch back, a rollback). The machine a handover goes to keeps its
+ * console device until then: a switch back that is cancelled leaves its console standing.
  */
 import path from 'node:path'
 import { freshRecord, getInstanceId, tombstone, updateAuth } from '../../device-store.js'
@@ -45,13 +45,11 @@ export async function prepareConsoleForHandover(o: {
   }
   const device = consoleDeviceName(o.machine)
   const walnutId = await getInstanceId()
-  // The machine the lead goes to has no console of its own once it leads (a switch back).
-  const theirs = consoleDeviceName(o.to)
   const token = await updateAuth((auth) => {
     const fresh = freshRecord(device)
-    const old = auth.devices.filter((d) => d.name === device || d.name === theirs)
+    const old = auth.devices.filter((d) => d.name === device)
     tombstone(auth, old.map((d) => d.tokenHash))
-    auth.devices = [...auth.devices.filter((d) => d.name !== device && d.name !== theirs), fresh.record]
+    auth.devices = [...auth.devices.filter((d) => d.name !== device), fresh.record]
     return { persist: true, result: fresh.token }
   })
   writeConsoleFile({
@@ -62,9 +60,10 @@ export async function prepareConsoleForHandover(o: {
 }
 
 /**
- * This machine's console of `home` will never stand (the handover was refused after the mint, or
- * cancelled): its device record leaves this server's auth.json (its hash tombstoned, so a copy of
- * the token never works again) and its console file goes. Nothing to do is no error.
+ * This machine's console of `home` will never stand (the handover was refused after the mint or
+ * cancelled, or this home leads again): its device record leaves this server's auth.json (its
+ * hash tombstoned, so a copy of the token never works again) and its console file goes. Nothing
+ * to do is no error.
  */
 export async function withdrawConsole(o: { home: string; machine: string; dir?: string }): Promise<{ device: boolean; files: string[] }> {
   const device = consoleDeviceName(o.machine)

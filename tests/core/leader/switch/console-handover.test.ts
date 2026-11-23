@@ -103,17 +103,20 @@ describe('the console minted at the handover', () => {
     expect(await withdrawConsole({ home: WALNUT_HOME, machine: 'machine-a' })).toEqual({ device: false, files: [] })
   })
 
-  it('a handover to a machine drops that machine\'s own console device (a switch back: it leads now)', async () => {
+  it('a switch back keeps the console device of the machine it goes to until that machine leads: a cancelled one leaves the console standing', async () => {
     // machine-a handed over to machine-b before: its console device came to machine-b with the data.
     writeMarker(WALNUT_HOME, { switchId: 'sw-1', to: 'machine-b', state: 'switching', at: 'x' })
     await prepareConsoleForHandover({ to: 'machine-b', machine: 'machine-a', home: WALNUT_HOME, address: { port: 4802, host: '::' } })
     expect(devices().map((d) => d.name)).toContain('console-machine-a')
-    // Now machine-b hands back to machine-a.
+    // Now machine-b starts a switch back to machine-a: its own console is minted, machine-a's stays.
     writeMarker(WALNUT_HOME, { switchId: 'sw-2', to: 'machine-a', state: 'switching', at: 'x' })
     await prepareConsoleForHandover({ to: 'machine-a', machine: 'machine-b', home: WALNUT_HOME, address: { port: 4803, host: '::' } })
+    expect(devices().map((d) => d.name)).toEqual(expect.arrayContaining(['console-machine-a', 'console-machine-b']))
+    // The switch back is cancelled: machine-b withdraws only its own.
+    await withdrawConsole({ home: WALNUT_HOME, machine: 'machine-b' })
     const names = devices().map((d) => d.name)
-    expect(names).toContain('console-machine-b')
-    expect(names).not.toContain('console-machine-a')
+    expect(names).toContain('console-machine-a')
+    expect(names).not.toContain('console-machine-b')
   })
 
   it('refuses the handover when it cannot say where this server listens', async () => {
@@ -214,12 +217,57 @@ describe('the standby gives its port up to the console replica', () => {
     expect(ended).toBeNull()
   })
 
-  it('a holder that never answers as this Walnut (a pid used again, nothing at the port): it takes the port after the wait and does not give way to it again', async () => {
-    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'stale' })
+  it('a holder that says it serves but never answers as this Walnut (a pid used again, nothing at the port): it takes the port after the wait and does not give way to it again', async () => {
+    writeHolder(WALNUT, { pid: process.pid, state: 'serving', port, host: '127.0.0.1', since: 'stale' })
     const l = await seat({ answerWaitMs: 600 })
     expect(l.line).toMatch(/^Walnut standby listening on/)
     await new Promise((r) => setTimeout(r, 500))
     expect((await health())?.standby).toBe(true)
+  })
+
+  it('a start beside a replica that only waits for the port: it listens after a short wait and gives the port up as usual', async () => {
+    writeHolder(WALNUT, { pid: process.pid, state: 'waiting', port, host: '127.0.0.1', since: 'now' })
+    const started = Date.now()
+    const l = await seat({ answerWaitMs: 60_000 })
+    watchEnd(l)
+    // Not the whole answer wait: at most the few seconds a waiting replica gets.
+    expect(Date.now() - started).toBeLessThan(8_000)
+    expect(l.line).toMatch(/^Walnut standby listening on/)
+    // The line comes once the listener is closed, so the port is free a moment before it.
+    expect(await until(() => lines.some((x) => /gave the port up/.test(x)))).toBe(true)
+    expect(await portFree()).toBe(true)
+    expect(ended).toBeNull()
+  }, 15_000)
+
+  it('its page loads again by itself once the port answers as the console, and only then; any page a browser opens is that page', async () => {
+    await seat()
+    const html = await fetch(`http://127.0.0.1:${port}/`).then((r) => r.text())
+    // No meta refresh outside <noscript>: one that fails to load never fires again.
+    expect(html.replace(/<noscript>[\s\S]*?<\/noscript>/g, '')).not.toMatch(/http-equiv="refresh"/)
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? ''
+    expect(script).toContain('/api/health')
+    // Run the page's own script with its timer, fetch and location stood in.
+    const run = async (answer: () => Promise<{ status: number; json: () => Promise<unknown> }>) => {
+      let tick: (() => void) | null = null
+      let reloads = 0
+      new Function('setInterval', 'fetch', 'location', script)((f: () => void) => { tick = f }, () => answer(), { reload: () => { reloads++ } })
+      tick!()
+      // Every stand-in answers at once: its promise chain is done before the next macrotask.
+      await new Promise((r) => setImmediate(r))
+      return reloads
+    }
+    expect(await run(async () => ({ status: 200, json: async () => ({ standby: true }) }))).toBe(0)
+    expect(await run(async () => { throw new Error('connection refused') })).toBe(0)
+    expect(await run(async () => ({ status: 502, json: async () => ({}) }))).toBe(0)
+    expect(await run(async () => ({ status: 200, json: async () => ({ status: 'ok' }) }))).toBe(1)
+    expect(await run(async () => ({ status: 401, json: async () => ({ error: 'device' }) }))).toBe(1)
+    // A reload of a console page (any path a browser opens) is the standby page; the API stays JSON.
+    const page = await fetch(`http://127.0.0.1:${port}/tasks/abc`, { headers: { accept: 'text/html,application/xhtml+xml' } })
+    expect(page.status).toBe(200)
+    expect(await page.text()).toContain('This Walnut is on standby')
+    const api = await fetch(`http://127.0.0.1:${port}/api/tasks`, { headers: { accept: 'text/html' } })
+    expect(api.status).toBe(409)
+    expect(((await api.json()) as { code?: string }).code).toBe('handed_over')
   })
 
   it('another program on the port answering as something else: the start does not count it as the console, and fails on the taken port', async () => {

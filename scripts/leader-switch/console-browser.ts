@@ -32,6 +32,8 @@ export async function makeWalkData(cw: ConsoleWorld): Promise<WalkData> {
   }
   const board = ok(await cw.api(cw.b, 'POST', '/api/tasks', { title: 'Release plan', project: 'Acme', description: 'Ship on Friday after the drill.' }), 'board task') as { task: { id: string } }
   ok(await cw.api(cw.b, 'PUT', `/api/v1/tasks/${board.task.id}/board`, { html: '<h1>Release</h1><p id="build">Build: green</p>' }), 'board')
+  // A Board opens from a lead's task (useBoardTab): it leads one open subtask.
+  ok(await cw.api(cw.b, 'POST', '/api/tasks', { title: 'Release checklist', project: 'Acme', parent_task_id: board.task.id }), 'subtask')
   const rename = ok(await cw.api(cw.b, 'POST', '/api/tasks', { title: 'Rename me', project: 'Acme' }), 'task') as { task: { id: string } }
   const work = path.join(cw.b.dir, 'work')
   fs.mkdirSync(work, { recursive: true })
@@ -140,7 +142,13 @@ export class ConsoleBrowser {
       await this.shot('03-message-sent')
     })
     await this.step(c, 'the task\'s Board opens', async () => {
-      await this.panel().getByTestId('session-board-chip').click()
+      // A narrow column moves the chip into the header's More menu (SessionHeaderMore.tsx).
+      const chip = this.panel().getByTestId('session-board-chip')
+      await chip.waitFor({ state: 'attached', timeout: 30_000 })
+      if ((await chip.getAttribute('data-hidden')) === 'true') {
+        await this.panel().getByTestId('session-header-more-btn').click()
+        await p.getByTestId('session-header-more-item-board').click()
+      } else await chip.click()
       const pane = p.getByTestId('task-board-pane')
       await pane.waitFor({ state: 'visible', timeout: 30_000 })
       const custom = pane.getByTestId('board-view-custom')

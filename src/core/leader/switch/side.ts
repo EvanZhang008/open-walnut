@@ -18,7 +18,7 @@ import { switchDir } from './records.js'
 import { confirmStandby, readStandbyServer, type StandbyServer } from './handed-over.js'
 import { alive, serverCommand, stopPid, tail } from '../../trial-start/process.js'
 import { waitForConsolePort } from './console-port.js'
-import { consoleDir, consoleDirOfAccount, removeConsolesOfHome } from '../../handed-over-console.js'
+import { consoleDir, consoleDirOfAccount } from '../../handed-over-console.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -79,11 +79,8 @@ export class LocalSide implements SwitchSide {
     await this.stopStandby(30_000)
     // So may this machine's console replica, until it sees the home it served is gone (a switch back).
     // Its console files are its account's (its HOME), which need not be this process's.
-    const consoles = m.env?.HOME ? consoleDirOfAccount(m.env.HOME) : consoleDir()
-    const port = await waitForConsolePort(m.home, m.port, 30_000, consoles)
+    const port = await waitForConsolePort(m.home, m.port, 30_000, m.env?.HOME ? consoleDirOfAccount(m.env.HOME) : consoleDir())
     if (!port.ok) return { ok: false, why: port.why }
-    // This home leads again (a switch back's commit): the console it had as a handed-over home is over.
-    if (mode === 'leader') removeConsolesOfHome(m.home, consoles)
     const cmd = m.start ?? serverCommand(['web', '--port', String(m.port)])
     fs.mkdirSync(switchDir(m.home), { recursive: true, mode: 0o700 })
     const logFile = path.join(switchDir(m.home), `server-${mode}.log`)
