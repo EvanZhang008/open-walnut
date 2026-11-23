@@ -1233,8 +1233,10 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.close && (!(cur.closed && cur.closed.how === patch.close) || by === 'human' && cur.closed.reacted)) {
     // A thread the node opened that he never answered may be dropped by it: he was never asked yet.
     const ownUnseen = patch.close === 'dropped' && !!cur.opener && !cur.messages.length && by === cur.opener.by;
-    // A done line on what he acknowledged with its result: his Acknowledge was his reaction (thread-known.ts ackHoldsResult).
-    const ackCovers = opts.line && ackHoldsResult(cur);
+    // A close of what he acknowledged with its result, by a line or the node's own thread_update: his
+    // Acknowledge was his reaction (thread-known.ts ackHoldsResult; 2026-11-23, a node refused
+    // not_reacted three times on cards he had acknowledged).
+    const ackCovers = ackHoldsResult(cur);
     if (!ownUnseen && !ackCovers) checkClose(file, cur, by, patch.user_words);
     next.closed = { how: patch.close, at, by };
     delete next.snoozed;

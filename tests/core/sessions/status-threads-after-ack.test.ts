@@ -243,3 +243,18 @@ describe('whose words a summary is (review round 2)', () => {
     expect(planThreadWrites(acked.f, [line(acked.f.threads[0], 'answered', 'Merged again.')], []).held).toEqual([acked.id])
   })
 })
+
+describe('the node closes what he acknowledged (2026-11-23, refused not_reacted three times)', () => {
+  it('its own thread_update close goes through on every kind of acknowledged thread, a card a line flipped back included', () => {
+    for (const c of acknowledged()) {
+      const closed = updateThread(c.f, c.id, { close: 'acked' }, NODE, at(40)).thread
+      expect(closed.closed, c.name).toMatchObject({ how: 'acked', by: NODE })
+    }
+  })
+
+  it('news since his Acknowledge still needs his reaction before the node closes it', () => {
+    const [, legacy] = acknowledged()
+    const told = updateThread(legacy.f, legacy.id, { reply: 'The rollout failed in one oven; the oven task rolled it back.' }, NODE, at(30)).file
+    expect(() => updateThread(told, legacy.id, { close: 'acked' }, NODE, at(40))).toThrow(/Not closed/)
+  })
+})
