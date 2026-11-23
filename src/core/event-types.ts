@@ -570,12 +570,16 @@ export interface SessionPermissionRequestEvent {
   reason?: string;
   /** ACP adapters offer their own option list instead of a plain allow/deny. */
   acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
+  /** The tool call it gates (claude-permission-options.ts permissionEventFields). */
+  toolUseId?: string;
 }
 
 /** ACP dialect: ≈ session/request_permission outcome. */
 export interface SessionPermissionResolvedEvent {
   sessionId: string;
+  taskId?: string;
   requestId: string;
+  toolName?: string;
   allowed: boolean;
   turnGen?: number;
   /** The CLI withdrew the request (control_cancel_request), or a daemon
@@ -784,6 +788,12 @@ export interface SessionSideThreadRenamedEvent {
   sessionId: string;
   threadId: string;
   title: string;
+}
+
+/** A session's controls (model, effort, mode choices) changed: the UI reads them again. */
+export interface SessionControlsChangedEvent {
+  sessionId: string;
+  taskId?: string;
 }
 
 /** A daemon snapshot moved a session from `running` to `idle` while no live
@@ -1546,6 +1556,9 @@ export interface EventPayloadMap {
   'session:side-question-done': SessionSideQuestionDoneEvent;
   'session:side-question-error': SessionSideQuestionErrorEvent;
   'session:side-thread-renamed': SessionSideThreadRenamedEvent;
+  'session:controls-changed': SessionControlsChangedEvent;
+  'session:permission-request': SessionPermissionRequestEvent;
+  'session:permission-resolved': SessionPermissionResolvedEvent;
   'session:recap-updated': SessionRecapUpdatedEvent;
   'session:turn-settled': SessionTurnSettledEvent;
   'session:retry-over': SessionRetryOverEvent;

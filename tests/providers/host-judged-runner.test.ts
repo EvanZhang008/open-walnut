@@ -20,13 +20,15 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 
 import { SID, harness, probeSetup, probeTeardown, settle } from '../helpers/runner-probe-harness.js'
 import { SessionRunner } from '../../src/providers/claude-code-session.js'
-import { HOST_JUDGED_RUNNER_METHODS, HostRunsItError, _resetHostJudgedRunnerForTesting, hostStartsInFlight, noteHostStartBorn, installHostJudgedRouting, saidHereAlready, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
-import { _resetJudgeOfForTesting, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
+import { HOST_JUDGED_RUNNER_METHODS, HostRunsItError, _resetHostJudgedRunnerForTesting, attemptStartedOn, hostStartWorkIdle, hostStartsInFlight, noteHostStartBorn, installHostJudgedRouting, saidHereAlready, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
+import { _resetJudgeOfForTesting, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
 import { _resetHostSessionTasksForTesting, startHostSessionTasks } from '../../src/core/session-channel/leader-tasks.js'
 import { _resetRemoteJudgedSessionsForTesting, noteLiveState, setRemoteJudgedCaller, type HostCallBody, isRemoteJudgedSession } from '../../src/providers/remote-judged-session.js'
 import { HostRequestNotSent, type LeaderSide } from '../../src/core/session-channel/leader-side.js'
 import { applyHostChannelBatch, getSessionByClaudeId } from '../../src/core/session-tracker.js'
+import { applyHanded } from '../helpers/handed-rows.js'
+import { handsNow } from '../../src/core/session-channel/handed-sessions.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import { _resetLineParseCountForTesting, lineParsesOf } from '../../src/providers/line-parse-count.js'
@@ -35,16 +37,18 @@ import { getRegisteredSessionManager } from '../../src/providers/session-manager
 
 const HOST_SID = '50000000-0000-4000-8000-0000000000c1'
 
-function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean; notOwn?: boolean } = {}) {
+function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean; notOwn?: boolean; answerSid?: string } = {}) {
   const sent: Array<{ op: string; host: string; body: Record<string, unknown> }> = []
   const calls: Array<{ host: string } & HostCallBody> = []
+  const resyncs: Array<{ host: string; sids: readonly string[] }> = []
   const side = {
+    resyncNow: (host: string, sids: readonly string[]) => { resyncs.push({ host, sids }) },
     startOnHost: async (host: string, body: Record<string, unknown>) => {
       sent.push({ op: 'start', host, body })
       if (o.notSent) throw new HostRequestNotSent(host, new Error('the host devbox is not connected'))
       if (o.lost) throw new Error('request timed out after 120000 ms')
       if (o.refuse) return { ok: false, error: 'no claude here' }
-      return { ok: true, sessionId: (body.preassignedSessionId as string | undefined) ?? 'started-on-host', title: 'Host title' }
+      return { ok: true, sessionId: o.answerSid ?? (body.preassignedSessionId as string | undefined) ?? 'started-on-host', title: 'Host title' }
     },
     // `notOwn`: a host that does not hold the session (it never took the start) says so.
     sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return o.notOwn ? { ok: false, error: 'not_own_session' } : o.refuse ? { ok: false, error: 'busy' } : { ok: true } },
@@ -53,11 +57,11 @@ function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean; notO
   }
   _setActiveLeaderSideForTesting(side as unknown as LeaderSide)
   setRemoteJudgedCaller((host, body) => side.callHost(host, body))
-  return { sent, calls }
+  return { sent, calls, resyncs }
 }
 
 async function hostRow(sid = HOST_SID, status = 'running') {
-  await applyHostChannelBatch({
+  await applyHanded({
     hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 1 },
     rows: [{ sid, born: true, patch: { claudeSessionId: sid, taskId: '', project: 'p', host: 'devbox', judge: 'host', process_status: status, startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
   })
@@ -136,7 +140,7 @@ describe('a host-judged session', () => {
     const { getTask } = await import('../../src/core/task-manager.js')
     await vi.waitFor(async () => expect((await getTask('gate-task-b')).phase).toBe('IN_PROGRESS'))
     expect((await getSessionByClaudeId(seeded))).toMatchObject({ judge: 'host', host: 'devbox', title: 'Seeded' })
-    const applied = await applyHostChannelBatch({
+    const applied = await applyHanded({
       hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 2 },
       rows: [{ sid: seeded, born: true, patch: { claudeSessionId: seeded, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', title: 'Host title', startedAt: 'x', lastActiveAt: 'x', messageCount: 1 } }],
     })
@@ -346,7 +350,29 @@ describe('a host-judged session', () => {
     expect(startGoesToHost(undefined)).toBe(false)
   })
 
-  it('a session its host started itself: its born row links the task here, moves it to In Progress and says one session:started', async () => {
+  it('a session its host began itself, with no start of the leader\'s: its born row is refused and links nothing (such sessions come through the host\'s journal)', async () => {
+    harness()
+    const stopTasks = startHostSessionTasks()
+    try {
+      const { getTask, updateTask } = await import('../../src/core/task-manager.js')
+      await updateTask('gate-task-b', { phase: 'TODO' })
+      const sid = '50000000-0000-4000-8000-0000000000e2'
+      const r = await applyHostChannelBatch({
+        hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 3 },
+        rows: [{ sid, born: true, patch: { claudeSessionId: sid, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', mode: 'default', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
+      })
+      expect(r.refused).toEqual([sid])
+      expect(await getSessionByClaudeId(sid)).toBeNull()
+      await settle(30)
+      const t = await getTask('gate-task-b')
+      expect(t.session_id).not.toBe(sid)
+      expect(t.phase).toBe('TODO')
+    } finally {
+      stopTasks()
+    }
+  })
+
+  it('a session the leader handed its host: its born row links the task here, moves it to In Progress and says one session:started', async () => {
     harness()
     const stopTasks = startHostSessionTasks()
     const said: unknown[] = []
@@ -357,7 +383,7 @@ describe('a host-judged session', () => {
       const sid = '50000000-0000-4000-8000-0000000000e1'
       // The channel's apply (leader-side.ts applyRecs): the row in its batch, then its facts through
       // the channel's emit (leader-boot.ts), the started said from the born row first.
-      await applyHostChannelBatch({
+      await applyHanded({
         hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 3 },
         rows: [{ sid, born: true, patch: { claudeSessionId: sid, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', mode: 'default', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
       })
@@ -393,8 +419,8 @@ describe('a host session renamed by its CLI', () => {
     const from = '50000000-0000-4000-8000-0000000000f1'
     const to = '50000000-0000-4000-8000-0000000000f2'
     const row = { claudeSessionId: from, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', mode: 'default', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 }
-    await applyHostChannelBatch({ hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 4 }, rows: [{ sid: from, born: true, patch: row }] })
-    await applyHostChannelBatch({ hostId: 'devbox', rows: [], cursor: { logId: 'L', seq: 5 }, renames: [{ from, to, seq: 5 }] })
+    await applyHanded({ hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 4 }, rows: [{ sid: from, born: true, patch: row }] })
+    await applyHanded({ hostId: 'devbox', rows: [], cursor: { logId: 'L', seq: 5 }, renames: [{ from, to, seq: 5 }] })
     await noteHostSessionRenamed(from, to)
     const t = await getTask('gate-task-b')
     expect(t.exec_session_id).toBe(to)
@@ -423,5 +449,106 @@ describe('the leader parses no line of a host-judged session', () => {
     // The counter counts: a line of a session this server runs, handed over as text.
     _parsedJsonlLineForTesting({ ev: 'jsonl', sid: SID, line: '{"type":"assistant"}' } as never)
     expect(lineParsesOf(SID)).toBe(1)
+  })
+})
+
+describe('a start hands the host its session, and only that one (handed-sessions.ts)', () => {
+  // A start's work after its answer (its commit, the task's link) runs on: it ends before the
+  // store is removed, or a write reopens a store being deleted and wedges the next test.
+  afterEach(async () => { await hostStartWorkIdle() })
+  const bornOf = (sid: string, taskId = '', hand?: string) => applyHostChannelBatch({
+    hostId: 'devbox', renames: [], cursor: { logId: 'L-hand', seq: 1 },
+    rows: [{ sid, born: true, ...(hand ? { hand } : {}), patch: { claudeSessionId: sid, taskId, project: 'p', host: 'devbox', judge: 'host', process_status: 'running', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
+  })
+
+  it('a start whose id the host names: its answer names the hand, so that born row applies and no other new id does; its row is asked for whole', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const { updateTask } = await import('../../src/core/task-manager.js')
+    await updateTask('gate-task-b', { phase: 'TODO' })
+    const f = fakeSide({ answerSid: 'acp-named-1' })
+    const r = await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')
+    expect(r.claudeSessionId).toBe('acp-named-1')
+    expect(handsNow()).toEqual([{ host: 'devbox', sid: 'acp-named-1' }])
+    // A host that does not echo the hand had its born row refused before this answer: the leader asks for it.
+    expect(f.resyncs).toEqual([{ host: 'devbox', sids: ['acp-named-1'] }])
+    expect((await bornOf('not-the-one')).refused).toEqual(['not-the-one'])
+    expect((await bornOf('acp-named-1', 'gate-task-b')).written).toEqual(['acp-named-1'])
+    expect(handsNow()).toEqual([])
+  })
+
+  it('the start carries its hand, and the host\'s born row that echoes it applies before any answer (S2); one for another task does not (S1)', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const f = fakeSide({ lost: true })
+    await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')).rejects.toThrow()
+    const hand = f.sent[0]!.body.startHand as string
+    expect(hand).toMatch(/^[0-9a-f]{18}$/)
+    expect((await bornOf('acp-echo-other', 'some-other-task', hand)).refused).toEqual(['acp-echo-other'])
+    expect((await bornOf('acp-no-echo', 'gate-task-b')).refused).toEqual(['acp-no-echo'])
+    expect((await bornOf('acp-echo', 'gate-task-b', hand)).written).toEqual(['acp-echo'])
+  })
+
+  it('a seeded start keeps its hand on disk before it goes: the born row applies even with no seed row and no memory of it', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const seeded = '50000000-0000-4000-8000-0000000000f1'
+    fakeSide({ lost: true })
+    await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
+    expect(handsNow()).toEqual([{ host: 'devbox', sid: seeded }])
+    // A restart forgets what was in memory; the hand is in the store.
+    _resetJudgeOfForTesting()
+    _resetHostJudgedRunnerForTesting()
+    expect((await bornOf(seeded, 'gate-task-b')).written).toEqual([seeded])
+  })
+
+  it('an answer naming a session that is not the host\'s fails the start, and nothing of that session moves', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    await createSessionRecord('leader-own-1', '', 'p', undefined, { title: 'Leader own' })
+    fakeSide({ answerSid: 'leader-own-1' })
+    await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')).rejects.toThrow(/not its own/)
+    expect(judgingHostOf('leader-own-1')).toBeNull()
+    expect(await getSessionByClaudeId('leader-own-1')).toMatchObject({ title: 'Leader own' })
+    expect((await getSessionByClaudeId('leader-own-1'))?.judge).toBeUndefined()
+    expect(handsNow()).toEqual([])
+  })
+
+  it('a start aimed at a revoked host fails at once with the reason, on the host\'s path and the legacy one, and nothing goes (R2-S2)', async () => {
+    const { setRevokedHosts } = await import('../../src/core/session-channel/revoked-hosts.js')
+    const h = harness()
+    const f = fakeSide()
+    setRevokedHosts(['devbox'])
+    try {
+      setHostJudgeProbe((host) => host === 'devbox')
+      await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')).rejects.toThrow(/the host devbox is revoked/)
+      // With the channel cut the host no longer judges: today's path would run the CLI there itself.
+      setHostJudgeProbe(() => false)
+      await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')).rejects.toThrow(/the host devbox is revoked/)
+      expect(f.sent).toEqual([])
+      expect(handsNow()).toEqual([])
+    } finally { setRevokedHosts([]) }
+  })
+
+  it('a transfer attempt counts as started only on the host its start went to (R2-S1, fork-init)', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    fakeSide({ answerSid: 'acp-moved-1' })
+    await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', transferAttemptId: 'att-1' } as never, 'test')
+    expect(attemptStartedOn('devbox', 'att-1')).toBe(true)
+    expect(attemptStartedOn('devbox-b', 'att-1')).toBe(false)
+    expect(attemptStartedOn('devbox', 'att-2')).toBe(false)
+  })
+
+  it('a start the host refuses, or one that never left, leaves no hand', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    fakeSide({ refuse: true })
+    await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox' } as never, 'test')).rejects.toThrow()
+    expect(handsNow()).toEqual([])
+    fakeSide({ notSent: true })
+    await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: '50000000-0000-4000-8000-0000000000f2' } as never, 'test')).rejects.toThrow()
+    expect(handsNow()).toEqual([])
   })
 })

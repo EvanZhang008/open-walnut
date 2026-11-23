@@ -19,6 +19,10 @@
  *
  *   K2 slow    a start the host answers late (its born row reaches the Mac first, as on a loaded
  *              host): session:started is said once, from the born row, and every host fact once
+ *   O1 owner   the host sends a born row of a session it was never handed, and one of a session of
+ *              the Mac's own: both refused, nothing made or changed, and the channel goes on
+ *   R1 revoke  the Mac revokes the host's door: its socket closes within seconds, nothing new is
+ *              issued to it at the next check, and after an allow it is issued a key and dials again
  *
  * Facts are compared by identity as in host-judged-session-cluster-e2e.test.ts: each record of
  * the host's log (seq order, its name and a hash of its data) against the Mac's bus events of the
@@ -185,6 +189,58 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
     expect(started[0]!.data).toMatchObject({ sessionId: s3, taskId: t.json.task.id, host: HOST_KEY })
     expect(f.seen, `host: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
   }, 400_000)
+
+  it('O1: a born row of a session the host was never handed, or of one of the Mac\'s own, is refused; the session stays as it was and the channel goes on', async () => {
+    expect(sid).toBeTruthy()
+    const fresh = 'forged-0000-4000-8000-000000000001'
+    const mine = 'leader-own-0000-4000-8000-00000000001'
+    expect((await h.mac(`/legacy?sid=${mine}`)).row).toMatchObject({ title: 'Leader own' })
+    const before = (await h.mac(`/row?sid=${mine}`)).row
+    const at = (await hostFacts()).head
+    for (const s of [fresh, mine]) await h.host(`/forge?sid=${s}`)
+    // The Mac read past both records (its cursor at the host's head), and applied neither.
+    await waitFor(async () => ((await h.mac(`/cursor?host=${HOST_KEY}`)).cursor?.seq ?? 0) >= at + 2, 60_000, 'the Mac to read the forged records').catch((err) => { throw new Error(say(String(err))) })
+    expect((await h.mac(`/row?sid=${fresh}`)).row).toBeNull()
+    expect(await h.mac(`/judge?sid=${fresh}`)).toEqual({ judge: 'legacy', host: null })
+    expect((await h.mac(`/row?sid=${mine}`)).row).toEqual(before)
+    expect(await h.mac(`/judge?sid=${mine}`)).toEqual({ judge: 'legacy', host: null })
+    expect(((await h.mac(`/events?sid=${fresh}`)) as ProbeEvent[]).filter((e) => e.source === 'host-channel')).toEqual([])
+    // Counted in Walnut Health, never a popup (audience.ts).
+    await waitFor(async () => ((await h.c.mac('GET', '/api/notifications')).json.feed as Array<Record<string, any>>).find((n) => n.dedupKey === `host-session-ownership:${HOST_KEY}`) ?? null, 30_000, 'the Walnut Health item')
+      .then((n) => expect(n).toMatchObject({ audience: 'health', host: HOST_KEY }))
+    // The host's own session still runs over the same channel.
+    const sent = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text: 'ROUND after forged' })
+    expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
+    await waitFor(async () => resultOn(await channelEvents(sid), 'echo: ROUND after forged'), 120_000, 'the answer after the forged records').catch((err) => { throw new Error(say(String(err))) })
+  }, 300_000)
+
+  it('R1: a revoke closes the host\'s door socket within seconds and issues it nothing; an allow issues it a key and it dials again', async () => {
+    await waitFor(async () => (await h.mac(`/side?host=${HOST_KEY}`)).kind === 'host-dialed', 60_000, 'the host-dialed socket as the link')
+    const authRec = () => (JSON.parse(fs.readFileSync(path.join(h.c.macData, 'auth.json'), 'utf8')) as { devices: Array<Record<string, any>> }).devices.find((d) => d.issuer === 'leader' && d.hostKey === HOST_KEY)
+    const at = Date.now()
+    const rv = await h.c.mac('POST', `/api/host-doors/${HOST_KEY}/revoke`, {})
+    expect(rv.status, JSON.stringify(rv.json)).toBe(200)
+    expect(rv.json).toMatchObject({ hostKey: HOST_KEY, revoked: true, by: 'human', credentials: 0 })
+    await waitFor(async () => (await h.host('/dialer')).linked === false && (await h.mac(`/side?host=${HOST_KEY}`)).kind !== 'host-dialed', 10_000, 'the revoked host\'s socket to close').catch((err) => { throw new Error(say(String(err))) })
+    expect(Date.now() - at).toBeLessThan(10_000)
+    expect(authRec()).toMatchObject({ revoked: { by: 'human' } })
+    expect(authRec()).not.toHaveProperty('verifyKey')
+    // A config write makes the issuer check every host again: still nothing for this one.
+    const door = `ws://127.0.0.1:${h.c.macPort}/host-door`
+    expect((await h.c.mac('PUT', '/api/config', { session: { host_door_urls: [door] } })).status).toBe(200)
+    await new Promise((r) => setTimeout(r, 8_000))
+    expect(authRec()).not.toHaveProperty('verifyKey')
+    expect((await h.host('/dialer')).linked).toBe(false)
+    expect((await h.mac(`/side?host=${HOST_KEY}`)).kind).not.toBe('host-dialed')
+
+    const al = await h.c.mac('POST', `/api/host-doors/${HOST_KEY}/allow`, {})
+    expect(al.status, JSON.stringify(al.json)).toBe(200)
+    expect(al.json).toMatchObject({ allowedNow: true, revoked: false })
+    await waitFor(async () => (await h.host('/dialer')).linked === true, 120_000, 'the allowed host to be issued a key and dial again').catch((err) => { throw new Error(say(String(err))) })
+    await waitFor(async () => (await h.mac(`/side?host=${HOST_KEY}`)).kind === 'host-dialed', 60_000, 'the dialed socket as the link again')
+    expect(authRec()?.verifyKey).toEqual(expect.any(String))
+    expect(authRec()).toMatchObject({ allowed: { by: 'human' } })
+  }, 300_000)
 
   it('D4: with the host dialed in, the Mac stops promptly on SIGTERM, and the host hears its door go away at once', async () => {
     await waitFor(async () => (await h.mac(`/side?host=${HOST_KEY}`)).kind === 'host-dialed', 60_000, 'the host-dialed socket as the link')

@@ -50,6 +50,8 @@ import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, w
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
 import { clearHandOverMarkIn } from './session-channel/handover-marks.js';
+import { handForNewSession, handedTo, mayRenameInto, settleHandsOf, useHand } from './session-channel/handed-sessions.js';
+import { noteRefusedSessions } from './session-channel/refused-sessions.js';
 import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSnapshot, snapshotIsStale } from './session-channel/rows-snapshot.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { prepared } from '../lib/sqlite-prepared.js';
@@ -3508,6 +3510,8 @@ export interface HostRowChange {
   patch: Readonly<Record<string, unknown>>;
   /** The record's place in the host's log: changes and renames apply in this order. */
   seq?: number;
+  /** A born row's echo of its start's hand (handed-sessions.ts): the open hand it may take. */
+  hand?: string;
 }
 
 export interface HostRename { from: string; to: string; seq?: number }
@@ -3557,6 +3561,16 @@ export interface HostChannelBatchResult {
   stale?: boolean;
   /** Sessions whose hand-over to this host the rows ended (session-channel/handover-marks.ts). */
   handOversEnded?: string[];
+  /**
+   * Session ids the host named that are not its (handed-sessions.ts): a new session nobody handed
+   * it, one handed to another host or for another task, a rename into another session's row.
+   * Never applied.
+   */
+  refused?: string[];
+  /** Rows the leader holds whose patch named another task: written with the leader's task kept. */
+  taskKept?: string[];
+  /** The renames this batch applied (a rename's `to` can be in `written` for another reason: its born row). */
+  renamed?: Array<{ from: string; to: string }>;
 }
 
 /**
@@ -3580,6 +3594,9 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
   const removed: string[] = [];
   const orphaned: string[] = [];
   const handOversEnded: string[] = [];
+  const refused: string[] = [];
+  const taskKept: string[] = [];
+  const renamed: Array<{ from: string; to: string }> = [];
   let stale = false;
   let after = 0;
   // Deleted on the leader, its host not done yet: none of its rows comes back, none of its facts is said.
@@ -3612,24 +3629,35 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
           const old = read(from);
           if (!old || old.host !== hostId || !judgedByHost(old)) {
             skipped.push(from);
-            // The host has `to` now: its whole row repairs what the rename could not.
-            if (!old) resync.add(to);
+            // The host has `to` now: its whole row repairs what the rename could not, when it was handed `to`.
+            if (!old && handedTo(handle, hostId, to)) resync.add(to);
             continue;
           }
+          // Into a row that is not this host's, or an id handed to another host: refused, both rows stay.
+          const into = read(to);
+          if (into ? into.host !== hostId || !judgedByHost(into) : !mayRenameInto(handle, hostId, to)) { refused.push(to); continue; }
           const historyBefore = storedHistoryFields(handle, from);
           deleteSessionRowSqlite(handle, from);
-          if (!read(to)) writeSessionRowSqlite(handle, { ...old, claudeSessionId: to }, { before: historyBefore! });
+          if (!into) writeSessionRowSqlite(handle, { ...old, claudeSessionId: to }, { before: historyBefore! });
           written.push(to);
+          renamed.push({ from, to });
           continue;
         }
         const change = step.row!;
         if (gone.has(change.sid)) continue;
         const before = read(change.sid);
         if (before && (before.host !== hostId || !judgedByHost(before))) { skipped.push(change.sid); continue; }
-        if (!before && !change.born) { skipped.push(change.sid); resync.add(change.sid); continue; }
+        // A patch of a row the leader lacks: its whole row is asked for only when it was handed this
+        // host (a refused session's patches are not asked about again and again).
+        if (!before && !change.born) { skipped.push(change.sid); if (handedTo(handle, hostId, change.sid)) resync.add(change.sid); continue; }
         const next = mergeHostFacts(before, change.patch, change.born === true);
         next.claudeSessionId = change.sid;
         if (next.host !== hostId || !judgedByHost(next)) { skipped.push(change.sid); continue; }
+        // The task a session is for is set at its birth here and never moved by its host.
+        if (before && (next.taskId ?? '') !== (before.taskId ?? '')) { next.taskId = before.taskId; taskKept.push(change.sid); }
+        // A session the leader has no row of: only one it handed this host, for that task (handed-sessions.ts).
+        const hand = before ? null : handForNewSession(handle, hostId, change.sid, { echo: change.hand, taskId: next.taskId ?? '' });
+        if (hand && 'refused' in hand) { refused.push(change.sid); continue; }
         try {
           writeSessionRowSqlite(handle, next);
         } catch (err) {
@@ -3643,12 +3671,14 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         // The host wrote its row of a session this leader handed it: the hand-over's answer, on disk
         // with the row (a lost answer, a leader that stopped before it, change nothing of it).
         if (clearHandOverMarkIn(handle, change.sid, hostId)) handOversEnded.push(change.sid);
+        if (hand) useHand(handle, hand.hand);
+        if (change.born) settleHandsOf(handle, hostId, change.sid);
         announce.push({
-          record: next,
-          status: !before || !statusProjectionEquals(canonicalStatusProjection(before), canonicalStatusProjection(next))
-            || normalizedStatusRevision(before) !== normalizedStatusRevision(next),
-          content: !before || searchContentProjection(before) !== searchContentProjection(next),
-        });
+        record: next,
+        status: !before || !statusProjectionEquals(canonicalStatusProjection(before), canonicalStatusProjection(next))
+          || normalizedStatusRevision(before) !== normalizedStatusRevision(next),
+        content: !before || searchContentProjection(before) !== searchContentProjection(next),
+      });
       }
       if (batch.snapshot) {
         // The host's rows here it no longer names: deleted only on the host's word (rows-snapshot.ts).
@@ -3690,6 +3720,8 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
   if (stale) log.session.info('host channel: a rows frame older than what is applied was skipped', { hostId, at: batch.snapshot?.at });
   if (orphaned.length > 0) log.session.warn('host channel: rows the host does not name were kept and marked stopped', { hostId, sessionIds: orphaned.slice(0, 20), count: orphaned.length });
   if (skipped.length > 0) log.session.warn('host channel: changes skipped (not this host\'s rows)', { hostId, sessionIds: skipped.slice(0, 20), count: skipped.length });
+  if (refused.length > 0) noteRefusedSessions(hostId, refused, 'row');
+  if (taskKept.length > 0) noteRefusedSessions(hostId, taskKept, 'task');
   // After the commit: one announcement that throws never stops the others, nor the channel.
   for (const a of announce) {
     try {
@@ -3703,7 +3735,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
     log.session.warn('host channel: rows the host no longer has were removed', { hostId, sessionIds: removed.slice(0, 20), count: removed.length });
     try { bus.emit(EventNames.SESSION_DELETED, { sessionIds: removed }, ['*'], { source: 'host-channel', urgency: 'normal' }); } catch { /* announced best-effort */ }
   }
-  return { written, skipped, gone: [...gone], after, resync: [...resync], removed, orphaned, ...(handOversEnded.length ? { handOversEnded } : {}), ...(stale ? { stale } : {}) };
+  return { written, skipped, gone: [...gone], after, resync: [...resync], removed, orphaned, ...(handOversEnded.length ? { handOversEnded } : {}), ...(stale ? { stale } : {}), ...(refused.length ? { refused } : {}), ...(taskKept.length ? { taskKept } : {}), renamed };
 }
 
 export { loadChannelCursor } from './session-db.js';

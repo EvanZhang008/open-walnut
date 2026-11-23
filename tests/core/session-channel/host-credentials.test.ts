@@ -21,9 +21,9 @@ import { _resetDeviceAuthForTesting, readDeviceRegistry, revokeDevice, verifyDev
 import { validateBearerCredential } from '../../../src/web/middleware/auth.js'
 import { _resetAuthRateLimitForTesting } from '../../../src/web/middleware/auth-rate-limit.js'
 import {
-  HostKeyMismatch, PREVIOUS_GRACE_MS, credentialDue, doorKeysOf, hostCredentialName, hostCredentialOf, mintHostCredential,
+  HostDoorRevoked, HostKeyMismatch, PREVIOUS_GRACE_MS, credentialDue, doorKeysOf, hostCredentialName, hostCredentialOf, hostDoorRevoked, mintHostCredential,
 } from '../../../src/core/session-channel/host-credentials.js'
-import { revokeHostCredential, revokeHostsGone, setRevokeStandbySync } from '../../../src/core/session-channel/leader-issue.js'
+import { allowHostDoorNow, hostRevokedNow, revokeHostCredential, revokeHostDoorNow, revokeHostsGone, setDoorHostHooks, setRevokeStandbySync } from '../../../src/core/session-channel/leader-issue.js'
 import { handleHostDoorUpgrade, startHostDoor, verifyHostDoorUpgrade } from '../../../src/core/session-channel/host-door.js'
 import { doorKeyId } from '../../../src/core/session-channel/door-wire.js'
 import type { ChannelSocket } from '../../../src/core/session-channel/leader-links.js'
@@ -114,6 +114,8 @@ describe('revoke', () => {
   afterEach(async () => {
     stopDoor?.(); stopDoor = null
     setRevokeStandbySync(null)
+    setDoorHostHooks(null)
+    delete process.env.WALNUT_HOST_RUNS_SESSIONS
     server?.closeAllConnections?.()
     await new Promise<void>((r) => (server ? server.close(() => r()) : r()))
     server = null
@@ -206,5 +208,81 @@ describe('revoke', () => {
     expect(await c.closed).toBe(4003)
     expect((await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })).code).toBe(4004)
     expect(await hostCredentialOf(MACHINE)).not.toBeNull()
+  })
+
+  it('a revoke of a host still in the config is a ban: socket closed at once, no key kept, nothing minted until an allow', async () => {
+    const url = await door()
+    const { verifyKey } = await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
+    const c = await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })
+    await vi.waitFor(() => expect(adopted).toHaveLength(1))
+    let synced = 0
+    setRevokeStandbySync(async () => { synced++; return null })
+    const rechecked: string[] = []
+    const cut: Array<[string, boolean]> = []
+    setDoorHostHooks({ machineIdOf: () => MACHINE, recheck: (k) => { rechecked.push(k) }, cut: (k) => { cut.push([k, hostRevokedNow(k)]) } })
+    expect(await revokeHostDoorNow('devbox', 'task:t-revoker')).toEqual({ revoked: true, closed: 1, standbySynced: true })
+    // The session channel is cut too, on every link (leader-side.ts noteRevoked reads hostRevokedNow).
+    expect(cut).toEqual([['devbox', true]])
+    expect(await c.closed).toBe(4003)
+    expect(synced).toBe(1)
+    // Kept with the credential records: no key, who did it and when.
+    const rec = (await hostCredentialOf(MACHINE))!
+    expect(rec).toMatchObject({ hostKey: 'devbox', revoked: { by: 'task:t-revoker' } })
+    expect(rec.verifyKey).toBeUndefined()
+    expect(rec.previous).toBeUndefined()
+    expect(doorKeysOf(rec)).toEqual([])
+    expect(await hostDoorRevoked('devbox')).toMatchObject({ by: 'task:t-revoker' })
+    expect((await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })).code).toBe(4004)
+    // Still in the config, still linked: still not minted (a revoke is no rotation).
+    await expect(mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })).rejects.toBeInstanceOf(HostDoorRevoked)
+    // Removing the host is no allow: its mark stays.
+    setRevokeStandbySync(async () => null)
+    expect(await revokeHostsGone(new Set())).toEqual([])
+    expect(await hostDoorRevoked('devbox')).not.toBeNull()
+    // A drop of its credential (a rotation, a removal listed before the revoke) keeps the mark (N3).
+    expect(await revokeHostCredential(MACHINE)).toBe(false)
+    expect(await hostDoorRevoked('devbox')).not.toBeNull()
+
+    expect(await allowHostDoorNow('devbox', 'human')).toEqual({ allowed: true, standbySynced: true })
+    expect(rechecked).toEqual(['devbox'])
+    expect(cut).toEqual([['devbox', true], ['devbox', false]])
+    expect(await hostDoorRevoked('devbox')).toBeNull()
+    expect(await hostCredentialOf(MACHINE)).toMatchObject({ allowed: { by: 'human' } })
+    const fresh = await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
+    expect(fresh.verifyKey).not.toBe(verifyKey)
+    const back = await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey: fresh.verifyKey })
+    expect(back.welcome).toMatchObject({ op: 'welcome' })
+    await vi.waitFor(() => expect(adopted).toHaveLength(2))
+    // The old key never comes back.
+    expect(doorKeysOf((await hostCredentialOf(MACHINE))!).map((k) => k.verifyKey)).toEqual([fresh.verifyKey])
+  })
+
+  it('a revoke made by another process closes the socket at the next recheck', async () => {
+    const url = await door(50)
+    const { verifyKey } = await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
+    const c = await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })
+    await vi.waitFor(() => expect(adopted).toHaveLength(1))
+    // Another process wrote the mark: no event reaches this one, the record still holds a key here and there.
+    const devices = (await readDeviceRegistry()).devices.map((d) => (d.issuer === 'leader' ? { ...d, revoked: { at: new Date().toISOString(), by: 'human' } } : d))
+    await writeAuth(devices)
+    _resetDeviceAuthForTesting()
+    expect(await c.closed).toBe(4003)
+  })
+
+  it('a host with no credential yet: with the switch on, the machine its link names is marked; with it off, nothing is written', async () => {
+    setRevokeStandbySync(async () => null)
+    setDoorHostHooks({ machineIdOf: () => MACHINE, recheck: () => {} })
+    process.env.WALNUT_HOST_RUNS_SESSIONS = '0'
+    expect(await revokeHostDoorNow('devbox', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true })
+    expect(await hostCredentialOf(MACHINE)).toBeNull()
+    process.env.WALNUT_HOST_RUNS_SESSIONS = '1'
+    expect(await revokeHostDoorNow('devbox', 'human')).toEqual({ revoked: true, closed: 0, standbySynced: true })
+    expect(await hostCredentialOf(MACHINE)).toMatchObject({ hostKey: 'devbox', kind: 'machine', issuer: 'leader', tokenHash: '', revoked: { by: 'human' } })
+    await expect(mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })).rejects.toBeInstanceOf(HostDoorRevoked)
+    // Another host's machine is never marked for this one.
+    await mintHostCredential({ machineId: 'b2'.repeat(16), walnutId: WALNUT, hostKey: 'keeper' })
+    setDoorHostHooks({ machineIdOf: () => 'b2'.repeat(16), recheck: () => {} })
+    expect(await revokeHostDoorNow('stranger', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true })
+    expect(await hostDoorRevoked('keeper')).toBeNull()
   })
 })

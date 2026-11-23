@@ -31,7 +31,7 @@ import { WebSocketServer, type WebSocket } from '#ws'
 import { hostCallAllowed, hostCallArgs } from './host-calls.js'
 import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
-import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, NOT_OWN_SESSION, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
+import { HAND_ID, HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, NOT_OWN_SESSION, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
 import type { StartBundles } from './host-port.js'
 import type { SessionRecord } from '../types.js'
 import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH } from './door-wire.js'
@@ -209,7 +209,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       const v = (body as Record<string, unknown>)[k]
       if (v !== undefined && v !== null && (typeof v !== 'string' || !SAFE_ID.test(v))) return { status: 400, body: { ok: false, error: `${k} is not a session id`, why: 'bad_request' } }
     }
-    const { largePrompt, largePromptPath, startBundle, busSource, ...rest } = body
+    const { largePrompt, largePromptPath, startBundle, busSource, startHand, ...rest } = body
     const data: Record<string, unknown> & { taskId: string; message: string } = { ...rest }
     if (typeof largePrompt === 'string' && largePrompt.length > 0) {
       await fsp.mkdir(o.spillDir, { recursive: true, mode: 0o700 })
@@ -227,6 +227,8 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     data.waitForSpawn = true
     const startId = startIdOf(body)
     if (startBundle) o.bundles.put(startId, body.taskId, startBundle, body.preassignedSessionId)
+    // The leader's hand of this start: its born row says it back, so only that row takes the hand (handed-sessions.ts).
+    if (typeof startHand === 'string' && HAND_ID.test(startHand)) o.bundles.putHand(startId, body.taskId, startHand)
     if (pre) {
       try { o.claim?.take(pre) } catch (err) { o.log?.('warn', 'host sessions: a start could not claim its session\'s row', { taskId: body.taskId, sessionId: pre, error: errText(err) }) }
     }

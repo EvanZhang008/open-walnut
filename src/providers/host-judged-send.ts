@@ -148,6 +148,12 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   const w = stateOf(sid)
   // The send this kick stands for: its task input edge waits for the host to take it.
   if (kick) w.kick = { source: o.source, endsWait: o.endsWait || w.kick?.endsWait === true }
+  // These rows are this session's now (a row moved here from another session too): its host's
+  // facts may name them (handed-sessions.ts linesNotOthers). Written before the send.
+  if (taken.lines.length > 0) {
+    const { noteLinesHanded } = await import('../core/session-channel/handed-sessions.js')
+    await noteLinesHanded(sid, taken.lines.map((m) => m.id)).catch((err) => log.session.warn('host-run session: its handed lines were not noted', { sessionId: sid, host, error: errText(err) }))
+  }
   let a: Awaited<ReturnType<typeof side.sendToHost>>
   try {
     a = await side.sendToHost(host, payload)

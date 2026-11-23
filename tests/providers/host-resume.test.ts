@@ -24,7 +24,9 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 import { SID, harness, probeSetup, probeTeardown, settle, type Harness } from '../helpers/runner-probe-harness.js'
 import { notAtRestReason, resumeHostOf, _resetHostResumeForTesting, type RestFacts } from '../../src/providers/host-resume.js'
 import { _resetHostJudgedRunnerForTesting, noteHostStartBorn } from '../../src/providers/host-judged-runner.js'
-import { HOST_START_LOST_REASON, _resetHostHandOverForTesting, handOverPending, handStartToHost, noteHostLinked } from '../../src/providers/host-handover.js'
+import { HOST_START_LOST_REASON, _resetHostHandOverForTesting, handOverPending, handStartToHost, noteHostLinked, takeSessionBack } from '../../src/providers/host-handover.js'
+import { handsNow } from '../../src/core/session-channel/handed-sessions.js'
+import { applyHostChannelBatch } from '../../src/core/session-tracker.js'
 import { _resetHostJudgedSendForTesting, _waitingForTesting, redeliverWaitingFor } from '../../src/providers/host-judged-send.js'
 import { rearmHandOversAtBoot } from '../../src/providers/host-resume.js'
 import { clearHandOverMark } from '../../src/core/session-channel/handover-marks.js'
@@ -469,6 +471,25 @@ describe('S-A: a host-judged session whose host no longer holds it is never stuc
   })
 })
 
+describe('the hand of a hand-over (handed-sessions.ts): a resume hands its session, a take-back drops it', () => {
+  const hostRow = (host: string) => ({ claudeSessionId: SID, taskId: '', project: 'test', host, judge: 'host', process_status: 'running', startedAt: 'x', lastActiveAt: 'x', messageCount: 3 })
+  it('a resume records the hand; the host\'s whole row of it applies, another host\'s does not; a take-back drops the hand', async () => {
+    await legacyAtRest()
+    fakeSide()
+    kick()
+    await vi.waitFor(async () => expect((await getSessionByClaudeId(SID))?.judge).toBe('host'), { timeout: 5_000 })
+    expect(handsNow().filter((x) => x.sid === SID)).toEqual([{ host: 'devbox', sid: SID }])
+    // The host claims the leader's row (now the host's): its row, as a resume's first record, applies.
+    expect((await applyHostChannelBatch({ hostId: 'devbox', renames: [], cursor: { logId: 'L-r', seq: 1 }, rows: [{ sid: SID, born: true, patch: hostRow('devbox'), seq: 1 }] })).written).toEqual([SID])
+    expect((await applyHostChannelBatch({ hostId: 'devbox-b', renames: [], cursor: { logId: 'L-b', seq: 1 }, rows: [{ sid: SID, born: true, patch: hostRow('devbox-b'), seq: 1 }] })).written).toEqual([])
+    // Taken back (a host that disowns it): no hand of it stands for that host.
+    await handStartToHost(SID, 'devbox', 'resume')
+    expect(handsNow().some((x) => x.sid === SID)).toBe(true)
+    await takeSessionBack(SID, 'devbox')
+    expect(handsNow().filter((x) => x.sid === SID)).toEqual([])
+  })
+})
+
 describe('S-B, N1: a start re-armed at boot', () => {
   const SEED = '30000000-0000-4000-8000-0000000000b7'
   /** A start handed to devbox whose answer never came, then a leader restart. */
@@ -477,6 +498,7 @@ describe('S-B, N1: a start re-armed at boot', () => {
     await legacyAtRest()
     await createSessionRecord(SEED, '', 'test', '/w', { host: 'devbox', initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn' } as never)
     expect(await handStartToHost(SEED, 'devbox', 'start')).toBe(true)
+    expect(handsNow().filter((x) => x.sid === SEED)).toEqual([{ host: 'devbox', sid: SEED }])
     await enqueueMessage(SEED, 'while it starts', { id: 'qm-seed-1', sentBy: 'person' })
     _resetHostHandOverForTesting({ keepDisk: true })
     _resetJudgeOfForTesting()
@@ -505,6 +527,8 @@ describe('S-B, N1: a start re-armed at boot', () => {
     noteHostLinked('devbox')
     await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1), { timeout: 3_000 })
     expect((await getSessionByClaudeId(SEED))?.judge).toBeUndefined()
+    // The lost check took it back: its hand is gone, so a born row of it now is refused.
+    expect(handsNow().filter((x) => x.sid === SEED)).toEqual([])
     await vi.waitFor(async () => expect((await getQueue(SEED)).map((m) => `${m.id}:${m.status}`)).toEqual(['qm-seed-1:parked']))
     expect((await getQueue(SEED))[0].parkedReason).toMatch(new RegExp(`^${HOST_START_LOST_REASON}`))
   })

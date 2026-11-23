@@ -1230,6 +1230,8 @@ export function isMachineFaultKind(v: unknown): v is MachineFaultKind {
 export const GATEWAY_CODE_FAULT: Readonly<Record<GatewayErrorCode, MachineFaultKind | null>> = {
   hub_unreachable: 'server_away',
   hub_timeout: null,
+  // A revoked host is a person's decision, not a fault of the machine: the check hears it.
+  host_revoked: null,
   unknown_peer: null,
   ambiguous_peer: null,
   self_send: null,

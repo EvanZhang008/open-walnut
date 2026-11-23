@@ -24,7 +24,7 @@ import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/l
 import { _resetHostSessionTasksForTesting } from '../../src/core/session-channel/leader-tasks.js'
 import { _resetRemoteJudgedSessionsForTesting } from '../../src/providers/remote-judged-session.js'
 import type { LeaderSide } from '../../src/core/session-channel/leader-side.js'
-import { applyHostChannelBatch } from '../../src/core/session-tracker.js'
+import { applyHanded } from '../helpers/handed-rows.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { AFTER_TURN_REASON } from '../../src/core/relay-fates.js'
 
@@ -46,7 +46,7 @@ function fakeSide(start: Mode) {
 }
 
 async function hostRow(sid = HOST_SID) {
-  await applyHostChannelBatch({
+  await applyHanded({
     hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 1 },
     rows: [{ sid, born: true, patch: { claudeSessionId: sid, taskId: '', project: 'p', host: 'devbox', judge: 'host', process_status: 'idle', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
   })

@@ -2692,6 +2692,12 @@ export class DaemonConnection {
       .catch((err) => log.session.warn('DaemonConnection: host replica round failed', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) }))
   }
 
+  /** Drain this daemon's journal on the next host-slice round (a revoked host allowed again: offline-handover.ts held it). */
+  drainJournalSoon(): void {
+    this.offlineDrainDue = true
+    this.pushHostSlice()
+  }
+
   /** Describe the Walnut to this daemon again on the next host-slice round. */
   refreshLeader(): void {
     this.leaderConfigured = false

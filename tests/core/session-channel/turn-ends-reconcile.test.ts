@@ -5,7 +5,7 @@
  * live path's own decision (applySessionPhase). A second boot changes nothing; a legacy session is
  * never touched; a phase the live path (or anyone) moved after the turn end stands.
  *
- * Real: the leader's session and task stores, applyHostChannelBatch, the leader side over an
+ * Real: the leader's session and task stores, the leader side over an
  * in-memory socket to a real HostChannel and fact log.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,7 +17,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-turn-ends-reconcile'))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { _resetSessionTrackerForTesting, applyHostChannelBatch, createSessionRecord, getSessionByClaudeId, loadChannelCursor } from '../../../src/core/session-tracker.js'
+import { _resetSessionTrackerForTesting, createSessionRecord, getSessionByClaudeId, loadChannelCursor } from '../../../src/core/session-tracker.js'
+import { applyHanded } from '../../helpers/handed-rows.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import * as taskDb from '../../../src/core/task-db.js'
 import * as tm from '../../../src/core/task-manager.js'
@@ -75,7 +76,7 @@ describe('the turn-end edge a fact says by its data alone', () => {
 describe('the boot reconcile of host turn ends', () => {
   it('a batch committed and never said: the next boot sets the task from the row; a second boot changes nothing', async () => {
     const taskId = await inProgressTask('Host turn ended')
-    await applyHostChannelBatch({
+    await applyHanded({
       hostId: HOST, rows: [{ sid: 'h1', born: true, patch: born('h1', taskId), seq: 1 }], renames: [],
       cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h1', edge: 'session:result', seq: 2 }],
     })
@@ -95,7 +96,7 @@ describe('the boot reconcile of host turn ends', () => {
   it('a phase moved at or after the turn end stands (the live path did it, or a person since); a row running again is left to its own turn end', async () => {
     const said = await inProgressTask('Said before the stop')
     const again = await inProgressTask('Runs again')
-    await applyHostChannelBatch({
+    await applyHanded({
       hostId: HOST,
       rows: [{ sid: 'h2', born: true, patch: born('h2', said), seq: 1 }, { sid: 'h3', born: true, patch: born('h3', again, { process_status: 'running' }), seq: 2 }],
       renames: [], cursor: { logId: 'L1', seq: 4 },
@@ -116,7 +117,7 @@ describe('the boot reconcile of host turn ends', () => {
     const legacyTask = await inProgressTask('Legacy session')
     await createSessionRecord('legacy-1', legacyTask, 'Marina', undefined, { host: HOST })
     const errTask = await inProgressTask('Host turn failed')
-    await applyHostChannelBatch({
+    await applyHanded({
       hostId: HOST, rows: [{ sid: 'h4', born: true, patch: born('h4', errTask, { process_status: 'error' }), seq: 1 }], renames: [],
       cursor: { logId: 'L1', seq: 3 },
       turnEnds: [{ sid: 'legacy-1', edge: 'session:result', seq: 2 }, { sid: 'h4', edge: 'session:error', seq: 3 }],
@@ -131,19 +132,19 @@ describe('the boot reconcile of host turn ends', () => {
 
   it('a later turn end with no edge (a retrier took it) removes the older mark; one with an edge replaces it', async () => {
     const taskId = await inProgressTask('Superseded')
-    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h9', born: true, patch: born('h9', taskId), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h9', edge: 'session:error', seq: 2 }] })
+    await applyHanded({ hostId: HOST, rows: [{ sid: 'h9', born: true, patch: born('h9', taskId), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h9', edge: 'session:error', seq: 2 }] })
     expect(turnEndMarks().map((m) => m.edge)).toEqual(['session:error'])
-    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h9', edge: 'session:result', seq: 3 }] })
+    await applyHanded({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h9', edge: 'session:result', seq: 3 }] })
     expect(turnEndMarks().map((m) => m.edge)).toEqual(['session:result'])
-    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 4 }, turnEnds: [{ sid: 'h9', edge: null, seq: 4 }] })
+    await applyHanded({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 4 }, turnEnds: [{ sid: 'h9', edge: null, seq: 4 }] })
     expect(turnEndMarks()).toEqual([])
   })
 
   it('only the named host\'s marks made before the boot are looked at', async () => {
     const a = await inProgressTask('Host A')
     const b = await inProgressTask('Host B')
-    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'ha', born: true, patch: born('ha', a), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'ha', edge: 'session:result', seq: 2 }] })
-    await applyHostChannelBatch({ hostId: 'devbox-b', rows: [{ sid: 'hb', born: true, patch: { ...born('hb', b), host: 'devbox-b' }, seq: 1 }], renames: [], cursor: { logId: 'L2', seq: 2 }, turnEnds: [{ sid: 'hb', edge: 'session:result', seq: 2 }] })
+    await applyHanded({ hostId: HOST, rows: [{ sid: 'ha', born: true, patch: born('ha', a), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'ha', edge: 'session:result', seq: 2 }] })
+    await applyHanded({ hostId: 'devbox-b', rows: [{ sid: 'hb', born: true, patch: { ...born('hb', b), host: 'devbox-b' }, seq: 1 }], renames: [], cursor: { logId: 'L2', seq: 2 }, turnEnds: [{ sid: 'hb', edge: 'session:result', seq: 2 }] })
     expect((await reconcileHostTurnEnds({ hostId: HOST, before: 0 })).looked).toBe(0)
     expect(await reconcileHostTurnEnds({ hostId: HOST, before: Date.now() + 1 })).toEqual({ looked: 1, applied: ['ha'] })
     expect(await phaseOf(b)).toBe('IN_PROGRESS')
@@ -152,8 +153,8 @@ describe('the boot reconcile of host turn ends', () => {
 
   it('a turn end at or below the stored position (a link before this one applied it) marks nothing again', async () => {
     const taskId = await inProgressTask('Applied before')
-    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h5', born: true, patch: born('h5', taskId), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 5 } })
-    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 5 }, turnEnds: [{ sid: 'h5', edge: 'session:result', seq: 4 }] })
+    await applyHanded({ hostId: HOST, rows: [{ sid: 'h5', born: true, patch: born('h5', taskId), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 5 } })
+    await applyHanded({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 5 }, turnEnds: [{ sid: 'h5', edge: 'session:result', seq: 4 }] })
     expect(turnEndMarks()).toEqual([])
   })
 })
@@ -194,7 +195,7 @@ describe('through the leader side: a host\'s turn end applied, the leader stoppe
     side = createLeaderSide({
       walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), switchNow: async () => () => true,
       openStream: async () => { throw new Error('in memory') }, dial,
-      applyBatch: applyHostChannelBatch, loadCursor: async () => null,
+      applyBatch: applyHanded, loadCursor: async () => null,
       // The crash seam: the leader stops before it says anything.
       emit: (name) => { said.push(name) },
       noteLive: () => {}, noteRename: () => {}, noteHostJudged: () => {},
@@ -247,7 +248,7 @@ describe('S1: the reconcile waits for the host\'s first catch-up after the boot'
     const makeSide = (onCaughtUp?: (host: string) => void) => createLeaderSide({
       walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), switchNow: async () => () => true,
       openStream: async () => { throw new Error('in memory') }, dial,
-      applyBatch: applyHostChannelBatch, loadCursor: async (h) => loadChannelCursor(h),
+      applyBatch: applyHanded, loadCursor: async (h) => loadChannelCursor(h),
       emit: () => {}, noteLive: () => {}, noteRename: () => {}, noteHostJudged: () => {},
       ownerOf: () => HOST, backoffMs: () => 20, log: () => {}, ...(onCaughtUp ? { onCaughtUp } : {}),
     })

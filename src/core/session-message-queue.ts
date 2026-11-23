@@ -123,6 +123,16 @@ export async function loadQueue(): Promise<void> {
  * phone, so the phone retried) collapses onto the original row, and queue
  * redelivery after a daemon respawn delivers it once.
  */
+/**
+ * Told the session of every row this queue stores anew (session-channel/leader-boot.ts installs it
+ * on a leader while any host runs its sessions: a host's fact may name only its own session's rows,
+ * handed-sessions.ts linesNotOthers). Null elsewhere: nothing is called.
+ */
+let rowLedger: ((sessionId: string, id: string) => void) | null = null
+export function setQueuedRowLedger(fn: ((sessionId: string, id: string) => void) | null): void {
+  rowLedger = fn
+}
+
 export async function enqueueMessage(
   sessionId: string,
   message: string,
@@ -213,6 +223,7 @@ export async function enqueueMessage(
     return outcome.existing;
   }
   if (msg.sentBy === 'person' && !inherited) noteRecentHumanMessage(sessionId, opts?.recentText ?? message, msg.enqueuedAt);
+  if (rowLedger) try { rowLedger(sessionId, msg.id) } catch { /* the ledger logs its own failures */ }
   log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth: outcome.queueDepth });
   // A write that works takes what an earlier failed one left in the spool.
   if (!outcome.spooled && spool.spoolMayHoldRows()) void spool.drainQueueSpool().catch(() => 0);

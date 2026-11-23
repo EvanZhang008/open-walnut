@@ -17,7 +17,8 @@ vi.mock('../../../src/core/phase.js', async (orig) => ({
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { closeDb } from '../../../src/core/session-db.js'
-import { _resetSessionTrackerForTesting, applyHostChannelBatch, createSessionRecord } from '../../../src/core/session-tracker.js'
+import { _resetSessionTrackerForTesting, createSessionRecord } from '../../../src/core/session-tracker.js'
+import { applyHanded } from '../../helpers/handed-rows.js'
 import { _resetJudgeOfForTesting } from '../../../src/core/sessions/judge-of.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { setRetryOverCard, startLeaderRetryOver } from '../../../src/core/session-channel/leader-retry-over.js'
@@ -35,7 +36,7 @@ beforeEach(async () => {
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
   cards.length = 0
   phases.length = 0
-  await applyHostChannelBatch({
+  await applyHanded({
     hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 1 },
     rows: [{ sid: HOST_SID, born: true, patch: { claudeSessionId: HOST_SID, taskId: 'task-1', project: 'p', host: 'devbox', judge: 'host', process_status: 'idle', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
   })

@@ -17,8 +17,9 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-leader-is
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
-import { doorKeysOf, hostCredentialOf } from '../../../src/core/session-channel/host-credentials.js'
-import { configuredHostKeys, issueOnce, startCredentialIssuer, type IssuerDeps } from '../../../src/core/session-channel/leader-issue.js'
+import { allowHostDoor, doorKeysOf, hostCredentialOf, revokeHostDoor } from '../../../src/core/session-channel/host-credentials.js'
+import { hostRevokedNow, setRevokedHosts } from '../../../src/core/session-channel/revoked-hosts.js'
+import { allowHostDoorNow, configuredHostKeys, issueOnce, revokeHostDoorNow, setRevokeStandbySync, startCredentialIssuer, watchRevokedHosts, type IssuerDeps } from '../../../src/core/session-channel/leader-issue.js'
 import { answerCredentialRoute, answerDoorsRoute, readHostCredential } from '../../../src/core/session-channel/host-credential-file.js'
 import { setMachineIdHomeForTest } from '../../../src/core/machine-id.js'
 import { setOutwardDoorChecker } from '../../../src/core/leader/switch/doors.js'
@@ -136,6 +137,42 @@ describe('issuing a host its door credential', () => {
     issuer.noteHost('devbox', { connected: false, dials: true })
     expect(await issuer.pushDoors([DOOR])).toEqual({ told: [], failed: [] })
     issuer.stop()
+  })
+
+  it('a revoked host is issued nothing while its link stands, until it is allowed; then a fresh key at once', async () => {
+    setRevokeStandbySync(async () => null)
+    try {
+      expect(await issueOnce(deps(), 'devbox', MACHINE, [DOOR])).toBe('issued')
+      const first = await readHostCredential(WALNUT)
+      expect(await revokeHostDoorNow('devbox', 'human')).toMatchObject({ revoked: true })
+      posts = []
+      expect(await issueOnce(deps(), 'devbox', MACHINE, [DOOR])).toBe('refused')
+      // Nothing asked, nothing sent: the host keeps the key the door no longer takes.
+      expect(posts).toEqual([])
+      expect(await allowHostDoorNow('devbox', 'task:t-1')).toMatchObject({ allowed: true })
+      expect(await issueOnce(deps(), 'devbox', MACHINE, [DOOR])).toBe('issued')
+      const now = await readHostCredential(WALNUT)
+      expect(now!.verifyKey).not.toBe(first!.verifyKey)
+      expect((await hostCredentialOf(MACHINE))!.verifyKey).toBe(now!.verifyKey)
+      // A rotation grace never brings the revoked key back.
+      expect(doorKeysOf((await hostCredentialOf(MACHINE))!).map((k) => k.which)).toEqual(['current'])
+    } finally { setRevokeStandbySync(null) }
+  })
+
+  it('a ban written outside this process\'s acts (no revokeHostDoorNow here) holds within the recheck, and so does its allow (R2-N2)', async () => {
+    expect(await issueOnce(deps(), 'devbox', MACHINE, [DOOR])).toBe('issued')
+    setRevokedHosts([])
+    const changes: string[][] = []
+    const watch = await watchRevokedHosts((c) => changes.push(c), 20, () => {})
+    try {
+      expect(hostRevokedNow('devbox')).toBe(false)
+      // The records alone, as another process (a CLI, a standby that took over) would write them.
+      await revokeHostDoor('devbox', { by: 'human', machineId: MACHINE })
+      await vi.waitFor(() => expect(hostRevokedNow('devbox')).toBe(true), { timeout: 2000, interval: 10 })
+      await allowHostDoor('devbox', { by: 'human' })
+      await vi.waitFor(() => expect(hostRevokedNow('devbox')).toBe(false), { timeout: 2000, interval: 10 })
+      expect(changes).toEqual([['devbox'], ['devbox']])
+    } finally { watch.stop(); setRevokedHosts([]) }
   })
 
   it('issues only to a host in the config', async () => {

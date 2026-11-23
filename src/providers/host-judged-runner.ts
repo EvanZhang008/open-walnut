@@ -126,6 +126,35 @@ export class HostStartOutcomeUnknown extends Error {
   readonly why = 'host_start_outcome_unknown'
 }
 
+/** A start's work that runs on after its answer (its hints' commit, the task's link): kept, so a test awaits it. */
+const detached = new Set<Promise<unknown>>()
+function detach(p: Promise<unknown>): void {
+  const kept = p.catch(() => {}).finally(() => detached.delete(kept))
+  detached.add(kept)
+}
+/** Tests: every start's work after its answer has ended. */
+export async function hostStartWorkIdle(): Promise<void> {
+  while (detached.size > 0) await Promise.all([...detached])
+}
+
+/**
+ * The transfer attempts a start this leader handed a host carries (transferAttemptId): a host's
+ * transfer:fork-init names only one of these (fact-keys.ts attemptId), for as long as a start is in flight.
+ */
+const attempts = new Map<string, { host: string; until: number }>()
+/** As long as a start is in flight (host-handover.ts). */
+const ATTEMPT_MS = 15 * 60_000
+export function attemptStartedOn(host: string, attemptId: string): boolean {
+  const a = attempts.get(attemptId)
+  return !!a && a.host === host && a.until > Date.now()
+}
+function noteAttempt(host: string, attemptId: unknown): void {
+  if (typeof attemptId !== 'string' || !attemptId) return
+  const at = Date.now()
+  for (const [k, v] of attempts) if (v.until <= at) attempts.delete(k)
+  attempts.set(attemptId, { host, until: at + ATTEMPT_MS })
+}
+
 /** Would `host`'s own service run a start there? */
 export function startGoesToHost(host: string | undefined): boolean {
   return judgeOfStart(host) === 'host'
@@ -190,6 +219,7 @@ export async function startOnJudgingHost<T extends StartData>(
   onLost?: (err: Error) => Promise<void>,
 ): Promise<{ claudeSessionId: string; title: string }> {
   const host = data.host!
+  noteAttempt(host, (data as { transferAttemptId?: unknown }).transferAttemptId)
   const { largePromptFile, ...rest } = data
   const payload = { ...rest } as unknown as StartBody
   // The spilled message's file is this server's: its text goes instead, with the path the message
@@ -206,7 +236,18 @@ export async function startOnJudgingHost<T extends StartData>(
   // A row seeded for this start (task-start.ts makes one under the id it answers with) is the
   // host's before the host speaks: its facts can beat the start's answer.
   const seeded = (data as { preassignedSessionId?: unknown }).preassignedSessionId
-  const handed = typeof seeded === 'string' && seeded ? await handStartToHost(seeded, host) : false
+  const seededId = typeof seeded === 'string' && seeded ? seeded : null
+  // The host may bring this start's session here, and no other (handed-sessions.ts): its hand is on
+  // disk before the start goes, so a born row that beats the answer, or comes after a restart,
+  // applies. A seeded start's hand is kept with its hand-over (host-handover.ts handStartToHost);
+  // an unseeded one is an open hand the host echoes on that start's born row.
+  const hands = await import('../core/session-channel/handed-sessions.js')
+  const handed = seededId ? await handStartToHost(seededId, host, 'start', { taskId: data.taskId }) : false
+  const handId = seededId ? hands.handIdOf(host, seededId) : await hands.handStart(host, null, { taskId: data.taskId }).catch((err: unknown) => {
+    log.session.warn('host start: the hand of this start was not kept; its born row is refused until its answer names it', { host, error: err instanceof Error ? err.message : String(err) })
+    return ''
+  })
+  if (handId) payload.startHand = handId
   log.session.info('session routing', { taskId: data.taskId, type: 'host', host })
   let a: Awaited<ReturnType<typeof side.startOnHost>>
   try {
@@ -217,7 +258,8 @@ export async function startOnJudgingHost<T extends StartData>(
     // the leader's again and the start fails here (round 3 MF1).
     const { requestNotSent } = await import('../core/session-channel/leader-side.js')
     if (requestNotSent(err)) {
-      if (typeof seeded === 'string' && seeded) await takeStartBack(seeded, host, handed)
+      if (seededId) await takeStartBack(seededId, host, handed)
+      else await hands.dropHand(handId).catch(() => {})
       throw new Error(`the host ${host} did not get the start: ${why}`)
     }
     // No answer (the leader's timeout, a link that dropped): the host may have taken it, so it is
@@ -227,20 +269,40 @@ export async function startOnJudgingHost<T extends StartData>(
     if (typeof seeded === 'string' && seeded) {
       armLostStartCheck(seeded, host, handed, why, startLostHooks(seeded, host, onLost))
       log.session.warn('host start: no answer from the host; the session stays the host\'s and its channel tells what became of it', { sessionId: seeded, host, error: why })
-      void commit(seeded).catch(() => {})
+      detach(commit(seeded))
       return { claudeSessionId: seeded, title: '' }
     }
     throw new HostStartOutcomeUnknown(`the host ${host} did not answer the start (${why}); if it took it, its channel brings the session`)
   }
+  // An answer naming a session that is not the host's (another host's, a legacy one) is a refusal:
+  // the host never takes a session this way (handed-sessions.ts settleAnswer). Its hand names the
+  // answer's id now (a seeded hand of another id moves to it: one hand per start).
+  const settled = a.ok === true && typeof a.sessionId === 'string' && !!a.sessionId && (a.sessionId !== seeded || !handId)
+    ? await hands.settleAnswer(host, a.sessionId, handId, { taskId: data.taskId }).catch((err: unknown) => {
+      // The store could not say: the start stands (its born row is held to the rule when it comes).
+      log.session.warn('host start: the answer\'s session could not be checked against the store', { host, sessionId: a.sessionId, error: err instanceof Error ? err.message : String(err) })
+      return { ok: true, row: true }
+    })
+    : null
+  const foreign = settled?.ok === false
+  // No row here yet: a born row that came before this answer (a host that does not echo the hand)
+  // was refused, so its row is asked for whole now.
+  if (settled?.ok && !settled.row) side.resyncNow(host, [a.sessionId as string])
+  if (foreign) {
+    const { noteRefusedSessions } = await import('../core/session-channel/refused-sessions.js')
+    noteRefusedSessions(host, [a.sessionId as string], 'answer')
+    a = { ok: false, error: `the host answered with session ${String(a.sessionId)}, which is not its own`, why: 'not_its_session' }
+  }
   if (a.ok !== true || typeof a.sessionId !== 'string' || !a.sessionId) {
     // The host said no: the seed is the leader's again, and the start's failure is written on it.
-    if (typeof seeded === 'string' && seeded) await takeStartBack(seeded, host, handed)
+    if (seededId) await takeStartBack(seededId, host, handed)
+    else await hands.dropHand(handId).catch(() => {})
     throw new Error(`the host ${host} did not start the session: ${a.error ?? 'no reason given'}${a.why ? ` (${String(a.why)})` : ''}`)
   }
   noteHostJudged(a.sessionId, host)
   if (typeof seeded === 'string' && seeded) handOverAnswered(seeded)
   kinds.set(a.sessionId, isAcpEngine(data.engine) ? 'acp' : 'native')
-  void commit(a.sessionId).catch(() => {})
+  detach(commit(a.sessionId))
   // The start is this leader's, so its session:started is too, as the runner says it for a start
   // it runs (handleStart), now with the id the host named; unless the channel said it first (the
   // host's born row of it, or its own fact, beat this answer): one per session (claimHostStarted).
@@ -252,7 +314,7 @@ export async function startOnJudgingHost<T extends StartData>(
     }, ['main-ai'], { source: 'session-runner' })
   }
   // The task is the leader's: its slot, link and phase are set here (leader-tasks.ts), once.
-  void noteHostSessionStarted(a.sessionId, data.taskId, data.mode)
+  detach(noteHostSessionStarted(a.sessionId, data.taskId, data.mode))
   return { claudeSessionId: a.sessionId, title: typeof a.title === 'string' ? a.title : '' }
 }
 
@@ -372,5 +434,6 @@ export function installHostJudgedRouting(proto: object): void {
 export function _resetHostJudgedRunnerForTesting(): void {
   kinds.clear()
   _resetHostHandOverForTesting()
+  attempts.clear()
   _resetHostJudgedSendForTesting()
 }

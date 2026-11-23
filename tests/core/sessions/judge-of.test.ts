@@ -9,7 +9,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-judge-of'))
 
-import { _resetSessionTrackerForTesting, applyHostChannelBatch, createSessionRecord } from '../../../src/core/session-tracker.js'
+import { _resetSessionTrackerForTesting, createSessionRecord } from '../../../src/core/session-tracker.js'
+import { applyHanded } from '../../helpers/handed-rows.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import {
   _resetJudgeOfForTesting, judgeOf, judgeOfRecord, judgeOfStart, judgingHostOf, judgedHereOnly, judgedHereRecords, noteHostJudged, setHostJudgeProbe,
@@ -34,7 +35,7 @@ describe('judgeOf', () => {
 
   it('is host for a row the channel wrote, legacy for the leader\'s own rows beside it', async () => {
     await createSessionRecord('l1', '', 'p')
-    await applyHostChannelBatch({
+    await applyHanded({
       hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 1 },
       rows: [{ sid: 'h1', born: true, patch: { claudeSessionId: 'h1', taskId: '', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
     })

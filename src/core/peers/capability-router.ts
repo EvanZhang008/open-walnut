@@ -132,6 +132,11 @@ export async function handleGatewayCapability(
   if (d.cloudMode) {
     return err('unsupported_replica', 'agent gateway capabilities are not available on a cloud replica');
   }
+  // A revoked host's sessions run nothing here: a ban, not only a closed door (revoked-hosts.ts).
+  const { hostRevokedNow, HostRevokedError } = await import('../session-channel/revoked-hosts.js');
+  if (host && host !== '__local__' && hostRevokedNow(host)) {
+    return err('host_revoked', new HostRevokedError(host, `${capability} refused, nothing ran`).message);
+  }
   // An ACP session's worker runtime id names its session record from here on.
   callerSid = (await import('../sessions/acp-caller-sid.js')).canonicalCallerSid(callerSid);
   switch (capability) {

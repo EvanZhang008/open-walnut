@@ -2740,10 +2740,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/devices', deviceAdoptionRouter)
   // The browser sign-in code, and this server's tunnel (docs/plan/walnut-servers-everywhere.md).
   {
-    const [{ browserCodeRouter }, { exposeRouter }, { hostServersRouter }] = await Promise.all([
+    const [{ browserCodeRouter }, { exposeRouter }, { hostServersRouter }, { hostDoorsRouter }] = await Promise.all([
       import('./routes/browser-pair.js'),
       import('./routes/expose.js'),
       import('./routes/host-servers.js'),
+      import('./routes/host-doors.js'),
     ])
     app.use('/api/devices', browserCodeRouter)
     // A browser renews its sign-in here (routes/browser-sign-in.ts): on the primary only
@@ -2758,6 +2759,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     app.use('/api/expose', exposeRouter)
     app.use('/api/host-servers', hostServersRouter)
+    // A host's door credential: revoke and allow (core/session-channel/leader-issue.ts).
+    app.use('/api/host-doors', hostDoorsRouter)
   }
   app.use('/api/devices', devicesRouter)
   app.use('/api/focus', focusRouter)

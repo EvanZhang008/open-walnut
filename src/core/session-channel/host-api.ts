@@ -55,6 +55,12 @@ export type StartBody = Omit<SessionStartEvent, 'largePromptFile'> & {
   largePromptPath?: string
   startBundle?: StartBundle
   busSource?: string
+  /**
+   * The leader's hand of an unseeded start (handed-sessions.ts): the host echoes it on that start's
+   * born row (`row` {born, hand}). A host older than this ignores it, and its born row then waits
+   * for the start's answer.
+   */
+  startHand?: string
 } & Partial<ResumeFields>
 
 /**
@@ -70,6 +76,9 @@ export interface ResumeFields {
   resumeRow: SessionRecord
   queued: QueuedLine[]
 }
+
+/** What a hand id looks like: the host echoes nothing else. */
+export const HAND_ID = /^[0-9a-f]{18}$/
 
 export type StartAnswer = { ok: true; sessionId: string; title: string } | { ok: false; error: string; why?: string }
 

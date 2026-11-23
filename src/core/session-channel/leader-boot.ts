@@ -22,6 +22,9 @@ import { NOT_OWN_SESSION } from './host-api.js'
 import type { PermitPair } from './channel.js'
 import { leaderPermitNumberForHosts, runningLeaderPermit } from './leader-permit.js'
 
+/** How often the ban is read again from the credential records (another process may write it). */
+const REVOKED_RECHECK_MS = 60_000
+
 let active: LeaderSide | null = null
 let standing: ((hostKey: string) => LeaderStanding) | null = null
 let pushDoors: ((doors: readonly string[]) => Promise<HostDoorsPush>) | null = null
@@ -83,7 +86,7 @@ export function sayHostFact(name: string, data: unknown, opts: { late: boolean; 
 
 export async function startLeaderSessionChannels(): Promise<() => void> {
   if (active) return () => {}
-  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight, noteHostStartBorn }, { permitHolderId }, { cleanDoorUrls }] = await Promise.all([
+  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight, noteHostStartBorn, attemptStartedOn }, { permitHolderId }, { cleanDoorUrls }, { sessionTaskAndEngineInStore }] = await Promise.all([
     import('../session-tracker.js'),
     import('../host-server/index.js'),
     import('../leader/primary-leader.js'),
@@ -92,7 +95,20 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     import('../../providers/host-judged-runner.js'),
     import('../machine-id.js'),
     import('./door-wire.js'),
+    import('../session-db.js'),
   ])
+  const [{ linesNotOthers, noteLinesHanded }, { hostRevokedNow }, { setQueuedRowLedger }, { hostRunsSessionsAnyNow }] = await Promise.all([
+    import('./handed-sessions.js'), import('./revoked-hosts.js'), import('../session-message-queue.js'), import('./switch.js'),
+  ])
+  // Every queue row's session, while any host runs its sessions (only then can a host's fact name
+  // one): a fact may name its own session's rows and none of another's (fact-keys.ts, scoped keys).
+  let ledgerOn = false
+  const readLedgerSwitch = async (): Promise<void> => { ledgerOn = await hostRunsSessionsAnyNow().catch(() => ledgerOn) }
+  await readLedgerSwitch()
+  setQueuedRowLedger((sid, id) => {
+    if (!ledgerOn) return
+    void noteLinesHanded(sid, [id]).catch((err: unknown) => log.session.warn('session channel: a queue row\'s session was not noted', { sessionId: sid, messageId: id, error: err instanceof Error ? err.message : String(err) }))
+  })
   const ownMachine = permitHolderId() ?? ''
   const standingNow = (hostKey: string): LeaderStanding => {
     const permit = runningLeaderPermit()
@@ -158,6 +174,13 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       void import('../sessions/host-judged-complete.js').then((m) => m.retryCompletionStopsFor(host)).catch(() => {})
     },
     onCaughtUp: reconcileTurnEnds,
+    refused: (hostId, sids) => { void import('./refused-sessions.js').then((m) => m.noteRefusedSessions(hostId, sids, 'record')) },
+    // A host's fact says the task of this leader's own row of its session (leader-apply.ts).
+    taskOf: (sid) => sessionTaskAndEngineInStore(sid)?.taskId,
+    // The leader objects a host's fact may name: the queue rows and transfer attempts it handed that session.
+    scopeIds: (hostId, sid, key, ids) => (key === 'attemptId' ? ids.filter((a) => attemptStartedOn(hostId, a)) : linesNotOthers(sid, ids)),
+    // A revoked host's channel is cut (revoked-hosts.ts, read from the credential records by leader-issue.ts).
+    revoked: hostRevokedNow,
     log: (level, msg, data) => log.session[level](msg, data),
   })
   active = side
@@ -167,6 +190,12 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     import('./host-door.js'), import('./leader-issue.js'), import('../leader-doors.js'), import('../../providers/daemon-connection.js'),
     import('../standby/runner.js'), import('../server-role.js'), import('../config-manager.js'),
   ])
+  // The ban read again at boot, at a revoke event here, at a config write and every minute (a ban
+  // another process wrote): a host whose standing changed is cut, or may link again (noteRevoked).
+  const revokedWatch = await issue.watchRevokedHosts((changed) => { for (const k of changed) side.noteRevoked(k) }, REVOKED_RECHECK_MS, (err) => {
+    log.session.warn('host door: reading the revoked hosts failed', { error: err instanceof Error ? err.message : String(err) })
+  })
+  const recheckRevoked = revokedWatch.recheck
   const doorUrls = async (): Promise<string[]> => cleanDoorUrls((await getConfig()).session?.host_door_urls)
   // The hosts in this leader's config now: only they are issued, let in and kept linked at the door.
   let configured: Set<string> | null = null
@@ -243,6 +272,15 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const lookIssue = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown } | null }) => {
     issuer.noteHost(view.hostKey, { connected: hostServer.hostServerLink(view.hostKey) !== null, dials: view.phase === 'running' && issue.reportDials(view.server) })
   }
+  // A revoke or an allow made from a route (leader-issue.ts revokeHostDoorNow, allowHostDoorNow).
+  issue.setDoorHostHooks({
+    machineIdOf: (hostKey) => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey),
+    recheck: (hostKey) => {
+      issuer.refresh()
+      for (const v of hostServer.peekHostServerViews()) if (v.hostKey === hostKey) lookIssue(v)
+    },
+    cut: (hostKey) => side.noteRevoked(hostKey),
+  })
   const { startHostSessionTasks } = await import('./leader-tasks.js')
   const stopTasks = startHostSessionTasks()
   // A host's retriers run there: their turn state and give-ups reach this leader's readers.
@@ -252,7 +290,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const unlisten = hostServer.onHostServerView(look)
   // The switch is read again at every config write, so a start after it went off stays here.
   bus.subscribe(CONFIG_SUBSCRIBER, () => {
-    void side.refreshFlag(); void syncDoor(); issuer.refresh()
+    void side.refreshFlag(); void syncDoor(); issuer.refresh(); void recheckRevoked(); void readLedgerSwitch()
     void revokeGone().then(() => { for (const v of hostServer.peekHostServerViews()) lookIssue(v) })
   }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
   void revokeGone()
@@ -282,6 +320,9 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     setLeaderDoorOpen('/host-door', false)
     issuer.stop()
     issue.setRevokeStandbySync(null)
+    issue.setDoorHostHooks(null)
+    revokedWatch.stop()
+    setQueuedRowLedger(null)
     stopDoor()
     side.stop()
     setHostJudgeProbe(null)

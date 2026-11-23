@@ -20,6 +20,7 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
 /** Callers of the per-host start decision: file -> why. */
 const PER_HOST: Record<string, string> = {
   'src/core/session-channel/leader-boot.ts': "the leader side's start probe (leader-side.ts hostJudges, judge-of.ts startGoesToHost): the one per-host decision",
+  'src/core/session-channel/leader-issue.ts': "a revoke names the host's machine for a new ban record only when that host's switch is on (off, nothing was issued to it)",
 }
 
 /** Callers of "on for any host": file -> why. */

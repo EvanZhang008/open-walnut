@@ -320,10 +320,9 @@ export function anyChannelCursor(): boolean {
  * says `judge: 'host'` (a substring test first, so only such a row's payload is parsed). Null: no
  * such row.
  */
-export function sessionJudgeInStore(claudeSessionId: string): { host: string | null; judgedByHost: boolean } | null {
-  const handle = getDb();
+export function sessionJudgeInStore(claudeSessionId: string, handle: DatabaseType | null = getDb()): { host: string | null; judgedByHost: boolean } | null {
   if (!handle) return null;
-  const row = handle.prepare(
+  const row = prepared(handle, 
     `SELECT host, CASE WHEN instr(coalesce(payload, ''), '"judge":"host"') > 0 AND json_valid(payload) THEN json_extract(payload, '$.judge') = 'host' ELSE 0 END AS judged FROM sessions WHERE claude_session_id = ?`,
   ).get(claudeSessionId) as { host: string | null; judged: number } | undefined;
   return row ? { host: row.host, judgedByHost: row.judged === 1 } : null;
@@ -1149,6 +1148,23 @@ const SCHEMA_SQL = `
     claude_session_id TEXT PRIMARY KEY,
     host_id TEXT NOT NULL,
     edge TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
+  -- The starts a leader handed its hosts (session-channel/handed-sessions.ts): sid NULL while the host names it.
+  CREATE TABLE IF NOT EXISTS session_host_hands (
+    id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    sid TEXT,
+    task_id TEXT NOT NULL DEFAULT '',
+    at INTEGER NOT NULL,
+    until INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS session_host_hands_sid ON session_host_hands(sid);
+  -- The queue rows a leader handed its hosts' sessions (session-channel/handed-sessions.ts): a host's
+  -- fact names only these ids of its session.
+  CREATE TABLE IF NOT EXISTS session_host_lines (
+    id TEXT PRIMARY KEY,
+    sid TEXT NOT NULL,
     at INTEGER NOT NULL
   );
 `;

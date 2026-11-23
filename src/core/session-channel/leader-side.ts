@@ -9,8 +9,10 @@
  *     channel.ts attachLeaderChannel. What it applies: the host's rows, renames and the channel's
  *     position in one transaction (session-tracker applyHostChannelBatch), then the facts on this
  *     bus (`source: 'host-channel'`, `late` for a record read back long after it happened), and
- *     the `live` records into the proxies' mirrored state (providers/remote-judged-session.ts).
- *     A dropped link dials again with a backoff.
+ *     the `live` records into the proxies' mirrored state (providers/remote-judged-session.ts);
+ *     leader-apply.ts holds what the records do. A dropped link dials again with a backoff.
+ *   - none of it for a host whose door is revoked (leader-issue.ts hostRevokedNow): no link is
+ *     kept or taken, and what one sent is not applied (noteRevoked closes it at the revoke).
  *   - or the socket the host dialed into this leader's door (host-door.ts), once both proved who
  *     they are: `adopt`. One link per host: the newer one wins and the older is closed `replaced`;
  *     while a host-dialed socket is up the leader dials nothing to that host.
@@ -21,19 +23,16 @@
  *     and again each time the channel links, until the host's `drop` record answers each one.
  */
 import type { Duplex } from 'node:stream'
-import { attachLeaderChannel, isChannelFrame, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
-import { channelClassOf, sessionIdOf } from './event-classes.js'
-import { EventNames } from '../event-bus.js'
+import { attachLeaderChannel, isChannelFrame, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
+import { createLeaderApply, HostRevoked } from './leader-apply.js'
 import { SESSION_JUDGE_CAP, SESSION_RESUME_CAP } from './switch.js'
-import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
-import type { HostTurnEnd } from './turn-ends.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
-import type { SessionRecord } from '../types.js'
 import { noteFrameParsed } from '../../providers/line-parse-count.js'
 
 export { HostRequestNotSent, requestNotSent, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
+export { HostRevoked } from './leader-apply.js'
 
 export interface LeaderSideDeps {
   walnutId(): Promise<string>
@@ -79,10 +78,19 @@ export interface LeaderSideDeps {
   backoffMs?(attempt: number): number
   callTimeoutMs?: number
   startTimeoutMs?: number
+  /** Records of sessions `hostId` does not own were not said (refused-sessions.ts noteRefusedSessions). */
+  refused?(hostId: string, sids: string[]): void
+  /** The task of this leader's own row of `sid` (a host's fact says this task, never its own word). */
+  taskOf?(sid: string): string | null | undefined
+  /** Of `ids` under a fact's `key`, the leader objects it handed `sid` of `hostId` (fact-keys.ts scoped keys). */
+  scopeIds?(hostId: string, sid: string, key: string, ids: string[]): string[]
+  /** Is `hostKey` revoked (leader-issue.ts)? Its link is closed and nothing it sends is applied. */
+  revoked?(hostKey: string): boolean
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
 }
 
 interface HostState {
+  key: string
   connected: boolean
   judges: boolean
   socket: ChannelSocket | null
@@ -104,12 +112,6 @@ const RESYNC_EVERY_MS = 10 * 60_000
 
 const defaultBackoff = (attempt: number): number => Math.min(30_000, 500 * 2 ** Math.min(attempt, 6))
 
-/** The session:started of a session born on `hostId`, from its row (as the runner says one: handleStart). */
-function startedOf(hostId: string, sid: string, row: Record<string, unknown>): Record<string, unknown> {
-  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
-  return { sessionId: sid, claudeSessionId: sid, taskId: str(row.taskId), project: str(row.project) ?? '', host: hostId }
-}
-
 export function createLeaderSide(deps: LeaderSideDeps) {
   const hosts = new Map<string, HostState>()
   let onFor: (hostKey: string) => boolean = () => false
@@ -124,7 +126,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   const stateOf = (hostKey: string): HostState => {
     let s = hosts.get(hostKey)
     if (!s) {
-      s = { connected: false, judges: false, socket: null, dialing: false, attempt: 0, timer: null, channel: null, resyncAt: new Map(), lostTimer: null, dialedIn: false }
+      s = { key: hostKey, connected: false, judges: false, socket: null, dialing: false, attempt: 0, timer: null, channel: null, resyncAt: new Map(), lostTimer: null, dialedIn: false }
       hosts.set(hostKey, s)
     }
     return s
@@ -135,19 +137,20 @@ export function createLeaderSide(deps: LeaderSideDeps) {
    * switch decides only where a new start goes (hostJudges). A socket the host dialed in is kept
    * whatever the daemon link says: the host proved itself at the door (host-door.ts).
    */
-  const wanted = (s: HostState): boolean => !stopped && ((s.dialedIn && !!s.socket) || (s.connected && s.judges))
-
-  /** One step after the commit: a throw is logged, never closes the link (the position is already past it). */
-  function after(hostId: string, what: string, sid: string, fn: () => void): void {
-    try { fn() } catch (err) {
-      deps.log('warn', 'session channel: a step after the apply failed', { hostId, what, sessionId: sid, error: err instanceof Error ? err.message : String(err) })
-    }
+  const wanted = (s: HostState): boolean => !stopped && !isRevoked(s.key) && ((s.dialedIn && !!s.socket) || (s.connected && s.judges))
+  function isRevoked(hostKey: string): boolean {
+    try { return deps.revoked?.(hostKey) === true } catch { return true }
   }
-
-  /** Does this record of `hostId` name a session that host owns here (M1)? */
-  function hostsOwn(hostId: string, sid: string, wrote: ReadonlySet<string>): boolean {
-    if (wrote.has(sid)) return true
-    try { return deps.ownerOf(sid) === hostId } catch { return false }
+  /** A revoked host's records: never applied, and its link goes (S3 of the land 9 review). */
+  function refuseRevoked(hostId: string): void {
+    if (!isRevoked(hostId)) return
+    const s = hosts.get(hostId)
+    if (s) closeLink(s, 'revoked')
+    throw new HostRevoked(hostId)
+  }
+  const taskOf = (sid: string): string | null | undefined => {
+    if (!deps.taskOf) return undefined
+    try { return deps.taskOf(sid) ?? null } catch { return null }
   }
 
   /** Ask the host for these rows whole (rate-limited per session). */
@@ -163,96 +166,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     s.channel.resync(due)
   }
 
-  async function applyRecs(hostId: string, recs: AppliedFact[], next: ChannelCursor): Promise<void> {
-    const rows: HostChannelBatch['rows'][number][] = []
-    const renames: HostChannelBatch['renames'][number][] = []
-    const drops: string[] = []
-    const check = new Set<string>()
-    // Turn ends that move a task's phase: marked with the rows, so a leader that stops before saying them sets the phase at boot (turn-ends.ts).
-    const turnEnds: HostTurnEnd[] = []
-    // A new id a rename of this batch moves a row to: its row is that session's, never a start (R2-H1).
-    const renamedTo = new Set<string>()
-    for (const r of recs) {
-      const d = (r.data ?? {}) as Record<string, unknown>
-      // A `resync` row is the host's whole row again: applied as a born one (its omitted fields cleared, made when missing).
-      if (r.name === 'row') rows.push({ sid: r.sid, born: d.born === true || d.resync === true, patch: (d.patch ?? {}) as Record<string, unknown>, seq: r.seq })
-      else if (r.name === 'rename' && typeof d.from === 'string' && typeof d.to === 'string') { renames.push({ from: d.from, to: d.to, seq: r.seq }); renamedTo.add(d.to) }
-      else if (r.name === 'drop') drops.push(r.sid)
-      else {
-        check.add(r.sid)
-        // Every turn end of the session counts: one with no edge (a retrier took it, work goes on) still supersedes an older mark.
-        if (channelClassOf(r.name) === 'fact' && sessionIdOf(r.name, r.data) === r.sid && isTurnEndName(r.name)) turnEnds.push({ sid: r.sid, edge: turnEndEdgeOf(r.name, r.data), seq: r.seq })
-      }
-    }
-    const applied = await deps.applyBatch({ hostId, rows, renames, cursor: next, ...(drops.length ? { drops } : {}), ...(check.size ? { check: [...check] } : {}), ...(turnEnds.length ? { turnEnds } : {}) })
-    const { written } = applied
-    for (const sid of written) after(hostId, 'noteHostJudged', sid, () => deps.noteHostJudged(sid, hostId))
-    const wrote = new Set(written)
-    // Deleted here, its host not done yet: nothing of it is said (leader-drops.ts).
-    const gone = new Set(applied.gone ?? [])
-    // Applied by a link before this one (the transaction read the position, M2): said then.
-    const appliedBefore = applied.after ?? 0
-    if (applied.resync?.length) askResync(hostId, applied.resync)
-    let refused = 0
-    // After the commit, in log order: the rows a fact's subscribers read are already there.
-    for (const r of recs) {
-      if (r.seq <= appliedBefore || gone.has(r.sid)) continue
-      if (r.name === 'row') {
-        // A session born on the host: said as started here, at its row's place. A start the host
-        // began itself says none the leader hears (a native one has no id yet), so this is its
-        // only one; for a start this leader handed on, the channel's emit keeps one in all
-        // (leader-tasks.ts claimHostStarted). A rows frame (applyRows) is a resync, never a start,
-        // and so is a whole row the host sends again (`resync`: its boot, the leader's ask).
-        // It names no destinations: it goes where a start this leader hands on says it (reemitDestinations).
-        const d = (r.data ?? {}) as { born?: unknown; patch?: Record<string, unknown> }
-        if (d.born === true && wrote.has(r.sid)) {
-          if (deps.noteBorn) after(hostId, 'noteBorn', r.sid, () => deps.noteBorn!(r.sid))
-          if (!renamedTo.has(r.sid)) emitFact(hostId, r, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), undefined)
-        }
-        continue
-      }
-      // A dropped session holds nothing live on its host.
-      if (r.name === 'drop') { after(hostId, 'noteLive', r.sid, () => deps.noteLive(r.sid, { gone: true }, hostId)); continue }
-      if (r.name === 'turn-summary') continue
-      if (r.name === 'rename') {
-        // Only a rename the batch applied: the host renamed a row of its own (the transaction checked `from`).
-        const d = r.data as { from?: string; to?: string }
-        if (d?.from && d?.to && wrote.has(d.to)) after(hostId, 'noteRename', d.to, () => deps.noteRename(d.from!, d.to!))
-        continue
-      }
-      if (!hostsOwn(hostId, r.sid, wrote)) { refused++; continue }
-      if (r.name === 'live') {
-        after(hostId, 'noteLive', r.sid, () => deps.noteLive(r.sid, ((r.data as { state?: LiveState } | null)?.state ?? {}) as LiveState, hostId))
-        continue
-      }
-      if (channelClassOf(r.name) !== 'fact') continue
-      // The event names the record's own session, or it is not said.
-      if (sessionIdOf(r.name, r.data) !== r.sid) { refused++; continue }
-      emitFact(hostId, r, r.name, r.data, r.to)
-    }
-    if (refused > 0) deps.log('warn', 'session channel: records of sessions this host does not own were not said', { hostId, count: refused })
-    // A hand-over its host answered with a row that is no born one (a row it owned already): ended too.
-    const bornHere = new Set(recs.filter((r) => r.name === 'row' && (r.data as { born?: unknown } | null)?.born === true).map((r) => r.sid))
-    if (deps.noteBorn) for (const sid of applied.handOversEnded ?? []) if (!bornHere.has(sid)) after(hostId, 'noteBorn', sid, () => deps.noteBorn!(sid))
-  }
-
-  function emitFact(hostId: string, r: AppliedFact, name: string, data: unknown, to: string[] | undefined): void {
-    after(hostId, name, r.sid, () => deps.emit(name, data, { late: r.late, at: r.happenedAt, ...(to ? { to } : {}) }))
-  }
-
-  async function applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor, frame: { at: number; gone: string[] }): Promise<void> {
-    const { written, removed } = await deps.applyBatch({
-      hostId,
-      rows: rows.map((row) => ({ sid: row.claudeSessionId, born: true, patch: row as unknown as Record<string, unknown> })),
-      renames: [],
-      cursor: next,
-      // Every row the host owns now, as of record `at`: only a row it names gone is deleted (rows-snapshot.ts).
-      snapshot: { keep: deps.startsInFlight?.() ?? new Set(), at: frame.at, gone: frame.gone },
-    })
-    for (const sid of written) after(hostId, 'noteHostJudged', sid, () => deps.noteHostJudged(sid, hostId))
-    if (deps.noteBorn) for (const sid of written) after(hostId, 'noteBorn', sid, () => deps.noteBorn!(sid))
-    if (removed?.length) deps.log('info', 'session channel: rows the host no longer has were removed here', { hostId, count: removed.length })
-  }
+  const { applyRecs, applyRows, onFlow } = createLeaderApply(deps, { askResync, refuseRevoked, isRevoked, taskOf })
 
   function schedule(hostKey: string, s: HostState): void {
     if (!wanted(s) || s.timer || s.socket || s.dialing) return
@@ -326,11 +240,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       loadCursor: deps.loadCursor,
       apply: applyRecs,
       applyRows,
-      onFlow: (hostId, sid, name, data, to) => {
-        // A text delta of a session this host owns, naming that session, or nothing (M1).
-        if (!hostsOwn(hostId || hostKey, sid, new Set()) || sessionIdOf(name, data) !== sid) return
-        try { deps.emit(name, data, { late: false, ...(to ? { to } : {}) }) } catch { /* a flow event is never kept */ }
-      },
+      onFlow: (hostId, sid, name, data, to) => onFlow(hostId || hostKey, sid, name, data, to),
       onCaughtUp: (hostId) => deps.onCaughtUp?.(hostId || hostKey),
       onLog: deps.log,
     })
@@ -429,7 +339,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
      * `replaced`, and no dial of the leader's runs while it is up. False when this side is stopped.
      */
     adopt(hostKey: string, sock: ChannelSocket): boolean {
-      if (stopped) { try { sock.close('stopping') } catch { /* gone */ } return false }
+      if (stopped || isRevoked(hostKey)) { try { sock.close(stopped ? 'stopping' : 'revoked') } catch { /* gone */ } return false }
       // The door is open only while the switch is on: read it again for the next start.
       void readSwitch()
       const s = stateOf(hostKey)
@@ -473,6 +383,23 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     /** A delete this leader just made of `hostKey`'s sessions: sent now when the host is linked, else at its next link. */
     async dropOnHost(hostKey: string): Promise<void> {
       if (hosts.get(hostKey)?.socket) await flushDrops(hostKey)
+    },
+    /**
+     * `hostKey` was revoked or allowed again (leader-issue.ts): a revoked host's link closes now and
+     * none is made or taken until it is allowed; an allowed one is linked again when it is wanted.
+     */
+    noteRevoked(hostKey: string): void {
+      const s = hosts.get(hostKey)
+      if (!s || stopped) return
+      if (isRevoked(hostKey)) closeLink(s, 'revoked')
+      else ensure(hostKey)
+    },
+    /** Ask `hostKey` for these rows whole now, past the rate limit (a start's answer named a session whose born row was refused). */
+    resyncNow(hostKey: string, sids: readonly string[]): void {
+      const s = hosts.get(hostKey)
+      if (!s) return
+      for (const sid of sids) s.resyncAt.delete(sid)
+      askResync(hostKey, sids)
     },
     /** Tests: the current link's apply chain. */
     idle(hostKey: string): Promise<void> { return hosts.get(hostKey)?.channel?.idle() ?? Promise.resolve() },

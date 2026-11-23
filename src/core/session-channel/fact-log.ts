@@ -391,7 +391,9 @@ export function compactRecords(records: readonly FactRecord[]): FactRecord[] {
         for (const x of rows) Object.assign(merged, (x.data as { patch?: Record<string, unknown> })?.patch ?? {})
         const last = rows[rows.length - 1]
         const born = rows.some((x) => (x.data as { born?: boolean })?.born)
-        replace.set(last.seq, { ...last, refs: undefined, data: { ...(born ? { born: true } : {}), patch: merged } })
+        // A born row's echo of its start's hand (host-emitter.ts) stays with the merged row.
+        const hand = rows.map((x) => (x.data as { hand?: unknown })?.hand).find((h): h is string => typeof h === 'string')
+        replace.set(last.seq, { ...last, refs: undefined, data: { ...(born ? { born: true } : {}), ...(hand ? { hand } : {}), patch: merged } })
         for (const x of rows.slice(0, -1)) replace.set(x.seq, null)
       }
       turn = []

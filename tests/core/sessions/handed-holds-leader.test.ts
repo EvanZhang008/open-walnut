@@ -17,7 +17,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-handed-ho
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 import { closeDb } from '../../../src/core/session-db.js'
-import { _resetSessionTrackerForTesting, applyHostChannelBatch, createSessionRecord } from '../../../src/core/session-tracker.js'
+import { _resetSessionTrackerForTesting, createSessionRecord } from '../../../src/core/session-tracker.js'
+import { applyHanded } from '../../helpers/handed-rows.js'
 import { resetCache, sendMessageToSession, getQueue, enqueueMessage, takeLinesForHost } from '../../../src/core/session-message-queue.js'
 import { _resetJudgeOfForTesting } from '../../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting } from '../../../src/core/session-channel/leader-boot.js'
@@ -31,7 +32,7 @@ let refuse = false
 let refusals = 0
 
 async function hostRow(): Promise<void> {
-  await applyHostChannelBatch({
+  await applyHanded({
     hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 1 },
     rows: [{ sid: HOST_SID, born: true, patch: { claudeSessionId: HOST_SID, taskId: '', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
   })

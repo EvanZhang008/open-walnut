@@ -72,6 +72,8 @@ export interface HandoverResult {
   replayed: number;
   skipped: number;
   failed: number;
+  /** The host is revoked here: its journal was not read and stays on the host until it is allowed again. */
+  held?: true;
 }
 
 /** A queued write that did not land, told to the session that made it. */
@@ -174,6 +176,7 @@ export function _resetOfflineHandoverForTesting(): void {
   running.clear();
   letterFailing.clear();
   logDiskErrorHosts.clear();
+  heldLoggedAt.clear();
   resumesToRescue.clear();
   for (const d of due.values()) d.resolve();
   due.clear();
@@ -200,8 +203,25 @@ async function lostSessionWindow(sid: string): Promise<{ from: number; to: numbe
   }
 }
 
+/** The last time a held drain was logged, per host: a revoked host's link asks on every copy round. */
+const heldLoggedAt = new Map<string, number>();
+const HELD_LOG_EVERY_MS = 10 * 60_000;
+
 async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   const result: HandoverResult = { rounds: 0, records: 0, imported: 0, settled: 0, replayed: 0, skipped: 0, failed: 0 };
+  // A revoked host's journal is held, not dropped: its records are what its sessions and its
+  // person did while this Mac was away, and dropping them would lose that work. Nothing is read
+  // or acked, so the host keeps every record, and the first drain after an allow takes them in
+  // (session-channel/revoked-hosts.ts; host-doors.ts says so in the revoke's answer).
+  const { hostRevokedNow } = await import('./session-channel/revoked-hosts.js');
+  if (hostRevokedNow(conn.hostKey) || (conn.aliases ?? []).some((a) => hostRevokedNow(a))) {
+    const now = Date.now();
+    if (now - (heldLoggedAt.get(conn.hostKey) ?? 0) >= HELD_LOG_EVERY_MS) {
+      heldLoggedAt.set(conn.hostKey, now);
+      log.session.info('journal drain held: the host is revoked; its records stay on it until it is allowed again', { host: conn.hostKey });
+    }
+    return { ...result, held: true };
+  }
   // A task's updated_at as it was BEFORE this handover wrote anything: a second
   // queued write for the same task must not lose to the first one's own stamp.
   const baseline = new Map<string, number>();

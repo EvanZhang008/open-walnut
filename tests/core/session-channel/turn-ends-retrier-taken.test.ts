@@ -15,7 +15,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-land6-retrier-taken'))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { _resetSessionTrackerForTesting, applyHostChannelBatch } from '../../../src/core/session-tracker.js'
+import { _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js'
+import { applyHanded } from '../../helpers/handed-rows.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import * as taskDb from '../../../src/core/task-db.js'
 import * as tm from '../../../src/core/task-manager.js'
@@ -43,7 +44,7 @@ describe('a turn end a host retrier took is never replayed at boot', () => {
     expect(turnEndEdgeOf('session:result', data)).toBeNull()
     const { task } = await tm.addTask({ title: 'Waiting on a usage limit', project: 'Marina' })
     await tm.updateTask(task.id, { phase: 'IN_PROGRESS' })
-    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h1', born: true, seq: 1, patch: row('h1', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 } })
+    await applyHanded({ hostId: HOST, rows: [{ sid: 'h1', born: true, seq: 1, patch: row('h1', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 } })
     expect(turnEndMarks()).toEqual([])
     expect((await reconcileHostTurnEnds()).applied).toEqual([])
     expect((await tm.getTask(task.id)).phase).toBe('IN_PROGRESS')
@@ -62,7 +63,7 @@ describe('a turn end a host retrier took is never replayed at boot', () => {
   it('a mark the live handler ran for goes, whatever it decided; a newer turn end marked while it ran stays', async () => {
     const { task } = await tm.addTask({ title: 'Handled live', project: 'Marina' })
     await tm.updateTask(task.id, { phase: 'IN_PROGRESS' })
-    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h2', born: true, seq: 1, patch: row('h2', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h2', edge: 'session:error', seq: 2 }] })
+    await applyHanded({ hostId: HOST, rows: [{ sid: 'h2', born: true, seq: 1, patch: row('h2', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h2', edge: 'session:error', seq: 2 }] })
     expect(turnEndMarks().map((m) => m.sid)).toEqual(['h2'])
     // The handler held the phase (it decided nothing); its mark still goes.
     await clearingTurnEndMarks(async () => {})({ name: 'session:error', data: { sessionId: 'h2' }, source: 'host-channel' })
@@ -77,7 +78,7 @@ describe('a turn end a host retrier took is never replayed at boot', () => {
     // The wrapper reads its mark before the handler runs: once the handler is in, that read is done.
     const running = clearingTurnEndMarks(async () => { entered(); await gate })({ name: 'session:result', data: { sessionId: 'h2' }, source: 'host-channel' })
     await inHandler
-    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h2', edge: 'session:result', seq: 3 }] })
+    await applyHanded({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h2', edge: 'session:result', seq: 3 }] })
     release(); await running
     expect(turnEndMarks().map((m) => m.sid)).toEqual(['h2'])
   })
@@ -99,7 +100,7 @@ describe('the leader\'s turn-end handler is wrapped', () => {
 describe('round 2, N2 and N3: which mark the handler clears', () => {
   it('a handler that threw keeps the mark (the boot looks again); a normal return clears it', async () => {
     const { task } = await tm.addTask({ title: 'Handler threw', project: 'Marina' })
-    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h3', born: true, seq: 1, patch: row('h3', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h3', edge: 'session:result', seq: 2 }] })
+    await applyHanded({ hostId: HOST, rows: [{ sid: 'h3', born: true, seq: 1, patch: row('h3', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h3', edge: 'session:result', seq: 2 }] })
     await expect(clearingTurnEndMarks(async () => { throw new Error('task ref did not resolve') })({ name: 'session:result', data: { sessionId: 'h3' }, source: 'host-channel' })).rejects.toThrow('task ref')
     expect(turnEndMarks().map((m) => m.sid)).toEqual(['h3'])
     await clearingTurnEndMarks(async () => {})({ name: 'session:result', data: { sessionId: 'h3' }, source: 'host-channel' })
@@ -110,12 +111,12 @@ describe('round 2, N2 and N3: which mark the handler clears', () => {
     const { task } = await tm.addTask({ title: 'Same millisecond', project: 'Marina' })
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_900_000_000_000)
     try {
-      await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h4', born: true, seq: 1, patch: row('h4', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h4', edge: 'session:error', seq: 2 }] })
+      await applyHanded({ hostId: HOST, rows: [{ sid: 'h4', born: true, seq: 1, patch: row('h4', task.id) }], renames: [], cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'h4', edge: 'session:error', seq: 2 }] })
       let release!: () => void
       const gate = new Promise<void>((r) => { release = r })
       const running = clearingTurnEndMarks(async () => { await gate })({ name: 'session:error', data: { sessionId: 'h4' }, source: 'host-channel' })
       // The clock has not moved: the newer batch commits in the same millisecond.
-      await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h4', edge: 'session:result', seq: 3 }] })
+      await applyHanded({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h4', edge: 'session:result', seq: 3 }] })
       release(); await running
       expect(turnEndMarks().map((m) => [m.sid, m.edge])).toEqual([['h4', 'session:result']])
     } finally { now.mockRestore() }

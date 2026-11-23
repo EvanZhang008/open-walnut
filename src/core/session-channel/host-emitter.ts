@@ -6,7 +6,8 @@
  *   bus `fact` event   -> FactLog.append(sid, name, data, {line}) (event-classes.ts)
  *   bus `flow` event   -> HostChannel.flow (only to a caught-up reader, never kept)
  *   `leader`/`command` -> nothing (the leader makes those from its own data)
- *   own row written    -> `row` {born:true, patch: whole row} the first time, then {patch} with
+ *   own row written    -> `row` {born:true, hand?, patch: whole row} the first time (`hand`: the
+ *                         leader's hand of the start in flight for its task, host-port.ts handFor), then {patch} with
  *                         the fields that changed since the last row kept (null: cleared); a
  *                         leader field never rides a patch (the host does not write them)
  *   start, resync ask  -> `row` {resync:true, patch: whole row} for each own row (each at start,
@@ -69,6 +70,8 @@ export interface HostEmitterOptions {
   stamp?(name: string, data: unknown): unknown
   /** An own row was written (the host has `sid` again: gone-rows.ts forgets it). */
   onOwnRow?(sid: string): void
+  /** The leader's hand of the start in flight for this row's task (host-port.ts StartBundles.handFor). */
+  handOf?(row: SessionRecord): string | undefined
   liveMs?: number
   pendingMs?: number
   now?: () => number
@@ -244,7 +247,9 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     // The row the leader has is the one the last kept record made: a record the log did not take
     // leaves it, so the next patch (diffed against it) still carries what this one missed.
     if (!before) {
-      if (append(sid, 'row', { born: true, patch: copy })) lastRows.set(sid, copy)
+      let hand: string | undefined
+      try { hand = o.handOf?.(row) } catch { /* no echo: the leader waits for the start's answer */ }
+      if (append(sid, 'row', { born: true, ...(hand ? { hand } : {}), patch: copy })) lastRows.set(sid, copy)
       takeOwn(sid)
     } else {
       own.add(sid)

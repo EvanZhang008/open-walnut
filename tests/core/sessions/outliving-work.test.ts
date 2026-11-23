@@ -185,6 +185,7 @@ const RAW_READERS: Record<string, string> = {
   'src/core/sessions/outliving-work.ts': 'the shared definition',
   'src/core/sessions/turn-end-edge.ts': 'the phase edge a turn end says by its data alone, with the rule web/server.ts\'s turn-end handler applies (its work goes on: no hand-back), so the boot reconcile of host turn ends decides the same',
   'src/core/session-channel/host-live.ts': 'a host that runs its sessions: mirrors its runner\'s outlivingWorkOf and its team and cron flags to the leader',
+  'src/core/session-channel/fact-keys.ts': 'names the flags as keys of a host\'s facts (the table of what the leader does with each key); reads none',
   'src/core/session-channel/host-api.ts': 'the mirrored live state\'s type (its outliving list and team and cron flags)',
   'src/providers/remote-judged-session.ts': 'the leader\'s proxy of a session its host runs: answers from the host\'s outlivingWorkOf list and flags, with the runner\'s rule (workOutlivesTurn: a /loop alone does not)',
   'src/core/subagents/on-host.ts': 'a turn a restart cut off waits for its own end: it skips an intermediate result (teamActive), as lane-turn.ts does',

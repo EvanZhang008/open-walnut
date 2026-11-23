@@ -107,7 +107,7 @@ export function handOverPending(sid: string): boolean {
  * back). The mark comes first and in the same tick as noteHostJudged, so no send of it goes out
  * before the window is open.
  */
-export async function handStartToHost(sid: string, host: string, kind: HandOverKind = 'start'): Promise<boolean> {
+export async function handStartToHost(sid: string, host: string, kind: HandOverKind = 'start', o: { taskId?: string } = {}): Promise<boolean> {
   loadMarks()
   const m: HandOverMark = { sid, host, kind, since: Date.now() }
   marks.set(sid, m)
@@ -116,6 +116,13 @@ export async function handStartToHost(sid: string, host: string, kind: HandOverK
   }
   inFlight.set(sid, m.since + IN_FLIGHT_MS)
   noteHostJudged(sid, host)
+  // The host may bring this session here (handed-sessions.ts), for its task: a start's, or the
+  // resumed row's own. On disk before anything goes out.
+  const [hands, { sessionTaskAndEngineInStore }] = await Promise.all([import('../core/session-channel/handed-sessions.js'), import('../core/session-db.js')])
+  const taskId = o.taskId ?? (() => { try { return sessionTaskAndEngineInStore(sid)?.taskId } catch { return undefined } })() ?? ''
+  await hands.handStart(host, sid, { taskId }).catch((err: unknown) => {
+    log.session.warn('host hand-over: its hand was not kept; the host\'s row of it applies only once the leader\'s is the host\'s', { sessionId: sid, host, error: errText(err) })
+  })
   const tracker = await import('../core/session-tracker.js')
   return tracker.handSeedToHost(sid, host).catch((err: unknown) => {
     log.session.warn('host start: the seeded row was not handed to its host', { sessionId: sid, host, error: errText(err) })
@@ -139,6 +146,10 @@ export async function takeStartBack(sid: string, host: string, handed: boolean):
   forgetHostJudged(sid)
   // What waited for the host is the leader's to deliver now (its runner's own queue).
   forgetWaitingLines(sid)
+  // The host may no longer bring it here as a new session (handed-sessions.ts).
+  await (await import('../core/session-channel/handed-sessions.js')).dropHandsOf(host, sid).catch((err: unknown) => {
+    log.session.warn('host hand-over: the hand of a session taken back was not dropped; it lapses by itself', { sessionId: sid, host, error: errText(err) })
+  })
   if (!handed) return
   const tracker = await import('../core/session-tracker.js')
   await tracker.takeSeedBack(sid, host).catch(() => {})

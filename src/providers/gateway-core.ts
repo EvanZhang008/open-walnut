@@ -351,6 +351,8 @@ export type GatewayErrorCode =
   | 'unsupported_replica'
   /** A host's own Walnut server answered while its leader is away: this call needs the leader. */
   | 'needs_leader'
+  /** The calling host is revoked on this leader (session-channel/revoked-hosts.ts): nothing it relays runs. */
+  | 'host_revoked'
   | 'internal';
 
 export interface GatewayError {

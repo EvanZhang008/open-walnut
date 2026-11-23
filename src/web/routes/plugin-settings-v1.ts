@@ -10,6 +10,7 @@
  */
 
 import { Router, type Request, type Response } from 'express'
+import { changedBy } from './changed-by.js'
 import { PluginSettingsError, applyPluginSettings, listPluginSettings, readPluginSettings } from '../../core/plugins/plugin-settings.js'
 import { role } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
@@ -27,16 +28,6 @@ function fail(req: Request, res: Response, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
   log.web.warn('plugin settings failed', { error: message })
   res.status(500).json({ error: message, code: 'internal' })
-}
-
-/** Who changed it: the calling session's task, else a person. */
-async function changedBy(req: Request): Promise<string> {
-  const raw = req.headers['x-walnut-caller-sid']
-  const sid = (Array.isArray(raw) ? raw[0] : raw)?.trim()
-  if (!sid) return 'human'
-  const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
-  const caller = await resolveCaller(sid).catch(() => null)
-  return caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'agent'
 }
 
 pluginSettingsV1Router.get('/plugin-settings', async (req, res) => {

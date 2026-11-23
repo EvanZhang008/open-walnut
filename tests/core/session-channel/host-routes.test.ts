@@ -30,7 +30,7 @@ let channel: HostChannel
 let bundles: StartBundles
 const emitted: Array<{ name: string; data: unknown; source: string }> = []
 const runnerCalls: string[] = []
-let seenAtStart: { bundle: StartBundle | null; data: Record<string, unknown> } | null = null
+let seenAtStart: { bundle: StartBundle | null; data: Record<string, unknown>; hand?: string } | null = null
 let undone = 0
 const dropped: string[][] = []
 const terminated: Array<{ sid: string; opts: unknown }> = []
@@ -51,7 +51,7 @@ const session = {
 const acp = { setModel: async (m: string) => { runnerCalls.push(`acp:${m}`); return { ok: true } } }
 const runner: HostRunnerLike & Record<string, unknown> = {
   startSession: async (data) => {
-    seenAtStart = { bundle: bundles.get(data.taskId), data }
+    seenAtStart = { bundle: bundles.get(data.taskId), data, hand: bundles.handFor(data.taskId) }
     if (data.message === 'fail') throw Object.assign(new Error('no claude here'), { why: 'cli_missing' })
     if (data.message === 'up-then-throw') throw new Error('a step after the spawn failed')
     return { claudeSessionId: 'sid-started-1', title: 'Started' }
@@ -239,6 +239,17 @@ describe('start, send, interrupt', () => {
     expect(fs.readFileSync(spill.localPath, 'utf8')).toBe('L'.repeat(5000))
     expect(fs.statSync(spill.localPath).mode & 0o777).toBe(0o600)
     expect(bundles.get('task-1')).toBeNull()
+  })
+
+  it('a start\'s hand is kept for its born row to echo while it runs, never passed to the runner; a malformed one is dropped (S2)', async () => {
+    const hand = 'ab'.repeat(9)
+    await post('/host-api/sessions/start', { taskId: 'task-h', message: 'hi', startHand: hand })
+    expect(seenAtStart!.hand).toBe(hand)
+    expect(seenAtStart!.data.startHand).toBeUndefined()
+    expect(bundles.handFor('task-h')).toBeUndefined()
+    await post('/host-api/sessions/start', { taskId: 'task-h', message: 'hi', startHand: '../not-a-hand' })
+    expect(seenAtStart!.hand).toBeUndefined()
+    expect(seenAtStart!.data.startHand).toBeUndefined()
   })
 
   it('a large prompt\'s message points at the host\'s own file, and old spilled prompts are swept', async () => {

@@ -18,9 +18,14 @@
  *               its daemon's `image.save`, the CLI's words name them under the images header (as a
  *               legacy send's do), and each answer comes back once
  *   P5c too big a picture past the host's cap is refused as on every path, and nothing is sent
+ *   P5d start   while the Mac is away a session on the host makes and starts a task with its own
+ *               `walnut` call (the away start, src/replica/away-starts.ts), the daemon journals it
  *   P6 back     the Mac woken: it has every fact of the session once and in order (the phone's
  *               turns included), its history shows the pictures as a legacy send's, and the
  *               companion relays to the Mac again (no `viaHost`)
+ *   P7 adopted  the away start's task and session are the Mac's once, through the host's journal
+ *               (offline-merge/apply-session.ts); nothing of it was refused as a session the host
+ *               was never handed (handed-sessions.ts): no refusal, no Walnut Health item
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { IMAGES_ATTACHED_LINE } from '../../src/lib/attachment-headers.js'
@@ -28,7 +33,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BUN, HOST_KEY, WINDOWS, waitFor } from '../helpers/replica-cluster.js'
-import { writeClusterLogs } from '../helpers/replica-cluster-reads.js'
+import { gatewayCall, hostJournal, hostStream, macSessions, macTasks, replicaKnowsDefaultHost, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
 import { factsAtBothEnds, startHostJudgeCluster, untilFactsStill, type HostFactRecord, type HostJudgeCluster, type PhoneStream, type ProbeEvent } from '../helpers/host-judge-cluster.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
@@ -39,6 +44,9 @@ describe.skipIf(!RUN)('the phone operates a host-judged session through the comp
   let taskId = ''
   let sid = ''
   let stream: PhoneStream | null = null
+  let awayTaskId = ''
+  let awaySid = ''
+  const AWAY_TITLE = 'Started on the host while the Mac was away'
 
   const channelEvents = async (s: string) => ((await h.mac(`/events?sid=${s}`)) as ProbeEvent[]).filter((e) => e.source === 'host-channel')
   const hostFacts = async (): Promise<{ head: number; recs: HostFactRecord[] }> => h.host('/facts?after=0')
@@ -70,6 +78,9 @@ describe.skipIf(!RUN)('the phone operates a host-judged session through the comp
     const t = await h.c.mac('POST', '/api/tasks', { title: 'Phone run on the host', project: 'Acme' })
     expect(t.status, JSON.stringify(t.json)).toBe(201)
     taskId = t.json.task.id as string
+    // The project's new sessions run on the host, in its work folder (the away start reads its copy).
+    const meta = await h.c.mac('PUT', `/api/v1/projects/${encodeURIComponent('Acme')}/metadata`, { default_host: HOST_KEY, default_cwd: hostCwd })
+    expect(meta.status, JSON.stringify(meta.json)).toBeLessThan(300)
   }, 900_000)
 
   afterEach(({ task }) => {
@@ -101,6 +112,7 @@ describe.skipIf(!RUN)('the phone operates a host-judged session through the comp
   }, 600_000)
 
   it('P2: the Mac stopped, the companion answers from the host\'s word, and the list still shows the session', async () => {
+    await waitFor(() => (replicaKnowsDefaultHost(h.c, 'Acme', HOST_KEY) ? true : null), 60_000, 'the host\'s copy to hold the project\'s default host').catch(fail)
     h.c.sleepMac()
     const d = await waitFor(async () => { const r = await h.phone('GET', `/api/v1/sessions/${sid}`); return r.status === 200 && r.json.viaHost === true ? r.json : null }, WINDOWS.takeoverMs + 60_000, 'the companion to answer from the host').catch(fail)
     expect(d.session).toMatchObject({ claudeSessionId: sid, host: HOST_KEY, judge: 'host' })
@@ -199,6 +211,18 @@ describe.skipIf(!RUN)('the phone operates a host-judged session through the comp
     expect(resultsOf((await hostFacts()).recs, sid, 'PICTURES too big')).toEqual([])
   }, 120_000)
 
+  it('P5d: while the Mac is away, a session on the host makes and starts a task with its own walnut call', async () => {
+    // The Mac has been away past its quiet window since P2: the host's own calls run there.
+    const created = await gatewayCall(h.c, sid, 'task_create', { title: AWAY_TITLE, project: 'Acme', message: 'ROUND away start' })
+    expect(created.ok, JSON.stringify(created)).toBe(true)
+    awayTaskId = String(created.result.id ?? created.result.task?.id ?? '')
+    expect(awayTaskId).not.toBe('')
+    const start = await waitFor(() => hostJournal(h.c).find((r) => r.kind === 'session' && r.taskId === awayTaskId), 60_000, 'the away start\'s session record').catch(fail)
+    expect(start).toMatchObject({ run: 'task', host: HOST_KEY })
+    awaySid = String(start.sid)
+    await waitFor(() => hostStream(h.c, awaySid).some((l) => l.type === 'result' && String(l.result).includes('ROUND away start')), 120_000, 'the away start\'s session to answer on the host').catch(fail)
+  }, 300_000)
+
   it('P6: the Mac woken has every fact once and in order, and the companion relays to it again', async () => {
     h.c.wakeMac()
     await untilFactsStill(h, { timeoutMs: 120_000 }).catch(fail)
@@ -227,6 +251,28 @@ describe.skipIf(!RUN)('the phone operates a host-judged session through the comp
     const sent = await h.phone('POST', `/api/v1/sessions/${sid}/messages`, { text: 'ROUND after', messageId: mid() })
     expect(sent.status, JSON.stringify(sent.json)).toBe(202)
     expect(sent.json.viaHost).toBeUndefined()
-    await waitFor(async () => (await channelEvents(sid)).some((e) => e.name === 'session:result' && String(e.data?.result ?? '').includes('echo: ROUND after')), 120_000, 'the relayed send\'s answer on the Mac').catch(fail)
+    // The answer echoes the line as delivered: P5d's task filed beside this one moved its folder, so a
+    // place notice rides in front of it (core/sessions place notice).
+    await waitFor(async () => (await channelEvents(sid)).some((e) => e.name === 'session:result' && String(e.data?.result ?? '').includes('ROUND after')), 120_000, 'the relayed send\'s answer on the Mac').catch(fail)
   }, 400_000)
+
+  it('P7: the away start is the Mac\'s once, through the host\'s journal, and nothing of it was refused', async () => {
+    let seen = ''
+    const adopted = await waitFor(() => {
+      const tasks = macTasks(h.c).filter((t) => t.id === awayTaskId)
+      const sessions = macSessions(h.c).filter((s) => s.claude_session_id === awaySid)
+      seen = JSON.stringify({ tasks, sessions })
+      return tasks.length === 1 && sessions.length === 1 ? { tasks, sessions } : null
+    }, 180_000, 'the Mac to hold the away start\'s task and session').catch((e: Error) => fail(`${e.message} (the Mac holds ${seen})`))
+    expect(adopted.sessions[0]).toMatchObject({ task_id: awayTaskId, host: HOST_KEY })
+    // A while for the host's channel to say all it has about it: nothing of it is refused here.
+    await new Promise((r) => setTimeout(r, 5_000))
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : /^open-walnut-.*\.log$/.test(e.name) ? [path.join(d, e.name)] : [])
+    const macLogs = [h.c.logs().mac, ...walk(h.c.macData).map((f) => fs.readFileSync(f, 'utf8'))].join('\n')
+    const refusals = macLogs.split('\n').filter((l) => /not its own|was never handed|named sessions that are not/.test(l))
+    expect(refusals, refusals.slice(0, 5).join('\n')).toEqual([])
+    // No Walnut Health item about it (refused-sessions.ts raises one per host into the Mac's notifications).
+    const items = (() => { try { return fs.readFileSync(path.join(h.c.macData, 'notifications.json'), 'utf8') } catch { return '' } })()
+    expect(items).not.toContain(`host-session-ownership:${HOST_KEY}`)
+  }, 300_000)
 })

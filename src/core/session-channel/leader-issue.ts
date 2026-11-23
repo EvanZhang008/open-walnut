@@ -14,16 +14,29 @@
  * an issue or a revoke, one standby batch runs before it reports done (standby/runner.ts), so a
  * standby that takes over knows the credential its hosts hold.
  *
+ * A host whose door was revoked (revokeHostDoorNow) is issued nothing until it is allowed again
+ * (allowHostDoorNow), whatever its link says, and its session channel is cut on every link: the
+ * leader side neither keeps nor takes one, and applies nothing such a link sent (leader-apply.ts),
+ * read from hostRevokedNow. A start aimed at it fails on every path, its sessions' relayed calls
+ * are refused and its journal is held on it (revoked-hosts.ts names each reader; what is left:
+ * REVOKED_STILL_REACHES). The cache is read again at boot, at each act here, on a revoke event and
+ * every minute (leader-boot.ts), so a ban another process writes holds here within a minute.
+ * After an allow the host's kept records come in as they are: its channel log was never acked,
+ * so its next link sends it again, judged by the rules of then. Going back to a release older than the ban lifts it: that release
+ * reads a revoked record as one never issued and issues it a fresh key (its mint knows no ban).
+ *
  * Doors: pushDoors tells every host this issuer knows on its daemon link the new door list
  * (`POST /host-api/doors`, under this leader's standing; the host keeps it only from a standing
  * not below what it holds). Hosts linked over a dialed socket hear it as a `doors` frame instead
  * (host-door.ts pushDoorsToDialed); leader-boot.ts pushHostDoors does both.
  */
 import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH, HOST_DOOR_CAP, cleanDoorUrls, doorKeyId } from './door-wire.js'
-import { credentialDue, dropHostCredential, hostCredentialOf, hostCredentials, mintHostCredential } from './host-credentials.js'
+import { allowHostDoor, credentialDue, dropHostCredential, hostCredentialOf, hostCredentials, hostDoorRevoked, HostDoorRevoked, mintHostCredential, revokeHostDoor } from './host-credentials.js'
 import { requestOverStream, type HostCallAnswer } from './leader-links.js'
 import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js'
 import { foundHostUnadopted, type FoundFlags } from '../hosts/found-hosts.js'
+import { hostSwitchNow } from './switch.js'
+import { setRevokedHosts } from './revoked-hosts.js'
 import type { Duplex } from 'node:stream'
 import type { PermitPair } from './channel.js'
 
@@ -71,6 +84,8 @@ const sameDoors = (a: unknown, b: readonly string[]): boolean => Array.isArray(a
 export async function issueOnce(d: IssuerDeps, hostKey: string, machineId: string, doors: readonly string[]): Promise<IssueOutcome> {
   const walnutId = await d.walnutId()
   if (d.configured && !d.configured(hostKey)) return 'skipped'
+  // Revoked: nothing for it until someone allows it again (the header).
+  if (await hostDoorRevoked(hostKey)) return 'refused'
   const rec = await hostCredentialOf(machineId)
   // One record per machine, bound to its host key: another key that reports the same machine is
   // refused (no rotation fight, no socket adopted under the wrong key), and says so.
@@ -88,7 +103,14 @@ export async function issueOnce(d: IssuerDeps, hostKey: string, machineId: strin
   if (!due) return 'held'
   // A configure of a host: only the machine that holds the write permission sends it.
   if (leaderPermitActive()) assertOutwardDoor('host-credential', `host-credential:${machineId}`)
-  const minted = await mintHostCredential({ machineId, walnutId, hostKey, now: d.now?.() })
+  let minted: Awaited<ReturnType<typeof mintHostCredential>>
+  try {
+    minted = await mintHostCredential({ machineId, walnutId, hostKey, now: d.now?.() })
+  } catch (err) {
+    // Revoked between the check and the mint.
+    if (err instanceof HostDoorRevoked) return 'refused'
+    throw err
+  }
   const { permitNumber, epoch } = d.standing(hostKey)
   const a = await sendCredential(d, hostKey, { walnutId, machineId, verifyKey: minted.verifyKey, doors: [...doors], permitNumber, epoch })
   if (a.ok !== true) {
@@ -173,8 +195,9 @@ export function setRevokeStandbySync(fn: (() => Promise<unknown>) | null): void 
  * once (host-door.ts), and one standby batch runs before this resolves. True when there was one.
  *
  * For a host still in the config this is a rotation, not a ban: its key is dead at once, and the
- * next check of its link issues it a new one. To cut a host off, remove it from the config
- * (revokeHostsGone, below): then nothing is issued to it and the door lets it in no more.
+ * next check of its link issues it a new one. To cut a host off, revoke it (revokeHostDoorNow,
+ * below: nothing is issued to it until it is allowed again) or remove it from the config
+ * (revokeHostsGone): either way the door lets it in no more.
  */
 export async function revokeHostCredential(machineId: string): Promise<boolean> {
   const gone = await dropHostCredential(machineId)
@@ -191,7 +214,8 @@ export async function revokeHostCredential(machineId: string): Promise<boolean> 
  * close at once, one standby batch). The machine ids revoked.
  */
 export async function revokeHostsGone(configured: ReadonlySet<string>): Promise<string[]> {
-  const gone = (await hostCredentials()).filter((r) => r.machineId && (!r.hostKey || !configured.has(r.hostKey)))
+  // A host revoked by hand keeps its mark (it holds no key): removing it is no allow.
+  const gone = (await hostCredentials()).filter((r) => r.machineId && !r.revoked && (!r.hostKey || !configured.has(r.hostKey)))
   const out: string[] = []
   for (const r of gone) if (await revokeHostCredential(r.machineId!)) out.push(r.machineId!)
   return out
@@ -204,4 +228,106 @@ export async function revokeHostsGone(configured: ReadonlySet<string>): Promise<
  */
 export function configuredHostKeys(hosts: Record<string, ({ enabled?: boolean } & FoundFlags) | null | undefined> | undefined): Set<string> {
   return new Set(Object.entries(hosts ?? {}).filter(([, h]) => !!h && h.enabled !== false && !foundHostUnadopted(h)).map(([k]) => k))
+}
+
+/** What the leader's boot gives a revoke and an allow made from a route (null: no leader side runs). */
+export interface DoorHostHooks {
+  /** The machine id `hostKey`'s daemon link named, or null. */
+  machineIdOf(hostKey: string): string | null
+  /** Check `hostKey` again now (an allow: it is issued at once when its link is up). */
+  recheck(hostKey: string): void
+  /** `hostKey` was revoked or allowed: its session channel is cut now, or may link again (leader-side.ts noteRevoked). */
+  cut?(hostKey: string): void
+}
+let hooks: DoorHostHooks | null = null
+
+export function setDoorHostHooks(h: DoorHostHooks | null): void {
+  hooks = h
+}
+
+export { hostRevokedNow } from './revoked-hosts.js'
+
+/** Read the revoked hosts from the credential records again (at boot, at each act, a revoke event, a recheck): the hosts whose standing changed. */
+export async function refreshRevokedHosts(): Promise<string[]> {
+  return setRevokedHosts((await hostCredentials()).filter((r) => r.revoked && r.hostKey).map((r) => r.hostKey!))
+}
+
+/**
+ * Keep the revoked-host cache current: read now, on a revoke event in this process, and every
+ * `everyMs` (a ban another process wrote holds here within it). `onChanged` gets the hosts whose
+ * standing changed (leader-boot.ts cuts them). The returned function stops it; `recheck` reads now.
+ */
+export async function watchRevokedHosts(onChanged: (hostKeys: string[]) => void, everyMs: number, onError: (err: unknown) => void): Promise<{ stop(): void; recheck(): Promise<void> }> {
+  const recheck = async (): Promise<void> => {
+    let changed: string[]
+    try { changed = await refreshRevokedHosts() } catch (err) { onError(err); return }
+    if (changed.length > 0) onChanged(changed)
+  }
+  await recheck()
+  const timer = setInterval(() => { void recheck() }, everyMs)
+  timer.unref?.()
+  const unlisten = (await import('../device-auth.js')).onCredentialsRevoked(() => { void recheck() })
+  return { recheck, stop: () => { clearInterval(timer); unlisten() } }
+}
+
+/** The standby batch an act takes, bounded: false when it did not finish in time (the answer says so). */
+const STANDBY_SYNC_MS = 20_000
+async function syncStandbyBounded(): Promise<boolean> {
+  const sync = syncStandbyNow ?? (async () => (await import('../standby/runner.js')).standbyRunner()?.runOnce() ?? null)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const done = await Promise.race([
+    sync().then(() => true, () => false),
+    new Promise<false>((r) => { timer = setTimeout(() => r(false), STANDBY_SYNC_MS); timer.unref?.() }),
+  ])
+  if (timer) clearTimeout(timer)
+  return done
+}
+
+/** The records changed: the cache first, then the leader side (a cut closes the host's channel now). */
+async function noteDoorActed(hostKey: string): Promise<void> {
+  await refreshRevokedHosts().catch(() => { /* the last read stands until the next */ })
+  try { hooks?.cut?.(hostKey) } catch { /* the next view of the host does it */ }
+}
+
+/**
+ * Revoke `hostKey`'s door, a ban (host-credentials.ts revokeHostDoor): its key is dropped, its
+ * door sockets close at once, its session channel is cut on every link (nothing it sends is
+ * applied), and the issuer issues it nothing until allowHostDoorNow. `by` is who did it (a person,
+ * or the task of the session that asked). What stays is the leader's daemon link of a host in its
+ * config, as for any host whose service does not run its sessions: removing the host from the
+ * config, or turning it off, ends that. `standbySynced`: false when the standby batch did not end
+ * in time (a leader switch right after could still hold the old record there).
+ */
+export async function revokeHostDoorNow(hostKey: string, by: string): Promise<{ revoked: boolean; closed: number; standbySynced: boolean }> {
+  // With the switch off nothing is issued anyway: only the records there are get the mark (no new one).
+  const on = (await hostSwitchNow())(hostKey)
+  const out = await revokeHostDoor(hostKey, { by, machineId: on ? hooks?.machineIdOf(hostKey) ?? null : null })
+  if (!out.revoked) return { revoked: false, closed: 0, standbySynced: true }
+  await noteDoorActed(hostKey)
+  return { revoked: true, closed: out.closed.length, standbySynced: await syncStandbyBounded() }
+}
+
+/**
+ * What a revoked host still gets from this leader, said in the revoke's answer: the leader's own
+ * daemon link of a host in its config is not the door, and a revoke does not end it. What a revoke
+ * does end: the door and its key, the session channel (nothing the host says is applied), new starts
+ * on every path, its sessions' relayed calls, and its journal's drain (held on the host until an allow).
+ */
+export const REVOKED_STILL_REACHES: readonly string[] = [
+  "the leader's daemon link while the host is in the config: its hello and reports, and the copies the leader sends it (tasks, notes, memory)",
+  'messages and stops to sessions this leader itself runs there (the legacy path), until they end',
+  'host_exec, host_copy and host MCP calls that a person or a session here aims at it',
+  'to end all of it, remove the host from the config or turn it off',
+]
+
+/** Allow `hostKey` again after a revoke: it is checked now, so a host on its link is issued a fresh key at once. */
+export async function allowHostDoorNow(hostKey: string, by: string): Promise<{ allowed: boolean; standbySynced: boolean }> {
+  const was = await allowHostDoor(hostKey, { by })
+  if (!was) return { allowed: false, standbySynced: true }
+  await noteDoorActed(hostKey)
+  const standbySynced = await syncStandbyBounded()
+  try { hooks?.recheck(hostKey) } catch { /* checked at its next view */ }
+  // The journal its link held while it was revoked (offline-handover.ts) drains now, not at the next copy.
+  try { (await import('../../providers/daemon-connection.js')).getConnectedDaemonConnection(hostKey)?.drainJournalSoon() } catch { /* the next connect drains it */ }
+  return { allowed: true, standbySynced }
 }

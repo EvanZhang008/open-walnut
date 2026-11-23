@@ -37,6 +37,7 @@ import { frameStartData } from '../core/sessions/send-frame.js'
 import { installHostJudgedRouting, routeHostJudgedEvent, startGoesToHost, startOnJudgingHost } from './host-judged-runner.js'
 import { setLeaderDelivery } from './host-handover.js'
 import { resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
+import { assertHostNotRevoked } from '../core/session-channel/revoked-hosts.js'
 import { execHostOf } from '../core/sessions/session-row-owner.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
@@ -13427,6 +13428,8 @@ export class SessionRunner {
     resumeFile?: string
     transferAttemptId?: string
   }): Promise<void> {
+    // A revoked host takes no new session on any path, its service's or the leader's own (revoked-hosts.ts).
+    assertHostNotRevoked(data.host, 'The session was not started')
     if (data.profile?.areaRole === 'router' && !data.taskId) throw new Error('An area session must name its task')
     if (data.taskId) {
       const { readRouterAreas, taskArea } = await sessionPort().launch.loadRouterAreas()

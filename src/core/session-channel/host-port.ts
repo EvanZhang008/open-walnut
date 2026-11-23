@@ -48,6 +48,8 @@ interface BundleEntry { taskId: string; bundle: StartBundle; sid?: string; until
  */
 export class StartBundles {
   private byStart = new Map<string, BundleEntry>()
+  /** The hand each start in flight carries (`startHand`, handed-sessions.ts): echoed on its born row. */
+  private hands = new Map<string, { taskId: string; hand: string }>()
   private readonly current = new AsyncLocalStorage<string>()
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -120,8 +122,27 @@ export class StartBundles {
     return undefined
   }
 
+  /** Start `startId` (of task `taskId`) carries the leader's hand `hand`. */
+  putHand(startId: string, taskId: string, hand: string): void {
+    if (startId && taskId && hand) this.hands.set(startId, { taskId, hand })
+  }
+
+  /**
+   * The hand a born row of task `taskId` echoes: the running start's own (a read inside `run`),
+   * else the newest start in flight for that task; undefined when none carries one.
+   */
+  handFor(taskId: string | undefined): string | undefined {
+    if (!taskId) return undefined
+    const mine = this.current.getStore()
+    const own = mine ? this.hands.get(mine) : undefined
+    if (own && own.taskId === taskId) return own.hand
+    let found: string | undefined
+    for (const h of this.hands.values()) if (h.taskId === taskId) found = h.hand
+    return found
+  }
+
   /** The start ended: only its own entry goes. */
-  clear(startId: string): void { this.byStart.delete(startId) }
+  clear(startId: string): void { this.byStart.delete(startId); this.hands.delete(startId) }
 }
 
 /** This service's own API, called as one of its sessions (null `sid`: as no session). */

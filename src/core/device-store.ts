@@ -103,6 +103,14 @@ export interface DeviceRecord {
   issuedAt?: string
   /** A host door credential: the key a rotation replaced, still taken until `until` (ISO). */
   previous?: { verifyKey: string; until: string }
+  /**
+   * A host door credential: its host was revoked (host-credentials.ts revokeHostDoor), by whom and
+   * when. The record then holds no key, the door lets it in no more, and nothing is issued to that
+   * host until someone allows it again (allowHostDoor).
+   */
+  revoked?: { at: string; by: string }
+  /** A host door credential: the last allow after a revoke, by whom and when. */
+  allowed?: { at: string; by: string }
 }
 
 /** A host's door credential this leader issued (DeviceRecord.issuer): only the leader's door takes it. */

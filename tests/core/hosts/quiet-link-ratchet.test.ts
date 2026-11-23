@@ -60,6 +60,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/diagnostics/host-probes.ts': { calls: 4, kind: 'wake-recheck', why: 'doctor reads under the caller\'s deadline; a lost one is a warning line' },
   'src/core/hosts/fleet.ts': { calls: 3, kind: 'wake-recheck', why: 'vitals and facts reads with their own timeouts; a lost one keeps the last card' },
   'src/core/hosts/host-daemon-update.ts': { calls: 1, kind: 'wake-recheck', why: 'an update a session asks for; the updater times each of its steps' },
+  'src/core/session-channel/leader-issue.ts': { calls: 1, kind: 'wake-recheck', why: 'an allow marks the journal of a host on an open link due (drainJournalSoon); a drain lost on a dead link runs at its next connect' },
   'src/core/hosts/host-readiness.ts': { calls: 2, kind: 'wake-recheck', why: 'preflight and fixes on a connected link; a lost send fails as a transport error' },
   'src/core/hosts/named-paths.ts': { calls: 4, kind: 'wake-recheck', why: 'placement\'s file reads only on a link already open, under a 4 s deadline; a lost one reads as cannot be asked' },
   'src/core/hosts/placement.ts': { calls: 2, kind: 'wake-recheck', why: 'a load read under a 4 s deadline; a lost one means no load figure' },

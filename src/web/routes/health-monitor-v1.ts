@@ -11,6 +11,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { changedBy } from './changed-by.js'
 import { alarmDetail, healthView, runningHealthMonitor } from '../../core/health-monitor/index.js'
 import { builtinAlarm } from '../../core/health-monitor/alarms.js'
 import type { OverridePatch } from '../../core/health-monitor/overrides.js'
@@ -39,16 +40,6 @@ async function fixTasksMode(): Promise<'record' | 'start' | 'off'> {
   const { getConfig } = await import('../../core/config-manager.js')
   const v = (await getConfig()).health_monitor?.fix_tasks
   return v === 'start' || v === 'off' ? v : 'record'
-}
-
-/** Who made a change: the calling session's task, else a person. */
-async function changedBy(req: Request): Promise<string> {
-  const raw = req.headers['x-walnut-caller-sid']
-  const sid = (Array.isArray(raw) ? raw[0] : raw)?.trim()
-  if (!sid) return 'human'
-  const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
-  const caller = await resolveCaller(sid).catch(() => null)
-  return caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'agent'
 }
 
 healthMonitorV1Router.put('/health-monitor/settings', async (req: Request, res: Response, next: NextFunction) => {

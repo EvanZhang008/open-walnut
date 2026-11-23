@@ -1,0 +1,102 @@
+/**
+ * /api/host-doors: the door credentials this leader issues its hosts (core/session-channel/
+ * host-credentials.ts, leader-issue.ts), one host at a time.
+ *
+ *   GET  /:hostKey          { hostKey, revoked, at?, by?, allowed?, credentials }   (never a key)
+ *   POST /:hostKey/revoke   a ban: its key is dropped, its door socket closes, its session channel
+ *                           is cut on every link (nothing it sends is applied), a start aimed at it
+ *                           fails on every path, its sessions' relayed calls are refused, its journal
+ *                           is held on it, and nothing is issued to it until an allow → the GET's
+ *                           answer, `closed` and `stillReaches` (leader-issue.ts REVOKED_STILL_REACHES)
+ *   POST /:hostKey/allow    let it be issued a key again (at its next link check, at once when linked)
+ *                           → the GET's answer and `allowedNow` (false: it was not revoked). What the
+ *                           host kept while revoked comes in as it is: its journal drains, and the
+ *                           channel records it was refused (never acked) are sent again on its next
+ *                           link and judged by the rules of then (a session it was handed, its task).
+ *   Both answer `standbySynced: false` when the standby batch did not end in time.
+ *
+ * A person and a session may both do it (CLAUDE.md, "Every human action is an agent action too");
+ * the record says who (`by`, changed-by.ts: `human`, `task:<id>`, `agent`, and the host a call came
+ * through). Never the host itself: a call that came through `hostKey`'s own link (its sessions'
+ * calls, relayed by its daemon: x-walnut-origin `host:<hostKey>`, which a caller can only lower) is
+ * refused 403 `own_host`, as is a call whose origin is not known. What stays after a revoke is the
+ * leader's daemon link of a host in its config (`stillReaches`): removing it from the config, or
+ * turning it off, ends that (revokeHostsGone). Leader only: a replica answers 404. Nothing here waits on a host:
+ * the standby batch an act takes is bounded (leader-issue.ts syncStandbyBounded).
+ */
+import { Router, type Request, type Response, type NextFunction } from 'express'
+import { isFollower } from '../../core/server-role.js'
+import { log } from '../../logging/index.js'
+import { changedBy } from './changed-by.js'
+import { requestOrigin } from '../middleware/request-origin.js'
+import { UNKNOWN_ORIGIN } from '../../lib/caller-origin.js'
+
+export const hostDoorsRouter = Router()
+
+const HOST_KEY = /^[A-Za-z0-9._-]{1,64}$/
+
+hostDoorsRouter.use((_req, res, next) => {
+  if (isFollower()) { res.status(404).json({ error: 'not_found' }); return }
+  next()
+})
+
+function hostKeyOf(req: Request, res: Response): string | null {
+  const hostKey = String(req.params.hostKey ?? '')
+  if (HOST_KEY.test(hostKey)) return hostKey
+  res.status(400).json({ error: 'not a host key', code: 'bad_host_key' })
+  return null
+}
+
+/** A revoke or an allow of `hostKey` that came through that host's own link, or from nowhere known: refused. */
+async function refusedCaller(req: Request, res: Response, hostKey: string): Promise<boolean> {
+  const origin = requestOrigin(req)
+  // Through fromHost: a call relayed over another alias of the same daemon is that host's too.
+  const { fromHost } = await import('../../core/hosts/session-host-origin.js')
+  if (origin !== UNKNOWN_ORIGIN && !(await fromHost(hostKey, origin))) return false
+  log.web.warn('host door: a revoke or allow was refused (it came through the host itself, or from an unknown origin)', { host: hostKey, origin })
+  res.status(403).json({ error: `A host's door is revoked or allowed from this leader or another machine, never through ${hostKey} itself.`, code: 'own_host' })
+  return true
+}
+
+async function doorOf(hostKey: string) {
+  const { hostCredentials, revokedHostIn } = await import('../../core/session-channel/host-credentials.js')
+  const recs = (await hostCredentials()).filter((d) => d.hostKey === hostKey)
+  const revoked = revokedHostIn(recs, hostKey)
+  const allowed = recs.find((d) => d.allowed)?.allowed
+  return { hostKey, revoked: !!revoked, ...(revoked ?? {}), ...(allowed ? { allowed } : {}), credentials: recs.filter((d) => !!d.verifyKey).length }
+}
+
+hostDoorsRouter.get('/:hostKey', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const hostKey = hostKeyOf(req, res)
+    if (hostKey) res.json(await doorOf(hostKey))
+  } catch (err) { next(err) }
+})
+
+hostDoorsRouter.post('/:hostKey/revoke', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const hostKey = hostKeyOf(req, res)
+    if (!hostKey || await refusedCaller(req, res, hostKey)) return
+    const by = await changedBy(req)
+    const { revokeHostDoorNow, REVOKED_STILL_REACHES } = await import('../../core/session-channel/leader-issue.js')
+    const out = await revokeHostDoorNow(hostKey, by)
+    if (!out.revoked) {
+      res.status(404).json({ error: `${hostKey} holds no door credential here and has not linked yet; there is nothing to revoke`, code: 'no_door_credential' })
+      return
+    }
+    log.web.info('host door: a host was revoked', { host: hostKey, by, closed: out.closed })
+    res.json({ ...(await doorOf(hostKey)), closed: out.closed, stillReaches: REVOKED_STILL_REACHES, standbySynced: out.standbySynced })
+  } catch (err) { next(err) }
+})
+
+hostDoorsRouter.post('/:hostKey/allow', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const hostKey = hostKeyOf(req, res)
+    if (!hostKey || await refusedCaller(req, res, hostKey)) return
+    const by = await changedBy(req)
+    const { allowHostDoorNow } = await import('../../core/session-channel/leader-issue.js')
+    const out = await allowHostDoorNow(hostKey, by)
+    if (out.allowed) log.web.info('host door: a revoked host was allowed again', { host: hostKey, by })
+    res.json({ ...(await doorOf(hostKey)), allowedNow: out.allowed, standbySynced: out.standbySynced })
+  } catch (err) { next(err) }
+})

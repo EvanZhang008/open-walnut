@@ -4,9 +4,10 @@
  * them (until the machine credential lets it call the leader's API, it gets needs_leader), so the
  * leader does from what it sees what its runner does for a session of its own:
  *
- *   start      the start the host answered, or a session the host started itself (its `born`
- *              row, which leader-side.ts says as a session:started; a native start on the host says
- *              its own with no id yet): the task's exec (or plan) slot and its session link, and
+ *   start      the start the host answered, or its `born` row when that came first (leader-side.ts
+ *              says it as a session:started; a native start on the host says its own with no id
+ *              yet; a born row applies only for a session the leader handed that host,
+ *              handed-sessions.ts): the task's exec (or plan) slot and its session link, and
  *              its phase to IN_PROGRESS (handleStart does both for a session of the leader's). One
  *              session:started per session on this bus, whoever says it first (claimHostStarted).
  *   send       a message the leader forwarded: the phase edge of an input (session:input, with the

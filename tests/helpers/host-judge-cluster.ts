@@ -12,8 +12,9 @@
  *                the runtime through the own-sessions link, the production path; and a probe in its
  *                process (the module the entry imports once its server answers)
  *
- * The probes only read, but for the Mac's /delete and the host's /slow-start and /hold-sid (and
- * the host's door port is the leader door itself, for a send made on the host while the Mac is away).
+ * The probes only read, but for the Mac's /delete and /legacy and the host's /slow-start, /hold-sid
+ * and /forge (and the host's door port is the leader door itself, for a send made on the host while
+ * the Mac is away).
  *
  * The host's ACP engines run the scripted adapter (tests/providers/mock-acp-agent.mjs) through an
  * ACP worker built from this checkout (acp-worker-bundle.ts): the setTestAcpArtifacts seam, as the
@@ -27,6 +28,9 @@
  *         GET /delete?sid=   deletes the Mac's row of a session (deleteSessionRecords), as a
  *                            retention sweep does: the one probe that writes
  *         GET /drops?host=   the deletes of the host's sessions it has not answered yet
+ *         GET /row?sid=      the Mac's row of a session (null: none)
+ *         GET /legacy?sid=   makes a row of the Mac's own (a legacy session) under that id: a probe write
+ *         GET /hands         the starts the Mac handed its hosts, still standing (handed-sessions.ts)
  *         GET /acp?sid=      what the Mac's runner answers for an ACP session (findAcpSession)
  *         GET /parses?sid=   how many CLI lines of it this process parsed (line-parse-count.ts)
  *         GET /frames        how many daemon frames and session-channel frames this process parsed
@@ -53,9 +57,11 @@
  *         GET /judging?sid=  does the host stand down (its leader older, old-leader-watch.ts), its read of
  *                            the leader's presence, is a leader on its channel, and does it judge `sid`
  *         GET /slow-start?ms= the host's next start answers its leader `ms` late, its session up
- *                            and its born row written (a loaded host's order)
+ *                            and its born row written (a loaded host's order): a probe write
  *         GET /hold-sid?sid=&on=1|0   the host's runner says it holds a live session of `sid` (a
  *                            resume of it is refused there, not at rest) until `on=0`
+ *         GET /forge?sid=    appends a born row of `sid` to the host's fact log, as a bad host
+ *                            would send one for a session it was never handed: a probe write
  *
  * `companion`: a real cloud companion too (tests/helpers/cloud-box-replica.ts), paired with the Mac
  * before the Mac boots, as a first bridge push leaves a pairing: the Mac's `cloud` remote and its
@@ -208,6 +214,9 @@ await serveProbe({
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),
   '/delete': async (q) => ({ removed: await trk.deleteSessionRecords(new Set([q.get('sid')]), 'cluster-probe') }),
   '/drops': (q) => ({ sids: drp.leaderDropsOf(q.get('host')) }),
+  '/row': async (q) => ({ row: await trk.getSessionByClaudeId(q.get('sid')) }),
+  '/legacy': async (q) => { await trk.createSessionRecord(q.get('sid'), '', 'Acme', undefined, { title: 'Leader own' }); return { row: await trk.getSessionByClaudeId(q.get('sid')) } },
+  '/hands': async () => ({ hands: (await import(${url('src/core/session-channel/handed-sessions.ts')})).handsNow() }),
   '/acp': (q) => {
     const a = ccs.sessionRunner.findAcpSession(q.get('sid'))
     return { found: !!a, hostJudged: a?.hostJudged === true, kind: a?.kind ?? null, processStatus: a?.processStatus ?? null, workerLive: a?.workerLive ?? null, engineId: a?.engineId ?? null }
@@ -284,6 +293,13 @@ await serveProbe({
     if (q.get('on') === '0') held.delete(q.get('sid'))
     else held.add(q.get('sid'))
     return { ok: true, held: [...held] }
+  },
+  '/forge': (q) => {
+    const h = boot.hostSessionsRunning()
+    const sid = q.get('sid')
+    const now = new Date().toISOString()
+    const rec = h.log.append(sid, 'row', { born: true, patch: { claudeSessionId: sid, taskId: '', project: 'Acme', host: ${JSON.stringify(HOST_KEY)}, judge: 'host', process_status: 'running', mode: 'default', title: 'Forged', startedAt: now, lastActiveAt: now, messageCount: 0 } })
+    return { seq: rec.seq }
   },
   '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
 }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })

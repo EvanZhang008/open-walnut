@@ -31,6 +31,7 @@ import {
   queueSentBy,
   sendMessageToSession,
   SendNoLongerWantedError,
+  setQueuedRowLedger,
 } from '../../src/core/session-message-queue.js';
 import { beginQuietTurn, isQuietTurn, resetQuietTurnsForTest } from '../../src/core/sessions/quiet-turn.js';
 import { bus } from '../../src/core/event-bus.js';
@@ -100,6 +101,20 @@ describe('enqueueMessage', () => {
 
 // Who sent a row, from its send source: the panel folds an agent's card on
 // arrival and never a person's words (QueuedMessage.sentBy).
+describe('the row ledger (session-channel/handed-sessions.ts linesNotOthers)', () => {
+  it('names the session of each row stored anew, once; nothing when none is installed', async () => {
+    const seen: Array<[string, string]> = [];
+    setQueuedRowLedger((sid, id) => seen.push([sid, id]));
+    try {
+      const m = await enqueueMessage('s-q', 'hello', { id: 'qm-ledger-1' });
+      await enqueueMessage('s-q', 'hello', { id: 'qm-ledger-1' });
+      expect(seen).toEqual([['s-q', m.id]]);
+    } finally { setQueuedRowLedger(null); }
+    await enqueueMessage('s-q', 'after', { id: 'qm-ledger-2' });
+    expect(seen).toHaveLength(1);
+  });
+});
+
 describe('sentBy', () => {
   it('reads a person from the sources a person types into, and an agent from the rest', () => {
     for (const s of ['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat', 'human-inbox', 'side-thread', 'cloud-fallback']) expect(queueSentBy(s)).toBe('person');

@@ -22,11 +22,11 @@
  *      (leader-links.ts ChannelSocket.call). Another listener that authenticates its own way (the
  *      companion's) hands its sockets to linkDoorSocket too.
  *
- * Revoke: a revoke in this process (host-credentials.ts dropHostCredential, a host removed from the
- * config) closes that machine's sockets at once (onCredentialsRevoked); every linked socket also
- * checks its record again every DOOR_RECHECK_MS (it still exists, still names its host key, that
- * host is still configured, the key it proved with still counts), which is how a revoke made by
- * another process or a previous key past its grace closes it.
+ * Revoke: a revoke in this process (host-credentials.ts dropHostCredential, revokeHostDoor, a host
+ * removed from the config) closes that machine's sockets at once (onCredentialsRevoked); every
+ * linked socket also checks its record again every DOOR_RECHECK_MS (it still exists, still names
+ * its host key, that host is still configured, the key it proved with still counts), which is how
+ * a revoke made by another process or a previous key past its grace closes it.
  */
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -77,6 +77,11 @@ let deps: HostDoorDeps | null = null
 let wss: WebSocketServer | null = null
 /** Sockets by the credential's device name (host-<machineId>): waiting for their auth, and linked. */
 const pending = new Map<string, WebSocket[]>()
+/**
+ * Revokes per credential name (closeDoorSockets): a handshake that read its keys before a revoke
+ * whose close missed it (it was not pending yet) sees the count moved and never links.
+ */
+const revokes = new Map<string, number>()
 /** The address each waiting socket came from. */
 const pendingIp = new WeakMap<WebSocket, string>()
 /** Unauthenticated sockets now, by address and in all. */
@@ -160,6 +165,8 @@ export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps, 
   let name = ''
   let hello: Extract<DoorFrame, { op: 'hello' }> | null = null
   let keys: DoorKey[] = []
+  /** The revokes of this machine's credential when its record was read (revokes). */
+  let revokesAtHello = 0
   let hostKey = ''
   let walnutId = ''
   const nonceD = doorSecret()
@@ -201,6 +208,7 @@ export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps, 
       d.log('warn', 'host door: a hello did not name this Walnut and a machine; closed', {})
       return fail('mismatch', `hello:${String(f.walnutId)}:${String(f.machineId)}`)
     }
+    revokesAtHello = revokes.get(hostCredentialName(f.machineId)) ?? 0
     const rec = await hostCredentialOf(f.machineId).catch(() => null)
     const configured = !!rec?.hostKey && await Promise.resolve(d.configured?.(rec.hostKey) ?? true).catch(() => false)
     keys = rec && configured ? doorKeysOf(rec, now()) : []
@@ -239,6 +247,11 @@ export function handshakeDoorSocket(ws: WebSocket, ip: string, d: HostDoorDeps, 
     if (!key || !proofsEqual(expected, f.proof)) {
       d.log('warn', 'host door: a host\'s proof did not match its credential; closed', { host: hostKey })
       return fail('bad_proof', typeof f.proof === 'string' ? f.proof : undefined)
+    }
+    // Revoked since its record was read (a revoke that came while this handshake was not pending yet).
+    if ((revokes.get(name) ?? 0) !== revokesAtHello) {
+      d.log('info', 'host door: the credential was revoked during the handshake; closed', { host: hostKey })
+      return close(DOOR_CLOSE.revoked, 'revoked')
     }
     phase = 'done'
     clearTimeout(timer)
@@ -352,6 +365,7 @@ export function pushDoorsToDialed(doors: readonly string[]): string[] {
 export function closeDoorSockets(names: readonly string[]): number {
   let n = 0
   for (const name of names) {
+    revokes.set(name, (revokes.get(name) ?? 0) + 1)
     for (const ws of [...(pending.get(name) ?? []), ...(live.get(name) ?? [])]) { n++; closeWs(ws, DOOR_CLOSE.revoked, 'revoked') }
   }
   return n

@@ -164,6 +164,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     stamp,
     offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset,
     onOwnRow: (sid) => gone.forget(sid),
+    handOf: (row) => bundles.handFor(row.taskId),
     onLog: say,
   })
   emitterRef = emitter

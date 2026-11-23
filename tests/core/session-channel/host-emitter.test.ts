@@ -44,7 +44,7 @@ async function records(from = startHead): Promise<FactRecord[]> {
   return log.read(from)
 }
 
-async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: number } = {}): Promise<void> {
+async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: number; handOf?: (row: SessionRecord) => string | undefined } = {}): Promise<void> {
   emitter = createHostEmitter({
     log, channel: { flow: (sid: string, name: string) => { flows.push([sid, name]) } } as never, hostKey: HOST,
     ownRows: async () => opts.own ?? [],
@@ -52,6 +52,7 @@ async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: 
     offsetOf: () => offset,
     bus, rowListener: (fn) => { rowFn = fn },
     liveMs: opts.liveMs ?? 30, pendingMs: opts.pendingMs ?? 200,
+    ...(opts.handOf ? { handOf: opts.handOf } : {}),
   })
   await emitter.start()
   await log.flush()
@@ -129,6 +130,17 @@ describe('the emitter', () => {
     expect(recs.map((r) => r.name)).toEqual(['row', 'row'])
     expect(recs[0]!.data).toMatchObject({ born: true, patch: { claudeSessionId: OWN, judge: 'host', host: HOST } })
     expect(recs[1]!.data).toEqual({ patch: { messageCount: 2, process_status: 'idle' } })
+  })
+
+  it('a born row echoes the hand of the start in flight for its task; a later patch carries none (S2)', async () => {
+    await make({ handOf: (r) => (r.taskId === 'task-marina-1' ? 'cd'.repeat(9) : undefined) })
+    rowFn!(row(OWN))
+    rowFn!(row(OWN, { messageCount: 2 }))
+    rowFn!(row('own-2', { taskId: 'task-other' }))
+    const recs = await records()
+    expect(recs[0]!.data).toMatchObject({ born: true, hand: 'cd'.repeat(9) })
+    expect(recs[1]!.data).toEqual({ patch: { messageCount: 2 } })
+    expect((recs[2]!.data as { hand?: string }).hand).toBeUndefined()
   })
 
   it('a row this host already had at start is patched, never born again', async () => {
