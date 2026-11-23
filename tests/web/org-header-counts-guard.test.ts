@@ -153,8 +153,9 @@ describe('the header counts in the user\'s words (2026-11-23: "xx working, yy wa
     expect(headerPillWords('working', 51)).toBe('51 working')
     expect(headerPillWords('waiting', 22)).toBe('22 waiting')
     expect(headerPillWords('notstarted', 5)).toBe('5 not started')
-    expect(headerPillWords('needs', 2)).toBe('2 need you')
-    expect(headerPillWords('needs', 1)).toBe('1 needs you')
+    // A Needs you count reads in the state's own name (task-state-ratchet: no old "need you" count).
+    expect(headerPillWords('needs', 2)).toBe('2 Needs you')
+    expect(headerPillWords('needs', 1)).toBe('1 Needs you')
   })
 
   it('counts working and waiting only: a task nobody started is no header count', () => {

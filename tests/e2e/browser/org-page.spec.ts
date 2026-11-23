@@ -323,7 +323,7 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   // Led by what to do with it (2026-11-03): a Board choice is a decision.
   await expect(r).toHaveAttribute('title', new RegExp(`\\nRenewal ${STAMP}: Decide: \\S`))
   await r.click()
-  await expect(page.getByTestId('org-detail-counts').getByTestId('org-pill-needs')).toHaveText('1 needs you')
+  await expect(page.getByTestId('org-detail-counts').getByTestId('org-pill-needs')).toHaveText('1 Needs you')
   // Listed on its own chat too: the chat does not show a Board's choice.
   await expectChatShown(page)
   await showTasks(page)

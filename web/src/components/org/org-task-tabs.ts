@@ -7,7 +7,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { projectKey, userStateOf } from '@open-walnut/org-tree';
-import { shownState } from '@open-walnut/user-status';
+import { shownState, stateCountLabel } from '@open-walnut/user-status';
 import { STATUS_SECTION_LABELS, isNotStarted, isWatched, sortSectionTasks } from '@/components/tasks/status-sections';
 import { askCount, flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
@@ -113,7 +113,8 @@ export interface HeaderPill { tab: OrgTaskTab; n: number }
  *  workng tasks, 22 waiting tasks", then "acutally cahnge it to xx working, yy waiting"): the number
  *  and what it counts in lower case, never a tab's long name, never "tasks". */
 export function headerPillWords(tab: HeaderPill['tab'], n: number): string {
-  if (tab === 'needs') return `${n} ${n === 1 ? 'needs' : 'need'} you`;
+  // A Needs you count is a state's count: in the state's own name (user-status.ts).
+  if (tab === 'needs') return stateCountLabel('needs', n);
   return `${n} ${tab === 'notstarted' ? 'not started' : tab}`;
 }
 
