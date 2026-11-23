@@ -794,6 +794,9 @@ let switchStopper: ((stop: SwitchStop) => boolean) | null = null
 let serverStopping = false
 /** commands/web.ts: how this process stops for a switch (null: it cannot, as in a test's in-process server). */
 export function onSwitchStopRequest(fn: ((stop: SwitchStop) => boolean) | null): void { switchStopper = fn }
+let plainStopHook: (() => void) | null = null
+/** routes/leader-switch.ts, once it handed over: what an ordinary stop (not the switch's) ends first. */
+export function onPlainStop(fn: (() => void) | null): void { plainStopHook = fn }
 export function switchStopAvailable(): boolean { return !!switchStopper && !serverStopping && !switchStop }
 /** Stop this server for a switch: false when it cannot (stopping already, or no stopper registered). */
 export function requestSwitchStop(stop: SwitchStop): boolean {
@@ -7779,6 +7782,9 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   serverStopping = true
   const finalStop = switchStop
   switchStop = null
+  // Any other stop of a server that handed over: nothing waits for its switch stop any more (no take-back
+  // runs through the teardown; a rolled-back switch's next boot waits for the handover to run out).
+  if (!finalStop) plainStopHook?.()
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
   localDaemonLane?.stop()

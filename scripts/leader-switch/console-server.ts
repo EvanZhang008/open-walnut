@@ -81,18 +81,8 @@ if (hostKey && Number.isInteger(daemonPort) && daemonPort > 0) {
   }
 }
 
-const { startServer, stopServer, armGracefulSignalExit, standbyEnded } = await import('../../src/web/server.js')
-let stopping = false
-const stop = async () => {
-  if (stopping) return
-  stopping = true
-  const bail = setTimeout(() => process.exit(1), 15_000)
-  try { await stopServer({ reason: 'SIGTERM' }) } catch { /* exit anyway */ }
-  clearTimeout(bail)
-  process.exit(0)
-}
-process.on('SIGTERM', () => { void stop() })
-process.on('SIGINT', () => { void stop() })
+const { startServer, armGracefulSignalExit, standbyEnded } = await import('../../src/web/server.js')
+const { stop } = await (await import('./server-stops.js')).wireServerStops({ bailMs: 15_000 })
 armGracefulSignalExit()
 try {
   await startServer({ port, dev: false })

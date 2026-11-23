@@ -102,6 +102,7 @@ async function switchLink(to: string, me: string): Promise<{ peer: import('../..
   ])
   const cfg = readHomeSwitchConfig(WALNUT_HOME)
   if (!cfg.settings) return { refused: cfg.problem ?? 'no leader_switch section' }
+  if (!machineById(cfg.settings, me)) return { refused: `this machine (${me}) is not in leader_switch.machines` }
   const raw = (await getConfig()).standby ?? {}
   const standby = { ...(raw.dir ? { dir: raw.dir } : {}), ...(raw.host ? { host: raw.host } : {}) }
   // A target reached as a host: what this leader's link knows of its service (hello serviceRoles, launcher goodRoles).
@@ -121,12 +122,23 @@ async function takeBackHandover(why: string, o: { begun?: import('../../core/lea
   const stop = await import('../../core/leader/switch/final-stop.js')
   if (!p || p.trial) { if (o.begun) stop.endTakeBack(o.begun, false); return { ok: false, why: 'this server does not hold the write permission' } }
   // The stop wait began its take-back already (synchronously, in its timer); everyone else begins it here.
-  const begun = o.begun ? { ok: true as const, sw: o.begun } : stop.beginTakeBack()
+  let begun = o.begun ? { ok: true as const, sw: o.begun } : stop.beginTakeBack()
+  if (!begun.ok && stop.handedOverSwitch()?.phase === 'cancelling') {
+    // A cancel by hand while the server's own take-back runs: wait for it (one take-back at a time), then answer its outcome.
+    const id = stop.handedOverSwitch()!.switchId
+    const until = Date.now() + 60_000
+    while (stop.handedOverSwitch()?.phase === 'cancelling' && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
+    if (stop.wasTakenBack(id)) return { ok: true }
+    begun = stop.beginTakeBack()
+  }
   if (!begun.ok) return { ok: false, why: begun.why }
   log.web.warn(`leader switch: this server takes its handover back (${why})`, { switchId: begun.sw?.switchId ?? null })
   const r = await p.runtime.cancel().catch((err: unknown) => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
-  // Not taken back: the switch waits for its stop again, and the take-back is tried again in 5 s.
-  stop.endTakeBack(begun.sw, r.ok)
+  // Not taken back: the switch waits for its stop again, and the take-back is tried again in 5 s, unless it never can
+  // stand (the new leader committed, or this process holds no handover any more): then nothing waits.
+  const state = p.runtime.status().state
+  if (!r.ok && (/committed before the cancel/.test(r.why ?? '') || (state !== 'handed-over' && state !== 'lost'))) stop.dropHandedOver(begun.sw)
+  else stop.endTakeBack(begun.sw, r.ok)
   if (r.ok) await withdrawConsoleQuietly(p.machine, (await import('../../constants.js')).WALNUT_HOME)
   else log.web.warn('leader switch: the handover could not be taken back yet', { switchId: begun.sw?.switchId ?? null, why: r.why })
   return r
@@ -146,7 +158,7 @@ function testKnobs(raw: unknown): { killAt?: string; skipLedgerRewrite?: true; p
 
 /** After the handover stood: the ticket and the target job over the copy link, and the wait for the switch stop. */
 async function startTargetSide(o: { switchId: string; to: string; record: number; link: { peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings }; home: string; machine: string; test?: unknown }): Promise<{ ok: true; commitDeadline: string } | { ok: false; why: string }> {
-  const [{ noteHandedOver, handedOverSwitch }, { ticketName }, { machineById }, { getVersion }] = await Promise.all([
+  const [{ noteHandedOver, handedOverSwitch, forgetHandedOver }, { ticketName }, { machineById }, { getVersion }] = await Promise.all([
     import('../../core/leader/switch/final-stop.js'), import('../../core/leader/switch/ticket.js'), import('../../core/leader/switch/settings.js'), import('../../core/version.js'),
   ])
   const { peer, settings } = o.link
@@ -157,6 +169,8 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
   const had = handedOverSwitch()
   const deadline = had && had.switchId === o.switchId ? had.commitDeadline : Date.now() + settings.commitWindowMs
   // From here the stop wait runs: whatever fails below, the take-back of this handover is retried until it stands.
+  // An ordinary stop of this server ends that wait first (no take-back runs through its teardown).
+  ;(await import('../server.js')).onPlainStop(() => forgetHandedOver())
   noteHandedOver({
     switchId: o.switchId, to: o.to, peer, commitDeadline: deadline, stopWaitMs: settings.stopWaitMs,
     // No stop within the wait: take the handover back; when the witnesses do not answer, try again every 5 s

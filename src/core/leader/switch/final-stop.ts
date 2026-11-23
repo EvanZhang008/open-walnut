@@ -34,7 +34,7 @@ export interface HandedOverSwitch {
   phase: 'waiting' | 'stopping' | 'cancelling'
 }
 
-type Held = HandedOverSwitch & { timer: ReturnType<typeof setTimeout> | null; stopWaitMs: number; onStopWaitOver: (sw: HandedOverSwitch) => void }
+type Held = HandedOverSwitch & { timer: ReturnType<typeof setTimeout> | null; stopWaitMs: number; onStopWaitOver: (sw: HandedOverSwitch) => void; waitOver: boolean }
 let current: Held | null = null
 /** The switch whose handover this server took back last (a stop asked after it is told so). */
 let cancelledId: string | null = null
@@ -47,6 +47,7 @@ function armStopWait(sw: Held, ms: number): void {
   sw.timer = setTimeout(() => {
     sw.timer = null
     if (current !== sw || sw.phase !== 'waiting') return
+    sw.waitOver = true
     // Synchronous with beginSwitchStop: a stop that comes now is refused, never run beside the take-back.
     sw.phase = 'cancelling'
     sw.onStopWaitOver(sw)
@@ -62,7 +63,7 @@ function armStopWait(sw: Held, ms: number): void {
 export function noteHandedOver(o: Omit<HandedOverSwitch, 'phase'> & { stopWaitMs: number; onStopWaitOver: (sw: HandedOverSwitch) => void }): HandedOverSwitch {
   if (current && current.switchId === o.switchId) return current
   if (current?.timer) clearTimeout(current.timer)
-  const sw: Held = { switchId: o.switchId, to: o.to, peer: o.peer, commitDeadline: o.commitDeadline, phase: 'waiting', timer: null, stopWaitMs: o.stopWaitMs, onStopWaitOver: o.onStopWaitOver }
+  const sw: Held = { switchId: o.switchId, to: o.to, peer: o.peer, commitDeadline: o.commitDeadline, phase: 'waiting', timer: null, stopWaitMs: o.stopWaitMs, onStopWaitOver: o.onStopWaitOver, waitOver: false }
   current = sw
   cancelledId = null
   armStopWait(sw, o.stopWaitMs)
@@ -90,7 +91,7 @@ export function beginTakeBack(): { ok: true; sw: HandedOverSwitch | null } | { o
  */
 export function endTakeBack(sw: HandedOverSwitch | null, ok: boolean, retryMs = 5_000): void {
   if (!sw || current !== sw) return
-  if (ok) { if (current.timer) clearTimeout(current.timer); cancelledId = sw.switchId; current = null; return }
+  if (ok) { if (current.timer) clearTimeout(current.timer); cancelledId = sw.switchId; current = null; sw.peer.close(); return }
   current.phase = 'waiting'
   armStopWait(current, retryMs)
 }
@@ -113,10 +114,18 @@ export function beginSwitchStop(switchId: string): { ok: true; sw: HandedOverSwi
 export function abandonSwitchStop(sw: HandedOverSwitch): void {
   if (current !== sw || sw.phase !== 'stopping') return
   current.phase = 'waiting'
-  armStopWait(current, current.stopWaitMs)
+  armStopWait(current, current.waitOver ? 5_000 : current.stopWaitMs)
 }
 
-/** Tests: forget the switch. */
+/** A take-back that will never stand (the new leader committed, or this process no longer holds a handover): nothing waits any more. */
+export function dropHandedOver(sw: HandedOverSwitch | null): void {
+  if (!sw || current !== sw) return
+  if (current.timer) clearTimeout(current.timer)
+  current = null
+  sw.peer.close()
+}
+
+/** An ordinary stop of the server (server.ts onPlainStop), and tests: nothing waits for a switch stop any more. */
 export function forgetHandedOver(): void {
   if (current?.timer) clearTimeout(current.timer)
   current = null

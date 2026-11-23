@@ -126,8 +126,9 @@ describe('the wait for the switch stop', () => {
     // No witness majority this moment: it waits for its stop again, and tries again 5 s later.
     endTakeBack(held, false, 5_000)
     expect(beginSwitchStop('S4').ok).toBe(true)
+    // A stop taken in a retry gap and then abandoned: the take-back is tried again 5 s later (its wait is over).
     abandonSwitchStop(held!)
-    vi.advanceTimersByTime(119_000)
+    vi.advanceTimersByTime(4_000)
     expect(over).toHaveBeenCalledTimes(1)
     vi.advanceTimersByTime(2_000)
     expect(over).toHaveBeenCalledTimes(2)
