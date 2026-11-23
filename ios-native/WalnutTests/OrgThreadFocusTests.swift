@@ -314,7 +314,7 @@ final class OrgThreadFocusTests: XCTestCase {
         XCTAssertEqual(Set(listed), Set(threads.map(\.id)), "every thread below the open groups is in one fold")
         XCTAssertEqual(listed.count, threads.count, "and in only one")
         XCTAssertEqual(OrgThreadRevealModel.Fold.waiting.threads(in: sections).map(\.id), ["th-000032", "th-000033"],
-                       "Waiting / Snoozed: the waiting ones, then the snoozed ones")
+                       "Waiting: the waiting ones, then the snoozed ones")
         for f in OrgThreadRevealModel.Fold.allCases {
             for t in f.threads(in: sections) {
                 XCTAssertEqual(OrgThreadRevealModel.outcome(.init(threadId: t.id, at: t0), threads: threads, sections: sections, lastRead: read),

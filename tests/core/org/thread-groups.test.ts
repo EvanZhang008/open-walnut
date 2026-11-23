@@ -4,12 +4,12 @@
  * Acknowledge: "if I ack and ai should determine if it should go to closed or wait or wip", "keep
  * Acknowledged, simpler").
  *
- *  - The groups are exactly Needs you, Done, Working, Waiting / Snoozed, Acknowledged, Closed,
+ *  - The groups are exactly Needs you, Done, Working, Waiting, Acknowledged, Closed,
  *    Archived, plus All, which shows every group but Archived.
  *  - Every thread shape the model can hold (each state, closed or not and how long ago, snoozed,
  *    asked in a task, acknowledged and not placed yet or placed in each place, listed or not) is in
  *    exactly one group, and the old groups map without a loss: To read to Done, Known to
- *    Acknowledged, Working or Waiting / Snoozed, Done to Closed (or Archived once a day old). A thread of a task below
+ *    Acknowledged, Working or Waiting, Done to Closed (or Archived once a day old). A thread of a task below
  *    (`owner`) is left out of the mapping check: its line is another change's (thread-groups.ts).
  */
 import { describe, expect, it } from 'vitest'
@@ -38,9 +38,9 @@ const OLD_TO_NEW: Record<string, readonly ThreadGroup[]> = {
 }
 
 describe('the groups of his Threads', () => {
-  it('are exactly Needs you, Done, Working, Waiting / Snoozed, Acknowledged, Closed and Archived, in that order', () => {
+  it('are exactly Needs you, Done, Working, Waiting, Acknowledged, Closed and Archived, in that order', () => {
     expect(THREAD_GROUPS).toEqual(['needs', 'read', 'working', 'waiting', 'known', 'done', 'archived'])
-    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Acknowledged', 'Closed', 'Archived'])
+    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting', 'Acknowledged', 'Closed', 'Archived'])
     // Needs you and Done open, the rest folded below them, in that order.
     expect([...FOR_HIM_GROUPS, ...FOLDED_GROUPS]).toEqual(THREAD_GROUPS)
   })

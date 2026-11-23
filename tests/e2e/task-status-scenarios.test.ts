@@ -348,7 +348,7 @@ describe('every surface shows the same state after every step', () => {
     await expectEverywhere(worker.id, lead.id, 'working', 'fired')
   }, 120_000)
 
-  // 2026-11-02, the user: finished work under Waiting / snoozed "looks kike they are waiting for my
+  // 2026-11-02, the user: finished work under Waiting "looks kike they are waiting for my
   // input". Something to read with nothing asked is To read, drawn under Needs you (2026-11-03: "I
   // dont wnat serpeate to read"), never Waiting.
   it('a turn that answered the user -> To read under Needs you everywhere -> the user writes again', async () => {
@@ -357,7 +357,7 @@ describe('every surface shows the same state after every step', () => {
     expect((await getTask(worker.id)).phase).toBe('NEED_ACTION')
     await expectEverywhere(worker.id, lead.id, 'read', 'answered the user')
     expect((await getTask(worker.id)).user_status).toMatchObject({ toRead: 'answer', category: 'look' })
-    // Snoozed, it sleeps under Waiting / snoozed.
+    // Snoozed, it sleeps under Waiting.
     await updateTask(worker.id, { start_date: '2099-01-01' } as never)
     await expectEverywhere(worker.id, lead.id, 'waiting', 'to read, snoozed')
     await updateTask(worker.id, { start_date: '' } as never)

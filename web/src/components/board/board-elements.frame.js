@@ -22,7 +22,7 @@
   // task the server has not derived, read as fallbackUserState reads it.
   // `read` (To read, from an older parent) is drawn as Needs you (shownState, 2026-11-03): the chip
   // reads it through SHOWN, and USER stays the one set of names (task-state-ratchet).
-  var USER = { needs: 'Needs you', read: 'To read', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed' };
+  var USER = { needs: 'Needs you', read: 'To read', working: 'Working', waiting: 'Waiting', done: 'Completed' };
   var SHOWN = { read: 'needs' };
   var PHASE_USER = { TODO: 'waiting', IN_PROGRESS: 'working', NEED_ACTION: 'needs', WAITING: 'waiting', COMPLETE: 'done' };
   // The first click on a message's × arms it for this long; the second deletes.

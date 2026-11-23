@@ -139,7 +139,7 @@ describe('leaders under a VP', () => {
     // Crane lead comes right after the Director it is under.
     const order = flatDirectors(groups).map((d) => d.title)
     expect(order.indexOf('Crane lead')).toBe(order.indexOf('Dock team') + 1)
-    // A task never started reads "Not started", never the tab's "Waiting / snoozed".
+    // A task never started reads "Not started", never the tab's "Waiting".
     expect(flatDirectors(groups).find((d) => d.title === 'Lone promoted')!.stateText).toBe('Not started')
     const vpA = { key: 'project:wharf', name: 'Wharf', vpName: 'Harbour' } as ChannelRow
     const vpB = { key: 'project:other', name: 'Other' } as ChannelRow

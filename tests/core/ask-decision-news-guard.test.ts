@@ -132,7 +132,7 @@ function taskOf(report: StatusReport, extra: Partial<Task> = {}): Task {
 const lead = (brief?: Task['brief']): Task => ({
   id: 'lead', title: 'Marina lead', phase: 'WAITING', status: 'in_progress', org_role: 'lead', project: 'Marina', ...(brief ? { brief } : {}),
 }) as Task
-const LETTER = '### Needs you\n- <task-ref id="asker" label="A"/>: the ask\n### Working\n### Waiting / snoozed'
+const LETTER = '### Needs you\n- <task-ref id="asker" label="A"/>: the ask\n### Working\n### Waiting'
 
 /** A lead's answer in the user's place to the ask `t` shows, recorded as ask-answer.ts records it. */
 function answerTo(t: Task, opts: { noId?: true } = {}): AskAnswer {

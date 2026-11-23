@@ -1,10 +1,10 @@
 /**
  * Flat's Not started section (web/src/components/tasks/status-sections.ts drawnSectionOf).
- * 2026-11-09, the user, on Focus's Waiting / snoozed holding tasks whose menu said "Status: Not
+ * 2026-11-09, the user, on Focus's Waiting holding tasks whose menu said "Status: Not
  * started": "there shudl be a new category not started, to put the not stared one not mix in to
  * wait and snooze they are completeli differnet , auto collpes also, icon change also".
  *
- * A task nobody started folds under its own heading between Waiting / snoozed and Completed, with
+ * A task nobody started folds under its own heading between Waiting and Completed, with
  * the dashed ring on its heading and its row; a parked task and a snoozed one stay in Waiting /
  * snoozed; Not started starts folded and folds again 60 s after the last action, like Waiting.
  * By project keeps those tasks in its list and draws no Not started heading.
@@ -33,7 +33,7 @@ const tomorrow = () => new Date(Date.now() + 36 * 3600e3).toISOString().slice(0,
 test.describe('Flat: Not started is its own section', () => {
   test.describe.configure({ timeout: 150_000 })
 
-  test('a task nobody started folds under Not started with the dashed ring, never under Waiting / snoozed', async ({ page }) => {
+  test('a task nobody started folds under Not started with the dashed ring, never under Waiting', async ({ page }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
     await page.clock.install()
@@ -71,7 +71,7 @@ test.describe('Flat: Not started is its own section', () => {
     expect(await row.locator('.pinned-phase-picker').innerHTML()).toContain('stroke-dasharray')
     for (const id of [parked, snoozed, done]) await expect(statusSectionRows(panel, 'notstarted').locator(`[data-task-id="${id}"]`)).toHaveCount(0)
 
-    // Waiting / snoozed keeps the parked task and the snoozed one, not the one nobody started.
+    // Waiting keeps the parked task and the snoozed one, not the one nobody started.
     await setStatusSectionOpen(panel, 'waiting', true)
     await showSectionCard(panel, 'waiting', parked)
     await showSectionCard(panel, 'waiting', snoozed)

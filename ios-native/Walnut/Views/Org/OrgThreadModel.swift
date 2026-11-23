@@ -244,7 +244,7 @@ enum OrgThreadModel {
             case .needs: return "Needs you"
             case .read: return "Done"
             case .working: return "Working"
-            case .waiting: return "Waiting / Snoozed"
+            case .waiting: return "Waiting"
             case .known: return "Acknowledged"
             case .done: return "Closed"
             case .archived: return "Archived"

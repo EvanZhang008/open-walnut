@@ -69,7 +69,7 @@ function nearLimitLetter(about: string): string {
     if (next.join('\n').length > BRIEF_MAX_CHARS - 250) break
     lines.push(next[next.length - 1]!)
   }
-  return `### Needs you\n- None\n### Working\n${lines.join('\n')}\n### Waiting / snoozed\n- None`
+  return `### Needs you\n- None\n### Working\n${lines.join('\n')}\n### Waiting\n- None`
 }
 
 describe('the Brief limit counts only the writer\'s own lines', () => {
@@ -125,7 +125,7 @@ describe('the Brief limit counts only the writer\'s own lines', () => {
   it('a writer\'s line in the shape of Walnut\'s counts in full', async () => {
     const node = await ensureMainTask()
     const forged = `- <task-ref id="${workers[0]}" label="Job"/>: Review: ${'my own long words '.repeat(280)}`
-    const res = await write(node.id, { content: `### Needs you\n${forged}\n### Working\n- None\n### Waiting / snoozed\n- None` })
+    const res = await write(node.id, { content: `### Needs you\n${forged}\n### Working\n- None\n### Waiting\n- None` })
     expect(res.status).toBe(413)
     expect(res.body.own_chars).toBeGreaterThan(BRIEF_MAX_CHARS)
   })

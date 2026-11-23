@@ -1285,7 +1285,7 @@ defineOp({
 
 // Main's or a lead's Brief (src/core/sessions/brief-write.ts): the letter the user reads above its chat.
 const BRIEF_SCOPE = 'Your Brief is the short Markdown letter the user reads at the top of your chat on the Org page (Main and '
-  + 'every lead keep one): three sections, "### Needs you", "### Working", "### Waiting / snoozed", one line per piece of work, '
+  + 'every lead keep one): three sections, "### Needs you", "### Working", "### Waiting", one line per piece of work, '
   + 'each starting with the <task-ref id="..." label="..."/> of its task. Update it yourself whenever something changes what the '
   + 'user should know, any time in a turn. Walnut keeps it in shape: each line under its task\'s live section, a finished task\'s '
   + 'line removed, and every task that asks the user added to Needs you.'

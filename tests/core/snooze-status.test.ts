@@ -124,7 +124,7 @@ describe('the reminders wait, and start fresh at the date', () => {
     expect(seenOf({ phase: 'NEED_ACTION', user_status: snoozed }).label).toMatch(/^Snoozed/)
   })
 
-  it('the Brief lists a snoozed task under Waiting / snoozed with its date, never as an ask', () => {
+  it('the Brief lists a snoozed task under Waiting with its date, never as an ask', () => {
     const owner = { id: 'lead', title: 'Lead', phase: 'IN_PROGRESS', org_role: 'lead', project: 'P' }
     const mk = (id: string, snoozed: boolean) => ({
       id, title: id, phase: 'NEED_ACTION', project: 'P', parent_task_id: 'lead', due_date: '2026-10-29',

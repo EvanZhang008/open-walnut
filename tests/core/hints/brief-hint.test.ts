@@ -12,7 +12,7 @@ import { briefHintStateOf, briefHintText } from '../../../src/core/sessions/brie
 import { briefSnapshot } from '../../../src/core/sessions/brief-fresh.js'
 
 const NOW = Date.parse('2026-10-31T18:00:00Z')
-const LETTER = '### Needs you\n- <task-ref id="a" label="A"/>: review section 3.\n### Working\n- None\n### Waiting / snoozed\n- None'
+const LETTER = '### Needs you\n- <task-ref id="a" label="A"/>: review section 3.\n### Working\n- None\n### Waiting\n- None'
 const worker = (s: NonNullable<Task['user_status']>): Task => ({ id: 'a', title: 'A', phase: s.state === 'needs' ? 'NEED_ACTION' : 'WAITING', status: 'in_progress', project: 'Marina', parent_task_id: 'lead', user_status: s }) as Task
 const asking = worker({ state: 'needs', source: 'session', ask: 'Review section 3' })
 const lead = (brief?: Task['brief']): Task => ({ id: 'lead', title: 'Marina lead', phase: 'WAITING', status: 'in_progress', org_role: 'lead', project: 'Marina', ...(brief ? { brief } : {}) }) as Task
@@ -43,7 +43,7 @@ describe('the brief hint', () => {
     expect(text).toContain('is behind (1 line moved since)')
     expect(text).toContain('brief_write')
     // Its own rewrite: nothing more until the next reminder.
-    const rewritten = lead({ text: LETTER.replace('### Needs you\n- <task-ref id="a" label="A"/>: review section 3.\n', '### Needs you\n- None\n').replace('### Waiting / snoozed\n- None', '### Waiting / snoozed\n- <task-ref id="a" label="A"/>: on the reviewer.'), at: new Date(NOW).toISOString(), ...briefSnapshot(LETTER, lead(), [answered]) })
+    const rewritten = lead({ text: LETTER.replace('### Needs you\n- <task-ref id="a" label="A"/>: review section 3.\n', '### Needs you\n- None\n').replace('### Waiting\n- None', '### Waiting\n- <task-ref id="a" label="A"/>: on the reviewer.'), at: new Date(NOW).toISOString(), ...briefSnapshot(LETTER, lead(), [answered]) })
     expect(send(rec, rewritten, [answered])).toEqual([])
   })
 

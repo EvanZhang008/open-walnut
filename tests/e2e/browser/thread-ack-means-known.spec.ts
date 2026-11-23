@@ -9,7 +9,7 @@
  *     a click on Working's head opens it.
  *  2. Acknowledge on a lead's thread whose task still works: the card goes to Acknowledged at once,
  *     reading Acknowledged and "AI is deciding where this goes."; no Acknowledge on it any more.
- *  3. The lead's AI places it (thread_update place, place_why): the card moves to Waiting / Snoozed,
+ *  3. The lead's AI places it (thread_update place, place_why): the card moves to Waiting,
  *     saying "Moved to Waiting: <why>" over what it waits on (the task chip, what it is to finish).
  *  4. Acknowledge on a result card: Acknowledged too; the AI closes it, and the Closed card says why.
  *  (Walnut placing it itself after 10 minutes runs on a fake clock: tests/e2e/thread-ack-means-known.test.ts.)
@@ -180,7 +180,7 @@ test('Acknowledge: the card waits in Acknowledged while the AI decides, then sho
   const placed = card(page, 'waiting', ids.work)
   await expect(placed).toBeVisible({ timeout: 15_000 })
   await expect(card(page, 'known', ids.work)).toHaveCount(0)
-  await expect(placed.getByTestId('org-thread-state')).toHaveText('Waiting / Snoozed')
+  await expect(placed.getByTestId('org-thread-state')).toHaveText('Waiting')
   await expect(placed.getByTestId('org-thread-ack-line')).toHaveText('Moved to Waiting: waits on the new timer board, due Friday')
   const wait = placed.getByTestId('org-thread-known-wait')
   await expect(wait).toHaveAttribute('data-task-id', ids.running)

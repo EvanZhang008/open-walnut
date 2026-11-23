@@ -78,7 +78,7 @@ describe('Walnut\'s lines follow the Brief\'s language', () => {
       for (const k of [1, 5]) expect(ADDED_MORE_RE.test(BRIEF_WALNUT_WORDS[lang].more(k)), `${lang} ${k}`).toBe(true)
     }
     const many = Array.from({ length: ADDED_ASKS_MAX + 2 }, (_, i) => task({ state: 'needs', source: 'session', ask: `Decide the order of bed ${i}` }))
-    const text = structureBrief('### Needs you\n- \u65e0\n### Working\n- \u65e0\n### Waiting / snoozed\n- \u65e0', lead.id, [lead, ...many], { live: lead }).text
+    const text = structureBrief('### Needs you\n- \u65e0\n### Working\n- \u65e0\n### Waiting\n- \u65e0', lead.id, [lead, ...many], { live: lead }).text
     expect(text).toContain(BRIEF_WALNUT_WORDS.zh.more(2))
     expect(text).not.toContain('more asks')
   })
@@ -94,7 +94,7 @@ describe('Walnut\'s lines follow the Brief\'s language', () => {
   it('a letter stored before (no record of its Walnut lines) has its Chinese lines told by their shape', () => {
     const t = task({ state: 'needs', source: 'session', category: 'decide', ask: '\u4e1c\u8fb9\u82b1\u575b\u9009\u54ea\u5bb6\u4f9b\u5e94\u5546\uff1f' })
     const line = addedAskLine(t, false, [lead, t], 'zh')
-    const text = `### Needs you\n${line}\n### Working\n- \u65e0\n### Waiting / snoozed\n- \u65e0`
+    const text = `### Needs you\n${line}\n### Working\n- \u65e0\n### Waiting\n- \u65e0`
     expect(briefWalnutLines({ text }, lead, [lead, t])).toEqual([line])
   })
 })
@@ -107,7 +107,7 @@ describe('one line per task: Walnut\'s earlier line goes once the writer names t
   it('on the write: the writer\'s line stays, Walnut\'s goes', () => {
     const t = asker()
     const tasks = [lead, t]
-    const first = shapeBriefText('### Needs you\n- \u65e0\n### Working\n- \u65e0\n### Waiting / snoozed\n- \u65e0', lead, tasks, { lang: 'zh' }).brief
+    const first = shapeBriefText('### Needs you\n- \u65e0\n### Working\n- \u65e0\n### Waiting\n- \u65e0', lead, tasks, { lang: 'zh' }).brief
     const walnutLine = first.added![0]!
     expect(first.text).toContain(walnutLine)
     expect(walnutLine).toContain(BRIEF_WALNUT_WORDS.zh.labels.look)
@@ -126,7 +126,7 @@ describe('one line per task: Walnut\'s earlier line goes once the writer names t
     const tasks = [lead, t]
     const walnutLine = addedAskLine(t, false, tasks, 'en')
     const own = `- <task-ref id="${t.id}" label="Daily planning"/> the new day plan is set, look there.`
-    const brief = { text: `### Needs you\n${walnutLine}\n${own}\n### Working\n- None\n### Waiting / snoozed\n- None`, at: '2026-11-10T12:00:00.000Z', added: [walnutLine] }
+    const brief = { text: `### Needs you\n${walnutLine}\n${own}\n### Working\n- None\n### Waiting\n- None`, at: '2026-11-10T12:00:00.000Z', added: [walnutLine] }
     const shown = structureBrief(brief.text, lead.id, tasks, { live: lead, walnut: brief.added }).text
     expect(shown.split('\n').filter((l) => l.includes(`id="${t.id}"`))).toEqual([own])
   })
@@ -135,7 +135,7 @@ describe('one line per task: Walnut\'s earlier line goes once the writer names t
     const t = task({ state: 'needs', source: 'session', category: 'decide', ask: '\u4e1c\u8fb9\u82b1\u575b\u9009\u54ea\u5bb6\u4f9b\u5e94\u5546\uff1f' })
     const tasks = [lead, t]
     const english = addedAskLine(t, false, tasks, 'en')
-    const brief = { text: `### Needs you\n${english}\n### Working\n- \u65e0\n### Waiting / snoozed\n- \u65e0`, at: '2026-11-10T12:00:00.000Z', added: [english] }
+    const brief = { text: `### Needs you\n${english}\n### Working\n- \u65e0\n### Waiting\n- \u65e0`, at: '2026-11-10T12:00:00.000Z', added: [english] }
     const shown = structureBrief(brief.text, lead.id, tasks, { live: lead, lang: 'zh', walnut: brief.added }).text
     expect(shown).not.toContain(english)
     expect(shown).toContain(addedAskLine(t, false, tasks, 'zh'))
@@ -150,11 +150,11 @@ describe('one line per task: Walnut\'s earlier line goes once the writer names t
   it('a task Walnut added that now works or waits keeps its line, moved to its section', () => {
     for (const state of ['working', 'waiting'] as const) {
       const t = task({ state: 'needs', source: 'session', category: 'decide', ask: 'Pick the supplier for the east bed' })
-      const first = shapeBriefText('### Needs you\n- None\n### Working\n- None\n### Waiting / snoozed\n- None', lead, [lead, t], { lang: 'en' }).brief
+      const first = shapeBriefText('### Needs you\n- None\n### Working\n- None\n### Waiting\n- None', lead, [lead, t], { lang: 'en' }).brief
       const line = first.added![0]!
       const moved = { ...t, phase: state === 'working' ? 'IN_PROGRESS' : 'WAITING', user_status: { state, at: '2026-11-10T13:00:00.000Z', ...(state === 'waiting' ? { kind: 'outside', waitingOn: 'a reply' } : { now: 'checking' }) } } as Task
       const shown = structureBrief(first.text, lead.id, [lead, moved], { live: lead, walnut: first.added }).text
-      const heading = state === 'working' ? '### Working' : '### Waiting / snoozed'
+      const heading = state === 'working' ? '### Working' : '### Waiting'
       expect(shown, state).toContain(`${heading}\n${line}`)
     }
   })
@@ -164,7 +164,7 @@ describe('one line per task: Walnut\'s earlier line goes once the writer names t
   it('a letter with no record of Walnut\'s lines loses none of them', () => {
     const t = task({ state: 'needs', source: 'session', category: 'decide', ask: 'Approve staging?' })
     const own = `- <task-ref id="${t.id}" label="${t.title}"/>: Decide: Approve staging only; the production cluster is explicitly excluded.`
-    const brief = { text: `### Needs you\n${own}\n### Working\n- None\n### Waiting / snoozed\n- None`, at: '2026-11-10T12:00:00.000Z' }
+    const brief = { text: `### Needs you\n${own}\n### Working\n- None\n### Waiting\n- None`, at: '2026-11-10T12:00:00.000Z' }
     expect(structureBrief(brief.text, lead.id, [lead, t], { live: lead, ...(brief as { added?: string[] }).added ? { walnut: (brief as { added?: string[] }).added } : {} }).text).toContain(own)
     expect(shapeBriefText(brief.text, { ...lead, brief } as Task, [lead, t], { prior: briefWalnutLines(brief, lead, [lead, t]) }).brief.text).toContain(own)
   })

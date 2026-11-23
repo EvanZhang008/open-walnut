@@ -1,7 +1,7 @@
 /**
  * One decision shows once on Home (src/core/same-ask.ts; 2026-11-04: a lead and its subtask both sat
  * in Needs you asking whether to create three alpha test accounts). A lead and its subtask ask the
- * user the same: Needs you lists the subtask only, and the lead waits under Waiting / snoozed naming
+ * user the same: Needs you lists the subtask only, and the lead waits under Waiting naming
  * it. Answering the subtask settles both: neither is in Needs you after. Records a video of it
  * (SAME_ASK_VIDEO_DIR) for the hand-off.
  */
@@ -70,7 +70,7 @@ test('a lead and its subtask asking the same decision show one Needs you row; an
   await expect(needsRows.locator(`[data-task-id="${lead}"]`)).toHaveCount(0)
   await page.waitForTimeout(1200)
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-1-one-row.png` }).catch(() => {})
-  // The lead waits under Waiting / snoozed, naming the subtask that asks.
+  // The lead waits under Waiting, naming the subtask that asks.
   await setStatusSectionOpen(panel, 'waiting', true)
   const leadCard = await showSectionCard(panel, 'waiting', lead)
   await leadCard.scrollIntoViewIfNeeded()

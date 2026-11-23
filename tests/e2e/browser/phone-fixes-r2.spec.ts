@@ -323,7 +323,7 @@ test('N2-35: the sign-in page sends nothing but the sign-in probe, and writes no
 
 test('N2-28: the task panel\'s status sections draw no comma at a line end: each count is its own tap', async ({ page }) => {
   // The filter footer ("2 Waiting hidden, 3 Complete hidden") is gone; its counts now
-  // head the folded Waiting / snoozed and Completed sections, one heading button each.
+  // head the folded Waiting and Completed sections, one heading button each.
   const errors = await bootHome(page)
   const headings = page.locator('.todo-panel .status-section-heading')
   if (await headings.count() === 0) { test.info().annotations.push({ type: 'note', description: 'no status sections on this fixture view' }); return }

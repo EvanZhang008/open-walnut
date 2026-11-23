@@ -3,7 +3,7 @@
  * Needs you card; "if it is snoozed, it is not needs you"). Two tasks of one project hand back to the
  * user; one has a start date two weeks out. Only the other one needs the user: the counts, the
  * alert list and the All tasks sections say so in the one set of names (src/core/user-status.ts), and the
- * snoozed one reads "Snoozed until <date>" under Waiting / snoozed. Moving its start date to the past
+ * snoozed one reads "Snoozed until <date>" under Waiting. Moving its start date to the past
  * brings it back as Needs you, live.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -74,7 +74,7 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   const detail = page.getByTestId('org-detail')
   const counts = detail.getByTestId('org-detail-counts')
   await expect(counts).toContainText('0 threads')
-  await expect(counts).toContainText('Waiting / snoozed')
+  await expect(counts).toContainText('Waiting')
   await expect(counts).not.toContainText(/needs? you/i)
   // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
   await openTasksBy(detail, 'all')
@@ -85,9 +85,9 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   await expect(needs.locator(`[data-testid="org-alert"][data-task-id="${ids.plain}"]`)).toBeVisible()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.snoozed}"]`)).toHaveCount(0)
 
-  // The snoozed one is under Waiting / snoozed (folded by default), saying until when.
+  // The snoozed one is under Waiting (folded by default), saying until when.
   await openSection(detail, 'waiting')
-  await expect(taskSection(detail, 'waiting').getByTestId('org-task-section-head')).toContainText('Waiting / snoozed')
+  await expect(taskSection(detail, 'waiting').getByTestId('org-task-section-head')).toContainText('Waiting')
   const snoozedRow = taskRow(detail, ids.snoozed, 'waiting')
   await expect(snoozedRow).toBeVisible()
   await expect(snoozedRow.getByTestId('org-task-note')).toContainText(`Snoozed until ${later}`)

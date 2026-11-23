@@ -84,7 +84,7 @@ describe('one decision across rewordings', () => {
     await turnEnd(ASK_1)
     first = (await decisionId())!
     expect(first).toMatch(/^ask-/)
-    const letter = `### Needs you\n- <task-ref id="${taskId}" label="Alpha dev account"/>: create the alpha dev account?\n### Working\n- nothing\n### Waiting / snoozed\n- nothing`
+    const letter = `### Needs you\n- <task-ref id="${taskId}" label="Alpha dev account"/>: create the alpha dev account?\n### Working\n- nothing\n### Waiting\n- nothing`
     const put = await call('PUT', `/api/v1/tasks/${vpId}/brief`, { content: letter })
     expect(put.status).toBe(200)
     expect((await call('GET', `/api/v1/tasks/${vpId}/brief`)).json.fresh?.stale).toBe(false)

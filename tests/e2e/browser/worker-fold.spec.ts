@@ -214,7 +214,7 @@ test.describe('worker fold', () => {
   })
 
   // On the user's data the Focus column was about 120px wide: the hint ran off the column's left
-  // edge and each line showed only "Waiting / snoozed", its title squeezed to nothing (2026-11-12).
+  // edge and each line showed only "Waiting", its title squeezed to nothing (2026-11-12).
   test('in a narrow column the hint stays whole in the window and a line keeps its title', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')

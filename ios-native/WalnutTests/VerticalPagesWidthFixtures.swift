@@ -100,7 +100,7 @@ enum VerticalPagesWidthFixtures {
 
     static func brief() -> OrgBriefReply {
         let text = "### Needs you\n- " + WideText.taskRefSentence + "\n### Working\n" + WideText.markdown
-            + "\n### Waiting / snoozed\n- " + WideText.unbrokenPath
+            + "\n### Waiting\n- " + WideText.unbrokenPath
         let fresh = OrgBriefReply.Fresh(writtenAt: WideText.isoAgo(10), moved: [], finished: [], newAsks: [], stale: true,
                                         words: "3 lines moved since " + WideText.pathThenCJK)
         return OrgBriefReply(brief: .init(text: text, at: WideText.isoAgo(10)), fresh: fresh)

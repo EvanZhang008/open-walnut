@@ -3,7 +3,7 @@
  * the user picked it from ten designs): the panel is its status sections, each row two
  * lines (the project and its tags on a small line, then the title), with no list of
  * tiers or projects under them. Display's Group row picks Flat or By project, the list
- * as it was. A snoozed task waits under Waiting / snoozed even when it needs the user
+ * as it was. A snoozed task waits under Waiting even when it needs the user
  * (2026-10-30: "I already snoozed it, why doesn't it leave?").
  */
 import { test, expect } from './shortcut-test-fixture'
@@ -55,7 +55,7 @@ test.describe('Flat layout', () => {
     await expect(list).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
     await list.click()
     await expect(list).toHaveAttribute('aria-expanded', 'true')
-    // By project draws no Waiting / snoozed section of its own (each project folds its own).
+    // By project draws no Waiting section of its own (each project folds its own).
     await expect(panel.getByTestId('status-section-waiting')).toHaveCount(0)
     expect(await page.evaluate(() => localStorage.getItem('walnut-todo-panel-design'))).toBeNull()
     await openDisplayMenu(page)

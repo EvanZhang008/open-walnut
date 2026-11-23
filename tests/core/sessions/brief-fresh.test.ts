@@ -29,7 +29,7 @@ const LETTER = [
   '- <task-ref id="a" label="A"/>: review section 3, reply "next".',
   '### Working',
   '- <task-ref id="b" label="B"/>: running the integration test.',
-  '### Waiting / snoozed',
+  '### Waiting',
   '- <task-ref id="c" label="C"/>: waits on the review.',
 ].join('\n')
 
@@ -206,7 +206,7 @@ describe('briefFreshness', () => {
 
   it("Main's asks cover the whole org, not only its leads", () => {
     const main: Task = { id: 'main', title: 'Main', phase: 'WAITING', status: 'in_progress', org_role: 'main' } as Task
-    const text = '### Needs you\n- <task-ref id="a" label="A"/> (VP <task-ref id="lead" label="L"/>): review.\n### Working\n- None\n### Waiting / snoozed\n- None'
+    const text = '### Needs you\n- <task-ref id="a" label="A"/> (VP <task-ref id="lead" label="L"/>): review.\n### Working\n- None\n### Waiting\n- None'
     const tasks = [lead(), ...world()]
     const owner = { ...main, brief: { text, at: T0, ...briefSnapshot(text, main, tasks) } } as Task
     expect(owner.brief!.asks).toEqual(['a'])

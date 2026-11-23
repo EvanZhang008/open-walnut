@@ -11,7 +11,7 @@
  *  1. The park alone keeps its open ask on the list as Needs you (an ask of the user
  *     outranks any trigger, 2026-11-19); once the turn's own report says it waits outside,
  *     the task leaves the default task list on its own (no reload), and the folded
- *     Waiting / snoozed section counts it; opening it shows it with the hourglass.
+ *     Waiting section counts it; opening it shows it with the hourglass.
  *  2. The Inbox has no letter about it: no "Waiting: <title>" envelope, and the
  *     inbox's count of letters for this task stays at zero.
  *
@@ -42,7 +42,7 @@ test.beforeAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
-  // The Waiting / snoozed section at the bottom is Flat's.
+  // The Waiting section at the bottom is Flat's.
   await presetPanelDesign(page, 'status')
   await presetPanelView(page, { section: 'all' })
   await page.setViewportSize({ width: 1280, height: 860 })
@@ -60,7 +60,7 @@ async function taskOf(id: string): Promise<any> {
 
 /** A real session whose first turn has ended asking the user something, and its task. A turn
  *  that asks nothing reads Waiting (only a real ask reaches Needs you) and sits in the folded
- *  Waiting / snoozed section, so the ask is what puts the task on the list to begin with. */
+ *  Waiting section, so the ask is what puts the task on the list to begin with. */
 async function startSession(request: APIRequestContext, message: string): Promise<{ sid: string; taskId: string }> {
   const res = await request.post('/api/sessions/quick-start', { data: { cwd: `${fixtureRoot}/projects/walnut`, message } })
   expect(res.ok(), await res.text()).toBeTruthy()
@@ -119,7 +119,7 @@ test('a session\'s trigger parks its task off the list, and no letter reaches th
   })
   expect(settled.ok(), await settled.text()).toBe(true)
 
-  // 1. It leaves the list live, and the folded Waiting / snoozed section under the
+  // 1. It leaves the list live, and the folded Waiting section under the
   // list counts it (the footer that said "N Waiting hidden" became that section).
   await expect(anyRow).toHaveCount(0, { timeout: 15_000 })
   await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false')

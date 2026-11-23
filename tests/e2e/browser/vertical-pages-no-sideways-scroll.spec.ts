@@ -100,7 +100,7 @@ test.beforeAll(async ({ request }) => {
   }))
   fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })
   fs.writeFileSync(`${walnutHome}/org/threads/${ids.lead}.json`, JSON.stringify({ version: 1, taskId: ids.lead, threads }))
-  const brief = await request.put(`/api/v1/tasks/${ids.lead}/brief`, { data: { content: `### Needs you\n\n${md}\n\n### Working\n\n${md}\n\n### Waiting / snoozed\n\n${TOKEN}` } })
+  const brief = await request.put(`/api/v1/tasks/${ids.lead}/brief`, { data: { content: `### Needs you\n\n${md}\n\n### Working\n\n${md}\n\n### Waiting\n\n${TOKEN}` } })
   expect(brief.ok(), await brief.text()).toBe(true)
   const letter = await request.post('/api/v1/human-inbox', { data: { subject: TITLE, type: 'info', markdown: md } })
   expect(letter.status(), await letter.text()).toBe(201)

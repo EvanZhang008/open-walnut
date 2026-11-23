@@ -4,7 +4,7 @@
  *
  * With the Status filter at its default and no search, the panel draws its tasks
  * under status headings. Flat (the default): Watching, Needs you (no heading), Working,
- * Waiting / snoozed and Completed, with no list. By project: Watching on top, the list
+ * Waiting and Completed, with no list. By project: Watching on top, the list
  * itself, and each project folding its own waiting and completed rows. These replaced the old footer ("N Waiting hidden", "N Complete hidden",
  * "N not available yet: show").
  */

@@ -96,7 +96,7 @@ describe('the compact Brief read', () => {
     // The lead writes its letter from the live lists, one line per task.
     const full = await read(leadId)
     const s = full.body.sections as Record<'needs' | 'working' | 'waiting', string[]>
-    const letter = `### Needs you\n${s.needs.join('\n')}\n### Working\n${s.working.join('\n')}\n### Waiting / snoozed\n${s.waiting.length ? s.waiting.join('\n') : '- Nothing waits.'}`
+    const letter = `### Needs you\n${s.needs.join('\n')}\n### Working\n${s.working.join('\n')}\n### Waiting\n${s.waiting.length ? s.waiting.join('\n') : '- Nothing waits.'}`
     expect((await write(leadId, { content: letter })).status).toBe(200)
 
     const fullAgain = await read(leadId, { sid: SID_A })

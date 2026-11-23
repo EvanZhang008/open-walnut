@@ -1,6 +1,6 @@
 /**
  * The one fold rule of the task panel's status folds (web/src/components/tasks/section-fold-rule.ts):
- * Watching and Needs you start folded, then follow the user's choice; Working, Waiting / snoozed,
+ * Watching and Needs you start folded, then follow the user's choice; Working, Waiting,
  * Completed and every per-project fold folded by default and folded again 15 minutes after
  * they were opened; since 2026-11-06 that time is 60 s after the last action in their panel.
  */

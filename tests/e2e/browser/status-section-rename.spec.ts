@@ -3,7 +3,7 @@
  * Enter saves; Escape puts the old title back (2026-11-03, the user, on a row under Watching:
  * "whhy the preivosu avaiible text edit cna't be done here?"). The source guard is
  * tests/web/task-row-title-edit.test.ts; this walks the real rows of Watching, Needs you,
- * Waiting / snoozed and Completed.
+ * Waiting and Completed.
  */
 import { test, expect } from './shortcut-test-fixture'
 import type { Page } from '@playwright/test'

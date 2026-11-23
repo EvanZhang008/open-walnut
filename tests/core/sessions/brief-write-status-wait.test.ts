@@ -28,7 +28,7 @@ describe('writeNodeBrief and a slow status pass', () => {
   it('stores the Brief once its bound passes, with the pass still running', async () => {
     const { task: lead } = await addTask({ title: 'Orchard lead', project: 'Orchard', source: 'local', org_role: 'lead' } as never)
     const started = Date.now()
-    const out = await writeNodeBrief(lead.id, { content: '### Needs you\n- None\n### Working\n- None\n### Waiting / snoozed\n- None' })
+    const out = await writeNodeBrief(lead.id, { content: '### Needs you\n- None\n### Working\n- None\n### Waiting\n- None' })
     expect(pass.started).toBe(1)
     // Its bound and the write's own work, far under the gateway's 10 s.
     expect(Date.now() - started).toBeLessThan(STATUS_ANSWER_WAIT_MS + 5_000)

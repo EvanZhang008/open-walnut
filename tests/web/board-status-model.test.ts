@@ -57,7 +57,7 @@ describe('buildStatusBoard', () => {
     expect(brief.needs.map((n) => n.ask)).toEqual(['Revoke the old token?', 'Approve a real iPhone test?']);
     // Each one's line says what to do with it, then its ask.
     expect(brief.needs.map((n) => n.line)).toEqual(['Decide: Revoke the old token?', 'Decide: Approve a real iPhone test?']);
-    expect(briefCountsLine(brief)).toBe('3 Working, 2 Waiting / snoozed (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.');
+    expect(briefCountsLine(brief)).toBe('3 Working, 2 Waiting (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.');
   });
 
   it('filters: all open in the table order, or one state', () => {
@@ -85,7 +85,7 @@ describe('buildStatusBoard', () => {
       task('result', { us: { state: 'read', toRead: 'result', waitingOn: 'The result is ready', at: ago(20) } }),
       // An older server stored To read as Waiting with toRead: it is under Needs you too.
       task('legacy', { us: { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your question', at: ago(5) } }),
-      // A snoozed one stays Waiting / snoozed.
+      // A snoozed one stays Waiting.
       task('snoozed', { us: { state: 'waiting', toRead: 'result', waitingOn: 'Its result', snoozed: { until: ago(-600) }, at: ago(1) } }),
     ];
     const b = buildStatusBoard({ ownerId: 'lead', tasks, now: NOW, doneWindowDays: 7 });
@@ -104,7 +104,7 @@ describe('buildStatusBoard', () => {
     expect(brief.needs.map((n) => n.id)).toEqual(['vm', 'stt']);
     expect(brief.needs.map((n) => n.line)).toEqual(['Decide: Revoke the old token?', 'Decide: Approve a real iPhone test?']);
     expect(brief.toLook).toBe(2);
-    expect(briefCountsLine(brief)).toBe('3 Working, 3 Waiting / snoozed (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.');
+    expect(briefCountsLine(brief)).toBe('3 Working, 3 Waiting (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.');
     expect(briefCountsLine(brief)).not.toContain('To read');
   });
 

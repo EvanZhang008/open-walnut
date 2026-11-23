@@ -159,7 +159,7 @@ test.describe('Status, sections and persistence', () => {
     try {
       await filterProjects(page, [garden])
       // Open + Waiting, picked through the Status chip menu: Working keeps the open
-      // row, the waiting row lives in the folded Waiting / snoozed section.
+      // row, the waiting row lives in the folded Waiting section.
       await setStatus(page, ['Not started', 'Working', 'Needs you', 'Waiting'])
       await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
       await setStatusSectionOpen(page, 'working', true)
@@ -184,7 +184,7 @@ test.describe('Status, sections and persistence', () => {
     }
   })
 
-  test('a task not available yet sleeps under Waiting / snoozed, whatever Date shows it (C39)', async ({ page, baseURL }) => {
+  test('a task not available yet sleeps under Waiting, whatever Date shows it (C39)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
     const ids = await seed(page, garden, [{ title: `g now ${stamp}`, running: true }, { title: `g later ${stamp}`, start: '2099-01-01' }])
@@ -192,7 +192,7 @@ test.describe('Status, sections and persistence', () => {
     try {
       await filterProjects(page, [garden])
       // The old footer offered "1 not available yet: show"; the snoozed task now
-      // counts under the folded Waiting / snoozed section, with its start date.
+      // counts under the folded Waiting section, with its start date.
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
       await setStatusSectionOpen(page, 'working', true)
       await expect(statusSectionCard(page, 'working', ids[0])).toBeVisible()
@@ -203,7 +203,7 @@ test.describe('Status, sections and persistence', () => {
       await expect(snoozed.locator('.todo-item-start-pill')).toBeVisible()
       await setStatusSectionOpen(page, 'waiting', false)
       // Any date shows it as well, and it is still snoozed: the shared status says so
-      // (src/core/user-status.ts, 2026-10-31), so it stays under Waiting / snoozed.
+      // (src/core/user-status.ts, 2026-10-31), so it stays under Waiting.
       await addFilter(page, 'date', 'Any date')
       await expect(filterChip(page, 'date')).toContainText('Any date')
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')

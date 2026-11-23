@@ -41,7 +41,7 @@ async function get(): Promise<Record<string, any>> {
   return res.json()
 }
 
-const letter = (path: string) => `### Needs you\n- None\n### Working\n- None\n### Waiting / snoozed\n- <task-ref id="${workerId}" label="Garden job"/>: log at ${path}`
+const letter = (path: string) => `### Needs you\n- None\n### Working\n- None\n### Waiting\n- <task-ref id="${workerId}" label="Garden job"/>: log at ${path}`
 const twoLines = (a: string, b: string) => `${letter(a)}\n- <task-ref id="${otherId}" label="Garden other"/>: notes at ${b}`
 
 /** Start the next test from a stored letter that shares no character with any test letter. */

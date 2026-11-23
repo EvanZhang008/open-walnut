@@ -2,8 +2,8 @@
  * The Org node's views since the side-bar redesign (2026-11-02): the chat is always on screen, and
  * the side bar's Tasks draws the node's work as All tasks or as its lead's Board (OrgTaskRail's
  * All tasks | Board, 2026-11-12; the Status tabs and the Team view it replaced are gone). All tasks
- * is one list of sections (Watching, Needs you, Working, Waiting / snoozed, Not started, Completed),
- * each folding on its heading; Waiting / snoozed, Not started and Completed start folded. Specs
+ * is one list of sections (Watching, Needs you, Working, Waiting, Not started, Completed),
+ * each folding on its heading; Waiting, Not started and Completed start folded. Specs
  * reach them through these, not through the Chat / Team / Board tabs that are gone.
  */
 import { expect, type Locator, type Page } from '@playwright/test'

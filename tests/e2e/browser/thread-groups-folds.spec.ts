@@ -6,7 +6,7 @@
  * drew every group's cards (commit 9f73d8e161).
  *
  * A lead with a thread in every group: Needs you (its Board's choice), Done (a result on its card),
- * Working, Waiting / Snoozed (one pending, one snoozed), Acknowledged (he acknowledged it, the AI
+ * Working, Waiting (one pending, one snoozed), Acknowledged (he acknowledged it, the AI
  * has not placed it yet: experiment ack_means_known) and Closed; Archived holds none.
  *  1. By default Needs you and Done show their cards, open, with no toggle; Working, Waiting /
  *     Snoozed, Acknowledged and Closed follow in that order, each one line with its count and no card;
@@ -18,7 +18,7 @@
  *  4. His answer to the choice moves its card out of Needs you: a line stands in its place
  *     ("Moved to Closed", Show); Show opens Closed and brings the card's top into view, marked. A
  *     card snoozed with the keyboard leaves Done the same way, the line taking the focus; Enter on
- *     Show opens Waiting / Snoozed and hands the focus to its head. Each line fades by itself.
+ *     Show opens Waiting and hands the focus to its head. Each line fades by itself.
  *  5. A card that moved while the Threads were away leaves no line when they open again.
  *  6. A long group (25 cards) stays one line until opened.
  *  7. Under many long Done cards every folded head is in the pane on arrival, stacked along its
@@ -141,7 +141,7 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-const labels: Record<string, string> = { needs: 'Needs you', read: 'Done', working: 'Working', waiting: 'Waiting / Snoozed', known: 'Acknowledged', done: 'Closed', archived: 'Archived' }
+const labels: Record<string, string> = { needs: 'Needs you', read: 'Done', working: 'Working', waiting: 'Waiting', known: 'Acknowledged', done: 'Closed', archived: 'Archived' }
 
 test('by default Needs you and Done show their cards and every other group is one folded line', async ({ page, request }) => {
   const pageErrors: string[] = []
@@ -283,9 +283,9 @@ test('a card that leaves Needs you or Done for a fold leaves a line; Show opens 
   await page.keyboard.press('Enter')
   await expect(menu).toHaveCount(0)
   await expect(read).toHaveCount(0)
-  await expect(note(page, ids.read)).toContainText('Moved to Waiting / Snoozed')
+  await expect(note(page, ids.read)).toContainText('Moved to Waiting')
   await expect.poll(() => focusAt(page)).toEqual({ testId: 'org-thread-move-show', moved: ids.read, group: null })
-  // Enter on Show: Waiting / Snoozed opens, the card marked, the focus on that group's head.
+  // Enter on Show: Waiting opens, the card marked, the focus on that group's head.
   await page.keyboard.press('Enter')
   await expect(group(page, 'waiting')).toHaveAttribute('data-open', 'true')
   const back = cardIn(page, 'waiting', ids.read)
@@ -339,7 +339,7 @@ test('a card that moved while the Threads were away leaves no line when they ope
   // While he looks, the same card moves again (snoozed) out of the open Working: its line shows.
   await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${away}`, { snooze: new Date(Date.now() + 86_400_000).toISOString() })
   await expect(note(page, away)).toBeVisible({ timeout: 20_000 })
-  await expect(note(page, away)).toContainText('Moved to Waiting / Snoozed')
+  await expect(note(page, away)).toContainText('Moved to Waiting')
   expect(pageErrors).toEqual([])
 })
 

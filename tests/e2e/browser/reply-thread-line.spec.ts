@@ -202,7 +202,7 @@ test('a task with Threads on: its chat names the thread, and the line opens its 
   // He opens the task from the lead's Tasks.
   await showTasks(page.getByTestId('org-detail'))
   const row = page.getByRole('button', { name: new RegExp(`^${WORK}`) }).first()
-  if (!(await row.isVisible())) await page.getByRole('button', { name: /Waiting \/ snoozed/ }).last().click()
+  if (!(await row.isVisible())) await page.getByRole('button', { name: /^Waiting\b/ }).last().click()
   await row.click()
   const panel = page.locator(`.session-panel[data-session-id="${ids.workSid}"]`).last()
   const composer = panel.locator('.chat-input-textarea[data-draft-key^="draft:session:"]')

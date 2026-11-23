@@ -3,7 +3,7 @@
  * (2026-11-02, the user, on a task parked on its own build: "look htis one is runing why it is in
  * wait? wait is not waintg wait is just acutally waitng, if it is runnig it shoud be i progress
  * right?", then "it is not finish it is working right, the implementaiton is working"; on the
- * Waiting / snoozed section: "this is not waiting looks kike they are waiting for my input").
+ * Waiting section: "this is not waiting looks kike they are waiting for my input").
  *
  * Guards for the class:
  *  - every report that says the task's own work goes on (FOR_USER_STATE working, or a wait of kind
@@ -175,7 +175,7 @@ describe('the states every surface reads', () => {
   it('counts carry To read apart, and the line counts it under Needs you', () => {
     const c = countUserStates([{ state: 'needs' }, { state: 'read' }, { state: 'working' }])
     expect(c).toEqual({ needs: 1, read: 1, working: 1, waiting: 0, done: 0 })
-    expect(userStatusLine(c)).toBe('2 Needs you · 1 Working · 0 Waiting / snoozed · 0 Completed')
+    expect(userStatusLine(c)).toBe('2 Needs you · 1 Working · 0 Waiting · 0 Completed')
     expect(userStatusLine({ needs: 0, working: 1, waiting: 2, done: 0 })).not.toContain('To read')
   })
 })

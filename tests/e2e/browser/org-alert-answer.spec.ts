@@ -223,7 +223,7 @@ test('each row is its summary, its task, the answer and small Quote and Snooze; 
   await expect(page).toHaveURL(/\/org\?/)
 })
 
-test('Snooze opens the date picker; a pick snoozes the task, which moves to Waiting / snoozed until then', async ({ page, request }) => {
+test('Snooze opens the date picker; a pick snoozes the task, which moves to Waiting until then', async ({ page, request }) => {
   const id = await createTask(request, `Snoozable ${STAMP}`)
   await needsUser(request, id)
   await openTeam(page)
@@ -266,8 +266,8 @@ test('Snooze opens the date picker; a pick snoozes the task, which moves to Wait
   release()
   await page.unroute(`**/api/tasks/${id}`)
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date).toBe(date)
-  // A snoozed ask is Waiting / snoozed until then (the one user status, src/core/user-status.ts):
-  // it leaves Needs you, and the Waiting / snoozed section lists it.
+  // A snoozed ask is Waiting until then (the one user status, src/core/user-status.ts):
+  // it leaves Needs you, and the Waiting section lists it.
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state, { timeout: 30_000 }).toBe('waiting')
   await expect(row).toHaveCount(0)
   const detail = page.getByTestId('org-detail')

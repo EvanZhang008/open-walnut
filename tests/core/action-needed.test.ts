@@ -44,7 +44,7 @@ describe('applyActions: the state an open item gives a task', () => {
     expect(s.actions?.[0]?.snoozedUntil).toBe(LATER)
   })
 
-  it('every item that made it Needs you snoozed: Waiting / snoozed until the first comes back', () => {
+  it('every item that made it Needs you snoozed: Waiting until the first comes back', () => {
     const own: UserStatus = { state: 'needs', source: 'letter', ask: letter.summary }
     const s = applyActions(own, [letter, approval], [{ id: 'lt-1', until: LATER, at: EARLIER }, { id: 'apr-1', until: '2026-11-20T09:00:00.000Z', at: EARLIER }], { nowMs: NOW })
     expect(s).toMatchObject({ state: 'waiting', kind: 'time', until: LATER, snoozed: { until: LATER, ask: letter.summary } })

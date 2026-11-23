@@ -59,7 +59,7 @@ final class OrgNodeTasksModelTests: XCTestCase {
             task("d", phase: "COMPLETE", status: "done", completed: "2026-11-04T01:00:00Z"),
         ]
         let s = OrgNodeTasksModel.statusSections(rows)
-        // Not started is its own group after Waiting / snoozed (2026-11-09).
+        // Not started is its own group after Waiting (2026-11-09).
         XCTAssertEqual(s.map(\.id), ["watching", "needs", "working", "waiting", "notstarted", "done"])
         XCTAssertEqual(s.first?.rows.map(\.id), ["w"])
         XCTAssertEqual(s.first { $0.id == "waiting" }?.rows.map(\.id), ["z"])

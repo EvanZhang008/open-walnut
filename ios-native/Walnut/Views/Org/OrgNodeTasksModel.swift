@@ -27,7 +27,7 @@ enum OrgNodeTasksModel {
             case .watching: return "Watching"
             case .needs: return "Needs you"
             case .working: return "Working"
-            case .waiting: return "Waiting / snoozed"
+            case .waiting: return "Waiting"
             case .notStarted: return TeamStatusModel.notStartedLabel
             case .done: return "Completed"
             }

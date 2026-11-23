@@ -129,7 +129,7 @@ test.beforeAll(async ({ request }) => {
   expect(talk.messages[1].answer.sid).toBeUndefined()
   await ok(await request.put(`/api/v1/tasks/${ids.lead}/brief`, {
     headers: { 'x-walnut-caller-sid': UNPLACED_SID },
-    data: { content: `### Needs you\n\nNone.\n\n### Working\n\n<a class="file-link" data-rel-path="src/notes.ts" data-cwd="${dir}" data-file-line="2" data-file-end-line="3">Relative notes</a>\n\n### Waiting / snoozed\n\nNone.` },
+    data: { content: `### Needs you\n\nNone.\n\n### Working\n\n<a class="file-link" data-rel-path="src/notes.ts" data-cwd="${dir}" data-file-line="2" data-file-end-line="3">Relative notes</a>\n\n### Waiting\n\nNone.` },
   }), 'unknown writer brief')
 })
 

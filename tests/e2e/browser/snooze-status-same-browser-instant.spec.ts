@@ -1,7 +1,7 @@
 /**
  * A snooze cleared by hand wakes the task's row in the same frame, before the server has answered
  * (2026-11-19: clearing a snooze changed the start date at once, but the row kept reading Snoozed
- * under Waiting / snoozed until the server's pass derived `user_status` again, a field only the
+ * under Waiting until the server's pass derived `user_status` again, a field only the
  * server writes).
  *
  * The store now predicts the woken status by the server's own rule (predictedForStart in
@@ -12,8 +12,8 @@
  * Snooze until -> Clear date):
  *  1. Cleared with the write held: the row is under Needs you inside INSTANT_MS with zero
  *     responses answered; after the release, in no frame of the next 2.5 s is it back under
- *     Waiting / snoozed, and the server reads Needs you.
- *  2. Cleared, refused (500 after 1.2 s, and its retries): the row is back under Waiting / snoozed,
+ *     Waiting, and the server reads Needs you.
+ *  2. Cleared, refused (500 after 1.2 s, and its retries): the row is back under Waiting,
  *     and the server still has the snooze.
  * The fixture is shared, so this file makes its own tasks and removes them.
  */
@@ -143,7 +143,7 @@ test('a snooze cleared wakes the row before the server has answered, and the ans
   expect(await seen(), 'the row was drawn outside Needs you after it woke').toEqual([rows('needs')])
 })
 
-test('a refused unsnooze puts the row back under Waiting / snoozed', async ({ page }) => {
+test('a refused unsnooze puts the row back under Waiting', async ({ page }) => {
   const id = ids.refused
   const panel = await openHome(page, id)
   let refusals = 0

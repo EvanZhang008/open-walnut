@@ -1,6 +1,6 @@
 /**
  * Guard: the words a Thread shows (the Org page's and a task's Threads, the phone app's) are the
- * user's own groups and nothing else: Needs you, Done, Working, Waiting / Snoozed, Acknowledged,
+ * user's own groups and nothing else: Needs you, Done, Working, Waiting, Acknowledged,
  * Closed, Archived (src/core/org/thread-groups.ts THREAD_GROUP_LABELS). Its state value stays
  * `answered` inside Walnut; he never reads "Answered", "To read" or "Known" as a state,
  * "Acknowledged" only names the group a card waits in while the AI decides where it goes, and
@@ -86,8 +86,8 @@ describe('Threads show only his own group words', () => {
     ]) expect(rel).toContain(f);
   });
 
-  it('the groups are exactly Needs you, Done, Working, Waiting / Snoozed, Acknowledged, Closed and Archived', () => {
-    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Acknowledged', 'Closed', 'Archived']);
+  it('the groups are exactly Needs you, Done, Working, Waiting, Acknowledged, Closed and Archived', () => {
+    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting', 'Acknowledged', 'Closed', 'Archived']);
   });
 
   it('no file that renders a thread has Answered, To read or Known in a string, nor Acknowledged but its group label', () => {

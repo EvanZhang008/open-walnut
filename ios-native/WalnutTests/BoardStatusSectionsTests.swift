@@ -2,7 +2,7 @@ import XCTest
 import SwiftUI
 @testable import Walnut
 
-/// The board's status sections (Watching, Needs you, Working, Waiting / snoozed, Background,
+/// The board's status sections (Watching, Needs you, Working, Waiting, Background,
 /// Completed):
 /// which row goes where, in what order, what is open by default and how that is stored, and
 /// the Watch write. The model is `BoardStatusSections.swift`; `BoardModel.assemble` is where
@@ -61,7 +61,7 @@ final class BoardStatusSectionsTests: XCTestCase {
 
     /// Each row of the view is drawn exactly once, in its state's section: done in Completed,
     /// the user's turn in Needs you (the user status first, the phase as the fallback, never
-    /// a done row), WAITING or a later start (under Now) in Waiting / snoozed, the rest in the
+    /// a done row), WAITING or a later start (under Now) in Waiting, the rest in the
     /// bands under Working. Both groupings agree.
     func testEveryRowLandsInExactlyOneSection() {
         let tasks = [
@@ -92,7 +92,7 @@ final class BoardStatusSectionsTests: XCTestCase {
     /// There is no To read section (2026-11-03, the user: "I dont wnat serpeate to read"): a
     /// stored `read`, or an older server's `waiting` with `toRead`, is a Needs you row, sorted
     /// with the others by latest activity and wearing the needs mark; a snoozed status stays
-    /// under Waiting / snoozed whatever it holds.
+    /// under Waiting whatever it holds.
     func testToReadRowsAreNeedsYouRowsAndNothingSnoozed() {
         let tasks = [
             task("read", phase: "NEED_ACTION", updated: "2026-08-25T00:00:00Z",
@@ -125,7 +125,7 @@ final class BoardStatusSectionsTests: XCTestCase {
                        ["Decide: Pick one", "Take a look: It answered your question", "Can close: The result is ready"])
     }
 
-    /// The mark follows the row's group: under Waiting / snoozed or Completed no row
+    /// The mark follows the row's group: under Waiting or Completed no row
     /// wears the needs dot, even one whose phase alone (an older server) would ask for it.
     /// Unread still shows everywhere.
     func testTheRowMarkFollowsItsSectionNotThePhase() {
@@ -139,7 +139,7 @@ final class BoardStatusSectionsTests: XCTestCase {
         var unread = task("u", phase: "NEED_ACTION")
         unread.unread = true
         XCTAssertEqual(BoardModel.dot(unread, in: .waiting), .unread)
-        // A snoozed status is Waiting, never Needs you, so its row sits under Waiting / snoozed.
+        // A snoozed status is Waiting, never Needs you, so its row sits under Waiting.
         let snoozed = task("s", start: "2026-09-01", user: .init(state: "waiting", snoozed: .init(until: "2026-09-01", ask: "Approve")))
         XCTAssertFalse(BoardModel.needsHuman(snoozed))
         XCTAssertEqual(board([snoozed]).sections.waiting.map(\.id), ["s"])
@@ -240,7 +240,7 @@ final class BoardStatusSectionsTests: XCTestCase {
         XCTAssertEqual(b.sections.needs.map(\.id), ["talked", "edited", "old"])
     }
 
-    /// Waiting / snoozed: the soonest wake first (a WAITING clock, else a start date), then the
+    /// Waiting: the soonest wake first (a WAITING clock, else a start date), then the
     /// rows with no clock by latest activity. A wait clock on a task that is not WAITING does
     /// not count.
     func testWaitingPutsTheSoonestWakeFirst() {
@@ -301,7 +301,7 @@ final class BoardStatusSectionsTests: XCTestCase {
 
     func testDefaultsAndWords() {
         XCTAssertEqual(BoardStatusSection.allCases.map(\.label),
-            ["Watching", "Needs you", "Working", "Waiting / snoozed", "Background", "Completed"])
+            ["Watching", "Needs you", "Working", "Waiting", "Background", "Completed"])
         XCTAssertEqual(BoardStatusSection.allCases.filter(\.defaultOpen), [.watching, .needs, .working])
         XCTAssertEqual(BoardWatchItem.label(watched: false), "Watch")
         XCTAssertEqual(BoardWatchItem.label(watched: true), "Stop watching")
@@ -504,7 +504,7 @@ final class BoardStatusSectionsTests: XCTestCase {
     }
 
     /// A WAITING row the board holds out of its bands (the Parked shelf) goes to Background
-    /// too when it is marked, never to Waiting / snoozed.
+    /// too when it is marked, never to Waiting.
     func testAHeldWaitingRowInBackgroundIsDrawnInBackground() {
         let tasks = [task("parked", phase: "WAITING", background: "2026-08-26T00:00:00Z"), task("open")]
         let s = board(tasks).sections

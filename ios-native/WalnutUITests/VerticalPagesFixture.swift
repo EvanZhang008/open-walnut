@@ -76,7 +76,7 @@ enum VerticalPagesFixture {
     /// The letter with the head that says how current it is (`fresh`), its words long too.
     private static var brief: [String: Any] {
         [
-            "brief": ["text": "### Needs you\n- \(WideText.taskRefSentence)\n### Working\n\(WideText.markdown)\n### Waiting / snoozed\n- nothing",
+            "brief": ["text": "### Needs you\n- \(WideText.taskRefSentence)\n### Working\n\(WideText.markdown)\n### Waiting\n- nothing",
                       "at": at(10)],
             "fresh": ["writtenAt": at(10), "moved": [] as [Any], "finished": [] as [Any], "newAsks": [] as [Any],
                       "stale": true, "words": "3 lines moved since " + WideText.pathThenCJK],

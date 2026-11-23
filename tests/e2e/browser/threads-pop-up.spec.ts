@@ -14,7 +14,7 @@
  *     recommended one first, marked), no Acknowledge; a click sends its label to the subtask's
  *     thread as his reply (2026-11-20, the user: "if you recommend this, why can I not just click it?").
  *  5. Threads by state: his reply moves a card below to Working, leaving a line in Needs you;
- *     snoozed there with the keyboard it leaves a line holding the focus; in Waiting / Snoozed it
+ *     snoozed there with the keyboard it leaves a line holding the focus; in Waiting it
  *     says until when, its box follows the task up, and its menu's Unsnooze brings it back to
  *     Working (2026-11-21, a review: no way back).
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
@@ -183,8 +183,8 @@ test('on: the subtask\'s thread shows on its lead, and his reply there wakes the
   const side = page.getByRole('group', { name: 'Threads, Tasks or Brief' })
   await side.getByRole('button', { name: /^Tasks/ }).click()
   const row = page.getByRole('button', { name: new RegExp(`^Task status foundation ${STAMP}`) }).first()
-  // Its turn on his words has ended, so it may sit in the folded Waiting / snoozed group.
-  if (!(await row.isVisible())) await page.getByRole('button', { name: /Waiting \/ snoozed/ }).last().click()
+  // Its turn on his words has ended, so it may sit in the folded Waiting group.
+  if (!(await row.isVisible())) await page.getByRole('button', { name: /^Waiting\b/ }).last().click()
   await row.click()
   const chat = page.locator('.main-page-session-column, .session-panel').filter({ hasText: REPLY }).first()
   await expect(chat).toBeVisible({ timeout: 30_000 })
@@ -378,10 +378,10 @@ test('on, Threads by state: a card below snoozed says until when, and its Unsnoo
     await menu.getByRole('button', { name: '2h', exact: true }).focus()
     await page.keyboard.press('Enter')
     await expect(inGroup('working')).toHaveCount(0)
-    await expect(line).toContainText('Moved to Waiting / Snoozed')
+    await expect(line).toContainText('Moved to Waiting')
     await expect.poll(focused).toBe('org-thread-move-show')
     await shot(page, '7-snoozed-line')
-    // Show: Waiting / Snoozed opens, the card saying until when, Snoozed and Unsnooze on it.
+    // Show: Waiting opens, the card saying until when, Snoozed and Unsnooze on it.
     await page.keyboard.press('Enter')
     await expect(group('waiting')).toHaveAttribute('data-open', 'true')
     const card = inGroup('waiting')

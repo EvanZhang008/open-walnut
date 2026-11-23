@@ -117,7 +117,7 @@ const plantWhen = () => `<walnut-choice id="plant-when" title="Plant the beds th
 const waterHow = () => `<walnut-choice id="water-how" title="Drip or sprinkler for the beds?" options="drip:Drip,spray:Sprinkler" task="${bedsId}"></walnut-choice>`
 const threadOn = async (choice: string) => (await readThreads(leadId)).threads.find((t) => t.id === choiceThreadId(leadId, choice))
 
-const BRIEF = '### Needs you\n- Nothing\n\n### Working\n- The beds are being dug\n\n### Waiting / snoozed\n- Nothing'
+const BRIEF = '### Needs you\n- Nothing\n\n### Working\n- The beds are being dug\n\n### Waiting\n- Nothing'
 
 beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true })

@@ -207,7 +207,7 @@ describe('buildStatusSections', () => {
     expect(inList.workingCount).toBe(1);
   });
 
-  it('a snoozed task sleeps under Waiting / snoozed', () => {
+  it('a snoozed task sleeps under Waiting', () => {
     const later = task({ start_date: '2099-01-01' });
     const m = buildStatusSections({ scope: [later], passes: () => true, snoozed: (x) => x.id === later.id });
     expect(ids(m.waiting)).toEqual([later.id]);

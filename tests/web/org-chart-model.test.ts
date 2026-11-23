@@ -74,7 +74,7 @@ describe('org chart cards', () => {
   it('one card per project, named after it, the Inbox last and a VP like any other', () => {
     const cards = cardsOf([...garden, ...seeds, ...inbox, gardenLead, seedsLead])
     expect(cards.map((c) => [c.name, c.projects.length])).toEqual([['Garden', 1], ['Seeds', 1], ['Inbox', 1]])
-    expect(cards.find((c) => c.name === 'Garden')!.line).toBe('1 Working · 1 Waiting / snoozed')
+    expect(cards.find((c) => c.name === 'Garden')!.line).toBe('1 Working · 1 Waiting')
     // The Inbox is a project with its VP since 2026-11-21: counted with the others.
     expect(ceoLine(cards)).toBe('3 VPs · 2 Working')
   })
@@ -84,8 +84,8 @@ describe('org chart cards', () => {
     const cards = cardsOf([...garden, ...seeds, ...inbox, vp, { ...seedsLead, phase: 'COMPLETE' as const }])
     const g = cards.find((c) => c.name === 'Garden')!
     // Seeds' task not started yet is Waiting (src/core/user-status.ts), as on the Board.
-    expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 Working · 1 Waiting / snoozed'], ['Seeds', '1 Working · 1 Waiting / snoozed']])
-    expect(g.line).toBe('2 projects · 2 Working · 2 Waiting / snoozed')
+    expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 Working · 1 Waiting'], ['Seeds', '1 Working · 1 Waiting']])
+    expect(g.line).toBe('2 projects · 2 Working · 2 Waiting')
     expect(cards.some((c) => c.name === 'Seeds')).toBe(false)
     expect(ceoLine(cards)).toBe('2 VPs · 1 Working')
   })
@@ -97,7 +97,7 @@ describe('org chart cards', () => {
     const one = cardsOf([signed, busy, gardenLead]).find((c) => c.name === 'Garden')!
     expect([one.news, one.newsTask]).toEqual(['The check passed; only your signature is left.', 'Renew the permit'])
     expect(one.newsAt).toBe(Date.parse(at(30)))
-    expect(one.line).toBe('1 Working · 1 Waiting / snoozed')
+    expect(one.line).toBe('1 Working · 1 Waiting')
     // Several projects on one card: the one that needs the user leads, named.
     const ask = t('Seeds', { phase: 'NEED_ACTION', title: 'Pick a supplier', user_status: { state: 'needs', source: 'session', ask: 'Choose one of two quotes', at: at(5) } as never })
     const vp = { ...gardenLead, org_leads: ['Seeds'] }
@@ -153,7 +153,7 @@ describe('org chart cards', () => {
     cards = cardsOf([...garden, ...seeds, named, { ...seedsLead, phase: 'COMPLETE' as const }, { ...growth, org_leads: ['Seeds'], phase: 'NEED_ACTION' as const }])
     const g2 = cards.find((c) => c.project === 'Growth')!
     expect(g2.projects.map((p) => p.name)).toEqual(['Seeds'])
-    expect(g2.line).toBe('1 Working · 1 Waiting / snoozed')
+    expect(g2.line).toBe('1 Working · 1 Waiting')
     expect(g2.needsYou).toBe(1)
     // Its own project shows once it has open work.
     cards = cardsOf([...garden, ...seeds, named, seedsLead, growth, t('Growth', { phase: 'IN_PROGRESS' })])
@@ -171,7 +171,7 @@ describe('org chart cards', () => {
     expect(vpLine({ open: 3, running: 0, needsYou: 0, waiting: 0 })).toBe('3 open')
     expect(vpLine({ open: 0, running: 0, needsYou: 0, waiting: 0 })).toBe('Nothing open')
     // To read is counted under Needs you (the card's own number), never a count of its own here.
-    expect(vpLine({ open: 4, running: 1, needsYou: 0, toRead: 2, waiting: 1 })).toBe('1 Working · 1 Waiting / snoozed')
+    expect(vpLine({ open: 4, running: 1, needsYou: 0, toRead: 2, waiting: 1 })).toBe('1 Working · 1 Waiting')
     // An older server's counts carry no toRead.
     expect(vpLine({ open: 1, running: 1, needsYou: 0, waiting: 0 } as never)).toBe('1 Working')
   })

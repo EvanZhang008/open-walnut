@@ -41,7 +41,7 @@ function writeEdits(stored: { text: string; text_sources?: BriefTextSource[] }, 
 }
 
 const working = t('b', { state: 'working', now: 'building' }, 'IN_PROGRESS')
-const letter = '### Needs you\n- None\n### Working\n- <task-ref id="b" label="B"/>: building, log at /home/me/run/build.log\n### Waiting / snoozed\n- None'
+const letter = '### Needs you\n- None\n### Working\n- <task-ref id="b" label="B"/>: building, log at /home/me/run/build.log\n### Waiting\n- None'
 
 describe('Brief text sources', () => {
   it('a whole write is all its writer\'s, and a path in it names that remote session', () => {
@@ -53,7 +53,7 @@ describe('Brief text sources', () => {
 
   it('an exact edit by another session keeps the old path with its writer and gives the new words to the editor', () => {
     const first = writeWhole(letter, REMOTE, [lead, working])
-    const edited = writeEdits(first, [{ old: '### Waiting / snoozed\n- None', new: '### Waiting / snoozed\n- <task-ref id="b" label="B"/>: notes in /srv/other/notes.md' }], OTHER, [lead, working])
+    const edited = writeEdits(first, [{ old: '### Waiting\n- None', new: '### Waiting\n- <task-ref id="b" label="B"/>: notes in /srv/other/notes.md' }], OTHER, [lead, working])
     expect(briefPathWriters(edited.text, edited.text_sources, '/home/me/run/build.log')).toEqual([REMOTE])
     expect(briefPathWriters(edited.text, edited.text_sources, '/srv/other/notes.md')).toEqual([OTHER])
   })

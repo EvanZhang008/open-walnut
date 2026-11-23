@@ -235,8 +235,8 @@ describe('counts', () => {
   it('one line, the same everywhere', () => {
     const c = countUserStates([{ state: 'needs' }, { state: 'needs' }, { state: 'working' }, { state: 'waiting' }, { state: 'done' }])
     expect(c).toEqual({ needs: 2, read: 0, working: 1, waiting: 1, done: 1 })
-    expect(userStatusLine(c)).toBe('2 Needs you · 1 Working · 1 Waiting / snoozed · 1 Completed')
-    expect(userStatusLine({ needs: 1, working: 0, waiting: 0, done: 0 }, { withDone: false })).toBe('1 Needs you · 0 Working · 0 Waiting / snoozed')
+    expect(userStatusLine(c)).toBe('2 Needs you · 1 Working · 1 Waiting · 1 Completed')
+    expect(userStatusLine({ needs: 1, working: 0, waiting: 0, done: 0 }, { withDone: false })).toBe('1 Needs you · 0 Working · 0 Waiting')
   })
 })
 

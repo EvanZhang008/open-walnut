@@ -592,7 +592,7 @@ test('his view shows only threads with something for him; his reply sends one ou
   await page.getByTestId('org-threads-hidden').click()
   const quiet = page.getByTestId('org-thread-list-hidden')
   await expect(quiet.getByTestId('org-thread')).toHaveCount(3)
-  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Waiting / Snoozed')
+  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Waiting')
   await page.getByTestId('org-threads-hidden').click()
   await expect(quiet).toHaveCount(0)
 

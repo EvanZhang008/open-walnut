@@ -10,7 +10,7 @@
  *  1. a lead with a Brief: the node opens on Threads (tabs Threads, Tasks, Brief); Task shows All
  *     tasks with its Needs you section open (Latest, the cards), the switch
  *     offers Brief with a dot for a rewrite not read yet; Brief shows the letter alone, in its three
- *     sections (Needs you, Working, Waiting / snoozed) with each task under its live status, its
+ *     sections (Needs you, Working, Waiting) with each task under its live status, its
  *     pills wearing that status, its time, no Needs you cards; Task brings the cards back; the
  *     Task view's sections carry the home panel's names and counts, in its order, what waits folded,
  *     and a count pill opens its section in the same list;
@@ -147,10 +147,10 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   const body = detail.getByTestId('org-brief-body')
   await expect(body).toContainText('the parser is half done')
   // Three sections in order, each task under its live status, an empty one says so.
-  await expect(body.locator('h3')).toHaveText(['Needs you', 'Working', 'Waiting / snoozed'])
+  await expect(body.locator('h3')).toHaveText(['Needs you', 'Working', 'Waiting'])
   await expect(body.locator('h3[data-brief-section]')).toHaveCount(3)
   await expect.poll(() => sectionOf(body, ids.parser)).toBe('Needs you')
-  await expect.poll(() => sectionOf(body, ids.review)).toBe('Waiting / snoozed')
+  await expect.poll(() => sectionOf(body, ids.review)).toBe('Waiting')
   await expect(body.locator(`a.task-link[data-task-id="${ids.parser}"]`)).toHaveAttribute('data-user-state', 'needs')
   await expect(body.locator(`a.task-link[data-task-id="${ids.review}"]`)).toHaveAttribute('data-user-state', 'waiting')
   await expect(detail.getByTestId('org-brief-head')).toHaveText(/^Written [^·]*$/)
@@ -165,7 +165,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   // All tasks is one list (2026-11-12): Watching first (Home's watched tasks of this node's work,
   // org-pins.ts), then the home panel's names, To read folded into Needs you (5ef179d98: no section of
   // its own); a section with nothing in it is left out. Not started lists the review, nobody started it
-  // (2026-11-09: its own section, out of Waiting / snoozed; the Brief keeps its three sections). What is
+  // (2026-11-09: its own section, out of Waiting; the Brief keeps its three sections). What is
   // in front of the user now is open, what waits and what is done start folded. (The lead's own turn
   // ended too, so it may need the user as well: counted, not pinned.)
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
@@ -173,7 +173,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   const shownTabs = await detail.getByTestId('org-task-section').evaluateAll((els) => els.map((e) => e.getAttribute('data-tab') ?? ''))
   expect(shownTabs, 'sections in the home panel\'s order').toEqual(ORDER.filter((t) => shownTabs.includes(t)))
   expect(shownTabs).toEqual(expect.arrayContaining(['needs', 'notstarted']))
-  const LABELS: Record<string, RegExp> = { watching: /^Watching\s*\d+$/, needs: /^Needs you\s*\d+$/, working: /^Working\s*\d+$/, waiting: /^Waiting \/ snoozed\s*\d+$/, notstarted: /^Not started\s*\d+$/, done: /^Completed\s*\d+$/ }
+  const LABELS: Record<string, RegExp> = { watching: /^Watching\s*\d+$/, needs: /^Needs you\s*\d+$/, working: /^Working\s*\d+$/, waiting: /^Waiting\s*\d+$/, notstarted: /^Not started\s*\d+$/, done: /^Completed\s*\d+$/ }
   await expect(detail.getByTestId('org-task-section-head')).toHaveText(shownTabs.map((t) => LABELS[t]!))
   await expect(taskSection(detail, 'needs')).toHaveAttribute('data-open', '1')
   await expect(taskSection(detail, 'needs').getByTestId('org-task-section-head')).toHaveAttribute('aria-expanded', 'true')
@@ -249,7 +249,7 @@ test('in a Chinese Brief Walnut writes its line in Chinese, and a task the write
   const ask = await request.patch(`/api/tasks/${asker}`, { data: { phase: 'NEED_ACTION' } })
   expect(ask.ok(), await ask.text()).toBe(true)
   const none = '- \u65e0'
-  const letter = `### Needs you\n${none}\n### Working\n- <task-ref id="${ids.review}" label="Review"/>\uff1a\u5728\u7b49\u4ee3\u7801\u5ba1\u9605\u3002\n### Waiting / snoozed\n${none}`
+  const letter = `### Needs you\n${none}\n### Working\n- <task-ref id="${ids.review}" label="Review"/>\uff1a\u5728\u7b49\u4ee3\u7801\u5ba1\u9605\u3002\n### Waiting\n${none}`
   await writeBrief(request, { content: letter })
   const stored = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.brief as { text: string; added?: string[]; lang?: string }
   const walnutLine = (stored.added ?? []).find((l) => l.includes(asker))
@@ -352,7 +352,7 @@ test('a rewrite reaches an open Brief at once, with no reload', async ({ page, r
   expect(issues).toHaveLength(1)
   await expect(body).toContainText('waits on your pick', { timeout: 30_000 })
   await expect(body).not.toContainText('the parser is half done')
-  await expect(body.locator('h3')).toHaveText(['Needs you', 'Working', 'Waiting / snoozed'])
+  await expect(body.locator('h3')).toHaveText(['Needs you', 'Working', 'Waiting'])
   await expect(body.locator(`a.task-link[data-task-id="${ids.parser}"]`)).toHaveAttribute('data-user-state', 'needs')
   // Its first line names no task: stored with that issue (brief-rules.ts), which the page does not show.
   const stored = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.brief as { issues?: Array<{ kind: string }> }

@@ -118,7 +118,7 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
 
   // No Panels section: the list opens on Pinned, and Notes / Calendar are reached from the rail.
   for (const id of ['panels', 'notes', 'calendar']) await expect(heading(page, id)).toHaveCount(0);
-  // The status sections' headings (Watching, Waiting / snoozed, Completed) share the
+  // The status sections' headings (Watching, Waiting, Completed) share the
   // heading style but are not navigation regions; NAV_HEADING leaves them out.
   expect(await navigation(page).locator(NAV_HEADING).first().getAttribute('data-navigation-id')).toBe('pinned');
 

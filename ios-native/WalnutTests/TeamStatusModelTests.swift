@@ -37,7 +37,7 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(b.stuck, 1)
         XCTAssertEqual(b.notStarted, 1)
         // Not started is its own category, never part of Waiting (the web's countsLine, 2026-11-09).
-        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 2 Waiting / snoozed (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.")
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 2 Waiting (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.")
         XCTAssertEqual(TeamStatusChip.waiting.rows(b).map(\.id), ["c", "a"])
         XCTAssertEqual(TeamStatusChip.notStarted.rows(b).map(\.id), ["d"])
         XCTAssertEqual(TeamStatusChip.allCases.map { $0.count(b) }, [1, 1, 2, 1, 1])
@@ -72,12 +72,12 @@ final class TeamStatusModelTests: XCTestCase {
         // `read` is still decoded, but never a group of its own: no chip, no words, no count.
         XCTAssertEqual(UserState.groups, [.needs, .working, .waiting, .done])
         XCTAssertFalse(UserState.groups.contains(.read))
-        XCTAssertEqual(UserState.groups.map(\.label), ["Needs you", "Working", "Waiting / snoozed", "Completed"])
+        XCTAssertEqual(UserState.groups.map(\.label), ["Needs you", "Working", "Waiting", "Completed"])
         XCTAssertEqual(UserState.read.shown, .needs)
         XCTAssertEqual(UserState.read.label, "Needs you")
         XCTAssertFalse(UserState.allCases.map(\.label).contains("To read"))
         // The chips: the four groups with Not started after Waiting, and no To read.
-        XCTAssertEqual(TeamStatusChip.allCases.map(\.label), ["Needs you", "Working", "Waiting / snoozed", "Not started", "Completed"])
+        XCTAssertEqual(TeamStatusChip.allCases.map(\.label), ["Needs you", "Working", "Waiting", "Not started", "Completed"])
     }
 
     func testToReadFromTheServerAndFromAnOlderOneIsNeedsYou() {
@@ -212,7 +212,7 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(Set(b.waiting.map(\.id)), ["w", "z"])
         XCTAssertEqual(Set(b.working.map(\.id)), ["lead", "c"])
         // The counts line names no To read: those tasks are Needs you.
-        XCTAssertEqual(TeamStatusModel.countsLine(b), "2 Working, 2 Waiting / snoozed, 1 Completed in the last 7 days.")
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "2 Working, 2 Waiting, 1 Completed in the last 7 days.")
         XCTAssertFalse(TeamStatusModel.countsLine(b).contains("To read"))
         // Each row's third line.
         XCTAssertEqual(b.needs.map { TeamStatusModel.needLine($0.status)?.line },
@@ -385,7 +385,7 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(LiveActivityFormat.line(a, now: Self.now).text, "slack: post · 40 s · turn 2 h 5 min")
     }
 
-    /// A not started task that is snoozed sleeps under Waiting / snoozed; Not started counts only
+    /// A not started task that is snoozed sleeps under Waiting; Not started counts only
     /// the ones nobody started and nobody put aside (the web's `isNotStartedStatus`).
     func testASnoozedTaskNobodyStartedIsWaitingNotNotStarted() {
         var snoozed = WalnutUserStatus(state: "waiting", kind: "not-started", waitingOn: "Not started yet")
@@ -398,7 +398,7 @@ final class TeamStatusModelTests: XCTestCase {
         let b = TeamStatusModel.build(ownerId: "lead", tasks: tasks, now: Self.now)
         XCTAssertEqual(b.notStartedRows.map(\.id), ["ns"])
         XCTAssertEqual(b.waitingRows.map(\.id), ["zz"])
-        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 1 Waiting / snoozed, 1 Not started, 0 Completed in the last 7 days.")
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 1 Waiting, 1 Not started, 0 Completed in the last 7 days.")
         // A filter an older build kept still reads.
         XCTAssertEqual(TeamStatusChip(rawValue: "waiting"), .waiting)
         XCTAssertEqual(TeamStatusChip(rawValue: "notstarted"), .notStarted)

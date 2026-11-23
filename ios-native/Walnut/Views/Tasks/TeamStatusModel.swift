@@ -24,7 +24,7 @@ enum UserState: String, CaseIterable {
         // To read is drawn and named as Needs you (`shown`).
         case .read: return "Needs you"
         case .working: return "Working"
-        case .waiting: return "Waiting / snoozed"
+        case .waiting: return "Waiting"
         case .done: return "Completed"
         }
     }

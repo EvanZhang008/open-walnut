@@ -466,7 +466,7 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
 })
 
 test('Waiting tasks are out of the list and the tiers by default; Status Waiting brings them back; parking a card fades it out', async ({ page, request, browserName }) => {
-  // The folded Waiting / snoozed and Completed sections under the list are Flat's (the
+  // The folded Waiting and Completed sections under the list are Flat's (the
   // product default); By project folds them inside each project instead.
   await presetPanelDesign(page, 'status')
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
@@ -492,7 +492,7 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   await expect(anyParked).toHaveCount(0)
   await shot(page.locator('.todo-panel'), 'show-waiting-off', browserName)
 
-  // The folded "Waiting / snoozed" section under the list says what the view holds
+  // The folded "Waiting" section under the list says what the view holds
   // back; opening it draws the parked task there, with the hourglass. (The footer
   // that used to say "N Waiting hidden" became these sections.)
   const waitingHeading = statusSection(page, 'waiting')
@@ -513,7 +513,7 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   await expect(anyParked).toHaveCount(0)
 
   // Open + Waiting holds every open phase, so it keeps the sections: the parked task
-  // stays in the folded Waiting / snoozed section, not in the list or its tier.
+  // stays in the folded Waiting section, not in the list or its tier.
   await setStatus(page, ['Not started', 'Working', 'Needs you', 'Waiting'])
   await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
   await expect(waitingHeading).toBeVisible()
@@ -559,7 +559,7 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   // park this page wrote: the row must still follow it (useTasks takeServerOwned).
   await expect.poll(async () => (await taskOf(plain.id)).user_status?.state, { timeout: 30_000 }).toBe('waiting')
   await expect(plainCard).toHaveCount(0, { timeout: 20_000 })
-  // It went to the folded Waiting / snoozed section.
+  // It went to the folded Waiting section.
   await setStatusSectionOpen(page, 'waiting', true)
   await showSectionCard(page, 'waiting', plain.id)
   await setStatusSectionOpen(page, 'waiting', false)
@@ -571,7 +571,7 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
 })
 
 test('the status sections count the current view: a tier tab counts its own tier, and Completed shows a tier\'s done pin', async ({ page, browserName }) => {
-  // The view-wide Waiting / snoozed and Completed sections are Flat's.
+  // The view-wide Waiting and Completed sections are Flat's.
   await presetPanelDesign(page, 'status')
   // Every tier tab on the bar, so the view can be switched by clicking. "Hide empty
   // tabs" stays at its default (on): a tier whose only tasks are parked is not empty.
@@ -656,7 +656,7 @@ test('the Projects view keeps only Running and Collapse; Waiting comes back thro
   await expect(bar.getByRole('button', { name: /(Collapse|Expand) all projects/ })).toBeVisible()
   expect((await bar.innerText()) + (await bar.innerHTML())).not.toMatch(/[\u2713\u29D7\u2195\u25F7\u2303\u2304]|View panel/)
   await expect(rowEl).toHaveCount(0)
-  // By project folds a parked task into its project's "Waiting / snoozed" line: folded,
+  // By project folds a parked task into its project's "Waiting" line: folded,
   // it is drawn nowhere; opened, its row is there, never in the list too.
   const fold = page.locator('[data-testid="project-status-folds"][data-project=""] [data-testid="project-status-fold-waiting"]').first()
   const anyParked = page.locator(`[data-task-id="${parked.id}"]`)

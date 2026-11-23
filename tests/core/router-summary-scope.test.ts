@@ -116,7 +116,7 @@ describe('Brief text reads one area', () => {
   })
 
   it('Walnut adds no area ask to Main\'s Brief, and keeps a line the writer put there', () => {
-    const written = `### Needs you\n- <task-ref id="in-a" label="Title in-a"/>: written by the node\n### Working\n- None\n### Waiting / snoozed\n- None`
+    const written = `### Needs you\n- <task-ref id="in-a" label="Title in-a"/>: written by the node\n### Working\n- None\n### Waiting\n- None`
     const out = structureBrief(written, main.id, ALL, { live: main })
     expect(out.asksAdded).toEqual(expect.arrayContaining(['plain', 'plain2']))
     for (const id of AREA_IDS) expect(out.asksAdded).not.toContain(id)

@@ -3577,7 +3577,7 @@ if (process.env.PW_AGENT_TEXT_ENTRIES === '1') {
       { type: 'user', uuid: '0199cc05-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc04-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(49_000),
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_opcards_letter', content: '{' }] } },
       { type: 'assistant', uuid: '0199cc06-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc05-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(40_000),
-        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_opcards_brief', name: 'mcp__walnut__brief_write', input: { task: 'pw-task-opcards', content: '### Needs you\nNothing.\n\n### Working\nThe browser task fixes the tab list.\n\n### Waiting / snoozed\nNothing.' } }] } },
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_opcards_brief', name: 'mcp__walnut__brief_write', input: { task: 'pw-task-opcards', content: '### Needs you\nNothing.\n\n### Working\nThe browser task fixes the tab list.\n\n### Waiting\nNothing.' } }] } },
       { type: 'user', uuid: '0199cc07-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc06-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(39_000),
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_opcards_brief', content: '{"ok":true}' }] } },
       { type: 'assistant', uuid: '0199cc08-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc07-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(38_000),
@@ -3632,7 +3632,7 @@ if (process.env.PW_AGENT_TEXT_ENTRIES === '1') {
       { type: 'user', uuid: u(5), parentUuid: u(4), sessionId: sid, timestamp: at(88_000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_inb_read', content: '{"text":"### Needs you\\nNothing."}' }] } },
       { type: 'user', uuid: u(6), parentUuid: u(5), sessionId: sid, timestamp: at(87_000), message: { role: 'user', content: peer } },
       { type: 'assistant', uuid: u(7), parentUuid: u(6), sessionId: sid, timestamp: at(86_000),
-        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_inb_write', name: 'mcp__walnut__brief_write', input: { task: 'pw-task-inbound', content: '### Needs you\nNothing.\n\n### Working\nDaily deploy runs its happy path.\n\n### Waiting / snoozed\nNothing.' } }] } },
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_inb_write', name: 'mcp__walnut__brief_write', input: { task: 'pw-task-inbound', content: '### Needs you\nNothing.\n\n### Working\nDaily deploy runs its happy path.\n\n### Waiting\nNothing.' } }] } },
       { type: 'user', uuid: u(8), parentUuid: u(7), sessionId: sid, timestamp: at(85_000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_inb_write', content: '{"ok":true}' }] } },
       { type: 'assistant', uuid: u(9), parentUuid: u(8), sessionId: sid, timestamp: at(84_000), message: { role: 'assistant', content: [{ type: 'text', text: 'INBOUND_ANSWER_ONE: the website check is done and the deploy waits for its next step.' }] } },
       // A turn a trigger started, with the notes in front of it.

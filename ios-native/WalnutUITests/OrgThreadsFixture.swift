@@ -208,14 +208,14 @@ enum OrgThreadsFixture {
         case "/sessions/\(slowSessionID)":
             return (200, sessionDetail(slowSessionID, task: slowTaskID, title: slowTitle))
         case "/tasks/\(vp2TaskID)/brief":
-            return (200, ["brief": ["text": "### Needs you\n- \(vp2Titles[0])\n### Working\n- nothing\n### Waiting / snoozed\n- nothing", "at": at(20)]])
+            return (200, ["brief": ["text": "### Needs you\n- \(vp2Titles[0])\n### Working\n- nothing\n### Waiting\n- nothing", "at": at(20)]])
         case "/tasks/\(workerTaskID)":
             return (200, detail(workerTaskID, title: workerTitle, session: workerSessionID, role: nil))
         case "\(vp)/threads":
             return (200, ["threads": threadIDs.indices.map(thread), "closed_count": 0, "shown_count": threadIDs.count])
         case "\(vp)/brief":
             return (200, ["brief": [
-                "text": "### Needs you\n- \(titles[0]): say yes or no.\n### Working\n- \(workerTitle)\n### Waiting / snoozed\n- nothing",
+                "text": "### Needs you\n- \(titles[0]): say yes or no.\n### Working\n- \(workerTitle)\n### Waiting\n- nothing",
                 "at": at(15),
             ]])
         case "/org/settings":

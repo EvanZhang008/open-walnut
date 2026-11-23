@@ -19,7 +19,7 @@ describe('the chip from the task\'s threads', () => {
     expect(threadCardStatus(idle, thread('needs'))).toMatchObject({ text: 'Needs you: Pick the seed tray size', tone: 'red', kind: 'thread' });
     expect(threadCardStatus(idle, thread('read'))).toMatchObject({ text: 'Done: Pick the seed tray size', tone: 'red', kind: 'to-read' });
     expect(threadCardStatus(idle, thread('working'))).toMatchObject({ text: 'Working: Pick the seed tray size', tone: 'green', kind: 'thread' });
-    expect(threadCardStatus(idle, thread('waiting'))).toMatchObject({ text: 'Waiting / Snoozed: Pick the seed tray size', tone: 'grey' });
+    expect(threadCardStatus(idle, thread('waiting'))).toMatchObject({ text: 'Waiting: Pick the seed tray size', tone: 'grey' });
   });
 
   it('the card\'s own facts stay, and a thread never outranks its status', () => {

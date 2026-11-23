@@ -295,7 +295,7 @@ describe('org channels', () => {
     ])
     const plain = buildChannels(buildOrgTree(tasks), tasks, noAlerts).rows[0]!
     const cols = teamColumns(plain, tasks)
-    expect(cols.map((c) => [c.key, c.label])).toEqual([['working', 'Working'], ['waiting', 'Waiting / snoozed']])
+    expect(cols.map((c) => [c.key, c.label])).toEqual([['working', 'Working'], ['waiting', 'Waiting']])
     // Each with its own status's words: what it does, on whom it waits.
     expect(cols[0]!.items[0]).toMatchObject({ id: 'w1', note: 'Writing the parser' })
     expect(cols[1]!.items[0]).toMatchObject({ id: 'w2', workers: 1, lastAt: Date.parse(at(30)), note: 'Its lead reads the result' })
@@ -310,7 +310,7 @@ describe('org channels', () => {
     const { rows } = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
     const cols = mainTeamColumns(rows)
     expect(cols.map((c) => [c.label, c.items.map((i) => i.title)])).toEqual([
-      ['Working', ['Walnut']], ['Waiting / snoozed', ['Garden', 'Travel', 'Personal']],
+      ['Working', ['Walnut']], ['Waiting', ['Garden', 'Travel', 'Personal']],
     ])
     expect(cols[0]!.items[0]).toMatchObject({ rowKey: projectRowKey('Walnut'), note: 'Writing the parser' })
   })

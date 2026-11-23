@@ -131,7 +131,7 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads for you')
   await expect(counts).not.toContainText('Needs you')
   await expect(counts).toContainText('1 Not started')
-  await expect(counts).not.toContainText('Waiting / snoozed')
+  await expect(counts).not.toContainText('Waiting')
   // A VP opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   await showTasks(detail)

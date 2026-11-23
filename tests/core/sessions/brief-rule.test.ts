@@ -37,7 +37,7 @@ describe('the Brief rule', () => {
       // 2026-10-29: after a compaction a lead wrote the Brief into its reply.
       /never write the Brief into your replies/,
       // 2026-10-30: three sections every time, each task under its own live status.
-      /Three sections, always all three, in this order: "### Needs you" \(what the user must decide or do\), "### Working" \(in progress\) and "### Waiting \/ snoozed"/,
+      /Three sections, always all three, in this order: "### Needs you" \(what the user must decide or do\), "### Working" \(in progress\) and "### Waiting"/,
       /each task goes in the section of its own live status/,
       /One thing per line, each line starting with the <task-ref\/> of the task it is about/,
       /Main names the VP who leads it right after/,
@@ -66,8 +66,8 @@ describe('the turn end asks for no Brief; brief_read gives the rules and the lis
     const rules = briefRules({ hadBrief: true, sections, language: 'Chinese', ownId: 'lead-1' })
     expect(rules).toContain('Edit the lines that changed with brief_write')
     expect(rules).toContain('in Chinese')
-    expect(rules).toContain('"### Needs you", "### Working", "### Waiting / snoozed"')
-    expect(rules).toContain(`### Needs you\n${sections.needs[0]}\n### Working\n(none now)\n### Waiting / snoozed\n(none now)`)
+    expect(rules).toContain('"### Needs you", "### Working", "### Waiting"')
+    expect(rules).toContain(`### Needs you\n${sections.needs[0]}\n### Working\n(none now)\n### Waiting\n(none now)`)
     expect(rules).toContain('EVERY line starts with the <task-ref')
     expect(rules).toContain('<task-ref id="lead-1" label="..."/>')
     expect(rules).not.toContain('FOR_USER_BRIEF')

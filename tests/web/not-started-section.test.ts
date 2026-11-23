@@ -1,5 +1,5 @@
 /**
- * Not started is its own category, out of Waiting / snoozed (2026-11-09, the user: "there shudl be
+ * Not started is its own category, out of Waiting (2026-11-09, the user: "there shudl be
  * a new category not started, to put the not stared one not mix in to wait and snooze they are
  * completeli differnet , auto collpes also, icon change also").
  *
@@ -54,7 +54,7 @@ const WAITS: UserStatus[] = [
 ];
 
 describe('Not started: Home (Flat)', () => {
-  it('every not-started status lands in Not started; every wait and snooze stays in Waiting / snoozed', () => {
+  it('every not-started status lands in Not started; every wait and snooze stays in Waiting', () => {
     for (const us of NOT_STARTED) expect(drawnSectionOf(task({ us })), us.waitingOn).toBe('notstarted');
     for (const us of WAITS) expect(drawnSectionOf(task({ us, phase: 'WAITING' })), `${us.kind} ${us.snoozed ? 'snoozed' : ''}`).toBe('waiting');
   });
@@ -122,12 +122,12 @@ describe('Not started: the Board and Org Status view', () => {
     expect(filteredRows(board, 'waiting').some((r) => r.task.id.startsWith('ns'))).toBe(false);
     expect(filteredRows(board, 'open')).toHaveLength(1 + kids.length);
     expect(isStatusFilter('notstarted')).toBe(true);
-    expect(briefCountsLine(statusBrief(board))).toBe(`1 Working, ${WAITS.length} Waiting / snoozed (1 with nothing to wake it), ${NOT_STARTED.length} Not started, 0 Completed in the last 7 days.`);
+    expect(briefCountsLine(statusBrief(board))).toBe(`1 Working, ${WAITS.length} Waiting (1 with nothing to wake it), ${NOT_STARTED.length} Not started, 0 Completed in the last 7 days.`);
   });
 });
 
 describe('Not started: the Org node Task view', () => {
-  it('a tab of its own after Waiting / snoozed, saying only a failed start', () => {
+  it('a tab of its own after Waiting, saying only a failed start', () => {
     expect(ORG_RAIL_TABS).toEqual(['watching', 'needs', 'working', 'waiting', 'notstarted', 'done']);
     expect(ORG_TASK_TAB_LABELS.notstarted).toBe('Not started');
     expect(taskTabNote(task({ us: NOT_STARTED[0] }), 'notstarted')).toBe('');

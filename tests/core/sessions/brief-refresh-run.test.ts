@@ -36,7 +36,7 @@ import { briefSnapshot } from '../../../src/core/sessions/brief-fresh.js'
 import { keepsBrief } from '../../../src/core/sessions/brief.js'
 
 const NOW = Date.parse('2026-10-31T17:00:00Z')
-const LETTER = '### Needs you\n- <task-ref id="w1" label="Review"/>: review section 3.\n### Working\n- None\n### Waiting / snoozed\n- None'
+const LETTER = '### Needs you\n- <task-ref id="w1" label="Review"/>: review section 3.\n### Working\n- None\n### Waiting\n- None'
 const worker = (ask?: string): Task => ({
   id: 'w1', title: 'Review the doc', phase: ask ? 'NEED_ACTION' : 'WAITING', status: 'in_progress', project: 'Marina', parent_task_id: 'L',
   user_status: ask ? { state: 'needs', source: 'session', ask } : { state: 'waiting', kind: 'task', waitingOn: 'The reviewer' },

@@ -155,7 +155,7 @@ test('N17: the task panel\'s last status section keeps its words above the home 
   // The folded sections that close the panel are Flat's.
   const errors = await bootHome(page, 'status')
   await injectSafeArea(page, { top: 47, bottom: 34 })
-  // The filter footer is gone; the folded Waiting / snoozed and Completed sections
+  // The filter footer is gone; the folded Waiting and Completed sections
   // close the list now (R3-03: the list's last lines on a phone).
   const last = page.locator('.main-page-todo .home-navigation-scroll .status-section-heading').last()
   await expect(last).toBeVisible({ timeout: 15_000 })

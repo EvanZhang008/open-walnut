@@ -2,7 +2,7 @@
  * The Brief's fixed shape (src/core/sessions/brief-structure.ts). 2026-10-30, the user, on a VP's
  * Brief that was one flat list with Walnut's footers under it: "what is being done, what does not
  * need me, what needs me ... we must put this whole structure in", and "brief 就是 AI 写的一个
- * brief. That's it". Every stored Brief has three sections, Needs you, Working, Waiting / snoozed,
+ * brief. That's it". Every stored Brief has three sections, Needs you, Working, Waiting,
  * each task's line under the section of its own live status; the Brief view shows that letter only.
  */
 import fs from 'node:fs'
@@ -28,15 +28,15 @@ describe('the three sections', () => {
       expect(covered.has(shownState(state) as never), `user status "${state}" has no Brief section`).toBe(true)
     }
     // The user's three sections; a task with only something to read is under Needs you (2026-11-03).
-    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
+    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting'])
   })
 
   it('puts a task to read under Needs you, and a To read heading an earlier letter has folds into it', () => {
     const done = t('rd', { phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready' } })
-    const text = structureBrief('### Needs you\n- nothing\n### Working\n- nothing\n### Waiting / snoozed\n- <task-ref id="rd">x</task-ref> finished', lead.id, [done]).text
+    const text = structureBrief('### Needs you\n- nothing\n### Working\n- nothing\n### Waiting\n- <task-ref id="rd">x</task-ref> finished', lead.id, [done]).text
     expect(text).toMatch(/### Needs you\n- <task-ref id="rd">/)
     expect(text).not.toContain('To read')
-    const older = structureBrief('### Needs you\n- nothing\n### To read\n- <task-ref id="rd">x</task-ref> finished\n### Working\n- nothing\n### Waiting / snoozed\n- nothing', lead.id, [done]).text
+    const older = structureBrief('### Needs you\n- nothing\n### To read\n- <task-ref id="rd">x</task-ref> finished\n### Working\n- nothing\n### Waiting\n- nothing', lead.id, [done]).text
     expect(older).toMatch(/### Needs you\n- <task-ref id="rd">/)
     expect(older).not.toContain('To read')
   })
@@ -54,7 +54,7 @@ describe('the three sections', () => {
     expect(headingSection('### Needs you')).toBe('needs')
     expect(headingSection('**需要你：**')).toBe('needs')
     expect(headingSection('## In progress')).toBe('working')
-    expect(headingSection('Waiting / snoozed:')).toBe('waiting')
+    expect(headingSection('Waiting:')).toBe('waiting')
     expect(headingSection('### Needs you (2)')).toBe('needs')
     expect(headingSection('- Needs you to pick a supplier')).toBeNull()
     expect(headingSection('**Needs you to pick a supplier**')).toBeNull()
@@ -85,15 +85,15 @@ describe('structureBrief', () => {
     expect(out.text).toBe([
       '### Needs you', flat.split('\n')[1], '',
       '### Working', flat.split('\n')[0], '',
-      '### Waiting / snoozed', flat.split('\n')[2], flat.split('\n')[3],
+      '### Waiting', flat.split('\n')[2], flat.split('\n')[3],
     ].join('\n'))
   })
 
   it('moves a line written under the wrong section, and is a no-op on a right Brief', () => {
-    const wrong = `### Needs you\n- ${ref('review')}: in review.\n\n### Working\n- ${ref('setup')}: ten minutes.\n\n### Waiting / snoozed\n- None`
+    const wrong = `### Needs you\n- ${ref('review')}: in review.\n\n### Working\n- ${ref('setup')}: ten minutes.\n\n### Waiting\n- None`
     const out = structureBrief(wrong, 'lead', tasks)
     expect(out.moved).toBe(2)
-    expect(out.text).toBe(`### Needs you\n- ${ref('setup')}: ten minutes.\n\n### Working\n- None\n\n### Waiting / snoozed\n- ${ref('review')}: in review.`)
+    expect(out.text).toBe(`### Needs you\n- ${ref('setup')}: ten minutes.\n\n### Working\n- None\n\n### Waiting\n- ${ref('review')}: in review.`)
     const again = structureBrief(out.text, 'lead', tasks)
     expect(again).toEqual({ text: out.text, moved: 0, added: [] })
   })
@@ -101,30 +101,30 @@ describe('structureBrief', () => {
   it('keeps the owner\'s own lines, finished work and lines with no task where they were written', () => {
     const text = `## 需要你\n- 没有\n## 进行中\n- ${ref('lead')}: I plan the week.\n- ${ref('done')}: shipped.\n- A note with no task.`
     const out = structureBrief(text, 'lead', tasks, { language: 'Simplified Chinese (简体中文)' })
-    expect(out.text).toBe(`### Needs you\n- 没有\n\n### Working\n- ${ref('lead')}: I plan the week.\n- ${ref('done')}: shipped.\n- A note with no task.\n\n### Waiting / snoozed\n- 无`)
+    expect(out.text).toBe(`### Needs you\n- 没有\n\n### Working\n- ${ref('lead')}: I plan the week.\n- ${ref('done')}: shipped.\n- A note with no task.\n\n### Waiting\n- 无`)
     expect(emptySectionLine('English')).toBe('- None')
   })
 
   it('reads a bold label at the head of a line as its section', () => {
     expect(structureBrief(`**Needs you:** nothing right now.\n**进行中：** ${ref('panel')}: building.`, 'lead', tasks).text)
-      .toBe(`### Needs you\n- nothing right now.\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting / snoozed\n- 无`)
+      .toBe(`### Needs you\n- nothing right now.\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting\n- 无`)
   })
 
   it('makes a task\'s bare line a list item', () => {
     expect(structureBrief(`${ref('panel')} building.\n${ref('setup')} ten minutes.`, 'lead', tasks).text)
-      .toBe(`### Needs you\n- ${ref('setup')} ten minutes.\n\n### Working\n- ${ref('panel')} building.\n\n### Waiting / snoozed\n- None`)
+      .toBe(`### Needs you\n- ${ref('setup')} ten minutes.\n\n### Working\n- ${ref('panel')} building.\n\n### Waiting\n- None`)
   })
 
   it('never drops a line of the writer\'s, and a sub-item goes with its item', () => {
     const text = `### Working\n- ${ref('review')}: 等供应商报价\n  对方还没有回复邮件\n  - none of the reviewers answered yet\n- ${ref('panel')}: building.`
     expect(structureBrief(text, 'lead', tasks).text).toBe(
-      `### Needs you\n- 无\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting / snoozed\n- ${ref('review')}: 等供应商报价\n  对方还没有回复邮件\n  - none of the reviewers answered yet`)
+      `### Needs you\n- 无\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting\n- ${ref('review')}: 等供应商报价\n  对方还没有回复邮件\n  - none of the reviewers answered yet`)
     // A bold word that is not a label (no colon) stays the writer's.
     expect(structureBrief(`- **Snoozed** until Monday: ${ref('review')}`, 'lead', tasks).text)
       .toContain(`- **Snoozed** until Monday: ${ref('review')}`)
     // A label alone on a bullet line opens its section.
     expect(structureBrief(`- **Needs you:**\n- ${ref('setup')}: ten minutes.`, 'lead', tasks).text)
-      .toBe(`### Needs you\n- ${ref('setup')}: ten minutes.\n\n### Working\n- None\n\n### Waiting / snoozed\n- None`)
+      .toBe(`### Needs you\n- ${ref('setup')}: ten minutes.\n\n### Working\n- None\n\n### Waiting\n- None`)
   })
 
   it('makes a sub-item with its own task an item of its section, and never reads an indented line as a heading', () => {
@@ -132,19 +132,19 @@ describe('structureBrief', () => {
     // there) or nested under another item.
     const text = `### Working\n- ${ref('panel')}: building.\n  Working:\n    - ${ref('review')}: its review`
     expect(structureBrief(text, 'lead', tasks).text).toBe(
-      `### Needs you\n- None\n\n### Working\n- ${ref('panel')}: building.\n  Working:\n\n### Waiting / snoozed\n- ${ref('review')}: its review`)
+      `### Needs you\n- None\n\n### Working\n- ${ref('panel')}: building.\n  Working:\n\n### Waiting\n- ${ref('review')}: its review`)
     // One going to its item's own section stays nested under it.
     expect(structureBrief(`- ${ref('panel')}: building.\n  - ${ref('panel', 'again')}: the tests`, 'lead', tasks).text)
       .toContain(`### Working\n- ${ref('panel')}: building.\n  - ${ref('panel', 'again')}: the tests\n`)
     // A numbered sub-item keeps its number; a bare one becomes a bullet.
     expect(structureBrief(`- ${ref('panel')}: building.\n   2. ${ref('setup')}: ten minutes.\n   ${ref('review')} in review`, 'lead', tasks).text).toBe(
-      `### Needs you\n2. ${ref('setup')}: ten minutes.\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting / snoozed\n- ${ref('review')} in review`)
+      `### Needs you\n2. ${ref('setup')}: ten minutes.\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting\n- ${ref('review')} in review`)
   })
 
   it('carries a wrapped line with its item', () => {
     const text = `- ${ref('setup')}: run the sign-in,\n  then say start.\n- ${ref('panel')}: building.`
     expect(structureBrief(text, 'lead', tasks).text)
-      .toBe(`### Needs you\n- ${ref('setup')}: run the sign-in,\n  then say start.\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting / snoozed\n- None`)
+      .toBe(`### Needs you\n- ${ref('setup')}: run the sign-in,\n  then say start.\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting\n- None`)
   })
 })
 

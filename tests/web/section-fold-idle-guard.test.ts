@@ -1,5 +1,5 @@
 /**
- * Working, Waiting / snoozed and Completed fold back by themselves 60 s after the user's last
+ * Working, Waiting and Completed fold back by themselves 60 s after the user's last
  * action in the side bar (2026-11-06, the user: "the complete and working snooze need to auto
  * collapse in 60s if no action, so why is it still open? no action means people not actively
  * scrolling, click in the side bar"). Completed had stayed open in his Mac app: the clock ran

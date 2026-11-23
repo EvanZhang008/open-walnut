@@ -36,7 +36,7 @@ export { ACK_DECIDING_LINE, ackCardLine, backFromKnown, inAcknowledged, isKnown,
 export type ThreadGroup = 'needs' | 'read' | 'working' | 'waiting' | 'known' | 'done' | 'archived';
 export const THREAD_GROUPS: readonly ThreadGroup[] = ['needs', 'read', 'working', 'waiting', 'known', 'done', 'archived'];
 export const THREAD_GROUP_LABELS: Record<ThreadGroup, string> = {
-  needs: USER_STATE_LABELS.needs, read: 'Done', working: USER_STATE_LABELS.working, waiting: 'Waiting / Snoozed', known: 'Acknowledged', done: 'Closed', archived: 'Archived',
+  needs: USER_STATE_LABELS.needs, read: 'Done', working: USER_STATE_LABELS.working, waiting: 'Waiting', known: 'Acknowledged', done: 'Closed', archived: 'Archived',
 };
 
 /**

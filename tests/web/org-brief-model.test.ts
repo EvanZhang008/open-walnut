@@ -53,7 +53,7 @@ describe('applyBriefDecorations', () => {
     applyBriefDecorations(letter, new Map([['t1', 'read']]))
     expect(t1.getAttribute('data-user-state')).toBe('read')
     expect(head.getAttribute('data-brief-section')).toBeNull()
-    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
+    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting'])
     // The stylesheets draw a read pill in the Needs you colour, the same rule as needs.
     const css = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/org-brief.css'), 'utf8')
     const globals = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/globals.css'), 'utf8')

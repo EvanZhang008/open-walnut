@@ -154,7 +154,7 @@ test.beforeAll(async ({ request }) => {
     reply: `Design: ${picture}\n\nFile: ${document}:2-3\n\nVideo: ${movie}\n\nMissing: ${missing}\n\n[Website](https://example.com/design) <task-ref id="${workerId}" label="Worker"/> ${letter}`,
   } });
   expect(updated.ok(), await updated.text()).toBeTruthy();
-  const brief = await request.put(`/api/v1/tasks/${owner}/brief`, { data: { content: `### Needs you\n\nNone.\n\n### Working\n\nDesign: ${picture}\n\n### Waiting / snoozed\n\nNone.` } });
+  const brief = await request.put(`/api/v1/tasks/${owner}/brief`, { data: { content: `### Needs you\n\nNone.\n\n### Working\n\nDesign: ${picture}\n\n### Waiting\n\nNone.` } });
   expect(brief.ok(), await brief.text()).toBeTruthy();
 });
 

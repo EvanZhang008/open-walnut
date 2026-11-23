@@ -1543,7 +1543,7 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// A tier whose every row is WAITING keeps its chip, so a reader scoped to it keeps the
-    /// scope, and its rows are drawn under Waiting / snoozed.
+    /// scope, and its rows are drawn under Waiting.
     func testATierOfOnlyWaitingRowsKeepsItsChipAndScope() {
         let tasks = [task("o", project: "acme"), task("pw", project: "marina", phase: "WAITING")]
         let tierOf = ["o": "focus", "pw": "ct_later"]
@@ -1569,7 +1569,7 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// The same holds for a tier whose every row is SNOOZED: under Now a start date still to
-    /// come puts a row under Waiting / snoozed, and its tier keeps its chip and scope whether
+    /// come puts a row under Waiting, and its tier keeps its chip and scope whether
     /// the row is WAITING or not, and however far out the date is (2026-11-10: a demo tier's
     /// chip was missing on every day, because its only task starts on a later day).
     func testATierOfOnlySnoozedRowsKeepsItsChipAndScope() {
@@ -1615,7 +1615,7 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// Every row the old footer counted as hidden is now in a section: done in Completed,
-    /// WAITING and (under Now) a start date still to come in Waiting / snoozed. Under All a
+    /// WAITING and (under Now) a start date still to come in Waiting. Under All a
     /// later start is ordinary open work, as on the web, where only the default Date rule
     /// makes a snooze.
     func testHiddenWorkLandsInItsSection() {
@@ -1652,7 +1652,7 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// A subtask with no start date of its own inherits its nearest ancestor's, as the
-    /// console's Now does (`getEffectiveDateField`), and lands under Waiting / snoozed.
+    /// console's Now does (`getEffectiveDateField`), and lands under Waiting.
     func testNowInheritsTheNearestAncestorsStartDate() {
         let tasks = [
             // parents are unpinned: off the board, still in the projection

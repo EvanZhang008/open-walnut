@@ -126,7 +126,7 @@ function waitIsUsers(report: StatusReport | null | undefined, hasLeader: boolean
  *  whole system's naming clear ... the same everywhere ... four small tabs"; To read joined them
  *  2026-11-02). No other words for them: not "need you", "needs me", "handed back" or "stuck" as a state. */
 export const USER_STATE_LABELS: Record<UserState, string> = {
-  needs: 'Needs you', read: 'To read', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed',
+  needs: 'Needs you', read: 'To read', working: 'Working', waiting: 'Waiting', done: 'Completed',
 };
 
 /**
@@ -1658,7 +1658,7 @@ export const BRIEF_SECTIONS: ReadonlyArray<{ state: Exclude<UserState, 'done' | 
   // A task with only something to read is under Needs you too (shownState, 2026-11-03).
   { state: 'needs', heading: 'Needs you' },
   { state: 'working', heading: 'Working' },
-  { state: 'waiting', heading: 'Waiting / snoozed' },
+  { state: 'waiting', heading: 'Waiting' },
 ];
 
 /** A team task as the Brief's section lists read it. */

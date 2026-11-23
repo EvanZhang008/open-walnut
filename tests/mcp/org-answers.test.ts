@@ -325,7 +325,7 @@ describe('the other Org reads page and the writes answer receipts', () => {
 describe('the Brief reads compact and writes a receipt (shapes for ops/tasks.ts)', () => {
   const line = (i: number) => `- <task-ref id="t-${i}" label="A task with a long title number ${i}"/>: ${LONG.repeat(2)}`
   const sections = { needs: Array.from({ length: 30 }, (_, i) => line(i)), working: Array.from({ length: 4 }, (_, i) => line(100 + i)), waiting: [] as string[] }
-  const text = `### Needs you\n${sections.needs.slice(0, 8).join('\n')}\n### Working\n- none\n### Waiting / snoozed\n- none`
+  const text = `### Needs you\n${sections.needs.slice(0, 8).join('\n')}\n### Working\n- none\n### Waiting\n- none`
   const full = withOutcome({
     task_id: 'vp-1', title: 'Bakery VP', brief: { text, at: at(1), text_sources: Array.from({ length: 12 }, () => ({ by: 'task:vp-1', from: 0, to: 10 })) },
     chars: text.length, limit: 4000, fresh: { stale: true, words: '3 moved', moved: Array.from({ length: 40 }, (_, i) => ({ id: `t-${i}` })), finished: [] },

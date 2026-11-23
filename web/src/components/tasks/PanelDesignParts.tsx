@@ -54,7 +54,7 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
           onClick={(e) => { e.stopPropagation(); onToggle(key); }}
         >
           <span className="project-status-count-icon" aria-hidden="true">{SECTION_ICONS.waiting}</span>
-          {tasks.waiting.length} Waiting / snoozed
+          {tasks.waiting.length} Waiting
         </DisclosureButton>
       </div>
       {isOpen && (

@@ -2,7 +2,7 @@
  * Guard: a Threads card says the group it is drawn in, from the one rule (src/core/org/thread-groups.ts
  * threadGroupOf), never from a mapping of its own (web/src/components/org/thread-badge.ts; 2026-11-21,
  * a review on his data: a card in Working kept the orange needs dot and an Answer box, one in
- * Waiting / Snoozed read "Pending", one in Closed read "Moved").
+ * Waiting read "Pending", one in Closed read "Moved").
  *
  *  - For every thread shape (tests/core/org/thread-shapes.ts), as the node's own and as a task's
  *    below: the badge's word is THREAD_GROUP_LABELS[threadGroupOf(t)], its group is that group, and

@@ -41,7 +41,7 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
         case .watching: return "Watching"
         case .needs: return "Needs you"
         case .working: return "Working"
-        case .waiting: return "Waiting / snoozed"
+        case .waiting: return "Waiting"
         case .background: return "Background"
         case .done: return "Completed"
         }

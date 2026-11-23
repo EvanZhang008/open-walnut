@@ -33,7 +33,7 @@ describe('shapeBriefText', () => {
     t('c', { state: 'done' }, 'COMPLETE'),
   ]
   it('keeps the three sections, moves a line to its live section, drops a finished one, adds a missing ask', () => {
-    const { brief, issues } = shapeBriefText('### Waiting / snoozed\n- <task-ref id="b" label="B"/>: building.\n- <task-ref id="c" label="C"/>: sweeping.', lead, tasks, { nowIso: '2026-10-31T18:00:00.000Z' })
+    const { brief, issues } = shapeBriefText('### Waiting\n- <task-ref id="b" label="B"/>: building.\n- <task-ref id="c" label="C"/>: sweeping.', lead, tasks, { nowIso: '2026-10-31T18:00:00.000Z' })
     expect(brief.text).toMatch(/^### Needs you\n- <task-ref id="a"[^\n]*Approve the layout/)
     expect(brief.text).toMatch(/### Working\n- <task-ref id="b" label="B"\/>: building\./)
     expect(brief.text).not.toContain('id="c"')
@@ -43,7 +43,7 @@ describe('shapeBriefText', () => {
     expect(briefFreshness({ ...lead, brief }, tasks)!.stale).toBe(false)
   })
   it('answers a line that names no task as an issue', () => {
-    const { issues } = shapeBriefText('### Needs you\n- Delete the six stacks?\n### Working\n- None\n### Waiting / snoozed\n- None', lead, tasks)
+    const { issues } = shapeBriefText('### Needs you\n- Delete the six stacks?\n### Working\n- None\n### Waiting\n- None', lead, tasks)
     expect(issues.map((i) => i.kind)).toContain('no_task')
   })
 })

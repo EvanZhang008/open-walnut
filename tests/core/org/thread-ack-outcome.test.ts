@@ -4,7 +4,7 @@
  * the user: "if I ack and ai should determine if it should go to closed or wait or wip", "If U know
  * why not close"). The rule: its own result delivered and he acknowledged it: Closed, unless a task
  * it lists still works on this thread's subject (Working) or waits on someone, something or a time
- * (Waiting / Snoozed). Fixtures: four real cards of 2026-11-20, in invented words, same shapes.
+ * (Waiting). Fixtures: four real cards of 2026-11-20, in invented words, same shapes.
  */
 import { describe, expect, it } from 'vitest'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
@@ -32,7 +32,7 @@ describe('his Acknowledge sends the card where its work stands', () => {
     expect(r.waits).toEqual({ tasks: [{ id: 't-avatars', title: 'Agent avatars on web and phone' }], replies: false, letter: false })
   })
 
-  it('(2) "Director: web live, phone waits for a Mac simulator", its task WAITING with what and until when: Waiting / Snoozed', () => {
+  it('(2) "Director: web live, phone waits for a Mac simulator", its task WAITING with what and until when: Waiting', () => {
     const t = card('Director: web live, phone waits for a Mac simulator', ['t-director'])
     const task: AckTask = { id: 't-director', title: 'Add a Director layer to the org', phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'a Mac simulator in the morning', until: '2026-11-21T16:00:00.000Z' } }
     const r = ackOutcome(t, byId(task))

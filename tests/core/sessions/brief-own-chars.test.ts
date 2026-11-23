@@ -61,9 +61,9 @@ function letters(tasks: Task[]): string[] {
   return [
     '',
     'just one line with no sections',
-    `### Needs you\n- ${ref(a!)}: pick one\n### Working\n- None\n### Waiting / snoozed\n- None`,
+    `### Needs you\n- ${ref(a!)}: pick one\n### Working\n- None\n### Waiting\n- None`,
     // Wrong sections, a finished task, a bare ref, an indented sub-item, a short id.
-    `### Waiting / snoozed\n${ref(working)}: building ${long}\n  - a sub-item ${long}\n- ${ref(done)}: was sweeping\n  more about it\n- <task-ref id="${waiting.id.slice(0, 9)}" label="W"/>: waits`,
+    `### Waiting\n${ref(working)}: building ${long}\n  - a sub-item ${long}\n- ${ref(done)}: was sweeping\n  more about it\n- <task-ref id="${waiting.id.slice(0, 9)}" label="W"/>: waits`,
     // Headings in other words, an inline label, Chinese, an about line, a stale "nothing" line.
     `**需要你：**\n- ${ref(b!)}：选一个\n- 无\n## In progress\n- ${ref(a!)}: ${long}\n<about ids="${c!.id}"/>\n**Waiting:** ${ref(waiting)} waits on a review`,
     // A line about the owner itself, and numbered items.
@@ -146,7 +146,7 @@ describe('shaping never grows the writer\'s share', () => {
     let letter = ''
     for (let i = 0; ; i++) {
       lines.push(`- ${ref(working)}: step ${i} of the garden plan is going on as written in the sheet`)
-      const next = `### Needs you\n- None\n### Working\n${lines.join('\n')}\n### Waiting / snoozed\n- None`
+      const next = `### Needs you\n- None\n### Working\n${lines.join('\n')}\n### Waiting\n- None`
       if (briefOwnChars(next) > BRIEF_MAX_CHARS - 100) break
       letter = next
     }

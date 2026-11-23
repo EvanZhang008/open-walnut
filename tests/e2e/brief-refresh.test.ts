@@ -66,7 +66,7 @@ beforeAll(async () => {
   await createSessionRecord(LEAD_SID, leadId, 'Garden', WALNUT_HOME)
   // Its CLI went quiet after its last turn.
   await updateSessionRecord(LEAD_SID, { process_status: 'stopped' })
-  const letter = `### Needs you\n- <task-ref id="${workerId}" label="Review"/>: review section 3.\n### Working\n- None\n### Waiting / snoozed\n- None`
+  const letter = `### Needs you\n- <task-ref id="${workerId}" label="Review"/>: review section 3.\n### Working\n- None\n### Waiting\n- None`
   const owner = await getTask(leadId)
   await updateTaskRaw(leadId, { brief: { text: letter, at: new Date().toISOString(), ...briefSnapshot(letter, owner, await listTasks()) } }, { emitEvent: true, source: 'status-report' })
 })
@@ -108,7 +108,7 @@ describe('a Brief refresh', () => {
     expect(read.sections.waiting.join('\n')).toContain('waits on The reviewer')
     expect(read.rules).toContain('brief_write')
     const old = `### Needs you\n- <task-ref id="${workerId}" label="Review"/>: review section 3.\n`
-    const put = await write(leadId, { edits: [{ old, new: '### Needs you\n- None\n' }, { old: '### Waiting / snoozed\n- None', new: `### Waiting / snoozed\n- <task-ref id="${workerId}" label="Review"/>: waits on the reviewer.` }] })
+    const put = await write(leadId, { edits: [{ old, new: '### Needs you\n- None\n' }, { old: '### Waiting\n- None', new: `### Waiting\n- <task-ref id="${workerId}" label="Review"/>: waits on the reviewer.` }] })
     expect(put.status).toBe(200)
     const t = await getTask(leadId)
     expect(Date.parse(t.brief!.at)).toBeGreaterThan(Date.parse(t.brief_refresh!.at))
@@ -123,7 +123,7 @@ describe('a Brief refresh', () => {
     await updateTaskRaw(done, { phase: 'COMPLETE' }, { emitEvent: true, source: 'test' })
     await updateTaskRaw(workerId, { phase: 'NEED_ACTION', status_report: { state: 'needs', ask: 'Approve the layout', at: new Date().toISOString() } }, { emitEvent: true, source: 'status-report', leaveHeld: true })
     await until('the worker asks', async () => (await getTask(workerId)).user_status?.ask === 'Approve the layout')
-    const letter = `### Needs you\n- None\n### Working\n- <task-ref id="${done}" label="Old chore"/>: sweeping.\n### Waiting / snoozed\n- None`
+    const letter = `### Needs you\n- None\n### Working\n- <task-ref id="${done}" label="Old chore"/>: sweeping.\n### Waiting\n- None`
     const res = await write(leadId, { content: letter })
     expect(res.status).toBe(200)
     const text = (await getTask(leadId)).brief!.text

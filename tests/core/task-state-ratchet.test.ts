@@ -71,7 +71,7 @@ describe('every reminder path asks the snooze', () => {
     expect(fs.readFileSync(path.join(ROOT, 'src/core/human-inbox/letter-ops.ts'), 'utf8')).toMatch(/admitSnoozedLetter\(/)
     // Main's org digest skips a snoozed error and reads the same live status as every surface.
     expect(fs.readFileSync(path.join(ROOT, 'src/core/org/org-store.ts'), 'utf8')).toMatch(/task\.user_status\?\.snoozed/)
-    // The Brief lists a snoozed task under Waiting / snoozed with its date, never as an ask.
+    // The Brief lists a snoozed task under Waiting with its date, never as an ask.
     expect(fs.readFileSync(path.join(ROOT, 'src/core/sessions/brief.ts'), 'utf8')).toMatch(/snoozed\?\.until\) words = `snoozed until/)
   })
 
@@ -232,7 +232,7 @@ describe('one set of state names', () => {
 
   it('no string a person reads uses an old state word', () => {
     const hits = files.filter((f) => !OLD_WORD_OK[rel(f)] && (OLD_WORD.test(code(fs.readFileSync(f, 'utf8'))) || OLD_COUNT.test(code(fs.readFileSync(f, 'utf8'))))).map(rel)
-    expect(hits, 'Use the names in USER_STATE_LABELS (src/core/user-status.ts): Needs you, Working, Waiting / snoozed, '
+    expect(hits, 'Use the names in USER_STATE_LABELS (src/core/user-status.ts): Needs you, Working, Waiting, '
       + `Completed; stateCountLabel for a count. Or list the file with why the word is not a task state: ${hits.join(', ')}`).toEqual([])
   })
 

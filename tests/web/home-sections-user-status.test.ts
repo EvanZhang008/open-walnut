@@ -116,7 +116,7 @@ describe('Home sections equal the user status', () => {
     expect(waitingReason(task({ phase: 'IN_PROGRESS', user_status: { state: 'working' } as Task['user_status'] }), fmt)).toBe('')
   })
 
-  // 2026-11-02, the user: under Waiting / snoozed the rows wore the needs ring and "looks kike they
+  // 2026-11-02, the user: under Waiting the rows wore the needs ring and "looks kike they
   // are waiting for my input", and finished results sat there too. 2026-11-03: "I dont wnat
   // serpeate to read", "thridline cna show what need u", with a category ("read, makde decison,
   // review, see if can closed").
@@ -135,7 +135,7 @@ describe('Home sections equal the user status', () => {
     expect(needsLine(review)).toMatchObject({ category: 'review', label: 'Review' })
     // Not under Needs you: no line.
     expect(needsLine(task({ phase: 'IN_PROGRESS', user_status: { state: 'working' } as Task['user_status'] }))).toBeNull()
-    // Snoozed, it sleeps under Waiting / snoozed.
+    // Snoozed, it sleeps under Waiting.
     expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', toRead: 'result', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('waiting')
   })
 
@@ -153,7 +153,7 @@ describe('Home sections equal the user status', () => {
     expect(fs.readFileSync(path.join(dir, 'DisplaySections.tsx'), 'utf8')).toContain('checked={showStatusLines} onChange={setShowStatusLines}')
   })
 
-  it('a row wears its section\'s mark, never the phase\'s: no ring under Waiting / snoozed', () => {
+  it('a row wears its section\'s mark, never the phase\'s: no ring under Waiting', () => {
     const wrong: string[] = []
     for (const phase of PHASES) {
       for (const snoozed of [false, true]) {
