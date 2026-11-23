@@ -34,6 +34,7 @@ import { selfCallRefusal } from './origin-policy.js'
 import { declaredKeysNote, inferRenames, invalidTypeHint, renameNote, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
+import { heldAwayResult, isBareAwayQueued } from './outcome.js'
 import { FULL_ARG, agentAnswer, answerFit, cutTextRefusal, takeFullArg, type AnswerFit, type AnswerSurface } from './answer.js'
 import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { capOverCounts, countCapNote } from './count-cap.js'
@@ -117,6 +118,10 @@ interface CallerProvenance {
   unreachedAny?: boolean
   /** Set when any self-call got an answer from a server, whatever its status. */
   answeredAny?: boolean
+  /** Every write this call sent, answered or not (awayWrites counts only when it covers them all). */
+  writeCount?: number
+  /** Writes this host's own server journaled while the Walnut server is away, with nothing else in the answer (isBareAwayQueued). */
+  awayWrites?: number
 }
 
 /** The op id of the next write of this call to `method path` (src/lib/op-call-id.ts writeOpId). */
@@ -191,7 +196,10 @@ async function rawRequest(
   const self = getSelfApiRoot()
   const selfToken = self && resolveApiBase(self) === base ? getSelfCallToken() : null
   let res: Response
-  if (method !== 'GET' && method !== 'HEAD') await prov.beforeMutation?.()
+  if (method !== 'GET' && method !== 'HEAD') {
+    await prov.beforeMutation?.()
+    prov.writeCount = (prov.writeCount ?? 0) + 1
+  }
   const opId = nextWriteOpId(prov, method, path)
   try {
     res = await fetch(url, {
@@ -282,6 +290,9 @@ async function rawRequest(
       message: `Walnut API error (${code}): ${msg}${res.status === 507 ? DISK_FULL_HINT : ''}`,
     }
   }
+  // A write this host's server only journaled (the Walnut server is away) and answered with nothing
+  // else: an op reading a field from it would read what is not there (heldAwayResult).
+  if (method !== 'GET' && method !== 'HEAD' && isBareAwayQueued(parsed)) prov.awayWrites = (prov.awayWrites ?? 0) + 1
   return { ok: true, result: parsed }
 }
 
@@ -627,7 +638,13 @@ export async function executeOp(
     const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}), ...(unproven ? { unproven: true as const } : {}) }, () => runOp(op, args, base, prov, fit)))
     // A handler that caught a lost or refused-for-now self-call and answered ok (a bulk op's
     // failed row): a copy must run it again, and the ledger answers the rows that applied.
-    if (outcome.ok) return prov.lostAny || prov.unsettled ? { ...outcome, retry: true } : outcome
+    if (outcome.ok) {
+      // Every write of the call was only journaled here: its result says so. A call with another write
+      // (applied, refused, failed) keeps the op's own words, which name that one.
+      const held = prov.awayWrites && prov.awayWrites === prov.writeCount && op.tags.readonly !== true
+        ? { ...outcome, result: heldAwayResult(outcome.result, prov.awayWrites) } : outcome
+      return prov.lostAny || prov.unsettled ? { ...held, retry: true } : held
+    }
     // A handler that caught a lost self-call and failed another way still may have written.
     if (prov.lostAny && !outcome.lost) return { ...outcome, lost: true }
     if (prov.unsettled && !outcome.lost) return { ...outcome, retry: true }

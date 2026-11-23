@@ -71,6 +71,38 @@ export function awayAnswer(body: unknown): Record<string, unknown> | null {
   return b && typeof b === 'object' && b.offline === true && typeof b.outcome === 'string' && typeof b.next === 'string' ? b : null;
 }
 
+const BARE_AWAY_KEYS = new Set(['queued', 'offline', 'opId']);
+
+/**
+ * A write this host's own server journaled while the Walnut server is away and answered with nothing
+ * else (src/replica/write-port.ts: `{ queued: true, offline: true, opId }`): it is saved here and
+ * applied when the server is back. An answer with more (a task row, a placement, the host daemon's
+ * own words) lets the op say what happened itself.
+ */
+export function isBareAwayQueued(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const b = body as Record<string, unknown>;
+  return b.queued === true && b.offline === true && Object.keys(b).every((k) => BARE_AWAY_KEYS.has(k));
+}
+
+/**
+ * An op's result after `writes` of its writes were journaled on this host while the server is away
+ * with nothing else in the answer (isBareAwayQueued): it says so in its outcome, in place of
+ * what the op read from an answer that was never the server's (2026-11-23: board_project_set said
+ * "removed" for a project it had just written, as the journaled answer carries no `project`).
+ */
+export function heldAwayResult(result: unknown, writes: number): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const r = result as Record<string, unknown>;
+  return {
+    ...r,
+    queued: true,
+    offline: true,
+    outcome: `Saved on this host while the Walnut server is away: ${writes === 1 ? 'the write is' : `${writes} writes are`} journaled here, and Walnut applies ${writes === 1 ? 'it' : 'them'} when the server is back (its own checks decide again). Until then this answer cannot show what the server holds.`,
+    next: 'Nothing else is required. Do not repeat the call; read it back once the server is back.',
+  };
+}
+
 /**
  * What a message still waits on, for the agent that sent it: the words the user's bubble
  * shows, the next try Walnut makes by itself, and how to send it now. '' when nothing holds it.
