@@ -1191,7 +1191,6 @@ export function DraftSessionPanel({
               <div className="draft-walnut-suggests" role="group" aria-label="Quick actions">
                 <button
                   type="button"
-                  // A text action, so the plain grey key, as Work in and More beside it.
                   className="btn btn-sm session-action-chip"
                   data-testid="draft-customize-walnut"
                   title="Open a session in Walnut's own source code to change or fix Walnut"
