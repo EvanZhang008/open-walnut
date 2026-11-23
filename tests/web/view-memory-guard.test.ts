@@ -201,6 +201,7 @@ const PASSING: Record<string, string> = {
   'apps/mail/MailCorrectPopover.tsx#step': 'the step of one correction in a popover',
   'components/common/FileContentView.tsx#fullscreen': 'one preview blown up over its own pane, an overlay of the file open now; the panel around it keeps its full screen (fullscreen-owner.ts)',
   'components/notes/slash-commands/SlashCommandPortal.tsx#subPanel': 'a level of the slash menu',
+  'components/org/OrgThreads.tsx#copyOpen': 'a watched thread\'s row in Watching opened in place for a look: the card itself stays open in its own group',
   'components/org/OrgChartSheet.tsx#panel': 'a panel inside the org chart sheet, itself passing',
   'components/sessions/SessionRewindDialog.tsx#guardStep': 'a step of the rewind dialog',
   'components/sessions/SessionUsageDialog.tsx#panel': 'a panel of the usage dialog',
@@ -222,6 +223,8 @@ const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: stri
   // 2026-11-06, the user: "and can expand for more detail"; what was opened stays opened.
   { file: 'components/org/OrgChartVp.tsx', state: 'open', key: /usePageViewOf\('org', 'chart\.open', key, false, isBoolean\)/, what: 'an org chart card or project row opened, per card and per row' },
   { file: 'components/org/OrgThreads.tsx', state: 'showClosed', key: /usePageView\('org', 'threads\.showClosed'/, what: 'the week\'s closed threads shown' },
+  // 2026-11-23, the user: Watching is "its own category" like the task panel's, whose fold is kept.
+  { file: 'components/org/OrgThreadsWatching.tsx', state: 'open', key: /usePageView\('org', 'threads\.watchingOpen', true, isBoolean\)/, what: 'the Threads view\'s Watching group folded or open' },
   { file: 'pages/AppsPage.tsx', state: 'kept', key: /usePageView<AppsFilter>\('apps', 'filter'/, what: 'the Apps category chip' },
   // Kept as KeptStatusFilter: a To read chip an older build kept opens as Needs you (statusFilterShown).
   { file: 'components/board/BoardStatusView.tsx', state: 'kept', key: /usePageViewOf<KeptStatusFilter>\('board', 'statusFilter', ownerId,/, what: 'a board\'s status filter, per board' },

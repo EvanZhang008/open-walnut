@@ -8,7 +8,7 @@
  * the thread's `watched.at` (the task Watching's order, tasks/status-sections.ts watchReorder). It
  * opens unfolded; a fold he makes lasts while he is here, never remembered (the other groups' rule).
  */
-import { memo, useCallback, useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
+import { memo, useCallback, useMemo, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy, type AnimateLayoutChanges, defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -16,6 +16,7 @@ import { DisclosureButton } from '@/components/controls';
 import { ICON_EYE_FILLED } from '@/components/common/Icons';
 import type { OrgThread } from '@/api/org-threads';
 import { watchReorder } from '../tasks/status-sections';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 
 /**
  * The card drawn a second time, in Watching (OrgThreads.tsx ThreadCard): its element ids get a suffix
@@ -55,7 +56,8 @@ export function OrgThreadsWatching({ threads, card, onReorder }: {
   card: (t: OrgThread, copy: WatchingCopy) => ReactNode;
   onReorder: (writes: { id: string; watch_at: string }[]) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  // Folded or open stays as he left it, like the task panel's Watching (utils/view-memory.ts).
+  const [open, setOpen] = usePageView('org', 'threads.watchingOpen', true, isBoolean);
   const sensors = useSensors(useSensor(PointerSensor, DRAG));
   const ids = useMemo(() => threads.map((t) => t.id), [threads]);
   const onDragEnd = useCallback((e: DragEndEvent) => {

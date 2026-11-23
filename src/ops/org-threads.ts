@@ -327,8 +327,8 @@ const UPDATE_INPUT = {
   place: z.enum(ACK_PLACES).optional().describe('After his Acknowledge, when his card asks where it goes: closed (it is over), waiting (on something outside) or working (its work still runs). Only with place_why'),
   place_why: z.string().max(PLACE_WHY_MAX).optional().describe('With place: one line his card shows (what it waits on, or why it is over)'),
   snooze: z.string().max(40).optional().describe('When he asked to come back to it later: it leaves his view for the Snoozed section until an ISO time, a date or a duration ("4h", "3d"), at most a year, and returns sooner when he writes in it, you answer it or it moves to needs or answered; "" ends it'),
-  watch: z.boolean().optional().describe('true puts it on his Watching list (its own group at the top; it stays in its own group too) until unwatched or closed; false takes it off. One he watches you cannot unwatch or close'),
-  watch_at: z.string().max(40).optional().describe('Its place on the Watching list, an ISO time (oldest first): only on a watched thread'),
+  watch: z.boolean().optional().describe('true adds it to his Watching group (it stays in its own group too); false removes it. You cannot unwatch or close his'),
+  watch_at: z.string().max(40).optional().describe('Its place in Watching (ISO time, oldest first)'),
   merge_into: THREAD_ID.optional().describe('Put this thread under that open thread (same subject); alone in its call'),
   task: TASK_ARG,
 }
