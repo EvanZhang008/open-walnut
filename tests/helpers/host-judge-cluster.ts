@@ -220,7 +220,7 @@ await serveProbe({
   '/hands': async () => ({ hands: (await import(${url('src/core/session-channel/handed-sessions.ts')})).handsNow() }),
   '/acp': (q) => {
     const a = ccs.sessionRunner.findAcpSession(q.get('sid'))
-    return { found: !!a, hostJudged: a?.hostJudged === true, kind: a?.kind ?? null, processStatus: a?.processStatus ?? null, workerLive: a?.workerLive ?? null, engineId: a?.engineId ?? null }
+    return { found: !!a, hostJudged: a?.hostJudged === true, kind: a?.kind ?? null, processStatus: a?.processStatus ?? null, workerLive: a?.workerLive ?? null, engineId: a?.engineId ?? null, controls: Array.isArray(a?.sessionControls) ? a.sessionControls.length : null }
   },
 })
 `
@@ -271,7 +271,7 @@ await serveProbe({
   // The host runner's own ACP object of a session (its runtime, and the host it reaches it on).
   '/acp': (q) => {
     const a = sessionRunner.findAcpSession(q.get('sid'))
-    return { found: !!a, runtimeId: a?.runtimeId ?? null, host: a?.host ?? null, workerLive: a?.workerLive ?? null }
+    return { found: !!a, runtimeId: a?.runtimeId ?? null, host: a?.host ?? null, workerLive: a?.workerLive ?? null, controls: Array.isArray(a?.sessionControls) ? a.sessionControls.length : null }
   },
   '/dialer': async () => {
     const cf = await import(${url('src/core/session-channel/host-credential-file.ts')})

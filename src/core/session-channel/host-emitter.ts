@@ -31,7 +31,7 @@ import type { FactLog } from './fact-log.js'
 import type { HostChannel } from './channel.js'
 import type { LiveState } from './host-api.js'
 import { channelClassOf, sessionIdOf } from './event-classes.js'
-import { setOwnRowListener } from './row-hook.js'
+import { setOwnLiveListener, setOwnRowListener } from './row-hook.js'
 import { rowOwnedHere, sessionFieldOwner } from '../sessions/session-row-owner.js'
 import type { SessionRecord } from '../types.js'
 import type { BusEvent, SubscribeOptions, SubscriberHandler } from '../event-bus.js'
@@ -62,6 +62,8 @@ export interface HostEmitterOptions {
   bus?: EmitterBus
   /** Install the row listener (row-hook.ts); tests pass their own. */
   rowListener?(fn: ((row: SessionRecord) => void) | null): void
+  /** Install the live listener (row-hook.ts noteSessionLiveChanged); tests pass their own. */
+  liveListener?(fn: ((sid: string) => void) | null): void
   /**
    * What a fact keeps of its event's data: the data, or a copy with what only this host knows at the
    * event added (a turn end's `hostTakenBy`, turn-run-host.ts). Called in the event's own tick, after
@@ -150,6 +152,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
   let started = false
   let busRef: EmitterBus | null = null
   let rowListener: ((fn: ((row: SessionRecord) => void) | null) => void) | null = null
+  let liveListener: ((fn: ((sid: string) => void) | null) => void) | null = null
 
   const warn = (msg: string, data?: Record<string, unknown>): void => o.onLog?.('warn', msg, data)
 
@@ -311,6 +314,9 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       // process) reaches the leader too.
       rowListener = o.rowListener ?? setOwnRowListener
       rowListener(onRow)
+      // A live change no row write or event shows (an ACP attach): its live record goes again.
+      liveListener = o.liveListener ?? setOwnLiveListener
+      liveListener(scheduleLive)
       for (const row of await o.ownRows()) {
         if (!rowOwnedHere(row, o.hostKey) || lastRows.has(row.claudeSessionId)) continue
         appendWhole(row)
@@ -324,6 +330,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       started = false
       busRef?.unsubscribe(HOST_EMITTER_SUBSCRIBER)
       rowListener?.(null)
+      liveListener?.(null)
       for (const t of liveTimers.values()) clearTimeout(t)
       liveTimers.clear()
       for (const p of pending.values()) clearTimeout(p.timer)

@@ -453,8 +453,12 @@ permission prompts still name Walnut.
   the row's runtime id, on both ends the runner's ACP object counts live only while it holds anything, and
   every attach of the session asks first, since an attach starts its worker: a send, a delivery, and a read
   that attaches (the panel's controls, the model catalog), which hands it over with no line waiting and is
-  answered by the host's proxy. A Restart and a self-report stay where the session ran. An attach the
-  hand-over overtakes is let go, its worker left to the host (tests: `host-resume-acp.test.ts`,
+  answered by the host's proxy (empty controls and catalog, never undefined, until the host reports; a
+  read waits a few seconds for that first report, and the leader tells the panel to read again when it
+  comes). The host owns a resumed row from the moment it takes it, and its attach says its live state
+  changed (no row write shows it), so that report always comes. A Restart and a self-report stay where the session ran. A host taking a resume, or giving a
+  session back, lets go of its objects of it that hold nothing, so an old one never replays the
+  leader's turns. An attach the hand-over overtakes is let go, its worker left to the host (tests: `host-resume-acp.test.ts`,
   `host-resume-acp-attach.test.ts`, the attach list in `host-resume-entry-ratchet.test.ts`, A1 to A4 in
   `host-judge-legacy-acp-resume-e2e.test.ts`).
 - **A hand-over whose answer is lost** (a start or a resume, `src/providers/host-handover.ts`) is neither the

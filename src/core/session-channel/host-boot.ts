@@ -46,6 +46,7 @@ import { createStandDownHeld } from './stand-down-held.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { heldOnThisHost, startStrandedSweep, type StrandedSweep } from '../sessions/stranded-own-rows.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
+import { noteSessionRowWritten } from './row-hook.js'
 import { hasLocalDaemon, isHostReplica } from '../server-role.js'
 import { WALNUT_HOME } from '../../constants.js'
 import type { SessionRecord } from '../types.js'
@@ -182,11 +183,14 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   // Own rows no session here holds while the leader says they are not this host's go back to the
   // leader's version (stranded-own-rows.ts): at boot, on a clock, after a copy that disowns one, and
   // at a failed start's release.
+  // The runner's objects of `sid` that hold nothing let go (claude-code-session.ts dropDeadWrapper).
+  const dropIdle = (sid: string): void => sessionRunner.resumeView().dropDeadWrapper(sid)
   // Does a session of `sid` live in this host's runner (a stranded row is held, a resume is refused)?
   const runnerHolds = (sid: string): boolean => !!(runner.findSessionByClaudeId?.(sid) || runner.findAcpSession?.(sid))
   const stranded = startStrandedSweep({
     held: (row) => heldOnThisHost(row, { runnerHolds, runtimeAlive: (sid) => runtimeHoldsCli(sid) }),
-    onHandedBack: (sids) => emitter.disown(sids),
+    // Given back: the runner's objects of them that hold nothing go too (a later resume builds anew).
+    onHandedBack: (sids) => { emitter.disown(sids); for (const sid of sids) dropIdle(sid) },
     log: say,
   })
   setLeaderDisownNotice(() => stranded.poke())
@@ -219,6 +223,13 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     spillDir: path.join(dir, 'prompts'),
     // A start the leader handed names its session: that row is this host's from its first write.
     claim: { take: claimStartingRow, release: (sid) => { releaseStartingRow(sid); void stranded.run(sid).catch(() => {}) } },
+    // A resume taken: its idle objects go, and its claimed row is this host's own now (the emitter
+    // takes it as the runner's first write would: an ACP attach makes none, and its live state counts).
+    taken: async (sid) => {
+      dropIdle(sid)
+      const row = await (await import('../session-tracker.js')).getSessionByClaudeId(sid).catch(() => null)
+      if (row) noteSessionRowWritten(row)
+    },
     // A resume of a session its leader ran: refused while anything of it runs here.
     notAtRest: (sid, row) => resumeNotAtRest(sid, row, {
       holds: (id) => sessionRunner.holdsSessionForResume(id),

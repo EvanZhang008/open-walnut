@@ -79,6 +79,8 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     owns: async (sid) => sid !== 'sid-leaders',
     claim: { take: (sid, row) => { claims.push(`take:${sid}:${runnerCalls.includes('started') ? 'after' : 'before'}`); if (row) claimRows.push(row) }, release: (sid) => { claims.push(`release:${sid}`) } },
     ...(notAtRest === undefined ? {} : { notAtRest: async () => notAtRest ?? null }),
+    // Async, as host-boot's (it reads the claimed row): the runner is told only after it finished.
+    taken: async (sid) => { await new Promise((r) => setTimeout(r, 20)); emitted.push({ name: 'taken', data: { sid }, source: '' }) },
   }) : null
   door = createLeaderDoor({ devices: {} as never, sessions: () => routes })
   server = net.createServer((sock) => door.accept(sock))
@@ -372,13 +374,16 @@ describe('a start that resumes a session the leader ran', () => {
   const lines = [{ id: 'qm-r1', message: 'resume me', sentBy: 'person' }]
   const resume = () => post('/host-api/sessions/start', { taskId: 'task-1', message: '', resumeSessionId: sid, resumeRow: row, queued: lines, busSource: 'ui' })
 
-  it('at rest here: its row is claimed with the leader\'s, its lines are queued, and the runner drains them; no new session', async () => {
+  it('at rest here: its row is claimed with the leader\'s, its lines are queued, it is readied here (old objects go, its row is own), and the runner drains them; no new session', async () => {
     await startDoor(true)
     expect((await resume()).body).toEqual({ ok: true, sessionId: sid, title: '' })
     expect(claims).toEqual([`take:${sid}:before`])
     expect(claimRows).toEqual([row])
+    // The runner's objects of it that hold nothing go before its drain (one kept from before this
+    // host gave it back would read the journal on from its old place: the leader's turns again).
     expect(emitted).toEqual([
       { name: 'enqueue', data: { sid, lines }, source: 'ui' },
+      { name: 'taken', data: { sid }, source: '' },
       { name: 'session:send', data: { sessionId: sid, message: '' }, source: 'ui' },
     ])
     expect(seenAtStart).toBeNull()

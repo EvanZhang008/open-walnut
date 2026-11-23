@@ -22,7 +22,7 @@ const NOTE_WITHIN_LINES = 40
 const NO_ROW_FACT: Record<string, Record<string, string>> = {
   'src/core/session-db.ts': {
     applySessionCopy: "the leader's sessions copy on a host: an own row takes only its leader fields, which the leader already holds",
-    writeCopyRow: "a start's claim of a copied row (claimStartingRow), or an own row given back to the leader (handOwnRowBack): the leader's copy, marked this host's or as the leader has it; the runner's first own write after a claim is the session's born record, and a row given back is the leader's own",
+    writeCopyRow: "a start's claim of a copied row (claimStartingRow), or an own row given back to the leader (handOwnRowBack): the leader's copy, marked this host's or as the leader has it; the runner's first own write after a claim is the session's born record (a resume's claim announces its row at once, host-boot.ts taken), and a row given back is the leader's own",
     applyCompanionSessionCopy: "the companion's file of the Mac's sessions, never a host's own rows",
     ensureSessionStatusColumns: 'the schema migration at open, before any listener is installed',
   },

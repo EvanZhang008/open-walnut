@@ -110,8 +110,15 @@ export class RemoteJudgedSession {
   get activity(): string | undefined { return this.state.acp?.activity }
   get workerLive(): boolean { return this.state.acp?.workerLive === true }
   get engineId(): string | undefined { return this.state.acp?.engineId }
-  get sessionControls(): unknown { return this.state.acp?.sessionControls }
-  get modelCatalog(): unknown { return this.state.acp?.modelCatalog }
+  // Never undefined: a caller reads them as an ACP session's own (arrays, a catalog), and a session its
+  // host has not reported yet (just handed over) reads empty until it does (noteLiveState says when).
+  get sessionControls(): unknown[] { return Array.isArray(this.state.acp?.sessionControls) ? this.state.acp!.sessionControls as unknown[] : [] }
+  get modelCatalog(): { availableModels: unknown[]; currentModelId?: string } {
+    const c = this.state.acp?.modelCatalog as { availableModels?: unknown } | undefined
+    return c && Array.isArray(c.availableModels) ? c as { availableModels: unknown[]; currentModelId?: string } : { availableModels: [] }
+  }
+  /** Has its host reported this ACP session's controls yet (a read right after a hand-over waits for it)? */
+  get controlsReported(): boolean { return Array.isArray(this.state.acp?.sessionControls) }
 
   // ── snapshot and reconcile writers: the host judges its own process ──
   setProcessStatusFromReconciler(): void {}
@@ -136,7 +143,7 @@ export class RemoteJudgedSession {
   }
 
   /** An ACP session has no such member on its host: its catalog is the mirrored one (R2-L3). */
-  getModelCatalog(...a: unknown[]) { return this.kind === 'acp' ? Promise.resolve(this.modelCatalog ?? null) : this.call('getModelCatalog', a, 'session') }
+  getModelCatalog(...a: unknown[]) { return this.kind === 'acp' ? Promise.resolve(this.state.acp?.modelCatalog ?? null) : this.call('getModelCatalog', a, 'session') }
   getSettingsSnapshot(...a: unknown[]) { return this.call('getSettingsSnapshot', a, 'session') }
   applyModel(...a: unknown[]) { return this.call('applyModel', a, 'session') }
   refreshAppliedSettings(...a: unknown[]) { return this.call('refreshAppliedSettings', a, 'session') }
@@ -251,9 +258,32 @@ export function noteLiveState(sid: string, state: LiveState, host?: string): voi
     proxies.get(sid)?.noteLive({})
     return
   }
+  const before = liveStates.get(sid)
   liveStates.set(sid, state ?? {})
   if (host) liveHosts.set(sid, host)
   proxies.get(sid)?.noteLive(state ?? {})
+  // An ACP session's controls or model catalog came (its host's first report after it attached, a
+  // hand-over made by a read) or changed: what shows them reads them again, now that they are here.
+  const was = before?.acp
+  const now = state?.acp
+  if (now && (now.sessionControls !== undefined || now.modelCatalog !== undefined)
+    && (JSON.stringify(was?.sessionControls) !== JSON.stringify(now.sessionControls) || JSON.stringify(was?.modelCatalog) !== JSON.stringify(now.modelCatalog))) {
+    bus.emit(EventNames.SESSION_CONTROLS_CHANGED, { sessionId: sid, taskId: proxies.get(sid)?.taskId }, ['web-ui'], { source: 'host-live' })
+  }
+}
+
+/**
+ * Wait, at most `ms`, for the host of an ACP session just handed over to report its controls (a read
+ * right after its hand-over: the panel's first one). False: not reported in time (the read answers
+ * empty, and the change event above makes the panel read again when they come).
+ */
+export async function controlsReportedWithin(sid: string, ms: number): Promise<boolean> {
+  const until = Date.now() + ms
+  for (;;) {
+    if (Array.isArray(liveStates.get(sid)?.acp?.sessionControls)) return true
+    if (Date.now() >= until) return false
+    await new Promise((r) => setTimeout(r, 100))
+  }
 }
 
 /**

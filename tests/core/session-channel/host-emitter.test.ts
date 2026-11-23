@@ -14,6 +14,7 @@ import { FactLog, type FactRecord } from '../../../src/core/session-channel/fact
 import { createHostEmitter, rowPatch, sessionIdOf, type HostEmitter } from '../../../src/core/session-channel/host-emitter.js'
 import type { LiveState } from '../../../src/core/session-channel/host-api.js'
 import type { SessionRecord } from '../../../src/core/types.js'
+import { noteSessionLiveChanged } from '../../../src/core/session-channel/row-hook.js'
 
 const HOST = 'marina-box'
 const OWN = '11111111-1111-4111-8111-111111111111'
@@ -25,6 +26,7 @@ let log: FactLog
 let bus: EventBus
 let emitter: HostEmitter
 let rowFn: ((row: SessionRecord) => void) | null = null
+let liveFn: ((sid: string) => void) | null = null
 let flows: Array<[string, string]> = []
 let live = new Map<string, LiveState>()
 let offset = 0
@@ -44,13 +46,14 @@ async function records(from = startHead): Promise<FactRecord[]> {
   return log.read(from)
 }
 
-async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: number; handOf?: (row: SessionRecord) => string | undefined } = {}): Promise<void> {
+async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: number; handOf?: (row: SessionRecord) => string | undefined; realLiveHook?: boolean } = {}): Promise<void> {
   emitter = createHostEmitter({
     log, channel: { flow: (sid: string, name: string) => { flows.push([sid, name]) } } as never, hostKey: HOST,
     ownRows: async () => opts.own ?? [],
     liveOf: (sid) => live.get(sid) ?? null,
     offsetOf: () => offset,
     bus, rowListener: (fn) => { rowFn = fn },
+    ...(opts.realLiveHook ? {} : { liveListener: (fn: ((sid: string) => void) | null) => { liveFn = fn } }),
     liveMs: opts.liveMs ?? 30, pendingMs: opts.pendingMs ?? 200,
     ...(opts.handOf ? { handOf: opts.handOf } : {}),
   })
@@ -67,6 +70,7 @@ beforeEach(async () => {
   live = new Map()
   offset = 0
   rowFn = null
+  liveFn = null
   startHead = 0
 })
 afterEach(async () => {
@@ -254,6 +258,32 @@ describe('the emitter', () => {
     // Linked again: already said gone, and a stopped row with no live object says nothing.
     emitter.relive()
     expect((await lives()).length).toBe(4)
+  })
+
+  it('a live change no row write or event shows (an ACP attach) writes the own session\'s live record; a session not its own, or after stop, none', async () => {
+    await make({ own: [row(OWN)], liveMs: 10 })
+    const lives = async () => (await records()).filter((r) => r.name === 'live').map((r) => [r.sid, (r.data as { state: LiveState }).state])
+    expect(liveFn).not.toBeNull()
+    live.set(OWN, { processStatus: 'idle', acp: { workerLive: true, sessionControls: [{ id: 'mode' }] } })
+    live.set(FOREIGN, { processStatus: 'idle' })
+    liveFn!(OWN)
+    liveFn!(FOREIGN)
+    await vi.waitFor(async () => expect(await lives()).toEqual([[OWN, { processStatus: 'idle', acp: { workerLive: true, sessionControls: [{ id: 'mode' }] } }]]))
+    emitter.stop()
+    expect(liveFn).toBeNull()
+  })
+
+  it('the store\'s live hook (row-hook.ts noteSessionLiveChanged) reaches the emitter it installed, and nothing once stopped', async () => {
+    await make({ own: [row(OWN)], liveMs: 10, realLiveHook: true })
+    live.set(OWN, { processStatus: 'idle', acp: { workerLive: true } })
+    noteSessionLiveChanged(OWN)
+    const lives = async () => (await records()).filter((r) => r.name === 'live').length
+    await vi.waitFor(async () => expect(await lives()).toBe(1))
+    emitter.stop()
+    live.set(OWN, { processStatus: 'idle', acp: { workerLive: false } })
+    noteSessionLiveChanged(OWN)
+    await sleep(40)
+    expect(await lives()).toBe(1)
   })
 
   it('a drop the leader asked for is answered with a drop record, also for a session this host no longer has', async () => {

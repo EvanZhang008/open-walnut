@@ -111,6 +111,17 @@ describe.skipIf(!RUN)('a legacy ACP session at rest is resumed by its host\'s se
     await waitFor(async () => (await macRow())?.judge === 'host', 60_000, 'the panel\'s attach to hand the session to the host').catch(fail)
     // The host's runner attached it and runs its worker; the Mac's has no ACP object of it.
     await waitFor(async () => (await h.host(`/acp?sid=${sid}`)).workerLive === true, 60_000, 'the host\'s worker of it').catch(fail)
+    // The panel shows the host's real controls: its first read waited for the host's first report
+    // (or, past that wait, the change event makes it read again; asked again here the same way).
+    const firstControls = (controls.json.controls ?? []) as Array<{ id?: string }>
+    const shown = firstControls.length > 0 ? firstControls : await waitFor(async () => {
+      const again = ((await h.c.mac('GET', `/api/sessions/${sid}/controls`)).json.controls ?? []) as Array<{ id?: string }>
+      return again.length > 0 ? again : null
+    }, 30_000, 'the panel\'s controls from the host').catch(async (e) => fail(new Error(`${e instanceof Error ? e.message : String(e)}; host /acp ${JSON.stringify(await h.host(`/acp?sid=${sid}`))}, mac /acp ${JSON.stringify(await macAcp())}; host records of it ${JSON.stringify(((await h.host('/facts?after=0')).recs ?? []).filter((r: { sid?: string }) => r.sid === sid).map((r: { name?: string; data?: unknown }) => r.name === 'live' ? { live: r.data } : r.name))}`)))
+    expect(shown.length).toBeGreaterThan(0)
+    // The Mac's proxy mirrors what the host's object reports (mode, collaboration mode, model).
+    expect(await macAcp()).toMatchObject({ hostJudged: true, workerLive: true, controls: 3 })
+    process.stdout.write(`legacy-acp-resume: the panel's first read after the hand-over had ${firstControls.length} controls\n`)
     expect(await macAcp()).toMatchObject({ found: true, hostJudged: true })
     expect(resultsOn(await channelEvents(), 'ACP round host')).toEqual([])
     await send('ACP round host')
@@ -124,7 +135,7 @@ describe.skipIf(!RUN)('a legacy ACP session at rest is resumed by its host\'s se
     expect(await macAcp()).toMatchObject({ found: true, hostJudged: true })
     // The host's own runner attached it from its row, with the same runtime, to its own daemon (this
     // machine, never a link to itself), and its worker runs there.
-    expect(await h.host(`/acp?sid=${sid}`)).toEqual({ found: true, runtimeId, host: '__local__', workerLive: true })
+    expect(await h.host(`/acp?sid=${sid}`)).toEqual({ found: true, runtimeId, host: '__local__', workerLive: true, controls: 3 })
     const onHost = (await h.host(`/events?sid=${sid}`)) as ProbeEvent[]
     expect(onHost.some((e) => e.name === 'session:send'), JSON.stringify(onHost.map((e) => e.name))).toBe(true)
     await untilFactsStill(h)

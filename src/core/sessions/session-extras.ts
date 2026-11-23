@@ -65,8 +65,7 @@ export async function getSessionControls(sessionId: string): Promise<SessionCont
       // The record's OWN engine, not a literal: the field tells the client which
       // control vocabulary it is looking at.
       engine: caps.id,
-      // A session its host runs answers from its mirrored state, empty until the host first reports.
-      controls: (session.sessionControls ?? []).filter((control) => control.id !== 'model'),
+      controls: session.sessionControls.filter((control) => control.id !== 'model'),
     };
   }
   return { engine: caps.id, controls: claudeModeControls(record.mode || 'default') };
@@ -90,7 +89,7 @@ export async function applySessionControl(
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
     const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
     if (!session) throw new SessionControlError(`${caps.displayName} ACP session is not available`, 409);
-    const control = (session.sessionControls ?? []).find((candidate) => candidate.id === id);
+    const control = session.sessionControls.find((candidate) => candidate.id === id);
     if (!control || !control.options.some((option) => option.value === value)) {
       throw new SessionControlError('unknown control or value', 400);
     }

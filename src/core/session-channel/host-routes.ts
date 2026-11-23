@@ -112,6 +112,14 @@ export interface HostRoutesOptions {
    * takes no resume (it answers `resume_unsupported`).
    */
   notAtRest?(sid: string, row?: SessionRecord): Promise<string | null>
+  /**
+   * A resume taken, before its runner is told: the runner's objects of the session that hold nothing
+   * go (one kept from before this host gave the session back would read the journal on from its old
+   * place and say the leader's turns again), so its attach builds a fresh one from the resume's row;
+   * and the claimed row is this host's own at once (its emitter keeps the session's events and live
+   * state from now on, not only from the runner's first write: an ACP attach writes none).
+   */
+  taken?(sid: string): void | Promise<void>
   now?: () => number
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -286,6 +294,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       o.log?.('warn', 'host sessions: a resume could not queue its lines', { sessionId: sid, error: errText(err) })
       return { status: 200, body: { ok: false, error: `the resume's lines were not queued: ${errText(err)}`, why: 'resume_failed' } }
     }
+    try { await o.taken?.(sid) } catch (err) { o.log?.('warn', 'host sessions: a resume could not ready its session here', { sessionId: sid, error: errText(err) }) }
     o.emit('session:send', { sessionId: sid, message: '' }, source)
     o.log?.('info', 'host sessions: a session its leader ran is resumed here', { sessionId: sid, lines: lines.length })
     return { status: 200, body: { ok: true, sessionId: sid, title: '' } }

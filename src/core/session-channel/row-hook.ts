@@ -24,3 +24,21 @@ export function noteSessionRowWritten(row: SessionRecord): void {
   if (!listener) return
   try { listener(row) } catch { /* the emitter logs its own failures */ }
 }
+
+/**
+ * The same hook for a session's live state (host-live.ts) that changed with no row write and no
+ * bus event: an ACP session the runner attached (its worker up, its controls known). The host's
+ * emitter writes the session's `live` record again; nothing listens anywhere else.
+ */
+type LiveListener = (sid: string) => void
+let liveListener: LiveListener | null = null
+
+export function setOwnLiveListener(fn: LiveListener | null): void {
+  liveListener = fn
+}
+
+/** The runner's live object of `sid` changed in a way no row write or event shows. Never throws. */
+export function noteSessionLiveChanged(sid: string): void {
+  if (!liveListener) return
+  try { liveListener(sid) } catch { /* the emitter logs its own failures */ }
+}

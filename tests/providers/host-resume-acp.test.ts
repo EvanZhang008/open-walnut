@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 const probe = vi.hoisted(() => ({ acp: false as boolean | null, acpCalls: [] as string[], statusCalls: 0 }))
+// A read waits for the host's first report at most this long here (claude-code-session.ts READ_HANDOVER_WAIT_MS).
+vi.hoisted(() => { process.env.WALNUT_ACP_READ_HANDOVER_WAIT_MS = '300' })
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-resume-acp'))
 vi.mock('../../src/providers/daemon-connection.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
