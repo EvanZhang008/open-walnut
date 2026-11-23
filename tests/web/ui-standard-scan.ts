@@ -231,6 +231,9 @@ const NOT_A_KEY = /(-(row|rows|card|block|rail|bar|head|header|item|cell|aside|d
 const ROUND_CORNER = /^(var\(--radius-full\)|50%|inherit|0|0px|none|initial|unset)$/; // a literal 999px is the token's job (pillRadius)
 /** `border-radius: 8px; /* shape: <why, 10+ characters> *\/`: a class named like a key that is not one (a row's highlight). */
 export const SHAPE_MARK = /\/\*\s*shape:\s*[^*]{10,}\*\//;
+/** A font size off the type scale that a measurement needs, said on its own line (a `size: <why>` comment):
+ *  not counted as fontSizeOffScale. Each one is listed in ui-standard-ratchet.test.ts (SIZE_MARKS). */
+export const SIZE_MARK = /\/\*\s*size:\s*[^*]{10,}\*\//;
 export function pressableClasses(): Set<string> {
   const out = new Set<string>(btnCompanions());
   for (const file of walk(WEB_SRC, ['.tsx'])) {
@@ -496,7 +499,7 @@ export function countAll(): Counts {
     for (const d of scanCss(rel, text)) {
       const key = d.selectors.join(', ');
       rules.set(key, [...(rules.get(key) ?? []), d]);
-      for (const kind of tokenBreaks(d)) bump(out[kind], rel);
+      for (const kind of tokenBreaks(d)) if (kind !== 'fontSizeOffScale' || !SIZE_MARK.test(lines[d.line - 1] ?? '')) bump(out[kind], rel);
       if (d.prop === 'border-radius' && !SHAPE_MARK.test(lines[d.line - 1] ?? '') && d.selectors.some((x) => isSquareKey(x, d.value, pressables))) bump(out.squareKey, rel);
     }
     for (const [, decls] of rules) {

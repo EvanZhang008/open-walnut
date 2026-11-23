@@ -42,7 +42,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pluginCss, pluginStyles, countAll, isSquareKey, isRoundRow, restylesBtn, ownBehaviour, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
+import { pluginCss, pluginStyles, countAll, isSquareKey, isRoundRow, restylesBtn, ownBehaviour, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, SIZE_MARK, WEB_SRC, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -84,6 +84,31 @@ function compare(kind: keyof Counts, now: Record<string, number>, was: Record<st
   }
   return { grew, fell };
 }
+
+/**
+ * Every font size kept off the type scale by a `size: <why>` comment mark, and why. A mark not listed
+ * here fails, so the type scale gives way only where a measurement says it must.
+ */
+const SIZE_MARKS: Record<string, string> = {
+  // 2026-11-23: 24c5c5b1de rounded it to --font-size-xs (11px), and the collapse row's sentence
+  // ("58 more folders, 6 with unread") no longer fits the scrolled pane's 158px slot.
+  'apps/mail/mail.css': 'the mail pane collapse row: its sentence measures 147px at 10px and 161px at 11px against a 158px slot',
+};
+
+describe('UI standard: font sizes off the scale', () => {
+  it('every size mark is listed with why', () => {
+    const marked: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.endsWith('.css') && fs.readFileSync(p, 'utf8').split('\n').some((l) => SIZE_MARK.test(l))) marked.push(path.relative(WEB_SRC, p).split(path.sep).join('/'));
+      }
+    };
+    walk(WEB_SRC);
+    expect(marked.sort(), 'a size: comment mark keeps a font size off the scale: list it in SIZE_MARKS with its measurement').toEqual(Object.keys(SIZE_MARKS).sort());
+  });
+});
 
 describe('UI standard: one look per kind of control', () => {
   const now = current();

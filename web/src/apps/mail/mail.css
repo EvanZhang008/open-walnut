@@ -1021,7 +1021,7 @@
      `58 more folder…` over 202 unread messages. The size gives way; the sentence stays whole. Re-measured,
      not re-argued, in `tests/e2e/browser/mail-sidebar-round3.spec.ts` and its WebKit twin, in both the
      scrolled and unscrolled pane. */
-  font-size: var(--font-size-xs);
+  font-size: 10px; /* size: one step under --font-size-xs, measured above; the sentence clips at 11px */
   /* `font-family: inherit` is load-bearing on a BUTTON in WebKit, exactly as it is on the filter input
      below: left alone, a button is drawn in the engine's own control face, which is wider than the app's
      and is the difference between this row's sentence fitting and being ellipsised. */
