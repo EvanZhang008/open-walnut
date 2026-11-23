@@ -113,10 +113,9 @@
   font-size: var(--font-size-lg);
   line-height: 1.4;
 }
-/* Its one key is the family's .btn; a finger gets 44 px. */
-@media (pointer: coarse) {
-  .phone-tier-empty-btn { min-height: 44px; }
-}
+/* Its one key is the family's .btn; a finger gets 44 px. This view is the phone's own, so the size
+   holds on every phone, and `.btn.` outranks the family's 34 px whichever file loads first. */
+.btn.phone-tier-empty-btn { min-height: 44px; }
 
 /* N12: a disabled row in the phone's session menu says why. */
 .phone-session-row-why {
@@ -152,10 +151,12 @@
     opacity: 0.55;
     -webkit-tap-highlight-color: transparent;
   }
+  /* 44 px to a finger: the 32 px key plus 6 px a side, counted from inside the family's 1 px
+     border (an absolute box is placed from the padding box). */
   .app-shell-navigation .session-history .msg-more-btn::before {
     content: '';
     position: absolute;
-    inset: -6px;
+    inset: -7px;
   }
   .app-shell-navigation .session-history .msg-more-btn:active {
     opacity: 1;
