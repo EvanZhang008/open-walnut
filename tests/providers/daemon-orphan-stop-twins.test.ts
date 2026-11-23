@@ -109,6 +109,11 @@ function buildTwin(kind: Twin, world: World) {
     },
     journaledIds: () => world.journaled,
     journaledHome: (sid: string) => world.journalHomes.get(sid),
+    // No Walnut server runs here, so no data dir maps to a leader (host-server-core.ts walnutOf): a
+    // home is its own Walnut and the replica stop fence never applies. Cases for those live in
+    // tests/providers/host-server-own-session-owner-twins.test.ts, against real daemons.
+    walnutOfHome: (home: string) => home,
+    servedStopRefusal: () => null,
     SESSION_IDLE_WARNING_MS: IDLE_WARNING_MS,
     SESSION_IDLE_KILL_MS: IDLE_KILL_MS,
     deriveSessionProtection: () => ({ source: world.protection.source, killMs: IDLE_KILL_MS }),

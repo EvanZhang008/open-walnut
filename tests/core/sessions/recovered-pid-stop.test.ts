@@ -102,6 +102,10 @@ function productionDaemonDecisions(): Decide {
     },
     journaledIds: () => new Set(journal.keys()),
     journaledHome: (sid: string) => journal.get(sid),
+    // The daemon runs no Walnut server here, so no data dir maps to a leader (host-server-core.ts
+    // walnutOf): a home is its own Walnut and no replica stop fence applies, as on a dev box today.
+    walnutOfHome: (home: string) => home,
+    servedStopRefusal: () => null,
     SESSION_IDLE_WARNING_MS: 5 * 60 * 1000,
     SESSION_IDLE_KILL_MS: 2 * 60 * 60 * 1000,
     deriveSessionProtection: () => ({ source: null }),
