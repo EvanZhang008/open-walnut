@@ -60,14 +60,15 @@ describe('what still holds a thread at his Acknowledge', () => {
 describe('the ack that keeps it open', () => {
   it('goes pending, every exchange known by him, the ack recorded: out of his sight, not closed', () => {
     const { f, id } = running()
-    const pinned = updateThread(f, id, { pin: true }, 'human', at(3)).file
-    const r = ackKnown(pinned, id, at(4))
+    const watched = updateThread(f, id, { watch: true }, 'human', at(3)).file
+    const r = ackKnown(watched, id, at(4))
     expect(r.thread.closed).toBeUndefined()
     expect(r.thread.state).toBe('pending')
     expect(r.thread.ackedAt).toBe(at(4))
     expect(r.thread.known).toMatchObject({ by: 'human', through: r.thread.messages[0].id })
     expect(r.thread.reactedAt).toBe(at(4))
-    expect(r.thread.pinned).toBeUndefined()
+    // His watch stays: he follows the subject on, whatever group it is in.
+    expect(r.thread.watched).toEqual({ at: at(3), by: 'human' })
     expect(hasThreadNews(r.thread)).toBe(false)
     expect(shownToHim(r.thread, undefined, Date.parse(at(5)))).toBe(false)
     expect(threadCounts(r.file.threads, Date.parse(at(5))).shown).toBe(0)
@@ -198,10 +199,10 @@ describe('what the node hears', () => {
     const p = checkPlace(NODE, 'waiting', '  waits on\n the simulator ', {})
     expect(p).toEqual({ to: 'waiting', why: 'waits on the simulator' })
     expect(nodePlaced(t, t, p, at(6)).ackPlaced).toEqual({ to: 'waiting', by: 'node', at: at(6), why: 'waits on the simulator' })
-    // He pinned it since his ack: a place in Closed is its close (threads-store.ts), which his pin refuses.
-    const pinnedT = { ...t, pinned: { at: at(5), by: 'human' } }
-    expect(() => updateThread({ ...f, threads: [pinnedT] }, id, { close: 'acked' }, NODE, at(6))).toThrow(/pinned/)
-    expect(nodePlaced(pinnedT, pinnedT, { to: 'waiting', why: 'x' }, at(6)).pinned).toBeTruthy()
+    // He watches it: a place in Closed is its close (threads-store.ts), which his watch refuses.
+    const watchedT = { ...t, watched: { at: at(5), by: 'human' } }
+    expect(() => updateThread({ ...f, threads: [watchedT] }, id, { close: 'acked' }, NODE, at(6))).toThrow(/watches/)
+    expect(nodePlaced(watchedT, watchedT, { to: 'waiting', why: 'x' }, at(6)).watched).toBeTruthy()
     // Placed in Closed: its close records where it went and why.
     const shutByNode = updateThread({ ...f, threads: [t] }, id, { close: 'acked' }, NODE, at(7)).thread
     expect(nodePlaced(t, shutByNode, { to: 'closed', why: 'the timer is fixed' }, at(7)).ackPlaced).toEqual({ to: 'closed', by: 'node', at: at(7), why: 'the timer is fixed' })
@@ -225,9 +226,9 @@ describe('what the node hears', () => {
     expect(knownStep(told, false, Date.parse(at(15)) + KNOWN_CLOSE_MS)).toBe('close')
     // New work opened on it after it ended: the clock starts again.
     expect(knownStep(told, true, now)).toBe('rewait')
-    // He pinned or snoozed it since: it stays in his hands, Walnut neither shows nor closes it.
+    // He watches or snoozed it: it stays in his hands, Walnut neither shows nor closes it.
     const late = Date.parse(at(15)) + KNOWN_CLOSE_MS
-    expect(knownStep({ ...told, pinned: { at: at(16), by: 'human' } }, false, late)).toBe('wait')
+    expect(knownStep({ ...told, watched: { at: at(16), by: 'human' } }, false, late)).toBe('wait')
     expect(knownStep({ ...told, snoozed: { until: new Date(late + 60_000).toISOString(), at: at(16) } }, false, late)).toBe('wait')
     // The node wrote a new summary after his ack but left it pending: shown, never closed unseen.
     const wrote = updateThread({ ...f, threads: [t] }, id, { state: 'pending', reply: 'Timer fixed and tested.' }, NODE, at(16)).thread

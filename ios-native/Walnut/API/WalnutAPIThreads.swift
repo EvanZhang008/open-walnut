@@ -50,7 +50,8 @@ struct OrgThread: Codable, Equatable, Identifiable {
         var host: String? = nil
     }
     struct Snoozed: Codable, Equatable { let until: String; let at: String }
-    struct Pinned: Codable, Equatable { let at: String; var by: String? = nil }
+    /// On his Watching list (additive, 2026-11-23): `at` is its place there, oldest first.
+    struct Watched: Codable, Equatable { let at: String; var by: String? = nil }
     /// A choice he taps while it waits on him (additive, 2026-11-20): the one shape of a choice
     /// (the server's core/ask-options.ts). A tap is his answer in words, the label.
     struct Option: Codable, Equatable, Identifiable { let id: String; let label: String; var detail: String? = nil; var recommended: Bool? = nil }
@@ -84,7 +85,9 @@ struct OrgThread: Codable, Equatable, Identifiable {
     var known: Known? = nil
     var opener: Opener? = nil
     var snoozed: Snoozed? = nil
-    var pinned: Pinned? = nil
+    var watched: Watched? = nil
+    /// The watch's older name, from a server of 2026-11-03 to 11-23: read as a watch.
+    var pinned: Watched? = nil
     /// His view shows it (additive, 2026-11-06): the server's rule over ALL the node's threads,
     /// the one `user_status.threads` counts by, so this list and the header's count agree. Absent
     /// from an older server: the phone judges it itself (`OrgThreadModel.shownToHim`).
@@ -136,14 +139,19 @@ enum OrgThreadEdit: Equatable {
     case reopen
     /// An ISO time; "" takes the snooze off.
     case snooze(String)
-    case pin(Bool)
+    /// On or off his Watching list.
+    case watch(Bool)
+    /// Its place on the Watching list (an ISO time; oldest first).
+    case watchAt(String)
 
     var body: [String: AnyEncodable] {
         switch self {
         case .acknowledge: return ["close": AnyEncodable("acked")]
         case .reopen: return ["reopen": AnyEncodable(true)]
         case .snooze(let until): return ["snooze": AnyEncodable(until)]
-        case .pin(let on): return ["pin": AnyEncodable(on)]
+        // `pin` too: a Mac on the build before the watch reads only that name.
+        case .watch(let on): return ["watch": AnyEncodable(on), "pin": AnyEncodable(on)]
+        case .watchAt(let at): return ["watch_at": AnyEncodable(at)]
         }
     }
 }

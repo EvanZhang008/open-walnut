@@ -108,7 +108,7 @@ describe('a node is never read twice at once', () => {
       await tick(OWNER_READ_GAP_MS)
     }
     await act(async () => { surfaces[0].heard('th-a1b2c3', undefined, 'go on') })
-    await act(async () => { await surfaces[1].update('th-a1b2c3', { pin: true }) })
+    await act(async () => { await surfaces[1].update('th-a1b2c3', { watch: true }) })
     expect(api.maxInFlight).toBe(1)
     expect(api.calls).toBe(1)
     await answer([thread('old')])

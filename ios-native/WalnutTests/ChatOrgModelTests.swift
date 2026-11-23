@@ -255,27 +255,30 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertNil(ChatOrgModel.threadsOf("lead-x", tasks: ["lead-x": node("lead-x", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts()))]))
     }
 
-    /// A pinned thread named on a row's line wears a pin (web `latestPinned`); the counts decode
-    /// from the server and read as unpinned from an older one.
-    func testAPinnedThreadOnTheLineIsMarked() throws {
-        let decoded = try JSONDecoder().decode(WalnutThreadCounts.self, from: Data(#"{"shown":2,"needs":0,"pinned":1,"title":"Watch list","id":"th-2","titlePinned":true}"#.utf8))
-        XCTAssertEqual(decoded, WalnutThreadCounts(shown: 2, needs: 0, pinned: 1, title: "Watch list", id: "th-2", titlePinned: true))
-        XCTAssertEqual(try JSONDecoder().decode(WalnutThreadCounts.self, from: Data(#"{"shown":2,"pinned":"1","titlePinned":"yes"}"#.utf8)), WalnutThreadCounts(shown: 2))
+    /// A watched thread named on a row's line wears the eye (web `latestWatched`); the counts decode
+    /// from the server, an older server's `pinned` read as a watch, and odd fields as none.
+    func testAWatchedThreadOnTheLineIsMarked() throws {
+        let decoded = try JSONDecoder().decode(WalnutThreadCounts.self, from: Data(#"{"shown":2,"needs":0,"watched":1,"title":"Watch list","id":"th-2","titleWatched":true}"#.utf8))
+        XCTAssertEqual(decoded, WalnutThreadCounts(shown: 2, needs: 0, watched: 1, title: "Watch list", id: "th-2", titleWatched: true))
+        XCTAssertEqual(try JSONDecoder().decode(WalnutThreadCounts.self, from: Data(#"{"shown":2,"pinned":1,"titlePinned":true}"#.utf8)), WalnutThreadCounts(shown: 2, watched: 1, titleWatched: true))
+        XCTAssertEqual(try JSONDecoder().decode(WalnutThreadCounts.self, from: Data(#"{"shown":2,"watched":"1","titleWatched":"yes"}"#.utf8)), WalnutThreadCounts(shown: 2))
+        // It round-trips (the task cache stores it).
+        XCTAssertEqual(try JSONDecoder().decode(WalnutThreadCounts.self, from: JSONEncoder().encode(decoded)), decoded)
         let rows = ChatOrgModel.rows(tree: try tree(), tasks: [
-            node("lead-o", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, pinned: 1, title: "Watch list", titlePinned: true))),
-            node("lead-w", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, pinned: 1, title: "Rename", titlePinned: true))),
-            node("main-1", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, pinned: 1, title: "Plan", titlePinned: true))),
+            node("lead-o", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, watched: 1, title: "Watch list", titleWatched: true))),
+            node("lead-w", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, watched: 1, title: "Rename", titleWatched: true))),
+            node("main-1", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, watched: 1, title: "Plan", titleWatched: true))),
         ])
         let by = Dictionary(uniqueKeysWithValues: rows.map { ($0.name, $0) })
         let ops = try XCTUnwrap(by["Ops"])
         XCTAssertEqual(ops.line, "1 thread: Watch list")
-        XCTAssertTrue(ops.linePinned)
-        // A VP's own threads lead its line over its tasks' asks, the pin with them.
+        XCTAssertTrue(ops.lineWatched)
+        // A VP's own threads lead its line over its tasks' asks, the eye with them.
         XCTAssertEqual(by["Walnut"]?.line, "1 thread: Rename")
-        XCTAssertEqual(by["Walnut"]?.linePinned, true)
-        // The CEO's line names its newest thread, so its pin shows there too.
-        XCTAssertEqual(by["CEO"]?.linePinned, true)
-        XCTAssertTrue(ChatDrawerOrgList.accessibilityText(ops).contains("pinned, 1 thread: Watch list"))
+        XCTAssertEqual(by["Walnut"]?.lineWatched, true)
+        // The CEO's line names its newest thread, so its eye shows there too.
+        XCTAssertEqual(by["CEO"]?.lineWatched, true)
+        XCTAssertTrue(ChatDrawerOrgList.accessibilityText(ops).contains("watched, 1 thread: Watch list"))
     }
 
     /// The CEO's own Threads lead its line (the newest named) and are its badge; none is "0 threads".

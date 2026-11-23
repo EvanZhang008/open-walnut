@@ -72,7 +72,7 @@ export function ThreadsEmpty({ name, owner }: { name: string; owner: Task | unde
   );
 }
 
-export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, onShowThread, epoch = 0 }: {
+export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, onShowThread, epoch = 0, watching }: {
   groups: Record<ThreadGroup, OrgThread[]>;
   /** The folded groups he opened while here. */
   opened: ReadonlySet<ThreadGroup>;
@@ -85,6 +85,8 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
   onShowThread?: (id: string) => void;
   /** Reads that caught the pane up (useOrgThreads catchUp): no move is drawn across one. */
   epoch?: number;
+  /** His Watching group (OrgThreadsWatching), drawn first: each of its threads is in its own group too. */
+  watching?: ReactNode;
 }) {
   const shown = useMemo(() => shownGroups(opened), [opened]);
   const { moves, dismiss } = useThreadMoves(groups, shown, epoch);
@@ -116,6 +118,7 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
       onFocus={(e) => { hadFocus.current = true; wasTyping.current = e.target instanceof HTMLElement && (e.target.matches('input, textarea') || e.target.isContentEditable); }}
       onBlur={(e) => { if (!e.relatedTarget || !(e.currentTarget.contains(e.relatedTarget as Node))) hadFocus.current = false; }}
     >
+      {watching}
       {[...FOR_HIM_GROUPS, ...FOLDED_GROUPS].map((g) => {
         const list = groups[g];
         const folds = FOLDED_GROUPS.includes(g);

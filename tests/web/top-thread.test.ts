@@ -5,9 +5,9 @@
  * only has 1, not right ... top only show one but will show how many left ... top can be hide").
  *
  *  - its N is the header's and the Threads tab's count (threadCounts.shown), with threads of tasks
- *    below (one whose reply is on its way included), snoozed, pinned, quiet and closed ones in the mix;
- *  - its order: the pinned first, then the ones that need him, then the ones to read, each newest
- *    change first; the Threads view orders the same way under the flag, and as before without it;
+ *    below (one whose reply is on its way included), snoozed, watched, quiet and closed ones in the mix;
+ *  - its order: the ones that need him, then the ones to read, each newest change first (a watch
+ *    moves nothing: Watching is a group of its own in the Threads view); the Threads view orders the same way under the flag, and as before without it;
  *  - a thread that leaves the list gives its place to the next one;
  *  - an Action needed item that is not a thread still shows; a letter that became a thread does not;
  *  - Hide is kept in the view memory (a reload reads it back).
@@ -47,7 +47,7 @@ function realNode(): OrgThread[] {
   return [
     thread('answered', 90), thread('needs', 30), thread('answered', 100), thread('needs', 80),
     ...Array.from({ length: 12 }, (_, i) => thread('answered', 40 + i)),
-    thread('answered', 110, { pinned: { at: at(60), by: 'human' } }),
+    thread('answered', 110, { watched: { at: at(60), by: 'human' } }),
     // Out of his sight: working, pending, closed, snoozed.
     thread('working', 115), thread('pending', 116),
     thread('answered', 117, { closed: { how: 'acked', at: at(117), by: 'human' } }),
@@ -64,7 +64,7 @@ describe('the top steps through the Threads view\'s own list', () => {
     const list = topThreads(all, NOW)
     expect(list.length).toBe(threadCounts(all, NOW).shown)
     expect(list.length).toBe(listedForHim(all, NOW).length)
-    // 2 needs + 1 pinned + 14 to read + 1 below = 18; none of the hidden ones.
+    // 2 needs + 1 watched + 14 to read + 1 below = 18; none of the hidden ones.
     expect(list.length).toBe(18)
     const states = new Set(list.map((t) => t.state))
     expect(states).toEqual(new Set(['needs', 'answered']))
@@ -84,10 +84,9 @@ describe('the top steps through the Threads view\'s own list', () => {
     expect(topThreads(all, NOW).length).toBe(threadCounts(all, NOW).shown)
   })
 
-  it('orders the pinned first, then the ones that need him, then the ones to read, each newest first', () => {
-    const list = topThreads(realNode(), NOW)
-    expect(list[0]!.pinned).toBeTruthy()
-    const rest = list.slice(1)
+  it('orders the ones that need him, then the ones to read, each newest first; a watch moves nothing', () => {
+    const rest = topThreads(realNode(), NOW)
+    expect(rest.find((t) => t.watched)?.state).toBe('answered')
     const firstRead = rest.findIndex((t) => t.state !== 'needs')
     expect(rest.slice(0, firstRead).every((t) => t.state === 'needs')).toBe(true)
     expect(rest.slice(firstRead).every((t) => t.state !== 'needs')).toBe(true)
@@ -103,8 +102,7 @@ describe('the top steps through the Threads view\'s own list', () => {
     const listed = listedForHim(realNode(), NOW)
     expect(orderedForHim(listed, { needsFirst: true }).map((t) => t.id)).toEqual(topThreads(realNode(), NOW).map((t) => t.id))
     const today = orderedForHim(listed)
-    expect(today[0]!.pinned).toBeTruthy()
-    const times = today.slice(1).map((t) => t.updatedAt)
+    const times = today.map((t) => t.updatedAt)
     expect(times).toEqual([...times].sort().reverse())
   })
 
@@ -121,25 +119,21 @@ describe('the top steps through the Threads view\'s own list', () => {
   })
 
   // 2026-11-21, a review on his data: pinning a Waiting card put it on the top's first page while it
-  // kept its old place, "1 / 6" jumped to "2 / 7". A pin is a place in his list, never something for
-  // him: the top's list and its N stay, and the card on show stays on show.
-  it('pinning a card that waits on nobody leaves the top as it was; pinning one of its own keeps the card on show', () => {
+  // kept its old place, "1 / 6" jumped to "2 / 7". A watch (the pin's successor, 2026-11-23) is a
+  // list of his own, never something for him and never a place: the top's list, its order and its N
+  // stay, and the card on show stays on show.
+  it('watching a card that waits on nobody, or one of its own, leaves the top as it was', () => {
     const all = realNode()
     const before = topThreads(all, NOW)
     const onShow = before[0]!.id
-    const waiting = all.find((t) => t.state === 'pending')!
-    waiting.pinned = { at: at(119), by: 'human' }
-    const pinnedWaiting = topThreads(all, NOW)
-    expect(pinnedWaiting.map((t) => t.id)).toEqual(before.map((t) => t.id))
+    all.find((t) => t.state === 'pending')!.watched = { at: at(119), by: 'human' }
+    expect(topThreads(all, NOW).map((t) => t.id)).toEqual(before.map((t) => t.id))
     expect(threadCounts(all, NOW).shown).toBe(before.length)
-    expect(pinnedWaiting[topIndex(pinnedWaiting, onShow, 0)]!.id).toBe(onShow)
-    // Pinning a counted card sorts it first: the one on show is still the one on show, one place on.
-    const other = before.find((t) => !t.pinned && t.id !== onShow)!
-    all.find((t) => t.id === other.id)!.pinned = { at: at(119), by: 'human' }
-    const pinnedOwn = topThreads(all, NOW)
-    expect(pinnedOwn.length).toBe(before.length)
-    expect(pinnedOwn[0]!.id).toBe(other.id)
-    expect(pinnedOwn[topIndex(pinnedOwn, onShow, 0)]!.id).toBe(onShow)
+    const other = before.find((t) => !t.watched && t.id !== onShow)!
+    all.find((t) => t.id === other.id)!.watched = { at: at(119), by: 'human' }
+    const watchedOwn = topThreads(all, NOW)
+    expect(watchedOwn.map((t) => t.id)).toEqual(before.map((t) => t.id))
+    expect(watchedOwn[topIndex(watchedOwn, onShow, 0)]!.id).toBe(onShow)
   })
 
   it('the hidden line counts them and the ones that need him', () => {

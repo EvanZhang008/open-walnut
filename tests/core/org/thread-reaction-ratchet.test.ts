@@ -34,11 +34,11 @@ describe('a reaction is durable news provenance, not a state', () => {
     expect(cardView(late).unread.map((x) => x.answer?.text)).toEqual(['A late result.']);
   });
 
-  it('a user reaction hides a pinned card too, while an agent still cannot unpin it', () => {
-    const pin = model.updateThread(base(), 'th-aaaaaa', { pin: true }, 'human', at(2));
-    expect(() => model.updateThread(pin.file, pin.thread.id, { pin: false }, by, at(3))).toThrow(model.ThreadError);
-    const reaction = model.fileMessage(pin.file, { threadId: pin.thread.id, text: 'One more question?', via: 'follow-up', at: at(3) });
-    expect(reaction.thread.pinned).toBeUndefined();
+  it('a user reaction hides a watched card too (it stays on his Watching list), while an agent cannot unwatch it', () => {
+    const watch = model.updateThread(base(), 'th-aaaaaa', { watch: true }, 'human', at(2));
+    expect(() => model.updateThread(watch.file, watch.thread.id, { watch: false }, by, at(3))).toThrow(model.ThreadError);
+    const reaction = model.fileMessage(watch.file, { threadId: watch.thread.id, text: 'One more question?', via: 'follow-up', at: at(3) });
+    expect(reaction.thread.watched).toEqual({ at: at(2), by: 'human' });
     expect(shownToHim(reaction.thread, new Set(), Date.parse(at(4)))).toBe(false);
   });
 

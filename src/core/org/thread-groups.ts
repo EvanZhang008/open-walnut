@@ -8,7 +8,7 @@
  * number, badge and red line counts only the threads drawn in Needs you or Done (the result waits
  * on the card for him).
  */
-import { listedForHim, orderedForHim, pinnedFirst, pinnedNow, snoozedNow, type ThreadCounts, type ViewThread } from './thread-view.js';
+import { listedForHim, orderedForHim, snoozedNow, watchingOf, watchedNow, type ThreadCounts, type ViewThread } from './thread-view.js';
 import { USER_STATE_LABELS } from '../user-status.js';
 import { inAcknowledged, isKnown, placedSinceAck } from './thread-known.js';
 
@@ -72,7 +72,7 @@ export function threadGroupOf(t: GroupedThread, listed: boolean, now: number = D
   return 'working';
 }
 
-/** Every thread in its group, each group in his Threads' order (pinned first, newest change first). Pure. */
+/** Every thread in its group, each group in his Threads' order (newest change first). A watched thread is in its group as well as in Watching (thread-view.ts watchingOf). Pure. */
 export function groupThreads<T extends GroupedThread & { id: string; updatedAt: string }>(threads: readonly T[], now: number = Date.now()): Record<ThreadGroup, T[]> {
   const listed = new Set(listedForHim(threads, now));
   const out: Record<ThreadGroup, T[]> = { needs: [], read: [], working: [], waiting: [], known: [], done: [], archived: [] };
@@ -119,7 +119,7 @@ type Counted = ViewThread & { id: string; state: string; updatedAt: string };
  * chat, `user_status.threads` and the phone's list (2026-11-21, the user, on a VP row that read "1"
  * while its Threads held only Working, Waiting and closed ones: "It show 1 but there isn't any").
  * A thread his view lists for another
- * reason (pinned, overdue on the node, a task's thread below while his reply travels to it) is in
+ * reason (overdue on the node, a task's thread below while his reply travels to it) is in
  * his list but never counted: nothing lights up for a card that is not his to answer or read. Pure.
  */
 export function threadsForHim<T extends Counted>(threads: readonly T[], now: number = Date.now()): T[] {
@@ -139,12 +139,13 @@ export function threadCounts<T extends Counted & { title: string }>(threads: rea
   const below = lit.filter((t) => !!t.owner);
   // A thread holding the task's own ask is that task's Needs you, counted there (thread-report-ask.ts).
   const needs = shown.filter((t) => t.state === 'needs' && !t.heldAsk);
-  const pinned = pinnedFirst(shown.filter(pinnedNow));
+  // Newest watch first: the one he watched last names the row when nothing waits on him.
+  const watched = watchingOf(shown).reverse();
   const newest = (list: readonly T[]) => list.reduce<T | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
-  const top = newest(needs) ?? pinned[0] ?? newest(shown) ?? newest(below);
+  const top = newest(needs) ?? watched[0] ?? newest(shown) ?? newest(below);
   return {
-    shown: lit.length, needs: needs.length, ...(pinned.length ? { pinned: pinned.length } : {}),
-    ...(top ? { title: top.title, id: top.id, ...(pinnedNow(top) ? { titlePinned: true } : {}) } : {}),
+    shown: lit.length, needs: needs.length, ...(watched.length ? { watched: watched.length } : {}),
+    ...(top ? { title: top.title, id: top.id, ...(watchedNow(top) ? { titleWatched: true } : {}) } : {}),
     ...(below.length ? { below: below.length } : {}),
   };
 }

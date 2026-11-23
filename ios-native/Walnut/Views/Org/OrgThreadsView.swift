@@ -119,6 +119,9 @@ struct OrgThreadsView: View {
                     } else if sections.open.isEmpty {
                         emptyText(sections)
                     }
+                    // Watching first: the ones he watches, each also in its own group below
+                    // (2026-11-23, the user: a watch is its own category, like a task's).
+                    watchingGroup(sections, shared: shared, now: now)
                     // Needs you, then Done: always open, each under its head with its count, as
                     // the web draws them (each in its own order). No row of tabs or chips.
                     ForEach(OrgThreadModel.openGroups, id: \.self) { g in
@@ -397,6 +400,47 @@ struct OrgThreadsView: View {
         max((store.closedCount ?? 0) - s.closed.count, s.archived.count)
     }
 
+    /// Watching: every thread he watches, oldest watch first, each a row that opens in place; Move up
+    /// and Move down (its context menu) place it, as the web's drag does.
+    @ViewBuilder
+    private func watchingGroup(_ sections: OrgThreadModel.Sections, shared: Set<String>, now: Date) -> some View {
+        let list = sections.watching
+        if !list.isEmpty {
+            HStack(spacing: 6) {
+                Image(systemName: "eye.fill")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.tint)
+                Text("Watching")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("\(list.count)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("org.threads.group.watching")
+            ForEach(Array(list.enumerated()), id: \.element.id) { i, t in
+                card(t, shared: shared, now: now, snoozed: sections.snoozed.contains { $0.id == t.id }, compact: true)
+                    .contextMenu {
+                        if i > 0 { Button("Move up") { move(list, from: i, to: i - 1) } }
+                        if i < list.count - 1 { Button("Move down") { move(list, from: i, to: i + 1) } }
+                    }
+                    .id("watching-\(t.id)")
+            }
+        }
+    }
+
+    private func move(_ list: [OrgThread], from: Int, to: Int) {
+        guard let at = OrgThreadModel.watchPlace(list, from: from, to: to, now: Date()) else { return }
+        let id = list[from].id
+        Task { await store.edit(id, .watchAt(at)) }
+    }
+
     /// A group always open (Needs you, Done): its head, then its cards; nothing when it has none.
     @ViewBuilder
     private func openGroup(_ g: OrgThreadModel.Group, sections: OrgThreadModel.Sections, shared: Set<String>, now: Date) -> some View {
@@ -569,7 +613,7 @@ struct OrgThreadCard: View {
 
     private var t: OrgThread { thread }
     private var closed: Bool { t.closed != nil }
-    private var pinned: Bool { OrgThreadModel.pinnedNow(t) }
+    private var watched: Bool { OrgThreadModel.watchedNow(t) }
     private var known: Bool { OrgThreadModel.isKnown(t) }
     /// His view lists it (the server's `shown`): an answered one reads Done, else Waiting / Snoozed.
     private var inView: Bool { OrgThreadModel.inView(t, shared: shared, now: now) }
@@ -585,7 +629,7 @@ struct OrgThreadCard: View {
     /// A folded row's second line: when a snoozed thread comes back, else its state and age.
     private var rowLine: String {
         if snoozed, let sn = t.snoozed { return "Snoozed until \(OrgThreadModel.backAt(sn.until, now: now))" }
-        return "\(OrgThreadModel.stateLabel(t, inView: inView, now: now)) · \(timeAgo)"
+        return "\(watched ? "Watching · " : "")\(OrgThreadModel.stateLabel(t, inView: inView, now: now)) · \(timeAgo)"
     }
 
     private var compactRow: some View {
@@ -789,7 +833,8 @@ struct OrgThreadCard: View {
     }
 
     private var stateText: some View {
-        Text(OrgThreadModel.stateLabel(t, inView: inView, now: now))
+        // A watched thread wears the eye beside its state, in its own group and in Watching.
+        (watched ? Text("\(Image(systemName: "eye.fill")) \(Text(verbatim: OrgThreadModel.stateLabel(t, inView: inView, now: now)))") : Text(OrgThreadModel.stateLabel(t, inView: inView, now: now)))
             .font(.caption.weight(.semibold))
             .foregroundStyle(t.state == "needs" && !closed ? Theme.needsText : .secondary)
     }
@@ -809,17 +854,17 @@ struct OrgThreadCard: View {
             .accessibilityIdentifier("org.thread.fold")
         }
         if !closed {
-            Button { onEdit(.pin(!pinned)) } label: {
-                Image(systemName: pinned ? "pin.fill" : "pin")
+            Button { onEdit(.watch(!watched)) } label: {
+                Image(systemName: watched ? "eye.fill" : "eye")
                     .font(.footnote)
-                    .foregroundStyle(pinned ? Theme.tint : .secondary)
+                    .foregroundStyle(watched ? Theme.tint : .secondary)
                     .frame(width: 36, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(busy)
-            .accessibilityLabel(pinned ? "Unpin" : "Pin to the top")
-            .accessibilityIdentifier("org.thread.pin")
+            .accessibilityLabel(watched ? "Stop watching" : "Watch")
+            .accessibilityIdentifier("org.thread.watch")
         }
     }
 
@@ -1003,12 +1048,7 @@ struct OrgThreadCard: View {
 
     private func snoozeMenu(fullWidth: Bool) -> some View {
         Menu {
-            // The server takes the pin off a thread it snoozes, so a pinned card says so first.
-            if pinned {
-                Section("Snoozing unpins this thread") { snoozeChoices }
-            } else {
-                snoozeChoices
-            }
+            snoozeChoices
             if snoozed {
                 Divider()
                 Button("Unsnooze") { onEdit(.snooze("")) }

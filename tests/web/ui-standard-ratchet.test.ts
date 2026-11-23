@@ -2,7 +2,7 @@
  * The UI standard (.claude/skills/walnut-ui-requirements/standard.md): one look per kind of control.
  *
  * 2026-11-21, the user, on one screen with a question card (grey rounded option buttons) and a
- * result card (filled blue Acknowledge, outlined Snooze, outlined pin): "why they are not even
+ * result card (filled blue Acknowledge, outlined Snooze, outlined watch): "why they are not even
  * consistent come on". Both were the shared `.btn`, each restyled by its own card's CSS.
  *
  * Three ways a second style gets in, counted per file (ui-standard-scan.ts):
@@ -104,7 +104,7 @@ describe('UI standard: one look per kind of control', () => {
   it('finds each shape of a second style', () => {
     const companions = new Set(['org-ask-tool']);
     expect(restylesBtn('.ask-card-answer .btn')).toBe(true);
-    expect(restylesBtn('.btn.org-thread-pin-btn')).toBe(true);
+    expect(restylesBtn('.btn.org-thread-watch-btn')).toBe(true);
     expect(restylesBtn('.org-ask-tool', companions)).toBe(true);
     expect(restylesBtn('.org-ask-tool:hover', companions)).toBe(true);
     expect(restylesBtn('.btn')).toBe(false);

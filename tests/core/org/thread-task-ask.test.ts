@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import { askOwnerKept, askOwnerOf, askPointerSignature, sameThreadDecision, threadAskedIn, withAskPointers } from '../../../src/core/org/thread-task-ask.js'
 import { askKey } from '../../../src/core/same-ask.js'
-import { shownToHim, threadOverdue } from '../../../src/core/org/thread-view.js'
+import { shownToHim, threadOverdue, watchingOf } from '../../../src/core/org/thread-view.js'
 import { threadCounts } from '../../../src/core/org/thread-groups.js'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
 import type { Task } from '../../../src/core/types.js'
@@ -299,17 +299,18 @@ describe('the read every surface shares', () => {
     expect(read.reply).toBe(stored.reply)
   })
 
-  it('counts: the pointer is no needs and not shown; the raw needs thread was; a pinned pointer is listed, never counted', () => {
+  it('counts: the pointer is no needs and not shown; the raw needs thread was; a watched pointer is in Watching, never listed or counted', () => {
     const other = thread({ id: 'th-000002', tasks: [], title: 'Budget', reply: 'Pick a budget.' })
     const tasks = [task('t-owner')]
     expect(threadCounts([thread(), other], NOW)).toMatchObject({ shown: 2, needs: 2 })
     const read = withAskPointers(NODE, [thread(), other], tasks)
     expect(threadCounts(read, NOW)).toMatchObject({ shown: 1, needs: 1, id: 'th-000002' })
     expect(shownToHim(read[0], new Set(), NOW)).toBe(false)
-    const pinned = withAskPointers(NODE, [thread({ pinned: { at: iso(1), by: 'human' } })], tasks)
-    // Pinned, it leads his list; its decision is asked in a task, so it waits here and lights nothing up.
-    expect(shownToHim(pinned[0], new Set(), NOW)).toBe(true)
-    expect(threadCounts(pinned, NOW)).toEqual({ shown: 0, needs: 0 })
+    const watched = withAskPointers(NODE, [thread({ watched: { at: iso(1), by: 'human' } })], tasks)
+    // Watched, it is on his Watching list; its decision is asked in a task, so it waits here and lights nothing up.
+    expect(watchingOf(watched).map((t) => t.id)).toEqual([watched[0].id])
+    expect(shownToHim(watched[0], new Set(), NOW)).toBe(false)
+    expect(threadCounts(watched, NOW)).toEqual({ shown: 0, needs: 0 })
   })
 
   it('no overdue ask on the pointer: the task asking it is checked on its own clock', () => {

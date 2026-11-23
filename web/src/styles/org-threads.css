@@ -46,9 +46,9 @@
   grid-column: 2; grid-row: 1; min-width: 0; display: flex; justify-content: flex-end; align-items: baseline;
   font-size: var(--font-size-xs); color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: pre; overflow: hidden;
 }
-.org-thread-from, .org-thread-meta .org-thread-pin { min-width: 0; flex: 0 1 auto; }
-.org-thread-from, .org-thread-pin-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-thread-pin-who { min-width: 0; }
+.org-thread-from, .org-thread-meta .org-thread-watch { min-width: 0; flex: 0 1 auto; }
+.org-thread-from, .org-thread-watch-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-thread-watch-who { min-width: 0; }
 .org-thread-time { flex: none; }
 .org-thread-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
 .org-thread-follows { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
@@ -125,10 +125,23 @@
 .org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; font-size: var(--font-size-xs); cursor: pointer; }
 .org-thread-actions { display: flex; align-items: center; column-gap: 8px; flex-wrap: wrap; }
 .org-thread-snoozed { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
-/* A pinned thread leads the list: its mark beside the time, and a quiet accent edge. */
-.org-thread.is-pinned { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.org-thread-pin { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
-.org-thread-pin .thread-icon { flex: none; }
+/* A watched thread (OrgThreadsWatching): the eye beside the time in its own group, a quiet accent
+   edge, and in Watching a grip at its left to drag it into his order. */
+.org-thread.is-watched { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.org-thread-watch { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
+.org-thread-watch svg { flex: none; width: 12px; height: 12px; }
+.org-thread-watch-btn.is-watched { color: var(--accent); }
+.org-thread[data-copy="watching"] { position: relative; padding-left: 24px; }
+.org-thread[data-copy="watching"].is-dragging { box-shadow: var(--shadow-md); }
+.org-thread-grip {
+  position: absolute; left: 4px; top: 8px; width: 14px; height: 20px; border-radius: var(--radius-xs);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--fg-muted); cursor: grab; touch-action: none;
+}
+.org-thread-grip:hover { color: var(--fg-secondary); background: var(--bg-hover); }
+.org-thread-grip:active { cursor: grabbing; }
+.org-thread-watching-eye { display: inline-flex; vertical-align: -2px; margin-right: 6px; color: var(--accent); }
+.org-thread-watching-eye svg { width: 13px; height: 13px; }
 .org-thread-closed { font-size: var(--font-size-sm); color: var(--fg-muted); margin-right: auto; }
 .org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
 .org-thread-error { margin: 0 auto 0 0; font-size: var(--font-size-sm); color: var(--error); }

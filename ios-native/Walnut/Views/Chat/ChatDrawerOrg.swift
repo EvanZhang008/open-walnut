@@ -91,7 +91,7 @@ struct ChatDrawerOrgList: View {
         var parts = [row.name]
         if row.kind == .vp { parts.append("VP") }
         if !row.ledProjects.isEmpty { parts.append("also leads \(row.ledProjects.joined(separator: ", "))") }
-        parts.append(row.linePinned ? "pinned, \(row.line)" : row.line)
+        parts.append(row.lineWatched ? "watched, \(row.line)" : row.line)
         if let t = row.threadsBadge {
             parts.append(ChatOrgModel.threadCountLabel(t))
         } else if row.needs > 0 {
@@ -133,8 +133,8 @@ struct ChatOrgRowView: View {
                             .fixedSize()
                     }
                 }
-                // A pinned thread named on the line wears the Threads card's pin.
-                (row.linePinned ? Text("\(Image(systemName: "pin.fill")) \(Text(verbatim: row.line))") : Text(verbatim: row.line))
+                // A watched thread named on the line wears the Threads card's eye.
+                (row.lineWatched ? Text("\(Image(systemName: "eye.fill")) \(Text(verbatim: row.line))") : Text(verbatim: row.line))
                     .font(.caption)
                     .foregroundStyle(row.state == .needs ? UserStatePill.textColor(.needs) : .secondary)
                     .lineLimit(lines)

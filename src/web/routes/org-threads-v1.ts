@@ -10,7 +10,7 @@
  *                                                          `shown` is his view's rule over all of them; 503 primary_only on every replica)
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, watch?, watch_at?, merge_into? }
  *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, reply?, options?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, tasks? } -> the node opens one itself
  *                                                          (`options`: with needs, the choices he clicks, [{ id?, label, detail?, recommended? }], 2 to 5;
  *                                                          a needs write whose words list A:/B: or 1./2. choices with none answers 409 needs_options)
@@ -387,8 +387,12 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   if (b.reopen === true) patch.reopen = true
   // Checked by the one reader of a choice's options (core/org/thread-options.ts).
   if (b.options !== undefined) patch.options = b.options
-  if (typeof b.pin === 'boolean') patch.pin = b.pin
-  else if (b.pin !== undefined) throw new RouteError(400, 'bad_request', 'pin must be true or false.')
+  // `pin` is the watch's older name (2026-11-03 to 11-23): a page or a phone from then still sends it.
+  const watch = b.watch !== undefined ? b.watch : b.pin
+  if (typeof watch === 'boolean') patch.watch = watch
+  else if (watch !== undefined) throw new RouteError(400, 'bad_request', 'watch must be true or false.')
+  if (typeof b.watch_at === 'string') patch.watch_at = b.watch_at
+  else if (b.watch_at !== undefined) throw new RouteError(400, 'bad_request', 'watch_at must be an ISO datetime.')
   // A merge removes this thread: anything else asked of it would be written and then lost.
   if (mergeInto && Object.keys(patch).length) {
     throw new RouteError(400, 'bad_request', `merge_into goes alone (this thread is gone after the merge, so ${Object.keys(patch).join(', ')} would be lost): send { merge_into } by itself, then change ${mergeInto} with its own update.`)
@@ -407,7 +411,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
     thread = await mergeThread(task.id, id, mergeInto, by)
   }
-  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, ask_owner, state, reply, options, tasks, add_tasks, known, close, reopen, snooze, pin or merge_into.')
+  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, ask_owner, state, reply, options, tasks, add_tasks, known, close, reopen, snooze, watch, watch_at or merge_into.')
   log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto })
   res.json({ task_id: task.id, thread: await projected(task.id, thread), ...(mergeInto ? { merged: id } : {}) })
 }))

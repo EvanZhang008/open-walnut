@@ -100,12 +100,12 @@ describe('the turn-end check names the answered threads he wrote after (answered
     expect(answeredBeforeHim(known.threads, T0 + 630_000)).toEqual([])
   })
 
-  it('names nothing he has not written after, nor one he pinned or snoozed, nor the thread his words went to', () => {
+  it('names nothing he has not written after, nor one he watches or snoozed, nor the thread his words went to', () => {
     const { f, a } = asked()
     expect(answeredBeforeHim(f.threads, T0 + 60_000)).toEqual([])
     const r = follow(f, 600)
-    const pinned = updateThread(r.file, a.id, { pin: true }, 'human', at(601)).file
-    expect(answeredBeforeHim(pinned.threads, T0 + 610_000)).toEqual([])
+    const watched = updateThread(r.file, a.id, { watch: true }, 'human', at(601)).file
+    expect(answeredBeforeHim(watched.threads, T0 + 610_000)).toEqual([])
     const snoozed = updateThread(r.file, a.id, { snooze: '4h' }, 'human', at(601)).file
     expect(answeredBeforeHim(snoozed.threads, T0 + 610_000)).toEqual([])
     // A reply he gave on another card is not his chat words: it says nothing about A.

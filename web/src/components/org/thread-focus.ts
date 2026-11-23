@@ -79,7 +79,8 @@ const HIS_INPUT = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
 export function scrollCardToTop(root: HTMLElement, id: string): () => void {
   let card: HTMLElement | null = null;
   const align = () => {
-    card = root.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(id)}"]`);
+    // Its own group's card, never its one-line copy in Watching (drawn first).
+    card = root.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(id)}"]:not([data-copy])`);
     if (!card) return;
     card.style.scrollMarginTop = `${HEAD_GAP}px`;
     card.scrollIntoView?.({ block: 'start', behavior: 'auto' });

@@ -18,7 +18,7 @@ import path from 'node:path'
 import Database, { type Database as DatabaseType } from '../../lib/sqlite.js'
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
 import { WALNUT_HOME } from '../../constants.js'
-import { CLOSED_KEEP_MS, ThreadError, type OrgThread, type ThreadMessage, type ThreadsFile } from './threads-model.js'
+import { CLOSED_KEEP_MS, liftLegacyWatch, ThreadError, type OrgThread, type ThreadMessage, type ThreadsFile } from './threads-model.js'
 import { expandAnswerRefs, storedMessages } from './thread-answer-refs.js'
 
 /**
@@ -213,7 +213,8 @@ export function loadNode(node: string, opts: { all?: boolean } = {}): NodeSnapsh
   }
   const threads: OrgThread[] = []
   for (const r of heads) {
-    const thread = JSON.parse(r.body) as OrgThread
+    // A pin stored before it became a watch reads as one; the node's next write stores it so.
+    const thread = liftLegacyWatch(JSON.parse(r.body) as OrgThread)
     const texts = byThread.get(r.id) ?? []
     // A reply stored once reads back under every message it answers (thread-answer-refs.ts).
     thread.messages = expandAnswerRefs(texts.map((t) => JSON.parse(t) as ThreadMessage))

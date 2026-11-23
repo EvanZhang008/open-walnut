@@ -177,7 +177,7 @@ describe('every op a message hint names is listed for the roles that get it', ()
   const thread = {
     threadId: 'th1', title: 'Fix the login', created: true, followUp: false, duplicate: false,
     follows: { id: 'th0', title: 'Old login' }, movedTo: { task: 't9', title: 'Login team' }, popped: true, joined: 'reopened',
-    open: [{ id: 'th2', title: 'Ship it', state: 'needs', snoozedUntil: new Date(now + 3600_000).toISOString(), pinnedBy: 'human' }],
+    open: [{ id: 'th2', title: 'Ship it', state: 'needs', snoozedUntil: new Date(now + 3600_000).toISOString(), watchedBy: 'human' }],
     closed: [{ id: 'th3', title: 'Done thing', how: 'acked', by: 'human' }],
   }
   const tidy = { items: (['reacted', 'untitled', 'state', 'summary'] as const).map((why, i) => ({ id: `th${i}`, title: `T${i}`, state: 'working', why })), key: 'k' }

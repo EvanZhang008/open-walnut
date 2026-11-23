@@ -23,7 +23,6 @@
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { threadCountLabel } from '@open-walnut/thread-view';
-import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { DisclosureButton } from '@/components/controls';
 import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
@@ -40,7 +39,7 @@ import { topicKey } from '@/components/topics/topic-model';
 import { OrgReorgReminder } from './OrgReorgReminder';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { FitButton } from '@/components/common/HeaderFit';
-import { ICON_ORG_CHART } from '@/components/common/Icons';
+import { ICON_EYE_FILLED, ICON_ORG_CHART } from '@/components/common/Icons';
 import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
@@ -113,8 +112,8 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
         </span>
         {/* What is happening is metadata: one line under the name, cut first (the hover peek shows it whole). */}
         <span className={`org-channel-latest wn-meta${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
-          {/* A pinned thread named on the line wears the Threads card's pin. */}
-          {row.latestPinned && <ThreadPinIcon size={11} className="org-channel-pin" />}{row.latest}
+          {/* A watched thread named on the line wears the Threads card's eye. */}
+          {row.latestWatched && <span className="org-channel-watch" aria-label="watched">{ICON_EYE_FILLED}</span>}{row.latest}
         </span>
       </span>
     </button>

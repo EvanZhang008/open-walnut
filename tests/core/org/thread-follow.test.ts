@@ -142,11 +142,11 @@ describe('the move itself (moveThreadOut / moveThreadIn)', () => {
   const base = () => {
     let f = fileMessage(emptyThreads(marina.id), { text: 'learn from this bot', via: 'chat', at: at(1), newThreadId: 'th-aaaaaaaaaaaa', messageId: 'tm-aaaaaaaaaaaa' }).file
     f = setAnswers(f, new Map([['tm-aaaaaaaaaaaa', { text: 'Handed to research.', at: at(2) }]])).file
-    f = updateThread(f, 'th-aaaaaaaaaaaa', { title: 'Bot lessons', state: 'needs', user_kind: 'user_own', user_kind_why: 'he asked to decide which lesson to adopt', tasks: ['t1'], pin: true }, `task:${marina.id}`, at(3)).file
+    f = updateThread(f, 'th-aaaaaaaaaaaa', { title: 'Bot lessons', state: 'needs', user_kind: 'user_own', user_kind_why: 'he asked to decide which lesson to adopt', tasks: ['t1'], watch: true }, `task:${marina.id}`, at(3)).file
     return f
   }
 
-  it('keeps his messages, the answers, state, pin and tasks; the source closes pointing at it', () => {
+  it('keeps his messages, the answers, state, watch and tasks; the source closes pointing at it', () => {
     const src = base()
     const out = moveThreadOut(src, 'th-aaaaaaaaaaaa', { task: walnut.id, title: 'Walnut VP' }, 'agent', at(4), 'its work is in Walnut VP\'s team')
     const gone = out.file.threads[0]
@@ -154,10 +154,10 @@ describe('the move itself (moveThreadOut / moveThreadIn)', () => {
     expect(gone.closed).toEqual({ how: 'dropped', at: at(4), by: 'agent', told: true })
     expect(movedAway(gone)).toBe(true)
     expect(gone.movedTo).toMatchObject({ task: walnut.id, title: 'Walnut VP', why: 'its work is in Walnut VP\'s team' })
-    expect(gone.pinned).toBeUndefined()
+    expect(gone.watched).toBeUndefined()
     const dest = moveThreadIn(emptyThreads(walnut.id), out.thread, { task: marina.id, title: 'Marina VP' }, 'agent', at(4), 'its work is in Walnut VP\'s team')
     const t = dest.file.threads[0]
-    expect(t).toMatchObject({ id: 'th-aaaaaaaaaaaa', title: 'Bot lessons', state: 'needs', tasks: ['t1'], pinned: expect.objectContaining({ by: `task:${marina.id}` }) })
+    expect(t).toMatchObject({ id: 'th-aaaaaaaaaaaa', title: 'Bot lessons', state: 'needs', tasks: ['t1'], watched: expect.objectContaining({ by: `task:${marina.id}` }) })
     expect(t.messages[0]).toMatchObject({ id: 'tm-aaaaaaaaaaaa', text: 'learn from this bot', answer: { text: 'Handed to research.' } })
     expect(t.movedFrom).toMatchObject({ task: marina.id, title: 'Marina VP' })
     expect(t.closed).toBeUndefined()
@@ -165,7 +165,7 @@ describe('the move itself (moveThreadOut / moveThreadIn)', () => {
     expect(enteredNeeds(emptyThreads(walnut.id), dest.file)).toEqual([])
   })
 
-  it('a moved thread is not reopened or pinned where it left, and moving it again is refused there', () => {
+  it('a moved thread is not reopened or watched where it left, and moving it again is refused there', () => {
     const out = moveThreadOut(base(), 'th-aaaaaaaaaaaa', { task: walnut.id, title: 'Walnut VP' }, 'agent', at(4))
     expect(() => updateThread(out.file, 'th-aaaaaaaaaaaa', { reopen: true }, 'human', at(5))).toThrow(/moved to Walnut VP/)
     expect(() => moveThreadOut(out.file, 'th-aaaaaaaaaaaa', { task: 'x', title: 'X' }, 'agent', at(5))).toThrow(ThreadError)

@@ -126,8 +126,8 @@ export interface ChannelRow {
   latestAt: number;
   /** The task `latest` is about, when the line does not name it. */
   latestTask?: string;
-  /** `latest` names a thread he (or the node) pinned: the row marks it. */
-  latestPinned?: boolean;
+  /** `latest` names a thread he (or the node) watches: the row wears the eye. */
+  latestWatched?: boolean;
   /** Newest activity among the row's tasks (ms), 0 = unknown. */
   lastAt: number;
   unread: boolean;
@@ -254,10 +254,10 @@ export function alertText(a: OrgAlertView): string {
 
 /** The row's one line: what needs the user (with its ask), else the newest news of its tasks in
  *  their own status words (team-news.ts, the rule a lead's note uses too), with its time. */
-function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, alerts: readonly OrgAlertView[], threads?: ThreadCounts, node?: Task): { text: string; at: number; task?: string; pinned?: boolean } {
+function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, alerts: readonly OrgAlertView[], threads?: ThreadCounts, node?: Task): { text: string; at: number; task?: string; watched?: boolean } {
   // His own requests come first (2026-11-03, the user: "thread is better than need u ... thread
   // should be the first one in the list"); one that only shows an answer never hides a task's ask.
-  if (threads?.shown) return { text: threadLine(threads), at: taskTime(node), ...(threads.titlePinned ? { pinned: true } : {}) };
+  if (threads?.shown) return { text: threadLine(threads), at: taskTime(node), ...(threads.titleWatched ? { watched: true } : {}) };
   if (alerts.length) {
     // An ask names the row before a card with only something to read.
     const a = alerts.find(isAsk) ?? alerts[0]!;
@@ -303,7 +303,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     latest: latest.text,
     latestAt: latest.at,
     ...(latest.task ? { latestTask: latest.task } : {}),
-    ...(latest.pinned ? { latestPinned: true } : {}),
+    ...(latest.watched ? { latestWatched: true } : {}),
     lastAt: Math.max(0, ...ids.map((id) => taskTime(byId.get(id)))),
     unread: !!(lead ?? contact)?.unread,
     ...(p.vp ? { vp: p.vp } : {}),
@@ -439,7 +439,7 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     ...(mainThreads ? { threads: mainThreads } : {}),
     threadsBadge: mainThreads?.shown ?? 0,
     // Its threads name the newest one, then the rest of the line (summary[0] is their count).
-    ...(mainThreads?.shown && mainThreads.titlePinned ? { latestPinned: true } : {}),
+    ...(mainThreads?.shown && mainThreads.titleWatched ? { latestWatched: true } : {}),
     latest: mainThreads?.shown ? [threadLine(mainThreads), ...summary.slice(1)].join(' · ') : summary.join(' · '),
     latestAt: taskTime(mainTask),
     lastAt: taskTime(mainTask),

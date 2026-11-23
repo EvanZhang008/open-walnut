@@ -56,7 +56,7 @@ function thread(id: string, state: OrgThread['state'], over: Partial<OrgThread> 
   } as OrgThread
 }
 
-/** Every kind his view judges: shown (needs, answered, pinned), hidden (pending, snoozed, working
+/** Every kind his view judges: shown (needs, answered, watched), hidden (pending, snoozed, working
  *  with nothing new, working with only the node's chat answer), closed; one answer shared with a
  *  closed thread. */
 function fixture(): OrgThread[] {
@@ -69,7 +69,7 @@ function fixture(): OrgThread[] {
     thread('th-a00002', 'answered', { ...answered('th-a00002', LONG), known: { through: 'tm-a0000201' } } as Partial<OrgThread>),
     // Not reacted to yet: the card shows it, so it stays whole however long.
     thread('th-a00003', 'answered', answered('th-a00003', LONG_UNSEEN)),
-    thread('th-a00004', 'working', { pinned: { at: iso(HOUR), by: 'human' } } as Partial<OrgThread>),
+    thread('th-a00004', 'working', { watched: { at: iso(HOUR), by: 'human' } } as Partial<OrgThread>),
     thread('th-a00005', 'pending', answered('th-a00005', 'handed on')),
     thread('th-a00006', 'answered', { snoozed: { until: new Date(T0 + 5 * HOUR).toISOString(), at: iso(HOUR / 2) } } as Partial<OrgThread>),
     // His message a few minutes ago, nothing yet: the node's move, not overdue.
@@ -108,7 +108,7 @@ describe('reading Threads as the phone does', () => {
     const all = (await (await read()).json()) as Reply
     const expected = threadCounts(fixture()).shown
     // needs and the unread answer count; a known answer never returns on its answered state. The
-    // pinned one in the node's hands is listed, never counted (thread-groups.ts threadsForHim).
+    // watched one in the node's hands is listed, never counted (thread-groups.ts threadsForHim).
     expect(expected).toBe(2)
     expect(all.shown_count).toBe(expected)
     expect(all.threads.filter((t) => t.counted).length).toBe(expected)

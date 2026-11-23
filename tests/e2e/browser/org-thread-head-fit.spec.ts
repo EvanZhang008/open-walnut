@@ -1,6 +1,6 @@
 /**
  * A thread card's header row (web/src/components/org/OrgThreads.tsx, styles/org-threads.css): the
- * state, then "Pinned by <node>", "Opened by <node>" and the time. 2026-11-09: in WebKit (the Mac
+ * state, then "Watched by <node>", "Opened by <node>" and the time. 2026-11-09: in WebKit (the Mac
  * app's engine) the right-hand part overflowed to the left over "Needs you" when the node's name
  * was long, because an end-aligned grid item took its full text width. The pieces must never
  * overlap or leave the card at any width the Org side bar takes (its 300px floor, wider drags, the
@@ -46,7 +46,7 @@ async function headBoxes(page: Page): Promise<Array<{ id: string; head: Box; pie
   return page.locator('[data-testid="org-thread"]').evaluateAll((cards) => cards.map((c) => {
     const rect = (e: Element) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }
     const head = c.querySelector('[data-testid="org-thread-head"]')!
-    const pieces = ['org-thread-state', 'org-thread-pinned', 'org-thread-from', 'org-thread-time']
+    const pieces = ['org-thread-state', 'org-thread-watched', 'org-thread-from', 'org-thread-time']
       .map((name) => ({ name, el: head.querySelector(`[data-testid="${name}"]`) }))
       .filter((p): p is { name: string; el: Element } => !!p.el)
       .map((p) => ({ name: p.name, box: rect(p.el), text: p.el.textContent ?? '' }))
@@ -88,15 +88,15 @@ test('a card header never overlaps itself, whatever the side bar width or the no
   made.push(node)
   const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
   const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
-  // Every state his view shows, each with the node's own first post ("Opened by"), one pinned by
-  // the node ("Pinned by"), one plain, and the in-progress ones (the line below starts open).
+  // Every state his view shows, each with the node's own first post ("Opened by"), one watched by
+  // the node ("Watched by", drawn in Watching too), one plain, and the in-progress ones (the line below starts open).
   const thread = (n: string, title: string, state: string, extra: Record<string, unknown> = {}) => ({
     id: `th-00000000e00${n}`, title, titled: true, state, reply: `${title}: the summary`, createdAt: at(90), updatedAt: at(5),
     messages: [], opener: { text: `${title}?`, at: at(90), from: 'node', by: `task:${node}` }, ...extra,
   })
   fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })
   fs.writeFileSync(`${walnutHome}/org/threads/${node}.json`, JSON.stringify({ version: 1, taskId: node, threads: [
-    thread('1', 'Yearly learning budget', 'needs', { pinned: { at: at(4), by: `task:${node}` } }),
+    thread('1', 'Yearly learning budget', 'needs', { watched: { at: at(4), by: `task:${node}` } }),
     thread('2', 'Mail: the meetup asks about the talk', 'answered'),
     thread('3', 'Working on the routing', 'working'),
     { id: 'th-00000000e004', title: 'Plain ask', titled: true, state: 'needs', reply: 'Plain: the summary', createdAt: at(30), updatedAt: at(3), messages: [{ id: 'tm-00000000e004', at: at(30), text: 'Plain ask?', via: 'chat' }] },
@@ -111,8 +111,9 @@ test('a card header never overlaps itself, whatever the side bar width or the no
   const detail = page.getByTestId('org-detail')
   await expect(detail).toHaveAttribute('data-key', rowKey(project))
   await detail.getByTestId('org-top-threads').click()
-  await expect(page.locator('[data-testid="org-thread"]')).toHaveCount(4, { timeout: 30_000 })
-  await expect(page.locator('[data-thread-id="th-00000000e001"]').getByTestId('org-thread-pinned')).toContainText('Pinned by')
+  // Four threads, the watched one drawn twice (Watching, and Needs you with the eye).
+  await expect(page.locator('[data-testid="org-thread"]')).toHaveCount(5, { timeout: 30_000 })
+  await expect(page.locator('[data-thread-id="th-00000000e001"]:not([data-copy])').getByTestId('org-thread-watched')).toContainText('Watched by')
 
   fs.mkdirSync(SHOTS, { recursive: true })
   const browser = test.info().project.name

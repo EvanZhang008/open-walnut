@@ -4,7 +4,7 @@
 //
 // Scenario matrix (one lead, two threads):
 //  1. a summary written through the route by the remote session (`pw-limits-remote-session`, host
-//     `fixture-remote`), with a forged writer in the body, then pinned by the user and repeated by a
+//     `fixture-remote`), with a forged writer in the body, then watched by the user and repeated by a
 //     caller Walnut cannot place: the server keeps the remote session; its path opens the remote
 //     host's copy on the first press, reading nothing here and no session record;
 //  2. in one conversation: an answer read from the remote session (its picture loads from that host,
@@ -109,13 +109,13 @@ test.beforeAll(async ({ request }) => {
   }))
 
   // The summary, through the route the node's thread_update op calls: the remote session writes it
-  // (a writer forged in the body is not read), the user pins it, an unplaced caller repeats it.
+  // (a writer forged in the body is not read), the user watches it, an unplaced caller repeats it.
   ids.summary = (await ok(await request.post(`/api/v1/tasks/${ids.lead}/threads`, { data: { text: `Summary of the notes ${stamp}` } }), 'file ask')).thread.id
   await ok(await request.patch(`/api/v1/tasks/${ids.lead}/threads/${ids.summary}`, {
     headers: { 'x-walnut-caller-sid': REMOTE_SID },
     data: { title: `Notes summary ${stamp}`, state: 'answered', reply: `Summary: ${doc}:2`, reply_sid: 'forged', reply_host: 'local', sid: 'forged', host: 'local', by: 'human' },
   }), 'remote summary')
-  await ok(await request.patch(`/api/v1/tasks/${ids.lead}/threads/${ids.summary}`, { data: { pin: true } }), 'pin')
+  await ok(await request.patch(`/api/v1/tasks/${ids.lead}/threads/${ids.summary}`, { data: { watch: true } }), 'watch')
   await ok(await request.patch(`/api/v1/tasks/${ids.lead}/threads/${ids.summary}`, {
     headers: { 'x-walnut-caller-sid': UNPLACED_SID }, data: { state: 'answered', reply: `Summary: ${doc}:2` },
   }), 'same words again')
@@ -123,7 +123,7 @@ test.beforeAll(async ({ request }) => {
   expect(stored).toMatchObject({ reply: `Summary: ${doc}:2`, reply_sid: REMOTE_SID, reply_host: REMOTE })
   // The remote session's own writer (its task, or an agent with no task), never the body's `human`.
   expect(stored.reply_by).not.toBe('human')
-  expect(stored.pinned).toBeTruthy()
+  expect(stored.watched).toBeTruthy()
   const talk = await thread(request, ids.talk)
   expect(talk.messages[0].answer).toMatchObject({ sid: REMOTE_SID, host: REMOTE })
   expect(talk.messages[1].answer.sid).toBeUndefined()
@@ -319,7 +319,7 @@ test('an unknown Brief relative link reads no file or session before the source 
   await closeFile(page)
 })
 
-test('a summary the remote session wrote opens on its host on the first press, after a pin and a repeat by other callers', async ({ page }) => {
+test('a summary the remote session wrote opens on its host on the first press, after a watch and a repeat by other callers', async ({ page }) => {
   const list = await openThreads(page)
   const summary = card(list, ids.summary).getByTestId('org-thread-reply')
   await expect(summary).toContainText('Summary:')

@@ -39,11 +39,12 @@
  * a Snoozed section and comes back on its date, or earlier on real news (thread-view.ts snoozedNow).
  * His message in it, a move to needs or to answered takes the snooze off here; the node is not woken.
  *
- * He may pin a thread (`pinned`, 2026-11-03, the user: "have a pin thread feature, like this thread I
- * need to make it pinned"): it stays at the top of his view whatever its state, until he unpins it or
- * acknowledges it. The node may pin and unpin too, but never takes off a pin of his: it cannot unpin,
- * snooze or close a thread he pinned. A pin moves no clock (`updatedAt`), so an unpinned thread goes
- * back to where it was.
+ * He may watch a thread (`watched`; a pin from 2026-11-03, made a watch on 2026-11-23, the user,
+ * translated: "turn it into a watch ... its own category ... of course it is still in working or
+ * whatever, but at the same time it is in Watching ... the same idea as our tasks"): it is listed in
+ * his Watching group (thread-view.ts watchingOf) as long as it is open, and stays in its own group
+ * too; nothing else about it moves. The node may watch and unwatch too, but never ends a watch of
+ * his: it cannot unwatch or close a thread he watches. A watch moves no clock (`updatedAt`); `watched.at` is its place in Watching, which he drags.
  *
  * A thread waiting on him to pick among choices carries them (`options`, thread-options.ts): his
  * card offers them as buttons, the recommended one first; they go when it leaves needs.
@@ -60,7 +61,7 @@ import { oneCardNow } from './one-card.js';
 import { storedOptions } from '../ask-options.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
-import { ACK_PLACES, pinnedFirst, hasThreadNews, readAfter, threadReactionAt, type AckPlaced } from './thread-view.js';
+import { ACK_PLACES, hasThreadNews, readAfter, threadReactionAt, type AckPlaced } from './thread-view.js';
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
@@ -69,7 +70,7 @@ import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
-/** The states his view keeps out of sight (unless pinned, or overdue with something for him: thread-view.ts shownToHim). */
+/** The states his view keeps out of sight (unless overdue with something for him: thread-view.ts shownToHim). */
 export const HIDDEN_STATES: ReadonlySet<ThreadState> = new Set(['new', 'working', 'pending']);
 export const THREAD_CLOSE_HOWS = ['acked', 'dropped'] as const;
 export type ThreadCloseHow = typeof THREAD_CLOSE_HOWS[number];
@@ -260,8 +261,9 @@ export function movedAway(t: Pick<OrgThread, 'closed' | 'movedTo'>): boolean {
   return !!t.closed && !!t.movedTo;
 }
 
-/** Kept at the top of his view, whatever its state, until unpinned or closed. */
-export interface ThreadPinned {
+/** Listed in his Watching group while open, whatever its state, until unwatched. */
+export interface ThreadWatched {
+  /** When the watch began, or where he dragged it to: its place in Watching (oldest first). */
   at: string;
   by: ThreadWriter;
 }
@@ -280,7 +282,7 @@ export interface OrgThread {
   /** When the node last wrote `reply` (thread-view.ts supersededBySummary: an older answer leaves the card). */
   replyAt?: string;
   /**
-   * Who wrote `reply`, set only by a write that changed it (a pin, a close or a state move keeps
+   * Who wrote `reply`, set only by a write that changed it (a watch, a close or a state move keeps
    * it): `reply_by` the writer, `reply_sid`/`reply_host` its verified session (ThreadTextSource).
    * None of them on a summary written before 2026-11-07: its writer is unknown, never guessed.
    */
@@ -311,8 +313,8 @@ export interface OrgThread {
   opener?: ThreadOpener;
   /** Put aside until a time (thread-view.ts snoozedNow says whether it still is). */
   snoozed?: ThreadSnoozed;
-  /** Pinned to the top of his view (thread-view.ts pinnedFirst). */
-  pinned?: ThreadPinned;
+  /** In his Watching group (thread-view.ts watchingOf). */
+  watched?: ThreadWatched;
   /** When its last move into needs buzzed his phone (push/thread-push.ts): one buzz per absence. */
   needsBuzzedAt?: string;
   /** When a node last put it in needs (thread-return.ts: his words after it bring it back only with an answer first). */
@@ -388,7 +390,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'watched_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -507,10 +509,9 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (next.snoozed && !(typeof next.snoozed === 'object' && isStr(next.snoozed.until) && isStr(next.snoozed.at) && Number.isFinite(Date.parse(next.snoozed.until)))) delete next.snoozed;
   if (next.replyAt !== undefined && !(isStr(next.replyAt) && next.reply)) delete next.replyAt;
   if (next.recheck && !(typeof next.recheck === 'object' && isStr(next.recheck.since) && isStr(next.recheck.at))) delete next.recheck;
-  if (next.pinned && !(typeof next.pinned === 'object' && isStr(next.pinned.at))) delete next.pinned;
-  else if (next.pinned && !isStr(next.pinned.by)) next.pinned = { ...next.pinned, by: 'human' };
-  // A closed thread holds no pin (a hand edit, or a file from a build that kept one).
-  if (next.closed) delete next.pinned;
+  liftLegacyWatch(next);
+  if (next.watched && !(typeof next.watched === 'object' && isStr(next.watched.at) && Number.isFinite(Date.parse(next.watched.at)))) delete next.watched;
+  else if (next.watched && !isStr(next.watched.by)) next.watched = { ...next.watched, by: 'human' };
   if (next.known && !(typeof next.known === 'object' && isStr(next.known.through) && messages.some((m) => m.id === next.known!.through))) delete next.known;
   if (next.reactedAt !== undefined && !(isStr(next.reactedAt) && Number.isFinite(Date.parse(next.reactedAt)))) delete next.reactedAt;
   if (next.needsAt !== undefined && !(isStr(next.needsAt) && Number.isFinite(Date.parse(next.needsAt)))) delete next.needsAt;
@@ -574,9 +575,22 @@ export function normalizeThreads(raw: unknown, taskId: string): ThreadsFile {
 
 export function isOpen(t: OrgThread): boolean { return !t.closed; }
 
-/** Open threads first (the pinned ones on top, newest pin first; then newest change first), then closed ones (newest close first). */
+/**
+ * A pin (the watch's older name, 2026-11-03 to 11-23) is read as a watch from that time, by whoever
+ * pinned it; the old field goes. In place, on a thread read from a file or the Threads database.
+ */
+export function liftLegacyWatch(t: OrgThread): OrgThread {
+  const raw = t as OrgThread & { pinned?: unknown };
+  if (!('pinned' in raw)) return t;
+  const pin = raw.pinned as Partial<ThreadWatched> | null | undefined;
+  delete raw.pinned;
+  if (!raw.watched && pin && typeof pin === 'object' && typeof pin.at === 'string' && !raw.closed) raw.watched = { at: pin.at, by: (typeof pin.by === 'string' ? pin.by : 'human') as ThreadWriter };
+  return t;
+}
+
+/** Open threads first (newest change first), then closed ones (newest close first). */
 export function sortedThreads(threads: readonly OrgThread[]): OrgThread[] {
-  const open = pinnedFirst(threads.filter(isOpen).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+  const open = threads.filter(isOpen).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const closed = threads.filter((t) => !isOpen(t)).sort((a, b) => (b.closed!.at).localeCompare(a.closed!.at));
   return [...open, ...closed];
 }
@@ -730,7 +744,7 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   if (target && (isOpen(target) || reopened)) {
     // His own message in a snoozed thread brings it back; one he closed minutes ago opens again.
     // His answer ends its needs, and its options with it (a choice clicked is filed as his words).
-    const { snoozed: _s, closed: _c, pinned: _p, options: _o, ...rest } = target;
+    const { snoozed: _s, closed: _c, options: _o, ...rest } = target;
     const reacted = recordReaction(rest, input.at);
     const next: OrgThread = {
       ...reacted, messages: [...reacted.messages, message], updatedAt: input.at, by: 'human',
@@ -782,7 +796,7 @@ function preserveReaction(t: OrgThread): OrgThread {
 
 /** A split source with no unanswered work and no unseen words is finished, not a fresh result. */
 function ackReaction(t: OrgThread, by: ThreadWriter, at: string): OrgThread {
-  if (t.closed || t.state === 'needs' || t.pinned || !t.reactedAt || hasThreadNews(t)) return t;
+  if (t.closed || t.state === 'needs' || t.watched || !t.reactedAt || hasThreadNews(t)) return t;
   if (t.messages.some((m) => !m.answer)) return t;
   return { ...t, closed: { how: 'acked', at, by, reacted: true } };
 }
@@ -810,8 +824,10 @@ export interface ThreadPatch {
   known?: string;
   /** Put it aside until this time: an ISO datetime or a duration from now ("4h", "3d"); "" takes the snooze off. */
   snooze?: string;
-  /** true pins it to the top of his view, false unpins it (a node never unpins one he pinned). */
-  pin?: boolean;
+  /** true lists it in his Watching group (it stays in its own group too), false ends the watch (a node never ends one of his). */
+  watch?: boolean;
+  /** Its place in Watching (an ISO time; Watching lists the oldest first): where he dragged it. Only on a watched thread. */
+  watch_at?: string;
   /** With state needs from an agent: which of the user's kinds this is, and why (user-kind.ts). Never stored. */
   user_kind?: string;
   user_kind_why?: string;
@@ -876,9 +892,10 @@ function checkPatch(p: ThreadPatch): void {
   if (p.snooze !== undefined && typeof p.snooze !== 'string') throw new ThreadError('bad_input', 400, 'snooze must be an ISO datetime, a duration like "4h", or "".');
   if (p.close && p.snooze) throw new ThreadError('bad_input', 400, 'close and snooze cannot go together.');
   if (p.decision !== undefined && p.decision !== 'same' && p.decision !== 'new') throw new ThreadError('bad_input', 400, 'decision must be "same" or "new".');
-  if (p.pin !== undefined && typeof p.pin !== 'boolean') throw new ThreadError('bad_input', 400, 'pin must be true or false.');
-  if (p.pin && p.close) throw new ThreadError('bad_input', 400, 'pin and close cannot go together.');
-  if (p.pin && p.snooze) throw new ThreadError('bad_input', 400, 'pin and snooze cannot go together: a pinned thread stays in his sight.');
+  if (p.watch !== undefined && typeof p.watch !== 'boolean') throw new ThreadError('bad_input', 400, 'watch must be true or false.');
+  if (p.watch && p.close) throw new ThreadError('bad_input', 400, 'watch and close cannot go together.');
+  if (p.watch_at !== undefined && !(typeof p.watch_at === 'string' && Number.isFinite(Date.parse(p.watch_at)))) throw new ThreadError('bad_input', 400, 'watch_at must be an ISO datetime.');
+  if (p.watch_at !== undefined && p.watch === false) throw new ThreadError('bad_input', 400, 'watch_at places a watched thread: it cannot go with watch false.');
   if (p.known !== undefined && p.known !== 'all' && !(typeof p.known === 'string' && THREAD_MESSAGE_ID_RE.test(p.known))) {
     throw new ThreadError('bad_input', 400, 'known must be a message id of this thread (tm-...) or "all".');
   }
@@ -1000,16 +1017,16 @@ function notReacted(what: string, at: string, words?: string): ThreadError {
       : 'If he asked you in his own words to close it, or said it is done or no longer wanted, close it with user_words quoting them.'));
 }
 
-/** He pinned it: a node's write may not take it out of his sight. */
-function checkHisPin(t: OrgThread, by: ThreadWriter, what: string): void {
-  if (by !== 'human' && t.pinned?.by === 'human') {
-    throw new ThreadError('pinned_by_user', 409, `Not ${what}: the user pinned thread ${t.id} to keep it in his sight; only he unpins it (or acknowledges it).`);
+/** He watches it: a node's write may not end his watch (an unwatch, or a close that takes it out of Watching). */
+function checkHisWatch(t: OrgThread, by: ThreadWriter, what: string): void {
+  if (by !== 'human' && t.watched?.by === 'human') {
+    throw new ThreadError('watched_by_user', 409, `Not ${what}: the user watches thread ${t.id} (it is on his Watching list); only he stops watching it.`);
   }
 }
 
-/** Only a pin or unpin asked: the thread's place and its change time stay as they are. */
-function onlyPin(p: ThreadPatch): boolean {
-  return p.pin !== undefined && Object.entries(p).every(([k, v]) => k === 'pin' || v === undefined);
+/** Only a watch, an unwatch or a new place in Watching asked: the thread's change time stays as it is. */
+function onlyWatch(p: ThreadPatch): boolean {
+  return (p.watch !== undefined || p.watch_at !== undefined) && Object.entries(p).every(([k, v]) => k === 'watch' || k === 'watch_at' || v === undefined);
 }
 
 function taskList(ids: readonly unknown[]): string[] {
@@ -1031,7 +1048,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   file = stampLegacyReplyAt(file);
   const cur = find(file, id);
   // A thread that moved lives on at the other node: it is changed there, never opened again here.
-  if (movedAway(cur) && (patch.reopen || patch.pin)) {
+  if (movedAway(cur) && (patch.reopen || patch.watch)) {
     throw new ThreadError('thread_closed', 409, `Thread ${id} moved to ${cur.movedTo!.title} (${cur.movedTo!.task}) with its work: it is open there.`);
   }
   // He closed it himself with Acknowledge: it stays closed (2026-11-20, the user: a thread he closed
@@ -1064,14 +1081,13 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
       cur.opener ? {} : { ownWords: [patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') });
     if (unclear) throw new ThreadError('user_kind', 409, unclear.replace(/^Not sent to the user:/, 'Not handed to the user:'));
   }
-  if (patch.pin === false && cur.pinned) checkHisPin(cur, by, 'unpinned');
-  if (patch.snooze?.trim() && cur.pinned) checkHisPin(cur, by, 'snoozed');
-  if (patch.close && !cur.closed) checkHisPin(cur, by, 'closed');
+  if (patch.watch === false && cur.watched) checkHisWatch(cur, by, 'unwatched');
+  if (patch.close && !cur.closed) checkHisWatch(cur, by, 'closed');
   // His reply from a card above has not reached the task yet: it is not done with it (thread-reply.ts).
   if (threadsPopUpNow() && by !== 'human' && !cur.closed && (patch.close || patch.state === 'answered') && cur.messages.some(deliveryOpen)) {
     throw new ThreadError('reply_pending', 409, `Thread ${id} holds his reply that has not reached you yet: read it first (thread_list shows it now; it also comes with your next message).`);
   }
-  if (onlyPin(patch)) return pinOnly(file, cur, patch.pin!, by, at);
+  if (onlyWatch(patch)) return watchOnly(file, cur, patch, by, at);
   const next: OrgThread = { ...cur, updatedAt: at, by };
   if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; }
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
@@ -1101,8 +1117,6 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     else {
       if (cur.closed && !patch.reopen) throw new ThreadError('thread_closed', 409, `Thread ${id} is closed: there is nothing to snooze.`);
       next.snoozed = { until: parseSnoozeUntil(patch.snooze, at), at, by };
-      // Put aside: out of his sight, so no longer pinned.
-      delete next.pinned;
     }
   }
   if (patch.options !== undefined) {
@@ -1139,14 +1153,13 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     if (!ownUnseen) checkClose(file, cur, by, patch.user_words);
     next.closed = { how: patch.close, at, by };
     delete next.snoozed;
-    delete next.pinned;
   }
   // Reopening preserves read receipts: the view still requires news.
   if (patch.reopen) { delete next.closed; if (HIDDEN_STATES.has(next.state) && patch.state === undefined) next.state = 'answered'; }
   // Only a system reaction-close may reopen on actual news, never an explicit user close.
   if (!patch.close && next.closed?.reacted && (next.state === 'needs' || hasThreadNews(next))) delete next.closed;
   if (next.closed) delete next.options;
-  if (patch.pin !== undefined) applyPin(next, cur, patch.pin, by, at);
+  applyWatch(next, cur, patch, by, at);
   // Only its ask in other words: the thread is the decision, so nothing moved (no news, no new
   // change time, no overdue clock reset; 2026-11-09, ask-decision.ts).
   if (onlyAskReworded(cur, next)) { next.updatedAt = cur.updatedAt; next.by = cur.by; }
@@ -1164,20 +1177,28 @@ export function onlyAskReworded(cur: OrgThread, next: OrgThread): boolean {
   return [...keys].every((k) => a[k] === b[k] || JSON.stringify(a[k]) === JSON.stringify(b[k]));
 }
 
-/** Pin (a closed thread first needs reopen) or unpin `next`; a pin of his stays his when a node pins it again. */
-function applyPin(next: OrgThread, cur: OrgThread, pin: boolean, by: ThreadWriter, at: string): void {
-  if (!pin) { delete next.pinned; return; }
-  if (next.closed) throw new ThreadError('thread_closed', 409, `Thread ${cur.id} is closed: reopen it to pin it.`);
-  if (!cur.pinned || (by === 'human' && cur.pinned.by !== 'human')) next.pinned = { at, by };
-  // Pinned stays in his sight: a snooze on it is over.
-  delete next.snoozed;
+/**
+ * Watch (a closed thread first needs reopen) or unwatch `next`, then place it in Watching
+ * (`watch_at`); a watch of his stays his when a node watches it again, and keeps its place.
+ */
+function applyWatch(next: OrgThread, cur: OrgThread, patch: Pick<ThreadPatch, 'watch' | 'watch_at'>, by: ThreadWriter, at: string): void {
+  if (patch.watch === false) { delete next.watched; return; }
+  if (patch.watch) {
+    if (next.closed) throw new ThreadError('thread_closed', 409, `Thread ${cur.id} is closed: reopen it to watch it.`);
+    if (!cur.watched) next.watched = { at, by };
+    else if (by === 'human' && cur.watched.by !== 'human') next.watched = { at: cur.watched.at, by };
+  }
+  if (patch.watch_at !== undefined) {
+    if (!next.watched) throw new ThreadError('bad_input', 409, `Thread ${cur.id} is not watched: watch it first (watch: true), then place it.`);
+    next.watched = { ...next.watched, at: new Date(Date.parse(patch.watch_at)).toISOString() };
+  }
 }
 
-/** A pin or unpin alone: nothing else of the thread moves (its change time keeps its place in the list). */
-function pinOnly(file: ThreadsFile, cur: OrgThread, pin: boolean, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
+/** A watch, an unwatch or a new place alone: nothing else of the thread moves (its change time keeps its place in its group). */
+function watchOnly(file: ThreadsFile, cur: OrgThread, patch: ThreadPatch, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
   const next: OrgThread = { ...cur };
-  applyPin(next, cur, pin, by, at);
-  if (next.pinned === cur.pinned && next.snoozed === cur.snoozed) return { file, thread: cur };
+  applyWatch(next, cur, patch, by, at);
+  if (next.watched === cur.watched) return { file, thread: cur };
   return { file: replace(file, next, at), thread: next };
 }
 
@@ -1198,22 +1219,20 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   if (!isOpen(from)) throw new ThreadError('thread_closed', 409, `Thread ${fromId} is closed; reopen it first if it belongs under ${intoId}.`);
   // A thread the node opened keeps its first post: his ask goes under it, never the other way.
   if (from.opener) throw new ThreadError('bad_input', 409, `Thread ${fromId} was opened by you with its own first post; merge ${intoId} into it instead.`);
-  // A pin goes with the messages: the thread he kept in sight is the one they are in now (his pin wins).
-  const pinned = into.pinned?.by === 'human' ? into.pinned : from.pinned?.by === 'human' ? from.pinned : into.pinned ?? from.pinned;
+  // A watch goes with the messages: the thread he watches is the one they are in now (his watch wins).
+  const watched = into.watched?.by === 'human' ? into.watched : from.watched?.by === 'human' ? from.watched : into.watched ?? from.watched;
   const messages = [...into.messages, ...from.messages].sort((a, b) => a.at.localeCompare(b.at));
   // The phone buzz either one gave this absence stays with the merged thread (push/thread-push.ts).
   const needsBuzzedAt = [into.needsBuzzedAt, from.needsBuzzedAt].filter((x): x is string => !!x).sort().pop();
   const needsAt = [into.needsAt, from.needsAt].filter((x): x is string => !!x).sort().pop();
   const next: OrgThread = {
     ...into, messages, updatedAt: at, by,
-    ...(pinned ? { pinned } : {}),
+    ...(watched ? { watched } : {}),
     ...(needsBuzzedAt ? { needsBuzzedAt } : {}),
     ...(needsAt ? { needsAt } : {}),
     ...(from.tasks?.length || into.tasks?.length ? { tasks: taskList([...(into.tasks ?? []), ...(from.tasks ?? [])]) } : {}),
     ...(into.state === 'answered' || into.state === 'pending' ? { state: 'working' as ThreadState } : {}),
   };
-  // Pinned stays in his sight: a snooze the target had is over.
-  if (pinned) delete next.snoozed;
   return { file: { ...file, threads: file.threads.filter((t) => t.id !== fromId).map((t) => (t.id === intoId ? next : t)) }, thread: next };
 }
 
@@ -1236,7 +1255,7 @@ export function moveThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: Th
   file = stampLegacyReplyAt(file);
   const cur = preserveReaction(find(file, id));
   checkMovable(cur);
-  const { pinned: _p, snoozed: _s, recheck: _r, ...rest } = cur;
+  const { watched: _w, snoozed: _s, recheck: _r, ...rest } = cur;
   const movedTo: ThreadMove = { task: to.task, title: to.title, at, by, kind, ...(why ? { why: clip(why, THREAD_ASK_MAX) } : {}) };
   const closed: ThreadClosed = { how: 'dropped', at, by, told: true };
   // threads_pop_up: what stays is a pointer, never a copy: no message, no summary (relocateThreadOut).
@@ -1256,7 +1275,7 @@ export function relocateThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by
 }
 
 /**
- * The thread arrives from `from` with everything on it (his messages, the answers, its state, pin and
+ * The thread arrives from `from` with everything on it (his messages, the answers, its state, watch and
  * links), saying where it came from. A copy already here (a move retried after a crash, or run
  * again) keeps everything written here, a close he made of it included, and gains what the source
  * has that it lacks (mergeMovedCopy), so a move is safe to run again; only the tombstone of an

@@ -70,8 +70,8 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   opener?: { text: string; at: string; from: string; ref?: string };
   /** He put it aside until `until` (threads-model.ts ThreadSnoozed). */
   snoozed?: { until: string; at: string };
-  /** He (or the node) pinned it to the top of his view (threads-model.ts ThreadPinned). */
-  pinned?: { at: string; by?: string };
+  /** He (or the node) watches it: it is in his Watching group too (threads-model.ts ThreadWatched). */
+  watched?: { at: string; by?: string };
   /** The node's summary, when it was last rewritten (`replyAt`; absent on threads written before 2026-11-07). */
   reply?: string;
   /** What he wants, in the node's words; and the thread's title. */
@@ -410,8 +410,7 @@ export function sharedAnswers(threads: ReadonlyArray<{ id: string; messages: rea
  */
 export function snoozedNow(t: ViewThread, now: number = Date.now()): boolean {
   const s = t.snoozed;
-  // A pinned thread stays in his sight: never in the Snoozed section.
-  if (!s || t.closed || pinnedNow(t) || !(Date.parse(s.until) > now)) return false;
+  if (!s || t.closed || !(Date.parse(s.until) > now)) return false;
   return !newsSince(t, s.at);
 }
 
@@ -420,19 +419,22 @@ export function openNotWaiting(t: { closed?: unknown; movedTo?: unknown; state: 
   return !t.closed && !t.movedTo && t.state !== 'needs';
 }
 
-/** Pinned to the top of his view now (2026-11-03, the user: "have a pin thread feature"): open and pinned. */
-export function pinnedNow(t: Pick<ViewThread, 'pinned' | 'closed'>): boolean {
-  return !!t.pinned && !t.closed;
+/**
+ * In his Watching group now (2026-11-23, the user: a watch is "its own category ... at the same time
+ * it is in Watching", the way a task's watch is): open, here (not moved to another node), watched.
+ */
+export function watchedNow(t: Pick<ViewThread, 'watched' | 'closed'> & { movedTo?: unknown }): boolean {
+  return !!t.watched && !t.closed && !t.movedTo;
 }
 
-/** The pinned threads first (the newest pin on top), the rest after them in the order given. */
-export function pinnedFirst<T extends Pick<ViewThread, 'pinned' | 'closed'>>(threads: readonly T[]): T[] {
-  const pinned = threads.filter(pinnedNow).sort((a, b) => b.pinned!.at.localeCompare(a.pinned!.at));
-  return pinned.length ? [...pinned, ...threads.filter((t) => !pinnedNow(t))] : [...threads];
+/**
+ * His Watching group: every thread he (or the node) watches, whatever its state or group, oldest
+ * watch first, so a new watch lands at the bottom and a drag places one (`watched.at`, the task
+ * Watching's order). Each is still drawn in its own group as well. Pure.
+ */
+export function watchingOf<T extends Pick<ViewThread, 'watched' | 'closed'> & { id: string; movedTo?: unknown }>(threads: readonly T[]): T[] {
+  return threads.filter(watchedNow).sort((a, b) => a.watched!.at.localeCompare(b.watched!.at) || a.id.localeCompare(b.id));
 }
-
-/** The states a thread is out of his sight in, unless pinned or an answer waits (threads-model.ts HIDDEN_STATES). */
-const QUIET_STATES: ReadonlySet<string> = new Set(['new', 'working', 'pending']);
 
 /** A message of his or an answer of the node's came after `at`. */
 function newsSince(t: ViewThread, at: string): boolean {
@@ -449,8 +451,6 @@ function newsSince(t: ViewThread, at: string): boolean {
  */
 export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
   if (t.closed) return false;
-  // Pinned: in his sight whatever its state, until he unpins or acknowledges it.
-  if (pinnedNow(t)) return true;
   if (t.state === 'pending' || snoozedNow(t, now)) return false;
   if (t.state === 'needs') return true;
   if (t.state === 'answered') return hasThreadNews(t, shared);
@@ -571,9 +571,7 @@ export function newsAt<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<
   let last: string | null = null;
   for (const t of threads) {
     if (!shownToHim(t, shared, now)) continue;
-    // A pinned thread in the node's hands (new, working, pending) shows only for the pin: a change
-    // of it (his own message merged in, the node saying it works on it) is no news; its answers are.
-    let at = pinnedNow(t) && QUIET_STATES.has(t.state) ? '' : t.updatedAt;
+    let at = t.updatedAt;
     // Only a snooze that ran its course: one news ended early was news then, not again at its date.
     const s = t.snoozed;
     if (s && !t.closed && Date.parse(s.until) <= now && s.until > at && !newsSince(t, s.at)) at = s.until;
@@ -594,13 +592,13 @@ export interface ThreadCounts {
   shown: number;
   /** Of those, the ones waiting on him (state needs). */
   needs: number;
-  /** Of those, the ones he (or the node) pinned. Absent when none. */
-  pinned?: number;
-  /** The newest waiting on him, else the newest pinned, else the newest shown. */
+  /** Of those, the ones he (or the node) watches. Absent when none. */
+  watched?: number;
+  /** The newest waiting on him, else the newest watched, else the newest shown. */
   title?: string;
   id?: string;
-  /** The thread `title` names is pinned (a surface marks it). */
-  titlePinned?: boolean;
+  /** The thread `title` names is watched (a surface marks it with the eye). */
+  titleWatched?: boolean;
   /** Of `shown`, the threads of tasks below listed above them (thread-popup.ts): never in `needs`. Absent when none. */
   below?: number;
 }
@@ -634,7 +632,7 @@ export function listedAbove<M extends ViewMessage>(t: ViewThread<M> & { state: s
  * The threads his Threads view lists, in the order given: his own that have something for him
  * (shownToHim, an answer shared with another of them judged over all of them, the closed ones
  * included), and the threads of tasks below that are listed above them (listedAbove). Every count
- * is the part of this list that waits on him (thread-groups.ts threadsForHim): a pinned or overdue
+ * is the part of this list that waits on him (thread-groups.ts threadsForHim): an overdue
  * thread, or one below whose reply is on its way, is listed and never counted. Pure.
  */
 export function listedForHim<T extends ViewThread & { id: string; state: string }>(threads: readonly T[], now: number = Date.now()): T[] {
@@ -643,14 +641,14 @@ export function listedForHim<T extends ViewThread & { id: string; state: string 
 }
 
 /**
- * The order his Threads list them in: the pinned first (newest pin on top), the rest newest change
- * first. `needsFirst` (experiment top_thread): after the pinned, the ones waiting on him lead, then
- * the rest, each newest change first, so the top of the chat shows the same first thread. Pure.
+ * The order his Threads list them in: newest change first. `needsFirst` (experiment top_thread):
+ * the ones waiting on him lead, then the rest, each newest change first, so the top of the chat
+ * shows the same first thread. A watch changes no place here: Watching is its own list (watchingOf). Pure.
  */
-export function orderedForHim<T extends Pick<ViewThread, 'pinned' | 'closed'> & { state: string; updatedAt: string }>(threads: readonly T[], opts: { needsFirst?: boolean } = {}): T[] {
+export function orderedForHim<T extends { state: string; updatedAt: string }>(threads: readonly T[], opts: { needsFirst?: boolean } = {}): T[] {
   const byChange = [...threads].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  if (!opts.needsFirst) return pinnedFirst(byChange);
-  return pinnedFirst([...byChange.filter((t) => t.state === 'needs'), ...byChange.filter((t) => t.state !== 'needs')]);
+  if (!opts.needsFirst) return byChange;
+  return [...byChange.filter((t) => t.state === 'needs'), ...byChange.filter((t) => t.state !== 'needs')];
 }
 
 /** "1 thread", "3 threads": the words every surface counts them in. */

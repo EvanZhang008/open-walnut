@@ -111,7 +111,8 @@
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
-.org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 4px; color: var(--accent); }
+.org-channel-watch { display: inline-flex; vertical-align: -2px; margin-right: 4px; color: var(--accent); }
+.org-channel-watch svg { width: 12px; height: 12px; }
 
 /* In the name's tail (.org-channel-tail): level with the name's first line. */
 .org-badge {

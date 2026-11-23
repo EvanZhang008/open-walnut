@@ -883,36 +883,51 @@ struct WalnutLastWords: Codable, Equatable {
 }
 
 /// `user_status.threads` (server `src/core/org/thread-view.ts` `ThreadCounts`): how many threads
-/// his view shows, how many of those wait on him and how many are pinned, and the newest waiting
-/// on him (else the newest pinned, else the newest shown), `titlePinned` when that one is pinned.
+/// his view shows, how many of those wait on him and how many he watches, and the newest waiting
+/// on him (else the newest watched, else the newest shown), `titleWatched` when that one is watched.
 /// Decoded leniently: a missing or odd field reads as 0, false or nil, never a failed task list.
+/// A server of 2026-11-03 to 11-23 named the watch a pin (`pinned`, `titlePinned`): read as one.
 struct WalnutThreadCounts: Codable, Equatable {
     var shown = 0
     var needs = 0
-    /// Pinned threads among the shown ones (additive, 2026-11-03; 0 from an older server).
-    var pinned = 0
+    /// Watched threads among the shown ones (additive; 0 from an older server).
+    var watched = 0
     var title: String? = nil
     var id: String? = nil
-    /// The thread `title` names is pinned: the row wears a pin (additive, 2026-11-03).
-    var titlePinned = false
+    /// The thread `title` names is watched: the row wears the eye (additive).
+    var titleWatched = false
 
-    init(shown: Int = 0, needs: Int = 0, pinned: Int = 0, title: String? = nil, id: String? = nil, titlePinned: Bool = false) {
+    enum CodingKeys: String, CodingKey { case shown, needs, watched, title, id, titleWatched, pinned, titlePinned }
+
+    init(shown: Int = 0, needs: Int = 0, watched: Int = 0, title: String? = nil, id: String? = nil, titleWatched: Bool = false) {
         self.shown = shown
         self.needs = needs
-        self.pinned = pinned
+        self.watched = watched
         self.title = title
         self.id = id
-        self.titlePinned = titlePinned
+        self.titleWatched = titleWatched
     }
 
     init(from decoder: Decoder) throws {
         let c = try? decoder.container(keyedBy: CodingKeys.self)
-        shown = max(0, (try? c?.decodeIfPresent(Int.self, forKey: .shown)) ?? 0)
-        needs = max(0, (try? c?.decodeIfPresent(Int.self, forKey: .needs)) ?? 0)
+        let int = { (k: CodingKeys) in (try? c?.decodeIfPresent(Int.self, forKey: k)) ?? nil }
+        let bool = { (k: CodingKeys) in (try? c?.decodeIfPresent(Bool.self, forKey: k)) ?? nil }
+        shown = max(0, int(.shown) ?? 0)
+        needs = max(0, int(.needs) ?? 0)
         title = (try? c?.decodeIfPresent(String.self, forKey: .title)) ?? nil
         id = (try? c?.decodeIfPresent(String.self, forKey: .id)) ?? nil
-        pinned = max(0, (try? c?.decodeIfPresent(Int.self, forKey: .pinned)) ?? 0)
-        titlePinned = ((try? c?.decodeIfPresent(Bool.self, forKey: .titlePinned)) ?? nil) ?? false
+        watched = max(0, int(.watched) ?? int(.pinned) ?? 0)
+        titleWatched = bool(.titleWatched) ?? bool(.titlePinned) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(shown, forKey: .shown)
+        try c.encode(needs, forKey: .needs)
+        try c.encode(watched, forKey: .watched)
+        try c.encodeIfPresent(title, forKey: .title)
+        try c.encodeIfPresent(id, forKey: .id)
+        try c.encode(titleWatched, forKey: .titleWatched)
     }
 }
 

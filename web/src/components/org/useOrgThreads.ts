@@ -39,30 +39,29 @@ export function heardOn(t: OrgThread, saved?: OrgThread, words?: string, at: str
   return merged.state === 'needs' || merged.state === 'answered' || merged.state === 'pending' || merged.state === 'new' ? { ...merged, state: 'working' } : merged;
 }
 
-/** What a close, reopen, snooze or pin looks like before the server answers. */
+/** What a close, reopen, snooze, watch or a drag in Watching looks like before the server answers. */
 function optimistic(t: OrgThread, patch: OrgThreadPatch): OrgThread {
   const at = new Date().toISOString();
-  if (patch.close) { const { pinned: _p, ...rest } = t; return { ...rest, closed: { how: patch.close, at, by: 'human' }, updatedAt: at }; }
-  // A pin moves no clock: unpinned, the thread is back where it was.
-  if (patch.pin !== undefined) {
-    const { pinned: _p, snoozed: _s, ...rest } = t;
-    // His pin keeps its time while the write is on its way (a re-read must not reorder the pins).
-    if (patch.pin) return { ...rest, pinned: t.pinned?.by === 'human' ? t.pinned : { at, by: 'human' } };
-    return t.snoozed ? { ...rest, snoozed: t.snoozed } : rest;
+  if (patch.close) return { ...t, closed: { how: patch.close, at, by: 'human' }, updatedAt: at };
+  // A watch moves no clock: its own group keeps it where it was (threads-model.ts watchOnly).
+  if (patch.watch === false) { const { watched: _w, ...rest } = t; return rest; }
+  if (patch.watch || patch.watch_at !== undefined) {
+    // A new watch lands at the bottom of Watching; one already watched keeps its place unless dragged.
+    const was = t.watched ?? { at, by: 'human' };
+    return { ...t, watched: { at: patch.watch_at ?? was.at, by: patch.watch ? 'human' : was.by } };
   }
   if (patch.reopen) { const { closed: _c, ...rest } = t; return { ...rest, updatedAt: at }; }
   if (patch.snooze !== undefined) {
     const { snoozed: _s, ...rest } = t;
-    // Snoozed: put aside, so no longer pinned.
-    if (patch.snooze) { const { pinned: _p, ...unpinned } = rest; return { ...unpinned, snoozed: { until: patch.snooze, at, by: 'human' }, updatedAt: at }; }
+    if (patch.snooze) return { ...rest, snoozed: { until: patch.snooze, at, by: 'human' }, updatedAt: at };
     return { ...rest, updatedAt: at };
   }
   return t;
 }
 
-/** The server's answer to an Acknowledge it kept open, over the listed row: no pin or snooze of his holds it any more. */
+/** The server's answer to an Acknowledge it kept open, over the listed row: no snooze of his holds it any more (his watch does, as the server keeps it). */
 function keptOpen(t: OrgThread, saved: OrgThread): OrgThread {
-  const { pinned: _p, snoozed: _s, ...rest } = t;
+  const { watched: _w, snoozed: _s, ...rest } = t;
   return { ...rest, ...saved };
 }
 

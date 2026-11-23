@@ -83,18 +83,22 @@ export function settleHeldThread(file: ThreadsFile, threadId: string, kind: Held
   if (!cur || !holdsHeld(cur, kind)) return null;
   const mark = markOf(cur, kind)!;
   let next: OrgThread;
+  // He watches it: an item nobody needs any more leaves it open as answered, on his Watching list, for
+  // him to close (a node's close of it is refused the same way, threads-model.ts checkHisWatch). The
+  // experiment going off still closes it: it opens again, watch and all, when it comes back.
+  const his = cur.watched?.by === 'human';
   if (outcome.kind === 'off') {
     next = { ...cur, [kind]: { ...mark, off: true }, closed: { how: 'dropped', at, by: 'agent', told: true } } as OrgThread;
   } else {
     const reply = clip(outcome.words, REPLY_MAX);
     const by: ThreadWriter = outcome.kind === 'his' || (outcome.kind === 'moot' && outcome.byHim) ? 'human' : 'agent';
-    const { pinned: _p, snoozed: _s, ...rest } = cur;
+    const { snoozed: _s, ...rest } = cur;
     next = {
       ...(outcome.kind === 'for_him' ? cur : rest), state: 'answered', reply, replyAt: at, reply_by: by, updatedAt: at, by,
       // Ended: a later ask on this thread is the node's own, never this item's again.
       [kind]: { ...mark, done: true },
       ...(outcome.kind === 'his' ? { closed: { how: 'acked' as const, at, by, reacted: true, told: true }, reactedAt: at } : {}),
-      ...(outcome.kind === 'moot' ? { closed: { how: 'dropped' as const, at, by, told: true } } : {}),
+      ...(outcome.kind === 'moot' && (!his || by === 'human') ? { closed: { how: 'dropped' as const, at, by, told: true } } : {}),
     } as OrgThread;
     // Walnut wrote this summary from the item: no session's words, so no session to open paths on.
     delete next.reply_sid;

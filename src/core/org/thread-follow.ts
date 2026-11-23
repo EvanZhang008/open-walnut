@@ -3,7 +3,7 @@
  * Threads while another VP did the work: "why this is ehre ... shoidl be walnut vp"; then, translated:
  * once the task is moved under the other VP, "then you no longer need to monitor it"). One of his Threads
  * (threads-model.ts) belongs to the Org node whose team does its work. When the work leaves a node,
- * the thread leaves with it: his messages, the answers, its state, pin and links move to the other
+ * the thread leaves with it: his messages, the answers, its state, watch and links move to the other
  * node's Threads, saying where it came from, and the old node keeps a closed copy pointing there
  * (`moved`), so it stops following it. Both nodes are told in one line riding their next message.
  *

@@ -63,7 +63,7 @@ const OPTIONS_WHY = 'With needs: the choices, your pick first; [] takes them off
 
 const TASK_ARG = z.string().min(1).optional().describe('Main, a lead or a task with Threads on (id or unique prefix); default: your own task')
 
-interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string }; askedIn?: { task: string; title: string }; ackPlaced?: { to: string } }
+interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; watched?: { by: string }; askedIn?: { task: string; title: string }; ackPlaced?: { to: string } }
 
 /**
  * The asking arguments of thread_update and thread_create, each cut to what it means and its
@@ -134,7 +134,7 @@ function withCorrectedCall(op: string, args: Record<string, unknown>, keys: read
   else if (code === 'not_reacted' && given.close) fix = `${op} ${callArgs(given, { user_words: '<his words asking to close it, quoted from his latest message>' })}`
   else if (code === 'same_ask') fix = `${op} ${callArgs(given, { same_ask_reason: '<one line: why this is a different decision>' })}, or leave the ask to that task and keep this thread working`
   else if (code === 'last_message' && typeof given.merge_into === 'string') fix = `thread_update {"id":"${String(given.id)}","merge_into":"${given.merge_into}"} (its only message moves with the whole thread)`
-  else if (code === 'pinned_by_user') fix = `${op} ${callArgs(Object.fromEntries(Object.entries(given).filter(([k]) => !['pin', 'snooze', 'close'].includes(k))))}`
+  else if (code === 'watched_by_user') fix = `${op} ${callArgs(Object.fromEntries(Object.entries(given).filter(([k]) => !['watch', 'watch_at', 'close'].includes(k))))}`
   const words = fix ? `${msg} The call that goes through: ${fix}`
     : status === 400 && !msg.includes(' takes: ') ? `${msg} ${op} takes: ${keys.join(', ')}.` : ''
   if (!words) throw err
@@ -327,7 +327,8 @@ const UPDATE_INPUT = {
   place: z.enum(ACK_PLACES).optional().describe('After his Acknowledge, when his card asks where it goes: closed (it is over), waiting (on something outside) or working (its work still runs). Only with place_why'),
   place_why: z.string().max(PLACE_WHY_MAX).optional().describe('With place: one line his card shows (what it waits on, or why it is over)'),
   snooze: z.string().max(40).optional().describe('When he asked to come back to it later: it leaves his view for the Snoozed section until an ISO time, a date or a duration ("4h", "3d"), at most a year, and returns sooner when he writes in it, you answer it or it moves to needs or answered; "" ends it'),
-  pin: z.boolean().optional().describe('true pins it to the top of his view whatever its state, until he unpins or acknowledges it; false unpins. One he pinned you cannot unpin, snooze or close'),
+  watch: z.boolean().optional().describe('true puts it on his Watching list (its own group at the top; it stays in its own group too) until unwatched or closed; false takes it off. One he watches you cannot unwatch or close'),
+  watch_at: z.string().max(40).optional().describe('Its place on the Watching list, an ISO time (oldest first): only on a watched thread'),
   merge_into: THREAD_ID.optional().describe('Put this thread under that open thread (same subject); alone in its call'),
   task: TASK_ARG,
 }
@@ -360,7 +361,7 @@ defineOp({
     return withOutcome(
       body,
       body.merged ? `Thread ${body.merged} is now under ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages).`
-        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.pinned && !body.thread.closed ? `, pinned${body.thread.pinned.by === 'human' ? ' by the user' : ''}` : ''}${body.thread.askedIn ? `, its decision asked in ${body.thread.askedIn.title} (${body.thread.askedIn.task})` : ''}${body.thread.ackPlaced && !body.thread.closed ? `, placed in ${body.thread.ackPlaced.to}` : ''}.`,
+        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.watched && !body.thread.closed ? `, watched${body.thread.watched.by === 'human' ? ' by the user' : ''}` : ''}${body.thread.askedIn ? `, its decision asked in ${body.thread.askedIn.title} (${body.thread.askedIn.task})` : ''}${body.thread.ackPlaced && !body.thread.closed ? `, placed in ${body.thread.ackPlaced.to}` : ''}.`,
       long ?? 'No further action is required.',
     )
   },
@@ -523,7 +524,7 @@ defineOp({
   name: 'thread_move',
   title: 'Move a Thread to another node',
   description: 'Moves one of your open Threads (the user\'s requests, one per subject) to another node\'s Threads (another VP, Main, or the node whose team a task is in), '
-    + 'with everything on it: his messages, the answers, its state, pin and tasks; it reads "Moved here from" there, and it closes on yours as moved, pointing at it. '
+    + 'with everything on it: his messages, the answers, its state, watch and tasks; it reads "Moved here from" there, and it closes on yours as moved, pointing at it. '
     + `${THREADS_MOVE_RULE} On a task with Threads on, naming thread in a handoff only lists that task and Walnut never moves its threads: only thread_move does.`,
   input: {
     id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),

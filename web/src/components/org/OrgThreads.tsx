@@ -35,9 +35,10 @@
  *   its ask    a thread holding its task's own ask (core/org/thread-report-ask.ts) reads Needs you
  *              and its card is that ask (the one ask card, actions/AskCard.tsx, answered on the
  *              thread), its own summary under it
- *   Pinned     the ones he (or the node) pinned lead the list, whatever their state, with a pin mark,
- *              until he unpins or acknowledges them (2026-11-03, the user: "have a pin thread feature,
- *              like this thread I need to make it pinned"); unpinned, a thread goes back to its place
+ *   Watching   the ones he (or the node) watches, a group of their own at the top (OrgThreadsWatching),
+ *              each one ALSO in its own group, wearing the eye there (2026-11-23, the user: a watch is
+ *              "its own category ... at the same time it is in Watching", like a task's watch); he
+ *              drags them into his order, and a watch moves nothing else
  *   Snoozed    the ones he put aside (Snooze on a card, OrgThreadSnooze), each saying when it comes
  *              back; collapsed by default. A thread leaves the list and the tab's dot while snoozed
  *              and comes back on its date, or earlier on news (core/org/thread-view.ts snoozedNow)
@@ -49,10 +50,11 @@
  *              the bottom, Reopen on each
  */
 import { useMemo, useRef, useState } from 'react';
+import { OrgThreadsWatching, type WatchingCopy } from './OrgThreadsWatching';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
-import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, pinnedNow, sharedAnswers, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
-import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
+import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, sharedAnswers, snoozedNow, watchedNow, watchingOf, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
+import { ICON_EYE, ICON_EYE_FILLED } from '@/components/common/Icons';
 import { DisclosureButton } from '@/components/controls';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -179,7 +181,7 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused, listed, onReadWhole }: {
+function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused, listed, onReadWhole, copy }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
@@ -191,13 +193,16 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   listed: boolean;
   /** Where the card is drawn in a bound room (the top of a chat): its title opens it whole elsewhere (its Conversation still unfolds in place). */
   onReadWhole?: () => void;
+  /** Drawn in Watching, beside its own group's card. */
+  copy?: WatchingCopy;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
   /** The answers he has not seen, unfolded under the summary (folded by default). */
   const [unfolded, setUnfolded] = useState(false);
   const closed = !!t.closed;
-  const pinned = pinnedNow(t);
+  const watched = watchedNow(t);
+  const domId = `${t.id}${copy ? '-watching' : ''}`;
   // The one card (experiment threads_one_card, core/org/one-card.ts); off, the card as before it.
   const oneCard = useExperimental('threads_one_card');
   // Its decision is asked in a task (core/org/thread-task-ask.ts): the card says where, not Needs you.
@@ -222,7 +227,10 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   // Its word and dot are its group's (core/org/thread-groups.ts), the one it is drawn in (thread-badge.ts).
   const badge = threadBadge(t, listed, now);
   // In a bound room a click on its title reads it whole elsewhere (onReadWhole); in a list, it unfolds in place.
-  const onHead = () => (onReadWhole ? onReadWhole() : setOpen(!open));
+  // In Watching, one line that opens the card in place, so a few watched threads never push Needs you down.
+  const [copyOpen, setCopyOpen] = useState(false);
+  const folded = !!copy && !copyOpen;
+  const onHead = () => (copy ? setCopyOpen(!copyOpen) : onReadWhole ? onReadWhole() : setOpen(!open));
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
   const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
@@ -242,13 +250,20 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
-    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-group={badge.group} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
-      <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={onHead}>
+    <li ref={copy?.setNodeRef} style={copy?.style} className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${watched ? ' is-watched' : ''}${copy?.dragging ? ' is-dragging' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-group={badge.group} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-watched={watched ? 'true' : undefined} data-copy={copy ? 'watching' : undefined} data-folded={folded ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
+      {copy && (
+        // A handle, not a button of the family: dnd-kit gives it its role and keyboard focus.
+        <span className="org-thread-grip" data-testid="org-thread-watch-grip" aria-label={`Drag "${t.title}" to reorder Watching`} title="Drag to reorder" {...copy.grip}>
+          <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2" /><circle cx="7" cy="3" r="1.2" /><circle cx="3" cy="7" r="1.2" /><circle cx="7" cy="7" r="1.2" /><circle cx="3" cy="11" r="1.2" /><circle cx="7" cy="11" r="1.2" /></svg>
+        </span>
+      )}
+      <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={copy ? copyOpen : open} aria-controls={copy ? undefined : `${domId}-conversation`} data-testid="org-thread-head" onClick={onHead}>
         <ThreadState badge={badge} />
         <span className="org-thread-meta">
-          {pinned && (<>
-            <span className="org-thread-pin" data-testid="org-thread-pinned" title={t.pinned!.by === 'human' ? 'You pinned this thread' : `${name} pinned this thread`}>
-              <ThreadPinIcon size={11} /><span className="org-thread-pin-who">{t.pinned!.by === 'human' ? 'Pinned' : `Pinned by ${name}`}</span>
+          {/* Its own group's copy says it is also in Watching; the Watching copy needs no word for it. */}
+          {watched && !copy && (<>
+            <span className="org-thread-watch" data-testid="org-thread-watched" title={t.watched!.by === 'human' ? 'You watch this thread: it is also in Watching' : `${name} watches this thread: it is also in Watching`}>
+              {ICON_EYE_FILLED}<span className="org-thread-watch-who">{t.watched!.by === 'human' ? 'Watching' : `Watched by ${name}`}</span>
             </span>{' \u00b7 '}
           </>)}
           {t.opener && <span className="org-thread-from" data-testid="org-thread-from" title={`Opened by ${name}`}>Opened by {name}</span>}
@@ -260,6 +275,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
         </span>
         <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>
+      {/* In Watching a card is one line (its state, title and time) until a click opens it in place. */}
+      {!folded && (<>
       <TopicThreadBadge threadId={t.id} />
       {snoozed && t.snoozed && <SnoozedUntil until={t.snoozed.until} now={now} />}
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
@@ -315,12 +332,12 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
         </ol>
       )}
       {count > 0 && (
-        <DisclosureButton expanded={open} className="org-thread-toggle" data-testid="org-thread-history" aria-controls={`${t.id}-conversation`} onClick={() => setOpen(!open)}>
+        <DisclosureButton expanded={open} className="org-thread-toggle" data-testid="org-thread-history" aria-controls={`${domId}-conversation`} onClick={() => setOpen(!open)}>
           {open ? 'Hide the conversation' : 'Conversation'} · <span data-testid="org-thread-count">{count} {count === 1 ? 'message' : 'messages'}</span>
         </DisclosureButton>
       )}
       {open && (
-        <ol id={`${t.id}-conversation`} className="org-thread-conversation" data-testid="org-thread-messages">
+        <ol id={`${domId}-conversation`} className="org-thread-conversation" data-testid="org-thread-messages">
           {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} />)}
         </ol>
       )}
@@ -330,15 +347,15 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           user's pick of ten whole-card designs: "2 is good").
           It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at
           once, in the one ask card's row. */}
-      {oneCard && letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
-      {choice && !letter && <AskCardFrame testId="org-thread-choice-card" className="org-thread-ask" answer={<ThreadChoiceAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
-      {needs && !heldItem && !letter && !choice && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} pinned={pinned} />}
+      {oneCard && letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} watched={watched} />} />}
+      {choice && !letter && <AskCardFrame testId="org-thread-choice-card" className="org-thread-ask" answer={<ThreadChoiceAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} watched={watched} />} />}
+      {needs && !heldItem && !letter && !choice && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} watched={watched} />}
       {/* A card waiting on him answers in the ask card's row just above (its own box and Snooze, or the
           held ask's): none of them twice, and no Acknowledge. */}
       {/* The ask card's own answer row (actions/ask-card.css), so every card's buttons, box, Snooze
-          and pin look and sit the same (2026-11-21, the user: "I lkike P1 button, not the stupid ugly
+          and Watch eye look and sit the same (2026-11-21, the user: "I lkike P1 button, not the stupid ugly
           current snooze or ack, also why they arenot even con sistent"): its buttons first, the box
-          under them, Snooze and the pin at the right of the box's line. */}
+          under them, Snooze and the Watch eye at the right of the box's line. */}
       {needs || choice ? null : (
         <div className="ask-card-answer org-thread-actions">
           {closed ? (<>
@@ -350,10 +367,11 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
             {onFollowUp && !letter ? (
               <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
             ) : null}
-            <span className="ask-card-tools"><ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} /></span>
+            <span className="ask-card-tools"><ThreadTools t={t} snoozed={snoozed} state={state} watched={watched} /></span>
           </>)}
         </div>
       )}
+      </>)}
     </li>
   );
 }
@@ -361,7 +379,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
 /** One thread of his list as every surface draws it: a thread of a task below is the ask card
  *  (PoppedThreadCard), the node's own the thread card. The Threads view and the top of the chat
  *  (TopThread) both draw through this, so one thread reads the same in both. */
-export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false, listed = true, onReadWhole }: {
+export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false, listed = true, onReadWhole, copy }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined; state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number; snoozed: boolean;
   /** A chat message's thread line just opened it (thread-focus.ts). */
@@ -370,10 +388,12 @@ export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now
   listed?: boolean;
   /** Drawn in a bound room (the top of a chat): read it whole in the Threads view. */
   onReadWhole?: () => void;
+  /** Drawn again in Watching (OrgThreadsWatching). */
+  copy?: WatchingCopy;
 }) {
   return t.owner && owner
     ? <PoppedThreadCard node={owner.id} t={t} state={state} now={now} snoozed={snoozed} listed={listed} />
-    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} {...(onReadWhole ? { onReadWhole } : {})} />;
+    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} {...(onReadWhole ? { onReadWhole } : {})} {...(copy ? { copy } : {})} />;
 }
 
 export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState = false }: Props) {
@@ -407,8 +427,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
     const shownSet = new Set(listed);
     return {
       clock: at,
-      // Pinned ones lead, newest pin first; the rest newest change first (as the server sorts
-      // them), so one just unpinned goes back to its place before the server answers. Under
+      // Newest change first (as the server sorts them); a watch moves nothing here. Under
       // top_thread the ones that need him lead the rest, the order the top of the chat steps in.
       open: orderedForHim(listed, { needsFirst }),
       listedIds: new Set(listed.map((t) => t.id)),
@@ -440,15 +459,22 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   });
   // Nothing in either view: the empty line carries New topic (ThreadsEmpty), no bar above it.
   const nothing = all !== null && !state.error && (groups ? !THREAD_GROUPS.some((g) => groups[g].length > 0) : !open.length && !hidden.length && !snoozed.length);
-  const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id} listed={listedIds.has(t.id)} />;
+  const card = (t: OrgThread, copy?: WatchingCopy) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id && !copy} listed={listedIds.has(t.id)} {...(copy ? { copy } : {})} />;
+  // Watching: his watched threads, each also drawn in its own group below (a thread of a task
+  // below is watched in that task's own Threads, never from here).
+  const watching = useMemo(() => watchingOf((all ?? []).filter((t) => !t.owner)), [all]);
+  const watchingList = all !== null && (
+    <OrgThreadsWatching threads={watching} card={(t, copy) => card(t, copy)} onReorder={(writes) => { for (const w of writes) void state.update(w.id, { watch_at: w.watch_at }); }} />
+  );
   return (
     <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {/* Nothing at all: New topic sits on the empty view's one line instead (ThreadsEmpty). */}
       {!nothing && <ThreadsTopicBar owner={owner} />}
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
-      {groups && all !== null && <OrgThreadsByState groups={groups} opened={opened} onOpen={openFold} card={card} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
+      {groups && all !== null && <OrgThreadsByState watching={watchingList} groups={groups} opened={opened} onOpen={openFold} card={(t) => card(t)} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
+      {watchingList}
       {all !== null && !open.length && (hidden.length || snoozed.length
         ? (
           <p className="org-threads-empty" data-testid="org-threads-empty">
@@ -456,25 +482,25 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
           </p>
         )
         : <ThreadsEmpty name={name} owner={owner} />)}
-      {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
+      {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map((t) => card(t))}</ul>}
       {snoozed.length > 0 && (
         <DisclosureButton expanded={showSnoozed} className="org-threads-closed-toggle" data-testid="org-threads-snoozed" onClick={() => setShowSnoozed(!showSnoozed)}>
           {snoozed.length} snoozed
         </DisclosureButton>
       )}
-      {showSnoozed && snoozed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-snoozed" data-show="snoozed">{snoozed.map(card)}</ul>}
+      {showSnoozed && snoozed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-snoozed" data-show="snoozed">{snoozed.map((t) => card(t))}</ul>}
       {hidden.length > 0 && (
         <DisclosureButton expanded={showHidden} className="org-threads-closed-toggle" data-testid="org-threads-hidden" onClick={() => setShowHidden(!showHidden)}>
           {hidden.length} in progress, nothing for you
         </DisclosureButton>
       )}
-      {showHidden && hidden.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-hidden" data-show="hidden">{hidden.map(card)}</ul>}
+      {showHidden && hidden.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-hidden" data-show="hidden">{hidden.map((t) => card(t))}</ul>}
       {closed.length > 0 && (
         <DisclosureButton expanded={showClosed} className="org-threads-closed-toggle" data-testid="org-threads-closed" onClick={() => setShowClosed(!showClosed)}>
           {closed.length} closed this week
         </DisclosureButton>
       )}
-      {showClosed && closed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-closed" data-show="closed">{closed.map(card)}</ul>}
+      {showClosed && closed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-closed" data-show="closed">{closed.map((t) => card(t))}</ul>}
       </>)}
     </div>
   );

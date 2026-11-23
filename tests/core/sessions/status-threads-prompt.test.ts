@@ -2,7 +2,7 @@
  * The status question lists every open thread of the task (src/core/sessions/status-threads.ts;
  * 2026-11-20, the user: "if there are multiple thread please ask for multiple thread"). The threads
  * are enumerated from a threads file on disk, so a thread the question leaves out fails here: an
- * open one (whatever its state, pinned, snoozed) is listed by its ref, a closed one is not, and the
+ * open one (whatever its state, watched, snoozed) is listed by its ref, a closed one is not, and the
  * list stops at THREAD_LIST_MAX, newest first. Main and the leads keep their own thread rules and
  * get no block; a task that keeps no Threads gets none either.
  */
@@ -33,7 +33,7 @@ const FIXTURE: OrgThread[] = [
   thread(1, { state: 'needs', ask: 'Pick the apple variety?' }),
   thread(2, { state: 'answered', reply: 'The pears are picked.' }),
   thread(3, { state: 'pending' }),
-  thread(4, { pinned: { at: at(4), by: 'human' } }),
+  thread(4, { watched: { at: at(4), by: 'human' } }),
   thread(5, { snoozed: { until: at(600), at: at(5), by: 'human' } }),
   thread(6, { opener: { text: 'The frost watch started.', at: at(6), from: 'node', by: `task:${TASK}` }, messages: [] }),
   thread(7, { state: 'answered', closed: { how: 'acked', at: at(8), by: 'human' } }),

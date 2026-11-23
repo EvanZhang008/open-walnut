@@ -19,7 +19,7 @@ import {
   fileMessage, FOLLOW_UP_REOPENS_MS, isOpen, lastUserAt, movedAway, SAME_CONVERSATION_MS, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
-import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
+import { exchangesOf, snoozedNow, watchedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
 import { keepsThreads } from './keeps-threads.js';
 import { threadsKeptNow } from './threads-kept.js';
 import { letterThreadId } from './letter-thread-model.js';
@@ -85,7 +85,7 @@ export interface ThreadHintState {
   follows?: { id: string; title: string };
   /** This send was filed already (a retry with its id): nothing new. */
   duplicate: boolean;
-  open: Array<{ id: string; title: string; state: ThreadState; snoozedUntil?: string; pinnedBy?: ThreadWriter }>;
+  open: Array<{ id: string; title: string; state: ThreadState; snoozedUntil?: string; watchedBy?: ThreadWriter }>;
   /** Threads closed since the node was last told, and by whom. */
   closed: Array<{ id: string; title: string; how: ThreadCloseHow; by: ThreadWriter }>;
   /** The Follow up named a thread that moved to another node with its work: filed there (thread-follow.ts). */
@@ -199,7 +199,7 @@ export async function prepareThreadCapture(input: {
     followUp: !!input.threadId && !planned.created,
     ...(planned.joined ? { joined: planned.joined } : {}),
     ...(follows ? { follows: { id: follows.id, title: follows.title } } : {}),
-    open: open.map((t) => ({ id: t.id, title: t.title, state: t.state, ...(snoozedNow(t, nowMs) ? { snoozedUntil: t.snoozed!.until } : {}), ...(pinnedNow(t) ? { pinnedBy: t.pinned!.by } : {}) })),
+    open: open.map((t) => ({ id: t.id, title: t.title, state: t.state, ...(snoozedNow(t, nowMs) ? { snoozedUntil: t.snoozed!.until } : {}), ...(watchedNow(t) ? { watchedBy: t.watched!.by } : {}) })),
     closed: closed.map((t) => ({ id: t.id, title: t.title, how: t.closed!.how, by: t.closed!.by })),
   };
   return {

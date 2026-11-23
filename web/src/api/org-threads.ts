@@ -62,8 +62,8 @@ export interface OrgThread {
   opener?: { text: string; at: string; from: string; ref?: string; by: string; sid?: string; host?: string };
   /** Put aside until `until` (core/org/thread-view.ts snoozedNow says whether it still is). */
   snoozed?: { until: string; at: string; by: string };
-  /** Pinned to the top of his view, whatever its state (core/org/thread-view.ts pinnedNow). */
-  pinned?: { at: string; by: string };
+  /** On his Watching list, whatever its state, and in its own group too (core/org/thread-view.ts watchingOf). */
+  watched?: { at: string; by: string };
   /** Walnut woke the node about this thread's overdue stretch (core/org/thread-recheck.ts). */
   recheck?: { since: string; at: string; why?: string; pending?: boolean };
   /** The node named the task that already asks him this decision (core/org/threads-model.ts ThreadAskOwner). */
@@ -115,8 +115,10 @@ export interface OrgThreadPatch {
   reopen?: boolean;
   /** An ISO time it comes back at, or '' to take the snooze off. */
   snooze?: string;
-  /** Pin it to the top of his view, or unpin it. */
-  pin?: boolean;
+  /** Put it on his Watching list, or take it off. */
+  watch?: boolean;
+  /** Its place on the Watching list (an ISO time; oldest first): a drag. */
+  watch_at?: string;
   merge_into?: string;
 }
 

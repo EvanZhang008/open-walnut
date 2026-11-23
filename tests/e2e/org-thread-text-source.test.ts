@@ -5,7 +5,7 @@
  * wrote it).
  *
  *  1. a summary written by an earlier remote writer keeps that session and host
- *     while the node runs a local session, through its pin, its state move with the same words
+ *     while the node runs a local session, through its watch, its state move with the same words
  *     and the user's close; new words take their new writer;
  *  2. a `sid`, `host`, `by` or `reply_sid` in the body is never read: the caller's own session
  *     record decides;
@@ -85,16 +85,16 @@ afterAll(async () => {
 })
 
 describe('who wrote an Org thread\'s words', () => {
-  it('a summary keeps its old remote writer after the lead moved to a local session, through pin, state and close', async () => {
+  it('a summary keeps its old remote writer after the lead moved to a local session, through watch, state and close', async () => {
     const t = await fileAsk('where are the notes?')
     await call('PATCH', `/${t.id}`, { title: 'Notes', state: 'answered', reply: 'Notes in /home/me/orchard/notes.txt:2' }, OLD_REMOTE_SID)
     const written = { reply: 'Notes in /home/me/orchard/notes.txt:2', reply_by: `task:${oldWriterId}`, reply_sid: OLD_REMOTE_SID, reply_host: 'devbox' }
     expect(replySource(await thread(t.id))).toEqual(written)
     // The lead now runs its local session.
     await linkSessionSlot(leadId, NEW_LOCAL_SID, 'exec')
-    await call('PATCH', `/${t.id}`, { pin: true }, NEW_LOCAL_SID)
+    await call('PATCH', `/${t.id}`, { watch: true }, NEW_LOCAL_SID)
     await call('PATCH', `/${t.id}`, { state: 'answered', reply: 'Notes in /home/me/orchard/notes.txt:2' }, NEW_LOCAL_SID)
-    await call('PATCH', `/${t.id}`, { pin: false })
+    await call('PATCH', `/${t.id}`, { watch: false })
     await call('PATCH', `/${t.id}`, { close: 'acked' })
     const closed = await thread(t.id)
     expect(closed.closed?.how).toBe('acked')

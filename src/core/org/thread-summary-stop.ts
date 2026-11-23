@@ -61,13 +61,13 @@ function newestOfHis(threads: readonly OrgThread[]): { at: string; thread: OrgTh
 /**
  * The open answered threads whose answer is still news on his card although he wrote in the node's
  * chat after it (his words went to another thread): they may already build on it (he read it), so
- * the node checks each against them. A reply he gave on another card is not one. Pinned and
+ * the node checks each against them. A reply he gave on another card is not one. Watched and
  * snoozed ones are his to keep. Pure.
  */
 export function answeredBeforeHim(threads: readonly OrgThread[], nowMs: number): OrgThread[] {
   const his = newestOfHis(threads);
   if (!his) return [];
-  return threads.filter((t) => t.id !== his.thread.id && !t.closed && t.state === 'answered' && !t.pinned && !snoozedNow(t, nowMs)
+  return threads.filter((t) => t.id !== his.thread.id && !t.closed && t.state === 'answered' && !t.watched && !snoozedNow(t, nowMs)
     && hasThreadNews(t) && nodeWordAt(t) !== '' && nodeTouchAt(t) < his.at);
 }
 

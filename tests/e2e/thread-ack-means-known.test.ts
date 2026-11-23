@@ -299,15 +299,15 @@ describe('his Acknowledge means he knows', () => {
     await noBuzz(...Object.values(ids))
   })
 
-  it('one he pinned in Acknowledged stays in his hands: Walnut places it in Waiting, never closes it, and its timer never spins', async () => {
+  it('one he watches in Acknowledged stays in his hands: Walnut places it in Waiting, never closes it, and its timer never spins', async () => {
     const id = await runningThread('Order the oven gloves', [flour])
     await ack(id)
     pendingRiding(sid)?.markTold()
-    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { pin: true })).status).toBe(200)
+    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { watch: true })).status).toBe(200)
     const t0 = pastDeadline()
     await runThreadFollowPass({ now: t0 })
     const placed = await threadOf(id)
-    expect(placed.ackPlaced).toMatchObject({ to: 'waiting', by: 'walnut', why: 'nothing on it is open; you pinned it' })
+    expect(placed.ackPlaced).toMatchObject({ to: 'waiting', by: 'walnut', why: 'nothing on it is open; you watch it' })
     expect(placed.closed).toBeUndefined()
     await runThreadFollowPass({ now: t0 + 1_000 })
     pendingRiding(sid)?.markTold()
@@ -317,7 +317,7 @@ describe('his Acknowledge means he knows', () => {
     const r = await settleKnown(await ackedThreads(), openTasksOf(await listTasks()), late)
     expect((await threadOf(id)).closed).toBeUndefined()
     expect(r.nextAt === undefined || r.nextAt > late).toBe(true)
-    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { pin: false })).status).toBe(200)
+    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { watch: false })).status).toBe(200)
   })
 
   it('one Walnut placed while its task was open: its task done, the node hears it once, and 10 minutes later Walnut closes it quietly', async () => {

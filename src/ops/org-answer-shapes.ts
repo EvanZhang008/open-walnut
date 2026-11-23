@@ -131,7 +131,7 @@ export function threadReceipt(t: ThreadLike | undefined): Obj | undefined {
     state: t.closed ? 'closed' : t.state,
     ...(t.closed ? { closed: t.closed.how } : {}),
     messages: messages.length,
-    ...(t.pinned && !t.closed ? { pinned: t.pinned.by === 'human' ? 'by the user' : 'by you' } : {}),
+    ...(t.watched && !t.closed ? { watched: t.watched.by === 'human' ? 'by the user' : 'by you' } : {}),
     ...(t.snoozed && !t.closed && future(t.snoozed.until) ? { snoozed_until: t.snoozed.until } : {}),
     ...(t.askedIn?.task ? { asked_in: t.askedIn.task } : {}),
     ...(t.ackPlaced && !t.closed ? { placed: t.ackPlaced.to } : {}),

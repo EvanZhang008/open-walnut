@@ -43,8 +43,8 @@ enum ChatOrgModel {
         let line: String
         /// The node's own Threads that hold something for the user (nil = none shown).
         var threads: WalnutThreadCounts? = nil
-        /// `line` names a thread he (or the node) pinned: the row wears a pin (web `latestPinned`).
-        var linePinned = false
+        /// `line` names a thread he (or the node) watches: the row wears the eye (web `latestWatched`).
+        var lineWatched = false
         /// The CEO's and a VP's own row: its badge, the threads his view shows (0 included).
         var threadsBadge: Int? = nil
     }
@@ -115,7 +115,7 @@ enum ChatOrgModel {
             id: "ceo", kind: .ceo, name: ceoName, contactId: tree.main?.id, project: "",
             state: state, needs: needs, working: tree.counts.running, open: tree.counts.open,
             ledProjects: [], line: parts.joined(separator: " · "), threads: threads,
-            linePinned: shown > 0 && threads?.titlePinned == true, threadsBadge: shown
+            lineWatched: shown > 0 && threads?.titleWatched == true, threadsBadge: shown
         )
     }
 
@@ -155,7 +155,7 @@ enum ChatOrgModel {
                 state: state, needs: needs, working: counts.running, open: counts.open,
                 ledProjects: under.map(\.project),
                 line: threadsLine ?? line(state: state, open: counts.open), threads: threads,
-                linePinned: threadsLine != nil && threads?.titlePinned == true,
+                lineWatched: threadsLine != nil && threads?.titleWatched == true,
                 threadsBadge: ownRow ? threads?.shown ?? 0 : nil
             )
             // The web's `lastAt`: the VP (on its own row) and every task under the row.

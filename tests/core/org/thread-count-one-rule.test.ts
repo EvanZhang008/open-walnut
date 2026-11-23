@@ -9,7 +9,7 @@
  * (thread-groups.ts threadsForHim; `read` is drawn as Done), both under All, his Threads' default.
  * Every count is made from it.
  *
- *   1. Every kind of thread (each state, pinned, snoozed, a task's below, his reply on its way,
+ *   1. Every kind of thread (each state, watched, snoozed, a task's below, his reply on its way,
  *      asked in a task, the task's own ask, Known, closed, overdue on the node) and their mix:
  *      the count is the Needs you and Done groups, each counted card is in his list, and none
  *      outside those groups is counted.
@@ -35,7 +35,7 @@ const STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const
 /** Each way a thread can be, on top of its state. */
 const KINDS: Record<string, (t: T) => T> = {
   plain: (t) => t,
-  pinned: (t) => ({ ...t, pinned: { at: ago(5), by: 'human' } }),
+  watched: (t) => ({ ...t, watched: { at: ago(5), by: 'human' } }),
   snoozed: (t) => ({ ...t, snoozed: { until: new Date(NOW + 3600_000).toISOString(), at: ago(3) } }),
   below: (t) => ({ ...t, owner: { task_id: 'task-trays', title: 'Order the seed trays' } }),
   'below, his reply on its way': (t) => ({

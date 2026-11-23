@@ -22,7 +22,7 @@ import { ThreadError, updateThread, type OrgThread, type ThreadPatch, type Threa
 import { deliverableLine } from '../task-deliverable.js';
 import { ackOutcome, ackWhy, type AckOutcome, type AckReading, type AckTask } from './thread-ack-outcome.js';
 import { ACK_PLACES, isKnown, KNOWN_CLOSE_MS, knownStep, placedSinceAck, type AckPlace, type AckWaits } from './thread-known.js';
-import { hasThreadNews, pinnedNow, PLACE_WHY_MAX, sharedAnswers, snoozedNow } from './thread-view.js';
+import { hasThreadNews, PLACE_WHY_MAX, sharedAnswers, snoozedNow, watchedNow } from './thread-view.js';
 
 export type { AckWaits } from './thread-known.js';
 
@@ -45,8 +45,9 @@ export function ackWaitsOf(t: OrgThread, tasks: ReadonlyMap<string, AckTask>): A
 export function ackKnown(file: ThreadsFile, id: string, at: string): { file: ThreadsFile; thread: OrgThread } {
   const cur = file.threads.find((t) => t.id === id);
   const r = updateThread(file, id, { state: 'pending', ...(cur?.messages.length ? { known: 'all' } : {}) }, 'human', at);
-  // Acknowledged: out of his sight like a close, so no pin or snooze of his holds it; a placement of an earlier ack is gone.
-  const { pinned: _pin, snoozed: _snooze, ackDone: _done, ackPlaced: _placed, ...rest } = r.thread;
+  // Acknowledged: out of his sight like a close, so no snooze of his holds it; a placement of an
+  // earlier ack is gone. His watch stays: he follows the subject on, whatever group it is in.
+  const { snoozed: _snooze, ackDone: _done, ackPlaced: _placed, ...rest } = r.thread;
   const thread: OrgThread = { ...rest, reactedAt: at, ackedAt: at };
   return { file: { ...r.file, threads: r.file.threads.map((t) => (t.id === id ? thread : t)) }, thread };
 }
@@ -93,7 +94,7 @@ export function checkPlace(by: ThreadWriter, place: unknown, why: unknown, rest:
 
 /**
  * Under the lock, after the node's write on `before` made `next` (a `place: closed` went through
- * updateThread as its close, so every close check holds: his pin, a reply still on its way): its
+ * updateThread as its close, so every close check holds: his watch, a reply still on its way): its
  * place is recorded only on a thread he acknowledged and wrote nothing in since (isKnown); a close
  * of its own on one is its decision too, recorded so the closed card says so. Anything else is
  * `next` as it is. Pure; throws ThreadError for a place on any other thread.
@@ -116,7 +117,7 @@ export function nodePlaced(before: OrgThread | undefined, next: OrgThread, placi
 export function ackPlace(t: OrgThread, to: AckPlace, by: 'node' | 'walnut', why: string | undefined, at: string): OrgThread {
   const ackPlaced = { to, by, at, ...(why ? { why } : {}) };
   if (to !== 'closed') return { ...t, ackPlaced, updatedAt: at, by: 'agent' };
-  const { options: _o, snoozed: _s, pinned: _p, ...rest } = t;
+  const { options: _o, snoozed: _s, ...rest } = t;
   return { ...rest, ackPlaced, closed: { how: 'acked', at, by: 'agent', reacted: true }, updatedAt: at, by: 'agent' };
 }
 
@@ -254,8 +255,8 @@ function settleOf(t: OrgThread, step: ReturnType<typeof knownStep>, openTasks: R
   const r = ackOutcome(t, openTasks);
   if (r.outcome !== 'closed') return { step: 'place', to: r.outcome, why: ackWhy(r) };
   if (hasThreadNews(t, shared)) return { step: 'show' };
-  // He pinned or snoozed it since his ack: it stays in his hands, waiting, and settles as Walnut's waiting one does.
-  if (pinnedNow(t)) return { step: 'place', to: 'waiting', why: 'nothing on it is open; you pinned it' };
+  // He watches or snoozed it: it stays in his hands, waiting, and settles as Walnut's waiting one does.
+  if (watchedNow(t)) return { step: 'place', to: 'waiting', why: 'nothing on it is open; you watch it' };
   if (snoozedNow(t, now)) return { step: 'place', to: 'waiting', why: 'nothing on it is open; you snoozed it' };
   return { step: 'place', to: 'closed', why: ackWhy(r) };
 }
@@ -323,8 +324,8 @@ function dueAt(t: OrgThread, want: Settle | null, now: number): number {
   const placed = placedSinceAck(t);
   if (!placed) return Date.parse(t.ackedAt!) + KNOWN_CLOSE_MS;
   if (placed.by !== 'walnut' || !t.ackDone) return NaN;
-  // He pinned it: it waits on his unpin (a change event), never on a clock; snoozed, on its date too.
-  if (pinnedNow(t)) return NaN;
+  // He watches it: it waits on his unwatch (a change event), never on a clock; snoozed, on its date too.
+  if (watchedNow(t)) return NaN;
   const due = Date.parse(t.ackDone) + KNOWN_CLOSE_MS;
   return t.snoozed && snoozedNow(t, now) ? Math.max(due, Date.parse(t.snoozed.until)) : due;
 }

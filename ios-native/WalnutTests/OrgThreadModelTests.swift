@@ -53,10 +53,12 @@ final class OrgThreadModelTests: XCTestCase {
             XCTAssertTrue(s.open.isEmpty, state)
             XCTAssertEqual(s.working.map(\.id), ["f"], state)
         }
-        // Pinned: he keeps it in sight whatever its state.
-        var pinned = try t("p", extra: #","pinned":{"at":"2026-11-04T08:00:00Z"}"#)
-        pinned.shown = true
-        XCTAssertTrue(OrgThreadModel.inView(OrgThreadModel.afterHisFollowUp(pinned), shared: [], now: Self.now))
+        // Watched: his Follow up takes it out of his view like any other (Watching still lists it).
+        var watched = try t("w", extra: #","watched":{"at":"2026-11-04T08:00:00Z"}"#)
+        watched.shown = true
+        let after = OrgThreadModel.afterHisFollowUp(watched)
+        XCTAssertFalse(OrgThreadModel.inView(after, shared: [], now: Self.now))
+        XCTAssertEqual(OrgThreadModel.sections([after], now: Self.now).watching.map(\.id), ["w"])
         // Closed: untouched (a Follow up there opens a new thread on the server).
         let closed = try t("c", extra: #","closed":{"how":"acked","at":"2026-11-04T08:00:00Z","by":"human"}"#)
         XCTAssertEqual(OrgThreadModel.afterHisFollowUp(closed), closed)
@@ -102,8 +104,8 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertFalse(OrgThreadModel.shownToHim(try t("p", state: "pending", messages: answeredOnce), now: Self.now))
         // A working thread with an answer he has not reacted to shows.
         XCTAssertTrue(OrgThreadModel.shownToHim(try t("wa", state: "working", messages: answeredOnce), now: Self.now))
-        // Pinned shows whatever its state; closed never does.
-        XCTAssertTrue(OrgThreadModel.shownToHim(try t("pin", state: "pending", extra: #","pinned":{"at":"2026-11-04T08:00:00Z"}"#), now: Self.now))
+        // A watch moves nothing in his view (Watching is its own list); closed never shows.
+        XCTAssertFalse(OrgThreadModel.shownToHim(try t("w", state: "pending", extra: #","watched":{"at":"2026-11-04T08:00:00Z"}"#), now: Self.now))
         XCTAssertFalse(OrgThreadModel.shownToHim(try t("c", state: "needs", extra: #","closed":{"how":"acked","at":"2026-11-04T08:00:00Z","by":"human"}"#), now: Self.now))
     }
 
@@ -119,11 +121,13 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertFalse(OrgThreadModel.snoozedNow(news, now: Self.now))
     }
 
-    func testSectionsOrderPinnedFirstThenNewest() throws {
+    func testSectionsOrderNewestFirstWithWatchingBeside() throws {
         let threads = [
             try t("old", state: "needs", updated: "2026-11-04T08:00:00Z"),
             try t("new", state: "answered", updated: "2026-11-04T11:00:00Z"),
+            // Watched (by an older server's `pinned` too): in Watching AND in its own section.
             try t("pin", state: "working", updated: "2026-11-04T07:00:00Z", extra: #","pinned":{"at":"2026-11-04T07:30:00Z"}"#),
+            try t("eye", state: "answered", updated: "2026-11-04T10:00:00Z", extra: #","watched":{"at":"2026-11-04T07:00:00Z","by":"human"}"#),
             try t("busy", state: "working"),
             try t("zz", state: "needs", extra: #","snoozed":{"until":"2026-11-06T09:00:00Z","at":"2026-11-04T11:00:00Z"}"#),
             try t("done", state: "answered", extra: #","closed":{"how":"acked","at":"2026-11-04T11:00:00Z","by":"human"}"#),
@@ -132,12 +136,28 @@ final class OrgThreadModelTests: XCTestCase {
                   extra: #","closed":{"how":"acked","at":"2026-11-04T10:00:00Z","by":"human"}"#),
         ]
         let s = OrgThreadModel.sections(threads, now: Self.now)
-        XCTAssertEqual(s.open.map(\.id), ["pin", "new", "old"])
+        XCTAssertEqual(s.watching.map(\.id), ["eye", "pin"])
+        XCTAssertEqual(s.open.map(\.id), ["new", "eye", "old"])
         XCTAssertEqual(s.snoozed.map(\.id), ["zz"])
-        XCTAssertEqual(s.working.map(\.id), ["busy"])
+        XCTAssertEqual(Set(s.working.map(\.id)), ["busy", "pin"])
         XCTAssertEqual(s.closed.map(\.id), ["done", "done2"])
-        XCTAssertEqual(OrgThreadModel.shownAt(threads[6]), "2026-11-04T10:00:00Z")
+        XCTAssertEqual(OrgThreadModel.shownAt(threads[7]), "2026-11-04T10:00:00Z")
         XCTAssertEqual(OrgThreadModel.shownAt(threads[1]), "2026-11-04T11:00:00Z")
+    }
+
+    /// Move up / Move down in Watching: the card takes a time between its new neighbours (the web's drag).
+    func testAWatchingMovePlacesItBetweenItsNewNeighbours() throws {
+        let w = { (id: String, at: String) in try self.t(id, state: "working", extra: #","watched":{"at":"\#(at)"}"#) }
+        let list = OrgThreadModel.watching([try w("a", "2026-11-04T08:00:00Z"), try w("b", "2026-11-04T09:00:00Z"), try w("c", "2026-11-04T10:00:00Z")])
+        XCTAssertEqual(list.map(\.id), ["a", "b", "c"])
+        // c up one: between a and b.
+        XCTAssertEqual(OrgThreadModel.watchPlace(list, from: 2, to: 1, now: Self.now), "2026-11-04T08:30:00.000Z")
+        // a down to the end: after c.
+        let last = OrgThreadModel.watchPlace(list, from: 0, to: 2, now: WalnutTask.parseISO("2026-11-04T09:30:00Z")!)
+        XCTAssertEqual(last, "2026-11-04T10:00:00.001Z")
+        // b to the top: a second before a.
+        XCTAssertEqual(OrgThreadModel.watchPlace(list, from: 1, to: 0, now: Self.now), "2026-11-04T07:59:59.000Z")
+        XCTAssertNil(OrgThreadModel.watchPlace(list, from: 1, to: 1, now: Self.now))
     }
 
     func testAThreadTheNodeOpenedLeadsWithItsPost() throws {
@@ -155,7 +175,8 @@ final class OrgThreadModelTests: XCTestCase {
         }
         XCTAssertEqual(try encode(.acknowledge), #"{"close":"acked"}"#)
         XCTAssertEqual(try encode(.reopen), #"{"reopen":true}"#)
-        XCTAssertEqual(try encode(.pin(false)), #"{"pin":false}"#)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: Data(try encode(.watch(false)).utf8)) as? [String: Bool], ["watch": false, "pin": false])
+        XCTAssertEqual(try encode(.watchAt("2026-11-04T08:00:00.000Z")), #"{"watch_at":"2026-11-04T08:00:00.000Z"}"#)
         XCTAssertEqual(try encode(.snooze("")), #"{"snooze":""}"#)
     }
 

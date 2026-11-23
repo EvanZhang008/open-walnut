@@ -1,11 +1,11 @@
 /**
  * A thread card's answer parts (OrgThreads.tsx ThreadCard): the box to follow it up in, the line
- * naming the task that already asks its decision, Snooze and the pin, and the answer row of a card
+ * naming the task that already asks its decision, Snooze and the Watch eye, and the answer row of a card
  * that waits on him. Moved out of OrgThreads.tsx whole.
  */
 import { useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
+import { ICON_EYE, ICON_EYE_FILLED } from '@/components/common/Icons';
 import { ReplyComposer } from '@/components/chat/ReplyComposer';
 import type { ImageAttachment } from '@/api/chat';
 import { draftKey } from '@/utils/drafts';
@@ -66,8 +66,8 @@ export function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   );
 }
 
-/** A card's Snooze (with Unsnooze while put aside) and its pin. */
-export function ThreadTools({ t, snoozed, state, pinned }: { t: OrgThread; snoozed: boolean; state: OrgThreadsState; pinned: boolean }) {
+/** A card's Snooze (with Unsnooze while put aside) and its Watch eye (the task header's WatchButton look). */
+export function ThreadTools({ t, snoozed, state, watched }: { t: OrgThread; snoozed: boolean; state: OrgThreadsState; watched: boolean }) {
   return (<>
     <OrgThreadSnooze
       title={t.title}
@@ -76,11 +76,11 @@ export function ThreadTools({ t, snoozed, state, pinned }: { t: OrgThread; snooz
     />
     {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
     <button
-      type="button" className="btn btn-sm btn-ghost org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
-      aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
-      title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
-      onClick={() => void state.update(t.id, { pin: !pinned })}
-    ><ThreadPinIcon size={14} /></button>
+      type="button" className={`btn btn-sm btn-ghost org-thread-watch-btn${watched ? ' is-watched' : ''}`} data-testid="org-thread-watch" aria-pressed={watched}
+      aria-label={watched ? `Stop watching "${t.title}"` : `Watch "${t.title}"`}
+      title={watched ? 'Watching \u00b7 click to take it off your Watching list' : 'Watch: keep it on your Watching list at the top, whatever its state; it stays in its own group too'}
+      onClick={() => void state.update(t.id, { watch: !watched })}
+    >{watched ? ICON_EYE_FILLED : ICON_EYE}</button>
   </>);
 }
 
@@ -89,8 +89,8 @@ export function ThreadTools({ t, snoozed, state, pinned }: { t: OrgThread; snooz
  * as buttons (OrgInlineAnswer AskOptions, the recommended one first), the box, always shown, then
  * Snooze. A click is his answer in words (the label), filed under the thread like a typed reply.
  */
-export function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
-  t: OrgThread; owner: Task | undefined; onFollowUp: OnFollowUp; snoozed: boolean; state: OrgThreadsState; pinned: boolean;
+export function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, watched }: {
+  t: OrgThread; owner: Task | undefined; onFollowUp: OnFollowUp; snoozed: boolean; state: OrgThreadsState; watched: boolean;
 }) {
   /** A click that did not go (a typed reply's failure is the box's own). */
   const [failed, setFailed] = useState(false);
@@ -120,7 +120,7 @@ export function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
           return ok;
         }} />
       </>) : undefined}
-      tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />}
+      tools={<ThreadTools t={t} snoozed={snoozed} state={state} watched={watched} />}
     />
   );
 }

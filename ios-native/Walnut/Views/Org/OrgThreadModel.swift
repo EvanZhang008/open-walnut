@@ -21,7 +21,9 @@ enum OrgThreadModel {
 
     /// The sections of the Threads page, in the order drawn.
     struct Sections: Equatable {
-        /// For him now: pinned first (newest pin on top), then newest change first.
+        /// Watching: the ones he watches, oldest watch first; each is in its own section too.
+        var watching: [OrgThread] = []
+        /// For him now: newest change first.
         var open: [OrgThread] = []
         /// Put aside, soonest back first (under Waiting / Snoozed).
         var snoozed: [OrgThread] = []
@@ -111,10 +113,41 @@ enum OrgThreadModel {
 
     // MARK: - Where a thread is drawn
 
-    static func pinnedNow(_ t: OrgThread) -> Bool { t.pinned != nil && t.closed == nil }
+    /// On his Watching list now (server thread-view.ts watchedNow): open and watched.
+    static func watchedNow(_ t: OrgThread) -> Bool { watch(t) != nil && t.closed == nil }
+
+    /// Its watch, the older `pinned` of an older server read as one.
+    static func watch(_ t: OrgThread) -> OrgThread.Watched? { t.watched ?? t.pinned }
+
+    /// The Watching list (server thread-view.ts watchingOf): oldest watch first.
+    static func watching(_ threads: [OrgThread]) -> [OrgThread] {
+        threads.filter(watchedNow).sorted { a, b in
+            let x = watch(a)?.at ?? "", y = watch(b)?.at ?? ""
+            return x == y ? a.id < b.id : x < y
+        }
+    }
+
+    /// The new place of the card dragged from `from` to `to` in Watching, as the time between its
+    /// new neighbours (the web's watchingReorder); nil when it stays put.
+    static func watchPlace(_ list: [OrgThread], from: Int, to: Int, now: Date) -> String? {
+        guard list.indices.contains(from), list.indices.contains(to), from != to else { return nil }
+        var rest = list
+        let moved = rest.remove(at: from)
+        rest.insert(moved, at: to)
+        func ms(_ t: OrgThread) -> Double? { watch(t).flatMap { WalnutTask.parseISO($0.at) }.map { $0.timeIntervalSince1970 * 1000 } }
+        let before = to > 0 ? ms(rest[to - 1]) : nil
+        let after = to < rest.count - 1 ? ms(rest[to + 1]) : nil
+        let place: Double
+        if let b = before, let a = after { place = a - b >= 2 ? ((a + b) / 2).rounded(.down) : b + 1 }
+        else if let a = after { place = a > 1000 ? a - 1000 : 1 }
+        else { place = max((before ?? 0) + 1, now.timeIntervalSince1970 * 1000) }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: Date(timeIntervalSince1970: place / 1000))
+    }
 
     static func snoozedNow(_ t: OrgThread, now: Date) -> Bool {
-        guard let s = t.snoozed, t.closed == nil, !pinnedNow(t),
+        guard let s = t.snoozed, t.closed == nil,
               let until = WalnutTask.parseISO(s.until), until > now else { return false }
         return !newsSince(t, s.at)
     }
@@ -124,24 +157,22 @@ enum OrgThreadModel {
     }
 
     /// His view shows it: he must decide (needs), the result is in (answered), an answer of the
-    /// node's he has not reacted to is on it, or he pinned it.
+    /// node's he has not reacted to is on it.
     static func shownToHim(_ t: OrgThread, shared: Set<String> = [], now: Date) -> Bool {
         if t.closed != nil { return false }
-        if pinnedNow(t) { return true }
         if t.state == "pending" || snoozedNow(t, now: now) { return false }
         if t.state == "needs" || t.state == "answered" { return true }
         return !unread(t, shared: shared).isEmpty
     }
 
     /// The thread once his Follow up went in, before the next read: an answered, needs or pending
-    /// thread is the node's move again (threads-model.ts files his message so), out of his view
-    /// unless he pinned it.
+    /// thread is the node's move again (threads-model.ts files his message so), out of his view.
     static func afterHisFollowUp(_ t: OrgThread) -> OrgThread {
         var t = t
         if t.closed != nil { return t }
         if ["answered", "needs", "pending"].contains(t.state) { t.state = "working" }
-        t.shown = pinnedNow(t)
-        // The node's move now: listed when pinned, never counted (server thread-groups.ts threadsForHim).
+        t.shown = false
+        // The node's move now: never counted (server thread-groups.ts threadsForHim).
         t.counted = false
         return t
     }
@@ -215,8 +246,8 @@ enum OrgThreadModel {
         var s = Sections()
         let shown = threads.filter { inView($0, shared: shared, now: now) }
             .sorted { $0.updatedAt > $1.updatedAt }
-        let pinned = shown.filter(pinnedNow).sorted { ($0.pinned?.at ?? "") > ($1.pinned?.at ?? "") }
-        s.open = pinned + shown.filter { !pinnedNow($0) }
+        s.watching = watching(threads)
+        s.open = shown
         s.snoozed = threads.filter { !inView($0, shared: shared, now: now) && snoozedNow($0, now: now) }
             .sorted { ($0.snoozed?.until ?? "") < ($1.snoozed?.until ?? "") }
         let rest = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !inView($0, shared: shared, now: now) }
