@@ -53,7 +53,7 @@ import { useMemo, useRef, useState } from 'react';
 import { OrgThreadsWatching, type WatchingCopy } from './OrgThreadsWatching';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
-import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, sharedAnswers, snoozedNow, watchedNow, watchingOf, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, forHimInList, listedForHim, orderedForHim, overdueLine, threadDeadline, sharedAnswers, snoozedNow, watchedNow, watchingOf, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ICON_EYE, ICON_EYE_FILLED } from '@/components/common/Icons';
 import { DisclosureButton } from '@/components/controls';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
@@ -420,19 +420,22 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const all = state.threads;
   const needsFirst = useExperimental('top_thread');
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
-  const { open: openAll, listedIds, hidden: hiddenAll, snoozed: snoozedAll, clock } = useMemo(() => {
+  const { open: openAll, listedIds, forHimIds, hidden: hiddenAll, snoozed: snoozedAll, clock } = useMemo(() => {
     // The page's clock ticks once a minute; the re-read at a snooze's end (useOrgThreads) must not wait for it.
     const at = Math.max(now, Date.now());
     const list = all ?? [];
     // The list the header and the tab count (thread-view.ts listedForHim), so they agree.
     const listed = listedForHim(list, at);
-    const shownSet = new Set(listed);
+    // A card from below listed only while his reply is on its way goes with the ones in progress (forHimInList).
+    const forHim = forHimInList(listed, at);
+    const shownSet = new Set(forHim);
     return {
       clock: at,
       // Newest change first (as the server sorts them); a watch moves nothing here. Under
       // top_thread the ones that need him lead the rest, the order the top of the chat steps in.
-      open: orderedForHim(listed, { needsFirst }),
+      open: orderedForHim(forHim, { needsFirst }),
       listedIds: new Set(listed.map((t) => t.id)),
+      forHimIds: new Set(forHim.map((t) => t.id)),
       hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t)),
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };
@@ -440,7 +443,8 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const closedAll = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
   // The filter by where they came from (ThreadOriginFilter.tsx), once a task below has a thread here:
   // every list shows the pick's threads, read after the lists are made, so no card changes its group.
-  const origin = useThreadOrigin(foldNode, all, listedIds);
+  // Its chips count the cards drawn for him (forHimInList), as the list above them shows.
+  const origin = useThreadOrigin(foldNode, all, forHimIds);
   const { open, hidden, snoozed, closed } = useMemo(() => ({
     open: origin.only(openAll), hidden: origin.only(hiddenAll), snoozed: origin.only(snoozedAll), closed: origin.only(closedAll),
   }), [origin, openAll, hiddenAll, snoozedAll, closedAll]);

@@ -636,6 +636,16 @@ export function listedAbove<M extends ViewMessage>(t: ViewThread<M> & { state: s
 }
 
 /**
+ * Of `listed` (listedForHim), the cards a plain list draws among the ones for him: a card of a task
+ * below listed only while his reply to it is on its way is that task's move, drawn with the ones in
+ * progress, as the groups draw it in Working (2026-11-23, the user, of such a card at the top of a
+ * task's Threads: "why this is working but still show in the up there"). Pure.
+ */
+export function forHimInList<T extends ViewThread & { state: string }>(listed: readonly T[], now: number = Date.now()): T[] {
+  return listed.filter((t) => !t.owner || aboveForHim(t, NONE, now));
+}
+
+/**
  * The threads his Threads view lists, in the order given: his own that have something for him
  * (shownToHim, an answer shared with another of them judged over all of them, the closed ones
  * included), and the threads of tasks below that are listed above them (listedAbove). Every count
