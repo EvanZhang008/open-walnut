@@ -194,26 +194,38 @@ export type DeliverySeries = 'stdin' | 'mid-turn' | 'resume'
 
 /**
  * The series a delivered batch's wait belongs to: the path that wrote it, except
- * that a row which arrived while the session was not live counts under `resume`
- * however its line went in at the end. Such a row waited for the session's CLI to
- * start: it arrived before the latest start settled, or while one is in flight.
+ * that a row which arrived before the path it went through was up counts under
+ * `resume` however its line went in at the end. Such a row waited for that path
+ * to come up: the session's CLI to start, this server to attach to it, or the
+ * host's link to come back. A send into a live session is one whose whole wait ran
+ * on a path that was already up.
  *
  * 2026-11-22 the send.delivery alarm (sends into a live session) fired on 87 s and
  * 67 s that were waits on a start: the Mac woke from sleep on 3 % battery, the VP's
  * CLI died on its first write, and the messages that came in while its --resume
  * started (routed with no pid) went in through stdin and mid-turn once it was up,
- * so they read as slow live sends. A send into a live session is one that arrived
- * after the CLI it reached had started.
+ * so they read as slow live sends.
+ *
+ * 2026-11-23 the same alarm fired on 22 s and 60 s that were the other two: a
+ * deploy restarted the server at 07:49:29 and its reattach of 64 sessions reached
+ * a clouddev session only at 07:52:56, so a send at 07:52:13 waited for its own
+ * attach (22 s on a slow link); at 07:54:19 the clouddev link stopped answering,
+ * was dropped at 07:54:49 and came back at 07:54:58, and the send went in at
+ * 07:55:27 once the link carried it again (60 s, of which only the 8.8 s the link
+ * was marked down was left out).
  */
 export function deliverySeries(path: DeliverySeries, input: {
   /** When the batch's oldest row was enqueued (ms). */
   enqueuedAtMs: number
   /** A start of the session's CLI is in flight now. */
   startInFlight: boolean
-  /** When the latest start settled (ms), 0 when this server started none (an attach). */
+  /** When this server's hold on the CLI was last made (ms): a start settled or an attach finished; 0 when neither. */
   startSettledAtMs: number
+  /** The host's link was down at some time during the wait (host-link-ledger.ts). */
+  linkDownDuringWait?: boolean
 }): DeliverySeries {
   if (path === 'resume') return path
   if (input.startInFlight) return 'resume'
+  if (input.linkDownDuringWait) return 'resume'
   return input.enqueuedAtMs < input.startSettledAtMs ? 'resume' : path
 }

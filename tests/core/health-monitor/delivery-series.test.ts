@@ -9,9 +9,14 @@
  * it was up. The same turn's 208 s resume was then replaced by the next, shorter
  * delivery, so the resume alarm never saw it.
  *
+ * 2026-11-23 the same alarm fired on the other two ways a path comes up: a send that
+ * waited for this server's own attach after a deploy (22 s), and one that waited
+ * while the clouddev link stopped answering, dropped and came back (60 s).
+ *
  * This file pins the series rule, the turn keeping its slowest delivery, and the
  * class: every path a delivery can be logged under is judged by the same rule
- * before it reaches a health series.
+ * before it reaches a health series, and every way this server comes to hold a CLI
+ * records when it did.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,6 +26,7 @@ import { SessionRunner } from '../../../src/providers/claude-code-session.js'
 import { __resetSleepLedgerForTest } from '../../../src/lib/sleep-ledger.js'
 import { MinuteCollector } from '../../../src/core/health-monitor/collect.js'
 import { recordTurn } from '../../../src/core/observability/recorder.js'
+import { __resetHostLinkLedgerForTest, noteHostLinkDown, noteHostLinkUp } from '../../../src/providers/host-link-ledger.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -44,6 +50,16 @@ describe('deliverySeries', () => {
     expect(deliverySeries('stdin', { enqueuedAtMs: at('09:40:03'), startInFlight: false, startSettledAtMs: 0 })).toBe('stdin')
     // An unreadable enqueue time keeps the write path, as before.
     expect(deliverySeries('stdin', { enqueuedAtMs: Number.NaN, startInFlight: false, startSettledAtMs: at('09:38:57') })).toBe('stdin')
+  })
+
+  it('a row that arrived before this server attached to the CLI counts under resume (the 2026-11-23 07:52:13 send)', () => {
+    // A deploy restarted the server at 07:49:29; the send came in at 07:52:13 and attached the session itself at 07:52:28.9.
+    expect(deliverySeries('stdin', { enqueuedAtMs: at('07:52:13.219'), startInFlight: false, startSettledAtMs: at('07:52:28.890') })).toBe('resume')
+  })
+
+  it('a row whose wait the host link was down for counts under resume (the 2026-11-23 07:54:19 send)', () => {
+    expect(deliverySeries('stdin', { enqueuedAtMs: at('07:54:19.402'), startInFlight: false, startSettledAtMs: at('07:52:28.890'), linkDownDuringWait: true })).toBe('resume')
+    expect(deliverySeries('mid-turn', { enqueuedAtMs: at('07:54:19.402'), startInFlight: false, startSettledAtMs: 0, linkDownDuringWait: false })).toBe('mid-turn')
   })
 
   it('a resume stays a resume', () => {
@@ -76,10 +92,36 @@ describe('logDeliveryLatency feeds the turn the series and its slowest delivery'
     realNow = Date.now
     Date.now = () => now
     __resetSleepLedgerForTest({ now: () => now, monoNow: () => now })
+    __resetHostLinkLedgerForTest()
   })
   afterEach(() => {
     Date.now = realNow
     __resetSleepLedgerForTest(null)
+    __resetHostLinkLedgerForTest()
+  })
+
+  it('a send that waited through its host link dropping reads as resume, not live (2026-11-23 clouddev)', () => {
+    const s = { ...fakeSession({ inFlight: false, settledAtMs: at('07:52:28.890') }), host: 'clouddev' }
+    noteHostLinkDown('clouddev', at('07:54:49.070'))
+    noteHostLinkUp('clouddev', at('07:54:57.916'))
+    now = at('07:55:27.861')
+    log.call(runner, 'sid-clouddev', 'stdin', [row('qm-host-d174', at('07:54:19.402'))], s)
+    expect(s._lastDeliveryPath).toBe('resume')
+    // The link's marked downtime is still left out of the wait.
+    expect(s._lastDeliveryMs).toBe(68_459 - 8_846)
+    // The same wait on another host's link is the live path's.
+    const other = { ...fakeSession({ inFlight: false, settledAtMs: at('07:52:28.890') }), host: 'olddev' }
+    log.call(runner, 'sid-olddev', 'stdin', [row('qm-olddev', at('07:54:19.402'))], other)
+    expect(other._lastDeliveryPath).toBe('stdin')
+  })
+
+  it('a line the daemon says went in before the link fell keeps its live path', () => {
+    const s = { ...fakeSession({ inFlight: false, settledAtMs: at('07:52:28.890') }), host: 'clouddev' }
+    noteHostLinkDown('clouddev', at('07:54:49.070'))
+    noteHostLinkUp('clouddev', at('07:54:57.916'))
+    now = at('07:55:27.861')
+    log.call(runner, 'sid-clouddev', 'stdin', [row('qm-early', at('07:54:19.402'))], s, { fate: 'answered', writtenAt: at('07:54:21.000') })
+    expect(s._lastDeliveryPath).toBe('stdin')
   })
 
   it('a send that waited on the start is the turn\'s resume wait, and the slower resume before it is kept', () => {
@@ -147,6 +189,22 @@ describe('the class: every logged delivery path is judged by the series rule', (
     expect(src).toMatch(/const series = deliverySeries\(path, \{/)
     const writes = (src.match(/_lastDeliveryPath = [^\n]+/g) ?? []).filter((w) => !w.endsWith('undefined'))
     expect(writes).toEqual(['_lastDeliveryPath = series'])
+  })
+
+  it('every way a session comes to hold a CLI records when it did (a start settles, an attach finishes)', () => {
+    // A transport bound to a CLI is this server's hold on it: the method that binds one stamps the time.
+    const lines = src.split('\n')
+    const header = /^  (?:[a-z]+ )*\*?[A-Za-z_]+\(/
+    const binds = lines.flatMap((l, i) => (/\._transport\s*=(?!=)\s*(?!\s|null\b)/.test(l) ? [i] : []))
+    expect(binds.length).toBeGreaterThanOrEqual(2)
+    for (const i of binds) {
+      let a = i
+      while (a > 0 && !header.test(lines[a])) a--
+      let b = i + 1
+      while (b < lines.length && !header.test(lines[b])) b++
+      const body = lines.slice(a, b).join('\n')
+      expect(body, `${lines[a].trim()} binds a transport but never stamps _startSettledAtMs`).toMatch(/_startSettledAtMs = Date\.now\(\)/)
+    }
   })
 
   it('a start records when it settled, on success and on failure', () => {

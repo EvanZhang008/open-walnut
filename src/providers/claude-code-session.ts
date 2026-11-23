@@ -2489,8 +2489,9 @@ export class ClaudeCodeSession {
    * come back under a different id. Delivery waits on this instead.
    */
   private _spawnSettled: Promise<void> | null = null
-  /** When the latest start stopped being in flight (ms), on success or failure; 0 before the
-   *  first. A row enqueued before it arrived while the session was not live (delivery-latency.ts deliverySeries). */
+  /** When this server's hold on the CLI was last made (ms): the latest start stopped being in
+   *  flight (on success or failure), or an attach to a running CLI finished; 0 before either. A row
+   *  enqueued before it arrived while the session was not live here (delivery-latency.ts deliverySeries). */
   private _startSettledAtMs = 0
   /** The session's last start: whether one is in flight now, and when the last one settled. */
   get startState(): { inFlight: boolean; settledAtMs: number } {
@@ -4534,6 +4535,8 @@ export class ClaudeCodeSession {
       }
     }
 
+    // Rows enqueued before this attach waited for this server to hold the CLI (deliverySeries).
+    session._startSettledAtMs = Date.now()
     return session
   }
 
@@ -15491,10 +15494,12 @@ export class SessionRunner {
     const waits: OutOfPathWaits = { ...REAL_WAITS, linkDown: (from, to) => linkDownIntervals(hostKey, from, to, now) }
     const lat = deliveryLatency(msgs, now, known, waits)
     const enqueuedAtMs = Math.min(...msgs.map((m) => Date.parse(m.enqueuedAt)).filter((t) => !Number.isNaN(t)), now)
-    // A row that arrived while the session was not live waited on its start, whatever path wrote it.
+    // A row that arrived before its path was up (a start, this server's attach, the host link) waited on that.
     const start = target?.startState
     const series = deliverySeries(path, {
       enqueuedAtMs, startInFlight: start?.inFlight ?? false, startSettledAtMs: start?.settledAtMs ?? 0,
+      // Up to the write: a line the daemon says went in earlier waited only until then.
+      linkDownDuringWait: linkDownIntervals(hostKey, enqueuedAtMs, typeof known?.writtenAt === 'number' && Number.isFinite(known.writtenAt) ? known.writtenAt : now, now).length > 0,
     })
     // A resumed CLI that waited on this machine's paging: that share is the machine's, not the path's.
     const machineMs = series === 'resume' && lat.deliveryMs !== undefined && !lat.writtenEarlier
