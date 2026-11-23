@@ -733,7 +733,7 @@ TSC_DONE=0
 if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]] && [[ -f "$REPO_ROOT/scripts/lib/tsc-done.sh" ]]; then
   # shellcheck source=lib/tsc-done.sh
   . "$REPO_ROOT/scripts/lib/tsc-done.sh"
-  if walnut_tsc_done "$REPO_ROOT"; then
+  if walnut_tsc_done "$REPO_ROOT" || walnut_tsc_wait "$REPO_ROOT"; then
     TSC_DONE=1
     echo "web/ type-check skipped: commit $(git -C "$REPO_ROOT" rev-parse --short HEAD) passed it already ($(walnut_tsc_done_dir))."
   fi
