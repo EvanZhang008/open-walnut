@@ -791,3 +791,45 @@ describe('fetch admission control', () => {
     });
   });
 });
+
+describe('a read that waits while the page is in the background', () => {
+  // 2026-11-23, live: the Mac app's tab reloaded itself while hidden; its first reads held the
+  // connections 63 to 245 s while the engine ran the page in bursts, and 90 reads behind them were
+  // rejected in 7 minutes nobody was looking. Such a wait is named for it, and the real-use
+  // monitor leaves it out (usage-watch/normalize.ts), as it does a page that is leaving.
+  let doc: EventTarget & { visibilityState: string };
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    doc = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal('document', doc);
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  async function rejectedCause(hide: 'before' | 'during' | 'never'): Promise<string> {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const client = await import('../../web/src/api/client');
+    const hideNow = () => { doc.visibilityState = 'hidden'; doc.dispatchEvent(new Event('visibilitychange')); };
+    const showNow = () => { doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange')); };
+    if (hide === 'before') { hideNow(); await vi.advanceTimersByTimeAsync(1_000); showNow(); }
+    for (let i = 0; i < client.SHARED_FETCH_SLOTS; i++) void client.apiGet(`/api/hold${i}`).catch(() => {});
+    const behind = client.apiGet('/api/behind', undefined, { timeoutMs: 120_000 }).catch(() => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    if (hide === 'during') { hideNow(); await vi.advanceTimersByTimeAsync(1_000); showNow(); }
+    await vi.advanceTimersByTimeAsync(20_000);
+    await behind;
+    const line = errorSpy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('/api/behind rejected'));
+    return /\(([^)]+)\)$/.exec(line ?? '')?.[1] ?? 'not rejected';
+  }
+
+  it('hidden during its wait: page hidden', async () => {
+    expect(await rejectedCause('during')).toBe('page hidden');
+  });
+  it('hidden only before it was asked, or never: pool saturated, as before', async () => {
+    expect(await rejectedCause('before')).toBe('pool saturated');
+    vi.resetModules();
+    expect(await rejectedCause('never')).toBe('pool saturated');
+  });
+});

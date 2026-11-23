@@ -118,8 +118,9 @@ export function pageErrorKind(message: string, args: string | undefined, templat
   const text = String(message ?? '').replace(/\s+/g, ' ').trim()
   const fail = CLIENT_FAIL_RE.exec(text)
   if (fail) {
-    // A request held in the page's queue while the page was in the background never was a problem.
-    if (fail[3] === 'rejected' && /page suspended/.test(fail[4] ?? '')) return null
+    // A request held in the page's queue while the page was in the background (leaving it, or a
+    // hidden window whose timers ran late) never was a problem.
+    if (fail[3] === 'rejected' && /page (?:suspended|hidden)/.test(fail[4] ?? '')) return null
     // A fetch that threw with no network error in its error text was refused by the browser itself
     // (an invalid header, a GET with a body): with no error text at all it reads as the network's.
     const err = String(args ?? '')

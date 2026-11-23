@@ -4,7 +4,7 @@ import { isLongPollPath, sameRead, type SameReadDeps } from './same-read-turn';
 import { asDeadlineError } from '../utils/request-failure';
 import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_MS } from './op-id';
 import { leaderErrorMessage, noteResponseHeaders } from './leader-presence';
-import { readsSuspended, onReadLifecycle } from './read-lifecycle';
+import { readsSuspended, onReadLifecycle, pageHiddenSince } from './read-lifecycle';
 import { ApiError } from './api-error';
 import { quietRetryDelays, quietlyRetryable } from './background-retry';
 import { deadlineSignal } from '../utils/deadline-signal';
@@ -194,7 +194,10 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
       const idx = queue.indexOf(entry);
       if (idx >= 0) queue.splice(idx, 1);
       if (callerSignal && entry.onCallerAbort) callerSignal.removeEventListener('abort', entry.onCallerAbort);
-      const cause = admission.suspended ? 'page suspended' : 'pool saturated';
+      // Waited while the page was in the background: its timers ran late, so the wait says nothing
+      // about the page's connections (the real-use monitor skips both causes, usage-watch/normalize.ts).
+      const cause = admission.suspended ? 'page suspended'
+        : pageHiddenSince(admission.deadline - waitMs) ? 'page hidden' : 'pool saturated';
       console.error(`[api] ${label} rejected after ${waitMs}ms in the connection queue (${cause})`, {
         queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches, priority, holding: holdingSlots(),
       });

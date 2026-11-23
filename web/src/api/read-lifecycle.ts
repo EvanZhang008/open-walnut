@@ -33,6 +33,25 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   window.addEventListener('pageshow', resume);
 }
 
+/** When the page last went into the background (a window behind others, a hidden tab), Date.now() based. */
+let lastHiddenAt = -Infinity;
+const docOf = (): { visibilityState?: string; addEventListener?: (t: string, f: () => void) => void } | undefined =>
+  (globalThis as { document?: { visibilityState?: string; addEventListener?: (t: string, f: () => void) => void } }).document;
+docOf()?.addEventListener?.('visibilitychange', () => {
+  if (docOf()?.visibilityState === 'hidden') lastHiddenAt = Date.now();
+});
+
+/**
+ * Was the page in the background at any time since `since` (Date.now() based)? A background
+ * window's engine runs its timers late and in bursts (2026-11-23, live: the Mac app's tab reloaded
+ * itself while hidden, its first reads held the connections 63 to 245 s, and 90 requests behind
+ * them were rejected in 7 minutes nobody was looking), so time spent there says nothing about the
+ * page's own connections.
+ */
+export function pageHiddenSince(since: number): boolean {
+  return docOf()?.visibilityState === 'hidden' || lastHiddenAt >= since;
+}
+
 export function readsSuspended(): boolean {
   return leaving;
 }
