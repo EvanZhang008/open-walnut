@@ -132,12 +132,27 @@ export function peekAllowed(el: Element): boolean {
  * 1280 a cut task title opened over the row menu's Pin to, beside it). A tooltip (wn-tip) is none.
  */
 export const OVERLAY_SELECTOR = '.wn-overlay, .wn-dialog, .wn-scrim, [role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], dialog[open]';
+/** The family's own kinds (and an open <dialog>) float by definition. */
+const FLOATING_KIND = '.wn-overlay, .wn-dialog, .wn-scrim, dialog[open]';
 
 export function overlayShowing(): boolean {
   for (const el of document.querySelectorAll(OVERLAY_SELECTOR)) {
-    if (el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden') return true;
+    if (el.getClientRects().length === 0) continue;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden') continue;
+    // A role alone says only what a list or panel is: one in the page's flow (the panel's own
+    // list of options, a file list, a "Runs on" picker row) covers nothing, and counting it kept
+    // every peek of the window shut while it showed (2026-11-23, inbox-card-peek.spec.ts). It is
+    // a layer when it floats: placed out of the flow, or in the top layer.
+    if (el.matches(FLOATING_KIND) || style.position === 'fixed' || style.position === 'absolute' || inTopLayer(el)) return true;
   }
   return false;
+}
+
+/** In the top layer (an open popover or a modal). An engine that does not know these selectors
+ *  throws on them; it has no top layer of that kind either. */
+function inTopLayer(el: Element): boolean {
+  try { return el.matches(':popover-open, :modal'); } catch { return false; }
 }
 
 /** A task row (or any list row) that expands as a whole: the pointer anywhere on it shows every cut-off text in it. */

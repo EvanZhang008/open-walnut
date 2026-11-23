@@ -203,8 +203,10 @@ test('in a zone, unmarked components, rows with twelve texts, a line longer than
 
 test('a worker row under a long lead says Worker alone and widens whole, with the metadata one line above the title', async ({ page, request }, info) => {
   await expectWorkerRowWidens(page, request, {
-    // A project long enough to be cut at both panel widths, so the row has something to open.
-    project: 'Garden Insights Re-Architecture Platform with the complete plan, the inventory of every tool and the planting log',
+    // A project long enough to be cut at both panel widths, so the row has something to open: longer
+    // than a whole meta line at 640 too, since that line wraps a part that fits rather than cut it
+    // (ea0bd746c2, status-sections.css .status-card-meta).
+    project: 'Garden Insights Re-Architecture Platform with the complete plan, the inventory of every tool, the planting log, the watering rota for every bed and the seed orders for next spring',
     lead: 'Garden Re-Architecture As Platform - Platform Lead with the complete plan and the inventory of every tool',
     worker: 'Garden org demo Friday: garden insight end to end, with the complete planting schedule and all the next steps',
   }, info)

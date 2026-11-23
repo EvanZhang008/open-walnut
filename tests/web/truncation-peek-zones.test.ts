@@ -65,6 +65,12 @@ describe('the truncation peek widens only in its zones', () => {
     const find = fs.readFileSync(path.join(WEB_SRC, 'utils/truncation-peek-find.ts'), 'utf8')
     const selector = /export const OVERLAY_SELECTOR = '([^']+)'/.exec(find)?.[1] ?? ''
     for (const k of kinds.filter((k) => !notALayer.has(k))) expect(selector, `OVERLAY_SELECTOR names .${k}`).toContain(`.${k}`)
+    // A family kind floats by definition; a bare ARIA role counts only when it floats: an
+    // in-flow list of options in a zone kept every peek shut (2026-11-23, inbox-card-peek.spec.ts).
+    const floating = /const FLOATING_KIND = '([^']+)'/.exec(find)?.[1] ?? ''
+    for (const k of kinds.filter((k) => !notALayer.has(k))) expect(floating, `FLOATING_KIND names .${k}`).toContain(`.${k}`)
+    expect(find, 'a role counts only out of the flow or in the top layer').toMatch(/FLOATING_KIND\) \|\| style\.position === 'fixed' \|\| style\.position === 'absolute' \|\| inTopLayer\(el\)/)
+    expect(find, 'the top layer is an open popover or a modal').toMatch(/function inTopLayer\(el: Element\): boolean \{\s*try \{ return el\.matches\(':popover-open, :modal'\); \} catch \{ return false; \}/)
     const peek = fs.readFileSync(path.join(WEB_SRC, 'utils/truncation-peek.ts'), 'utf8')
     expect(peek, 'over() asks first').toMatch(/function over\([^)]*\)[^{]*\{[\s\S]{0,200}overlayShowing\(\)/)
     expect(peek, 'the open timer asks again').toMatch(/setTimeout\(\(\) => \{[\s\S]{0,160}overlayShowing\(\)/)
