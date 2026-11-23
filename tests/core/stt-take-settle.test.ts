@@ -11,20 +11,19 @@ import { joinSegmentTexts } from '../../src/core/stt/wav-segment.js';
 import { speechPcm, RATE } from '../helpers/speech-pcm.js';
 
 describe('settleCuts', () => {
-  it('a take under 40 s settles nothing', () => {
-    expect(settleCuts(speechPcm(39.9), 0)).toEqual([]);
+  it('a take under SETTLE_MIN_SEC settles nothing', () => {
     expect(settleCuts(speechPcm(SETTLE_MIN_SEC - 0.01), 0)).toEqual([]);
   });
 
-  it('cuts pieces of at most 30 s at quiet spots, keeps the last segment open and never cuts in the final 5 s', () => {
-    for (const seconds of [40, 45, 61, 95, 180, 301]) {
+  it('cuts pieces of at most PIECE_MAX_SEC at quiet spots, keeps the last segment open and never cuts in the final 5 s', () => {
+    for (const seconds of [SETTLE_MIN_SEC, 30, 45, 61, 95, 180, 301]) {
       const pcm = speechPcm(seconds, seconds);
       const cuts = settleCuts(pcm, 0);
       expect(cuts.length, `${seconds} s`).toBeGreaterThan(0);
       let from = 0;
       for (const end of cuts) {
         expect(end - from).toBeLessThanOrEqual(PIECE_MAX_SEC * RATE);
-        expect(end - from).toBeGreaterThan(10 * RATE);
+        expect(end - from).toBeGreaterThan((PIECE_MAX_SEC / 2 - 1) * RATE);
         // A cut sits in a pause between words (the synthetic pauses are near silence).
         expect(Math.abs(pcm[end]!)).toBeLessThan(200);
         from = end;
@@ -35,11 +34,11 @@ describe('settleCuts', () => {
     }
   });
 
-  it('continues from what is settled, and waits again until 40 s are unsettled', () => {
+  it('continues from what is settled, and waits again until SETTLE_MIN_SEC are unsettled', () => {
     const pcm = speechPcm(120, 7);
-    const first = settleCuts(pcm.subarray(0, 50 * RATE), 0);
+    const first = settleCuts(pcm.subarray(0, (SETTLE_MIN_SEC + 10) * RATE), 0);
     const settled = first[first.length - 1]!;
-    expect(settleCuts(pcm.subarray(0, settled + 39 * RATE), settled)).toEqual([]);
+    expect(settleCuts(pcm.subarray(0, settled + (SETTLE_MIN_SEC - 1) * RATE), settled)).toEqual([]);
     const next = settleCuts(pcm, settled);
     expect(next[0]!).toBeGreaterThan(settled);
     expect(next[0]! - settled).toBeLessThanOrEqual(PIECE_MAX_SEC * RATE);

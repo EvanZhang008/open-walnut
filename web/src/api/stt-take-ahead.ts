@@ -4,7 +4,7 @@
  * src/core/stt/take-ahead.ts, route src/web/routes/stt-takes.ts).
  *
  * The parts are the take's own recorder chunks, the same bytes the stop sends
- * whole. One upload at a time, every ~15 s. Hearing ahead is only a speed-up,
+ * whole. One upload at a time, every ~10 s. Hearing ahead is only a speed-up,
  * but losing it makes a long take's stop wait for the whole clip (2026-11-23: a
  * deploy restarted the server 3 minutes into a 4.5-minute take, the server
  * forgot the take, and the stop waited 10.8 s instead of about 2). So a take the
@@ -17,7 +17,8 @@
 import { log } from '@/utils/log';
 import { deadlineSignal } from '../utils/deadline-signal';
 
-export const TAKE_AHEAD_EVERY_MS = 15_000;
+/** How often the new bytes go up: the stop hears at most this much that was never uploaded, on top of the open part. */
+export const TAKE_AHEAD_EVERY_MS = 10_000;
 
 /**
  * What the client does with each answer of the append route (server:

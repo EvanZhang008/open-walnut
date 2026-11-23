@@ -2,9 +2,9 @@
  * A take heard ahead while it records, so the stop only waits for its tail.
  *
  * The web recorder uploads its clip in parts while the user talks (POST
- * /api/stt/takes/:id/append). Once 40 s of it are not yet heard, the growing
+ * /api/stt/takes/:id/append). Once 25 s of it are not yet heard, the growing
  * file is decoded and its finished part cut at quiet spots into pieces of about
- * 30 s (take-settle.ts), each heard by the normal engine path one at a time; a
+ * 20 s (take-settle.ts), each heard by the normal engine path one at a time; a
  * piece with no sound in it is not heard at all (an engine fills silence with
  * words never said). The stop still sends the whole clip; when it starts with
  * the bytes appended here, decodes to exactly the samples every piece was heard
@@ -82,7 +82,7 @@ interface Take {
   /** The recorder's repeat, read once there was sound enough; every decode is heard with it. */
   repeat: Exclude<BlockRepeatVerdict, null> | undefined;
   decodedSize: number;
-  /** Bytes per spoken second, from the last decode: says when 40 s are unsettled without decoding. */
+  /** Bytes per spoken second, from the last decode: says when SETTLE_MIN_SEC are unsettled without decoding. */
   bytesPerSec: number | null;
   chain: Promise<unknown>;
   work: Promise<void> | null;
@@ -235,7 +235,7 @@ function kick(t: Take): void {
     .finally(() => { t.work = null; });
 }
 
-/** Whether there are new bytes and, by the last decode's rate, 40 s not yet heard. */
+/** Whether there are new bytes and, by the last decode's rate, SETTLE_MIN_SEC not yet heard. */
 function due(t: Take): boolean {
   if (t.stopped || t.finishing || t.size <= t.decodedSize) return false;
   if (!t.bytesPerSec) return true;

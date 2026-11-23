@@ -29,6 +29,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { pcmToWav, wavPcm } from '../../src/core/stt/wav-segment.js'
 import { _resetTakesForTest, holdName } from '../../src/core/stt/take-ahead.js'
+import { SETTLE_MIN_SEC, PIECE_MAX_SEC } from '../../src/core/stt/take-settle.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { runningSwitchesDir } from '../../src/core/sessions/running-switches.js'
@@ -95,7 +96,7 @@ describe('a long take heard ahead through the real server', () => {
     // Let the last decode's pieces finish, as the user talking on would.
     await new Promise((r) => setTimeout(r, 500))
     const piecesBefore = heard.length
-    expect(heard.every((s) => s > 0 && s <= 30)).toBe(true)
+    expect(heard.every((s) => s > 0 && s <= PIECE_MAX_SEC)).toBe(true)
 
     const res = await stop(clip, 'take-e2e-long-01')
     expect(res.status).toBe(200)
@@ -215,8 +216,8 @@ describe('guard: every other stop hears the whole clip, as before', () => {
     expect(await res.json()).toEqual({ dropped: false })
   })
 
-  it('a short take (under 45 s) appended in parts: nothing heard ahead, the whole clip at the stop', async () => {
-    const clip = pcmToWav(speechPcm(35, 6))
+  it('a short take (under SETTLE_MIN_SEC) appended in parts: nothing heard ahead, the whole clip at the stop', async () => {
+    const clip = pcmToWav(speechPcm(SETTLE_MIN_SEC - 3, 6))
     wholeClip = clip
     await appendInParts('take-e2e-short-01', clip, 3)
     await new Promise((r) => setTimeout(r, 300))
