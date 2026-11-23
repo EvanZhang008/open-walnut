@@ -3,11 +3,12 @@
  * the words for each engine state and consent, the numbers as shown, the
  * marked lowest value, what a run will do, and whether the engine columns fit
  * the pane (when they do not, or on a phone, the recordings become a stacked
- * list: nothing scrolls sideways).
+ * list: nothing scrolls sideways), and the Over time chart's lines.
  */
 import type { NoticeTone } from '@/components/common/NoticeCard';
 import type {
   CompareEngineRow, CompareEngineState, CompareEngineSummary, CompareProgress, CompareResult, CompareRunState, CompareScore, CompareTake,
+  CompareTrendDay, CompareTrendPoint,
 } from '@/api/stt-compare';
 
 /** Half a percentage point: a lower value is marked only when it leads the next by this much. */
@@ -229,7 +230,7 @@ export function runButtonWords(plan: RunPlan): string {
   return plan.kind === 'judge-only' ? 'Estimate errors' : 'Run comparison';
 }
 
-const recordingsWord = (n: number) => `${n} recording${n === 1 ? '' : 's'}`;
+export const recordingsWord = (n: number) => `${n} recording${n === 1 ? '' : 's'}`;
 
 /** What the last run did, in place, once it has ended: the recordings it really compared, not the planned ones; null while none has. */
 export function lastRunWords(p: CompareProgress | null): string | null {
@@ -292,3 +293,49 @@ export function sentHeading(take: Pick<CompareTake, 'sentAt' | 'sentMatch'>): st
 /** The row preview's source: what was probably sent (or, paired by recording, sent), else what Walnut wrote then. */
 export const SENT_SOURCE = 'Probably sent';
 export const SENT_EXACT_SOURCE = 'Sent';
+
+/** What the Over time chart plots: an estimated error rate, or the median engine time. */
+export type TrendMetric = 'mixed' | 'cjk' | 'latin' | 'ms';
+export const TREND_METRICS: ReadonlyArray<{ value: TrendMetric; label: string }> = [
+  { value: 'mixed', label: 'Overall' }, { value: 'cjk', label: 'Chinese' }, { value: 'latin', label: 'English' }, { value: 'ms', label: 'Time' },
+];
+export const isTrendMetric = (v: unknown): v is TrendMetric => TREND_METRICS.some((m) => m.value === v);
+
+/** The point's value for the metric: a rate (0 to 1), or seconds. */
+export function trendValue(point: CompareTrendPoint, metric: TrendMetric): number | null {
+  if (metric === 'ms') return point.medianMs === null ? null : point.medianMs / 1000;
+  return point[metric];
+}
+
+export interface TrendLine { id: string; points: Array<{ day: string; value: number; takes: number }> }
+
+/** Every engine of the trend: the in-use one first, the rest in `order` (the summary's), then any other. */
+export function trendEngines(trend: ReadonlyArray<CompareTrendDay>, order: ReadonlyArray<string>): string[] {
+  return [...new Set([...order, ...trend.flatMap((d) => Object.keys(d.engines))])]
+    .sort((a, b) => Number(b === 'in-use') - Number(a === 'in-use'));
+}
+
+/** The chart's lines, one per engine with a point for the metric (trendEngines' order), and the days that have one, oldest first. */
+export function trendLines(trend: ReadonlyArray<CompareTrendDay>, order: ReadonlyArray<string>, metric: TrendMetric): { days: string[]; lines: TrendLine[] } {
+  const lines = trendEngines(trend, order).map((id) => ({
+    id,
+    points: trend.flatMap((d) => {
+      const p = d.engines[id];
+      const value = p ? trendValue(p, metric) : null;
+      return p && value !== null ? [{ day: d.day, value, takes: p.takes }] : [];
+    }),
+  })).filter((l) => l.points.length > 0);
+  const days = trend.map((d) => d.day).filter((day) => lines.some((l) => l.points.some((p) => p.day === day)));
+  return { days, lines };
+}
+
+/** Days with a point for any metric: the chart needs two. */
+export function trendDays(trend: ReadonlyArray<CompareTrendDay>): number {
+  return trend.filter((d) => Object.keys(d.engines).length > 0).length;
+}
+
+/** A point's value as shown: a rate in percent, a time in seconds (an added time with a +). */
+export function trendWords(value: number, metric: TrendMetric, adds = false): string {
+  return metric === 'ms' ? seconds(value * 1000, adds) : pct(value);
+}
+

@@ -4,7 +4,7 @@
  * nothing is kept, run or uploaded then (what was kept before stays until the
  * pane's Delete comparison data removes it).
  *
- *   GET  /summary?engines=a,b     per engine over the shared takes, by day, and the edited dictations kept
+ *   GET  /summary?engines=a,b     per engine over the shared takes, by day, each engine per day (trend), and the edited dictations kept
  *   GET  /pairs.jsonl             the edited dictations, one JSON line each; only messages made from
  *                                 one dictation, with the composer's own text (compare/pairs.ts)
  *   GET  /takes?limit&cursor      takes, newest first, with run states

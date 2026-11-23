@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { countTerm, lev, scoreText, termsSpoken, tokens, wordDiff } from '../../src/core/stt/compare/score.js'
-import { BEST_MARGIN, summarize } from '../../src/core/stt/compare/summary.js'
+import { BEST_MARGIN, summarize, trendOf } from '../../src/core/stt/compare/summary.js'
 import type { CompareTake, TakeScore } from '../../src/core/stt/compare/types.js'
 
 // A mixed Chinese/English dictation (test data as escapes).
@@ -108,5 +108,47 @@ describe('summarize', () => {
     const s = summarize(takes)
     expect(s.byDay.map((d) => d.takes)).toEqual([1, 1])
     expect(s.byDay[0]!.day > s.byDay[1]!.day).toBe(true)
+  })
+})
+
+describe('trend', () => {
+  // Local noon, so the local day is the one named whatever the machine's zone.
+  const at = (d: number, h = 12) => new Date(2026, 10, d, h).toISOString()
+  const timed = (t: CompareTake, ms: Record<string, number>) => {
+    for (const [e, v] of Object.entries(ms)) t.results[e]!.ms = v
+    return t
+  }
+  const takes = [
+    timed(take('rec-1', at(21), { 'in-use': score(30), whisper: score(10) }), { 'in-use': 400, whisper: 3000 }),
+    // Later the same day, the in-use engine alone: the trend counts it (the shared table would not).
+    timed(take('rec-2', at(21, 15), { 'in-use': score(10) }), { 'in-use': 800 }),
+    take('rec-3', at(20), { 'in-use': score(5) }),
+    // No judge yet: no scores, so no point.
+    { ...take('rec-4', at(22), {}), scores: undefined },
+  ]
+
+  it('is one entry per local day, oldest first, each engine over every take it scored that day', () => {
+    const s = summarize(takes)
+    expect(s.trend.map((d) => d.day)).toEqual(['2026-11-20', '2026-11-21'])
+    const [first, second] = s.trend
+    // Whisper ran only on the 21st: no point on the 20th.
+    expect(Object.keys(first!.engines)).toEqual(['in-use'])
+    expect(first!.engines['in-use']).toMatchObject({ takes: 1, mixed: 0.05, medianMs: 1000 })
+    expect(second!.engines['in-use']).toMatchObject({ takes: 2, medianMs: 600 })
+    expect(second!.engines['in-use']!.mixed).toBeCloseTo(40 / 200)
+    expect(second!.engines['in-use']!.latin).toBeCloseTo(40 / 200)
+    expect(second!.engines['in-use']!.cjk).toBeNull()
+    expect(second!.engines.whisper).toMatchObject({ takes: 1, mixed: 0.1, medianMs: 3000 })
+    // The side-by-side table still counts only the one shared take.
+    expect(s.sharedTakes).toBe(1)
+    expect(s.byDay.map((d) => d.takes)).toEqual([1])
+  })
+
+  it('keeps to the engines shown and leaves out a take with no day', () => {
+    const odd = take('rec-x', 'not a time', { 'in-use': score(1) })
+    const trend = trendOf([...takes, odd], ['whisper'])
+    expect(trend.map((d) => d.day)).toEqual(['2026-11-21'])
+    expect(Object.keys(trend[0]!.engines)).toEqual(['whisper'])
+    expect(trendOf(takes, [])).toEqual([])
   })
 })

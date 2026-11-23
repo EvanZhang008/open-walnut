@@ -22,8 +22,8 @@ export const MONTHLY_AFTER_DAYS = 730;
 export const OTHER_KEY = '__other__';
 
 /** Categorical slots in their validated order (blue, orange, aqua, yellow, magenta, violet). */
-const SLOTS = ['var(--usage-s1)', 'var(--usage-s2)', 'var(--usage-s3)', 'var(--usage-s4)', 'var(--usage-s5)', 'var(--usage-s6)'];
-const OTHER_COLOR = 'var(--usage-other)';
+const SLOTS = ['var(--chart-s1)', 'var(--chart-s2)', 'var(--chart-s3)', 'var(--chart-s4)', 'var(--chart-s5)', 'var(--chart-s6)'];
+const OTHER_COLOR = 'var(--chart-other)';
 /** An agent keeps its color whatever the period, so switching periods never repaints one. */
 const AGENT_SLOT: Record<string, number> = { claude: 0, codex: 1, opencode: 2, goose: 3, imported: 4, walnut: 5 };
 /** Token kinds and kinds of work keep theirs too, so the table reads the same on every visit. */

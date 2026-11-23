@@ -162,6 +162,11 @@ describe('/api/stt/compare', () => {
     expect(summary.body.engines.map((e: { id: string }) => e.id)).toContain('in-use')
     // Each engine names the models its results were made with; this older result recorded none.
     expect(summary.body.engines.find((e: { id: string }) => e.id === 'in-use')).toMatchObject({ models: [], unrecorded: 1 })
+    // The trend: one entry for the take's local day, the in-use engine's point over its one take.
+    expect(summary.body.trend).toHaveLength(1)
+    expect(summary.body.trend[0].day).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(summary.body.trend[0].engines['in-use']).toMatchObject({ takes: 1, medianMs: 3 })
+    expect(typeof summary.body.trend[0].engines['in-use'].mixed).toBe('number')
     // Judge again is queued like a run (202), and the run's progress follows it.
     expect((await request(app).post(`/api/stt/compare/takes/rec-${REC}/judge`)).status).toBe(202)
     await runIdle()

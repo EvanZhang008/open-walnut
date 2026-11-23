@@ -157,7 +157,7 @@
     "styles/thread-stack-page.css": 9,
     "styles/topics.css": 3,
     "styles/unpaired-notice.css": 9,
-    "styles/usage-breakdown.css": 24,
+    "styles/usage-breakdown.css": 3,
     "styles/walnut-agent.css": 6,
     "../../plugin-store/notes-import/src/web/styles.ts": 4
   },

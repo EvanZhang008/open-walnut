@@ -17,7 +17,9 @@
  *     goes back to its row.
  *  4. Ticking the AI judge's consent reaches the server, and with no engine ready the run reads
  *     "Estimate errors" and runs to its end; the consent is put back after.
- *  5. At 390 px the recordings are a stacked list and nothing scrolls sideways; each consent tick
+ *  2b. Over time: the seeded recordings are on three days, so the chart draws a line per engine, the
+ *     in-use one leading; a hovered point reads out its day, and the metric switch (Time) redraws the line.
+ *  5. At 390 px the recordings are a stacked list and nothing scrolls sideways (the chart too); each consent tick
  *     sits on its label's first line with the label in full beside it, and the engines'
  *     switches line up at the right whatever their state's words. The dialog opened there is on
  *     top of everything, the phone's top bar included: the point at the centre of its Close is the
@@ -179,6 +181,35 @@ test('summary, a recording opened, a consent ticked, and the phone layout', asyn
   await expect(summary.locator('[data-engine="whisper-large-v2"]').getByTestId('va-summary-model')).toContainText('11-21 benchmark')
   await shot(page, 'desktop')
 
+  // Over time: the seeded recordings are on three days, so each engine has a line; in use first.
+  const trend = page.getByTestId('va-trend')
+  await expect(trend).toContainText('Over time')
+  const chart = trend.getByTestId('va-trend-chart')
+  await expect(chart).toBeVisible()
+  await expect(trend.getByTestId('va-trend-empty')).toHaveCount(0)
+  const inUseLine = chart.locator('[data-testid="va-trend-line"][data-engine="in-use"]')
+  await expect(inUseLine).toHaveAttribute('data-lead', 'true')
+  expect(await inUseLine.getByTestId('va-trend-point').count()).toBeGreaterThanOrEqual(2)
+  await expect(trend.locator('.va-trend-legend li').first()).toHaveAttribute('data-lead', 'true')
+  await expect(trend.locator('.va-trend-tick').filter({ hasText: /^\d+%$/ }).first()).toBeAttached()
+  await expect(trend.getByTestId('va-trend-readout')).toContainText(/recordings?/)
+  // A point under the pointer reads out its own day.
+  const firstPoint = inUseLine.getByTestId('va-trend-point').first()
+  const firstDay = await firstPoint.getAttribute('data-day')
+  await firstPoint.hover()
+  await expect(trend.getByTestId('va-trend-readout')).toHaveAttribute('data-day', firstDay!)
+  // The metric switch redraws the line: Time plots median seconds.
+  const pathBefore = await inUseLine.locator('path').getAttribute('d')
+  await trend.getByTestId('va-trend-ms').click()
+  await expect(trend.locator('.va-trend-box')).toHaveAttribute('data-metric', 'ms')
+  await expect(inUseLine.getByTestId('va-trend-point').first()).toHaveAttribute('data-value', / s$/)
+  await expect.poll(() => inUseLine.locator('path').getAttribute('d')).not.toBe(pathBefore)
+  await expect(trend.locator('.va-trend-tick').filter({ hasText: / s$/ }).first()).toBeAttached()
+  await shot(page, 'over-time')
+  // Kept like any view choice; put back to Overall for the next run.
+  await trend.getByTestId('va-trend-mixed').click()
+  await expect(trend.locator('.va-trend-box')).toHaveAttribute('data-metric', 'mixed')
+
   // A recording opens in its dialog: Play and Recalculate at the top, one engine's text beside the AI's guess.
   const takes = page.getByTestId('va-takes')
   await expect(takes).toHaveAttribute('data-layout', 'matrix')
@@ -283,6 +314,13 @@ test('summary, a recording opened, a consent ticked, and the phone layout', asyn
     return scrollers.map((el) => el.scrollWidth - el.clientWidth)
   })
   for (const extra of overflow) expect(extra, 'no sideways scroll at 390 px').toBeLessThanOrEqual(1)
+  // The chart is drawn at the pane's width there, never wider than its box.
+  const fit = await page.evaluate(() => {
+    const svg = document.querySelector('#voice-accuracy [data-testid="va-trend-chart"]')!.getBoundingClientRect()
+    const box = document.querySelector('#voice-accuracy .va-trend-box')!.getBoundingClientRect()
+    return { svg: svg.right, box: box.right, vb: document.querySelector('#voice-accuracy [data-testid="va-trend-chart"]')!.getAttribute('viewBox') }
+  })
+  expect(fit.svg, `chart right edge (viewBox ${fit.vb})`).toBeLessThanOrEqual(fit.box + 1)
   // Stacked, the row keeps its Details key.
   await expect(takes.locator(`[data-testid="va-take-row"][data-take="${paired}"]`).getByTestId('va-take-details')).toBeVisible()
   // Each consent tick on its label's first line, the label in full beside it.

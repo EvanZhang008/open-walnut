@@ -396,3 +396,64 @@ html body .va-take-dialog[data-sheet='true'] {
   text-overflow: clip;
   white-space: normal;
 }
+
+/* Over time (VoiceAccuracyTrend.tsx): one line per engine on the chart palette, the in-use one
+   first and strongest; drawn at the measured width, so nothing here scrolls sideways. */
+.va-trend { padding: 10px var(--settings-row-pad-x) 12px; min-width: 0; }
+/* The empty state is a row of its own, with its own padding. */
+.va-trend[data-empty='true'] { padding: 0; }
+.va-trend-box { min-width: 0; }
+/* A metric with nothing to plot sits under the switch, on the chart's own edge. */
+.va-trend:not([data-empty]) .empty-state { padding-inline: 0; }
+.va-trend [data-slot='0'] { --va-line: var(--chart-s1); }
+.va-trend [data-slot='1'] { --va-line: var(--chart-s2); }
+.va-trend [data-slot='2'] { --va-line: var(--chart-s3); }
+.va-trend [data-slot='3'] { --va-line: var(--chart-s4); }
+.va-trend [data-slot='4'] { --va-line: var(--chart-s5); }
+.va-trend [data-slot='5'] { --va-line: var(--chart-s6); }
+
+.va-trend-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.va-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+}
+.va-trend-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.va-trend-legend li[data-lead='true'] { color: var(--fg); font-weight: 600; }
+/* A short stroke of the line's colour: a key, never a status dot. */
+.va-trend-swatch { display: inline-block; width: 12px; height: 3px; border-radius: var(--radius-full); background: var(--va-line); flex: 0 0 auto; }
+
+.va-trend-plot { border-radius: var(--radius-sm); touch-action: pan-y; }
+.va-trend-plot svg { display: block; overflow: visible; }
+.va-trend-grid { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
+.va-trend-tick { font-size: var(--font-size-xs); fill: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.va-trend-guide { stroke: var(--border-strong); stroke-width: 1; }
+.va-trend-line path { fill: none; stroke: var(--va-line); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; opacity: 0.8; }
+.va-trend-line circle { fill: var(--va-line); stroke: var(--card-bg); stroke-width: 1.5; }
+.va-trend-line[data-lead='true'] path { stroke-width: 2.5; opacity: 1; }
+
+.va-trend-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 18px;
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.va-trend-readout-day { color: var(--fg); font-weight: 600; }
+.va-trend-readout-item { display: inline-flex; align-items: center; gap: 6px; }

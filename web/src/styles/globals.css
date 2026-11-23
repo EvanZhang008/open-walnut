@@ -284,6 +284,28 @@ body {
   }
 }
 
+/* The chart palette: categorical slots in a validated order (each adjacent pair tells apart for
+   color-blind eyes too), and a grey for "the rest". Usage & Costs and Voice Accuracy draw with it. */
+:root {
+  --chart-s1: #2a78d6; --chart-s2: #eb6834; --chart-s3: #1baf7a;
+  --chart-s4: #eda100; --chart-s5: #e87ba4; --chart-s6: #4a3aa7;
+  --chart-other: #a3a3a8;
+}
+
+:root[data-theme="dark"] {
+  --chart-s1: #3987e5; --chart-s2: #d95926; --chart-s3: #199e70;
+  --chart-s4: #c98500; --chart-s5: #d55181; --chart-s6: #9085e9;
+  --chart-other: #6e6e73;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --chart-s1: #3987e5; --chart-s2: #d95926; --chart-s3: #199e70;
+    --chart-s4: #c98500; --chart-s5: #d55181; --chart-s6: #9085e9;
+    --chart-other: #6e6e73;
+  }
+}
+
 @supports not selector(::-webkit-scrollbar) {
   html {
     scrollbar-width: thin;

@@ -1,24 +1,6 @@
 /* Settings > Usage & Costs: the stacked cost chart and the table under it. */
 
-/* Categorical slots in a validated order (each adjacent pair tells apart for color-blind eyes too). */
-.usage-bd {
-  --usage-s1: #2a78d6; --usage-s2: #eb6834; --usage-s3: #1baf7a;
-  --usage-s4: #eda100; --usage-s5: #e87ba4; --usage-s6: #4a3aa7;
-  --usage-other: #a3a3a8;
-}
-:root[data-theme="dark"] .usage-bd {
-  --usage-s1: #3987e5; --usage-s2: #d95926; --usage-s3: #199e70;
-  --usage-s4: #c98500; --usage-s5: #d55181; --usage-s6: #9085e9;
-  --usage-other: #6e6e73;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .usage-bd {
-    --usage-s1: #3987e5; --usage-s2: #d95926; --usage-s3: #199e70;
-    --usage-s4: #c98500; --usage-s5: #d55181; --usage-s6: #9085e9;
-    --usage-other: #6e6e73;
-  }
-}
-
+/* The colours are the app's chart palette (--chart-s1..s6 and --chart-other, globals.css). */
 .usage-bd-pick { display: inline-flex; align-items: center; gap: 8px; }
 .usage-bd-pick-label { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .usage-bd-body { display: block; padding-top: 12px; container: usage-bd / inline-size; }
@@ -98,16 +80,16 @@
 .usage-account-name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .usage-account-cost { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
 .usage-account-meta { grid-column: 1 / -1; color: var(--fg-muted); font-size: var(--font-size-sm); }
-.usage-account[data-direct] { background: color-mix(in srgb, var(--usage-s2) 12%, var(--bg-secondary)); }
-.usage-account-flag { font-size: var(--font-size-xs); font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--usage-s2); color: var(--on-accent); }
-/* The headline sits outside .usage-bd, so the stat carries its own copy of the orange slot. */
-.settings-addons-stat[data-direct] { --usage-s2: #c2410c; }
-:root[data-theme="dark"] .settings-addons-stat[data-direct] { --usage-s2: #f08a5d; }
+.usage-account[data-direct] { background: color-mix(in srgb, var(--chart-s2) 12%, var(--bg-secondary)); }
+.usage-account-flag { font-size: var(--font-size-xs); font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--chart-s2); color: var(--on-accent); }
+/* The headline's stat takes a deeper orange than the chart slot, for its small text. */
+.settings-addons-stat[data-direct] { --chart-s2: #c2410c; }
+:root[data-theme="dark"] .settings-addons-stat[data-direct] { --chart-s2: #f08a5d; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .settings-addons-stat[data-direct] { --usage-s2: #f08a5d; }
+  :root:not([data-theme]) .settings-addons-stat[data-direct] { --chart-s2: #f08a5d; }
 }
-.settings-addons-stat[data-direct] .settings-addons-stat-value { color: var(--usage-s2); }
-.settings-addons-stat[data-direct] .settings-addons-stat-label { color: var(--usage-s2); font-weight: 600; }
+.settings-addons-stat[data-direct] .settings-addons-stat-value { color: var(--chart-s2); }
+.settings-addons-stat[data-direct] .settings-addons-stat-label { color: var(--chart-s2); font-weight: 600; }
 /* A fourth figure (Billed directly) joins the row instead of wrapping to a second one. */
 .settings-addons-stats[data-count="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 

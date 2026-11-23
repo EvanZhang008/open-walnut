@@ -4,6 +4,8 @@
  * easy takes never looks better than one run on fifty. Rates are estimated
  * errors against the judge's reference, not a ground truth. The lowest rate is
  * marked only when it is lower than the next by at least BEST_MARGIN points.
+ * The trend is the other rule: per day, each engine over every take it scored
+ * that day, so the in-use engine has a point each day the nightly run scored it.
  */
 import type { CompareTake } from './types.js'
 
@@ -32,13 +34,26 @@ export interface EngineSummary extends EngineRates {
 
 export interface DaySummary { day: string; takes: number; engines: Record<string, EngineRates>; best?: string }
 
+/** One engine on one day, over every take it scored that day (shared or not). */
+export interface TrendPoint extends EngineRates {
+  takes: number
+  /** Median engine time that day, ms. */
+  medianMs: number | null
+}
+
+/** Only the engines that scored a take that day. */
+export interface TrendDay { day: string; engines: Record<string, TrendPoint> }
+
 export interface CompareSummary {
   takes: number
   judged: number
   sharedTakes: number
   engines: EngineSummary[]
   best?: string
+  /** The shared takes by day, newest first (the side-by-side rule). */
   byDay: DaySummary[]
+  /** Every scored take by day, oldest first (each engine alone). */
+  trend: TrendDay[]
 }
 
 const rate = (edits: number, n: number) => (n > 0 ? edits / n : null)
@@ -75,6 +90,33 @@ export function localDay(iso: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+/** The takes by local day, in the order first seen. */
+function groupByDay(takes: CompareTake[]): Map<string, CompareTake[]> {
+  const days = new Map<string, CompareTake[]>()
+  for (const take of takes) {
+    const day = localDay(take.at)
+    days.set(day, [...(days.get(day) ?? []), take])
+  }
+  return days
+}
+
+const msOf = (takes: CompareTake[], id: string) =>
+  median(takes.map((t) => t.results[id]?.ms).filter((ms): ms is number => typeof ms === 'number'))
+
+/** Per day, oldest first: each shown engine over the takes it scored that day; a take with no day is left out. */
+export function trendOf(takes: CompareTake[], shown: string[]): TrendDay[] {
+  const days = groupByDay(takes.filter((t) => shown.some((id) => t.scores?.[id])))
+  days.delete('unknown')
+  return [...days.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, list]) => {
+    const engines: Record<string, TrendPoint> = {}
+    for (const id of shown) {
+      const own = list.filter((t) => t.scores?.[id])
+      if (own.length) engines[id] = { ...rates(own, id), takes: own.length, medianMs: msOf(own, id) }
+    }
+    return { day, engines }
+  })
+}
+
 /** Every engine with a score on some take, in the order first seen. */
 export function scoredEngines(takes: CompareTake[]): string[] {
   return [...new Set(takes.flatMap((t) => Object.keys(t.scores ?? {})))]
@@ -87,18 +129,13 @@ export function summarize(takes: CompareTake[], engines?: string[]): CompareSumm
   const rows: EngineSummary[] = shown.map((id) => ({
     id,
     ...rates(shared, id),
-    medianMs: median(shared.map((t) => t.results[id]?.ms).filter((ms): ms is number => typeof ms === 'number')),
+    medianMs: msOf(shared, id),
     takes: shared.length,
     scoredTakes: takes.filter((t) => t.scores?.[id]).length,
     models: [...new Set(shared.map((t) => t.results[id]?.model).filter((m): m is string => !!m))],
     unrecorded: shared.filter((t) => !t.results[id]?.model).length,
   }))
-  const days = new Map<string, CompareTake[]>()
-  for (const take of shared) {
-    const day = localDay(take.at)
-    days.set(day, [...(days.get(day) ?? []), take])
-  }
-  const byDay: DaySummary[] = [...days.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([day, list]) => {
+  const byDay: DaySummary[] = [...groupByDay(shared).entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([day, list]) => {
     const perEngine = Object.fromEntries(shown.map((id) => [id, rates(list, id)]))
     const best = bestOf(shown.map((id) => ({ id, mixed: perEngine[id]!.mixed })))
     return { day, takes: list.length, engines: perEngine, ...(best ? { best } : {}) }
@@ -111,5 +148,6 @@ export function summarize(takes: CompareTake[], engines?: string[]): CompareSumm
     engines: rows,
     ...(best ? { best } : {}),
     byDay,
+    trend: trendOf(takes, shown),
   }
 }

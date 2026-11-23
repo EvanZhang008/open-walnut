@@ -17,7 +17,8 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { VoiceAccuracyEngines, showEngineRow } from './VoiceAccuracyEngines';
 import { LowestTag, VoiceAccuracyTakes } from './VoiceAccuracyTakes';
 import { useVoiceAccuracy } from './useVoiceAccuracy';
-import { RUN_LAST, engineName, judgeBlocker, lastRunWords, pct, runButtonWords, runPlan, runPlanWords, summaryMetrics, summaryModel } from './voice-accuracy-model';
+import { RUN_LAST, engineName, judgeBlocker, lastRunWords, pct, runButtonWords, recordingsWord, runPlan, runPlanWords, summaryMetrics, summaryModel } from './voice-accuracy-model';
+import { VoiceAccuracyTrend } from './VoiceAccuracyTrend';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/settings-sections-configure.css';
 import '@/styles/voice-accuracy.css';
@@ -42,8 +43,6 @@ function nameOf(engines: CompareEngines | null, id: string): string {
 export const JUDGE_OFF_HELP =
   'No new AI guesses until it runs. Scores still use the earlier guesses: a recording that has one is scored against it, also for engine texts that arrive later; a recording without one gets no estimated errors.';
 
-const recordings = (n: number) => `${n} recording${n === 1 ? '' : 's'}`;
-
 /** Why the AI judge does not run now, with the way to its setting; none while it runs. */
 function JudgeLine({ judge }: { judge: CompareSummary['judge'] }) {
   const blocker = judgeBlocker(judge);
@@ -64,68 +63,74 @@ function SummaryGroup({ summary, engines }: { summary: CompareSummary; engines: 
   const shared = summary.sharedTakes;
   const comparable = summary.engines.length > 0 && shared > 0;
   return (
-    <div data-testid="va-summary" data-layout="rows">
-      <SettingsGroup
-        heading="Estimated errors"
-        description={comparable
-          ? `Counted against earlier AI guesses of what you said, on the same ${recordings(shared)}. The AI reads the engines' transcripts only (it doesn't listen), and no person checked its guesses.`
-          : "Counted against an AI's guess of what you said. The AI reads the engines' transcripts only (it doesn't listen), and no person checks its guesses."}
-      >
-        <JudgeLine judge={summary.judge} />
-        {summary.engines.length === 0 && (
-          <EmptyState
-            size="row"
-            title="No estimated errors yet"
-            hint={summary.judge.state === 'ready'
-              ? `Run a comparison below: Walnut hears up to ${RUN_LAST} recordings again and the AI judge estimates each engine's errors.`
-              : 'They need the AI judge, which reads the engines\' transcripts and guesses what you said.'}
-            testId="va-summary-empty"
-          />
-        )}
-        {summary.engines.length > 0 && shared === 0 && (
-          <SettingsRow
-            label="Can't compare the engines yet."
-            help="No recording has estimated errors from every engine shown, so there is nothing to put side by side."
-            data-testid="va-summary-none-shared"
-          />
-        )}
-        {comparable && summary.engines.map((row) => {
-          const model = summaryModel(row);
-          const metrics = summaryMetrics(row, after(row.id));
-          const lowest = summary.best === row.id;
-          return (
-            <SettingsRow
-              key={row.id}
-              label={(
-                <span className="va-summary-label">
-                  <span>
-                    {nameOf(engines, row.id)}
-                    <span className="va-summary-model" data-testid="va-summary-model">{` · ${model.words}`}</span>
-                  </span>
-                  {model.mixed && <span className="badge badge-important" title={model.words}>Mixed models</span>}
-                </span>
-              )}
-              help={(
-                <span className="va-metrics">
-                  {metrics.map((m) => (
-                    <span key={m.label} className="va-metric"><span className="va-metric-label">{m.label}</span> {m.value}</span>
-                  ))}
-                </span>
-              )}
-              data-testid="va-summary-row"
-              data-engine={row.id}
-              control={(
-                <span className="va-rate" data-marked={lowest ? 'true' : undefined}>
-                  <span className="settings-visually-hidden">Estimated errors </span>
-                  {pct(row.mixed)}
-                  {lowest && <LowestTag />}
-                </span>
-              )}
+    <>
+      <div data-testid="va-summary" data-layout="rows">
+        <SettingsGroup
+          heading="Estimated errors"
+          description={comparable
+            ? `Counted against earlier AI guesses of what you said, on the same ${recordingsWord(shared)}. The AI reads the engines' transcripts only (it doesn't listen), and no person checked its guesses.`
+            : "Counted against an AI's guess of what you said. The AI reads the engines' transcripts only (it doesn't listen), and no person checks its guesses."}
+        >
+          <JudgeLine judge={summary.judge} />
+          {summary.engines.length === 0 && (
+            <EmptyState
+              size="row"
+              title="No estimated errors yet"
+              hint={summary.judge.state === 'ready'
+                ? `Run a comparison below: Walnut hears up to ${RUN_LAST} recordings again and the AI judge estimates each engine's errors.`
+                : 'They need the AI judge, which reads the engines\' transcripts and guesses what you said.'}
+              testId="va-summary-empty"
             />
-          );
-        })}
-      </SettingsGroup>
-    </div>
+          )}
+          {summary.engines.length > 0 && shared === 0 && (
+            <SettingsRow
+              label="Can't compare the engines yet."
+              help="No recording has estimated errors from every engine shown, so there is nothing to put side by side."
+              data-testid="va-summary-none-shared"
+            />
+          )}
+          {comparable && summary.engines.map((row) => {
+            const model = summaryModel(row);
+            const metrics = summaryMetrics(row, after(row.id));
+            const lowest = summary.best === row.id;
+            return (
+              <SettingsRow
+                key={row.id}
+                label={(
+                  <span className="va-summary-label">
+                    <span>
+                      {nameOf(engines, row.id)}
+                      <span className="va-summary-model" data-testid="va-summary-model">{` · ${model.words}`}</span>
+                    </span>
+                    {model.mixed && <span className="badge badge-important" title={model.words}>Mixed models</span>}
+                  </span>
+                )}
+                help={(
+                  <span className="va-metrics">
+                    {metrics.map((m) => (
+                      <span key={m.label} className="va-metric"><span className="va-metric-label">{m.label}</span> {m.value}</span>
+                    ))}
+                  </span>
+                )}
+                data-testid="va-summary-row"
+                data-engine={row.id}
+                control={(
+                  <span className="va-rate" data-marked={lowest ? 'true' : undefined}>
+                    <span className="settings-visually-hidden">Estimated errors </span>
+                    {pct(row.mixed)}
+                    {lowest && <LowestTag />}
+                  </span>
+                )}
+              />
+            );
+          })}
+        </SettingsGroup>
+      </div>
+      {/* Under the table: each engine by day (older servers send no trend). */}
+      {summary.engines.length > 0 && summary.trend && (
+        <VoiceAccuracyTrend trend={summary.trend} order={summary.engines.map((e) => e.id)} nameOf={(id) => nameOf(engines, id)} adds={after} />
+      )}
+    </>
   );
 }
 

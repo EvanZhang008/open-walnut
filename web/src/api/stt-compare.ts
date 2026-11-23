@@ -55,6 +55,10 @@ export interface CompareEngineSummary extends CompareRates {
   unrecorded?: number;
 }
 export interface CompareDay { day: string; takes: number; engines: Record<string, CompareRates>; best?: string }
+/** One engine on one day, over every take it scored that day. */
+export interface CompareTrendPoint extends CompareRates { takes: number; medianMs: number | null }
+/** Only the engines that scored a take that day. */
+export interface CompareTrendDay { day: string; engines: Record<string, CompareTrendPoint> }
 export interface CompareSummary {
   takes: number;
   judged: number;
@@ -62,6 +66,8 @@ export interface CompareSummary {
   engines: CompareEngineSummary[];
   best?: string;
   byDay: CompareDay[];
+  /** Every scored take by local day, oldest first, each engine alone (older servers: absent). */
+  trend?: CompareTrendDay[];
   judge: { state: CompareEngineState; detail?: string };
   /** Dictations edited before they were sent, kept as training pairs (older servers: absent). */
   editedTakes?: number;

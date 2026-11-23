@@ -28,7 +28,7 @@ describe('usage breakdown model', () => {
     expect(b.buckets.map((x) => x.label)).toEqual(['Oct 20', 'Oct 21', 'Oct 22']);
     expect(b.series.map((s) => [s.label, s.values])).toEqual([['Claude Code', [10, 0, 20]], ['Walnut', [6, 0, 0]]]);
     // An agent keeps its own color whatever else is in the period.
-    expect(b.series.map((s) => s.color)).toEqual(['var(--usage-s1)', 'var(--usage-s6)']);
+    expect(b.series.map((s) => s.color)).toEqual(['var(--chart-s1)', 'var(--chart-s6)']);
     expect(b.rows.map((r) => Math.round(r.share))).toEqual([83, 17]);
   });
 
@@ -44,7 +44,7 @@ describe('usage breakdown model', () => {
     expect(other.values).toEqual([30 + 20 + 10]);
     expect(b.rows).toHaveLength(8);
     expect(new Set(b.series.slice(0, MAX_SERIES).map((s) => s.color)).size).toBe(MAX_SERIES);
-    expect(b.rows.slice(MAX_SERIES).every((r) => r.color === 'var(--usage-other)')).toBe(true);
+    expect(b.rows.slice(MAX_SERIES).every((r) => r.color === 'var(--chart-other)')).toBe(true);
   });
 
   it('goes by week past three months, the first week starting on the first day', () => {
@@ -80,10 +80,10 @@ describe('usage breakdown model', () => {
     const tokens: CostGroup = { id: 'token', heading: 'By token type', daily: [],
       lines: [line('input', 9, 'Input'), line('cacheRead', 5, 'Cache read'), line('output', 2, 'Output')] };
     expect(buildBreakdown(tokens, ['2026-10-01']).rows.map((r) => [r.line.key, r.color]))
-      .toEqual([['input', 'var(--usage-s5)'], ['cacheRead', 'var(--usage-s1)'], ['output', 'var(--usage-s3)']]);
+      .toEqual([['input', 'var(--chart-s5)'], ['cacheRead', 'var(--chart-s1)'], ['output', 'var(--chart-s3)']]);
     const kinds: CostGroup = { id: 'kind', heading: 'By kind of work', daily: [],
       lines: [line('routine', 9), line('interactive', 5), line('walnut', 1)] };
-    expect(buildBreakdown(kinds, ['2026-10-01']).rows.map((r) => r.color)).toEqual(['var(--usage-s3)', 'var(--usage-s1)', 'var(--usage-s6)']);
+    expect(buildBreakdown(kinds, ['2026-10-01']).rows.map((r) => r.color)).toEqual(['var(--chart-s3)', 'var(--chart-s1)', 'var(--chart-s6)']);
   });
 
   it('says how much of a bucket is stored: nothing before the first stored day, part of the one that holds it', () => {
