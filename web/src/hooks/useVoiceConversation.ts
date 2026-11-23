@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLeanCallback } from './useLeanCallback';
 import { transcribeAudio, warmupStt } from '../api/stt';
-import { voiceStatus, type TtsEngineId } from '../api/voice';
+import { voiceStatus, warmUpVoice, type TtsEngineId, type VoiceStatus } from '../api/voice';
 import { openVoice, reduceVoice, type VoiceEffect, type VoiceEvent, type VoiceState } from '../voice/conversation-machine';
 import { BARGE_IN_OPTIONS, LISTEN_OPTIONS, VoiceActivity } from '../voice/voice-activity';
 import { VoiceMic } from '../voice/voice-mic';
@@ -246,15 +246,19 @@ export function useVoiceConversation(
     // asks for the mic): nothing is kept, and nothing is closed, unless it is still this one.
     const current = () => genRef.current === gen && ctxRef.current === ctx;
     void (async () => {
-      let tts: TtsEngineId = 'device';
-      try { tts = (await voiceStatus()).engine; } catch { /* the device's own voice */ }
+      // The warm-up answers with the status and loads the local voice meanwhile (an older server has only the status).
+      let status: VoiceStatus | null = null;
+      try { status = await warmUpVoice(); } catch {
+        try { status = await voiceStatus(); } catch { /* the device's own voice */ }
+      }
       if (!current()) return;
+      const tts: TtsEngineId = status?.engine ?? 'device';
       setEngine(tts);
       const speaker = new VoiceSpeaker(ctx, tts, (next, why) => {
         if (genRef.current !== gen) return;
         setEngine(next);
         setEngineNote(`Using this device's voice: ${why}`);
-      });
+      }, status?.byLanguage ?? {});
       let mic: VoiceMic;
       try {
         mic = await VoiceMic.open(ctx);

@@ -153,8 +153,9 @@ export async function retireDaemon(proc: ChildProcess | null, port: number, labe
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000).unref();
   } else {
     log.stt.info(`Shutting down adopted ${label} on :${port}`);
+    // JSON with no Origin: the only kind of POST a local daemon takes (a browser page cannot send it).
     await fetch(`http://127.0.0.1:${port}/shutdown`, {
-      method: 'POST', signal: AbortSignal.timeout(2000),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(2000),
     }).catch(() => {});
   }
   if (!(await waitForPortReleased(port, 5_000))) {

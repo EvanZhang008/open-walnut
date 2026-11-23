@@ -7,7 +7,8 @@
  * about 5 s (p50 of 41, p90 6.4 s) and starts when the mic is pressed, while the
  * browser records, so a 10-minute idle exit loses no words.
  *
- * The class: each file under src/core/stt that spawns a process. A model server
+ * The class: each file under src/core/stt that spawns a process, and the daemons
+ * started through its shared launcher (python-daemon.ts). A model server
  * names its idle exit here; anything else is listed with why it holds no model.
  */
 import { describe, expect, it } from 'vitest'
@@ -24,12 +25,15 @@ const MODEL_SERVERS: Record<string, (src: string) => number[]> = {
   'cleanup-mlx.ts': (s) => [ms(s, /const IDLE_TTL_MS = ([\d *]+);/), py(s)],
   'engine-whisper-server.ts': (s) => [ms(s, /DEFAULT_IDLE_TTL_MS = ([\d *]+);/)],
   'engine-llama.ts': (s) => [Number(/sleepIdleSec \?\? (\d+)/.exec(s)?.[1])],
+  // The local voice (Qwen3-TTS) runs through the same launcher; its daemon's Python is qwen-daemon-script.ts.
+  '../tts/engine-qwen.ts': (s) => [ms(s, /const IDLE_TTL_MS = ([\d *]+);/), py(readFileSync(join(DIR, '../tts/qwen-daemon-script.ts'), 'utf8'))],
 }
 
 /** Spawn a process that holds no model. */
 const NOT_MODEL_SERVERS: Record<string, string> = {
   'mic-record.ts': 'records the microphone for a dictation and ends with it',
   'setup-stream.ts': 'runs one setup step (an install or a download) and ends',
+  'python-daemon.ts': 'the launcher engine-mlx.ts and ../tts/engine-qwen.ts start their daemons with: each passes its idle exit on the daemon\'s command line, checked above',
 }
 
 function ms(src: string, re: RegExp): number {

@@ -88,6 +88,13 @@ describe('writeConfigSection', () => {
       .toEqual({ turn_retry: { max: 3, delay_s: 5 } })
   })
 
+  it('a voice setting written alone keeps the key and the other voice settings (tts merges)', () => {
+    const tts = { engine: 'elevenlabs', elevenlabs_api_key: 'k', elevenlabs_voice_id_zh: 'v' }
+    expect(writeConfigSection('tts', tts, { zh_engine: 'qwen', qwen_voice: 'Uncle_Fu' }))
+      .toEqual({ ...tts, zh_engine: 'qwen', qwen_voice: 'Uncle_Fu' })
+    expect(writeConfigSection('tts', { ...tts, zh_engine: 'qwen' }, { zh_engine: null })).toEqual(tts)
+  })
+
   it('an object one level down is replaced whole', () => {
     expect(writeConfigSection('session', stored, { turn_retry: { max: 1 } }))
       .toEqual({ reply_language: 'en', cron_policy: 'session-only', turn_retry: { max: 1 } })

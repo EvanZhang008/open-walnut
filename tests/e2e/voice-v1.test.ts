@@ -13,6 +13,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-voice-v1'))
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { clearTtsCache } from '../../src/core/tts/index.js'
+import { getConfig, updateConfig } from '../../src/core/config-manager.js'
 
 let server: HttpServer
 let port: number
@@ -117,5 +118,46 @@ describe('/api/v1/voice', () => {
     expect((await res.json()).error).toMatchObject({ code: 'tts_quota' })
     expect((await post('/api/v1/voice/speak', { text: '' })).status).toBe(400)
     expect((await post('/api/v1/voice/speak', { text: 'x'.repeat(2001) })).status).toBe(400)
+  })
+
+  it('lists the local Chinese voice, off until its experiment is on; warmup answers at once with the status', async () => {
+    const status = await (await realFetch(url('/api/v1/voice/status'))).json()
+    expect(status.engines.find((e: { id: string }) => e.id === 'qwen')).toMatchObject({
+      id: 'qwen', available: false, state: 'off', languages: ['zh'],
+      model: 'mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit', voice: 'Uncle_Fu',
+    })
+    expect(status.byLanguage).toBeUndefined()
+    // The engines a client already knew are still first, as they were.
+    expect(status.engines.slice(0, 2).map((e: { id: string }) => e.id)).toEqual(['elevenlabs', 'device'])
+    const t0 = Date.now()
+    const warm = await post('/api/v1/voice/warmup', {})
+    expect(warm.status).toBe(200)
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect((await warm.json()).engines.find((e: { id: string }) => e.id === 'qwen').state).toBe('off')
+  })
+
+  it('with the experiment on, a server that cannot run the local voice reads Chinese as before', async () => {
+    process.env.ELEVENLABS_API_KEY = 'test-key'
+    clearTtsCache()
+    upstream.length = 0
+    upstreamAnswer = () => new Response(new Uint8Array([0xff, 0xf3, 7]), { headers: { 'content-type': 'audio/mpeg' } })
+    await updateConfig({ experimental: { ...(await getConfig()).experimental, local_chinese_voice: true }, tts: { qwen_voice: 'Serena' } })
+    const status = await (await realFetch(url('/api/v1/voice/status'))).json()
+    // Linux has no runtime; a Mac test runner is an isolated server: either way it says why.
+    expect(status.engines.find((e: { id: string }) => e.id === 'qwen')).toMatchObject({ available: false, state: 'unsupported', voice: 'Serena', reason: expect.any(String) })
+    expect(status.byLanguage).toBeUndefined()
+    const res = await post('/api/v1/voice/speak', { text: 'Chinese piece', language: 'zh-CN' })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-walnut-tts-engine')).toMatch(/^elevenlabs\//)
+    expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([0xff, 0xf3, 7])
+    expect((await getConfig()).tts).toEqual({ qwen_voice: 'Serena' })
+  })
+
+  it('a local voice model that is not an mlx-community repo is never used: the status names the default', async () => {
+    await updateConfig({ tts: { qwen_model: 'evil/model', qwen_port: 7893 } })
+    const status = await (await realFetch(url('/api/v1/voice/status'))).json()
+    expect(status.engines.find((e: { id: string }) => e.id === 'qwen')).toMatchObject({ model: 'mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit' })
+    // The config keeps what the person wrote; only its use falls back.
+    expect((await getConfig()).tts).toMatchObject({ qwen_model: 'evil/model', qwen_port: 7893 })
   })
 })

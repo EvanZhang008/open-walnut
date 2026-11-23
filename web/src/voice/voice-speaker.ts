@@ -20,6 +20,14 @@ import { WaitingCue } from './waiting-cue';
 
 export type SpeakOutcome = 'done' | 'stopped';
 
+/**
+ * A language's own voice that cannot read a piece now (`tts_unavailable`: the
+ * local voice loading, or too slow once) has that piece said on the device and
+ * is asked again for the next; this many such misses in a row, or any other
+ * failure, and the language is said on the device for the rest of the conversation.
+ */
+const OWN_VOICE_MAX_MISSES = 3;
+
 interface Queued {
   text: string;
   language: string;
@@ -46,9 +54,19 @@ export class VoiceSpeaker {
   private readonly outBuf: Float32Array<ArrayBuffer>;
   private readonly cue: WaitingCue;
   private deviceSpeaking = false;
+  /** A language another server voice reads (`zh: 'qwen'`, the local Chinese voice), while it works. */
+  private byLanguage: Record<string, TtsEngineId>;
+  /** Misses in a row of each language's own voice (see OWN_VOICE_MAX_MISSES). */
+  private ownMisses = new Map<string, number>();
 
-  constructor(private readonly ctx: AudioContext, engine: TtsEngineId, private readonly onEngineChange?: (engine: TtsEngineId, why: string) => void) {
+  constructor(
+    private readonly ctx: AudioContext,
+    engine: TtsEngineId,
+    private readonly onEngineChange?: (engine: TtsEngineId, why: string) => void,
+    byLanguage: Record<string, TtsEngineId> = {},
+  ) {
     this.engine = engine;
+    this.byLanguage = { ...byLanguage };
     this.out = ctx.createAnalyser();
     this.out.fftSize = 2048;
     this.out.connect(ctx.destination);
@@ -65,6 +83,18 @@ export class VoiceSpeaker {
 
   get currentEngine(): TtsEngineId {
     return this.engine;
+  }
+
+  /** The language key `byLanguage` is read with ('zh' for 'zh-CN'). */
+  private static lang(language: string): string {
+    return language.toLowerCase().split('-')[0] ?? '';
+  }
+
+  /** The server reads this piece: the conversation's server voice, or a voice of its own language. */
+  private served(item: Queued): boolean {
+    if (this.engine !== 'device') return true;
+    const own = this.byLanguage[VoiceSpeaker.lang(item.language)];
+    return !!own && own !== 'device';
   }
 
   /** Nothing is being said or waits to be. */
@@ -112,7 +142,7 @@ export class VoiceSpeaker {
 
   /** Starts the audio of a queued piece, once (the server voice only). */
   private fetch(item: Queued, next: Queued | undefined, signal: AbortSignal): void {
-    if (this.engine === 'device' || item.audio) return;
+    if (!this.served(item) || item.audio) return;
     item.audio = speakPiece({
       text: item.text,
       language: item.language,
@@ -126,7 +156,8 @@ export class VoiceSpeaker {
     for (let i = 0; run === this.run; i++) {
       const item = this.queue.shift();
       if (!item) break;
-      if (this.engine !== 'device') {
+      if (this.served(item)) {
+        const ownVoice = this.engine === 'device';
         this.fetch(item, this.queue[0], signal);
         try {
           const bytes = await item.audio!;
@@ -134,13 +165,15 @@ export class VoiceSpeaker {
           // The next piece's audio comes while this one plays.
           const next = this.queue[0];
           if (next) this.fetch(next, this.queue[1], signal);
+          if (ownVoice) this.ownMisses.delete(VoiceSpeaker.lang(item.language));
           await this.playBytes(bytes, run);
           continue;
         } catch (err) {
           if (run !== this.run || signal.aborted) return;
           const why = err instanceof Error ? err.message : String(err);
           log.warn('voice', 'server voice failed: the device speaks instead', { error: why, piece: i });
-          if (!(err instanceof SpeakError) || err.fallback) {
+          if (ownVoice) this.ownVoiceMissed(VoiceSpeaker.lang(item.language), err);
+          else if (!(err instanceof SpeakError) || err.fallback) {
             this.engine = 'device';
             this.onEngineChange?.('device', why);
           }
@@ -152,6 +185,18 @@ export class VoiceSpeaker {
     this.drain = null;
     this.abort = null;
     drain.resolve('done');
+  }
+
+  /** The language's own voice could not read a piece: kept after a passing miss, dropped otherwise. */
+  private ownVoiceMissed(lang: string, err: unknown): void {
+    const misses = (this.ownMisses.get(lang) ?? 0) + 1;
+    if (err instanceof SpeakError && err.code === 'tts_unavailable' && misses < OWN_VOICE_MAX_MISSES) {
+      this.ownMisses.set(lang, misses);
+      return;
+    }
+    log.warn('voice', 'the language\'s own voice keeps failing: the device says it from now on', { language: lang, misses });
+    delete this.byLanguage[lang];
+    this.ownMisses.delete(lang);
   }
 
   stop(): void {

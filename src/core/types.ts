@@ -2298,6 +2298,18 @@ export interface Config {
     elevenlabs_voice_id?: string;
     /** The voice for Chinese answers (zh*); unset: `elevenlabs_voice_id` reads them too. */
     elevenlabs_voice_id_zh?: string;
+    /**
+     * The engine for Chinese pieces (zh*), only while the `local_chinese_voice`
+     * experiment is on. Unset with the experiment on: `qwen` on an Apple Silicon
+     * Mac, else `engine`. `qwen` is Qwen3-TTS run on this Mac (src/core/tts/engine-qwen.ts).
+     */
+    zh_engine?: 'qwen' | 'elevenlabs' | 'device';
+    /** Qwen3-TTS speaker. Default: Uncle_Fu (a male standard Mandarin voice). */
+    qwen_voice?: string;
+    /** Qwen3-TTS model (an mlx-community repo). Default: the 0.6B CustomVoice 8-bit model. */
+    qwen_model?: string;
+    /** The local voice daemon's port (default 7895), for an opted-in isolated server kept apart. */
+    qwen_port?: number;
   };
   /** Speech-to-text configuration for voice input */
   stt?: {

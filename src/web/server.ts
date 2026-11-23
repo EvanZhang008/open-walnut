@@ -3711,6 +3711,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     void (async () => {
       const { startQwenAutoSetup, isIsolatedServer } = await import('../core/stt/auto-setup.js')
       await startQwenAutoSetup({ isolated: await isIsolatedServer() })
+      // The local Chinese voice (experimental): set up in the background when it is chosen.
+      const { kickLocalVoice } = await import('../core/tts/local-voice.js')
+      const { getConfig } = await import('../core/config-manager.js')
+      void kickLocalVoice(await getConfig())
     })().catch((err) => {
       log.web.warn('STT auto-setup failed to start', { error: err instanceof Error ? err.message : String(err) })
     })

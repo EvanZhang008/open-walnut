@@ -6,7 +6,7 @@
  * path that ran the engines, adopted the warm daemon on the shared port or
  * opened the microphone did not.
  *
- * Over the TypeScript AST of src/core/stt/*.ts and src/core/audio-*.ts:
+ * Over the TypeScript AST of src/core/stt/*.ts, src/core/tts/*.ts and src/core/audio-*.ts:
  *
  *  1. Every call that starts a process (spawn, spawnSync, exec, execSync,
  *     execFile, execFileSync, fork from node:child_process, under any local name,
@@ -42,6 +42,8 @@ function tsFilesUnder(dir: string): string[] {
 
 const FILES = [
   ...tsFilesUnder('src/core/stt'),
+  // The local voice (Qwen3-TTS) runs a model daemon too.
+  ...tsFilesUnder('src/core/tts'),
   ...fs.readdirSync(path.join(repoRoot, 'src/core')).filter((f) => /^audio-.*\.ts$/.test(f)).map((f) => `src/core/${f}`),
 ].sort();
 
@@ -77,11 +79,14 @@ const EXEMPT: Record<string, { calls: number; why: string }> = {
 const ENGINE_EXEMPT: Record<string, string> = {
   'src/core/stt/engine-openai.ts': 'a hosted API: no model, no microphone; its one local process is the ffmpeg conversion in audio-convert.ts',
   'src/core/stt/engine-qwen.ts': 'its own isAvailable is the no-runtime branch, never available and starting nothing; the other branches return the mlx and llama engines',
+  'src/core/tts/engine-elevenlabs.ts': 'a hosted API: no model, no microphone, no local process',
 };
 
 /** Functions that run voice without a process call of their own, each of which must ask the gate. */
 const ENTRY_POINTS = [
-  'src/core/stt/engine-mlx.ts#createMlxEngine.startServer',          // adopts the warm daemon on the shared port
+  'src/core/stt/python-daemon.ts#createPythonDaemon.startServer',   // adopts the warm daemon on the shared port (mlx, local voice)
+  'src/core/tts/engine-qwen.ts#createQwenTtsEngine.synthesize',      // talks to the local voice's daemon
+  'src/core/tts/qwen-setup.ts#qwenTtsSetupRefusal',                  // the local voice's install asks before it downloads
   'src/core/stt/engine-llama.ts#createLlamaEngine.start',            // adopts llama-server on its port
   'src/core/stt/engine-llama.ts#createLlamaEngine.transcribeSerial', // converts a take before it reaches start
   'src/core/stt/cleanup-mlx.ts#startDaemon',                         // adopts or retires the cleanup daemon

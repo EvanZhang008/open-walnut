@@ -98,11 +98,20 @@ export async function isHfModelCached(model: string, cacheDir = getHfHubCacheDir
   return false;
 }
 
-/** Does this interpreter import mlx_audio? 10s cap: a cold mlx import is ~1-3s. */
-export async function pythonImportsMlxAudio(python: string, timeoutMs = 10_000): Promise<boolean> {
+/**
+ * Does this interpreter import mlx_audio (or one of its modules), at `minVersion`
+ * or newer when one is given? 10s cap: a cold mlx import is ~1-3s.
+ */
+export async function pythonImportsMlxAudio(python: string, timeoutMs = 10_000, module = 'mlx_audio', minVersion?: string): Promise<boolean> {
   if (!(await isFile(python))) return false;
+  if (!/^mlx_audio(\.[a-z0-9_]+)*$/.test(module)) return false;
+  if (minVersion !== undefined && !/^\d+(\.\d+){0,2}$/.test(minVersion)) return false;
+  const atLeast = minVersion === undefined ? '' : [
+    'import importlib.metadata as m, re, sys',
+    `sys.exit(0 if tuple(int(x) for x in re.findall(r"\\d+", m.version("mlx-audio"))[:3]) >= (${minVersion.split('.').map(Number).join(', ')},) else 3)`,
+  ].join('\n');
   try {
-    await execFileAsync(python, ['-c', 'import mlx_audio'], { timeout: timeoutMs, env: sttSpawnEnv() });
+    await execFileAsync(python, ['-c', `import ${module}\n${atLeast}`], { timeout: timeoutMs, env: sttSpawnEnv() });
     return true;
   } catch {
     return false;
@@ -375,6 +384,10 @@ function failure(step: string, r: StreamRunResult): SetupEvent {
 
 export interface MlxSetupOptions {
   signal?: AbortSignal;
+  /** The oldest mlx-audio the env may hold ("0.6.1"); an older one is upgraded. */
+  minMlxAudio?: string;
+  /** What the env is for, in the messages (default: the speech recognizer). */
+  label?: string;
   /** Test seams: the target venv and the tools to use. */
   venvDir?: string;
   uvPath?: string | null;
@@ -387,12 +400,13 @@ export interface MlxSetupOptions {
  * is new enough. Idempotent: a venv that already imports mlx_audio is done.
  */
 export function setupMlxEnv(opts: MlxSetupOptions = {}): AsyncGenerator<SetupEvent> {
-  return exclusive('mlx-env', () => setupMlxEnvInner(opts));
+  // Per venv: the local voice keeps its own (src/core/tts/qwen-setup.ts) and may build it meanwhile.
+  return exclusive(`mlx-env:${opts.venvDir ?? getMlxVenvDir()}`, () => setupMlxEnvInner(opts));
 }
 
 async function* setupMlxEnvInner(opts: MlxSetupOptions): AsyncGenerator<SetupEvent> {
   if (!isAppleSilicon()) {
-    yield { type: 'error', message: 'Qwen3-ASR needs a Mac with Apple Silicon. Choose Whisper instead.' };
+    yield { type: 'error', message: opts.label ? `${opts.label} needs a Mac with Apple Silicon.` : 'Qwen3-ASR needs a Mac with Apple Silicon. Choose Whisper instead.' };
     return;
   }
   const venv = opts.venvDir ?? getMlxVenvDir();
@@ -400,7 +414,7 @@ async function* setupMlxEnvInner(opts: MlxSetupOptions): AsyncGenerator<SetupEve
   const env = { ...sttSpawnEnv(), PIP_DISABLE_PIP_VERSION_CHECK: '1' };
 
   yield { type: 'progress', percent: 2, message: 'Checking the Python environment...' };
-  if (await pythonImportsMlxAudio(python)) {
+  if (await pythonImportsMlxAudio(python, undefined, 'mlx_audio', opts.minMlxAudio)) {
     yield { type: 'log', message: `mlx-audio is already installed in ${venv}` };
     yield { type: 'progress', percent: 100, message: 'Python environment ready' };
     yield { type: 'done', message: 'Python environment already set up', path: python };
@@ -448,9 +462,11 @@ async function* setupMlxEnvInner(opts: MlxSetupOptions): AsyncGenerator<SetupEve
   }
 
   yield { type: 'progress', percent: 15, message: 'Installing mlx-audio (about 400 MB)...' };
+  // A floor upgrades an older install in place (uv and pip both reinstall an unmet requirement).
+  const spec = opts.minMlxAudio ? `mlx-audio>=${opts.minMlxAudio}` : 'mlx-audio';
   const [cmd, args] = uv
-    ? [uv, ['pip', 'install', '--python', python, 'mlx-audio']]
-    : [python, ['-m', 'pip', 'install', '--upgrade', 'pip', 'mlx-audio']];
+    ? [uv, ['pip', 'install', '--python', python, spec]]
+    : [python, ['-m', 'pip', 'install', '--upgrade', 'pip', spec]];
   const r = yield* forward(runStreaming(cmd, args, {
     ...common, label: uv ? 'uv' : 'pip', timeoutMs: 1_800_000,
     onTick: creepingProgress(15, 3, 92, 'Installing mlx-audio...'),
@@ -459,8 +475,8 @@ async function* setupMlxEnvInner(opts: MlxSetupOptions): AsyncGenerator<SetupEve
     yield failure('Installing mlx-audio', r);
     return;
   }
-  if (!(await pythonImportsMlxAudio(python, 30_000))) {
-    yield { type: 'error', message: 'mlx-audio installed but does not import. Check the server log for details.' };
+  if (!(await pythonImportsMlxAudio(python, 30_000, 'mlx_audio', opts.minMlxAudio))) {
+    yield { type: 'error', message: `mlx-audio${opts.minMlxAudio ? ` ${opts.minMlxAudio} or newer` : ''} installed but does not import. Check the server log for details.` };
     return;
   }
   log.stt.info(`MLX environment ready: ${python}`);
@@ -471,6 +487,8 @@ async function* setupMlxEnvInner(opts: MlxSetupOptions): AsyncGenerator<SetupEve
 export interface MlxDownloadOptions {
   signal?: AbortSignal;
   model?: string;
+  /** The model's name in the messages (default Qwen3-ASR). */
+  label?: string;
   /** Test seams. */
   python?: string;
   cacheDir?: string;
@@ -532,7 +550,7 @@ async function* downloadMlxModelInner(model: string, opts: MlxDownloadOptions): 
   }));
   if (r.code !== 0) {
     await removeRunPartials(blobs, stale);
-    yield failure('Downloading Qwen3-ASR', r);
+    yield failure(`Downloading ${opts.label ?? 'Qwen3-ASR'}`, r);
     return;
   }
   if (!(await isHfModelCached(model, cacheDir))) {
@@ -541,5 +559,5 @@ async function* downloadMlxModelInner(model: string, opts: MlxDownloadOptions): 
   }
   log.stt.info(`MLX model downloaded: ${model}`);
   yield { type: 'progress', percent: 100, message: 'Download complete' };
-  yield { type: 'done', message: 'Qwen3-ASR downloaded', path: getHfModelCacheDir(model, cacheDir) };
+  yield { type: 'done', message: `${opts.label ?? 'Qwen3-ASR'} downloaded`, path: getHfModelCacheDir(model, cacheDir) };
 }

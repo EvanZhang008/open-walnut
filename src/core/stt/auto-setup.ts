@@ -102,8 +102,20 @@ async function isFile(p: string): Promise<boolean> {
   try { return (await stat(p)).isFile(); } catch { return false; }
 }
 
-/** A uv this server can run: the machine's own, else a pinned one it fetches. */
-async function ensureUv(signal?: AbortSignal): Promise<string> {
+// One fetch at a time: the speech recognizer's setup and the local voice's both
+// ask at boot, and two would write the same archive and staging dir at once.
+let uvInFlight: Promise<string> | null = null;
+
+/**
+ * A uv this server can run: the machine's own, else a pinned one it fetches
+ * (Apple Silicon). Concurrent callers share one fetch (the first one's signal ends it).
+ */
+export function ensureUv(signal?: AbortSignal): Promise<string> {
+  uvInFlight ??= ensureUvOnce(signal).finally(() => { uvInFlight = null; });
+  return uvInFlight;
+}
+
+async function ensureUvOnce(signal?: AbortSignal): Promise<string> {
   const { findUv } = await import('./setup-mlx.js');
   const found = await findUv();
   if (found) return found;

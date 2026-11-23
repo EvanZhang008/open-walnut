@@ -9,8 +9,11 @@
  * server which words to say (POST /api/v1/voice/spoken).
  */
 
-/** The engines a person can pick. `device` = the client's own system voice. */
-export const TTS_ENGINE_IDS = ['elevenlabs', 'device'] as const;
+/**
+ * The engines. `device` = the client's own system voice; `qwen` = Qwen3-TTS on
+ * this Mac, only for Chinese pieces (`tts.zh_engine`, experimental).
+ */
+export const TTS_ENGINE_IDS = ['elevenlabs', 'device', 'qwen'] as const;
 export type TtsEngineId = (typeof TTS_ENGINE_IDS)[number];
 
 export interface TtsRequest {
@@ -23,6 +26,8 @@ export interface TtsRequest {
   nextText?: string;
   /** Ends the upstream request (the client went away, or the deadline passed). */
   signal?: AbortSignal;
+  /** How long this engine may take for the piece, for one that tells its backend when to stop. */
+  deadlineMs?: number;
 }
 
 export interface TtsAudio {
@@ -39,6 +44,13 @@ export interface TtsEngine {
   voice: string;
   /** The voice a piece in `language` is read with, when it differs by language (default `voice`). */
   voiceFor?(language?: string): string;
+  /**
+   * With another engine behind it: how long this one may take for a piece before
+   * the other reads it instead, so the other keeps its own full deadline.
+   */
+  fallbackBudgetMs?: number;
+  /** False for a piece it cannot finish within `fallbackBudgetMs`: the engine behind it reads it at once. */
+  fitsBudget?(text: string): boolean;
   synthesize(req: TtsRequest): Promise<TtsAudio>;
 }
 

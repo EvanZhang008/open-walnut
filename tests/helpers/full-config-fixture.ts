@@ -98,7 +98,10 @@ export function fullConfigFixture(): Record<string, unknown> {
     audio: { retention_days: 7 },
     stt: { engine: 'openai', language: 'en', openai_api_key: sttKey, openai_model: 'acme-stt' },
     stt_corrections: { clouddev: ['Cloud Deep'], token: ['toe ken'] },
-    tts: { engine: 'elevenlabs', elevenlabs_api_key: ttsKey, elevenlabs_model: 'eleven_flash_v2_5' },
+    tts: {
+      engine: 'elevenlabs', elevenlabs_api_key: ttsKey, elevenlabs_model: 'eleven_flash_v2_5',
+      zh_engine: 'qwen', qwen_voice: 'Uncle_Fu', qwen_model: 'mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit', qwen_port: 7895,
+    },
     jev: { api_key: jevKey },
     api_keys: [{ name: 'phone', key: pairKey, created_at: '2026-10-01T00:00:00.000Z' }],
     push_tokens: [{ token: pushToken, platform: 'ios' }],

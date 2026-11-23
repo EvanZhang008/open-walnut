@@ -6,18 +6,21 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-interface Fetch { text: string; previousText?: string; nextText?: string; resolve: () => void }
+interface Fetch { text: string; previousText?: string; nextText?: string; resolve: () => void; reject: (err: Error) => void }
 const fetches: Fetch[] = []
 
 vi.mock('../../../web/src/api/voice', () => ({
-  speakPiece: (piece: { text: string; previousText?: string; nextText?: string }) => new Promise<ArrayBuffer>((resolve) => {
-    fetches.push({ ...piece, resolve: () => resolve(new ArrayBuffer(8)) })
+  speakPiece: (piece: { text: string; previousText?: string; nextText?: string }) => new Promise<ArrayBuffer>((resolve, reject) => {
+    fetches.push({ ...piece, resolve: () => resolve(new ArrayBuffer(8)), reject })
   }),
-  SpeakError: class extends Error {},
+  SpeakError: class extends Error {
+    constructor(message: string, readonly status: number, readonly fallback: boolean, readonly code = '') { super(message) }
+  },
   spokenReply: async () => null,
 }))
 
 import { VoiceSpeaker } from '../../../web/src/voice/voice-speaker'
+import { SpeakError } from '../../../web/src/api/voice'
 
 interface FakeSource { onended: (() => void) | null; started: boolean }
 
@@ -155,5 +158,104 @@ describe('voice speaker queue', () => {
     speaker.waitingCue(true)
     vi.advanceTimersByTime(10_000)
     expect(ctx.oscillators).toBe(0)
+  })
+})
+
+describe('a language with a voice of its own (the local Chinese voice)', () => {
+  const zh = (...chunks: string[]) => ({ text: chunks.join(''), language: 'zh-CN', truncated: false, chunks })
+
+  it('with the device voice, a Chinese piece is still fetched from the server and an English one is not', async () => {
+    speaker.stop()
+    speaker = new VoiceSpeaker(ctx as unknown as AudioContext, 'device', undefined, { zh: 'qwen' })
+    const done = speaker.enqueue(zh('\u4f60\u597d\u3002'))
+    expect(fetches.map((f) => f.text)).toEqual(['\u4f60\u597d\u3002'])
+    fetches[0]!.resolve()
+    await settle()
+    endPlaying()
+    expect(await done).toBe('done')
+    await speaker.enqueue(reply('Hello.'))
+    expect(fetches).toHaveLength(1)
+    expect(speaker.currentEngine).toBe('device')
+  })
+
+  it('without one, a device conversation fetches nothing', async () => {
+    speaker.stop()
+    speaker = new VoiceSpeaker(ctx as unknown as AudioContext, 'device')
+    await speaker.enqueue(zh('\u4f60\u597d\u3002'))
+    expect(fetches).toHaveLength(0)
+  })
+
+  /** A device conversation with the local Chinese voice, its device voice heard through `spoken`. */
+  function zhSpeaker(): string[] {
+    const spoken: string[] = []
+    vi.stubGlobal('speechSynthesis', { getVoices: () => [], cancel() {}, speak(u: { text: string; onend?: () => void }) { spoken.push(u.text); setTimeout(() => u.onend?.(), 0) } })
+    vi.stubGlobal('SpeechSynthesisUtterance', class { lang = ''; voice = null; onend: (() => void) | null = null; onerror = null; constructor(readonly text: string) {} })
+    speaker.stop()
+    speaker = new VoiceSpeaker(ctx as unknown as AudioContext, 'device', undefined, { zh: 'qwen' })
+    return spoken
+  }
+  const unavailable = () => new SpeakError('The local voice is still loading', 503, true, 'tts_unavailable')
+
+  it('a tts_unavailable from its own voice says that piece on the device and asks the voice again for the next', async () => {
+    const spoken = zhSpeaker()
+    try {
+      const done = speaker.enqueue(zh('\u4e00\u3002', '\u4e8c\u3002'))
+      fetches[0]!.reject(unavailable())
+      await settle()
+      expect(spoken).toEqual(['\u4e00\u3002'])
+      // The next piece still goes to the server, and it plays.
+      expect(fetches.map((f) => f.text)).toEqual(['\u4e00\u3002', '\u4e8c\u3002'])
+      fetches[1]!.resolve()
+      await settle()
+      endPlaying()
+      expect(await done).toBe('done')
+      expect(spoken).toEqual(['\u4e00\u3002'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('three misses in a row, or another failure, and the language is said on the device from then on', async () => {
+    const spoken = zhSpeaker()
+    try {
+      const pieces = ['\u4e00\u3002', '\u4e8c\u3002', '\u4e09\u3002', '\u56db\u3002']
+      const done = speaker.enqueue(zh(...pieces))
+      for (let i = 0; i < 3; i++) {
+        await settle()
+        fetches[i]!.reject(unavailable())
+        await settle()
+      }
+      expect(await done).toBe('done')
+      // The fourth piece was never asked of the server.
+      expect(fetches.map((f) => f.text)).toEqual(pieces.slice(0, 3))
+      expect(spoken).toEqual(pieces)
+
+      // A failure that is not "unavailable" (the engine refused the piece) drops it at once.
+      fetches.length = 0
+      spoken.length = 0
+      const again = zhSpeaker()
+      const next = speaker.enqueue(zh('\u4e94\u3002', '\u516d\u3002'))
+      fetches[0]!.reject(new SpeakError('The local voice answered 500', 502, false, 'tts_failed'))
+      expect(await next).toBe('done')
+      expect(fetches).toHaveLength(1)
+      expect(again).toEqual(['\u4e94\u3002', '\u516d\u3002'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('a piece that plays clears the misses: two, a success, then two more keep the voice', async () => {
+    zhSpeaker()
+    try {
+      const pieces = ['\u4e00\u3002', '\u4e8c\u3002', '\u4e09\u3002', '\u56db\u3002', '\u4e94\u3002', '\u516d\u3002']
+      const done = speaker.enqueue(zh(...pieces))
+      for (let i = 0; i < pieces.length - 1; i++) {
+        await settle()
+        if (i === 2) { fetches[i]!.resolve(); await settle(); endPlaying() } else fetches[i]!.reject(unavailable())
+        await settle()
+      }
+      await settle()
+      expect(fetches.map((f) => f.text)).toEqual(pieces)
+      fetches[5]!.resolve()
+      await settle()
+      endPlaying()
+      expect(await done).toBe('done')
+    } finally { vi.unstubAllGlobals() }
   })
 })

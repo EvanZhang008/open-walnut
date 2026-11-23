@@ -2,11 +2,12 @@
  * /api/v1 voice output: the words voice mode says and the speech it plays, for
  * every client (the web's voice mode, and the phone's).
  *
- *   GET  /voice/status              → { engine, engines: [{ id, available, reason?, model?, voice? }] }
+ *   GET  /voice/status              → { engine, engines: [{ id, available, reason?, model?, voice?, state? }], byLanguage? }
+ *   POST /voice/warmup              → the same status, at once; loads the local voice in the background
  *   POST /voice/spoken { text, piece?, language? }
  *                                   → { text, language, truncated, chunks, rest? } | { text: null }
  *   POST /voice/speak  { text, language?, previousText?, nextText? }
- *                                   → 200 audio/mpeg, streamed as the engine makes it
+ *                                   → 200 audio/mpeg (ElevenLabs, streamed as it is made) or audio/wav (the local voice, whole)
  *
  * `spoken` turns a reply into what is said (src/core/tts/spoken-text.ts: the part
  * before `---`, no code, tables or paths, about 40 seconds at most) and cuts it in
@@ -19,10 +20,18 @@
  * streamed Chinese answer whose detail is English). With `engine: "device"` the client speaks the pieces with its own system
  * voice and never calls `speak`.
  *
+ * A Chinese piece may have an engine of its own (the experimental local voice,
+ * src/core/tts/local-voice.ts); `byLanguage.zh` names it once its model answers,
+ * and a piece it cannot read in time (it has 8 s with `engine` behind it, and a long
+ * piece goes straight to `engine`) is read by `engine`, which keeps its own full
+ * deadline. `warmup`, called when voice mode opens, loads that model before the
+ * first Chinese sentence (and sets it up the first time), waiting a moment to
+ * adopt a warm one so its answer can name it; status does the setup part too.
+ *
  * Errors: `bad_request` (400), `tts_unavailable` (503: no engine on this server, or
  * the engine cannot be reached; the client falls back to its own voice), `tts_quota`
  * (503: the cloud voice's credits are used up), `tts_failed` (502).
- * Every upstream call has a deadline, so no request pins a connection.
+ * Every upstream call has a deadline (SPEAK_DEADLINE_MS each engine), so no request pins a connection.
  *
  * Frozen-contract note: additive (docs/reference/api-v1.md).
  */
@@ -31,15 +40,14 @@ import { Readable } from 'node:stream'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { prepareSpokenPiece, prepareSpokenText } from '../../core/tts/spoken-text.js'
-import { isTtsError, serverEngine, speak, ttsStatus } from '../../core/tts/index.js'
+import { enginesFor, isTtsError, speakWithFallback, ttsStatus, SPEAK_DEADLINE_MS } from '../../core/tts/index.js'
+import { kickLocalVoice } from '../../core/tts/local-voice.js'
 
 export const voiceV1Router = Router()
 
 /** Longest reply `spoken` takes, and longest piece `speak` takes (a piece is a sentence or two). */
 const MAX_REPLY_CHARS = 200_000
 const MAX_PIECE_CHARS = 2_000
-/** The engine must start answering within this, or the client hears its own voice instead. */
-const SPEAK_DEADLINE_MS = 20_000
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } })
@@ -52,7 +60,20 @@ function optionalString(v: unknown, max: number): string | undefined {
 voiceV1Router.get('/voice/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { getConfig } = await import('../../core/config-manager.js')
-    res.json(ttsStatus(await getConfig()))
+    const config = await getConfig()
+    // Sets the local voice up the first time it is chosen; never waits for it.
+    void kickLocalVoice(config)
+    res.json(ttsStatus(config))
+  } catch (err) { next(err) }
+})
+
+/** Voice mode opened: load the local voice now, so the first Chinese sentence finds it warm. */
+voiceV1Router.post('/voice/warmup', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getConfig } = await import('../../core/config-manager.js')
+    const config = await getConfig()
+    await kickLocalVoice(config, { warm: true })
+    res.json(ttsStatus(config))
   } catch (err) { next(err) }
 })
 
@@ -89,26 +110,27 @@ voiceV1Router.post('/voice/speak', async (req: Request, res: Response, next: Nex
     sendError(res, 400, 'bad_request', `text is longer than ${MAX_PIECE_CHARS} characters: ask /voice/spoken for pieces`)
     return
   }
+  // Each engine has a deadline of its own (speakWithFallback); this one is the client's.
   const abort = new AbortController()
-  const deadline = setTimeout(() => abort.abort(), SPEAK_DEADLINE_MS)
   // The client went away (voice mode stopped, the person talked over it): stop paying for audio.
   res.on('close', () => { if (!res.writableEnded) abort.abort() })
   const since = Date.now()
   try {
     const { getConfig } = await import('../../core/config-manager.js')
-    const engine = serverEngine(await getConfig())
-    if (!engine) {
+    const language = optionalString(body.language, 20)
+    const engines = enginesFor(await getConfig(), language)
+    if (!engines.engine) {
       sendError(res, 503, 'tts_unavailable', 'No voice engine on this server: the device speaks with its own voice')
       return
     }
-    const audio = await speak(engine, {
+    const audio = await speakWithFallback(engines, {
       text,
-      language: optionalString(body.language, 20),
+      language,
       previousText: optionalString(body.previousText, MAX_PIECE_CHARS),
       nextText: optionalString(body.nextText, MAX_PIECE_CHARS),
       signal: abort.signal,
-    })
-    clearTimeout(deadline)
+    }, SPEAK_DEADLINE_MS)
+    const engine = audio.engine
     res.status(200)
     res.setHeader('Content-Type', audio.mime)
     res.setHeader('Cache-Control', 'no-store')
@@ -123,7 +145,6 @@ voiceV1Router.post('/voice/speak', async (req: Request, res: Response, next: Nex
     })
     stream.pipe(res)
   } catch (err) {
-    clearTimeout(deadline)
     if (res.headersSent) { res.destroy(); return }
     if (abort.signal.aborted && !res.writable) return
     if (isTtsError(err)) {

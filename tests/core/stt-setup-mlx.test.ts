@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import {
   hfTreeTotalBytes, sumHfBlobBytes, listIncompleteBlobs, isHfModelCached, getHfHubCacheDir, getHfModelCacheDir,
   isAllowedMlxModel, mlxDownloadProgress, pythonVersionOk, parseVersion, formatGb, downloadMlxModel, setupMlxEnv,
-  isAppleSilicon, DEFAULT_MLX_MODEL, MLX_DOWNLOAD_SCRIPT, parseMlxProgressLine, findPython3,
+  isAppleSilicon, DEFAULT_MLX_MODEL, MLX_DOWNLOAD_SCRIPT, parseMlxProgressLine, findPython3, pythonImportsMlxAudio,
 } from '../../src/core/stt/setup-mlx.js';
 import type { SetupEvent } from '../../src/core/stt/setup-stream.js';
 
@@ -131,6 +131,38 @@ describe('the download script and its progress lines', () => {
     if (!python) return; // no python3 on this machine: nothing to check it with
     await promisify(execFile)(python.path, ['-c', 'import ast, sys; ast.parse(sys.argv[1])', MLX_DOWNLOAD_SCRIPT], { timeout: 20_000 });
   });
+});
+
+describe('the mlx-audio import probe with a version floor', () => {
+  /** A python3 that sees a fake mlx_audio package of `version` (its dist-info metadata), and nothing else of it. */
+  async function pythonWithMlxAudio(version: string): Promise<string | null> {
+    const python = await findPython3();
+    if (!python) return null;
+    const site = join(dir, `site-${version}`);
+    await mkdir(join(site, 'mlx_audio', 'tts'), { recursive: true });
+    await writeFile(join(site, 'mlx_audio', '__init__.py'), '');
+    await writeFile(join(site, 'mlx_audio', 'tts', '__init__.py'), '');
+    await writeFile(join(site, 'mlx_audio', 'tts', 'utils.py'), '');
+    await mkdir(join(site, `mlx_audio-${version}.dist-info`), { recursive: true });
+    await writeFile(join(site, `mlx_audio-${version}.dist-info`, 'METADATA'), `Metadata-Version: 2.1\nName: mlx-audio\nVersion: ${version}\n`);
+    const shim = join(dir, `python-${version}`);
+    await writeFile(shim, `#!/bin/sh\nPYTHONPATH='${site}' exec '${python.path}' "$@"\n`);
+    await chmod(shim, 0o755);
+    return shim;
+  }
+
+  it('an env older than the floor does not count, the floor and newer do, and no floor takes any', async () => {
+    const old = await pythonWithMlxAudio('0.6.0');
+    if (!old) return; // no python3 on this machine: nothing to check it with
+    const exact = (await pythonWithMlxAudio('0.6.1'))!;
+    const newer = (await pythonWithMlxAudio('0.10.2'))!;
+    expect(await pythonImportsMlxAudio(old, 20_000, 'mlx_audio.tts.utils')).toBe(true);
+    expect(await pythonImportsMlxAudio(old, 20_000, 'mlx_audio.tts.utils', '0.6.1')).toBe(false);
+    expect(await pythonImportsMlxAudio(exact, 20_000, 'mlx_audio.tts.utils', '0.6.1')).toBe(true);
+    expect(await pythonImportsMlxAudio(newer, 20_000, 'mlx_audio.tts.utils', '0.6.1')).toBe(true);
+    // A floor that is not a plain version runs nothing.
+    expect(await pythonImportsMlxAudio(newer, 20_000, 'mlx_audio', '0.6; import os')).toBe(false);
+  }, 60_000);
 });
 
 describe('small pure helpers', () => {

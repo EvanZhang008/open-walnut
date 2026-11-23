@@ -8,6 +8,10 @@
  * Speech is cached by engine, model, voice and words: Replay, a second tab and the
  * phone reading the same answer cost one request, not three (a cloud voice is paid
  * per character).
+ *
+ * A Chinese piece can have an engine of its own (`tts.zh_engine`, the experimental
+ * local voice: local-voice.ts); when that one fails a piece, the piece is read by
+ * the engine every other piece uses, so voice mode never falls silent.
  */
 
 import type { Config } from '../types.js';
@@ -15,6 +19,11 @@ import { resolveSecret } from '../../model/providers/secret.js';
 import { createElevenLabsEngine, ELEVENLABS_DEFAULT_MODEL, ELEVENLABS_DEFAULT_VOICE } from './engine-elevenlabs.js';
 import { TtsError, type TtsAudio, type TtsEngine, type TtsEngineId, type TtsRequest } from './types.js';
 import { registerMemoryHolder } from '../observability/memory-ledger.js';
+import {
+  isChinese, kickLocalVoice, localVoiceFacts, localVoiceStatus, localVoiceUsable, qwenEngineFor, retireLocalVoiceUnlessChosen, zhEngineChoice,
+  type LocalVoiceFacts, type LocalVoiceStatus,
+} from './local-voice.js';
+import { log } from '../../logging/index.js';
 
 export { TtsError } from './types.js';
 export type { TtsEngineId } from './types.js';
@@ -31,7 +40,9 @@ export interface TtsEngineStatus {
 export interface TtsStatus {
   /** The engine voice mode uses now. */
   engine: TtsEngineId;
-  engines: TtsEngineStatus[];
+  engines: Array<TtsEngineStatus | LocalVoiceStatus>;
+  /** A language read by another engine than `engine` (`zh`: the local voice), while that holds. */
+  byLanguage?: Record<string, TtsEngineId>;
 }
 
 function elevenLabsKey(config: Config): string | undefined {
@@ -39,7 +50,7 @@ function elevenLabsKey(config: Config): string | undefined {
 }
 
 /** What each engine can do on this server, and which one is in use. */
-export function ttsStatus(config: Config): TtsStatus {
+export function ttsStatus(config: Config, facts: LocalVoiceFacts = localVoiceFacts()): TtsStatus {
   const key = elevenLabsKey(config);
   const elevenlabs: TtsEngineStatus = {
     id: 'elevenlabs',
@@ -49,15 +60,32 @@ export function ttsStatus(config: Config): TtsStatus {
     ...(key ? {} : { reason: 'No ElevenLabs API key in Settings' }),
   };
   const device: TtsEngineStatus = { id: 'device', available: true };
-  // A cloud voice without its key falls back to the device's own voice rather than to silence.
-  const engine: TtsEngineId = config.tts?.engine !== 'device' && key ? 'elevenlabs' : 'device';
-  return { engine, engines: [elevenlabs, device] };
+  const engine = usualEngineId(config);
+  const qwen = localVoiceUsable(config, facts) ? qwenEngineFor(config) : null;
+  const local = localVoiceStatus(config, facts, qwen);
+  const zh = zhEngineFor(config, engine, facts, !!qwen?.ready);
+  return { engine, engines: [elevenlabs, device, local], ...(zh !== engine ? { byLanguage: { zh } } : {}) };
 }
 
-/** The server-side engine voice mode uses now, or null when the client speaks itself. */
-export function serverEngine(config: Config, deps: { fetchImpl?: typeof fetch; baseUrl?: string } = {}): TtsEngine | null {
-  const status = ttsStatus(config);
-  if (status.engine !== 'elevenlabs') return null;
+/**
+ * The engine a Chinese piece is read with now. The local voice is named only once
+ * its model answers: while it loads, a client with no server voice of its own
+ * (the device voice) would otherwise send it pieces it can only refuse.
+ */
+function zhEngineFor(config: Config, engine: TtsEngineId, facts: LocalVoiceFacts, localReady: boolean): TtsEngineId {
+  const choice = zhEngineChoice(config, facts.appleSilicon);
+  if (choice === 'qwen') return localReady ? 'qwen' : engine;
+  if (choice === 'elevenlabs') return elevenLabsKey(config) ? 'elevenlabs' : 'device';
+  return choice ?? engine;
+}
+
+/** The engine every piece uses unless its language has one of its own. */
+function usualEngineId(config: Config): TtsEngineId {
+  // A cloud voice without its key falls back to the device's own voice rather than to silence.
+  return config.tts?.engine !== 'device' && elevenLabsKey(config) ? 'elevenlabs' : 'device';
+}
+
+function elevenLabsEngine(config: Config, deps: { fetchImpl?: typeof fetch; baseUrl?: string }): TtsEngine | null {
   const key = elevenLabsKey(config);
   if (!key) return null;
   return createElevenLabsEngine({
@@ -67,6 +95,90 @@ export function serverEngine(config: Config, deps: { fetchImpl?: typeof fetch; b
     voiceZh: config.tts?.elevenlabs_voice_id_zh,
     ...deps,
   });
+}
+
+/** The server-side engine voice mode uses now, or null when the client speaks itself. */
+export function serverEngine(config: Config, deps: { fetchImpl?: typeof fetch; baseUrl?: string } = {}): TtsEngine | null {
+  return usualEngineId(config) === 'elevenlabs' ? elevenLabsEngine(config, deps) : null;
+}
+
+/** The engine for a piece in `language`, and the one that reads it when that one fails. */
+export interface PieceEngines {
+  engine: TtsEngine | null;
+  fallback: TtsEngine | null;
+}
+
+export function enginesFor(
+  config: Config,
+  language: string | undefined,
+  deps: { fetchImpl?: typeof fetch; baseUrl?: string; facts?: LocalVoiceFacts } = {},
+): PieceEngines {
+  const { facts = localVoiceFacts(), ...elevenDeps } = deps;
+  retireLocalVoiceUnlessChosen(config, facts.appleSilicon);
+  const usual = (): TtsEngine | null => serverEngine(config, elevenDeps);
+  if (!isChinese(language)) return { engine: usual(), fallback: null };
+  const choice = zhEngineChoice(config, facts.appleSilicon);
+  if (choice === 'device') return { engine: null, fallback: null };
+  if (choice === 'elevenlabs') return { engine: elevenLabsEngine(config, elevenDeps), fallback: null };
+  if (choice === 'qwen') {
+    if (localVoiceUsable(config, facts)) return { engine: qwenEngineFor(config), fallback: usual() };
+    // Not set up yet: say it the usual way, and get the setup going for the next one.
+    void kickLocalVoice(config);
+  }
+  return { engine: usual(), fallback: null };
+}
+
+/** How long an engine may take to start answering a piece, each engine its own. */
+export const SPEAK_DEADLINE_MS = 20_000;
+
+/**
+ * Speak one piece with its engine, and with the fallback when that one cannot
+ * (unreachable, too slow, refused). A cancelled request is not retried.
+ *
+ * Each try has its own deadline: the engine gets its `fallbackBudgetMs` when a
+ * fallback stands behind it (and a piece it cannot finish in that goes to the
+ * fallback at once), and the fallback gets the whole `deadlineMs` of its own.
+ */
+export async function speakWithFallback(
+  engines: PieceEngines,
+  req: TtsRequest,
+  deadlineMs = SPEAK_DEADLINE_MS,
+): Promise<TtsAudio & { cached: boolean; engine: TtsEngine }> {
+  const { engine, fallback } = engines;
+  if (!engine) throw new TtsError('No voice engine on this server: the device speaks with its own voice', 503, 'tts_unavailable');
+  if (fallback && engine.fitsBudget?.(req.text) === false) {
+    log.web.info('tts piece too long for its engine\'s budget, the fallback reads it', { engine: engine.id, fallback: fallback.id, chars: req.text.length });
+    return { ...(await speakWithin(fallback, req, deadlineMs)), engine: fallback };
+  }
+  const budget = fallback && engine.fallbackBudgetMs ? Math.min(deadlineMs, engine.fallbackBudgetMs) : deadlineMs;
+  try {
+    return { ...(await speakWithin(engine, req, budget)), engine };
+  } catch (err) {
+    if (!fallback || !(err instanceof TtsError) || err.status === 499 || req.signal?.aborted) throw err;
+    log.web.warn('tts engine failed, the piece goes to the fallback', { engine: engine.id, fallback: fallback.id, code: err.code, message: err.message });
+    return { ...(await speakWithin(fallback, req, deadlineMs)), engine: fallback };
+  }
+}
+
+/**
+ * `speak` that must start answering within `ms` (a streaming engine then goes on;
+ * the caller's own signal still ends it). A try cut by its deadline is
+ * `tts_unavailable`, never a cancel, so the fallback reads the piece.
+ */
+async function speakWithin(engine: TtsEngine, req: TtsRequest, ms: number): Promise<TtsAudio & { cached: boolean }> {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), ms);
+  const signal = req.signal ? AbortSignal.any([req.signal, deadline.signal]) : deadline.signal;
+  try {
+    return await speak(engine, { ...req, signal, deadlineMs: ms });
+  } catch (err) {
+    if (deadline.signal.aborted && !req.signal?.aborted) {
+      throw new TtsError(`The ${engine.id} voice did not answer within ${Math.round(ms / 1000)}s`, 503, 'tts_unavailable');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── Cache ──

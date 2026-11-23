@@ -271,6 +271,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Settings › Diagnostics › Voice Accuracy hears your recent voice takes again with other speech-to-text engines and shows how often each one gets your words wrong, against a reference an AI judge writes from all their texts. Engines that run on this computer start right away; an engine or the judge that sends audio or text to a cloud service runs only after you tick its consent. Off: nothing is run or uploaded and nothing new is kept; to remove what it kept, use Delete comparison data in its pane before turning it off.',
     default: false,
   },
+  {
+    id: 'local_chinese_voice',
+    name: 'Local Chinese voice',
+    description: 'Voice mode reads Chinese answers with Qwen3-TTS on this Mac, a male standard Mandarin voice by default (tts.qwen_voice in the config names another speaker). Needs a Mac with Apple Silicon: the first time it is on, Walnut sets up the voice model in the background (about 2.5 GB to download), and until it is ready Chinese is read the way it is today. English keeps its voice. Off: every answer is read as before.',
+    default: false,
+  },
 ] as const;
 
 /**
