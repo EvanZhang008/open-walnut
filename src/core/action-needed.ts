@@ -119,15 +119,22 @@ export function ownItemOf(s: UserStatus, sessionId?: string): ActionItem | null 
   if (s.state !== 'needs' || !s.ask) return null;
   if (s.source === 'session') {
     const id = s.decision?.id ?? `ask:${hashWords(s.ask)}`;
-    return strip<ActionItem>({ kind: 'ask', id, summary: s.askForm?.summary ?? s.ask, ...(detailOf(s.askForm?.more, s.askForm?.summary ?? s.ask)), sessionId: s.askSessionId ?? sessionId, ...(s.askForm ? { form: s.askForm, options: s.askForm.options } : {}), at: s.checkedAt });
+    return strip<ActionItem>({ kind: 'ask', id, summary: s.askForm?.summary ?? s.ask, ...(detailOf(s.askForm?.more, s.askForm?.summary ?? s.ask, WHOLE)), sessionId: s.askSessionId ?? sessionId, ...(s.askForm ? { form: s.askForm, options: s.askForm.options } : {}), at: s.checkedAt });
   }
   if (s.source === 'choice' && s.choice) return { kind: 'choice', id: s.choice.id, summary: s.ask, board: s.choice.board };
   return null;
 }
 
-/** An item's detail: its words on one line, cut at 240, and none when they only repeat its summary. */
-export function detailOf(words: string | null | undefined, summary: string): { detail?: string } {
-  const d = (words ?? '').replace(/\s+/g, ' ').trim().slice(0, 240);
+/**
+ * An item's detail: its words on one line, cut at `max` (240, a letter's preview or an approval's
+ * summary, whose whole text opens where it lives), and none when they only repeat its summary.
+ * An ask keeps its whole why (WHOLE: askFormFrom already cut it at ASK_MORE_MAX, at a word): its
+ * card cuts it to two lines and Show more opens it whole there (actions/AskCard.tsx); a cut here
+ * ended a long why mid-word with no way to read the rest.
+ */
+const WHOLE = Number.POSITIVE_INFINITY;
+export function detailOf(words: string | null | undefined, summary: string, max = 240): { detail?: string } {
+  const d = (words ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const same = (x: string) => x.replace(/[\s.。!！?？]+$/g, '').trim();
   return d && same(d) !== same(summary.replace(/\s+/g, ' ')) ? { detail: d } : {};
 }

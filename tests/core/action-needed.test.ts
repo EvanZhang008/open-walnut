@@ -3,7 +3,8 @@
  * it, and a snooze of one item.
  */
 import { describe, expect, it } from 'vitest'
-import { applyActions, itemSnoozeEndedMs, markSnoozes, ownLineIsItem, writeSnooze, type ActionItem } from '../../src/core/action-needed.js'
+import { applyActions, itemSnoozeEndedMs, markSnoozes, ownItemOf, ownLineIsItem, writeSnooze, type ActionItem } from '../../src/core/action-needed.js'
+import { askFormFrom } from '../../src/core/user-status.js'
 import { approvalItemsByTask, letterItem, promptItem } from '../../src/core/action-needed-facts.js'
 import type { UserStatus } from '../../src/core/user-status.js'
 import { USER_KIND_LEAD_WORDS } from '../../src/core/human-inbox/walnut-letters/thread-words.js'
@@ -36,6 +37,14 @@ describe('applyActions: the state an open item gives a task', () => {
     const s = applyActions(own, [approval], [], { nowMs: NOW })
     expect(s).toMatchObject({ state: 'needs', source: 'session', ask: 'Which bucket?' })
     expect(s.actions?.map((a) => `${a.kind}:${a.id}`)).toEqual(['approval:apr-1', 'ask:ask-abc123'])
+  })
+
+  it('its own ask keeps its whole why (its card folds it), a letter keeps its preview\'s head', () => {
+    // 2026-11-23: a why cut at 240 here ended mid-word in the card, so Show more never showed the rest.
+    const why = 'Each page shows the same card at three widths, with the old one beside it. '.repeat(8).trim()
+    const own: UserStatus = { state: 'needs', source: 'session', ask: 'Ship the long card?', askForm: askFormFrom('Ship the long card?', 'yes_no', undefined, why) }
+    expect(ownItemOf(own)?.detail).toBe(why)
+    expect(letterItem({ id: 'lt-2', subject: 'Pick one', createdAt: EARLIER, textPreview: why }).detail).toBe(why.slice(0, 240))
   })
 
   it('a snoozed item leaves the state as derived; it rides along marked', () => {
