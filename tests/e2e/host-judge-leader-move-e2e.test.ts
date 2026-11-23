@@ -14,7 +14,9 @@
  *               itself goes into its log; B boots over a copy of A's data, the host leaves A's
  *               silent door (no pong) and dials B's, and B resumes from the cursor it copied
  *   T3 on B     B has every fact after its copied cursor once and in order (the gap's turn
- *               included), A had every one up to it, and a send from B reaches the session
+ *               included), A had every one up to it (and past it at most what the host wrote to
+ *               A's silent socket before leaving it, never one made after B booted), and a send
+ *               from B reaches the session
  *   T4 A back   A woken, its daemon link mended: its resume carries (1, e), below the (2, e')
  *               the host saw, and is refused (stale permit): A's cursor does not move and A hears
  *               none of B's turns, while B keeps the host
@@ -38,6 +40,8 @@ describe.skipIf(!RUN)('a host\'s leader moves from A to a standby B over a copy 
   let sid = ''
   let portB = 0
   let copied = 0
+  /** The host's head before B boots: every fact the host could have sent A's socket before it left A's door. */
+  let headBeforeB = 0
 
   const eventsOn = async (read: (p: string) => Promise<any>, s: string) => ((await read(`/events?sid=${s}`)) as ProbeEvent[]).filter((e) => e.source === 'host-channel' && isHostFact(e.name))
   const hostFacts = async (): Promise<{ head: number; permitPair: { permitNumber: number; epoch: number }; recs: HostFactRecord[] }> => h.host('/facts?after=0')
@@ -94,6 +98,7 @@ describe.skipIf(!RUN)('a host\'s leader moves from A to a standby B over a copy 
     const gap = await h.door('POST', '/host-api/sessions/send', { sessionId: sid, taskId, message: 'ROUND gap', busSource: 'ui' })
     expect(gap.json, JSON.stringify(gap.json)).toEqual({ ok: true })
     await waitFor(async () => resultIn((await h.host(`/events?sid=${sid}`)) as ProbeEvent[], 'echo: ROUND gap'), 60_000, 'the gap\'s turn to complete on the host').catch(fail)
+    headBeforeB = (await hostFacts()).head
     b = await h.standby({ data: dataB, port: portB, env: { WALNUT_CLUSTER_PERMIT_NUMBER: '2' } })
     expect(b.leader.port).toBe(portB)
     // The host leaves A's silent door and links B's.
@@ -112,10 +117,17 @@ describe.skipIf(!RUN)('a host\'s leader moves from A to a standby B over a copy 
     const onB = await eventsOn(b!.probe, sid)
     expect(seenAsFacts(onB, after), `host: ${factIds(after).join(' ')}`).toEqual(factIds(after))
     expect(resultIn(onB, 'echo: ROUND gap'), 'the gap\'s turn reached B').toBeTruthy()
-    // A's part, read once A runs again (its bus heard nothing after it stopped).
+    // A's part, read once A runs again and has read its old dialed socket to its close: every fact
+    // up to its copied cursor once and in order. Past it, only what the host wrote to that socket
+    // before its ping found A silent (the gap's turn, on a loaded host: frames A reads on waking),
+    // all of it made before B booted; none of B's turns.
     h.c.wakeMac()
+    await waitFor(async () => (await h.mac(`/side?host=${HOST_KEY}`)).kind !== 'host-dialed', 60_000, 'A to read its old socket to its close').catch(fail)
     const onA = await eventsOn(h.mac, sid)
-    expect(seenAsFacts(onA, before), `host: ${factIds(before).join(' ')}`).toEqual(factIds(before))
+    const sentA = all.filter((r) => r.seq <= headBeforeB).slice(0, onA.length)
+    expect(onA.length, `A heard ${onA.length}, ${before.length} up to its copy, ${all.filter((r) => r.seq <= headBeforeB).length} before B`).toBeGreaterThanOrEqual(before.length)
+    expect(seenAsFacts(onA, sentA), `host: ${factIds(sentA).join(' ')}`).toEqual(factIds(sentA))
+    expect(onA.length).toBeLessThanOrEqual(all.filter((r) => r.seq <= headBeforeB).length)
     expect(before.length + after.length).toBe(all.length)
   }, 400_000)
 
