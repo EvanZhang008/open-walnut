@@ -219,12 +219,17 @@ export function acceptReply(body: unknown, asked: string, req: PermitRequest, ro
 export const WITNESS_DOOR_PATH = '/leader-witness'
 export const WITNESS_DOOR_CHALLENGE = '/challenge'
 export const WITNESS_DOOR_REQUEST = '/request'
-/** The largest call text the door takes (a list change carries every op entry). */
-export const WITNESS_DOOR_MAX_CALL = 4 * 1024 * 1024
+/**
+ * The largest call text the door takes. The largest real call is a list change carrying the full ledger
+ * (MAX_LEDGER_ENTRIES entries of a real op id such as mail:<key>, the holder's id and its nonce: about 160
+ * bytes each, 1.6 MB); this is that and a margin. A longer call is refused before anything of it is read.
+ */
+export const WITNESS_DOOR_MAX_CALL = 2 * 1024 * 1024
 
 /** `cnonce`: the caller's own fresh nonce, in both proofs, so no recorded reply passes for a new one. */
 export interface DoorChallenge { v: 1; walnutId: string; witness: string; digest: string; cnonce: string }
-export interface DoorRequest { v: 1; nonce: string; cnonce: string; proof: string; call: string }
+/** `walnutId` and `witness` name the call's witness beside the call, so the nonce is checked before the call is parsed. */
+export interface DoorRequest { v: 1; walnutId: string; witness: string; nonce: string; cnonce: string; proof: string; call: string }
 /** A door's nonce: 12 hex of its expiry on the door's clock, then 64 hex of the door's HMAC over the call it is for. */
 export const DOOR_NONCE_RE = /^[0-9a-f]{76}$/
 export type DoorAnswer =
@@ -240,11 +245,12 @@ export function parseDoorChallenge(raw: unknown): DoorChallenge | null {
 }
 
 export function parseDoorRequest(raw: unknown): DoorRequest | null {
-  if (!isObj(raw) || raw.v !== 1 || typeof raw.nonce !== 'string' || !DOOR_NONCE_RE.test(raw.nonce)) return null
+  if (!isObj(raw) || raw.v !== 1 || !isWitnessName(raw.walnutId) || !isWitnessName(raw.witness)) return null
+  if (typeof raw.nonce !== 'string' || !DOOR_NONCE_RE.test(raw.nonce)) return null
   if (typeof raw.cnonce !== 'string' || !PROOF_SECRET_RE.test(raw.cnonce)) return null
   if (typeof raw.proof !== 'string' || !PROOF_SECRET_RE.test(raw.proof)) return null
   if (typeof raw.call !== 'string' || raw.call.length === 0 || raw.call.length > WITNESS_DOOR_MAX_CALL) return null
-  return { v: 1, nonce: raw.nonce, cnonce: raw.cnonce, proof: raw.proof, call: raw.call }
+  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, nonce: raw.nonce, cnonce: raw.cnonce, proof: raw.proof, call: raw.call }
 }
 
 interface DoorProofFields { walnutId: string; witness: string; nonce: string; cnonce: string; digest: string }

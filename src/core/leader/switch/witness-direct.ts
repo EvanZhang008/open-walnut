@@ -13,7 +13,7 @@
 import { hmacProof, proofSecret, proofsEqual, sha256Hex } from '../../../utils/hmac-proof.js'
 import type { RemoteCall, RemoteCallResult } from './witness-transport.js'
 import {
-  DOOR_NONCE_RE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_REQUEST, WITNESS_REQUEST_PATH, doorCallerProofText, doorWitnessProofText,
+  DOOR_NONCE_RE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_MAX_CALL, WITNESS_DOOR_REQUEST, WITNESS_REQUEST_PATH, doorCallerProofText, doorWitnessProofText,
   type WitnessEvidence, type WitnessSetup,
 } from './witness-wire.js'
 
@@ -59,6 +59,8 @@ export function directWitnessCall(o: { post?: DoorPost; timeoutMs?: number; waln
       if (gone) return
       const call = { ...body, walnutId }
       const text = JSON.stringify(call)
+      // The door refuses a longer call unread: say so here, without a round trip.
+      if (text.length > WITNESS_DOOR_MAX_CALL) { finish({ status: 413, body: { ok: false, error: 'too_large' } }); return }
       const digest = sha256Hex(text)
       let challenged = false
       // The caller's own nonce, in both proofs: a reply recorded for an earlier call never passes for this one.
@@ -70,7 +72,7 @@ export function directWitnessCall(o: { post?: DoorPost; timeoutMs?: number; waln
         const nonce = isObj(ch?.json) ? ch.json.nonce : undefined
         if (!ch || ch.status !== 200 || typeof nonce !== 'string' || !DOOR_NONCE_RE.test(nonce)) { finish(ch ? { status: ch.status === 200 ? 502 : ch.status, body: ch.json } : null); return }
         const fields = { walnutId, witness: place.id, nonce, cnonce, digest }
-        abandon = post(`${url}${WITNESS_DOOR_REQUEST}`, { v: 1, nonce, cnonce, proof: hmacProof(key, doorCallerProofText(fields)), call: text }, (r) => {
+        abandon = post(`${url}${WITNESS_DOOR_REQUEST}`, { v: 1, walnutId, witness: place.id, nonce, cnonce, proof: hmacProof(key, doorCallerProofText(fields)), call: text }, (r) => {
           if (gone) return
           if (!r) { finish(null); return }
           if (r.status !== 200) { finish({ status: r.status, body: r.json }); return }

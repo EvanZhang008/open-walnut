@@ -772,12 +772,18 @@ read one record format, which `permit/store.ts` already versions.
 ```
 POST <url>/challenge  {v:1, walnutId, witness, digest, cnonce} digest = sha256 of the call's JSON text; cnonce: the caller's own
                       -> {ok, nonce, ttlMs}                    a nonce for THIS call only, once, 10 s
-POST <url>/request    {v:1, nonce, cnonce, proof, call}       proof = HMAC-SHA256 under the witness's key of the caller text
+POST <url>/request    {v:1, walnutId, witness, nonce, cnonce,  proof = HMAC-SHA256 under the witness's key of the caller text
+                       proof, call}                            call = the call's JSON text, as a string
                       -> {ok, reply, proof}                    proof = HMAC-SHA256 under the same key of the witness text
 ```
 
 The door keeps no state for a challenge: the nonce is its expiry on the door's clock and the door's own HMAC (a secret of that
 door process) over the Walnut, the witness, the call's digest, the caller's nonce and the expiry (`witness-door.ts`).
+A request names its Walnut and witness beside the call, so the door checks everything on the raw call text first (its digest, the
+nonce, the expiry, the caller's proof) and parses the call only after that held; a call that names another witness than its request
+is refused. A request body is at most about 2.6 MB (a call of 2 MB: a list change carrying a full ledger of 10,000 real op entries
+is about 1.6 MB) and a challenge's 4 KB: a longer body is refused (413 `too_large`) as it arrives, by its length when it says one,
+and none of it is parsed.
 
 The caller text is the lines `walnut-witness-door-v1`, `caller`, the Walnut id, the witness id, the nonce, the caller's nonce and the
 call's digest; the witness text is the same with `witness` in place of `caller` and the reply's digest added (`witness-wire.ts`
@@ -793,8 +799,9 @@ nonce for a witness it keeps no key of: `no_witness_here` when the directory hol
 without its key), which a setup counts as not reached. A nonce is remembered as used only once a proof over it held, so a caller
 without the key fills no state at all (a flood of challenges takes nothing from an honest caller); the used ones are kept until they
 expire, at most 4096 (past it a key holder's request is refused, 429 `too_many_requests`, and no entry is dropped). One caller may
-ask for 256 challenges a 10 s window (429 `too_many_challenges`, not logged): a brake on the HMAC work one place can cause,
-counted by its address, an IPv6 one by its /64. (On the companion `trust proxy: loopback` makes the address the client's behind
+ask for 256 challenges and send 256 requests a 10 s window (429 `too_many_challenges`, `too_many_requests`, not logged): a brake
+on the HMAC and hashing work one place can cause, counted by its address, an IPv6 one by its /64. The used nonces are swept by
+their expiry, not by the order they were used in, so an expired one never counts toward the 4096. (On the companion `trust proxy: loopback` makes the address the client's behind
 its front.) Only `https://` (plain `http://` only to a loopback address); the proofs are in `src/utils/hmac-proof.ts`, the one
 module of this crypto (5a's door proofs are to use it too).
 
