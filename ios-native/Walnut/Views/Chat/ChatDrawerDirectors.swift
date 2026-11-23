@@ -76,7 +76,7 @@ struct ChatDirectorFold: View {
                             .buttonStyle(.plain)
                             .contextMenu { ChatDirectorMenu(director: d, actions: actions) }
                             .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("\(d.title), Director, \(d.state.label)")
+                            .accessibilityLabel("\(d.title), Director, \(d.stateText.isEmpty ? d.state.label : d.stateText)")
                             .accessibilityAddTraits(.isButton)
                             .accessibilityIdentifier("chat.drawer.director.\(d.id)")
                     }

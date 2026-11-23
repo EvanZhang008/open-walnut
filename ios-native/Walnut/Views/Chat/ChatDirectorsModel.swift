@@ -19,6 +19,8 @@ enum ChatDirectorsModel {
         let title: String
         let project: String
         let state: UserState
+        /// Its state in words; a task never started reads "Not started" (web org-leaders.ts stateTextOf).
+        var stateText: String = ""
         /// 0 = a top Director under its VP; 1 = under another Director; and so on.
         let depth: Int
         /// The VP row it reports to (`ChatOrgModel.Row.id`) and that VP's name.
@@ -75,7 +77,8 @@ enum ChatDirectorsModel {
             if n.director == true {
                 out.append(Director(
                     id: n.id, title: title(n, tasks: tasks), project: n.project ?? project,
-                    state: state(n, tasks: tasks), depth: depth, vpRowId: row.id, vpName: row.name
+                    state: state(n, tasks: tasks), stateText: stateText(n, tasks: tasks),
+                    depth: depth, vpRowId: row.id, vpName: row.name
                 ))
                 walk(n.workers ?? [], depth: depth + 1, project: project, row: row, tasks: tasks, seen: &seen, into: &out)
             } else {
@@ -111,7 +114,7 @@ enum ChatDirectorsModel {
 
     /// The second line of a Director in the sections layout.
     static func sectionLine(_ d: Director) -> String {
-        "\(d.vpName) · \(d.state.label)"
+        "\(d.vpName) · \(d.stateText.isEmpty ? d.state.label : d.stateText)"
     }
 
     /// The round avatar's letter: the VP's first.
@@ -162,6 +165,14 @@ enum ChatDirectorsModel {
     private static func title(_ n: OrgTeamNodeWire, tasks: [String: WalnutTask]) -> String {
         let t = (tasks[n.id]?.title ?? n.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? "Untitled task" : t
+    }
+
+    /// A Director not started yet (TODO, nothing to do but wait for its first message) says so,
+    /// never "Waiting / snoozed"; any other reads its state's label.
+    static func stateText(_ n: OrgTeamNodeWire, tasks: [String: WalnutTask]) -> String {
+        let s = state(n, tasks: tasks)
+        let phase = tasks[n.id]?.phase ?? n.phase
+        return phase == "TODO" && s.shown == .waiting ? "Not started" : s.label
     }
 
     /// The task list's status first (the feed keeps it current), else the tree's.

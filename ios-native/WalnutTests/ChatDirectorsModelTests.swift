@@ -65,6 +65,9 @@ final class ChatDirectorsModelTests: XCTestCase {
         let list = ChatDirectorsModel.sections(rows: rows(t), tree: t, tasks: [])
         XCTAssertEqual(list.map(\.id), ["d1", "d2", "d3", "g1"])
         XCTAssertEqual(ChatDirectorsModel.sectionLine(list[0]), "Walnut · Working")
+        // A Director never started reads "Not started", as on the web; one that asks still says so.
+        XCTAssertEqual(ChatDirectorsModel.sectionLine(list[2]), "Walnut · Not started")
+        XCTAssertEqual(list[1].stateText, UserState.needs.label)
         // To read is drawn as Needs you, on every surface.
         XCTAssertEqual(list[3].state, .needs)
         XCTAssertEqual(ChatDirectorsModel.vpInitial(list[0].vpName), "W")
