@@ -4,7 +4,9 @@
  *
  * POST   /api/stt/takes/:takeId/append?offset=<bytes on the server>&format=<webm|mp4|...>&language=<hint>
  *        body: the next bytes of the recorder's clip (application/octet-stream)
- *        200 { size } | 409 { error, size } (send from `size`) | 404/410/413/503 (stop for this take)
+ *        200 { size } | 409 { error, size } (send from `size`) | 404 (unknown: a restart lost it; the client
+ *        sends it again from 0) | 503 (busy; tried again) | 400/410/413 (stop for this take).
+ *        The client's action per answer: APPEND_ANSWER in web/src/api/stt-take-ahead.ts
  * DELETE /api/stt/takes/:takeId   a take that will not be finished (a discarded recording)
  *
  * The stop itself is POST /api/stt/transcribe with `take=<takeId>` (stt.ts).

@@ -112,6 +112,29 @@ describe('a long take heard ahead through the real server', () => {
     expect(list.recordings.find((r) => r.id === res.body.recordingId)?.result).toMatchObject({ text: res.body.text, durationMs: 10, aheadEngineMs: 10 * piecesBefore })
   }, 60_000)
 
+  it('a take the server lost mid-way (a restart) is sent again from byte 0 and still heard ahead', async () => {
+    // 2026-11-23: a deploy restarted the server 3 minutes into a 4.5-minute take; the next part
+    // got 404, the client gave up, and the stop heard the whole clip (10.8 s instead of ~2 s).
+    const clip = pcmToWav(speechPcm(150, 23))
+    wholeClip = clip
+    const half = Math.floor(clip.length / 2)
+    await appendInParts('take-e2e-restart-01', clip.subarray(0, half), 5)
+    await _resetTakesForTest() // what a restart does to the takes held in memory
+    heard = []
+    const next = await append('take-e2e-restart-01', half, clip.subarray(half, half + 1000))
+    expect(next).toMatchObject({ status: 404, body: { error: 'Unknown take' } })
+    // The client's start-over: everything recorded so far at offset 0, then on as before.
+    expect(await append('take-e2e-restart-01', 0, clip.subarray(0, half + 1000))).toEqual({ status: 200, body: { size: half + 1000 } })
+    expect((await append('take-e2e-restart-01', half + 1000, clip.subarray(half + 1000))).status).toBe(200)
+    await vi.waitFor(() => expect(heard.length).toBeGreaterThanOrEqual(3), { timeout: 20_000 })
+    await new Promise((r) => setTimeout(r, 500))
+    const res = await stop(clip, 'take-e2e-restart-01')
+    expect(res.status).toBe(200)
+    expect(heard).not.toContain(-1)
+    expect(res.body.heardAheadSec).toBeGreaterThan(60)
+    expect(res.body.heardAheadSec! + heard[heard.length - 1]!).toBeCloseTo(150, 0)
+  }, 60_000)
+
   it('the append answers 409 with its size for a wrong offset, and refuses a bad take id', async () => {
     const clip = pcmToWav(speechPcm(4))
     expect((await append('take-e2e-off-01', 0, clip.subarray(0, 2000))).body).toEqual({ size: 2000 })
