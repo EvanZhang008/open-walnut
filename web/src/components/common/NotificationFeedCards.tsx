@@ -216,7 +216,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
           answer={answer}
           fallback={target && (
             <div className="notification-feed-item-actions">
-              <button className="notification-perm-btn" onClick={() => onNavigate(target)}>Go to Session</button>
+              <button type="button" className="btn btn-sm nfc-go-session" onClick={() => onNavigate(target)}>Go to Session</button>
             </div>
           )}
         />
@@ -379,7 +379,7 @@ const FeedItem = memo(function FeedItem({
       {producerAction && (
         <div className="nfc-card-actions" {...stop}>
           <button
-            className="nfc-card-action nfc-card-action--primary"
+            className="btn btn-sm btn-primary nfc-card-action nfc-card-action--primary"
             data-testid="nfc-producer-action"
             onClick={(e) => { e.stopPropagation(); onNavigate(producerAction.to); }}
           >
@@ -396,7 +396,7 @@ const FeedItem = memo(function FeedItem({
           {fixTarget ? (
             <>
               <button
-                className="nfc-card-action nfc-fix-open"
+                className="btn btn-sm nfc-card-action nfc-fix-open"
                 data-testid="nfc-fix-open"
                 title="Open the repair session already working on this error"
                 onClick={(e) => { e.stopPropagation(); onNavigate(fixTarget); }}
@@ -405,7 +405,7 @@ const FeedItem = memo(function FeedItem({
               </button>
               {/* Quiet secondary: the first session may have finished or gone wrong. */}
               {!agentBlocked && <button
-                className="nfc-card-action nfc-fix-restart"
+                className="btn btn-sm nfc-card-action nfc-fix-restart"
                 data-testid="nfc-fix-restart"
                 title="Start a fresh repair session for this error"
                 disabled={fixBusy}
@@ -416,7 +416,7 @@ const FeedItem = memo(function FeedItem({
             </>
           ) : (
             <button
-              className="nfc-card-action nfc-fix-start"
+              className="btn btn-sm nfc-card-action nfc-fix-start"
               data-testid="nfc-fix-start"
               title={canFix ? "Start a coding session in Walnut's source with this error as the brief" : 'Agent repair is unavailable on this server'}
               disabled={fixBusy || !canFix}

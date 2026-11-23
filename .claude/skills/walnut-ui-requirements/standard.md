@@ -598,9 +598,10 @@ Counted on 2026-11-23 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
 
 - 1 rule restyles `.btn` outside the family's two homes (`styles/buttons.css`, and the card
   family in `components/actions/ask-card.css`): `styles/inline-answer.css`.
-- 41 rules in 21 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
-  corner instead of a `.btn` variant.
-- 1001 `<button>` elements in 391 TSX files carry no `btn` class (choice controls with role tab,
+- 322 rules in 97 files give a key its own fill and corner instead of a `.btn` variant: a
+  `*-btn`, `*-button`, `*-pill` or `*-chip` class, or any class written on a `<button>` outside the
+  family (`.nfc-card-action` had no such name, 2026-11-23).
+- 993 `<button>` elements in 390 TSX files carry no `btn` class (choice controls with role tab,
   radio, switch, checkbox or option aside). A new file starts at 0.
 - 21 raw `#007aff` / `#0a84ff` in 9 files where `var(--accent)` belongs.
 - Values written where a token belongs (per declaration, `tests/web/ui-token-scan.ts`):

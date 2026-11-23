@@ -66,13 +66,17 @@ export function restylesBtn(selector: string, companions: Set<string> = new Set(
   return classesOf(parts[at]).some((c) => !FAMILY.has(c)) || parts.length > 1;
 }
 
-/** `.my-thing-btn { background; border-radius }`: a button, pill or chip with a look of its own. */
-export function isOwnControl(selector: string): boolean {
+/**
+ * `.my-thing-btn { background; border-radius }`: a button, pill or chip with a look of its own. A class
+ * written on a `<button>` outside the family (`bareKeys`, from bareKeyClasses) is one whatever its name:
+ * `.nfc-card-action` drew the notice cards' keys and no suffix gave it away (2026-11-23).
+ */
+export function isOwnControl(selector: string, bareKeys: Set<string> = new Set()): boolean {
   const parts = compounds(selector);
   const last = parts[parts.length - 1] ?? '';
   const cls = classesOf(last);
   if (cls.includes('btn')) return false; // counted by restylesBtn
-  return cls.some((c) => /(-btn|-button|-pill|-chip)$/.test(c));
+  return cls.some((c) => /(-btn|-button|-pill|-chip)$/.test(c) || bareKeys.has(c));
 }
 
 /**
@@ -414,6 +418,22 @@ export function openingTags(src: string, name: string): string[] {
 /** The opening tags of every `<button` in a TSX source. */
 export const buttonTags = (src: string): string[] => openingTags(src, 'button');
 
+/** Every class written on a `<button>` drawn outside the family (isBareButton), in any quoted piece of its className. */
+export function bareKeyClasses(): Set<string> {
+  const out = new Set<string>();
+  for (const file of walk(WEB_SRC, ['.tsx'])) {
+    for (const tag of buttonTags(fs.readFileSync(file, 'utf8'))) {
+      if (!isBareButton(tag)) continue;
+      const at = tag.search(/\bclassName=/);
+      if (at < 0) continue;
+      const start = at + 'className='.length;
+      const value = tag.slice(start, valueEnd(tag, start)).replace(/\$\{/g, ' ');
+      for (const m of value.matchAll(/[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+/g)) out.add(m[0]);
+    }
+  }
+  return out;
+}
+
 /**
  * A `<button>` drawn outside the family: no `btn` among the words of its className (a static
  * string, a template, or an expression that names it), and not a choice control.
@@ -438,6 +458,7 @@ export function countAll(): Counts {
   const parts = inputParts();
   const fields = fieldClasses();
   const pressables = pressableClasses();
+  const bareKeys = bareKeyClasses();
   for (const file of walk(WEB_SRC, ['.css']).sort()) {
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
@@ -453,7 +474,7 @@ export function countAll(): Counts {
       const sels = decls[0].selectors;
       const sets = (re: RegExp) => decls.some((d) => re.test(d.prop));
       if (decls.some((d) => LOOK.test(d.prop)) && !fingerSize(decls) && sels.some((x) => restylesBtn(x, companions))) bump(out.restyledBtn, rel);
-      else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some(isOwnControl)) bump(out.ownControl, rel);
+      else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some((x) => isOwnControl(x, bareKeys))) bump(out.ownControl, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
       if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value) && !META_MARK.test(lines[d.line - 1] ?? '')) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);

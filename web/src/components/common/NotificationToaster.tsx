@@ -456,7 +456,8 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
         />
       ) : toast.action && shownActions.length > 0 && (
         <button
-          className="notification-toast-action"
+          type="button"
+          className="btn btn-sm notification-toast-action"
           onClick={(e) => {
             e.stopPropagation();  // action has its own target — don't also open the center
             const a = toast.action;
@@ -717,7 +718,7 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
                would report an empty answers map as the user's answer. The center is
                the escape hatch: it shows the record's full detail, and for an
                unanswerable ask it offers the session deep link. */
-            <button className="notification-toast-action" onClick={openCenter}>Open</button>
+            <button type="button" className="btn btn-sm notification-toast-action" onClick={openCenter}>Open</button>
           ) : acpOptions.length > 0 ? (
             <>
               {acpOptions.map((o) => {

@@ -107,11 +107,15 @@
     display: flex;
     gap: 8px;
   }
-  html body .nfc-perm-toast .nfc-perm-btn,
-  html body .nfc-perm-toast .notification-toast-action {
+  html body .nfc-perm-toast .nfc-perm-btn {
     flex: 1 1 0;
     min-height: 44px;
     font-size: var(--font-size-lg);
+  }
+  /* Its Open key is the family's grey key: only a finger's height here. */
+  html body .nfc-perm-toast .notification-toast-action {
+    flex: 1 1 0;
+    min-height: 44px;
   }
   /* Deny with a note: a full-row finger target, and a box iOS does not zoom into. */
   html body .nfc-perm-toast .perm-note-toggle {

@@ -152,6 +152,9 @@ describe('UI standard: one look per kind of control', () => {
     expect(isOwnControl('.kanban-icon-btn')).toBe(true);
     expect(isOwnControl('.row .pr-pill:hover')).toBe(true);
     expect(isOwnControl('.card-title')).toBe(false);
+    // A class on a <button> outside the family is a key with its own look, whatever its name.
+    expect(isOwnControl('.nfc-card-action')).toBe(false);
+    expect(isOwnControl('.nfc-card-action:hover', new Set(['nfc-card-action']))).toBe(true);
     const bare = (src: string) => buttonTags(src).map(isBareButton);
     expect(bare('<button className="btn btn-sm" onClick={() => a > b}>x</button>')).toEqual([false]);
     expect(bare("<button className={`btn${on ? ' btn-primary' : ''}`}>y</button>")).toEqual([false]);

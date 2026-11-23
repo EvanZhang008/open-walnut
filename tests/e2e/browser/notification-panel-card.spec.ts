@@ -266,6 +266,10 @@ test('NP-live: a running break\'s buttons, an ask\'s host, Clear and a row\'s x 
   await expect(buttons).toHaveText(['End break', 'Another block'], { timeout: 20_000 })
   await expect(buttons.first()).toHaveClass(/nfc-card-action--primary/)
   await expect(focus.locator('.nfc-card-action')).toHaveCount(2)
+  // They are the button family's keys: the first its one blue key, the other a grey one.
+  await expect(buttons.first()).toHaveClass(/\bbtn-primary\b/)
+  await expect(buttons.nth(1)).toHaveClass(/\bbtn\b/)
+  await expect(buttons.nth(1)).not.toHaveClass(/btn-primary/)
 
   // The ask on another computer names it on its source line; the settled one has its short id.
   const ask = panel.locator('.nfc-perm-card', { hasText: 'rm -rf build/' })

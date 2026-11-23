@@ -14173,21 +14173,8 @@ a.task-kebab-info:hover {
 
 .notification-toast-body:last-child { margin-bottom: 0; }
 
-.notification-toast-action {
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--accent);
-  background: none;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-full);
-  padding: 4px 12px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.notification-toast-action:hover {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
+/* A toast's one action (Undo, Open chat, Open) is the family's small grey key (btn btn-sm); this
+   class is its hook. */
 
 /* ===== Agent Management ===== */
 

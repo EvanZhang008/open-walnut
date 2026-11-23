@@ -104,13 +104,13 @@ export function NotificationActionButtons({
       >
         {actions.map((a, i) => {
           const primary = i === 0;
-          const className = card
-            ? `nfc-card-action${primary ? ' nfc-card-action--primary' : ''}`
-            : `nfc-perm-btn${primary ? ' nfc-perm-primary' : ''}`;
+          // The family's keys: the first is the notice's one main step. The old names stay as hooks.
+          const hook = card ? 'nfc-card-action' : 'nfc-notice-action';
           return (
             <button
               key={`${i}:${a.label}`}
-              className={className}
+              type="button"
+              className={`btn btn-sm${primary ? ` btn-primary ${hook}--primary` : ''} ${hook}`}
               data-testid="nfc-notice-action"
               disabled={busy !== null}
               onClick={(e) => { e.stopPropagation(); void run(a, i); }}
