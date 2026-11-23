@@ -40,6 +40,7 @@ const config = mergeConfig(
         '@open-walnut/budget-engines': path.resolve(import.meta.dirname, 'src/core/usage/budget-engines.ts'),
         '@open-walnut/model-line': path.resolve(import.meta.dirname, 'src/core/usage/model-line.ts'),
         '@open-walnut/speed-totals': path.resolve(import.meta.dirname, 'src/core/sessions/speed-totals.ts'),
+        '@open-walnut/pcm-l16': path.resolve(import.meta.dirname, 'src/core/tts/pcm.ts'),
         '@open-walnut/session-cost-settled': path.resolve(import.meta.dirname, 'src/core/usage/session-cost-settled.ts'),
         '@open-walnut/search-transcript': path.resolve(import.meta.dirname, 'src/core/task-search-transcript.ts'),
         '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),

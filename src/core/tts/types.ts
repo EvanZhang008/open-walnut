@@ -28,6 +28,17 @@ export interface TtsRequest {
   signal?: AbortSignal;
   /** How long this engine may take for the piece, for one that tells its backend when to stop. */
   deadlineMs?: number;
+  /**
+   * The client plays raw PCM as it arrives (`audio/L16`): an engine that `streams`
+   * then answers once its first audio is made instead of once the piece is whole.
+   */
+  stream?: boolean;
+  /**
+   * Said by an engine whose own earlier piece still holds its backend: the
+   * caller's first-audio budget waits until `ahead` settles, so the time queued
+   * behind the engine's own work is not counted against this piece.
+   */
+  queuedBehind?(ahead: Promise<unknown>): void;
 }
 
 export interface TtsAudio {
@@ -51,6 +62,12 @@ export interface TtsEngine {
   fallbackBudgetMs?: number;
   /** False for a piece it cannot finish within `fallbackBudgetMs`: the engine behind it reads it at once. */
   fitsBudget?(text: string): boolean;
+  /**
+   * Answers a `stream` request with `audio/L16` as it is made: `fallbackBudgetMs` then
+   * bounds the wait for the first audio, and `fitsBudget` does not apply (the piece
+   * plays while the rest is made).
+   */
+  streams?: boolean;
   synthesize(req: TtsRequest): Promise<TtsAudio>;
 }
 

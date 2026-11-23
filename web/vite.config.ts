@@ -44,6 +44,7 @@ export default defineConfig({
       // One rule for counting a turn into the session's average speed: the server folds each final
       // in, and this browser folds a final it holds live into a record read before it landed.
       '@open-walnut/speed-totals': path.resolve(__dirname, '../src/core/sessions/speed-totals.ts'),
+      '@open-walnut/pcm-l16': path.resolve(__dirname, '../src/core/tts/pcm.ts'),
       // Same reason: which cost answer is a finished read has one rule, the server cache's and this browser's.
       '@open-walnut/session-cost-settled': path.resolve(__dirname, '../src/core/usage/session-cost-settled.ts'),
       // Same reason once more: the ✦ search's prompt and answer are BUILT by the

@@ -108,6 +108,13 @@ describe('/api/v1/voice', () => {
     const again = await post('/api/v1/voice/speak', { text: 'Hello there.', language: 'en-US' })
     expect(again.headers.get('x-walnut-tts-cached')).toBe('1')
     expect(upstream).toHaveLength(1)
+    // A client that plays streamed PCM asks with stream: true; ElevenLabs answers its MP3 as before.
+    const streamed = await post('/api/v1/voice/speak', { text: 'Streamed ask.', language: 'en-US', stream: true })
+    expect(streamed.status).toBe(200)
+    expect(streamed.headers.get('content-type')).toBe('audio/mpeg')
+    expect(streamed.headers.get('cache-control')).toBe('no-store, no-transform')
+    expect([...new Uint8Array(await streamed.arrayBuffer())]).toEqual([0xff, 0xf3, 1, 2])
+    expect(upstream[1]!.body).not.toHaveProperty('stream')
   })
 
   it('an engine failure answers in words, and bad input is 400', async () => {
@@ -118,6 +125,9 @@ describe('/api/v1/voice', () => {
     expect((await res.json()).error).toMatchObject({ code: 'tts_quota' })
     expect((await post('/api/v1/voice/speak', { text: '' })).status).toBe(400)
     expect((await post('/api/v1/voice/speak', { text: 'x'.repeat(2001) })).status).toBe(400)
+    const notBool = await post('/api/v1/voice/speak', { text: 'x', stream: 'yes' })
+    expect(notBool.status).toBe(400)
+    expect((await notBool.json()).error.message).toMatch(/stream must be a boolean/)
   })
 
   it('lists the local Chinese voice, off until its experiment is on; warmup answers at once with the status', async () => {

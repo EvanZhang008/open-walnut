@@ -6,8 +6,9 @@
  *   POST /voice/warmup              → the same status, at once; loads the local voice in the background
  *   POST /voice/spoken { text, piece?, language? }
  *                                   → { text, language, truncated, chunks, rest? } | { text: null }
- *   POST /voice/speak  { text, language?, previousText?, nextText? }
- *                                   → 200 audio/mpeg (ElevenLabs, streamed as it is made) or audio/wav (the local voice, whole)
+ *   POST /voice/speak  { text, language?, previousText?, nextText?, stream? }
+ *                                   → 200 audio/mpeg (ElevenLabs, streamed as it is made) or audio/wav (the local voice, whole);
+ *                                     with stream: true the local voice answers audio/L16 as it is made
  *
  * `spoken` turns a reply into what is said (src/core/tts/spoken-text.ts: the part
  * before `---`, no code, tables or paths, about 40 seconds at most) and cuts it in
@@ -28,6 +29,15 @@
  * first Chinese sentence (and sets it up the first time), waiting a moment to
  * adopt a warm one so its answer can name it; status does the setup part too.
  *
+ * `stream: true` (a client that plays raw PCM as it arrives): a piece the local
+ * voice reads comes as `audio/L16; rate=<hz>; channels=1` (RFC 2586: signed
+ * 16-bit big-endian samples, no header), each chunk as the model makes it. Its
+ * first audio has the local voice's budget (8 s, of which 2.5 s once the model
+ * started the piece), else `engine` reads the piece as without it; once audio
+ * went out a failure only ends the response early (the reader's fetch fails,
+ * since the chunked body is cut). The cache keeps the whole piece as WAV, so a
+ * cached one answers `audio/wav`, whole. Without `stream` nothing changes.
+ *
  * Errors: `bad_request` (400), `tts_unavailable` (503: no engine on this server, or
  * the engine cannot be reached; the client falls back to its own voice), `tts_quota`
  * (503: the cloud voice's credits are used up), `tts_failed` (502).
@@ -36,7 +46,7 @@
  * Frozen-contract note: additive (docs/reference/api-v1.md).
  */
 
-import { Readable } from 'node:stream'
+import { Readable, pipeline } from 'node:stream'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { prepareSpokenPiece, prepareSpokenText } from '../../core/tts/spoken-text.js'
@@ -110,6 +120,10 @@ voiceV1Router.post('/voice/speak', async (req: Request, res: Response, next: Nex
     sendError(res, 400, 'bad_request', `text is longer than ${MAX_PIECE_CHARS} characters: ask /voice/spoken for pieces`)
     return
   }
+  if (body.stream !== undefined && typeof body.stream !== 'boolean') {
+    sendError(res, 400, 'bad_request', 'stream must be a boolean')
+    return
+  }
   // Each engine has a deadline of its own (speakWithFallback); this one is the client's.
   const abort = new AbortController()
   // The client went away (voice mode stopped, the person talked over it): stop paying for audio.
@@ -129,21 +143,25 @@ voiceV1Router.post('/voice/speak', async (req: Request, res: Response, next: Nex
       previousText: optionalString(body.previousText, MAX_PIECE_CHARS),
       nextText: optionalString(body.nextText, MAX_PIECE_CHARS),
       signal: abort.signal,
+      ...(body.stream === true ? { stream: true } : {}),
     }, SPEAK_DEADLINE_MS)
     const engine = audio.engine
     res.status(200)
     res.setHeader('Content-Type', audio.mime)
-    res.setHeader('Cache-Control', 'no-store')
+    // no-transform: compression and proxies pass each chunk on as it comes.
+    res.setHeader('Cache-Control', 'no-store, no-transform')
     res.setHeader('X-Walnut-Tts-Engine', `${engine.id}/${engine.model}`)
     res.setHeader('X-Walnut-Tts-Cached', audio.cached ? '1' : '0')
     res.flushHeaders()
-    log.web.info('tts speak', { engine: engine.id, model: engine.model, chars: text.length, cached: audio.cached, firstMs: Date.now() - since })
+    log.web.info('tts speak', { engine: engine.id, model: engine.model, chars: text.length, cached: audio.cached, firstMs: Date.now() - since, mime: audio.mime })
     const stream = Readable.fromWeb(audio.body as import('node:stream/web').ReadableStream<Uint8Array>)
-    stream.on('error', (err) => {
-      if (!abort.signal.aborted) log.web.warn('tts stream broke', { error: err instanceof Error ? err.message : String(err) })
-      res.destroy()
+    // pipeline, not pipe: a client that goes away destroys the source too, which
+    // cancels the engine's stream (the daemon stops the piece, the engine is free).
+    // A source that breaks destroys the response: audio already went out, so no
+    // fallback now, the response just ends short (its chunked body cut).
+    pipeline(stream, res, (err) => {
+      if (err && !abort.signal.aborted) log.web.warn('tts stream broke', { engine: engine.id, chars: text.length, error: err instanceof Error ? err.message : String(err) })
     })
-    stream.pipe(res)
   } catch (err) {
     if (res.headersSent) { res.destroy(); return }
     if (abort.signal.aborted && !res.writable) return

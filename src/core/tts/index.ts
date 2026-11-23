@@ -24,6 +24,7 @@ import {
   type LocalVoiceFacts, type LocalVoiceStatus,
 } from './local-voice.js';
 import { log } from '../../logging/index.js';
+import { l16ToWav, parseL16 } from './pcm.js';
 
 export { TtsError } from './types.js';
 export type { TtsEngineId } from './types.js';
@@ -138,6 +139,10 @@ export const SPEAK_DEADLINE_MS = 20_000;
  * Each try has its own deadline: the engine gets its `fallbackBudgetMs` when a
  * fallback stands behind it (and a piece it cannot finish in that goes to the
  * fallback at once), and the fallback gets the whole `deadlineMs` of its own.
+ * A streamed piece (`req.stream` to an engine that `streams`) has that budget
+ * for its first audio only, counted from when the engine's own earlier piece is
+ * done (`queuedBehind`); once audio was passed on there is no fallback, and a
+ * stream that breaks just ends (the route logs it).
  */
 export async function speakWithFallback(
   engines: PieceEngines,
@@ -146,7 +151,9 @@ export async function speakWithFallback(
 ): Promise<TtsAudio & { cached: boolean; engine: TtsEngine }> {
   const { engine, fallback } = engines;
   if (!engine) throw new TtsError('No voice engine on this server: the device speaks with its own voice', 503, 'tts_unavailable');
-  if (fallback && engine.fitsBudget?.(req.text) === false) {
+  // A streamed piece plays while the rest is made: its length is no reason to skip the engine.
+  const streamed = !!req.stream && !!engine.streams;
+  if (fallback && !streamed && engine.fitsBudget?.(req.text) === false) {
     log.web.info('tts piece too long for its engine\'s budget, the fallback reads it', { engine: engine.id, fallback: fallback.id, chars: req.text.length });
     return { ...(await speakWithin(fallback, req, deadlineMs)), engine: fallback };
   }
@@ -167,16 +174,26 @@ export async function speakWithFallback(
  */
 async function speakWithin(engine: TtsEngine, req: TtsRequest, ms: number): Promise<TtsAudio & { cached: boolean }> {
   const deadline = new AbortController();
-  const timer = setTimeout(() => deadline.abort(), ms);
+  let timer: NodeJS.Timeout | undefined = setTimeout(() => deadline.abort(), ms);
+  let settled = false;
   const signal = req.signal ? AbortSignal.any([req.signal, deadline.signal]) : deadline.signal;
+  // The engine's own earlier piece holds it: the clock starts again, whole, once that one is done.
+  const queuedBehind = (ahead: Promise<unknown>) => {
+    clearTimeout(timer);
+    timer = undefined;
+    void ahead.catch(() => {}).then(() => {
+      if (!settled && !deadline.signal.aborted) timer = setTimeout(() => deadline.abort(), ms);
+    });
+  };
   try {
-    return await speak(engine, { ...req, signal, deadlineMs: ms });
+    return await speak(engine, { ...req, signal, deadlineMs: ms, queuedBehind });
   } catch (err) {
     if (deadline.signal.aborted && !req.signal?.aborted) {
       throw new TtsError(`The ${engine.id} voice did not answer within ${Math.round(ms / 1000)}s`, 503, 'tts_unavailable');
     }
     throw err;
   } finally {
+    settled = true;
     clearTimeout(timer);
   }
 }
@@ -239,12 +256,16 @@ export async function speak(engine: TtsEngine, req: TtsRequest): Promise<TtsAudi
       size += chunk.byteLength;
       controller.enqueue(chunk);
     },
+    // Only a piece that ended whole: a stream that broke or was cancelled never flushes.
     flush() {
       if (size === 0) return;
       const all = new Uint8Array(size);
       let at = 0;
       for (const p of parts) { all.set(p, at); at += p.byteLength; }
-      remember(key, audio.mime, all);
+      // Raw PCM is kept as WAV: a cached piece answers whole, which every client plays.
+      const pcm = parseL16(audio.mime);
+      if (pcm) remember(key, 'audio/wav', l16ToWav(all, pcm));
+      else remember(key, audio.mime, all);
     },
   });
   return { mime: audio.mime, cached: false, body: audio.body.pipeThrough(keep) };

@@ -30,10 +30,15 @@ function silentWav(ms: number): Buffer {
   return b
 }
 
-interface Captured { sends: { message: string; hints?: unknown }[]; speaks: string[] }
+/** Silent raw PCM as the local voice streams it (audio/L16: 16-bit big-endian, 24 kHz mono). */
+function silentL16(ms: number): Buffer {
+  return Buffer.alloc(Math.round(24 * ms) * 2)
+}
 
-async function setup(page: Page, opts: { serverVoice: boolean; refuseMic?: boolean }): Promise<Captured> {
-  const captured: Captured = { sends: [], speaks: [] }
+interface Captured { sends: { message: string; hints?: unknown }[]; speaks: string[]; streamAsked: boolean[] }
+
+async function setup(page: Page, opts: { serverVoice: boolean; refuseMic?: boolean; pcm?: boolean }): Promise<Captured> {
+  const captured: Captured = { sends: [], speaks: [], streamAsked: [] }
   await useSyntheticMic(page, { gain: QUIET, refuse: opts.refuseMic ? 'NotAllowedError' : undefined })
   // The session:send RPC is answered here, so the message is "accepted" with no server session.
   await page.addInitScript(() => {
@@ -63,8 +68,11 @@ async function setup(page: Page, opts: { serverVoice: boolean; refuseMic?: boole
   // Opening voice mode asks the warm-up (it answers with the status); an older server only has the status.
   await page.route((url) => url.pathname === '/api/v1/voice/status' || url.pathname === '/api/v1/voice/warmup', (route) => route.fulfill({ json: { engine: opts.serverVoice ? 'elevenlabs' : 'device', engines: [] } }))
   await page.route('**/api/v1/voice/speak', async (route) => {
-    captured.speaks.push(JSON.parse(route.request().postData() ?? '{}').text)
+    const asked = JSON.parse(route.request().postData() ?? '{}')
+    captured.speaks.push(asked.text)
+    captured.streamAsked.push(asked.stream === true)
     if (!opts.serverVoice) return route.fulfill({ status: 503, json: { error: { code: 'tts_unavailable', message: 'No voice engine on this server' } } })
+    if (opts.pcm) return route.fulfill({ status: 200, contentType: 'audio/L16; rate=24000; channels=1', body: silentL16(1500) })
     return route.fulfill({ status: 200, contentType: 'audio/mpeg', body: silentWav(1500) })
   })
   await mockSession(page, [], 'idle')
@@ -280,6 +288,23 @@ export function registerVoiceConversationScenarios(): void {
     await expect(box).toHaveValue('kept draft')
     expect(drafts.length).toBeGreaterThan(0)
     expect(JSON.stringify((await sends(page))[0])).toContain('What is on today?')
+  })
+
+  test('the local voice\'s streamed PCM (audio/L16) is played, each piece to its end, then it listens again', async ({ page }) => {
+    const captured = await setup(page, { serverVoice: true, pcm: true })
+    await openVoice(page)
+    await talkAndPause(page)
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
+    await answer(page, 'Two meetings today. The first is at ten.')
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
+    await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
+    expect(captured.streamAsked.every(Boolean)).toBe(true)
+    // Two pieces of 1.5 s each, played through Web Audio: still speaking after the first one's length.
+    await page.waitForTimeout(1_000)
+    expect(await phase(page)).toBe('speaking')
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'listening', { timeout: 15_000 })
+    // The server voice stayed: a stream is not a failure.
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-engine', 'elevenlabs')
   })
 
   test('a refused microphone says why and keeps the composer', async ({ page }) => {

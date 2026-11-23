@@ -10,6 +10,11 @@
  * said with the device's own voice (speechSynthesis), never left silent. While
  * voice mode waits for words it plays the waiting cue (waiting-cue.ts) through the
  * same output.
+ *
+ * A piece the local voice streams (a PcmFeed, `audio/L16`) plays as it arrives:
+ * each run of samples becomes a buffer scheduled right after the one before, so
+ * the first sound comes as soon as the first chunk is made; the piece is done
+ * when the stream ended and its last buffer finished.
  */
 
 import { speakPiece, SpeakError, type SpokenReply, type TtsEngineId } from '../api/voice';
@@ -17,6 +22,7 @@ import { log } from '../utils/log';
 import { analyserRms } from './voice-mic';
 import { estimatedSeconds } from './stream-reader';
 import { WaitingCue } from './waiting-cue';
+import { PcmFeed } from './pcm-feed';
 
 export type SpeakOutcome = 'done' | 'stopped';
 
@@ -27,19 +33,30 @@ export type SpeakOutcome = 'done' | 'stopped';
  * failure, and the language is said on the device for the rest of the conversation.
  */
 const OWN_VOICE_MAX_MISSES = 3;
+/**
+ * How far ahead of now the first buffer of a streamed piece (or one after a gap)
+ * is scheduled: room for the next chunk to come before this one runs out. A
+ * buffer that came after the one before had ended (an underrun) doubles it, up
+ * to STREAM_MAX_LEAD_S, for the rest of the conversation.
+ */
+const STREAM_LEAD_S = 0.2;
+const STREAM_MAX_LEAD_S = 1.0;
 
 interface Queued {
   text: string;
   language: string;
   /** The piece said before it, for a voice that keeps its tone across pieces. */
   previous?: string;
-  audio?: Promise<ArrayBuffer>;
+  audio?: Promise<ArrayBuffer | PcmFeed>;
 }
 
 export class VoiceSpeaker {
   private run = 0;
   private abort: AbortController | null = null;
-  private source: AudioBufferSourceNode | null = null;
+  /** Every buffer playing or scheduled (one for a whole piece, a run of them for a stream). */
+  private sources = new Set<AudioBufferSourceNode>();
+  /** The streamed piece being played, so stop() ends its reading too. */
+  private feed: PcmFeed | null = null;
   private wake: (() => void) | null = null;
   /** Pieces not yet said, in order. */
   private queue: Queued[] = [];
@@ -58,6 +75,14 @@ export class VoiceSpeaker {
   private byLanguage: Record<string, TtsEngineId>;
   /** Misses in a row of each language's own voice (see OWN_VOICE_MAX_MISSES). */
   private ownMisses = new Map<string, number>();
+  /** The lead a streamed piece starts with now (see STREAM_LEAD_S). */
+  private streamLead = STREAM_LEAD_S;
+  /**
+   * The next piece may be fetched: the current one's audio is here and, when it
+   * streams, its stream has ended. The local voice makes one piece at a time and
+   * faster than it plays, so a fetch started earlier only waits in its line.
+   */
+  private prefetchOpen = true;
 
   constructor(
     private readonly ctx: AudioContext,
@@ -77,7 +102,7 @@ export class VoiceSpeaker {
   /** The output's loudness now: 0 when silent, null while the device's voice speaks (not measurable). */
   outputLevel(): number | null {
     if (this.deviceSpeaking) return null;
-    if (!this.source && !this.cue.playing) return 0;
+    if (!this.sources.size && !this.cue.playing) return 0;
     return analyserRms(this.out, this.outBuf);
   }
 
@@ -125,9 +150,8 @@ export class VoiceSpeaker {
       this.lastText = text;
     }
     if (this.drain) {
-      // One is playing or on its way: the next piece's audio starts now, so it adds no silence.
-      const next = this.queue[0];
-      if (next && this.abort) this.fetch(next, this.queue[1], this.abort.signal);
+      // One is playing or on its way: the next piece's audio starts as soon as it may, so it adds no silence.
+      if (this.abort) this.prefetch(this.abort.signal);
       return this.drain.promise;
     }
     let resolve!: (outcome: SpeakOutcome) => void;
@@ -138,6 +162,12 @@ export class VoiceSpeaker {
     this.abort = abort;
     void this.pump(this.run, drain, abort.signal);
     return promise;
+  }
+
+  /** Starts the next piece's audio, once the current one allows it (prefetchOpen). */
+  private prefetch(signal: AbortSignal): void {
+    const next = this.queue[0];
+    if (this.prefetchOpen && next && !signal.aborted) this.fetch(next, this.queue[1], signal);
   }
 
   /** Starts the audio of a queued piece, once (the server voice only). */
@@ -156,20 +186,31 @@ export class VoiceSpeaker {
     for (let i = 0; run === this.run; i++) {
       const item = this.queue.shift();
       if (!item) break;
+      this.prefetchOpen = !this.served(item);
       if (this.served(item)) {
         const ownVoice = this.engine === 'device';
         this.fetch(item, this.queue[0], signal);
         try {
-          const bytes = await item.audio!;
+          const audio = await item.audio!;
           if (run !== this.run) return;
-          // The next piece's audio comes while this one plays.
-          const next = this.queue[0];
-          if (next) this.fetch(next, this.queue[1], signal);
+          // The next piece's audio comes while this one plays: after its stream ended, for a streamed one.
+          if (audio instanceof PcmFeed) {
+            void audio.done.then(() => {
+              if (run !== this.run) return;
+              this.prefetchOpen = true;
+              this.prefetch(signal);
+            });
+          } else {
+            this.prefetchOpen = true;
+            this.prefetch(signal);
+          }
           if (ownVoice) this.ownMisses.delete(VoiceSpeaker.lang(item.language));
-          await this.playBytes(bytes, run);
+          if (audio instanceof PcmFeed) await this.playFeed(audio, run, i);
+          else await this.playBytes(audio, run);
           continue;
         } catch (err) {
           if (run !== this.run || signal.aborted) return;
+          this.prefetchOpen = true;
           const why = err instanceof Error ? err.message : String(err);
           log.warn('voice', 'server voice failed: the device speaks instead', { error: why, piece: i });
           if (ownVoice) this.ownVoiceMissed(VoiceSpeaker.lang(item.language), err);
@@ -205,9 +246,14 @@ export class VoiceSpeaker {
     this.abort = null;
     this.queue = [];
     this.lastText = undefined;
+    this.prefetchOpen = true;
     this.cue.stop();
-    try { this.source?.stop(); } catch { /* already stopped */ }
-    this.source = null;
+    for (const source of this.sources) {
+      try { source.stop(); } catch { /* already stopped */ }
+    }
+    this.sources.clear();
+    this.feed?.cancel();
+    this.feed = null;
     if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
     this.deviceSpeaking = false;
     this.wake?.();
@@ -224,7 +270,7 @@ export class VoiceSpeaker {
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.out);
-    this.source = source;
+    this.sources.add(source);
     await new Promise<void>((resolve) => {
       const done = () => { clearTimeout(watchdog); if (this.wake === done) this.wake = null; resolve(); };
       const watchdog = setTimeout(done, buffer.duration * 1000 + 1500);
@@ -232,7 +278,44 @@ export class VoiceSpeaker {
       source.onended = done;
       source.start();
     });
-    if (this.source === source) this.source = null;
+    this.sources.delete(source);
+  }
+
+  /** A streamed piece: each run of samples scheduled back to back as it arrives, through `out`. */
+  private async playFeed(feed: PcmFeed, run: number, piece: number): Promise<void> {
+    this.feed = feed;
+    if (this.ctx.state === 'suspended') await this.ctx.resume().catch(() => {});
+    let at = 0;
+    let last: AudioBufferSourceNode | null = null;
+    for await (const samples of feed.samples()) {
+      if (run !== this.run) return;
+      const buffer = this.ctx.createBuffer(samples.length, samples[0]!.length, feed.format.rate);
+      samples.forEach((channel, c) => buffer.getChannelData(c).set(channel));
+      const source = this.ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.out);
+      source.onended = () => { this.sources.delete(source); };
+      this.sources.add(source);
+      // Right after the buffer before it; after a gap (the stream fell behind), a moment from now,
+      // and a longer moment from then on.
+      const now = this.ctx.currentTime;
+      if (last && at < now) this.streamLead = Math.min(STREAM_MAX_LEAD_S, this.streamLead * 2);
+      at = Math.max(now + this.streamLead, at);
+      source.start(at);
+      at += buffer.duration;
+      last = source;
+    }
+    if (this.feed === feed) this.feed = null;
+    if (run !== this.run) return;
+    if (feed.failed) log.warn('voice', 'the streamed piece broke off part way: it ends there', { error: String(feed.failed), piece });
+    const final = last;
+    if (!final || !this.sources.has(final)) return;
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(watchdog); if (this.wake === done) this.wake = null; resolve(); };
+      const watchdog = setTimeout(done, Math.max(0, at - this.ctx.currentTime) * 1000 + 1500);
+      this.wake = done;
+      final.onended = () => { this.sources.delete(final); done(); };
+    });
   }
 
   private sayOnDevice(text: string, language: string, run: number): Promise<void> {

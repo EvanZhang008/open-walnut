@@ -4,7 +4,7 @@
  */
 
 import { apiGet, apiPost } from './client';
-import { deadlineSignal } from '../utils/deadline-signal';
+import { PcmFeed, parseL16 } from '../voice/pcm-feed';
 
 /** `qwen`: the local voice on the Mac, for Chinese pieces only (the `local_chinese_voice` experiment). */
 export type TtsEngineId = 'elevenlabs' | 'device' | 'qwen';
@@ -68,31 +68,73 @@ export class SpeakError extends Error {
 }
 
 /**
- * How long a piece may take: the server gives the local voice up to 8 s and the
- * voice behind it 20 s of its own (src/core/tts/index.ts), with room.
+ * How long a piece may take to start: the server gives the local voice up to 8 s
+ * for its first audio and the voice behind it 20 s of its own
+ * (src/core/tts/index.ts), with room. A streamed piece then plays as long as it
+ * is made, under the run's own signal only.
  */
 const SPEAK_TIMEOUT_MS = 30_000;
 
-/** The speech of one piece, whole (a piece is a sentence or two: a few KB of MP3, or WAV from the local voice). */
+/**
+ * The speech of one piece: whole bytes (a few KB of MP3, or WAV from the local
+ * voice's cache), or a PcmFeed when the local voice streams it (`audio/L16`),
+ * resolved at its first audio so playing can start before the piece is made.
+ * A stream that ends before any audio fails like a failed request.
+ */
 export async function speakPiece(
   piece: { text: string; language?: string; previousText?: string; nextText?: string },
   signal?: AbortSignal,
-): Promise<ArrayBuffer> {
-  const res = await fetch('/api/v1/voice/speak', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(piece),
-    signal: signal ? AbortSignal.any([signal, deadlineSignal(SPEAK_TIMEOUT_MS)]) : deadlineSignal(SPEAK_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    let message = res.statusText;
-    let code = '';
+  timeoutMs = SPEAK_TIMEOUT_MS,
+): Promise<ArrayBuffer | PcmFeed> {
+  // Not deadlineSignal: this deadline is called off at the first audio.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new DOMException('The operation timed out.', 'TimeoutError')), timeoutMs);
+  const limit = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
+  const late = () => new SpeakError(`The voice did not start within ${Math.round(timeoutMs / 1000)}s`, 503, true, 'tts_unavailable');
+  try {
+    let res: Response;
     try {
-      const data = await res.json() as { error?: { code?: string; message?: string } };
-      message = data.error?.message ?? message;
-      code = data.error?.code ?? '';
-    } catch { /* keep statusText */ }
-    throw new SpeakError(message, res.status, res.status === 503 || code === 'tts_unavailable' || code === 'tts_quota', code);
+      res = await fetch('/api/v1/voice/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // stream: this client plays raw PCM as it comes; an older server ignores the field.
+        body: JSON.stringify({ ...piece, stream: true }),
+        signal: limit,
+      });
+    } catch (err) {
+      if (deadline.signal.aborted && !signal?.aborted) throw late();
+      throw err;
+    }
+    if (!res.ok) {
+      let message = res.statusText;
+      let code = '';
+      try {
+        const data = await res.json() as { error?: { code?: string; message?: string } };
+        message = data.error?.message ?? message;
+        code = data.error?.code ?? '';
+      } catch { /* keep statusText */ }
+      throw new SpeakError(message, res.status, res.status === 503 || code === 'tts_unavailable' || code === 'tts_quota', code);
+    }
+    const pcm = parseL16(res.headers.get('content-type'));
+    if (!pcm || !res.body) {
+      try {
+        return await res.arrayBuffer();
+      } catch (err) {
+        if (deadline.signal.aborted && !signal?.aborted) throw late();
+        throw err;
+      }
+    }
+    const feed = new PcmFeed(res.body, pcm, limit);
+    try {
+      await feed.firstAudio;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      if (deadline.signal.aborted) throw late();
+      throw new SpeakError(`The voice stream ended before any audio: ${err instanceof Error ? err.message : String(err)}`, 503, true, 'tts_unavailable');
+    }
+    return feed;
+  } finally {
+    // From the first audio on, only the run's own signal ends the piece.
+    clearTimeout(timer);
   }
-  return res.arrayBuffer();
 }

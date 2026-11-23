@@ -4,15 +4,19 @@
  * <idle ttl> <rev> <voice>`), refuses to serve unless the real Qwen3-TTS source
  * arrived on stdin, and speaks its HTTP contract (GET health, POST /speak with
  * WAV bytes, /cancel, /shutdown). A control file makes it slow, failing or late
- * to start. Nothing here makes a sound: the WAV bytes are only compared.
+ * to start. With `stream: true` it answers audio/L16 in chunks, which the control
+ * file can delay, space out or cut. Nothing here makes a sound: the bytes are
+ * only compared.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeFile, readFile, chmod, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { execFileSync } from 'node:child_process';
-import { createQwenTtsEngine, qwenDeadlineMs, qwenFitsBudget, QWEN_BUDGET_MS, type QwenTtsEngine } from '../../../src/core/tts/engine-qwen.js';
+import { createQwenTtsEngine, qwenDeadlineMs, qwenFitsBudget, qwenStreamDeadlineMs, QWEN_BUDGET_MS, type QwenTtsEngine } from '../../../src/core/tts/engine-qwen.js';
+import { clearTtsCache, speakWithFallback } from '../../../src/core/tts/index.js';
+import type { TtsEngine } from '../../../src/core/tts/types.js';
 import { _setVoiceIsolationForTest } from '../../../src/core/stt/voice-here.js';
 import { removeTempTree } from '../../helpers/temp-home.js';
 import { optInToVoice } from '../../helpers/voice-opt-in.js';
@@ -33,6 +37,14 @@ interface Control {
   fail?: boolean;
   /** The daemon binds its port this long after it starts (a model load). */
   startDelayMs?: number;
+  /** A streamed piece: its chunks (4 bytes each), the wait before its answer (a piece ahead), before its first chunk, between chunks, and a cut after N chunks. */
+  streamChunks?: number;
+  streamHeaderMs?: number;
+  streamFirstMs?: number;
+  streamGapMs?: number;
+  streamBreakAfter?: number;
+  /** The daemon process exits after N streamed chunks (a crash). */
+  streamExitAfter?: number;
 }
 
 async function setControl(c: Control): Promise<void> {
@@ -78,7 +90,21 @@ async function makeFakePython(): Promise<string> {
     "      if (req.url === '/cancel') { res.end('{}'); return; }",
     '      const c = control();',
     "      if (c.fail) { res.statusCode = 500; res.setHeader('Content-Type', 'application/json'); res.end('{\"error\":\"model broke\"}'); return; }",
-    '      const { text } = JSON.parse(body);',
+    "      const { text, stream } = JSON.parse(body);",
+    "      if (stream) {",
+    "        let i = 0; let ended = false;",
+    "        res.on('close', () => { if (!ended) note(`STREAM-GONE ${i}`); });",
+    "        const send = () => {",
+    "          if (res.destroyed) return;",
+    "          if (c.streamBreakAfter !== undefined && i >= c.streamBreakAfter) { ended = true; res.socket.destroy(); return; }",
+    "          if (c.streamExitAfter !== undefined && i >= c.streamExitAfter) { note('EXIT'); process.exit(1); }",
+    "          if (i >= (c.streamChunks ?? 3)) { ended = true; res.end(); return; }",
+    "          const b = Buffer.alloc(4); b.writeInt16BE((i + 1) * 1000, 0); b.writeInt16BE(-(i + 1) * 1000, 2); res.write(b); i++;",
+    "          setTimeout(send, c.streamGapMs ?? 0);",
+    "        };",
+    "        setTimeout(() => { res.setHeader('Content-Type', 'audio/L16; rate=24000; channels=1'); res.flushHeaders(); setTimeout(send, c.streamFirstMs ?? 0); }, c.streamHeaderMs ?? 0);",
+    "        return;",
+    "      }",
     "      const answer = () => { res.setHeader('Content-Type', 'audio/wav'); res.end(Buffer.from(`RIFF:${text}:${voice}`)); };",
     '      if (c.speakMs) setTimeout(answer, c.speakMs); else answer();',
     '    });',
@@ -286,5 +312,210 @@ describe('local voice daemon client', () => {
     } finally {
       process.env.WALNUT_STT_AUTO_SETUP = saved;
     }
+  }, 30_000);
+});
+
+/** The bytes of a stream, each read with when it came (ms since `t0`). */
+async function reads(body: ReadableStream<Uint8Array>, t0: number): Promise<{ at: number; bytes: number[] }[]> {
+  const out: { at: number; bytes: number[] }[] = [];
+  const reader = body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return out;
+    out.push({ at: Date.now() - t0, bytes: [...value] });
+  }
+}
+
+/** The fake daemon's chunk i: two big-endian samples, (i + 1) * 1000 and its negative. */
+const chunk = (i: number) => { const b = Buffer.alloc(4); b.writeInt16BE((i + 1) * 1000, 0); b.writeInt16BE(-(i + 1) * 1000, 2); return [...b]; };
+
+function fallbackEngine(): TtsEngine & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    id: 'elevenlabs', model: 'eleven-model', voice: 'eleven-voice', calls,
+    async synthesize(req) {
+      calls.push(req.text);
+      return { mime: 'audio/mpeg', body: new ReadableStream({ start(c) { c.enqueue(new Uint8Array([9, 9])); c.close(); } }) };
+    },
+  };
+}
+
+describe('a streamed piece (stream: true)', () => {
+  afterEach(() => clearTtsCache());
+
+  it('resolves at the first audio, before the piece is made, and passes the rest on as it comes', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort() });
+    await e.warmup();
+    await setControl({ streamChunks: 4, streamGapMs: 150 });
+    const t0 = Date.now();
+    const audio = await e.synthesize({ text: '\u4eca\u5929\u3002', language: 'zh-CN', stream: true });
+    expect(Date.now() - t0).toBeLessThan(400);
+    expect(audio.mime).toBe('audio/L16; rate=24000; channels=1');
+    const got = await reads(audio.body, t0);
+    expect(got.flatMap((r) => r.bytes)).toEqual([0, 1, 2, 3].flatMap(chunk));
+    expect(got.at(-1)!.at - got[0]!.at).toBeGreaterThanOrEqual(300);
+    const speak = (await requestLog()).find((l) => l.includes('POST /speak'))!;
+    expect(JSON.parse(speak.slice(speak.indexOf('{')))).toMatchObject({ stream: true, deadline_ms: qwenStreamDeadlineMs('\u4eca\u5929\u3002') });
+  }, 30_000);
+
+  it('no first audio within its deadline after the daemon started it: tts_unavailable, and the daemon is told', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort(), firstAudioMs: 200 });
+    await e.warmup();
+    await setControl({ streamFirstMs: 3_000 });
+    const t0 = Date.now();
+    await expect(e.synthesize({ text: 'late', language: 'zh', stream: true })).rejects.toMatchObject({ status: 503, code: 'tts_unavailable', message: expect.stringMatching(/no audio within/) });
+    expect(Date.now() - t0).toBeLessThan(1_500);
+    // The cancel and the closed stream reach the daemon a moment after the refusal.
+    await vi.waitFor(async () => {
+      const log = await requestLog();
+      const sent = log.find((l) => l.includes('POST /speak'))!;
+      const id = JSON.parse(sent.slice(sent.indexOf('{'))).id;
+      expect(log.some((l) => l.includes('POST /cancel') && l.includes(id))).toBe(true);
+      expect(log.some((l) => l.includes('STREAM-GONE 0'))).toBe(true);
+    }, { timeout: 5_000, interval: 50 });
+  }, 30_000);
+
+  it('a piece queued behind another waits for its start: only the time after it is the first audio\'s', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort(), firstAudioMs: 300 });
+    await e.warmup();
+    await setControl({ streamHeaderMs: 800 });
+    const audio = await e.synthesize({ text: 'queued', language: 'zh', stream: true });
+    expect((await reads(audio.body, Date.now())).flatMap((r) => r.bytes)).toEqual([0, 1, 2].flatMap(chunk));
+  }, 30_000);
+
+  it('a reader that goes away ends the daemon\'s piece and tells it', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort() });
+    await e.warmup();
+    await setControl({ streamChunks: 20, streamGapMs: 100 });
+    const audio = await e.synthesize({ text: 'gone', language: 'zh', stream: true });
+    const reader = audio.body.getReader();
+    await reader.read();
+    await reader.cancel();
+    await vi.waitFor(async () => {
+      const log = await requestLog();
+      expect(log.some((l) => l.includes('POST /cancel'))).toBe(true);
+      expect(log.some((l) => /STREAM-GONE [1-9]\d*$/.test(l))).toBe(true);
+    }, { timeout: 5_000, interval: 50 });
+  }, 30_000);
+
+  it('through speakWithFallback: late first audio goes to the fallback; a break part way only ends it; a whole one is cached as WAV', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort(), firstAudioMs: 200 });
+    await e.warmup();
+    const eleven = fallbackEngine();
+    const engines = { engine: e, fallback: eleven };
+
+    // No audio in time: the usual engine reads it, as for a whole piece.
+    await setControl({ streamFirstMs: 2_000 });
+    const late = await speakWithFallback(engines, { text: 'late one', language: 'zh-CN', stream: true });
+    expect(late.engine.id).toBe('elevenlabs');
+    expect([...new Uint8Array(await new Response(late.body).arrayBuffer())]).toEqual([9, 9]);
+
+    // Audio went out, then the daemon broke: no fallback, the stream fails, nothing is cached.
+    await setControl({ streamChunks: 5, streamGapMs: 50, streamBreakAfter: 2 });
+    const broke = await speakWithFallback(engines, { text: 'broken one', language: 'zh-CN', stream: true });
+    expect(broke.engine.id).toBe('qwen');
+    await expect(reads(broke.body, Date.now())).rejects.toThrow();
+    expect(eleven.calls).toEqual(['late one']);
+    await setControl({});
+    const retried = await speakWithFallback(engines, { text: 'broken one', language: 'zh-CN', stream: true });
+    expect(retried.cached).toBe(false);
+    await reads(retried.body, Date.now());
+
+    // A long piece streams too (it plays while the rest is made); whole, it is kept as WAV and answers whole.
+    const long = '\u4eca'.repeat(80);
+    expect(qwenFitsBudget(long)).toBe(false);
+    const whole = await speakWithFallback(engines, { text: long, language: 'zh-CN', stream: true });
+    expect(whole.engine.id).toBe('qwen');
+    expect(whole.mime).toMatch(/^audio\/L16/);
+    await reads(whole.body, Date.now());
+    const again = await speakWithFallback(engines, { text: long, language: 'zh-CN', stream: true });
+    expect(again).toMatchObject({ cached: true, mime: 'audio/wav' });
+    const wav = Buffer.from(await new Response(again.body).arrayBuffer());
+    expect(wav.toString('ascii', 0, 4)).toBe('RIFF');
+    expect(wav.readUInt32LE(24)).toBe(24000);
+    expect(wav.readUInt32LE(40)).toBe(12);
+    expect([0, 1, 2, 3, 4, 5].map((i) => wav.readInt16LE(44 + i * 2))).toEqual([1000, -1000, 2000, -2000, 3000, -3000]);
+
+    // Without stream nothing changed: the whole WAV, and a long piece still goes to the fallback.
+    const plain = await speakWithFallback(engines, { text: 'plain one', language: 'zh-CN' });
+    expect(plain.mime).toBe('audio/wav');
+    expect(await text(plain.body)).toBe('RIFF:plain one:Uncle_Fu');
+    expect((await speakWithFallback(engines, { text: '\u660e'.repeat(80), language: 'zh-CN' })).engine.id).toBe('elevenlabs');
+  }, 30_000);
+
+  it('a piece asked for while the one before still streams waits its turn, and that wait is not its budget: no fallback', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort(), budgetMs: 300, firstAudioMs: 1_000 });
+    await e.warmup();
+    const eleven = fallbackEngine();
+    const engines = { engine: e, fallback: eleven };
+    // Each piece takes about 750 ms to make, well past the 300 ms budget.
+    await setControl({ streamChunks: 6, streamGapMs: 150 });
+    const first = await speakWithFallback(engines, { text: 'first one', language: 'zh-CN', stream: true });
+    const nextOne = speakWithFallback(engines, { text: 'second one', language: 'zh-CN', stream: true });
+    expect((await reads(first.body, Date.now())).flatMap((r) => r.bytes)).toEqual([0, 1, 2, 3, 4, 5].flatMap(chunk));
+    const second = await nextOne;
+    expect(second.engine.id).toBe('qwen');
+    expect((await reads(second.body, Date.now())).flatMap((r) => r.bytes)).toEqual([0, 1, 2, 3, 4, 5].flatMap(chunk));
+    expect(eleven.calls).toEqual([]);
+    // The daemon got the second piece only after the first was done: one at a time, as its model runs.
+    const speaks = (await requestLog()).filter((l) => l.includes('POST /speak'));
+    expect(speaks.map((l) => JSON.parse(l.slice(l.indexOf('{'))).text)).toEqual(['first one', 'second one']);
+    expect(e.busy).toBe(false);
+
+  }, 30_000);
+
+  it('a caller that goes away mid-stream (the route\'s client closed) frees the engine and tells the daemon, though nobody reads on', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort() });
+    await e.warmup();
+    await setControl({ streamChunks: 50, streamGapMs: 100 });
+    const abort = new AbortController();
+    const audio = await e.synthesize({ text: 'left', language: 'zh', stream: true, signal: abort.signal });
+    expect(audio.mime).toMatch(/^audio\/L16/);
+    expect(e.busy).toBe(true);
+    abort.abort();
+    expect(e.busy).toBe(false);
+    await vi.waitFor(async () => {
+      const log = await requestLog();
+      const sent = log.find((l) => l.includes('POST /speak'))!;
+      const id = JSON.parse(sent.slice(sent.indexOf('{'))).id;
+      expect(log.some((l) => l.includes('POST /cancel') && l.includes(id))).toBe(true);
+      expect(log.some((l) => /STREAM-GONE \d+$/.test(l))).toBe(true);
+    }, { timeout: 5_000, interval: 50 });
+    // The next piece is not held behind the one that was dropped.
+    await setControl({});
+    const next = await e.synthesize({ text: 'next', language: 'zh', stream: true });
+    expect((await reads(next.body, Date.now())).flatMap((r) => r.bytes)).toEqual([0, 1, 2].flatMap(chunk));
+  }, 30_000);
+
+  it('a stream cut part way by a daemon that is still up (its deadline, a model error) keeps it ready; one that died is started again', async () => {
+    const pythonPath = await makeFakePython();
+    const e = engine({ pythonPath, port: await freePort() });
+    await e.warmup();
+    const probes = async () => (await requestLog()).filter((l) => l.includes(' GET /')).length;
+    await setControl({ streamChunks: 5, streamGapMs: 50, streamBreakAfter: 2 });
+    const before = await probes();
+    const cut = await e.synthesize({ text: 'cut', language: 'zh', stream: true });
+    await expect(reads(cut.body, Date.now())).rejects.toMatchObject({ name: 'TtsError', code: 'tts_unavailable' });
+    expect(e.ready).toBe(true);
+    // The engine looked: the daemon answered, so it stays the voice for the next piece.
+    await vi.waitFor(async () => expect(await probes()).toBeGreaterThan(before), { timeout: 5_000, interval: 50 });
+    expect(e.ready).toBe(true);
+    expect(e.busy).toBe(false);
+    await setControl({});
+    const next = await e.synthesize({ text: 'after', language: 'zh', stream: true });
+    await reads(next.body, Date.now());
+
+    // A daemon that died part way: nothing answers the look, so it is started again for the next piece.
+    await setControl({ streamChunks: 5, streamGapMs: 50, streamExitAfter: 2 });
+    const died = await e.synthesize({ text: 'crash', language: 'zh', stream: true });
+    await expect(reads(died.body, Date.now())).rejects.toMatchObject({ name: 'TtsError' });
+    await vi.waitFor(async () => expect((await requestLog()).filter((l) => / START /.test(l))).toHaveLength(2), { timeout: 5_000, interval: 50 });
   }, 30_000);
 });

@@ -5,7 +5,14 @@
  * Qwen3-TTS through mlx-audio: the model loads once, says one short sentence
  * to warm up (the first generate after a load takes about 7 s on an M4 Pro, the
  * next ones a fraction of a second), and only then binds its port, so "ready"
- * means warm. Each POST /speak turns one piece into 16-bit mono WAV, whole.
+ * means warm. Each POST /speak turns one piece into 16-bit mono WAV, whole;
+ * with `stream: true` it answers 200 as soon as the piece's generation starts
+ * and writes each chunk as the model makes it: `audio/L16; rate=<rate>;
+ * channels=1` (RFC 2586: signed 16-bit big-endian PCM, no header) in HTTP/1.1
+ * chunks. A piece made whole ends with the last (empty) chunk; one cut off (a
+ * cancel, its deadline, a model error) ends without it, so the reader's fetch
+ * fails instead of taking a shortened piece for a whole one. A reader that goes
+ * away stops the generation at the next chunk (the write fails).
  *
  * stdlib only beyond mlx-audio itself: the samples are packed with `array`
  * from the array's `tolist()`, which also reads a bfloat16 array, and keeps
@@ -59,34 +66,94 @@ def _is_cancelled(req_id):
     with cancel_lock:
         return bool(req_id) and req_id in cancelled
 
+def pcm16(samples, big=False):
+    """Float samples in [-1, 1] to 16-bit PCM bytes: little-endian for WAV, big-endian for audio/L16."""
+    pcm = array.array("h", (int(max(-1.0, min(1.0, x)) * 32767.0) for x in samples))
+    if (sys.byteorder == "big") != big:
+        pcm.byteswap()
+    return pcm.tobytes()
+
 def to_wav(samples):
     """Float samples in [-1, 1] to 16-bit mono WAV bytes."""
-    pcm = array.array("h", (int(max(-1.0, min(1.0, x)) * 32767.0) for x in samples))
-    if sys.byteorder == "big":
-        pcm.byteswap()  # WAV is little-endian
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(SAMPLE_RATE)
-        w.writeframes(pcm.tobytes())
+        w.writeframes(pcm16(samples))
     return buf.getvalue()
+
+def _flat(r):
+    audio = getattr(r, "audio", None)
+    if audio is None:
+        return []
+    flat = audio.tolist()
+    while flat and isinstance(flat[0], list):
+        flat = [x for row in flat for x in row]
+    return flat
+
+def _chunks(text, voice, lang_code):
+    # mlx-audio makes every chunk the same size (int(interval * 12.5) codec tokens): no smaller first one.
+    return model.generate(text=text, voice=voice or None, lang_code=lang_code, stream=True, streaming_interval=0.32)
+
+def _stopped(req_id, deadline):
+    if _is_cancelled(req_id):
+        return "cancelled"
+    if deadline is not None and time.time() > deadline:
+        return "deadline"
+    return None
 
 def synthesize(text, voice, lang_code, req_id="", deadline=None):
     """WAV bytes of the whole piece, or (None, why) when it was cut off."""
     samples = []
-    for r in model.generate(text=text, voice=voice or None, lang_code=lang_code, stream=True, streaming_interval=0.32):
-        audio = getattr(r, "audio", None)
-        if audio is not None:
-            flat = audio.tolist()
-            while flat and isinstance(flat[0], list):
-                flat = [x for row in flat for x in row]
-            samples.extend(flat)
-        if _is_cancelled(req_id):
-            return None, "cancelled"
-        if deadline is not None and time.time() > deadline:
-            return None, "deadline"
+    for r in _chunks(text, voice, lang_code):
+        samples.extend(_flat(r))
+        why = _stopped(req_id, deadline)
+        if why:
+            return None, why
     return to_wav(samples), None
+
+def _write_timeout(deadline):
+    """How long one write may block: at most 15 s, and not much past the piece's deadline."""
+    left = 15.0 if deadline is None else deadline - time.time()
+    return max(0.5, min(15.0, left))
+
+def stream_speech(handler, text, voice, lang_code, req_id, deadline):
+    """Answer 200 now and write the piece as audio/L16 chunks as they are made: None when whole, else why it stopped."""
+    handler.protocol_version = "HTTP/1.1"  # chunked transfer needs it; Connection: close ends the exchange
+    handler.send_response(200)
+    handler.send_header("Content-Type", "audio/L16; rate=%d; channels=1" % SAMPLE_RATE)
+    handler.send_header("Transfer-Encoding", "chunked")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+    out = handler.wfile
+    gen = _chunks(text, voice, lang_code)
+    try:
+        for r in gen:
+            flat = _flat(r)
+            if flat:
+                data = pcm16(flat, big=True)
+                # A reader that stops reading cannot hold the model past the piece's deadline.
+                handler.connection.settimeout(_write_timeout(deadline))
+                out.write(b"%x\\r\\n" % len(data) + data + b"\\r\\n")
+                out.flush()
+            why = _stopped(req_id, deadline)
+            if why:
+                return why
+        out.write(b"0\\r\\n\\r\\n")
+        out.flush()
+        return None
+    except OSError:
+        return "the reader went away"
+    except Exception as e:  # noqa: BLE001 - the headers are out: end the stream short, never write JSON into it
+        print("stream failed: " + repr(e)[:300], flush=True)
+        return "model error"
+    finally:
+        try:
+            gen.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 # Warm up before binding: the first generate after a load is the slow one.
 t0 = time.time()
@@ -169,15 +236,24 @@ class Handler(BaseHTTPRequestHandler):
             req_id = str(req.get("id") or "")
             deadline_ms = float(req.get("deadline_ms") or 30000)
             deadline = time.time() + min(deadline_ms, 120000) / 1000.0
+            stream = req.get("stream") is True
             t0 = time.time()
+            streamed = False
             with gen_lock:
                 if _is_cancelled(req_id) or time.time() > deadline:
                     wav, why = None, "cancelled before it started"
+                elif stream:
+                    streamed = True
+                    wav, why = None, stream_speech(self, text, req.get("voice") or "", req.get("lang_code") or "zh", req_id, deadline)
                 else:
                     wav, why = synthesize(text, req.get("voice") or "", req.get("lang_code") or "zh", req_id, deadline)
             last_activity = time.time()
             with cancel_lock:
                 cancelled.pop(req_id, None)
+            if streamed:
+                # The answer is out (whole, or ended short so the reader sees it cut); nothing more to write.
+                self.close_connection = True
+                return
             if wav is None:
                 self._reply(408, {"error": "stopped: " + why})
                 return
@@ -188,6 +264,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(wav)
         except Exception as e:  # noqa: BLE001 - the daemon must answer, not die
+            if self.protocol_version == "HTTP/1.1":
+                return  # a stream already answered: no JSON into it
             try:
                 self._reply(500, {"error": str(e)[:500]})
             except Exception:  # noqa: BLE001 - the client already went away

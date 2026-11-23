@@ -4,7 +4,10 @@
  * chunks the way Qwen3-TTS's generate(stream=True) does. Checks the WAV it
  * writes byte by byte (header, 16-bit samples, clipping), the warm-up before
  * it binds, its refusals, and that a cancel or a deadline stops a generation
- * between chunks. Only bytes are written and read: nothing is played.
+ * between chunks. The streaming mode (`stream: true`): audio/L16 chunks as the
+ * model makes them, a cut-off stream that ends without its last chunk, and a
+ * reader that goes away stopping the generation. Only bytes are written and
+ * read: nothing is played.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -45,6 +48,14 @@ class Model:
                 time.sleep(0.05)
                 yield Result([0.0] * 10)
             return
+        if text == "STEPS":
+            for _ in range(3):
+                time.sleep(0.25)
+                yield Result([0.5, -0.5])
+            return
+        if text == "MIDBOOM":
+            yield Result([0.5])
+            raise RuntimeError("the model broke mid-piece")
         yield Result([0.5, -0.5])
         yield Result([[2.0, -2.0], [0.25]])
 
@@ -178,6 +189,10 @@ describe('local voice daemon script', () => {
       req.end(body);
     });
     expect(rebound).toBe(403);
+    // The streaming mode is behind the same guard.
+    const streamBody = JSON.stringify({ text: 'x', id: 'w3', stream: true });
+    expect((await fetch(`http://127.0.0.1:${port}/speak`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: streamBody })).status).toBe(403);
+    expect((await fetch(`http://127.0.0.1:${port}/speak`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://example.com' }, body: streamBody })).status).toBe(403);
     // Nothing reached the model, and a local JSON request still does.
     expect((await calls()).length).toBe(before);
     expect((await speak(port, { text: 'ok', id: 'w2' })).status).toBe(200);
@@ -201,6 +216,61 @@ describe('local voice daemon script', () => {
     expect((await late.json()).error).toBe('stopped: deadline');
 
     expect((await speak(port, { text: 'ok', id: 'r3' })).status).toBe(200);
+  }, 30_000);
+
+  it('stream: answers audio/L16 at once and writes each chunk as the model makes it, big-endian', async (ctx) => {
+    if (!python) ctx.skip();
+    const { port } = await startDaemon();
+    const t0 = Date.now();
+    const res = await speak(port, { text: 'STEPS', id: 's1', stream: true });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('audio/L16; rate=24000; channels=1');
+    const reader = res.body!.getReader();
+    const parts: { at: number; bytes: Uint8Array }[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push({ at: Date.now() - t0, bytes: value });
+    }
+    // Three chunks a quarter second apart: the first came long before the last was made.
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    expect(parts.at(-1)!.at - parts[0]!.at).toBeGreaterThanOrEqual(300);
+    const all = Buffer.concat(parts.map((p) => p.bytes));
+    expect(all.byteLength).toBe(12);
+    expect([0, 1, 2, 3, 4, 5].map((i) => all.readInt16BE(i * 2))).toEqual([16383, -16383, 16383, -16383, 16383, -16383]);
+    expect((await calls()).at(-1)).toMatchObject({ text: 'STEPS', stream: true, interval: 0.32 });
+  }, 30_000);
+
+  it('stream: a piece cut off (model error, cancel) ends without its last chunk, so the read fails; it stays up', async (ctx) => {
+    if (!python) ctx.skip();
+    const { port } = await startDaemon();
+    const drain = async (reader: ReadableStreamDefaultReader<Uint8Array>) => { for (;;) { if ((await reader.read()).done) return; } };
+    const broke = await speak(port, { text: 'MIDBOOM', id: 's2', stream: true });
+    expect(broke.status).toBe(200);
+    await expect(drain(broke.body!.getReader())).rejects.toThrow();
+
+    const long = await speak(port, { text: 'LONG', id: 's3', stream: true });
+    const reader = long.body!.getReader();
+    expect((await reader.read()).value!.byteLength).toBeGreaterThan(0);
+    await fetch(`http://127.0.0.1:${port}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 's3' }) });
+    await expect(drain(reader)).rejects.toThrow();
+
+    expect((await speak(port, { text: 'ok', id: 's4' })).status).toBe(200);
+  }, 30_000);
+
+  it('stream: a reader that goes away stops the generation, so the next piece does not wait for it', async (ctx) => {
+    if (!python) ctx.skip();
+    const { port } = await startDaemon();
+    const abort = new AbortController();
+    const res = await fetch(`http://127.0.0.1:${port}/speak`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'LONG', id: 's5', stream: true }), signal: abort.signal,
+    });
+    await res.body!.getReader().read();
+    abort.abort();
+    // LONG takes 10 s whole; the next piece gets the model within a moment of the reader leaving.
+    const t0 = Date.now();
+    expect((await speak(port, { text: 'ok', id: 's6' })).status).toBe(200);
+    expect(Date.now() - t0).toBeLessThan(3_000);
   }, 30_000);
 
   it('/shutdown ends it', async (ctx) => {
