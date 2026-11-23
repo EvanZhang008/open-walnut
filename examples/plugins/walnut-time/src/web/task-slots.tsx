@@ -1,4 +1,3 @@
-import { useCallback, useRef, useState } from 'react'
 import type { SessionMetaSlotProps, TaskMetaSlotProps } from '@open-walnut/plugin-api/web'
 import type { TimePair, TimeTotals } from './api'
 import { formatLane, formatLaneCompact, type TimePaths } from './task-routes'
@@ -13,8 +12,8 @@ import type { TaskTimeStore } from './task-time-store'
  *  - `task.meta`: with a task's id and dates, in its details popup and on its page.
  *  - `session.meta`: at the top of the session's ⋮ menu, the page narrowed to it. When
  *    the user pins it to the session header (`placement: 'header'`), the host prints no
- *    label there, so it is a pill instead: a person and `25m`, a spark and `1h`, which
- *    opens to the exact numbers on hover (TimeChip).
+ *    label there, so it is a pill instead: a person and `25m`, a spark and `1h`, with the
+ *    exact numbers in its hover text (TimeChip).
  *
  * Both lanes are always shown and never summed, the rule every view here follows.
  * Both render nothing until there is an answer, and nothing at all where the
@@ -65,40 +64,32 @@ const AgentIcon = () => (
 )
 
 /**
- * The header pill (the user, 2026-10-26: "a pill like human icon: 2h, and agent icon:
- * 8h ... when hover it can expand to show all"). At rest each lane is an icon and one
- * whole unit; on hover or keyboard focus a layer grows out of the pill with both exact
- * numbers and their names. The layer is positioned over the row, never in it, so the
- * header's other chips do not move, and it grows toward the side the panel has room on.
- * The button's own text reads "You 2h · Agent 8h" (visually hidden words), which is
- * what an older host's "..." row prints; `data-header-value` gives a newer host the
- * exact line.
+ * The header pill (the user, 2026-10-26: "a pill like human icon: 2h, and agent icon: 8h").
+ * Each lane is an icon and one whole unit. Hovering grows nothing (2026-11-23, the user, on
+ * what widens on hover outside a narrow list: "所有东西都放大真的是不太舒服"): the exact numbers
+ * are its native tooltip, and for a screen reader its label; a click opens the day by day page.
+ * The button's own text reads "You 2h · Agent 8h" (visually hidden words), which is what an
+ * older host's "..." row prints; `data-header-value` gives a newer host the exact line.
  */
 function TimeChip({ totals, onOpen }: { totals: TimeTotals; onOpen: () => void }) {
   const { all } = totals
-  const wrapRef = useRef<HTMLSpanElement>(null)
-  const [align, setAlign] = useState<'start' | 'end'>('start')
-  // Grow to the right unless that would leave the panel; then grow leftward from the pill's end.
-  const fit = useCallback(() => {
-    const wrap = wrapRef.current
-    const inner = wrap?.querySelector<HTMLElement>('.wt-pill-full-inner')
-    if (!wrap || !inner) return
-    const bounds = (wrap.closest('.session-panel') ?? document.documentElement).getBoundingClientRect()
-    const at = wrap.getBoundingClientRect()
-    const need = inner.scrollWidth + 16
-    setAlign(at.left + need <= bounds.right - 4 || at.right - need < bounds.left + 4 ? 'start' : 'end')
-  }, [])
   const human = formatLane(all.humanMs)
   const agent = formatLane(all.agentMs)
-  const open = (e: { stopPropagation: () => void }) => { e.stopPropagation(); onOpen() }
+  const tip = [
+    'Time on this session',
+    laneLine('You', (p) => p.humanMs, totals),
+    laneLine('Agent', (p) => p.agentMs, totals),
+    'Click for day by day',
+  ].join('\n')
   return (
-    <span ref={wrapRef} className="wt-pill" data-align={align} onPointerEnter={fit} onFocus={fit}>
+    <span className="wt-pill">
       <button
         type="button"
         className="wt-chip"
         data-testid="time-session-chip"
         data-header-value={`You ${human} \u00b7 Agent ${agent}`}
-        onClick={open}
+        onClick={(e) => { e.stopPropagation(); onOpen() }}
+        title={tip}
         aria-label={`Time on this session. ${laneLine('You', (p) => p.humanMs, totals)}. ${laneLine('Agent', (p) => p.agentMs, totals)}. Open day by day.`}
       >
         <HumanIcon />
@@ -108,21 +99,6 @@ function TimeChip({ totals, onOpen }: { totals: TimeTotals; onOpen: () => void }
         <AgentIcon />
         <span className="wt-fact-v is-agent" data-cell="agent-compact">{formatLaneCompact(all.agentMs)}</span>
       </button>
-      {/* The exact numbers: the same click, for the pointer only (the button above speaks for it). */}
-      <span className="wt-pill-full" aria-hidden="true" data-testid="time-session-chip-full" onClick={open}>
-        <span className="wt-pill-full-inner">
-          <HumanIcon />
-          <span className="wt-pill-name">You</span>
-          <span className="wt-fact-v is-human">{human}</span>
-          <span className="wt-fact-sep">{'\u00b7'}</span>
-          <AgentIcon />
-          <span className="wt-pill-name">Agent</span>
-          <span className="wt-fact-v is-agent">{agent}</span>
-          {/* What the click does: the pill alone gives no sign it opens anything. */}
-          <span className="wt-fact-sep">{'\u00b7'}</span>
-          <span className="wt-pill-name">Open day by day</span>
-        </span>
-      </span>
     </span>
   )
 }

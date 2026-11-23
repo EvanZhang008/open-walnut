@@ -40,6 +40,17 @@ describe('the truncation peek widens only in its zones', () => {
     expect(peek).toMatch(/!peekAllowed\(target\)\) \{[\s\S]{0,300}cutTip\(target\)/);
   });
 
+  // The Time plugin's header pill grew a layer of exact numbers out of itself on hover: the same
+  // widening, in a session's head. Its numbers are its tooltip now (task-slots.tsx TimeChip).
+  it('the Time header pill grows no layer on hover or focus', () => {
+    const dir = path.join(ROOT, 'examples/plugins/walnut-time/src/web');
+    const css = fs.readFileSync(path.join(dir, 'styles-task.ts'), 'utf8');
+    const tsx = fs.readFileSync(path.join(dir, 'task-slots.tsx'), 'utf8');
+    expect(css, 'a .wt-pill rule that shows something on hover or focus').not.toMatch(/\.wt-pill(?::hover|:has\([^)]*:focus)[^{]*\{[^}]*(?:visibility:\s*visible|opacity:\s*1)/);
+    expect(tsx).not.toMatch(/wt-pill-full/);
+    expect(tsx).toMatch(/data-testid="time-session-chip"[\s\S]{0,300}title=\{tip\}/);
+  });
+
   it('every zone has a reason', () => {
     for (const [file, why] of Object.entries(ZONES)) expect(why.length, file).toBeGreaterThan(40);
   });

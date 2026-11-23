@@ -360,98 +360,63 @@ test('nothing recorded means no Time fact and no stray label', async ({ page }) 
   expect(errors).toEqual([])
 })
 
-test('the header pill grows the exact numbers out of itself on hover and focus, moving nothing', async ({ page, browserName }) => {
+// 2026-11-23, the user, on what grows on hover outside a narrow list: "所有东西都放大真的是不太舒服".
+test('the header pill grows nothing on hover or focus: the exact numbers are its tooltip, and it still opens day by day', async ({ page, browserName }) => {
   const errors = watchErrors(page)
   await loadHome(page, [SLOT_KEY])
   const col = await openColumnFromDetails(page, SID_A)
   const header = col.locator('.session-panel-header')
   const chip = col.getByTestId('time-session-chip')
-  const full = col.getByTestId('time-session-chip-full')
   await expect(chip).toBeVisible({ timeout: 30_000 })
   await expect(cell(chip, 'you-compact')).toHaveText('50m')
   await expect(cell(chip, 'agent-compact')).toHaveText('3h')
   await expect(chip.locator('.wt-pill-icon.is-human')).toHaveCount(1)
   await expect(chip.locator('.wt-pill-icon.is-agent')).toHaveCount(1)
-  await expect(full).toBeHidden()
+  // The exact numbers: its tooltip, and its name for a screen reader.
+  await expect(chip).toHaveAttribute('title', /You: 50m total[\s\S]*Agent: 3h 02m total[\s\S]*Click for day by day/)
+  await expect(chip).toHaveAttribute('aria-label', /You: 50m total.*Agent: 3h 02m total/)
 
   const items = () => header.locator('[data-header-id]').evaluateAll((els) => els
     .filter((el) => (el as HTMLElement).dataset.hidden !== 'true' && el.getBoundingClientRect().width > 0)
     .map((el) => { const r = el.getBoundingClientRect(); return `${(el as HTMLElement).dataset.headerId}:${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}` }))
-  const settled = () => full.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))).then(() => undefined))
-  const grown = async () => {
-    await expect(full).toBeVisible()
-    await settled()
-    // Grown all the way: the layer shows its whole line, inside the panel.
-    const fit = await full.evaluate((el) => {
-      const inner = el.querySelector('.wt-pill-full-inner')!.getBoundingClientRect()
-      const box = el.getBoundingClientRect()
-      const panel = el.closest('.session-panel')!.getBoundingClientRect()
-      return { whole: box.width >= inner.width - 0.5, inside: box.left >= panel.left - 0.5 && box.right <= panel.right + 0.5, opacity: getComputedStyle(el).opacity }
-    })
-    expect(fit).toEqual({ whole: true, inside: true, opacity: '1' })
-  }
+  // What the pill draws: the pill and everything in it, each box, so a layer that grows out of it shows here.
+  const drawn = () => col.locator('.wt-pill').evaluate((pill) => [pill, ...Array.from(pill.querySelectorAll('*'))]
+    .filter((el) => getComputedStyle(el).visibility !== 'hidden' && Number(getComputedStyle(el).opacity) > 0)
+    .map((el) => { const r = el.getBoundingClientRect(); return `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}` }))
   // The column may still be settling from its open: read the row once it holds still.
   let last = ''
   await expect.poll(async () => { const now = JSON.stringify(await items()); const same = now === last; last = now; return same }, { intervals: [250], timeout: 15_000 }).toBe(true)
   const before = await items()
+  const rest = await drawn()
 
-  // ── Hover: the exact numbers and their names, over the row; nothing on it moves ──
+  // ── Hover: nothing grows, nothing on the row moves ──
   await chip.hover()
-  await grown()
-  await expect(full.locator('.wt-pill-name')).toHaveText(['You', 'Agent'])
-  await expect(full.locator('.wt-fact-v.is-human')).toHaveText('50m')
-  await expect(full.locator('.wt-fact-v.is-agent')).toHaveText('3h 02m')
+  await page.waitForTimeout(500)
+  expect(await drawn(), 'hovering the pill grows nothing out of it').toEqual(rest)
   expect(await items()).toEqual(before)
-  const fb = await full.boundingBox()
-  await page.screenshot({ path: `${SHOTS}/session-pill-open.png`, clip: { x: fb!.x - 60, y: fb!.y - 14, width: fb!.width + 120, height: fb!.height + 28 } })
-  // Away: back into the pill.
-  await page.mouse.move(640, 840)
-  await expect(full).toBeHidden()
   const cb = await chip.boundingBox()
-  await page.screenshot({ path: `${SHOTS}/session-pill-rest.png`, clip: { x: cb!.x - 60, y: cb!.y - 14, width: cb!.width + 120, height: cb!.height + 28 } })
+  await page.screenshot({ path: `${SHOTS}/session-pill-hover.png`, clip: { x: cb!.x - 60, y: cb!.y - 14, width: cb!.width + 120, height: cb!.height + 28 } })
 
-  // ── Keyboard: focus from the keyboard opens it too, and Enter still leads to the page ──
+  // ── Keyboard: focus grows nothing either, and Enter leads to the page ──
   // WebKit's Tab reaches buttons only with Option held, as Safari's own default.
   const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
+  await page.mouse.move(640, 840)
   await chip.focus()
   await page.keyboard.press(`Shift+${tab}`)
   await page.keyboard.press(tab)
   await expect(chip).toBeFocused()
-  await grown()
+  await page.waitForTimeout(400)
+  expect(await drawn(), 'focusing the pill grows nothing out of it').toEqual(rest)
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
   await page.getByTestId('time-task-back').click()
   await expect(column(page, SID_A)).toBeVisible({ timeout: 30_000 })
 
-  // ── A click on the grown layer is the pill's click ──
-  // The pill as a pointer meets it: the pointer may still rest where the page left it, over the grown layer.
-  await column(page, SID_A).locator('.wt-pill').hover()
-  await grown()
-  await column(page, SID_A).getByTestId('time-session-chip-full').click()
+  // ── A click opens the page too ──
+  await column(page, SID_A).getByTestId('time-session-chip').click()
   await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
   await page.getByTestId('time-task-back').click()
   await expect(column(page, SID_A)).toBeVisible({ timeout: 30_000 })
-
-  // ── Reduced motion: it opens and closes at once ──
-  await page.emulateMedia({ reducedMotion: 'reduce' })
-  const durations = await column(page, SID_A).getByTestId('time-session-chip-full').evaluate((el) => getComputedStyle(el).transitionDuration)
-  expect(durations.split(',').every((d) => parseFloat(d) === 0)).toBe(true)
-  await page.emulateMedia({ reducedMotion: 'no-preference' })
-
-  // ── Narrower columns, while the pill is still on the row: it grows toward the room it has ──
-  let checked = 0
-  for (const width of [640, 560, 500, 460, 420]) {
-    await clampColumn(page, width)
-    const narrow = column(page, SID_A)
-    await page.waitForTimeout(250)
-    if (await narrow.locator(`[data-header-id="slot:${SLOT_KEY}"]`).getAttribute('data-hidden') === 'true') break
-    await narrow.locator('.wt-pill').hover()
-    await grown()
-    checked++
-    await page.mouse.move(640, 840)
-  }
-  expect(checked).toBeGreaterThan(0)
-  await clampColumn(page, null)
   expect(errors).toEqual([])
 })
 
