@@ -10,13 +10,18 @@
 import { log } from '../../logging/index.js'
 import type { NewNotification } from './store.js'
 
-/** The name a person reads for a host: its label in Settings, else its key. */
+/** A host's name without its Settings label: "this machine" for the local one, else its key. */
+export function plainHostLabel(hostKey: string | undefined): string {
+  return !hostKey || hostKey === '__local__' ? 'this machine' : hostKey
+}
+
+/** The name a person reads for a host: its label in Settings, else plainHostLabel. */
 export async function hostLabel(hostKey: string): Promise<string> {
   try {
     const { getConfig } = await import('../config-manager.js')
-    return (await getConfig()).hosts?.[hostKey]?.label?.trim() || hostKey
+    return (await getConfig()).hosts?.[hostKey]?.label?.trim() || plainHostLabel(hostKey)
   } catch {
-    return hostKey
+    return plainHostLabel(hostKey)
   }
 }
 

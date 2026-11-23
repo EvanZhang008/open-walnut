@@ -33,6 +33,7 @@
  */
 
 import { log } from '../../logging/index.js';
+import { plainHostLabel as hostLabel } from '../notifications/health-items.js';
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../providers/trigger-check-core.js';
 import type { TriggerCheckedEvent } from '../../providers/trigger-check-core.js';
 import type { TriggerCheckedApplied } from '../cron/trigger-apply.js';
@@ -74,9 +75,6 @@ function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-function hostLabel(host: string | undefined): string {
-  return !host || host === '__local__' ? 'this machine' : host;
-}
 
 function at(ms: number): string {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : 'an unknown time';

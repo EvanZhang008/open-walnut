@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { fleetLauncher, launcherRollbackItem, launcherVersionWords } from '../../../src/core/hosts/host-launcher.js'
 import { launcherFactsFrom, parseLauncherFacts } from '../../../src/providers/service-launcher-beat.js'
 import { launcherWords } from '../../../web/src/components/settings/sections/host-fleet-model'
+import { plainHostLabel } from '../../../src/core/notifications/health-items.js'
 
 const V = (c: string) => `/home/u/.local/share/open-walnut/daemon/versions/${c.repeat(64)}/daemon`
 
@@ -39,6 +40,14 @@ describe('the card and Walnut Health', () => {
     expect(item.body).toContain('build cccc did not hold: the new version was not ready within 90 s')
     expect(item).not.toHaveProperty('needsYou')
     expect(launcherRollbackItem('devbox', 'Dev box', { current: V('a'), good: V('a'), phase: 'committed', since: 1 })).toBeNull()
+  })
+
+  it('names the local host "this machine" when Settings gives it no label (the Mac\'s own put-back)', () => {
+    expect(plainHostLabel('__local__')).toBe('this machine')
+    expect(plainHostLabel(undefined)).toBe('this machine')
+    expect(plainHostLabel('devbox')).toBe('devbox')
+    const item = launcherRollbackItem('__local__', plainHostLabel('__local__'), { current: V('a'), good: V('a'), phase: 'committed', since: 1, rollback: { at: 1, from: V('c'), to: V('a'), reason: 'x' } })!
+    expect(item.title).toBe('Walnut on this machine went back to its previous version')
   })
 
   it('the Session helper row says a probation and a recent put-back, and only the tooltip an old one', () => {
