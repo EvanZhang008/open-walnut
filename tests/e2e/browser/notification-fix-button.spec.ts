@@ -104,7 +104,8 @@ async function openCenter(page: Page): Promise<Locator> {
 async function showErrors(panel: Locator): Promise<void> {
   const errors = panel.locator('.nfc-rail-btn', { hasText: 'Errors' }).first()
   await errors.click()
-  await expect(errors).toHaveAttribute('aria-current', 'true')
+  // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+  await expect(errors).toHaveAttribute('aria-current', 'page')
 }
 
 /** Walnut Health's error log, reached the way a user reaches it: the bell's Errors view points there. */

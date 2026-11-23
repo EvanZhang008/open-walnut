@@ -450,7 +450,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         {samples.length > 0 && (
           <>
             <span aria-hidden="true">{' \u00b7 '}</span>
-            <DisclosureButton expanded={samplesOn} data-testid="mail-rule-samples" onClick={() => setSamplesOn((on) => !on)}>
+            {/* inline: the preview line keeps one height whether it counts, checks or answers (C93). */}
+            <DisclosureButton inline expanded={samplesOn} data-testid="mail-rule-samples" onClick={() => setSamplesOn((on) => !on)}>
               {samplesOn ? 'Hide them' : `Show ${samples.length === 1 ? 'it' : samples.length}`}
             </DisclosureButton>
           </>

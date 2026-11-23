@@ -47,7 +47,8 @@ test.describe('the panel is a dialog for the keyboard', () => {
     await expect(panel).toHaveAttribute('role', 'dialog')
     await expect(panel).toHaveAttribute('aria-modal', 'true')
     await expect(panel).toHaveAttribute('aria-label', 'Notifications')
-    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
     await expect.poll(() => problemRowHosts(page), { timeout: 20_000 }).toEqual(FIXTURE_ORDER)
     await expect.poll(() => where(page)).toMatch(/^panel:/)
     const seen: string[] = []
@@ -60,7 +61,7 @@ test.describe('the panel is a dialog for the keyboard', () => {
     for (let i = 0; i < 12 && !(await where(page)).startsWith('panel:System'); i++) await page.keyboard.press(TAB(browserName))
     await expect(railButton(page, 'System')).toBeFocused()
     await page.keyboard.press('Enter')
-    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
+    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'page')
     await expect(systemHosts(page).locator('li.hpb-row')).toHaveCount(4, { timeout: 10_000 })
     await page.keyboard.press(TAB(browserName))
     expect(await where(page)).toMatch(/^panel:All/)

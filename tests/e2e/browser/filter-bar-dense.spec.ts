@@ -140,7 +140,8 @@ test.describe('Owner: dense board', () => {
     await search.fill('doing')
     await expect(hits.first()).toHaveAttribute('data-filter-value', 'Working')
     await search.fill('zzqq')
-    await expect(page.locator('.fb-search-results')).toContainText('Nothing matches "zzqq"')
+    // Every no-match state quotes the query in curly quotes (986499817c, one empty state everywhere).
+    await expect(page.locator('.fb-search-results')).toContainText('Nothing matches \u201czzqq\u201d')
     await page.keyboard.press('Escape')
     await expect(search).toHaveValue('')
     await expect(filterMenu(page)).toBeVisible()

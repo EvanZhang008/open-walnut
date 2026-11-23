@@ -233,7 +233,8 @@ async function openLetter(page: Page, subject: string): Promise<Locator> {
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible()
   await panel.locator('.nfc-rail-btn', { hasText: 'Inbox' }).click()
-  await expect(panel.locator('.nfc-rail-btn', { hasText: 'Inbox' })).toHaveAttribute('aria-current', 'true')
+  // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+  await expect(panel.locator('.nfc-rail-btn', { hasText: 'Inbox' })).toHaveAttribute('aria-current', 'page')
   const row = panel.locator('.hib-row').filter({ hasText: subject })
   await expect(row).toBeVisible({ timeout: 20_000 })
   await row.locator('.hib-subject').click()

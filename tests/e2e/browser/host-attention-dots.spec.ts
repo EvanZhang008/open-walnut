@@ -229,7 +229,8 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
     await expect(bell(page)).toHaveAttribute('aria-label', LOCAL_REASON, { timeout: 20_000 })
     const n0 = h.health!.rechecks
     await openBell(page)
-    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
     await expect(panelLocalCard(page)).toBeVisible()
     // Only this machine needs a step: no host list in the problems block, and nothing on the
     // Errors badge, since signing in is a first-run step, not a failure (localNoticeIsFailure).
@@ -252,7 +253,7 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
     await expect(bellDot(page)).toHaveCount(0)
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
     await openBell(page)
-    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
     // An old Claude Code here is never a notice.
     await expect(panelProblems(page)).toHaveCount(0)
     await expect(panelLocalCard(page)).toHaveCount(0)

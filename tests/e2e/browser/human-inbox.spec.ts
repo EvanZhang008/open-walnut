@@ -124,7 +124,8 @@ async function railBadge(panel: Locator, label: string): Promise<number> {
 async function openInbox(panel: Locator): Promise<void> {
   await rail(panel, 'Inbox').click()
   // aria-current, not aria-selected: the rail is plain buttons on purpose.
-  await expect(rail(panel, 'Inbox')).toHaveAttribute('aria-current', 'true')
+  // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+  await expect(rail(panel, 'Inbox')).toHaveAttribute('aria-current', 'page')
   await expect(panel.locator('.hib-toolbar')).toBeVisible()
 }
 
@@ -223,7 +224,7 @@ test('an action_required letter arrives, reads in the reader, and one click answ
   // A decision letter is Inbox mail, never Needs Action: that section is only what
   // a session asks live (2026-11-01, the user: "two separate things").
   await rail(panel, 'Needs you').click()
-  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'page')
   await expect(panel.locator('.hib-row')).toHaveCount(0)
   await expect(envelope(panel, DECISION_SUBJECT)).toHaveCount(0)
 
@@ -521,7 +522,7 @@ test('a decision letter stays in the Inbox, read or unread, and never counts or 
   // Whatever live asks the shared fixture server holds, the letter adds no row,
   // and reading or unreading it never moves the badge.
   await rail(panel, 'Needs you').click()
-  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'page')
   await expect(panel.locator('.hib-row')).toHaveCount(0)
   const asks = await railBadge(panel, 'Needs you')
   await shot(page, 'e2e-09-needs-action-holds-no-letter')

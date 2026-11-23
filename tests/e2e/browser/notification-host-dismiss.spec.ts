@@ -113,7 +113,8 @@ test.describe('the row x in All\'s problems', () => {
     await expect(bellDot(page)).toHaveCount(1, { timeout: 20_000 })
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: Claude Code needs attention')
     await openBell(page)
-    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
     await expect(panelLocalCard(page).locator('[data-testid="setup-banner-install"]')).toBeVisible()
     await expect(errorsBadge(page)).toHaveText('1')
     const x = panelLocalCard(page).getByRole('button', { name: 'Dismiss Claude Code notice' })
@@ -139,7 +140,7 @@ test.describe('expiry and the way back', () => {
     await expect(bellDot(page)).toHaveCount(0)
     // Dismissed: the bell opens on All with nothing leading it and nothing on Errors; System still lists the host.
     await openBell(page)
-    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
     await expect(panelProblems(page)).toHaveCount(0)
     await expect(errorsBadge(page)).toHaveCount(0)
     await pickRail(page, 'System')

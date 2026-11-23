@@ -98,7 +98,8 @@ test.describe('the problems block: which hosts, in which order', () => {
     await page.waitForTimeout(1500)
     await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     await openBell(page)
-    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
     await expect(panelProblems(page)).toHaveCount(0)
     await expect(errorsBadge(page)).toHaveCount(0)
     await pickRail(page, 'System')
@@ -484,7 +485,7 @@ test.describe('the Errors view and the rail counts', () => {
       await routeHealth(page2)
       await loadApp(page2)
       await openBell(page2)
-      await expect(railButton(page2, 'All')).toHaveAttribute('aria-current', 'true')
+      await expect(railButton(page2, 'All')).toHaveAttribute('aria-current', 'page')
       await expect(panelProblems(page2)).toHaveCount(0)
       const system2 = railButton(page2, 'System')
       await system2.click()
@@ -504,7 +505,7 @@ test.describe('the Errors view and the rail counts', () => {
       feed: [askRecord(1), askRecord(2)],
     })
     await openBell(page)
-    await expect(railButton(page, 'Needs you')).toHaveAttribute('aria-current', 'true')
+    await expect(railButton(page, 'Needs you')).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('.notification-panel .nfc-perm-card')).toHaveCount(2)
     const panelBox = await box(page.locator('.notification-panel'))
     const askTop = (await box(page.locator('.notification-panel .nfc-perm-card').first())).y

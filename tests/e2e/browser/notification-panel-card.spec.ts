@@ -114,7 +114,8 @@ async function openPanel(page: Page, scheme: 'light' | 'dark'): Promise<void> {
   await page.reload()
   await expect(bell(page)).toBeVisible({ timeout: 45_000 })
   await openBell(page)
-  if (await railButton(page, 'All').getAttribute('aria-current') !== 'true') await railButton(page, 'All').click()
+  // The rail's picked entry is the shared nav item, aria-current="page" (0a5209345f).
+  if (await railButton(page, 'All').getAttribute('aria-current') !== 'page') await railButton(page, 'All').click()
   await expect(page.locator('[data-testid="nfc-local-claude"]')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('.notification-panel .notification-feed-item', { hasText: 'Disk space low' })).toBeVisible()
 }
@@ -257,7 +258,7 @@ test('NP-live: a running break\'s buttons, an ask\'s host, Clear and a row\'s x 
   await page.reload()
   await expect(bell(page)).toBeVisible({ timeout: 45_000 })
   await openBell(page)
-  if (await railButton(page, 'All').getAttribute('aria-current') !== 'true') await railButton(page, 'All').click()
+  if (await railButton(page, 'All').getAttribute('aria-current') !== 'page') await railButton(page, 'All').click()
   const panel = page.locator('.notification-panel')
 
   // While the break runs, its row offers both of its buttons, as the card family's actions.

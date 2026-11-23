@@ -95,7 +95,10 @@
 .mail-rule-hint-fix:hover { text-decoration: underline; }
 .mail-rule-help { color: var(--fg-muted); }
 .mail-rule-add-condition { align-self: flex-start; }
-.mail-rule-preview { margin: 4px 0 0; min-height: 18px; font-size: var(--font-size-sm); color: var(--fg-muted); }
+/* One 18 px line whether it checks, counts or answers: the answer's inline Show key (16 px) sits inside it (C93). */
+.mail-rule-preview { margin: 4px 0 0; min-height: 18px; line-height: 18px; font-size: var(--font-size-sm); color: var(--fg-muted); }
+/* Top-aligned 1 px down, not on its icon's baseline, which pushed the line to 19 px. */
+.mail-rule-preview > .wn-disclosure-inline { vertical-align: top; margin-top: 1px; }
 .mail-rule-editor-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
 .mail-rules-picker {
