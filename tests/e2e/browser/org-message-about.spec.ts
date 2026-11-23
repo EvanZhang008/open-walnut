@@ -66,6 +66,13 @@ test('a VP\'s reply shows the tasks it is about as live pills, and the line neve
   const about = chat.getByTestId('msg-about')
   await expect(about).toHaveCount(1, { timeout: 30_000 })
   await expect(about).toHaveAttribute('data-ids', `${ids.move},${ids.boxes}`)
+  // A fold row like the turn summary's (the user, 2026-11-23: "use the same little arrow"):
+  // closed it reads "About 2 tasks"; a click shows the pills.
+  await expect(about).toHaveAttribute('data-open', 'false')
+  const toggle = about.getByRole('button', { name: 'About 2 tasks' })
+  await expect(about.locator('.process-fold-chevron')).toHaveCount(1)
+  await toggle.click()
+  await expect(about).toHaveAttribute('data-open', 'true')
   // The pills read as the tasks' names, not their ids.
   await expect(about).toContainText(`Book the movers ${STAMP}`, { timeout: 30_000 })
   await expect(about).toContainText(`Pack the boxes ${STAMP}`)

@@ -60,7 +60,7 @@ import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
-import { MessageAbout, MessageAboutContext, rowAbout } from './message-about';
+import { MessageAboutContext, MessageAboutFold, rowAbout } from './message-about';
 import { ReplyThreadContext, ReplyThreadLine, useReplyThreadLineOn } from './reply-thread-line';
 import { answerTasks, type ReplyThread } from '@open-walnut/reply-thread';
 import { shortenFileAboutLine } from '@/utils/thread-tree';
@@ -1605,7 +1605,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         ))}
         {bodyText && (lineThread && !isUser
           ? <ReplyThreadLine thread={lineThread} side="answer" {...(lineTasks?.length ? { tasks: lineTasks } : {})} />
-          : aboutIds.length > 0 && <MessageAbout ids={aboutIds} />)}
+          : aboutIds.length > 0 && <MessageAboutFold ids={aboutIds} msgId={message.msgId} />)}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render
           // in that order. Merge consecutive generic tools into one "Ran 3

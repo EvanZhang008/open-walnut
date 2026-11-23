@@ -2,3 +2,7 @@
 .msg-about { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px; font-size: var(--font-size-sm); }
 .msg-about-label { color: var(--fg-muted); font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.02em; }
 .msg-about-pills { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+/* In a session's chat: a folded line like the turn's (step-rows.css draws the toggle), its pills
+   under it when open, at the line's text indent. */
+.msg-about-fold { margin-top: 4px; }
+.msg-about-fold-pills { display: flex; padding: 2px 0 4px 24px; font-size: var(--font-size-sm); }

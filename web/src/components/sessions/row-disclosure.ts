@@ -106,6 +106,8 @@ export const disclosureIds = {
   tool: (toolUseId: string | undefined): string | undefined => (toolUseId ? `tool-${toolUseId}` : undefined),
   diff: (toolUseId: string | undefined): string | undefined => (toolUseId ? `diff-${toolUseId}` : undefined),
   diffFull: (toolUseId: string | undefined): string | undefined => (toolUseId ? `difffull-${toolUseId}` : undefined),
+  /** A reply's "About N tasks" line (message-about.tsx). */
+  about: (msgId: string | undefined): string | undefined => (msgId ? `about-${msgId}` : undefined),
   /** A person's message: what Walnut added to it. */
   added: (messageId: string | undefined): string | undefined => (messageId ? `added-${messageId}` : undefined),
   /** A row known by its words alone (a system notice, injected context). */
