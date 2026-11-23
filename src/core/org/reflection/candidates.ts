@@ -94,19 +94,30 @@ export interface CandidateDeps {
   nowMs: () => number;
   /** The session a send to this task reaches now (session-send-core.ts currentSessionOfTask): an org node's slot fields are empty. */
   currentSession?: (task: Task) => Promise<string>;
+  /** The task's session running when a message was written (session-send-core.ts sessionOfTaskAt), for one that names none. */
+  sessionAt?: (task: Task, at: string) => Promise<string>;
 }
 
-/** A task's session now: the send's own pick when known, else its slot fields. */
+/**
+ * A task's session now: the send's own pick ('' when no session of it is live: never an archived slot),
+ * or, without that lookup, its slot fields. A failed lookup throws: it is no answer, not "no session".
+ */
 export async function sessionNowOf(task: Task, deps: { currentSession?: (task: Task) => Promise<string> }): Promise<string> {
-  return (await deps.currentSession?.(task).catch(() => '')) || task.session_id || task.exec_session_id || '';
+  if (deps.currentSession) return deps.currentSession(task);
+  return task.session_id || task.exec_session_id || '';
+}
+
+/** The session a message of his went to: its own, else the task's session running then, else (no such lookup) the session now. */
+async function sessionOfMessage(task: Task, m: { sid?: string; at: string }, deps: CandidateDeps, now: () => Promise<string>): Promise<string> {
+  if (m.sid) return m.sid;
+  if (deps.sessionAt) return deps.sessionAt(task, m.at).catch(() => '');
+  return now().catch(() => '');
 }
 
 interface Pass { now: number; floor: string; seen: ReadonlySet<string>; lang: boolean; deps: CandidateDeps; out: Candidate[]; quiet: string[]; threadsOf: (taskId: string) => Promise<ReflectionThread[]> }
 /** What every candidate of one place shares: its task, session, thread. */
 type Place = Pick<Candidate, 'task' | 'sessionId' | 'thread' | 'hold'>;
 
-/** A message's own session, else the task's session now (`now`, sessionNowOf). */
-const sessionOf = (now: string, m?: { sid?: string }) => m?.sid || now;
 const withAlso = (signals: ReflectionSignal[]) => ({ signal: signals[0], ...(signals.length > 1 ? { also: signals.slice(1) } : {}) });
 const has = (p: Pass, key: string) => p.seen.has(key) || p.out.some((c) => c.key === key);
 const sha12 = (t: string) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 12);
@@ -185,18 +196,21 @@ async function taskCandidates(task: Task, p: Pass): Promise<void> {
     if (!cache.has(k)) cache.set(k, turnsAround(sid, from, to, p.deps.readTranscript, { turnsBefore: 4 }).catch(() => []));
     return cache.get(k)!;
   };
-  const now = all.length ? await sessionNowOf(task, p.deps) : '';
+  let nowSid: Promise<string> | undefined;
+  const now = () => (nowSid ??= sessionNowOf(task, p.deps));
+  const sidOf = new Map<string, string>();
+  for (const m of all) sidOf.set(m.id, await sessionOfMessage(task, m, p.deps, now));
   for (const m of all) {
-    const sid = sessionOf(now, m);
+    const sid = sidOf.get(m.id) ?? '';
     await signalStep(p, `msg:${task.id}:${m.id}`, m, { task, sessionId: sid }, async () => lastAssistantBefore(await turns(sid, m.at, m.at), m.at));
   }
-  roundsStep(p, all, (w) => `rounds:${task.id}:${w.ids[0]}`, (w) => ({ task, sessionId: sessionOf(now, all.find((m) => m.id === w.ids[w.ids.length - 1])) }));
+  roundsStep(p, all, (w) => `rounds:${task.id}:${w.ids[0]}`, (w) => ({ task, sessionId: sidOf.get(w.ids[w.ids.length - 1]) ?? '' }));
   if (!p.lang || !all.length) return;
   // The session's answers to him since his first new message, read once until he writes again.
   const last = all[all.length - 1];
   const checked = `langchk:${task.id}:${last.id}`;
   if (p.seen.has(checked)) return;
-  const sid = sessionOf(now, last);
+  const sid = sidOf.get(last.id) ?? '';
   const t = await turns(sid, all[0].at, last.at);
   if (t.some((x) => x.role === 'assistant' && x.at > last.at)) p.quiet.push(checked);
   languageStep(p, answersToHim(t, all[0].at).map(({ his, answer }) => ({

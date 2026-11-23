@@ -230,7 +230,7 @@ export function toolErrorCode(result: string): string {
   const mcp = word(/(?:^|\n)\s*walnut: ([a-z][a-z0-9_]{1,40}):/.exec(head))
   if (mcp) return mcp
   // No server answered (2026-11-23 audit: these fell to 'other' and a CLI's 'other' is not counted).
-  if (/no answer from the Walnut daemon|agent-gateway\.sock|connect ECONNREFUSED/.test(head)) return 'no_daemon'
+  if (/no answer from the Walnut daemon|agent-gateway\.sock/.test(head)) return 'no_daemon'
   const hub = word(/\b(hub_[a-z_]{3,30})\b/.exec(head))
   if (hub) return hub
   if (/\bserver not running\b/i.test(head)) return 'hub_unreachable'

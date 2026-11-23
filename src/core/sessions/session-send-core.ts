@@ -296,6 +296,16 @@ export async function currentSessionOfTask(task: { id: string; session_id?: stri
   return pickTaskSession(live, task.session_id || task.exec_session_id || undefined)?.claudeSessionId ?? '';
 }
 
+/**
+ * The task's session that was running at `at` (an ISO time): the latest one started by then, archived
+ * ones too (their transcripts stay), or '' when none had started. For a message that names no session.
+ */
+export async function sessionOfTaskAt(taskId: string, at: string): Promise<string> {
+  const { getSessionsForTask } = await import('../session-tracker.js');
+  const started = (await getSessionsForTask(taskId)).filter((s) => s.startedAt && s.startedAt <= at);
+  return started.sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]?.claudeSessionId ?? '';
+}
+
 /** The `Title [8hex]` / `[8hex]` handle every envelope and session_list row
  *  prints. The class is wider than hex because provider-issued session ids
  *  (ACP engines) are not UUIDs and still get printed this way. */

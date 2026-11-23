@@ -271,7 +271,9 @@ export async function appendDayNote(nodeId: string, nodeName: string, date: stri
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const had = await fsp.readFile(file, 'utf-8').catch(() => '');
     await fsp.appendFile(file, `${had ? '' : `# Session reflection: ${nodeName}, ${date}\n\n`}> Note: ${line}\n\n`, 'utf-8');
-    // In the JSON too: an audit reads the JSON (2026-11-23: "the day's record says nothing of the budget").
+    // In the JSON too: an audit reads the JSON (2026-11-23: "the day's record says nothing of the budget");
+    // never one that would start over a day the Markdown already holds (recordDayPass says why).
+    if (had && (await readDayJson(nodeId, date)).state !== 'ok') return;
     await writeDayJson(nodeId, nodeName, date, (d) => { d.notes = [...(d.notes ?? []), { at: new Date(nowMs).toISOString(), text: line }]; });
   });
 }
@@ -281,6 +283,10 @@ export async function recordDayPass(nodeId: string, nodeName: string, date: stri
   const file = reflectionDayFileOf(nodeId, date);
   await withFileLock(file, async () => {
     await fsp.mkdir(path.dirname(file), { recursive: true });
+    // A day whose Markdown holds entries its JSON does not (a broken JSON set aside, a day before the
+    // JSON) is left as it is: a count alone would make the JSON the day's record and hide them.
+    const read = await readDayJson(nodeId, date);
+    if (read.state !== 'ok' && await fsp.access(file).then(() => true, () => false)) return;
     await writeDayJson(nodeId, nodeName, date, (d) => {
       d.passes = { count: (d.passes?.count ?? 0) + 1, last: { at: new Date(nowMs).toISOString(), ...counts } };
     });

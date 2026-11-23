@@ -17,7 +17,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reflection-node-session'))
 
-const sessionsByTask = new Map<string, Array<{ claudeSessionId: string; lastActiveAt?: string; archived?: boolean }>>()
+const sessionsByTask = new Map<string, Array<{ claudeSessionId: string; startedAt: string; lastActiveAt?: string; archived?: boolean }>>()
 vi.mock('../../../src/core/session-tracker.js', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getSessionsForTask: async (id: string) => sessionsByTask.get(id) ?? [],
@@ -29,7 +29,7 @@ import { confirmSendCheck, reflectForNode, type ReflectDeps } from '../../../src
 import { appendDayEntry, appendDayNote, guidanceFileOf, readDayEntries, reflectionDayJsonOf, renderGuidance } from '../../../src/core/org/reflection/records.js'
 import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 import { askTidy } from '../../../src/core/org/reflection/guidance-tidy.js'
-import { currentSessionOfTask } from '../../../src/core/sessions/session-send-core.js'
+import { currentSessionOfTask, sessionOfTaskAt } from '../../../src/core/sessions/session-send-core.js'
 
 const NOW = Date.parse('2026-11-23T20:00:00Z')
 const iso = (minAgo: number) => new Date(NOW - minAgo * 60_000).toISOString()
@@ -65,6 +65,7 @@ function deps(over: Partial<ReflectDeps> & { messages?: Array<{ id: string; at: 
     send: async (task, text) => { sent.push({ task: task.id, text }); return true },
     confirmSend: (node, task, sid) => confirmSendCheck(node, task, sid, look),
     currentSession: currentSessionOfTask,
+    sessionAt: (t, at) => sessionOfTaskAt(t.id, at),
     rulesText: async () => '',
     replyLanguage: async () => null,
     nowMs: () => NOW,
@@ -76,8 +77,11 @@ function deps(over: Partial<ReflectDeps> & { messages?: Array<{ id: string; at: 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   sessionsByTask.clear()
-  sessionsByTask.set(worker.id, [{ claudeSessionId: 'sess-old', lastActiveAt: iso(900), archived: true }, { claudeSessionId: 'sess-live', lastActiveAt: iso(5) }])
-  sessionsByTask.set(vp.id, [{ claudeSessionId: 'sess-vp', lastActiveAt: iso(1) }])
+  sessionsByTask.set(worker.id, [
+    { claudeSessionId: 'sess-old', startedAt: iso(2000), lastActiveAt: iso(900), archived: true },
+    { claudeSessionId: 'sess-live', startedAt: iso(800), lastActiveAt: iso(5) },
+  ])
+  sessionsByTask.set(vp.id, [{ claudeSessionId: 'sess-vp', startedAt: iso(5000), lastActiveAt: iso(1) }])
   await updateReflectionState(vp.id, (s) => { s.since = iso(3 * 24 * 60) }, NOW)
 })
 
@@ -85,10 +89,26 @@ describe('a task with no slot fields', () => {
   it('has the session a send reaches: its slot when live, else the newest live one, else none', async () => {
     expect(await currentSessionOfTask(worker)).toBe('sess-live')
     expect(await currentSessionOfTask({ ...worker, session_id: 'sess-old' })).toBe('sess-live')
-    sessionsByTask.set(worker.id, [{ claudeSessionId: 'a', lastActiveAt: iso(50) }, { claudeSessionId: 'b', lastActiveAt: iso(10) }])
+    // The session running when a message was written: archived ones too, never one started after it.
+    expect(await sessionOfTaskAt(worker.id, iso(1000))).toBe('sess-old')
+    expect(await sessionOfTaskAt(worker.id, iso(30))).toBe('sess-live')
+    expect(await sessionOfTaskAt(worker.id, iso(3000))).toBe('')
+    sessionsByTask.set(worker.id, [{ claudeSessionId: 'a', startedAt: iso(90), lastActiveAt: iso(50) }, { claudeSessionId: 'b', startedAt: iso(60), lastActiveAt: iso(10) }])
     expect(await currentSessionOfTask({ ...worker, session_id: 'a' })).toBe('a')
-    sessionsByTask.set(worker.id, [])
-    expect(await currentSessionOfTask(worker)).toBe('')
+    // No live session: none, never the archived slot it names.
+    sessionsByTask.set(worker.id, [{ claudeSessionId: 'gone', startedAt: iso(90), archived: true }])
+    expect(await currentSessionOfTask({ ...worker, session_id: 'gone' })).toBe('')
+  })
+
+  it('a message from before the session changed is judged on its own session\'s turns and sent to the current one, told so', async () => {
+    const { d, sent, transcriptsRead } = deps({
+      messages: [{ id: 'm0', at: iso(1000), text: 'the reply used to show under the card' }],
+      readTranscript: async (sid: string) => { transcriptsRead.push(sid); return sid === 'sess-old' ? [{ role: 'assistant', text: DONE, timestamp: iso(1100) }, { role: 'user', text: 'the reply used to show under the card', timestamp: iso(1000), sentBy: 'person' }] as never : [] },
+    })
+    await reflectForNode(vp, 'Marina VP', [vp, worker], d)
+    expect(transcriptsRead).toContain('sess-old')
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toContain('a turn of an earlier session of this task')
   })
 
   it('is judged on its session\'s turns, and its correction is sent (never "no known session")', async () => {
@@ -125,12 +145,24 @@ describe('one pass', () => {
       { id: 'm1', at: iso(40), text: 'the reply used to show under the card' },
       { id: 'm2', at: iso(30), text: 'it used to show the reply, it broke again' },
     ]
-    const { d } = deps({ messages, callModel: async () => finding(lesson) })
+    const said = [lesson, 'Keep the reply under the card whenever the layout changes.']
+    const { d } = deps({ messages, callModel: async () => finding(said.shift()!) })
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
     const entries = (await readDayEntries(vp.id, localDate(NOW)))!
     expect(entries).toHaveLength(2)
     expect(entries.filter((e) => e.rule.kind === 'guidance')).toHaveLength(1)
     expect(entries.some((e) => e.rule.text.startsWith('not added (same lesson as an earlier finding on this task this pass)'))).toBe(true)
+  })
+
+  it('a different lesson of the same kind on the same task is still kept', async () => {
+    const said = ['Keep the reply under the card when the layout changes.', 'Run the phone layout check before a card ships.']
+    const messages = [
+      { id: 'm1', at: iso(40), text: 'the reply used to show under the card' },
+      { id: 'm2', at: iso(30), text: 'the phone layout used to show the tab, it broke' },
+    ]
+    const { d } = deps({ messages, callModel: async () => finding(said.shift()!) })
+    await reflectForNode(vp, 'Marina VP', [vp, worker], d)
+    expect((await readDayEntries(vp.id, localDate(NOW)))!.filter((e) => e.rule.kind === 'guidance')).toHaveLength(2)
   })
 
   it('is counted in the day\'s JSON with nothing to judge, and a note stays there when entries come after it', async () => {
@@ -141,6 +173,17 @@ describe('one pass', () => {
     const day = JSON.parse(await fs.readFile(reflectionDayJsonOf(vp.id, localDate(NOW)), 'utf-8'))
     expect(day.passes).toMatchObject({ count: 2, last: { candidates: 0, judged: 0, skipped: 0 } })
     expect(day.notes).toEqual([{ at: new Date(NOW).toISOString(), text: 'Judge budget: spent at 19:00 UTC.' }])
+  })
+
+  it('never starts a JSON over a day only the Markdown holds', async () => {
+    const md = reflectionDayJsonOf(vp.id, localDate(NOW)).replace(/\.json$/, '.md')
+    await fs.mkdir(path.dirname(md), { recursive: true })
+    await fs.writeFile(md, '# Session reflection: Marina VP\n\n- an entry from before the JSON\n')
+    const { d } = deps()
+    await reflectForNode(vp, 'Marina VP', [vp, worker], d)
+    await appendDayNote(vp.id, 'Marina VP', localDate(NOW), 'Judge budget: spent.', NOW)
+    await expect(fs.access(reflectionDayJsonOf(vp.id, localDate(NOW)))).rejects.toThrow()
+    expect(await fs.readFile(md, 'utf-8')).toContain('> Note: Judge budget: spent.')
   })
 })
 

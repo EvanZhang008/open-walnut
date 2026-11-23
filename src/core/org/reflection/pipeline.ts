@@ -161,6 +161,17 @@ async function keepRule(node: Task, nodeName: string, c: Candidate, f: Finding, 
   return { ...rule, text: `${rule.text}; skill ${f.skill.name} not written (${wrote === 'day_full' ? 'today\'s skill is written already' : wrote})` };
 }
 
+/** Two lessons that say much the same: most of the shorter one's character pairs are in the other (any script). */
+export function nearlySame(a: string, b: string): boolean {
+  const pairs = (t: string) => { const x = normalizeForQuote(t).replace(/\s+/g, ''); const out = new Set<string>(); for (let i = 0; i < x.length - 1; i++) out.add(x.slice(i, i + 2)); return out; };
+  const [p, q] = [pairs(a), pairs(b)];
+  if (!p.size || !q.size) return false;
+  const [small, big] = p.size <= q.size ? [p, q] : [q, p];
+  let hit = 0;
+  for (const x of small) if (big.has(x)) hit++;
+  return hit / small.size >= 0.6;
+}
+
 /** The verdict on one candidate: the judge's, or the fixed language finding (no model call). Sends nothing. */
 export async function verdictOf(node: Task, c: Candidate, deps: Pick<ReflectDeps, 'readTranscript' | 'callModel' | 'rulesText' | 'replyLanguage'>, guidance: readonly string[]): Promise<Verdict> {
   if (c.signal === 'wrong_language') return { verdict: 'bad_decision', finding: languageFinding(c, await deps.replyLanguage(), guidance) };
@@ -172,7 +183,7 @@ export async function verdictOf(node: Task, c: Candidate, deps: Pick<ReflectDeps
 
 /** Judge one candidate (or check it, for wrong_language) and act on a real finding. */
 export async function reflectOnCandidate(
-  // What this pass did already: a task id it sent a correction to, `lesson:<task>:<kind>` a lesson it kept.
+  // What this pass did already: a task id it sent a correction to, `lesson:<task>:<kind>:<text>` a lesson it kept.
   node: Task, nodeName: string, c: Candidate, deps: ReflectDeps, guidance: readonly string[], thisPass: Set<string> = new Set(),
 ): Promise<{ verdict: Verdict; entry?: DayEntry }> {
   const verdict = await verdictOf(node, c, deps, guidance);
@@ -206,13 +217,16 @@ export async function reflectOnCandidate(
       }
     }
   }
-  // One lesson a pass per task and kind: his several messages about one thing are one lesson
-  // (2026-11-23 audit: one complaint judged 4 times wrote 4 nearly equal lessons).
-  const lessonKey = `lesson:${c.task.id}:${f.kind}`;
-  const rule: DayRule = thisPass.has(lessonKey) && (f.guidance || f.skill)
-    ? { kind: 'none', text: `not added (same lesson as an earlier finding on this task this pass): ${f.guidance ?? f.skill?.name ?? ''}` }
+  // A lesson this pass already kept for this task and kind, said again in other words, is not written
+  // twice: his several messages about one thing are one lesson (2026-11-23 audit: one complaint judged
+  // 4 times wrote 4 nearly equal lessons). A different lesson of the same kind is kept as usual.
+  const lessonText = f.guidance || f.skill?.name || '';
+  const lessonPrefix = `lesson:${c.task.id}:${f.kind}:`;
+  const twin = lessonText ? [...thisPass].find((k) => k.startsWith(lessonPrefix) && nearlySame(k.slice(lessonPrefix.length), lessonText)) : undefined;
+  const rule: DayRule = twin
+    ? { kind: 'none', text: `not added (same lesson as an earlier finding on this task this pass): ${lessonText}` }
     : await keepRule(node, nodeName, c, f, guidance, now, deps);
-  if (f.guidance || f.skill) thisPass.add(lessonKey);
+  if (lessonText) thisPass.add(lessonPrefix + lessonText);
   const entry: DayEntry = {
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
     finding: f, corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}), rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
@@ -366,6 +380,7 @@ export function defaultDeps(): ReflectDeps {
       return confirmSendCheck(node, task, sessionId, { getTask: async (id) => (await getTask(id)) ?? null, orgTasks, orgEnabled: isOrgEnabled, dutyOn, currentSession: currentSessionDefault });
     },
     currentSession: currentSessionDefault,
+    sessionAt: async (t, at) => (await import('../../sessions/session-send-core.js')).sessionOfTaskAt(t.id, at),
     readThreads: async (taskId) => {
       const { readThreads } = await import('../threads-store.js');
       return threadsFromRecords((await readThreads(taskId)).threads);
