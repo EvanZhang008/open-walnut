@@ -72,8 +72,11 @@ describe('a turn end a host retrier took is never replayed at boot', () => {
     // A newer turn end of the same session committed while a handler runs keeps its mark.
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
-    const running = clearingTurnEndMarks(async () => { await gate })({ name: 'session:result', data: { sessionId: 'h2' }, source: 'host-channel' })
-    await new Promise((r) => setTimeout(r, 5))
+    let entered!: () => void
+    const inHandler = new Promise<void>((r) => { entered = r })
+    // The wrapper reads its mark before the handler runs: once the handler is in, that read is done.
+    const running = clearingTurnEndMarks(async () => { entered(); await gate })({ name: 'session:result', data: { sessionId: 'h2' }, source: 'host-channel' })
+    await inHandler
     await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 3 }, turnEnds: [{ sid: 'h2', edge: 'session:result', seq: 3 }] })
     release(); await running
     expect(turnEndMarks().map((m) => m.sid)).toEqual(['h2'])

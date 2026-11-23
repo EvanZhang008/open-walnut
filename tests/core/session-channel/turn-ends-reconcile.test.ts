@@ -201,11 +201,10 @@ describe('through the leader side: a host\'s turn end applied, the leader stoppe
       ownerOf: () => HOST, backoffMs: () => 20, log: () => {},
     })
     await side.noteHost(HOST, { connected: true, judges: true })
-    const end = Date.now() + 8000
-    while (turnEndMarks().length === 0 || !(await getSessionByClaudeId('h7'))) {
-      if (Date.now() > end) throw new Error('the batch was not applied')
-      await new Promise((r) => setTimeout(r, 10))
-    }
+    await vi.waitFor(async () => {
+      expect(turnEndMarks().length).toBeGreaterThan(0)
+      expect(await getSessionByClaudeId('h7')).toBeTruthy()
+    }, { timeout: 8000, interval: 10 })
     side.stop(); side = null
     expect(turnEndMarks().map((m) => m.sid)).toEqual(['h6'])
     // The facts were said here (the emit seam ran), but nothing acted on them: the handlers are not wired in this test.
@@ -273,10 +272,7 @@ describe('S1: the reconcile waits for the host\'s first catch-up after the boot'
         .then(() => reconcileHostTurnEnds({ hostId: host, before: bootAt }))
     })
     await side.noteHost(HOST, { connected: true, judges: true })
-    while (!ran) {
-      if (Date.now() > end) throw new Error('the link never caught up')
-      await new Promise((r) => setTimeout(r, 10))
-    }
+    await vi.waitFor(() => expect(ran).not.toBeNull(), { timeout: Math.max(1, end - Date.now()), interval: 10 })
     const r = await ran
     expect(seen).toEqual([{ host: HOST, status: 'running' }])
     expect(r).toEqual({ looked: 1, applied: [] })
