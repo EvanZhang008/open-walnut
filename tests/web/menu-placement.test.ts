@@ -411,11 +411,18 @@ describe('flyoutBesideHost', () => {
     const out = computePlacement({ anchor: at.anchor, naturalHeight: 200, menuWidth: 300, viewportWidth: 1280, viewportHeight: 900, gap: 2, margin: 8, minHeight: 120, align: at.align });
     expect(1280 - out.right - 300).toBe(462);
   });
-  it('neither side has the room: the roomier one, slid into the window, covering the host least', () => {
+  it('neither side has the whole width: the roomier one, its width capped to that room, beside the host', () => {
     const at = flyoutBesideHost({ left: 390, right: 748 }, trigger, 460, 800, 2, 8)!;
     expect(at.align).toBe('right');
-    const out = computePlacement({ anchor: at.anchor, naturalHeight: 200, menuWidth: 460, viewportWidth: 800, viewportHeight: 900, gap: 2, margin: 8, minHeight: 120, align: at.align, edgeOverflow: 'clamp' });
-    expect(800 - out.right).toBe(8 + 460);
+    expect(at.maxWidth).toBe(380);
+    // Measured again at the capped width, it picks the same side and cap: the passes agree.
+    expect(flyoutBesideHost({ left: 390, right: 748 }, trigger, 380, 800, 2, 8)).toEqual(at);
+    const out = computePlacement({ anchor: at.anchor, naturalHeight: 200, menuWidth: 380, viewportWidth: 800, viewportHeight: 900, gap: 2, margin: 8, minHeight: 120, align: at.align, edgeOverflow: 'clamp' });
+    expect(800 - out.right).toBe(388);
+  });
+  it('too little room on both sides: its own width, slid into the window', () => {
+    const at = flyoutBesideHost({ left: 200, right: 600 }, trigger, 460, 800, 2, 8)!;
+    expect(at.maxWidth).toBeUndefined();
   });
   it('not measured yet: no override', () => {
     expect(flyoutBesideHost(host, trigger, 0, 1280, 2, 8)).toBeNull();

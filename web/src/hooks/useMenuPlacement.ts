@@ -46,6 +46,8 @@ export interface MenuPlacement {
   top: number;
   right: number;
   maxHeight: number;
+  /** A flyout beside its host (`[data-flyouts-beside]`): the room on its side, so it never covers the host. */
+  maxWidth?: number;
   /** Only with `beside`: where the popover's arrow sits, pointing at the anchor. */
   arrow?: PlacementArrow;
 }
@@ -314,10 +316,13 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   return { top, right, maxHeight, side: openUp ? 'up' : 'down' };
 }
 
+/** The narrowest a flyout beside its host is made to read in (a list of names still fits). */
+const FLYOUT_BESIDE_MIN = 260;
+
 /**
  * Where a flyout goes beside its host (`[data-flyouts-beside]`): its right edge at the host's left,
  * else its left edge at the host's right, its top at the trigger's top; neither with the room, the
- * roomier side, slid into the window. Null before the flyout is measured.
+ * roomier side with its width capped to it. Null before the flyout is measured.
  */
 export function flyoutBesideHost(
   host: { left: number; right: number },
@@ -326,16 +331,21 @@ export function flyoutBesideHost(
   viewportWidth: number,
   gap: number,
   margin: number,
-): { anchor: { top: number; bottom: number; right: number; left: number }; align: 'right' | 'left' } | null {
+): { anchor: { top: number; bottom: number; right: number; left: number }; align: 'right' | 'left'; maxWidth?: number } | null {
   if (menuWidth <= 0) return null;
   const at = { top: trigger.top - gap, bottom: trigger.top - gap };
-  if (host.left - gap - menuWidth >= margin) return { anchor: { ...at, left: host.left - gap, right: host.left - gap }, align: 'right' };
-  if (host.right + gap + menuWidth <= viewportWidth - margin) return { anchor: { ...at, left: host.right + gap, right: host.right + gap }, align: 'left' };
-  // Neither side has its whole width: the roomier side, slid only as far as the window needs
-  // (edgeOverflow 'clamp'), so it covers as little of the host as it can.
-  return host.left >= viewportWidth - host.right
-    ? { anchor: { ...at, left: host.left - gap, right: host.left - gap }, align: 'right' }
-    : { anchor: { ...at, left: host.right + gap, right: host.right + gap }, align: 'left' };
+  const leftRoom = host.left - gap - margin;
+  const rightRoom = viewportWidth - margin - host.right - gap;
+  // Its side: the left when it fits there, else the right, else the roomier one. Its width is capped
+  // to that side's room, so a wide list wraps beside the host instead of covering it; the side picked
+  // with the capped width is the same one, so the two passes agree. Too little room (under
+  // FLYOUT_BESIDE_MIN) keeps its width and slides into the window, over the host as little as it can.
+  const left = leftRoom >= menuWidth || (rightRoom < menuWidth && leftRoom >= rightRoom);
+  const room = left ? leftRoom : rightRoom;
+  const cap = room >= FLYOUT_BESIDE_MIN ? { maxWidth: room } : {};
+  return left
+    ? { anchor: { ...at, left: host.left - gap, right: host.left - gap }, align: 'right', ...cap }
+    : { anchor: { ...at, left: host.right + gap, right: host.right + gap }, align: 'left', ...cap };
 }
 
 /**
@@ -519,7 +529,7 @@ export function useMenuPlacement(
       const next: MenuPlacement = besideAt
         ?? (beside
           ? { ...stacked!, arrow: verticalArrow(stacked!, r, menuWidth, naturalHeight, window.innerWidth) }
-          : stacked!);
+          : sideOfHost?.maxWidth !== undefined ? { ...stacked!, maxWidth: sideOfHost.maxWidth } : stacked!);
       // Latch on the first pass only — but not before the menu has been measured,
       // or we'd freeze a side chosen from naturalHeight 0 (which always "fits
       // below") and never reconsider once the real height is known.
@@ -533,9 +543,9 @@ export function useMenuPlacement(
       // state update. Remove it and you get an infinite render loop.
       setPlacement((prev) =>
         prev && prev.top === next.top && prev.right === next.right && prev.maxHeight === next.maxHeight
-          && sameArrow(prev.arrow, next.arrow)
+          && prev.maxWidth === next.maxWidth && sameArrow(prev.arrow, next.arrow)
           ? prev
-          : { top: next.top, right: next.right, maxHeight: next.maxHeight, ...(next.arrow ? { arrow: next.arrow } : {}) });
+          : { top: next.top, right: next.right, maxHeight: next.maxHeight, ...(next.maxWidth !== undefined ? { maxWidth: next.maxWidth } : {}), ...(next.arrow ? { arrow: next.arrow } : {}) });
     };
 
     place();
@@ -631,5 +641,5 @@ export function menuPlacementStyle(p: MenuPlacement | null): CSSProperties {
     // it a click could land on the unplaced frame.
     return { position: 'fixed', top: 0, left: -9999, zIndex: 'var(--z-menu)', pointerEvents: 'none' };
   }
-  return { position: 'fixed', top: p.top, right: p.right, maxHeight: p.maxHeight, zIndex: 'var(--z-menu)' };
+  return { position: 'fixed', top: p.top, right: p.right, maxHeight: p.maxHeight, ...(p.maxWidth !== undefined ? { maxWidth: p.maxWidth } : {}), zIndex: 'var(--z-menu)' };
 }
