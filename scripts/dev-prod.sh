@@ -726,8 +726,18 @@ sweep_build_clones
 # for WALNUT_DEVPROD_SKIP_TSC=1 when the error is provably unrelated to `/`.
 # tsc runs under a working node when this machine has one, else on $JS_BIN (bun; its
 # own `#!/usr/bin/env node` line would need a node): the same check peaked at 8.3 GB
-# under bun and 3.7 GB under node (scripts/lib/tsc-runtime.sh).
-if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]]; then
+# under bun and 3.7 GB under node (scripts/lib/tsc-runtime.sh). A commit whose web/ another tool
+# already type-checked, unchanged here, is not checked twice (scripts/lib/tsc-done.sh).
+TSC_DONE=0
+if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]] && [[ -f "$REPO_ROOT/scripts/lib/tsc-done.sh" ]]; then
+  # shellcheck source=lib/tsc-done.sh
+  . "$REPO_ROOT/scripts/lib/tsc-done.sh"
+  if walnut_tsc_done "$REPO_ROOT"; then
+    TSC_DONE=1
+    echo "web/ type-check skipped: commit $(git -C "$REPO_ROOT" rev-parse --short HEAD) passed it already ($(walnut_tsc_done_dir))."
+  fi
+fi
+if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]] && [[ "$TSC_DONE" != "1" ]]; then
   WEB_TSC="$REPO_ROOT/web/node_modules/.bin/tsc"
   [[ -x "$WEB_TSC" ]] || WEB_TSC="$REPO_ROOT/node_modules/.bin/tsc"
   # shellcheck source=lib/tsc-runtime.sh
