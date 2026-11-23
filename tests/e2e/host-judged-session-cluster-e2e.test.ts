@@ -241,6 +241,8 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
   }, 400_000)
 
   it('S6: the switch off on the Mac: a new start on the same host takes the legacy path; the session the host already runs still reports', async () => {
+    // S5 ended on a wake: the Mac's daemon link to the host is redialled after it, and the channel with it.
+    await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 120_000, 'the Mac to link the host again after the wake')
     const off = await h.c.mac('PUT', '/api/config', { experimental: { host_runs_sessions: false } })
     expect(off.status, JSON.stringify(off.json)).toBe(200)
     await waitFor(async () => !(await h.mac(`/side?host=${HOST_KEY}`)).judges, 30_000, 'the Mac to stop handing starts to the host')
