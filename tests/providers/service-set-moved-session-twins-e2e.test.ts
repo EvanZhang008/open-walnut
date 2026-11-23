@@ -29,6 +29,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -86,7 +87,8 @@ async function boot(twin: Twin, name: 'A' | 'B'): Promise<Daemon> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
-    PATH: '/usr/bin:/bin',
+    // The system dirs, behind the exec guard (a stray ssh or sudo from a child is caught, never run).
+    PATH: guardedPath([], '/usr/bin:/bin'),
     HOME: path.join(root, 'home'), // one machine, one OS account: shared by both daemons
     CLAUDE_CONFIG_DIR: undefined,
     WALNUT_DAEMON_DIR: daemonDir,

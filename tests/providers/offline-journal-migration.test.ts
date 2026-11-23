@@ -474,13 +474,14 @@ const RULE = {
   source: ruleBlock('daemon-source.ts', /var JOURNAL_PROD_STATE_DIR =/, /\/\/ Whether daemon\.pid names this process/),
 }
 interface Rule { JOURNAL_ROOT: string; OFFLINE_HOST_DIR: string; LEADER_BOOK_DIR: string; LEGACY_JOURNAL_DIRS: string[]; LEGACY_LEADER_DIRS: string[] }
-interface RuleEnv { daemonDir: string; service: boolean; prod: boolean; stateDir?: string; knob?: string; home?: string; prodDir?: string }
+interface RuleEnv { daemonDir: string; service: boolean; prod: boolean; stateDir?: string; knob?: string; home?: string; prodDir?: string; set?: string }
 const PROD = '/tmp/open-walnut'
 /** A twin's rule block run with this mode (no fs access: the block only joins paths). */
 const runRule = (text: string, env: RuleEnv): Rule => new Function(
-  'path', 'HOME_DIR', 'DAEMON_DIR', 'DAEMON_STATE_DIR', 'SERVICE_MODE', 'IS_PROD_DAEMON_DIR', 'PROD_DAEMON_DIR', 'FALLBACK_DAEMON_DIR', 'process',
+  'path', 'HOME_DIR', 'DAEMON_DIR', 'DAEMON_STATE_DIR', 'SERVICE_MODE', 'IS_PROD_DAEMON_DIR', 'SET_ID', 'KEEPS_SESSIONS', 'PROD_DAEMON_DIR', 'FALLBACK_DAEMON_DIR', 'process',
   `${text}\nreturn { JOURNAL_ROOT, OFFLINE_HOST_DIR, LEADER_BOOK_DIR, LEGACY_JOURNAL_DIRS, LEGACY_LEADER_DIRS }`,
-)(path, env.home ?? '/home/marina', env.daemonDir, env.stateDir, env.service, env.prod, env.prodDir ?? PROD,
+  // The twins' own rule for these two (SET_ID: a service set's runtime, service-set.ts; KEEPS_SESSIONS: the prod dir or a set).
+)(path, env.home ?? '/home/marina', env.daemonDir, env.stateDir, env.service, env.prod, env.set ?? '', env.prod || !!env.set, env.prodDir ?? PROD,
   path.join(env.home ?? '/home/marina', '.cache', 'open-walnut'),
   { platform: 'linux', env: env.knob ? { WALNUT_JOURNAL_DIR: env.knob } : {} }) as Rule
 
@@ -503,6 +504,9 @@ describe('ONE journal root per host in every mode, the same in both twins (evalu
     // The server picks the fallback when /tmp/open-walnut is another user's or a symlink: never read.
     { name: 'the home fallback daemon dir', env: { daemonDir: FALLBACK, service: false, prod: true }, root: MINE, legacy: [FALLBACK] },
     { name: 'the home fallback daemon dir in service mode', env: { daemonDir: FALLBACK, stateDir: STATE, service: true, prod: true }, root: MINE, legacy: [FALLBACK] },
+    // A service set's daemon keeps its journal in its own install root (never ~/.open-walnut/tmp, the default set's),
+    // and the test knob does not move it.
+    { name: 'a service set\'s daemon', env: { daemonDir: '/home/marina/.open-walnut-host/walnuts/0123456789abcdef/rt', stateDir: '/home/marina/.open-walnut-host/walnuts/0123456789abcdef/daemon', service: true, prod: false, set: '0123456789abcdef', knob: '/tmp/acme-j' }, root: '/home/marina/.open-walnut-host/walnuts/0123456789abcdef/daemon', legacy: ['/home/marina/.open-walnut-host/walnuts/0123456789abcdef/rt'] },
   ]
   it.each(cases)('$name', ({ env, root, legacy }) => {
     const a = runRule(RULE.standalone, env)
@@ -553,8 +557,12 @@ describe('ONE journal root per host in every mode, the same in both twins (evalu
     expect(checked).toBe(48)
   })
 
-  it('neither rule reads the service state dir: the mode never moves the journal', () => {
-    for (const text of [RULE.standalone, RULE.source]) expect(text).not.toMatch(/DAEMON_STATE_DIR|STATE_CANDIDATES|SERVICE_STATE_DIR/)
+  it('neither rule reads the service state dir but for a service set: the mode never moves the default set\'s journal', () => {
+    for (const text of [RULE.standalone, RULE.source]) {
+      expect(text).not.toMatch(/STATE_CANDIDATES|SERVICE_STATE_DIR/)
+      // A service set's journal is in its own install root (its state dir): read only behind SET_ID.
+      expect(text.replace(/\(SET_ID && DAEMON_STATE_DIR\)/g, '')).not.toMatch(/DAEMON_STATE_DIR/)
+    }
   })
 
   /** A temp host: HOME, the prod dir (both modes' runtime dir), and a service state dir of its own. */

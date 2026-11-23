@@ -340,8 +340,8 @@ describe('leader protocol: both twins', () => {
     it(`${name}: the bridge hello says what the daemon does for the companion, and a test can hide it`, () => {
       expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1'\]\.filter\(/)
       expect(src).toMatch(/WALNUT_BRIDGE_HIDE_CAPS/)
-      // The knob is refused for the prod daemon dir (section 10): it is read only off it.
-      expect(src).toMatch(/BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR \? \[\] : \(process\.env\.WALNUT_BRIDGE_HIDE_CAPS/)
+      // The knob is refused for a daemon that keeps sessions (section 10: the prod dir, or a service set's runtime): read only off them.
+      expect(src).toMatch(/BRIDGE_HIDDEN_CAPS = KEEPS_SESSIONS \? \[\] : \(process\.env\.WALNUT_BRIDGE_HIDE_CAPS/)
       expect(src.match(/WALNUT_BRIDGE_HIDE_CAPS \|\||WALNUT_BRIDGE_HIDE_CAPS \?\?/g)).toHaveLength(1)
       expect(src).toMatch(/uplink: 1,\s+\/\/[^\n]*\n\s+capabilities: BRIDGE_CAPABILITIES,/)
     })

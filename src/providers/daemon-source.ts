@@ -5793,7 +5793,7 @@ var JOURNAL_PROD_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp');
 var JOURNAL_HOST_DAEMON = IS_PROD_DAEMON_DIR;
 var JOURNAL_TEST_DIR = !KEEPS_SESSIONS ? process.env.WALNUT_JOURNAL_DIR : undefined;
 // A set's journal lives in its install root: ~/.open-walnut/tmp is the default set's, and its runtime dir may be /tmp.
-var JOURNAL_ROOT = JOURNAL_TEST_DIR || (JOURNAL_HOST_DAEMON ? JOURNAL_PROD_STATE_DIR : SET_ID ? DAEMON_STATE_DIR : DAEMON_DIR);
+var JOURNAL_ROOT = JOURNAL_TEST_DIR || (JOURNAL_HOST_DAEMON ? JOURNAL_PROD_STATE_DIR : (SET_ID && DAEMON_STATE_DIR) || DAEMON_DIR);
 var OFFLINE_HOST_DIR = path.join(JOURNAL_ROOT, 'offline-host');
 var LEADER_BOOK_DIR = path.join(JOURNAL_ROOT, 'leader');
 // Which homes name a Walnut kept here under another home (walnut-scope-core.ts declared moves).

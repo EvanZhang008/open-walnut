@@ -42,7 +42,8 @@ describe('SetHold', () => {
     const waiting = h.admit('acpStart', {}, () => new Error('held')).then((done) => { went = true; return done })
     const own = await h.admit('server.configure', pastSetHold({}), () => new Error('held'))
     own()
-    await new Promise((r) => setTimeout(r, 5))
+    // Still held: the move's own command went, the ACP start did not (raced against a promise already settled).
+    expect(await Promise.race([waiting.then(() => 'went'), Promise.resolve('held')])).toBe('held')
     expect(went).toBe(false)
     h.set(false)
     const done = await waiting
@@ -50,7 +51,7 @@ describe('SetHold', () => {
     expect(h.inFlight).toBe(1)
     let drained = false
     const d = h.drained(1_000).then((v) => { drained = v })
-    await new Promise((r) => setTimeout(r, 5))
+    expect(await Promise.race([d.then(() => 'drained'), Promise.resolve('under way')])).toBe('under way')
     expect(drained).toBe(false)
     done()
     await d

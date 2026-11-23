@@ -126,6 +126,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/projection-cache.ts': { calls: 4, kind: 'local', why: 'the phone feed relayed by this machine\'s daemon; a lost push is resent by its sweep' },
   'src/providers/engine-model-probe.ts': { calls: 1, kind: 'local', why: 'a model catalog read over loopback' },
   'src/providers/oneshot-client.ts': { calls: 2, kind: 'local', why: 'one-shot claude children run by this machine\'s daemon' },
+  'src/providers/service-set-move-link.ts': { calls: 1, kind: 'local', why: 'this machine\'s own walnut-net endpoint id (net.status of its local daemon, 5 s) for a service set\'s net route; no answer stops the flip before anything moves' },
   'src/web/routes/events-v1.ts': { calls: 4, kind: 'local', why: 'the phone feed relayed by this machine\'s daemon' },
   'src/web/routes/hosts-net.ts': { calls: 1, kind: 'local', why: 'walnut-net status, in this machine\'s daemon' },
   'src/web/routes/system.ts': { calls: 2, kind: 'local', why: 'the desktop app\'s status and restart' },

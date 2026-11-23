@@ -74,12 +74,13 @@ function extractCmdSkillsSync(): (homeDir: string, daemonDir: string, prodDir: s
       || path.resolve(daemonDir) === path.resolve(path.join(homeDir, '.cache', 'open-walnut'))
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const bound = new Function(
-      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
+      // KEEPS_SESSIONS: the prod dir, or a service set's runtime (none here): the twin's gate for skills.sync.
+      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
       // What the held skills keep on disk (held-pushes.json) is the twins tests' to cover.
       'loadHeldPushes', 'persistHeldPushes',
       fnSrc + '\nreturn cmdSkillsSync(null, 1, CMD);',
     ) as (...a: unknown[]) => void
-    bound(path, fs, homeDir, daemonDir, prodDir, isProd, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {})
+    bound(path, fs, homeDir, daemonDir, prodDir, isProd, isProd, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {})
     return reply
   }
 }
@@ -133,9 +134,9 @@ function heldSkillsProcess(): (homeDir: string, offlineDir: string, cmd: Record<
     if (!run) {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       run = new Function(
-        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
+        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
         block + '\nreturn function (CMD) { return cmdSkillsSync(null, 1, CMD); };',
-      )(path, fs, crypto, homeDir, offlineDir, true,
+      )(path, fs, crypto, homeDir, offlineDir, true, true,
         (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } },
         (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } },
         () => {}, 'walnut-managed v1') as (cmd: Record<string, unknown>) => void
@@ -364,11 +365,12 @@ describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () =>
     expect(fs.existsSync(canonical())).toBe(true)
   })
 
-  it("the binding mirrors the twin's own IS_PROD_DAEMON_DIR rule", () => {
+  it("the binding mirrors the twin's own KEEPS_SESSIONS rule (the prod dir, or a service set's runtime)", () => {
     const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
     expect(src).toMatch(/const FALLBACK_DAEMON_DIR = path\.join\(process\.env\.HOME \|\| HOME_DIR, '\.cache', 'open-walnut'\);/)
     expect(src).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\);/)
-    expect(src).toMatch(/function cmdSkillsSync[\s\S]*?if \(!IS_PROD_DAEMON_DIR\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+    expect(src).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== '';/)
+    expect(src).toMatch(/function cmdSkillsSync[\s\S]*?if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })
 
   it('rejects a payload without the managed marker', () => {
@@ -489,7 +491,8 @@ describe('twin parity', () => {
     // gemini: the one engine with a private skills dir.
     expect(standalone).toContain("if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))")
     expect(standalone).toContain('fs.symlinkSync(canonicalDir, link)')
-    expect(standalone).toMatch(/skills\.sync[\s\S]{0,2600}if \(!IS_PROD_DAEMON_DIR\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+    expect(standalone).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== ''/)
+    expect(standalone).toMatch(/skills\.sync[\s\S]{0,2600}if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
     expect(standalone).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/)
   })
 })
