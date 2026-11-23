@@ -1,9 +1,9 @@
 /**
- * One machine of a switch, as the switch command sees it: its server (running or not, stop,
- * start) and its API. This phase has one kind, local: both machines are on this computer, so
- * a server is found by its home's single-instance lock (server.lock.json: pid and port) and
- * started as a child process. A remote side (a later phase) implements the same calls over
- * the links between machines; the flow (flow.ts) does not change.
+ * One machine of a switch, as its own job sees it (source-job.ts, target-job.ts): its server
+ * (running or not, stop, start) and its API. Each job drives only its own machine, so this is
+ * always local: a server is found by its home's single-instance lock (server.lock.json: pid and
+ * port) and started as a detached child process. What crosses machines is the old leader's copy
+ * link (peer.ts) and the witnesses, never a side.
  *
  * A home that handed the leader over may run a standby instead (handed-over.ts): it holds the
  * server's port but no lock in the home, so `runningServer()` (a server that may lead) does not
@@ -44,8 +44,9 @@ export interface SwitchSide {
   /**
    * Start the server on this side's home and wait until it answers, or fails to.
    * `commitHandover`: the new leader's start after the trial, told it may commit (renew on) that handover.
+   * `switchId`: a start the switch makes on the home it is making (its claim, promotion-wait.ts, lets only these boot).
    */
-  startServer(mode: ServerMode, timeoutMs?: number, commitHandover?: number): Promise<StartResult>
+  startServer(mode: ServerMode, timeoutMs?: number, commitHandover?: number, switchId?: string): Promise<StartResult>
   /**
    * Start this side's home again after its handover, as its launcher would: it boots as the handed-over standby
    * (handed-over.ts), which keeps this machine's witness door up. ok once the standby answers.
@@ -91,7 +92,7 @@ export class LocalSide implements SwitchSide {
     return { wasRunning: true }
   }
 
-  async startServer(mode: ServerMode, timeoutMs = 120_000, commitHandover?: number): Promise<StartResult> {
+  async startServer(mode: ServerMode, timeoutMs = 120_000, commitHandover?: number, switchId?: string): Promise<StartResult> {
     const m = this.machine
     // A standby of this home holds the port the server is to listen on.
     await this.stopStandby(30_000)
@@ -99,10 +100,15 @@ export class LocalSide implements SwitchSide {
     // Its console files are its account's (its HOME), which need not be this process's.
     const port = await waitForConsolePort(m.home, m.port, 30_000, m.env?.HOME ? consoleDirOfAccount(m.env.HOME) : consoleDir())
     if (!port.ok) return { ok: false, why: port.why }
-    const { exited, logFile, child } = this.spawnServer(mode, commitHandover)
+    const { exited, logFile, child } = this.spawnServer(mode, commitHandover, undefined, switchId)
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      if (exited() !== null) return { ok: false, why: `the server exited during its start (code ${exited()})`, logTail: tail(logFile) }
+      if (exited() !== null) {
+        // Another process took the home first (its launcher, the app): a leader that runs there is the start asked for.
+        const other = mode === 'leader' && !commitHandover ? this.runningServer() : null
+        if (other && other.pid !== child.pid && (await this.api('GET', '/api/health').catch(() => null))) return { ok: true, pid: other.pid }
+        return { ok: false, why: `the server exited during its start (code ${exited()})`, logTail: tail(logFile) }
+      }
       // It came up as a standby (its home handed over, or another machine leads): no start.
       const standby = this.standbyServer()
       if (standby && await confirmStandby(standby)) {
@@ -142,7 +148,7 @@ export class LocalSide implements SwitchSide {
   }
 
   /** Spawn this home's server command, detached, its output to `logFile` (default the switch's log of `mode`). */
-  private spawnServer(mode: ServerMode, commitHandover?: number, logTo?: string): { child: ReturnType<typeof spawn>; logFile: string; exited: () => number | null } {
+  private spawnServer(mode: ServerMode, commitHandover?: number, logTo?: string, switchId?: string): { child: ReturnType<typeof spawn>; logFile: string; exited: () => number | null } {
     const m = this.machine
     const cmd = m.start ?? serverCommand(['web', '--port', String(m.port)])
     const logFile = logTo ?? path.join(switchDir(m.home), `server-${mode}.log`)
@@ -153,6 +159,10 @@ export class LocalSide implements SwitchSide {
     else delete env.WALNUT_LEADER_TRIAL
     if (mode === 'leader' && commitHandover) env.WALNUT_LEADER_SWITCH_COMMIT = String(commitHandover)
     else delete env.WALNUT_LEADER_SWITCH_COMMIT
+    if (switchId) env.WALNUT_LEADER_SWITCH_START = switchId
+    else delete env.WALNUT_LEADER_SWITCH_START
+    // A job's own test knob never reaches a server it starts.
+    delete env.WALNUT_LEADER_SWITCH_KILL_AT
     const child = spawn(cmd[0], cmd.slice(1), { env, detached: true, stdio: ['ignore', out, out] })
     fs.closeSync(out)
     let exited: number | null = null

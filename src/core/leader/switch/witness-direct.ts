@@ -13,7 +13,7 @@
 import { hmacProof, proofSecret, proofsEqual, sha256Hex } from '../../../utils/hmac-proof.js'
 import type { RemoteCall, RemoteCallResult } from './witness-transport.js'
 import {
-  DOOR_NONCE_RE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_MAX_CALL, WITNESS_DOOR_REQUEST, WITNESS_REQUEST_PATH, doorCallerProofText, doorWitnessProofText,
+  DOOR_NONCE_RE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_MAX_CALL, WITNESS_DOOR_REQUEST, WITNESS_NOTE_PATH, WITNESS_REQUEST_PATH, doorCallerProofText, doorWitnessProofText,
   type WitnessEvidence, type WitnessSetup,
 } from './witness-wire.js'
 
@@ -48,8 +48,9 @@ function isObj(v: unknown): v is Record<string, unknown> {
 export function directWitnessCall(o: { post?: DoorPost; timeoutMs?: number; walnutId?: () => Promise<string> } = {}): RemoteCall {
   const post = o.post ?? fetchDoorPost(o.timeoutMs ?? 15_000)
   return (place, path, body, done) => {
-    // Only permit requests ride the direct door; a setup comes over an authenticated link (its key is in it).
-    if (path !== WITNESS_REQUEST_PATH || !place.url || !place.key || !('request' in body)) { done(null); return }
+    // Only permit requests and switch notes ride the direct door; a setup comes over an authenticated link (its key is in it).
+    const kind = path === WITNESS_REQUEST_PATH && 'request' in body ? 'request' : path === WITNESS_NOTE_PATH && 'note' in body ? 'note' : null
+    if (!kind || !place.url || !place.key) { done(null); return }
     const key = place.key
     const url = place.url
     let gone = false

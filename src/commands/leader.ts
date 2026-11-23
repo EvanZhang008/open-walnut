@@ -5,6 +5,8 @@
  *   leader switch --back           the same, back to the machine this Walnut came from
  *   leader switch --resume         finish (or roll back) a switch a kill left half done
  *   leader switch --cancel         cancel a switch that has not committed
+ *   leader switch --status         this machine's switch jobs, the witnesses, each machine's newest note
+ *   leader switch --job source|target   one machine's job (the command starts it, detached)
  *   leader status                  the switch under way, the marker, the witnesses' record, and
  *                                  the outward ops an earlier holder left with no known outcome
  *   leader witnesses init          set up the witness directories of leader_switch.witnesses
@@ -20,29 +22,53 @@ const fail = (err: unknown) => {
 }
 
 export async function runLeaderSwitchCommand(options: Record<string, unknown>): Promise<void> {
-  const { runLeaderSwitch } = await import('../core/leader/switch/flow.js')
   const t0 = Date.now()
+  const out = (line: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${line}`)
+  const home = typeof options.home === 'string' ? options.home : WALNUT_HOME
   try {
-    const st = await runLeaderSwitch({
-      home: typeof options.home === 'string' ? options.home : WALNUT_HOME,
+    // The jobs themselves (the command below starts them, detached): exit 0 done, 3 rolled back, 1 refused.
+    if (options.job === 'source') {
+      const { runSourceJob } = await import('../core/leader/switch/source-job.js')
+      const st = await runSourceJob({ home, ...(typeof options.to === 'string' ? { to: options.to } : {}), back: !!options.back, resume: !!options.resume, out })
+      process.exitCode = st.step === 'done' ? 0 : 3
+      return
+    }
+    if (options.job === 'target') {
+      const { runTargetJob } = await import('../core/leader/switch/target-job.js')
+      if (typeof options.switch !== 'string' || typeof options.standbyDir !== 'string') return fail('--job target needs --switch <id> and --standby-dir <dir>')
+      const r = await runTargetJob({ standbyDir: options.standbyDir, switchId: options.switch, check: !!options.check, out })
+      process.exitCode = 'step' in r ? (r.step === 'done' ? 0 : 3) : (r.ok ? 0 : 1)
+      return
+    }
+    if (options.job !== undefined) return fail(`--job is source or target, not ${String(options.job)}`)
+    if (options.status) {
+      const { switchStatus } = await import('../core/leader/switch/switch-command.js')
+      console.log(JSON.stringify(await switchStatus({ home }), null, 2))
+      return
+    }
+    const { runLeaderSwitch } = await import('../core/leader/switch/switch-command.js')
+    const r = await runLeaderSwitch({
+      home,
       ...(typeof options.to === 'string' ? { to: options.to } : {}),
-      back: !!options.back,
-      resume: !!options.resume,
-      cancel: !!options.cancel,
-      out: (line) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${line}`),
+      back: !!options.back, resume: !!options.resume, cancel: !!options.cancel,
+      out: (line) => console.log(line),
     })
-    if (st.step === 'done') {
-      console.log(`Switched: ${st.to} leads (permit record ${st.commit}). Downtime ${st.downtimeMs !== undefined ? `${(st.downtimeMs / 1000).toFixed(1)} s` : 'unknown'}.`)
+    const st = r.source
+    if (r.code === 0 && st) {
+      const dt = r.target?.downtimeMs
+      console.log(`Switched: ${st.to} leads (permit record ${st.commit}). Downtime ${dt !== undefined ? `${(dt / 1000).toFixed(1)} s` : 'unknown on this machine'}.`)
       console.log(`The old home ${st.sourceHome} is kept as it was and marked handed over; it never leads again.`)
       console.log('Not undone by a switch back: anything already sent outward (mail, pushes, posts).')
-      if (st.outcomeUnknown?.length) console.log(`Outcome unknown, check by hand (never sent again): ${st.outcomeUnknown.join(', ')}`)
+      if (r.target?.outcomeUnknown?.length) console.log(`Outcome unknown, check by hand (never sent again): ${r.target.outcomeUnknown.join(', ')}`)
       const { readUnresolvedOps } = await import('../core/leader/switch/records.js')
       const ops = readUnresolvedOps(st.targetHome)
       if (ops.length) console.log(`Outward ops ${st.from} registered and never reported (never sent again, check by hand): ${ops.map((o) => o.id).join(', ')}`)
+    } else if (r.code === 3) {
+      console.log(`Rolled back: ${r.message.replace(/^rolled back: /, '')}. ${st?.from ?? 'The old leader'} leads as before.`)
     } else {
-      console.log(`Rolled back: ${st.rollbackWhy ?? 'unknown reason'}. ${st.from} leads as before.`)
-      process.exitCode = 3
+      console.error(`leader: ${r.message}`)
     }
+    process.exitCode = r.code
   } catch (err) {
     fail(err)
   }

@@ -234,7 +234,12 @@ export function registerCommands(program: Command): void {
     .option('--back', 'Switch back to the machine this Walnut was switched from')
     .option('--resume', 'Finish, or roll back, a switch that was cut off')
     .option('--cancel', 'Cancel a switch that has not committed')
+    .option('--status', 'This machine\'s switch jobs, the witnesses\' record, and each machine\'s newest note')
     .option('--home <dir>', 'The leader\'s home (default: this Walnut\'s)')
+    .option('--job <side>', 'Run one machine\'s job of a switch: source or target (the command starts it)')
+    .option('--switch <id>', 'The switch of a target job')
+    .option('--standby-dir <dir>', 'The standby folder of a target job (its ticket and state are there)')
+    .option('--check', 'A target job\'s candidate check only: read, report, change nothing')
     .action(async (options: Record<string, unknown>) => {
       const { runLeaderSwitchCommand } = await import('./leader.js');
       await runLeaderSwitchCommand(options);

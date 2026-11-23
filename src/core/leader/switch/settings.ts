@@ -21,7 +21,10 @@
  *                              # the switch moves paths under it to the other machine's
  *       start_command: [...]   # optional: how to start its server (default: this CLI's `web --port`)
  *       env: { K: V }          # optional: extra environment for that server
+ *       doors: [https://...]   # optional: where hosts reach its server when it leads (the old machine's standby names them)
  *   back_window_hours: 168     # `--back` is offered this long after a switch
+ *   commit_window_s: 300       # from the handover to the new leader's commit start, at most
+ *   stop_wait_s: 120           # the old leader cancels its own handover when no switch stop came this long after it
  * ```
  */
 import fs from 'node:fs'
@@ -61,6 +64,8 @@ export interface MachinePlace {
   accountHome?: string
   start?: string[]
   env?: Record<string, string>
+  /** Where hosts and devices reach this machine's server when it leads (https://, or http:// to loopback): told by the old machine's standby after a switch. */
+  doors?: string[]
 }
 
 export interface LeaderSwitchSettings {
@@ -68,7 +73,14 @@ export interface LeaderSwitchSettings {
   machines: MachinePlace[]
   backWindowHours: number
   params: PermitParams
+  /** How long a switch may take from the handover to the new leader's commit start (commit_window_s, default 300 s). */
+  commitWindowMs: number
+  /** How long the old leader waits for its switch stop after its handover before it cancels the handover itself (stop_wait_s, default 120 s). */
+  stopWaitMs: number
 }
+
+export const DEFAULT_COMMIT_WINDOW_S = 300
+export const DEFAULT_STOP_WAIT_S = 120
 
 export interface HomeSwitchConfig {
   /** The experiment `switchable_leader`. */
@@ -175,17 +187,27 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
       ? Object.fromEntries(Object.entries(x.env as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>
       : undefined
     const accountHome = str(x.account_home) ? x.account_home : env?.HOME
-    machines.push({ id: x.id, home: path.resolve(x.home), standbyDir: path.resolve(x.standby_dir), port, ...(accountHome ? { accountHome } : {}), ...(start ? { start } : {}), ...(env ? { env } : {}) })
+    let doors: string[] | undefined
+    if (x.doors !== undefined) {
+      if (!Array.isArray(x.doors) || x.doors.length > 8 || !x.doors.every((d) => typeof d === 'string' && witnessUrlRefusal(d) === null)) {
+        return { settings: null, problem: `leader_switch.machines: ${x.id}'s doors must be a list of https:// addresses (http:// only to loopback)` }
+      }
+      doors = (x.doors as string[]).map(normalWitnessUrl)
+    }
+    machines.push({ id: x.id, home: path.resolve(x.home), standbyDir: path.resolve(x.standby_dir), port, ...(accountHome ? { accountHome } : {}), ...(start ? { start } : {}), ...(env ? { env } : {}), ...(doors ? { doors } : {}) })
   }
   if (machines.length < 2) return { settings: null, problem: 'leader_switch.machines must list the two machines a leader can move between' }
   if (new Set(machines.map((m) => m.id)).size !== machines.length) return { settings: null, problem: 'leader_switch.machines: ids must be unique' }
   const hours = Number(o.back_window_hours)
+  const seconds = (v: unknown, dflt: number, min: number) => { const n = Number(v); return (Number.isFinite(n) && n >= min ? n : dflt) * 1000 }
   return {
     settings: {
       witnesses,
       machines,
       backWindowHours: Number.isFinite(hours) && hours > 0 ? hours : 168,
       params: { ...DEFAULT_PERMIT_PARAMS },
+      commitWindowMs: seconds(o.commit_window_s, DEFAULT_COMMIT_WINDOW_S, 30),
+      stopWaitMs: seconds(o.stop_wait_s, DEFAULT_STOP_WAIT_S, 10),
     },
   }
 }

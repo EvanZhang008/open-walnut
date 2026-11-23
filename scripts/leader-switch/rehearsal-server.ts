@@ -72,16 +72,27 @@ if (links) {
   })
 }
 
-const { startServer, stopServer, armGracefulSignalExit } = await import('../../src/web/server.js')
+const { startServer, stopServer, armGracefulSignalExit, onSwitchStopRequest } = await import('../../src/web/server.js')
+const { SWITCH_ABORT_BAIL_MS } = await import('../../src/commands/web.js')
 let stopping = false
-const stop = async () => {
-  if (stopping) return
+// As `walnut web` does (commands/web.ts): a leader switch's stop is asked through the API and may run its final
+// batch past the usual bail; a signal during it aborts the batch (no final mark) and the process ends soon after.
+let switchStop: import('../../src/web/server.js').SwitchStop | null = null
+let bail: ReturnType<typeof setTimeout> | null = null
+const armBail = (ms: number) => { if (bail) clearTimeout(bail); bail = setTimeout(() => process.exit(1), ms) }
+const stop = async (forSwitch?: import('../../src/web/server.js').SwitchStop) => {
+  if (stopping) {
+    if (switchStop && !forSwitch) { switchStop.abort('stopped by a signal'); switchStop = null; armBail(SWITCH_ABORT_BAIL_MS) }
+    return
+  }
   stopping = true
-  const bail = setTimeout(() => process.exit(1), 15_000)
-  try { await stopServer({ reason: 'SIGTERM' }) } catch { /* exit anyway */ }
-  clearTimeout(bail)
+  switchStop = forSwitch ?? null
+  armBail(15_000 + (forSwitch?.windowMs ?? 0))
+  try { await stopServer({ reason: forSwitch ? 'leader-switch' : 'SIGTERM' }) } catch { /* exit anyway */ }
+  if (bail) clearTimeout(bail)
   process.exit(0)
 }
+onSwitchStopRequest((s) => { if (stopping) return false; void stop(s); return true })
 process.on('SIGTERM', () => { void stop() })
 process.on('SIGINT', () => { void stop() })
 // As `walnut web` does: the handler first, then the server's boot-time signal handling defers to it.

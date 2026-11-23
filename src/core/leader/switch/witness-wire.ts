@@ -14,6 +14,8 @@ export const WITNESS_PREFIX = '/host-api/witness/'
 export const WITNESS_REQUEST_PATH = `${WITNESS_PREFIX}request`
 /** Set a witness up, once, with the first list: the body is a WitnessSetup. Never part of a permit round. */
 export const WITNESS_SETUP_PATH = `${WITNESS_PREFIX}setup`
+/** A switch note at a witness (ways a and b only): the body is a NoteCall. Never part of a permit round. */
+export const WITNESS_NOTE_PATH = `${WITNESS_PREFIX}note`
 
 /** Ids and the Walnut's id become directory names on the witness machine: plain names only. */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -174,6 +176,58 @@ export function setupAllowed(setup: WitnessSetup): { ok: true } | { ok: false; e
   if (setup.evidence.some((e) => e.seen === 'record')) return { ok: false, error: 'witnesses_hold_records' }
   if (setup.evidence.some((e) => e.seen !== 'absent' && e.seen !== 'blank')) return { ok: false, error: 'witnesses_unreached' }
   return { ok: true }
+}
+
+// ---- switch notes -------------------------------------------------------------------------
+//
+// A switch's progress, kept beside each witness record (local-witnesses.ts NOTES_FILE) and asked
+// through ways a and b with the witness's own key, so the two machines of a switch hear each other
+// with no link between them. A note is never trusted for safety and never touches the permit
+// record: a lost or false one only changes how soon a side gives up; the permit still picks one leader.
+
+/** One machine's newest step in one switch. */
+export interface SwitchNote {
+  switchId: string
+  machine: string
+  step: string
+  why?: string
+  at: string
+}
+
+export interface NoteCall {
+  v: 1
+  walnutId: string
+  witness: string
+  note: { op: 'write'; note: SwitchNote } | { op: 'read'; switchId: string }
+}
+
+/** A note's fields, bounded: a note is a line for a person, never a store. */
+export const NOTE_WHY_MAX = 600
+
+export function parseSwitchNote(raw: unknown): SwitchNote | null {
+  if (!isObj(raw)) return null
+  for (const k of Object.keys(raw)) if (!['switchId', 'machine', 'step', 'why', 'at'].includes(k)) return null
+  if (!isWitnessName(raw.switchId) || !isWitnessName(raw.machine) || !isWitnessName(raw.step) || !isStr(raw.at, 40) || !raw.at) return null
+  if (raw.why !== undefined && !isStr(raw.why, NOTE_WHY_MAX)) return null
+  return { switchId: raw.switchId, machine: raw.machine, step: raw.step, ...(typeof raw.why === 'string' ? { why: raw.why } : {}), at: raw.at }
+}
+
+export function parseNoteCall(raw: unknown): NoteCall | null {
+  if (!isObj(raw) || raw.v !== 1 || !isWitnessName(raw.walnutId) || !isWitnessName(raw.witness) || !isObj(raw.note) || 'request' in raw) return null
+  const n = raw.note
+  const base = { v: 1 as const, walnutId: raw.walnutId, witness: raw.witness }
+  if (n.op === 'read' && isWitnessName(n.switchId)) return { ...base, note: { op: 'read', switchId: n.switchId } }
+  if (n.op === 'write') {
+    const note = parseSwitchNote(n.note)
+    if (note) return { ...base, note: { op: 'write', note } }
+  }
+  return null
+}
+
+/** The notes in a note call's answer (`{ok, reply: {notes}}`), only those of `switchId`; null when it is no such answer. */
+export function acceptNotes(body: unknown, switchId: string): SwitchNote[] | null {
+  if (!isObj(body) || body.ok !== true || !isObj(body.reply) || !Array.isArray(body.reply.notes)) return null
+  return body.reply.notes.map(parseSwitchNote).filter((n): n is SwitchNote => !!n && n.switchId === switchId)
 }
 
 /** The number a reply answers: the record's, or 'read'. */

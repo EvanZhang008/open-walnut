@@ -57,24 +57,27 @@ function machine(root: string, name: string, port: number, homeName = 'home', at
   }
 }
 
-export function switchConfig(w: { a: Machine; b: Machine; witnesses: LocalWitnessPlace[] }, standbyDir: string, intervalSeconds = 5): Record<string, unknown> {
-  const m = (x: Machine) => ({ id: x.id, home: x.home, standby_dir: x.standbyDir, port: x.port, start_command: x.start, env: x.env })
+/** `extra`: more leader_switch keys (commit_window_s, stop_wait_s), and the doors each machine is reached at. */
+export function switchConfig(w: { a: Machine; b: Machine; witnesses: LocalWitnessPlace[] }, standbyDir: string, intervalSeconds = 5, extra: WorldExtra = {}): Record<string, unknown> {
+  const m = (x: Machine, doors?: string[]) => ({ id: x.id, home: x.home, standby_dir: x.standbyDir, port: x.port, start_command: x.start, env: x.env, ...(doors?.length ? { doors } : {}) })
   return {
     experimental: { switchable_leader: true },
     standby: { dir: standbyDir, interval_seconds: intervalSeconds },
-    leader_switch: { witnesses: w.witnesses.map((x) => ({ id: x.id, dir: x.dir })), machines: [m(w.a), m(w.b)], back_window_hours: 24 },
+    leader_switch: { witnesses: w.witnesses.map((x) => ({ id: x.id, dir: x.dir })), machines: [m(w.a, extra.doorsA), m(w.b, extra.doorsB)], back_window_hours: 24, ...(extra.leaderSwitch ?? {}) },
   }
 }
 
+export interface WorldExtra { leaderSwitch?: Record<string, unknown>; doorsA?: string[]; doorsB?: string[] }
+
 /** `homeA`: A's data home's name in its folder (`.open-walnut`: where an install keeps it, in HOME). */
 /** `dirB`: B's machine folder (its HOME) somewhere else than `<root>/b`, for a home that moves to another prefix. */
-export function makeWorld(root: string, opts: { portA: number; portB: number; intervalSeconds?: number; homeA?: string; dirB?: string }): World {
+export function makeWorld(root: string, opts: { portA: number; portB: number; intervalSeconds?: number; homeA?: string; dirB?: string } & WorldExtra): World {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const a = machine(root, 'a', opts.portA, opts.homeA)
   const b = machine(root, 'b', opts.portB, 'home', opts.dirB)
   const witnesses = ['w1', 'w2', 'w3'].map((id) => ({ id, dir: path.join(root, 'witnesses', id) }))
   fs.mkdirSync(a.home, { recursive: true, mode: 0o700 })
-  fs.writeFileSync(path.join(a.home, 'config.yaml'), YAML.stringify(switchConfig({ a, b, witnesses }, b.standbyDir, opts.intervalSeconds)))
+  fs.writeFileSync(path.join(a.home, 'config.yaml'), YAML.stringify(switchConfig({ a, b, witnesses }, b.standbyDir, opts.intervalSeconds, opts)))
   setUpLocalWitnesses(witnesses)
   const world: World = {
     root, a, b, witnesses,

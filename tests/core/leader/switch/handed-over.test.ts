@@ -69,7 +69,7 @@ describe('the standby of a handed-over home', () => {
     for (const p of ['/api/health', '/api/config']) {
       const r = await fetch(url(open, p))
       expect(r.status, p).toBe(200)
-      expect(await r.json()).toEqual({ standby: true, leader: 'machine-b', switchId: 's1', message: 'this machine handed the leader to machine-b (switch s1)' })
+      expect(await r.json()).toEqual({ standby: true, leader: 'machine-b', leaderDoors: [], switchId: 's1', message: 'this machine handed the leader to machine-b (switch s1)' })
     }
     // Concurrent status reads share one read of the witnesses and all answer.
     const many = await Promise.all(Array.from({ length: 5 }, () => fetch(url(open!, '/api/leader/status')).then((r) => r.status)))
@@ -77,7 +77,7 @@ describe('the standby of a handed-over home', () => {
     for (const [method, p] of [['POST', '/api/tasks'], ['GET', '/api/tasks'], ['PUT', '/api/notes-v2/content/a.md'], ['POST', '/api/config'], ['DELETE', '/']] as const) {
       const r = await fetch(url(open, p), { method, ...(method === 'GET' ? {} : { body: '{"x":1}', headers: { 'content-type': 'application/json' } }) })
       expect(r.status, `${method} ${p}`).toBe(409)
-      expect(await r.json()).toEqual({ error: 'this machine handed the leader to machine-b (switch s1)', code: 'handed_over', leader: 'machine-b', switchId: 's1' })
+      expect(await r.json()).toEqual({ error: 'this machine handed the leader to machine-b (switch s1)', code: 'handed_over', leader: 'machine-b', leaderDoors: [], switchId: 's1' })
     }
     // Its pid file is outside the home, and the switch's side finds it there.
     const file = standbyServerFile(home, env)

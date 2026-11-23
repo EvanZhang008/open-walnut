@@ -781,6 +781,28 @@ let standbyHandle: { stop: () => void } | null = null
 let leaderPermitHandle: { stop: () => Promise<void>; decision: { kind: string } } | null = null
 /** A home that handed the leader over runs this instead of the server (core/leader/switch/handed-over.ts). */
 let handedOverServer: import('../core/leader/switch/handed-over.js').StandbyListener | null = null
+
+/**
+ * A leader switch's stop (core/leader/switch/final-stop.ts): asked through the API, not a signal. Its
+ * `run` is the LAST step of stopServer, after every store and the HTTP server closed: the final batch,
+ * the final mark. `commands/web.ts` registers how this process stops for it (its bail stretched to the
+ * commit window); a signal during it calls `abort` (no mark, the switch rolls back).
+ */
+export interface SwitchStop { windowMs: number; run: () => Promise<boolean>; abort: (why: string) => void }
+let switchStop: SwitchStop | null = null
+let switchStopper: ((stop: SwitchStop) => boolean) | null = null
+let serverStopping = false
+/** commands/web.ts: how this process stops for a switch (null: it cannot, as in a test's in-process server). */
+export function onSwitchStopRequest(fn: ((stop: SwitchStop) => boolean) | null): void { switchStopper = fn }
+export function switchStopAvailable(): boolean { return !!switchStopper && !serverStopping && !switchStop }
+/** Stop this server for a switch: false when it cannot (stopping already, or no stopper registered). */
+export function requestSwitchStop(stop: SwitchStop): boolean {
+  if (!switchStopAvailable()) return false
+  switchStop = stop
+  if (switchStopper!(stop)) return true
+  switchStop = null
+  return false
+}
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
@@ -1322,6 +1344,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (IS_EPHEMERAL) {
     const { assertEphemeralHomeIsNotProduction } = await import('../core/sessions/ephemeral-guard.js')
     assertEphemeralHomeIsNotProduction(WALNUT_HOME)
+  }
+
+  // A home a leader switch is making into the new leader's (its claim, or a promotion not committed):
+  // a server started on it by anyone but the switch (an app, a launcher, a person) waits without the
+  // port and opens nothing until the switch settled, then ends so its launcher starts it again
+  // (core/leader/switch/promotion-wait.ts). Looked for only where a switch can be: a promotion mark in
+  // the home, or a machine that ran the write permission (its leader-instance folder).
+  if (role() === 'leader' && (!IS_EPHEMERAL || process.env.WALNUT_EPHEMERAL_LEADER_SWITCH === '1')) {
+    const { machineIdFile } = await import('../core/machine-id.js')
+    const instanceDir = path.join(path.dirname(process.env.WALNUT_MACHINE_ID_FILE || machineIdFile()), 'leader-instance')
+    if (fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'promoted.json')) || fs.existsSync(instanceDir)) {
+      const { promotionWaitAtBoot, waitForPromotion } = await import('../core/leader/switch/promotion-wait.js')
+      const wait = promotionWaitAtBoot({ home: WALNUT_HOME })
+      if (wait) {
+        log.web.warn('leader switch: this home is being made the leader\'s by a switch; this process waits and leads nothing', { switchId: wait.switchId, why: wait.why })
+        handedOverServer = waitForPromotion(wait)
+        console.log(handedOverServer.line)
+        bootCompleted = true
+        return handedOverServer.server
+      }
+    }
   }
 
   // A home that handed the leader over to another machine (the leader switch's marker,
@@ -7732,6 +7775,10 @@ function startPluginSyncPolling(): void {
  * Gracefully shut down the server.
  */
 export async function stopServer(opts: { dropConnections?: boolean; reason?: string; bailMs?: number } = {}): Promise<void> {
+  // A switch's stop runs its final batch last (SwitchStop); any other stop sends none.
+  serverStopping = true
+  const finalStop = switchStop
+  switchStop = null
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
   localDaemonLane?.stop()
@@ -7747,6 +7794,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     beginShutdownSteps({ bailMs: opts.bailMs })
     await shutdownStep('standby session runtime', async () => (await import('./standby-service.js')).releaseServiceRuntimeInStandby(opts.reason ?? 'server stop', IN_PROCESS_DAEMON_STOP_BUDGET_MS), { budgetMs: IN_PROCESS_DAEMON_STOP_BUDGET_MS + 500 })
     await shutdownStep('handed-over standby', () => s.close(), { budgetMs: 2_000 })
+    serverStopping = false
     return
   }
   // A stopping leader acts on nothing more: its outward doors close now, and its write
@@ -8302,7 +8350,11 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     await shutdownStep('threads files, last', async () => (await import('../core/org/threads-sync.js')).flushThreadsExports(), { budgetMs: 800, afterClose: true })
     // Held notes and notices the requests the close drained wrote (core/sessions/held-notices-store.ts).
     await shutdownStep('held notices, last', async () => (await import('../core/sessions/held-notices-sweep.js')).stopHeldNotices(), { budgetMs: 800, afterClose: true })
+    // A switch's stop: every writer of the home is closed now, so its final batch is the home's last state.
+    // As long as it takes, bounded by the commit window (commands/web.ts stretched its bail); never throws.
+    if (finalStop) await finalStop.run().catch((err: unknown) => { log.web.warn('leader switch: the switch stop failed', { error: err instanceof Error ? err.message : String(err) }) })
   } finally {
+    serverStopping = false
     releaseSelfApiRoot()
     // Started before the HTTP close; the release caps itself at 3 s (RELEASE_CAP_MS).
     await shutdownStep('leader permit release', () => permitReleased, { budgetMs: 3_500, afterClose: true })

@@ -25,6 +25,7 @@ import { bootstrapWitnessStore, createFilePermitStore, prepareJoiningWitness } f
 import { PermitWitness } from '../permit/witness.js'
 import type { PermitParams, PermitReply, PermitRequest } from '../permit/types.js'
 import type { LocalWitnessPlace } from './settings.js'
+import { parseSwitchNote, type SwitchNote } from './witness-wire.js'
 
 import { registerMemoryHolder } from '../../observability/memory-ledger.js'
 
@@ -76,6 +77,38 @@ export function serveLocalWitness(place: LocalWitnessPlace, req: PermitRequest, 
     const reply = c.witness.handle(req)
     c.text = readText(file)
     return reply
+  }, { timeoutMs: 2_000 })
+}
+
+/** Switch notes beside the record (witness-wire.ts SwitchNote): never read by the permit core. */
+export const NOTES_FILE = 'switch-notes.json'
+/** The newest note of each machine in each switch, at most this many (the oldest go first). */
+const MAX_NOTES = 32
+
+function readNotesFile(file: string): SwitchNote[] {
+  try {
+    const j = JSON.parse(fs.readFileSync(file, 'utf8')) as { notes?: unknown[] }
+    return (Array.isArray(j.notes) ? j.notes : []).map(parseSwitchNote).filter((n): n is SwitchNote => !!n)
+  } catch { return [] }
+}
+
+/**
+ * A switch note at the witness in `dir` (its own file, its own lock: the record is never opened), or the
+ * notes of `switchId` it keeps. Null when the directory holds no witness record (no answer): a note is
+ * kept only where a witness is.
+ */
+export function serveSwitchNote(dir: string, op: { op: 'write'; note: SwitchNote } | { op: 'read'; switchId: string }): Promise<SwitchNote[] | null> {
+  if (!fs.existsSync(path.join(dir, RECORD))) return Promise.resolve(null)
+  const file = path.join(dir, NOTES_FILE)
+  if (op.op === 'read') return Promise.resolve(readNotesFile(file).filter((n) => n.switchId === op.switchId))
+  return withFileLock(file, async () => {
+    const n = op.note
+    const kept = readNotesFile(file).filter((x) => !(x.switchId === n.switchId && x.machine === n.machine))
+    const all = [...kept, n].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).slice(-MAX_NOTES)
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, `${JSON.stringify({ v: 1, notes: all })}\n`, { mode: 0o600 })
+    fs.renameSync(tmp, file)
+    return all.filter((x) => x.switchId === n.switchId)
   }, { timeoutMs: 2_000 })
 }
 

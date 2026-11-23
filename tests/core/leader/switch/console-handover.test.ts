@@ -25,6 +25,7 @@ import { handedOverAtBoot, serveHandedOver, type StandbyListener } from '../../.
 import { waitForConsolePort } from '../../../../src/core/leader/switch/console-port.js'
 import { getInstanceId } from '../../../../src/core/device-store.js'
 import { writeMarker } from '../../../../src/core/leader/switch/records.js'
+import { removeSwitchClaim, writeSwitchClaim } from '../../../../src/core/leader/switch/ticket.js'
 
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 
@@ -296,6 +297,36 @@ describe('the standby gives its port up to the console replica', () => {
     } finally {
       await replica.close()
     }
+  })
+
+  it('ends while it serves when a switch claims its home (the switch back is making it the new leader\'s), or the marker names another switch', async () => {
+    const l = await seat()
+    watchEnd(l)
+    expect((await health())?.standby).toBe(true)
+    writeSwitchClaim(home, 'sw-2', ID_ENV())
+    expect(await until(() => ended !== null)).toBe(true)
+    expect(ended).toMatch(/switch sw-2 is making .* the new leader's home; this standby ends/)
+    expect(await until(portFree)).toBe(true)
+    removeSwitchClaim(home, 'sw-2', ID_ENV())
+    ended = null
+    const again = await seat()
+    watchEnd(again)
+    writeMarker(home, { switchId: 'sw-3', to: 'machine-b', state: 'handed-over', at: 'y' })
+    expect(await until(() => ended !== null)).toBe(true)
+    expect(ended).toMatch(/no longer stands handed over by switch sw-1/)
+  })
+
+  it('names where the leader is reached (the marker\'s leaderDoors) in its status, its refusal and its page, only for the machine the marker names', async () => {
+    writeMarker(home, { switchId: 'sw-1', to: 'machine-b', state: 'handed-over', leaderDoors: ['https://machine-b.example.test/w'], at: 'x' })
+    await seat()
+    const status = await fetch(`http://127.0.0.1:${port}/api/leader/status`).then((r) => r.json() as Promise<{ leaderDoors?: string[] }>)
+    expect(status.leaderDoors).toEqual(['https://machine-b.example.test/w'])
+    const refused = await fetch(`http://127.0.0.1:${port}/api/tasks`, { method: 'POST' })
+    expect(refused.status).toBe(409)
+    expect(((await refused.json()) as { leaderDoors?: string[] }).leaderDoors).toEqual(['https://machine-b.example.test/w'])
+    expect(await fetch(`http://127.0.0.1:${port}/`).then((r) => r.text())).toContain('It is reached at <code>https://machine-b.example.test/w</code>')
+    // The standby opened nothing in the home for it.
+    expect(fs.readdirSync(home).sort()).toEqual(['local'])
   })
 
   it('a switch start waits for the console replica to let the port go, bounded', async () => {

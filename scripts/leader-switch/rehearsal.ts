@@ -15,7 +15,7 @@ import { consoleDirOfAccount } from '../../src/core/handed-over-console.js'
 import { standbyStatus } from '../../src/core/standby/index.js'
 import { experimentalEnabled } from '../../src/core/experimental.js'
 import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/switch/records.js'
-import { readSwitchState } from '../../src/core/leader/switch/flow.js'
+import { readSwitchOutcome as readSwitchState } from '../../src/core/leader/switch/flow.js'
 import { describeHit, judgePathHits, pathRoots, scanHomePaths } from '../../src/core/leader/switch/home-paths.js'
 import { homePathRules } from '../../src/core/leader/switch/home-path-rules.js'
 
@@ -35,7 +35,7 @@ export class Checks {
   get ok(): boolean { return this.all.every((c) => c.ok) }
 }
 
-async function waitFor<T>(what: string, fn: () => Promise<T | null | undefined | false>, timeoutMs = 60_000, everyMs = 500): Promise<T> {
+export async function waitFor<T>(what: string, fn: () => Promise<T | null | undefined | false>, timeoutMs = 60_000, everyMs = 500): Promise<T> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const v = await fn().catch(() => null)
@@ -53,7 +53,7 @@ export async function waitForBatch(dir: string, since: number, timeoutMs = 120_0
   }, timeoutMs, 500)
 }
 
-async function status(w: World, m: Machine): Promise<{ mayAct: boolean; state?: string } | null> {
+export async function status(w: World, m: Machine): Promise<{ mayAct: boolean; state?: string } | null> {
   const r = await w.api(m, 'GET', '/api/leader/status').catch(() => null)
   const p = (r?.json as { permit?: { mayAct?: boolean; state?: string } } | null)?.permit
   return p ? { mayAct: !!p.mayAct, state: p.state } : null
@@ -375,7 +375,7 @@ export async function rehearseLedgerControl(root: string, print: (c: Check) => v
   }
 }
 
-export const KILL_POINTS = ['after-handover', 'during-final-batch', 'during-promote', 'after-promote', 'during-trial', 'after-commit-majority', 'after-commit'] as const
+export const KILL_POINTS = ['during-wait-mark', 'after-handover', 'during-final-batch', 'during-promote', 'after-promote', 'during-trial', 'after-commit-majority', 'after-commit-seen', 'after-commit'] as const
 
 /** Kill the switch command at one point, rerun it with --resume: one consistent leader results. */
 export async function rehearseKill(root: string, point: typeof KILL_POINTS[number], print: (c: Check) => void, ports: { portA: number; portB: number }): Promise<Checks> {
@@ -388,7 +388,7 @@ export async function rehearseKill(root: string, point: typeof KILL_POINTS[numbe
     const s = await seed(w, w.a, 5)
     await waitForBatch(w.b.standbyDir, Date.now())
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: point })
-    c.add(`kill ${point}: the switch command died there`, first.signal === 'SIGKILL', `exit ${first.code} signal ${first.signal}; step ${readSwitchState(w.a.home)?.step}`)
+    c.add(`kill ${point}: a switch job died there and the command said so`, first.code === 4 && /died|stopped at/.test(first.out), `exit ${first.code}; step ${readSwitchState(w.a.home)?.step}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     const resumed = await w.cli(w.a.home, ['leader', 'switch', '--resume'])
     const st = readSwitchState(w.a.home)
     const finished = st?.step === 'done' || st?.step === 'rolled-back'
@@ -420,7 +420,7 @@ export async function rehearseCancelAfterCommit(root: string, print: (c: Check) 
     const s = await seed(w, w.a, 3)
     await waitForBatch(w.b.standbyDir, Date.now())
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'after-commit-majority' })
-    c.add('cancel after commit: the command died after the commit stood', first.signal === 'SIGKILL')
+    c.add('cancel after commit: the new leader\'s job died after the commit stood', first.code === 4, `exit ${first.code}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     const cancel = await w.cli(w.a.home, ['leader', 'switch', '--cancel'])
     const st = readSwitchState(w.a.home)
     c.add('cancel after commit: --cancel finishes the switch instead', st?.step === 'done' && cancel.code === 0, `step ${st?.step}; exit ${cancel.code}; ${cancel.out.trim().split('\n').slice(-2).join(' | ')}`)
@@ -449,7 +449,7 @@ export async function rehearseCancel(root: string, print: (c: Check) => void, po
     const s = await seed(w, w.a, 3)
     await waitForBatch(w.b.standbyDir, Date.now())
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'after-handover' })
-    c.add('cancel: the command died after the handover record, A still running', first.signal === 'SIGKILL' && !!a.runningServer())
+    c.add('cancel: the source job died after the handover record, A still running', first.code === 4 && !!a.runningServer(), `exit ${first.code}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     const lost = await waitFor('A to see the handover', async () => (await status(w, w.a))?.mayAct === false, 40_000).catch(() => false)
     c.add('cancel: A stops acting once the handover stands', lost === true)
     const cancel = await w.cli(w.a.home, ['leader', 'switch', '--cancel'])
@@ -479,7 +479,7 @@ export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAIL
     const s = await seed(w, w.a, 5)
     await waitForBatch(w.b.standbyDir, Date.now())
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'after-promote' })
-    c.add(`trial ${kind}: stopped after the copy became B's home`, first.signal === 'SIGKILL' && fs.existsSync(w.b.home))
+    c.add(`trial ${kind}: stopped after the copy became B's home`, first.code === 4 && fs.existsSync(w.b.home), `exit ${first.code}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     if (kind === 'corrupt-database') {
       const db = path.join(w.b.home, 'tasks', 'tasks.sqlite')
       const fd = fs.openSync(db, 'r+')
@@ -492,7 +492,9 @@ export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAIL
       fs.mkdirSync(path.join(w.b.home, 'cache'), { recursive: true })
       fs.writeFileSync(path.join(w.b.home, 'cache', 'status-riding.json'), JSON.stringify({ dir: path.join(w.a.home, 'workdir') }))
     } else {
-      const cfgFile = path.join(w.a.home, 'config.yaml')
+      // The target job reads its own machine's entry from its own (promoted) home.
+      const cfgFile = path.join(w.b.home, 'config.yaml')
+      fs.chmodSync(cfgFile, 0o600)
       const cfg = YAML.parse(fs.readFileSync(cfgFile, 'utf8'))
       cfg.leader_switch.machines[1].env.WALNUT_LEADER_SWITCH_FAKE_VERSION = '0.0.1'
       fs.writeFileSync(cfgFile, YAML.stringify(cfg))

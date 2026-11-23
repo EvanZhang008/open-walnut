@@ -25,10 +25,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { hmacProof, proofSecret, proofText, proofsEqual, sha256Hex } from '../../../utils/hmac-proof.js'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams, type PermitReply, type PermitRequest } from '../permit/types.js'
-import { serveLocalWitness, witnessDirEmpty } from './local-witnesses.js'
+import { serveLocalWitness, serveSwitchNote, witnessDirEmpty } from './local-witnesses.js'
 import { readWitnessKey, witnessDir } from './witness-route.js'
 import {
-  NO_WITNESS_HERE_CODE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_MAX_CALL, WITNESS_DOOR_REQUEST, doorCallerProofText, doorWitnessProofText, parseDoorChallenge, parseDoorRequest, parseWitnessCall, type DoorAnswer,
+  NO_WITNESS_HERE_CODE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_MAX_CALL, WITNESS_DOOR_REQUEST, doorCallerProofText, doorWitnessProofText, parseDoorChallenge, parseDoorRequest, parseNoteCall, parseWitnessCall,
+  type DoorAnswer, type NoteCall, type SwitchNote,
 } from './witness-wire.js'
 
 /** How long a nonce is good for: a call's two posts are a round trip apart, far under this. */
@@ -61,6 +62,11 @@ export interface WitnessDoorDeps {
   holdsNothing?(walnutId: string, witness: string): boolean
   /** Serve one permit request at that witness: its reply, null when it does not answer (its record gone), 'busy' when it cannot now. */
   serve(walnutId: string, witness: string, req: PermitRequest, done: (reply: PermitReply | null | 'busy') => void): void
+  /**
+   * A switch note at that witness (witness-wire.ts NoteCall): the notes of its switch after the call, null when no witness
+   * is there, 'busy' when it cannot now. Absent: this door keeps no notes (a note call is answered as no witness).
+   */
+  note?(walnutId: string, witness: string, op: NoteCall['note'], done: (notes: SwitchNote[] | null | 'busy') => void): void
   /** Milliseconds on a clock that only goes forward (default performance.now). */
   now?(): number
   nonceTtlMs?: number
@@ -181,6 +187,19 @@ export function createWitnessDoor(deps: WitnessDoorDeps): WitnessDoor {
       used.set(r.nonce, Number.parseInt(exp, 16))
       let parsed: unknown
       try { parsed = JSON.parse(r.call) } catch { return done(refuse(400, 'bad_request')) }
+      // A switch note: the same nonce and proofs, its own store beside the record (never the record).
+      const note = parseNoteCall(parsed)
+      if (note) {
+        if (note.walnutId !== r.walnutId || note.witness !== r.witness) return done(refuse(400, 'bad_request'))
+        if (!deps.note) return done(NOT_A_WITNESS)
+        deps.note(note.walnutId, note.witness, note.note, (notes) => {
+          if (notes === 'busy') return done(refusal(503, 'busy'))
+          if (!notes) return done(NOT_A_WITNESS)
+          const text = JSON.stringify({ notes })
+          done({ status: 200, body: { ok: true, reply: text, proof: hmacProof(key, doorWitnessProofText({ ...fields, replyDigest: sha256Hex(text) })) } })
+        })
+        return
+      }
       const call = parseWitnessCall(parsed)
       // The call names the witness its envelope named (the one the nonce and the proof are for).
       if (!call || call.walnutId !== r.walnutId || call.witness !== r.witness) return done(refuse(400, 'bad_request'))
@@ -211,6 +230,9 @@ export function machineWitnessDoor(o: { root: string; params?: PermitParams; onR
         o.log?.('warn', 'witness door: a request could not be served', { witness, error: err instanceof Error ? err.message : String(err) })
         done('busy')
       })
+    },
+    note: (walnutId, witness, op, done) => {
+      serveSwitchNote(witnessDir(o.root, walnutId, witness), op).then(done, () => done('busy'))
     },
     ...(o.onRefuse ? { onRefuse: o.onRefuse } : {}),
     ...(o.now ? { now: o.now } : {}),

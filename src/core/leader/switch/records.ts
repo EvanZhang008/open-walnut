@@ -12,7 +12,10 @@
  *   history.json     switches that made this home the leader (for `--back`)
  *   may-act.jsonl    every change of this server's permission and every outward door call
  *                    (rotated at 4 MB into may-act.1.jsonl, one kept)
- *   switch.lock      the switch command running on this home (one at a time)
+ *   switch.lock      the source job running on this home (one at a time)
+ *   source-job.log   its output (switch-command.ts)
+ *   final-stop.json  what the server's switch stop did: its final batch and mark, or why not (final-stop.ts)
+ *   cancel-request.json  a `--cancel` typed on this machine, for the running source job
  *   unresolved-ops.json  outward ops an earlier holder registered and never reported: never
  *                    sent again, for a person to check (`walnut leader status` lists them)
  *
@@ -62,6 +65,8 @@ export interface HandedOverMarker {
   /** The handover record (number) once written, and the commit record once it stood. */
   handover?: number
   commit?: number
+  /** Where the new leader is reached (leader_switch.machines[to].doors), for whoever asks this machine. */
+  leaderDoors?: string[]
   at: string
   torn?: true
 }
@@ -135,13 +140,27 @@ export function promotionRefusal(home: string, as: { trial: boolean; commit: boo
 }
 
 /**
- * One switch command per home at a time: a second one (another terminal's --resume or
- * --cancel while the first still runs) is refused. Taken with O_EXCL; a lock whose process is
- * gone is taken over.
+ * One switch job per home at a time: a second one (another terminal's --resume or --cancel while
+ * the first still runs) is refused. Taken with O_EXCL; a lock whose process is gone is taken over.
  */
 export function takeSwitchLock(home: string): () => void {
-  const file = path.join(switchDir(home), 'switch.lock')
-  fs.mkdirSync(switchDir(home), { recursive: true, mode: 0o700 })
+  return takeJobLock(path.join(switchDir(home), 'switch.lock'), 'another `walnut leader switch` runs on this home')
+}
+
+/** The pid a job lock names while that process lives, else null. */
+export function lockHolder(file: string): number | null {
+  let pid = 0
+  try { pid = Number(JSON.parse(fs.readFileSync(file, 'utf8')).pid) } catch { return null }
+  return pid > 1 && pidAlive(pid) ? pid : null
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+/** The lock of one job (`file`): see takeSwitchLock. `what` names it in the refusal. */
+export function takeJobLock(file: string, what: string): () => void {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   for (let i = 0; i < 3; i++) {
     try {
       const fd = fs.openSync(file, 'wx', 0o600)
@@ -151,13 +170,25 @@ export function takeSwitchLock(home: string): () => void {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
       let pid = 0
       try { pid = Number(JSON.parse(fs.readFileSync(file, 'utf8')).pid) } catch { /* torn: judge by age */ }
-      const alive = pid > 1 && (() => { try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' } })()
+      const alive = pid > 1 && pidAlive(pid)
       const old = (() => { try { return Date.now() - fs.statSync(file).mtimeMs > 60_000 } catch { return true } })()
-      if (alive || (!pid && !old)) throw new Error(`another \`walnut leader switch\` runs on this home (pid ${pid || '?'}): wait for it, or stop it first`)
+      if (alive || (!pid && !old)) throw new Error(`${what} (pid ${pid || '?'}): wait for it, or stop it first`)
       try { fs.unlinkSync(file) } catch { /* taken by another */ }
     }
   }
   throw new Error('could not take the switch lock')
+}
+
+/** What the old leader's server wrote of its switch stop (final-stop.ts): beside the home's other switch files, never in a batch. */
+export interface FinalStopResult { switchId: string; ok: boolean; batch?: number; stoppedAt?: string; why?: string; at: string }
+
+export function finalStopResultFile(home: string): string {
+  return path.join(switchDir(home), 'final-stop.json')
+}
+
+export function readFinalStopResult(home: string, switchId: string): FinalStopResult | null {
+  const r = readJson<FinalStopResult>(finalStopResultFile(home))
+  return r && r.switchId === switchId ? r : null
 }
 
 export interface HistoryEntry {

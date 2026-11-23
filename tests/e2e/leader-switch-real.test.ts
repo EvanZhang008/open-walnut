@@ -11,6 +11,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { rehearseLateWriter, rehearseLauncherRace, rehearseServerKilledInFinalBatch, rehearseSignalInFinalBatch, rehearseStopWait } from '../../scripts/leader-switch/stop-rehearsal.js'
 import { KILL_POINTS, TRIAL_FAILURES, rehearseCancel, rehearseCancelAfterCommit, rehearseFlagOff, rehearseHomePrefix, rehearseNoWitnesses, rehearseRestart, rehearseKill, rehearseLedgerControl, rehearseSwitchAndBack, rehearseTrialFailure, type Check } from '../../scripts/leader-switch/rehearsal.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-switch-e2e-'))
@@ -60,6 +61,31 @@ describe('the manual leader switch, real servers', () => {
     const c = await rehearseCancel(path.join(root, 'cancel'), () => {}, ports())
     expect(failed(c.all)).toEqual([])
   }, 300_000)
+
+  it('a writer after the old leader\'s first final batch reaches B; the old home names B\'s door; --status reads the switch on both machines', async () => {
+    const c = await rehearseLateWriter(path.join(root, 'late-writer'), () => {}, ports())
+    expect(failed(c.all)).toEqual([])
+  }, 300_000)
+
+  it('a signal during the final batch writes no mark, ends the server within 60 s and rolls back', async () => {
+    const c = await rehearseSignalInFinalBatch(path.join(root, 'signal-in-final-batch'), () => {}, ports())
+    expect(failed(c.all)).toEqual([])
+  }, 400_000)
+
+  it('the old leader\'s server killed during its final batch rolls the switch back', async () => {
+    const c = await rehearseServerKilledInFinalBatch(path.join(root, 'server-killed-in-final-batch'), () => {}, ports())
+    expect(failed(c.all)).toEqual([])
+  }, 400_000)
+
+  it('with no switch stop after the handover, the old leader cancels it itself and leads on', async () => {
+    const c = await rehearseStopWait(path.join(root, 'stop-wait'), () => {}, ports())
+    expect(failed(c.all)).toEqual([])
+  }, 400_000)
+
+  it('a launcher that restarts the home during the switch back waits and never leads until the switch settled', async () => {
+    const c = await rehearseLauncherRace(path.join(root, 'launcher-race'), () => {}, ports())
+    expect(failed(c.all)).toEqual([])
+  }, 500_000)
 
   for (const kind of TRIAL_FAILURES) {
     it(`a trial that finds ${kind} cancels, and the old leader leads with everything`, async () => {

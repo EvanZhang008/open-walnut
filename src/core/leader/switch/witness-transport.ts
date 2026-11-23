@@ -36,7 +36,7 @@ import { serveLocalWitness, witnessDirEmpty } from './local-witnesses.js'
 import { isRemoteWitness, type RemoteWitnessPlace, type WitnessPlace } from './settings.js'
 import { witnessDir } from './witness-route.js'
 import {
-  NO_WITNESS_HERE_CODE, WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, acceptReply, type WitnessCall, type WitnessEvidence, type WitnessSetup,
+  NO_WITNESS_HERE_CODE, WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, acceptReply, type NoteCall, type WitnessCall, type WitnessEvidence, type WitnessSetup,
 } from './witness-wire.js'
 
 /**
@@ -58,7 +58,7 @@ export interface RemoteCallResult { status: number; body: unknown }
  * link). It may call `done` at once or never; the transport has its own timeout. The returned
  * function abandons the call (frees its stream).
  */
-export type RemoteCall = (place: RemoteWitnessPlace, path: string, body: WitnessCall | WitnessSetup, done: (r: RemoteCallResult | null) => void) => void | (() => void)
+export type RemoteCall = (place: RemoteWitnessPlace, path: string, body: WitnessCall | WitnessSetup | NoteCall, done: (r: RemoteCallResult | null) => void) => void | (() => void)
 
 /** The three ways to a witness kept by a machine (see the top of this file). */
 export type WitnessWay = 'here' | 'direct' | 'link'

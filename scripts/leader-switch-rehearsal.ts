@@ -3,13 +3,15 @@
  * "Rehearsal"): real servers on synthetic homes, three local witnesses, the real
  * `walnut leader switch` command. Prints one line per check; exits 1 when one fails.
  *
- *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--paths] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--paths] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
  *
  * Without a scenario flag it runs the main one: A leads, a standby copy to B, load through
  * A's API, the switch to B, every check, A started again by hand (online and offline), writes
  * on B, the switch back; then a home moved to another HOME prefix (`--paths` runs only that). `--gb N` puts N GB of filler in A's home first (the downtime of a
  * real-sized home; the first standby batch of 20 GB takes about 20 minutes). `--kills` kills
  * the command at each step and resumes it (`--no-back`: no switch back, for a large home on a full disk); `--trials` breaks the copy three ways.
+ * `--stops` runs the switch stop's cases (leader-switch/stop-rehearsal.ts): a writer after the first final batch, a
+ * signal and a kill during it, the old leader's own cancel when no stop comes, a launcher that restarts the home, `--status`.
  * `--console` runs the old leader's console after the switch (leader-switch/console-rehearsal.ts):
  * the Mac app's handling replayed the whole time, B cut off for `--away-seconds` (default 60),
  * A's home checked by its manifest classes; `--as-installed` keeps A's daemon state where an
@@ -19,12 +21,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { rehearseConsole } from './leader-switch/console-rehearsal.js'
+import { rehearseLateWriter, rehearseLauncherRace, rehearseServerKilledInFinalBatch, rehearseSignalInFinalBatch, rehearseStopWait } from './leader-switch/stop-rehearsal.js'
 import { KILL_POINTS, TRIAL_FAILURES, rehearseCancel, rehearseCancelAfterCommit, rehearseFlagOff, rehearseHomePrefix, rehearseNoWitnesses, rehearseRestart, rehearseLedgerControl, rehearseKill, rehearseSwitchAndBack, rehearseTrialFailure, type Check } from './leader-switch/rehearsal.js'
 
 const args = process.argv.slice(2)
 const root = args[0]
 if (!root || root.startsWith('--')) {
-  console.error('usage: bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--no-back] [--port-base N] [--keep]')
+  console.error('usage: bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--no-back] [--port-base N] [--keep]')
   process.exit(2)
 }
 const has = (f: string) => args.includes(f)
@@ -45,7 +48,7 @@ const baseAt = args.indexOf('--port-base')
 let port = baseAt >= 0 ? Number(args[baseAt + 1]) : 4800
 const ports = () => { port += 2; return { portA: port, portB: port + 1 } }
 
-const main = !has('--kills') && !has('--trials') && !has('--flag-off') && !has('--restarts') && !has('--paths') && !has('--console')
+const main = !has('--kills') && !has('--stops') && !has('--trials') && !has('--flag-off') && !has('--restarts') && !has('--paths') && !has('--console')
 if (main || all) {
   await rehearseLedgerControl(path.join(work, 'ledger-control'), print, ports())
   const r = await rehearseSwitchAndBack(path.join(work, 'main'), print, { ...ports(), fillerGb: gb, noBack: has('--no-back'), log })
@@ -56,6 +59,13 @@ if (has('--kills') || all) {
   for (const p of KILL_POINTS) await rehearseKill(path.join(work, `kill-${p}`), p, print, ports())
   await rehearseCancel(path.join(work, 'cancel'), print, ports())
   await rehearseCancelAfterCommit(path.join(work, 'cancel-after-commit'), print, ports())
+}
+if (has('--stops') || all) {
+  await rehearseLateWriter(path.join(work, 'late-writer'), print, ports())
+  await rehearseSignalInFinalBatch(path.join(work, 'signal-in-final-batch'), print, ports())
+  await rehearseServerKilledInFinalBatch(path.join(work, 'server-killed-in-final-batch'), print, ports())
+  await rehearseStopWait(path.join(work, 'stop-wait'), print, ports())
+  await rehearseLauncherRace(path.join(work, 'launcher-race'), print, ports())
 }
 if (has('--trials') || all) for (const k of TRIAL_FAILURES) await rehearseTrialFailure(path.join(work, `trial-${k}`), k, print, ports())
 if (has('--restarts') || all) {

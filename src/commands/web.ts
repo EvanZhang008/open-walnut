@@ -14,6 +14,8 @@ import { takeExitOnOrphanRequest, watchForOrphan } from '../lib/exit-on-orphan.j
 
 /** How long a SIGTERMed server may spend in stopServer() before it exits anyway. */
 export const SHUTDOWN_BAIL_MS = 7_000
+/** A signal during a leader switch's final batch: the process ends within this (a launcher kills at 60 s). */
+export const SWITCH_ABORT_BAIL_MS = 30_000
 
 /**
  * A server is never a session. One started from inside a Walnut session (a
@@ -178,7 +180,7 @@ export async function runWeb(options: {
     )
   }
 
-  const { startServer, stopServer, armGracefulSignalExit, exitTraceFile, shutdownStepSuffix } = await import('../web/server.js')
+  const { startServer, stopServer, armGracefulSignalExit, exitTraceFile, shutdownStepSuffix, onSwitchStopRequest } = await import('../web/server.js')
 
   const port = options.port ? parseInt(options.port, 10) : undefined
 
@@ -195,31 +197,56 @@ export async function runWeb(options: {
   // (peak 43 concurrent) until the Mac starved and macOS killed the user's GUI
   // apps. Handler first, then arm, then boot.
   let shuttingDown = false
-  // `signal`: the name Node passes a signal listener; it becomes the stop's reason (stopServer).
-  const shutdown = async (signal?: unknown) => {
-    if (shuttingDown) return // a second signal must not race a teardown in flight
-    shuttingDown = true
-    // Safety timeout: force-exit if stopServer hangs (e.g. audio save stuck).
-    // Longer than the 5s a plugin may take to deactivate (plugin-manager.ts
-    // deactivationTimeoutMs), or one slow plugin ends the teardown here before
-    // the import and the stores get their turn (2026-10-01: exit 1 at exactly
-    // 4s, nothing after the plugins logged); shorter than the deploy's 8s
-    // SIGKILL grace (scripts/dev-prod.sh STOP_GRACE_SECS). The trace names the
-    // bail, so a code=1 exit is not mistaken for a crash.
-    const bail = setTimeout(() => {
-      const msg = `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}${shutdownStepSuffix()}`
+  // A leader switch's stop under way (web/server.ts SwitchStop): its final batch runs past the usual bail.
+  let switchStop: import('../web/server.js').SwitchStop | null = null
+  let bail: ReturnType<typeof setTimeout> | null = null
+  // Safety timeout: force-exit if stopServer hangs (e.g. audio save stuck).
+  // Longer than the 5s a plugin may take to deactivate (plugin-manager.ts
+  // deactivationTimeoutMs), or one slow plugin ends the teardown here before
+  // the import and the stores get their turn (2026-10-01: exit 1 at exactly
+  // 4s, nothing after the plugins logged); shorter than the deploy's 8s
+  // SIGKILL grace (scripts/dev-prod.sh STOP_GRACE_SECS). The trace names the
+  // bail, so a code=1 exit is not mistaken for a crash.
+  const armBail = (ms: number) => {
+    if (bail) clearTimeout(bail)
+    bail = setTimeout(() => {
+      const msg = `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${ms}ms pid=${process.pid}${shutdownStepSuffix()}`
       try { fs.appendFileSync(exitTraceFile(), msg + '\n') } catch { /* best-effort */ }
       process.exit(1)
-    }, SHUTDOWN_BAIL_MS)
+    }, ms)
+  }
+  // `signal`: the name Node passes a signal listener; it becomes the stop's reason (stopServer).
+  const shutdown = async (signal?: unknown, switchArg?: unknown) => {
+    // A signal listener is called with (name, number): only onSwitchStopRequest passes a stop.
+    const forSwitch = switchArg && typeof switchArg === 'object' && 'run' in switchArg ? switchArg as import('../web/server.js').SwitchStop : undefined
+    if (shuttingDown) {
+      // A signal during a switch's final batch (a launcher's SIGTERM, then its SIGKILL after 60 s): the batch
+      // ends with no final mark (the switch rolls back) and the process within SWITCH_ABORT_BAIL_MS.
+      if (switchStop && typeof signal === 'string') {
+        switchStop.abort(`stopped by ${signal}`)
+        switchStop = null
+        armBail(SWITCH_ABORT_BAIL_MS)
+      }
+      return // a second signal must not race a teardown in flight
+    }
+    shuttingDown = true
+    switchStop = forSwitch ?? null
+    armBail(SHUTDOWN_BAIL_MS + (forSwitch ? forSwitch.windowMs : 0))
     try {
-      await stopServer({ reason: typeof signal === 'string' ? signal : undefined, bailMs: SHUTDOWN_BAIL_MS })
+      await stopServer({ reason: forSwitch ? 'leader-switch' : typeof signal === 'string' ? signal : undefined, bailMs: SHUTDOWN_BAIL_MS })
     } catch {
       // A failed teardown must still terminate — never leave an immune process.
     } finally {
-      clearTimeout(bail)
+      if (bail) clearTimeout(bail)
     }
     process.exit(0)
   }
+  // The switch stop is an API call to this server (routes/leader-switch.ts), never a signal.
+  onSwitchStopRequest((stop) => {
+    if (shuttingDown) return false
+    void shutdown(undefined, stop)
+    return true
+  })
 
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)

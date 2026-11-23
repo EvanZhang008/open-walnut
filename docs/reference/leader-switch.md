@@ -92,29 +92,69 @@ and the permission (state, may act, time left, record). A standby answers it too
 
 `walnut leader switch --to <machine>` (run with the leader's home). A stop, not a live freeze:
 there is no read-only mode on the leader, and building one over every route, timer and
-SQLite write was judged too risky. Each step is written to `local/leader-switch/switch-state.json`
-in the old home before it runs and is safe to repeat; `--resume` continues after a kill,
-`--cancel` rolls back a switch that has not committed.
+SQLite write was judged too risky.
+
+### Two jobs
+
+A switch is two jobs, one on each machine, and the witnesses between them. Neither job reaches
+into the other machine: they meet only at the witnesses (the permit record decides), in the
+switch notes (progress, never a decision: [Switch notes](#switch-notes)), and over the old leader's
+copy link (the one the standby batches already travel, `peer.ts` `SwitchPeer`: today kind `local`,
+a folder on this computer; the daemon kind is the next step's).
+
+- The **command** (`switch-command.ts`) does no step itself. It starts this machine's job as a
+  detached process (a closed terminal or a killed command stops nothing), prints its lines and
+  follows it until it ends. Exit 0 switched, 1 refused, 3 rolled back, 4 a job died part way (run
+  `--resume`). The source job's output goes beside this machine's id
+  (`leader-switch-jobs/source-<hash>.log`), outside every home, so a refused switch writes nothing in either home.
+- The **source job** (`source-job.ts`, on the old leader's machine; state in the old home's
+  `local/leader-switch/switch-state.json`).
+- The **target job** (`target-job.ts`, on the new leader's machine; state and output in its
+  `standby_dir/switch/`). The old leader's server starts it over the copy link right after the
+  handover stood, with the **ticket** (`switch/<id>.json`: the switch, the handover number, both homes, the
+  old program's version, the commit deadline). The final mark (`switch/<id>.final.json`) comes
+  the same way.
+
+Each job writes its step before it runs it and takes `--resume`. `--cancel` asks each open job on
+this machine to roll back (a committed switch goes forward instead), then resumes it. One source
+job runs per home (`local/leader-switch/switch.lock`) and one target job per switch.
+
+Source job:
 
 1. **preflight**: the old leader runs with the permission (only its process can hand it over), the standby copy has
    a complete batch under 5 minutes old and verifies without drift, the copy's config has the
-   experiment and the section, a majority of witnesses answers and names the old leader, **the new
-   leader's machine itself reaches a majority of the witnesses with no leader link and they name the
-   old leader** ([The preflight from the candidate's side](#the-preflight-from-the-candidates-side)), the
-   new home's disk has room, the new leader's program is not older than the old one's, no
-   server runs on the new home. Any failure refuses with the reasons; nothing changed (a refused
-   switch writes no switch state, no marker, nothing in either home).
+   experiment and the section, a majority of witnesses answers and names the old leader. Then the
+   old leader's server is asked to begin (`POST /api/leader/switch/begin`, the trust rule below; it records who
+   started the switch on which machine in its console and in Walnut Health), and the
+   **candidate's own check** runs as a target job with `--check` over the copy link: the new
+   leader's machine reaches a majority of the witnesses with no leader link and they name the old
+   leader ([The preflight from the candidate's side](#the-preflight-from-the-candidates-side)), its disk has room,
+   its program is not older than the old one's, no server runs on the new home. Any failure refuses with
+   the reasons; nothing changed (a refused switch writes no switch state, no marker, nothing in either home).
 2. **handover**: the marker `handed-over.json` (state `switching`) goes into the old home
    first, then the old leader's server writes its `handover` record to a majority of the
-   witnesses and acts no more (asked through `POST /api/leader/handover`). Before that record
+   witnesses and acts no more (`POST /api/leader/handover`). Before that record
    it makes what must ride the final batch (`before-handover.ts`: today this machine's console
    device, [The old leader's console](./leader-switch-console.md)); one that fails refuses the
-   handover. While it runs it may still cancel it.
-3. **stop-source**: a planned stop (SIGTERM, SIGKILL after 30 s). Sessions and detached work
-   keep running under the existing restart rules. The downtime starts here.
-4. **final-batch**: one standby batch of the stopped home (a batch voided by an outside writer
-   is tried again, six times), a verify pass, and a second batch that must find nothing changed.
-5. **promote**: the copy becomes the new home (`promote.ts`; `promoted.json` goes into the copy
+   handover. Once the record stands the server writes the ticket and starts the target job; when
+   it cannot, it cancels the handover and leads on. The source job waits (30 s at most) until the
+   target job says it sees the handover at a majority it reaches by its own ways.
+3. **stop-source**: the switch stop ([below](#the-switch-stop)), asked through
+   `POST /api/leader/switch/final-stop`. The downtime starts here.
+4. **wait-target**: until the witnesses show the new leader's record above the handover (the
+   commit). A `gave-up` note, a handover that no longer stands, or the commit deadline plus the
+   take-back time roll back.
+5. **hand-off**: the marker becomes `handed-over`, with the record number and the new leader's
+   `leaderDoors` (`leader_switch.machines[].doors`); then the [service role](#service-role) turns replica.
+
+Target job:
+
+1. **wait-mark**: the handover stands at a majority this machine reaches (within 10 s, else it gives
+   up), then it waits for the final mark. Every 2 s it reads the witnesses: a record of the old
+   leader above the handover (its cancel) means it took the lead back, and the job rolls back.
+   It never promotes without the mark, and starts no commit after the deadline.
+2. **promote**: the switch claim goes beside this machine's id ([A launcher during a switch](#a-launcher-during-a-switch)),
+   any server on the new home is stopped, and the copy becomes the new home (`promote.ts`; `promoted.json` goes into the copy
    first). With no folder at that path it is one rename, so the home is marked from the instant it
    exists. A folder already there (the first switch's target holding this machine's daemon state,
    a switch back's handed-over home) is swapped around this machine's daemon runtime places
@@ -129,7 +169,7 @@ in the old home before it runs and is safe to repeat; `--resume` continues after
    apply again on the new one: the rehearsal shows it) and `standby.dir` (the new leader's
    batches go to the old machine's standby folder, for the switch back). Sends the old leader had begun and not settled
    (mail rows `sending` or `unknown`) are listed as "outcome unknown".
-6. **trial**: an offline self-check (every file of the batch at its size, every database
+3. **trial**: an offline self-check (every file of the batch at its size, every database
    through integrity_check with the old home's row count, no path of the old machine left
    that no rule keeps: [Paths](#paths)), then the new leader starts with `WALNUT_LEADER_TRIAL=1`: it never asks for the
    permission, so every outward door stays closed, and every gate reads the boot policy's
@@ -140,23 +180,98 @@ in the old home before it runs and is safe to repeat; `--resume` continues after
    restore drill's boot check, `src/core/trial-start/read-back.ts`: the note is the first one under
    the vault root, `artifacts/` once the notes moved into the one tree, `notes/` before). Then it stops. A
    resumed trial skips the size and row comparison (its server may have touched the home).
-7. **commit**: the new leader starts for real, told the handover's number: its own `renew` on
+4. **commit**: the new leader starts for real, told the handover's number: its own `renew` on
    top of the handover reaches a majority (a `grant` once the handover ran out at the
    witnesses, for a long trial). From here the old machine's `mayAct()` is false for good and
-   the new one's is true; the marker becomes `handed-over` with the record number,
-   `promoted.json` becomes `led`, and the new home's `local/leader-switch/history.json` names
+   the new one's is true; `promoted.json` becomes `led`, and the new home's `local/leader-switch/history.json` names
    the switch (for `--back`).
-8. **start-target**: the new leader opens its doors. The downtime ends when it says it may act.
+5. **role**: the [service role](#service-role) turns leader, on the promoted home.
+6. **start-target**: the new leader opens its doors. The downtime ends when it says it may act
+   (measured from the mark's `stoppedAt`). The switch claim is removed.
 
-Any failure before the commit (a trial that fails included) rolls back. The new leader's
-server is stopped first, so what the witnesses hold next is final; when they show its commit
-the switch goes forward instead. When the old leader's server still runs, it cancels its
-handover and leads at once (a handover and a cancel never both stand). Once it stopped no
-process can cancel (the record was its process's): the tried home goes aside as
-`<home>.trial-failed-<switch>` (the folder it displaced comes back), the standby copy is built
-again from its chunks, the marker is removed and the old leader starts again, **with its
-doors closed until its handover runs out at the witnesses (up to a minute)**, then grants
-itself. Nothing was lost: the old home was never changed.
+Any failure before the commit (a trial that fails included) rolls back, each job on its own. The
+target job stops the new leader's server first, so what the witnesses hold next is final; when
+they show its commit the switch goes forward instead. Otherwise it demotes the tried home
+(`<home>.trial-failed-<switch>`, the folder it displaced comes back), builds the standby copy again
+from its chunks, removes its claim and writes a `gave-up` note. The source job, when the old
+leader's server still runs, has it cancel its handover and lead at once (a handover and a cancel
+never both stand). Once it stopped no process can cancel (the record was its process's): the
+marker is removed and the old leader starts again, **with its doors closed until its handover
+runs out at the witnesses (up to a minute)**, then grants itself. Nothing was lost: the old home
+was never changed.
+
+Defaults: `commit_window_s: 300` (from the handover to the last moment the new leader may start
+its commit; the final batch must end inside it), `stop_wait_s: 120` (the old leader's server cancels
+its own handover when no switch stop came this long after it, so a source job that died after the
+handover leaves no machine without a leader for long; a stop asked later is refused).
+
+**Who may begin a switch.** The old leader's server takes a begin for `to` only when `to` is a
+machine of `leader_switch.machines` and holds this leader's standby target (its `standby_dir` is
+where the batches go). A begin forwarded by another machine is taken only from the machine it
+goes to (`final-stop.ts` `beginRefusal`). The forwarding itself (a replica passing a person's
+`walnut leader switch` to the leader) is not wired yet.
+
+### The switch stop
+
+The old leader's server ends itself for the switch: an API call, never a signal (a signal is the
+ordinary planned stop). In order (`server.ts` `stopServer`, `final-stop.ts`):
+
+1. It takes the stop (`beginSwitchStop`: the handover of this switch stands and no stop or
+   cancel came before) and answers 202; `walnut web` gives it its usual bail plus the commit window.
+2. Its doors close and its stores close, as in a planned stop. A switch stop writes no
+   release record: the handover is the last record of this process.
+3. **The final batch**: standby batches of the stopped home until one finds nothing changed (a
+   batch voided by an outside writer is tried again), bounded by the commit deadline, then a
+   verify pass. A writer that lands after one batch is in the next: the mark names only a batch
+   that found nothing changed.
+4. **The final mark** goes over the copy link into the target's `standby_dir/switch/` (the
+   batch number, `stoppedAt`); the result also goes beside the old home's switch state
+   (`local/leader-switch/final-stop.json`, machine data, never batched), for the source job.
+5. It closes its host links and exits.
+
+A signal during the final batch aborts it: no mark is written, `walnut web` exits within 30 s (under
+the launcher's 60 s before KILL), and the switch rolls back. A crash in it leaves no result: the
+source job says the old leader died before its final batch, and rolls back. An ordinary planned
+stop is unchanged: it writes its release first and sends no batch. The one-machine flow uses the
+same path (the CLI's own final batch after the stop is gone).
+
+### Switch notes
+
+Each job writes a note at its steps (`handed-over`, `waiting-mark`, `stopped`, `committed`,
+`handed-off`, `gave-up` with why, `done`) to every witness it reaches by ways a and b, with that
+witness's own key, as its own call (`/host-api/witness/note`, `witness-wire.ts` `NoteCall`). A note lives
+in its own file beside the record (`switch-notes.json`, the newest per switch and machine, 32 at
+most) and never touches the permit record, so the permit's model check is unchanged. A note
+request is proved like a permit request (a single-use nonce, the witness's key): a replay or a
+wrong key writes nothing.
+
+`walnut leader switch --status` works on either machine: this machine's jobs (step, running,
+last line), the witnesses' record as this machine reads it (its server's links, else its own ways),
+and each machine's newest note of the switch.
+
+### Service role
+
+The one launcher-kept service of a machine starts as the leader or as a replica, on a home. The
+switch says what it should be at two places: on the new leader after the commit (leader, the
+promoted home), and on the old leader after the hand-off (replica, its copy dir). Records first,
+mode second: the job writes the role it wants into its state, asks for the mode
+(`setServiceRole`, injected), then marks it set. A kill between the two is healed by
+`resumeServiceRole`, a read-only entry for the service's start hook: it reads this machine's last
+switch record (through `leader-switch-pointer.json` beside the machine id) and asks for the same
+role again; for a target job at its commit it also hands the start its handover number. The
+mode is never the truth of who leads: the witnesses' record stays that. **The real setter is not
+wired**: until the launcher's owner lands it, the step is recorded as not set, with why.
+
+### A launcher during a switch
+
+A launcher (the Mac app, a service manager) restarts what it sees stop. After the promotion a
+server it starts on the new home must not lead, and the switch must not fight it. So a server
+started on a home that holds a switch claim (written before the promotion, removed when the
+target job is done or rolled back), or whose `promoted.json` is not yet `led`, **waits**
+(`promotion-wait.ts`): no port, no lock, no file in or beside the home; it looks every second and
+ends once the switch settled and no server of the switch holds the home. The launcher's next start
+then boots by the usual rules. The switch's own starts carry `WALNUT_LEADER_SWITCH_START` and do not
+wait. A handed-over standby on that home ends itself when a claim appears or its marker changes.
 
 **About the brief's step names.** The brief named step 2 "handover-started" and step 5
 "commit: the handover record reaches a majority". In the permit core a handover record that
@@ -164,8 +279,6 @@ reached a majority can still be cancelled by its writer; what ends the old machi
 good is the new holder's record on top of it. So the "handover-started" record is the
 `handover` record, and the commit is the new holder's `renew` (or `grant`) on top of it.
 
-One switch command runs per home at a time (`local/leader-switch/switch.lock`): a second
-`--resume` or `--cancel` from another terminal is refused while the first runs.
 
 ### The trial column
 
@@ -591,7 +704,7 @@ any more, and on a leader-data store of the manifest that is in no rule and not 
 
 ## Rehearsal
 
-`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--keep]`
+`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--keep]`
 runs on any Linux dev box (in a Walnut dev container: `walnut-dev run bun ...`). It builds two
 machines and three witnesses in `<work dir>`, starts A on a synthetic home with tasks, notes,
 a plugin's files and a routine, keeps a standby copy at B, drives writes through A's API, runs
@@ -600,9 +713,16 @@ B by content, op ids replayed on B apply none twice, the routine's slots each fi
 two machines' permission logs never overlap, A started by hand (online, and with every witness
 unreachable) runs as a standby that names B, answers a write `handed_over`, writes no door line
 and leaves its home's hash unchanged, B's writes come back with `--back` and A leads again
-(its standby stopped by the switch), B started by hand then is a standby naming A. `--kills` kills the command at each
-step (after the handover, during the final batch, during and after the promotion, during the trial,
-between the commit's majority and its marker, after the commit) and resumes it; `--trials`
+(its standby stopped by the switch), B started by hand then is a standby naming A. `--kills` kills a job at each
+step (the target job while it waits for the mark, the source job after the handover and during the final batch, the target
+job during and after the promotion, during the trial, between the commit's majority and its records and after the commit,
+the source job after it saw the commit) and resumes it; `--stops` runs the switch stop's cases
+(`scripts/leader-switch/stop-rehearsal.ts`): a plugin's writer after the first final batch reaches B and the mark names the
+later batch, the old home's standby names B's door, `--status` on both machines, a SIGTERM during the final batch (no mark,
+the server ends within 60 s, rollback), the old leader's server killed in it (rollback), a source job dead after the handover
+(the old leader cancels its own handover after `stop_wait_s` and leads on, the target job rolls back on its own), and a
+launcher that restarts A's home during the switch back (its start waits, never leads, and leads once the switch's server
+stops); `--trials`
 breaks the copy (a corrupt database, a missing note, an old program, an old-home path in a store
 no rule decides) and expects a rollback; `--paths` moves a home to another HOME prefix and checks
 what the [path rules](#paths) did (the main run does too, and scans both homes after each switch);
@@ -863,12 +983,11 @@ leader's link to host-c); w-k: its door https://box/leader-witness did not answe
 The old leader's side still reads through its own links (its server, `GET /api/leader/witnesses`). Right after the handover the
 candidate looks again: the handover must stand at a majority IT reaches (a witness takes the new leader's commit only on its handover),
 within 10 s, or the switch rolls back while the old leader still runs and takes its handover back. Between the old leader's stop and
-the new one's commit start no server runs: the switch command then reads the witnesses by the new leader's ways a and b
+the new one's commit start no server runs: the target job then reads the witnesses by the new leader's ways a and b
 (`makeWitnessReader`'s own read). The commit then depends only on what the candidate itself reaches, never on hosts recognising the
 new leader first. A step after the commit that cannot read the witnesses stops and says to rerun with `--cancel` or `--resume`; it
-never goes round again by itself. On this computer (`LocalSide`) the probe runs in
-the switch command's process with the other machine's identity (its machine-id file and witness root from its env); a side on
-another machine runs the same function there.
+never goes round again by itself. The probe runs in the candidate's own target job (`--check` for the preflight), a process with
+that machine's identity (its machine-id file and witness root from its env), so it is the same on one computer or two.
 
 ### Where the witnesses are
 
@@ -895,20 +1014,25 @@ witness, above).
 
 ## Not built yet
 
-- **Remote transports**: a remote `SwitchSide` (start and stop a server on another machine, and run
-  `reachWitnesses` there), the standby transport over the network. What changes then: `LocalSide` (`side.ts`), the standby
-  target's transport (task aead7731). The path rewrite between homes and accounts is [done](#paths);
-  whose host the old leader's own local sessions and folders become after a switch is not decided.
-  The flow, the records, the marker, the boot rule and the doors stay. The witness transport is
+- **The copy link to another machine**: the two jobs and their ticket, mark and notes are built ([Two jobs](#two-jobs));
+  `SwitchPeer` has only the kind `local` (a standby folder on this computer). The daemon kind (the batches, the ticket,
+  the mark and the target job's start over the host link) is the next step's; `peerFor` refuses a `standby.host` until then.
+  The trial's online and offline checks still read the old home by its path from the target side (one computer only);
+  they move to the copy and the ticket with the daemon kind. The path rewrite between homes and accounts is [done](#paths);
+  whose host the old leader's own local sessions and folders become after a switch is not decided. The witness transport is
   [done](#witnesses-on-other-machines), with a candidate's own ways to the witnesses (a and b).
+- **A begin forwarded from another machine**: the trust rule is built and tested (`beginRefusal`); a replica passing a
+  person's `walnut leader switch` to the leader is not wired.
+- **The service role's setter**: `setServiceRole` is an injected function with its two call sites and the start hook's resume
+  entry; the launcher's real setter (and calling `resumeServiceRole` from the service's start hook) is its owner's to land.
 - **Waiting on 5a** (the host-dialed door): its call frames as way c (`allowDoorCallPrefix('/host-api/witness/')` registering an
   `addWitnessReach`), and moving its proofs onto `src/utils/hmac-proof.ts`. Until then a witness reached only by a `host` cannot
   be set up or read by a server that has not led: it joins after the first lead (above), and the Mac as a first leader (no witness
   of its own, the others only over links) waits for the door. Tests: a real host daemon runtime relays the leader's `follower`/`replica` stream to a real leader door
   with the route on it (`tests/core/leader/switch/witness-twin.test.ts`), and a spy on the link module shows no link before the
   first lead, none for a refused or trial start, and the link of each host after it (`witness-link-gate.test.ts`).
-- **The candidate's own probe on another machine**: `reachWitnesses` runs in the switch command's process with the candidate's identity
-  (`LocalSide`); a remote side running it on the candidate's machine is part of the remote `SwitchSide` above.
+- **The candidate's own probe on another machine**: it runs in the candidate's own target job (`--check`), started over the copy
+  link; on another machine that needs the daemon kind above.
 - **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)):
   no daemon runs in the rehearsal yet, so that runs only in the real-daemon test.
 - **Operation ids registered at the witnesses before an outward send**: the permit core has
@@ -917,20 +1041,10 @@ witness, above).
   final batch is complete, so a send claimed and not settled at the stop is in the copy's
   ledger and listed as "outcome unknown" (mail; its reaper never sends a `sending` row again).
   They matter for an automatic takeover, where the copy may lag.
-- **Old leader under a service launcher**: the old home now comes back as a standby, so a
-  launcher's restart no longer loops. The switch still stops the old leader with a signal; a
-  launcher that restarts it during the switch gets a standby on the port, which a rollback's
-  start of the old leader (`side.ts`) stops first, and the launcher may then start another.
-  Stopping it through the launcher is the next phase's.
 - **The standby takes no data**: it answers who leads and nothing else. The old machine's
   console is served by its host replica of the new leader instead
   ([The old leader's console](./leader-switch-console.md), whose own list of what is not built
   yet starts with the new leader taking the old machine as a host by itself).
-- **A switch back with a launcher** (known risk, left for the cross-machine phase): the switch
-  stops the old home's standby right before the promotion, and a launcher that restarts what it
-  sees stop can start the standby again in that gap. It then holds the port the trial and the
-  new leader need (their start fails and the switch rolls back), or runs on the promoted path.
-  The fix is to stop it through the launcher, which this phase does not touch.
 - No Settings screen (it needs the user's approval of the design).
 - Backups are not a door: a stopped old leader backs up nothing, but a server that lost the
   permission while running keeps its backup schedule.

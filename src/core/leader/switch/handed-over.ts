@@ -10,7 +10,7 @@
  *   GET  /api/leader/status   says this machine leads nothing and who does: the machine the
  *                             witnesses name now (read live, read-only), else the one the marker names
  *   GET  / (any page)         the standby page, which loads again by itself once the console has the port
- *   anything else             409 { code: 'handed_over', error: "this machine handed the leader to X (switch S)" }
+ *   anything else             409 { code: 'handed_over', error: "this machine handed the leader to X (switch S)", leader, leaderDoors }
  *   POST /leader-witness/*    this machine's witness door, only when the server opens it (witness-door.ts)
  * and writes only its pid file beside the instance lock (machine-id.ts standbyServerFile),
  * outside the home (and, through its door, this machine's witness record in the state dir). It sends nothing, fires nothing and claims nothing: no outward door is
@@ -45,6 +45,8 @@ export interface HandedOverStandby {
   machine: string | null
   /** The machine that leads now as the boot found it: the witnesses' record, else the marker's `to`. */
   leader: string | null
+  /** Where that machine's server is reached (the marker's leaderDoors: leader_switch.machines[].doors), when known. */
+  leaderDoors: string[]
   switchId: string | null
   marker: HandedOverMarker | null
   /** The record that named another machine, when the witnesses decided it. */
@@ -75,6 +77,8 @@ function standbyOf(o: { home: string; env: NodeJS.ProcessEnv; marker: HandedOver
     home: path.resolve(o.home),
     machine: permitHolderId(o.env),
     leader: o.leader,
+    // The doors the marker names are the marker's machine's; a leader the witnesses name otherwise has none known here.
+    leaderDoors: o.marker && !o.marker.torn && o.marker.to === o.leader && Array.isArray(o.marker.leaderDoors) ? o.marker.leaderDoors.filter((d) => typeof d === 'string') : [],
     switchId: o.marker?.switchId ?? null,
     marker: o.marker,
     record: o.record,
@@ -217,6 +221,7 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
       // What the switch's side checks before it signals the pid its file names (side.ts).
       pid: process.pid,
       leader,
+      leaderDoors: leader === s.leader ? s.leaderDoors : [],
       switchId: s.switchId,
       handedOver: s.marker,
       record,
@@ -224,7 +229,7 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
       permit: { state: 'standby', mayAct: false, remainingMs: 0, record, why: s.why },
     }
   }
-  const refusal = () => JSON.stringify({ error: s.message, code: 'handed_over', leader: s.leader, switchId: s.switchId })
+  const refusal = () => JSON.stringify({ error: s.message, code: 'handed_over', leader: s.leader, leaderDoors: s.leaderDoors, switchId: s.switchId })
   const json = (res: http.ServerResponse, code: number, body: unknown) => {
     res.writeHead(code, { 'content-type': 'application/json' })
     res.end(JSON.stringify(body))
@@ -263,7 +268,7 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
       return
     }
     if (req.method === 'GET' && (url === '/api/health' || url === '/api/config')) {
-      json(res, 200, { standby: true, leader: s.leader, switchId: s.switchId, message: s.message })
+      json(res, 200, { standby: true, leader: s.leader, leaderDoors: s.leaderDoors, switchId: s.switchId, message: s.message })
       return
     }
     // Drained so a client's body upload ends cleanly, then refused.
@@ -340,7 +345,27 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
     line = listeningLine()
   }
 
+  /**
+   * A marked home that no longer stands for its switch (a rollback removed the marker, a switch back moved the
+   * home aside), or one a switch now claims (promotion-wait.ts): this standby is done, whichever state it is in.
+   */
+  const superseded = async (): Promise<string | null> => {
+    if (!s.marker || s.marker.torn) return null
+    const m = readMarker(s.home)
+    if (!m || m.switchId !== s.switchId) return `${s.home} no longer stands handed over by switch ${s.switchId}`
+    const { readSwitchClaim } = await import('./ticket.js')
+    const claim = readSwitchClaim(s.home, env)
+    return claim ? `switch ${claim.switchId} is making ${s.home} the new leader's home` : null
+  }
   async function step(): Promise<void> {
+    const over = await superseded()
+    if (over) {
+      closed = true
+      clearInterval(look)
+      if (state === 'serving') { state = 'yielded'; await release() }
+      endWith(`Walnut standby: ${over}; this standby ends`)
+      return
+    }
     if (state === 'serving') {
       const found = await consoleOnPort(s.home, o.port)
       if (!found || holderKey(found) === distrusted || closed) return
@@ -437,6 +462,7 @@ function standbyPage(s: HandedOverStandby): string {
 <h1>This Walnut is on standby</h1>
 <p>${escapeHtml(s.message.charAt(0).toUpperCase() + s.message.slice(1))}.</p>
 <p>${s.leader ? `Open Walnut on <code>${escapeHtml(s.leader)}</code>, which leads now.` : 'Open Walnut on the machine that leads now.'} Nothing here changes while this machine waits: its data stays as it was handed over.</p>
+${s.leaderDoors.length ? `<p>It is reached at ${s.leaderDoors.map((d) => `<code>${escapeHtml(d)}</code>`).join(', ')}.</p>` : ''}
 <p>To make this machine lead again, run <code>walnut leader switch --back</code> on the machine that leads.</p>
 <script>${STANDBY_PAGE_POLL}</script>
 </body></html>

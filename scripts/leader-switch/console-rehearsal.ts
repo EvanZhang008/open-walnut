@@ -17,7 +17,7 @@ import { makeConsoleWorld, HOST_KEY_A, type ConsoleWorld } from './console-world
 import { compareKept, describeKept, snapshotHome } from '../../src/core/home-manifest/home-kept.js'
 import { MacAppReplay } from './mac-app-replay.js'
 import { REPO, type Machine } from './world.js'
-import { readSwitchState } from '../../src/core/leader/switch/flow.js'
+import { readSwitchOutcome as readSwitchState } from '../../src/core/leader/switch/flow.js'
 import { readConsoleFile, readHolder } from '../../src/core/handed-over-console.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
