@@ -206,7 +206,7 @@ export function agentHistory(result: unknown, args: Record<string, unknown>, max
   const r = result as Row
   const rows = r.messages
   if (!Array.isArray(rows) || rows.length === 0) return result
-  if (args.limit !== undefined || args.since !== undefined || args.compact !== undefined) return result
+  if (args.limit !== undefined || args.since !== undefined || args.compact !== undefined) return fitWindow(r, rows as Row[], args, max)
   // Already this default (a host's call relayed through a gateway that shapes it too).
   if (typeof r.shown === 'string') return result
   const all = rows as Row[]
@@ -247,6 +247,60 @@ export function agentHistory(result: unknown, args: Record<string, unknown>, max
     left_out: { cutOlder: out.cutOlder, cutSince: 0, folded: out.folded, clipped: out.clipped, chars: out.chars, note: leftOutLine(out, paged) },
     shown: `The newest ${limit} messages, compact (an agent's default)${more ? `; not shown: ${more} (older.how reads the page before)` : ''}. `
       + 'Pass limit (up to 200), since, compact:false, or "_full": true for the whole answer.',
+  }
+}
+
+/** Room a fitted window keeps under the cap for what it adds (`older`, `shown`) and the cutter's own note. */
+const WINDOW_ROOM = 900
+
+/**
+ * A window the caller named (limit, since, compact) held to the answer's cap by leaving out its
+ * OLDEST rows, whole timestamp runs at a time, never its newest: `older.how` reads the rows left out
+ * with the same window, so nothing between them and the newest is lost (2026-11-24: the generic
+ * cutter dropped the newest rows of a `limit:14` read, and its `older.before` pointed past them).
+ * A window that fits is answered as the op gave it.
+ */
+function fitWindow(r: Row, rows: Row[], args: Record<string, unknown>, max?: number): unknown {
+  if (max === undefined) return r
+  const json = (v: unknown): number => (JSON.stringify(v) ?? 'null').length
+  if (json(r) <= max) return r
+  // Where a page may start: the first row of a timestamp run (the page before excludes the whole run).
+  const starts = rows.flatMap((m, i) => (i > 0 && typeof m.timestamp === 'string' && m.timestamp !== rows[i - 1].timestamp ? [i] : []))
+  if (starts.length === 0) return r
+  const room = max - WINDOW_ROOM - json({ ...r, messages: [] })
+  let start = starts.at(-1)!
+  let used = rows.slice(start).reduce((n, m) => n + json(m) + 1, 0)
+  for (let k = starts.length - 2; k >= 0; k--) {
+    const more = rows.slice(starts[k], start).reduce((n, m) => n + json(m) + 1, 0)
+    if (used + more > room) break
+    used += more
+    start = starts[k]
+  }
+  let messages = rows.slice(start)
+  // all:true holds several sessions: the cut keeps the header row that says whose rows these are.
+  const header = args.all === true ? rows.slice(0, start).reverse().find(isSessionHeader) : undefined
+  if (header) messages = [header, ...messages]
+  const before = String(rows[start].timestamp)
+  const dropped = rows.slice(0, start).filter((m) => m !== header)
+  const prior = (r.left_out && typeof r.left_out === 'object' ? r.left_out : {}) as Partial<ShapeResult>
+  const left = {
+    cutOlder: (prior.cutOlder ?? 0) + dropped.length,
+    cutSince: prior.cutSince ?? 0,
+    folded: prior.folded ?? { tool: 0, thinking: 0 },
+    clipped: prior.clipped ?? 0,
+    chars: (prior.chars ?? 0) + dropped.reduce((n, m) => n + json(m), 0),
+  }
+  const page: Row = { id: r.taskId ?? args.id }
+  for (const k of ['all', 'fresh', 'limit', 'since', 'compact'] as const) if (args[k] !== undefined) page[k] = args[k]
+  page.before = before
+  return {
+    ...r,
+    messages,
+    truncated: true,
+    older: { before, how: `walnut tools call task_history '${JSON.stringify(page)}'` },
+    left_out: { ...left, note: leftOutLine(left, true) },
+    shown: `The newest ${messages.length - (header ? 1 : 0)} of the ${rows.length} rows this window holds fit the answer; `
+      + `older.how reads the ${dropped.length} before them${args.compact === true ? '' : ' (compact:true fits more in one answer)'}.`,
   }
 }
 

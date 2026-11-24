@@ -353,12 +353,22 @@ describe('task_history answers an agent the newest messages, compact, with how t
     expect((answer.left_out as { cutOlder: number }).cutOlder).toBeGreaterThan(0)
   })
 
-  it('a caller that names its window or form, or `_full`, gets the answer as the op gave it', () => {
+  it('a caller that names its window or form keeps it, its newest rows held to the cap; `_full` gets the answer as the op gave it', () => {
     for (const args of [{ id: ID, limit: 50 }, { id: ID, compact: false }, { id: ID, since: AT }]) {
       const answer = agentAnswer(history, args, result) as Obj
-      // The cap still holds; only the default shaping is skipped.
-      expect(answer.older).toEqual(result.older)
+      // The default shaping is skipped (no compact form); the cap holds by leaving out the oldest rows,
+      // and the page before them is the same window (2026-11-24: the newest rows were the ones lost).
+      const rows = answer.messages as Obj[]
+      expect(size(answer)).toBeLessThanOrEqual(CONTENT_MAX_CHARS)
+      expect(rows.at(-1)!.timestamp).toBe(messages.at(-1)!.timestamp)
+      expect(rows.some((r) => r.kind === 'tool' && String(r.detail).length > 400)).toBe(true)
+      const older = answer.older as { before: string; how: string }
+      expect(older.before).toBe(rows[0].timestamp)
+      expect(older.how).toBe(`walnut tools call task_history '${JSON.stringify({ ...args, before: older.before })}'`)
     }
+    // A window that fits is the op's own answer, its own `older` included.
+    const small = { ...result, messages: messages.slice(-3) }
+    expect(agentAnswer(history, { id: ID, limit: 1 }, small)).toBe(small)
     expect(agentAnswer(history, { id: ID }, result, true)).toBe(result)
     expect(AGENT_HISTORY_LIMIT).toBe(20)
   })

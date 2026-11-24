@@ -208,13 +208,36 @@ const NOTE_FIELDS = 6
 /** From this size an answer gets the one-walk coarse cut first. */
 const COARSE_FROM_CHARS = 400_000
 
-/** One walk: every long text to 2,000 characters and every long list to 40 rows. */
-function coarse(value: unknown, note: (path: string, chars: number, items: number) => void, path = '', depth = 0): void {
+/**
+ * A conversation's rows (each has a `role`; the timed ones are oldest first): a cut keeps its newest
+ * end, the rows a reader came for. 2026-11-24: task_history {"limit":14} read 63 rows and the agent got
+ * the oldest 13, the newest reply gone. Any other list is cut from its end, as before.
+ */
+export function newestLast(list: readonly unknown[]): boolean {
+  let prev = -Infinity
+  let timed = 0
+  for (const item of list) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const row = item as Record<string, unknown>
+    if (typeof row.role !== 'string') return false
+    const t = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN
+    if (Number.isNaN(t)) continue
+    if (t < prev) return false
+    prev = t
+    timed++
+  }
+  return timed >= 2
+}
+
+/** One walk: every long text to 2,000 characters and every long list to 40 rows (a conversation's newest 40). */
+function coarse(value: unknown, note: (path: string, chars: number, items: number, older?: boolean) => void, path = '', depth = 0): void {
   if (!value || typeof value !== 'object' || depth > 12) return
   const container = value as Record<string | number, unknown>
   if (Array.isArray(value) && value.length > 40) {
-    note(path, 0, value.length - 40)
-    value.length = 40
+    const older = newestLast(value)
+    note(path, 0, value.length - 40, older)
+    if (older) value.splice(0, value.length - 40)
+    else value.length = 40
   }
   const keys: (string | number)[] = Array.isArray(value) ? value.map((_, i) => i) : Object.keys(value)
   for (const k of keys) {
@@ -229,7 +252,7 @@ function coarse(value: unknown, note: (path: string, chars: number, items: numbe
 
 /**
  * `value` held to `max` characters of JSON. Long strings are cut first (to
- * `floor` characters at least), then the tails of lists, then strings again to a
+ * `floor` characters at least), then the tails of lists (a conversation's oldest rows, newestLast), then strings again to a
  * short head. The answer says what was cut under `_cut`. A value that cannot be
  * made to fit (nothing left to cut) is returned as far as it got.
  */
@@ -238,12 +261,12 @@ export function cutToFit(value: unknown, max: number, whole?: string): unknown {
   const root: Record<string, unknown> = value && typeof value === 'object' && !Array.isArray(value)
     ? JSON.parse(JSON.stringify(value)) as Record<string, unknown>
     : { result: JSON.parse(JSON.stringify(value ?? null)) as unknown }
-  const cuts = new Map<string, { chars: number; items: number }>()
-  const note = (path: string, chars: number, items: number): void => {
+  const cuts = new Map<string, { chars: number; items: number; older: number }>()
+  const note = (path: string, chars: number, items: number, older = false): void => {
     // A cut inside a list item is told once for the list.
     const name = path.replace(/\[\d+\]/g, '[]')
-    const had = cuts.get(name) ?? { chars: 0, items: 0 }
-    cuts.set(name, { chars: had.chars + chars, items: had.items + items })
+    const had = cuts.get(name) ?? { chars: 0, items: 0, older: 0 }
+    cuts.set(name, { chars: had.chars + chars, items: had.items + (older ? 0 : items), older: had.older + (older ? items : 0) })
   }
   let budget = Math.max(200, max - NOTE_ROOM)
   const collect = (): { strings: Leaf[]; arrays: Leaf[] } => {
@@ -275,7 +298,8 @@ export function cutToFit(value: unknown, max: number, whole?: string): unknown {
       }
     }
   }
-  // The biggest list loses rows from its end until the answer fits or one row is left; then the next list.
+  // The biggest list loses rows from its end (a conversation: from its start) until the answer fits
+  // or one row is left; then the next list.
   const cutArrays = (): void => {
     for (let round = 0; round < 60; round++) {
       const over = size(root) - budget
@@ -283,13 +307,14 @@ export function cutToFit(value: unknown, max: number, whole?: string): unknown {
       const leaf = collect().arrays.sort((a, b) => b.size - a.size)[0]
       if (!leaf) return
       const list = (leaf.parent as Record<string | number, unknown>)[leaf.key] as unknown[]
+      const older = newestLast(list)
       let freed = 0
       let dropped = 0
       while (list.length > 1 && freed < over) {
-        freed += size(list.pop()) + 1
+        freed += size(older ? list.shift() : list.pop()) + 1
         dropped++
       }
-      note(leaf.path, 0, dropped)
+      note(leaf.path, 0, dropped, older)
     }
   }
   // Last: the biggest nested object or list is left out whole, until the answer fits.
@@ -327,7 +352,7 @@ export function cutToFit(value: unknown, max: number, whole?: string): unknown {
     const entries = [...cuts.entries()]
     const fields: Record<string, string> = {}
     for (const [path, c] of entries.slice(0, NOTE_FIELDS)) {
-      fields[path.length > 60 ? `${path.slice(0, 57)}...` : path] = [c.items ? `${c.items} more items` : '', c.chars ? `${c.chars} more characters` : ''].filter(Boolean).join(', ')
+      fields[path.length > 60 ? `${path.slice(0, 57)}...` : path] = [c.older ? `${c.older} older items` : '', c.items ? `${c.items} more items` : '', c.chars ? `${c.chars} more characters` : ''].filter(Boolean).join(', ')
     }
     return {
       note: `Shortened to fit ${max} characters; nothing failed.`,
