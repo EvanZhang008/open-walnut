@@ -19,7 +19,8 @@
  * this host's copy of the leader's config: a fake `codex` records the command line and CODEX_CONFIG
  * its app-server is started with. The leader's `engines.codex.provider` names the leader's own
  * 127.0.0.1 proxy, which reaches nothing on this host: the session carries this host's own provider
- * (the copy's `host_engines` row) or none (providers/codex-engine-config.ts codexProviderForPlace).
+ * (the copy's `host_engines` row); with none of its own the start is refused with what to set, and
+ * no Codex runs (providers/codex-engine-config.ts codexProviderForPlace).
  *
  * Isolation: one temp base for HOME, data dir, run dir, the runtime's daemon and state dirs;
  * PATH leads with the fake `claude`, then the test run's exec guard (guardedPath,
@@ -230,11 +231,10 @@ describe('a Codex session this host runs itself gets the provider for this host'
   const LEADER_LOOPBACK = { base_url: 'http://127.0.0.1:8402/openai/v1', name: 'local-proxy', wire_api: 'responses' }
   const HOST_OWN = { base_url: 'http://127.0.0.1:18402/v1', name: 'host-relay', wire_api: 'responses' }
 
-  /** Start Codex through the door; the app-server's command line and CODEX_CONFIG the fake codex wrote. */
-  async function codexStart(n: number): Promise<{ argv: string; config: string }> {
-    await fsp.rm(codexLog(), { force: true })
+  /** Start Codex through the door: the start's answer once it settled (a refusal), or null while it still runs. */
+  function postStart(n: number): Promise<{ ok: boolean; error?: string }> {
     const taskId = `task-marina-codex-${n}`
-    void fetch(`http://127.0.0.1:${doorPort}/host-api/sessions/start`, {
+    return fetch(`http://127.0.0.1:${doorPort}/host-api/sessions/start`, {
       method: 'POST', headers: { 'content-type': 'application/json', connection: 'close' },
       body: JSON.stringify({
         taskId, message: 'hello', cwd: work(), mode: 'bypass', engine: 'codex', preassignedSessionId: crypto.randomUUID(), project: 'Marina',
@@ -244,7 +244,13 @@ describe('a Codex session this host runs itself gets the provider for this host'
           hintsApplied: true,
         },
       }),
-    }).then((r) => r.text(), () => '')
+    }).then((r) => r.json() as Promise<{ ok: boolean; error?: string }>)
+  }
+
+  /** Start Codex through the door; the app-server's command line and CODEX_CONFIG the fake codex wrote. */
+  async function codexStart(n: number): Promise<{ argv: string; config: string }> {
+    await fsp.rm(codexLog(), { force: true })
+    void postStart(n).catch(() => null)
     const end = Date.now() + 60_000
     let text = ''
     while (Date.now() < end) {
@@ -257,12 +263,15 @@ describe('a Codex session this host runs itself gets the provider for this host'
     return { argv, config: /^CODEX_CONFIG (.*)$/m.exec(text)?.[1] ?? '' }
   }
 
-  it('the leader\'s loopback provider is not passed: Codex uses this host\'s own config.toml', async () => {
-    await leaderCopyIs({ engines: { codex: { provider: LEADER_LOOPBACK } } })
-    const { argv, config } = await codexStart(1)
-    expect(argv).not.toContain('model_providers.')
-    expect(argv).not.toContain(LEADER_LOOPBACK.base_url)
-    expect(config).not.toContain('model_provider')
+  it('the leader\'s loopback provider with none of this host\'s own: the start is refused with what to set, and no Codex runs', async () => {
+    await leaderCopyIs({ engines: { codex: { provider: LEADER_LOOPBACK, model: 'gpt-6.2-sol' } } })
+    await fsp.rm(codexLog(), { force: true })
+    const answer = await postStart(1)
+    expect(answer.ok, stderr.slice(-3000)).toBe(false)
+    expect(answer.error).toContain(`host "${HOST_KEY}"`)
+    expect(answer.error).toContain(`hosts:\n  ${HOST_KEY}:\n    engines:\n      codex:\n        provider:`)
+    const ran = await fsp.readFile(codexLog(), 'utf8').catch(() => '')
+    expect(ran).not.toMatch(/^ARGV .*app-server/m)
   }, 120_000)
 
   it('this host\'s own provider from the copy\'s host_engines row is passed', async () => {

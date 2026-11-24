@@ -63,10 +63,24 @@ machine's `config.yaml`, it reaches your proxy only for sessions on this machine
 the same address reaches nothing there. So Walnut decides the provider per host, for every Codex
 start, resume, restart and engine switch, on this machine and on the host's own service:
 
-1. the host's own `hosts.<name>.engines.codex.provider`, when you set one (same keys as above);
-2. else the global `engines.codex.provider`, except a loopback one on any machine but this one:
-   there Walnut passes no provider, and Codex reads that host's own `~/.codex/config.toml`. The
-   server log says once per host that the global provider was not used there, and why.
+1. the host's own `hosts.<name>.engines.codex.provider`, when you set one (same keys as above),
+   under the host's name or under another name of the same machine (two host entries whose
+   daemon links reach one daemon process);
+2. else the global `engines.codex.provider`, except a loopback one on any machine but this one
+   (a host entry that reaches this machine's own daemon counts as this machine): there the Codex
+   session does not start. Its error, in the session and on its task, names the host and shows
+   the `hosts.<name>.engines.codex.provider` to set. Walnut never falls back to the host's own
+   `~/.codex/config.toml` there, which may send the session to another account.
+
+Wherever the global provider is not the one used, the `engines.codex.env` entries that point at
+it are not sent either: a `MODEL_PROVIDER` naming it, the variable named by its `env_key`, a
+value holding its `base_url`, and its entry (and a `model_provider` naming it) in a
+`CODEX_CONFIG` there.
+
+Only the provider is per host. `model`, `effort` and every other key of `engines.codex` stay the
+global ones on every host, so the default `model` must exist on each host's provider too. The
+model prefix is the provider's own: a host provider with no `model_prefix` gets none, one with its
+own `model_prefix` gets that one.
 
 ```yaml
 engines:
@@ -87,10 +101,10 @@ hosts:
 
 A global provider on a non-loopback address (`https://llm.example.com/v1`) still reaches every
 host. The host's provider is written in `config.yaml` (or through `PUT /api/config`, like the
-global one); the copy a host's own service keeps carries it as its own row, so an older host
-reads the rest of its copy as before. An older host's service gets the global provider without a
-loopback one, and so uses its own `~/.codex/config.toml`; it does not read a host provider until it
-is updated.
+global one); the copy a host's own service keeps carries it as its own row (`host_engines`), so an
+older host reads the rest of its copy as before. An older host's service refuses that one row (its
+log says so once) and keeps starting Codex as it did before, on the global provider; it reads a
+host provider once it is updated.
 
 ## Model ids on your endpoint (`model_prefix`)
 
@@ -319,8 +333,7 @@ setting says. Only Codex has this setting: every other engine runs its own ACP a
 ## Sessions started by the companion or a host's server
 
 A Walnut companion (or a host's own server) keeps a copy of this machine's configuration. That
-copy carries `engines.<id>.provider` (left out when it is a loopback address, which names this
-machine only), `model` and `effort`, and each host's own provider (`host_engines`), never `env`
+copy carries `engines.<id>.provider`, `model` and `effort`, and each host's own provider (`host_engines`), never `env`
 (it holds API keys) and never `adapter_cmd`. A Codex session the companion starts while it leads uses your provider,
 model and effort from that copy, with its own `env`, so the API key named by `env_key` must be
 set on the companion (or on the host) as well.
@@ -332,6 +345,8 @@ rather than letting Codex use the host's own provider:
 - this machine runs a Walnut older than copying engine settings;
 - the provider was not copied because it holds a credential (a password in `base_url`). Put the
   key under `env_key` instead, so the provider itself carries none.
+- the provider is a loopback address of this machine and the host has no provider of its own (see
+  "A provider per host").
 
 ## Telling Walnut's requests apart (`session.tag_requests`)
 

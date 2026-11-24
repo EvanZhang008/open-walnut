@@ -62,6 +62,15 @@ describe('keepNetHosts', () => {
     expect(out['gpu-box']).toEqual(current['gpu-box'])
   })
 
+  it('a host\'s own engine settings are taken only when a start could read them', () => {
+    expect(PERSON_FIELD_OK.engines({ codex: { provider: { base_url: 'http://127.0.0.1:18402/v1', name: 'host-relay' } } })).toBe(true)
+    expect(PERSON_FIELD_OK.engines({})).toBe(true)
+    expect(PERSON_FIELD_OK.engines({ codex: { provider: { name: 'no-url' } } })).toBe(false)
+    expect(PERSON_FIELD_OK.engines({ codex: { provider: { base_url: 'ftp://x' } } })).toBe(false)
+    expect(PERSON_FIELD_OK.engines({ codex: { provider: { base_url: 'http://x/v1', name: 'openai' } } })).toBe(false)
+    expect(PERSON_FIELD_OK.engines([])).toBe(false)
+  })
+
   it('every field a person writes has a shape it is checked against', () => {
     const person = Object.entries(NET_ROW_FIELD_WRITER).filter(([, w]) => w === 'person').map(([f]) => f).sort()
     expect(Object.keys(PERSON_FIELD_OK).sort()).toEqual(person)

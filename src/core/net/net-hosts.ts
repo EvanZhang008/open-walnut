@@ -7,6 +7,7 @@
  * capability tags) are theirs to change on such a row as on any other.
  */
 import type { Config } from '../types.js'
+import { readCodexEngineSettings } from '../../providers/codex-engine-config.js'
 
 type HostRow = Record<string, unknown>
 type HostDef = NonNullable<Config['hosts']>[string]
@@ -59,7 +60,18 @@ export const PERSON_FIELD_OK: { readonly [K in PersonField]: (v: unknown) => boo
   capabilities: (v) => Array.isArray(v) && v.every((t) => typeof t === 'string'),
   keep: (v) => typeof v === 'object' && v !== null && !Array.isArray(v),
   runs_sessions: (v) => typeof v === 'boolean',
-  engines: (v) => typeof v === 'object' && v !== null && !Array.isArray(v),
+  // The host's own engine settings, read by the same rule a start reads them (a wrong provider is refused here).
+  engines: (v) => typeof v === 'object' && v !== null && !Array.isArray(v) && hostEnginesValid(v),
+}
+
+/** `hosts.<name>.engines` as codex-engine-config.ts reads it: no throw. */
+function hostEnginesValid(v: object): boolean {
+  try {
+    readCodexEngineSettings({ engines: v })
+    return true
+  } catch {
+    return false
+  }
 }
 
 function isPersonField(field: string): field is PersonField {

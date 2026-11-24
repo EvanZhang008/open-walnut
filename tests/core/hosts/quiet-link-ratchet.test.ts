@@ -112,6 +112,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/usage/session-budget.ts': { calls: 3, kind: 'wake-recheck', why: 'budget reads and sets; a lost set answers refresh first, a revision guards a resend' },
   'src/core/workspaces/daemon-client.ts': { calls: 2, kind: 'wake-recheck', why: 'workspace jobs a person starts; a lost one is a host-timeout they retry' },
   'src/providers/acp-session.ts': { calls: 3, kind: 'wake-recheck', why: 'ACP sends carry a command id the daemon dedupes; the journal is followed again after a reconnect' },
+  'src/providers/codex-engine-source.ts': { calls: 2, kind: 'no-send', why: 'a Codex start on a host whose links are not up yet dials this machine\'s own daemon (loopback, 5 s deadline) only to learn which hosts share it, and sends nothing on it' },
   'src/providers/cwd-check.ts': { calls: 1, kind: 'wake-recheck', why: 'a path probe under 5 s before a spawn, which goes on without an answer' },
   'src/providers/remote-session-manager.ts': { calls: 5, kind: 'wake-recheck', why: 'session start, send and stop; an unanswered send is asked again with dedupe, so it lands once; and the local daemon\'s task directory root, read off its link, for the files a message ships' },
   'src/web/routes/files.ts': { calls: 1, kind: 'wake-recheck', why: 'file reads under boundHostRead; a lost read answers degraded' },

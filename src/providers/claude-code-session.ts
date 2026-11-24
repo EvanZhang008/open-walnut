@@ -14035,11 +14035,18 @@ export class SessionRunner {
     // With engines.codex.provider, the pick is the endpoint's id (its model prefix
     // applied) and rides the new thread's config (codex-engine-config.ts).
     if (engine === 'codex' && draftModel) {
-      const { codexPickForProvider, codexRawConfig, resolveCodexEngine } = await import('./codex-engine-config.js')
-      const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: remoteHost })
-      const { settings } = resolveCodexEngine(walnutConfig, codexRawConfig(walnutConfig, !!remoteHost))
-      const mapped = codexPickForProvider({ model: draftModel }, settings)
-      if (mapped?.model) draftModel = mapped.reasoning_effort ? `${mapped.model}[${mapped.reasoning_effort}]` : mapped.model
+      const { CodexEngineConfigError, codexPickForProvider, codexRawConfig, resolveCodexEngine } = await import('./codex-engine-config.js')
+      try {
+        const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: remoteHost })
+        const { settings } = resolveCodexEngine(walnutConfig, codexRawConfig(walnutConfig, !!remoteHost))
+        const mapped = codexPickForProvider({ model: draftModel }, settings)
+        if (mapped?.model) draftModel = mapped.reasoning_effort ? `${mapped.model}[${mapped.reasoning_effort}]` : mapped.model
+      } catch (err) {
+        // A provider refused here is refused again where the session's env is built, with the
+        // host's link up then (a host that is this machine is told apart only so): the pick stays
+        // as asked, and that start maps it (acp-session.ts buildAdapterEnv) or says why it cannot.
+        if (!(err instanceof CodexEngineConfigError)) throw err
+      }
     }
     const { base: draftModelBase, effort: draftModelEffort } = draftModel
       ? splitAcpModelId(draftModel)

@@ -114,8 +114,19 @@ function optionalString(entry: Record<string, unknown>, key: string, where: stri
   return trimmed || undefined
 }
 
+/**
+ * The mark codexProviderForPlace leaves on a provider that cannot reach the place it is read
+ * for: readProvider refuses with its text, as with a `withheld` one. A symbol, so no config
+ * file or copy can ever carry it.
+ */
+const UNREACHABLE_HERE = Symbol('codex provider unreachable here')
+/** The global provider codexProviderForPlace set aside at a place (on `engines.codex`): codexEnvAtPlace drops the env that points at it. */
+const SET_ASIDE = Symbol('codex global provider set aside')
+
 function readProvider(raw: unknown): CodexProviderSettings | undefined {
   if (raw === undefined || raw === null) return undefined
+  const unreachable = isRecord(raw) ? (raw as Record<symbol, unknown>)[UNREACHABLE_HERE] : undefined
+  if (typeof unreachable === 'string') throw new CodexEngineConfigError(unreachable)
   // Only in a copy of the Mac's config (replication/config-allowlist.ts): the Mac has a provider it could not copy.
   if (isRecord(raw) && raw.withheld === true) {
     throw new CodexEngineConfigError('provider on the Mac holds a credential, which is never copied off the Mac, so this server cannot send Codex there. Name the key\'s variable in provider.env_key instead, or start the session from the Mac')
@@ -199,7 +210,7 @@ export type CodexProviderSource =
   | { from: 'host'; host: string }
   | { from: 'global' }
   | { from: 'none' }
-  | { from: 'skipped-loopback'; host: string | undefined; base_url: string }
+  | { from: 'refused-loopback'; host: string | undefined; name: string; base_url: string }
 
 /**
  * THE provider a Codex process gets at `place` (every spawn path takes it, through
@@ -208,11 +219,17 @@ export type CodexProviderSource =
  *   1. the host's own `hosts.<host>.engines.codex.provider`, when it is set (under its own key, else
  *      under another name of the same machine, `place.aliases`);
  *   2. else the global `engines.codex.provider`, EXCEPT a loopback one (127.0.0.1, localhost, ::1)
- *      on a machine other than the one whose config it is: there it reaches nothing, so no
- *      provider is passed and Codex uses that host's own ~/.codex/config.toml (Walnut never sets
- *      an engine's own defaults).
+ *      on a machine other than the one whose config it is: it reaches nothing there, so the
+ *      start is refused with what to set (readProvider throws the mark's text), as a server
+ *      that cannot tell the provider refuses (codex-engine-source.ts). Never the host's own
+ *      ~/.codex/config.toml in its place: that one may send the session to another account.
  *
- * Pure: the caller says which machine the config is (configIsThisMachine) and logs a skip.
+ * Wherever the global provider is not the one used, the `engines.codex.env` entries that point at
+ * it are left out (withoutProviderEnv): a MODEL_PROVIDER naming it, the variable holding its key,
+ * a value holding its URL, and its entry in a CODEX_CONFIG there. The provider is also marked set
+ * aside, so codexEnvAtPlace strips the same from an engine env overlay built elsewhere.
+ *
+ * Pure: the caller says which machine the config is (configIsThisMachine) and logs a refusal.
  */
 export function codexProviderForPlace(
   config: Record<string, unknown>,
@@ -220,10 +237,13 @@ export function codexProviderForPlace(
 ): { config: Record<string, unknown>; source: CodexProviderSource } {
   const engines = isRecord(config.engines) ? config.engines : {}
   const codex = isRecord(engines.codex) ? engines.codex : {}
-  const withProvider = (provider: unknown): Record<string, unknown> => {
-    const next = { ...codex }
-    if (provider === undefined) delete next.provider
-    else next.provider = provider
+  const global = codex.provider
+  const withProvider = (provider: unknown, used: unknown): Record<string, unknown> => {
+    const next: Record<string, unknown> = { ...codex, provider }
+    if (isRecord(global)) {
+      (next as Record<symbol, unknown>)[SET_ASIDE] = global
+      if (isRecord(codex.env)) next.env = withoutProviderEnv(codex.env, global, isRecord(used) ? used : undefined)
+    }
     return { ...config, engines: { ...engines, codex: next } }
   }
   const hosts = isRecord(config.hosts) ? config.hosts : {}
@@ -236,14 +256,95 @@ export function codexProviderForPlace(
   // The host's own key first, then its other names of the same machine.
   for (const key of place.host ? [place.host, ...(place.aliases ?? [])] : []) {
     const own = providerOf(key)
-    if (own !== undefined) return { config: withProvider(own), source: { from: 'host', host: key } }
+    if (own !== undefined) return { config: withProvider(own, own), source: { from: 'host', host: key } }
   }
-  const global = codex.provider
   if (global === undefined || global === null) return { config, source: { from: 'none' } }
   if (!place.configIsThisMachine && isRecord(global) && isLoopbackUrl(global.base_url)) {
-    return { config: withProvider(undefined), source: { from: 'skipped-loopback', host: place.host, base_url: String(global.base_url) } }
+    const name = providerIdOf(global) ?? DEFAULT_CODEX_PROVIDER_ID
+    const baseUrl = String(global.base_url)
+    return {
+      config: withProvider({ [UNREACHABLE_HERE]: unreachableText(place.host, name, baseUrl) }, undefined),
+      source: { from: 'refused-loopback', host: place.host, name, base_url: baseUrl },
+    }
   }
   return { config, source: { from: 'global' } }
+}
+
+/** The id a provider entry goes by (its `name`, else Walnut's default), or undefined for no mapping. */
+function providerIdOf(raw: unknown): string | undefined {
+  if (!isRecord(raw)) return undefined
+  const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+  return name || DEFAULT_CODEX_PROVIDER_ID
+}
+
+/** The refusal of a loopback provider read on another machine: what is wrong and the exact setting that fixes it. */
+function unreachableText(host: string | undefined, name: string, baseUrl: string): string {
+  const key = host ?? '<name of this host>'
+  return `provider "${name}" is at ${baseUrl}, a loopback address of the machine whose config it is, `
+    + `so it reaches nothing on ${host ? `host "${host}"` : 'this server'} and the Codex session is not started there. `
+    + 'Give that host its own provider, hosts.<name>.engines.codex.provider in config.yaml (the proxy it runs itself), for example:\n'
+    + `hosts:\n  ${key}:\n    engines:\n      codex:\n        provider:\n          name: ${host ? host.replace(/[^A-Za-z0-9_-]/g, '-') : 'host'}-proxy\n`
+    + `          base_url: http://127.0.0.1:<port of the proxy on that host>/v1\n`
+    + 'See "A provider per host" in docs/reference/codex-engine.md.'
+}
+
+/**
+ * The engine env (`engines.codex.env` as an adapter overlay) for a Codex spawn resolved by
+ * codexWalnutConfig: as it is, unless codexProviderForPlace set the global provider aside there;
+ * then without the entries that point at it (withoutProviderEnv).
+ */
+export function codexEnvAtPlace(env: Record<string, string> | undefined, resolved: unknown): Record<string, string> | undefined {
+  const codex = isRecord(resolved) && isRecord(resolved.engines) && isRecord(resolved.engines.codex) ? resolved.engines.codex : undefined
+  const global = codex ? (codex as Record<symbol, unknown>)[SET_ASIDE] : undefined
+  if (!env || !isRecord(global)) return env
+  const used = isRecord(codex!.provider) && typeof (codex!.provider as Record<symbol, unknown>)[UNREACHABLE_HERE] !== 'string' ? codex!.provider : undefined
+  return withoutProviderEnv(env, global, used) as Record<string, string>
+}
+
+/**
+ * `env` without what points at the global provider `global`, for a place where it is not the one
+ * used (`used`: the provider that is, none for a refusal):
+ *   - MODEL_PROVIDER naming it (Codex's app-server client falls back to it for a thread's provider);
+ *   - the variable that holds its key (`env_key`), unless the one used reads the same variable;
+ *   - any value holding its base_url (an OPENAI_BASE_URL of it, say);
+ *   - in a CODEX_CONFIG there, its `model_providers` entry, any entry at its URL, and a
+ *     `model_provider` naming one of those (a user's CODEX_CONFIG wins over the derived keys).
+ */
+function withoutProviderEnv(env: Record<string, unknown>, global: Record<string, unknown>, used: Record<string, unknown> | undefined): Record<string, unknown> {
+  const id = providerIdOf(global)!
+  const url = typeof global.base_url === 'string' ? global.base_url.trim().replace(/\/+$/, '') : ''
+  const keyVar = typeof global.env_key === 'string' ? global.env_key.trim() : ''
+  const usedId = used ? providerIdOf(used) : undefined
+  const usedKeyVar = used && typeof used.env_key === 'string' ? used.env_key.trim() : ''
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(env)) {
+    if (k === 'MODEL_PROVIDER' && typeof v === 'string' && v.trim() === id && usedId !== id) continue
+    if (keyVar && k === keyVar && usedKeyVar !== keyVar) continue
+    if (k === 'CODEX_CONFIG' && typeof v === 'string' && v) { out[k] = codexConfigWithout(v, id, url); continue }
+    if (url && typeof v === 'string' && v.includes(url)) continue
+    out[k] = v
+  }
+  return out
+}
+
+function codexConfigWithout(raw: string, id: string, url: string): string {
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return raw } // resolveCodexEngine refuses it with the reason
+  if (!isRecord(parsed)) return raw
+  const next: Record<string, unknown> = { ...parsed }
+  const gone = new Set<string>([id])
+  if (isRecord(next.model_providers)) {
+    const providers: Record<string, unknown> = {}
+    for (const [pid, entry] of Object.entries(next.model_providers)) {
+      const at = isRecord(entry) && typeof entry.base_url === 'string' ? entry.base_url.trim().replace(/\/+$/, '') : ''
+      if (pid === id || (url && at === url)) { gone.add(pid); continue }
+      providers[pid] = entry
+    }
+    if (Object.keys(providers).length > 0) next.model_providers = providers
+    else delete next.model_providers
+  }
+  if (typeof next.model_provider === 'string' && gone.has(next.model_provider)) delete next.model_provider
+  return JSON.stringify(next)
 }
 
 /** The CODEX_CONFIG keys the settings stand for. */

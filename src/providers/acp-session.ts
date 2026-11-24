@@ -108,7 +108,7 @@ import {
   resolveCodexStartPreset,
   type AcpAutoAnswer,
 } from './acp-permission-posture.js'
-import { CODEX_MODEL_PREFIX_ENV, codexPickForProvider, codexRawConfig, parseCodexBaseConfig, resolveCodexEngine } from './codex-engine-config.js'
+import { CODEX_MODEL_PREFIX_ENV, codexEnvAtPlace, codexPickForProvider, codexRawConfig, parseCodexBaseConfig, resolveCodexEngine } from './codex-engine-config.js'
 import { parseUsageLimitReset, usageLimitSentence } from './usage-limit-text.js'
 import { safeguardStopOfAcpStopReason } from '../core/sessions/safeguard-stop.js'
 import { descriptorAdapterEnv } from './acp-worker/adapter-env.js'
@@ -1699,10 +1699,13 @@ export class AcpSession {
     // (codex-engine-source.ts). The provider is the one for the host this runs on
     // (codexProviderForPlace): its own, else the global one unless that names another machine.
     const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: this.host })
+    // The engine env as the place's resolution left it: an entry that points at a global provider not
+    // used here (a MODEL_PROVIDER naming it, its key) is gone (codex-engine-config.ts withoutProviderEnv).
+    const codexOverlay = codexEnvAtPlace(overlay, walnutConfig)
     const pick = record?.acpConfig ?? this.cfg.acpConfig
     const codex = resolveCodexEngine(
       walnutConfig,
-      overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : (this.remote ? undefined : process.env.CODEX_CONFIG),
+      codexOverlay && Object.hasOwn(codexOverlay, 'CODEX_CONFIG') ? codexOverlay.CODEX_CONFIG : (this.remote ? undefined : process.env.CODEX_CONFIG),
       {
         pick: pick ? { model: pick.model, reasoning_effort: pick.reasoning_effort } : undefined,
         // session.tag_requests (sessions/request-tag.ts): this task's id and project on every request.
@@ -1751,8 +1754,8 @@ export class AcpSession {
     // Walnut's own app-server client, or the codex-acp adapter (codex-app-server/transport.ts),
     // read from the same engines.codex as the provider (the Mac's copy off the Mac).
     const transport = { [CODEX_TRANSPORT_ENV]: resolveCodexTransport(walnutConfig, process.env, { adapterGiven: !!this.cfg.artifacts }) }
-    if (!overlay && !descriptor) return { ...(managed ?? {}), ...transport }
-    return { ...(descriptor ?? {}), ...(overlay ?? {}), ...(managed ?? {}), ...transport }
+    if (!codexOverlay && !descriptor) return { ...(managed ?? {}), ...transport }
+    return { ...(descriptor ?? {}), ...(codexOverlay ?? {}), ...(managed ?? {}), ...transport }
   }
 
   /**

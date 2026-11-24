@@ -3,8 +3,10 @@
  * adapter env of the acpStart the daemon receives. `engines.codex.provider` naming this
  * machine's 127.0.0.1 proxy reaches nothing on another host (2026-11-24: every Codex session
  * on a dev host failed that way), so a start there carries the host's own provider
- * (`hosts.<name>.engines.codex.provider`) or none, and Codex reads that host's own
- * ~/.codex/config.toml. A start here keeps the global provider.
+ * (`hosts.<name>.engines.codex.provider`), without the env that named the global one; with none
+ * of its own the start is refused, and the session and its task say what to set. A start here
+ * keeps the global provider. The config is shaped as the maintainer's primary writes it
+ * (engines.codex.env.MODEL_PROVIDER naming the loopback provider).
  *
  * Real server, real session runner, real AcpSession and worker bundle; MockDaemon and the
  * mock ACP agent stand in for the host's daemon and Codex. The host-judged path is off here
@@ -28,7 +30,7 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { addTask } from '../../src/core/task-manager.js'
+import { addTask, getTask } from '../../src/core/task-manager.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 
@@ -36,25 +38,27 @@ const REPO = path.resolve(import.meta.dirname, '../..')
 const MOCK_CLI = path.join(REPO, 'tests/providers/mock-claude.mjs')
 const MOCK_AGENT = path.join(REPO, 'tests/providers/mock-acp-agent.mjs')
 
-const GLOBAL = { base_url: 'http://127.0.0.1:8402/openai/v1', name: 'local-proxy', wire_api: 'responses' }
+const GLOBAL = { base_url: 'http://127.0.0.1:8402/openai/v1', name: 'local-proxy', wire_api: 'responses', model_prefix: 'openai.' }
+const GLOBAL_ENV = { MODEL_PROVIDER: 'local-proxy', CODEX_CONFIG: '{"model_context_window": 1000000}' }
 const HOST_OWN = { base_url: 'http://127.0.0.1:18402/v1', name: 'host-relay', wire_api: 'responses' }
 
 let server: HttpServer
+let port = 0
 let daemon: MockDaemon
 const savedSwitch = process.env.WALNUT_HOST_RUNS_SESSIONS
 
-async function waitFor<T>(fn: () => T | undefined | false, what: string, ms = 30_000): Promise<T> {
+async function waitFor<T>(fn: () => T | undefined | false | Promise<T | undefined | false>, what: string, ms = 30_000): Promise<T> {
   const deadline = Date.now() + ms
   for (;;) {
-    const v = fn()
+    const v = await fn()
     if (v) return v
     if (Date.now() > deadline) throw new Error(`timeout waiting for ${what}`)
     await new Promise((r) => setTimeout(r, 50))
   }
 }
 
-/** Start a Codex session the way the UI's session:start does and return the CODEX_CONFIG its acpStart carried. */
-async function codexConfigOfStart(host: string | undefined): Promise<Record<string, unknown>> {
+/** Start a Codex session the way the UI's session:start does and return its acpStart's env and CODEX_CONFIG. */
+async function codexStartOn(host: string | undefined): Promise<{ env: Record<string, string>; config: Record<string, unknown> }> {
   const before = daemon.getCommandHistoryFor('acpStart').length
   const { task } = await addTask({ title: `Codex on ${host ?? 'this machine'}`, project: 'marina' })
   bus.emit(EventNames.SESSION_START, {
@@ -62,7 +66,7 @@ async function codexConfigOfStart(host: string | undefined): Promise<Record<stri
   }, ['session-runner'], { source: 'web-ui' })
   const cmd = await waitFor(() => daemon.getCommandHistoryFor('acpStart')[before], `the acpStart on ${host ?? 'this machine'}`)
   const env = (cmd.payload.env ?? {}) as Record<string, string>
-  return env.CODEX_CONFIG ? JSON.parse(env.CODEX_CONFIG) as Record<string, unknown> : {}
+  return { env, config: env.CODEX_CONFIG ? JSON.parse(env.CODEX_CONFIG) as Record<string, unknown> : {} }
 }
 
 beforeAll(async () => {
@@ -73,8 +77,10 @@ beforeAll(async () => {
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
   sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, acpWorkerBundle()], adapterCmd: [process.execPath, MOCK_AGENT] })
   server = await startServer({ port: 0, dev: true })
+  const addr = server.address()
+  port = typeof addr === 'object' && addr ? addr.port : 0
   await updateConfig({
-    engines: { codex: { provider: GLOBAL } },
+    engines: { codex: { provider: GLOBAL, model: 'gpt-6.2-sol', effort: 'xhigh', env: GLOBAL_ENV } },
     hosts: {
       devbox: { hostname: 'devbox.invalid', enabled: true },
       relaybox: { hostname: 'relaybox.invalid', enabled: true, engines: { codex: { provider: HOST_OWN } } },
@@ -94,21 +100,35 @@ afterAll(async () => {
 
 describe('the Codex provider of a start, by the host it runs on', () => {
   it('a start on this machine carries the global provider', async () => {
-    const config = await codexConfigOfStart(undefined)
+    const { env, config } = await codexStartOn(undefined)
     expect(config).toMatchObject({ model_provider: 'local-proxy', model_providers: { 'local-proxy': { base_url: GLOBAL.base_url } } })
+    expect(env.MODEL_PROVIDER).toBe('local-proxy')
   }, 60_000)
 
-  it('a start on a host with no provider of its own carries none: the global one names this machine', async () => {
-    const config = await codexConfigOfStart('devbox')
-    expect(config.model_provider).toBeUndefined()
-    expect(config.model_providers).toBeUndefined()
-    // The rest of the start's config still rides it.
-    expect(typeof config.developer_instructions).toBe('string')
+  it('a start on a host with no provider of its own is refused: nothing reaches the host, its caller and its task say what to set', async () => {
+    const before = daemon.getCommandHistoryFor('acpStart').length
+    const { task } = await addTask({ title: 'Codex on devbox', project: 'marina' })
+    const res = await fetch(`http://localhost:${port}/api/v1/tasks/${task.id}/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hello', cwd: '/home/marina/work', host: 'devbox', engine: 'codex' }),
+    })
+    // The caller (a person's start, an agent's task_start) gets the reason and the fix.
+    const answer = JSON.stringify(await res.json())
+    expect(res.status).toBe(502)
+    for (const words of ['engines.codex: provider \\"local-proxy\\"', 'host \\"devbox\\"', 'hosts:\\n  devbox:\\n    engines:\\n      codex:\\n        provider:']) expect(answer).toContain(words)
+    // The task keeps it as its failed start, which its status reads (user-status-sync.ts startFailed).
+    const stored = await getTask(task.id)
+    expect(stored.last_start).toMatchObject({ state: 'failed', engine: 'codex' })
+    expect(stored.last_start?.error).toContain('host "devbox"')
+    expect(stored.last_start?.error).toContain('hosts.<name>.engines.codex.provider')
+    // Nothing went to the host.
+    expect(daemon.getCommandHistoryFor('acpStart').length).toBe(before)
   }, 60_000)
 
-  it('a start on a host with its own provider carries that one', async () => {
-    const config = await codexConfigOfStart('relaybox')
-    expect(config).toMatchObject({ model_provider: 'host-relay', model_providers: { 'host-relay': { base_url: HOST_OWN.base_url, requires_openai_auth: false } } })
-    expect(JSON.stringify(config)).not.toContain(GLOBAL.base_url)
+  it('a start on a host with its own provider carries that one, without the env that named the global one', async () => {
+    const { env, config } = await codexStartOn('relaybox')
+    expect(config).toMatchObject({ model_provider: 'host-relay', model_providers: { 'host-relay': { base_url: HOST_OWN.base_url, requires_openai_auth: false } }, model_context_window: 1000000 })
+    expect(env.MODEL_PROVIDER).toBeUndefined()
+    expect(JSON.stringify(env)).not.toContain(GLOBAL.base_url)
   }, 60_000)
 })

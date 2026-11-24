@@ -42,8 +42,13 @@ export interface FileCopy<Row> {
   reset(): void
 }
 
+/** How many refused rows one copy remembers having said (a leader with many rows this replica refuses). */
+const REFUSED_SAID_CAP = 256
+
 export function createFileCopy<Row>(spec: FileCopySpec<Row>): FileCopy<Row> {
   const file = () => copyStateFile(spec.kind)
+  /** The refused rows already said (key and content), so a row the leader sends every round is said once. */
+  const refusedSaid = new Set<string>()
   let mem: FileShape<Row> | null = null
   let serial = serialChain()
   let follower: RowSetFollower | null = null
@@ -88,7 +93,13 @@ export function createFileCopy<Row>(spec: FileCopySpec<Row>): FileCopy<Row> {
       for (const r of rows ?? []) {
         if (spec.admit && !spec.admit(r)) {
           skipped.push(spec.key(r))
-          log.session.warn(`${spec.label}: refused a row`, { kind: spec.kind, key: spec.key(r) })
+          // The leader sends a refused row again every round (it is not stored here): one line per row as it is.
+          const seen = `${spec.key(r)}|${JSON.stringify(r)}`
+          if (!refusedSaid.has(seen)) {
+            refusedSaid.add(seen)
+            if (refusedSaid.size > REFUSED_SAID_CAP) refusedSaid.delete(refusedSaid.values().next().value as string)
+            log.session.warn(`${spec.label}: refused a row`, { kind: spec.kind, key: spec.key(r) })
+          }
           continue
         }
         m.rows[spec.key(r)] = r

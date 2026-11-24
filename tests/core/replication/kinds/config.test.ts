@@ -4,7 +4,6 @@
  * copy and whose config writes answer needs_leader. Real config.yaml on disk, real
  * route, real follower, real round; the acceptance grep walks the replica's data.
  */
-import { COPY_ONLY_CONFIG_KEYS } from '../../../../src/core/replication/copy-only-keys.js'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -25,6 +24,7 @@ import { _resetReplicaStatusForTesting, forgetKindManifests, peekKindState } fro
 import * as cm from '../../../../src/core/config-manager.js'
 import { maskSecretTail } from '../../../../src/core/config-secret-shape.js'
 import { CONFIG_COPY_ALLOWLIST } from '../../../../src/core/replication/config-allowlist.js'
+import { COPY_ONLY_CONFIG_KEYS } from '../../../../src/core/replication/copy-only-keys.js'
 
 const ENV = ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER'] as const
 const saved: Record<string, string | undefined> = {}
@@ -160,6 +160,21 @@ describe('a secret-shaped value lands in an allowlisted key on the Mac', () => {
     expect(text).not.toContain('acmeEvilPut')
     expect(text).not.toContain('\u2022')
   })
+
+  it('a row this replica refuses is said once, though the leader sends it again every round (a newer leader\'s row)', async () => {
+    await round()
+    const { followerStep } = await import('../../../../src/core/replication/kind-follower.js')
+    const { log } = await import('../../../../src/logging/index.js')
+    const warn = vi.spyOn(log.session, 'warn')
+    const refusals = () => warn.mock.calls.filter((c) => String(c[0]).includes('refused a row')).length
+    const newer = { key: 'a_row_of_a_newer_leader', value: { x: 1 } }
+    for (let i = 0; i < 3; i++) expect(await followerStep({ op: 'put', kind: 'config', schemaVersion: 1, rows: [newer], last: true })).toMatchObject({ ok: true, stored: 0 })
+    expect(refusals()).toBe(1)
+    // Another content of it is said again.
+    await followerStep({ op: 'put', kind: 'config', schemaVersion: 1, rows: [{ ...newer, value: { x: 2 } }], last: true })
+    expect(refusals()).toBe(2)
+    warn.mockRestore()
+  })
 })
 
 describe('config writes on the replica', () => {
@@ -236,14 +251,13 @@ describe('the half rule (floor 0) and the confirm', () => {
     expect(Object.keys((await readConfigCopy())!).length).toBe(all)
     const st = peekKindState(h.target.id, 'config')!
     expect(st.refusals).toBe(3)
-    // Left: ui, version, the engines row every copy carries, and the rows the leader adds of its own
-    // (copy-only-keys.ts: what it speaks, which hosts run sessions), whatever config.yaml says.
-    const left = (st.lastRefusal as { entries: number }).entries
-    expect(left).toBeGreaterThanOrEqual(3)
-    expect(left).toBeLessThanOrEqual(3 + COPY_ONLY_CONFIG_KEYS.length)
-    expect(confirmKindRemoval(h.target, 'config', { entries: left })).toBe(true)
-    expect(await round()).toMatchObject({ action: 'synced', removed: all - left })
-    expect(Object.keys((await readConfigCopy())!).filter((k) => !COPY_ONLY_CONFIG_KEYS.includes(k)).sort()).toEqual(['engines', 'ui', 'version'])
+    // The rows left: ui, version, the engines row every copy carries, and the rows the leader adds
+    // of its own (copy-only-keys.ts: leader_capabilities while the host_runs_sessions experiment is on).
+    const left = (await kind.rows()).map((r) => r.key).sort()
+    expect(left.filter((k) => !COPY_ONLY_CONFIG_KEYS.includes(k))).toEqual(['engines', 'ui', 'version'])
+    expect(confirmKindRemoval(h.target, 'config', { entries: left.length })).toBe(true)
+    expect(await round()).toMatchObject({ action: 'synced', removed: all - left.length })
+    expect(Object.keys((await readConfigCopy())!).sort()).toEqual(left)
   })
 })
 

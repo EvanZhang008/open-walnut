@@ -20,6 +20,12 @@ vi.mock('../../src/core/server-role.js', async (importOriginal) => ({
   isFollower: () => place !== 'mac',
   isHostReplica: () => place === 'host',
 }))
+/** This leader's own daemon link: dialled only to tell a host that may be this machine (codexWalnutConfig). */
+let localDial: () => Promise<unknown> = async () => { throw new Error('no local daemon in this test') }
+vi.mock('../../src/providers/local-daemon-dial.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/providers/local-daemon-dial.js')>()),
+  getLocalDaemonConnection: () => localDial(),
+}))
 vi.mock('../../src/core/replication/kinds/config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/replication/kinds/config.js')>()),
   readConfigCopy: async () => copy,
@@ -44,6 +50,7 @@ beforeEach(async () => {
   place = 'mac'
   copy = null
   _resetCodexSourceNotesForTesting()
+  localDial = async () => { throw new Error('no local daemon in this test') }
   _resetForTesting()
   _resetSessionTrackerForTesting()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -63,6 +70,10 @@ function linksReach(...groups: string[][]): void {
   })
 }
 const codexOf = (config: Record<string, unknown>) => ((config.engines as Record<string, Record<string, unknown>> | undefined)?.codex ?? {})
+/** What a Codex start resolved against `config` says: null when it starts, else its refusal. */
+const refusalOf = (config: Record<string, unknown>): string | null => {
+  try { resolveCodexEngine(config, undefined); return null } catch (err) { expect(err).toBeInstanceOf(CodexEngineConfigError); return (err as Error).message }
+}
 
 describe('the config copy carries the non-secret part of engines', () => {
   it('provider, model and effort go; env and adapter_cmd never do', () => {
@@ -98,12 +109,35 @@ describe('the config copy carries the non-secret part of engines', () => {
   })
 })
 
-describe('the copy carries each host\'s own provider and never the leader\'s loopback one', () => {
-  it('a loopback global provider is left out of the engines row; the rest of engines.codex stays', () => {
+describe('the copy carries each host\'s own provider beside the global one', () => {
+  it('a loopback global provider stays in the engines row: a newer replica refuses it there, an older one runs as before', () => {
     const { rows } = configCopyRows({ engines: { codex: { provider: LOOPBACK, model: 'gpt-example' }, goose: { model: 'm' } } })
     const row = rows.find((r) => r.key === 'engines')!
-    expect(row.value).toEqual({ codex: { model: 'gpt-example' }, goose: { model: 'm' } })
+    expect(row.value).toEqual({ codex: { provider: LOOPBACK, model: 'gpt-example' }, goose: { model: 'm' } })
     expect(configRowAdmissible(row)).toBe(true)
+  })
+
+  it('a host key with a dot: a credential in its provider is withheld, never sent', () => {
+    const planted = 'https://user:hunter2-planted-secret@proxy.example.com/v1'
+    const { rows, refused } = configCopyRows({ hosts: {
+      'dev.box': { hostname: 'dev.box', engines: { codex: { provider: { name: 'p', base_url: planted } } } },
+      'plain.host.example': { hostname: 'p', engines: { codex: { provider: HOST_OWN } } },
+    } })
+    expect(refused.map((r) => r.key)).toEqual(['host_engines'])
+    const row = rows.find((r) => r.key === 'host_engines')!
+    expect(JSON.stringify(rows)).not.toContain('hunter2')
+    expect(row.value).toEqual({ 'dev.box': { codex: { provider: { withheld: true } } }, 'plain.host.example': { codex: { provider: HOST_OWN } } })
+    expect(configRowAdmissible(row)).toBe(true)
+  })
+
+  it('a host named like a secret field does not refuse the row: every host still gets its provider', () => {
+    for (const name of ['token', 'password-box', 'mysecret', 'api_key']) {
+      const { rows, refused } = configCopyRows({ hosts: { [name]: { hostname: 'h', engines: { codex: { provider: HOST_OWN } } }, other: { hostname: 'o', engines: { codex: { provider: HOST_OWN } } } } })
+      expect([name, refused]).toEqual([name, []])
+      const row = rows.find((r) => r.key === 'host_engines')!
+      expect(row.value).toEqual({ [name]: { codex: { provider: HOST_OWN } }, other: { codex: { provider: HOST_OWN } } })
+      expect([name, configRowAdmissible(row)]).toEqual([name, true])
+    }
   })
 
   it('hosts.<name>.engines rides its own copy-only row; the hosts row is as an older replica admits it', () => {
@@ -192,14 +226,15 @@ describe('a Codex start off the Mac', () => {
     expect(env!.WALNUT_CODEX_MODEL_PREFIX).toBe('vendor.')
   })
 
-  it('a host\'s server running Codex itself: the leader\'s loopback provider (an older leader\'s copy) is not used there', async () => {
+  it('a host\'s server running Codex itself: the leader\'s loopback provider is refused there, its own provider is used', async () => {
     place = 'host'
     const saved = process.env.WALNUT_HOST_KEY
     process.env.WALNUT_HOST_KEY = 'devbox'
     try {
       copy = { engines: { codex: { provider: LOOPBACK, model: 'gpt-example' } } }
       const config = await codexWalnutConfig({ host: '__local__' })
-      expect((config.engines as Record<string, Record<string, unknown>>).codex).toEqual({ model: 'gpt-example' })
+      expect(refusalOf(config)).toContain('host "devbox"')
+      expect(codexOf(config).model).toBe('gpt-example')
       // Its own provider from the leader's copy (host_engines) wins.
       copy = { engines: { codex: { provider: LOOPBACK } }, host_engines: { devbox: { codex: { provider: HOST_OWN } } } }
       const own = await codexWalnutConfig({ host: undefined })
@@ -217,19 +252,38 @@ describe('a Codex start off the Mac', () => {
     await updateConfig({ engines: { codex: { provider: LOOPBACK } }, hosts: { 'devbox-ssh': { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } }, devbox: { hostname: 'devbox.example.com' } } } as never)
     linksReach(['devbox', 'devbox-ssh'])
     expect(codexOf(await codexWalnutConfig({ host: 'devbox' })).provider).toEqual(HOST_OWN)
-    // A name of another machine does not take it.
+    // A name of another machine does not take it: refused.
     linksReach(['devbox'], ['devbox-ssh'])
-    expect(codexOf(await codexWalnutConfig({ host: 'devbox' })).provider).toBeUndefined()
+    expect(refusalOf(await codexWalnutConfig({ host: 'devbox' }))).toContain('host "devbox"')
   })
 
   it('on the leader, a host entry that reaches this machine\'s own daemon is this machine: the loopback provider applies', async () => {
     await updateConfig({ engines: { codex: { provider: LOOPBACK } }, hosts: { 'mac-alias': { hostname: 'mac.example.com' }, devbox: { hostname: 'devbox.example.com' } } } as never)
     linksReach(['__local__', 'mac-alias'])
     expect(codexOf(await codexWalnutConfig({ host: 'mac-alias' })).provider).toEqual(LOOPBACK)
-    expect(codexOf(await codexWalnutConfig({ host: 'devbox' })).provider).toBeUndefined()
-    // Only the live tie counts: without it the alias is another machine.
+    expect(refusalOf(await codexWalnutConfig({ host: 'devbox' }))).toContain('host "devbox"')
+    // Only the live tie counts: without it the alias is another machine, refused with the reason.
     setRevokedHostResolver(null)
-    expect(codexOf(await codexWalnutConfig({ host: 'mac-alias' })).provider).toBeUndefined()
+    expect(refusalOf(await codexWalnutConfig({ host: 'mac-alias' }))).toContain('host "mac-alias"')
+  })
+
+  it('right after a restart, this leader\'s own daemon link is dialled before a refusal stands (a host that is this machine starts)', async () => {
+    await updateConfig({ engines: { codex: { provider: LOOPBACK } }, hosts: { 'mac-alias': { hostname: 'mac.example.com' } } } as never)
+    // The host's link is up (a start dials it first); this leader's own is not yet.
+    linksReach(['mac-alias'])
+    let dialled = 0
+    localDial = async () => { dialled++; linksReach(['__local__', 'mac-alias']); return {} }
+    expect(codexOf(await codexWalnutConfig({ host: 'mac-alias' })).provider).toEqual(LOOPBACK)
+    expect(dialled).toBe(1)
+    // A host that is another machine: the dial proves nothing more, the refusal stands.
+    linksReach(['devbox'])
+    localDial = async () => { dialled++; return {} }
+    expect(refusalOf(await codexWalnutConfig({ host: 'devbox' }))).toContain('host "devbox"')
+    // A provider the host can use needs no dial.
+    await updateConfig({ engines: { codex: { provider: PROVIDER } } } as never)
+    const before = dialled
+    expect(codexOf(await codexWalnutConfig({ host: 'devbox' })).provider).toEqual(PROVIDER)
+    expect(dialled).toBe(before)
   })
 
   it('on the Mac its own config is read, as before', async () => {

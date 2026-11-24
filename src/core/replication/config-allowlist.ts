@@ -24,7 +24,6 @@ import { redactSensitiveText } from '../../logging/redact.js'
 import { hostRunsSessionsAny, hostsTurnedOn } from '../session-channel/switch.js'
 import { LEADER_CHANNEL_CAP } from '../session-channel/old-leader-watch.js'
 import type { Config } from '../types.js'
-import { isLoopbackUrl } from '../service-url.js'
 
 /**
  * `true`: the whole value, only for a value that cannot grow a field (a scalar,
@@ -54,7 +53,6 @@ const ALLOW: Record<string, AllowSpec> = {
   // Where each engine sends its requests, and its default model: a Codex session the
   // companion starts must use the Mac's provider (providers/codex-engine-source.ts).
   // `withheld` is the copy's own mark for a provider that held a credential (engineRows).
-  // A provider whose base_url is a loopback address is left out (withoutLoopbackProviders).
   engines: { '*': { provider: ENGINE_PROVIDER_SPEC, model: true, effort: true, transport: true } },
   agent: {
     // region, maxTokens and available_models are retired (CONFIG_COPY_RETIRED_FIELDS), but an
@@ -255,7 +253,7 @@ export const CONFIG_COPY_RETIRED_FIELDS: Readonly<Record<string, Readonly<Record
 })
 
 /** Maps keyed by a name someone chose (a host alias, a tag, a path): the name is not judged, what is inside it is. */
-const NAME_KEYED = new Set(['hosts', 'session_limits', 'tag_display', 'tag_links', 'link_tags', 'external_session_import.excluded_cwds', 'stt_corrections'])
+const NAME_KEYED = new Set(['hosts', 'host_engines', 'session_limits', 'tag_display', 'tag_links', 'link_tags', 'external_session_import.excluded_cwds', 'stt_corrections'])
 
 /** Field names that hold a credential and that the shape rule does not name. */
 const EXTRA_SECRET_KEYS = new Set(['credential_process', 'credentials', 'authorization', 'cookie', 'cookies'])
@@ -367,13 +365,12 @@ export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>, 
       if (!Object.prototype.hasOwnProperty.call(CONFIG_COPY_DROPPED, key) && !RETIRED_CONFIG_KEYS.has(key)) unknown.push(key)
       continue
     }
-    const through = allowThrough(config[key], spec)
-    const value = key === 'engines' ? withoutLoopbackProviders(through) : through
+    const value = allowThrough(config[key], spec)
     if (value === undefined) continue
     const findings = findSecrets(value, key)
     if (findings.length > 0) {
       refused.push({ key, findings })
-      if (key === 'engines' || key === 'host_engines') rows.push({ key, value: withheldEngines(value, findings, key === 'host_engines') })
+      if (key === 'engines' || key === 'host_engines') rows.push({ key, value: withheldEngines(value, key === 'host_engines') })
       continue
     }
     rows.push({ key, value })
@@ -382,28 +379,6 @@ export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>, 
   // set no provider, rather than guessing from a missing row (codex-engine-source.ts).
   if (!rows.some((r) => r.key === 'engines')) rows.push({ key: 'engines', value: {} })
   return { rows: rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)), refused, unknown }
-}
-
-/**
- * The global engine providers a replica can use: one whose base_url is a loopback address
- * (127.0.0.1, localhost) names THIS machine, and every reader of the copy is another machine,
- * where it reaches nothing. Left out, a replica (an older one too, which takes the copy as it is)
- * passes no provider and Codex uses that host's own ~/.codex/config.toml, as
- * codexProviderForPlace decides for a host with no provider of its own.
- */
-function withoutLoopbackProviders(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const out: Record<string, unknown> = {}
-  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
-    const provider = entry && typeof entry === 'object' ? (entry as Record<string, unknown>).provider : undefined
-    if (provider && typeof provider === 'object' && isLoopbackUrl((provider as Record<string, unknown>).base_url)) {
-      const { provider: _here, ...rest } = entry as Record<string, unknown>
-      out[id] = rest
-    } else {
-      out[id] = entry
-    }
-  }
-  return out
 }
 
 /**
@@ -453,25 +428,18 @@ function withHostsRunSessions(config: Readonly<Record<string, unknown>>, aliases
  * a server reading the copy refuses that engine's start instead of using the host's
  * provider; the other engines are copied as they are.
  */
-function withheldEngines(value: unknown, findings: SecretFinding[], perHost = false): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  if (perHost) {
-    // host_engines.<host>.<engine>.provider: each flagged engine of a host is withheld the same way.
-    const flagged = new Set(findings.map((f) => f.path.split('.').slice(1, 3).join('.')))
-    for (const [host, engines] of Object.entries(value as Record<string, unknown>)) {
-      const next: Record<string, unknown> = {}
-      for (const [id, entry] of Object.entries((engines ?? {}) as Record<string, unknown>)) {
-        next[id] = flagged.has(`${host}.${id}`) ? { provider: { withheld: true } } : entry
-      }
-      out[host] = next
-    }
-    return out
-  }
-  const flagged = new Set(findings.map((f) => f.path.split('.')[1]))
-  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
-    out[id] = flagged.has(id) ? { provider: { withheld: true } } : entry
-  }
-  return out
+function withheldEngines(value: unknown, perHost: boolean): Record<string, unknown> {
+  const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+  // Each engine entry is checked by itself, never by splitting a finding's path: a host key or an
+  // engine id may hold a '.' ("dev.box"), and a split path then matched no entry and withheld nothing.
+  const withhold = (engines: unknown): Record<string, unknown> => Object.fromEntries(Object.entries(isMap(engines) ? engines : {})
+    .map(([id, entry]) => [id, findSecrets(entry, id).length > 0 ? { provider: { withheld: true } } : entry]))
+  const all = (engines: unknown): Record<string, unknown> => Object.fromEntries(Object.keys(isMap(engines) ? engines : {}).map((id) => [id, { provider: { withheld: true } }]))
+  const src = isMap(value) ? value : {}
+  const out = perHost ? Object.fromEntries(Object.entries(src).map(([host, engines]) => [host, withhold(engines)])) : withhold(src)
+  // Anything still secret-shaped (outside an entry: a name): every entry is withheld, never sent.
+  if (findSecrets(out, perHost ? 'host_engines' : 'engines').length === 0) return out
+  return perHost ? Object.fromEntries(Object.entries(src).map(([host, engines]) => [host, all(engines)])) : all(src)
 }
 
 /** A row the host may write: an allowlisted key, its value already through the spec, nothing secret in it. */

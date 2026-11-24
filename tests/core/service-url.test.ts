@@ -4,14 +4,14 @@
  * module, so these cases are the contract for both sides.
  */
 import { describe, expect, it } from 'vitest'
-import { hostnamesMatch, isLoopbackHostname, parseServiceUrl } from '../../src/core/service-url.js'
+import { hostnamesMatch, isLoopbackHostname, isLoopbackUrl, parseServiceUrl } from '../../src/core/service-url.js'
 import { resolveServiceTarget } from '../../src/core/session-service-preview.js'
 
 describe('isLoopbackHostname', () => {
-  it.each(['localhost', 'LOCALHOST', 'app.localhost', '127.0.0.1', '127.1.2.3', '0.0.0.0', '::1', '[::1]', '::', '[::]'])(
+  it.each(['localhost', 'LOCALHOST', 'app.localhost', '127.0.0.1', '127.1.2.3', '0.0.0.0', '::1', '[::1]', '::', '[::]', '[::ffff:7f00:1]', '::ffff:127.0.0.1', '[::ffff:7f12:3]'])(
     '%s is loopback', (h) => expect(isLoopbackHostname(h)).toBe(true),
   )
-  it.each(['example.com', 'localhost.example.com', '10.0.0.1', '128.0.0.1', '127.0.0', 'mylocalhost', ''])(
+  it.each(['example.com', 'localhost.example.com', '10.0.0.1', '128.0.0.1', '127.0.0', 'mylocalhost', '', '[::ffff:a00:1]', '::ffff:10.0.0.1'])(
     '%s is not', (h) => expect(isLoopbackHostname(h)).toBe(false),
   )
 })
@@ -206,5 +206,12 @@ describe('resolveServiceTarget', () => {
       // Without its daemon's word (a link that is down), the real name is unknown: refused, as before.
       expect(resolveServiceTarget(url('http://joined-box-7.lan.example.test:5173/'), ctx('joined-box', {}))).toBeNull()
     })
+  })
+})
+
+describe('isLoopbackUrl', () => {
+  it('reads the host of a whole URL, an IPv4-mapped loopback included', () => {
+    for (const u of ['http://127.0.0.1:8402/v1', 'http://[::1]:9/v1', 'http://[::ffff:127.0.0.1]:9/v1', 'http://localhost/']) expect([u, isLoopbackUrl(u)]).toEqual([u, true])
+    for (const u of ['https://llm.example.com/v1', 'http://[::ffff:10.0.0.1]/', 'not a url', 42]) expect([u, isLoopbackUrl(u)]).toEqual([u, false])
   })
 })

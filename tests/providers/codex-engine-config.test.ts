@@ -23,6 +23,7 @@ import { AcpSession } from '../../src/providers/acp-session.js'
 import {
   CodexEngineConfigError,
   codexPickForProvider,
+  codexEnvAtPlace,
   codexProviderForPlace,
   mapCodexCatalog,
   readCodexEngineSettings,
@@ -263,36 +264,100 @@ describe('AcpSession: every Codex start carries the provider', () => {
 })
 
 /** A provider on this machine's own proxy: only the machine whose config it is can reach it. */
-const LOOPBACK = { base_url: 'http://127.0.0.1:8402/openai/v1', name: 'local-proxy', wire_api: 'responses' }
+const LOOPBACK = { base_url: 'http://127.0.0.1:8402/openai/v1', name: 'local-proxy', wire_api: 'responses', model_prefix: 'openai.' }
 /** A host's own proxy, at its own port. */
 const HOST_OWN = { base_url: 'http://127.0.0.1:18402/v1', name: 'host-relay' }
+/** engines.codex as the maintainer's primary writes it (2026-11-24): the env names the loopback provider too. */
+const REAL_SHAPED = {
+  provider: LOOPBACK, model: 'gpt-6.2-sol', effort: 'xhigh',
+  env: { MODEL_PROVIDER: 'local-proxy', CODEX_CONFIG: '{"model_context_window": 1000000}', SOME_SETTING: 'kept' },
+}
 
 describe('codexProviderForPlace: the provider for the machine Codex runs on', () => {
-  const providerOf = (out: { config: Record<string, unknown> }) =>
-    ((out.config.engines as Record<string, Record<string, unknown>> | undefined)?.codex ?? {}).provider
+  const codexOf = (out: { config: Record<string, unknown> }) =>
+    ((out.config.engines as Record<string, Record<string, unknown>> | undefined)?.codex ?? {})
+  const providerOf = (out: { config: Record<string, unknown> }) => codexOf(out).provider
+  /** The error a start at that place gets, or null when it starts. */
+  const refusalOf = (out: { config: Record<string, unknown> }): string | null => {
+    try { resolveCodexEngine(out.config, undefined); return null } catch (err) { expect(err).toBeInstanceOf(CodexEngineConfigError); return (err as Error).message }
+  }
 
   it('a host with its own provider gets it, over any global one', () => {
     const config = { engines: { codex: { provider: LOOPBACK, model: 'gpt-example' } }, hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } } } }
     const out = codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })
     expect(providerOf(out)).toEqual(HOST_OWN)
     expect(out.source).toEqual({ from: 'host', host: 'devbox' })
+    expect(refusalOf(out)).toBeNull()
     // The rest of engines.codex stays: a default model still applies there.
-    expect((out.config.engines as Record<string, Record<string, unknown>>).codex.model).toBe('gpt-example')
-    // Another host has none of its own: the global rule applies to it.
-    expect(providerOf(codexProviderForPlace(config, { host: 'other', configIsThisMachine: false }))).toBeUndefined()
+    expect(codexOf(out).model).toBe('gpt-example')
+    // Another host has none of its own: the global rule applies to it, a refusal.
+    expect(refusalOf(codexProviderForPlace(config, { host: 'other', configIsThisMachine: false }))).toMatch(/hosts:\n {2}other:\n/)
   })
 
-  it('a loopback global on another machine is not passed, and says so', () => {
-    for (const base_url of ['http://127.0.0.1:8402/v1', 'http://localhost:9000/v1', 'http://[::1]:9000/v1', 'http://127.1.2.3/v1']) {
+  it('a loopback global on another machine refuses the start, naming the host and the setting with an example', () => {
+    for (const base_url of ['http://127.0.0.1:8402/v1', 'http://localhost:9000/v1', 'http://[::1]:9000/v1', 'http://127.1.2.3/v1', 'http://[::ffff:127.0.0.1]:9000/v1']) {
       const out = codexProviderForPlace({ engines: { codex: { provider: { ...LOOPBACK, base_url } } } }, { host: 'devbox', configIsThisMachine: false })
-      expect(providerOf(out)).toBeUndefined()
-      expect(out.source).toEqual({ from: 'skipped-loopback', host: 'devbox', base_url })
+      expect(out.source).toEqual({ from: 'refused-loopback', host: 'devbox', name: 'local-proxy', base_url })
+      const why = refusalOf(out)!
+      expect(why).toContain('engines.codex: provider "local-proxy"')
+      expect(why).toContain('host "devbox"')
+      expect(why).toContain('hosts:\n  devbox:\n    engines:\n      codex:\n        provider:\n')
     }
   })
 
-  it('a non-loopback global reaches every host', () => {
-    const out = codexProviderForPlace({ engines: { codex: { provider: PROXY } } }, { host: 'devbox', configIsThisMachine: false })
-    expect(providerOf(out)).toEqual(PROXY)
+  it('the real-shaped config: on another host its MODEL_PROVIDER and CODEX_CONFIG entries for the loopback provider never go', () => {
+    const config = { engines: { codex: REAL_SHAPED }, hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } }, other: { hostname: 'other' } } }
+    // The host's own provider: MODEL_PROVIDER named the global one, so it is gone; the rest stays.
+    const own = codexOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false }))
+    expect(own.env).toEqual({ CODEX_CONFIG: '{"model_context_window":1000000}', SOME_SETTING: 'kept' })
+    const resolved = resolveCodexEngine({ engines: { codex: own } }, (own.env as Record<string, string>).CODEX_CONFIG)
+    expect(resolved.baseConfig).toMatchObject({ model_provider: 'host-relay', model: 'gpt-6.2-sol', model_context_window: 1000000 })
+    expect(JSON.stringify(resolved.baseConfig)).not.toContain(LOOPBACK.base_url)
+    // No provider of its own: refused, its env stripped all the same.
+    const other = codexProviderForPlace(config, { host: 'other', configIsThisMachine: false })
+    expect(refusalOf(other)).toContain('host "other"')
+    expect((codexOf(other).env as Record<string, string>).MODEL_PROVIDER).toBeUndefined()
+    // This machine keeps it all.
+    expect(codexOf(codexProviderForPlace(config, { configIsThisMachine: true })).env).toEqual(REAL_SHAPED.env)
+  })
+
+  it('every env entry tied to the global provider is left out where it is not used, and nothing else', () => {
+    const global = { ...LOOPBACK, env_key: 'LOCAL_PROXY_KEY' }
+    const env = {
+      MODEL_PROVIDER: 'local-proxy',
+      LOCAL_PROXY_KEY: 'k-1',
+      OPENAI_BASE_URL: 'http://127.0.0.1:8402/openai/v1',
+      CODEX_CONFIG: JSON.stringify({
+        model_provider: 'local-proxy', model_context_window: 1000000,
+        model_providers: { 'local-proxy': { base_url: 'http://127.0.0.1:8402/openai/v1' }, 'same-url': { base_url: 'http://127.0.0.1:8402/openai/v1/' }, other: { base_url: 'https://other.example.com/v1' } },
+      }),
+      UNRELATED: 'stays',
+    }
+    const config = { engines: { codex: { provider: global, env } }, hosts: { devbox: { hostname: 'd', engines: { codex: { provider: HOST_OWN } } } } }
+    const out = codexOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })).env as Record<string, string>
+    expect(Object.keys(out).sort()).toEqual(['CODEX_CONFIG', 'UNRELATED'])
+    expect(JSON.parse(out.CODEX_CONFIG)).toEqual({ model_context_window: 1000000, model_providers: { other: { base_url: 'https://other.example.com/v1' } } })
+    // A host provider of the same name and key variable keeps both: they name the one used.
+    const same = { ...config, hosts: { devbox: { hostname: 'd', engines: { codex: { provider: { ...HOST_OWN, name: 'local-proxy', env_key: 'LOCAL_PROXY_KEY' } } } } } }
+    const kept = codexOf(codexProviderForPlace(same, { host: 'devbox', configIsThisMachine: false })).env as Record<string, string>
+    expect(kept.MODEL_PROVIDER).toBe('local-proxy')
+    expect(kept.LOCAL_PROXY_KEY).toBe('k-1')
+  })
+
+  it('an engine env overlay built elsewhere is stripped the same at a host, and kept where the global is used', () => {
+    const config = { engines: { codex: REAL_SHAPED }, hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } } } }
+    const overlay = { MODEL_PROVIDER: 'local-proxy', CODEX_CONFIG: '{"model_context_window":1000000}', SOME_SETTING: 'kept' }
+    const atHost = codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false }).config
+    expect(codexEnvAtPlace(overlay, atHost)).toEqual({ CODEX_CONFIG: '{"model_context_window":1000000}', SOME_SETTING: 'kept' })
+    const here = codexProviderForPlace(config, { configIsThisMachine: true }).config
+    expect(codexEnvAtPlace(overlay, here)).toBe(overlay)
+    expect(codexEnvAtPlace(undefined, atHost)).toBeUndefined()
+  })
+
+  it('a non-loopback global reaches every host, with its env', () => {
+    const config = { engines: { codex: { provider: PROXY, env: { MODEL_PROVIDER: 'my-proxy' } } } }
+    const out = codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })
+    expect(out.config).toBe(config)
     expect(out.source).toEqual({ from: 'global' })
   })
 
@@ -311,8 +376,8 @@ describe('codexProviderForPlace: the provider for the machine Codex runs on', ()
     // Its own key wins over an alias's.
     const both = { ...config, hosts: { ...config.hosts, devbox: { hostname: 'x', engines: { codex: { provider: PROXY } } } } }
     expect(providerOf(codexProviderForPlace(both, { host: 'devbox', aliases: ['devbox-ssh'], configIsThisMachine: false }))).toEqual(PROXY)
-    // No proven alias: not found.
-    expect(providerOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false }))).toBeUndefined()
+    // No proven alias: not found, so refused.
+    expect(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false }).source.from).toBe('refused-loopback')
   })
 
   it('nothing set: nothing changes', () => {
@@ -322,29 +387,36 @@ describe('codexProviderForPlace: the provider for the machine Codex runs on', ()
 })
 
 describe('AcpSession: the provider is the one for the host the session runs on', () => {
-  it('a loopback global reaches a start here but not one on another host, whose own config.toml then decides', async () => {
-    await updateConfig({ engines: { codex: { provider: LOOPBACK } } } as never)
+  it('a loopback global reaches a start here; on another host with none of its own the start is refused and sends nothing', async () => {
+    await updateConfig({ engines: { codex: REAL_SHAPED } } as never)
     expect(codexConfigOf(await startEnv())).toMatchObject({ model_provider: 'local-proxy' })
-    const remote = codexConfigOf(await startEnv({ host: 'devbox' }))
-    expect(remote?.model_provider).toBeUndefined()
-    expect(remote?.model_providers).toBeUndefined()
+    await expect(startEnv({ host: 'devbox' })).rejects.toThrow(/hosts\.<name>|hosts:\n {2}devbox:/)
   })
 
-  it('a host with its own provider starts on it; this machine keeps the global one', async () => {
-    await updateConfig({ engines: { codex: { provider: LOOPBACK } }, hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } } } } as never)
-    expect(codexConfigOf(await startEnv({ host: 'devbox' }))).toMatchObject({
+  it('a host with its own provider starts on it, without the env that named the global one; this machine keeps the global one', async () => {
+    await updateConfig({ engines: { codex: REAL_SHAPED }, hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } } } } as never)
+    const remote = await startEnv({ host: 'devbox' })
+    expect(codexConfigOf(remote)).toMatchObject({
       model_provider: 'host-relay',
       model_providers: { 'host-relay': { base_url: 'http://127.0.0.1:18402/v1', wire_api: 'responses', requires_openai_auth: false } },
+      model_context_window: 1000000,
     })
-    expect(codexConfigOf(await startEnv())).toMatchObject({ model_provider: 'local-proxy' })
+    expect(remote.MODEL_PROVIDER).toBeUndefined()
+    expect(remote.SOME_SETTING).toBe('kept')
+    expect(JSON.stringify(remote)).not.toContain(LOOPBACK.base_url)
+    const local = await startEnv()
+    expect(codexConfigOf(local)).toMatchObject({ model_provider: 'local-proxy' })
+    expect(local.MODEL_PROVIDER).toBe('local-proxy')
   })
 
   it('the host\'s own model_prefix applies to a pick there, the global one\'s here', async () => {
-    await updateConfig({ engines: { codex: { provider: { ...LOOPBACK, model_prefix: 'global.' } } }, hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: { ...HOST_OWN, model_prefix: 'vendor.' } } } } } } as never)
+    await updateConfig({ engines: { codex: { provider: LOOPBACK } }, hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: { ...HOST_OWN, model_prefix: 'vendor.' } } } }, plain: { hostname: 'plain', engines: { codex: { provider: HOST_OWN } } } } } as never)
     expect(codexConfigOf(await startEnv({ host: 'devbox', acpConfig: { model: 'gpt-x' } }))).toMatchObject({ model: 'vendor.gpt-x', model_provider: 'host-relay' })
-    expect(codexConfigOf(await startEnv({ acpConfig: { model: 'gpt-x' } }))).toMatchObject({ model: 'global.gpt-x', model_provider: 'local-proxy' })
-    // A loopback global with no host provider: no prefix either (it belongs to a provider not used there).
-    expect((await startEnv({ host: 'elsewhere', acpConfig: { model: 'gpt-x' } })).WALNUT_CODEX_MODEL_PREFIX).toBeUndefined()
+    expect(codexConfigOf(await startEnv({ acpConfig: { model: 'gpt-x' } }))).toMatchObject({ model: 'openai.gpt-x', model_provider: 'local-proxy' })
+    // A host provider with no prefix of its own gets none (the global one's is that provider's).
+    const plain = await startEnv({ host: 'plain', acpConfig: { model: 'gpt-x' } })
+    expect(plain.WALNUT_CODEX_MODEL_PREFIX).toBeUndefined()
+    expect(codexConfigOf(plain)).toMatchObject({ model: 'gpt-x', model_provider: 'host-relay' })
   })
 })
 

@@ -68,16 +68,31 @@ export interface CodexSpawnPlace { host: string | undefined }
 
 const noted = new Set<string>()
 
-/** One line per host and URL: the global loopback provider was not used there, and why. */
+/** One line per host and URL: a Codex start there was refused, and why (the start itself says so to the session). */
 function noteSource(source: CodexProviderSource, log: (msg: string, meta: Record<string, unknown>) => void): void {
-  if (source.from !== 'skipped-loopback') return
+  if (source.from !== 'refused-loopback') return
   const key = `${source.host ?? ''}|${source.base_url}`
   if (noted.has(key)) return
   noted.add(key)
-  log('codex: the global engines.codex.provider was not used on this host: its base_url names the machine of the config it comes from (a loopback address), which is not this host; Codex uses the host\'s own ~/.codex/config.toml. Set hosts.<name>.engines.codex.provider for this host to route it elsewhere', {
-    host: source.host ?? '(this server)', base_url: source.base_url,
+  log('codex: a start was refused: the global engines.codex.provider is a loopback address of the machine whose config it is, which is not this host, and the host has no provider of its own (hosts.<name>.engines.codex.provider)', {
+    host: source.host ?? '(this server)', provider: source.name, base_url: source.base_url,
   })
 }
+
+/** This leader's own daemon link is up (dialled now when it is not, within a few seconds); false when it cannot be. */
+async function localDaemonLinked(): Promise<boolean> {
+  try {
+    const { getLocalDaemonConnection } = await import('./local-daemon-dial.js')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), LOCAL_LINK_DEADLINE_MS) })
+    const linked = await Promise.race([getLocalDaemonConnection().then(() => true, () => false), deadline])
+    clearTimeout(timer)
+    return linked
+  } catch {
+    return false
+  }
+}
+const LOCAL_LINK_DEADLINE_MS = 5_000
 
 /** Tests only. */
 export function _resetCodexSourceNotesForTesting(): void { noted.clear() }
@@ -105,10 +120,17 @@ export async function codexWalnutConfig(place: CodexSpawnPlace): Promise<Record<
   // The host's other names, and whether it is this leader's own machine: only the tie the
   // leader's own links prove (one live daemon process, revoked-hosts.ts sameDaemonKeysNow).
   const { sameDaemonKeysNow } = await import('../core/session-channel/revoked-hosts.js')
-  const ties = host ? sameDaemonKeysNow(host) : []
-  const thisMachine = !follower && (!remote || ties.includes('__local__'))
-  const resolved = codexProviderForPlace(config, { host, aliases: ties.filter((k) => k !== '__local__'), configIsThisMachine: thisMachine })
-  if (resolved.source.from === 'skipped-loopback') {
+  const resolve = () => {
+    const ties = host ? sameDaemonKeysNow(host) : []
+    const thisMachine = !follower && (!remote || ties.includes('__local__'))
+    return codexProviderForPlace(config, { host, aliases: ties.filter((k) => k !== '__local__'), configIsThisMachine: thisMachine })
+  }
+  let resolved = resolve()
+  // A host key that may be this leader's own machine is told apart only by both daemon links being
+  // up (a start dials the host's before it builds the env; this leader's own may not be up yet,
+  // right after a restart): this leader's own is dialled before a refusal stands.
+  if (resolved.source.from === 'refused-loopback' && !follower && remote && await localDaemonLinked()) resolved = resolve()
+  if (resolved.source.from === 'refused-loopback') {
     const { log } = await import('../logging/index.js')
     noteSource(resolved.source, (msg, meta) => log.session.warn(msg, meta))
   }

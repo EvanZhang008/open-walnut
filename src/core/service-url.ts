@@ -11,12 +11,14 @@ export function bareHost(hostname: string): string {
   return hostname.replace(/^\[|\]$/g, '').toLowerCase()
 }
 
-/** localhost, *.localhost, 127.0.0.0/8, the wildcard binds, and ::1. */
+/** localhost, *.localhost, 127.0.0.0/8 (also as an IPv4-mapped IPv6 address), the wildcard binds, and ::1. */
 export function isLoopbackHostname(hostname: string): boolean {
   const h = bareHost(hostname)
   return h === 'localhost'
     || h.endsWith('.localhost')
     || /^127(?:\.\d{1,3}){3}$/.test(h)
+    // ::ffff:127.0.0.1, which a URL writes as ::ffff:7f00:1.
+    || /^::ffff:(?:127(?:\.\d{1,3}){3}|7f[0-9a-f]{2}:[0-9a-f]{1,4})$/.test(h)
     || h === '0.0.0.0'
     || h === '::1'
     || h === '::'
