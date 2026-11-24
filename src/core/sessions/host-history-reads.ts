@@ -33,6 +33,12 @@
  *
  * A host that refuses a read as not its own (it gave the session back) or does not know the
  * member is read here; the not-own refusal also tells the leader (session-channel/leader-boot.ts).
+ *
+ * A host that cannot answer is a state of the host, not of one read: it logs once per episode
+ * (from its first degraded read until it answers again), never once per read (2026-11-24: every
+ * poll of a clouddev session in the windows of a leader restart wrote a warn, 44 an hour on a
+ * day of many deploys). The leader's own windows (stopping, and starting until the host's first
+ * report, at most BOOT_GRACE_MS) are expected and log at info; only a real outage warns.
  */
 import { inTranscriptReadOf } from '../../providers/line-parse-count.js'
 import type { HostHistoryRead } from '../session-channel/host-calls.js'
@@ -64,6 +70,16 @@ let known: Set<string> | null = null
 let knownLoad: Promise<Set<string>> | null = null
 let forceHere = false
 let deadlineMs = HOST_HISTORY_DEADLINE_MS
+/** After the leader side starts, how long a host known on disk may go without its first report before its stale reads warn. */
+export const BOOT_GRACE_MS = 180_000
+let bootGraceMs = BOOT_GRACE_MS
+/** When the caller was installed (the leader side started; module load until then), and the hosts that reported since. */
+let callerSince = Date.now()
+/** The leader side stopped (its caller was removed): reads until this process exits are expected to degrade. */
+let stopped = false
+const reportedSince = new Set<string>()
+/** Each host's current degraded episode: when it began, the reads it answered degraded, and whether it warned. */
+const episodes = new Map<string, { since: number; reads: number; warned: boolean }>()
 
 /** The answers kept here: key (sid, reader, arguments) -> the host's version and the decoded value. Oldest first. */
 const kept = new Map<string, { sid: string; member: HostHistoryRead; version: string; value: unknown; chars: number }>()
@@ -73,6 +89,9 @@ const inflight = new Map<string, Promise<unknown>>()
 /** Installed by the leader side (session-channel/leader-boot.ts); null when it stops. */
 export function setHostHistoryCaller(fn: Caller | null): void {
   caller = fn
+  if (fn) callerSince = Date.now()
+  stopped = !fn
+  reportedSince.clear()
   if (!fn) answering.clear()
 }
 
@@ -81,8 +100,13 @@ export function setHostHistoryCaller(fn: Caller | null): void {
  * running without it (`old`: an older service, read here as before), or not running (`down`).
  */
 export function noteHostReadsHistory(host: string, state: 'answers' | 'old' | 'down'): void {
+  const was = answering.has(host)
   if (state === 'answers') answering.add(host)
   else answering.delete(host)
+  // A host's first report after the leader started ends its expected window, whatever it says.
+  if (state !== 'down' || Date.now() - callerSince >= bootGraceMs) reportedSince.add(host)
+  // Only a change ends an episode: a host whose calls fail keeps reporting `answers` (every view patch).
+  if (state === 'old' || (state === 'answers' && !was)) void recovered(host)
   if (state === 'down') return
   void knownHosts().then((k) => {
     if ((state === 'answers') === k.has(host)) return
@@ -164,7 +188,7 @@ async function viaHost<T>(sid: string, host: string, member: HostHistoryRead, ex
   const way = await wayOf(sid, host, extra)
   if (way === 'here') return inTranscriptReadOf(sid, here)
   const key = `${sid}\u0000${member}\u0000${JSON.stringify(extra)}`
-  if (way === 'stale') return await unavailable(key, member, `the host ${host} does not answer reads now`, true) as T
+  if (way === 'stale') return await unavailable(host, key, member, `the host ${host} does not answer reads now`, true) as T
   const shared = inflight.get(key)
   if (shared) return await shared as T
   const run = readOnHost(sid, host, member, extra, key)
@@ -195,15 +219,16 @@ async function readOnHost(sid: string, host: string, member: HostHistoryRead, ex
     if (READ_HERE.test(msg)) return READ_HERE_MARK
     // Gave up: the host drops what it still makes or holds of this read, and nothing late is parsed here.
     void caller?.(host, { sid, target: 'history', member: 'cancelRead', args: [id] }, 10_000).catch(() => {})
-    return unavailable(key, member, `the host ${host} did not answer the read of ${sid}: ${msg}`, linkFailureKind(err) !== null)
+    return unavailable(host, key, member, `the host ${host} did not answer the read of ${sid}: ${msg}`, linkFailureKind(err) !== null)
   }
+  if (answer.k === 'same' || answer.k === 'full') void recovered(host)
   if (answer.k === 'same') {
     const entry = kept.get(key)!
     kept.delete(key)
     kept.set(key, entry)
     return entry.value
   }
-  if (answer.k !== 'full') return unavailable(key, member, `the host ${host} answered ${answer.k}`)
+  if (answer.k !== 'full') return unavailable(host, key, member, `the host ${host} answered ${answer.k}`)
   const value = await fromWire(answer.wire)
   keep(key, { sid, member, version: answer.version, value, chars: answer.chars })
   // The last whole conversation the host answered: what a later failed read shows after a restart (history-disk-cache.ts).
@@ -260,12 +285,46 @@ function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
+ * Why a degraded read of `host` is expected now: the leader side is stopping (no caller), or it
+ * started moments ago and the host has not reported yet. Null: the host itself is out.
+ */
+function expectedWindow(host: string): 'leader stopping' | 'leader starting' | null {
+  if (!caller && stopped) return 'leader stopping'
+  if (!reportedSince.has(host) && Date.now() - callerSince < bootGraceMs) return 'leader starting'
+  return null
+}
+
+/** Count a degraded read in its host's episode; log only its first read (and the first one past an expected window). */
+async function noteDegraded(host: string, member: HostHistoryRead, why: string, hadKept: boolean): Promise<void> {
+  const expected = expectedWindow(host)
+  let ep = episodes.get(host)
+  const first = !ep
+  if (!ep) episodes.set(host, ep = { since: Date.now(), reads: 0, warned: false })
+  ep.reads++
+  const warn = !expected && !ep.warned
+  if (!first && !warn) return
+  if (warn) ep.warned = true
+  const { log } = await import('../../logging/index.js')
+  const data = { host, member, why, kept: hadKept, ...(expected ? { expected } : {}), reads: ep.reads }
+  if (warn) log.session.warn('host history read degraded', data)
+  else log.session.info('host history read degraded', data)
+}
+
+/** The host answers again: its episode ends, with one line saying how many reads it answered degraded. */
+async function recovered(host: string): Promise<void> {
+  const ep = episodes.get(host)
+  if (!ep) return
+  episodes.delete(host)
+  const { log } = await import('../../logging/index.js')
+  log.session.info('host history reads answered again', { host, degradedReads: ep.reads, ms: Date.now() - ep.since })
+}
+
+/**
  * The host cannot answer now: the last answer kept here, else the reader's failed read. The whole
  * history always throws, so its callers say "stale" over the copy they find (getCachedSessionHistory).
  */
-async function unavailable(key: string, member: HostHistoryRead, why: string, unreachable = false): Promise<unknown> {
-  const { log } = await import('../../logging/index.js')
-  log.session.warn('host history read degraded', { member, why, kept: kept.has(key) })
+async function unavailable(host: string, key: string, member: HostHistoryRead, why: string, unreachable = false): Promise<unknown> {
+  await noteDegraded(host, member, why, kept.has(key))
   if (member !== 'readSessionHistory' && kept.has(key)) return kept.get(key)!.value
   switch (member) {
     case 'readSessionHistoryTailWindow': case 'extractPlanContent': case 'reconstructWorkflowProgress': case 'readHistoryReachingAnchor':
@@ -319,6 +378,11 @@ export function _setHostHistoryDeadlineForTesting(ms: number | null): void {
   deadlineMs = ms ?? HOST_HISTORY_DEADLINE_MS
 }
 
+/** Tests: a shorter window after the leader side starts (null: the default). */
+export function _setBootGraceForTesting(ms: number | null): void {
+  bootGraceMs = ms ?? BOOT_GRACE_MS
+}
+
 /** Tests: forget the kept answers, the hosts known to answer, and the switches above. */
 export async function _resetHostHistoryReadsForTesting(): Promise<void> {
   await writing
@@ -326,6 +390,11 @@ export async function _resetHostHistoryReadsForTesting(): Promise<void> {
   keptChars = 0
   inflight.clear()
   answering.clear()
+  reportedSince.clear()
+  episodes.clear()
+  callerSince = Date.now()
+  stopped = false
+  bootGraceMs = BOOT_GRACE_MS
   known = null
   knownLoad = null
   forceHere = false
