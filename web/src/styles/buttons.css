@@ -217,6 +217,16 @@
   text-align: left;
   border-radius: var(--radius-sm);
 }
+/* A quiet full-width key that is a menu's row (role=menuitem, Up and Down move DOM focus onto it) is
+   lit where the keyboard is, with the menu row's fill, and only one row is lit: the pointer's row wins
+   while it is over the menu. The rows' own fills went with the button family (8c22324753), which left
+   the Ask choice with no lit row at all. Guard: tests/web/menu-row-focus-fill-guard.test.ts. */
+.btn-block.btn-ghost:is([role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox']):is(:focus, :hover):not(:disabled) {
+  background: var(--bg-hover);
+}
+[role='menu']:hover > .btn-block.btn-ghost:is([role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox']):focus:not(:hover) {
+  background: transparent;
+}
 
 /* ── Compound trigger slots: "Cost $2077 v" is .btn > label, .btn-value, .btn-caret ── */
 .btn .btn-value {
