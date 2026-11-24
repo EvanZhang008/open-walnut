@@ -19,8 +19,10 @@ import {
   _stallRecorderStats,
   _rotateNowForTest,
   _recorderObserverForTest,
+  keepProfileForBurst,
   type ProfilerDriver,
 } from '../../src/core/stall-recorder.js'
+import { profileTopFrames } from '../../src/core/stall-recorder-burst.js'
 import {
   setProbeObserver,
   startEventLoopMonitor,
@@ -131,6 +133,19 @@ describe('profile windows', () => {
     expect(_stallRecorderStats().rotations).toBe(2)
     expect(_stallRecorderStats().previousHeld).toBe(true)
     expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([])
+  })
+
+  // 2026-11-24: the live heap grew 2 GB in 36 s with no stall, so no profile said what ran.
+  it('a memory burst keeps the window before it and the one it fell in, once per ten minutes', async () => {
+    const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {})
+    await _rotateNowForTest()
+    expect(keepProfileForBurst({ rssMb: 6000, riseMb: 3000 })).toBe(true)
+    expect(keepProfileForBurst({ rssMb: 7000, riseMb: 4000 })).toBe(false)
+    await _rotateNowForTest()
+    const files = await waitForFiles(2)
+    expect(files.filter((f) => f.startsWith('stall-burst-'))).toHaveLength(2)
+    const lines = warn.mock.calls.filter((c) => c[0] === 'memory burst profile')
+    expect(lines.map((c) => (c[1] as { self: Array<[string, number]> }).self[0]![0]).sort()).toEqual(['window1:1', 'window2:1'])
   })
 
   it('keeps the CURRENT window for a stall whose due time is after the last rotation', async () => {
@@ -324,5 +339,19 @@ describe('paging baseline', () => {
     refreshVmBaseline(61_000, failing)
     expect(reads).toBe(2)
     resetSystemContext()
+  })
+})
+
+describe('profileTopFrames', () => {
+  it('counts each function once per sample, on top and anywhere on the stack, idle left out', () => {
+    const f = (id: number, functionName: string, children: number[] = [], lineNumber = 9) => ({ id, callFrame: { functionName, url: '', lineNumber, columnNumber: 0 }, children })
+    const profile = {
+      nodes: [f(1, '(root)', [2, 5]), f(2, 'route', [3]), f(3, 'parse', [4]), f(4, 'parse'), f(5, '(idle)')],
+      startTime: 0, endTime: 4, samples: [4, 3, 2, 5], timeDeltas: [1, 1, 1, 1],
+    }
+    const top = profileTopFrames(profile)
+    expect(top.samples).toBe(4)
+    expect(top.self).toEqual([['parse:10', 0.5], ['route:10', 0.25]])
+    expect(top.total).toEqual([['route:10', 0.75], ['parse:10', 0.5]])
   })
 })

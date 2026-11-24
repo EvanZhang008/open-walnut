@@ -1222,16 +1222,21 @@ interface PassInputs {
 
 /** Read what a pass derives `ids` (null: every open task) from; null when none is open. */
 async function readPass(ids: ReadonlySet<string> | null): Promise<PassInputs | null> {
-  const { listTasks } = await import('./task-manager.js');
+  const { taskStoreForReplica } = await import('./task-manager.js');
   const t0 = Date.now();
-  const everything = await listTasks();
+  // The store's own rows (a write replaces a row, never edits it): the pass copies only the tasks
+  // it derives, which it may write a status onto. A copy of the whole board per pass was about 480
+  // copies of 8k tasks in ten minutes after a restart (2026-11-24, the taskCopiesBy note).
+  const view = (await taskStoreForReplica()).tasks;
   const { getConfig } = await import('./config-manager.js');
   const followWorkers = experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
   // While the experiment is on, a changed task's open ancestors are derived in the same pass,
   // children first (childrenFirst below), so a nested change reaches the top in one pass.
-  const wanted = ids && followWorkers ? withAncestors(ids, everything) : ids;
-  const targets = everything.filter((t) => (wanted ? wanted.has(t.id) : true) && openLeader(t));
-  if (!targets.length) return null;
+  const wanted = ids && followWorkers ? withAncestors(ids, view) : ids;
+  const targetIds = new Set(view.filter((t) => (wanted ? wanted.has(t.id) : true) && openLeader(t)).map((t) => t.id));
+  if (!targetIds.size) return null;
+  const everything: Task[] = view.map((t) => (targetIds.has(t.id) ? { ...t } : t));
+  const targets = everything.filter((t) => targetIds.has(t.id));
   const t1 = Date.now();
   const facts = await readStatusFacts(targets, everything.map((t) => t.id), followWorkers, everything);
   const t2 = Date.now();

@@ -10,7 +10,7 @@ import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
   memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, GC_NUDGE_RISE_MB, nudgeGcOnRise, _resetMemoryLedgerForTesting,
   writeHeapSnapshot, SNAPSHOT_EVERY_MS, copyCallerCounter,
-  watchMemoryBurst, startMemoryBurstProbe, BURST_PROBE_EVERY_MS, BURST_HEAP_WALK_MB, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
+  watchMemoryBurst, startMemoryBurstProbe, BURST_PROBE_EVERY_MS, BURST_HEAP_WALK_MB, registerBurstContext, onMemoryBurst, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
 
@@ -230,6 +230,20 @@ describe('watchMemoryBurst', () => {
     } finally { off(); warn.mockRestore(); }
   });
 });
+
+describe('onMemoryBurst', () => {
+  it('hears each logged burst with its footprint and rise', async () => {
+    const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {})
+    const heard: Array<{ rssMb: number; riseMb: number }> = []
+    const off = onMemoryBurst((b) => { heard.push(b) })
+    try {
+      const t0 = 3_000_000_000
+      await watchMemoryBurst(t0, 1000)
+      await watchMemoryBurst(t0 + 2000, 1000 + BURST_RISE_MB + 500)
+      expect(heard).toEqual([{ rssMb: 1000 + BURST_RISE_MB + 500, riseMb: BURST_RISE_MB + 500 }])
+    } finally { off(); warn.mockRestore() }
+  })
+})
 
 describe('startMemoryBurstProbe', () => {
   // 2026-11-23 17:09: the footprint went 0.9 to 5.8 GB and back within 30 s; the 30 s health

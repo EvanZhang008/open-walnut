@@ -77,7 +77,8 @@ import { cpuCheckpoint, cpuCheckpoints, startCpuCheckpoints, stopCpuCheckpoints 
 import { refreshVmBaseline, resetSystemContext, sampleMemContext } from './stall-recorder-system.js';
 import { pruneStallDir, writeWhole } from './stall-recorder-retention.js';
 import { connectInspectorDriver, stallViews, type CpuProfile, type ProfilerDriver } from './stall-recorder-profiler.js';
-import { processMemoryMb } from './observability/memory-ledger.js';
+import { onMemoryBurst, processMemoryMb } from './observability/memory-ledger.js';
+import { BURST_KEEP_EVERY_MS, profileTopFrames } from './stall-recorder-burst.js';
 
 export type { CpuProfile, ProfilerDriver } from './stall-recorder-profiler.js';
 export { holdVerdict, profileHoldShare, type HoldContext, type HoldVerdict, type ProfileHold } from './stall-recorder-hold.js';
@@ -127,7 +128,11 @@ interface WindowRec {
   /** startMono in microseconds, measured around the profile's begin (for clock calibration). */
   startMonoUs: number;
   stalls: StallReport[];
+  /** A memory burst fell in this window: it is kept as a burst profile (stall-recorder-burst.ts). */
+  burst?: BurstInfo;
 }
+
+interface BurstInfo { at: number; rssMb: number; riseMb: number }
 
 interface HeldProfile {
   profile: CpuProfile;
@@ -255,6 +260,9 @@ async function rotate(): Promise<void> {
     if (win.stalls.length > 0) {
       previous = null;
       void keep(held);
+    } else if (win.burst) {
+      previous = null;
+      void keepBurst(held, win.burst);
     } else {
       // Kept one window back: a stall whose probe fires just after this
       // rotation (both timers expire at the end of the same hold) claims it.
@@ -305,6 +313,44 @@ function onStalls(reports: StallReport[]): void {
     scheduleRotate(opts.postStallMs);
   }
   if (unfiled.length > 0) setTimeout(() => { void emitRecord(unfiled, null, 'window-gone'); }, 100).unref?.();
+}
+
+let lastBurstKeepAt = -Infinity;
+let stopBurstHook: (() => void) | null = null;
+
+/**
+ * A memory burst keeps the window it fell in and the one before it (the rise built up over
+ * both), at most one burst every BURST_KEEP_EVERY_MS. True when it was taken.
+ */
+export function keepProfileForBurst(info: { rssMb: number; riseMb: number }, now = Date.now()): boolean {
+  if (!running || !driver || now - lastBurstKeepAt < BURST_KEEP_EVERY_MS) return false;
+  lastBurstKeepAt = now;
+  const burst = { at: now, ...info };
+  if (previous) { const held = previous; previous = null; void keepBurst(held, burst); }
+  if (current) { current.burst = burst; scheduleRotate(opts.postStallMs); }
+  return true;
+}
+
+/** Write one burst window, and log the functions it spent its time in. */
+async function keepBurst(held: HeldProfile, burst: BurstInfo): Promise<void> {
+  const now = Date.now();
+  writesThisHour = writesThisHour.filter((t) => now - t < 3_600_000);
+  if (writesThisHour.length >= opts.maxPerHour) { stats.skippedRate += 1; return; }
+  writesThisHour.push(now);
+  const base = `stall-burst-${stamp(new Date(burst.at))}-${burst.rssMb}mb-${process.pid}-${held.win.title.split('-').pop()}`;
+  const file = path.join(opts.dir, `${base}.cpuprofile`);
+  try {
+    const top = profileTopFrames(held.profile);
+    await fsp.mkdir(opts.dir, { recursive: true });
+    await writeWhole(file, JSON.stringify(held.profile));
+    await writeWhole(path.join(opts.dir, `${base}.json`), JSON.stringify({ version: 1, pid: process.pid, burst, window: { startMono: held.win.startMono, endMono: held.endMono }, top }, null, 2));
+    stats.kept += 1;
+    log.obs.warn('memory burst profile', { ...burst, file, samples: top.samples, self: top.self, total: top.total });
+    await prune();
+  } catch (err) {
+    stats.errors += 1;
+    log.web.warn('stall recorder: could not write a burst profile', { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 function stamp(d: Date): string {
@@ -449,6 +495,7 @@ export async function startStallRecorder(options: StallRecorderOptions = {}): Pr
     profile: options.profile ?? envFlag('WALNUT_STALL_PROFILE') !== '0',
   };
   running = true;
+  stopBurstHook ??= onMemoryBurst((b) => { keepProfileForBurst(b); });
   // A crash's leftovers (and anything past retention) go at start, not only
   // after the next kept stall.
   void prune().catch(() => { /* best effort */ });
@@ -504,6 +551,9 @@ function memoryFields(): Record<string, number> {
 export async function stopStallRecorder(): Promise<void> {
   if (!running) return;
   running = false;
+  stopBurstHook?.();
+  stopBurstHook = null;
+  lastBurstKeepAt = -Infinity;
   setProbeObserver(null);
   if (rotateTimer) { clearTimeout(rotateTimer); rotateTimer = null; }
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }

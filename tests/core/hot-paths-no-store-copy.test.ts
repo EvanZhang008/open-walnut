@@ -1,4 +1,6 @@
 /**
+ * The readers that run on every change read the stores' own rows and copy only what they keep.
+ *
  * A host slice is rebuilt on every task and session change, for every connected host: it reads the
  * stores' own rows and copies only what it ships. 2026-11-24: buildHostSlice copied all ~7.5k
  * session rows (listSessions) and, with a lead in the slice, all ~8k tasks (listTasks) per build;
@@ -9,6 +11,16 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const SRC = path.resolve(__dirname, '../../src/core/host-slice.ts')
+/** Hot functions outside host-slice.ts, by file: the status pass's read runs on every task change
+ *  (2026-11-24: about 480 copies of the whole board in ten minutes after a restart). */
+const HOT_FUNCTIONS: Record<string, string[]> = { 'src/core/user-status-sync.ts': ['readPass'] }
+const bodyOf = (src: string, fn: string): string => {
+  const start = src.search(new RegExp(`(async )?function ${fn}\\(`))
+  if (start < 0) return ''
+  const next = src.slice(start + 1).search(/\n(export )?(async )?function /)
+  return src.slice(start, next < 0 ? undefined : start + 1 + next)
+}
+const strip = (src: string) => src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
 /** Every reader that hands out a copy of a whole store. */
 const WHOLE_STORE_COPIES = ['listSessions', 'listTasks', 'listTasksSlim']
 
@@ -17,6 +29,18 @@ describe('the host slice reads the stores without copying them', () => {
     const src = fs.readFileSync(SRC, 'utf8').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
     const used = WHOLE_STORE_COPIES.filter((name) => new RegExp(`\\b${name}\\(`).test(src))
     expect(used, 'read sessionRowsForReplica / taskStoreForReplica (read only) instead').toEqual([])
+  })
+
+  it('the status pass reads the board without copying it', () => {
+    for (const [rel, fns] of Object.entries(HOT_FUNCTIONS)) {
+      const src = strip(fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8'))
+      for (const fn of fns) {
+        const body = bodyOf(src, fn)
+        expect(body, `${rel} ${fn} not found`).not.toBe('')
+        const used = WHOLE_STORE_COPIES.filter((name) => new RegExp(`\\b${name}\\(`).test(body))
+        expect(used, `${rel} ${fn}: read taskStoreForReplica (read only) and copy only what it writes`).toEqual([])
+      }
+    }
   })
 
   it('the readers it uses instead exist', () => {

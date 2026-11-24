@@ -342,6 +342,13 @@ export function registerBurstContext(name: string, read: () => unknown): () => v
   return () => { if (burstContexts.get(name) === read) burstContexts.delete(name); };
 }
 
+const burstHooks = new Set<(b: { rssMb: number; riseMb: number }) => void>();
+/** Called on each logged burst (the stall recorder keeps its CPU profile window). Returns its stop. */
+export function onMemoryBurst(fn: (b: { rssMb: number; riseMb: number }) => void): () => void {
+  burstHooks.add(fn);
+  return () => { burstHooks.delete(fn); };
+}
+
 const recentRss: Array<{ at: number; rssMb: number }> = [];
 let lastBurstAt = -Infinity;
 let lastBurstRssMb = Infinity;
@@ -386,6 +393,7 @@ export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb
     holdersMb: Math.round(readMemoryHolders().reduce((n, r) => n + r.bytes, 0) / MB),
     ...(u ? { engineMb: mb(u.current), engineCommitMb: mb(u.currentCommit) } : {}), ...(heap ? { heap } : {}), context,
   });
+  for (const fn of burstHooks) { try { fn({ rssMb, riseMb: rssMb - low }); } catch { /* a hook never stops the line */ } }
   return true;
 }
 
