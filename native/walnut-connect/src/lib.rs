@@ -79,7 +79,7 @@ pub fn start(config: &str) -> Value {
 }
 
 /// The port the running connector's listener holds now; 0 while none does (not running, the
-/// listener lost, a rebind under way). The app sends nothing to its port unless this names it.
+/// listener lost, a rebind under way). The app starts a request to its port only while this names it.
 pub fn listening() -> u16 {
     current().map(|c| c.listening()).unwrap_or(0)
 }

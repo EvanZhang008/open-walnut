@@ -133,12 +133,26 @@ final class WalnutConnectTests: XCTestCase {
         XCTAssertEqual(AppConfig.storedRoutes(in: d).map(\.origin), [lan.origin])
     }
 
-    func testTheMacsOwnListDropsAConnectRouteItNoLongerHas() {
+    func testOnlyAnExplicitOffDropsTheConnectRoute() throws {
         let local = AppConfig.localizedConnectRoutes([lan, connectRoute, cloud], origin: "http://127.0.0.1:41234")
-        // The Mac's list without it (the experiment off): gone.
+        // The Mac says it is off: gone.
         XCTAssertEqual(AppConfig.mergeRoutes(local, server: [lan, cloud], dropUnlisted: [.connect]).map(\.kind), [.lan, .cloud])
-        // A companion's copy without it says nothing about it: kept.
+        // A list without it and without the word (a companion, walnut-net restarting): kept.
         XCTAssertEqual(AppConfig.mergeRoutes(local, server: [lan, cloud]).map(\.kind), [.lan, .connect, .cloud])
+        let off = try JSONDecoder().decode(ServerRoutesResponse.self, from: Data(#"{"routes":[],"connectOff":true}"#.utf8))
+        XCTAssertTrue(off.connectOff)
+        let silent = try JSONDecoder().decode(ServerRoutesResponse.self, from: Data(#"{"routes":[],"connectOff":"yes"}"#.utf8))
+        XCTAssertFalse(silent.connectOff, "anything but true says nothing")
+    }
+
+    func testAConnectRouteOfAnotherWalnutIsIgnored() {
+        // An older build re-paired with another Mac and cleared only the main list.
+        let d = scratchDefaults()
+        let otherMac = ServerRoute(kind: .lan, origin: "http://192.168.1.30:3456", label: "Wi-Fi", instance: "mac-2")
+        AppConfig.storeRoutes(AppConfig.localizedConnectRoutes([lan, connectRoute], origin: "http://127.0.0.1:41234"), anchor: lan.origin, in: d)
+        let mainOnly = try? JSONEncoder().encode([otherMac])
+        d.set(mainOnly, forKey: AppConfig.routesKey)
+        XCTAssertEqual(AppConfig.storedRoutes(in: d), [otherMac], "mac-1's connect route is not mac-2's")
     }
 
     func testOnlyTheConnectPortIsHeldBack() {
@@ -150,6 +164,11 @@ final class WalnutConnectTests: XCTestCase {
         let port = connect.preferredPort
         let url = URL(string: "http://127.0.0.1:\(port)/api/v1/status")
         XCTAssertTrue(connect.isConnectURL(url))
+        // The same port by another loopback name is never this library's listener.
+        for other in ["http://localhost:\(port)/api/v1/status", "http://[::1]:\(port)/api/v1/status"] {
+            XCTAssertTrue(connect.isConnectURL(URL(string: other)), other)
+            XCTAssertFalse(connect.holds(url: URL(string: other)), other)
+        }
         // Nothing started in this process: the port is not this app's, so no token goes there.
         if !connect.holds(port) {
             XCTAssertFalse(connect.maySend(to: url))

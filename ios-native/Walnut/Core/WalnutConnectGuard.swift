@@ -12,15 +12,15 @@ import Foundation
 final class WalnutConnectGuard: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool {
         let connect = WalnutConnect.shared
-        guard connect.isConnectURL(request.url), let port = request.url?.port else { return false }
-        return !connect.holds(port)
+        guard connect.isConnectURL(request.url) else { return false }
+        return !connect.holds(url: request.url)
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         WalnutConnect.shared.wake()
-        client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet, userInfo: [
+        client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost, userInfo: [
             NSLocalizedDescriptionKey: "Walnut Connect is getting ready",
         ]))
     }

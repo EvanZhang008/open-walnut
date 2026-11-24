@@ -130,15 +130,19 @@ struct ServerRoutesResponse: Decodable, Sendable {
     /// With a Walnut Connect route: the network id this phone registered on the Mac (nil:
     /// none yet, so it registers its own; WalnutAPI.registerConnect).
     let connectEndpoint: String?
+    /// The Mac says Walnut Connect is off for sure: a stored connect route goes. Absent from
+    /// a companion and from a Mac that cannot tell right now.
+    let connectOff: Bool
 
-    init(routes: [ServerRoute], device: String? = nil, tailscale: TailscaleHint? = nil, connectEndpoint: String? = nil) {
+    init(routes: [ServerRoute], device: String? = nil, tailscale: TailscaleHint? = nil, connectEndpoint: String? = nil, connectOff: Bool = false) {
         self.routes = routes
         self.device = device
         self.tailscale = tailscale
         self.connectEndpoint = connectEndpoint
+        self.connectOff = connectOff
     }
 
-    private enum CodingKeys: String, CodingKey { case routes, device, tailscale, connectEndpoint }
+    private enum CodingKeys: String, CodingKey { case routes, device, tailscale, connectEndpoint, connectOff }
     private struct Lossy: Decodable {
         let route: ServerRoute?
         init(from decoder: Decoder) throws { route = try? ServerRoute(from: decoder) }
@@ -154,6 +158,7 @@ struct ServerRoutesResponse: Decodable, Sendable {
         let hint = (try? c.decodeIfPresent(TailscaleHint.self, forKey: .tailscale)) ?? nil
         tailscale = (hint?.isEmpty ?? true) ? nil : hint
         connectEndpoint = (try? c.decodeIfPresent(String.self, forKey: .connectEndpoint)) ?? nil
+        connectOff = (try? c.decodeIfPresent(Bool.self, forKey: .connectOff)) ?? false
     }
 
     /// The Walnut Connect route the server listed, if any.
@@ -172,7 +177,12 @@ extension AppConfig {
     /// never the whole list.
     static func storedRoutes(in defaults: UserDefaults) -> [ServerRoute] {
         let main = decodeRoutes(defaults.data(forKey: routesKey)).filter { $0.kind != .connect }
-        let connect = decodeRoutes(defaults.data(forKey: connectRoutesKey)).filter { $0.kind == .connect }
+        // An older build re-pairing clears only the main list: a connect route of another
+        // Walnut than the main list's is that old pairing's, never this one's.
+        let paired = Set(main.compactMap(\.instance))
+        let connect = decodeRoutes(defaults.data(forKey: connectRoutesKey)).filter {
+            $0.kind == .connect && (paired.isEmpty || $0.instance.map(paired.contains) == true)
+        }
         return connect.isEmpty ? main : ordered(main + connect)
     }
 
@@ -296,11 +306,10 @@ extension AppConfig {
         defaults.set(origin, forKey: routesAnchorKey)
     }
 
-    /// Fold the server's list into the stored one; returns whether it changed. `fromMac`: the
-    /// list is the Mac's own (not a companion's copy), so a Walnut Connect route it no longer
-    /// lists is gone (the experiment off, another network id).
+    /// Fold the server's list into the stored one; returns whether it changed. `connectOff`: the
+    /// Mac said Walnut Connect is off for sure, so a stored connect route goes.
     @discardableResult
-    static func mergeRoutes(server: [ServerRoute], fromMac: Bool = false) -> Bool {
+    static func mergeRoutes(server: [ServerRoute], connectOff: Bool = false) -> Bool {
         if routesArePinned { return false }
         let current = UserDefaults.standard.string(forKey: urlKey)
         let existing = routes(in: .standard, serverURL: current)
@@ -308,7 +317,7 @@ extension AppConfig {
         let usable = WalnutConnect.shared.isAvailable
             ? localizedConnectRoutes(server, origin: WalnutConnect.shared.localOrigin)
             : server.filter { $0.kind != .connect }
-        let merged = mergeRoutes(existing, server: usable, dropUnlisted: fromMac ? [.connect] : [])
+        let merged = mergeRoutes(existing, server: usable, dropUnlisted: connectOff ? [.connect] : [])
         guard merged != existing else { return false }
         storeRoutes(merged, anchor: current)
         return true

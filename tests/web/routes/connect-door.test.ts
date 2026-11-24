@@ -114,6 +114,8 @@ describe('Walnut Connect on the primary', () => {
     expect(r.status).toBe(200)
     expect(r.body.routes.some((x: { kind: string }) => x.kind === 'connect')).toBe(false)
     expect(r.body).not.toHaveProperty('connectEndpoint')
+    // Off for sure: a phone that stored the route drops it.
+    expect(r.body.connectOff).toBe(true)
   })
 
   it('opens the door when turned on; through it nothing is this machine', async () => {
@@ -143,6 +145,7 @@ describe('Walnut Connect on the primary', () => {
       connect: { id: MAC_ID, relayMode: 'public', relays: [HOME_RELAY], addrs: ['192.168.1.20:4100', '[2601:600::5]:4100'] },
     })
     expect(r.body.connectEndpoint).toBeNull()
+    expect(r.body).not.toHaveProperty('connectOff')
 
     syncNet.mockClear()
     const id = netKey('roam-phone-key')
@@ -201,6 +204,21 @@ describe('Walnut Connect on the primary', () => {
     expect((await connectPhones()).map((p) => p.name)).not.toContain('qr-phone')
   })
 
+  it('a route missing for a passing reason (walnut-net not answering) is not "off"', async () => {
+    const { token } = await createDevice('flaky-phone')
+    setConnectStatusSourceForTest(async () => { throw new Error('net.status timed out') })
+    try {
+      const r = await call('GET', '/api/v1/routes', undefined, bearer(token))
+      expect(r.body.routes.some((x: { kind: string }) => x.kind === 'connect')).toBe(false)
+      expect(r.body).not.toHaveProperty('connectOff')
+    } finally {
+      setConnectStatusSourceForTest(async () => ({
+        running: true, protocol: 3,
+        node: { id: MAC_ID, relayMode: 'public', homeRelay: HOME_RELAY, addrs: ['127.0.0.1:4100', '[fe80::1]:4100', '192.168.1.20:4100', '[2601:600::5]:4100'] },
+      }))
+    }
+  })
+
   it('closes with the host network: a network the user turned off stays off, whatever is paired', async () => {
     const sock = connectDoor()!
     syncNet.mockClear()
@@ -212,6 +230,8 @@ describe('Walnut Connect on the primary', () => {
     expect(r.body.pairingURI).not.toContain('&connect=')
     await new Promise((res) => setTimeout(res, 1_500))
     expect(syncNet.mock.calls.some(([o]) => (o as { enable?: boolean } | undefined)?.enable)).toBe(false)
+    const { token } = await createDevice('net-off-reader')
+    expect((await call('GET', '/api/v1/routes', undefined, bearer(token))).body.connectOff).toBe(true)
     // On again (the user's own switch): the door opens again.
     expect((await call('PUT', '/api/config', { net: { enabled: true } })).status).toBe(200)
     await waitFor(() => connectDoor() !== null)

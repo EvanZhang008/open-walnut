@@ -376,8 +376,13 @@ final class HTMLPreviewLoader {
     /// its siblings and subfolders sign in, while a script in the page cannot
     /// read files elsewhere with it (a `../` reference is refused). The jar is
     /// this preview's own non-persistent store.
+    ///
+    /// Never on Walnut Connect: its address is this phone's own 127.0.0.1, and a cookie ignores
+    /// ports, so a page could hand it to whatever app listens on another one. There the
+    /// document loads (its request carries the token) and its sibling files do not.
     static func deviceCookie(for url: URL, token: String?) -> HTTPCookie? {
         guard let token, !token.isEmpty, let host = url.host, isPathShaped(url) else { return nil }
+        if WalnutConnect.shared.isConnectURL(url) { return nil }
         let encodedPath = url.path(percentEncoded: true)
         guard let slash = encodedPath.lastIndex(of: "/") else { return nil }
         let folder = String(encodedPath[...slash])

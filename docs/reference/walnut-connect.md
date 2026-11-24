@@ -54,9 +54,10 @@ Mac: the connect door (src/web/connect-door.ts), the same Walnut server app
   (`AppConfig.localizedConnectRoutes`) and ranks it below Wi-Fi and Tailscale and above the
   companion: at home the Wi-Fi wins, away the Mac itself beats the companion's copy.
   Connect routes are stored under their own key (`walnut.routes.connect`), so an older
-  build, which knows no `connect` kind, still reads every other route. When the Mac's own
-  list no longer has the route (the experiment off), the phone drops it; a companion's copy
-  of the list never does.
+  build, which knows no `connect` kind, still reads every other route, and a stored connect
+  route of another Walnut than the stored routes' is ignored. The phone drops the route only
+  when the Mac says Walnut Connect is off (`connectOff: true` in `/routes`); a route missing
+  for a passing reason (walnut-net restarting, a slow status) says nothing.
 - The QR's key becomes the phone's only once that pairing worked, so a failed pairing leaves
   the phone's Walnut Connect to the Mac it had as it was.
 - A revoke or re-pair takes the phone off walnut-net's list at once (the next host network
@@ -88,21 +89,31 @@ takes the companion out of the path entirely.
 - The other way round matters more: the app sends its device token to that port, and another
   app could listen on a port the app does not hold (before the connector starts, after iOS
   takes a suspended app's listener away, Apple TN2277, or after the connector had to move to
-  another port). So the token goes there only while the library reports, at that moment, that
-  it holds exactly that port (`wc_listening`):
+  another port). So a request with the token starts only while the library reports, at that
+  moment, that it holds exactly that port on 127.0.0.1 (`wc_listening`). It is a check made
+  as each request starts:
   - `WalnutConnectGuard` (a URLProtocol every URLSession configuration gets through
     `DemoMode.configured`, and `URLSession.shared` globally) fails any request to a Walnut
-    Connect port, the ones used before included, that the library does not hold, and starts
-    the connector;
+    Connect port (the ones used before included, by any loopback name) that the library does
+    not hold, and starts the connector. A request made while the connector is still starting
+    (the first fraction of a second after a launch) fails once, as an unreachable server does;
   - the loads outside URLSession (AVPlayer with the token header, the HTML preview's web
     view) ask `WalnutConnect.maySend(to:)` first;
-  - the app takes the listener again (`wc_rebind`, never waiting on a start under way) as it
-    comes to the foreground, and in the background before a send once a second has passed,
-    since iOS gives no notice when it suspends the app;
+  - the HTML preview sets no device cookie on a Walnut Connect address (a cookie ignores
+    ports, so a page could pass it to another one): there the document loads and its sibling
+    files (images, frames) do not;
+  - the app takes the listener again (`wc_rebind`, never waiting on a start under way) after
+    a suspend, before the next send: a timer ticks while the app runs, and a gap in its ticks
+    means iOS suspended it (it gives no notice). An app that keeps running in the background
+    (music playing) keeps its listener and its open connections;
   - `tests/ios/walnut-connect-port-guard.test.ts` fails on a new URLSession that skips the
     hook, a background session, or a new load outside URLSession without the check.
 
 ## Limits
+
+- The check is made as a request starts. A request URLSession sends again by itself on a new
+  connection (after the system dropped the first) is not checked again; this has not been
+  tried on a phone.
 
 - The Mac must be awake and online. Leader switching (another Walnut answering while the Mac
   is off) is not part of Walnut Connect yet; the companion still covers a sleeping Mac.

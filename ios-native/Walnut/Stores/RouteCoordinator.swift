@@ -42,7 +42,7 @@ final class RouteCoordinator {
         var routes: @MainActor () -> [ServerRoute]
         var currentOrigin: @MainActor () -> String?
         var setActive: @MainActor (ServerRoute) -> Void
-        /// The server's list, and whether it is the Mac's own (not a companion's copy).
+        /// The server's list, and whether the Mac said Walnut Connect is off for sure.
         var mergeServerRoutes: @MainActor ([ServerRoute], Bool) -> Bool
         var probe: @Sendable (ServerRoute) async -> ProbeOutcome
         var fetchRoutes: @Sendable () async throws -> ServerRoutesResponse
@@ -61,7 +61,7 @@ final class RouteCoordinator {
                 routes: { AppConfig.routes },
                 currentOrigin: { AppConfig.serverURL?.absoluteString },
                 setActive: { AppConfig.setActiveRoute($0) },
-                mergeServerRoutes: { AppConfig.mergeRoutes(server: $0, fromMac: $1) },
+                mergeServerRoutes: { AppConfig.mergeRoutes(server: $0, connectOff: $1) },
                 probe: { await InstanceProbe.probe($0) },
                 fetchRoutes: { try await WalnutAPI().routes() },
                 restartStreams: { LifecycleHub.shared.restartForRouteChange() },
@@ -362,9 +362,7 @@ final class RouteCoordinator {
             // the last word from the Mac beats no word.
             if let hint = response.tailscale, hint != tailscaleHint { tailscaleHint = hint }
             registerConnectIfNeeded(response)
-            // A companion answers with itself as the cloud route; anything else is the Mac.
-            let fromMac = !response.routes.contains { $0.kind == .cloud && ServerRoute.sameOrigin($0.origin, key) }
-            if env.mergeServerRoutes(response.routes, fromMac) {
+            if env.mergeServerRoutes(response.routes, response.connectOff) {
                 refreshRoutes()
                 AppLog.info("connectivity", "routes learned", ["routes": String(env.routes().count)])
                 trigger(.routesLearned)

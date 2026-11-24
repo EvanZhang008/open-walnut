@@ -71,6 +71,11 @@ final class HTMLPreviewSignInTests: XCTestCase {
         let plain = try XCTUnwrap(WalnutAPI.rawFilePathURL(base: URL(string: "http://100.64.0.2:3456")!, path: "/a/index.html", host: nil))
         XCTAssertFalse(try XCTUnwrap(HTMLPreviewLoader.deviceCookie(for: plain, token: "t")).isSecure)
 
+        // Walnut Connect's address is this phone's own loopback: a cookie there reaches every port.
+        if WalnutConnect.shared.isAvailable {
+            let connect = try XCTUnwrap(WalnutAPI.rawFilePathURL(base: URL(string: WalnutConnect.shared.localOrigin)!, path: "/a/index.html", host: nil))
+            XCTAssertNil(HTMLPreviewLoader.deviceCookie(for: connect, token: "t"))
+        }
         XCTAssertNil(HTMLPreviewLoader.deviceCookie(for: page, token: nil))
         XCTAssertNil(HTMLPreviewLoader.deviceCookie(for: page, token: ""))
         // The query shape has no siblings, so it never needs the cookie.

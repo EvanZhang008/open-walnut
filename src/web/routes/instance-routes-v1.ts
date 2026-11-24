@@ -27,7 +27,7 @@ import { recordForToken } from '../../core/device-actor.js'
 import { CLOUD_ROUTE_LABEL, directRoutes, listeningPort, type DeviceRoute } from '../../core/devices/routes.js'
 import { adoptOnCloud, adoptOnPrimary } from './device-twins.js'
 import { peekTailscaleBrief } from '../../core/tailnet.js'
-import { connectRoute, reservedNetIds, scheduleConnectSync, type ConnectRoute } from '../../core/connect/connect-net.js'
+import { connectRoute, connectWanted, reservedNetIds, scheduleConnectSync, type ConnectRoute } from '../../core/connect/connect-net.js'
 import { ConnectRefused, registerConnectEndpoint } from '../../core/connect/connect-phones.js'
 
 export const instanceRoutesV1Router = Router()
@@ -56,6 +56,7 @@ instanceRoutesV1Router.get('/routes', async (req: Request, res: Response, next: 
     const caller = await callerRecord(req)
     const routes: Array<DeviceRoute | ConnectRoute> = []
     let connectEndpoint: string | null | undefined
+    let connectOff = false
     // So the phone can say "set up Tailscale on your Mac" vs "install it on this phone":
     // the Mac's own summary here, the one it sent in its adopt reply on a replica (the
     // phone that asks a replica is the one away from home); absent while the first probe runs.
@@ -77,12 +78,16 @@ instanceRoutesV1Router.get('/routes', async (req: Request, res: Response, next: 
       if (connect) {
         routes.push(connect)
         connectEndpoint = caller ? caller.connect?.endpoint ?? null : null
+      } else if (await connectWanted().then((w) => !w, () => false)) {
+        // Off for sure (the experiment, or the host network): the phone drops its stored route.
+        // A route missing for a passing reason (walnut-net restarting, a slow status) says nothing.
+        connectOff = true
       }
       const cloud = caller ? await adoptOnCloud(caller) : null
       if (cloud) routes.push({ kind: 'cloud', origin: cloud.origin, label: CLOUD_ROUTE_LABEL, instance: cloud.instance })
       tailscale = await peekTailscaleBrief()
     }
-    res.json({ routes, device: caller?.name ?? null, ...(tailscale ? { tailscale } : {}), ...(connectEndpoint !== undefined ? { connectEndpoint } : {}) })
+    res.json({ routes, device: caller?.name ?? null, ...(tailscale ? { tailscale } : {}), ...(connectEndpoint !== undefined ? { connectEndpoint } : {}), ...(connectOff ? { connectOff } : {}) })
   } catch (err) {
     next(err)
   }

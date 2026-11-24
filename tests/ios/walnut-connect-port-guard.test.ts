@@ -51,7 +51,10 @@ describe('the token reaches the Walnut Connect port only while the app holds it'
     expect(demo).toContain('config.protocolClasses = classes')
     expect(demo).toContain('URLProtocol.registerClass(WalnutConnectGuard.self)')
     const guardSrc = files.find((f) => f.file === 'Core/WalnutConnectGuard.swift')!.lines.join('\n')
-    expect(guardSrc).toContain('!connect.holds(port)')
+    expect(guardSrc).toContain('!connect.holds(url: request.url)')
+    // Only 127.0.0.1 is held: localhost and [::1] name the port on an address never listened on.
+    const lib = files.find((f) => f.file === 'Core/WalnutConnect.swift')!.lines.join('\n')
+    expect(lib).toMatch(/func holds\(url: URL\?\) -> Bool \{\s*guard let url, url\.host == "127\.0\.0\.1"/)
   })
 
   it('every URLSession is built from DemoMode.configured, and none runs in the background', () => {
@@ -60,6 +63,14 @@ describe('the token reaches the Walnut Connect port only while the app holds it'
     const bare = made.filter((h) => !h.text.includes('DemoMode.configured('))
     expect(bare.map((h) => h.at)).toEqual([])
     expect(hits(/URLSessionConfiguration\.background/).map((h) => h.at)).toEqual([])
+  })
+
+  it('the HTML preview sets no device cookie on a Walnut Connect address (cookies ignore ports)', () => {
+    const preview = files.find((f) => f.file === 'Views/HTMLFilePreview.swift')!.lines.join('\n')
+    const fn = preview.slice(preview.indexOf('static func deviceCookie('))
+    expect(fn.slice(0, fn.indexOf('HTTPCookie(properties'))).toContain('if WalnutConnect.shared.isConnectURL(url) { return nil }')
+    // No other cookie with the token is set anywhere in the app.
+    expect(hits(/\.name:\s*"walnut_device"/).map((h) => h.file)).toEqual(['Views/HTMLFilePreview.swift'])
   })
 
   it('AVPlayer loads that carry the token ask maySend first', () => {

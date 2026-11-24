@@ -72,28 +72,46 @@ final class WalnutConnect: @unchecked Sendable {
     private let lock = NSLock()
     private var running: (peer: ConnectPeer, key: String, port: Int)?
     private var starting: (peer: ConnectPeer, key: String, task: Task<Int?, Never>)?
-    /// iOS reclaims a suspended app's listener, and the app cannot see the moment it is
-    /// suspended. So in the background the listener is taken again before a send whenever
-    /// `backgroundRecheck` has passed since the last time (a silent push or a background
-    /// refresh wakes a suspended app without bringing it forward), and once on the way back.
-    private var inBackground = false
+    /// iOS reclaims a suspended app's listener, and the app gets no word when it is suspended
+    /// or woken (a silent push, a background refresh). So a timer ticks while the app runs:
+    /// a gap in its ticks means the app was suspended, and the listener is taken again before
+    /// the next send. An app that runs in the background (music playing) keeps ticking and
+    /// keeps its listener, so its open connections are never reset.
     private var needsRebind = false
-    private var checkedAt: UInt64 = 0
-    private static let backgroundRecheck: UInt64 = 1_000_000_000
+    private var lastTick: UInt64 = 0
+    private var ticker: DispatchSourceTimer?
+    private static let suspendedGap: UInt64 = 3_000_000_000
 
     private init() {
         isAvailable = Self.call { wc_status() }["stub"] as? Bool != true
         guard isAvailable else { return }
-        let center = NotificationCenter.default
-        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] _ in
+        // Back in front after a suspend: listen again before the first request asks.
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            self.lock.lock(); self.inBackground = true; self.needsRebind = true; self.lock.unlock()
+            self.tick()
+            self.lock.lock(); let again = self.running != nil && self.needsRebind; self.lock.unlock()
+            if again { _ = self.listenAgain() }
         }
-        center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            self.lock.lock(); self.inBackground = false; let run = self.running != nil; self.lock.unlock()
-            if run { _ = self.listenAgain() }
-        }
+    }
+
+    /// One tick of the timer that notices a suspend (a gap since the last tick).
+    private func tick() {
+        let now = Self.now()
+        lock.lock()
+        if lastTick > 0, now &- lastTick > Self.suspendedGap { needsRebind = true }
+        lastTick = now
+        lock.unlock()
+    }
+
+    private func startTicking() {
+        lock.lock(); defer { lock.unlock() }
+        guard ticker == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.openwalnut.connect.tick", qos: .utility))
+        t.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(500))
+        t.setEventHandler { [weak self] in self?.tick() }
+        lastTick = Self.now()
+        ticker = t
+        t.resume()
     }
 
     /// Nanoseconds on a clock that keeps counting while the phone sleeps.
@@ -162,20 +180,32 @@ final class WalnutConnect: @unchecked Sendable {
     var localOrigin: String { "http://127.0.0.1:\(preferredPort)" }
 
     /// Does this library hold `port` right now? Cheap: the guard asks it per request. After a
-    /// time in the background it takes the listener again first (a fraction of a millisecond).
+    /// suspend it takes the listener again first (a fraction of a millisecond).
     func holds(_ port: Int) -> Bool {
         guard isAvailable, port > 0 else { return false }
+        let now = Self.now()
         lock.lock()
-        let recheck = running != nil && (needsRebind || (inBackground && Self.now() &- checkedAt > Self.backgroundRecheck))
+        let recheck = running != nil && (needsRebind || (lastTick > 0 && now &- lastTick > Self.suspendedGap))
         lock.unlock()
         if recheck, !listenAgain() { return false }
         return Int(wc_listening()) == port
     }
 
-    /// Is `url` a Walnut Connect port of this phone (now or before)? Then the token goes there
-    /// only while this library holds it.
+    /// May a request to `url`, a Walnut Connect address, go now? Only to 127.0.0.1, where the
+    /// library listens, on the port it holds: `localhost` and `[::1]` name the same port on
+    /// an address this app never listens on.
+    func holds(url: URL?) -> Bool {
+        guard let url, url.host == "127.0.0.1", let port = url.port else { return false }
+        return holds(port)
+    }
+
+    private static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "::1", "[::1]"]
+
+    /// Is `url` a Walnut Connect port of this phone (now or before), on any loopback name? Then
+    /// the token goes there only while this library holds it (`holds(url:)`).
     func isConnectURL(_ url: URL?) -> Bool {
-        guard isAvailable, let url, url.host == "127.0.0.1", let port = url.port, port > 0 else { return false }
+        guard isAvailable, let url, let host = url.host?.lowercased(), Self.loopbackHosts.contains(host),
+              let port = url.port, port > 0 else { return false }
         if port == connectPort { return true }
         return ((UserDefaults.standard.array(forKey: Self.portsKey) as? [Int]) ?? []).contains(port)
     }
@@ -184,8 +214,8 @@ final class WalnutConnect: @unchecked Sendable {
     /// False only for the Walnut Connect port while this library does not hold it; the
     /// connector is woken then, and the load tried again later.
     func maySend(to url: URL?) -> Bool {
-        guard isConnectURL(url), let port = url?.port else { return true }
-        if holds(port) { return true }
+        guard isConnectURL(url) else { return true }
+        if holds(url: url) { return true }
         wake()
         return false
     }
@@ -243,7 +273,7 @@ final class WalnutConnect: @unchecked Sendable {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: config),
               let text = String(data: data, encoding: .utf8) else { return nil }
-        lock.lock(); let rebindFirst = needsRebind || inBackground; lock.unlock()
+        lock.lock(); let rebindFirst = needsRebind; lock.unlock()
         let out = await onFFI {
             var out = text.withCString { ptr in Self.call { wc_start(ptr) } }
             // Back from the background: a kept client's listener may be one iOS reclaimed.
@@ -260,8 +290,9 @@ final class WalnutConnect: @unchecked Sendable {
         lock.lock()
         running = (peer, key, port)
         needsRebind = false
-        checkedAt = Self.now()
+        lastTick = Self.now()
         lock.unlock()
+        startTicking()
         if port != connectPort { await movePort(to: port) }
         return port
     }
@@ -274,7 +305,7 @@ final class WalnutConnect: @unchecked Sendable {
     }
 
     /// Take the listener again (the same port while it is free): on the way back to the
-    /// foreground and before a send after a time in the background. Never waits (any thread,
+    /// foreground and before a send after a suspend. Never waits (any thread,
     /// the main one included): a start or stop under way answers false, and that start
     /// listens anew itself.
     private func listenAgain() -> Bool {
@@ -288,7 +319,7 @@ final class WalnutConnect: @unchecked Sendable {
         lock.lock()
         if let r = running { running = (r.peer, r.key, port) }
         needsRebind = false
-        checkedAt = Self.now()
+        lastTick = Self.now()
         lock.unlock()
         if port != connectPort {
             // Another app took the port while this one slept: everything moves to the new one,
@@ -314,7 +345,8 @@ final class WalnutConnect: @unchecked Sendable {
     }
 
     func stop() async {
-        lock.lock(); running = nil; lock.unlock()
+        lock.lock(); running = nil; let t = ticker; ticker = nil; lock.unlock()
+        t?.cancel()
         guard isAvailable else { return }
         await onFFI { wc_stop() }
     }

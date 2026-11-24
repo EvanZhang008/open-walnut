@@ -9,8 +9,8 @@
 //!
 //! The other way round matters too: the app must send its token only to this listener, never
 //! to another app that took the port. So the client says at every moment which port it holds
-//! (`listening`, 0 while none: lost to the system, being rebound, stopped), the app sends
-//! nothing to the port unless it is that one (WalnutConnect.swift's guard), and `rebind` takes
+//! (`listening`, 0 while none: lost to the system, being rebound, stopped), the app starts a
+//! request to the port only while it is that one (WalnutConnect.swift's guard), and `rebind` takes
 //! the port again after iOS reclaimed a suspended app's listener (Apple TN2277).
 
 use std::net::SocketAddr;
