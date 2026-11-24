@@ -2432,6 +2432,9 @@ export class DaemonConnection {
     const epoch = this._connectionEpoch
     const recheck = this.triggersRecheck
     this.triggersRecheck = false
+    // A service set move a leader restart cut: the set's daemon gets the triggers' memory before their first push (service-set-move-link.ts).
+    if (this.lastTriggersPushHash === null && !(await (this.serviceSetLink?.beforeTriggerPush().catch(() => true) ?? true))) return 'stop'
+    if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
     const { getTriggerPayloadProvider } = await import('../core/routines/trigger-bridge.js')
     const provider = getTriggerPayloadProvider()
     if (!provider) return 'stop'

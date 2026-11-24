@@ -22,7 +22,7 @@
  */
 import { log } from '../logging/index.js'
 import { clearServiceSetMoved, hostServiceSets, hostServiceSetsWanted, linkStanding, markServiceSetMoved, movedToSet, recordServiceSetFrom, setWordsDue, type HostSetRecord, type LinkStanding, type SetAsk } from './service-set-leader.js'
-import { moveOnce, moveReconnectMs, runMove, serviceSetMoves, settleMove, type MoveDeps, type MoveOutcome, type MoveSession, type StopResult } from './service-set-move.js'
+import { moveOnce, moveReconnectMs, runMove, seedOwed, serviceSetMoves, settleMove, type MoveDeps, type MoveOutcome, type MoveSession, type StopResult } from './service-set-move.js'
 import { dropWalnutScope, moveBlocker, moveSessions, openWorkThere, seedTriggerMemory, stopFollowerThere, stopProven, takeTriggerMemory, type MoveCheckLink, type TriggerMemory } from './service-set-move-checks.js'
 import { setCliCommand, type SetProvision } from './service-set-provision.js'
 import { isServiceSetId } from './service-set.js'
@@ -405,11 +405,31 @@ export class ServiceSetLink {
     return { hostKey: c.hostKey, home: c.home, send: (cmd, p, t) => c.send(cmd, p, t), hasCapability: (x) => c.hasCapability(x), workUnderWay: () => c.workUnderWay(), walnutId: () => c.walnutId() }
   }
 
+  /** Hand the triggers' memory to the daemon the link reaches now (the set's); a miss is logged, and they start afresh there. */
+  private async seed(memory: TriggerMemory[]): Promise<void> {
+    await (this.d.seedMemory ?? ((m: TriggerMemory[]) => seedTriggerMemory(this.checkLink, m)))(memory).catch((err) => {
+      log.session.warn('service set: the triggers\' memory did not reach the set\'s daemon; they start afresh there', { host: this.c.hostKey, error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  /** Before a connect's first trigger push (DaemonConnection.pushTriggersOnce): what a move cut by a restart still owes the set (seedOwed). False: push nothing. */
+  async beforeTriggerPush(): Promise<boolean> {
+    // A move under way carries the memory itself, while it holds the push.
+    if (this.holding || !this.c.connected || !this.c.helloSet()) return true
+    const owed = await seedOwed({ set: this.c.helloSet(), store: this.store(), now: this.now, seed: (m) => this.seed(m) })
+    if (owed !== 'lost') return true
+    log.session.warn('service set: the triggers\' memory kept for the move cannot be read; the link goes back to the shared daemon', { host: this.c.hostKey })
+    this.c.notice(this.noticeKey, `What this Walnut's triggers on ${this.c.hostKey} have already reported was lost in a restart during the move to its own service there, so they were not started there without it. Walnut points ${this.c.hostKey} back at the service another Walnut runs there, which still keeps it, and moves again.`)
+    await this.undoMove()
+    void this.c.relink(moveReconnectMs())
+    return false
+  }
+
   private move(record: HostSetRecord, force: boolean): Promise<MoveOutcome> {
     const set = record.set
     const kind = this.c.kind()!
-    /** Each trigger's memory, taken at the drop from the shared daemon, for the set's daemon. */
-    let memory: TriggerMemory[] = []
+    /** The trigger ids the drop empties, read before it (the link's last push). */
+    let ids: string[] = []
     const sleep = this.sleep
     const run = (): Promise<MoveOutcome> => runMove({
       set, link: kind, now: this.now, force, sleep,
@@ -427,16 +447,12 @@ export class ServiceSetLink {
       blocker: () => (this.d.blocker ?? (() => moveBlocker(this.checkLink, this.c.triggerIds())))(),
       // The ids are read before the drop (the link's last push); their memory right after it.
       dropScope: async () => {
-        const ids = this.c.triggerIds()
+        ids = this.c.triggerIds()
         await (this.d.dropScope ?? (() => dropWalnutScope(this.checkLink)))()
-        memory = await (this.d.takeMemory ?? (() => takeTriggerMemory(this.checkLink, ids, sleep)))()
       },
+      takeMemory: () => (this.d.takeMemory ?? (() => takeTriggerMemory(this.checkLink, ids, sleep)))(),
       drainJournal: () => (this.d.drainJournal ?? (() => this.c.drainJournal(JOURNAL_DRAIN_MS)))(),
-      carry: async () => {
-        await (this.d.seedMemory ?? ((m: TriggerMemory[]) => seedTriggerMemory(this.checkLink, m)))(memory).catch((err) => {
-          log.session.warn('service set: the triggers\' memory did not reach the set\'s daemon; they start afresh there', { host: this.c.hostKey, error: err instanceof Error ? err.message : String(err) })
-        })
-      },
+      carry: (memory) => this.seed(memory),
       // Dialled again, the shared daemon gets this Walnut's follower, triggers and plugin jobs back from
       // the connect's own pushes (they wait for the release, then go there).
       restore: async () => { await this.c.relink(moveReconnectMs()) },

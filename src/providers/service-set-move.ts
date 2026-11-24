@@ -42,8 +42,20 @@
  * again from the same start; 'flipped' while the link reaches the shared daemon is pointed back
  * first (the flip did not hold) and starts over; 'flipped' while it reaches the set is settled as
  * done (settleMove). Pure: every effect is a dependency (service-set-move-link.ts builds them).
+ *
+ * The triggers' memory survives a leader restart (a deploy restarts the leader, and a move waits
+ * for a turn to end): it is kept in the move's record from the drop on (`memory`, `owed`: written
+ * in the write that says the drop happened), until the set's daemon has it or the shared daemon
+ * got the triggers back (a give-up or a put-back). A move that runs again after a restart drops and
+ * takes the memory again (the reconnect gave the shared daemon the triggers back, with the state
+ * it keeps), and the kept copy fills every trigger that take found none for; a link that reaches
+ * the set with memory still owed seeds it before the first trigger push there
+ * (ServiceSetLink.beforeTriggerPush). A kept copy that cannot be read is never taken as no memory:
+ * the move takes it again on the shared daemon (a take that fails gives up, and the triggers stay
+ * there), and a link that already reaches the set pushes no trigger there and is pointed back.
  */
 import { KeyedUpdateStore } from './daemon-update-store.js'
+import type { TriggerMemory } from './service-set-move-checks.js'
 import { isServiceSetId } from './service-set.js'
 
 export type MovePhase = 'waiting' | 'holding' | 'flipped' | 'done' | 'gave_up' | 'reverted'
@@ -64,6 +76,31 @@ export interface MoveRecord {
   nextTryAt?: number
   /** Tries in a row that gave up or were put back: the wait before the next one doubles, and it ends (MOVE_MAX_TRIES). */
   failures?: number
+  /** The triggers were dropped on the shared daemon and the set's daemon does not have their memory yet. */
+  owed?: true
+  /** That memory (each trigger's exact state, as triggers.state.snapshot gave it); read with keptMemory. */
+  memory?: TriggerMemory[]
+}
+
+const validMemory = (m: unknown): m is TriggerMemory[] => Array.isArray(m) && m.every((e) => {
+  const x = e as TriggerMemory
+  return !!x && typeof x === 'object' && typeof x.triggerId === 'string' && !!x.state && typeof x.state === 'object'
+    && !Array.isArray(x.state) && typeof x.digest === 'string'
+})
+
+/**
+ * The triggers' memory a record still owes the set's daemon: [] when it owes none, null when it
+ * owes some and its copy cannot be read (never taken as "no memory").
+ */
+export function keptMemory(r: Pick<MoveRecord, 'owed' | 'memory'> | null | undefined): TriggerMemory[] | null {
+  if (!r?.owed) return []
+  return validMemory(r.memory) ? r.memory : null
+}
+
+/** A fresh take, with what a kept copy has for the triggers that take found nothing for. */
+function withKept(fresh: readonly TriggerMemory[], kept: readonly TriggerMemory[]): TriggerMemory[] {
+  const have = new Set(fresh.map((m) => m.triggerId))
+  return [...fresh, ...kept.filter((m) => !have.has(m.triggerId))]
 }
 
 /** The links a record may name (a value check, not a branch on the kind). */
@@ -139,12 +176,14 @@ export interface MoveDeps {
   blocker?(): Promise<string | null>
   /** Stop this Walnut's follower on the shared daemon and see it off; throws when it may still run. */
   stopFollower(): Promise<void>
-  /** Empty this Walnut's triggers and plugin jobs on the shared daemon, and take each trigger's memory; throws when not done. */
+  /** Empty this Walnut's triggers and plugin jobs on the shared daemon; throws when not done. */
   dropScope(): Promise<void>
+  /** Right after the drop: each of those triggers' memory there; throws when one cannot be taken (the move gives up). */
+  takeMemory?(): Promise<TriggerMemory[]>
   /** This Walnut's offline journal on the shared daemon drained to empty; throws when not. */
   drainJournal?(): Promise<void>
-  /** After the set answered, before the release: the triggers' memory taken at the drop goes to the set's daemon (best effort). */
-  carry?(): Promise<void>
+  /** After the set answered, before the release: the triggers' memory kept since the drop goes to the set's daemon (best effort). */
+  carry?(memory: TriggerMemory[]): Promise<void>
   /** A try that gave up after the follower stop: the shared daemon gets back this Walnut's follower, triggers and jobs (the link dials it again). */
   restore(): Promise<void>
   /** Host network: pair with the set's own walnut-net first; throws when not done (nothing touched yet). */
@@ -199,9 +238,12 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
   if (r?.phase === 'flipped') await d.unflip().catch(() => {})
   const resume = r && (r.phase === 'waiting' || r.phase === 'holding')
   const failures = failed ? r!.failures ?? 1 : resume ? r!.failures ?? 0 : 0
+  // Memory a try before a restart took stays owed in any new try (a flip pointed back, a done move
+  // that never reached the set): the shared daemon may no longer give all of it.
+  const owed = r?.owed ? { owed: true as const, ...(r.memory !== undefined ? { memory: r.memory } : {}) } : {}
   let rec: MoveRecord = resume
     ? { ...r!, phase: 'waiting', at: d.now() }
-    : { v: 1, at: d.now(), set: d.set, link: d.link, phase: 'waiting', startedAt: d.now(), stopped: [], ...(failures ? { failures } : {}) }
+    : { v: 1, at: d.now(), set: d.set, link: d.link, phase: 'waiting', startedAt: d.now(), stopped: [], ...(failures ? { failures } : {}), ...owed }
   const save = async (patch: Partial<MoveRecord>): Promise<void> => {
     rec = { ...rec, ...patch, at: d.now() }
     await d.store.write(rec)
@@ -211,7 +253,8 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     const n = failures + 1
     const final = n >= MOVE_MAX_TRIES
     const nextTryAt = final ? undefined : d.now() + Math.min(retryMs * 2 ** (n - 1), RETRY_CAP_MS)
-    await save({ phase: outcome.result, why: outcome.why, failures: n, nextTryAt }).catch(() => {})
+    // The shared daemon gets the triggers back (restore, the put-back's redial): it keeps their memory itself.
+    await save({ phase: outcome.result, why: outcome.why, failures: n, nextTryAt, owed: undefined, memory: undefined }).catch(() => {})
     const out = { ...outcome, failures: n, ...(final ? { final: true } : { nextTryAt }) }
     d.report(out)
     return out
@@ -277,6 +320,15 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     } catch (e) {
       return await giveUp(`this Walnut's triggers and plugin jobs on the shared daemon were not dropped (${errText(e)}); nothing was stopped`)
     }
+    let taken: TriggerMemory[]
+    try {
+      taken = await (d.takeMemory?.() ?? Promise.resolve([]))
+    } catch (e) {
+      return await giveUp(`${errText(e)}; nothing was stopped`)
+    }
+    // On disk before anything stops, so a restart from here on still has it (the copy a try before
+    // a restart kept fills what this take found none for; one that cannot be read fills nothing).
+    await save({ owed: true, memory: withKept(taken, keptMemory(rec) ?? []) })
     for (const s of quiet) {
       const res = await d.stop(s.id).catch((e): StopResult => ({ ok: false, why: `session ${s.id}: ${errText(e)}` }))
       if (!res.ok) {
@@ -300,7 +352,9 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
       await save({ phase: 'done', why: undefined, nextTryAt: undefined, failures: undefined })
       done = true
       await d.confirm().catch(() => {})
-      await d.carry?.().catch(() => {})
+      await d.carry?.(keptMemory(rec) ?? []).catch(() => {})
+      // The set's daemon has it now (or said why not): the record owes it no more.
+      await save({ owed: undefined, memory: undefined }).catch(() => {})
       // Released right after the done record (X1): nothing after this waits for the hold.
       d.release()
       await d.afterMove?.().catch(() => { /* tried again at the next look */ })
@@ -340,6 +394,24 @@ export async function settleMove(d: Pick<MoveDeps, 'set' | 'store' | 'confirm' |
   if (r.phase === 'flipped') await d.confirm().catch(() => {})
   await d.store.write({ ...r, phase: 'done', at: d.now(), why: undefined, nextTryAt: undefined })
   return true
+}
+
+/**
+ * A link reaches the set `set` with no move under way: memory the record still owes the set's daemon
+ * (a leader restart after the drop) is seeded before any trigger is pushed there, since the set's
+ * daemon takes a seed only for a trigger it does not hold yet; then the record owes it no more.
+ * 'lost': it owes memory whose kept copy cannot be read, so no trigger may be pushed there (the shared
+ * daemon still keeps it: the caller points the link back for the move to take it again).
+ */
+export async function seedOwed(d: Pick<MoveDeps, 'set' | 'store' | 'now'> & { seed(memory: TriggerMemory[]): Promise<void> }): Promise<'none' | 'seeded' | 'lost'> {
+  const r = await d.store.read().catch(() => null)
+  if (!r?.owed || r.set !== d.set) return 'none'
+  const memory = keptMemory(r)
+  if (memory === null) return 'lost'
+  await d.seed(memory)
+  const now = await d.store.read().catch(() => null)
+  if (now?.owed && now.set === d.set) await d.store.write({ ...now, owed: undefined, memory: undefined, at: d.now() })
+  return 'seeded'
 }
 
 /** The phase kept for a place, for the SSH dir choice: the set's runtime dir once the move flipped. */
