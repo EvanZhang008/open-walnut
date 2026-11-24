@@ -258,3 +258,37 @@ for (const notice of [true, false]) {
     }
   })
 }
+
+for (const notice of [true, false]) {
+  test(`every key in the collapsed rail sits on one centre line with its icon in its middle (${notice ? 'with' : 'without'} the notice)`, async ({ page }) => {
+    // 2026-11-24: the bottom keys are buttons, not flex boxes, so the status ring and Quick bar
+    // drew their icons at the key's left edge and the bell in its middle, 2 px left of the nav.
+    if (!notice) {
+      await page.context().unroute(STATUS)
+      await page.context().route(STATUS, r => r.fulfill({ json: { available: false, token: null } }))
+    }
+    await loadApp(page)
+    await expect(page.locator('.sidebar-notification-btn')).toBeVisible()
+    await expect(pill(page)).toHaveCount(notice ? 1 : 0, { timeout: 15_000 })
+    if (await page.locator('.sidebar.collapsed').count() === 0) await page.locator('.sidebar-collapse-btn').click()
+    await expect(page.locator('.sidebar.collapsed')).toHaveCount(1)
+    const keys = await page.locator('#primary-sidebar').evaluate((rail) => {
+      const left = rail.getBoundingClientRect().left
+      return [...rail.querySelectorAll('.sidebar-link, .sidebar-update-dock .stale-build-pill-action')].flatMap((k) => {
+        const box = k.getBoundingClientRect()
+        const icon = k.querySelector('svg')?.getBoundingClientRect()
+        if (!box.width || !icon?.width) return []
+        const name = k.getAttribute('aria-label') || k.className.toString().split(' ').slice(1).join('.')
+        return [{ name, key: box.left - left + box.width / 2, icon: icon.left - left + icon.width / 2 }]
+      })
+    })
+    expect(keys.map((k) => k.name).join(','), 'the bottom keys are measured').toMatch(/Notifications|notification-btn/)
+    expect(keys.length).toBeGreaterThan(5)
+    const line = keys[0].key
+    for (const k of keys) {
+      expect(Math.abs(k.icon - k.key), `${k.name}: icon centre ${k.icon} in key centre ${k.key}`).toBeLessThanOrEqual(0.75)
+      expect(Math.abs(k.key - line), `${k.name}: key centre ${k.key} on the rail's line ${line}`).toBeLessThanOrEqual(0.75)
+    }
+    await page.locator('.sidebar-notification-area').screenshot({ path: `${SHOTS}/rail-keys-${notice ? 'notice' : 'plain'}-${test.info().project.name}.png` })
+  })
+}

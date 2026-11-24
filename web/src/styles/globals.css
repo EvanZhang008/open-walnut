@@ -515,6 +515,12 @@ textarea::placeholder { max-width: 100%; }
 }
 
 .sidebar.collapsed .sidebar-link {
+  /* A flex box, so every key's icon sits in its middle and margin:auto centres it on the rail:
+     the bottom keys are buttons (inline-block), whose icons followed their own text-align (the
+     status ring and Quick bar left, the bell centred) on a column 2 px left of the nav's
+     (2026-11-24: the user's screenshot of the four bottom keys out of line). */
+  display: flex;
+  align-items: center;
   justify-content: center;
   padding: 10px 0;
   gap: 0;
@@ -27989,8 +27995,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .sidebar.collapsed .stale-build-pill.is-rail {
   flex-direction: column;
   align-items: center;
-  /* On the column of the keys under it (Quick bar, the bell). */
-  margin: 0 0 6px;
+  /* On the rail's one centre column, as every key under it. */
+  margin: 0 auto 6px;
   padding: 0;
   min-height: 0;
   width: 36px;
