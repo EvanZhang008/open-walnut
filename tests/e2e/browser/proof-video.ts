@@ -5,7 +5,7 @@
  * factor, draws a pointer dot and a ripple at each press (headless capture has no cursor) and a
  * caption line, and joins the frames with ffmpeg as H.264 CRF 18, by their own timestamps.
  *
- *   const video = await startProofVideo(page)   // before the first load
+ *   const video = await startProofVideo(page)   // before or after the first load
  *   await video.caption('Press Record')          // the first caption starts the capture (no loading screen)
  *   await video.hold()                           // about a second on a result
  *   await video.stop('drawing-narration')        // -> <PROOF_VIDEO_DIR>/drawing-narration.mp4
@@ -56,6 +56,9 @@ export async function startProofVideo(page: Page): Promise<ProofVideo> {
   const frames = fs.mkdtempSync(path.join(dir, '.frames-'))
   const stamps: Array<{ file: string; at: number }> = []
   await page.addInitScript(OVERLAY)
+  // Started after the page loaded, the init script waits for the next load: draw the pointer and
+  // the caption on the page as it is too (OVERLAY runs once per document), or the video has neither.
+  await page.evaluate(OVERLAY).catch(() => {})
   const cdp = await page.context().newCDPSession(page)
   // A frame can still arrive after stop() removed the folder (2026-11-22: ENOENT on a late frame
   // failed a passing proof run): frames after stop are dropped.
