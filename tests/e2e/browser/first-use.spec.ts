@@ -314,6 +314,14 @@ test('with the connect card and a notice in the stack, the next found host answe
   expect(fixture.answers).toEqual([
     { host: 'devbox-1', answer: 'yes' }, { host: 'devbox-2', answer: 'not_now' }, { host: 'devbox-3', answer: 'not_now' },
   ]);
+  // The connect keeps going. An error notice stays at least 15 s (ERROR_TOAST_MIN_MS, since
+  // 9f5ed157e3), and two kinds in a window this short take the short forms (corner-stack.tsx), so
+  // with the notice still up the connect is its one line; closing the notice brings the card back.
+  const notice = stack.locator('.notification-toast', { hasText: 'found host room' });
+  await expect(notice).toBeVisible();
+  await expect(stack.getByTestId('host-connect-pill')).toBeVisible();
+  await notice.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await expect(notice).toHaveCount(0);
   await expect(stack.getByTestId('host-connect-card')).toBeVisible();
 });
 

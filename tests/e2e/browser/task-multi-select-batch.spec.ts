@@ -15,6 +15,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs, showEverything } from './todo-panel-helpers'
 import { setShowCompleted } from './home-navigation-helpers'
+import { setStatus } from './filter-bar-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -264,9 +265,12 @@ test('a done selection offers Reopen instead of Complete', async ({ page }) => {
   await barBtn(page, /^Complete/).click()
   await expect.poll(async () => (await fetchTask(tasks[0].id))?.phase, { timeout: 15_000 }).toBe('COMPLETE')
 
-  // Show done rows (Status gains Complete), re-select them, and the bar should now offer Reopen.
-  await setShowCompleted(page, true)
-  await page.waitForTimeout(500)
+  // Show done rows as list rows (Status: Completed only), re-select them, and the bar should now
+  // offer Reopen. With every open status picked too, a done row keeps its place only for the
+  // completion grace (GRACE_MS, 3.15 s, TodoPanel.tsx) and then joins the Completed section's
+  // cards at the bottom (panel-design.ts): a slow run picked A in place and found B already gone.
+  // A Status narrower than Open has no sections, so the rows stay in their project's list.
+  await setStatus(page, ['Completed'])
 
   await selectRows(page, titles)
   await expect(barBtn(page, /^Reopen/)).toBeVisible()

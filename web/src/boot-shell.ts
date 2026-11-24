@@ -14,6 +14,7 @@
 import type { ComponentType } from 'react';
 import { isPopoutPath } from './popout/openPopout';
 import { loadPopoutView, popoutViewOf } from './popout/popout-views';
+import { holdDevLoad } from './utils/dev-load-hold-script';
 import { publishScrollbarMetrics } from './utils/scrollbar-metrics';
 
 export const shellPath = window.location.pathname;
@@ -22,23 +23,18 @@ export const isPopoutWindow = isPopoutPath(shellPath);
 let pluginLoader: Promise<typeof import('./plugins/loader')> | null = null;
 
 /**
- * The dev server only (the browser specs run on it): the console page's load event waits for the
- * app's own modules, as it did while main.tsx imported App statically. A dynamic import never
- * holds the load event, so without this `load` fired about half a second in while the app's
- * modules still came in for seconds, and every spec that waits for a page to load and then gives
- * the page 5 s (page.goto, page.reload) had that time eaten (2026-11-06: 0.3 to 0.6 s to `load`,
- * 4.5 to 8 s to the sidebar; with the static import: 3 to 5 s, then 0.5 s). A pending module script
- * holds it: dev-load-hold.ts, which imports App and the plugin loader by the specifiers used below,
- * so they are the same modules, fetched and run once, after this entry as the imports would.
- * A pop-out is left as it is (its view draws on its own clock, and the extension never waits for
- * its frame's load). A build loads its few chunks at once and has no such script.
+ * The dev server only: the console page's load event waits for the app's own modules, as it did
+ * while main.tsx imported App statically. A dynamic import never holds the load event, so without
+ * this `load` fired about half a second in while the app's modules still came in for seconds, and
+ * every spec that waits for a page to load and then gives the page 5 s (page.goto, page.reload)
+ * had that time eaten (2026-11-06: 0.3 to 0.6 s to `load`, 4.5 to 8 s to the sidebar; with the
+ * static import: 3 to 5 s, then 0.5 s). The hold is dev-load-hold.ts (utils/dev-load-hold-script.ts),
+ * which imports App and the plugin loader by the specifiers used below, so they are the same
+ * modules, fetched and run once, after this entry as the imports would. A pop-out is left as it is
+ * (its view draws on its own clock, and the extension never waits for its frame's load).
  */
 function holdLoadForApp(): void {
-  if (!import.meta.env.DEV || isPopoutWindow || document.readyState === 'complete') return;
-  const script = document.createElement('script');
-  script.type = 'module';
-  script.src = import.meta.url.replace(/[^/]*$/, 'dev-load-hold.ts');
-  document.head.appendChild(script);
+  if (import.meta.env.DEV && !isPopoutWindow) holdDevLoad(import.meta.url.replace(/[^/]*$/, 'dev-load-hold.ts'));
 }
 
 export const shellReady: Promise<ComponentType> = (() => {

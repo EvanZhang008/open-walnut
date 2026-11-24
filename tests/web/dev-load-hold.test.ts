@@ -5,6 +5,11 @@
  * imports, and by the same specifiers, so each module is one module (fetched and run once). This
  * fails when the console shell starts an import that file does not hold, or holds one by another
  * specifier, and when code imports the hold file (a build must leave it out).
+ *
+ * A hold added after `load` holds nothing, so the page's own entry (index.html's module script)
+ * holds every module it imports late: 2026-11-24, boot.ts imported main only after its Demo check,
+ * boot-shell's hold for App was never added, and `load` came at 0.15 s while the app's socket
+ * opened at 6.8 s (specs that sent on the socket right after load found none).
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -31,5 +36,20 @@ describe('the dev load event waits for the console modules', () => {
       .split('\n').filter((f) => /\.(t|j)sx?$/.test(f) && fs.existsSync(path.join(ROOT, f)))
     const importers = files.filter((f) => /from ['"][^'"]*dev-load-hold['"]|import\(['"][^'"]*dev-load-hold['"]\)|import ['"][^'"]*dev-load-hold['"]/.test(read(f)))
     expect(importers).toEqual([])
+  })
+
+  it('the page entry holds the load for every module it imports late, by the address the import uses', () => {
+    const entry = read('web/index.html').match(/<script type="module" src="\/src\/([\w/-]+\.tsx?)"><\/script>/)?.[1]
+    expect(entry).toBeTruthy()
+    const source = read(`web/src/${entry}`)
+    const late = [...source.matchAll(/import\('\.\/([\w/-]+)'\)/g)].map((m) => m[1])
+    expect(late).toContain('main')
+    for (const name of late) {
+      const file = ['.tsx', '.ts'].map((ext) => `${name}${ext}`).find((f) => fs.existsSync(path.join(ROOT, 'web/src', f)))
+      expect(file, `web/src/${name} exists`).toBeTruthy()
+      // The same address the import resolves to (import.meta.url's folder + the file), never
+      // `new URL(..., import.meta.url)`, which a build would copy as an asset.
+      expect(source, `${entry} holds the load for ./${name}`).toContain(`holdDevLoad(import.meta.url.replace(/[^/]*$/, '${file}'))`)
+    }
   })
 })

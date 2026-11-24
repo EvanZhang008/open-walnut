@@ -19,6 +19,9 @@ const ASKS = [
 test.use({ viewport: { width: 1280, height: 800 } })
 
 async function injectEvent(page: Page, name: string, data: unknown): Promise<void> {
+  // The app opens its socket once it has mounted, which can come after `networkidle` (the boot
+  // draws in slices after `load`, main.tsx): wait for the socket, never send on a guess.
+  await page.waitForFunction(() => !!(window as unknown as { __capturedShiftWs?: WebSocket }).__capturedShiftWs, null, { timeout: 20_000 })
   await page.evaluate(({ eventName, eventData }) => {
     const ws = (window as unknown as { __capturedShiftWs?: WebSocket }).__capturedShiftWs
     if (!ws) throw new Error('test WebSocket was not captured')

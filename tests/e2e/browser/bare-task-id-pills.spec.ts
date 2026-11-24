@@ -17,6 +17,7 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { cssColorToRgba } from './css-color'
+import { waitForBoardList } from './home-navigation-helpers'
 
 const SESSION_ID = 'pw-idref-session'
 const TASK_ID = 'pw-task-idref'
@@ -178,6 +179,9 @@ test('a task pill on a surface with no click handler opens the task on Home in-a
   page.on('load', () => { loads++ })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
+  // The fallback is the mounted app's listener, and the boot draws in slices after `load`
+  // (main.tsx): Home's task list being in shows the app is up before the click, not a guess.
+  await waitForBoardList(page)
   const before = loads
   // A surface that renders markdown but wires no entity click handler.
   await page.evaluate((id) => {
