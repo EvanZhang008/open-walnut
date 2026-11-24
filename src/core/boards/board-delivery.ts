@@ -174,7 +174,12 @@ export async function deliverBoardText(
   }
   const { performSessionSend, SendError } = await import('../sessions/session-send-core.js');
   try {
-    const result = await performSessionSend({ to: taskId, text, callerSid: opts.callerSid, expectReply: false, ...(opts.source ? { source: opts.source } : {}) });
+    // A Board item (a choice answered, a status set, a thread message, a reminder) is the lead's to
+    // act on: it never waits for a cold session's next wake (sessions/cold-hold.ts).
+    const result = await performSessionSend({
+      to: taskId, text, callerSid: opts.callerSid, expectReply: false,
+      wakeReason: 'a Board item its lead acts on', ...(opts.source ? { source: opts.source } : {}),
+    });
     return { state: result.delivery, sessionId: result.targetSessionId };
   } catch (err) {
     // A SendError is a known state (e.g. the task was never started); anything else is a fault.

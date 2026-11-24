@@ -761,6 +761,22 @@ async function workTargetDeliverable(callerTaskId: string | undefined, taskId: s
   }
 }
 
+/**
+ * Why a session's note that asks no reply still goes now to a cold session: it hands work. Only a
+ * report up the org (to the sender's own leader, its VP or Main: reply-direction.ts goesUp) may wait
+ * for a cold session's next wake (cold-hold.ts). 2026-11-24, measured on the Mac's log: 100 holds in
+ * two days, a median of 60.3 minutes each, most of them a VP or lead passing on the user's words
+ * down the org, or a forced message that reopened a completed task ("the Org rows are too long"
+ * reached its owner 61 minutes after the VP sent it). A note with no task to tell the way goes now.
+ */
+async function handsWorkReason(caller: CallerIdentity, taskId: string | undefined, reopens: boolean): Promise<string | undefined> {
+  if (caller.kind !== 'session') return undefined;
+  if (reopens) return 'it reopens a completed task, which must act again';
+  const { goesUp } = await import('./reply-direction.js');
+  const up = await goesUp(caller.record.taskId, taskId).catch(() => false);
+  return up ? undefined : 'a note down or across the org hands work';
+}
+
 /** The caller's task is the parent of `taskId` (a stored parent id may be a legacy prefix). */
 async function callerLeads(caller: CallerIdentity, taskId: string | undefined): Promise<boolean> {
   if (caller.kind !== 'session' || !caller.record.taskId || !taskId) return false;
@@ -1033,6 +1049,8 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
   await refuseOrgNodeWhileOff(caller, input.source, target.taskId ?? target.session.taskId);
   const admitted = await admitRetiredLead(caller, target.taskId ?? target.session.taskId, input, text);
   const body = await admitCompleteTarget(caller, target.taskId ?? target.session.taskId, input, admitted, 'send');
+  // admitCompleteTarget leads the text with its reason only when this send reopens a COMPLETE task.
+  const reopens = body !== admitted;
 
   // Envelope + throttle apply exactly when the SPEAKER is not the human:
   // another session (named peer-note) or an unidentified process (anonymous).
@@ -1208,8 +1226,12 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
   let messageId: string | undefined;
   try {
     const fromLeader = await callerLeads(caller, taskId);
-    // wake=true, or an answer the asker waits on, goes now even to a cold session (sessions/cold-hold.ts).
-    const wakeReason = input.wakeReason ?? (input.wake === true ? 'the sender asked to wake it now (wake=true)' : undefined);
+    // wake=true, an answer the asker waits on, or a note that hands work goes now even to a cold
+    // session (sessions/cold-hold.ts).
+    const wakeReason = input.wakeReason ?? (input.wake === true ? 'the sender asked to wake it now (wake=true)' : undefined)
+      // A forced wake=false note is delivered as any message (send-rules.ts holdsQuietly), so a reopen
+      // goes now whatever its wake says.
+      ?? (input.wake === undefined || reopens ? await handsWorkReason(caller, taskId, reopens) : undefined);
     const deliver = () => deliverToSession(target.session, {
       busText: body, enqueueText, source, taskId, messageId: rowId, fromLeader,
       ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),

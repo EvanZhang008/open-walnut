@@ -7,11 +7,12 @@
  * A wake of a session idle past its prompt cache's lifetime writes its whole context to the cache
  * again: about $3.50 for a 400K session, ten times a warm turn. In the week of 11-08 to 11-15 such
  * cold wakes were 2,182 turns and $6,174, 46% of the wake cost. A message that can wait
- * (wake-policy.ts waitsWhenCold: only an FYI, a task's note that asks nothing or a Walnut notice with
- * no clock in it; never a message a time brought, a trigger's fire, a wait clock, a re-check) to a
- * session that is cold (sessionIsCold) is stored in the session's queue parked under
- * COLD_HOLD_REASON: on disk like every queued row, so a restart loses nothing, and shown in the panel
- * as a queued message that says it is held and until when. No delivery path touches a parked row.
+ * (wake-policy.ts waitsWhenCold: only an FYI, a task's note that asks nothing and reports up the org
+ * (session-send-core.ts handsWorkReason) or a Walnut notice with no clock in it; never a message a
+ * time brought, a trigger's fire, a wait clock, a re-check) to a session that is cold
+ * (sessionIsCold) is stored in the session's queue parked under COLD_HOLD_REASON: on disk like
+ * every queued row, so a restart loses nothing, and shown in the panel as a queued message that says
+ * it is held and until when. No delivery path touches a parked row.
  *
  * What ends a hold, all of the session's held rows at once and in their order, so they go out as
  * ONE line (one turn):

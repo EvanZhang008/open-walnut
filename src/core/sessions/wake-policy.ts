@@ -216,7 +216,9 @@ const WAITS_COLD = new Set(NOTICE_WAITS_COLD);
  * a source in COLD_HOLD_SOURCES, and a message made of nothing but envelopes (and Walnut's hint
  * blocks), each a task's note that asks nothing (a peer-note with no `request`, not a script's) or a
  * notice that rides or is in NOTICE_WAITS_COLD. Everything else goes at once: an unknown shape or
- * source is never held by mistake.
+ * source is never held by mistake. A session's note that hands work (down or across the org, or a
+ * reopen) never reaches this test: the send core gives it a wakeReason (session-send-core.ts
+ * handsWorkReason), so only a report up the org can wait.
  */
 export function waitsWhenCold(text: string, source: string | undefined): boolean {
   if (!source || !COLD_HOLD_SOURCES.has(source)) return false;

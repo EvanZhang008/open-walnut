@@ -690,6 +690,54 @@ describe('performSessionSend — expect_reply', () => {
     }
   });
 
+  it('only a report up the org may wait for a cold session: down, across and a reopen go now', async () => {
+    // 2026-11-24: 100 cold holds in two days, a median of 60.3 min each, most of them the VP passing
+    // on the user's words down the org with expect_reply=false, or a forced reopen of a complete task.
+    tasks = [
+      { id: 'task-main', title: 'Main', org_role: 'main' },
+      { id: 'task-lead', title: 'Garden lead', org_role: 'lead', project: 'Garden' },
+      { id: 'task-work', title: 'Water the roses', parent_task_id: 'task-lead', project: 'Garden' },
+      { id: 'task-sub', title: 'Fix the hose', parent_task_id: 'task-work', project: 'Garden' },
+      { id: 'task-other', title: 'Paint the shed', project: 'Shed' },
+      { id: 'task-done', title: 'Prune the hedge', parent_task_id: 'task-lead', project: 'Garden', phase: 'COMPLETE' },
+    ];
+    sessions = [
+      rec('sess-main', { title: 'Main', taskId: 'task-main' }), rec('sess-lead', { title: 'Garden lead', taskId: 'task-lead' }),
+      rec('sess-work', { title: 'Water the roses', taskId: 'task-work' }), rec('sess-sub', { title: 'Fix the hose', taskId: 'task-sub' }),
+      rec('sess-other', { title: 'Paint the shed', taskId: 'task-other' }), rec('sess-done', { title: 'Prune the hedge', taskId: 'task-done' }),
+    ];
+    let n = 0;
+    const wakeOf = async (from: string, to: string, extra: Record<string, unknown> = {}) => {
+      sendMessageToSession.mockClear();
+      await performSessionSend({ to, text: `Evan says the rows are too long (${++n}).`, callerSid: from, expectReply: false, ...extra });
+      return dispatched().opts.wakeReason as string | undefined;
+    };
+    // Down and across hand work: never held for a cold session's next wake.
+    for (const [from, to] of [['sess-lead', 'sess-work'], ['sess-main', 'sess-lead'], ['sess-main', 'sess-sub'], ['sess-work', 'sess-sub'], ['sess-work', 'sess-other']] as const) {
+      expect(await wakeOf(from, to), `${from} -> ${to}`).toBe('a note down or across the org hands work');
+    }
+    // A report up (its leader, its leader's leader, Main) may wait.
+    for (const [from, to] of [['sess-work', 'sess-lead'], ['sess-sub', 'sess-lead'], ['sess-lead', 'sess-main'], ['sess-sub', 'sess-main']] as const) {
+      expect(await wakeOf(from, to), `${from} -> ${to}`).toBeUndefined();
+    }
+    // A forced message that reopens a complete task goes now.
+    expect(await wakeOf('sess-lead', 'sess-done', { force: true, reason: 'Evan saw the hedge is still too tall' }))
+      .toBe('it reopens a completed task, which must act again');
+    // The sender's own word still wins: wake=true says so, wake=false holds it as a quiet note.
+    expect(await wakeOf('sess-work', 'sess-lead', { wake: true })).toBe('the sender asked to wake it now (wake=true)');
+    sendMessageToSession.mockClear();
+    const quiet = await performSessionSend({ to: 'sess-work', text: 'FYI only.', callerSid: 'sess-lead', expectReply: false, wake: false });
+    expect(quiet.delivery).toBe('held');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // A forced reopen delivers a wake=false note as any message (send-rules.ts holdsQuietly), so it
+    // goes now too.
+    expect(await wakeOf('sess-lead', 'sess-done', { force: true, reason: 'Evan saw it again', wake: false }))
+      .toBe('it reopens a completed task, which must act again');
+    // A session with no task has no place in the org to tell the way from: its note goes now.
+    sessions.push(rec('sess-loose', { title: 'Loose helper' }));
+    expect(await wakeOf('sess-loose', 'sess-lead')).toBe('a note down or across the org hands work');
+  });
+
   it('registers a pending row, stamps the request in the tag, and adds ONE trailer line', async () => {
     sessions = [
       rec('sess-caller-4', { title: 'Asker', host: 'devbox' }),
