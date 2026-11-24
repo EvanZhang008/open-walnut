@@ -10,13 +10,19 @@
  *
  * Real task and session stores, closed and reopened for the restart; owner-stop is stubbed
  * (which hosts are connected, what each stop answered); process.kill must see nothing.
+ *
+ * Which path: the records here carry no `judge`, so this server judges them (the path every
+ * session started before host_runs_sessions, or with it off, takes); the switch only decides how
+ * a NEW session starts. The last describe is the twin for a session its host judges
+ * (`judge: 'host'`): the leader writes nothing of its row and its host takes the stop.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import fsp from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
-const { ownerStops, connected, answer } = vi.hoisted(() => ({
+const { ownerStops, hostStops, connected, answer } = vi.hoisted(() => ({
   ownerStops: [] as Array<{ sid: string; host?: string; why: string }>,
+  hostStops: [] as Array<{ sid: string; force?: boolean; by?: string }>,
   connected: new Set<string>(),
   answer: { outcome: 'stopped' as 'stopped' | 'unreachable' | 'unknown' | 'refused' },
 }))
@@ -31,6 +37,14 @@ vi.mock('../../../src/core/sessions/owner-stop.js', () => ({
     return answer.outcome
   },
   stopAcpThroughOwner: async () => 'stopped',
+}))
+// A host-judged session's stop goes to its host over the channel; HOST's link is `connected`.
+vi.mock('../../../src/core/sessions/host-judged-controls.js', () => ({
+  terminateOnHost: async (sid: string, opts: { force?: boolean; by?: string }) => {
+    if (!connected.has(HOST)) throw new Error('host not linked')
+    hostStops.push({ sid, ...opts })
+    return { status: 'stopped' }
+  },
 }))
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
   sessionRunner: { markExpectedTeardown: () => () => {} },
@@ -63,13 +77,18 @@ import {
 import { flushTaskCompleteStops, TASK_COMPLETE_STOP_UNDELIVERED_MAX_MS } from '../../../src/core/sessions/task-complete-stop.js'
 // Loaded up front: the turn-end wait imports these on its first look, and two first imports of a
 // module that reaches a mocked one at once can leave one of them pending under vitest.
-import '../../../src/core/sessions/turn-run.js'
+import { loadTurnRetriers } from '../../../src/core/sessions/turn-run.js'
 import '../../../src/providers/claude-code-session.js'
 import '../../../src/core/session-queue-store.js'
+import {
+  _completionStopsWaitingForTesting, _resetHostJudgedCompleteForTesting, retryCompletionStopsFor,
+} from '../../../src/core/sessions/host-judged-complete.js'
+import { writingAsHost } from '../../../src/core/sessions/session-row-owner.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 
 const PID = 2 ** 22 + 7
-const HOST = 'devbox'
+// Hoisted with the mocks: the host-judged-controls stub reads it.
+const { HOST } = vi.hoisted(() => ({ HOST: 'devbox' }))
 let signals: Array<[number, unknown]>
 /** Every status the bus announced for a session: the workspace cleanup acts on 'stopped'. */
 let announced: Array<{ sid: string; status: string }>
@@ -90,6 +109,7 @@ async function turnEnds(sid: string) {
 /** A deploy: everything in memory is gone, the stores on disk stay. */
 function restart() {
   _resetSelfCompleteStopsForTest()
+  _resetHostJudgedCompleteForTesting()
   closeTaskDb()
   closeSessionDb()
   _resetSessionTrackerForTesting()
@@ -98,12 +118,17 @@ function restart() {
 
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms))
 
+// The retry rows load at the server's start (triage/runs.ts); loaded here too, so a wait's first
+// look does not import them inside the timed window (2026-11-24: about a second on a busy host).
+beforeAll(async () => { await loadTurnRetriers() })
+
 beforeEach(async () => {
   restart()
   __setSelfCompleteSettleMs(0)
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
   ownerStops.length = 0
+  hostStops.length = 0
   connected.clear()
   connected.add('__local__').add(HOST)
   answer.outcome = 'stopped'
@@ -335,5 +360,39 @@ describe('ratchet: no decided stop drops what its owner answered', () => {
     }
     expect(calls).toBeGreaterThanOrEqual(8)
     expect(dropped, 'a stop whose outcome is dropped loses "host not connected" (task-complete-stop.ts)').toEqual([])
+  })
+})
+
+describe('the same timeline for a session its host judges (host_runs_sessions)', () => {
+  /** What the host's service writes of its own row, as the channel brings it here. */
+  const hostWrites = (sid: string, patch: Parameters<typeof updateSessionRecord>[1]) =>
+    writingAsHost(() => updateSessionRecord(sid, patch))
+
+  it('waits for its turn, writes nothing of its row, and its host takes the stop once it links', async () => {
+    const { task } = await addTask({ title: 'Ship the fix' })
+    await createSessionRecord('self', task.id, 'proj', undefined, { pid: PID, host: HOST })
+    await hostWrites('self', { judge: 'host', process_status: 'running' })
+    await linkSession(task.id, 'self')
+
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual(['self']))
+    expect(hostStops, 'the turn that completed the task is not cut').toEqual([])
+    expect((await getSessionByClaudeId('self'))?.taskCompleteStop, 'its row is its host\'s').toBeUndefined()
+
+    // The host's link drops; its turn ends (its row comes in idle).
+    connected.delete(HOST)
+    const rec = await hostWrites('self', { process_status: 'idle' })
+    emitSessionStatusChanged(rec, {}, ['*'], { source: 'session-runner' })
+    await vi.waitFor(() => expect(_completionStopsWaitingForTesting(HOST)).toEqual(['self']), { timeout: 10_000 })
+    expect(_pendingSelfCompleteStopsForTest()).toEqual([])
+    expect(await getSessionByClaudeId('self'), 'never written stopped by the leader').toMatchObject({ process_status: 'idle', pid: PID })
+    expect(announced.filter((a) => a.status === 'stopped')).toEqual([])
+
+    // The host links again: the stop that waited goes, whole.
+    connected.add(HOST)
+    retryCompletionStopsFor(HOST)
+    await vi.waitFor(() => expect(hostStops).toEqual([{ sid: 'self', force: true, by: 'task_completed' }]))
+    expect(_completionStopsWaitingForTesting(HOST)).toEqual([])
+    expect(ownerStops, 'no daemon owner stop for a host-judged session').toEqual([])
   })
 })

@@ -118,7 +118,14 @@ export interface TurnEndWaitSpec<T> {
   act(sessionId: string, data: T, verdict: Exclude<TurnEndVerdict, 'wait'>, hold: TurnHold): Promise<void>;
 }
 
-interface Entry<T> { data: T; backgroundSince?: number; timer?: ReturnType<typeof setTimeout>; checking?: boolean }
+interface Entry<T> {
+  data: T;
+  backgroundSince?: number;
+  timer?: ReturnType<typeof setTimeout>;
+  checking?: boolean;
+  /** A status change came while a look was reading: that look's answer is older than it. */
+  changedDuringLook?: boolean;
+}
 
 /** Every waiter made, by name: the ratchet reads it (lifecycle-waits.ts). */
 export const TURN_END_WAITERS = new Map<string, TurnEndLimits>();
@@ -175,6 +182,9 @@ export class TurnEndWait<T> {
       const sid = data?.sessionId;
       if (!sid || !this.entries.has(sid) || !data?.process_status || data.process_status === 'running') return;
       const e = this.entries.get(sid)!;
+      // A look reading now read the record before this change, and its 'wait' would replace a
+      // timer set here with the poll (30 s late): it looks again after the settle when it is done.
+      if (e.checking) { e.changedDuringLook = true; return; }
       this.schedule(sid, e, this.spec.settleMs ?? TURN_END_SETTLE_MS, true);
     }, { global: true, interest: [EventNames.SESSION_STATUS_CHANGED] });
   }
@@ -191,8 +201,9 @@ export class TurnEndWait<T> {
     const e = this.entries.get(sessionId);
     if (!e) return;
     if (delayMs) { this.schedule(sessionId, e, delayMs); return; }
-    if (e.checking) { if (settled) this.schedule(sessionId, e, this.spec.settleMs ?? TURN_END_SETTLE_MS, true); return; }
+    if (e.checking) { if (settled) e.changedDuringLook = true; return; }
     e.checking = true;
+    e.changedDuringLook = false;
     try {
       const asked = await this.spec.asked(sessionId, e.data);
       if (!asked) { this.drop(sessionId, e); return; }
@@ -223,6 +234,11 @@ export class TurnEndWait<T> {
       if (this.entries.get(sessionId) === e) this.schedule(sessionId, e, this.pollMs);
     } finally {
       e.checking = false;
+      // Still waiting, and the session changed while this look read: look again after the settle.
+      if (e.changedDuringLook && this.entries.get(sessionId) === e) {
+        e.changedDuringLook = false;
+        this.schedule(sessionId, e, this.spec.settleMs ?? TURN_END_SETTLE_MS, true);
+      }
     }
   }
 

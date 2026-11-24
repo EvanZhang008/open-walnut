@@ -8,7 +8,7 @@
  * process.kill is spied on and must see nothing. Pids are fabricated above any
  * real pid limit.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import fsp from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
@@ -59,6 +59,7 @@ import {
   _pendingSelfCompleteStopsForTest,
   _resetSelfCompleteStopsForTest,
 } from '../../../src/core/sessions/self-complete-stop.js'
+import { loadTurnRetriers } from '../../../src/core/sessions/turn-run.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 
 const BASE = 2 ** 22
@@ -94,6 +95,10 @@ function statusEvent(sid: string, process_status: 'running' | 'idle') {
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms))
 
 const stoppedSids = () => ownerStops.map((s) => s.sid).sort()
+
+// The retry rows load at the server's start (triage/runs.ts); loaded here too, so a wait's first
+// look does not import them inside the timed window (2026-11-24: about a second on a busy host).
+beforeAll(async () => { await loadTurnRetriers() })
 
 beforeEach(async () => {
   closeTaskDb()
