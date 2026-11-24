@@ -9901,6 +9901,14 @@ function persistHeldPushes(): void {
 }
 
 function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  // A service set's daemon writes none of the account's engine skill places, as it writes no user
+  // PATH shim: they are one per OS account, and on a shared machine the default service is another
+  // person's Walnut (2026-11-24). Answered, never refused; a probe reads held, so the skills never
+  // cross again. Keep in sync with daemon-source.ts.
+  if (SET_ID) {
+    const kept = { skipped: 'default-service', why: "kept by the default service: the account's engine skill places (distributed-skills and the engines' skill links) are written only by the default set" }
+    return sendOk(ws, id, cmd.probe === true ? { held: true, ...kept } : { applied: true, changed: false, ...kept })
+  }
   const entries: Array<{ name: string; body: string }> = []
   // Held: every canonical copy on disk is still what was sent. The engine links are then put
   // right from those copies as a push would (an engine installed since, a link removed), and

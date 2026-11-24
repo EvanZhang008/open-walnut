@@ -2321,7 +2321,8 @@ export class DaemonConnection {
           const probe = await this.send('skills.sync', { probe: true, hash: payload.hash }).catch(() => null)
           if (probe?.ok === true && probe.held === true && instance === this._daemonInstanceId) {
             this.lastSkillSyncHash = payload.hash
-            log.session.info('DaemonConnection: walnut skills already held, not sent', { host: this.hostKey, hash: payload.hash })
+            // `skipped`: a service set's daemon, which leaves the account's skill places to the default service.
+            log.session.info('DaemonConnection: walnut skills already held, not sent', { host: this.hostKey, hash: payload.hash, ...(typeof probe.skipped === 'string' ? { skipped: probe.skipped } : {}) })
             return
           }
         }
@@ -2343,6 +2344,7 @@ export class DaemonConnection {
           host: this.hostKey, hash: payload.hash, skills: payload.skills.map((s) => s.name),
           changed: (reply as Record<string, unknown>).changed === true,
           wrote: (reply as Record<string, unknown>).wrote,
+          skipped: (reply as Record<string, unknown>).skipped,
         })
       } catch (err) {
         log.session.warn('DaemonConnection: skill sync failed', {

@@ -28,9 +28,11 @@ const HOME = '/home/walnut'
 const ID = '0123456789abcdef'
 
 /** A default place of the default Walnut, in either quote style (the inlined cores are transpiled). */
-const DEFAULT_PLACE = /["']\.open-walnut["']|["']?\.open-walnut\/|["']\/tmp\/open-walnut(?!-set-)|open-walnut-streams|open-walnut-runtime/
+const DEFAULT_PLACE = /["']\.open-walnut["']|["']?\.open-walnut\/|["']\/tmp\/open-walnut(?!-set-)|open-walnut-streams|open-walnut-runtime|["'](\.claude|\.agents|\.gemini)["'], ["']skills["']|["']\.codex["'], ["']AGENTS\.md["']/
 
 type Verdict = string
+/** Written only by cmdSkillsSync, whose first statement answers a set's daemon and returns (checked below). */
+const SKILLS_DEFAULT_ONLY: Verdict = 'default set only: the skills push, which a set\'s daemon answers as kept by the default service'
 /** [where, a text unique to the line, what a set's process does with it]. */
 const PLACES: Array<['binary' | 'twins', string, Verdict]> = [
   // The compiled file's runtime trees (R1).
@@ -55,8 +57,14 @@ const PLACES: Array<['binary' | 'twins', string, Verdict]> = [
   ['twins', "path.join(HOME_DIR, '.open-walnut'), path.join(HOME_DIR, '.open-walnut-host')", 'read only: where no follower reads through'],
   ['twins', "'/tmp/open-walnut', '/tmp/open-walnut-streams',", 'read only: the places a file manager never deletes'],
   ['twins', "path.join(HOME_DIR, '.open-walnut', 'tmp'),", 'read only: the places a file manager never deletes'],
-  ['twins', "'.open-walnut', 'distributed-skills'", 'on a hub\'s skills push, not at start: the engines\' skill dirs are one per account'],
-  ['twins', "'.open-walnut', 'skills', 'walnut')", 'on a hub\'s skills push: an old layout moved once'],
+  // The account's engine skill places, written by the hub's skills push: one per OS account, so only the
+  // default set writes them (a set's daemon answers the push as kept by the default service: SKILLS_DEFAULT_ONLY).
+  ['twins', "'.open-walnut', 'distributed-skills'", SKILLS_DEFAULT_ONLY],
+  ['twins', "'.open-walnut', 'skills', 'walnut')", SKILLS_DEFAULT_ONLY],
+  ['twins', "ensureLink(path.join(HOME_DIR, '.claude', 'skills'))", SKILLS_DEFAULT_ONLY],
+  ['twins', "'.agents', 'skills'))", SKILLS_DEFAULT_ONLY],
+  ['twins', "ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))", SKILLS_DEFAULT_ONLY],
+  ['twins', "'.codex', 'AGENTS.md')", SKILLS_DEFAULT_ONLY],
   // Cores the JS twin inlines (the standalone imports the same ones).
   ['twins', '".open-walnut", "secrets", "plugins"', 'a plugin job\'s secrets, given by its spawn; read only'],
   ['twins', '".open-walnut", "local", "machine-id"', 'shared by the spec: the machine id (an old seed, read only)'],
@@ -89,6 +97,16 @@ describe('every default place a set\'s service program derives is decided for a 
     }
     expect(unlisted, 'a set\'s service derives a default place nobody decided for: list it in PLACES with what a set does').toEqual([])
     expect(PLACES.filter((_, at) => !used.has(at)).map((p) => p[1]), 'stale entries').toEqual([])
+  })
+
+  it('the skills push answers a set\'s daemon before it writes anything, in both twins', () => {
+    for (const src of sources().filter((x) => x.where === 'twins')) {
+      const at = src.text.indexOf('function cmdSkillsSync(')
+      expect(at, src.name).toBeGreaterThan(-1)
+      const body = src.text.slice(src.text.indexOf('{', at) + 1).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//'))
+      expect(body[0], src.name).toBe('if (SET_ID) {')
+      expect(body.slice(1, 3).join(' '), src.name).toMatch(/skipped: 'default-service'.*kept by the default service[\s\S]*return sendOk\(/)
+    }
   })
 
   it('a set\'s service env leaves the walnut file no default place to unpack its runtime into', () => {

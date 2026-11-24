@@ -79,12 +79,12 @@ function extractCmdSkillsSync(): (homeDir: string, daemonDir: string, prodDir: s
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const bound = new Function(
       // KEEPS_SESSIONS: the prod dir, or a service set's runtime (none here): the daemon's gate for skills.sync.
-      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
+      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'SET_ID', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
       // What the held skills keep on disk (held-pushes.json) is heldSkillsProcess's to cover.
       'loadHeldPushes', 'persistHeldPushes', 'heldSkills',
       fnSrc + '\nreturn cmdSkillsSync(null, 1, CMD);',
     ) as (...a: unknown[]) => void
-    bound(path, fs, homeDir, daemonDir, prodDir, isProd, isProd, process.env, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {}, null)
+    bound(path, fs, homeDir, daemonDir, prodDir, isProd, isProd, '', process.env, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {}, null)
     return reply
   }
 }
@@ -128,9 +128,9 @@ function heldSkillsProcess(): (homeDir: string, offlineDir: string, cmd: Record<
     if (!run) {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       run = new Function(
-        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
+        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'SET_ID', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
         block + '\nreturn function (CMD) { return cmdSkillsSync(null, 1, CMD); };',
-      )(path, fs, crypto, homeDir, offlineDir, true, true, process.env,
+      )(path, fs, crypto, homeDir, offlineDir, true, true, '', process.env,
         (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } },
         (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } },
         () => {}, 'walnut-managed v1') as (cmd: Record<string, unknown>) => void
