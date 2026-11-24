@@ -13,6 +13,7 @@
  */
 import path from 'node:path'
 import {
+  carriesServiceSetEnv,
   daemonServiceConfigFiles,
   type DaemonServiceConfig,
 } from './daemon-service-config.js'
@@ -396,7 +397,8 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     // with its single @reboot line; the launcher stops its daemon and runs it at the daemon's update exit.
     const fromLauncher = undo.previous !== null && isLauncherScript(undo.previous)
     if (updateOnly) {
-      if (!fromLauncher) try { text = replaceDaemonBootExecutable(undo.previous!, prepared.executable) } catch (err) { return fail('invalidConfig', errText(err)) }
+      // A set's script an older Walnut wrote, without the env a set carries now, is rendered whole too.
+      if (!fromLauncher && carriesServiceSetEnv('linux', undo.previous!, config)) try { text = replaceDaemonBootExecutable(undo.previous!, prepared.executable) } catch (err) { return fail('invalidConfig', errText(err)) }
       const latest = await probe()
       if (!latest.daemon || !latest.ourLines) return fail('serviceInactive', 'The service was stopped during staging; nothing was changed')
     }

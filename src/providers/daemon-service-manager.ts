@@ -3,6 +3,7 @@ import {
   daemonServiceConfigFiles,
   renderDaemonLaunchAgent,
   renderDaemonSystemdUnit,
+  carriesServiceSetEnv,
   replaceDaemonServiceExecutable,
   hasLauncherShape,
   readDaemonServiceExecutable,
@@ -749,7 +750,10 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     if (updateOnly) {
       // A launcher's unit (the experiment turned off since) becomes the plain one again, whole; so does
       // one an older Walnut put its daemon in, which kept the launcher's restart policy.
-      if (!launcherConfig(undo.previous!) && !hasLauncherShape(deps.platform, undo.previous!)) text = replaceDaemonServiceExecutable(deps.platform, undo.previous!, prepared.executable)
+      // A set's config an older Walnut wrote, without the env a set carries now, too.
+      if (!launcherConfig(undo.previous!) && !hasLauncherShape(deps.platform, undo.previous!) && carriesServiceSetEnv(deps.platform, undo.previous!, config)) {
+        text = replaceDaemonServiceExecutable(deps.platform, undo.previous!, prepared.executable)
+      }
       const latest = await probe(scope)
       const refusal = jobRefusal(scope, latest.present && latest.owned, latest)
       if (refusal) return { ok: false, failure: refusal }

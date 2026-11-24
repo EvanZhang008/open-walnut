@@ -230,4 +230,29 @@ describe.each([
       expect(m.crontab()).not.toContain(B)
     }
   })
+  it('an update gives an older set\'s config the env a set carries now; the default set\'s keeps its own text', async () => {
+    // Review of the 2026-11-24 drill fixes (S2): a set installed before WALNUT_RUNTIME_DIR was in its
+    // env kept a config whose update replaced only the executable, so its walnut file still unpacked
+    // into the default Walnut's data home.
+    const m = machine()
+    const a = walnut(m, 'A', serviceSet(platform, home, '', { runtimeDir: '/tmp/open-walnut' }), platform, scope)
+    const b = walnut(m, 'B', serviceSet(platform, home, B, { uid: UID }), platform, scope)
+    const opts = { scope }
+    const text = (w: typeof a) => fs.readFileSync(w.configPath, 'utf8')
+    expect((await a.manager.install(opts)).ok).toBe(true)
+    expect((await b.manager.install(opts)).ok).toBe(true)
+    const trees = `${b.set.installRoot}/runtime`
+    expect(text(b)).toContain(trees)
+    // The config as an older Walnut wrote it: no WALNUT_RUNTIME_DIR line.
+    fs.writeFileSync(b.configPath, text(b).split('\n').filter((l) => !l.includes('WALNUT_RUNTIME_DIR') && !l.includes(trees)).join('\n'))
+    expect(text(b)).not.toContain('WALNUT_RUNTIME_DIR')
+    const up = await b.manager.update(opts)
+    expect(up.ok, JSON.stringify(up)).toBe(true)
+    expect(text(b)).toContain(trees)
+    expect(text(b)).toContain(b.exe(2))
+    // The default set's update still replaces only its executable.
+    const before = text(a)
+    expect((await a.manager.update(opts)).ok).toBe(true)
+    expect(text(a)).toBe(before.split(a.exe(1)).join(a.exe(2)))
+  })
 })

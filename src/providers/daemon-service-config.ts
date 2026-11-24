@@ -227,6 +227,16 @@ function readServiceEnv(platform: DaemonServicePlatform, text: string, key: stri
   return m ? m[1].replace(/&(amp|lt|gt|quot|apos);/g, (_, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" })[entity]!) : null
 }
 
+/**
+ * Does an installed config (unit, LaunchAgent or cron boot script) carry the env a set's config
+ * carries now (serviceSetEnv)? An update that replaces only the executable keeps the rest of the
+ * text, so a set installed by an older Walnut, before WALNUT_RUNTIME_DIR was in it, is rendered
+ * whole instead. Always true for the default set, whose files stay as they were.
+ */
+export function carriesServiceSetEnv(platform: DaemonServicePlatform, text: string, config: Pick<DaemonServiceConfig, 'serviceSet' | 'stateDir'>): boolean {
+  return serviceSetEnv(config.serviceSet, config.stateDir).every(([key, value]) => readServiceEnv(platform, text, key) === value)
+}
+
 /** The daemon dir an installed service config pins (its WALNUT_DAEMON_DIR), or null when it names none. */
 export function readDaemonServiceDir(platform: DaemonServicePlatform, text: string): string | null {
   const dir = readServiceEnv(platform, text, 'WALNUT_DAEMON_DIR')
