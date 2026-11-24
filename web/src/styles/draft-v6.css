@@ -73,15 +73,13 @@
 }
 /* A very narrow draft (two drafts side by side, about 300 px): Project and Where share the row
    evenly, Where shows the host by its dot only (its name is in the field's title and the menu) so
-   the folder keeps the room; the send arrow keeps its place without its words (its title still
-   says what it starts). */
+   the folder keeps the room. */
 @container draft-v6 (max-width: 480px) {
   .draft-v6-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .draft-v6-field { overflow: hidden; }
   .draft-v6-crumbs .draft-v6-host-name,
   .draft-v6-crumbs > .draft-v6-sep { display: none; }
   .draft-v6-crumbs .draft-v6-host-static { padding: 2px 8px; }
-  .draft-v6-send-label { display: none; }
 }
 
 /* The row and its line: one slot of 82 px (28 + 6 + 48), Quick chat's block in the same box. The line
@@ -90,10 +88,14 @@
 .draft-v6-row-slot,
 .draft-v6-quick { flex: none; height: 82px; margin-top: 24px; margin-bottom: 0; box-sizing: border-box; }
 .draft-v6-row-slot { display: flex; flex-direction: column; justify-content: flex-end; }
-.draft-v6-row-slot > .draft-v6-row { flex: none; }
+.draft-v6-row-slot > .draft-v6-row,
+/* The line keeps its own height, a second line included: it grows up into the gap, never under the row
+   (2026-11-24: a narrow draft's gone-folder line slid under the row and hid its way out). */
+.draft-v6-row-slot > .draft-v6-line { flex: none; }
 .draft-v6-row {
   display: grid;
-  grid-template-columns: clamp(150px, 26%, 240px) minmax(0, 1fr);
+  /* Where (the folder) first and wide, then the repo or package (Evan, 2026-11-23). */
+  grid-template-columns: minmax(0, 1fr) clamp(150px, 28%, 260px);
   gap: 8px;
   height: 48px;
 }
@@ -118,7 +120,8 @@
 /* A field's own button (the family's link key, so it draws nothing) lies under its parts
    (DraftWhereRow); only the parts that are buttons themselves (the host, a level) take the pointer. */
 .draft-v6-field-open { position: absolute; inset: 0; width: 100%; }
-.draft-v6-field-open:focus-visible { outline: none; }
+/* One ring only, the field's (review 2026-11-24: the button's own ring showed inside it, two blue boxes). */
+html .draft-v6-field > .draft-v6-field-open:focus-visible { outline: none; }
 /* The ring goes round the whole field, at its own corner. */
 .draft-v6-field:has(> .draft-v6-field-open:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .draft-v6-field > :not(.draft-v6-field-open) { pointer-events: none; }
@@ -146,7 +149,12 @@
 /* The project and host names are .wn-meta (text-fit.css): one line, cut last, the whole name on hover. */
 .draft-v6-project-name { flex: 0 1 auto; }
 /* "detected" on the key line: the name under it keeps the field's whole width. */
+/* The second field's name stays on one line: a narrow field drops "detected" (its title still says it). */
+.draft-v6-project { container: draft-v6-project / inline-size; }
+.draft-v6-project .draft-v6-field-key { white-space: nowrap; overflow: hidden; }
+@container draft-v6-project (max-width: 180px) { .draft-v6-key-note { display: none; } }
 .draft-v6-key-note { margin-left: 6px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--accent); }
+.draft-v6-key-note.is-plain { color: var(--fg-muted); }
 .draft-v6-project-name.is-empty { color: var(--fg-muted); font-weight: 500; }
 .draft-v6-caret { color: var(--fg-muted); margin-left: auto; }
 .draft-v6-host .draft-v6-caret { margin-left: 2px; }
@@ -203,6 +211,9 @@
 .draft-v6-sep { flex: none; display: inline-flex; align-items: center; color: var(--fg-muted); }
 .draft-v6-folder-crumbs { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
 .draft-v6-crumb-wrap { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+/* Name only and still too long (a 400 px draft): the name ends in an ellipsis, never a cut glyph. */
+.draft-v6-folder-crumbs.is-tight > .draft-v6-crumb-wrap:has(> .draft-v6-crumb.is-last) { flex: 0 1 auto; min-width: 0; }
+.draft-v6-folder-crumbs.is-tight .draft-v6-crumb.is-last { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .draft-v6-gone { flex: none; color: var(--warning); }
 .draft-v6-auto-value { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
 .draft-v6-auto-tag { flex: none; }
@@ -263,7 +274,6 @@
    (chat-reading.css, --chat-column) is for a conversation, not this form. */
 :root .draft-session-panel.is-v6 .session-panel-input.draft-v6-input { padding: 0; z-index: auto; flex: none; }
 /* The send arrow's words: the family's quiet key (DraftV6Panel); this only lays it out. */
-.draft-v6-send-label { flex: none; }
 /* The model and the permission mode read as the design's controls: the row's own size and face,
    with their own menu caret (MenuCaret; the shared pills are a running session's small readouts). */
 .draft-session-panel.is-v6 .draft-actions-bar :is(.draft-model-select, .draft-mode-pill) {
@@ -275,7 +285,6 @@
   color: var(--fg-secondary);
 }
 .draft-session-panel.is-v6 .draft-actions-bar .draft-mode-pill .mode-toggle-pill-label { font-size: var(--font-size-md); font-family: inherit; }
-.draft-v6-body.is-blocked .draft-v6-send-label { opacity: 0.45; }
 .draft-v6-start-why {
   position: absolute;
   right: 8px;

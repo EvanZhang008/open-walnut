@@ -1,9 +1,9 @@
 /**
- * The new task draft's Project + Where row and the one line under it (experiment
+ * The new task draft's Where + Repo or package row and the one line over it (experiment
  * `project_first_start`, v6; words and rules in draft-work-in.ts, state in useDraftWhere.ts):
  *
- *   [PROJECT  ⑂ Marina   ▾] [WHERE  ● devbox ▾ › ✦Auto New worktree               ⌕]
  *   ◷ Last used for Marina: Auto on devbox, 12 min ago.
+ *   [WHERE  ● devbox ▾ › ✦Auto New worktree               ⌕] [REPO OR PACKAGE  ⑂ Marina   ▾]
  *
  * Where is one path whose first part is the host: the host part opens the Host menu, a middle
  * part opens the Where menu at that level, anything else the Where menu with an empty search.
@@ -65,11 +65,13 @@ export function DraftWhereRow({ draft, where, boundsRef, narrow, menu, setMenu, 
           2026-11-24) and a line that takes a second line grows upward, into the gap. */}
       <WhereLineView where={where} narrow={narrow} startError={startError} onPickFolder={() => setMenu({ kind: 'where', query: '' })} />
       <div ref={rowRef} className="draft-v6-row">
+        {/* The folder first, then the repo or package (Evan, 2026-11-23: "the folder should be before, the
+            pkgs should be second"). */}
+        <WhereField draft={draft} where={where} fieldRef={whereRef} hostRef={hostRef} narrow={narrow} menu={menu} setMenu={setMenu} />
         <ProjectField draft={draft} where={where} fieldRef={projectRef} open={menu?.kind === 'project'}
           onOpen={() => setMenu(menu?.kind === 'project' ? null : { kind: 'project' })} />
-        <WhereField draft={draft} where={where} fieldRef={whereRef} hostRef={hostRef} narrow={narrow} menu={menu} setMenu={setMenu} />
       </div>
-      <ProjectStartFlyout open={menu?.kind === 'project'} anchorRef={projectRef} onClose={close} label="Project"
+      <ProjectStartFlyout open={menu?.kind === 'project'} anchorRef={projectRef} onClose={close} label="Repo or package"
         className="draft-v6-menu draft-v6-project-menu" testId="draft-v6-project-menu" minHeight={200} boundsRef={boundsRef} side="up">
         <DraftProjectMenu where={where} onDone={close} onCustomizeWalnut={onCustomizeWalnut} />
       </ProjectStartFlyout>
@@ -108,17 +110,23 @@ function ProjectField({ draft, where, fieldRef, open, onOpen }: {
   const kind = name ? (where.row ? (where.row.startSource ? whereKindOf(where.row.startSource) : 'folder') : 'folder') : 'home';
   // Only a project the folder's code named (stampFolderDetection), never a name made from the folder.
   const detected = !!name && draft.projectSource === 'folder' && (draft.detectedProject ?? '').toLowerCase() === (draft.project ?? '').toLowerCase();
-  const title = name ? `Project: ${projectDisplayName(name)}${detected ? ' (detected from the folder)' : ''}` : 'No project: the task goes to the Inbox'; // empty-state-ok: a tooltip
+  // Named for what it picks, the code a start works on (Evan, 2026-11-23: "this is not project ... this
+  // means the walnut git repo", "the package", "or repo"); the task is still filed under it.
+  // A project with no code source works in the folder: said, so it never reads as a repo (review, 2026-11-24).
+  const noCode = !!name && !where.row?.startSource;
+  const title = name ? `Repo or package: ${projectDisplayName(name)}${detected ? ' (detected from the folder)' : ''}${noCode ? ', a project with no code: it works in the folder' : ''}`
+    : 'No repo or package: the task goes to the Inbox'; // empty-state-ok: a tooltip
   return (
     <div ref={fieldRef} className={`draft-v6-field draft-v6-project${open ? ' is-open' : ''}`} data-testid="draft-v6-project" title={title}
       onMouseDown={(e) => e.preventDefault()}>
       {/* The field's own button, under its parts (as Where's): the family's link key, so it draws nothing. */}
-      <FieldOpen testId="draft-v6-project-open" label={`${title}. Change the project`} open={open} onClick={onOpen} />
+      <FieldOpen testId="draft-v6-project-open" label={`${title}. Change it`} open={open} onClick={onOpen} />
       {/* "detected" sits on the key line, so the name below keeps the whole width (review: it was cut). */}
-      <span className="draft-v6-field-key">Project{detected && <span className="draft-v6-key-note" data-testid="draft-v6-detected">detected</span>}</span>
+      <span className="draft-v6-field-key">Repo or package{detected ? <span className="draft-v6-key-note" data-testid="draft-v6-detected">detected</span>
+        : noCode && <span className="draft-v6-key-note is-plain" data-testid="draft-v6-no-code">no code</span>}</span>
       <span className="draft-v6-field-value">
         <span className={`draft-v6-project-icon is-${kind}`}><WhereIcon kind={kind} size={14} /></span>
-        <span className={`draft-v6-project-name wn-meta${name ? '' : ' is-empty'}`} data-testid="draft-v6-project-name">{name ? projectDisplayName(name) : 'No project'}</span>{/* empty-state-ok: a field's value */}
+        <span className={`draft-v6-project-name wn-meta${name ? '' : ' is-empty'}`} data-testid="draft-v6-project-name">{name ? projectDisplayName(name) : 'None'}</span>{/* empty-state-ok: a field's value */}
         <MenuCaret className="draft-v6-caret" />
       </span>
     </div>
@@ -230,7 +238,8 @@ function FolderCrumbs({ path, narrow, offHost, gone, onLevel }: { path: string; 
   }, []);
   const crumbs = levels[at];
   return (
-    <span ref={ref} className="draft-v6-folder-crumbs" data-testid="draft-v6-folder">
+    // At its name only, a folder that still does not fit ends in an ellipsis (its whole path is the field's title).
+    <span ref={ref} className={`draft-v6-folder-crumbs${at === levels.length - 1 ? ' is-tight' : ''}`} data-testid="draft-v6-folder">
       {(offHost || gone) && <WhereIcon kind="gone" className="draft-v6-gone" />}
       {crumbs.map((c, i) => {
         const last = i === crumbs.length - 1;

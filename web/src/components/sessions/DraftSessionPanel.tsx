@@ -53,7 +53,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
 import type { DraftRowUpdate } from './useDraftWhere';
 import { DraftV6Body } from './DraftV6Body';
-import { DraftV6SendLabel, useDraftV6 } from './DraftV6Panel';
+import { useDraftV6 } from './DraftV6Panel';
 import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
 import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
@@ -1013,9 +1013,9 @@ export function DraftSessionPanel({
       // fork route's job — offering "create task" on either would make a
       // duplicate. Walnut mode hides it too: it would file the QUESTION as a
       // Walnut/Focus task with no session to answer it.
-      // v6: the send arrow says what it starts; Save as task moved to the lower row.
+      // v6: the arrow alone starts it (Evan crossed out "Start task", 11-23); Save as task is lower.
       sendOff={v6s.blocked} onShiftEnter={v6s.onShiftEnter}
-      sendSlot={v6 ? ({ canSend }: { canSend: boolean }) => <DraftV6SendLabel canSend={canSend} walnut={isWalnut} onClick={handleStartClick} />
+      sendSlot={v6 ? null
         : !isBound && !isFork && !isWalnut ? (
         <button
           className="btn draft-later-btn"

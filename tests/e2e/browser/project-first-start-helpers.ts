@@ -78,7 +78,8 @@ export const line = (panel: Locator): Locator => panel.getByTestId('draft-v6-lin
 export const whereMenu = (page: Page): Locator => page.getByTestId('draft-v6-where-menu')
 export const projectMenu = (page: Page): Locator => page.getByTestId('draft-v6-project-menu')
 export const hostMenu = (page: Page): Locator => page.getByTestId('draft-v6-host-menu')
-export const sendLabel = (panel: Locator): Locator => panel.locator('.draft-v6-send-label')
+/** The draft's send arrow (the v6 draft has no send words: Evan crossed out "Start task", 2026-11-23). */
+export const sendArrow = (panel: Locator): Locator => panel.locator('.draft-v6-input .wn-input-send')
 
 /** The lower row's More: the draft's one menu (tier, priority, dates, the task source). */
 export async function openMore(panel: Locator): Promise<Locator> {

@@ -59,16 +59,3 @@ export function useDraftV6(eligible: boolean): DraftV6State {
   const onShiftEnter = useLeanCallback(() => (v6 ? shiftEnterRef.current?.() ?? false : false), [v6]);
   return { v6, blockedRef, shiftEnterRef, onShiftEnter, blocked: v6 && blocked, setBlocked, startWhy, clearWhy: () => setStartWhy(null), whereNonce, holdsStart };
 }
-
-/**
- * The send arrow's words ("Start task", "Ask Walnut"): the arrow by another name, so it is off
- * exactly when the arrow is (nothing to send). A click never falls back to an empty start.
- */
-export function DraftV6SendLabel({ canSend, walnut, onClick }: { canSend: boolean; walnut: boolean; onClick: () => void }) {
-  return (
-    <button type="button" className={`btn btn-ghost draft-v6-send-label${walnut ? ' is-walnut' : ''}`} data-testid="draft-v6-send-label"
-      disabled={!canSend} onMouseDown={(e) => e.preventDefault()} onClick={onClick}>
-      {walnut ? 'Ask Walnut' : 'Start task'}
-    </button>
-  );
-}

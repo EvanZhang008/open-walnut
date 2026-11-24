@@ -87,6 +87,9 @@
 .draft-v6-wp-rows-box { flex: 1 1 auto; min-height: 0; }
 .draft-v6-wp-count { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }
 .draft-v6-wp-more { flex: none; font-size: var(--font-size-xs); color: var(--fg-secondary); white-space: nowrap; }
+/* The count and "+N more" are read whole; the line after them gives way first. */
+.draft-v6-wp-top > :is(.draft-v6-wp-title, .draft-v6-wp-count, .draft-v6-wp-more) { flex: none; min-width: max-content; }
+.draft-v6-wp-top > .draft-v6-wp-line { flex: 1 1 0; }
 .draft-v6-wp-rows {
   position: relative; /* the rows' offsetTop is the list's (the "+N more" count) */
   overflow-y: auto;

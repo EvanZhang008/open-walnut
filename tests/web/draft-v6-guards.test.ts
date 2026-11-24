@@ -77,12 +77,9 @@ describe('the v6 row is reached by keyboard (M6) and its send label never starts
     expect(row).toMatch(/<FieldOpen testId="draft-v6-where-open"/);
   });
 
-  it('the "Start task" / "Ask Walnut" label is off exactly when the send arrow is', () => {
-    const v6 = read(`${SESSIONS}/DraftV6Panel.tsx`);
-    const label = v6.slice(v6.indexOf('data-testid="draft-v6-send-label"') - 200, v6.indexOf('data-testid="draft-v6-send-label"') + 200);
-    expect(label).toMatch(/disabled=\{!canSend\}/);
-    expect(read(`${SESSIONS}/DraftSessionPanel.tsx`)).toMatch(/sendSlot=\{v6 \? \(\{ canSend \}: \{ canSend: boolean \}\) => <DraftV6SendLabel canSend=\{canSend\}/);
-    expect(read('web/src/components/chat/ChatInput.tsx')).toMatch(/typeof sendSlot === 'function' \? sendSlot\(\{ canSend \}\)/);
+  it('the v6 draft has no send words: the arrow alone starts it (Evan crossed out "Start task", 2026-11-23)', () => {
+    expect(read(`${SESSIONS}/DraftV6Panel.tsx`)).not.toMatch(/draft-v6-send-label/);
+    expect(read(`${SESSIONS}/DraftSessionPanel.tsx`)).toMatch(/sendSlot=\{v6 \? null/);
   });
 });
 

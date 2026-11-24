@@ -158,12 +158,30 @@ export function sourceMakes(source: StartSource | null | undefined): string {
   return /\b(workspace|worktree)s?$/i.test(name) ? name : `${name} workspace`;
 }
 
-/** The Project menu's order: favourites first, then the ones with a source, then the rest, each by name. */
+/** The words a code source is found by: its repo folder's name and every package or repo it lists. */
+export function sourceSearchWords(source: StartSource | null | undefined): string[] {
+  return sourceNames(source).map((w) => w.toLowerCase());
+}
+
+/** The repo folder's name and the packages or repos a code source lists, as written. */
+export function sourceNames(source: StartSource | null | undefined): string[] {
+  if (!source) return [];
+  const words = [source.anchor.replace(/\/+$/, '').split('/').pop() ?? ''];
+  for (const v of Object.values(source.inputs ?? {})) {
+    if (typeof v === 'string') words.push(v);
+    else if (Array.isArray(v)) for (const x of v) if (typeof x === 'string') words.push(x);
+  }
+  return words.filter(Boolean);
+}
+
+/** The Repo or package menu's order: favourites first, then the ones with a source, then the rest, each by
+ *  name; a query matches the name, or a repo or package the source names (review, 2026-11-24). */
 export function projectMenuOrder<R extends WorkInRow>(rows: readonly R[], isFavourite: (name: string) => boolean, query: string, label: (name: string) => string = (n) => n): R[] {
   const q = query.trim().toLowerCase();
   const rank = (r: R) => (isFavourite(r.name) ? 0 : r.startSource ? 1 : 2);
   return rows
-    .filter((r) => !q || r.name.toLowerCase().includes(q) || label(r.name).toLowerCase().includes(q))
+    .filter((r) => !q || r.name.toLowerCase().includes(q) || label(r.name).toLowerCase().includes(q)
+      || sourceSearchWords(r.startSource).some((w) => w.includes(q)))
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
 
@@ -226,7 +244,7 @@ export type AutoVerdict =
 /** A folder Walnut knows on a host (the working-dirs list). */
 export type KnownDir = Pick<WorkingDirEntry, 'cwd' | 'host'>;
 
-export const NO_PROJECT_REASON = 'Pick a project first: Auto follows the project';
+export const NO_PROJECT_REASON = 'Pick a repo or package first: Auto follows it';
 
 /**
  * Can `host` run this project's Auto? (The phone has the same rule.) No project: no. Its own host:

@@ -37,6 +37,13 @@ describe('sourceMakes and the Project menu order', () => {
     expect(wi.projectMenuOrder(rows, () => false, 'MAR').map((r) => r.name)).toEqual(['Marina']);
     expect(wi.projectMenuOrder(rows, () => false, 'bay', (n) => (n === 'Life' ? 'Life bay' : n)).map((r) => r.name)).toEqual(['Life']);
   });
+
+  it('a search finds a repo or package by the names its source lists (review, 2026-11-24)', () => {
+    const rows = [{ name: 'Tools', startSource: { ...plugin, inputs: { packages: ['AcmeLib', 'Gamma'] } } }, { name: 'Site', startSource: { ...git, anchor: '/srv/code/marina-web/' } }, { name: 'Plain' }];
+    expect(wi.projectMenuOrder(rows, () => false, 'acmelib').map((r) => r.name)).toEqual(['Tools']);
+    expect(wi.projectMenuOrder(rows, () => false, 'marina-web').map((r) => r.name)).toEqual(['Site']);
+    expect(wi.sourceSearchWords(undefined)).toEqual([]);
+  });
 });
 
 describe('sendsFolderProject: only a name taken from the folder goes to the server\'s folder rule', () => {
@@ -311,7 +318,7 @@ describe('Auto: what it makes, and whether a host can make it', () => {
     expect(wi.autoNote(life, { ok: true, moved: false }, { folderShown: '~/life' })).toBe('Works in ~/life');
     expect(wi.autoNote(inbox, { ok: true, moved: false })).toBe('Works in your home folder');
     expect(wi.autoNote(marina, { ok: false, reason: 'This Mac has no Marina checkout.' })).toBe('This Mac has no Marina checkout.');
-    expect(wi.autoNote(undefined, { ok: false, reason: wi.NO_PROJECT_REASON, noProject: true })).toBe('Pick a project first: Auto follows the project');
+    expect(wi.autoNote(undefined, { ok: false, reason: wi.NO_PROJECT_REASON, noProject: true })).toBe('Pick a repo or package first: Auto follows it');
   });
 });
 

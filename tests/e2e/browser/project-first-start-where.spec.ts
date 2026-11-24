@@ -15,7 +15,7 @@ import { isolateUiPrefs, listProjectHeader, openProjectDetails, presetPanelView 
 import { APP, DEVBOX, LIFE_REPO, PLAIN, SERVICE, SYNCED, fx, setupFixture } from './project-first-start-fixture'
 import {
   LOCAL_NAME, countStarts, expectSameGeometry, geometry, line, openHome, openMore, openWhere, pickHost,
-  makeProject, pickProject, pickTypedPath, projectField, projectMenu, sendLabel, setFlag, shot, start, v6, waitWorkspace,
+  makeProject, pickProject, pickTypedPath, projectField, projectMenu, sendArrow, setFlag, shot, start, v6, waitWorkspace,
   watchErrors, whereField, whereMenu, withDirs,
 } from './project-first-start-helpers'
 
@@ -444,33 +444,34 @@ test('the Code source section saves a source shown after a reload, and the Proje
   expect(errors).toEqual([])
 })
 
-test('the row by keyboard, and the send label: Tab reaches Where, Enter opens it; nothing to send, nothing starts', async ({ page, request }) => {
+test('the row by keyboard, and the send arrow: Tab reaches Where, Enter opens it; nothing to send, nothing starts', async ({ page, request }) => {
   await setFlag(request, true)
   const errors = watchErrors(page)
   await openHome(page)
   const panel = await openDraft(page)
   await pickProject(page, panel, MARINA)
-  // Review round 1 (H3): an empty composer leaves the "Start task" label off, as the send arrow.
+  // Review round 1 (H3): an empty composer leaves the send arrow off.
   const starts = countStarts(page)
   await draftComposer(page).fill('')
-  await expect(sendLabel(panel)).toBeDisabled()
-  await sendLabel(panel).click({ force: true })
+  await expect(sendArrow(panel)).toBeDisabled()
+  await sendArrow(panel).click({ force: true })
   await draftComposer(page).fill('Something to do')
-  await expect(sendLabel(panel)).toBeEnabled()
+  await expect(sendArrow(panel)).toBeEnabled()
   await draftComposer(page).fill('   ')
-  await expect(sendLabel(panel)).toBeDisabled()
+  await expect(sendArrow(panel)).toBeDisabled()
   expect(starts.n).toBe(0)
 
-  // Review round 1 (M6): the Where field is a real button, next after Project in the tab order.
-  // The Project field is one too: Enter opens its menu.
+  // Review round 1 (M6): each field is a real button. Where comes first, Repo or package after it in
+  // the tab order (Evan, 2026-11-23: the folder before the package).
   await projectField(panel).getByTestId('draft-v6-project-open').focus()
   await page.keyboard.press('Enter')
   await expect(projectMenu(page)).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(projectMenu(page)).toHaveCount(0)
   await projectField(panel).getByTestId('draft-v6-project-open').focus()
-  await page.keyboard.press('Tab')
-  await expect(whereField(panel).getByTestId('draft-v6-where-open')).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="draft-v6-where"]'))).toBe(true)
+  await whereField(panel).getByTestId('draft-v6-where-open').focus()
   await page.keyboard.press('Enter')
   await expect(whereMenu(page)).toBeVisible()
   await page.keyboard.press('Escape')

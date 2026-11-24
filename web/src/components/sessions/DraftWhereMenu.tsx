@@ -259,7 +259,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onPicked, 
                   ? homeFolders.status === 'loading' ? `Your folders; still looking through ${hostName}…`
                     : homeFolders.status === 'partial' ? `Your folders; ${hostName} could be read only in part`
                       : `Folders you used first, by use; then the rest on ${hostName}`
-                  : listKind === 'most' ? 'On every machine, by tasks started there' : 'On every machine: the last 10 folders you started a task in'}</span>
+                  : listKind === 'most' ? 'Most tasks started, every machine' : 'Last 10 used, every machine'}</span>
                 {!searching && (
                   <SegmentedControl size="sm" horizontalKeys aria-label="Which folders" value={listKind} data-testid="draft-v6-where-list"
                     options={[{ value: 'recent', label: 'Recent' }, { value: 'most', label: 'Most used' }]}

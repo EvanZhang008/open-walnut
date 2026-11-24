@@ -22,7 +22,7 @@ import { resetServerHostFixture } from './host-problems-fixture-helpers'
 import { APP, PLAIN, fx, minutesAgo, setupFixture } from './project-first-start-fixture'
 import {
   LOCAL_NAME, expectSameGeometry, geometry, line, openHome, openWhere,
-  pickProject, pickTypedPath, projectField, projectMenu, readTask, sendLabel, setFlag, shot, start, tile, v6, waitWorkspace,
+  pickProject, pickTypedPath, projectField, projectMenu, readTask, sendArrow, setFlag, shot, start, tile, v6, waitWorkspace,
   watchErrors, whereField, whereMenu, withDirs,
 } from './project-first-start-helpers'
 
@@ -75,13 +75,16 @@ test('the tiles, the row and Quick chat: a switch never moves the composer', asy
   await expect(tile(panel, 'task')).toHaveAttribute('aria-selected', 'true')
   await expect(tile(panel, 'chat')).toHaveAttribute('aria-selected', 'false')
   await expect(tile(panel, 'chat').locator('img')).toHaveCount(1)
-  // One row: Project, then Where with the host first. No old pill is left.
-  await expect(projectField(panel)).toContainText('Project')
+  // One row: Where (the host first), then Repo or package (Evan, 2026-11-23). No old pill is left.
+  await expect(projectField(panel)).toContainText('Repo or package')
+  expect((await whereField(panel).boundingBox())!.x).toBeLessThan((await projectField(panel).boundingBox())!.x)
   await expect(whereField(panel).getByTestId('draft-v6-host')).toHaveText(LOCAL_NAME)
   for (const gone of ['.draft-folder-pill', '.draft-project-chip', '[data-testid="draft-work-in-pill"]', '[data-testid="draft-start-host-pill"]']) {
     await expect(panel.locator(gone), gone).toHaveCount(0)
   }
-  await expect(sendLabel(panel)).toHaveText('Start task')
+  // The send arrow alone starts it: no "Start task" words beside it.
+  await expect(panel.locator('.draft-v6-input')).not.toContainText('Start task')
+  await expect(sendArrow(panel)).toBeVisible()
   // The model and the mode each say what they are ("Auto model", "Default mode"; approved 2026-11-23).
   await expect(panel.locator('.draft-v6-input')).not.toContainText('Permissions:')
   await expect(panel.locator('.draft-v6-input')).toContainText('Auto model')
@@ -94,7 +97,7 @@ test('the tiles, the row and Quick chat: a switch never moves the composer', asy
   await expect(tile(panel, 'chat')).toHaveAttribute('aria-selected', 'true')
   await expect(panel.getByTestId('draft-v6-quick')).toBeVisible()
   await expect(panel.locator('.draft-v6-row')).toHaveCount(0)
-  await expect(sendLabel(panel)).toHaveText('Ask Walnut')
+  await expect(panel.locator('.draft-v6-input')).not.toContainText('Ask Walnut')
   await expect(panel.getByRole('group', { name: 'Try' })).toBeVisible()
   // The lower row's Recent chats: the fixture's newest quick chats (each with its session), each
   // chip whole, in the row's fixed height.
@@ -144,7 +147,7 @@ test('a git source: Auto is the Where menu\'s first row, Start files a task whos
   // No project yet: Auto waits for one.
   let menu = await openWhere(page, panel)
   await expect(menu.getByTestId('draft-v6-auto-row')).toHaveAttribute('data-state', 'no-project')
-  await expect(menu.getByTestId('draft-v6-auto-row')).toContainText('Pick a project first: Auto follows the project')
+  await expect(menu.getByTestId('draft-v6-auto-row')).toContainText('Pick a repo or package first: Auto follows it')
   await expectSameGeometry(panel, base, 'Where menu open')
   await page.keyboard.press('Escape')
   await expect(whereMenu(page)).toHaveCount(0)
@@ -172,10 +175,10 @@ test('a git source: Auto is the Where menu\'s first row, Start files a task whos
   await expect(first).toHaveAttribute('aria-selected', 'true')
   await expect(first).toContainText(`Auto · New worktree on ${LOCAL_NAME}`)
   await expect(first).toContainText('Fresh copy of the default branch, removed when merged')
-  // The picker never covers the Start task label (review N6): it opens upward, over the row it edits.
+  // The picker never covers the row it edits or the composer (review N6): it opens upward, over the row.
   const menuBox = (await menu.boundingBox())!
-  const labelBox = (await sendLabel(panel).boundingBox())!
-  expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(labelBox.y)
+  const rowBox = (await panel.locator('.draft-v6-row').boundingBox())!
+  expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(rowBox.y)
   await shot(page, 'v6-where-auto')
   await page.keyboard.press('Escape')
 
