@@ -11,6 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import YAML from 'yaml'
 import { compareKept, describeKept, snapshotHome } from '../../src/core/home-manifest/home-kept.js'
 import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/switch/records.js'
@@ -876,6 +877,20 @@ function checkNoOwnWritesInStop(c: Checks, label: string, m: Machine, switchId: 
     from < 0 ? 'no switch stop line' : `${writes.length} git line(s) in the stop${writes.length ? `: ${writes.slice(0, 2).map((l) => `${l.time} ${l.message}`).join('; ')}` : ''}; settle: ${settled ? JSON.stringify({ late: settled.late, ms: settled.ms }) : 'none'}`)
 }
 
+/**
+ * The 2026-11-24 bug: the standby leaves the .gitignore out (rebuildable) and copies `.git`, so the promoted home
+ * booted an existing repo with no ignore list, and its auto-commit took in tmp/ (the standby's own spool) and
+ * /voice-archive/. The new leader has its .gitignore as committed, and git tracks nothing under either.
+ */
+function checkIgnoresKept(c: Checks, label: string, m: Machine): void {
+  const g = (...args: string[]) => execFileSync('git', ['-C', m.home, ...args], { encoding: 'utf8' }).trim()
+  const has = fs.existsSync(path.join(m.home, '.gitignore'))
+  const changed = has ? g('status', '--porcelain', '--', '.gitignore') : 'missing'
+  const tracked = g('ls-files', '--', 'tmp', 'voice-archive').split('\n').filter(Boolean)
+  c.add(`${label}: the new leader ${m.id} has its .gitignore as committed, and git tracks nothing of tmp/ or voice-archive/`, has && changed === '' && tracked.length === 0,
+    `.gitignore ${has ? (changed ? `changed (${changed})` : 'as committed') : 'missing'}; ${tracked.length} tracked under tmp/ or voice-archive/${tracked.length ? ` (${tracked.slice(0, 2).join(', ')})` : ''}`)
+}
+
 /** The leader's catch-up lines (routes/leader-switch.ts /switch/catch-up) since `since`: each attempt's batches. */
 function catchUps(m: Machine, since: number): string[] {
   return serverLog(m).filter((l) => Date.parse(l.time) >= since && /leader switch: the standby (caught up|did not catch up)/.test(String(l.message)))
@@ -903,7 +918,11 @@ async function measure(x: Ctx): Promise<void> {
   for (const slow of [false, true]) {
     // After a switch the copy goes the other way: its first batch there is the whole home.
     await writeAndBatch(x, slow ? 'measure-slow' : 'measure', 3 * 3600_000)
+    // That batch may be the whole home (minutes): the candidate's preflight counts a copy's age from its batch's
+    // start, so the next one (only what came meanwhile) is waited for too.
+    await waitForBatch(roles.other.standbyDir, Date.now(), 3 * 3600_000)
     const from = roles.leader
+    const to = roles.other
     const copy = from === w.a ? w.links.copy : w.links.bToA
     if (slow) copy.setMode('slow', { delayMs: 0, bytesPerSec: 2_500_000 })
     const began = Date.now()
@@ -914,7 +933,7 @@ async function measure(x: Ctx): Promise<void> {
     } finally {
       copy.setMode('pass')
     }
-    const label = `${from.id} -> ${r.state?.to}, copy link ${slow ? 'at 20 Mbit/s' : 'unslowed'}`
+    const label = `${from.id} -> ${r.state?.to ?? to.id}, copy link ${slow ? 'at 20 Mbit/s' : 'unslowed'}`
     c.add(`measure: switch ${label} completes`, r.state?.step === 'done' && r.target?.step === 'done', `source ${r.state?.step}; target ${r.target?.step}; ${refused} refusal(s) before (not caught up); ${(r.state?.rollbackWhy ?? '').slice(0, 300)}`)
     times[`downtime ${label}`] = `${((r.target?.downtimeMs ?? NaN) / 1000).toFixed(1)} s`
     times[`catch-up before ${label}`] = catchUps(from, began).join(' | ') || 'none logged'
@@ -924,6 +943,7 @@ async function measure(x: Ctx): Promise<void> {
     const followed = await waitFor('every host connected', async () => hostsConnected(w, N, [w.h.id, roles.other.id]), 180_000, 500).then(() => true).catch(() => false)
     const since = r.target?.readyAt ? Date.now() - Date.parse(r.target.readyAt) : NaN
     times[`every host connected to the new leader after done (${label})`] = followed ? `${(since / 1000).toFixed(1)} s` : `not within ${((Date.now() - t0) / 1000).toFixed(0)} s`
+    checkIgnoresKept(c, `measure ${label}`, N)
   }
 }
 
