@@ -363,7 +363,11 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
     expect(end).toBeGreaterThan(at)
     const envObject = standaloneSrc.slice(start, end)
     expect(envObject).toContain('...process.env')
-    expect(envObject).toMatch(/\bWALNUT_RUNTIME_DIR:\s*undefined/)
+    // Unset, except a service set's own runtime place (service-set.ts setRuntimeTreesDirOf:
+    // undefined unless the daemon is a set's and its dir is that set's), so a set's sessions
+    // never unpack into the default Walnut's runtime.
+    expect(envObject).toMatch(/\bWALNUT_RUNTIME_DIR:\s*SESSION_RUNTIME_DIR\b/)
+    expect(fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')).toMatch(/const SESSION_RUNTIME_DIR = setRuntimeTreesDirOf\(daemonEnv, fs\.realpathSync\)/)
   })
 
   it('daemon: scrub WALNUT_DAEMON_PARENT_PID from the CLI spawn env', () => {

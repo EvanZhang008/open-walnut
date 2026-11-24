@@ -18,7 +18,7 @@
  * service tool can run; the only processes are the CLI this file starts and the fakes it runs.
  */
 import { describe, it, expect } from 'vitest'
-import { spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -54,11 +54,11 @@ describe.skipIf(!BUN || process.platform !== 'linux' || !fs.existsSync('/bin/sh'
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-cli-install-home-')))
     try {
       const env: NodeJS.ProcessEnv = { HOME: root, SHELL: '/bin/sh', PATH: '/usr/bin:/bin', WALNUT_INSTALL_HOME: path.join(root, 'install') }
-      applyCliLoginPath(['daemon', 'status'], env)
+      applyCliLoginPath(['daemon', 'status'], env, { execFile, execFileSync })
       expect(env.PATH!.split(':').at(-1)).toBe(path.join(root, 'install', '.local', 'bin'))
       // A command that needs no login PATH keeps the one it was given.
       const tools: NodeJS.ProcessEnv = { ...env, PATH: '/usr/bin:/bin' }
-      applyCliLoginPath(['tools', 'list'], tools)
+      applyCliLoginPath(['tools', 'list'], tools, { execFile, execFileSync })
       expect(tools.PATH).toBe('/usr/bin:/bin')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })

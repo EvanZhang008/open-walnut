@@ -11,9 +11,9 @@
  * a toolbox bin) kept them. Spawns the login shell once and writes no file; other CLI commands
  * (tools, wait, guide) need none of it and skip the shell.
  */
-import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { createHostRuntime } from './host-runtime-core.js'
 
 /** `words` are the CLI's own (after `walnut`). */
@@ -35,13 +35,18 @@ export function withInstallHomeBin(loginPath: string, env: NodeJS.ProcessEnv): s
   return bin ? loginPath + path.delimiter + bin : loginPath
 }
 
-/** Put the daemon's PATH on `env` for a CLI command that needs it. */
-export function applyCliLoginPath(words: readonly string[], env: NodeJS.ProcessEnv = process.env): void {
+/**
+ * Put the daemon's PATH on `env` for a CLI command that needs it. `use` is the program's own
+ * child-process functions: this module starts none itself (daemon-runtime-child-process-ratchet.test.ts),
+ * and the CLI runs before any daemon runtime exists, so the program hands it node's.
+ */
+export function applyCliLoginPath(words: readonly string[], env: NodeJS.ProcessEnv, use: Required<Pick<ChildProcessUse<'execFile' | 'execFileSync'>, 'execFile' | 'execFileSync'>>): void {
   if (!cliNeedsLoginPath(words)) return
+  type Deps = Parameters<typeof createHostRuntime>[0]
   const runtime = createHostRuntime({
     fs, env, platform: process.platform, arch: process.arch,
-    execFile: execFile as unknown as NonNullable<Parameters<typeof createHostRuntime>[0]['execFile']>,
-    execFileSync: execFileSync as unknown as NonNullable<Parameters<typeof createHostRuntime>[0]['execFileSync']>,
+    execFile: use.execFile as unknown as NonNullable<Deps['execFile']>,
+    execFileSync: use.execFileSync as unknown as NonNullable<Deps['execFileSync']>,
   })
   env.PATH = withInstallHomeBin(runtime.computeDaemonPath().path, env)
 }
