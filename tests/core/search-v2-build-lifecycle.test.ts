@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   stats: vi.fn(() => ({ docs: 0 })),
 }));
 
-vi.mock('../../src/constants.js', () => ({
+// The real constants underneath (a module the build reaches reads LOG_DIR and the like); only the indexed dirs are this test's.
+vi.mock('../../src/constants.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   GLOBAL_SKILLS_DIR: '/tmp/walnut-search-build-test/skills',
   MEMORY_DIR: '/tmp/walnut-search-build-test/memory',
   NOTES_DIR: '/tmp/walnut-search-build-test/notes',
