@@ -103,6 +103,16 @@ describe('classifyHomePath', () => {
     expect(id('random.bak')).toBeUndefined()
   })
 
+  it('classes a compressed copy (data-copy-compact.ts) like the copy it replaced', () => {
+    for (const copy of [
+      'usage.sqlite.backup-2026-11-20-before-host-dedupe', 'usage.sqlite.backup-2026-10-14T09-43-51-805Z',
+      'sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup', 'tasks/tasks.sqlite.pre-repair-0805.backup',
+      'tasks/tasks.sqlite.pre-repair-0805.backup-wal', 'cron-jobs.json.corrupt-2026-11-24T07-16-00-469Z',
+      'notifications.json.corrupt-1', 'auth.json.unreadable-2026', 'cache/applied-ops.sqlite.backup-1',
+    ]) expect([copy, classifyHomePath(`${copy}.gz`)]).toEqual([copy, classifyHomePath(copy)])
+    expect(id('usage.sqlite.backup-2026-11-20-before-host-dedupe.gz')).toBe('usage-db')
+  })
+
   it('names only the two dead stores at the top level, so a user\'s x.db stays leader data', () => {
     expect(cls('sessions.db')).toBe('rebuildable')
     expect(cls('tasks.db')).toBe('rebuildable')

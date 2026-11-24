@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { homeEntries, homePathClass, type DataClass } from '../home-manifest/index.js'
+import { COPY_SUFFIX, homeEntries, homePathClass, type DataClass } from '../home-manifest/index.js'
 import { isNotCopiedDir, isNotCopiedPath } from './change-rules.js'
 import type { SourceStat } from './types.js'
 
@@ -52,8 +52,6 @@ const ENTRIES = homeEntries()
 const LEADER_PATHS = ENTRIES.filter((e) => e.class === 'leader-data' && e.path).map((e) => e.path)
 const ENTRY_PATHS = ENTRIES.filter((e) => e.path).map((e) => e.path)
 const PATTERNS = ENTRIES.filter((e) => e.match).map((e) => e.match as RegExp)
-/** The manifest's copy suffix (home-manifest/index.ts COPY_SUFFIX): such a name is classed by its original. */
-const COPY_LIKE = /\.(bak|backup|tmp|conflicted|corrupt|unreadable|migrated)([.-][^/]*)?$/
 const PROBE = 'standby-probe-name'
 
 /** A dir the walk enters: one that is, or leads to, leader data, and no git scratch dir. */
@@ -74,7 +72,7 @@ export function makeFileClass(): (dir: string, name: string) => DataClass {
   const byDir = new Map<string, DataClass | null>()
   return (dir, name) => {
     const rel = dir ? `${dir}/${name}` : name
-    if (!dir || COPY_LIKE.test(name) || PATTERNS.some((re) => re.test(rel))) return homePathClass(rel)
+    if (!dir || COPY_SUFFIX.test(name) || PATTERNS.some((re) => re.test(rel))) return homePathClass(rel)
     let cls = byDir.get(dir)
     if (cls === undefined) {
       const probe = `${dir}/${PROBE}`

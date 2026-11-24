@@ -37,8 +37,10 @@ const SQLITE_SIBLINGS = ['-wal', '-shm', '-journal']
 /**
  * A copy beside a file (an ad-hoc `.backup-<time>`, a write temp `.tmp-<pid>`, a
  * forensic `.corrupt-<time>`, a `.bak.<n>` snapshot) is classed like the file it copies.
+ * The one definition of a copy's name: the standby scan and the copy compaction
+ * (src/core/data-copy-compact.ts, whose `.gz` keeps the suffix in front) read it too.
  */
-const COPY_SUFFIX = /\.(bak|backup|tmp|conflicted|corrupt|unreadable|migrated)([.-][^/]*)?$/
+export const COPY_SUFFIX = /\.(bak|backup|tmp|conflicted|corrupt|unreadable|migrated)([.-][^/]*)?$/
 
 /** The file a copy beside it copies (`config.yaml.bak` -> `config.yaml`), or `rel` itself. */
 export function originalOfCopy(rel: string): string {

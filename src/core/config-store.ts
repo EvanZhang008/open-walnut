@@ -45,7 +45,7 @@ export { CONFIG_FILE_MODE, writeFileAtomic } from './config-file-io.js';
  *
  * Gitignored + untracked by git-sync's CRITICAL_IGNORES — it must never sync.
  */
-const CONFIG_BACKUP_FILE = `${CONFIG_FILE}.bak`;
+export const CONFIG_BACKUP_FILE = `${CONFIG_FILE}.bak`;
 
 /**
  * How long a bad config.yaml must keep still before Walnut believes it (see

@@ -6,6 +6,7 @@
  *  - `disk-sweep`: the task-directory sweep now, as a low-disk round (finished
  *    tasks' directories and their build output, idle build output of tasks in
  *    use, rebuildable tool caches; never a repo with work found nowhere else),
+ *    and the data home's old ad-hoc copies compressed (data-copy-compact.ts, lossless),
  *    with the space it freed measured on the data disk.
  *  - `status-recheck`: the status check now, which re-derives what it can.
  *  - `host-reconnect`: a host link that is down and waiting out its backoff dials
@@ -23,13 +24,19 @@ export async function runAutoFix(id: string, dataDir: string, labels?: Record<st
   if (id === 'disk-sweep') {
     const free = async () => { const s = await fsp.statfs(dataDir); return s.bavail * s.bsize }
     const before = await free()
-    const { sweepTaskDirsNow } = await import('../task-dir-sweep.js')
+    const [{ sweepTaskDirsNow }, { compactDataCopies }] = await Promise.all([import('../task-dir-sweep.js'), import('../data-copy-compact.js')])
     // The alarm rings, so the disk is low whatever the sweep's own floor says (task-dir-sweep.ts localDiskLow).
-    const rows = await sweepTaskDirsNow({ lowDisk: true })
+    // The round compresses the data home's copies too; this call joins that pass to read what it did.
+    const [rows, copies] = await Promise.all([sweepTaskDirsNow({ lowDisk: true }), compactDataCopies()])
     const after = await free()
     const removed = rows.reduce((n, r) => n + (Array.isArray(r.removed) ? r.removed.length : 0), 0)
+    const saved = copies.reduce((n, c) => n + Math.max(0, c.before - c.after), 0) / GiB
     const freed = Math.max(0, after - before) / GiB
-    return { ok: true, detail: `ran the task-directory sweep: ${removed} director${removed === 1 ? 'y' : 'ies'} removed, ${freed.toFixed(1)} GB freed` }
+    return {
+      ok: true,
+      detail: `ran the task-directory sweep: ${removed} director${removed === 1 ? 'y' : 'ies'} removed, `
+        + `${copies.length} data cop${copies.length === 1 ? 'y' : 'ies'} compressed (${saved.toFixed(1)} GB saved), ${freed.toFixed(1)} GB freed`,
+    }
   }
   if (id === 'status-recheck') {
     const { runStatusCheck } = await import('../status-consistency.js')

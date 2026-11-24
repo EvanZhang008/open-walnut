@@ -32,6 +32,9 @@
  * told to clear it (task-dir-size-notice.ts): run folders and data copies are
  * the task's to judge, so nothing of them is deleted here.
  *
+ * Every round also compresses the data home's old ad-hoc copies (data-copy-compact.ts):
+ * kept losslessly, never deleted.
+ *
  * Primary only: a replica (the cloud companion) holds a copy of the tasks and
  * must not decide over host files. An ephemeral server sweeps only its own
  * local daemon, whose root sits in its temp dir.
@@ -280,7 +283,8 @@ export function sweepTaskDirsNow(opts: { lowDisk?: boolean } = {}): Promise<Swee
   const cur = sweepInFlight
   if (cur && (cur.lowDisk || !lowDisk)) return cur.rows
   // Transfer packs ride the same rounds: their own prune ran only when a new transfer started.
-  const round = () => Promise.all([sweepTaskDirsOnce(lowDisk ? { lowDisk } : undefined), pruneTransfersQuietly(), sweepLeftSubagentRuns()]).then(([rows]) => rows)
+  // So do the data home's ad-hoc copies, compressed (data-copy-compact.ts).
+  const round = () => Promise.all([sweepTaskDirsOnce(lowDisk ? { lowDisk } : undefined), pruneTransfersQuietly(), sweepLeftSubagentRuns(), compactDataCopiesQuietly()]).then(([rows]) => rows)
   const rows: Promise<SweepRow[]> = (cur ? cur.rows.catch(() => []).then(round) : round())
     .finally(() => { if (sweepInFlight?.rows === rows) sweepInFlight = null })
   sweepInFlight = { rows, lowDisk }
@@ -292,6 +296,14 @@ async function pruneTransfersQuietly(): Promise<void> {
     const { pruneLocalTransfers } = await import('./transfer/workspace.js')
     const removed = await pruneLocalTransfers()
     if (removed) log.session.info('task-dir sweep: removed old transfer packs', { removed })
+  } catch { /* next round */ }
+}
+
+/** Ad-hoc copies in this server's own data home, kept but compressed: core/data-copy-compact.ts. */
+async function compactDataCopiesQuietly(): Promise<void> {
+  try {
+    const { compactDataCopies } = await import('./data-copy-compact.js')
+    await compactDataCopies()
   } catch { /* next round */ }
 }
 
