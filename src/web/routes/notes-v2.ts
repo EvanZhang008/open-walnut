@@ -80,10 +80,13 @@ import {
   closeNotesIndexDb,
   type LinkStatus,
 } from '../../core/notes-index.js'
+import { nameAnswersHere } from '../middleware/answer-name.js'
 
 export const MAX_NOTE_SIZE = 2_000_000 // 2 MB
 
 export const notesV2Router = Router()
+// A middleware below may answer before the route: real use names it as that route (answer-name.ts).
+notesV2Router.use(nameAnswersHere())
 // A host replica reads its notes from the daemon's copy (WP6); a pass-through on the Mac and the companion.
 notesV2Router.use(replicaNotesReads('v2'))
 // The companion's own note saves go into its journal once its notes copy is held (stage 4c).

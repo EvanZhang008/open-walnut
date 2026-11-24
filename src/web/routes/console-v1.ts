@@ -32,8 +32,11 @@ import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
 import { experimentalConfigView } from '../../core/experimental-prefs.js'
 import { effectiveExperimentalFlags } from '../../core/experimental.js'
 import { processMemoryMb } from '../../core/observability/memory-ledger.js'
+import { nameAnswersHere } from '../middleware/answer-name.js'
 
 export const consoleV1Router = Router()
+// A middleware below may answer before the route: real use names it as that route (answer-name.ts).
+consoleV1Router.use(nameAnswersHere())
 // The companion's skill reads take the Mac's copy, its skill writes need the Mac (stage 4d); a pass-through elsewhere.
 consoleV1Router.use(companionSkillRoutes('v1'))
 

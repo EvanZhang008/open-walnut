@@ -10,6 +10,7 @@ import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { COPY_AS_OF_HEADER, KIND_NOT_COPIED } from '../../core/replication/kinds/gate.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 import { ambientTestRun } from '../../core/test-run.js'
+import { markCountedOnMac } from '../v1-forward/counted-on-mac.js'
 
 // Express 5 ALREADY percent-decodes route params. Do NOT re-decode
 // `req.params.name`: a project name with a literal '%' double-decodes and
@@ -142,6 +143,7 @@ async function writeOnMac(req: Request, res: Response): Promise<void> {
     // Went out and got no answer: the Mac may hold it already, so the client must not retry blindly.
     // A 504 the relay answered (the Mac's own route ran past its time) is the same unanswered write.
     if ((r.failure.kind === 'bridge_offline' && !r.failure.notSent) || (r.failure.kind === 'error' && r.failure.status === 504)) {
+      markCountedOnMac(res)
       res.status(504).json({ error: { code: 'primary_timeout', sent: true, message: 'Your Mac did not answer in time. It may have applied this change: check before you try again.' } })
       return
     }

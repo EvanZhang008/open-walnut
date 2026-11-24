@@ -73,8 +73,11 @@ import { checkImagePayloads, isImageAttachError, processAndSaveImages, buildImag
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { log } from '../../logging/index.js'
+import { nameAnswersHere } from '../middleware/answer-name.js'
 
 export const apiV1Router = Router()
+// A middleware below may answer before the route: real use names it as that route (answer-name.ts).
+apiV1Router.use(nameAnswersHere())
 // A host replica reads its notes from the daemon's copy (WP6); a pass-through on the Mac and the companion.
 apiV1Router.use(replicaNotesReads('v1'))
 // The companion's own note saves go into its journal once its notes copy is held (stage 4c).

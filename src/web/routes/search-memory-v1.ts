@@ -49,8 +49,11 @@ import { relayControlAction, sendV1Error as sendError } from './v1-control-relay
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
+import { nameAnswersHere } from '../middleware/answer-name.js'
 
 export const searchMemoryV1Router = Router()
+// A middleware below may answer before the route: real use names it as that route (answer-name.ts).
+searchMemoryV1Router.use(nameAnswersHere())
 // The companion's memory reads and saves take the Mac's copy and its journal (stage 4d); a pass-through elsewhere.
 searchMemoryV1Router.use(companionMemoryRoutes('v1'))
 

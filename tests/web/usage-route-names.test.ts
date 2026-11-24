@@ -64,6 +64,23 @@ describe('real use names a request by the path its client called', () => {
     expect(api.filter((r) => registeredTemplate('', r.path) === 'unmatched').map((r) => `${r.method} ${r.path}`)).toEqual([])
   })
 
+  // A route registered with a list of paths gives `req.route.path` as that list (2026-11-24: the six
+  // liveness addresses of routes/system.ts were never counted). Each is named by the path it matched.
+  it('a route registered with a list of paths is counted under the path called', async () => {
+    const several = routes.filter((r) => r.path.startsWith('/api/') && r.several)
+    expect(several.length).toBeGreaterThan(0)
+    // Only plain reads are called here: a new list route of another kind needs its own case.
+    expect(several.filter((r) => r.method !== 'GET' || r.path.includes(':')).map((r) => `${r.method} ${r.path}`)).toEqual([])
+    for (const r of several) await fetch(`${base}${r.path}`).then((x) => x.arrayBuffer())
+    const { flushUsage } = await import('../../src/core/usage-watch/record.js')
+    const { readHours } = await import('../../src/core/usage-watch/store.js')
+    await vi.waitFor(() => {
+      flushUsage(Date.now())
+      const names = new Set(readHours(0, { kind: 'http' }).map((x) => x.name))
+      for (const r of several) expect(names, r.path).toContain(`GET ${r.path}`)
+    }, { timeout: 10_000 })
+  })
+
   it('a plain route, one with an id, a plugin route and the calendar alias are counted under the path called', async () => {
     const calls: Array<[string, string]> = [
       ['/api/v1/tasks', 'GET /api/v1/tasks'],
@@ -91,7 +108,8 @@ describe('real use names a request by the path its client called', () => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name)
         if (e.isDirectory()) walk(p)
-        else if (/\.ts$/.test(e.name) && /\b(?:req|request)\.url\s*=(?!=)/.test(fs.readFileSync(p, 'utf8'))) out.push(path.relative(ROOT, p))
+        // `req.url =`, `(req as X).url =`, `req['url'] =`.
+        else if (/\.ts$/.test(e.name) && /\b(?:req|request)\b[^;\n=]{0,40}?(?:\.url|\[\s*['"]url['"]\s*\])\s*=(?!=)/.test(fs.readFileSync(p, 'utf8'))) out.push(path.relative(ROOT, p))
       }
     }
     walk(path.join(ROOT, 'src'))

@@ -20,7 +20,7 @@ import { labelValue } from './counters.js'
 const HOUR_MS = 3_600_000
 const FLUSH_MS = 60_000
 /** At most this many names of one kind per hour; the rest count under `other`. */
-const MAX_NAMES_PER_HOUR = 600
+export const MAX_NAMES_PER_HOUR = 600
 const MAX_EVENTS_PER_FLUSH = 200
 /** A read slower than this is slow (long polls and streams never count). */
 export const SLOW_READ_MS = 5_000

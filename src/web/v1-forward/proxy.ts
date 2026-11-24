@@ -32,6 +32,7 @@ import type { RelayFailure } from '../routes/v1-control-relay.js'
 import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf } from './policy.js'
 import { refuseWhenDiskFull } from '../middleware/disk-guard.js'
 import { forwardOnStream } from './stream-forward.js'
+import { markCountedOnMac } from './counted-on-mac.js'
 
 /** What the companion knows of the Mac right now. */
 export interface PrimarySnapshot {
@@ -261,7 +262,8 @@ export function createV1Forward(deps: ForwardDeps) {
       const r = outcome.result as { status?: unknown; headers?: unknown; data?: unknown; tooLarge?: unknown }
       const code = typeof r.status === 'number' && r.status >= 100 && r.status < 600 ? r.status : 502
       if (r.tooLarge === true) {
-        if (isRead) return answerHere('reply-size', req, res, next)
+        // The Mac ran the read (and counted it); its reply did not fit, so it is answered here.
+        if (isRead) { markCountedOnMac(res); return answerHere('reply-size', req, res, next) }
         // The write was applied there; its reply did not fit. Say so rather than repeat it here.
         log.web.warn('v1 forward: a write was applied on the Mac and its reply was too large to carry', { method, path: req.path, status: code })
         status.forwarded++
@@ -295,6 +297,8 @@ export function createV1Forward(deps: ForwardDeps) {
     if (f.kind === 'bridge_offline' && f.notSent) return answerHere('not-sent', req, res, next)
     // It went out and no answer came: the Mac is not asked again until it is heard.
     suspectAt = deps.now()
+    // It went out: the Mac ran it, as far as anyone knows, and counted it.
+    markCountedOnMac(res)
     if (isRead) return answerHere('unanswered', req, res, next)
     unansweredWrite(req, res, method, f.kind, f.message)
   }
@@ -357,6 +361,7 @@ export function createV1Forward(deps: ForwardDeps) {
       return answerHere('unanswered', req, res, next)
     }
     suspectAt = deps.now()
+    markCountedOnMac(res)
     if (isRead) return answerHere('unanswered', req, res, next)
     unansweredWrite(req, res, method, 'stream', o.message)
   }

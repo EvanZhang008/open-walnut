@@ -18,10 +18,13 @@
  *
  * The Mac: applyCompanionUses checks each row (an /api route's name, an hour of the last week,
  * numbers only) and adds it to the hours under the route's own name, as its own requests are.
+ * What the Mac ran for the box (a forwarded call) is the Mac's own count: the box leaves it out
+ * (web/v1-forward/counted-on-mac.ts).
  */
 import { randomUUID } from 'node:crypto'
 import { log } from '../../logging/index.js'
 import { emptyAgg, mergeAgg, type Agg, type UsageKind } from './agg.js'
+import { looksLikeId } from './normalize.js'
 
 export const MAX_ROWS_PER_CALL = 500
 const MAX_WAITING = 2_000
@@ -92,11 +95,12 @@ export async function flushCompanionUses(why: string, now = Date.now()): Promise
  * Mac connects. Cloud companion only (server.ts, beside the cards' outbox). Returns the stop.
  */
 export function startCompanionUses(): { stop: () => void } {
-  void import('./record.js').then(({ startUsageRecorder }) => {
-    startUsageRecorder({ sink: (rows) => { noteCompanionRows(rows); void flushCompanionUses('sweep') } })
-  }).catch((err) => log.web.warn('companion real use: not started', { error: err instanceof Error ? err.message : String(err) }))
   let unhook: (() => void) | null = null
   let stopped = false
+  // A stop before the import is done starts nothing (the recorder's minute timer included).
+  void import('./record.js').then(({ startUsageRecorder }) => {
+    if (!stopped) startUsageRecorder({ sink: (rows) => { noteCompanionRows(rows); void flushCompanionUses('sweep') } })
+  }).catch((err) => log.web.warn('companion real use: not started', { error: err instanceof Error ? err.message : String(err) }))
   void import('../../web/ws/bridge-registry.js').then(({ addPrimaryBridgeConnectedHandler }) => {
     if (!stopped) unhook = addPrimaryBridgeConnectedHandler(() => { void flushCompanionUses('bridge-connected') })
   }).catch(() => { /* the minute's send still goes */ })
@@ -128,17 +132,19 @@ const COUNTS = Object.keys(emptyAgg()).filter((k) => typeof (emptyAgg() as unkno
 const MAPS = ['hist', 'msHist', 'codes'] as const
 const MAP_KEY_RE: Record<(typeof MAPS)[number], RegExp> = { hist: /^-?\d{1,4}$/, msHist: /^-?\d{1,4}$/, codes: /^[a-z][a-z0-9_]{0,47}$/ }
 const MAX_COUNT = 1e12
-/** Batches already added, so a resend after a lost answer is added once. */
-const appliedBatches: string[] = []
-const MAX_APPLIED = 500
 
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_COUNT ? v : null)
+
+/** A name the recorder writes: literal words and `:params`, never a segment shaped like an id or a dated word. */
+function isRouteName(name: string): boolean {
+  return ROUTE_NAME_RE.test(name) && !name.slice(name.indexOf(' ') + 1).split('/').some(looksLikeId)
+}
 
 /** A row as the box sent it, or null when any part of it is not one the recorder writes. */
 function checkedRow(v: unknown, now: number): UseRow | null {
   if (!v || typeof v !== 'object') return null
   const r = v as Record<string, unknown>
-  if (r.kind !== 'http' || typeof r.name !== 'string' || !ROUTE_NAME_RE.test(r.name)) return null
+  if (r.kind !== 'http' || typeof r.name !== 'string' || !isRouteName(r.name)) return null
   const hour = r.hour
   if (typeof hour !== 'number' || !Number.isInteger(hour) || hour % HOUR_MS !== 0 || hour < now - 8 * 24 * HOUR_MS || hour > now + HOUR_MS) return null
   if (!r.agg || typeof r.agg !== 'object') return null
@@ -165,25 +171,22 @@ function checkedRow(v: unknown, now: number): UseRow | null {
 
 /**
  * The companion's rows, added to this Mac's hours (session-controls.ts `server.usage.rows`).
- * A row that is not one the recorder writes is refused and counted, never stored.
+ * A row that is not one the recorder writes is refused and counted, never stored. The batch's id
+ * is kept with its rows in one write (store.ts addHoursOnce), so a resend is added once, across a
+ * restart too; a file that did not take them throws, and the box keeps the batch to send again.
  */
 export async function applyCompanionUses(params: { batch?: unknown; rows?: unknown }, now = Date.now()): Promise<{ added: number; refused: number; duplicate?: true }> {
   const batch = typeof params.batch === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(params.batch) ? params.batch : null
   if (!batch || !Array.isArray(params.rows) || params.rows.length > MAX_ROWS_PER_CALL) throw new CompanionUsesError(`batch is an id and rows an array of at most ${MAX_ROWS_PER_CALL}`)
-  if (appliedBatches.includes(batch)) return { added: 0, refused: 0, duplicate: true }
   const rows: UseRow[] = []
   let refused = 0
   for (const v of params.rows) { const r = checkedRow(v, now); if (r) rows.push(r); else refused++ }
-  const { addHours } = await import('./store.js')
-  addHours(rows)
-  appliedBatches.push(batch)
-  if (appliedBatches.length > MAX_APPLIED) appliedBatches.splice(0, appliedBatches.length - MAX_APPLIED)
+  const [{ addHoursOnce }, { MAX_NAMES_PER_HOUR }] = await Promise.all([import('./store.js'), import('./record.js')])
+  const done = addHoursOnce(batch, rows, MAX_NAMES_PER_HOUR, now)
+  if (done === 'failed') throw new Error('the real-use file did not take the rows; send them again')
+  if (done === 'duplicate') return { added: 0, refused: 0, duplicate: true }
   if (refused) log.web.warn('companion real use: rows refused', { batch, refused, added: rows.length })
   return { added: rows.length, refused }
 }
 
 export class CompanionUsesError extends Error {}
-
-export function _resetAppliedBatchesForTesting(): void {
-  appliedBatches.length = 0
-}

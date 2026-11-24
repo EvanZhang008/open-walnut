@@ -28,8 +28,11 @@ import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
 import { applyMemoryEdits, memoryChangeOf, MemoryEditError, type MemoryEdit } from '../../core/memory-edits.js'
 import { sortedByName } from '../../lib/dir-order.js'
 import { withFileLock } from '../../utils/file-lock.js'
+import { nameAnswersHere } from '../middleware/answer-name.js'
 
 export const memoryRouter = Router()
+// A middleware below may answer before the route: real use names it as that route (answer-name.ts).
+memoryRouter.use(nameAnswersHere())
 // The companion's memory reads and saves take the Mac's copy and its journal (stage 4d); a pass-through elsewhere.
 memoryRouter.use(companionMemoryRoutes('web'))
 

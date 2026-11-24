@@ -62,17 +62,24 @@ afterAll(async () => {
 describe('the companion\'s own answers in the Mac\'s real use', () => {
   it('the phone\'s transcript read and task list reach the Mac under the path called', async () => {
     const get = (p: string) => fetch(`http://127.0.0.1:${port}${p}`, { headers: { Authorization: `Bearer ${phone}` } }).then(async (r) => { await r.arrayBuffer(); return r.status })
-    const statuses = [
-      await get('/api/v1/sessions/5f1c2a77-0b2e-4d43-9c55-2f6ad3e0c1ab/transcript?rich=1&visible=14'),
-      await get('/api/v1/tasks'),
+    // The transcript and the task list are answered by their routes; the skills and memory reads by
+    // the copy readers before any route (replica/companion-copy-routes.ts), the references read by
+    // one router's reader for a route of another (routes/console-v1.ts, library-v1.ts).
+    const calls: Array<[string, string]> = [
+      ['/api/v1/sessions/5f1c2a77-0b2e-4d43-9c55-2f6ad3e0c1ab/transcript?rich=1&visible=14', 'GET /api/v1/sessions/:id/transcript'],
+      ['/api/v1/tasks', 'GET /api/v1/tasks'],
+      ['/api/v1/skills', 'GET /api/v1/skills'],
+      ['/api/v1/skills/demo-skill/references', 'GET /api/v1/skills/:dirName/references'],
+      ['/api/v1/memory/browse', 'GET /api/v1/memory/browse'],
     ]
-    // Answered here, whatever the answer (the Mac is away): neither went unanswered.
+    const statuses: number[] = []
+    for (const [url] of calls) statuses.push(await get(url))
+    // Answered here, whatever the answer (the Mac is away): none went unanswered.
     expect(statuses.every((s) => s > 0 && s !== 401)).toBe(true)
     await vi.waitFor(() => {
       flushUsage()
       const names = mac.rows.flatMap((b) => b.rows.map((r) => r.name))
-      expect(names).toContain('GET /api/v1/sessions/:id/transcript')
-      expect(names).toContain('GET /api/v1/tasks')
+      for (const [, name] of calls) expect(names, name).toContain(name)
     }, { timeout: 15_000, interval: 300 })
     // No content rides it: only route templates, never the session's id.
     expect(JSON.stringify(mac.rows)).not.toContain('5f1c2a77')
@@ -86,5 +93,50 @@ describe('the companion\'s own answers in the Mac\'s real use', () => {
     const v1 = routes.filter((r) => r.path.startsWith('/api/v1/')).map((r) => ({ method: r.method, rel: r.path.slice('/api/v1'.length).replace(/:[^/]+/g, 'x1') }))
     const unrouted = COMPANION_ROUTES.filter((rule) => !v1.some((r) => (!rule.methods || rule.methods.includes(r.method) || r.method === 'ALL') && rule.re.test(r.rel.toLowerCase()) && !(rule.unless && rule.unless.test(r.rel.toLowerCase()))))
     expect(unrouted.map((r) => `${r.methods?.join(',') ?? 'ANY'} ${r.re.source} (${r.why})`)).toEqual([])
+  })
+
+  // A router whose middleware answers before its routes (a copy reader) names those answers as the
+  // routes (web/middleware/answer-name.ts), or they reach neither box's real use.
+  it('every router with a copy reader names what it answers', async () => {
+    const src = path.resolve(__dirname, '../../../src')
+    const missing: string[] = []
+    const walk = async (d: string): Promise<void> => {
+      for (const e of await fs.readdir(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) { await walk(p); continue }
+        if (!e.name.endsWith('.ts')) continue
+        const text = await fs.readFile(p, 'utf8')
+        for (const m of text.matchAll(/(\w+)\.use\(\s*(?:companion|replica|hostCopy)\w*\(/g)) {
+          const named = text.indexOf(`${m[1]}.use(nameAnswersHere())`)
+          if (named < 0 || named > m.index!) missing.push(`${path.relative(src, p)}: ${m[0]}`)
+        }
+      }
+    }
+    await walk(src)
+    expect(missing).toEqual([])
+  })
+
+  // The companion's answer that is the Mac's answer is the Mac's to count (v1-forward/counted-on-mac.ts):
+  // every relay of an HTTP call to the Mac marks what it passes on.
+  it('every relay of a call to the Mac marks the Mac\'s answer', async () => {
+    const src = path.resolve(__dirname, '../../../src')
+    const relays: string[] = []
+    const unmarked: string[] = []
+    const walk = async (d: string): Promise<void> => {
+      for (const e of await fs.readdir(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) { await walk(p); continue }
+        if (!e.name.endsWith('.ts')) continue
+        const text = await fs.readFile(p, 'utf8')
+        if (!/callPrimaryControl\(\s*'server\.http'|forwardOnStream\(\{/.test(text) || p.endsWith('stream-forward.ts')) continue
+        relays.push(path.relative(src, p))
+        if (!text.includes("'X-Walnut-Answered-By', 'primary'")) unmarked.push(path.relative(src, p))
+      }
+    }
+    await walk(src)
+    expect(relays.length).toBeGreaterThanOrEqual(2)
+    expect(unmarked).toEqual([])
+    // The stream's answer is marked where it is written.
+    expect(await fs.readFile(path.join(src, 'web/v1-forward/stream-forward.ts'), 'utf8')).toContain("res.setHeader('X-Walnut-Answered-By', 'primary')")
   })
 })

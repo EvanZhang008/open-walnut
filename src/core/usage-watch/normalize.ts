@@ -16,13 +16,18 @@ export function safeCode(code: unknown): string | undefined {
 /** A mount segment shaped like an id: a long word with three or more digits (`rq-b83e9eb1dd8d`), or a uuid. `notes-v2` is not. */
 const ID_SEGMENT_RE = /^(?=(?:[^\d]*\d){3})[A-Za-z0-9_-]{8,}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f-]{14,}$/i
 
+/** A path segment shaped like an id (ID_SEGMENT_RE): the recorder never keeps one in a name. */
+export function looksLikeId(seg: string): boolean {
+  return ID_SEGMENT_RE.test(seg)
+}
+
 /** The route template Express matched (`/api/tasks/:id`), or `unmatched`. Never the URL itself. */
 export function registeredTemplate(baseUrl: unknown, routePath: unknown): string {
   if (typeof routePath !== 'string' || !routePath) return 'unmatched'
   // The mount path is the URL's own (Express keeps no template for it): a router mounted under a
   // parameter (`/api/plugins/:pluginId`) shows the value there. A segment shaped like an id
   // (digits in a long word, a uuid) becomes `:id`, so no id is kept and names stay few.
-  const base = (typeof baseUrl === 'string' ? baseUrl : '').split('/').map((seg) => (ID_SEGMENT_RE.test(seg) ? ':id' : seg)).join('/')
+  const base = (typeof baseUrl === 'string' ? baseUrl : '').split('/').map((seg) => (looksLikeId(seg) ? ':id' : seg)).join('/')
   const full = `${base}${routePath === '/' && base ? '' : routePath}`
   // A template is made of literal words and `:params`; anything else (a regex route) is not kept.
   return /^[A-Za-z0-9_\-/:.*]{1,160}$/.test(full) ? full : 'unmatched'

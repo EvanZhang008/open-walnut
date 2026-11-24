@@ -49,8 +49,11 @@ import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
+import { nameAnswersHere } from '../middleware/answer-name.js'
 
 export const libraryV1Router = Router()
+// A middleware below may answer before the route: real use names it as that route (answer-name.ts).
+libraryV1Router.use(nameAnswersHere())
 // The companion's skill writes need the Mac while its copy is held (stage 4d); a pass-through elsewhere.
 libraryV1Router.use(companionSkillRoutes('v1'))
 

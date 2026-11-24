@@ -3722,7 +3722,9 @@ export class DaemonConnection {
       // Any op the action runs acts for the relay's sender, never for this Mac.
       const outcome = await handleSessionControlRelay(action, sessionId, params, controlRelayOrigin(this.hostKey))
       if (outcome.ok) {
-        log.session.info('DaemonConnection: control relay handled', { host: this.hostKey, relayId, action, sessionId })
+        // The companion's minute of real-use rows (usage-watch/companion-uses.ts) is no news: 1,440 lines a day.
+        if (action === 'server.usage.rows') log.session.debug('DaemonConnection: control relay handled', { host: this.hostKey, relayId, action, sessionId })
+        else log.session.info('DaemonConnection: control relay handled', { host: this.hostKey, relayId, action, sessionId })
         reply = { relayId, result: outcome.result }
       } else {
         log.session.warn('DaemonConnection: control relay refused', {

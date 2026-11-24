@@ -41,7 +41,8 @@ export function installMountRecorder(): void {
   }
 }
 
-export interface WalkedRoute { method: string; path: string }
+/** `several`: the route was registered with a list of paths (Express then gives `req.route.path` as that list). */
+export interface WalkedRoute { method: string; path: string; several?: true }
 
 function join(a: string, b: string): string {
   const s = `${a.replace(/\/+$/, '')}/${b.replace(/^\/+/, '')}`
@@ -59,7 +60,7 @@ export function walkRoutes(app: { router?: { stack?: LayerLike[] } }): WalkedRou
         for (const prefix of prefixes) {
           for (const p of paths) {
             const full = join(prefix, typeof p === 'string' ? p : `<regexp ${String(p)}>`)
-            for (const m of methods) out.push({ method: m === '_all' ? 'ALL' : m.toUpperCase(), path: full })
+            for (const m of methods) out.push({ method: m === '_all' ? 'ALL' : m.toUpperCase(), path: full, ...(Array.isArray(layer.route.path) ? { several: true as const } : {}) })
           }
         }
         continue

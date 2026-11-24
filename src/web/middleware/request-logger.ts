@@ -43,6 +43,8 @@ import { isHandledFailure, isRepeatAnswer } from './handled-failure.js'
 import { registerBurstContext } from '../../core/observability/memory-ledger.js'
 import { isLongPoll } from '../../core/usage-watch/normalize.js'
 import { recordRequestUse } from '../../core/usage-watch/request-record.js'
+import { answerName } from './answer-name.js'
+import { countedOnMac } from '../v1-forward/counted-on-mac.js'
 import { isHostUnreachableAnswer, watchHostUnreachableAnswer } from './host-unreachable-answer.js'
 
 // Extend Express Request to carry the request ID
@@ -315,12 +317,13 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     // Real use (core/usage-watch): a request from a browser, the phone (direct or through the cloud
     // relay), a plugin or another client, under the route template Express matched. An op's own call
     // to the API (ops/executor.ts OP_CALL_HEADER) is counted under its tool instead; a test run's
-    // requests stay out.
-    if (fullPath.startsWith('/api/') && !req.headers['x-walnut-op-call'] && !req.headers['x-walnut-test-run']) {
+    // requests stay out. On the companion, an answer the Mac gave (or a call the Mac ran and whose
+    // answer did not come back) is the Mac's to count: it ran the route (v1-forward/counted-on-mac.ts).
+    if (fullPath.startsWith('/api/') && !req.headers['x-walnut-op-call'] && !req.headers['x-walnut-test-run'] && !countedOnMac(res)) {
       // A client that left before any answer was sent is a hang-up, not a wait: past the slow line its
       // route held it (usage-watch/record.ts recordHttp). One that left an answer under way (a video
       // seeking, a cancelled download) stays a wait.
-      recordRequestUse(req.method, { originalUrl: req.originalUrl, baseUrl: req.baseUrl, routePath: req.route?.path }, status, duration, { waits: isStream || isLongPoll(url) || (aborted && res.headersSent), hungUp: aborted && !res.headersSent, hostUnreachable: isHostUnreachableAnswer(res) })
+      recordRequestUse(req.method, { originalUrl: req.originalUrl, ...answerName(req, res) }, status, duration, { waits: isStream || isLongPoll(url) || (aborted && res.headersSent), hungUp: aborted && !res.headersSent, hostUnreachable: isHostUnreachableAnswer(res) })
     }
     observe(isStream ? 'http.sse' : 'http.request', duration, {
       route: routeGroup,

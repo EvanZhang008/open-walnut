@@ -5,7 +5,8 @@
  * Nothing in it is content: names, counts, sizes, times and error codes; task ids only in the
  * watches and ships tasks registered themselves, in the notes sent (with the titles of the
  * tasks they name, as the note said them), and with the session and host of each failed Walnut
- * tool call a session read (tool_errors: which op, which code, never its words).
+ * tool call a session read (tool_errors: which op, which code, never its words). The cloud
+ * companion's batches of rows are kept by their random ids, so a resent batch is added once.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -74,6 +75,7 @@ function create(file: string): DB {
       id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, sid TEXT NOT NULL, task_id TEXT,
       host TEXT NOT NULL, op TEXT NOT NULL, client TEXT NOT NULL, code TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS tool_errors_at ON tool_errors (at);
+    CREATE TABLE IF NOT EXISTS companion_batches (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
   `)
   return d
 }
@@ -107,6 +109,35 @@ export function addHours(rows: ReadonlyArray<{ hour: number; kind: UsageKind; na
 
 function parseAgg(text: string): Agg {
   try { return { ...emptyAgg(), ...(JSON.parse(text) as Partial<Agg>) } } catch { return emptyAgg() }
+}
+
+/**
+ * The cloud companion's rows (usage-watch/companion-uses.ts), added once per batch: the batch's id
+ * is kept in the same transaction, so a resend after an answer lost to a restart adds nothing.
+ * A name new to its hour once the hour holds `maxNames` names of its kind is added as `other`, as
+ * the recorder does (record.ts). `failed` when the file did not take them: the box keeps the batch.
+ */
+export function addHoursOnce(batch: string, rows: ReadonlyArray<{ hour: number; kind: UsageKind; name: string; agg: Agg }>, maxNames: number, now = Date.now()): 'added' | 'duplicate' | 'failed' {
+  return withStore<'added' | 'duplicate' | 'failed'>('failed', (d) => {
+    const seen = d.prepare('SELECT 1 FROM companion_batches WHERE id = ?')
+    const names = d.prepare('SELECT COUNT(*) AS n FROM hours WHERE hour = ? AND kind = ?')
+    const get = d.prepare('SELECT agg FROM hours WHERE hour = ? AND kind = ? AND name = ?')
+    const put = d.prepare('INSERT OR REPLACE INTO hours (hour, kind, name, agg) VALUES (?, ?, ?, ?)')
+    return d.transaction((): 'added' | 'duplicate' => {
+      if (seen.get(batch)) return 'duplicate'
+      for (const r of rows) {
+        let name = r.name
+        let was = get.get(r.hour, r.kind, name) as { agg: string } | undefined
+        if (!was && (names.get(r.hour, r.kind) as { n: number }).n >= maxNames) {
+          name = 'other'
+          was = get.get(r.hour, r.kind, name) as { agg: string } | undefined
+        }
+        put.run(r.hour, r.kind, name, JSON.stringify(was ? mergeAgg(parseAgg(was.agg), r.agg) : r.agg))
+      }
+      d.prepare('INSERT INTO companion_batches (id, at) VALUES (?, ?)').run(batch, now)
+      return 'added'
+    })()
+  })
 }
 
 /** Every hour row from `sinceHour` on (epoch ms of the hour), optionally one kind and name. */
@@ -208,6 +239,8 @@ export function pruneStore(now = Date.now()): void {
     d.prepare('DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY at DESC LIMIT ?)').run(MAX_EVENTS)
     d.prepare('DELETE FROM sends WHERE due_at < ?').run(now - 7 * 86_400_000)
     d.prepare('DELETE FROM alive WHERE hour < ?').run(now - RETAIN_HOURS * 3_600_000)
+    // A batch older than the rows a companion still sends (companion-uses.ts KEEP_HOURS) is never resent.
+    d.prepare('DELETE FROM companion_batches WHERE at < ?').run(now - 8 * 86_400_000)
     d.prepare('DELETE FROM tool_errors WHERE at < ?').run(now - RETAIN_EVENT_DAYS * 86_400_000)
     d.prepare('DELETE FROM tool_errors WHERE id NOT IN (SELECT id FROM tool_errors ORDER BY at DESC LIMIT ?)').run(MAX_TOOL_ERRORS)
   })

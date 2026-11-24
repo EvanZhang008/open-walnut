@@ -13,9 +13,12 @@ import {
 } from '../../core/skill-store.js';
 import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js';
 import { companionSkillRoutes } from '../../replica/companion-copy-routes.js';
+import { nameAnswersHere } from '../middleware/answer-name.js';
 
 export function createSkillsRouter(): Router {
   const router = Router();
+  // A middleware below may answer before the route: real use names it as that route (answer-name.ts).
+  router.use(nameAnswersHere());
   // The companion's skill reads take the Mac's copy, its skill writes need the Mac (stage 4d); a pass-through elsewhere.
   router.use(companionSkillRoutes('web'));
 
