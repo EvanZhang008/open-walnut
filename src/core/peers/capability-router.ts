@@ -431,6 +431,12 @@ async function handleToolsCall(
   // (wn-cli's own loops) none, it reads the whole answer.
   const { agentSurfaceOf } = await import('../../ops/answer.js');
   const surface = agentSurfaceOf(payload.client);
+  // Held to that surface only for a session's call: a check script or a plugin job reads the result as
+  // it is, and so does a call no session made (a person's terminal on that host, an outside script).
+  const forAgent = surface && !payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid) ? surface : undefined;
+  // Asked for whole (`_full`, taken out of the arguments by executeOp): read before the call.
+  const { FULL_ARG } = await import('../../ops/answer.js');
+  const askedWhole = typeof args === 'object' && args !== null && (args as Record<string, unknown>)[FULL_ARG] === true;
   const startedAt = Date.now();
   // The daemon could not prove the session sid (lib/caller-unproven.ts): the sid stays the call's
   // provenance, and the start-mode ceiling of every self-call reads the caller as anonymous.
@@ -442,15 +448,13 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
 ...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
 ...(jobToken ? { callerJob: jobToken } : {}),
 ...(unproven ? { callerUnproven: true } : {}),
-  // A session reads a receipt or capped content (ops/answer.ts); a check script or a plugin job reads the result as it is.
-  // A call no session made (a person's terminal on that host, an outside script) reads the result as it is too.
-  ...(surface && !payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid) ? { forAgent: surface } : {}),
+  ...(forAgent ? { forAgent } : {}),
 })).finally(() => releaseRelayJob(jobToken));
   // Real use (core/usage-watch): the call's outcome and its answer's size as its client prints it.
   // A test run's calls stay out of it.
   if (!testRun) {
     const { recordGatewayCall } = await import('../usage-watch/gateway-record.js');
-    recordGatewayCall(name, payload.client, r, Date.now() - startedAt);
+    recordGatewayCall(name, payload.client, r, Date.now() - startedAt, !forAgent || askedWhole);
   }
   // The server's own call to its API went out and got no answer: the caller hears the answer
   // was lost (hub_timeout), so its client names the call id and the read, never a bare error.

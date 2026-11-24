@@ -92,8 +92,11 @@ export function msPercentile(agg: Agg, p: number): number | null {
   return percentile(agg.msHist ?? {}, p, agg.msMax)
 }
 
-/** A call's outcome into an hour: one call, its class, size and time. */
-export function addCall(agg: Agg, c: { cls: OutcomeClass; code?: string; chars: number; ms: number }): void {
+/**
+ * A call's outcome into an hour: one call, its class, size and time. No `chars`: the answer was
+ * not an agent's read (a program took it, or the caller asked for it whole), so it is in no size number.
+ */
+export function addCall(agg: Agg, c: { cls: OutcomeClass; code?: string; chars?: number; ms: number }): void {
   agg.calls++
   if (c.cls !== 'ok') {
     agg.fails++
@@ -104,11 +107,13 @@ export function addCall(agg: Agg, c: { cls: OutcomeClass; code?: string; chars: 
     else agg.unreachable++
   }
   if (c.code) agg.codes[c.code] = (agg.codes[c.code] ?? 0) + 1
-  if (c.chars > BIG_CHARS) agg.over10k++
-  agg.charsSum += c.chars
-  if (c.chars > agg.charsMax) agg.charsMax = c.chars
-  const b = String(bucketOf(c.chars))
-  agg.hist[b] = (agg.hist[b] ?? 0) + 1
+  if (c.chars !== undefined) {
+    if (c.chars > BIG_CHARS) agg.over10k++
+    agg.charsSum += c.chars
+    if (c.chars > agg.charsMax) agg.charsMax = c.chars
+    const b = String(bucketOf(c.chars))
+    agg.hist[b] = (agg.hist[b] ?? 0) + 1
+  }
   agg.msSum += c.ms
   if (c.ms > agg.msMax) agg.msMax = c.ms
   const m = String(bucketOf(c.ms))

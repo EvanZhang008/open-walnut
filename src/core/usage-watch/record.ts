@@ -94,6 +94,12 @@ export interface OpCall {
   overLimit: boolean
   /** Saved to a file by Walnut's MCP server (answerSize). */
   spilled?: boolean
+  /**
+   * The answer was not held to an agent's surface (ops/answer.ts): a program read it (a check
+   * script, a plugin job, a CLI loop, a person's terminal), or the caller asked for it whole
+   * (`_full`). Its size is no agent's read: counted as a call, in no size number and never over a limit.
+   */
+  whole?: boolean
   ms: number
   now?: number
 }
@@ -103,8 +109,9 @@ export function recordOpCall(c: OpCall): void {
   if (!active) return
   const now = c.now ?? Date.now()
   const agg = bucket('op', c.op, now)
-  addCall(agg, { cls: c.cls, ...(c.code ? { code: c.code } : {}), chars: c.size, ms: c.ms })
-  if (c.overLimit) agg.overLimit++
+  const overLimit = c.overLimit && !c.whole
+  addCall(agg, { cls: c.cls, ...(c.code ? { code: c.code } : {}), ...(c.whole && c.cls === 'ok' ? {} : { chars: c.size }), ms: c.ms })
+  if (overLimit) agg.overLimit++
   if (c.spilled) agg.spilled++
   const labels = { op: labelValue(c.op) }
   if (c.cls === 'error' || c.cls === 'timeout') {
@@ -112,8 +119,8 @@ export function recordOpCall(c: OpCall): void {
     if (watchedOps.has(c.op)) count('usage.op.watched_errors', 1, labels)
   }
   if (c.cls === 'bad_args') count('usage.op.bad_args', 1, labels)
-  if (c.overLimit) count('usage.op.over_limit', 1, labels)
-  if (c.cls !== 'ok' || c.overLimit) {
+  if (overLimit) count('usage.op.over_limit', 1, labels)
+  if (c.cls !== 'ok' || overLimit) {
     event({ at: now, kind: 'op', name: c.op, problem: c.cls !== 'ok' ? c.cls : 'over_limit', ...(c.code ? { code: c.code } : {}), chars: c.size, ms: c.ms })
   }
 }

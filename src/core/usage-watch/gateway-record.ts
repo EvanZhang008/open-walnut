@@ -1,21 +1,23 @@
 /**
  * One gateway tool call into the real-use recorder (capability-router.ts handleToolsCall): every
  * session's Walnut MCP tools and `walnut` CLI calls arrive here, on every host. The client names
- * itself (`client: mcp|cli`); an older one names nothing and is counted as `unknown`.
+ * itself (`client: mcp|cli`); an older one names nothing and is counted as `unknown`. `whole`: the
+ * answer was not held to an agent's surface (no session made the call, or it asked for `_full`),
+ * so, like a program's read, its size is no agent's read (record.ts OpCall.whole).
  */
 import { log } from '../../logging/index.js'
-import { answerSize, isToolClient } from '../../lib/tool-answer-size.js'
+import { PROGRAM_CLIENT, answerSize, isToolClient } from '../../lib/tool-answer-size.js'
 import { failureClass } from './normalize.js'
 import { recordOpCall, recordToolError } from './record.js'
 
-export function recordGatewayCall(op: string, client: unknown, r: { ok: boolean; result?: unknown; message?: string; invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; status?: number; code?: string }, ms: number): void {
+export function recordGatewayCall(op: string, client: unknown, r: { ok: boolean; result?: unknown; message?: string; invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; status?: number; code?: string }, ms: number, whole = false): void {
   try {
     const c = isToolClient(client) ? client : 'unknown'
     if (r.ok) {
       // The gateway wraps a non-object answer as { value } (handleToolsCall): measure what the client gets.
       const shown = typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result) ? r.result : { value: r.result }
       const { size, overLimit, spilled } = answerSize(shown, c)
-      recordOpCall({ op, client: c, cls: 'ok', size, overLimit, ...(spilled ? { spilled } : {}), ms })
+      recordOpCall({ op, client: c, cls: 'ok', size, overLimit, ...(spilled ? { spilled } : {}), ...(whole || c === PROGRAM_CLIENT ? { whole: true } : {}), ms })
       return
     }
     const f = failureClass(r)

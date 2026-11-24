@@ -186,6 +186,29 @@ describe('the recorder', () => {
     expect(Object.keys(ev[0]!)).not.toContain('sid')
   })
 
+  it('a whole answer (a program\'s read, a call no session made, `_full`) is a call but in no size number and never over a limit', async () => {
+    const { recordGatewayCall } = await import('../../../src/core/usage-watch/gateway-record.js')
+    const big = { ok: true, result: { text: 'a'.repeat(300_000) } }
+    recordGatewayCall('task_history', 'cli', big, 5, true)
+    recordGatewayCall('task_history', 'mcp', big, 5, true)
+    recordGatewayCall('task_history', 'program', big, 5)
+    recordGatewayCall('task_history', 'cli', { ok: true, result: { text: 'a'.repeat(4_000) } }, 5)
+    // A failure of such a call still counts as one, with its small size.
+    recordGatewayCall('task_history', 'cli', { ok: false, message: 'Invalid arguments for task_history: x', invalidArgs: true }, 5, true)
+    flushUsage(T0 + 60_000)
+    const op = readHours(0).filter((r) => r.kind === 'op' && r.name === 'task_history').map((r) => r.agg)
+    const sum = (k: 'calls' | 'overLimit' | 'badArgs') => op.reduce((n, a) => n + a[k], 0)
+    expect(sum('calls')).toBe(5)
+    expect(sum('overLimit')).toBe(0)
+    expect(sum('badArgs')).toBe(1)
+    expect(Math.max(...op.map((a) => a.charsMax))).toBeLessThan(10_000)
+    expect(readEvents({ since: 0, limit: 50 }).filter((e) => e.name === 'task_history' && e.problem === 'over_limit')).toEqual([])
+    // The same answer held to an agent's surface still counts.
+    recordGatewayCall('task_history', 'cli', big, 5)
+    flushUsage(T0 + 120_000)
+    expect(readHours(0).filter((r) => r.kind === 'op' && r.name === 'task_history').reduce((n, r) => n + r.agg.overLimit, 0)).toBe(1)
+  })
+
   it("a 503 saying its host is not reachable now is unreachable, never the route's server error; any other 503 still is", () => {
     // 2026-11-23: deploys cut a host's link and the history route's "Reconnecting" 503s rang as
     // its server errors; an op call's 503 was already unreachable (failureClass).
