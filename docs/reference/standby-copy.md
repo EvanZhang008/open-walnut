@@ -389,9 +389,39 @@ daemon (the test `an apply that runs longer than a command may`, run once by han
 local write of each new chunk (5 GB for the first batch here), and holds what the link has not
 sent yet: up to about 4 GB at 20 Mbit/s, a few MB for an incremental batch.
 
-**Writes the gate does not hold** void a batch when they land on a file between the moment
-and its read, unless the file is marked append-only (above). Before the marks, one append
-every 20 ms to the session audit log voided every batch.
+**Writes the gate does not hold** fail a round when they land on a file after the moment and
+the batch holds no copy a stat after the moment proves, unless the file is marked append-only
+(above); the batch then takes another round. Before the marks, one append every 20 ms to the
+session audit log voided every batch.
+
+### A batch while the leader writes (2026-11-24)
+
+The rehearsal of the switch between machines (`scripts/leader-switch-rehearsal.ts --remote`,
+its `measure` scenario, `--gb 20`, run with only its batches) on clouddev, host load 40 to 45 on
+48 cores: a real leader with a 20 GB home (80 files of 256 MiB of random bytes and 20,000 small
+files, all under `artifacts/`, which git sync tracks), its standby batches over its daemon link
+to the other machine's daemon. The leader keeps writing: its git auto-commit runs `git add -A`
+every 30 s, which cannot finish the new 20 GB within its 30 s limit and is killed each time,
+leaving a temp object of up to a few hundred MB in `.git/objects` (not copied: `tmp_*`).
+
+| What | Before (trunk main of 2026-11-24 morning) | After, link unslowed | After, link at 20 Mbit/s |
+|---|---|---|---|
+| First batch of the 20 GB home | none in 55 minutes: 12 void, each over a file git wrote during the read | 888 s: 1 round, 3 passes (catch-up reads 622 s), hold 97 ms, pins 128 ms, 23.4 GB read and sent, 20,192 files | 12,617 s (3 h 30 min): 1 round, 3 passes (catch-up reads 475 s), hold 94 ms, pins 201 ms, 22.8 GB sent (about 14.5 Mbit/s of chunks: the rest of the 20 Mbit/s is the frames' base64) |
+| The next batch, the leader writing | none | the batch 20.0 s (1 round, 2 passes, 538 MB sent: git's new objects, not its temp ones; hold 38 ms); 27.6 s from the rehearsal's writes until the target held it | the batch 2,053 s (1 round, 2 passes, 3.76 GB sent: the objects git wrote during the first batch; hold 46 ms); 2,055 s until the target held it |
+| The one after it | none | 7.6 s from the rehearsal's writes until the target held it | 160 s until the target held it |
+| The leader's git auto-commit meanwhile | killed 57 times | failed 15 times in 16 minutes (`git add -A` killed at 30 s) | failed 246 times in the 4 hours |
+
+Two clocks: a batch's own time is the leader's log (`standby: batch committed`, `totalMs`: from
+the batch's walk to the target's answer to its commit); "until the target held it" is the
+rehearsal's (`later standby batch N` in its output: from its writes until the target's state
+names a batch committed after them, so it also holds the wait for the runner's next start and the
+rehearsal's own polling). The last batch's log line was not written before the rehearsal stopped
+the leader. The unslowed run is the standby code that also keeps a batch's dirs (above); an earlier run of
+the round code alone took 1,155 s for the first batch, 20.4 s for the next, on a busier host. The
+run at 20 Mbit/s is that round code alone, before the review's fixes and the dirs, which send no
+file more (only a few dir names in the manifest). Before the change no first batch completed unslowed, so the slow link was not measured on
+it.
+Two real machines and APFS are not measured (below).
 
 ## Not done yet
 
@@ -406,7 +436,10 @@ every 20 ms to the session audit log voided every batch.
   size in memory for a moment, then hashed; only changed chunks travel). On ext4 its file in
   the copy is still copied whole by the kernel each batch (no reflink); APFS shares the blocks.
 - An appended file not marked append-only (one a person may edit, a file outside the manifest's
-  marks) still voids a batch when it changes between the moment and its read.
+  marks) fails a round when it changes after the moment and its copy is older; ten failed
+  rounds void the batch.
+- The rounds rest on ctime as POSIX keeps it; tested on Linux ext4 only, not on APFS, and the
+  hold's length on a Mac is not measured.
 - The target needs up to twice the home's size (the copy, and its chunks, which dedupe repeated content).
 - A rollback-journal (not WAL) database holds its writers while it is copied.
 - Debounced writes that are still in memory are not in a batch (the same as at a crash);
