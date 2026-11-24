@@ -3631,7 +3631,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           {/* ROW 2 — the title gets the whole line; only the folded labels and the
               kebab sit beside it (plus the host's one leading control, when
               embedded). Every window/tool icon button lives on row 1. */}
-          <div className="session-panel-header-top" ref={titleRowRef} data-header-fit={titleRowTight ? 'tight' : undefined} {...titleRowBandProps(titleRowBand)}>
+          {/* data-kebab-row: the row draws the kebab once the session has loaded, so it keeps the kebab
+              key's height while it loads too (globals.css): the transcript pads by the header's height,
+              and a row that grew under a message already on screen moved it down. */}
+          <div className="session-panel-header-top" ref={titleRowRef} data-header-fit={titleRowTight ? 'tight' : undefined} {...titleRowBandProps(titleRowBand)}
+            data-kebab-row={sessionId && !kebabSlot && !hostHeader ? '' : undefined}>
             {headerLeading && !shownFullscreen && (
               <div className="session-panel-header-leading">{headerLeading}</div>
             )}

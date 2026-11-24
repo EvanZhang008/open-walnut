@@ -124,7 +124,7 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-test('a lead opens on Task with its Needs you cards; its Brief is the letter alone, in three sections', async ({ page }) => {
+test('a lead opens on Task with its Needs you cards; its Brief is the letter alone, in three sections', async ({ page, request }) => {
   // Each test has its own browser context, so the switch's memory (localStorage) starts empty.
   await isolateUiPrefs(page)
   await loadHome(page)
@@ -190,13 +190,31 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   // The node's header counts its threads, never its tasks' asks (those are this section).
   await expect(detail.getByTestId('org-pill-needs')).toHaveCount(0)
   await expect(detail.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads?$/)
-  // A count in the header opens its section in the same list; Needs you stays open beside it.
-  await detail.getByTestId('org-pill-notstarted').click()
+  // The header counts working and waiting only (2430d9d476, the user's design 4): the review nobody
+  // started is no header count, it stays in its folded Not started section.
+  await expect(detail.getByTestId('org-pill-notstarted')).toHaveCount(0)
+  await expect(detail.getByTestId('org-pill-waiting')).toHaveCount(0)
+  // A count in the header opens its section in the same list; Needs you stays open beside it. A
+  // snoozed ask is waiting (user-status.ts), so it gives the header its waiting count; it is removed
+  // again so the later tests read the same node.
+  const snoozed = await createTask(request, `Snoozed ${STAMP}`, LED)
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10)
+  for (const data of [{ phase: 'NEED_ACTION' }, { start_date: later }]) {
+    const res = await request.patch(`/api/tasks/${snoozed}`, { data })
+    expect(res.ok(), await res.text()).toBe(true)
+  }
+  await expect(detail.getByTestId('org-pill-waiting')).toHaveText('1 waiting', { timeout: 30_000 })
+  await expect(taskSection(detail, 'waiting')).toHaveAttribute('data-open', '0')
+  await detail.getByTestId('org-pill-waiting').click()
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
-  await expect(taskSection(detail, 'notstarted')).toHaveAttribute('data-open', '1')
-  await expect(taskRow(detail, ids.review, 'notstarted')).toBeVisible()
+  await expect(taskSection(detail, 'waiting')).toHaveAttribute('data-open', '1')
+  await expect(taskRow(detail, snoozed, 'waiting')).toBeVisible()
   await expect(taskSection(detail, 'needs')).toHaveAttribute('data-open', '1')
+  await expect(taskSection(detail, 'notstarted')).toHaveAttribute('data-open', '0')
   await detail.screenshot({ path: `test-results/org-task-waiting-${test.info().project.name}.png` })
+  await removeTask(request, snoozed)
+  made.splice(made.indexOf(snoozed), 1)
+  await expect(taskRow(detail, snoozed)).toHaveCount(0, { timeout: 30_000 })
 })
 
 test('a task the Brief names moves: its line shows it now, the head counts it, a refresh is asked; a new ask is added, a finished line leaves', async ({ page, request }) => {
@@ -318,11 +336,14 @@ test('Fold keeps the first lines and survives a reload; each node opens on the v
   await expect(page.getByTestId('org-brief')).toHaveClass(/is-folded/)
   await page.getByTestId('org-brief-fold').click()
   await expect(page.getByTestId('org-brief')).not.toHaveClass(/is-folded/)
-  // The view is the node's own: Main opens on its own (Task: before Main has started it shows its
-  // tasks alone), and the lead's Brief waits for it.
+  // The view is the node's own: Main opens on its own, never the lead's Brief, and the lead's Brief
+  // waits for it. A CEO not started yet keeps Threads as it will once it runs (bce4de8f96,
+  // nodeKeepsThreads), so it opens on its Threads like any node seen for the first time.
   await page.getByTestId('org-channel-main').click()
   await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', 'main')
-  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
+  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+  expect(await page.locator('[data-testid="org-detail"] .org-top-tabs .org-top-tab').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))))
+    .toEqual(['org-top-threads', 'org-top-task', 'org-top-brief'])
   await openNode(page, LED)
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'brief')
   // The Task view's folds too: Needs you (open by default, the parser asks) folded, another page, back.

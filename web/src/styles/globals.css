@@ -7964,6 +7964,12 @@ body.walnut-dragging {
   gap: 4px 8px;
 }
 
+/* A row that holds the kebab (the 28px .btn-icon key, TaskQuickActions) is that tall from the first
+   frame: while the session loads the kebab is not drawn yet, and the row grew by 8px when it came,
+   pushing the first message down (launch-prompt-first-message.spec.ts). The draft's row matches it
+   (walnut-agent.css). */
+.session-panel-header-top[data-kebab-row] { min-height: 28px; }
+
 .session-meta-row-2 + .session-panel-header-top {
   margin-top: 2px;
 }

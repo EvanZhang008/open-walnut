@@ -318,6 +318,9 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   await page.getByTestId('sidebar-org').click()
   await expect(page.getByTestId('org-page')).toBeVisible()
   await page.getByTestId('org-channel-main').click()
+  // The page may open on another node (the one left last): its side bar is not the CEO's, so
+  // the walk goes on once the CEO is the node shown (else its Tasks click lands on that node's).
+  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', 'main')
   // The CEO's row says its threads in its hover (it draws only its name and, above 0, a red dot).
   await expect(page.getByTestId('org-channel-main')).toHaveAttribute('title', /(^|\n|: )\d+ threads?\b/)
   // The node's side bar as the person last left it: open it, on Tasks, All tasks, its Needs you open.

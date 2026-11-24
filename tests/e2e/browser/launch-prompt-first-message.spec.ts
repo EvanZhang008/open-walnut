@@ -98,7 +98,11 @@ async function startFrameSampler(page: Page, stamp: string): Promise<() => Promi
             if (el.contains(real)) break
             above.push(`${el.className || el.tagName}:${(el as HTMLElement).offsetHeight}`)
           }
-          w.__lp.layouts.push(`top=${Math.round(top)} frame=${w.__lp.frames} above=[${above.join(', ')}]`)
+          // And the panel's header: the scroller pads its top by the header's height (--sp-header-h),
+          // so a header row that grows moves the message with nothing above it.
+          const header = real.closest('.session-panel')?.querySelector<HTMLElement>('.session-panel-header')
+          const rows = [...(header?.children ?? [])].map((el) => `${(el as HTMLElement).className}:${(el as HTMLElement).offsetHeight}`)
+          w.__lp.layouts.push(`top=${Math.round(top)} frame=${w.__lp.frames} above=[${above.join(', ')}] header=${header?.offsetHeight}[${rows.join(', ')}]`)
           lastTop = top
         }
       }
