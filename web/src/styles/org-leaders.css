@@ -10,14 +10,12 @@
 
 .org-leaders-group { display: flex; flex-direction: column; min-width: 0; }
 .org-leaders-project { padding: 4px 2px 2px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
-/* A Director's title wraps (.wn-title, OrgLeaders.tsx): the fold, dot and avatar stay level with its first
-   line, the eye and "leads N" end its last one, and each level steps in only LEVEL_INDENT_PX (2026-11-21, the
-   UI audit). On the 2px grid: the first line's middle is 13px down the row; every mark below is placed on it. */
-.org-leader { display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-xs); }
+/* A Director's title wraps (.wn-title, OrgLeaders.tsx): the dot and avatar stay level with its first line,
+   the eye and "leads N" end its last one (2026-11-21, the UI audit). On the 2px grid: the first line's middle
+   is 13px down the row; every mark below is placed on it. The 20px inset is where a row's own fold stood
+   before Directors were one level (2026-11-24), so the rows keep their place. */
+.org-leader { display: flex; align-items: flex-start; min-width: 0; padding-left: 20px; border-radius: var(--radius-xs); }
 .org-leader:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
-/* The fold is the shared icon DisclosureButton (20 px); a row with nothing under it keeps the room. */
-.org-leader-fold { flex: none; }
-.org-leader-fold.is-none { width: 20px; }
 .org-leader-open {
   flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 6px; padding: 2px 2px 2px 1px;
   border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;

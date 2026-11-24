@@ -68,7 +68,8 @@ describe('buildOrgTree director per node', () => {
 })
 
 describe('directorsOf', () => {
-  it('lists Directors with the nearest Directors below; a non-Director is transparent', () => {
+  // 2026-11-24, the user: only the first layer of leaders is listed, never a leader of a leader.
+  it('lists only the first Director on each path; what is under a Director is never listed', () => {
     // top (auto) -> mid (no, leads) -> deep (auto, leads) -> leaf
     //           \-> plain (no team)
     const top = t({ title: 'Top' })
@@ -77,8 +78,8 @@ describe('directorsOf', () => {
     const leaf = t({ title: 'Leaf', parent_task_id: deep.id })
     const plain = t({ title: 'Plain', parent_task_id: top.id })
     const ds = directorsOf(teamsOf([top, mid, deep, leaf, plain]))
-    // Mid is not one: Deep lifts to Top. Top leads Mid and Plain directly (2).
-    expect(shape(ds)).toEqual([['Top', 2, [['Deep', 1, []]]]])
+    // Top leads Mid and Plain directly (2); Deep, a leader inside Top's team, is not listed.
+    expect(shape(ds)).toEqual([['Top', 2, []]])
   })
 
   it('a no leader at the top lifts its sub-leaders to the top', () => {
@@ -89,14 +90,25 @@ describe('directorsOf', () => {
     expect(shape(ds)).toEqual([['A', 1, []]])
   })
 
-  it('a yes task with no workers is a Director with no team; nested yes below a Director nests', () => {
+  it('a yes task with no workers is a Director with no team; a yes inside a Director\'s team is not listed', () => {
     const lone = t({ title: 'Lone', director: 'yes' })
     const lead = t({ title: 'Lead' })
     const pick = t({ title: 'Pick', parent_task_id: lead.id, director: 'yes' })
     const ds = directorsOf(teamsOf([lone, lead, pick]))
     expect(ds.map((d) => d.title).sort()).toEqual(['Lead', 'Lone'])
     expect(ds.find((d) => d.title === 'Lone')).toMatchObject({ leads: 0, subs: [] })
-    expect(shape(ds.filter((d) => d.title === 'Lead'))).toEqual([['Lead', 1, [['Pick', 0, []]]]])
+    expect(shape(ds.filter((d) => d.title === 'Lead'))).toEqual([['Lead', 1, []]])
+  })
+
+  it('a task inside a Director\'s team that another project lists at its top is not listed there either', () => {
+    const lead = t({ title: 'Lead' })
+    const sub = t({ title: 'Sub', parent_task_id: lead.id })
+    const subW = t({ title: 'Sub worker', parent_task_id: sub.id })
+    const seen = new Set<string>()
+    const first = directorsOf(teamsOf([lead, sub, subW]), seen)
+    const subNode = teamsOf([lead, sub, subW])[0]!.workers[0]!
+    expect(first.map((d) => d.title)).toEqual(['Lead'])
+    expect(directorsOf([subNode], seen)).toEqual([])
   })
 
   it('keeps the tree order and lists each task once across calls (seen)', () => {

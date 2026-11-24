@@ -28,30 +28,42 @@ export function directorWrite(make: boolean, openWorkers: number): 'yes' | 'no' 
   return openWorkers > 0 ? 'no' : 'auto';
 }
 
-/** A Director and the Directors below it. */
+/** A Director, as org_get and the Org page list it. */
 export interface OrgDirector {
   id: string;
   title: string;
   /** How many open tasks report to it directly. */
   leads: number;
-  /** The nearest Directors below it, at any depth (a task that is no Director in between is skipped). */
+  /** Always empty since 2026-11-24 (the user: only the first layer of leaders, not the second): only the
+   * first Director on a path is listed. Kept so a client that reads it still gets an array. */
   subs: OrgDirector[];
 }
 
 /**
- * The Directors among `teams` (a project's teams, in the tree's order), each with the Directors
- * below it. A task that is no Director is transparent: the Directors under it are listed in its
- * place, under the nearest Director above (or at the top). `seen` keeps one task from being listed
- * twice across several calls (a VP reading several projects).
+ * The Directors among `teams` (a project's teams, in the tree's order): the first Director on each
+ * path down, one level only. A task that is no Director is transparent: the first Directors under it
+ * are listed in its place. Everything under a Director is its own team, never listed (2026-11-24, the
+ * user: only the first layer of leaders, not the second), and it is marked seen, so a team another
+ * project also lists is not listed there. `seen` keeps one task from being listed twice across several
+ * calls (a VP reading several projects).
  */
 export function directorsOf(teams: readonly OrgTaskNode[], seen: Set<string> = new Set()): OrgDirector[] {
   const out: OrgDirector[] = [];
   for (const n of teams) {
     if (seen.has(n.id)) continue;
     seen.add(n.id);
-    const below = directorsOf(n.workers, seen);
-    if (n.director) out.push({ id: n.id, title: n.title, leads: n.workers.length, subs: below });
-    else out.push(...below);
+    if (n.director) {
+      markSeen(n.workers, seen);
+      out.push({ id: n.id, title: n.title, leads: n.workers.length, subs: [] });
+    } else out.push(...directorsOf(n.workers, seen));
   }
   return out;
+}
+
+function markSeen(nodes: readonly OrgTaskNode[], seen: Set<string>): void {
+  for (const n of nodes) {
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    markSeen(n.workers, seen);
+  }
 }

@@ -31,8 +31,6 @@ export interface LeaderNode {
   watched: boolean;
   /** Its session (its chat), when it has one: "Open chat" opens it. */
   sessionId?: string;
-  /** The leaders among the tasks under it, at any depth below (a task that is none adds none). */
-  subs: LeaderNode[];
 }
 
 export interface LeaderGroup {
@@ -69,7 +67,6 @@ function leaderOf(d: OrgDirector, byId: ReadonlyMap<string, Task>): LeaderNode {
     leads: d.leads,
     watched: !!task?.watched_at,
     ...(task && resolveTaskSessionId(task) ? { sessionId: resolveTaskSessionId(task)! } : {}),
-    subs: d.subs.map((s) => leaderOf(s, byId)),
   };
 }
 
@@ -104,20 +101,16 @@ export function foldGroups(groups: readonly LeaderGroup[], showProjects: boolean
   return [{ key: '*', project: '', name: '', leaders: groups.flatMap((g) => g.leaders) }];
 }
 
-/** Every Director, a Director's own Directors right after it: the DIRECTORS section's rows (one level). */
-export const flatDirectors = (groups: readonly LeaderGroup[]): LeaderNode[] => groups.flatMap((g) => [...allLeaders(g.leaders)]);
-
-export function* allLeaders(nodes: readonly LeaderNode[]): Generator<LeaderNode> {
-  for (const n of nodes) { yield n; yield* allLeaders(n.subs); }
-}
+/** Every Director, project by project: the DIRECTORS section's rows. */
+export const flatDirectors = (groups: readonly LeaderGroup[]): LeaderNode[] => groups.flatMap((g) => g.leaders);
 
 const wordsOf = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
 const hits = (l: LeaderNode, words: readonly string[]) => words.every((w) => l.title.toLowerCase().includes(w));
 
-/** A search for `q` finds one of these leaders (every word in its title), at any depth. */
+/** A search for `q` finds one of these leaders (every word in its title). */
 export function leadersMatch(groups: readonly LeaderGroup[], q: string): boolean {
   const words = wordsOf(q);
-  return !!words.length && groups.some((g) => [...allLeaders(g.leaders)].some((l) => hits(l, words)));
+  return !!words.length && groups.some((g) => g.leaders.some((l) => hits(l, words)));
 }
 
 /** One row of the DIRECTORS section (OrgDirectorSection): a Director and the VP it is under. */

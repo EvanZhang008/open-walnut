@@ -45,8 +45,8 @@ describe('leaders under a VP', () => {
     expect(garden.leaders.map((l) => l.title)).toEqual(['Beds team'])
     const beds = garden.leaders[0]!
     expect(beds).toMatchObject({ leads: 2, watched: true })
-    // The leader under it; a worker that leads no one is not a leader.
-    expect(beds.subs.map((s) => [s.title, s.leads])).toEqual([['Bed two lead', 1]])
+    // One level only (2026-11-24, the user): the leader inside its team is not listed anywhere.
+    expect(groups.flatMap((g) => g.leaders).some((l) => l.title === 'Bed two lead')).toBe(false)
     // A team whose only worker is finished leads no one now.
     expect(garden.leaders.some((l) => l.title === 'Old team')).toBe(false)
     expect(groups[1]!.leaders.map((l) => l.title)).toEqual(['Seed buying'])
@@ -74,9 +74,8 @@ describe('leaders under a VP', () => {
     const leaders = groups[0]!.leaders
     // The demoted leader is gone; its sub-leader lifts to the top.
     expect(leaders.map((l) => [l.title, l.leads]).sort()).toEqual([['Promoted alone', 0], ['Sub leader', 2]])
-    const subLeader = leaders.find((l) => l.title === 'Sub leader')!
-    // A worker chosen as a Director shows under its leader, with no team of its own.
-    expect(subLeader.subs.map((s) => [s.title, s.leads])).toEqual([['Picked worker', 0]])
+    // A worker chosen as a Director inside a Director's team is not listed: one level only.
+    expect(leaders.some((l) => l.title === 'Picked worker')).toBe(false)
     expect(leaderTotal(groups)).toBe(2)
   })
 
@@ -90,8 +89,8 @@ describe('leaders under a VP', () => {
     const subWorker = t('Find', { parent_task_id: sub.id })
     const groups = groupsOf([team, sub, subWorker], 'Find')
     expect(leadersMatch(groups, 'pipeline WATCH')).toBe(true)
-    // A leader at any depth is found.
-    expect(leadersMatch(groups, 'resolver')).toBe(true)
+    // A leader inside a Director's team is not listed, so not found either.
+    expect(leadersMatch(groups, 'resolver')).toBe(false)
     expect(leadersMatch(groups, 'pipeline nothing')).toBe(false)
     expect(leadersMatch(groups, '  ')).toBe(false)
   })
@@ -109,16 +108,14 @@ describe('leaders under a VP', () => {
     expect(foldGroups([], false)).toEqual([])
   })
 
-  it('the DIRECTORS section: one level, by VP in the list order, a Director\'s own Directors right after it', () => {
+  it('the DIRECTORS section: one level, by VP in the list order, never a Director inside a Director\'s team', () => {
     const lead = t('Wharf', { org_role: 'lead', title: 'Wharf VP' })
     const top = t('Wharf', { title: 'Dock team' })
     const sub = t('Wharf', { parent_task_id: top.id, title: 'Crane lead' })
     const all = [lead, top, sub, t('Wharf', { parent_task_id: sub.id }), t('Wharf', { title: 'Lone promoted', director: 'yes' })]
     const groups = groupsOf(all, 'Wharf')
-    expect(flatDirectors(groups).map((d) => d.title).sort()).toEqual(['Crane lead', 'Dock team', 'Lone promoted'])
-    // Crane lead comes right after the Director it is under.
+    expect(flatDirectors(groups).map((d) => d.title).sort()).toEqual(['Dock team', 'Lone promoted'])
     const order = flatDirectors(groups).map((d) => d.title)
-    expect(order.indexOf('Crane lead')).toBe(order.indexOf('Dock team') + 1)
     // A task never started reads "Not started", never the tab's "Waiting".
     expect(flatDirectors(groups).find((d) => d.title === 'Lone promoted')!.stateText).toBe('Not started')
     const vpA = { key: 'project:wharf', name: 'Wharf', vpName: 'Harbour' } as ChannelRow
@@ -127,8 +124,9 @@ describe('leaders under a VP', () => {
     const rows = directorRows([vpB, vpA], groupsOf2)
     expect(rows.map((r) => [r.vp.key, r.director.title])).toEqual(order.map((title) => [vpA.key, title]))
     // A search shows the Directors it finds, or every Director of a VP whose name it finds.
-    expect(directorRows([vpA], groupsOf2, 'crane').map((r) => r.director.title)).toEqual(['Crane lead'])
-    expect(directorRows([vpA], groupsOf2, 'harbour')).toHaveLength(3)
+    expect(directorRows([vpA], groupsOf2, 'dock').map((r) => r.director.title)).toEqual(['Dock team'])
+    expect(directorRows([vpA], groupsOf2, 'crane')).toEqual([])
+    expect(directorRows([vpA], groupsOf2, 'harbour')).toHaveLength(2)
     expect(directorRows([vpA], groupsOf2, 'nothing here')).toEqual([])
   })
 })

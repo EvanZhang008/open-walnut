@@ -28,10 +28,6 @@ import { OrgNewDirector } from './OrgNewDirector';
 import '@/styles/org-leaders.css';
 import { NodeAvatar } from './OrgAvatar';
 
-/** How far each level of Directors steps in: enough for the tree to read, little enough that a deep
- *  level keeps the width its title wraps in (2026-11-21, the UI audit: names cut at every level). */
-const LEVEL_INDENT_PX = 10;
-
 /** A fold kept per key (the chart's view key, as before the list stopped drawing one). */
 function useFold(name: string, key: string): [boolean, (open: boolean) => void] {
   return usePageViewOf('org', `chart.${name}`, key, false, isBoolean);
@@ -47,68 +43,44 @@ function foldKeys(open: boolean, set: (v: boolean) => void) {
 
 interface RowProps {
   leader: LeaderNode;
-  depth: number;
   onOpen: (taskId: string) => void;
   onMenu: (e: MouseEvent, leader: LeaderNode) => void;
 }
 
-function LeaderRow({ leader: l, depth, onOpen, onMenu }: RowProps) {
-  const hasSubs = l.subs.length > 0;
-  const [open, setOpen] = useFold('leaders.sub', l.id);
-  const subsId = domId('org-leaders-chart-subs', l.id);
+/** One Director: one level only, the first leaders under the VP (2026-11-24, the user: "only the first
+ *  layer of leaders, the second layer is not needed"; `directorsOf` in src/core/org/org-directors.ts). */
+function LeaderRow({ leader: l, onOpen, onMenu }: RowProps) {
   const state = USER_STATE_LABELS[l.state];
-  const foldWords = hasSubs ? `, ${open ? 'directors under it shown' : 'directors under it folded'}` : '';
   return (
-    <>
-      <div
-        className="org-leader"
-        role="presentation"
-        data-testid="org-leader"
-        data-task-id={l.id}
-        data-state={l.state}
-        data-depth={depth}
-        style={depth ? { paddingLeft: `min(${LEVEL_INDENT_PX * depth}px, 40%)` } : undefined}
-        onContextMenu={(e) => onMenu(e, l)}
+    <div
+      className="org-leader"
+      role="presentation"
+      data-testid="org-leader"
+      data-task-id={l.id}
+      data-state={l.state}
+      onContextMenu={(e) => onMenu(e, l)}
+    >
+      <button
+        type="button"
+        className="org-leader-open"
+        data-testid="org-leader-open"
+        aria-label={`${l.title}: ${state}, leads ${l.leads}${l.watched ? ', watched' : ''}`}
+        title={`${l.title}: ${state}`}
+        onClick={() => onOpen(l.id)}
       >
-        {hasSubs ? (
-          <DisclosureButton
-            expanded={open}
-            className="org-leader-fold"
-            data-testid="org-leader-fold"
-            {...(open ? { 'aria-controls': subsId } : {})}
-            aria-label={`Directors under ${l.title}`}
-            title={open ? 'Hide the Directors under it' : 'Show the Directors under it'}
-            onClick={() => setOpen(!open)}
-          />
-        ) : <span className="org-leader-fold is-none" aria-hidden="true" />}
-        <button
-          type="button"
-          className="org-leader-open"
-          data-testid="org-leader-open"
-          aria-label={`${l.title}: ${state}, leads ${l.leads}${l.watched ? ', watched' : ''}${foldWords}`}
-          title={`${l.title}: ${state}`}
-          onClick={() => onOpen(l.id)}
-          onKeyDown={hasSubs ? foldKeys(open, setOpen) : undefined}
-        >
-          <i style={{ background: TAB_DOT[l.state] }} aria-hidden="true" />
-          <NodeAvatar taskId={l.id} name={l.title} size={20} className="org-leader-avatar" />
-          {/* The eye and "leads N" end the title's last line, at the row's right edge (or under it when that
-              line is full), so they take no column from the words (2026-11-22, the UI audit). */}
-          <span className="org-leader-title wn-title">
-            {l.title}
-            <span className="org-leader-tail wn-fixed">
-              {l.watched && <span className="org-leader-eye" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}
-              <span className="org-leader-leads" data-testid="org-leader-leads">leads {l.leads}</span>
-            </span>
+        <i style={{ background: TAB_DOT[l.state] }} aria-hidden="true" />
+        <NodeAvatar taskId={l.id} name={l.title} size={20} className="org-leader-avatar" />
+        {/* The eye and "leads N" end the title's last line, at the row's right edge (or under it when that
+            line is full), so they take no column from the words (2026-11-22, the UI audit). */}
+        <span className="org-leader-title wn-title">
+          {l.title}
+          <span className="org-leader-tail wn-fixed">
+            {l.watched && <span className="org-leader-eye" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}
+            <span className="org-leader-leads" data-testid="org-leader-leads">leads {l.leads}</span>
           </span>
-        </button>
-      </div>
-      {hasSubs && open && (
-        <div id={subsId} className="org-leader-subs">
-          {l.subs.map((s) => <LeaderRow key={s.id} leader={s} depth={depth + 1} onOpen={onOpen} onMenu={onMenu} />)}
-        </div>
-      )}
-    </>
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -190,7 +162,7 @@ export function OrgLeaders({ groups, vpKey, vpName, projects, showProjects = tru
           {shownGroups.map((g) => (
             <div key={g.key} className="org-leaders-group" data-testid="org-leaders-group" data-project={g.project}>
               {g.name && <div className="org-leaders-project wn-title" data-testid="org-leaders-project">{g.name}</div>}
-              {g.leaders.map((l) => <LeaderRow key={l.id} leader={l} depth={0} onOpen={onOpen} onMenu={onMenu} />)}
+              {g.leaders.map((l) => <LeaderRow key={l.id} leader={l} onOpen={onOpen} onMenu={onMenu} />)}
             </div>
           ))}
           {newRow}

@@ -113,7 +113,7 @@ test('off, nothing changes: no leaders line in the list or the chart', async ({ 
   await expect(page.getByTestId('org-leaders')).toHaveCount(0)
 })
 
-test('on: no fold in the list; on the chart folded by default; opened, the project, its leader with eye and count, the leader under it', async ({ page, request }) => {
+test('on: no fold in the list; on the chart folded by default; opened, the project, its leader with eye and count, never the leader inside its team', async ({ page, request }) => {
   test.setTimeout(120_000)
   await setFlag(request, true)
   await openOrg(page)
@@ -136,19 +136,17 @@ test('on: no fold in the list; on the chart folded by default; opened, the proje
   // A task with no team of its own is no leader.
   await expect(leaderRow(box, ids.solo)).toHaveCount(0)
 
-  // The leader under it is folded too; its own fold opens it.
+  // One level only (2026-11-24, the user: "only the first layer of leaders"): the leader inside the
+  // team is not listed, and a row has no fold of its own.
   await expect(leaderRow(box, ids.sub)).toHaveCount(0)
-  await team.getByTestId('org-leader-fold').click()
-  const sub = leaderRow(box, ids.sub)
-  await expect(sub).toHaveAttribute('data-depth', '1')
-  await expect(sub.getByTestId('org-leader-leads')).toHaveText('leads 1')
+  await expect(box.locator('.org-leader-fold')).toHaveCount(0)
 
   // Kept across a reload.
   await page.reload()
   await page.getByTestId('org-search').fill(PROJECT)
   await openChart(page)
   await expect(chartLeaders(page).getByTestId('org-leaders-toggle')).toHaveAttribute('data-open', 'true')
-  await expect(leaderRow(chartLeaders(page), ids.sub)).toBeVisible()
+  await expect(leaderRow(chartLeaders(page), ids.team)).toBeVisible()
 
   // Keyboard: Left folds the line, Right opens it again.
   const again = chartLeaders(page).getByTestId('org-leaders-toggle')
@@ -159,7 +157,7 @@ test('on: no fold in the list; on the chart folded by default; opened, the proje
   await expect(again).toHaveAttribute('data-open', 'true')
 
   // A leader opens beside the page (the chart closes).
-  await leaderRow(chartLeaders(page), ids.sub).getByTestId('org-leader-open').click()
+  await leaderRow(chartLeaders(page), ids.team).getByTestId('org-leader-open').click()
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
   await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
 
@@ -175,7 +173,7 @@ test('a search for a leader shows its VP\'s row in the list, still one plain row
   await isolateUiPrefs(page)
   await loadHome(page)
   await page.getByTestId('sidebar-org').click()
-  await page.getByTestId('org-search').fill(`Bed two lead ${STAMP}`)
+  await page.getByTestId('org-search').fill(`Beds team ${STAMP}`)
   const vp = page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)
   await expect(vp).toBeVisible()
   await expect(listFolds(page)).toHaveCount(0)
@@ -312,9 +310,10 @@ test('settings: Also in the list lists every Director as a plain row under DIREC
   const section = page.locator('.org-list [data-testid="org-directors"]')
   await expect(section).toBeVisible()
   await expect(listFolds(page)).toHaveCount(0)
-  // team, the leader under it (one level, no indent), solo (made one above): each its title only,
-  // its state and VP in its hover.
-  for (const id of [ids.team, ids.sub, ids.solo]) {
+  // team and solo (made one above), never the leader inside team's team: each its title only, its
+  // state and VP in its hover.
+  await expect(section.locator(`[data-testid="org-director-row"][data-task-id="${ids.sub}"]`)).toHaveCount(0)
+  for (const id of [ids.team, ids.solo]) {
     const r = section.locator(`[data-testid="org-director-row"][data-task-id="${id}"]`)
     await expect(r).toHaveAttribute('title', / · /)
     await expect(r.locator('.org-channel-name')).toHaveText((await taskOf(request, id)).title)
@@ -323,7 +322,7 @@ test('settings: Also in the list lists every Director as a plain row under DIREC
   await expect(section.getByTestId('org-directors-head')).toHaveText(/Directors · \d+/)
   await page.locator('.org-list').screenshot({ path: `${SHOTS}/web-p1.png` })
   // Its menu is the fold's.
-  await section.locator(`[data-testid="org-director-row"][data-task-id="${ids.sub}"]`).click({ button: 'right' })
+  await section.locator(`[data-testid="org-director-row"][data-task-id="${ids.team}"]`).click({ button: 'right' })
   await expect(page.getByTestId('org-director-menu').getByRole('menuitem')).toHaveText(['Open chat', 'Open task', 'Remove from Directors'])
   await page.keyboard.press('Escape')
 
