@@ -92,6 +92,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `host_disk_full` | 507 | `PUT /sessions/:id/uploads/:uploadId`: the host cannot hold the rest of the file plus 512 MB |
 | `upload_failed` | 502 | `PUT /sessions/:id/uploads/:uploadId`: the host could not write the chunk for another reason (retryable) |
 | `session_launch_needs_upgrade` | 400 | Session creation via the cloud companion when the primary's daemon predates the `session.launch` relay — self-heals on the next primary-box reconnect (auto-deploy) |
+| `cwd_missing` | 400 | Session creation (`POST /sessions`, additive 2026-11): the folder (`cwd`) is not there on its host. Nothing is created. Extras: `cwd`, `host?`. Before 2026-11 the task was made and its session ended in `error` |
 | `session_control_needs_upgrade` | 400 | Any `session.control`-relayed action (model/effort/fork/lifecycle/notifications) via the cloud companion when the primary's daemon OR server predates that action — self-heals on the next primary-box upgrade/reconnect |
 | `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all |

@@ -71,6 +71,18 @@ export async function folderState(cwd: string, host?: string | null): Promise<Fo
   }
 }
 
+/**
+ * A new task's start folder that is gone, said for the person (null: it is there, or nobody can
+ * tell now). quickStartSession asks it before it files a task (2026-11-23: a project's own folder
+ * had been deleted on the Mac; the task was made, its session never started, and the draft said
+ * nothing). `~` is everyone's home and is never asked.
+ */
+export async function missingStartFolder(cwd: string, host?: string | null): Promise<string | null> {
+  if (!cwd || cwd === '~' || cwd.startsWith('~/')) return null
+  if ((await folderState(cwd, host)) !== 'gone') return null
+  return isLocal(host) ? `The folder ${cwd} is gone. Pick another folder.` : `The folder ${cwd} is gone on ${host}. Pick another folder.`
+}
+
 /** Whether the session's engine keeps its history in a folder-keyed transcript (Claude Code). */
 export function historyInFolder(record: Pick<SessionRecord, 'engine' | 'provider'>): boolean {
   if (record.provider && record.provider !== 'cli') return false

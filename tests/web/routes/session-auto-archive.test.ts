@@ -92,6 +92,12 @@ import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId, getSessionsForTask } from '../../../src/core/session-tracker.js';
 import { addTask, getTask, _resetForTesting as resetTaskManager } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+// These starts run in folders made up for the test; the refusal of a folder that is gone has its
+// own tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}));
 
 function createApp() {
   const app = express();

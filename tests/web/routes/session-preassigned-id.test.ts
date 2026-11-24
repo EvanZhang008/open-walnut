@@ -56,6 +56,12 @@ import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { _resetForTesting as resetTaskManager } from '../../../src/core/task-manager.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+// These starts run in folders made up for the test; the refusal of a folder that is gone has its
+// own tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}));
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

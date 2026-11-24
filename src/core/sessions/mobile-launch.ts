@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
-import { quickStartSession, QuickStartError } from './quick-start.js';
+import { CWD_MISSING_CODE, quickStartSession, QuickStartError } from './quick-start.js';
 import { mobileWorkspacePlace } from '../workspaces/launch.js';
 import { checkProjectStartBody, mobileProjectStart } from './mobile-project-launch.js';
 import { resolveModelSwitchValue, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
@@ -506,10 +506,13 @@ export async function handleLaunchRelayRequest(
   }
 }
 
-/** The host gate's 409 body split for the relay reply: `code` rides errorKind, the rest rides `details`. */
+/** A refusal's body split for the relay reply (the host gate's 409, a gone folder's 400): `code` rides errorKind, the rest rides `details`. */
 export function hostGateRelayFields(err: QuickStartError): { code: string; details: Record<string, unknown> } | null {
   const body = err.body;
-  if (err.statusCode !== 409 || !body || typeof body.code !== 'string' || !body.code.startsWith('host_')) return null;
+  if (!body || typeof body.code !== 'string') return null;
+  // The host gate's 409s, and a folder that is gone (400 cwd_missing, quickStartSession).
+  const gate = err.statusCode === 409 && body.code.startsWith('host_');
+  if (!gate && !(err.statusCode === 400 && body.code === CWD_MISSING_CODE)) return null;
   const { error: _error, code, ...details } = body;
   return { code, details };
 }

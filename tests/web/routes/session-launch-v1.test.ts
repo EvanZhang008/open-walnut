@@ -56,6 +56,12 @@ import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import type { BusEvent } from '../../../src/core/event-bus.js';
 import { recordDirectory } from '../../../src/core/frequent-dirs.js';
+// These starts run in folders made up for the test; the refusal of a folder that is gone has its
+// own tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}));
 
 function createApp() {
   const app = express();

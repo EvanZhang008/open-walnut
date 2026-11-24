@@ -374,6 +374,7 @@ export function folderElsewhere(cwd: string, host: string | null | undefined, di
 
 export type WhereLine =
   | { kind: 'off-host'; other: string }
+  | { kind: 'gone'; cwd: string }
   | { kind: 'cannot'; reason: string; projectHost: string }
   | { kind: 'no-source'; reason: string }
   | { kind: 'last-used'; project: string; place: WherePlace }
@@ -383,6 +384,8 @@ export type WhereLine =
 export function whereLine(s: {
   /** The folder is known on another host only (folderElsewhere). */
   offHost: string | null;
+  /** The draft's folder is not there on its host (useFolderGone). */
+  gone?: string | null;
   /** Auto is the current choice and this host cannot make it. */
   cannot: string | null;
   /** A start from the project's source, and this tab sees the project with no source (removed meanwhile). */
@@ -395,6 +398,7 @@ export function whereLine(s: {
   moved: boolean;
 }): WhereLine | null {
   if (s.offHost) return { kind: 'off-host', other: s.offHost };
+  if (s.gone) return { kind: 'gone', cwd: s.gone };
   if (s.cannot) return { kind: 'cannot', reason: s.cannot, projectHost: s.projectHost };
   if (s.noSource) return { kind: 'no-source', reason: s.noSource };
   if (s.restored) return { kind: 'last-used', ...s.restored };

@@ -189,6 +189,9 @@ export interface QuickStartParams {
   ownTaskDir?: boolean;
 }
 
+/** A start whose folder is gone (400): the draft comes back with its words and a way to pick another. */
+export const CWD_MISSING_CODE = 'cwd_missing';
+
 export class QuickStartError extends Error {
   /** `body`: the full JSON answer when there is more than a sentence (the host gate's 409). */
   constructor(message: string, public statusCode: number = 400, public body?: Record<string, unknown>) {
@@ -361,6 +364,18 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       ...(params.hostGate?.deadlineMs ? { deadlineMs: params.hostGate.deadlineMs } : {}),
     });
     if (refused) throw new QuickStartError(refused.error, 409, { ...refused });
+  }
+
+  // A NEW task whose folder is gone is refused before anything is filed (missingStartFolder):
+  // the caller keeps its words and picks another. An existing task's start keeps the spawn's own
+  // ways on (its task dir made again, a cleaned workspace remade, "Continue in a new folder"), and
+  // a deferred start runs in a workspace the host makes later.
+  if (cwd && !existingTaskId && !walnutAgent && !inOwnTaskDir && !params.deferStart) {
+    const { missingStartFolder } = await import('./folder-gone.js');
+    const t0 = Date.now();
+    const gone = await missingStartFolder(cwd, host);
+    log.session.info('quick-start: start folder checked', { host: host ?? '__local__', gone: !!gone, ms: Date.now() - t0 });
+    if (gone) throw new QuickStartError(gone, 400, { code: CWD_MISSING_CODE, cwd, ...(host ? { host } : {}) });
   }
 
   let existingTask: Task | undefined;

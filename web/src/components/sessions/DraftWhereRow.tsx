@@ -153,7 +153,8 @@ function WhereField({ draft, where, fieldRef, hostRef, narrow, menu, setMenu }: 
   narrow: boolean; menu: RowMenu; setMenu: (m: RowMenu) => void;
 }) {
   const openWhere = (query = '') => setMenu(menu?.kind === 'where' && !query ? null : { kind: 'where', query });
-  const off = (where.autoCurrent && !where.verdict.ok && !where.verdict.noProject) || where.sourceGone;
+  const gone = where.line?.kind === 'gone';
+  const off = (where.autoCurrent && !where.verdict.ok && !where.verdict.noProject) || where.sourceGone || gone;
   const home = knownHomeOf(draft.host);
   const shown = draft.cwd ? tildePath(draft.cwd, home) : '';
   const label = where.autoCurrent
@@ -171,8 +172,8 @@ function WhereField({ draft, where, fieldRef, hostRef, narrow, menu, setMenu }: 
         <HostCrumb where={where} hostRef={hostRef} open={menu?.kind === 'host'}
           {...(narrow ? {} : { onClick: () => setMenu(menu?.kind === 'host' ? null : { kind: 'host' }) })} />
         <span className="draft-v6-sep" aria-hidden="true">{ICONS.ICON_CHEVRON_RIGHT}</span>
-        {where.autoCurrent ? <AutoValue where={where} off={off} picked={draft.fromProjectInputs} /> : (
-          <FolderCrumbs path={shown} narrow={narrow} offHost={where.offHost ? where.hostName(where.hostKey) : null}
+        {where.autoCurrent ? <AutoValue where={where} off={off} gone={gone} picked={draft.fromProjectInputs} /> : (
+          <FolderCrumbs path={shown} narrow={narrow} offHost={where.offHost ? where.hostName(where.hostKey) : null} gone={gone}
             onLevel={(dir) => openWhere(`${dir}/`)} />
         )}
       </span>
@@ -181,10 +182,10 @@ function WhereField({ draft, where, fieldRef, hostRef, narrow, menu, setMenu }: 
   );
 }
 
-function AutoValue({ where, off, picked }: { where: DraftWhere; off: boolean; picked?: Record<string, string[]> }) {
+function AutoValue({ where, off, gone, picked }: { where: DraftWhere; off: boolean; gone: boolean; picked?: Record<string, string[]> }) {
   const hostName = where.hostName(where.hostKey);
   const count = where.ps.source && where.what.kind === 'box' ? packagesWords(where.ps.source, picked) : '';
-  const words = where.sourceGone ? 'No code source' : off ? `No ${where.what.words.replace(/^New /, '')} on ${hostName}` : where.what.words; // empty-state-ok: a field's value
+  const words = where.sourceGone ? 'No code source' : gone ? `${where.what.words} is gone` : off ? `No ${where.what.words.replace(/^New /, '')} on ${hostName}` : where.what.words; // empty-state-ok: a field's value
   return (
     <span className="draft-v6-auto-value" data-testid="draft-v6-auto">
       <span className={`${badge(off ? 'warning' : 'neutral')} draft-v6-auto-tag`}><WhereIcon kind={off ? 'ban' : 'auto'} size={11} />Auto</span>
@@ -204,7 +205,7 @@ function packagesWords(source: NonNullable<DraftWhere['ps']['source']>, picked?:
 }
 
 /** The folder's parts after the host: the widest level that fits (3, 2, then the name only). */
-function FolderCrumbs({ path, narrow, offHost, onLevel }: { path: string; narrow: boolean; offHost: string | null; onLevel: (dir: string) => void }) {
+function FolderCrumbs({ path, narrow, offHost, gone, onLevel }: { path: string; narrow: boolean; offHost: string | null; gone: boolean; onLevel: (dir: string) => void }) {
   const ref = useRef<HTMLSpanElement>(null);
   const levels: PathCrumb[][] = narrow ? [pathCrumbItems(path, 1).slice(-1)] : [pathCrumbItems(path, 3), pathCrumbItems(path, 2), pathCrumbItems(path, 1)];
   const [level, setLevel] = useState(0);
@@ -225,7 +226,7 @@ function FolderCrumbs({ path, narrow, offHost, onLevel }: { path: string; narrow
   const crumbs = levels[at];
   return (
     <span ref={ref} className="draft-v6-folder-crumbs" data-testid="draft-v6-folder">
-      {offHost && <WhereIcon kind="gone" className="draft-v6-gone" />}
+      {(offHost || gone) && <WhereIcon kind="gone" className="draft-v6-gone" />}
       {crumbs.map((c, i) => {
         const last = i === crumbs.length - 1;
         return (
@@ -304,6 +305,13 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
       <WhereIcon kind="gone" />
       <span className="draft-v6-line-text">This folder is on {where.hostName(l.other)}, not on {hostName}.</span>
       {act(`Run on ${where.hostName(l.other)}`, () => where.pickHost(l.other), 'draft-v6-line-run')}
+      {act(`Pick a folder on ${hostName}`, onPickFolder, 'draft-v6-line-pick')}
+    </>);
+  } else if (l?.kind === 'gone') {
+    tone = ' is-warn';
+    body = (<>
+      <WhereIcon kind="gone" />
+      <span className="draft-v6-line-text" data-testid="draft-v6-folder-gone">This folder is gone on {hostName}.</span>
       {act(`Pick a folder on ${hostName}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'cannot') {

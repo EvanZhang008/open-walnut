@@ -62,8 +62,11 @@ export async function listLocalDirs(dir: string, depth: number): Promise<DirList
   try {
     const st = await fsp.stat(dir)
     if (!st.isDirectory()) return { dirs: [], parent: dir, exists: false }
-  } catch {
-    return { dirs: [], parent: dir, exists: false }
+  } catch (err) {
+    // Only a folder that is not there reads as gone (the draft blocks Start on it); one this
+    // process may not read (EACCES, macOS privacy's EPERM) is there, with nothing to list.
+    const code = (err as NodeJS.ErrnoException)?.code
+    return { dirs: [], parent: dir, exists: !(code === 'ENOENT' || code === 'ENOTDIR') }
   }
 
   const entries: string[] = []

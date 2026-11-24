@@ -15,7 +15,7 @@
  * the panel whether Start can run (`blockedRef`).
  */
 import { useEffect, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from 'react';
-import { useDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
+import { setDraftWorkspace, useDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
 import { DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
 import type { DraftColumn, DraftTaskField, DraftTaskFieldPatch } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
@@ -75,6 +75,15 @@ export function DraftV6Body({
   const [menu, setMenu] = useState<RowMenu>(null);
   const narrow = useNarrow(panelRef, NARROW_PX);
   const startError = useDraftWorkspace(draft.id).startError;
+  // A refused Start's words (a folder that is gone, a project without a source) hold until the
+  // place changes: another folder, host or project clears them.
+  const placeKey = `${draft.host ?? ''}|${draft.cwd ?? ''}|${draft.project ?? ''}`;
+  const placeRef = useRef(placeKey);
+  useEffect(() => {
+    if (placeRef.current === placeKey) return;
+    placeRef.current = placeKey;
+    if (startError) setDraftWorkspace(draft.id, { startError: undefined });
+  }, [placeKey, startError, draft.id]);
   useEffect(() => { if (walnut) setMenu(null); }, [walnut]);
   useEffect(() => { if (openWhereNonce && !walnut) setMenu({ kind: 'where', query: '' }); }, [openWhereNonce, walnut]);
 

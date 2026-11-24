@@ -388,6 +388,12 @@ interface GatedRestore { draft: DraftColumn; composerText: string; images?: Imag
  *  unknown-project, 422): the draft comes back instead of a Retry that would fail again. */
 const PROJECT_START_REFUSALS: readonly number[] = [400, 404, 422];
 
+/** The server refused a Start because its folder is gone (core quickStartSession, CWD_MISSING_CODE). */
+function isCwdMissing(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 400 && !!err.body && typeof err.body === 'object'
+    && (err.body as { code?: unknown }).code === 'cwd_missing';
+}
+
 /** The one Quick Start failure notification shape — used by both the retry
  *  path and the initial-launch path so the copy/dedup key can't drift apart. */
 function quickStartFailedNotification(host: string | null | undefined, cwd: string, errMsg: string) {
@@ -3343,6 +3349,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // with the server's words, nothing having been made.
         if (opts?.fromProject && opts.restore && err instanceof ApiError && PROJECT_START_REFUSALS.includes(err.status)) {
           restoreRefusedDraft(pendingColId, opts.restore, { message: err.message, body: err.body });
+          return;
+        }
+        // The folder is gone (400 cwd_missing): nothing was made, so the same draft comes back with
+        // the server's words (the v6 draft shows them under its row; the older one by a notice).
+        if (isCwdMissing(err)) {
+          if (opts?.restore) {
+            restoreRefusedDraft(pendingColId, opts.restore, { message: err.message, body: err.body });
+            if (!projectStartRef.current.on) notify({ ...quickStartFailedNotification(qsp.host, qsp.cwd, err.message), title: 'Folder is gone' });
+            return;
+          }
+          // No draft to bring back: the pending panel says why, with no Retry (it would be refused again).
+          if (pendingQuickStartMetaRef.current?.id === pendingColId) {
+            pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, httpError: err.message, gated: true };
+          }
+          setSessionColumns(prev => [...prev]);
           return;
         }
         // Keep the pending column visible with error — user can Retry from panel

@@ -88,6 +88,12 @@ import { quickStartSession } from '../../../src/core/sessions/quick-start.js';
 import { ASK_PROFILE_BANNER_OPEN } from '../../../src/core/sessions/ask-profile-prefix.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+// These starts run in folders made up for the test; the refusal of a folder that is gone has its
+// own tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}));
 
 function createApp() {
   const app = express();

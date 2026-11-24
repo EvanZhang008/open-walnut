@@ -26,9 +26,10 @@
  * the bridge relay below).
  *
  * 201 means ACCEPTED, not spawned: quickStartSession returns right after the
- * SESSION_START bus emit; the CLI spawn is async in session-runner. A bad
- * remote host or a cwd typo surfaces as session `error` status later, not as
- * an HTTP failure here — the record is pre-seeded so the returned sessionId
+ * SESSION_START bus emit; the CLI spawn is async in session-runner. A folder
+ * that is not there is refused first (400 cwd_missing, nothing created); other
+ * spawn failures surface as session `error` status later, not as an HTTP
+ * failure here: the record is pre-seeded so the returned sessionId
  * immediately resolves on the transcript/stream/messages endpoints.
  *
  * Cloud companion (REPLICA): the session RECORD lives on the primary box, so
@@ -61,7 +62,7 @@ import {
   performMobileLaunch,
   validateMobileLaunchBody,
 } from '../../core/sessions/mobile-launch.js'
-import { QuickStartError } from '../../core/sessions/quick-start.js'
+import { CWD_MISSING_CODE, QuickStartError } from '../../core/sessions/quick-start.js'
 import { log } from '../../logging/index.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
@@ -168,9 +169,15 @@ function relayErrorStatus(errorKind: string): number {
 
 /** The host gate's fields a relayed refusal carries (kind, host, headline, hint, allowOverride), nothing else. */
 function relayGateDetails(errorKind: string, details: unknown): Record<string, unknown> | undefined {
-  if (!errorKind.startsWith('host_') || !details || typeof details !== 'object') return undefined
+  if (!details || typeof details !== 'object') return undefined
   const d = details as Record<string, unknown>
   const out: Record<string, unknown> = {}
+  // A folder that is gone (400 cwd_missing): the folder and its host, as the direct answer has them.
+  if (errorKind === CWD_MISSING_CODE) {
+    for (const key of ['cwd', 'host']) if (typeof d[key] === 'string') out[key] = d[key]
+    return out
+  }
+  if (!errorKind.startsWith('host_')) return undefined
   for (const key of ['kind', 'host', 'headline', 'hint']) if (typeof d[key] === 'string') out[key] = d[key]
   if (d.allowOverride === true) out.allowOverride = true
   return out

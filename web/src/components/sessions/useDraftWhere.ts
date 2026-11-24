@@ -22,6 +22,7 @@ import { hostDisplayLabel, thisMachineName } from '@/utils/host-display-label';
 import { isHomeFolder, knownHomeOf, tildePath } from '@/utils/home-folder';
 import { log } from '@/utils/log';
 import { useWorkingDirs } from './path-selector/useWorkingDirs';
+import { useFolderGone } from './useFolderGone';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import { applyLaunchMemory, type DraftColumn } from './draft-column';
 import {
@@ -150,13 +151,17 @@ export function useDraftWhere(draft: DraftColumn, opts: {
   const own = ownHostOf(row);
   const cannot = autoCurrent && !verdict.ok && !verdict.noProject ? verdict.reason : null;
   const sourceGone = ps.mode === 'source' && !!row && !row.startSource;
+  // A folder start whose folder is not there: said now, and Start waits (the server refuses it too).
+  const folderGone = useFolderGone(draft.cwd, draft.host, !offHost && ps.mode !== 'source' && !draft.createCwd);
+  const gone = folderGone && draft.cwd ? draft.cwd : null;
   const line = whereLine({
-    offHost, cannot, projectHost: own, restored,
+    offHost, gone, cannot, projectHost: own, restored,
     noSource: sourceGone ? `${projectDisplayName(project)} has no code source now. Pick a folder, or add a source in its settings.` : null,
     suggestion: suggestion ? { ...suggestion, project: projectDisplayName(suggestion.project) } : null,
     moved: autoCurrent && verdict.ok && verdict.moved,
   });
-  const blocked = cannot ?? (offHost ? `This folder is on ${hostName(offHost)}, not on ${hostName(hostKey)}.` : null);
+  const blocked = cannot ?? (offHost ? `This folder is on ${hostName(offHost)}, not on ${hostName(hostKey)}.` : null)
+    ?? (gone ? `The folder ${tildePath(gone, home)} is gone on ${hostName(hostKey)}. Pick another folder.` : null);
 
   const remember = (name: string, place: WherePlace) => {
     if (!name) return;

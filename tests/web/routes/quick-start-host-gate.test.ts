@@ -65,6 +65,12 @@ import { _resetForTesting as resetTaskManager } from '../../../src/core/task-man
 import { WALNUT_HOME, IMAGES_DIR, CONFIG_FILE } from '../../../src/constants.js';
 import path from 'node:path';
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js';
+// These starts run in folders made up for the test; the refusal of a folder that is gone has its
+// own tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}));
 
 const app = () => express().use(express.json()).use('/api/sessions', sessionsRouter).use(errorHandler);
 

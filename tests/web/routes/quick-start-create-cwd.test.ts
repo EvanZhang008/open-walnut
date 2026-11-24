@@ -36,7 +36,8 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
     return {
       send: async (cmd: string, params: Record<string, unknown>) => {
         daemonSendCalls.push({ cmd, params });
-        return { ok: true, created: true, resolvedPath: params.path };
+        // The folder is there after its mkdir (the start's folder check reads fs.stat's `exists`).
+        return { ok: true, created: true, resolvedPath: params.path, exists: true };
       },
     };
   },
@@ -119,13 +120,18 @@ describe('POST /api/sessions/quick-start — createCwd', () => {
     expect(st.isDirectory()).toBe(true);
   });
 
-  it('without the flag: no mkdir, request still succeeds (spawn-time check is the net)', async () => {
+  it('without the flag: no mkdir, and a folder that is not there is refused before any task is made', async () => {
     const app = createApp();
     const target = path.join(tmpRoot, 'never/created');
     const res = await request(app).post('/api/sessions/quick-start')
       .send({ cwd: target, message: 'go' });
 
-    expect(res.status).toBe(200);
+    // 2026-11-23: the task was made, its session never started, the draft said nothing.
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('cwd_missing');
+    expect(res.body.cwd).toBe(target);
+    expect(res.body.error).toMatch(/is gone\. Pick another folder\./);
+    expect(res.body.taskId).toBeUndefined();
     await expect(fs.stat(target)).rejects.toThrow();
   });
 

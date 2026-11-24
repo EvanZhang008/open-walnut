@@ -5,6 +5,7 @@
  * the server refuses, the Code source section, and the row by keyboard. Part one, and how to run
  * both: project-first-start.spec.ts. The fixture data both share: project-first-start-fixture.ts.
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
 import { draftComposer, draftPanel, draftTaskMenu, openDraft } from './draft-helpers'
@@ -14,7 +15,7 @@ import { isolateUiPrefs, listProjectHeader, openProjectDetails, presetPanelView 
 import { APP, DEVBOX, LIFE_REPO, PLAIN, SERVICE, SYNCED, fx, setupFixture } from './project-first-start-fixture'
 import {
   LOCAL_NAME, countStarts, expectSameGeometry, geometry, line, openHome, openMore, openWhere, pickHost,
-  pickProject, pickTypedPath, projectField, projectMenu, sendLabel, setFlag, shot, start, v6, waitWorkspace,
+  makeProject, pickProject, pickTypedPath, projectField, projectMenu, sendLabel, setFlag, shot, start, v6, waitWorkspace,
   watchErrors, whereField, whereMenu, withDirs,
 } from './project-first-start-helpers'
 
@@ -306,6 +307,58 @@ test('a start from a project the server refuses for good brings the draft back w
   await expect(line(back).getByTestId('draft-v6-line-pick')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
   await shot(page, 'v6-refused-start')
+  expect(errors).toEqual([])
+})
+
+test('a folder that is gone is said before Start, and a start into one is refused with the draft back', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  await setFlag(request, true)
+  const errors = watchErrors(page)
+  // 2026-11-23: a project whose own folder had been deleted; the task was made, its session never
+  // started, and the draft said nothing.
+  const own = path.join(home, `gone-own-${stamp}`)
+  const proj = `Folderless ${stamp}`
+  await makeProject(request, proj, { default_cwd: own })
+  await openHome(page)
+  const panel = await openDraft(page)
+  await pickProject(page, panel, proj)
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'true')
+  await expect(panel.getByTestId('draft-v6-auto')).toContainText('is gone')
+  await expect(line(panel)).toHaveAttribute('data-kind', 'gone')
+  await expect(line(panel).getByTestId('draft-v6-folder-gone')).toHaveText(`This folder is gone on ${LOCAL_NAME}.`)
+  await shot(page, 'v6-folder-gone')
+  const starts = countStarts(page)
+  await draftComposer(page).fill('Start in a gone folder')
+  await draftComposer(page).press('Enter')
+  await expect(panel.getByTestId('draft-v6-start-why')).toContainText('is gone')
+  expect(starts.n).toBe(0)
+  await expect(draftComposer(page)).toHaveValue('Start in a gone folder')
+  // Its way out opens the folder menu.
+  await line(panel).getByTestId('draft-v6-line-pick').click()
+  await expect(whereMenu(page)).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  // A folder there when picked and gone by Start (deleted meanwhile): the server refuses it before
+  // anything is made, and the same draft comes back with its words.
+  const late = path.join(home, `gone-late-${stamp}`)
+  fs.mkdirSync(late, { recursive: true })
+  await pickTypedPath(page, panel, late)
+  await expect(line(panel)).not.toHaveAttribute('data-kind', 'gone')
+  fs.rmSync(late, { recursive: true, force: true })
+  const response = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
+  await draftComposer(page).press('Enter')
+  const res = await response
+  expect(res.status()).toBe(400)
+  const body = await res.json() as { code?: string; taskId?: string }
+  expect(body.code).toBe('cwd_missing')
+  expect(body.taskId).toBeUndefined()
+  const back = draftPanel(page)
+  await expect(draftComposer(page)).toHaveValue('Start in a gone folder')
+  await expect(back.getByTestId('draft-project-start-error')).toContainText('is gone. Pick another folder.')
+  await shot(page, 'v6-folder-gone-refused')
+  // Another folder clears the refusal.
+  await pickTypedPath(page, back, PLAIN())
+  await expect(back.getByTestId('draft-project-start-error')).toHaveCount(0)
   expect(errors).toEqual([])
 })
 

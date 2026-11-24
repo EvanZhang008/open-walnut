@@ -66,6 +66,12 @@ import { getTask, _resetForTesting as resetTaskManager } from '../../../src/core
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { ensureWalnutSource, WalnutSourceError } from '../../../src/core/self-repair/walnut-source.js';
+// These starts run in folders made up for the test; the refusal of a folder that is gone has its
+// own tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}));
 
 const ensureSource = vi.mocked(ensureWalnutSource);
 
