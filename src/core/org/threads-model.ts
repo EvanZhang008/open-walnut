@@ -1142,9 +1142,10 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
  */
 export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource, opts: { line?: boolean } = {}): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
-  // A node's summary must say something on its own: his card shows only it (org/thread-summary-content.ts).
-  // A close needs none, and a status line's words are judged where the line is read (status-threads.ts patchForLine).
-  if (by !== 'human' && !opts.line && patch.close === undefined && isStr(patch.reply)) {
+  // A node's summary must say something on its own: his card shows only it (org/thread-summary-content.ts),
+  // a closed card too, for its week in Done (a close needs no summary, but words given with one are his card's).
+  // A status line's words are judged where the line is read (status-threads.ts lineWords).
+  if (by !== 'human' && !opts.line && isStr(patch.reply)) {
     const was = find(file, id);
     const empty = summaryPointsElsewhere(patch.reply) ?? summaryRepeatsHim(patch.reply, was.messages.map((m) => m.text));
     if (empty) throw new ThreadError('bad_input', 422, empty);

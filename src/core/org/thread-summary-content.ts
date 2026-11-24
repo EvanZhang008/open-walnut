@@ -26,6 +26,9 @@ const POINTERS: readonly RegExp[] = [
   /\bsee\s+(?:above|below|the\s+chat|my\s+(?:chat\s+)?(?:reply|answer|message))\b/i,
   /\bas\s+(?:above|said|mentioned)\b/i,
   /^(?:already\s+)?(?:answered|replied|sent|told)\.?$/i,
+  // "this card was replaced by the new card ..." (\u88ab\u2026\u53d6\u4ee3): what it says is on that one.
+  /\u88ab[^\uff0c\u3002\uff1b,;]{0,16}?(?:\u53d6\u4ee3|\u66ff\u4ee3|\u4ee3\u66ff|\u66ff\u6362)/,
+  /\b(?:replaced|superseded)\s+by\b/i,
 ];
 
 /**
@@ -50,6 +53,8 @@ const ASK_CJK: readonly RegExp[] = [
   /\u56de\u6211\u4e00\u53e5/,
   /(?:\u4f60|\u60a8)(?:\u51b3\u5b9a\u4e00\u4e0b|\u62cd\u677f|\u770b\u7528\u54ea)/,
   /\u5982\u679c(?:\u4f60|\u60a8)\u540c\u610f/,
+  // "please pick / confirm on the new card" (\u8bf7\u5728\u65b0\u5361\u4e0a\u9009): a place between, then a whole verb (the threads inspection, Main's replaced card).
+  /\u8bf7(?:\u4f60|\u60a8)?\u5230?\u5728[^\uff0c\u3002\uff1b,;]{1,14}?(?:\u6311|\u9009|\u62cd\u677f|\u51b3\u5b9a|\u786e\u8ba4|\u56de\u7b54|\u56de\u590d|\u70b9\u5934)/,
 ];
 /** A "not" this close before a Chinese ask turns it into a result: not, no, never, without, no need, no longer. */
 const NOT_CJK = /[\u4e0d\u6ca1\u65e0\u522b\u672a\u52ff\u514d]/;
@@ -60,7 +65,7 @@ const NOT_CJK_BEFORE = 6;
 /** The particle that makes the verb before it a description. */
 const OF = '\u7684';
 /** English: a decision noun is named, never "waiting for your Mac" or a bare "waits on you". */
-const ASK_EN = /\b(?:for\s+you\s+to\s+(?:pick|choose|decide|approve|confirm)|wait(?:s|ing)?\s+on\s+you\s+to\s+(?:pick|choose|decide|approve|confirm)|can\s+you\s+(?:confirm|approve|pick|choose|decide)|let\s+me\s+know\s+(?:if\s+I\s+should|which)|if\s+you(?:'re|\s+are)\s+ok\s+with|wait(?:s|ing)?\s+(?:on|for)\s+your\s+(?:pick|call|choice|decision|approval|consent|yes|ok|go-ahead|nod|sign-off|answer)|needs\s+your\s+(?:pick|call|choice|decision|approval|consent|yes|ok|go-ahead|sign-off))\b/i;
+const ASK_EN = /\b(?:please\s+(?:pick|choose|decide|approve|confirm)\b|for\s+you\s+to\s+(?:pick|choose|decide|approve|confirm)|wait(?:s|ing)?\s+on\s+you\s+to\s+(?:pick|choose|decide|approve|confirm)|can\s+you\s+(?:confirm|approve|pick|choose|decide)|let\s+me\s+know\s+(?:if\s+I\s+should|which)|if\s+you(?:'re|\s+are)\s+ok\s+with|wait(?:s|ing)?\s+(?:on|for)\s+your\s+(?:pick|call|choice|decision|approval|consent|yes|ok|go-ahead|nod|sign-off|answer)|needs\s+your\s+(?:pick|call|choice|decision|approval|consent|yes|ok|go-ahead|sign-off))\b/i;
 const NOT_EN = /\b(?:no|not|never|nothing|without|don't|doesn't|isn't|aren't|won't)\b/i;
 /** The clauses a summary is read in. */
 const CLAUSE = /[\uff0c\u3002\uff1b\uff1a\uff01\uff1f\u3001,;:!?\n]|\.(?!\d)/;

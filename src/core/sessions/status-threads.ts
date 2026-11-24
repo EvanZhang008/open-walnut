@@ -344,14 +344,25 @@ const nodeOpened = (t: OrgThread): boolean => !!t.opener && t.opener.by !== 'hum
 /** The thread state each line writes; done is a close, or answered (patchForLine). */
 const TARGET: Record<Exclude<ThreadLineState, 'done'>, OrgThread['state']> = { working: 'working', waiting: 'pending', answered: 'answered' };
 
+/**
+ * A line's words as a card's summary, or undefined: words that only say the answer was given
+ * elsewhere, or say his own message back, are no summary (org/thread-summary-content.ts; 2026-11-23,
+ * a card that read only "the summary was given to you"). Every write of a line's words goes through
+ * here: its summary, the close of his acknowledged request and its fallback, a new subject's first
+ * post (the threads inspection, item 7: those three wrote the words unchecked). Pure.
+ */
+export function lineWords(t: Pick<OrgThread, 'messages'> | undefined, words: string | undefined): string | undefined {
+  if (!words) return undefined;
+  return summaryPointsElsewhere(words) || summaryRepeatsHim(words, (t?.messages ?? []).map((m) => m.text)) ? undefined : words;
+}
+
 /** The write one line makes on its thread, or null for none. Pure. */
 export function patchForLine(t: OrgThread, line: StatusThreadLine): ThreadPatch | null {
   // A thread waiting on him stays his until he answers or the task settles it with thread_update:
   // no line moves it, whatever it says (it may have moved into needs since the question was asked).
   if (t.closed || t.state === 'needs') return null;
-  // Words that only say the answer was given elsewhere, or say his own message back, are no summary: the card keeps what it had
-  // (org/thread-summary-content.ts; 2026-11-23, a card that read only "the summary was given to you").
-  const reply = line.progress && !summaryPointsElsewhere(line.progress) && !summaryRepeatsHim(line.progress, t.messages.map((m) => m.text)) ? line.progress : undefined;
+  // Words that say nothing on their own leave the card as it was.
+  const reply = lineWords(t, line.progress);
   // He acknowledged its result (org/thread-known.ts ackHoldsResult; 2026-11-23, cards back "New
   // since you acknowledged" every turn): a done line closes it, his Acknowledge covering it, its
   // words on the closed card; any other line writes nothing (real news is the node's thread_update).
@@ -438,17 +449,19 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
     const t = found && !movedSince(found, line.upTo) ? found : undefined;
     if (t && asksHimNow(line.progress)) { asked.push(t.id); continue; }
     const own = t && line.state === 'done' && !ackHoldsResult(t) && seen.has(t.id) && !wroteSinceQuestion(file, line.hisAt) && t.state === 'answered' && !nodeOpened(t);
-    const patch = own ? { close: 'acked' as const, ...(line.progress ? { reply: line.progress } : {}) } : t ? patchForLine(t, line) : null;
+    const words = lineWords(t, line.progress);
+    const patch = own ? { close: 'acked' as const, ...(words ? { reply: words } : {}) } : t ? patchForLine(t, line) : null;
     if (t && !patch && ackHoldsResult(t)) held.push(t.id);
     if (!t || !patch) continue;
-    // A close its thread refuses (he pinned it, he wrote in it and has not reacted): answered.
-    // One whose result he acknowledged keeps what he has (lineMay).
-    const back = { state: 'answered' as const, ...(line.progress ? { reply: line.progress } : {}) };
-    const fallback = patch.close && !same(t, 'answered', line.progress) && lineMay(t, back) ? back : undefined;
+    // A close its thread refuses (he pinned it, he wrote in it and has not reacted): answered, with
+    // words that say something (a fallback with none keeps the card's summary). One whose result he
+    // acknowledged keeps what he has (lineMay).
+    const back = { state: 'answered' as const, ...(words ? { reply: words } : {}) };
+    const fallback = patch.close && !same(t, 'answered', words) && lineMay(t, back) ? back : undefined;
     writes.push({ id: t.id, patch, ...(fallback ? { fallback } : {}) });
   }
-  // A new subject's words that ask him are not its first post either: it opens with its title (status-thread-asked.ts).
-  const opens = opened.map((n) => ({ title: n.title, text: n.progress && !asksHimNow(n.progress) ? n.progress : n.title, state: TARGET[n.state] }));
+  // A new subject's words that ask him, or say nothing on their own, are not its first post either: it opens with its title (status-thread-asked.ts).
+  const opens = opened.map((n) => ({ title: n.title, text: n.progress && !asksHimNow(n.progress) ? lineWords(undefined, n.progress) ?? n.title : n.title, state: TARGET[n.state] }));
   return { writes, opens, held, asked };
 }
 
