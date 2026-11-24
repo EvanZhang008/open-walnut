@@ -257,7 +257,7 @@ struct ChatView: View {
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         if tabBarCompensation > 0 {
                             Rectangle()
-                                .fill(ComposerCard.backdrop)
+                                .fill(ComposerCard.bandStyle)
                                 .frame(height: tabBarCompensation)
                         }
                     }
@@ -330,7 +330,7 @@ struct ChatView: View {
                     // The composer's own backdrop, so the band reads as more page
                     // under the card rather than a strip of material.
                     Rectangle()
-                        .fill(ComposerCard.backdrop)
+                        .fill(ComposerCard.bandStyle)
                         .frame(height: tabBarCompensation)
                 }
             }

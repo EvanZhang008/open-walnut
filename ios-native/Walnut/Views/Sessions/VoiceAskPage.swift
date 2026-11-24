@@ -68,9 +68,14 @@ struct VoiceAskPage: View {
             guard voice == nil else { return }
             // No bubble exists before the launch, so the controller keeps unsent
             // words (its default: the owner shows no copy of its own).
-            voice = VoiceModeController(sessionID: "ask-\(agentID)", rows: []) { text in
+            let controller = VoiceModeController(
+                sessionID: "ask-\(agentID)", rows: [], handsFree: VoiceModeController.handsFreeIsOn
+            ) { text in
                 await launch(text)
             }
+            voice = controller
+            // Hands-free: the page opens listening, no tap.
+            controller.begin()
         }
         .onDisappear { voice?.shutDown() }
     }

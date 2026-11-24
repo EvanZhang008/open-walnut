@@ -22,7 +22,7 @@ export const EXPERIMENTAL_FEATURES = [
     id: 'chat_glass_edges',
     name: 'Glass edges in session chats',
     summary: 'A session chat scrolls on behind its header and the box you type in, which turn to frosted glass.',
-    description: 'A session chat scrolls on behind its header, Tree Mode\'s path bar, the threads line above the chat and the box you type in, which turn to frosted glass the text shows softly through, with no hard line where the text meets them. At rest the newest line still ends above the box, and the scroll bar still stops where the box and the header begin. Off: the chat ends at a straight edge above the box, as before.',
+    description: 'A session chat scrolls on behind its header, Tree Mode\'s path bar, the threads line above the chat and the box you type in, which turn to frosted glass the text shows softly through, with no hard line where the text meets them. At rest the newest line still ends above the box, and the scroll bar still stops where the box and the header begin. Off: the chat ends at a straight edge above the box, as before. On the phone, the chat scrolls on behind the box you type in the same way.',
     default: false,
   },
   {
@@ -90,7 +90,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'voice_conversation',
     name: 'Voice conversation',
-    description: 'A Talk button in a session\'s chat box: speak, and a pause sends what you said; the answer comes back as a short spoken reply read aloud (the full answer stays on screen), and talking again stops it. Uses ElevenLabs when a key is set in Settings, else this device\'s own voice.',
+    description: 'A Talk button in a session\'s chat box: speak, and a pause sends what you said; the answer comes back as a short spoken reply read aloud (the full answer stays on screen), and talking again stops it. Uses ElevenLabs when a key is set in Settings, else this device\'s own voice. On the phone, voice mode listens on its own once it is on: a pause sends what you said, the words show in the box as they are heard, and it listens again after the answer.',
     summary: 'Adds a Talk button to the chat box: speak, pause to send, and hear a short spoken answer.',
     default: false,
   },

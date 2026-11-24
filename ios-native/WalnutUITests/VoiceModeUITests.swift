@@ -12,22 +12,22 @@ import XCTest
 /// on what the simulator's microphone hears. The microphone permission must be
 /// granted beforehand (`xcrun simctl privacy <udid> grant microphone
 /// dev.openwalnut.ios`): a permission alert is not part of what this checks.
-final class VoiceModeUITests: XCTestCase {
-    private static let demoURL = "https://demo.walnut.invalid"
-    private static let demoToken = "walnut-demo-token"
+class VoiceModeUITestBase: XCTestCase {
+    static let demoURL = "https://demo.walnut.invalid"
+    static let demoToken = "walnut-demo-token"
 
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
     }
 
-    private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+    func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == %@", identifier))
             .firstMatch
     }
 
-    private func attach(_ app: XCUIApplication, _ name: String) {
+    func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
         shot.lifetime = .keepAlways
@@ -35,7 +35,7 @@ final class VoiceModeUITests: XCTestCase {
     }
 
     /// Wait until `element`'s label contains one of `fragments`.
-    private func waitForLabel(
+    func waitForLabel(
         _ element: XCUIElement, containing fragments: [String], timeout: TimeInterval
     ) -> String? {
         let deadline = Date().addingTimeInterval(timeout)
@@ -48,7 +48,9 @@ final class VoiceModeUITests: XCTestCase {
         }
         return nil
     }
+}
 
+final class VoiceModeUITests: VoiceModeUITestBase {
     @MainActor
     func testTalkToWalnutLaunchesAnAskAndReadsTheAnswer() throws {
         let app = UITestLaunch.launch([

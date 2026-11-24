@@ -33,6 +33,16 @@ extension SpeechOutput: VoiceSpeaker {}
 /// Nothing new starts speaking while Walnut is away (the phone locked, another app
 /// in front): an answer that becomes due then is read when Walnut is back. An
 /// answer already being read when the person leaves is read to its end.
+///
+/// Hands-free (`handsFree`, the `voice_conversation` experiment): one tap turns
+/// voice mode on and it listens on its own. A pause after speech sends the take
+/// (`TalkPauseDetector`), the answer is read, and it listens again, with no tap in
+/// between. While it listens, the words heard so far show in the box
+/// (`VoiceLiveWords`). A tap of the mic sends what was said at once, or, before
+/// anything was said, pauses listening; a minute of quiet pauses it too. Over
+/// the answer the mic is off (the phone's speaker would hear itself): a tap of the
+/// mic or Stop ends the reading and listens. The loop is in
+/// VoiceModeController+HandsFree.swift.
 @Observable
 @MainActor
 final class VoiceModeController {
@@ -46,7 +56,11 @@ final class VoiceModeController {
     }
 
     let recorder: VoiceRecorder
-    private let speaker: any VoiceSpeaker
+    let speaker: any VoiceSpeaker
+    /// Listens on its own, sends on a pause, listens again after the answer.
+    let handsFree: Bool
+    /// The words of the take being recorded, shown in the box (hands-free only).
+    let liveWords: VoiceLiveWords
     /// Delivers one spoken message to the session (`voice: true`). Answers false
     /// when the send did not go through.
     private let send: (String) async -> Bool
@@ -55,7 +69,7 @@ final class VoiceModeController {
     /// and are not shown there are kept here (`unsentText`).
     private let ownerShowsUnsent: (String) -> Bool
     /// Walnut is in front of the person (the app is active).
-    private let isAppActive: () -> Bool
+    let isAppActive: () -> Bool
 
     /// The newest answer this controller knows, for Replay.
     private(set) var lastAnswer: ChatMessage?
@@ -70,6 +84,31 @@ final class VoiceModeController {
     /// page's failed bubble, with its own Retry, is the one copy. Nothing said is
     /// lost without a trace.
     private(set) var unsentText: String?
+    /// Hands-free is listening on its own: off after the person paused it, after a
+    /// minute of quiet, or after something failed, until a tap of the mic.
+    var listensOnItsOwn = false
+    /// The take being recorded has heard speech (a tap then sends it, not pauses).
+    var takeHeardSpeech = false
+
+    // Hands-free state (VoiceModeController+HandsFree.swift).
+    @ObservationIgnored var detector = TalkPauseDetector()
+    @ObservationIgnored var monitor: Task<Void, Never>?
+    @ObservationIgnored var speakingFollow: Task<Void, Never>?
+    @ObservationIgnored var takeStartedAt: Date?
+    /// A take is being started (the session switch is async): no second start.
+    @ObservationIgnored var startingTake = false
+    /// An answer is about to be read (its Task has not reached the speaker yet).
+    @ObservationIgnored var speakingSoon = false
+    /// Listening stopped because Walnut went to the background; it resumes on return.
+    @ObservationIgnored var pausedForAway = false
+    @ObservationIgnored var resignObserver: NSObjectProtocol?
+    /// How long a quiet stretch after speech sends the take (the web's endSilenceMs),
+    /// and how long listening with nothing said pauses (the web's IDLE_MS). The unit
+    /// tests shorten them.
+    @ObservationIgnored var pauseToSendSeconds: TimeInterval = 1.2
+    @ObservationIgnored var quietPauseSeconds: TimeInterval = 60
+    /// Test seam: opens a take in place of the microphone.
+    @ObservationIgnored var micOpener: (() async -> Bool)?
 
     /// Answer rows present when voice mode was turned on: never read.
     @ObservationIgnored private var baseline: Set<String> = []
@@ -111,12 +150,16 @@ final class VoiceModeController {
         // main actor, where none of these can be made.
         recorder: VoiceRecorder? = nil,
         speaker: (any VoiceSpeaker)? = nil,
+        handsFree: Bool = false,
+        liveWords: VoiceLiveWords? = nil,
         isAppActive: (() -> Bool)? = nil,
         notifications: NotificationCenter = .default,
         send: @escaping (String) async -> Bool
     ) {
         self.recorder = recorder ?? VoiceRecorder()
         self.speaker = speaker ?? SpeechOutput.shared
+        self.handsFree = handsFree
+        self.liveWords = liveWords ?? VoiceLiveWords()
         self.send = send
         self.ownerShowsUnsent = ownerShowsUnsent
         self.isAppActive = isAppActive ?? { UIApplication.shared.applicationState == .active }
@@ -130,6 +173,13 @@ final class VoiceModeController {
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.appBecameActive() }
+        }
+        if handsFree {
+            resignObserver = notifications.addObserver(
+                forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appWillResign() }
+            }
         }
     }
 
@@ -150,6 +200,10 @@ final class VoiceModeController {
     /// answer is being read stops the voice first (barge-in).
     func micTapped() async {
         notice = nil
+        if handsFree {
+            await handsFreeMicTapped()
+            return
+        }
         switch recorder.state {
         case .transcribing:
             return
@@ -165,20 +219,38 @@ final class VoiceModeController {
 
     /// Drop the take in progress.
     func cancelTake() {
+        if handsFree {
+            dropTake()
+            listensOnItsOwn = false
+            return
+        }
         recorder.cancel()
     }
 
-    private func finishTake() async {
+    func finishTake() async {
         // Background time from Stop to the send's answer: the person may lock the
         // phone or switch apps right after tapping send. The recorder's own
         // assertion ends with the transcription, before the words go out.
         await withBackgroundTime("voice-take") {
+            stopMonitor()
+            // No more drafts: the engine is the take's own now. Its words stay shown.
+            liveWords.freeze()
             guard let text = await recorder.stopAndTranscribe() else {
                 // The recorder kept the audio (or there was nothing to keep) and set
                 // its own sentence; the notice rows show it with Retry.
+                liveWords.clear()
+                if handsFree, recorder.errorMessage == nil || recorder.lastTakeHadNoWords {
+                    // Nothing in it after all (a cough, a door): listen on. The take is
+                    // kept like any other; its notice would only stop the conversation.
+                    if recorder.lastTakeHadNoWords { recorder.errorMessage = nil }
+                    resumeIfQuiet()
+                    return
+                }
+                if handsFree { listensOnItsOwn = false }
                 if recorder.errorMessage == nil { notice = "No speech heard. Tap the mic and try again." }
                 return
             }
+            liveWords.clear()
             await deliver(text)
         }
     }
@@ -191,6 +263,11 @@ final class VoiceModeController {
     private func deliver(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
+            if handsFree {
+                // The engine found no words in it: listen on.
+                resumeIfQuiet()
+                return
+            }
             notice = "No speech heard. Tap the mic and try again."
             return
         }
@@ -200,6 +277,8 @@ final class VoiceModeController {
         let sent = await withBackgroundTime("voice-send") { await send(trimmed) }
         if !sent {
             awaitingAnswer = false
+            // Not sent: listening on would talk past words that are not there.
+            listensOnItsOwn = false
             if !ownerShowsUnsent(trimmed) { unsentText = trimmed }
         }
     }
@@ -235,6 +314,8 @@ final class VoiceModeController {
         if awaitingAnswer, !streaming, sawTurnSinceSend, provisionalSince == nil {
             awaitingAnswer = false
         }
+        // A turn that ended with nothing to read: listen again.
+        resumeIfQuiet()
     }
 
     /// The session is waiting on the person (a permission or a question card).
@@ -245,9 +326,13 @@ final class VoiceModeController {
         announcedRequests.formUnion(requestIDs)
         // Not while Walnut is away either: nothing new is read then. The card and
         // the status line are on the page when the person is back.
-        guard let first = fresh.first, recorder.state == .idle, !speaker.isSpeaking,
-              isAppActive() else { return }
+        guard let first = fresh.first, isAppActive(), !speaker.isSpeaking, !startingTake else { return }
+        // A hands-free take nobody spoke into yet gives way; one with words does not.
+        if handsFree, recorder.state == .recording, !detector.hasSpeech { dropTake() }
+        guard recorder.state == .idle else { return }
+        speakingSoon = true
         await speaker.speak(Self.needsAnswerLine, language: "en-US", id: "needs-answer-\(first)")
+        followSpeaking()
     }
 
     nonisolated static func newRequests(_ ids: [String], announced: Set<String>) -> [String] {
@@ -256,7 +341,9 @@ final class VoiceModeController {
 
     /// Stop the voice (the person tapped Stop).
     func stopSpeaking() {
-        speaker.stop(handoff: false)
+        // Hands-free listens right after: the recorder takes the session, so the
+        // speaker must not switch it off under the new take.
+        speaker.stop(handoff: handsFree)
     }
 
     /// Walnut is back in front of the person: an answer that became due while it
@@ -264,27 +351,39 @@ final class VoiceModeController {
     /// provisional row's grace ran out while away, and its canonical row is late).
     func appBecameActive() {
         evaluate(now: Date())
+        if pausedForAway {
+            pausedForAway = false
+            resumeIfQuiet()
+        }
     }
 
     /// Read the newest answer again, or for the first time if it arrived while
     /// the person was recording.
     func replay() async {
-        guard let answer = lastAnswer else { return }
+        guard let answer = lastAnswer, !startingTake else { return }
         await speak(answer)
     }
 
     /// Voice mode is closing: silence, and no take left running.
     func shutDown() {
         provisionalTimer?.cancel()
+        stopMonitor()
+        speakingFollow?.cancel()
+        listensOnItsOwn = false
+        liveWords.clear()
         if let activeObserver {
             notifications.removeObserver(activeObserver)
             self.activeObserver = nil
+        }
+        if let resignObserver {
+            notifications.removeObserver(resignObserver)
+            self.resignObserver = nil
         }
         speaker.stop(handoff: false)
         if recorder.state == .recording { recorder.preserveAndStop(reason: "view-dismissed") }
     }
 
-    private func evaluate(now: Date) {
+    func evaluate(now: Date) {
         let decision = Self.nextToSpeak(
             rows: latestRows, streaming: latestStreaming, baseline: baseline,
             spokenIDs: spokenIDs, provisionalTexts: provisionalTexts,
@@ -315,21 +414,33 @@ final class VoiceModeController {
             // provisional row's grace timer could fire away from the page and read
             // a new answer in the background (App Store gate r9, LOW 2).
             guard isAppActive() else { return }
+            // A take is opening: decided once it is open (`startTake` asks again).
+            guard !startingTake else { return }
             provisionalSince = nil
             spokenIDs.insert(row.id)
             if Self.isProvisional(row) { provisionalTexts.insert(Self.textKey(row.text)) }
             lastAnswer = row
             awaitingAnswer = false
+            // A hands-free take nobody spoke into yet gives way to the answer.
+            if handsFree, recorder.state == .recording, !detector.hasSpeech { dropTake() }
             // Never over a take: the person is talking. Replay reads it later.
             guard recorder.state == .idle else { return }
+            speakingSoon = true
             Task { await self.speak(row) }
         }
     }
 
     private func speak(_ row: ChatMessage) async {
+        speakingSoon = true
         // What the screen shows: never the agent-ack line or an Org chat's tasks line.
-        guard let prepared = SpokenText.prepare(TimelineTurnMarker.strip(row.text)) else { return }
+        guard let prepared = SpokenText.prepare(TimelineTurnMarker.strip(row.text)) else {
+            speakingSoon = false
+            resumeIfQuiet()
+            return
+        }
+        if handsFree, recorder.state == .recording { dropTake() }
         await speaker.speak(prepared.text, language: prepared.language, id: row.id)
+        followSpeaking()
     }
 
     // MARK: - The decision (pure, unit-tested)
@@ -384,18 +495,23 @@ final class VoiceModeController {
 }
 
 extension VoiceModeController {
+    /// The experiment that makes voice mode hands-free (src/core/experimental.ts),
+    /// the same switch as the web's voice conversation.
+    static let handsFreeExperiment = "voice_conversation"
+    static var handsFreeIsOn: Bool { ServerClientSettings.shared.isOn(handsFreeExperiment) }
+
     /// Voice mode on a session page (`SessionConversationView`): the words go to
     /// `store` as spoken sends, and a send that failed leaves its bubble there, with
     /// Retry, as the one copy. The other arguments are the WalnutTests seams.
     static func sessionPage(
         _ store: SessionConversationStore, sessionID: String, awaitingAnswer: Bool,
         speaker: (any VoiceSpeaker)? = nil, isAppActive: (() -> Bool)? = nil,
-        notifications: NotificationCenter = .default
+        notifications: NotificationCenter = .default, handsFree: Bool? = nil
     ) -> VoiceModeController {
         VoiceModeController(
             sessionID: sessionID, rows: store.messages, awaitingAnswer: awaitingAnswer,
             ownerShowsUnsent: { store.showsFailedSend(of: $0) },
-            speaker: speaker, isAppActive: isAppActive, notifications: notifications
+            speaker: speaker, handsFree: handsFree ?? handsFreeIsOn, isAppActive: isAppActive, notifications: notifications
         ) { text in
             await store.send(text, voice: true)
         }

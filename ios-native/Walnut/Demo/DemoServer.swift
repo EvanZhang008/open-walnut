@@ -265,6 +265,11 @@ final class DemoServer: @unchecked Sendable {
         if match(r, "POST", s, "client-logs") != nil { return .ok }
         if match(r, "POST", s, "time", "heartbeats") != nil { return .noContent }
         if match(r, "POST", s, "stt", "transcribe") != nil { return .object(["text": DemoFixtures.transcriptionSentence(clockNow)]) }
+        // Voice mode's live words: the first words of what the take will say.
+        if match(r, "POST", s, "stt", "draft") != nil {
+            let words = DemoFixtures.transcriptionSentence(clockNow).split(separator: " ")
+            return .object(["text": words.prefix(max(1, words.count / 2)).joined(separator: " "), "durationMs": 120])
+        }
         if match(r, "GET", s, "asks") != nil { return asks(r) }
         // The demo has no org (no CEO or VPs): the Chat drawer then shows its chats only.
         if match(r, "GET", s, "org") != nil { return .error(404, "not_found", "The demo has no org.") }

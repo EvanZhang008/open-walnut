@@ -176,6 +176,8 @@ final class VoiceRecorder: NSObject {
 
     /// The store id of the take recording now, nil while none is.
     var liveTakeID: String? { state == .recording ? recordingID : nil }
+    /// The file the live take is being written to (voice mode drafts its words from it).
+    var liveTakeURL: URL? { state == .recording ? fileURL : nil }
 
     /// Stable per-instance identity for the store's drain gate, so a claim can be
     /// released by its owner and only by its owner.
@@ -413,8 +415,14 @@ final class VoiceRecorder: NSObject {
     /// Stop and upload for transcription. Returns the recognized text, or nil
     /// on failure (with `errorMessage` set). Success saves text before returning
     /// and retains audio. Failures remain recoverable via `retryPending()`.
+    /// The last `stopAndTranscribe` reached the engine and it heard no words in the
+    /// take (a cough, a door): the take is kept like any other, and hands-free voice
+    /// mode listens on instead of pausing on it.
+    private(set) var lastTakeHadNoWords = false
+
     func stopAndTranscribe() async -> String? {
         guard state == .recording, let url = fileURL, let id = recordingID else { return nil }
+        lastTakeHadNoWords = false
         stopCapture()
         state = .transcribing
         var words: String?
@@ -872,6 +880,7 @@ final class VoiceRecorder: NSObject {
             }
             let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
+                if trigger == .liveTake { lastTakeHadNoWords = true }
                 // The server answered but heard nothing. Keep the audio — an
                 // engine mishearing real speech must not destroy the take — but
                 // COUNT the verdict: the same bytes through the same engine will

@@ -32,6 +32,9 @@ final class SpeechOutput: NSObject {
     /// Spoken utterances by object identity, so a late callback for an
     /// utterance that was replaced cannot clear the newer one's state.
     @ObservationIgnored private var current: AVSpeechUtterance?
+    /// Bumped by every stop: a speak still waiting for the session (`settle`) when the
+    /// person stopped it, or a take took the session, says nothing.
+    @ObservationIgnored private var generation = 0
 
     override init() {
         super.init()
@@ -42,11 +45,14 @@ final class SpeechOutput: NSObject {
     func speak(_ text: String, language: String, id: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        generation += 1
+        let mine = generation
         if synthesizer.isSpeaking {
             handingOff = true
             synthesizer.stopSpeaking(at: .immediate)
         }
         await AudioSessionHandoff.settle()
+        guard mine == generation else { return }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
@@ -76,6 +82,7 @@ final class SpeechOutput: NSObject {
     /// Stop now. `handoff`: the recorder is about to take the session, so leave
     /// switching it off to the recorder.
     func stop(handoff: Bool = false) {
+        generation += 1
         guard synthesizer.isSpeaking || speakingID != nil else { return }
         handingOff = handoff
         current = nil

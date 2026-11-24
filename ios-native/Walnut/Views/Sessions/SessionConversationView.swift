@@ -603,8 +603,11 @@ struct SessionConversationView: View {
 
     /// Voice mode on: what is on the page now is never read, only what comes next.
     private func startVoiceMode(awaitingAnswer: Bool) {
-        voiceMode = VoiceModeController.sessionPage(store, sessionID: session.id, awaitingAnswer: awaitingAnswer)
-        AppLog.info("voice-mode", "voice mode on", ["sessionId": session.id])
+        let voice = VoiceModeController.sessionPage(store, sessionID: session.id, awaitingAnswer: awaitingAnswer)
+        voiceMode = voice
+        // Hands-free listens at once (or once the answer on its way was read).
+        voice.begin()
+        AppLog.info("voice-mode", "voice mode on", ["sessionId": session.id, "handsFree": voice.handsFree ? "true" : "false"])
     }
 
     private func stopVoiceMode() {

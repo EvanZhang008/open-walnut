@@ -342,6 +342,79 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
   }
 })
 
+/** A draft is the take so far, at most about 70 s of the phone's 16 kHz PCM. */
+const DRAFT_MAX_AUDIO_B64 = 3 * 1024 * 1024
+
+/**
+ * POST /api/v1/stt/draft { audio, format, language? } → { text, durationMs }
+ * The words of a take still being recorded, for the phone's voice mode to show
+ * in its box while the person talks (the web's /api/stt/draft). A preview only:
+ * nothing is kept, and the take's own /stt/transcribe is what gets sent. The
+ * user's own engine on this server only: never the hosted API (a draft every
+ * second or two would bill them for words nobody sends), and on the companion
+ * never the relay to the Mac, so a companion with no engine of its own has no
+ * live words.
+ */
+sttV1Router.post('/stt/draft', async (req: Request, res: Response, next: NextFunction) => {
+  const gone = new AbortController()
+  res.on('close', () => { if (!res.writableFinished) gone.abort() })
+  let drafted: (() => void) | undefined
+  try {
+    const { audio, format, language } = (req.body ?? {}) as { audio?: unknown; format?: unknown; language?: unknown }
+    if (typeof audio !== 'string' || audio === '') {
+      sendError(res, 400, 'bad_request', 'audio (base64 string) is required')
+      return
+    }
+    if (typeof format !== 'string' || !ALLOWED_FORMATS.has(format)) {
+      sendError(res, 400, 'bad_request', `format must be one of: ${[...ALLOWED_FORMATS].join(', ')}`)
+      return
+    }
+    if (audio.length > DRAFT_MAX_AUDIO_B64) {
+      sendError(res, 413, 'too_large', 'Draft audio too large (max 3MB base64)')
+      return
+    }
+    const lang = typeof language === 'string' && language !== '' ? language : undefined
+    const { getConfig } = await import('../../core/config-manager.js')
+    const { routeFeature } = await import('../../core/feature-route.js')
+    const { isFollower } = await import('../../core/server-role.js')
+    const follower = isFollower()
+    const config = await getConfig()
+    // Not the bridge either: the Mac answers a relayed request with a full pass it
+    // cannot drop, so drafts would queue ahead of the take's own words.
+    if (config.stt?.engine === 'openai') {
+      sendError(res, 503, 'stt_unavailable', 'Live words need a voice engine on your own machine')
+      return
+    }
+    const engines = sttEngines(config, follower)
+      .filter((engine) => engine.id !== 'openai' && engine.id !== 'bridge')
+      .map((engine) => ({
+        ...engine,
+        // This server's own engine: a preview pass, dropped when the phone stops waiting.
+        async run(input: SttInput) {
+          const { transcribeAudio } = await import('../../core/stt/index.js')
+          return transcribeAudio(config, { ...input, preview: true, signal: gone.signal })
+        },
+      }))
+    if (!follower) {
+      // A piece of a take heard ahead waits while a draft runs (take-ahead.ts).
+      const { noteLiveDraft } = await import('../../core/stt/take-ahead.js')
+      drafted = noteLiveDraft()
+    }
+    const result = await routeFeature(engines, { audio, format, language: lang })
+    if (gone.signal.aborted) return
+    if (result.ok) {
+      res.json({ text: result.output.text, durationMs: result.output.durationMs ?? 0 })
+      return
+    }
+    sendError(res, 503, 'stt_unavailable', unavailableNotice(result.attempts))
+  } catch (err) {
+    if (gone.signal.aborted) return
+    next(err)
+  } finally {
+    drafted?.()
+  }
+})
+
 // ── Custom vocabulary (Wave 3) ───────────────────────────────────────────────
 // The Mac's word list. The companion carries both calls to the Mac while it
 // answers (v1-forward/policy.ts); while it is away the box answers the Mac's

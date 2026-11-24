@@ -446,6 +446,18 @@ enum DemoFixtures {
         )
     }
 
+    /// Experiments a UI test turns on in the demo (`-walnut.debug.demoExperiments a,b`);
+    /// none otherwise, so the demo App Review sees keeps every default.
+    static var debugExperiments: [String: Bool] {
+        #if DEBUG
+        let ids = (UserDefaults.standard.string(forKey: "walnut.debug.demoExperiments") ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return Dictionary(uniqueKeysWithValues: ids.map { ($0, true) })
+        #else
+        return [:]
+        #endif
+    }
+
     static var serverConfig: [String: Any] {
         [
             "config": [
@@ -453,6 +465,7 @@ enum DemoFixtures {
                 "provider": ["type": "anthropic", "model": mainModel],
                 "agent": ["main_model": mainModel, "fast_model": fastModel],
                 "hosts": [buildBoxAlias: ["label": buildBoxLabel, "enabled": true]],
+                "experimental": debugExperiments,
             ],
             "cloud": false,
             "memory": ["rssMb": 212, "heapUsedMb": 96, "uptimeSec": 3 * 86_400 + 5 * 3600],

@@ -573,7 +573,9 @@ struct ComposerBar: View {
         // The page's own color behind the card (it used to be the `.bar` material
         // band), so the card is what reads as the composer. Opaque on purpose: the
         // transcript scrolls under this inset and must not show through around the
-        // card. Extends through the home-indicator area like the band did.
+        // card. Extends through the home-indicator area like the band did. With the
+        // glass experiment on, frosted glass instead, the chat showing softly through
+        // (`composerBand`).
         // The open `@` or `/` list sits right above the card, over the transcript, so its
         // coming and going never changes the composer's measured height.
         .overlay(alignment: .top) {
@@ -583,7 +585,7 @@ struct ComposerBar: View {
                     .alignmentGuide(.top) { d in d[.bottom] + 6 }
             }
         }
-        .background(ComposerCard.backdrop, ignoresSafeAreaEdges: .all)
+        .composerBand()
         // Publish the composer's WHOLE height (notices + voice-retry row +
         // thumbnail strip + field + control row) so the file-preview dock bar can
         // seat itself above all of it.
@@ -2685,6 +2687,51 @@ enum ComposerCard {
     static let fill = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
     })
+
+    /// Experiment `chat_glass_edges` (src/core/experimental.ts), as on the web: the chat
+    /// scrolls on behind the composer, which turns to frosted glass the text shows
+    /// softly through, its top edge dissolving instead of a hard line.
+    static let glassExperiment = "chat_glass_edges"
+    @MainActor static var glass: Bool { ServerClientSettings.shared.isOn(glassExperiment) }
+    /// The band's fill where it continues below the composer (the tab bar's room).
+    @MainActor static var bandStyle: AnyShapeStyle {
+        glass ? AnyShapeStyle(.thinMaterial) : AnyShapeStyle(backdrop)
+    }
+    /// How far the glass dissolves above the composer.
+    static let glassFade: CGFloat = 14
+    /// Under glass the card lets the band's one pane through, with a faint tint of
+    /// its own so the box keeps its shape (the web's glass card: two full tints
+    /// stacked read as a solid slab).
+    static let glassCardFill = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor.white.withAlphaComponent(0.06) : UIColor.white.withAlphaComponent(0.45)
+    })
+}
+
+/// The band under the composer (and voice mode's bar): the page's own color, or,
+/// with the glass experiment on, frosted glass that dissolves at its top edge.
+struct ComposerBandModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if ComposerCard.glass {
+            content.background {
+                Rectangle()
+                    .fill(.thinMaterial)
+                    .mask {
+                        VStack(spacing: 0) {
+                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                                .frame(height: ComposerCard.glassFade)
+                            Color.black
+                        }
+                    }
+                    .padding(.top, -ComposerCard.glassFade)
+                    .ignoresSafeArea(edges: .bottom)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("composer.glass")
+            }
+        } else {
+            content.background(ComposerCard.backdrop, ignoresSafeAreaEdges: .all)
+        }
+    }
 }
 
 private struct ComposerCardModifier: ViewModifier {
@@ -2694,8 +2741,8 @@ private struct ComposerCardModifier: ViewModifier {
             // would also shadow every glyph and button inside.
             .background {
                 MessageBox.shape
-                    .fill(ComposerCard.fill)
-                    .shadow(color: .black.opacity(0.08), radius: 12, y: 3)
+                    .fill(ComposerCard.glass ? ComposerCard.glassCardFill : ComposerCard.fill)
+                    .shadow(color: .black.opacity(ComposerCard.glass ? 0 : 0.08), radius: 12, y: 3)
             }
             .overlay(
                 MessageBox.shape
@@ -2711,6 +2758,8 @@ private struct ComposerCardModifier: ViewModifier {
 extension View {
     /// Draw this as the composer's floating card.
     func composerCard() -> some View { modifier(ComposerCardModifier()) }
+    /// Draw the band behind the composer card (`ComposerBandModifier`).
+    func composerBand() -> some View { modifier(ComposerBandModifier()) }
 }
 
 // MARK: - Banners

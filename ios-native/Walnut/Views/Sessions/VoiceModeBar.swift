@@ -7,6 +7,11 @@ import SwiftUI
 /// moment needs: Cancel while recording, Stop while an answer is being read,
 /// Replay otherwise. The line above says what is happening in words, because
 /// the person may not be looking at the transcript at all.
+///
+/// Hands-free (`voice.handsFree`): nothing to tap to talk. It listens on its own,
+/// the words heard so far show in the box as they are heard, and a pause sends
+/// them. The big key then sends at once, or pauses listening before anything
+/// was said; paused, it listens again.
 struct VoiceModeBar: View {
     /// The chat's greys in a chat (`WalnutPalette`); a listening mic stays red.
     @Environment(\.walnutPalette) private var palette
@@ -33,6 +38,7 @@ struct VoiceModeBar: View {
                 .lineLimit(2)
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("voiceMode.status")
+            if showsWordsBox { wordsBox }
             if let notice = voice.notice {
                 Text(notice)
                     .font(.footnote)
@@ -57,7 +63,7 @@ struct VoiceModeBar: View {
         }
         .padding(.vertical, 12)
         .composerCard()
-        .background(ComposerCard.backdrop, ignoresSafeAreaEdges: .all)
+        .composerBand()
     }
 
     // MARK: - Words
@@ -67,6 +73,7 @@ struct VoiceModeBar: View {
         if needsAnswer, voice.phase == .waiting || voice.phase == .ready {
             return VoiceModeController.needsAnswerLine
         }
+        if voice.handsFree { return handsFreeStatus }
         switch voice.phase {
         case .listening:
             return "Listening… \(Self.clock(voice.recorder.elapsed)). Tap to send."
@@ -84,6 +91,49 @@ struct VoiceModeBar: View {
             }
             return "Tap the mic and talk."
         }
+    }
+
+    private var handsFreeStatus: String {
+        switch voice.phase {
+        case .listening:
+            return voice.takeHeardSpeech
+                ? "Listening \(Self.clock(voice.recorder.elapsed)). Pause and it sends."
+                : "Listening. Just talk."
+        case .transcribing:
+            return "Sending what you said…"
+        case .speaking:
+            return "Reading the answer. Tap the mic to talk."
+        case .waiting:
+            if let activity, !activity.isEmpty { return "Working: \(activity)" }
+            return working ? "Working on it…" : "Sent. Waiting for the answer…"
+        case .ready:
+            if voice.pausedByPerson {
+                if working { return "Paused while it works. Tap the mic to talk." }
+                return "Paused. Tap the mic to talk."
+            }
+            return "Listening…"
+        }
+    }
+
+    /// The input box of voice mode: the words heard so far (hands-free).
+    private var showsWordsBox: Bool {
+        voice.handsFree && (voice.phase == .listening || voice.phase == .transcribing)
+    }
+
+    private var wordsBox: some View {
+        let words = voice.liveWords.text
+        return Text(words ?? (voice.takeHeardSpeech ? "…" : "Your words show here as you talk."))
+            .font(.body)
+            .foregroundStyle(words == nil ? .tertiary : .primary)
+            .lineLimit(4)
+            .truncationMode(.head)
+            .frame(maxWidth: .infinity, minHeight: MessageBox.lineHeight, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(MessageBox.shape.fill(Color(.tertiarySystemFill)))
+            .padding(.horizontal, 12)
+            .animation(.easeOut(duration: 0.15), value: words)
+            .accessibilityIdentifier("voiceMode.liveWords")
     }
 
     static func clock(_ seconds: TimeInterval) -> String {
@@ -125,7 +175,7 @@ struct VoiceModeBar: View {
                     ProgressView()
                         .tint(palette.onTint)
                 } else {
-                    Image(systemName: phase == .listening ? "arrow.up" : "mic.fill")
+                    Image(systemName: micGlyph)
                         .font(.system(size: micSize * 0.38, weight: .semibold))
                         .foregroundStyle(palette.onTint)
                 }
@@ -135,8 +185,19 @@ struct VoiceModeBar: View {
         }
         .buttonStyle(.plain)
         .disabled(phase == .transcribing)
-        .accessibilityLabel(phase == .listening ? "Send what you said" : "Talk")
+        .accessibilityLabel(micLabel)
         .accessibilityIdentifier("voiceMode.mic")
+    }
+
+    private var micGlyph: String {
+        guard voice.phase == .listening else { return "mic.fill" }
+        // Hands-free before any words: the key pauses listening.
+        return voice.handsFree && !voice.takeHeardSpeech ? "pause.fill" : "arrow.up"
+    }
+
+    private var micLabel: String {
+        guard voice.phase == .listening else { return "Talk" }
+        return voice.handsFree && !voice.takeHeardSpeech ? "Pause listening" : "Send what you said"
     }
 
     @ViewBuilder
