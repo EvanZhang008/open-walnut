@@ -41,7 +41,7 @@ import { handOverPending, setLeaderDelivery } from './host-handover.js'
 import { judgingHostOf } from '../core/sessions/judge-of.js'
 import { acpResumeHostOf, resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
 import { assertHostNotRevoked } from '../core/session-channel/revoked-hosts.js'
-import { execHostOf } from '../core/sessions/session-row-owner.js'
+import { execHostOf, rowOwnedHere, thisHostKey } from '../core/sessions/session-row-owner.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
@@ -107,7 +107,7 @@ import { lineAnswerFrame, type LineFate } from './line-fate-core.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
-import { readAttachEvidence, ON_DEMAND_ATTACH_EVIDENCE_MS, EVIDENCE_TIMEOUT, type StreamEvidence } from './attach-evidence.js'
+import { readAttachEvidence, judgedReplayFloor, ON_DEMAND_ATTACH_EVIDENCE_MS, EVIDENCE_TIMEOUT, type StreamEvidence } from './attach-evidence.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
@@ -4097,6 +4097,10 @@ export class ClaudeCodeSession {
 
     // ── Stale-watermark heal (incident inc-1786428350008, healStaleWatermark) ──
     if (typeof streamEvidence !== 'string') await ClaudeCodeSession.healStaleWatermark(session, record, streamEvidence)
+    // A session this host judges itself, with a result past its last judged turn end: what its CLI
+    // wrote while no runner read it is read again from there and judged now (attach-evidence.ts
+    // judgedReplayFloor). The replay itself ends the turn, so the downgrade below leaves it alone.
+    const judgedFloor = judgedReplayFloor(rowOwnedHere(record, thisHostKey()), session._consumedOffset, streamEvidence)
 
     // Create the session manager for attach (all sessions go through daemon now).
     //
@@ -4242,7 +4246,7 @@ export class ClaudeCodeSession {
       // recovered.workStatus from the canonical JSONL, which never fired on real
       // data.) reconcileProcessStatus re-checks bg/team debt from the same fold and
       // no-ops unless the record or phase is genuinely stuck.
-      if (fold.turnEnded) {
+      if (fold.turnEnded && judgedFloor === null) {
         try {
           const { reconcileProcessStatus } = await import('../core/session-reconcile.js')
           const outcome = await reconcileProcessStatus(record, {
@@ -4352,14 +4356,16 @@ export class ClaudeCodeSession {
       // exact "whole conversation replays" bug, just on the local path. Only a
       // live in-process fileSize (>0, accumulated from stream events) is a valid
       // stream offset; otherwise subscribe future-only like remote.
-      const fromOffset = session._transport.fileSize > 0 && !isRemote
-        ? session._transport.fileSize
-        : Number.MAX_SAFE_INTEGER  // fresh-attach: subscribe future-only
+      const fromOffset = judgedFloor !== null ? judgedFloor
+        : session._transport.fileSize > 0 && !isRemote
+          ? session._transport.fileSize
+          : Number.MAX_SAFE_INTEGER  // fresh-attach: subscribe future-only
       log.session.info('attachToExisting: attach fromOffset chosen', {
         sessionId: record.claudeSessionId,
         isRemote,
         transportFileSize: session._transport.fileSize,
         fromOffset: fromOffset === Number.MAX_SAFE_INTEGER ? 'MAX_SAFE_INTEGER (skip replay)' : fromOffset,
+        ...(judgedFloor !== null ? { replay: 'from the last judged turn end' } : {}),
       })
       try {
         const attachedTransport = session._transport
@@ -12483,6 +12489,9 @@ export class SessionRunner {
    */
   /** Settles once init's startup recovery has started its pending drains (tests wait on it). */
   startupRecoveryDone: Promise<void> = Promise.resolve()
+  private _markInitialized: () => void = () => {}
+  /** Settles once init ran and its startup recovery settled; never before init (startupRecoveryDone is settled from the start). */
+  readonly initialized: Promise<void> = new Promise<void>((resolve) => { this._markInitialized = resolve })
 
   init(reconnectable?: SessionRecord[]): void {
     // A session taken back from a host that no longer holds it is delivered by this runner (host-handover.ts).
@@ -12549,6 +12558,7 @@ export class SessionRunner {
     this.startupRecoveryDone = startupRecovery().catch((err) => {
       log.session.error('startup recovery failed', { error: err instanceof Error ? err.message : String(err) })
     })
+    void this.startupRecoveryDone.then(() => this._markInitialized())
 
     // Event-driven redelivery: when a host's daemon (re)connects, drain any
     // queue messages stranded in 'pending' by a delivery failure on that host.

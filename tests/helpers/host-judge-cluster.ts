@@ -455,6 +455,8 @@ export interface HostJudgeClusterOptions {
   companion?: boolean
   /** The Mac's switch in its config (default on). */
   macSwitch?: boolean
+  /** More experiments on in the Mac's config, beside the switch (`host_call_entry`: a same-host send is the host server's). */
+  macExperiments?: readonly string[]
   /** More of the host service's env, over the cluster's own (a timing seam, the host's switch forced off: an older host). */
   hostEnv?: Record<string, string>
   /** More of the Mac's env (WALNUT_LEADER_SESSION_CHANNELS=0: a leader from before the session channel). */
@@ -472,6 +474,9 @@ export interface HostJudgeClusterOptions {
   seedMac?: (o: { base: string; macData: string }) => void | Promise<void>
 }
 
+/** The Mac's `experimental:` block with these experiments on (none: no block). */
+const experimentLines = (ids: readonly string[]): string[] => (ids.length ? ['experimental:', ...ids.map((id) => `  ${id}: true`)] : [])
+
 export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Promise<HostJudgeCluster> {
   let companion: CloudBoxReplica | null = null
   const c = await startReplicaCluster({
@@ -480,7 +485,7 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
     hostService: { env: (d) => ({ ...hostJudgeServiceEnv(d), ...(o.hostEnv ?? {}) }), after: hostJudgeServiceProbe() },
     macBootExtra: macProbe(o.macRecord ?? 'full') + (o.macAcp ? acpStandIn() : '') + (o.macBootExtra ?? ''),
     macConfigExtra: [
-      ...(o.macSwitch === false ? [] : ['experimental:', '  host_runs_sessions: true']),
+      ...experimentLines([...(o.macSwitch === false ? [] : ['host_runs_sessions']), ...(o.macExperiments ?? [])]),
       ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : []),
       ...(o.macConfigExtra ?? []),
     ],

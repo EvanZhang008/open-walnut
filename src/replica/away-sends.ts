@@ -49,6 +49,7 @@ import { admitRetiredLeadRule, directionDecides, holdsQuietly, opensRequest, par
 import { clampReplyTimeoutSecs } from '../core/session-requests.js'
 import type { Overlay } from './overlay.js'
 import { log } from '../logging/index.js'
+import { attachJudgeFirst } from '../core/session-channel/host-judged-lines.js'
 
 /** The daemon capability `follower.peer` rides on. */
 export const PEER_CAP = 'follower-peer-v1'
@@ -301,6 +302,8 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
       title: me.title, shortId: sid.slice(0, 8), sessionId: sid, ...(me.taskId ? { taskId: me.taskId } : {}),
       host: view.host, ...(ask ? { requestId: ask.id } : {}),
     }, { title: str(b.title) || undefined })
+    // A session this host judges: its runner watches the CLI before the line goes in (host-judged-lines.ts).
+    await attachJudgeFirst(target.sid, 'away-sends')
     const r = peerAnswer(await w.call('follower.peer', {
       kind: 'send', online, fromSessionId: sid, toSessionId: target.sid, ...(target.taskId ? { toTaskId: target.taskId } : {}),
       text: envelope, dupText: text, messageId: mid, ...(ask ? { ask } : {}),

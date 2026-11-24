@@ -511,6 +511,16 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   once more, and a second no makes the session the leader's again, at rest; its next delivery hands it to
   the host again with the claim and the at-rest checks (`confirmHostDisowns` in
   `src/providers/host-judged-send.ts`). The waiting message goes once, never parked.
+- **No line into a session it judges goes past the host's runner unread** (`src/core/session-channel/host-judged-lines.ts`).
+  Every host path that writes into a session's CLI through the daemon instead of the runner (a same-host
+  send or reply, a plain note, a prompt's answer, a trigger fire, a message while the host is alone) lets the
+  runner attach first; after a restart of the host's service the runner attaches its own rows whose CLI
+  survived at once; and an attach of an own row with a result past its last judged turn end reads the
+  stream again from there (`judgedReplayFloor` in `src/providers/attach-evidence.ts`), so a turn that ended
+  while no runner read it, whoever wrote its line (the daemon's own away answer too), is judged once
+  (2026-11-23: a same-host send after a service restart; tests:
+  `tests/e2e/host-judge-restart-local-send-e2e.test.ts`, ratchet
+  `tests/core/session-channel/host-judged-lines-ratchet.test.ts`).
 - **Rolling back, in order.** Each step can stop there; each later one is safe without the earlier.
   1. One host: `hosts.<name>.runs_sessions: false` in the leader's config (no restart). New starts on
      that host take today's path at once; the sessions it already runs keep running and reporting

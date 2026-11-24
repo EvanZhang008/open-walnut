@@ -42,6 +42,7 @@
 
 import crypto from 'node:crypto'
 import { escapeHintTags, splitHinted } from '../core/hints/hint-format.js'
+import { attachJudgeFirst } from '../core/session-channel/host-judged-lines.js'
 import { voiceReplyBlock } from '../core/sessions/voice-reply.js'
 import type { ReplicaWrite, ReplicaWriteResult } from './dispatch.js'
 import { deriveStatusFromPhase, phaseDerivedFields, phaseFromStatus } from '../core/phase.js'
@@ -435,6 +436,8 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       // The host delivers it as it is, so it is escaped here as the Mac's queue would
       // (core/hints/hint-format.ts); only the voice block a voice send composed stays.
       const body = opts?.framed || typed.startsWith('/') || splitHinted(typed, [voiceReplyBlock()]) ? typed : escapeHintTags(typed)
+      // A session this host judges: its runner watches the CLI before the line goes in (host-judged-lines.ts).
+      await attachJudgeFirst(sid, 'write-port.send')
       const r = await w.call('follower.send', { sid, text: body, messageId: sendMessageId(messageId, w.opId) })
       if (r.kind === 'answered') return { answered: true }
       if (r.kind === 'refused') return refusalAnswer(r.code, r.message, r.detail, r.retryAfterMs)
@@ -442,6 +445,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       return { answered: false, status: 202, body: { delivered: true, messageId: r.reply.messageId ?? sendMessageId(messageId, w.opId), offline: true } }
     },
     async permission(w, sid, answer) {
+      await attachJudgeFirst(sid, 'write-port.permission')
       const r = await w.call('follower.permission', { sid, ...answer })
       if (r.kind === 'answered') return { answered: true }
       if (r.kind === 'refused') return refusalAnswer(r.code, r.message, r.detail, r.retryAfterMs)

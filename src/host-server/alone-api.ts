@@ -22,6 +22,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { DeviceCopy } from './device-copy.js'
 import type { Route } from './route.js'
 import { escapeHintTags } from '../core/hints/hint-format.js'
+import { attachJudgeFirst } from '../core/session-channel/host-judged-lines.js'
 
 export const ALONE_PREFIX = '/_alone/'
 /** How much of a conversation's file one transcript read takes. */
@@ -144,12 +145,15 @@ export function createAloneApi(deps: AloneApiDeps) {
     const messageId = typeof body.messageId === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(body.messageId) ? body.messageId : undefined
     // Escaped as the server's queue would (hints/hint-format.ts): the host delivers it as it is.
     const words = text.startsWith('/') ? text : escapeHintTags(text)
+    // A session this host judges: its runner watches the CLI before the line goes in (host-judged-lines.ts).
+    await attachJudgeFirst(sid, 'alone.message')
     const r = await call('follower.send', { sid, text: words, ...(messageId ? { messageId } : {}) }, 'sending', 20_000)
     deps.log('info', 'host server: a message sent while alone', { sid, device, messageId: r.messageId })
     return { status: 'delivered', sessionId: sid, messageId: r.messageId ?? messageId ?? null }
   }
 
   async function permission(sid: string, body: Record<string, unknown>, device: string): Promise<Record<string, unknown>> {
+    await attachJudgeFirst(sid, 'alone.permission')
     const r = await call('follower.permission', {
       sid, requestId: body.requestId, allow: body.allow,
       ...(body.message !== undefined ? { message: body.message } : {}),

@@ -22,6 +22,7 @@
  */
 
 import { pickHostTriggerTarget, type HostTriggerTarget } from '../core/routines/host-trigger-target.js'
+import { attachJudgeFirst } from '../core/session-channel/host-judged-lines.js'
 
 /** A follower.trigger.deliver may wait for a resume (a CLI start) before it is answered. */
 const ANSWER_TIMEOUT_MS = 60_000
@@ -81,7 +82,12 @@ export function createAwayTriggerDelivery(deps: AwayTriggerDeliveryDeps) {
       params = { deliveryId, error: err instanceof Error ? err.message : String(err) }
     }
     try {
+      // A session this host judges: its runner watches the CLI before the fire goes in, and again
+      // after it, when the daemon resumed the session itself (host-judged-lines.ts).
+      const sid = typeof params.sid === 'string' ? params.sid : null
+      await attachJudgeFirst(sid, 'trigger-delivery')
       const r = await deps.request('follower.trigger.deliver', params, ANSWER_TIMEOUT_MS)
+      if (r.ok !== false && params.resume === true) await attachJudgeFirst(sid, 'trigger-delivery.resume')
       if (r.ok === false) {
         deps.log('warn', 'replica: the daemon did not take a trigger delivery pick', { ...tags, error: String(r.error ?? ''), errorKind: r.errorKind })
         return

@@ -63,6 +63,8 @@ export interface HostSessions {
   companion: CompanionDialer
   stranded: StrandedSweep
   oldLeader: OldLeaderWatch
+  /** The stop of the attach rule and the boot attach of the own rows (host-judged-lines.ts). */
+  ownAttach: () => void
 }
 
 let current: HostSessions | null = null
@@ -289,13 +291,23 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     log: say,
   })
   watchRef = oldLeader
-  current = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded, oldLeader }
+  const up: HostSessions = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded, oldLeader, ownAttach: () => {} }
+  current = up
   // The session runner may reach the runtime in this process from now on (the own-sessions link).
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
+  // A line into an own session's CLI by any path but its runner waits for the runner to watch it, and
+  // the own rows whose CLI survived this service's restart are watched again at once (host-judged-lines.ts).
+  const { selfHostConnection } = await import('../../replica/self-host.js')
+  up.ownAttach = await (await import('./host-judged-lines.js')).installOwnAttach({
+    runner: sessionRunner, holds: runnerHolds, ownRows: () => ownRows(o.hostKey), runnerReady: sessionRunner.initialized,
+    readsReady: () => selfHostConnection(o.hostKey)?.connected === true, log: say,
+  })
+  // Stopped while it was put in place: it goes too.
+  if (current !== up) up.ownAttach()
   // The boot pass: a row a start claimed before this service stopped (its claim was in memory only).
   void stranded.run().catch(() => {})
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
-  return current
+  return up
 }
 
 /**
@@ -367,6 +379,7 @@ export async function stopHostSessions(): Promise<void> {
   const c = current
   current = null
   if (!c) return
+  c.ownAttach()
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
   c.oldLeader.stop()
   ;(await import('../event-bus.js')).bus.unsubscribe(STAND_DOWN_HELD_SUBSCRIBER)

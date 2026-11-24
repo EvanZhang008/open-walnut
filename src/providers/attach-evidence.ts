@@ -145,3 +145,23 @@ export async function readAttachEvidence(
   }
   return { cost, stream, ...(late.cost || late.stream ? { late } : {}) }
 }
+
+/**
+ * Where an attach of a session this host judges itself (session-row-owner.ts rowOwnedHere) reads
+ * its stream from: the last turn end its runner judged (the record's consumedOffset), when the
+ * stream proves a result was written past it, so a turn that ended while no runner read the CLI
+ * (a restart of the host's service, a line written by the daemon or the host's server directly)
+ * is read and judged once now; its result sits past the watermark, so the replay guard takes it as
+ * new, and every line at or below it stays a replay. Null otherwise: the attach subscribes to what
+ * comes next, as before (2026-11-23: a same-host send's turn ended before the runner attached
+ * again, and the future-only attach skipped it for good).
+ *
+ * `watermark` is the in-memory one after the stale-watermark heal (-1 when there is none, or when
+ * it belongs to a dead file), so a floor is never a position in another file.
+ */
+export function judgedReplayFloor(ownHostJudged: boolean, watermark: number, evidence: StreamEvidence): number | null {
+  if (!ownHostJudged || typeof evidence === 'string') return null
+  if (!Number.isInteger(watermark) || watermark < 0 || watermark >= evidence.fileSize) return null
+  const end = evidence.fold.lastResult?.endOffset
+  return typeof end === 'number' && end > watermark ? watermark : null
+}

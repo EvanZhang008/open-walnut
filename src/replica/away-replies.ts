@@ -16,6 +16,7 @@ import { needsLeaderAnswer, refusalAnswer, type PortAnswer } from './write-port.
 import { composeReplyText, readStructuredReply, scoreProblem } from '../core/peers/structured-reply.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { escapeSenderWords } from '../providers/offline-host-core.js'
+import { attachJudgeFirst } from '../core/session-channel/host-judged-lines.js'
 import type { AwaySendsDeps, HostSession } from './away-sends.js'
 
 export const kit = createEnvelopeKit()
@@ -108,6 +109,8 @@ async function replyOne(ctx: ReplyContext, find: ReturnType<typeof requestLookup
   const text = kit.buildReplyDeliveryText({ id, preview: row.preview }, {
     title: me.title, shortId: sid.slice(0, 8), host: ctx.view.host, sessionId: sid, ...(me.taskId ? { taskId: me.taskId } : {}),
   }, escapeSenderWords(admitted.text), { title: typeof b.title === 'string' && b.title.trim() ? b.title.trim() : undefined })
+  // A session this host judges: its runner watches the CLI before the line goes in (host-judged-lines.ts).
+  await attachJudgeFirst(asker, 'away-replies')
   const r = ctx.peerAnswer(await ctx.w.call('follower.peer', {
     kind: 'reply', online, ...(part ? { part } : {}), fromSessionId: sid, toSessionId: asker, requestId: id, text, messageId: mid,
     ...(me.taskId ? { replierTaskId: me.taskId } : {}), ...(b.score !== undefined ? { score: b.score } : {}), ...(rest.length ? { alsoSettle: rest } : {}),
