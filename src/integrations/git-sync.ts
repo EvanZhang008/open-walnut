@@ -1706,6 +1706,8 @@ async function ensureMachineLocalUntrackedAsync(atBoot = false): Promise<string[
   // `ls-files -i` only reports paths the CURRENT .gitignore ignores, so the
   // ignore rules must exist before the query — otherwise a repo whose
   // .gitignore predates CRITICAL_IGNORES reports nothing and the guard no-ops.
+  // A .gitignore gone at runtime: written back first (ensureCriticalIgnores needs a file to heal).
+  if (!atBoot) { try { await restoreMissingGitignore(); } catch { /* best-effort */ } }
   try { ensureCriticalIgnores(); } catch { /* best-effort */ }
   await sweepGitTempsAsync();
   const tracked = await gitSafeAsync('ls-files -i -c --exclude-standard');
@@ -1761,21 +1763,36 @@ function writeOrHealGitignore(): void {
 
 /**
  * An existing data repo with no .gitignore on disk gets one back: the committed one when HEAD
- * holds it (byte for byte, so it is not a change), else the template. Found by a 20 GB leader
- * switch rehearsal (2026-11-24): the standby leaves the .gitignore out as rebuildable
- * (home-entries.ts data-repo-ignore) and a promoted home keeps the copied `.git`, so the new
- * leader booted an existing repo with no ignore list. ensureCriticalIgnores() returns when the
- * file is missing, so nothing wrote it, and the auto-commit's `git add -A` took in tmp/ (the
- * standby's own spool), /voice-archive/, local/ and every machine-local store, and committed the
- * .gitignore's deletion.
+ * holds it (byte for byte, so it is not a change), else the template (also when git cannot
+ * answer). Found by a 20 GB leader switch rehearsal (2026-11-24): the standby then left the
+ * .gitignore out as rebuildable while it copied `.git` (home-entries.ts data-repo-ignore, leader
+ * data since), so the new leader booted an existing repo with no ignore list.
+ * ensureCriticalIgnores() returns when the file is missing, so nothing wrote it, and the
+ * auto-commit's `git add -A` took in tmp/ (the standby's own spool), /voice-archive/, local/ and
+ * every machine-local store, and committed the .gitignore's deletion. Run at boot (ensureRepo)
+ * and before every sync tick's ignore heal.
  */
-async function restoreMissingGitignore(): Promise<void> {
+async function restoreMissingGitignore(): Promise<{ ok: true } | { ok: false; error: string }> {
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
-  if (fs.existsSync(gitignorePath)) return;
-  const committed = await execGitArgsRaw(['show', 'HEAD:.gitignore'], { cwd: WALNUT_HOME, timeout: LOCAL_TIMEOUT });
-  const from = committed.code === 0 ? 'HEAD' : 'template';
-  fs.writeFileSync(gitignorePath, committed.code === 0 ? committed.stdout : GITIGNORE_CONTENT);
-  log.git.warn('git-sync: the data repo had no .gitignore; written back', { from });
+  if (fs.existsSync(gitignorePath)) return { ok: true };
+  // A leader switch's stop: nothing of this server writes the home now (the next leader's boot writes it).
+  if (gitQuietAt(WALNUT_HOME)) return { ok: false, error: 'the home is quiet for a leader switch' };
+  let committed: Buffer | null = null;
+  let why = '';
+  try {
+    const r = await execGitArgsRaw(['show', 'HEAD:.gitignore'], { cwd: WALNUT_HOME, timeout: LOCAL_TIMEOUT, holdsNoLock: true });
+    if (r.code === 0) committed = r.stdout;
+    else why = r.stderr.trim().split('\n')[0] ?? '';
+  } catch (err) {
+    why = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    fs.writeFileSync(gitignorePath, committed ?? GITIGNORE_CONTENT);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  log.git.warn('git-sync: the data repo had no .gitignore; written back', { from: committed ? 'HEAD' : 'template', ...(why ? { why } : {}) });
+  return { ok: true };
 }
 
 /**
@@ -4035,10 +4052,10 @@ export async function ensureRepo(): Promise<{ available: boolean; error?: string
         error: `git repo config setup failed: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
-    // A repo whose .gitignore is gone gets it back before anything stages.
-    try { await restoreMissingGitignore(); } catch (err) {
-      log.git.warn('git-sync: the data repo has no .gitignore and it could not be written back', { error: err instanceof Error ? err.message : String(err) });
-    }
+    // A repo whose .gitignore is gone gets it back before anything stages; with none, it is
+    // not available (an auto-commit with no ignore list takes in tmp/ and the machine-local stores).
+    const ignore = await restoreMissingGitignore();
+    if (!ignore.ok) return { available: false, error: `the data repo has no .gitignore and it could not be written: ${ignore.error}` };
     // Pre-existing repo: self-heal the .gitignore so sensitive/machine-local
     // files added after the repo was initialized never enter the sync history
     // (ensureMachineLocalUntrackedAsync heals it first), and drop any that are

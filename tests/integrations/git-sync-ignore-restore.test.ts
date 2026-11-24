@@ -27,7 +27,7 @@ vi.mock('../../src/constants.js', async () => {
   return createMockConstants('walnut-ignore-restore', { WALNUT_HOME: dirs.home });
 });
 
-import { ensureRepo, git } from '../../src/integrations/git-sync.js';
+import { endGitQuiet, ensureRepo, git, quietGitWriters } from '../../src/integrations/git-sync.js';
 
 const ignored = (rel: string): boolean => {
   try { execFileSync('git', ['-C', dirs.home, 'check-ignore', '-q', rel]); return true; } catch { return false; }
@@ -39,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  endGitQuiet(dirs.home);
   fs.rmSync(dirs.root, { recursive: true, force: true });
 });
 
@@ -77,6 +78,24 @@ describe('a data repo without its .gitignore at boot', () => {
     expect(ignored('tmp/x')).toBe(true);
     expect(ignored('voice-archive/a.webm')).toBe(true);
     expect(ignored('notes/a.md')).toBe(false);
+  });
+
+  it('a HEAD that committed its deletion: the template', async () => {
+    expect(await ensureRepo()).toEqual({ available: true });
+    git('rm -q --cached -- .gitignore');
+    git('commit -q -m "gone"');
+    fs.rmSync(path.join(dirs.home, '.gitignore'));
+    expect(await ensureRepo()).toEqual({ available: true });
+    expect(ignored('tmp/x')).toBe(true);
+    expect(ignored('voice-archive/a.webm')).toBe(true);
+  });
+
+  it('a home quiet for a leader switch\'s stop: nothing is written (the next leader\'s boot writes it)', async () => {
+    expect(await ensureRepo()).toEqual({ available: true });
+    fs.rmSync(path.join(dirs.home, '.gitignore'));
+    await quietGitWriters(dirs.home, { budgetMs: 0 });
+    expect((await ensureRepo()).available).toBe(false);
+    expect(fs.existsSync(path.join(dirs.home, '.gitignore'))).toBe(false);
   });
 
   it('one that has its .gitignore: left as it is', async () => {

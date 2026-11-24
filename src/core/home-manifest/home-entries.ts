@@ -131,7 +131,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   rebuild('obsidian-search', '.walnut-obsidian-search', 'dir', 'Semantic index of the notes, rebuilt from the notes'),
   rebuild('smart-env', '.smart-env', 'dir', 'A notes app plugin\'s embeddings, rebuilt by it'),
   lead('data-repo', '.git', 'dir', 'Git sync\'s history of the synced files: the only history when no data remote is configured'),
-  rebuild('data-repo-ignore', '.gitignore', 'file', 'Git sync\'s ignore list, written again from its template'),
+  lead('data-repo-ignore', '.gitignore', 'file', 'Git sync\'s ignore list: the template plus any rule of the user\'s, so it moves with .git (a boot writes back a missing one from HEAD, else the template)'),
   rebuild('logs', 'logs', 'dir', 'Log files left in the home'),
   rebuild('hook-errors', 'hook-errors.log', 'file', 'Hook error log'),
   // Older versions' places (no doc names them): the user's recordings move with the leader as at their new place.
