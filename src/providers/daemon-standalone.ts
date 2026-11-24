@@ -16074,6 +16074,23 @@ export async function runDaemonProcess(argv: string[] = process.argv): Promise<v
     process.exit(1)
   }
 
+  // CLI mode: the same binary doubles as the on-host walnut CLI (zero extra
+  // deploy artifacts — the on-PATH `walnut` is a 2-line shim exec'ing this
+  // binary). BOTH keywords dispatch here: `walnut` is canonical, `wn` is a
+  // deprecated compat alias that MUST stay because shims written by daemons
+  // already deployed in the field pass `wn`, and a shim is only rewritten when
+  // its own daemon next boots (see DAEMON_CLI_KEYWORD_LEGACY in gateway-core.ts).
+  // Before the runtime is created: a CLI is no daemon, and the runtime's setup writes its
+  // log, machine id and adoption files in the default runtime dir, another Walnut's when a
+  // service set's install runs `<daemon> walnut daemon install --walnut <id>` (2026-11-24 drill).
+  // Dynamic import keeps the daemon startup path free of CLI code; bun bundles
+  // the literal specifier into the compiled binary. Mirror daemon-source.ts.
+  if (isDaemonCliKeyword(action)) {
+    healDaemonCwd()
+    const { runWalnutCli } = await import('./wn-cli.js')
+    process.exit(await runWalnutCli(argv.slice(3)))
+  }
+
   let runtime: DaemonRuntime | null = null
   // A trial run's hard lifetime (daemon-boot-proof.ts, daemon-trial-cmd.ts): it exits by itself
   // after its proof window, so a trial whose prover died (the CLI, the server, the SSH session)
@@ -16122,18 +16139,6 @@ export async function runDaemonProcess(argv: string[] = process.argv): Promise<v
     onExitFlush: (flush) => { process.once('exit', flush) },
   })
 
-  // CLI mode: the same binary doubles as the on-host walnut CLI (zero extra
-  // deploy artifacts — the on-PATH `walnut` is a 2-line shim exec'ing this
-  // binary). BOTH keywords dispatch here: `walnut` is canonical, `wn` is a
-  // deprecated compat alias that MUST stay because shims written by daemons
-  // already deployed in the field pass `wn`, and a shim is only rewritten when
-  // its own daemon next boots (see DAEMON_CLI_KEYWORD_LEGACY in gateway-core.ts).
-  // Dynamic import keeps the daemon startup path free of CLI code; bun bundles
-  // the literal specifier into the compiled binary.
-  if (isDaemonCliKeyword(action)) {
-    const { runWalnutCli } = await import('./wn-cli.js')
-    process.exit(await runWalnutCli(argv.slice(3)))
-  }
   if (action === '--prewarm-folds') {
     // Background work for a running daemon's replacement: below the daemon it serves.
     try { os.setPriority(10) } catch {}

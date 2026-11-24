@@ -50,6 +50,8 @@ describe('daemon CLI dispatch keyword', () => {
     expect(standaloneSrc).toMatch(/if \(isDaemonCliKeyword\(action\)\) \{/);
     expect(standaloneSrc).toMatch(/const \{ runWalnutCli \} = await import\('\.\/wn-cli\.js'\)/);
     expect(standaloneSrc).not.toMatch(/if \(action === 'wn'\)/);
+    // Dispatched before the daemon runtime is created: a CLI sets no daemon up (2026-11-24 drill).
+    expect(standaloneSrc.indexOf('if (isDaemonCliKeyword(action)) {')).toBeLessThan(standaloneSrc.indexOf('runtime = await createDaemonRuntime({'));
   });
 
   it('the daemon keeps CLI argv out of the --version fast path for both keywords', () => {
