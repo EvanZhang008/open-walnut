@@ -108,6 +108,17 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   const { processActionsRefused } = await import('../core/sessions/replica-process-guard.js')
   if (processActionsRefused(session)) return session.process_status === 'running' || session.process_status === 'idle'
 
+  // A session its host runs and judges: its host's channel says (its live state, else the row only
+  // the host writes); its daemon is never asked (core/sessions/session-command-gate.ts).
+  if (session.claudeSessionId) {
+    const { sessionCommandTarget } = await import('../core/sessions/session-command-gate.js')
+    if (sessionCommandTarget(session.claudeSessionId).to === 'host') {
+      const { hostJudgedView } = await import('../providers/host-judged-view.js')
+      const view = await hostJudgedView(session.claudeSessionId, session)
+      return view?.alive ?? (session.process_status === 'running' || session.process_status === 'idle')
+    }
+  }
+
   // Prefer the registry — the active SessionManager knows the truth. A manager
   // not yet bound to its session does not: attachToExisting registers it, then
   // reconciles a turn that ended during the restart, then attaches. Its

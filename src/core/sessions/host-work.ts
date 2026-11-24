@@ -55,6 +55,14 @@ export const HOST_WORK_TIMEOUT_MS = 5_000;
 /** The host's word on this session, or null when its daemon cannot be asked or does not answer. Never throws. */
 export async function hostWorkOf(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>, now = Date.now()): Promise<HostWork | null> {
   try {
+    // A session its host runs and judges: the host's live state on the channel says (session-command-gate.ts).
+    const { sessionCommandTarget } = await import('./session-command-gate.js');
+    if (sessionCommandTarget(record.claudeSessionId).to === 'host') {
+      const { hostJudgedView } = await import('../../providers/host-judged-view.js');
+      const view = await hostJudgedView(record.claudeSessionId);
+      if (!view?.live || view.alive === null) return null;
+      return { alive: view.alive, working: view.working, inTurn: view.inTurn, outliving: view.outliving };
+    }
     const { getPooledSnapshotConnection } = await import('../../providers/daemon-connection.js');
     const conn = getPooledSnapshotConnection(record.host);
     if (!conn) return null;

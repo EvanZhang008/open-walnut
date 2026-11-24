@@ -55,6 +55,7 @@ import { isHomeMoveHeld, settledHomeMove } from '../core/home-move.js'
 import { BUILD_BACKOFF_MS, backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import { BACK_TRIES_MAX, pendingReplaces, serviceModeAsks } from './daemon-update-store.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
+import { assertSessionCommandReachesDaemon, hostJudgedSessionOfRuntime, sessionCommandTarget } from '../core/sessions/session-command-gate.js'
 import { sshAliasOptions, sshDestination } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { DAEMON_PID_SH } from './daemon-live-sh.js'
@@ -3245,6 +3246,9 @@ export class DaemonConnection {
     // A replica's own-sessions link does no leader work (ownSessionsOnly): a leader's command on it
     // is refused before it leaves, whichever path asked for it.
     if (this.ownSessionsOnly && LEADER_ONLY_COMMANDS.has(cmd)) throw new Error(`${cmd}: a host replica's own-sessions link sends no leader command`)
+    // A session its host runs and judges has one process manager, its host's service: no command
+    // about its process goes to that host's daemon, whichever path asked (sessions/session-command-gate.ts).
+    assertSessionCommandReachesDaemon(this.hostKey, cmd, params)
     // A service set move holds this Walnut's work for the host (service-set-hold.ts): a start or send is
     // refused in the words of a link that is down (the runner keeps it pending and sends it on the
     // release), any other work and the pushes that start work there wait for the release.
@@ -11614,6 +11618,11 @@ export async function probeDaemonSession(
   /** How long to wait for the answer; the command's default unless a scan passes STATUS_PROBE_TIMEOUT_MS. */
   timeoutMs?: number,
 ): Promise<{ alive: boolean; pid?: number } | null> {
+  // A host-judged session: its host's channel already said (sessions/session-command-gate.ts).
+  if (sessionCommandTarget(sessionId, 'status').to === 'host') {
+    const view = await (await import('./host-judged-view.js')).hostJudgedView(sessionId)
+    return view && view.alive !== null ? { alive: view.alive } : null
+  }
   // Direct-pool fallback (see isDaemonConnected): '__local__' lives under a
   // `direct:<wsUrl>` key, so a bare map lookup could never probe local sessions.
   const conn = getConnectedDaemonConnection(hostKey)
@@ -11642,6 +11651,11 @@ export async function probeDaemonSession(
  * link, no answer, or any other reply: daemon-status-reply.ts acpWorkerReplyAlive).
  */
 export async function probeAcpWorker(hostKey: string, runtimeId: string, timeoutMs = STATUS_PROBE_TIMEOUT_MS): Promise<boolean | null> {
+  // The worker of a host-judged session: its host's channel already said (sessions/session-command-gate.ts).
+  const judged = hostJudgedSessionOfRuntime(runtimeId)
+  if (judged && sessionCommandTarget(judged, 'acpState').to === 'host') {
+    return (await (await import('./host-judged-view.js')).hostJudgedView(judged))?.alive ?? null
+  }
   const conn = getConnectedDaemonConnection(hostKey)
   if (!conn) return null
   try {
@@ -11662,6 +11676,8 @@ export async function probeDaemonSessionArgs(
   sessionId: string,
   deadlineMs = 2000,
 ): Promise<string[] | null> {
+  // A host-judged session's argv is its host's: no answer here (the caller reads the record).
+  if (sessionCommandTarget(sessionId).to === 'host') return null
   const conn = getConnectedDaemonConnection(hostKey)
   if (!conn) return null
   try {

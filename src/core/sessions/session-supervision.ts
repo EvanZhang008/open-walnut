@@ -54,9 +54,28 @@ function validSupervision(value: unknown): boolean {
 }
 
 export async function readSessionSupervision(sid: string, enabled?: boolean): Promise<SupervisionAnswer> {
+  // A session its host runs and judges: its host reads or sets it on its own daemon (host-lifecycle.ts).
+  const { sessionCommandTarget } = await import('./session-command-gate.js')
+  if (sessionCommandTarget(sid).to === 'host') return onJudgingHostSupervision(sid, enabled)
   if (enabled !== undefined) return askSupervision(sid, enabled)
   const { getSessionByClaudeIdSync } = await import('../session-tracker.js')
   return withDeadline(askSupervision(sid), readDeadlineMs, () => keptOrUnavailable(sid, getSessionByClaudeIdSync(sid)?.stopRequest ?? null))
+}
+
+/** The host's own answer for its session: a change it did not confirm is an error, a read it did not answer the kept state. */
+async function onJudgingHostSupervision(sid: string, enabled?: boolean): Promise<SupervisionAnswer> {
+  const { onJudgingHost } = await import('./host-judged-controls.js')
+  const asked = onJudgingHost(sid, 'readSessionSupervision', enabled === undefined ? [] : [enabled]) as Promise<SupervisionAnswer>
+  if (enabled !== undefined) {
+    try { return await asked } catch (error) {
+      lastKnown.delete(sid)
+      throw new SessionControlError(`The session's host did not confirm the automatic recovery change: ${error instanceof Error ? error.message : String(error)}`, 503, { code: 'host_no_answer' })
+    }
+  }
+  const { getSessionByClaudeIdSync } = await import('../session-tracker.js')
+  const answer = await withDeadline(asked.then((a) => { keep(sid, a.startup, a.supervision); return a }, () => keptOrUnavailable(sid, getSessionByClaudeIdSync(sid)?.stopRequest ?? null)),
+    readDeadlineMs, () => keptOrUnavailable(sid, getSessionByClaudeIdSync(sid)?.stopRequest ?? null))
+  return answer
 }
 
 async function askSupervision(sid: string, enabled?: boolean): Promise<SupervisionAnswer> {
@@ -64,7 +83,9 @@ async function askSupervision(sid: string, enabled?: boolean): Promise<Supervisi
   const record = await getSessionByClaudeId(sid)
   if (!record) throw new SessionControlError('Session not found', 404)
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
-  const conn = getConnectedDaemonConnection(record.host ?? '__local__')
+  // A host's own session is on its own daemon (session-row-owner.ts execHostOf).
+  const { execHostOf } = await import('./session-row-owner.js')
+  const conn = getConnectedDaemonConnection(execHostOf(record) ?? '__local__')
   if (enabled === true && record.archived) throw new SessionControlError('Unarchive the session before enabling automatic recovery', 409)
   const base = { stopRequest: record.stopRequest ?? null }
   if (!conn?.connected || !conn.capabilitiesKnown) {

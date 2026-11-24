@@ -9,15 +9,25 @@
  *   stop   terminateSession on the host: its stop coordinator, its cron check, its ACP stop
  *   mode   changeSessionModeOf on the host: its row's mode and the live apply; the task's
  *          plan and exec slots follow here, on the leader
+ *   checks readSessionSupervision, lineAlreadyRan, cancelPendingStart (host-lifecycle.ts): what the
+ *          host's own daemon says of its own session, asked by the host (session-command-gate.ts)
  */
 import type { SessionMode, SessionRecord } from '../types.js'
 import type { TerminateResult } from './session-lifecycle.js'
+import type { HOST_CALL_ALLOWLIST } from '../session-channel/host-calls.js'
+
+export type HostLifecycleMember = (typeof HOST_CALL_ALLOWLIST)['lifecycle'][number]
 
 async function proxyOf(sessionId: string) {
   const { hostJudgedSession } = await import('../../providers/host-judged-runner.js')
   const p = hostJudgedSession(sessionId)
   if (!p) throw new Error(`session ${sessionId} is not run by a host`)
   return p
+}
+
+/** One `lifecycle` member (host-calls.ts) carried out by the host that runs `sessionId`: its answer, or a throw. */
+export async function onJudgingHost(sessionId: string, member: HostLifecycleMember, args: unknown[] = []): Promise<unknown> {
+  return (await proxyOf(sessionId)).call(member, args, 'lifecycle')
 }
 
 /** A stop of a host-run session: its host's answer. */

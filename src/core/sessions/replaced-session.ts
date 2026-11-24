@@ -47,6 +47,13 @@ export function __setOwnerViewForTesting(fn: ((rec: Rec) => Promise<OwnerView | 
  */
 export async function ownerView(rec: Rec): Promise<OwnerView | null> {
   if (viewOverride) return viewOverride(rec);
+  // A session its host runs and judges: the host's live state on the channel says (session-command-gate.ts).
+  const { sessionCommandTarget } = await import('./session-command-gate.js');
+  if (sessionCommandTarget(rec.claudeSessionId).to === 'host') {
+    const { hostJudgedView } = await import('../../providers/host-judged-view.js');
+    const view = await hostJudgedView(rec.claudeSessionId);
+    return view?.live && view.alive !== null ? { alive: view.alive, hold: view.hold } : null;
+  }
   const { isAcpEngine } = await import('../agents/engine-registry.js');
   if (isAcpEngine(rec.engine)) return null;
   const host = rec.host ?? '__local__';

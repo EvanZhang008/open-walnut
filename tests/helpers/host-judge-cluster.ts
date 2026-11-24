@@ -51,6 +51,12 @@
  *                            and the host key whose service a start on it goes to (startKeyOf)
  *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
+ *         GET /daemon-link?host=  is the Mac's pooled daemon connection to the host up (what a command would ride)
+ *         GET /session-cmds?sid=  the session-process commands this process aimed at a daemon for it
+ *                            (sessions/session-command-gate.ts), and every refusal by command
+ *         GET /scans?sid=&host=  this process's own scans of it, each the real function: its liveness
+ *                            (isSessionProcessAlive), a health monitor check, a capacity check that
+ *                            must evict one idle session of the host, the orphan candidates and sweep
  *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit (its pair too) and records
  *         GET /row?sid=      the host's own row of a session (null: none)
  *         GET /task?id=      the phase of the host's own copy of a task (null: none)
@@ -162,6 +168,7 @@ const drp = await import(${url('src/core/session-channel/leader-drops.ts')})
 const ccs = await import(${url('src/providers/claude-code-session.ts')})
 const hho = await import(${url('src/providers/host-handover.ts')})
 const hom = await import(${url('src/core/session-channel/handover-marks.ts')})
+const scg = await import(${url('src/core/sessions/session-command-gate.ts')})
 const probeFile = (await import('node:path')).join((await import('node:path')).dirname(c.WALNUT_HOME), 'mac-probe.json')
 // The permit number this leader tells its hosts (leader-permit.ts), as the leader switch's permit
 // system would number two leaders of one Walnut: WALNUT_CLUSTER_PERMIT_NUMBER, once the side is on.
@@ -217,6 +224,19 @@ await serveProbe({
   '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')), startKey: s && typeof s.startKeyOf === 'function' ? s.startKeyOf(q.get('host')) : null } },
   '/link': async (q) => ({ connected: (await import(${url('src/core/host-server/index.ts')})).hostServerLink(q.get('host')) !== null }),
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),
+  '/session-cmds': (q) => ({ aimed: scg.sessionCommandsAimedAt(q.get('sid')), refusals: scg.sessionCommandRefusals() }),
+  '/daemon-link': async (q) => ({ connected: (await import(${url('src/providers/daemon-connection.ts')})).getConnectedDaemonConnection(q.get('host')) !== null }),
+  '/scans': async (q) => {
+    const sid = q.get('sid')
+    const host = q.get('host')
+    const row = await trk.getSessionByClaudeId(sid)
+    const alive = await (await import(${url('src/utils/session-liveness.ts')})).isSessionProcessAlive(row)
+    await new (await import(${url('src/core/session-health-monitor.ts')})).SessionHealthMonitor().check()
+    const limit = await trk.checkSessionLimit(host, { [host]: 50 }, { max_idle: 1 })
+    const orphans = (await trk.listOrphanCandidates()).map((s) => s.claudeSessionId)
+    const swept = await (await import(${url('src/core/sessions/owner-stop.ts')})).sweepOrphansThroughOwner([row], 'cluster-probe')
+    return { alive, evicted: (limit.evicted ?? []).map((s) => s.claudeSessionId), orphans, swept, row: await trk.getSessionByClaudeId(sid) }
+  },
   '/delete': async (q) => ({ removed: await trk.deleteSessionRecords(new Set([q.get('sid')]), 'cluster-probe') }),
   '/drops': (q) => ({ sids: drp.leaderDropsOf(q.get('host')) }),
   '/row': async (q) => ({ row: await trk.getSessionByClaudeId(q.get('sid')) }),

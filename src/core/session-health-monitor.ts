@@ -473,7 +473,8 @@ export class SessionHealthMonitor {
       if (HEALTH_V2) {
         try {
           const { listOrphanCandidates } = await import('./session-tracker.js')
-          orphanScan = [...allSessions, ...judgedHereRecords(await listOrphanCandidates())]
+          // Only the rows this server judges: listOrphanCandidates filters them (judge-of.ts judgedHereRecords).
+          orphanScan = [...allSessions, ...await listOrphanCandidates()]
         } catch { /* fall back to active set only */ }
       }
       this.killOrphanedProcesses(orphanScan)

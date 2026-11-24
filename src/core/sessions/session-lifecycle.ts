@@ -1304,7 +1304,7 @@ export interface RecheckResult {
   infraClaim: boolean;
   /** Why nothing was checked. */
   reason?: 'terminal_error' | 'archived' | 'no_pooled_connection' | 'timeout'
-    | 'rpc_failed' | 'no_snapshot';
+    | 'rpc_failed' | 'no_snapshot' | 'host_link_unknown';
 }
 
 /**
@@ -1378,6 +1378,15 @@ export async function recheckSession(sessionId: string): Promise<RecheckResult> 
   // asked for) has nothing to re-examine — same bar the recovery loops use.
   if (kind === 'terminal') return { ...base, checked: false, reachable, reason: 'terminal_error' };
   if (record.archived) return { ...base, checked: false, reachable, reason: 'archived' };
+
+  // A session its host runs and judges: its row is the host's word already, and its live state the
+  // channel's; nothing is asked of its daemon, nothing written here (session-command-gate.ts).
+  if (judgeOf(sessionId) === 'host') {
+    const { hostJudgedView } = await import('../../providers/host-judged-view.js');
+    const view = await hostJudgedView(sessionId, record);
+    if (!view?.live) return { ...base, checked: false, reachable, reason: 'host_link_unknown' };
+    return { ...base, checked: true, reachable: true, ...(view.alive !== null ? { alive: view.alive } : {}) };
+  }
 
   const conn = getPooledSnapshotConnection(record.host);
   if (!conn) {

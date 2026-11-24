@@ -5,7 +5,8 @@
  *
  * A member that takes a callback cannot cross; it has a named op instead (bashCallMatchingOp).
  * `lifecycle` members are the session controls the host carries out whole for its own session
- * (sessions/session-lifecycle.ts): the leader hands them over instead of running them itself.
+ * (sessions/host-lifecycle.ts): the leader hands them over instead of running them itself, or asking
+ * the host's daemon (sessions/session-command-gate.ts).
  * State the leader reads synchronously (turnGen, processStatus, isInTurn ...) is not here: it comes
  * with the `live` records of the channel.
  *
@@ -34,7 +35,7 @@ export const HOST_CALL_ALLOWLIST = {
     'reinitialize', 'recoverCancelledForSession', 'markExpectedTeardown', 'undoExpectedTeardown',
     'settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd', 'getOrAttachLiveSession', 'findOrAttachAcpSession',
   ],
-  lifecycle: ['terminateSession', 'changeSessionModeOf'],
+  lifecycle: ['terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart'],
 } as const satisfies Record<'session' | 'acp' | 'runner' | 'lifecycle', readonly string[]>
 
 export type HostCallTarget = keyof typeof HOST_CALL_ALLOWLIST

@@ -93,7 +93,7 @@ export interface HostRoutesOptions {
    * through these routes. Absent (tests): every sid passes.
    */
   owns?(sid: string): Promise<boolean>
-  /** The session controls of host-calls.ts `lifecycle` (sessions/session-lifecycle.ts); tests pass their own. */
+  /** The session controls of host-calls.ts `lifecycle` (sessions/host-lifecycle.ts); tests pass their own. */
   lifecycle?: Record<string, (sid: string, ...args: unknown[]) => Promise<unknown>>
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
   commandRunsOp?(command: string, op: string, file?: string): boolean
@@ -315,7 +315,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     }
     // A control the host carries out whole for its own session (host-calls.ts `lifecycle`).
     if (body.target === 'lifecycle') {
-      const lifecycle = o.lifecycle ?? await import('../sessions/session-lifecycle.js')
+      const lifecycle = o.lifecycle ?? await import('../sessions/host-lifecycle.js')
       const fn = (lifecycle as unknown as Record<string, unknown>)[body.member]
       if (typeof fn !== 'function') return { status: 200, body: { ok: false, error: 'no_such_member' } }
       return { status: 200, body: { ok: true, value: jsonValue(await (fn as AnyFn)(...hostCallArgs('lifecycle', body.sid, args))) } }

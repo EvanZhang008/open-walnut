@@ -47,6 +47,7 @@ import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_A
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
 import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
+import { judgedHereRecords } from './sessions/judge-of.js';
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
 import { clearHandOverMarkIn } from './session-channel/handover-marks.js';
@@ -1138,7 +1139,8 @@ function fixStaleRecords(rows: SessionRecord[]): void {
   // its rows change only through the copy (sessions/replica-process-guard.ts).
   // The rows of sessions it runs itself are its own to repair.
   // Every caller funnels here (the limit check and both alive-by-host reads).
-  const own = rows.filter((r) => !processActionsRefused(r));
+  // A session its host runs and judges is no row to repair here either: only its host writes it.
+  const own = judgedHereRecords(rows.filter((r) => !processActionsRefused(r)));
   if (own.length < rows.length) refuseProcessAction('stale_repair');
   if (own.length === 0) return;
   const sessionIds = own.map((r) => r.claudeSessionId);
@@ -1285,7 +1287,8 @@ export async function checkSessionLimit(
   if (maxIdle > 0 && idleSessions.length >= maxIdle && !refuseProcessAction('capacity_eviction')) {
     // Only evict CLI sessions (a daemon holds their process and can stop it).
     // SDK/embedded sessions have no process: evicting them frees nothing.
-    const evictable = idleSessions
+    // A session its host runs and judges counts toward its machine's limit, but only its host evicts it.
+    const evictable = judgedHereRecords(idleSessions)
       .filter(s => s.provider !== 'sdk' && s.provider !== 'embedded')
       .sort((a, b) => a.lastActiveAt.localeCompare(b.lastActiveAt));
 
@@ -1713,7 +1716,8 @@ export async function listOrphanCandidates(): Promise<SessionRecord[]> {
       AND process_status IN ('stopped', 'error')
       AND last_status_change >= ?
   `).all(cutoff) as Record<string, any>[];
-  return rows.map(rowToSession);
+  // A session its host runs and judges is its host's to sweep (sessions/session-command-gate.ts).
+  return judgedHereRecords(rows.map(rowToSession));
 }
 
 /** How long an idle eviction waits for the owning daemon's answer before counting the stop as under way. */

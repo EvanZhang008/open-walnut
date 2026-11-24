@@ -37,6 +37,7 @@ import { hostWorkFrom, HOST_WORK_TIMEOUT_MS, type HostWork } from '../core/sessi
 import { OUTLIVING_SOURCES, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { assertOutwardDoor, leaderPermitActive } from '../core/leader/switch/doors.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
+import { judgedHereRecords } from '../core/sessions/judge-of.js'
 import type { CliHolderAnswer } from './remote-session-manager.js'
 import type { MoveSession, StopResult } from './service-set-move.js'
 import { HostRevokedError, revokedAs } from '../core/session-channel/revoked-hosts.js'
@@ -176,7 +177,9 @@ async function judge(link: MoveCheckLink, r: SessionRecord, listedAlive: boolean
 /** This Walnut's sessions on the shared daemon, each judged quiet, busy or blocking. Throws when the daemon cannot list them. */
 export async function moveSessions(link: MoveCheckLink, d: MoveCheckDeps = {}): Promise<MoveSession[]> {
   const alive = await aliveOnDaemon(link)
-  const records = (await (d.records ?? defaultRecords)())
+  // A session the host's own service runs and judges is that service's already: nothing to move,
+  // and nothing of it is asked of the shared daemon (core/sessions/session-command-gate.ts).
+  const records = judgedHereRecords(await (d.records ?? defaultRecords)())
     // An archived record whose CLI the daemon still lists alive is moved too (review round 2, M-L5).
     .filter((s) => s.host === link.hostKey && ((!s.archived && LIVE_OR_FAILED.has(s.process_status)) || alive.has(s.claudeSessionId)))
   const out: MoveSession[] = []

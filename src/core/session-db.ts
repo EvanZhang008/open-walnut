@@ -378,6 +378,20 @@ export function sessionTaskAndEngineInStore(claudeSessionId: string): { taskId: 
   return row ? { taskId: row.task_id, engine: row.engine, acpRuntimeId: typeof row.runtime === 'string' && row.runtime ? row.runtime : null } : null;
 }
 
+/**
+ * The host-judged session whose ACP worker is `runtimeId` (the session command gate,
+ * sessions/session-command-gate.ts): only rows whose payload says `judge: 'host'` are parsed.
+ */
+export function hostJudgedOfAcpRuntimeInStore(runtimeId: string): { sid: string; host: string | null } | null {
+  const handle = getDb();
+  if (!handle || !runtimeId) return null;
+  const row = prepared(handle,
+    `SELECT claude_session_id AS sid, host FROM sessions WHERE instr(coalesce(payload, ''), '"judge":"host"') > 0 AND instr(payload, ?) > 0
+       AND json_valid(payload) AND json_extract(payload, '$.acpRuntimeId') = ? LIMIT 1`,
+  ).get(runtimeId, runtimeId) as { sid: string; host: string | null } | undefined;
+  return row ?? null;
+}
+
 /** Every session id and ACP runtime id in the store, without decoding records (the ephemeral session gate's copied set). */
 export function sessionIdentitiesInStore(): string[] {
   const handle = getDb();

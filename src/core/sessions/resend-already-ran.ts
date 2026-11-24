@@ -17,6 +17,8 @@
  * process took and never answered is `unanswered` (sent again, as before), and
  * any other answer, or none (an older daemon, no link, a cloud replica), keeps
  * the old path, so this can only ever save a duplicate, never lose a message.
+ * A session its host runs and judges is asked of that host (a `lifecycle` call:
+ * host-lifecycle.ts lineAlreadyRan), which asks its own daemon the same way.
  */
 import { log } from '../../logging/index.js';
 
@@ -30,6 +32,14 @@ export async function resendAlreadyRan(input: {
 }): Promise<boolean> {
   if (!input.lineUuid) return false;
   try {
+    // A session its host runs and judges: its host asks its own daemon (host-lifecycle.ts), never this server.
+    const { sessionCommandTarget } = await import('./session-command-gate.js');
+    if (sessionCommandTarget(input.sessionId).to === 'host') {
+      const { onJudgingHost } = await import('./host-judged-controls.js');
+      const ran = await onJudgingHost(input.sessionId, 'lineAlreadyRan', [input.lineUuid, input.messageIds ?? []]) === true;
+      if (ran) log.session.info('resend of a line that already ran on its host: nothing enqueued', { sessionId: input.sessionId, uuid: input.lineUuid });
+      return ran;
+    }
     const { getConnectedDaemonConnection, readDaemonLineFate } = await import('../../providers/daemon-connection.js');
     const conn = getConnectedDaemonConnection(input.host ?? '__local__');
     const fate = await readDaemonLineFate(conn, input.sessionId, input.lineUuid, input.messageIds ?? []);

@@ -94,6 +94,15 @@ export function judgingHostOf(sid: string): string | null {
   return null
 }
 
+/** Can any session of this store be a host's (a host's start answered, or its channel applied here)? judgingHostOf's own memo. */
+export function hostJudgedRowsMayExist(): boolean {
+  if (known.size > 0) return true
+  if (anyCursor === null) {
+    try { anyCursor = anyChannelCursor() } catch { return false }
+  }
+  return anyCursor
+}
+
 /** Who judges this existing session. */
 export function judgeOf(sid: string): Judge {
   return judgingHostOf(sid) !== null ? 'host' : 'legacy'

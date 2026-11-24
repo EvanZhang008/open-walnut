@@ -62,9 +62,12 @@ import {
   completeTaskSessions,
   createSessionRecord,
   getSessionByClaudeId,
+  listOrphanCandidates,
   updateSessionRecord,
   _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js'
+import { writingAsHost } from '../../../src/core/sessions/session-row-owner.js'
+import { _resetJudgeOfForTesting, noteHostJudged } from '../../../src/core/sessions/judge-of.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import { ENGINE_REGISTRY, isAcpEngine } from '../../../src/core/agents/engine-registry.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
@@ -243,5 +246,38 @@ describe('checkSessionLimit: idle capacity eviction', () => {
     expect(result.evicted?.map((s) => s.claudeSessionId)).toEqual(['idle-1'])
     expect(undos).toEqual([])
     expect(await getSessionByClaudeId('idle-1')).toMatchObject({ process_status: 'stopped', status_reason: 'idle_eviction', pid: BASE + 31 })
+  })
+})
+
+describe('a session its host runs and judges (session-command-gate.ts)', () => {
+  afterEach(() => _resetJudgeOfForTesting())
+
+  async function seedHostJudged(sid: string, status: 'idle' | 'stopped', ageMin: number): Promise<void> {
+    await createSessionRecord(sid, `t-${sid}`, 'p', undefined, { pid: BASE + 50 + ageMin, host: 'devbox' })
+    await writingAsHost(() => updateSessionRecord(sid, { judge: 'host', process_status: status, lastActiveAt: new Date(Date.now() - ageMin * 60_000).toISOString() } as never))
+    noteHostJudged(sid, 'devbox')
+  }
+
+  it('counts toward its machine\'s idle limit but is never an eviction victim: only its host evicts it', async () => {
+    await seedHostJudged('judged-1', 'idle', 9)
+    await seedHostJudged('judged-2', 'idle', 8)
+    await createSessionRecord('legacy-1', 'tl', 'p', undefined, { pid: BASE + 61, host: 'devbox' })
+    await updateSessionRecord('legacy-1', { process_status: 'idle', lastActiveAt: new Date(Date.now() - 60_000).toISOString() })
+
+    const result = await checkSessionLimit('devbox', { devbox: 7 }, { max_idle: 2 })
+
+    // Three idle on devbox, room for one more under 2: two must go, and the only one this server may evict goes.
+    expect(result.evicted?.map((s) => s.claudeSessionId)).toEqual(['legacy-1'])
+    expect(ownerStops.map((s) => s.sid)).toEqual(['legacy-1'])
+    expect(marks.map((m) => m.sid)).toEqual(['legacy-1'])
+    for (const sid of ['judged-1', 'judged-2']) expect(await getSessionByClaudeId(sid)).toMatchObject({ process_status: 'idle', judge: 'host' })
+  })
+
+  it('is no orphan candidate: its host sweeps its own', async () => {
+    await seedHostJudged('judged-done', 'stopped', 1)
+    await createSessionRecord('legacy-done', 'tl', 'p', undefined, { pid: BASE + 62, host: 'devbox' })
+    await updateSessionRecord('legacy-done', { process_status: 'stopped' })
+
+    expect((await listOrphanCandidates()).map((s) => s.claudeSessionId)).toEqual(['legacy-done'])
   })
 })

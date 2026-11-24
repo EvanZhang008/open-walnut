@@ -627,6 +627,26 @@ acceptance and its proof on real machines before the next starts:
 Beside the phases, the main thread is cleared one measured item at a time (its own task): spawns through a
 pool, heavy statements and large parses to workers, the remaining synchronous file reads to async.
 
+### Phase 2, Done when 1: one gate for every session command
+
+For a session its host runs and judges, every daemon command about that session's process (start, input,
+stop, liveness, state, cron supervision, a line's fate, a pending start's cancel, the transcript holder) has
+one host-service answer, named per command in `src/core/sessions/session-command-gate.ts`. Probes answer from
+the channel's mirror (its `live` state, else the row only the host writes: `src/providers/host-judged-view.ts`);
+controls go as `lifecycle` calls the host carries out against its own daemon (`src/core/sessions/host-lifecycle.ts`);
+idle reaps, eviction, stale-row repair and the orphan sweep leave such a session to its host.
+`DaemonConnection.send` refuses whatever a caller still aims at the daemon, and a ratchet classifies every daemon
+command and every call site (`tests/core/sessions/session-command-gate-ratchet.test.ts`).
+
+The hand-over's own reads are not exceptions to the rule but outside it: the at-rest check before a resume
+hand-over asks while the session is still legacy (its process manager is the leader's to command), and while
+a hand-over is unanswered the host has not taken the session, so the leader still asks the runtime whether a CLI
+of it runs (`status`, `acpState` only; the gate checks the hand-over mark on disk).
+
+Not in this clause: host-local work (files, git, exec, terminals, transfers, workspaces, task folders, usage,
+turn snapshots) and maintenance still go over the daemon's command path, and transcript reads (the rewind
+probe and history) belong to clause 2.
+
 ## Budgets
 
 | | Today | Target |

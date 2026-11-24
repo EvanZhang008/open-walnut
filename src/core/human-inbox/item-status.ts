@@ -8,6 +8,15 @@ import { isWakeupArmed, type SessionSnapshot } from '../../providers/daemon-fold
 import type { SessionRecord } from '../types.js';
 
 async function liveProcessStatus(record: SessionRecord): Promise<InboxCurrentTaskStatus['status']> {
+  // A session its host runs and judges: the host's live state on the channel says (sessions/session-command-gate.ts).
+  const { sessionCommandTarget } = await import('../sessions/session-command-gate.js');
+  if (sessionCommandTarget(record.claudeSessionId).to === 'host') {
+    const { hostJudgedView } = await import('../../providers/host-judged-view.js');
+    const view = await hostJudgedView(record.claudeSessionId, record);
+    if (!view?.live || view.alive === null) return 'unavailable';
+    if (!view.alive) return record.process_status === 'error' ? 'error' : 'stopped';
+    return view.prompt ? 'waiting_permission' : view.working ? 'running' : 'idle';
+  }
   const connection = getConnectedDaemonConnection(record.host || '__local__');
   if (!connection) return 'unavailable';
   try {

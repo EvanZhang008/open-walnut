@@ -235,17 +235,15 @@ export function defaultRunStartDeps(): RunStartDeps {
     },
     async cancelStart(sessionId) {
       const { getSessionByClaudeId } = await import('../session-tracker.js');
-      const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
       const rec = await getSessionByClaudeId(sessionId).catch(() => null);
-      const conn = getConnectedDaemonConnection(rec?.host && rec.host !== LOCAL ? rec.host : LOCAL);
-      if (!conn || !conn.hasCapability('cancel-pending-start-v1')) return 'unknown';
-      // The same daemon command a task start uses to retry an unconfirmed start (sessions/task-start.ts).
+      // The same cancel a task start uses to retry an unconfirmed start (sessions/cancel-pending-start.ts).
+      const { cancelPendingStartOf } = await import('../sessions/cancel-pending-start.js');
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const res = await Promise.race([
-          conn.send('cancelPendingStart', { sid: sessionId }, 5_000),
+          cancelPendingStartOf({ sid: sessionId, sessionId, host: rec?.host && rec.host !== LOCAL ? rec.host : LOCAL }),
           new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer')), 8_000); }),
-        ]) as { ok?: boolean; alive?: boolean; cancelled?: boolean };
+        ]);
         if (res.alive) return 'alive';
         return res.ok !== false && res.cancelled === true ? 'cancelled' : 'unknown';
       } catch (err) {

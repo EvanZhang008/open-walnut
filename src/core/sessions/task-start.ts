@@ -983,13 +983,8 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
   const runtimeId = attempt?.runtime_id || attempt?.session_id || record?.claudeSessionId;
   if (!runtimeId) throw new QuickStartError(`Task ${task.id} has an unconfirmed start without a runtime identity. Read task_get; another start cannot be safely issued.`, 409);
   const host = attempt?.host || record?.host || '__local__';
-  const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
-  const reconcile = async () => {
-    let conn = getConnectedDaemonConnection(host);
-    if (!conn) conn = await (await import('../hosts/link.js')).link(host);
-    if (!conn.hasCapability('cancel-pending-start-v1')) throw new Error('The execution host needs a daemon upgrade before this start can be retried');
-    return conn.send('cancelPendingStart', { sid: runtimeId }, 5_000);
-  };
+  const { cancelPendingStartOf } = await import('./cancel-pending-start.js');
+  const reconcile = () => cancelPendingStartOf({ sid: runtimeId, sessionId: record?.claudeSessionId || attempt?.session_id, host, dial: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([reconcile(), new Promise<never>((_, reject) => {

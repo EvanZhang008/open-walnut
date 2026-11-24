@@ -38,6 +38,12 @@
  *
  * None of them ever calls process.kill. All are no-ops when the owning host's
  * daemon is not connected: its own idle reaper bounds the leak.
+ *
+ * A session its host runs and judges is never stopped through a daemon from here
+ * (session-command-gate.ts): a stop this server decided on for it (task completion,
+ * an undelivered stop's flush, maintenance) goes to its host's service whole
+ * (host-judged-controls.ts terminateOnHost), and an idle reap or an orphan sweep of
+ * it is its host's own work, so neither is asked at all.
  */
 
 import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
@@ -47,6 +53,7 @@ import { engineCaps } from '../agents/engine-registry.js'
 import { stopProvenance, type StopInitiator } from './stop-provenance.js'
 import { refuseProcessAction } from './replica-process-guard.js'
 import { execHostOf } from './session-row-owner.js'
+import { sessionCommandTarget } from './session-command-gate.js'
 
 /** Daemon capability that answers orphan stops with an ownership proof. */
 export const ORPHAN_STOP_CAPABILITY = 'orphan-stop-v1'
@@ -145,6 +152,26 @@ async function pooledConnection(hostKey: string): Promise<OwnerConnection | null
 export type OwnerStopOutcome = 'stopped' | 'refused' | 'unreachable' | 'unknown'
 
 /**
+ * The stop of a session its host runs and judges (see the header): its host's answer, 'refused'
+ * for an idle reap (its host reaps its own), or null when `sid` is not such a session.
+ */
+async function stopOnJudgingHost(sid: string, reason: OwnerStopReason, why: string): Promise<OwnerStopOutcome | null> {
+  if (sessionCommandTarget(sid).to !== 'host') return null
+  if (reason === 'idle') {
+    log.session.info('owner stop: not asked, its host reaps a session it runs itself', { sessionId: sid, why })
+    return 'refused'
+  }
+  try {
+    const { terminateOnHost } = await import('./host-judged-controls.js')
+    const res = await terminateOnHost(sid, { force: true, by: why })
+    return res?.status === 'terminated' ? 'stopped' : 'unknown'
+  } catch (err) {
+    log.session.warn('owner stop: its host did not take the stop of a session it runs', { sessionId: sid, why, error: err instanceof Error ? err.message : String(err) })
+    return 'unknown'
+  }
+}
+
+/**
  * Ask the daemon that owns `row`'s CLI to stop it. Never signals anything
  * locally; a disconnected host means nothing happens. The request names this
  * Walnut (owner-home-v1), so a shared daemon refuses to stop a session another
@@ -159,6 +186,8 @@ export async function stopThroughOwner(
 ): Promise<OwnerStopOutcome> {
   // A host replica's rows are copies of the Mac's: it never asks a daemon to stop one.
   if (refuseProcessAction(`owner_stop:${why}`, row.claudeSessionId, row)) return 'refused'
+  const onHost = await stopOnJudgingHost(row.claudeSessionId, reason, why)
+  if (onHost) return onHost
   const sessionId = row.claudeSessionId
   const host = ownerHostKey(row)
   let conn: OwnerConnection | null = null
@@ -205,6 +234,8 @@ export async function stopAcpThroughOwner(
   opts: { ephemeral?: boolean } = {},
 ): Promise<OwnerStopOutcome> {
   if (refuseProcessAction(`owner_acp_stop:${why}`, row.claudeSessionId, row)) return 'refused'
+  const onHost = await stopOnJudgingHost(row.claudeSessionId, 'maintenance', why)
+  if (onHost) return onHost
   const sessionId = row.claudeSessionId
   const host = ownerHostKey(row)
   const runtimeId = row.acpRuntimeId
@@ -341,6 +372,8 @@ async function askOwner(s: SessionRecord, source: string, deps: OrphanSweepDeps)
     return { sessionId, host, pid, result: 'left', reason, ...(detail ? { detail } : {}) }
   }
   try {
+    // A session its host runs and judges: its orphans are its host's to sweep.
+    if (sessionCommandTarget(sessionId).to === 'host') return left('host_judged')
     const conn = await deps.connection(host)
     if (!conn?.connected) return left('owner_unreachable')
     // Old daemon, or hello not answered yet: no ownership answer, so no request.
