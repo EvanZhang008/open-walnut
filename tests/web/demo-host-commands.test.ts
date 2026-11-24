@@ -131,6 +131,7 @@ describe('every HostCommands caller', () => {
       'components/sessions/HostGateErrorBar.tsx',
       'components/sessions/SessionHostErrorBar.tsx',
       'components/sessions/path-selector/HostNote.tsx',
+      'components/settings/sections/EngineSignInRow.tsx',
       'components/settings/sections/RemoteHostReadiness.tsx',
     ])
   })
@@ -146,11 +147,21 @@ describe('every HostCommands caller', () => {
     expect(readiness).toMatch(/demoSignInCopy\(\) \? DEMO_HOST_SIGN_IN_UNCONFIRMED : `Walnut could not confirm the Claude Code sign-in on \$\{label\}/)
   })
 
+  // A literal list carries no host message beside it: the fixed sign-in line, or an engine's
+  // installer line, which the server builds from Walnut's own spec (engine-sign-in.ts installLine).
+  const FIXED_LISTS: Record<string, string> = {
+    'components/settings/sections/RemoteHostReadiness.tsx': "['claude auth login']",
+    'components/settings/sections/EngineSignInRow.tsx': '[view.installCommand]',
+  }
+
   it('shows each problem message beside its commands through demoHostMessage, never raw', () => {
     for (const { rel, text } of callers) {
-      for (const match of text.matchAll(/<HostCommands commands=\{([^}]+)\}/g)) {
+      const calls = [...text.matchAll(/<HostCommands\b[^>]*?\bcommands=\{([^}]+)\}/g)]
+      // Every call is read below, whatever props come before its commands.
+      expect(calls.length, rel).toBe(text.split('<HostCommands').length - 1)
+      for (const match of calls) {
         const expr = match[1]!.trim()
-        if (expr.startsWith('[')) { expect(expr, rel).toBe("['claude auth login']"); continue }
+        if (expr.startsWith('[')) { expect(expr, rel).toBe(FIXED_LISTS[rel]); continue }
         const base = expr.replace(/[!?]?\.commands$/, '').replace(/[!?]/g, '')
         const escaped = base.replace(/\./g, '[!?]?\\.')
         // Every read of that message, not just one: each sits inside demoHostMessage( with its commands.
