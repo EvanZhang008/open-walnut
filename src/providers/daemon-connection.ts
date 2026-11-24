@@ -8987,6 +8987,8 @@ export class DaemonConnection {
    * step, so the loop and its retryAt outlive a failed Connect now.
    */
   reconnectNow(): Promise<void> {
+    // A Connect now is mostly a person's request: the link it re-dials carries no person mark, as connect()'s.
+    if (inPersonCall()) return outsidePersonCall(() => this.reconnectNow())
     if (this._reconnectInFlight) return this._reconnectInFlight
     if (this._directDial) return this._directDial
     if (this._connected) return Promise.resolve()
