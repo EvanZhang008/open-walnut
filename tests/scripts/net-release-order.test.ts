@@ -60,7 +60,7 @@ describe('the connector release comes first', () => {
   it('no Walnut release goes out before the connector it pins', () => {
     const jobs = load('release.yml').jobs
     // The nightly checks the green commit it picked, a promote the soaked nightly, a stable tag its tree.
-    expect(runs(jobs['nightly-build'])).toMatch(/elif ! sh scripts\/net-release-ready\.sh --at "\$green"; then\n(?:\s*#.*\n)*\s*echo "publish=false"/)
+    expect(runs(jobs['nightly-pick'])).toMatch(/elif ! sh scripts\/net-release-ready\.sh --at "\$green"; then\n(?:\s*#.*\n)*\s*echo "publish=false"/)
     expect(runs(jobs['promote-plan'])).toMatch(/elif ! sh scripts\/net-release-ready\.sh --at "\$SHA"; then\n(?:\s*#.*\n)*\s*echo "publish=false"/)
     expect(runs(jobs['stable-build'])).toMatch(/^sh scripts\/net-release-ready\.sh$/m)
   })

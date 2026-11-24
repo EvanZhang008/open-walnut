@@ -467,7 +467,9 @@ rule above). Otherwise it checks that commit out, installs, sets the version wit
 `scripts/nightly-version.mjs` (next patch of the newer of `package.json` and the `latest`
 version on npm, `-nightly.<UTC day>.<run number>`; the release commit an automatic stable
 pushes gets no CI run, so the newest green commit can still name the previous version),
-builds the files at that version (job `nightly-build`), runs them through the binary matrix
+builds the files at that version (job `nightly-build`, on macOS, only once job `nightly-pick` on
+Linux chose a commit and found no older Release run still building or publishing a nightly:
+`scripts/lib/release-in-flight.mjs`), runs them through the binary matrix
 (`nightly-files`), and then job `nightly` asks again, right before it publishes, whether this
 commit is still the next nightly (the same commit as the last nightly: skip; not a descendant
 of it: a warning and nothing published; `force` overrides both), publishes the platform packages

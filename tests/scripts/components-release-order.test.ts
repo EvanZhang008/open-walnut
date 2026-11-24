@@ -127,7 +127,7 @@ describe('the component releases come first', () => {
   it('no Walnut release goes out before the components it pins, at every gate the connector has', () => {
     const jobs = load('release.yml').jobs
     // The same three places net-release-order.test.ts pins for the connector.
-    expect(runs(jobs['nightly-build'])).toMatch(/elif ! bun scripts\/components-release-ready\.mjs --at "\$green"; then\n(?:\s*#.*\n)*\s*echo "publish=false"/)
+    expect(runs(jobs['nightly-pick'])).toMatch(/elif ! bun scripts\/components-release-ready\.mjs --at "\$green"; then\n(?:\s*#.*\n)*\s*echo "publish=false"/)
     expect(runs(jobs['promote-plan'])).toMatch(/elif ! bun scripts\/components-release-ready\.mjs --at "\$SHA"; then\n(?:\s*#.*\n)*\s*echo "publish=false"/)
     expect(runs(jobs['stable-build'])).toMatch(/^bun scripts\/components-release-ready\.mjs$/m)
     // Any job that asks for the connector asks for the components too.

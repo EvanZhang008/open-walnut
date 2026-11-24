@@ -2,7 +2,7 @@
  * Every job of one workflow run, page by page: GitHub lists at most 100 a page. CI's run holds
  * about 80 since it calls the binary matrix (2026-11-24), so a reader of the first page alone
  * would lose CI OK or a matrix row, and judge the run without it, the day the run passes 100.
- * Read by scripts/ci-gate.mjs and scripts/ci-runner-retry.mjs.
+ * Read by scripts/ci-gate.mjs, scripts/ci-runner-retry.mjs and scripts/lib/release-in-flight.mjs.
  *
  * `page(n)` answers `jobsPage(runId, n)` (GitHub's `actions/runs/<id>/jobs`) as parsed JSON.
  */

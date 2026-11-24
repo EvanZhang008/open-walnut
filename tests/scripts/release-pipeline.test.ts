@@ -537,7 +537,7 @@ describe('release.yml', () => {
     expect(doc.on.workflow_run).toEqual({ workflows: ['CI'], types: ['completed'], branches: ['main'] })
     expect(doc.on.schedule).toEqual([{ cron: '7,17,27,37,47,57 * * * *' }])
     expect(text).not.toContain('github.event.schedule ==')
-    for (const job of ['nightly-build', 'promote-plan']) {
+    for (const job of ['nightly-pick', 'promote-plan']) {
       expect(doc.jobs[job]!.if).toContain("github.event_name == 'schedule'")
       expect(doc.jobs[job]!.if).toContain("github.event_name == 'workflow_run'")
     }
@@ -545,7 +545,9 @@ describe('release.yml', () => {
     expect(doc.jobs.stable!.if).toBe("startsWith(github.ref, 'refs/tags/v')")
     const dispatch = doc.on.workflow_dispatch as { inputs: Record<string, { options?: string[]; default?: unknown }> }
     expect(dispatch.inputs.channel).toMatchObject({ options: ['nightly', 'stable'], default: 'nightly' })
-    expect(doc.jobs['nightly-build']!.if).toContain("inputs.channel != 'stable'")
+    expect(doc.jobs['nightly-pick']!.if).toContain("inputs.channel != 'stable'")
+    // The build runs only once the pick found a commit to publish: it waits for a macOS runner.
+    expect(doc.jobs['nightly-build']!.if).toBe("needs.nightly-pick.outputs.publish == 'true'")
     expect(doc.jobs['promote-plan']!.if).toContain("inputs.channel == 'stable'")
     // The rest of each channel follows its first job.
     expect(doc.jobs.nightly!.if).toBe("needs.nightly-build.outputs.publish == 'true'")
@@ -569,7 +571,7 @@ describe('release.yml', () => {
     // The repo's own package is the development one: no job publishes it.
     expect(text).not.toMatch(/npm publish|npm version/)
     // Only the publishing jobs may write.
-    for (const job of ['stable-build', 'nightly-build', 'promote-build']) expect(doc.jobs[job]!.permissions?.contents, job).toBe('read')
+    for (const job of ['stable-build', 'nightly-pick', 'nightly-build', 'promote-build']) expect(doc.jobs[job]!.permissions?.contents, job).toBe('read')
   })
 
   it('each channel builds its files once, on macOS with the pinned bun, at the version it publishes, and uploads them', () => {
@@ -676,7 +678,7 @@ describe('release.yml', () => {
   })
 
   it('a commit from before this release pipeline is never built: the nightly passes it over, the stable waits', () => {
-    const pick = doc.jobs['nightly-build']!.steps.find((s) => s.id === 'pick')!.run!
+    const pick = doc.jobs['nightly-pick']!.steps.find((s) => s.id === 'pick')!.run!
     expect(pick).toContain('git cat-file -e "$green:scripts/release-build.mjs"')
     expect(pick).toContain('git cat-file -e "$green:scripts/release-unpack.sh"')
     const files = doc.jobs['promote-plan']!.steps.find((s) => s.id === 'files')!
@@ -697,7 +699,7 @@ describe('release.yml', () => {
   })
 
   it('a nightly check publishes only once the last one is old enough; by hand, at once', () => {
-    const pick = doc.jobs['nightly-build']!.steps.find((s) => s.id === 'pick')!.run!
+    const pick = doc.jobs['nightly-pick']!.steps.find((s) => s.id === 'pick')!.run!
     const due = pick.indexOf('bun scripts/nightly-version.mjs due')
     expect(due).toBeGreaterThan(-1)
     expect(due).toBeLessThan(pick.indexOf('bun scripts/ci-gate.mjs last-green main'))
@@ -710,20 +712,22 @@ describe('release.yml', () => {
   })
 
   it('the nightly publishes the newest commit CI passed, without rerunning the tests', () => {
-    expect(runs('nightly-build')).toContain('bun scripts/ci-gate.mjs last-green main')
-    for (const job of ['nightly-build', 'nightly']) expect(runs(job), job).not.toContain('test:baseline')
-    const pick = doc.jobs['nightly-build']!.steps.find((s) => s.id === 'pick')!
+    expect(runs('nightly-pick')).toContain('bun scripts/ci-gate.mjs last-green main')
+    for (const job of ['nightly-pick', 'nightly-build', 'nightly']) expect(runs(job), job).not.toContain('test:baseline')
+    const pick = doc.jobs['nightly-pick']!.steps.find((s) => s.id === 'pick')!
     // The last nightly is the one npm records, never a git tag: the job's token
     // cannot point a tag at a commit whose workflows differ from main's tip.
     expect(pick.run).toContain('last="$(bun scripts/nightly-version.mjs last)"')
     expect(pick.run).not.toContain('refs/tags/nightly')
-    expect(pick.run).toContain('git checkout --quiet "$green"')
+    // The build checks out the picked commit itself.
+    expect(doc.jobs['nightly-build']!.steps.find((s) => s.uses?.startsWith('actions/checkout'))!.with).toEqual({ ref: '${{ needs.nightly-pick.outputs.sha }}', 'fetch-depth': 0 })
     // Never older than the last nightly (the runs list can lag a finished run).
     expect(pick.run).toContain('git merge-base --is-ancestor "$last" "$green"')
     const build = doc.jobs['nightly-build']!.steps.find((s) => s.id === 'build')!
-    expect(build.if).toBe("steps.pick.outputs.publish == 'true'")
-    expect(doc.jobs['nightly-build']!.outputs).toMatchObject({ publish: '${{ steps.pick.outputs.publish }}', sha: '${{ steps.pick.outputs.sha }}', version: '${{ steps.build.outputs.version }}' })
-    for (const job of ['nightly-build', 'nightly']) expect(runs(job), job).not.toMatch(/git (tag|push)/)
+    expect(build.if).toBeUndefined()
+    expect(doc.jobs['nightly-pick']!.outputs).toEqual({ publish: '${{ steps.pick.outputs.publish }}', sha: '${{ steps.pick.outputs.sha }}' })
+    expect(doc.jobs['nightly-build']!.outputs).toMatchObject({ publish: '${{ needs.nightly-pick.outputs.publish }}', sha: '${{ needs.nightly-pick.outputs.sha }}', version: '${{ steps.build.outputs.version }}' })
+    for (const job of ['nightly-pick', 'nightly-build', 'nightly']) expect(runs(job), job).not.toMatch(/git (tag|push)/)
     // The run ends only once npm serves what it published, so the next run reads it.
     const steps = doc.jobs.nightly!.steps
     const publish = steps.findIndex((s) => (s.run ?? '').includes('npm-packages.mjs publish'))

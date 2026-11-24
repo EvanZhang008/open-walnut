@@ -290,20 +290,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run release-archives.yml --ref main -f version="$VERSION"
 
-  nightly-build:
-    name: Build the nightly from main
+  # Whether there is a nightly to build, on Linux: this runs on every CI run that ends on main and
+  # every scheduled check, and almost always answers no. On the macOS build job it waited hours
+  # for a macOS runner behind the binary matrix's, just to say so (2026-11-23, Release run
+  # 45208086362: 3 h 15 min queued, then cancelled; 13 such jobs queued at once).
+  nightly-pick:
+    name: Pick the nightly from main
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
-    # macOS: it signs the darwin files and builds the SQLite they carry.
-    runs-on: macos-26
-    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: read
     outputs:
       publish: ${{ steps.pick.outputs.publish }}
       sha: ${{ steps.pick.outputs.sha }}
-      version: ${{ steps.build.outputs.version }}
-      files: release-files-nightly
     steps:
       - uses: actions/checkout@v5
         with:
@@ -356,35 +357,61 @@ jobs:
             # The same for the optional components it pins (components.yml publishes them).
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::warning::$green pins optional components that are not out yet; the nightly waits for them (last nightly $last)"
+          elif inflight="$(bun scripts/nightly-version.mjs in-flight)" && [ -n "$inflight" ]; then
+            # The pick answers as soon as its run starts, and npm shows the nightly only once an
+            # older run has built, run and published it, hours on a long macOS queue: every run
+            # in between would build the same commit again (scripts/lib/release-in-flight.mjs).
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "an older Release run is still building or publishing a nightly ($inflight); this one stands down"
           else
-            git checkout --quiet "$green"
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "sha=$green" >> "$GITHUB_OUTPUT"
           fi
+
+  nightly-build:
+    name: Build the nightly from main
+    needs: nightly-pick
+    if: needs.nightly-pick.outputs.publish == 'true'
+    # macOS: it signs the darwin files and builds the SQLite they carry.
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      publish: ${{ needs.nightly-pick.outputs.publish }}
+      sha: ${{ needs.nightly-pick.outputs.sha }}
+      version: ${{ steps.build.outputs.version }}
+      files: release-files-nightly
+    steps:
+      # The picked commit, detached with its history, as the pick's own `git checkout` left it before.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.nightly-pick.outputs.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
       - uses: actions/cache@v4
-        if: steps.pick.outputs.publish == 'true'
         with:
           path: ${{ runner.temp }}/bun-store
           key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
           restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
-      - if: steps.pick.outputs.publish == 'true'
-        run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: Version this nightly and build it
-        if: steps.pick.outputs.publish == 'true'
         id: build
         run: |
           WALNUT_LATEST_STABLE="$(bun -e 'const r = await fetch("https://registry.npmjs.org/open-walnut/latest"); if (r.ok) console.log((await r.json()).version)' 2>/dev/null || true)"
           export WALNUT_LATEST_STABLE
           version="$(bun scripts/nightly-version.mjs)"
-          echo "building open-walnut@$version from ${{ steps.pick.outputs.sha }}"
+          echo "building open-walnut@$version from ${{ needs.nightly-pick.outputs.sha }}"
           bun scripts/release-build.mjs --version "$version" --out "$RUNNER_TEMP/release"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # What jobs `nightly-files` run and `nightly` publishes.
       - uses: actions/upload-artifact@v4
-        if: steps.pick.outputs.publish == 'true'
         with:
           name: release-files-nightly
           path: ${{ runner.temp }}/release/assets

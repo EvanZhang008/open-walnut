@@ -97,12 +97,20 @@ async function packument() {
   return res.json()
 }
 
+/** nightly-build's name and the legs the publish needs (release.yml, nightly-files' matrix rows). */
+export const NIGHTLY_SHAPE = { build: /^Build the nightly from main$/, needs: /^The nightly's files on every system \/ / }
+
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain && process.argv[2] === 'due') {
   // `due`: prints due=true|false for $GITHUB_OUTPUT, the reason on stderr.
   const { due, reason } = nightlyDue(await packument(), new Date())
   process.stderr.write(`${reason}\n`)
   process.stdout.write(`due=${due}\n`)
+} else if (isMain && process.argv[2] === 'in-flight') {
+  // `in-flight`: an older Release run still building or publishing a nightly (its URL), or nothing.
+  // Imported here: the other modes run in jobs whose sparse checkout carries this file alone.
+  const [{ gh }, { releaseInFlightNow }] = await Promise.all([import('./ci-gate.mjs'), import('./lib/release-in-flight.mjs')])
+  process.stdout.write(`${releaseInFlightNow(gh, NIGHTLY_SHAPE) ?? ''}\n`)
 } else if (isMain && process.argv[2] === 'last') {
   process.stdout.write(`${lastNightlyCommit(await packument())}\n`)
 } else if (isMain && process.argv[2] === 'wait') {
