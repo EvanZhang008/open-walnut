@@ -9,12 +9,16 @@
  * sentence builder: the host's status shows it as a plain note (host-status.ts foldDaemonUpdate,
  * Settings' grey info lines), and a wait that is long reaches Walnut Health once
  * (core/hosts/daemon-update-wait-health.ts): a postponed update still waiting past the overdue
- * bound (daemon-update-behind.ts), or one skipped for more than an hour; never a skip the person
- * chose (a host's setting, the switch that turns these updates off).
+ * bound (daemon-update-behind.ts), or a skip that means something went wrong (WAIT_HEALTH) for more
+ * than an hour. Never a skip the person chose (a host's setting, the switch that turns these updates
+ * off), and never a steady fact of the host (a shared daemon that lacks nothing, a daemon Walnut
+ * cannot update, no build for its system): those stay a grey line, an alarm would never clear.
  *
- * Since when: one clock per host and build, kept on disk with the other update hold clocks
- * (acp-upgrade-hold.ts), because every deploy restarts the leader; a wait's reason may change
- * (a busy host, then a cooldown) while the build still waits. The update landing drops it.
+ * Since when: one clock per host, build and kind of wait (WAIT_CLOCKS), kept on disk with the other
+ * update hold clocks (acp-upgrade-hold.ts), because every deploy restarts the leader. Within a kind
+ * the reason may change (a busy host, then a cooldown) while the build still waits; a move into or
+ * out of a skip the person chose, or a shared daemon kept, starts the clock again (a 3-day hold then
+ * a short postpone is not a 3-day postpone). The update landing drops it.
  */
 import type { NetUpdatePhase, NetUpdateSkip } from './daemon-net-update.js'
 import { dropHoldClocks, upgradeHoldClock } from './acp-upgrade-hold.js'
@@ -69,39 +73,72 @@ export function waitKindOf(phase: NetUpdatePhase, skip?: NetUpdateSkip): DaemonU
   return null
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 /** 04:07, in this server's own time zone (the status's reader is its user). */
 export function clockTime(at: number): string {
   const d = new Date(at)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-/** The one sentence a waiting update says, on the host's status and in Walnut Health. */
-export function daemonUpdateWaitSentence(label: string, w: Pick<DaemonUpdateWait, 'kind' | 'why' | 'since'>): string {
-  const why = w.why.replace(/^waiting:\s*/, '').trim()
-  const lead = w.kind === 'postponed' ? `The daemon update on ${label} waits` : SKIP_WAIT_LEADS[w.kind]?.(label) ?? `The daemon update on ${label} waits`
-  return `${lead} (since ${clockTime(w.since)})${why ? `: ${why}` : ''}`
+/** 04:07 today, "Nov 22, 04:07" on another day (a wait over a day must not read as one of a few hours). */
+export function sinceTime(at: number, now: number = Date.now()): string {
+  const d = new Date(at)
+  const n = new Date(now)
+  const today = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()
+  return today ? clockTime(at) : `${MONTHS[d.getMonth()]} ${d.getDate()}, ${clockTime(at)}`
 }
 
-/** Skips the person chose: said on the host, never in Walnut Health. */
-const OWN_CHOICE: ReadonlySet<DaemonUpdateWaitKind> = new Set<DaemonUpdateWaitKind>(['held', 'turned-off'])
+/** The one sentence a waiting update says, on the host's status and in Walnut Health. */
+export function daemonUpdateWaitSentence(label: string, w: Pick<DaemonUpdateWait, 'kind' | 'why' | 'since'>, now: number = Date.now()): string {
+  const why = w.why.replace(/^waiting:\s*/, '').trim()
+  const lead = w.kind === 'postponed' ? `The daemon update on ${label} waits` : SKIP_WAIT_LEADS[w.kind]?.(label) ?? `The daemon update on ${label} waits`
+  return `${lead} (since ${sinceTime(w.since, now)})${why ? `: ${why}` : ''}`
+}
+
 /** A postponed update this long is past the bound every hold gives way at, and still waits. */
 export const LONG_POSTPONE_MS = DAEMON_UPDATE_BEHIND_MAX_MS
 export const LONG_SKIP_MS = 60 * 60_000
 
+/**
+ * Which waits reach Walnut Health, and after how long; null: never (a grey line only). Never: a skip
+ * the person chose (held, turned-off), and a steady fact of the host (a shared daemon that lacks
+ * nothing, one Walnut cannot update, no build for its system, a move to the own service, which has its
+ * own notice). The skips with no wait (SKIP_WAIT_LEADS null) are never one either.
+ */
+export const WAIT_HEALTH: Record<DaemonUpdateWaitKind, number | null> = {
+  postponed: LONG_POSTPONE_MS,
+  'gave-up': LONG_SKIP_MS, contested: LONG_SKIP_MS, refused: LONG_SKIP_MS, cooldown: LONG_SKIP_MS, recent: LONG_SKIP_MS,
+  held: null, 'turned-off': null,
+  shared: null, unmanaged: null, 'old-daemon': null, 'platform-unknown': null, 'no-binary': null, 'service-set': null,
+  'not-net': null, local: null, 'test-server': null, follower: null, 'no-build-version': null, current: null,
+}
+
 /** Long enough for Walnut Health. */
 export function updateWaitIsLong(w: Pick<DaemonUpdateWait, 'kind' | 'since'>, now: number): boolean {
-  if (OWN_CHOICE.has(w.kind)) return false
-  return now - w.since >= (w.kind === 'postponed' ? LONG_POSTPONE_MS : LONG_SKIP_MS)
+  const after = WAIT_HEALTH[w.kind]
+  return after !== null && now - w.since >= after
+}
+
+/** Which clock a wait counts on: a move between these starts it again (the person's choice, a shared daemon kept, everything else). */
+export const WAIT_CLOCKS: Record<DaemonUpdateWaitKind, 'own-choice' | 'shared' | 'waits'> = {
+  held: 'own-choice', 'turned-off': 'own-choice', shared: 'shared',
+  postponed: 'waits', 'gave-up': 'waits', contested: 'waits', refused: 'waits', cooldown: 'waits', recent: 'waits',
+  unmanaged: 'waits', 'old-daemon': 'waits', 'platform-unknown': 'waits', 'no-binary': 'waits', 'service-set': 'waits',
+  'not-net': 'waits', local: 'waits', 'test-server': 'waits', follower: 'waits', 'no-build-version': 'waits', current: 'waits',
 }
 
 /** A wait not seen again for this long (a host away a day) starts over. */
 const WAIT_STALE_MS = 24 * 3600_000
 const prefix = (host: string) => `update-wait:${host}:`
+/** Hosts whose wait ended (the update landed, or there was none to make) since their last wait. */
+const ended = new Set<string>()
 
 /** The update of `expected` on `host` waits now: since when it has waited (kept across leader restarts). */
 export function noteUpdateWait(host: string, kind: DaemonUpdateWaitKind, why: string, expected: string, now: number = Date.now()): DaemonUpdateWait {
-  const key = `${prefix(host)}${expected}`
+  const key = `${prefix(host)}${WAIT_CLOCKS[kind]}:${expected}`
   dropHoldClocks(prefix(host), key)
+  ended.delete(host)
   const { heldMs } = upgradeHoldClock(key, true, Number.POSITIVE_INFINITY, now, WAIT_STALE_MS)
   return { kind, why, since: now - heldMs, expected }
 }
@@ -109,4 +146,16 @@ export function noteUpdateWait(host: string, kind: DaemonUpdateWaitKind, why: st
 /** The host runs the build (its update landed, or there was none to make): no wait is left. */
 export function endUpdateWait(host: string): void {
   dropHoldClocks(prefix(host), '')
+  ended.add(host)
+}
+
+/** The host's wait ended since it last waited (endUpdateWait): its Health item recovers at once. */
+export function updateWaitEnded(host: string): boolean {
+  return ended.has(host)
+}
+
+/** A host no longer listed (removed, turned off): its clocks go. */
+export function forgetUpdateWait(host: string): void {
+  dropHoldClocks(prefix(host), '')
+  ended.delete(host)
 }

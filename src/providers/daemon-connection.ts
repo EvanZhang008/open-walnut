@@ -5745,6 +5745,8 @@ export class DaemonConnection {
       }
     }
     if (hold !== UPGRADE_STALE) this.postponeUpgrade(hold, expected, remoteVersion, { steady: true })
+    // Decided on a link that is gone: the new link decides again at its connect.
+    else this._updateWait = noteUpdateWait(this.hostKey, 'postponed', 'the link changed while the update was decided; it is decided again on the new link', expected)
     return true
   }
 
@@ -6141,20 +6143,29 @@ export class DaemonConnection {
     const sets = this.serviceSetLink ? await this.serviceSetLink.standingFor().catch(() => null) : null
     if (sets && (sets.standing === 'shared' || (sets.standing === 'unknown' && !this.serviceSetLink!.looked)) && await this.serviceSetLink!.setAsk()) {
       void this.serviceSetLink!.check()
+      this._updateWait = noteUpdateWait(this.hostKey, 'service-set', sets.standing === 'shared'
+        ? 'the daemon there is another Walnut\'s, and this Walnut moves to its own service there'
+        : 'which service on that machine is this Walnut\'s is not known yet', expected)
       return false
     }
     const set = this._remoteSet
     // Known unsupported or conflicting services remain off limits even if another path is unreadable.
     const { linux: [user, system, cron], darwin: [agent] } = setServiceConfigPaths(set)
     const present = (file: string) => takeover.present.includes(file)
-    if (present(system) || present(agent) || (present(user) && present(cron))) return false
+    if (present(system) || present(agent) || (present(user) && present(cron))) {
+      this._updateWait = noteUpdateWait(this.hostKey, 'unmanaged', 'its daemon runs under a system service, a LaunchAgent or both a user unit and a boot script, which Walnut does not update; the running daemon keeps serving', expected)
+      return false
+    }
     if (takeover.unknown.length) {
       this.postponeUpgrade('the service config could not be read; the running daemon keeps serving', expected, remoteVersion,
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
       return 'held'
     }
     const scope = managedUpdateScope(takeover.present, set)
-    if (!scope) return false
+    if (!scope) {
+      this._updateWait = noteUpdateWait(this.hostKey, 'unmanaged', 'no user-level service Walnut can update is known there; the running daemon keeps serving', expected)
+      return false
+    }
     // An earlier update whose answer did not come in time left its record on the host: judged
     // first, so a build it says did not stay serving is held the day before it is tried again.
     if ((await this.readBackUnreadUpdate()) === 'running') {

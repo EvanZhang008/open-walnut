@@ -22,10 +22,14 @@ test('a host whose daemon update waits says what for and since when, as a plain 
   await loadFixture(request, fixtureFile({
     buildbox: { label: 'Build box', hostname: 'buildbox.example.test', phase: 'connected', claude: HEALTHY, daemonUpdateWait: { kind: 'postponed', why: WHY, sinceMinutesAgo: 25 } },
     calmbox: { label: 'Calm box', hostname: 'calmbox.example.test', phase: 'connected', claude: HEALTHY },
+    // Held three days by its setting: a wait over a day says the day too, not a time that reads as today's.
+    heldbox: { label: 'Held box', hostname: 'heldbox.example.test', phase: 'connected', claude: HEALTHY, daemonUpdateWait: { kind: 'held', why: 'the host\'s setting says autofix: false', sinceMinutesAgo: 3 * 24 * 60 } },
   }))
   const wire = await wireHost(request, 'buildbox') as { warnings?: string[]; phase: string }
   expect(wire.phase).toBe('connected')
-  expect(wire.warnings).toEqual([expect.stringMatching(/^The daemon update on Build box waits \(since \d\d:\d\d\): service\.handover: active ACP workers or relay requests must finish first$/)])
+  expect(wire.warnings).toEqual([expect.stringMatching(/^The daemon update on Build box waits \(since (?:[A-Z][a-z]{2} \d{1,2}, )?\d\d:\d\d\): service\.handover: active ACP workers or relay requests must finish first$/)])
+  const held = await wireHost(request, 'heldbox') as { warnings?: string[] }
+  expect(held.warnings).toEqual([expect.stringMatching(/^Daemon updates on Held box are held by its setting \(since [A-Z][a-z]{2} \d{1,2}, \d\d:\d\d\): the host's setting says autofix: false$/)])
   expect((await wireHost(request, 'calmbox') as { warnings?: string[] }).warnings ?? []).toEqual([])
 
   await page.setViewportSize({ width: 1280, height: 900 })
@@ -48,4 +52,9 @@ test('a host whose daemon update waits says what for and since when, as a plain 
     const y = Math.max(0, box.y - 8)
     await page.screenshot({ path: `${SHOTS}/host-update-wait.png`, clip: { x: 0, y, width: 1280, height: Math.min(900 - y, detailsBox.y + detailsBox.height - y + 16) } })
   }
+  // The wait held for days names its day.
+  const heldNote = (await openHostDetails(page, 'heldbox')).locator('.rh-readiness-note', { hasText: 'are held by its setting' })
+  await expect(heldNote).toHaveText(held.warnings![0]!)
+  await heldNote.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SHOTS}/host-update-wait-held.png` })
 })

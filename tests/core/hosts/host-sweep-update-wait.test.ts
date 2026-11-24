@@ -5,24 +5,25 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { raised, recovered, conn } = vi.hoisted(() => ({
+const { raised, recovered, conn, hosts } = vi.hoisted(() => ({
   raised: [] as Array<Record<string, unknown>>,
   recovered: [] as string[][],
   conn: { wait: null as Record<string, unknown> | null, connected: true },
+  hosts: { list: { devbox: { hostname: 'devbox.example.test', label: 'Dev box' } } as Record<string, unknown> },
 }))
 vi.mock('../../../src/core/notifications/store.js', () => ({
   upsertNotification: async (item: Record<string, unknown>) => { raised.push(item); return { record: item, outcome: 'inserted' } },
   recoverNotifications: async (keys: string[]) => { recovered.push(keys); return { recovered: [] } },
 }))
 vi.mock('../../../src/core/server-role.js', () => ({ isFollower: () => false }))
-vi.mock('../../../src/core/config-manager.js', () => ({ getConfig: async () => ({ hosts: { devbox: { hostname: 'devbox.example.test', label: 'Dev box' } } }) }))
+vi.mock('../../../src/core/config-manager.js', () => ({ getConfig: async () => ({ hosts: hosts.list }) }))
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   getDaemonConnectState: (host: string) => ({ host, connected: conn.connected, phase: conn.connected ? 'connected' : 'reconnecting', phaseElapsedMs: 0, connectElapsedMs: 0, ...(conn.wait ? { daemonUpdateWait: conn.wait } : {}) }),
 }))
 
 import { reportHostDownGauges } from '../../../src/core/hosts/host-down-gauge.js'
 import { _resetDaemonUpdateWaitHealthForTesting, daemonUpdateWaitKey } from '../../../src/core/hosts/daemon-update-wait-health.js'
-import { LONG_POSTPONE_MS } from '../../../src/providers/daemon-update-wait.js'
+import { LONG_POSTPONE_MS, endUpdateWait } from '../../../src/providers/daemon-update-wait.js'
 
 const settle = () => new Promise((r) => setTimeout(r, 300))
 
@@ -31,6 +32,7 @@ beforeEach(() => {
   recovered.length = 0
   conn.wait = null
   conn.connected = true
+  hosts.list = { devbox: { hostname: 'devbox.example.test', label: 'Dev box' } }
   _resetDaemonUpdateWaitHealthForTesting()
 })
 
@@ -54,11 +56,26 @@ describe('the host sweep and an update that waits', () => {
     await reportHostDownGauges()
     await settle()
     expect(raised).toHaveLength(1)
+    // Connected and reading no wait for a sweep (a decision made again): the item stays.
     conn.wait = null
+    await reportHostDownGauges()
+    await settle()
+    expect(recovered).toEqual([])
+    // The update landed: recovered at the next sweep.
+    endUpdateWait('devbox')
     await reportHostDownGauges()
     await reportHostDownGauges()
     await vi.waitFor(() => expect(recovered).toEqual([[daemonUpdateWaitKey('devbox')]]), { timeout: 10_000 })
     await settle()
     expect(recovered).toHaveLength(1)
+  })
+
+  it('a host removed from the config while its item is up: the next sweep recovers it', async () => {
+    conn.wait = { kind: 'postponed', why: 'busy', since: Date.now() - LONG_POSTPONE_MS - 60_000, expected: 'build-new' }
+    await reportHostDownGauges()
+    await vi.waitFor(() => expect(raised).toHaveLength(1), { timeout: 10_000 })
+    hosts.list = {}
+    await reportHostDownGauges()
+    await vi.waitFor(() => expect(recovered).toEqual([[daemonUpdateWaitKey('devbox')]]), { timeout: 10_000 })
   })
 })

@@ -17,7 +17,7 @@ import { isFollower } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { hostProblemNeedsYou } from '../notifications/audience.js'
-import { noteDaemonUpdateWait } from './daemon-update-wait-health.js'
+import { forgetDaemonUpdateWaits, noteDaemonUpdateWait } from './daemon-update-wait-health.js'
 import type { HostStatus } from './host-status.js'
 import type { HostCapabilities } from './capabilities.js'
 import type { HostConnectErrorKind } from '../sessions/host-connect-hint.js'
@@ -94,7 +94,9 @@ export async function reportHostDownGauges(): Promise<string[]> {
   const { getDaemonConnectState } = await import('../../providers/daemon-connection.js')
   const next = new Map<string, HostStatus>()
   const down: string[] = []
+  const listed = new Set<string>()
   for (const { key, def } of listStatusHosts(await getConfig())) {
+    listed.add(key)
     const state = getDaemonConnectState(key)
     const status = buildHostStatus(key, def, state)
     // The same sweep tells Walnut Health of an update that has waited long (daemon-update-wait-health.ts);
@@ -105,6 +107,8 @@ export async function reportHostDownGauges(): Promise<string[]> {
     reportGauge(`${HOST_DOWN_METRIC}{host=${key}}`, isDown ? 1 : 0)
     if (isDown) { next.set(key, status); down.push(key) }
   }
+  // A host removed from the config: its update wait's item recovers and its clocks go.
+  forgetDaemonUpdateWaits(listed)
   latest = next
   return down
 }

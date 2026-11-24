@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  PHASE_WAITS, SKIP_WAIT_LEADS, daemonUpdateWaitSentence, endUpdateWait, noteUpdateWait, updateWaitIsLong, waitKindOf,
+  PHASE_WAITS, SKIP_WAIT_LEADS, WAIT_CLOCKS, WAIT_HEALTH, daemonUpdateWaitSentence, endUpdateWait, noteUpdateWait, sinceTime, updateWaitIsLong, waitKindOf,
   LONG_POSTPONE_MS, LONG_SKIP_MS, type DaemonUpdateWait, type DaemonUpdateWaitKind,
 } from '../../src/providers/daemon-update-wait.js'
 import type { NetUpdatePhase, NetUpdateSkip } from '../../src/providers/daemon-net-update.js'
@@ -33,23 +33,23 @@ function unionOf(file: string, name: string): string[] {
   const at = src.indexOf(`export type ${name} =`)
   expect(at).toBeGreaterThan(-1)
   const body = src.slice(at, src.indexOf('\n\n', at))
-  return [...body.replace(/\/\/.*$/gm, '').matchAll(/'([a-z-]+)'/g)].map((m) => m[1]!)
+  return [...body.replace(/\/\/.*$/gm, '').matchAll(/'([a-z0-9_-]+)'/g)].map((m) => m[1]!)
 }
 
 describe('the sentence a waiting update says', () => {
   it('postponed: what it waits for, in the path\'s words, and since when', () => {
-    expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'waiting: service.handover: active ACP workers or relay requests must finish first')))
+    expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'waiting: service.handover: active ACP workers or relay requests must finish first'), T))
       .toBe('The daemon update on Big dev box waits (since 14:05): service.handover: active ACP workers or relay requests must finish first')
     // The SSH path's reason has no "waiting:" prefix.
-    expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'ACP turns are open'))).toBe('The daemon update on Big dev box waits (since 14:05): ACP turns are open')
+    expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'ACP turns are open'), T)).toBe('The daemon update on Big dev box waits (since 14:05): ACP turns are open')
   })
 
   it('skipped as shared, held, and every other skip: its own lead, then the why', () => {
-    expect(daemonUpdateWaitSentence(LABEL, wait('shared', 'shared, another Walnut uses it')))
+    expect(daemonUpdateWaitSentence(LABEL, wait('shared', 'shared, another Walnut uses it'), T))
       .toBe('Big dev box keeps the daemon another Walnut uses there, so this Walnut does not update it (since 14:05): shared, another Walnut uses it')
-    expect(daemonUpdateWaitSentence(LABEL, wait('held', 'automatic updates are off for this host')))
+    expect(daemonUpdateWaitSentence(LABEL, wait('held', 'automatic updates are off for this host'), T))
       .toBe('Daemon updates on Big dev box are held by its setting (since 14:05): automatic updates are off for this host')
-    expect(daemonUpdateWaitSentence(LABEL, wait('cooldown', ''))).toBe('The daemon update on Big dev box waits for its cooldown (since 14:05)')
+    expect(daemonUpdateWaitSentence(LABEL, wait('cooldown', ''), T)).toBe('The daemon update on Big dev box waits for its cooldown (since 14:05)')
   })
 
   it('class guard: every NetUpdatePhase and every NetUpdateSkip in the source says what it is for the wait', () => {
@@ -59,12 +59,15 @@ describe('the sentence a waiting update says', () => {
     expect(skips.length).toBeGreaterThanOrEqual(16)
     expect(Object.keys(PHASE_WAITS).sort()).toEqual([...phases].sort())
     expect(Object.keys(SKIP_WAIT_LEADS).sort()).toEqual([...skips].sort())
+    // Every kind of wait says whether it reaches Walnut Health and which clock it counts on.
+    expect(Object.keys(WAIT_HEALTH).sort()).toEqual(['postponed', ...skips].sort())
+    expect(Object.keys(WAIT_CLOCKS).sort()).toEqual(['postponed', ...skips].sort())
     // A skip with a lead is a wait with its own sentence; one without is no wait.
     for (const skip of skips) {
       const kind = waitKindOf('skipped', skip)
       if (SKIP_WAIT_LEADS[skip]) {
         expect(kind).toBe(skip)
-        const s = daemonUpdateWaitSentence(LABEL, wait(skip, 'why'))
+        const s = daemonUpdateWaitSentence(LABEL, wait(skip, 'why'), T)
         expect(s).toContain('(since 14:05): why')
         expect(s).toContain(skip === 'turned-off' ? 'turned off' : LABEL)
       } else expect(kind).toBeNull()
@@ -76,18 +79,50 @@ describe('the sentence a waiting update says', () => {
 
   it('class guard: every kind the SSH path notes has its own sentence', () => {
     const src = fs.readFileSync(path.join(SRC, 'daemon-connection.ts'), 'utf8')
-    const kinds = [...src.matchAll(/noteUpdateWait\(this\.hostKey, '([a-z-]+)'/g)].map((m) => m[1]!)
-    expect([...new Set(kinds)].sort()).toEqual(['postponed', 'shared'])
+    const kinds = [...src.matchAll(/noteUpdateWait\(this\.hostKey, '([a-z0-9_-]+)'/g)].map((m) => m[1]!)
+    expect([...new Set(kinds)].sort()).toEqual(['postponed', 'service-set', 'shared', 'unmanaged'])
     for (const k of kinds) expect(k === 'postponed' || SKIP_WAIT_LEADS[k as NetUpdateSkip]).toBeTruthy()
   })
 
-  it('long: postponed past the overdue bound, skipped past an hour, never a skip the person chose', () => {
+  it('long: postponed past the overdue bound, a skip that went wrong past an hour; never the person\'s choice or a steady fact of the host', () => {
     expect(updateWaitIsLong(wait('postponed', 'x', T), T + LONG_POSTPONE_MS - 1)).toBe(false)
     expect(updateWaitIsLong(wait('postponed', 'x', T), T + LONG_POSTPONE_MS)).toBe(true)
-    expect(updateWaitIsLong(wait('shared', 'x', T), T + LONG_SKIP_MS - 1)).toBe(false)
-    expect(updateWaitIsLong(wait('shared', 'x', T), T + LONG_SKIP_MS)).toBe(true)
-    expect(updateWaitIsLong(wait('held', 'x', T), T + 30 * LONG_SKIP_MS)).toBe(false)
-    expect(updateWaitIsLong(wait('turned-off', 'x', T), T + 30 * LONG_SKIP_MS)).toBe(false)
+    expect(updateWaitIsLong(wait('gave-up', 'x', T), T + LONG_SKIP_MS - 1)).toBe(false)
+    for (const k of ['gave-up', 'contested', 'refused'] as const) expect(updateWaitIsLong(wait(k, 'x', T), T + LONG_SKIP_MS)).toBe(true)
+    // A shared daemon that lacks nothing is the designed steady state on every machine two Walnuts share.
+    for (const k of ['shared', 'unmanaged', 'old-daemon', 'platform-unknown', 'no-binary', 'held', 'turned-off'] as const) {
+      expect(updateWaitIsLong(wait(k, 'x', T), T + 30 * 24 * LONG_SKIP_MS)).toBe(false)
+    }
+  })
+
+  it('since when: the time today, the date and time on another day', () => {
+    expect(sinceTime(T, T + 3_600_000)).toBe('14:05')
+    expect(sinceTime(T - 2 * 24 * 3_600_000, T)).toBe('Nov 22, 14:05')
+    expect(daemonUpdateWaitSentence(LABEL, wait('held', 'autofix is off', T - 3 * 24 * 3_600_000), T)).toBe('Daemon updates on Big dev box are held by its setting (since Nov 21, 14:05): autofix is off')
+  })
+
+  it('class guard: every SSH update path that holds an update notes a wait first', () => {
+    const src = fs.readFileSync(path.join(SRC, 'daemon-connection.ts'), 'utf8')
+    const body = (name: string): string[] => {
+      const at = src.indexOf(`  private async ${name}(`)
+      expect(at, name).toBeGreaterThan(-1)
+      return src.slice(at, src.indexOf('\n  }\n', at)).split('\n')
+    }
+    // A wait is noted on the line or in the few above it; a hold that another checked hold made
+    // (holdUpgrade, execRunsOpen) or a return that is no hold (nothing to update) needs none.
+    const noted = /postponeUpgrade\(|noteUpdateWait\(|stageFailed\(/
+    const noHold = /holdUpgrade\(|execRunsOpen\(|done === 'held'|isReadOnlyRemote|remoteVersion === expected|hold === null/
+    const misses: string[] = []
+    const check = (name: string, holds: RegExp) => {
+      const lines = body(name)
+      lines.forEach((line, i) => {
+        if (!holds.test(line) || noHold.test(line)) return
+        if (!lines.slice(Math.max(0, i - 5), i + 1).some((l) => noted.test(l))) misses.push(`${name}: ${line.trim()}`)
+      })
+    }
+    check('holdUpgrade', /return true\b/)
+    check('updateManagedDaemon', /return (false|'held')\b/)
+    expect(misses).toEqual([])
   })
 })
 
@@ -95,6 +130,15 @@ describe('since when: one clock per host and build, kept on disk', () => {
   let dir = ''
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-wait-')); setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json')) })
   afterEach(() => { setAcpUpgradeHoldFileForTest(null); fs.rmSync(dir, { recursive: true, force: true }) })
+
+  it('starts over when the wait moves into or out of the person\'s choice or a shared daemon kept', () => {
+    expect(noteUpdateWait('devbox', 'held', 'autofix is off', 'b1', T).since).toBe(T)
+    // Three days held, then the person turns autofix on and a busy host postpones it: a fresh wait.
+    expect(noteUpdateWait('devbox', 'postponed', 'busy', 'b1', T + 3 * 24 * 3600_000).since).toBe(T + 3 * 24 * 3600_000)
+    expect(noteUpdateWait('devbox', 'cooldown', 'tried', 'b1', T + 3 * 24 * 3600_000 + 60_000).since).toBe(T + 3 * 24 * 3600_000)
+    expect(noteUpdateWait('devbox', 'shared', 'another Walnut uses it', 'b1', T + 3 * 24 * 3600_000 + 120_000).since).toBe(T + 3 * 24 * 3600_000 + 120_000)
+    expect(noteUpdateWait('devbox', 'turned-off', 'off', 'b1', T + 3 * 24 * 3600_000 + 180_000).since).toBe(T + 3 * 24 * 3600_000 + 180_000)
+  })
 
   it('holds across reasons and a leader restart, starts over for a new build, and ends when the update lands', async () => {
     expect(noteUpdateWait('devbox', 'postponed', 'busy', 'b1', T).since).toBe(T)
