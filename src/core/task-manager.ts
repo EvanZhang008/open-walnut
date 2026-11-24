@@ -184,6 +184,11 @@ let taskStoreCacheDataVersion: string | null = null;
  *  snapshot changes. getTask() is called from ~40 files; without this each call
  *  cloned and scanned the whole board to return one row. */
 let taskStoreIndex: Map<string, Task> | null = null;
+/** Moves on every change of the cached snapshot (each place that drops taskStoreIndex). */
+let taskStoreGen = 0;
+/** A number that changes whenever the canonical task rows may have changed: a key for a memo over
+ *  taskStoreForReplica's rows (they are patched in place, so their array alone is no key). */
+export function taskStoreGeneration(): number { return taskStoreGen; }
 // Every task row with its note (7.9k on the maintainer's board, 2026-11-20).
 registerMemoryHolder({
   name: 'task-manager.store',
@@ -195,7 +200,7 @@ registerMemoryHolder({
 function invalidateTaskStoreCache(): void {
   taskStoreCache = null;
   taskStoreCacheDataVersion = null;
-  taskStoreIndex = null;
+  taskStoreIndex = null; taskStoreGen += 1;
 }
 
 /** Store-shape counters for tests and the daily loop check (`scripts/walnut-logs.sh loop`). */
@@ -438,7 +443,7 @@ function patchStoreCacheRows(ids: readonly string[]): void {
       for (const id of removed) shadow.fingerprints.delete(id);
     }
   }
-  taskStoreIndex = null;
+  taskStoreIndex = null; taskStoreGen += 1;
   // The lock's finally keeps a snapshot its section re-seeded; this counts as one.
   taskStoreCacheSeeded += 1;
 }
@@ -465,7 +470,7 @@ export function _resetForTesting(): void {
   initialized = false;
   taskStoreCache = null;
   taskStoreCacheDataVersion = null;
-  taskStoreIndex = null;
+  taskStoreIndex = null; taskStoreGen += 1;
   for (const key of Object.keys(storeStats) as (keyof typeof storeStats)[]) storeStats[key] = 0;
   rowShadow = null;
   rowShadowDataVersion = null;
@@ -833,6 +838,8 @@ async function loadStore(): Promise<TaskStore> {
   }
   const db = getDb()!;
   storeStats.fullScans += 1;
+  // A fresh read is a new snapshot, cached or not (WALNUT_STORE_CACHE=0 reads every time).
+  taskStoreGen += 1;
   const taskRows = db.prepare('SELECT * FROM tasks').all() as Record<string, any>[];
   const tasks = taskRows.map(rowToTask);
 
@@ -876,7 +883,7 @@ async function loadStore(): Promise<TaskStore> {
   if (STORE_CACHE_ENABLED) {
     taskStoreCache = store;
     taskStoreCacheDataVersion = readDataVersion(db);
-    taskStoreIndex = null;
+    taskStoreIndex = null; taskStoreGen += 1;
   }
   return store;
 }
@@ -1149,7 +1156,7 @@ async function writeStore(store: TaskStore): Promise<void> {
   if (STORE_CACHE_ENABLED && store.projects !== undefined) {
     taskStoreCache = cloneTaskStore(store);
     taskStoreCacheDataVersion = readDataVersion(db);
-    taskStoreIndex = null;
+    taskStoreIndex = null; taskStoreGen += 1;
     taskStoreCacheSeeded += 1;
   } else {
     invalidateTaskStoreCache();

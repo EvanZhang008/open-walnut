@@ -78,7 +78,7 @@ import { refreshVmBaseline, resetSystemContext, sampleMemContext } from './stall
 import { pruneStallDir, writeWhole } from './stall-recorder-retention.js';
 import { connectInspectorDriver, stallViews, type CpuProfile, type ProfilerDriver } from './stall-recorder-profiler.js';
 import { onMemoryBurst, processMemoryMb } from './observability/memory-ledger.js';
-import { BURST_KEEP_EVERY_MS, profileTopFrames } from './stall-recorder-burst.js';
+import { BURST_KEEP_EVERY_MS, BURST_PROFILE_MIN_MB, profileTopFrames } from './stall-recorder-burst.js';
 
 export type { CpuProfile, ProfilerDriver } from './stall-recorder-profiler.js';
 export { holdVerdict, profileHoldShare, type HoldContext, type HoldVerdict, type ProfileHold } from './stall-recorder-hold.js';
@@ -316,6 +316,7 @@ function onStalls(reports: StallReport[]): void {
 }
 
 let lastBurstKeepAt = -Infinity;
+let lastBurstKeepRssMb = 0;
 let stopBurstHook: (() => void) | null = null;
 
 /**
@@ -323,8 +324,12 @@ let stopBurstHook: (() => void) | null = null;
  * both), at most one burst every BURST_KEEP_EVERY_MS. True when it was taken.
  */
 export function keepProfileForBurst(info: { rssMb: number; riseMb: number }, now = Date.now()): boolean {
-  if (!running || !driver || now - lastBurstKeepAt < BURST_KEEP_EVERY_MS) return false;
+  if (!running || !driver || info.rssMb < BURST_PROFILE_MIN_MB) return false;
+  // Inside the interval only a climb well past the last kept one: 2026-11-24 the boot's own rise
+  // to 1.8 GB took the one keep, and the climb to 8.4 GB two minutes later kept nothing.
+  if (now - lastBurstKeepAt < BURST_KEEP_EVERY_MS && info.rssMb < lastBurstKeepRssMb * 1.5) return false;
   lastBurstKeepAt = now;
+  lastBurstKeepRssMb = info.rssMb;
   const burst = { at: now, ...info };
   if (previous) { const held = previous; previous = null; void keepBurst(held, burst); }
   if (current) { current.burst = burst; scheduleRotate(opts.postStallMs); }
@@ -554,6 +559,7 @@ export async function stopStallRecorder(): Promise<void> {
   stopBurstHook?.();
   stopBurstHook = null;
   lastBurstKeepAt = -Infinity;
+  lastBurstKeepRssMb = 0;
   setProbeObserver(null);
   if (rotateTimer) { clearTimeout(rotateTimer); rotateTimer = null; }
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }

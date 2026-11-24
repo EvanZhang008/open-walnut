@@ -113,7 +113,12 @@ function storeVersion(db: NonNullable<ReturnType<typeof getDb>>): string {
 function invalidateSessionStoreCache(): void {
   sessionStoreCache = null;
   sessionStoreCacheDataVersion = null;
+  sessionStoreGen += 1;
 }
+
+/** Moves on every change of the cached snapshot: a memo key over sessionRowsForReplica's rows. */
+let sessionStoreGen = 0;
+export function sessionStoreGeneration(): number { return sessionStoreGen; }
 
 // ── Write-through: a row write patches the cache instead of dropping it ──
 //
@@ -236,6 +241,7 @@ function patchSessionCacheRows(ids: ReadonlySet<string>): void {
     }
   }
   if (removed.size > 0) sessionStoreCache = sessionStoreCache.filter((s) => !removed.has(s.claudeSessionId));
+  sessionStoreGen += 1;
 }
 
 /**
@@ -263,6 +269,7 @@ export function _resetSessionTrackerForTesting(): void {
   sessionInitialized = false;
   sessionStoreCache = null;
   sessionStoreCacheDataVersion = null;
+  sessionStoreGen += 1;
   touchedSessionIds = null;
   for (const key of Object.keys(sessionStoreStats) as (keyof typeof sessionStoreStats)[]) sessionStoreStats[key] = 0;
   _resetRowsSnapshotForTesting();
@@ -570,6 +577,8 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
       throw new Error('readStore: SQLite handle is null');
     }
     const rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
+    // Uncached, every read is a new snapshot.
+    sessionStoreGen += 1;
     return rows.map(rowToSession);
   }
   const db = getDb();
@@ -595,6 +604,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
     } while (before !== after);
     sessionStoreCache = rows.map((row) => slimForCache(rowToSession(row)));
     sessionStoreCacheDataVersion = after;
+    sessionStoreGen += 1;
     sessionStoreStats.fullScans += 1;
     sessionStoreStats.scanMs += performance.now() - scanStart;
   }

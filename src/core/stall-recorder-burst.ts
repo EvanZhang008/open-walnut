@@ -9,7 +9,10 @@
  */
 import type { CpuProfile } from './stall-recorder-profiler.js';
 
-/** At most one burst profile per this long (a climb logs several burst lines). */
+/** Only a burst to this footprint keeps a profile: a restart's own rise to about 2 GB is no news. */
+export const BURST_PROFILE_MIN_MB = 3_000;
+
+/** At most one burst profile per this long (a climb logs several burst lines), unless it climbs half again. */
 export const BURST_KEEP_EVERY_MS = 10 * 60_000;
 
 interface ProfileNode {

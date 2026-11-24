@@ -139,6 +139,7 @@ describe('profile windows', () => {
   it('a memory burst keeps the window before it and the one it fell in, once per ten minutes', async () => {
     const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {})
     await _rotateNowForTest()
+    expect(keepProfileForBurst({ rssMb: 1800, riseMb: 1300 })).toBe(false)
     expect(keepProfileForBurst({ rssMb: 6000, riseMb: 3000 })).toBe(true)
     expect(keepProfileForBurst({ rssMb: 7000, riseMb: 4000 })).toBe(false)
     await _rotateNowForTest()
@@ -353,5 +354,22 @@ describe('profileTopFrames', () => {
     expect(top.samples).toBe(4)
     expect(top.self).toEqual([['parse:10', 0.5], ['route:10', 0.25]])
     expect(top.total).toEqual([['route:10', 0.75], ['parse:10', 0.5]])
+  })
+})
+
+describe('a burst keeps its profile', () => {
+  it('a climb half again past the last kept one is kept inside the interval', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-burst-'))
+    const fp = fakeProfiler()
+    try {
+      await startStallRecorder({ force: true, dir, windowMs: 3_600_000, postStallMs: 3_600_000, profiler: fp.driver, systemContext: false })
+      const t0 = 5_000_000_000
+      expect(keepProfileForBurst({ rssMb: 4000, riseMb: 2000 }, t0)).toBe(true)
+      expect(keepProfileForBurst({ rssMb: 5000, riseMb: 3000 }, t0 + 60_000)).toBe(false)
+      expect(keepProfileForBurst({ rssMb: 8400, riseMb: 6000 }, t0 + 120_000)).toBe(true)
+    } finally {
+      await stopStallRecorder()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

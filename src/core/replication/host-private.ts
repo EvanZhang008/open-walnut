@@ -195,12 +195,37 @@ export function nothingKept(): HostPrivacy {
 
 /** The leader's privacy now: its task store (or the rows the caller already read) and its sessions. */
 export async function hostPrivacyNow(tasks?: ReadonlyArray<PrivacyTask>): Promise<HostPrivacy> {
-  const rows = tasks ?? (await (await import('../task-manager.js')).taskStoreForReplica()).tasks
+  if (tasks) {
+    if (!tasks.some((t) => keptFromHosts(t))) return nothingKept()
+    return hostPrivacyOf(tasks, await (await import('../session-tracker.js')).sessionRowsForReplica())
+  }
+  const tm = await import('../task-manager.js')
+  const rows = (await tm.taskStoreForReplica()).tasks
+  const taskGen = tm.taskStoreGeneration()
+  // Worked out once per change of the stores: every host slice and copy round asks, and each
+  // read walked every task and session (2026-11-24: a tenth of the CPU in a 5.7 GB burst). Each
+  // read still goes through the stores' own reads, which drop a snapshot another connection made
+  // stale (and so move its generation). Each caller gets its own `derived` (filled per round
+  // from other kinds' rows).
+  if (privacyMemo?.taskGen === taskGen && privacyMemo.sessionGen === null) return nothingKept()
   // Sessions are read only when a task is kept: the common case reads nothing more.
-  if (!rows.some((t) => keptFromHosts(t))) return nothingKept()
-  const sessions = await (await import('../session-tracker.js')).sessionRowsForReplica()
-  return hostPrivacyOf(rows, sessions)
+  if (privacyMemo?.taskGen !== taskGen && !rows.some((t) => keptFromHosts(t))) {
+    privacyMemo = { taskGen, sessionGen: null, value: nothingKept() }
+    return nothingKept()
+  }
+  const st = await import('../session-tracker.js')
+  const sessions = await st.sessionRowsForReplica()
+  const sessionGen = st.sessionStoreGeneration()
+  let memo = privacyMemo
+  if (!(memo?.taskGen === taskGen && memo.sessionGen === sessionGen)) {
+    memo = privacyMemo = { taskGen, sessionGen, value: hostPrivacyOf(rows, sessions) }
+  }
+  return { ...memo.value, derived: new Map() }
 }
+
+let privacyMemo: { taskGen: number; sessionGen: number | null; value: HostPrivacy } | null = null
+/** Tests: forget the memo. */
+export function _resetHostPrivacyMemoForTesting(): void { privacyMemo = null }
 
 /** A task change is read for a new kept set this long after it (a burst is one read). */
 export const PRIVACY_WATCH_MS = 2_000
