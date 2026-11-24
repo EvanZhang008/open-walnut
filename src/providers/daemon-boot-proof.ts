@@ -34,14 +34,15 @@
  */
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { singleFile } from '../lib/single-file.js'
-import { RUNTIME_DIR_ENV, serviceSetEnv, type ServiceSet } from './service-set.js'
-import { RUNTIME_TRIAL_ENV } from '../binary/runtime-tree.js'
+import { RUNTIME_DIR_ENV, isServiceSetRuntimeTreesDir, serviceSetEnv, type ServiceSet } from './service-set.js'
+import { RUNTIME_TRIAL_ENV, walnutLineRuntimeDir } from '../binary/runtime-tree.js'
 
 export interface BootProofOptions {
   executable: string
@@ -102,8 +103,12 @@ async function writeServeProof(dir: (name: string) => string, executable: string
  * not listen" holds the update) and /tmp space. A daemon that is no compiled file ignores it.
  */
 export function trialRuntimeDir(env: NodeJS.ProcessEnv = process.env, home = os.homedir(), own: string | null = singleFile()?.root ?? null): string {
-  if (own) return path.dirname(own)
-  if (env.WALNUT_RUNTIME_DIR && path.isAbsolute(env.WALNUT_RUNTIME_DIR)) return path.resolve(env.WALNUT_RUNTIME_DIR)
+  // The default set's trial (a set's names its own dir, proofEnvFor): never a place the default
+  // service does not look, a `--walnut` line's or a set's (2026-11-24 review: an update from
+  // such a line or a set's session primed that tree, and the service unpacked again in its wait).
+  const elsewhere = (dir: string) => path.resolve(dir) === walnutLineRuntimeDir() || isServiceSetRuntimeTreesDir(dir, { HOME: home }, realpathSync)
+  if (own && !elsewhere(path.dirname(own))) return path.dirname(own)
+  if (env.WALNUT_RUNTIME_DIR && path.isAbsolute(env.WALNUT_RUNTIME_DIR) && !elsewhere(env.WALNUT_RUNTIME_DIR)) return path.resolve(env.WALNUT_RUNTIME_DIR)
   const data = env.OPEN_WALNUT_HOME && path.isAbsolute(env.OPEN_WALNUT_HOME) ? env.OPEN_WALNUT_HOME : path.join(home, '.open-walnut')
   return path.join(data, 'local', 'runtime')
 }

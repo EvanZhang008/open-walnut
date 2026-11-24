@@ -317,7 +317,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-ready.ts',
   // The trial run of a new daemon before any service change, bundled into daemon-service-cli.cjs.
   'src/providers/daemon-boot-proof.ts',
-  // Where a trial of the walnut file unpacks its runtime (RUNTIME_TRIAL_ENV), bundled into daemon-service-cli.cjs.
+  // Where a trial of the walnut file unpacks its runtime (walnutLineRuntimeDir, RUNTIME_TRIAL_ENV), bundled into daemon-service-cli.cjs.
   'src/binary/runtime-tree.ts',
   'src/binary/asset-archive.ts',
   // `walnut daemon handback`: a stand-in hands its sessions to the LaunchAgent job (bundled into daemon-service-cli.cjs).

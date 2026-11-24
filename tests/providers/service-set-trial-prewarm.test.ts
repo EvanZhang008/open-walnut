@@ -11,7 +11,8 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { proofEnvFor } from '../../src/providers/daemon-boot-proof.js'
+import { proofEnvFor, trialRuntimeDir } from '../../src/providers/daemon-boot-proof.js'
+import { walnutLineRuntimeDir } from '../../src/binary/runtime-tree.js'
 import { serviceSet } from '../../src/providers/service-set.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -31,5 +32,28 @@ describe('a set\'s trial prewarms the set\'s runtime trees', () => {
     const at = cli.indexOf('return proveStagedBoot({')
     expect(at).toBeGreaterThan(-1)
     expect(cli.slice(at, at + 400)).toMatch(/env: proofEnvFor\(set, root\)/)
+  })
+})
+
+describe('the default set\'s trial unpacks where the default service looks', () => {
+  // 2026-11-24 review (S-c): an update run as a `--walnut` line, or from a set's session, runs
+  // the CLI on a tree outside the data home; the default set's trial used that tree's dir, and
+  // the default service then unpacked the same build in the data home inside its ready wait.
+  const DATA = `${HOME}/.open-walnut/local/runtime`
+  const setTrees = `${HOME}/.open-walnut-host/walnuts/${ID}/daemon/runtime`
+
+  it.each([
+    ['a --walnut line\'s tree', {}, path.join(walnutLineRuntimeDir(), '1.2.3-abc')],
+    ['a set\'s tree', {}, `${setTrees}/1.2.3-abc`],
+    ['a set session\'s runtime dir', { WALNUT_RUNTIME_DIR: setTrees }, null],
+    ['a set session\'s runtime dir and tree', { WALNUT_RUNTIME_DIR: setTrees }, `${setTrees}/1.2.3-abc`],
+  ])('from %s: the data home\'s', (_label, env, own) => {
+    expect(trialRuntimeDir(env, HOME, own)).toBe(DATA)
+  })
+
+  it('from the data home\'s tree or a deploy stage: as before', () => {
+    expect(trialRuntimeDir({}, HOME, `${DATA}/1.2.3-abc`)).toBe(DATA)
+    expect(trialRuntimeDir({ WALNUT_RUNTIME_DIR: '/stage/runtime' }, HOME, '/stage/runtime/1.2.3-abc')).toBe('/stage/runtime')
+    expect(trialRuntimeDir({ WALNUT_RUNTIME_DIR: '/stage/runtime' }, HOME, null)).toBe('/stage/runtime')
   })
 })
