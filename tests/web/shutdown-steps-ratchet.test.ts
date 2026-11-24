@@ -20,6 +20,7 @@ const ALLOWED: Array<{ re: RegExp; why: string }> = [
   { re: /^\(?import\(/, why: 'a module import: the server already loaded it, so it resolves at once' },
   { re: /^Promise\.all\(\[\s*import\([^)]*\),\s*import\([^)]*\),?\s*\]\)/, why: 'module imports only' },
   { re: /^closeHttpServer\(/, why: 'bounded on its own: idle sockets at once, the rest after HTTP_DRAIN_GRACE_MS (http-close.ts)' },
+  { re: /^settleWritersForSwitch\(/, why: 'a leader switch\'s stop only: each writer is waited for through withDeadline (its budget, at most a tenth of the commit window, plus 10 s), inside the bail that walnut web widens by the commit window for this stop' },
   { re: /^finalStop\.run\(/, why: 'a leader switch\'s final batch (final-stop.ts), last: bounded by its commit window, which walnut web adds to its bail for this stop only, and a signal aborts it (commands/web.ts)' },
 ]
 
