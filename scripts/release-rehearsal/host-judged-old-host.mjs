@@ -32,14 +32,15 @@ function probeOf(c) {
   }
 }
 
-export async function rehearseOldHost({ older, out }) {
+/** `hostLines`: the host's row in the Mac's config (host-judged-rollback.mjs switchOn: the switch on for it). */
+export async function rehearseOldHost({ older, out, hostLines = [...NET_HOST_LINES, '    runs_sessions: true'] }) {
   const r = { scenario: 'old-host', older: older.version, checks: {}, problems: [] }
   const fail = (why) => { r.problems.push(why); process.stdout.write(`  ✗ old-host: ${why}\n`) }
   let c = null
   try {
     c = await startReplicaCluster({
       twin: 'standalone', hostRelease: older.file, macBootExtra: macProbe('full'),
-      macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'],
+      macHostExtra: hostLines,
       macEnv: { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' },
     })
     r.base = c.base

@@ -73,6 +73,8 @@
  *                            the leader's presence, is a leader on its channel, and does it judge `sid`
  *         GET /slow-start?ms= the host's next start answers its leader `ms` late, its session up
  *                            and its born row written (a loaded host's order): a probe write
+ *         GET /hold-channel?on=1|0   every new link to the host's channel is closed at once until
+ *                            `on=0` (a leader that answers before its channel opens): a probe write
  *         GET /hold-sid?sid=&on=1|0   the host's runner says it holds a live session of `sid` (a
  *                            resume of it is refused there, not at rest) until `on=0`
  *         GET /forge?sid=    appends a born row of `sid` to the host's fact log, as a bad host
@@ -358,6 +360,25 @@ await serveProbe({
     }
     return { ok: true, ms }
   },
+  // Every new link to the host's channel is closed at once until on=0 (a leader that answers but
+  // whose channel has not opened yet: the window between a new leader's boot and its link).
+  '/hold-channel': (q) => {
+    const h = boot.hostSessionsRunning()
+    if (!h) return { running: false }
+    const proto = Object.getPrototypeOf(h.channel)
+    if (!globalThis.__clusterChannelHoldPatched) {
+      globalThis.__clusterChannelHoldPatched = true
+      const own = proto.attach
+      proto.attach = function (link) {
+        if (!globalThis.__clusterChannelHeld) return own.call(this, link)
+        globalThis.__clusterChannelRefused = (globalThis.__clusterChannelRefused ?? 0) + 1
+        setImmediate(() => { try { link.close('held by the probe') } catch {} })
+        return { onFrame: () => {}, onClose: () => {} }
+      }
+    }
+    globalThis.__clusterChannelHeld = q.get('on') !== '0'
+    return { ok: true, held: globalThis.__clusterChannelHeld, refused: globalThis.__clusterChannelRefused ?? 0 }
+  },
   // The host's runner says it holds a live session of a held sid (host-boot.ts notAtRest), so a resume of it is refused.
   '/hold-sid': (q) => {
     const held = globalThis.__clusterHeldSids ??= new Set()
@@ -431,7 +452,7 @@ function hostJudgeServiceEnv(d: { hostDaemon: string }): Record<string, string> 
 
 /** `at`: the event's timestamp (a late host fact keeps when it happened); `seenAt`: when this process's bus delivered it. */
 export interface ProbeEvent { name: string; sid: string; at: number; seenAt: number; source: string; late: boolean; hash: string; data?: any }
-export interface HostFactRecord { seq: number; opId: string; at: number; sid: string; sseq: number; name: string; data: any; refs?: Record<string, unknown> }
+export interface HostFactRecord { seq: number; opId: string; at: number; sid: string; sseq: number; name: string; data: any; refs?: Record<string, unknown>; judgedBy?: 'leader' }
 
 const factHash = (d: unknown): string => crypto.createHash('sha256').update(JSON.stringify(d ?? null) ?? 'null').digest('hex')
 
@@ -553,8 +574,11 @@ export interface HostJudgeClusterOptions {
   linkProxy?: boolean
   /** A real cloud companion paired with the Mac (see the header). */
   companion?: boolean
-  /** The Mac's switch in its config (default on). */
-  macSwitch?: boolean
+  /**
+   * The Mac's switch in its config: true (the default) stores `host_runs_sessions: true`, false stores
+   * `false` (a person who turned it off), 'unset' stores nothing, so the registry default decides.
+   */
+  macSwitch?: boolean | 'unset'
   /** More experiments on in the Mac's config, beside the switch (`host_call_entry`: a same-host send is the host server's). */
   macExperiments?: readonly string[]
   /** More of the host service's env, over the cluster's own (a timing seam, the host's switch forced off: an older host). */
@@ -574,8 +598,11 @@ export interface HostJudgeClusterOptions {
   seedMac?: (o: { base: string; macData: string }) => void | Promise<void>
 }
 
-/** The Mac's `experimental:` block with these experiments on (none: no block). */
-const experimentLines = (ids: readonly string[]): string[] => (ids.length ? ['experimental:', ...ids.map((id) => `  ${id}: true`)] : [])
+/** The Mac's `experimental:` block with these experiments stored (none: no block). */
+const experimentLines = (flags: Readonly<Record<string, boolean>>): string[] => {
+  const ids = Object.keys(flags)
+  return ids.length ? ['experimental:', ...ids.map((id) => `  ${id}: ${flags[id]}`)] : []
+}
 
 export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Promise<HostJudgeCluster> {
   let companion: CloudBoxReplica | null = null
@@ -585,7 +612,10 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
     hostService: { env: (d) => ({ ...hostJudgeServiceEnv(d), ...(o.hostEnv ?? {}) }), after: hostJudgeServiceProbe() },
     macBootExtra: macProbe(o.macRecord ?? 'full') + (o.macAcp ? acpStandIn() : '') + (o.macBootExtra ?? ''),
     macConfigExtra: [
-      ...experimentLines([...(o.macSwitch === false ? [] : ['host_runs_sessions']), ...(o.macExperiments ?? [])]),
+      ...experimentLines({
+        ...(o.macSwitch === 'unset' ? {} : { host_runs_sessions: o.macSwitch !== false }),
+        ...Object.fromEntries((o.macExperiments ?? []).map((id) => [id, true])),
+      }),
       ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : []),
       ...(o.macConfigExtra ?? []),
     ],

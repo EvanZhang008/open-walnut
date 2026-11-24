@@ -5,12 +5,17 @@
  * older release from the registry, as "Existing users keep working" asks:
  *
  *   bun scripts/release-rehearsal/host-judged-rollback.mjs [--older <version>|latest] [--out <dir>]
- *       [--only downgrade,old-host,per-host-off,restart-control] [--old-leader-ms <ms>]
+ *       [--only downgrade,old-host,per-host-off,restart-control,explicit-off] [--old-leader-ms <ms>]
+ *       [--switch default|per-host]
  *
  * Each cluster is tests/helpers/host-judge-cluster.ts (every piece a real process, its own HOME,
  * data, daemon dirs and ports under one temp base, mock `claude`, no auto-update), the host's row a
- * host-network machine (host-judged-leaders.mjs), the switch turned on for that host alone
- * (`runs_sessions: true`, the experiment off), as the rollout turns hosts on.
+ * host-network machine (host-judged-leaders.mjs). How the switch is on (--switch):
+ *   default   (the default) nothing stored: the experiment's registry default turns it on, no
+ *             `runs_sessions` in the host's row, no WALNUT_HOST_RUNS_SESSIONS on either side, as a
+ *             person who never touched it upgrades
+ *   per-host  `runs_sessions: true` for that host alone, the experiment stored off, as the rollout
+ *             turned hosts on one by one
  *
  *   downgrade     (1) a host-judged turn held running; this tree's leader stopped and the older
  *                 release's leader started on the same data and port. Judged: it starts and reads the
@@ -28,6 +33,8 @@
  *                 ends and reports over the channel; the next start there is legacy.
  *   restart-control  this tree only: the upgrade's last check (a send's turn end over the channel)
  *                 after a plain restart of the host's service, to tell a downgrade fault from a restart one.
+ *   explicit-off  (5) a stored false stays off through this tree, the older release and this tree
+ *                 again, for the experiment and for one host (host-judged-explicit-off.mjs).
  *
  * Evidence: <out>/<scenario>.json, and <out>/README.md with one row per scenario.
  */
@@ -37,26 +44,39 @@ import path from 'node:path'
 import { HOST_KEY, waitFor } from '../../tests/helpers/replica-cluster.ts'
 import { writeClusterLogs } from '../../tests/helpers/replica-cluster-reads.ts'
 import { macRows } from '../../tests/helpers/replica-cluster-reads.ts'
-import { factsAtBothEnds, isHostFact, startHostJudgeCluster, untilFactsStill } from '../../tests/helpers/host-judge-cluster.ts'
+import { factIds, factsAtBothEnds, seenAsFacts, startHostJudgeCluster, untilFactsStill } from '../../tests/helpers/host-judge-cluster.ts'
 import { installOlder, olderManifest } from './mixed-leader-host.mjs'
 import { NET_HOST_LINES, clusterDirs, startNewLeaderAgain, startOldLeader, stopClusterMac, stopMacDaemon } from './host-judged-leaders.mjs'
 import { rehearseOldHost } from './host-judged-old-host.mjs'
+import { explicitOffKey, rehearseExplicitOff } from './host-judged-explicit-off.mjs'
 import { errorLines, keepLogs, leaderReads, sessionView, startOn, stopLeftovers, streamCounts, taskView } from './host-judged-reads.mjs'
 
-const SCENARIOS = ['downgrade', 'old-host', 'per-host-off', 'restart-control']
+const SCENARIOS = ['downgrade', 'old-host', 'per-host-off', 'restart-control', 'explicit-off']
+const SWITCHES = ['default', 'per-host']
+/**
+ * The cluster options that turn the switch on for the host, per --switch mode: the Mac's stored
+ * experiment and the host's row (see the header). The host's own switch is never forced.
+ */
+export function switchOn(mode) {
+  return mode === 'per-host'
+    ? { macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'] }
+    : { macSwitch: 'unset', macHostExtra: [...NET_HOST_LINES] }
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function parseArgs(argv) {
-  const out = { older: 'latest', out: null, only: null, oldLeaderMs: 20_000 }
+  const out = { older: 'latest', out: null, only: null, oldLeaderMs: 20_000, switch: 'default' }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--older') out.older = argv[++i]
     else if (a === '--out') out.out = path.resolve(argv[++i])
     else if (a === '--only') out.only = argv[++i].split(',').filter(Boolean)
     else if (a === '--old-leader-ms') out.oldLeaderMs = Number(argv[++i])
+    else if (a === '--switch') out.switch = argv[++i]
     else throw new Error(`unknown argument ${a}`)
   }
   for (const s of out.only ?? []) if (!SCENARIOS.includes(s)) throw new Error(`--only takes ${SCENARIOS.join(', ')}, not ${s}`)
+  if (!SWITCHES.includes(out.switch)) throw new Error(`--switch takes ${SWITCHES.join(', ')}, not ${out.switch}`)
   return out
 }
 
@@ -93,7 +113,7 @@ function storedCursor(h) {
   try { return Number(macRows(h.c, 'SELECT seq FROM session_channel_cursor WHERE host_id = ?', 'sessions.sqlite', HOST_KEY)[0]?.seq ?? 0) } catch { return null }
 }
 
-async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
+async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out, mode }) {
   const r1 = { scenario: 'downgrade', older: older.version, oldLeaderMs, checks: {}, problems: [] }
   const r2 = { scenario: 'upgrade', older: older.version, checks: {}, problems: [] }
   let h = null
@@ -102,7 +122,7 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
   const fail = (r, why) => { r.problems.push(why); process.stdout.write(`  ✗ ${r.scenario}: ${why}\n`) }
   try {
     h = await startHostJudgeCluster({
-      macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'],
+      ...switchOn(mode),
       hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '', WALNUT_HOST_OLD_LEADER_MS: String(oldLeaderMs) },
     })
     const L = leaderReads(h)
@@ -116,6 +136,40 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
     r1.taskId = taskId; r1.sid = sid
     await waitFor(async () => (await h.mac(`/judge?sid=${sid}`)).judge === 'host', 60_000, 'the session to be host-judged')
     await waitFor(() => streamCounts(h, sid).turns >= 1, 120_000, 'the held turn to run on the host')
+    // Three more host sessions, each in a held turn that started under this leader and ends later in
+    // one window of the way back (old-leader-watch.ts): `early` while the old leader answers but before
+    // the host stood down (both judge it: the known duplicate), `a` while no leader answers (the old one
+    // stopped for its update), `b` while the new leader answers but its channel is not open yet.
+    // Neither leader acts on `a` or `b` before the channel opens: each must be acted on exactly once,
+    // by the new leader, never marked as judged by the old one.
+    const windows = {}
+    for (const [k, title] of [['early', 'Ends before the stand-down'], ['a', 'Ends while no leader answers'], ['b', 'Ends before the new channel opens']]) {
+      const file = path.join(d.base, `release-${k}`)
+      const st = await startOn(h, title, `please hold until ${file}`)
+      windows[k] = { ...st, file, text: `echo: released ${file}` }
+    }
+    for (const w of Object.values(windows)) {
+      await waitFor(async () => (await h.mac(`/judge?sid=${w.sid}`)).judge === 'host', 60_000, 'the session to be host-judged')
+      await waitFor(() => streamCounts(h, w.sid).turns >= 1, 120_000, 'the held turn to run on the host')
+    }
+    r1.windows = Object.fromEntries(Object.entries(windows).map(([k, w]) => [k, w.sid]))
+    // Release a window's turn and wait for its result on the host: what the host read then is kept.
+    const releaseWindow = async (k) => {
+      const w = windows[k]
+      const at = await h.host(`/judging?sid=${w.sid}`)
+      fs.writeFileSync(w.file, 'go\n')
+      const ended = await waitFor(() => streamCounts(h, w.sid, [w.text])[w.text] >= 1, 120_000, `the turn of window ${k} to end`).then(() => true, () => false)
+      // The host's service may be restarting (the old leader's host-server install restarts it once):
+      // its fact log is read when it answers again.
+      let rec = null
+      await waitFor(async () => {
+        const f = await h.host('/facts?after=0').catch(() => null)
+        if (!Array.isArray(f?.recs)) return false
+        rec = f.recs.filter((x) => x.sid === w.sid && x.name === 'session:result').at(-1) ?? null
+        return !!rec
+      }, 120_000, `the result of window ${k} in the host's fact log`, 1_000).catch(() => {})
+      return { atRelease: at, ended, judgedBy: rec?.judgedBy ?? null, seq: rec?.seq ?? null }
+    }
     // A second message while the turn holds: the host's runner takes it (the CLI queues a line that lands mid-turn).
     const queued = 'QUEUED before the downgrade'
     const q = await L.send(sid, queued)
@@ -132,6 +186,16 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
     r1.checks.oldLeaderUp.version = (await L.api('GET', '/api/v1/status')).json?.version ?? null
     r1.checks.dataReads = { tasks: (await L.api('GET', '/api/tasks')).status, task: taskView(await L.task(taskId)), session: sessionView(await L.session(sid)) }
     if (r1.checks.dataReads.task.title !== r1.before.task.title) fail(r1, `the old leader reads the task as ${JSON.stringify(r1.checks.dataReads.task)}`)
+    // The turn that ends before the stand-down: the host still judges it, and the old leader too. It
+    // ends once the host hears the old leader answer, with a few seconds for that leader to follow
+    // the session, still well inside the watch's bound.
+    const hearsOld = await waitFor(async () => (await h.host('/judging')).presence === 'answers', 60_000, 'the host to hear the old leader', 500).then(() => true, () => false)
+    if (!hearsOld) fail(r1, 'the host never heard the old leader answer')
+    await sleep(5_000)
+    r1.checks.windowEarly = await releaseWindow('early')
+    if (r1.checks.windowEarly.atRelease.presence !== 'answers') fail(r1, `the early turn was released while the host read the old leader as ${r1.checks.windowEarly.atRelease.presence}`)
+    if (r1.checks.windowEarly.atRelease.standsDown) fail(r1, 'the host already stood down when the early turn was released: it no longer tests the window before the stand-down')
+    if (!r1.checks.windowEarly.ended) fail(r1, 'the early turn never ended on the host')
     // The host stands down within its bound (a tick of a quarter bound, and the quiet window, past it).
     const bound = oldLeaderMs + Math.max(10_000, oldLeaderMs / 2) + 30_000
     const down = await waitFor(async () => (await h.host('/judging')).standsDown, bound, 'the host to stand down', 500).then(() => Date.now() - upAt, () => null)
@@ -181,8 +245,24 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
     r2.checks.oldExit = await old.stop()
     // Where the new leader takes the host's log up again: every fact after it must reach it once.
     r2.checks.cursorAtUpgrade = storedCursor(h)
+    // Window A: no leader answers. The host must read that before the turn ends.
+    const noLeader = await waitFor(async () => (await h.host('/judging')).presence !== 'answers', 120_000, 'the host to hear no leader', 500).then(() => true, () => false)
+    if (!noLeader) fail(r2, 'the host still read a leader that answers after the old one stopped')
+    r2.checks.windowA = await releaseWindow('a')
+    if (!r2.checks.windowA.atRelease.standsDown) fail(r2, 'the host no longer stood down in window A: it no longer tests that window')
+    if (!r2.checks.windowA.ended) fail(r2, 'the turn of window A never ended on the host')
+    if (r2.checks.windowA.judgedBy) fail(r2, `the turn that ended while no leader answered was marked judged by ${r2.checks.windowA.judgedBy}`)
+    // Window B: the new leader answers, its channel to the host held shut until the turn ended.
+    r2.checks.channelHold = await h.host('/hold-channel?on=1')
     again = await startNewLeaderAgain(h, { port, label: 'upgrade' })
     r2.checks.newLeaderUpMs = again.upMs
+    const answersAgain = await waitFor(async () => (await h.host('/judging')).presence === 'answers', 120_000, 'the host to hear the new leader', 500).then(() => true, () => false)
+    if (!answersAgain) fail(r2, 'the host never heard the new leader answer')
+    r2.checks.windowB = await releaseWindow('b')
+    if (r2.checks.windowB.atRelease.live) fail(r2, 'the new leader\'s channel was open in window B: it no longer tests that window')
+    if (!r2.checks.windowB.ended) fail(r2, 'the turn of window B never ended on the host')
+    if (r2.checks.windowB.judgedBy) fail(r2, `the turn that ended before the new channel opened was marked judged by ${r2.checks.windowB.judgedBy}`)
+    r2.checks.channelHold.refused = (await h.host('/hold-channel?on=0')).refused
     const linked = await waitFor(async () => (await h.host('/judging')).live && !(await h.host('/judging')).standsDown, 180_000, 'the host to judge again', 500).then(() => true, () => false)
     r2.checks.hostJudgesAgain = { linked, judging: await h.host(`/judging?sid=${sid}`) }
     if (!linked) fail(r2, 'the host did not take its sessions back after the new leader came back')
@@ -207,26 +287,59 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
     r2.checks.newSend.hostLog = entry.split('\n').filter((l) => l.includes(sid) && /suppressing replayed result|phase proxy|not this Walnut/.test(l)).map((l) => l.slice(0, 300))
     if (!viaChannel) fail(r2, 'a send after the upgrade was not answered over the channel')
     else if (r2.checks.newSend.history !== 1 || r2.checks.newSend.stream[`echo: ${newWords}`] !== 1) fail(r2, `the send after the upgrade was answered ${r2.checks.newSend.history} times (history), ${r2.checks.newSend.stream[`echo: ${newWords}`]} (host)`)
-    // Every host fact written after the stored cursor (the catch-up and the send's turn), once and in
-    // order, and nothing else: a missing one fails as a doubled one does. The new leader's probe hears
-    // only what came after its start, so its events are exactly the catch-up and after.
+    // Every host fact written after the stored cursor (the catch-up and the send's turn) that the new
+    // leader has to act on, once and in order, and nothing else: a missing one fails as a doubled one
+    // does. The facts the host kept while it stood down for the old leader (`judgedBy: 'leader'`: that
+    // leader acted on those turns) are applied and never said (leader-apply.ts actedOnAlready), so they
+    // are not owed. The new leader's probe hears only what came after its start.
     await untilFactsStill(h).catch((err) => fail(r2, `the host's facts did not settle: ${err.message}`))
     const facts = (await h.host('/facts?after=0')).recs
-    const events = await h.mac(`/events?sid=${sid}`)
-    const seen = events.filter((e) => e.source === 'host-channel' && isHostFact(e.name)).map((e) => `${e.name}:${e.hash}`)
-    const dupes = seen.filter((x, i) => seen.indexOf(x) !== i)
     const from = r2.checks.cursorAtUpgrade
-    const fa = factsAtBothEnds(facts.filter((x) => typeof from === 'number' && x.seq > from), events, sid)
-    const missing = fa.host.filter((x) => !fa.seen.includes(x))
-    r2.checks.facts = { hostRecords: facts.filter((x) => x.sid === sid).length, afterCursor: fa.host.length, leaderChannelEvents: seen.length, duplicates: dupes, missing, inOrder: JSON.stringify(fa.seen) === JSON.stringify(fa.host) }
     if (typeof from !== 'number') fail(r2, 'the leader\'s stored channel cursor could not be read before the upgrade')
-    else if (!fa.host.length) fail(r2, `no host fact after the cursor (${from}) to judge`)
-    if (dupes.length) fail(r2, `the new leader heard ${dupes.length} host facts twice: ${dupes.slice(0, 5).join(', ')}`)
-    if (missing.length) fail(r2, `${missing.length} host facts after the cursor never reached the new leader: ${missing.slice(0, 5).join(', ')}`)
-    else if (!r2.checks.facts.inOrder) fail(r2, `the new leader heard the host's facts out of order or with extras:\n  host ${fa.host.join(' ')}\n  seen ${fa.seen.join(' ')}`)
-    // No second start of the session under the new leader (the old one judged its turns meanwhile).
-    r2.checks.started = fa.started.length
-    if (fa.started.length > 1) fail(r2, `the new leader heard session:started ${fa.started.length} times`)
+    const oldLog = (() => { try { return fs.readFileSync(path.join(out, 'downgrade-old-leader.log'), 'utf8') } catch { return '' } })()
+    // A fact is its name and a hash of its data, so two turns that ended alike are two equal ids:
+    // a duplicate is an id heard more often than the host wrote it, never an id that occurs twice.
+    const tally = (xs) => xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map())
+    const over = (a, b) => [...tally(a)].filter(([x, n]) => n > (tally(b).get(x) ?? 0)).map(([x, n]) => `${x} x${n - (tally(b).get(x) ?? 0)}`)
+    r2.checks.facts = {}
+    r2.checks.turnEndsActedOn = {}
+    for (const [k, s1] of [['main', sid], ...Object.entries(windows).map(([k, w]) => [k, w.sid])]) {
+      const events = await h.mac(`/events?sid=${s1}`)
+      const fa = factsAtBothEnds(facts.filter((x) => typeof from === 'number' && x.seq > from), events, s1)
+      const owedRecs = fa.log.filter((x) => x.judgedBy !== 'leader')
+      const owed = factIds(owedRecs)
+      const seen = seenAsFacts(fa.mac, owedRecs)
+      const dupes = over(seen, owed)
+      const missing = over(owed, seen)
+      const f = r2.checks.facts[k] = { hostRecords: facts.filter((x) => x.sid === s1).length, afterCursor: fa.log.length, judgedByOld: fa.log.length - owedRecs.length, owed: owed.length, leaderChannelEvents: seen.length, duplicates: dupes, missing, inOrder: JSON.stringify(seen) === JSON.stringify(owed), started: fa.started.length }
+      if (!owed.length) fail(r2, `${k}: no host fact after the cursor (${from}) to judge`)
+      if (dupes.length) fail(r2, `${k}: the new leader heard ${dupes.length} host facts more often than owed: ${dupes.slice(0, 5).join(', ')}`)
+      if (missing.length) fail(r2, `${k}: ${missing.length} host facts after the cursor never reached the new leader: ${missing.slice(0, 5).join(', ')}`)
+      else if (!f.inOrder) fail(r2, `${k}: the new leader heard the host's facts out of order or with extras:\n  host ${owed.join(' ')}\n  seen ${seen.join(' ')}`)
+      // No second start of the session under the new leader (the old one judged its turns meanwhile).
+      if (fa.started.length > 1) fail(r2, `${k}: the new leader heard session:started ${fa.started.length} times`)
+      // Each turn end is acted on exactly once, by one leader: the older one acted on the turns that
+      // ended under it (its own log, one "session result received" of its web handler each), and the
+      // host kept the ones of its stand-down with `judgedBy: 'leader'`; the new leader acts on the rest
+      // (its result handler ends the session once per turn end it acts on).
+      const ends = fa.log.filter((x) => x.name === 'session:result' || x.name === 'session:error')
+      const byOld = oldLog.split('\n').filter((l) => l.includes('[web] session result received') && l.includes(s1)).length
+      const byNew = events.filter((e) => e.name === 'session:ended' && e.source === 'session-result').length
+      const marked = ends.filter((x) => x.judgedBy === 'leader').length
+      const t = r2.checks.turnEndsActedOn[k] = { inCatchUp: ends.length, markedJudgedByOld: marked, byOldLeader: byOld, byNewLeader: byNew }
+      if (byNew !== ends.length - marked) fail(r2, `${k}: the new leader acted on ${byNew} turn ends, ${ends.length - marked} were left to it`)
+      if (k === 'early') {
+        // The known duplicate (old-leader-watch.ts): the host judged it before it stood down, so it is
+        // unmarked, and the old leader judged it from the transcript too.
+        t.knownDuplicate = byOld + byNew > ends.length
+        if (marked) fail(r2, `early: the turn that ended before the stand-down was marked judged by the old leader`)
+        continue
+      }
+      if (byOld + byNew !== ends.length) fail(r2, `${k}: ${ends.length} turn ends after the cursor were acted on ${byOld + byNew} times (${byOld} by ${older.version}, ${byNew} by the new leader)`)
+      if (marked !== byOld) fail(r2, `${k}: the host marked ${marked} turn ends as judged by the older leader, which acted on ${byOld}`)
+      if (k !== 'main' && (ends.length !== 1 || byNew !== 1)) fail(r2, `${k}: ${ends.length} turn ends after the cursor, ${byNew} acted on by the new leader (one each expected)`)
+    }
+    r2.checks.started = r2.checks.facts.main.started
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
     fail(r2.ran ? r2 : r1, `run failed: ${why}`)
@@ -240,12 +353,12 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
   return [r1, r2]
 }
 
-async function rehearsePerHostOff({ out }) {
+async function rehearsePerHostOff({ out, mode }) {
   const r = { scenario: 'per-host-off', checks: {}, problems: [] }
   const fail = (why) => { r.problems.push(why); process.stdout.write(`  ✗ per-host-off: ${why}\n`) }
   let h = null
   try {
-    h = await startHostJudgeCluster({ macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'], hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
+    h = await startHostJudgeCluster({ ...switchOn(mode), hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
     const L = leaderReads(h)
     r.base = h.c.base
     await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 180_000, 'the Mac to link the host\'s session channel')
@@ -286,14 +399,14 @@ async function rehearsePerHostOff({ out }) {
  * the host's service restarted (as its update restarts it), then a send. Tells a fault of the
  * downgrade apart from one of any service restart.
  */
-async function rehearseRestartControl({ out }) {
+async function rehearseRestartControl({ out, mode }) {
   const r = { scenario: 'restart-control', checks: {}, problems: [] }
   const fail = (why) => { r.problems.push(why); process.stdout.write(`  ✗ restart-control: ${why}\n`) }
   let h = null
   const channelResults = async (sid, words) => (await h.mac(`/events?sid=${sid}`)).filter((e) => e.source === 'host-channel' && e.name === 'session:result' && String(e.data?.result ?? '').includes(words)).length
   const channelResult = async (sid, words) => (await channelResults(sid, words)) > 0
   try {
-    h = await startHostJudgeCluster({ macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'], hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
+    h = await startHostJudgeCluster({ ...switchOn(mode), hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
     const L = leaderReads(h)
     r.base = h.c.base
     await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 180_000, 'the Mac to link the host\'s session channel')
@@ -328,20 +441,26 @@ async function rehearseRestartControl({ out }) {
 }
 
 /** One README row per scenario: its verdict and the numbers it was judged on. */
-function readme(results, older) {
+function readme(results, older, mode) {
   const key = (r) => {
     const c = r.checks
     if (r.scenario === 'downgrade') return `old leader up ${c.oldLeaderUp?.upMs ?? '?'} ms (${c.oldLeaderUp?.version ?? 'no health'}); host stood down ${c.standDown?.afterMs ?? 'never'} ms after it (bound ${c.standDown?.boundMs} ms, WALNUT_HOST_OLD_LEADER_MS=${r.oldLeaderMs}; the old leader's host-server install restarted the service ${c.hostService?.restartsForSpec ?? '?'}x); held turn: ${c.turnEnd?.stream?.turns ?? "?"} turns, ${c.turnEnd?.stream?.results ?? "?"} results for 2 messages, history ${c.turnEnd?.historyReleased ?? '?'}x; old-leader send answered ${c.oldSend?.history ?? '?'}x`
-    if (r.scenario === 'upgrade') return `host judges again: ${c.hostJudgesAgain?.linked}; judge ${c.reads?.judge?.judge ?? '?'}; facts after the cursor ${c.facts?.afterCursor ?? '?'}, missing ${c.facts?.missing?.length ?? '?'}, duplicates ${c.facts?.duplicates?.length ?? '?'}, in order ${c.facts?.inOrder}; send answered ${c.newSend?.history ?? '?'}x in the history, its turn end over the channel: ${c.newSend?.viaChannel}`
+    if (r.scenario === 'upgrade') {
+      const f = c.facts?.main ?? {}
+      const t = (k) => { const x = c.turnEndsActedOn?.[k]; return x ? `${k} ${x.inCatchUp} end(s): ${r.older} ${x.byOldLeader} (marked ${x.markedJudgedByOld}), new ${x.byNewLeader}${x.knownDuplicate ? ', the known duplicate' : ''}` : `${k} ?` }
+      const win = (k, w) => w ? `${k}: ended ${w.ended}, marked ${w.judgedBy ?? 'no'} (host then: stood down ${w.atRelease?.standsDown}, presence ${w.atRelease?.presence}, channel ${w.atRelease?.live ? 'open' : 'shut'})` : `${k}: not run`
+      return `host judges again: ${c.hostJudgesAgain?.linked}; judge ${c.reads?.judge?.judge ?? '?'}; main session facts after the cursor ${f.afterCursor ?? '?'} (judged by the older leader, applied unsaid ${f.judgedByOld ?? '?'}), missing ${f.missing?.length ?? '?'}, duplicates ${f.duplicates?.length ?? '?'}, in order ${f.inOrder}; send answered ${c.newSend?.history ?? '?'}x in the history, its turn end over the channel: ${c.newSend?.viaChannel}; ${win('window A', c.windowA)}; ${win('window B', c.windowB)} (links refused while held ${c.channelHold?.refused ?? '?'}); turn ends acted on: ${['main', 'early', 'a', 'b'].map(t).join('; ')}`
+    }
     if (r.scenario === 'old-host') return `host daemon ${c.hostDaemon?.version ?? '?'} (pid ${c.hostDaemon?.pid ?? '?'}, the same at the end: ${c.hostDaemon?.sameAtEnd}); the leader judges there: ${c.leaderJudges}; start judged ${c.start?.judge?.judge ?? '?'}, answered ${c.start?.answered}`
     if (r.scenario === 'restart-control') return `service restarted (pid ${c.restartedPid ?? '?'}); host's task copy at the send: ${c.hostCopyAtSend ?? '?'}; next turn's end over the channel: ${c.send?.viaChannel}; answered ${c.send?.stream?.['ROUND after the restart'] ?? '?'}x on the host, ${c.send?.history ?? '?'}x in the history, ${c.send?.channelResults ?? '?'} turn end(s) over the channel`
+    if (r.scenario.startsWith('explicit-off')) return explicitOffKey(c)
     if (r.scenario === 'per-host-off') return `off took ${c.offTookMs ?? '?'} ms; held turn over the channel: ${c.turnEnd?.viaChannel}, ${c.turnEnd?.stream?.results ?? '?'} results; next start judged ${c.nextStart?.judge?.judge ?? '?'}`
     return ''
   }
   // What the cleanup found still running from a cluster's base, or could not do, is on the row too.
   const after = (r) => [r.leftovers?.length ? `left running and stopped: ${r.leftovers.length}` : '', ...(r.cleanup ?? []).map((x) => `cleanup ${x}`)].filter(Boolean)
   const rows = results.map((r) => `| ${r.scenario} | ${r.problems.length ? 'FAIL' : 'PASS'} | ${[key(r), ...after(r), ...r.problems].join('<br>')} |`)
-  return [`# Host-judged sessions: rollback against ${older.version}`, '', `Run ${new Date().toISOString()}; older release open-walnut@${older.version} (${older.printed}, daemon ${older.daemonVersion}).`, '',
+  return [`# Host-judged sessions: rollback against ${older.version}`, '', `Run ${new Date().toISOString()}; older release open-walnut@${older.version} (${older.printed}, daemon ${older.daemonVersion}); switch: ${mode}.`, '',
     '| Scenario | Verdict | Key numbers |', '|---|---|---|', ...rows, ''].join('\n')
 }
 
@@ -355,7 +474,8 @@ async function main() {
   try {
     const manifest = await olderManifest(opts.older)
     const older = await installOlder(work, manifest)
-    process.stdout.write(`older: ${older.printed} (daemon ${older.daemonVersion}); out: ${out}\n`)
+    process.stdout.write(`older: ${older.printed} (daemon ${older.daemonVersion}); switch: ${opts.switch}; out: ${out}\n`)
+    const mode = opts.switch
     const names = opts.only ?? SCENARIOS
     const run = async (name, fn) => {
       process.stdout.write(`\n▶ ${name}\n`)
@@ -367,11 +487,12 @@ async function main() {
         process.stdout.write(`  ${r.problems.length ? '✗' : '✓'} ${r.scenario}\n`)
       }
     }
-    if (names.includes('downgrade')) await run('downgrade + upgrade', () => rehearseDowngradeUpgrade({ older, oldLeaderMs: opts.oldLeaderMs, out }))
-    if (names.includes('old-host')) await run('old-host', () => rehearseOldHost({ older, out }))
-    if (names.includes('per-host-off')) await run('per-host-off', () => rehearsePerHostOff({ out }))
-    if (names.includes('restart-control')) await run('restart-control', () => rehearseRestartControl({ out }))
-    fs.writeFileSync(path.join(out, 'README.md'), readme(results, older))
+    if (names.includes('downgrade')) await run('downgrade + upgrade', () => rehearseDowngradeUpgrade({ older, oldLeaderMs: opts.oldLeaderMs, out, mode }))
+    if (names.includes('old-host')) await run('old-host', () => rehearseOldHost({ older, out, hostLines: switchOn(mode).macHostExtra }))
+    if (names.includes('per-host-off')) await run('per-host-off', () => rehearsePerHostOff({ out, mode }))
+    if (names.includes('restart-control')) await run('restart-control', () => rehearseRestartControl({ out, mode }))
+    if (names.includes('explicit-off')) await run('explicit-off', () => rehearseExplicitOff({ older, out }))
+    fs.writeFileSync(path.join(out, 'README.md'), readme(results, older, mode))
     process.stdout.write(`\nevidence: ${out}\n`)
   } finally {
     fs.rmSync(work, { recursive: true, force: true })
