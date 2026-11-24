@@ -455,12 +455,17 @@ test('(N3-1)(N3-6)(N3-10)(N3-11) a failed Update is said once on the plugin page
     await fs.rename(`${origin}.away`, origin)
   }
   // Take the update for real: the card's title line holds name, badge, version and chip at
-  // 1280 even with RESTART TO ACTIVATE on it (N3-10).
+  // 1280 (N3-10). The update reloads the plugin live (80899aeb78, source-update-run.ts), so it
+  // runs the new code at once and never waits on a restart: Restart to activate is only for code
+  // a live reload cannot replace (a native addon, a link out of its folder: plugin-module.ts).
   await page.getByTestId('plugin-update-walnut-demo').click()
-  await expect(page.getByTestId('plugin-update-feedback-walnut-demo')).toContainText('Updated to', { timeout: 60_000 })
+  await expect(page.getByTestId('plugin-update-feedback-walnut-demo')).toContainText(/^Updated to [0-9a-f]{7}, reloaded Walnut Plugin Demo/, { timeout: 60_000 })
+  await expect(page.getByTestId('plugin-row-walnut-demo')).toHaveAttribute('data-plugin-status', 'active')
   await backToApps(page)
   const card = page.getByTestId('plugin-source-native-plugin-repo')
-  await expect(card.locator('.badge', { hasText: /restart to activate/i })).toBeVisible()
+  // Its card reads On, the state of a plugin running its newest code, and no restart is asked.
+  await expect(page.getByTestId('plugin-card-walnut-demo-status')).toHaveText('On')
+  await expect(card.getByText(/restart to (activate|finish)/i)).toHaveCount(0)
   const title = card.locator('.plugin-store-source-title')
   const [t, c] = [await rect(title), await rect(sourceChip)]
   expect(t.height, 'title cluster is one line').toBeLessThan(30)
