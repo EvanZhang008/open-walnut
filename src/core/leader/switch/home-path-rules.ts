@@ -155,6 +155,7 @@ export const NO_PATH_STORES: Readonly<Record<string, string>> = {
   'status-check-told': 'ids of mismatches told',
   quiet: 'quiet-mode holds',
   'focus-spaces': 'names and ids',
+  'host-history-readers': 'host names',
   auth: 'token hashes and an instance id',
   secrets: 'credentials',
   'vault-in-home': 'the password vault',

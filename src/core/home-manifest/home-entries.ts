@@ -83,6 +83,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('router', 'router', 'dir', 'Router areas, routing ledgers, approval tokens and frozen incoming content', { sensitive: true }),
   lead('approvals', 'approvals', 'dir', 'Approval requests and the approvals switch (a `keys.json` an older Walnut left is no longer read)', { sensitive: true }),
   lead('host-exec-grants', 'host-exec-grants.json', 'file', 'The user\'s grants for running commands on hosts'),
+  lead('host-history-readers', 'host-history-readers.json', 'file', 'Hosts that read their own sessions\' transcripts, so this leader never parses one of them itself'),
   lead('browser-control', 'browser-control.json', 'file', 'Sites the user approved for agents in the browser'),
   lead('workspaces', 'workspaces', 'dir', 'Which workspace scripts the user trusts'),
   lead('sync', 'sync', 'dir', 'Sync state (children with another class are listed)', { sensitive: true, listsChildren: true }),

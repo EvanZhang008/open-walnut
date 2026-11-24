@@ -104,6 +104,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/router/` | leader-data | yes | Router areas, routing ledgers, approval tokens and frozen incoming content |
 | `~/.open-walnut/approvals/` | leader-data | yes | Approval requests and the approvals switch (a `keys.json` an older Walnut left is no longer read) |
 | `~/.open-walnut/host-exec-grants.json` | leader-data | no | The user's grants for running commands on hosts |
+| `~/.open-walnut/host-history-readers.json` | leader-data | no | Hosts that read their own sessions' transcripts, so this leader never parses one of them itself |
 | `~/.open-walnut/browser-control.json` | leader-data | no | Sites the user approved for agents in the browser |
 | `~/.open-walnut/workspaces/` | leader-data | no | Which workspace scripts the user trusts |
 | `~/.open-walnut/sync/` | leader-data | yes | Sync state (children with another class are listed) |
