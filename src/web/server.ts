@@ -2177,11 +2177,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // An ACP session's `walnut` names itself by its worker's runtime id: the caller header
   // reads as that session's record id from here on (core/sessions/acp-caller-sid.ts).
   app.use('/api', (await import('../core/sessions/acp-caller-sid.js')).acpCallerSidMiddleware)
-  // A person's own request is marked for the work it runs: on a revoked host only such a call runs
-  // a process or hands it data (core/session-channel/person-call.ts).
+  // A person's own request is marked for the work it runs, until its response ends: on a revoked
+  // host only such a call runs a process or hands it data (core/session-channel/person-call.ts).
   {
-    const [{ asPersonCall }, { isPersonCaller }] = await Promise.all([import('../core/session-channel/person-call.js'), import('./routes/person-caller.js')])
-    app.use('/api', (req, _res, next) => { if (isPersonCaller(req)) asPersonCall(next); else next() })
+    const [{ markPersonRequest }, { isPersonCaller }] = await Promise.all([import('../core/session-channel/person-call.js'), import('./routes/person-caller.js')])
+    app.use('/api', (req, res, next) => { if (isPersonCaller(req)) markPersonRequest(res, next); else next() })
   }
   app.use('/api', (await import('./middleware/router-area-access.js')).routerAreaAccess)
   // A host replica answering alone (the Mac away, no companion standing in): a

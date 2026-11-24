@@ -35,7 +35,12 @@ import {
   HostRevokedError, hostRevokedNow, machineRevokedNow, revokedAs, revokedAsIn, setRevokedHostResolver, setRevokedHosts, stickyAliasesOf,
 } from '../../../src/core/session-channel/revoked-hosts.js'
 import { gateSessionCommand, REVOKED_PERSON_ONLY_COMMANDS, REVOKED_REFUSES_COMMANDS } from '../../../src/providers/ephemeral-session-gate.js'
-import { asPersonCall } from '../../../src/core/session-channel/person-call.js'
+import { asPersonCall, inPersonCall, markPersonRequest, outsidePersonCall } from '../../../src/core/session-channel/person-call.js'
+import { _resetBridgeSweepForTesting, refreshRevokedHosts } from '../../../src/core/session-channel/leader-issue.js'
+import { mintHostCredential, revokeHostDoor } from '../../../src/core/session-channel/host-credentials.js'
+import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
+import { EventEmitter } from 'node:events'
+import net from 'node:net'
 import { classifyDeliveryFailure } from '../../../src/providers/delivery-failure.js'
 import { planTransfer, TransferError } from '../../../src/core/transfer/planner.js'
 import { enqueueMessage, getQueue, markNextProcessing, markProcessing, resetCache } from '../../../src/core/session-message-queue.js'
@@ -137,6 +142,26 @@ describe('S2: a revoked host is handed no credential and carries none of this Wa
     } finally { fetchMock.mockRestore(); companion.on = false }
   })
 
+  it('after a boot, the first ban read deletes every banned name\'s token again (a 404 counts as done), so a failed delete a restart forgot is not left valid (R3-S2)', async () => {
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
+    await fsp.mkdir(WALNUT_HOME, { recursive: true })
+    _resetDeviceAuthForTesting()
+    await mintHostCredential({ machineId: BOX, walnutId: 'w'.repeat(32), hostKey: 'devbox-w' })
+    await revokeHostDoor('devbox-w', { by: 'human' })
+    companion.on = true
+    const asked: string[] = []
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => { asked.push(String(url)); return new Response(null, { status: 404 }) })
+    try {
+      _resetBridgeSweepForTesting()
+      await refreshRevokedHosts()
+      await vi.waitFor(() => expect(asked).toEqual(['https://companion.example.test/api/devices/bridge-devbox-w']))
+      // Done once a boot: the next read asks nothing.
+      await refreshRevokedHosts()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(asked).toHaveLength(1)
+    } finally { fetchMock.mockRestore(); companion.on = false; _resetBridgeSweepForTesting() }
+  })
+
   it('the tunnel chosen there, or placed there by itself, runs here again', () => {
     const hosts = { devbox: { hostname: 'devbox-a.example.test' }, other: { hostname: 'other.example.test' } }
     const def = { id: 'tunnel-x', alwaysOnHostPattern: '^devbox' } as never
@@ -174,6 +199,40 @@ describe('S3: no new process starts on a revoked host, and no work moves there',
     // Reads, and the same commands to a host not revoked, go as before.
     expect(() => gateSessionCommand({ host: 'devbox' }, 'fs.read', {}, false)).not.toThrow()
     expect(() => gateSessionCommand({ host: 'other' }, 'exec.run', {}, false)).not.toThrow()
+  })
+
+  it('a link opened inside a person\'s request carries no person once the request ended: its events\' exec.run and allow are refused (R3-S1)', async () => {
+    setRevokedHosts(['devbox'])
+    const server = net.createServer((sock) => { setTimeout(() => sock.write('frame'), 30) })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    const port = (server.address() as net.AddressInfo).port
+    const allow = { sid: 's-1', raw: JSON.stringify({ response: { response: { behavior: 'allow' } } }) }
+    const res = new EventEmitter()
+    const seen: string[] = []
+    try {
+      await new Promise<void>((resolve) => {
+        markPersonRequest(res, () => {
+          expect(inPersonCall()).toBe(true)
+          // The daemon link's own dial runs outside the mark, even during the request.
+          expect(outsidePersonCall(() => inPersonCall())).toBe(false)
+          const sock = net.connect(port, '127.0.0.1')
+          sock.on('data', () => {
+            for (const [cmd, params] of [['exec.run', {}], ['sendRaw', allow]] as const) {
+              try { gateSessionCommand({ host: 'devbox' }, cmd, params, false); seen.push(`${cmd}: sent`) } catch { seen.push(`${cmd}: refused`) }
+            }
+            sock.destroy()
+            resolve()
+          })
+          // The person's request ends before the link says anything.
+          res.emit('finish')
+        })
+      })
+      expect(seen).toEqual(['exec.run: refused', 'sendRaw: refused'])
+      // Work wrapped as a person's call ends with it too.
+      let later = () => inPersonCall()
+      await asPersonCall(async () => { const t = setTimeout(() => {}, 0); clearTimeout(t); later = () => inPersonCall() })
+      expect(later()).toBe(false)
+    } finally { server.close() }
   })
 
   it('a transfer to it is refused in its plan, before anything is packed', () => {

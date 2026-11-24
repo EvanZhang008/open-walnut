@@ -255,6 +255,12 @@ export async function refreshRevokedHosts(): Promise<string[]> {
   if (revoked.length > 0) await import('../hosts/daemon-twins.js').then((m) => m.daemonTwinsReady()).catch(() => { /* its key and machine id still hold */ })
   const changed = setRevokedHosts(revoked)
   // A machine token the companion did not delete at the revoke: again now, while its key is still banned.
+  // The first read after a boot tries every banned name (a delete the companion already did answers
+  // 404, counted as done), so a failure a restart forgot is never left valid there (R3-S2).
+  if (!bridgeSwept && revoked.length > 0) {
+    bridgeSwept = true
+    for (const r of revoked) for (const k of await bannedNamesOf(r.hostKey)) bridgeRetry.add(k)
+  }
   const retry = [...bridgeRetry].filter((k) => hostRevokedNow(k))
   bridgeRetry.clear()
   if (retry.length) void revokeBridge(retry).catch(() => { retry.forEach((k) => bridgeRetry.add(k)) })
@@ -339,6 +345,10 @@ export async function revokeHostDoorNow(hostKey: string, by: string): Promise<{ 
 type BridgeRevoke = { revoked: string[]; failed: string[] }
 /** Keys whose companion machine token is still to be deleted (refreshRevokedHosts retries them). */
 const bridgeRetry = new Set<string>()
+/** The first ban read of this process tried every banned name's token (refreshRevokedHosts). */
+let bridgeSwept = false
+/** Tests: as after a boot. */
+export function _resetBridgeSweepForTesting(): void { bridgeSwept = false; bridgeRetry.clear() }
 
 /** Every name the ban on `hostKey` covers now: itself, its ban's key and the keys it named, its aliases. */
 async function bannedNamesOf(hostKey: string): Promise<string[]> {

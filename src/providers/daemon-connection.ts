@@ -105,6 +105,7 @@ import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 // A leaf (zero imports): the ban of a revoked host, under any name of its machine.
 import { HostRevokedError, revokedAs } from '../core/session-channel/revoked-hosts.js'
+import { inPersonCall, outsidePersonCall } from '../core/session-channel/person-call.js'
 import { notLinuxSentence, classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
 import { PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
@@ -2794,6 +2795,9 @@ export class DaemonConnection {
    * Sets up SSH tunnel and WebSocket connection.
    */
   async connect(): Promise<void> {
+    // A link dialed inside a person's request carries no person mark: its events, timers and
+    // reconnects are never that person's call (person-call.ts, R3-S1).
+    if (inPersonCall()) return outsidePersonCall(() => this.connect())
     if (this._connected || this._connecting) return
     // A stopping server dials nothing (daemon-dial-gate.ts).
     assertDaemonDialsOpen(this.hostKey)
@@ -8060,6 +8064,7 @@ export class DaemonConnection {
    * implement `hello`); it only leaves optional capabilities unadvertised.
    */
   async connectDirect(wsUrl: string): Promise<void> {
+    if (inPersonCall()) return outsidePersonCall(() => this.connectDirect(wsUrl))
     if (this._connected) return
     assertDaemonDialsOpen(this.hostKey)
     // One dial per connection (runner gate r3, section 4). The reconnect loop

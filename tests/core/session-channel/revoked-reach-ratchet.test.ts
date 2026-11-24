@@ -113,7 +113,7 @@ function members(): Record<string, string[]> {
 }
 
 /** Rows that are not one member of an enumerated kind. */
-const FIXED = ['door', 'issue', 'channel', 'start', 'send', 'expose', 'acp-allow', 'daemon-hello', 'daemon-answer', 'daemon-event:*']
+const FIXED = ['door', 'issue', 'channel', 'start', 'send', 'expose', 'acp-allow', 'person-local', 'daemon-hello', 'daemon-answer', 'daemon-event:*']
 
 describe('every way a host reaches this leader is classified for a revoke', () => {
   it('finds the members it enumerates (the patterns still match the source)', () => {
@@ -169,7 +169,11 @@ describe('every way a host reaches this leader is classified for a revoke', () =
     expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function gateSessionCommand(')).toMatch(/const canonicalCommand = canonical\(cmd, params\)\n(\s*\/\/[^\n]*\n)*\s*const spawns = !!canonicalCommand && REVOKED_REFUSES_COMMANDS\.has\(canonicalCommand\)\n\s*if \(spawns\) assertHostNotRevoked\(scope\.host,/)
     // A person-only command: right after, in the same gate; the server marks a person's request; an ACP allow before its link.
     expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function gateSessionCommand(')).toMatch(/if \(spawns\)[^\n]*\n\s*const personOnly = [^\n]*\n\s*if \(personOnly && !inPersonCall\(\)\) assertHostNotRevoked\(scope\.host,/)
-    expect(read('src/web/server.ts')).toMatch(/app\.use\('\/api', \(req, _res, next\) => \{ if \(isPersonCaller\(req\)\) asPersonCall\(next\); else next\(\) \}\)/)
+    expect(read('src/web/server.ts')).toMatch(/app\.use\('\/api', \(req, res, next\) => \{ if \(isPersonCaller\(req\)\) markPersonRequest\(res, next\); else next\(\) \}\)/)
+    // A daemon link is dialed outside any person mark, on both paths (R3-S1).
+    expect(bodyOf(daemon, 'async connect(')).toMatch(/\{\s*(\/\/[^\n]*\n\s*)*if \(inPersonCall\(\)\) return outsidePersonCall\(\(\) => this\.connect\(\)\)/)
+    expect(bodyOf(daemon, 'async connectDirect(')).toMatch(/\{\s*if \(inPersonCall\(\)\) return outsidePersonCall\(\(\) => this\.connectDirect\(wsUrl\)\)/)
+    expect(read('src/web/server.ts')).not.toMatch(/asPersonCall\(next\)/)
     const acp = bodyOf(read('src/providers/acp-session.ts'), 'async resolvePermissionRequest(')
     expect(acp.indexOf('revokedAs(this.host)')).toBeGreaterThan(-1)
     expect(acp.indexOf('revokedAs(this.host)')).toBeLessThan(acp.indexOf('this.ensureConn()'))

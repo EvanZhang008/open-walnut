@@ -83,6 +83,8 @@ export const REVOKED_REACH: Readonly<Record<string, Reach>> = {
   start: refused('a new session aimed at it, on either path (its service\'s or the leader\'s own)', 'src/providers/claude-code-session.ts', 'private async assertStartRouting('),
   send: refused('a line a person did not type, into a session there (a peer\'s, a routine\'s, a recovery\'s): parked with why', 'src/core/session-message-queue.ts', 'async function revokedHostOfSession('),
   expose: refused('the tunnel: placed back here', 'src/core/expose/placement.ts', 'export function exposePlacement('),
+  'person-local': stays('a process on this computer that sends no session id and no automation mark (curl, the CLI with its session env unset)',
+    'it reads as the person (web/routes/person-caller.ts), so it can still send the person rows there: the mark guards against an agent working through Walnut\'s tools, not a hostile process on this Mac'),
   'acp-allow': refused('a tool allowed in an ACP session there by anyone but a person (a deny still goes)', 'src/providers/acp-session.ts', 'async resolvePermissionRequest('),
 
   'daemon-hello': stays('its daemon\'s hello (machine id, version, capabilities)', 'how the leader knows the machine is the revoked one'),
