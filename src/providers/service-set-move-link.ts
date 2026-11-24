@@ -22,8 +22,10 @@
  */
 import { log } from '../logging/index.js'
 import { clearServiceSetMoved, hostServiceSets, hostServiceSetsWanted, linkStanding, markServiceSetMoved, movedToSet, recordServiceSetFrom, setWordsDue, type HostSetRecord, type LinkStanding, type SetAsk } from './service-set-leader.js'
-import { moveOnce, moveReconnectMs, runMove, seedOwed, serviceSetMoves, settleMove, type MoveDeps, type MoveOutcome, type MoveSession, type StopResult } from './service-set-move.js'
-import { dropWalnutScope, moveBlocker, moveSessions, openWorkThere, seedTriggerMemory, stopFollowerThere, stopProven, takeTriggerMemory, type MoveCheckLink, type TriggerMemory } from './service-set-move-checks.js'
+import { moveOnce, moveReconnectMs, runMove, serviceSetMoves, settleMove, type MoveDeps, type MoveOutcome, type MoveSession, type StopResult } from './service-set-move.js'
+import { moveStoreFor } from './service-set-move-store.js'
+import { dropWalnutScope, moveBlocker, moveSessions, openWorkThere, stopFollowerThere, stopProven, takeTriggerMemory, type MoveCheckLink, type SeedOutcome, type TriggerMemory } from './service-set-move-checks.js'
+import { OwedMemorySeeder } from './service-set-move-seed.js'
 import { setCliCommand, type SetProvision } from './service-set-provision.js'
 import { isServiceSetId } from './service-set.js'
 import { forgetSetNet, leaveSharedNet, pairServiceSetNet, type NetPairDeps } from './service-set-net-pair.js'
@@ -66,6 +68,10 @@ export interface SetLinkConn {
   walnutId(): Promise<string>
   /** A host health notice (Walnut Health), by key; null clears it. */
   notice(key: string, text: string | null): void
+  /** Push this Walnut's triggers to the daemon the link reaches (a seed that did not finish asks again). */
+  pushTriggers?(): void
+  /** This connect pushed the triggers (triggerIds() then names every one of them). */
+  triggersPushed?(): boolean
 }
 
 /** Dependencies a test replaces; the defaults ask the shared daemon and this server (service-set-move-checks.ts). */
@@ -77,7 +83,8 @@ export interface SetLinkDeps {
   stopFollower?(): Promise<void>
   /** The triggers' memory: taken from the shared daemon after the drop, handed to the set's before the release. */
   takeMemory?(): Promise<TriggerMemory[]>
-  seedMemory?(memory: TriggerMemory[]): Promise<void>
+  /** Hand memory to the set's daemon: what is still owed (void: none); a throw owes all of it unless it is a refusal for good. */
+  seedMemory?(memory: TriggerMemory[]): Promise<SeedOutcome | void>
   drainJournal?(): Promise<void>
   blocker?(): Promise<string | null>
   endpointId?(): Promise<string | null>
@@ -123,8 +130,19 @@ export class ServiceSetLink {
   /** The move holds this host's starts and sends now. */
   private holding = false
   private stopped = false
+  /** Where the link stands is written one at a time: a moved host's settle, a lost memory's point-back (review L1). */
+  private standingChain: Promise<unknown> = Promise.resolve()
+  /** Bumped by each point-back of a lost memory: a look begun before it keeps nothing as moved. */
+  private pointBacks = 0
+  /** What a move cut by a restart still owes the set's daemon, handed over before the first trigger push there. */
+  private readonly seeder: OwedMemorySeeder
 
-  constructor(private readonly c: SetLinkConn, private readonly d: SetLinkDeps = {}, readonly expected: () => string | null = () => null) {}
+  constructor(private readonly c: SetLinkConn, private readonly d: SetLinkDeps = {}, readonly expected: () => string | null = () => null) {
+    this.seeder = new OwedMemorySeeder({
+      c, seedMemory: d.seedMemory, checkLink: () => this.checkLink, store: () => this.store(), now: this.now,
+      noticeKey: this.noticeKey, pointBack: () => this.pointBack(),
+    })
+  }
 
   get place(): string { return `${this.c.kind() ?? 'none'}:${this.c.hostKey}` }
 
@@ -143,6 +161,13 @@ export class ServiceSetLink {
     this.stopped = true
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
+    this.seeder.stop()
+  }
+
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const p = this.standingChain.then(fn, fn)
+    this.standingChain = p.catch(() => {})
+    return p
   }
 
   /** The link came up: look once it settled. */
@@ -298,6 +323,7 @@ export class ServiceSetLink {
   private async checkOnce(force: boolean): Promise<void> {
     const ask = await this.ask()
     if (!ask || this.stopped || !this.c.connected) return
+    const pointBacks = this.pointBacks
     let { standing, record } = await this.standingFor()
     if (standing === 'default') return
     // A moved host whose set's dir (or endpoint, while still a member of the shared walnut-net) answers
@@ -314,10 +340,15 @@ export class ServiceSetLink {
       return
     }
     if (standing === 'own') {
-      await settleMove({ set: record!.set, store: this.store(), confirm: async () => {}, now: this.now })
-      await markServiceSetMoved(this.place, record!.set, this.now())
-      this.c.notice(this.noticeKey, null)
-      await this.leaveShared(record!.set)
+      const kept = await this.serial(async () => {
+        // A lost memory pointed the link back meanwhile (beforeTriggerPush): nothing is kept as moved, its notice stays.
+        if (this.pointBacks !== pointBacks) return false
+        await settleMove({ set: record!.set, store: this.store(), confirm: async () => {}, now: this.now })
+        await markServiceSetMoved(this.place, record!.set, this.now())
+        this.c.notice(this.noticeKey, null)
+        return true
+      })
+      if (kept) await this.leaveShared(record!.set)
       return
     }
     // Unknown, or a set of its own while the link reaches another daemon: look (and install) first,
@@ -365,7 +396,7 @@ export class ServiceSetLink {
   /** The move is undone here: the host's record says moved no more, the move's record goes, nothing points the link at the set. */
   private async undoMove(): Promise<void> {
     await clearServiceSetMoved(this.place)
-    await serviceSetMoves.write(this.place, null).catch(() => {})
+    await moveStoreFor(this.place).write(null).catch(() => {})
     this.sshOverride = null
     this.netOverride = null
     this.provisionedAt = 0
@@ -385,7 +416,7 @@ export class ServiceSetLink {
   }
 
   private store(): MoveDeps['store'] {
-    return { read: () => serviceSetMoves.read(this.place), write: (r) => serviceSetMoves.write(this.place, r) }
+    return moveStoreFor(this.place)
   }
 
   /** Stop each of this Walnut's sessions on the daemon the link reaches, proven (R3-5); why each one not stopped stays. */
@@ -405,24 +436,22 @@ export class ServiceSetLink {
     return { hostKey: c.hostKey, home: c.home, send: (cmd, p, t) => c.send(cmd, p, t), hasCapability: (x) => c.hasCapability(x), workUnderWay: () => c.workUnderWay(), walnutId: () => c.walnutId() }
   }
 
-  /** Hand the triggers' memory to the daemon the link reaches now (the set's); a miss is logged, and they start afresh there. */
-  private async seed(memory: TriggerMemory[]): Promise<void> {
-    await (this.d.seedMemory ?? ((m: TriggerMemory[]) => seedTriggerMemory(this.checkLink, m)))(memory).catch((err) => {
-      log.session.warn('service set: the triggers\' memory did not reach the set\'s daemon; they start afresh there', { host: this.c.hostKey, error: err instanceof Error ? err.message : String(err) })
-    })
+  /** Before a connect's first trigger push (DaemonConnection.pushTriggersOnce, `live`: the triggers it pushes): what a move cut by a restart still owes the set. False: push nothing. */
+  async beforeTriggerPush(live?: readonly string[]): Promise<boolean> {
+    // A move under way carries the memory itself, while it holds the push.
+    if (this.holding) return true
+    return this.seeder.beforePush(live ?? null)
   }
 
-  /** Before a connect's first trigger push (DaemonConnection.pushTriggersOnce): what a move cut by a restart still owes the set (seedOwed). False: push nothing. */
-  async beforeTriggerPush(): Promise<boolean> {
-    // A move under way carries the memory itself, while it holds the push.
-    if (this.holding || !this.c.connected || !this.c.helloSet()) return true
-    const owed = await seedOwed({ set: this.c.helloSet(), store: this.store(), now: this.now, seed: (m) => this.seed(m) })
-    if (owed !== 'lost') return true
-    log.session.warn('service set: the triggers\' memory kept for the move cannot be read; the link goes back to the shared daemon', { host: this.c.hostKey })
-    this.c.notice(this.noticeKey, `What this Walnut's triggers on ${this.c.hostKey} have already reported was lost in a restart during the move to its own service there, so they were not started there without it. Walnut points ${this.c.hostKey} back at the service another Walnut runs there, which still keeps it, and moves again.`)
-    await this.undoMove()
+  /** The kept copy of owed memory cannot be read: the link goes back to the shared daemon, which still keeps it, for the move to take it again. */
+  private async pointBack(): Promise<void> {
+    await this.serial(async () => {
+      this.pointBacks++
+      log.session.warn('service set: the triggers\' memory kept for the move cannot be read; the link goes back to the shared daemon', { host: this.c.hostKey })
+      this.c.notice(this.noticeKey, `What this Walnut's triggers on ${this.c.hostKey} have already reported was lost in a restart during the move to its own service there, so they were not started there without it. Walnut points ${this.c.hostKey} back at the service another Walnut runs there, which still keeps it, and moves again.`)
+      await this.undoMove()
+    })
     void this.c.relink(moveReconnectMs())
-    return false
   }
 
   private move(record: HostSetRecord, force: boolean): Promise<MoveOutcome> {
@@ -451,8 +480,10 @@ export class ServiceSetLink {
         await (this.d.dropScope ?? (() => dropWalnutScope(this.checkLink)))()
       },
       takeMemory: () => (this.d.takeMemory ?? (() => takeTriggerMemory(this.checkLink, ids, sleep)))(),
+      // Kept memory of a trigger deleted meanwhile is not carried; the ids are known once this connect pushed.
+      liveTriggerIds: () => (this.c.triggersPushed?.() ? ids : null),
       drainJournal: () => (this.d.drainJournal ?? (() => this.c.drainJournal(JOURNAL_DRAIN_MS)))(),
-      carry: (memory) => this.seed(memory),
+      carry: (memory) => this.seeder.seed(memory),
       // Dialled again, the shared daemon gets this Walnut's follower, triggers and plugin jobs back from
       // the connect's own pushes (they wait for the release, then go there).
       restore: async () => { await this.c.relink(moveReconnectMs()) },

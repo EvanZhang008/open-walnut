@@ -1786,6 +1786,8 @@ export class DaemonConnection {
       home: WALNUT_HOME,
       walnutId: async () => (await import('../core/device-auth.js')).getInstanceId(),
       notice: (key, text) => { void serviceSetNotice(this.hostKey, key, text) },
+      pushTriggers: () => this.pushTriggers(),
+      triggersPushed: () => this.lastTriggersPushHash !== null,
     }, {}, () => this.getExpectedDaemonVersion())
     return this._serviceSetLink
   }
@@ -2441,9 +2443,6 @@ export class DaemonConnection {
     const epoch = this._connectionEpoch
     const recheck = this.triggersRecheck
     this.triggersRecheck = false
-    // A service set move a leader restart cut: the set's daemon gets the triggers' memory before their first push (service-set-move-link.ts).
-    if (this.lastTriggersPushHash === null && !(await (this.serviceSetLink?.beforeTriggerPush().catch(() => true) ?? true))) return 'stop'
-    if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
     const { getTriggerPayloadProvider } = await import('../core/routines/trigger-bridge.js')
     const provider = getTriggerPayloadProvider()
     if (!provider) return 'stop'
@@ -2459,6 +2458,10 @@ export class DaemonConnection {
     const compiled = await provider(this.hostKey, { clock, fresh, hostStart, sameDaemon })
     if (!compiled) return 'stop'
     // A queued or slow compile belongs to the link that started it, never a later reconnect.
+    if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
+    // A service set move a leader restart cut: the set's daemon gets the memory of the triggers this
+    // push carries before their first push there (service-set-move-seed.ts). Not handed over: no push.
+    if (fresh && this.serviceSetLink && !(await this.serviceSetLink.beforeTriggerPush(compiled.payload.triggers.flatMap((t) => (t && typeof t === 'object' && typeof (t as { id?: unknown }).id === 'string' ? [(t as { id: string }).id] : []))).catch(() => true))) return 'stop'
     if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
     if (!recheck && compiled.hash === this.lastTriggersPushHash) return 'next'
     // A daemon that still holds this set under its name configures it from its copy

@@ -19,11 +19,12 @@ import type { MoveRecord } from '../../src/providers/service-set-move.js'
 /** One leader process: its own copy of every module (a restart forgets what a move held in memory). */
 async function leaderProcess() {
   vi.resetModules()
-  const [{ ServiceSetLink }, { serviceSetMoves }, { updateStoresSettled }, { recordServiceSetFrom }] = await Promise.all([
+  const [{ ServiceSetLink }, { serviceSetMoves }, { updateStoresSettled }, { recordServiceSetFrom, hostServiceSets }, { moveStoreFor }] = await Promise.all([
     import('../../src/providers/service-set-move-link.js'), import('../../src/providers/service-set-move.js'),
     import('../../src/providers/daemon-update-store.js'), import('../../src/providers/service-set-leader.js'),
+    import('../../src/providers/service-set-move-store.js'),
   ])
-  return { ServiceSetLink, serviceSetMoves, updateStoresSettled, recordServiceSetFrom }
+  return { ServiceSetLink, serviceSetMoves, updateStoresSettled, recordServiceSetFrom, hostServiceSets, moveStoreFor }
 }
 let proc: Awaited<ReturnType<typeof leaderProcess>>
 
@@ -43,6 +44,12 @@ function machine() {
     shared: { states: new Map<string, Record<string, unknown>>([['mail', MAIL]]), armed: true },
     set: { states: new Map<string, Record<string, unknown>>(), armed: false, seeds: [] as Array<{ triggerId: string; state: unknown }> },
     log: [] as string[],
+    /** How the set's daemon answers a seed now: as it should, a link cut, a write that failed there. */
+    seedFails: null as null | 'cut' | 'write_failed',
+    /** The set's daemon takes no seed at all (no trigger-state-seed-v1). */
+    noSeed: false,
+    /** The link's last push and its trigger ids (null: no push yet on this connect). */
+    pushed: null as null | string[],
   }
 }
 type Machine = ReturnType<typeof machine>
@@ -54,6 +61,8 @@ async function leader(m: Machine, cut?: 'stop' | 'reconnect-set' | 'seed') {
   let hello = ''
   let link!: ServiceSetLink
   const notices: string[] = []
+  /** Every notice call, null (cleared) included. */
+  const said: Array<string | null> = []
   const at = () => (hello === SET ? m.set : m.shared)
   const c: SetLinkConn = {
     hostKey: 'h', kind: () => 'ssh', connected: true,
@@ -67,6 +76,8 @@ async function leader(m: Machine, cut?: 'stop' | 'reconnect-set' | 'seed') {
       }
       if (cmd === 'triggers.state.seed') {
         if (cut === 'seed') return NEVER
+        if (m.seedFails === 'cut') throw new Error('the link dropped')
+        if (m.seedFails === 'write_failed') return { ok: true, seeded: false, reason: 'write_failed' }
         if (at().armed) return { ok: true, seeded: false, reason: 'still_configured' }
         m.set.seeds.push({ triggerId: String(params.triggerId), state: params.state })
         m.set.states.set(String(params.triggerId), params.state as Record<string, unknown>)
@@ -74,7 +85,7 @@ async function leader(m: Machine, cut?: 'stop' | 'reconnect-set' | 'seed') {
       }
       return { ok: true, status: { state: 'off' } }
     },
-    hasCapability: (cap) => CAPS.includes(cap),
+    hasCapability: (cap) => CAPS.includes(cap) && !(m.noSeed && cap === 'trigger-state-seed-v1'),
     sharedEndpoint: () => null,
     workUnderWay: () => 0,
     drained: async () => true,
@@ -90,11 +101,12 @@ async function leader(m: Machine, cut?: 'stop' | 'reconnect-set' | 'seed') {
     setHold: () => {},
     redeliver: () => {},
     dialled: () => (hello === SET ? RT : '/tmp/open-walnut'),
-    triggerIds: () => ['mail'],
+    triggerIds: () => m.pushed ?? ['mail'],
+    triggersPushed: () => m.pushed !== null,
     drainJournal: async () => {},
     home: HOME,
     walnutId: async () => WALNUT,
-    notice: (_k, t) => { if (t) notices.push(t) },
+    notice: (_k, t) => { said.push(t); if (t) notices.push(t) },
   }
   const deps: SetLinkDeps = {
     sessions: async () => [{ id: 's1' }],
@@ -105,7 +117,7 @@ async function leader(m: Machine, cut?: 'stop' | 'reconnect-set' | 'seed') {
   link = new ServiceSetLink(c, deps, () => 'walnut-daemon-abc')
   /** The connect of a new process: it dials where its records point now. */
   const connect = async () => { hello = (await link.sshDir())?.set ?? '' }
-  return { link, notices, connect, hello: () => hello }
+  return { link, notices, said, connect, hello: () => hello }
 }
 
 /** Let the old process run until it hangs at its cut step, then drop it (the restart). */
@@ -123,8 +135,10 @@ async function runUntilCut(m: Machine, cut: 'stop' | 'reconnect-set' | 'seed'): 
   old.link.stop()
 }
 
-const kept = async (): Promise<MoveRecord | null> => { await proc.updateStoresSettled(); return proc.serviceSetMoves.read(PLACE) }
-const keep = async (r: MoveRecord | null): Promise<void> => { await proc.serviceSetMoves.write(PLACE, r) }
+const kept = async (): Promise<MoveRecord | null> => { await proc.updateStoresSettled(); return proc.moveStoreFor(PLACE).read() }
+/** The kept copy of the memory, made unreadable (a file cut short, a disk error). */
+const spoilMemory = async (): Promise<void> => { await proc.updateStoresSettled(); fs.writeFileSync(memoryFile(), '{ "not": "a record", ') }
+const memoryFile = (): string => process.env.WALNUT_SERVICE_SET_MOVE_FILE!.replace(/\.json$/, '-memory.json')
 
 describe('a leader restart mid-move keeps the triggers\' memory', () => {
   let dir = ''
@@ -150,6 +164,10 @@ describe('a leader restart mid-move keeps the triggers\' memory', () => {
     const r = await kept()
     expect(r).toMatchObject({ phase: 'holding', owed: true, memory: [{ triggerId: 'mail', state: MAIL, digest: 'd-mail' }] })
     expect(fs.statSync(process.env.WALNUT_SERVICE_SET_MOVE_FILE!).mode & 0o777).toBe(0o600)
+    // The memory lives in its own file (0600), so the record rewritten at every stopped session stays small.
+    expect(fs.statSync(memoryFile()).mode & 0o777).toBe(0o600)
+    expect(fs.readFileSync(process.env.WALNUT_SERVICE_SET_MOVE_FILE!, 'utf8')).not.toContain('msg-1')
+    expect(fs.readFileSync(memoryFile(), 'utf8')).toContain('msg-1')
     const next = await leader(m)
     await next.connect()
     await next.link.check()
@@ -214,8 +232,7 @@ describe('a leader restart mid-move keeps the triggers\' memory', () => {
   it('a kept copy that cannot be read on the set: no trigger goes there, Walnut Health says so, and the link goes back to the shared daemon', async () => {
     const m = machine()
     await runUntilCut(m, 'seed')
-    const r = (await kept())!
-    await keep({ ...r, memory: 'garbage' as unknown as MoveRecord['memory'] })
+    await spoilMemory()
     const next = await leader(m)
     await next.connect()
     expect(await next.link.beforeTriggerPush()).toBe(false)
@@ -229,8 +246,7 @@ describe('a leader restart mid-move keeps the triggers\' memory', () => {
   it('a kept copy that cannot be read on the shared daemon: taken again there', async () => {
     const m = machine()
     await runUntilCut(m, 'stop')
-    const r = (await kept())!
-    await keep({ ...r, memory: 'garbage' as unknown as MoveRecord['memory'] })
+    await spoilMemory()
     const next = await leader(m)
     await next.connect()
     await next.link.check()
@@ -240,8 +256,7 @@ describe('a leader restart mid-move keeps the triggers\' memory', () => {
   it('a kept copy that cannot be read, and a shared daemon that cannot give it now: the move gives up and nothing reaches the set', async () => {
     const m2 = machine()
     await runUntilCut(m2, 'stop')
-    const r2 = (await kept())!
-    await keep({ ...r2, memory: 'garbage' as unknown as MoveRecord['memory'] })
+    await spoilMemory()
     const third = await leader(m2)
     // The shared daemon cannot give it now (a refusal other than "none there").
     const send = (third.link as unknown as { c: SetLinkConn }).c.send
@@ -253,5 +268,103 @@ describe('a leader restart mid-move keeps the triggers\' memory', () => {
     expect(gave?.owed).toBeUndefined()
     expect(m2.set.seeds).toEqual([])
     expect(m2.set.armed).toBe(false)
+  })
+
+  it('a seed a link cut ends keeps the memory owed: no trigger is pushed there, Health says they wait, and the next try seeds it', async () => {
+    const m = machine()
+    await runUntilCut(m, 'seed')
+    m.shared.states.clear()
+    const next = await leader(m)
+    await next.connect()
+    m.seedFails = 'cut'
+    expect(await next.link.beforeTriggerPush(['mail'])).toBe(false)
+    expect((await kept())?.owed).toBe(true)
+    expect((await kept())?.memory).toEqual([{ triggerId: 'mail', state: MAIL, digest: 'd-mail' }])
+    expect(next.notices.join('\n')).toMatch(/wait to start on its own service there/)
+    // A write that failed on the set's daemon: still owed.
+    m.seedFails = 'write_failed'
+    expect(await next.link.beforeTriggerPush(['mail'])).toBe(false)
+    expect((await kept())?.owed).toBe(true)
+    // The next connect (or the retry) seeds it, and the notice goes.
+    m.seedFails = null
+    expect(await next.link.beforeTriggerPush(['mail'])).toBe(true)
+    expect(m.set.seeds).toEqual([{ triggerId: 'mail', state: MAIL }])
+    expect((await kept())?.owed).toBeUndefined()
+    expect(next.said.at(-1)).toBeNull()
+    next.link.stop()
+  })
+
+  it('a set\'s daemon that can never take a seed owes it no more: the triggers start afresh there', async () => {
+    const m = machine()
+    await runUntilCut(m, 'seed')
+    const next = await leader(m)
+    await next.connect()
+    m.noSeed = true
+    expect(await next.link.beforeTriggerPush(['mail'])).toBe(true)
+    expect(m.set.seeds).toEqual([])
+    expect((await kept())?.owed).toBeUndefined()
+  })
+
+  it('the move\'s own carry cut by the link: the done move still owes it, and the first push there seeds it', async () => {
+    const m = machine()
+    m.seedFails = 'cut'
+    const first = await leader(m)
+    await first.link.check()
+    expect(await kept()).toMatchObject({ phase: 'done', owed: true })
+    m.seedFails = null
+    expect(await first.link.beforeTriggerPush(['mail'])).toBe(true)
+    expect(m.set.seeds).toEqual([{ triggerId: 'mail', state: MAIL }])
+    expect((await kept())?.owed).toBeUndefined()
+    first.link.stop()
+  })
+
+  it('memory of a trigger deleted during the restart is not seeded at the push', async () => {
+    const m = machine()
+    await runUntilCut(m, 'seed')
+    const next = await leader(m)
+    await next.connect()
+    // The push carries only the triggers that exist now.
+    expect(await next.link.beforeTriggerPush(['other'])).toBe(true)
+    expect(m.set.seeds).toEqual([])
+    expect((await kept())?.owed).toBeUndefined()
+  })
+
+  it('memory of a trigger deleted during the restart is not carried by the move that runs again', async () => {
+    const m2 = machine()
+    m2.shared.states.set('gone', { epoch: 'e', seq: 1, seen: { x: 1 } })
+    m2.pushed = ['mail', 'gone']
+    await runUntilCut(m2, 'stop')
+    // The restart's connect pushed the triggers there again, and 'gone' was deleted meanwhile.
+    m2.pushed = ['mail']
+    m2.shared.states.clear()
+    const again = await leader(m2)
+    await again.connect()
+    await again.link.check()
+    expect(m2.set.seeds).toEqual([{ triggerId: 'mail', state: MAIL }])
+  })
+
+  it('a lost copy pointing the link back and a look that finds the set at once: the host is not kept as moved, and the notice stays', async () => {
+    const m = machine()
+    await runUntilCut(m, 'seed')
+    await spoilMemory()
+    const next = await leader(m)
+    await next.connect()
+    // The look's own branch and the push's point-back, at the same moment.
+    await Promise.all([next.link.beforeTriggerPush(['mail']), next.link.check()])
+    await proc.updateStoresSettled()
+    expect((await proc.hostServiceSets.read(PLACE))?.movedAt).toBeUndefined()
+    expect(next.said.filter((t) => t !== null).at(-1)).toMatch(/lost in a restart/)
+    expect(next.said.at(-1)).not.toBeNull()
+  })
+
+  it('a record that cannot be written stops no session (the move gives up before it)', async () => {
+    const m = machine()
+    // The move's files cannot be written (a directory where the file goes).
+    fs.mkdirSync(process.env.WALNUT_SERVICE_SET_MOVE_FILE!, { recursive: true })
+    const stops: string[] = []
+    const first = await leader(m)
+    ;(first.link as unknown as { d: SetLinkDeps }).d.stop = async (id) => { stops.push(id); return { ok: true } }
+    await first.link.check()
+    expect(stops).toEqual([])
   })
 })

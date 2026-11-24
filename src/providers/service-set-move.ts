@@ -53,6 +53,13 @@
  * (ServiceSetLink.beforeTriggerPush). A kept copy that cannot be read is never taken as no memory:
  * the move takes it again on the shared daemon (a take that fails gives up, and the triggers stay
  * there), and a link that already reaches the set pushes no trigger there and is pointed back.
+ * Memory is owed until the set's daemon took it or refused it for good (seedTriggerMemory): a seed
+ * that a link cut, a timeout or a failed write ended keeps what it did not hand over, and the
+ * triggers wait for the next seed there. Only triggers that still exist are seeded.
+ *
+ * The memory (up to 2000 seen ids per trigger) is kept in its own file beside the move's record,
+ * written once per take (service-set-move-store.ts): the record, rewritten at every stopped session, stays small.
+ * Both are written through writeOrThrow, so nothing is stopped before its record is on disk.
  */
 import { KeyedUpdateStore } from './daemon-update-store.js'
 import type { TriggerMemory } from './service-set-move-checks.js'
@@ -78,11 +85,11 @@ export interface MoveRecord {
   failures?: number
   /** The triggers were dropped on the shared daemon and the set's daemon does not have their memory yet. */
   owed?: true
-  /** That memory (each trigger's exact state, as triggers.state.snapshot gave it); read with keptMemory. */
+  /** That memory (each trigger's exact state, as triggers.state.snapshot gave it); read with keptMemory. Kept in its own file (moveStoreFor). */
   memory?: TriggerMemory[]
 }
 
-const validMemory = (m: unknown): m is TriggerMemory[] => Array.isArray(m) && m.every((e) => {
+export const validMemory = (m: unknown): m is TriggerMemory[] => Array.isArray(m) && m.every((e) => {
   const x = e as TriggerMemory
   return !!x && typeof x === 'object' && typeof x.triggerId === 'string' && !!x.state && typeof x.state === 'object'
     && !Array.isArray(x.state) && typeof x.digest === 'string'
@@ -97,10 +104,14 @@ export function keptMemory(r: Pick<MoveRecord, 'owed' | 'memory'> | null | undef
   return validMemory(r.memory) ? r.memory : null
 }
 
-/** A fresh take, with what a kept copy has for the triggers that take found nothing for. */
-function withKept(fresh: readonly TriggerMemory[], kept: readonly TriggerMemory[]): TriggerMemory[] {
+/**
+ * A fresh take, with what a kept copy has for the triggers that take found nothing for; of those,
+ * only triggers that still exist (`live`; null when not known: all of them).
+ */
+function withKept(fresh: readonly TriggerMemory[], kept: readonly TriggerMemory[], live: readonly string[] | null): TriggerMemory[] {
   const have = new Set(fresh.map((m) => m.triggerId))
-  return [...fresh, ...kept.filter((m) => !have.has(m.triggerId))]
+  const exists = live ? new Set(live) : null
+  return [...fresh, ...kept.filter((m) => !have.has(m.triggerId) && (!exists || exists.has(m.triggerId)))]
 }
 
 /** The links a record may name (a value check, not a branch on the kind). */
@@ -182,8 +193,10 @@ export interface MoveDeps {
   takeMemory?(): Promise<TriggerMemory[]>
   /** This Walnut's offline journal on the shared daemon drained to empty; throws when not. */
   drainJournal?(): Promise<void>
-  /** After the set answered, before the release: the triggers' memory kept since the drop goes to the set's daemon (best effort). */
-  carry?(memory: TriggerMemory[]): Promise<void>
+  /** After the set answered, before the release: the triggers' memory kept since the drop goes to the set's daemon; what it did not take for good stays owed. */
+  carry?(memory: TriggerMemory[]): Promise<TriggerMemory[] | void>
+  /** The triggers of this Walnut there now (the link's last push), null when not known: kept memory of any other is not carried. */
+  liveTriggerIds?(): string[] | null
   /** A try that gave up after the follower stop: the shared daemon gets back this Walnut's follower, triggers and jobs (the link dials it again). */
   restore(): Promise<void>
   /** Host network: pair with the set's own walnut-net first; throws when not done (nothing touched yet). */
@@ -328,7 +341,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     }
     // On disk before anything stops, so a restart from here on still has it (the copy a try before
     // a restart kept fills what this take found none for; one that cannot be read fills nothing).
-    await save({ owed: true, memory: withKept(taken, keptMemory(rec) ?? []) })
+    await save({ owed: true, memory: withKept(taken, keptMemory(rec) ?? [], d.liveTriggerIds?.() ?? null) })
     for (const s of quiet) {
       const res = await d.stop(s.id).catch((e): StopResult => ({ ok: false, why: `session ${s.id}: ${errText(e)}` }))
       if (!res.ok) {
@@ -352,9 +365,11 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
       await save({ phase: 'done', why: undefined, nextTryAt: undefined, failures: undefined })
       done = true
       await d.confirm().catch(() => {})
-      await d.carry?.(keptMemory(rec) ?? []).catch(() => {})
-      // The set's daemon has it now (or said why not): the record owes it no more.
-      await save({ owed: undefined, memory: undefined }).catch(() => {})
+      const carried = keptMemory(rec) ?? []
+      const left = (await (d.carry?.(carried) ?? Promise.resolve()).catch(() => carried)) ?? []
+      // The set's daemon has it now (or refused it for good): the record owes it no more. What a
+      // cut or a failed write left stays owed, seeded before the next trigger push there.
+      await save(left.length ? { memory: left } : { owed: undefined, memory: undefined }).catch(() => {})
       // Released right after the done record (X1): nothing after this waits for the hold.
       d.release()
       await d.afterMove?.().catch(() => { /* tried again at the next look */ })
@@ -392,7 +407,7 @@ export async function settleMove(d: Pick<MoveDeps, 'set' | 'store' | 'confirm' |
   const r = await d.store.read().catch(() => null)
   if (!r || r.set !== d.set || r.phase === 'done') return false
   if (r.phase === 'flipped') await d.confirm().catch(() => {})
-  await d.store.write({ ...r, phase: 'done', at: d.now(), why: undefined, nextTryAt: undefined })
+  await d.store.write({ ...r, phase: 'done', at: d.now(), why: undefined, nextTryAt: undefined }).catch(() => {})
   return true
 }
 
@@ -400,17 +415,31 @@ export async function settleMove(d: Pick<MoveDeps, 'set' | 'store' | 'confirm' |
  * A link reaches the set `set` with no move under way: memory the record still owes the set's daemon
  * (a leader restart after the drop) is seeded before any trigger is pushed there, since the set's
  * daemon takes a seed only for a trigger it does not hold yet; then the record owes it no more.
+ * `live`: the triggers about to be pushed; kept memory of any other (deleted meanwhile) is not seeded.
  * 'lost': it owes memory whose kept copy cannot be read, so no trigger may be pushed there (the shared
  * daemon still keeps it: the caller points the link back for the move to take it again).
+ * 'retry': the seed handed over only part (a link cut, a timeout, a write the set's daemon failed):
+ * the rest stays owed and no trigger may be pushed yet; the next seed hands it over. `seed` answers
+ * what is still owed (a throw: all of it).
  */
-export async function seedOwed(d: Pick<MoveDeps, 'set' | 'store' | 'now'> & { seed(memory: TriggerMemory[]): Promise<void> }): Promise<'none' | 'seeded' | 'lost'> {
+export async function seedOwed(d: Pick<MoveDeps, 'set' | 'store' | 'now'> & {
+  seed(memory: TriggerMemory[]): Promise<TriggerMemory[]>
+  live?: readonly string[] | null
+}): Promise<'none' | 'seeded' | 'lost' | 'retry'> {
   const r = await d.store.read().catch(() => null)
   if (!r?.owed || r.set !== d.set) return 'none'
-  const memory = keptMemory(r)
-  if (memory === null) return 'lost'
-  await d.seed(memory)
+  const kept = keptMemory(r)
+  if (kept === null) return 'lost'
+  const exists = d.live ? new Set(d.live) : null
+  const memory = exists ? kept.filter((m) => exists.has(m.triggerId)) : kept
+  const left = await d.seed(memory).catch(() => memory)
   const now = await d.store.read().catch(() => null)
-  if (now?.owed && now.set === d.set) await d.store.write({ ...now, owed: undefined, memory: undefined, at: d.now() })
+  if (!now?.owed || now.set !== d.set) return 'seeded'
+  if (left.length) {
+    await d.store.write({ ...now, memory: left, at: d.now() }).catch(() => {})
+    return 'retry'
+  }
+  await d.store.write({ ...now, owed: undefined, memory: undefined, at: d.now() }).catch(() => {})
   return 'seeded'
 }
 

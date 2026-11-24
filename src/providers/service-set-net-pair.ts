@@ -23,7 +23,7 @@
 import { NET_FORGET_ACTION, NET_ID_ACTION, NET_ID_BUDGET_MS, encodeNetRequest } from './service-set-net.js'
 import { hostServiceSets, markServiceSetNetLeft, markServiceSetNetPaired, movedToSet, serviceSetWords, setNetMemberName, unmarkServiceSetNetPaired, type SetAsk } from './service-set-leader.js'
 import { parseServiceSetLine } from './service-set.js'
-import { serviceSetMoves } from './service-set-move.js'
+import { moveStoreFor } from './service-set-move-store.js'
 
 const NET_ID = /^[0-9a-f]{64}$/
 /** The host side ends within NET_ID_BUDGET_MS (a first walnut-net download included); the line's own start comes on top. */
@@ -106,6 +106,6 @@ export async function forgetSetNet(d: Pick<NetPairDeps, 'place' | 'unregister' |
   if (r.netEndpoint) await d.unregister(r.netEndpoint)
   await hostServiceSets.write(d.place, null)
   // A move record of the host is no try to resume, nor a done move to dial by, if the host comes back.
-  await serviceSetMoves.write(d.place, null).catch(() => {})
+  await moveStoreFor(d.place).write(null).catch(() => {})
   if (r.netEndpoint) await d.apply()
 }

@@ -317,18 +317,47 @@ export async function takeTriggerMemory(link: MoveCheckLink, ids: readonly strin
   return out
 }
 
-/** Hand the memory to the set's daemon (the link reaches it now), before its triggers are pushed there. Throws on the first that does not land. */
-export async function seedTriggerMemory(link: MoveCheckLink, memory: readonly TriggerMemory[]): Promise<void> {
-  if (!memory.length) return
+/** The set's daemon can never take this memory (no trigger-state-seed-v1): it is owed no more, and the triggers start afresh there. */
+export class SeedRefusedForGood extends Error {}
+
+/** A seed that can never land: a daemon with no seed, or a host revoked (HostRevokedError). */
+export function seedRefusedForGood(err: unknown): boolean {
+  return err instanceof SeedRefusedForGood || err instanceof HostRevokedError
+}
+
+/** A seed's end: what is still owed (a link cut, a timeout, a write that failed there), and the triggers the set's daemon refused for good. */
+export interface SeedOutcome { left: TriggerMemory[]; refused: string[] }
+
+/**
+ * Hand the memory to the set's daemon (the link reaches it now), before its triggers are pushed there.
+ * Each trigger's memory is taken (seeded, or kept there already), refused for good (any other refusal:
+ * the trigger is held there already, a state that does not check out), or still owed: a write that
+ * failed there, and on a send that threw or a reply that is no answer, that one and every one after it.
+ * Throws a final refusal for all of it: a revoked host (HostRevokedError), a daemon with no seed.
+ */
+export async function seedTriggerMemory(link: MoveCheckLink, memory: readonly TriggerMemory[]): Promise<SeedOutcome> {
+  if (!memory.length) return { left: [], refused: [] }
   // A revoked host is handed none of this Walnut's trigger memory (session-channel/revoked-reach.ts).
   const as = revokedAs(link.hostKey)
   if (as) throw new HostRevokedError(link.hostKey, 'trigger memory is not handed to it', as)
-  if (!link.hasCapability(SEED_CAPABILITY)) throw new Error(`the set's daemon takes no trigger memory (no ${SEED_CAPABILITY})`)
-  for (const m of memory) {
-    const r = await link.send('triggers.state.seed', { home: link.home, triggerId: m.triggerId, state: m.state, digest: m.digest }, 15_000)
+  if (!link.hasCapability(SEED_CAPABILITY)) throw new SeedRefusedForGood(`the set's daemon takes no trigger memory (no ${SEED_CAPABILITY})`)
+  const left: TriggerMemory[] = []
+  const refused: string[] = []
+  for (let i = 0; i < memory.length; i++) {
+    const m = memory[i]!
+    let r: Record<string, unknown>
+    try {
+      r = await link.send('triggers.state.seed', { home: link.home, triggerId: m.triggerId, state: m.state, digest: m.digest }, 15_000)
+    } catch {
+      return { left: [...left, ...memory.slice(i)], refused }
+    }
+    if (r.ok !== true) return { left: [...left, ...memory.slice(i)], refused }
     // `state_exists`: the set already keeps its own (an earlier move there): it is kept.
-    if (r.ok !== true || (r.seeded !== true && r.reason !== 'state_exists')) throw new Error(`trigger ${m.triggerId}: ${String(r.reason ?? r.error ?? 'no answer')}`)
+    if (r.seeded === true || r.reason === 'state_exists') continue
+    if (r.reason === 'write_failed') left.push(m)
+    else refused.push(`trigger ${m.triggerId}: ${String(r.reason ?? 'no answer')}`)
   }
+  return { left, refused }
 }
 
 /** Stop this Walnut's follower on the shared daemon and see it off. Throws when it may still run. */

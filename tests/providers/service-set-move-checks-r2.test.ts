@@ -9,7 +9,7 @@
  *       and handed to the set's daemon, so its first check there does not report every item again.
  */
 import { describe, expect, it } from 'vitest'
-import { dropWalnutScope, moveBlocker, seedTriggerMemory, takeTriggerMemory, type MoveCheckLink } from '../../src/providers/service-set-move-checks.js'
+import { dropWalnutScope, moveBlocker, seedTriggerMemory, SeedRefusedForGood, takeTriggerMemory, type MoveCheckLink } from '../../src/providers/service-set-move-checks.js'
 
 const HOME = '/home/u/.open-walnut'
 
@@ -78,13 +78,28 @@ describe('takeTriggerMemory and seedTriggerMemory (M2)', () => {
     expect(await takeTriggerMemory(l, ['t1'], async () => {})).toEqual([{ triggerId: 't1', state: aged, digest: 'd-t1' }])
   })
 
-  it('hands each to the set\'s daemon; one it already keeps stays; a daemon that cannot take it is an error', async () => {
+  it('hands each to the set\'s daemon; one it already keeps stays; a daemon that can never take it is a refusal for good', async () => {
     const memory = [{ triggerId: 't1', state, digest: 'd-t1' }, { triggerId: 't2', state, digest: 'd-t2' }]
     const { l, sent } = link(['trigger-state-seed-v1'], (_c, p) => (p.triggerId === 't2' ? { ok: true, seeded: false, reason: 'state_exists' } : { ok: true, seeded: true }))
-    await seedTriggerMemory(l, memory)
+    expect(await seedTriggerMemory(l, memory)).toEqual({ left: [], refused: [] })
     expect(sent).toEqual(memory.map((m) => ({ cmd: 'triggers.state.seed', params: { home: HOME, ...m } })))
-    await expect(seedTriggerMemory(link([]).l, memory)).rejects.toThrow(/no trigger-state-seed-v1/)
-    await expect(seedTriggerMemory(link(['trigger-state-seed-v1'], () => ({ ok: true, seeded: false, reason: 'armed' })).l, memory)).rejects.toThrow(/trigger t1: armed/)
-    await seedTriggerMemory(link([]).l, [])
+    await expect(seedTriggerMemory(link([]).l, memory)).rejects.toThrow(SeedRefusedForGood)
+    // A trigger the set's daemon holds already is refused for good, and the rest still go.
+    expect(await seedTriggerMemory(link(['trigger-state-seed-v1'], (_c, p) => (p.triggerId === 't1' ? { ok: true, seeded: false, reason: 'armed' } : { ok: true, seeded: true })).l, memory))
+      .toEqual({ left: [], refused: ['trigger t1: armed'] })
+    expect(await seedTriggerMemory(link([]).l, [])).toEqual({ left: [], refused: [] })
+  })
+
+  it('what a cut, a timeout or a failed write ended stays owed: that one and, after a lost answer, every one after it', async () => {
+    const memory = [{ triggerId: 't1', state, digest: 'd-t1' }, { triggerId: 't2', state, digest: 'd-t2' }, { triggerId: 't3', state, digest: 'd-t3' }]
+    // The set's daemon failed its write of t1: t1 is owed, t2 and t3 went.
+    const wrote = link(['trigger-state-seed-v1'], (_c, p) => (p.triggerId === 't1' ? { ok: true, seeded: false, reason: 'write_failed' } : { ok: true, seeded: true }))
+    expect(await seedTriggerMemory(wrote.l, memory)).toEqual({ left: [memory[0]], refused: [] })
+    // The link cut (or the 15 s timeout) at t2: t2 and t3 are owed.
+    const cut = link(['trigger-state-seed-v1'])
+    cut.l.send = async (_cmd, p) => { if (p.triggerId === 't2') throw new Error('the link dropped'); return { ok: true, seeded: true } }
+    expect(await seedTriggerMemory(cut.l, memory)).toEqual({ left: memory.slice(1), refused: [] })
+    // No answer (ok: false): owed too.
+    expect((await seedTriggerMemory(link(['trigger-state-seed-v1'], () => ({ ok: false, error: 'not connected' })).l, memory)).left).toEqual(memory)
   })
 })

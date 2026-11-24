@@ -69,7 +69,8 @@ export function updateStoresSettled(): Promise<void> {
 export class KeyedUpdateStore<T extends { at: number }> {
   constructor(
     private readonly fileName: string,
-    private readonly envName: string,
+    /** The env var that names the file (tests), or a function that names it (a file kept beside another store's). */
+    private readonly envName: string | (() => string | undefined),
     private readonly maxAgeMs: number,
     private readonly valid: (e: unknown) => e is T,
     /** An entry this says yes to is kept whatever its age (a host's moved service set). */
@@ -77,7 +78,7 @@ export class KeyedUpdateStore<T extends { at: number }> {
   ) {}
 
   private file(): string | null {
-    const named = process.env[this.envName]
+    const named = typeof this.envName === 'function' ? this.envName() : process.env[this.envName]
     if (named) return named
     if (process.env.VITEST) return null
     return updateStoreFile(this.fileName)
@@ -148,9 +149,18 @@ export class KeyedUpdateStore<T extends { at: number }> {
 
   /** Keep (or with null, forget) the entry for `key`. Best effort: one that cannot be kept is in memory only. */
   write(key: string, entry: T | null): Promise<void> {
+    return this.writeOrThrow(key, entry).catch(() => {})
+  }
+
+  /**
+   * The same write, rejected when it did not land on disk: for a caller that must know its entry is
+   * kept before it acts on it (a service set move stops sessions only once its record is written).
+   * The writes stay in order either way: one that failed does not stop the next.
+   */
+  writeOrThrow(key: string, entry: T | null): Promise<void> {
     const file = this.file()
     if (!file) return Promise.resolve()
-    writes = writes.then(async () => {
+    const p = writes.then(async () => {
       const all = await this.readAll(file)
       const now = Date.now()
       const mine = await machineKey(key)
@@ -164,8 +174,9 @@ export class KeyedUpdateStore<T extends { at: number }> {
       await fsp.mkdir(path.dirname(file), { recursive: true })
       await fsp.writeFile(tmp, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 })
       await fsp.rename(tmp, file)
-    }).catch(() => {})
-    return writes
+    })
+    writes = p.catch(() => {})
+    return p
   }
 }
 
