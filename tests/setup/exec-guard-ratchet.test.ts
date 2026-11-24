@@ -96,7 +96,7 @@ const LITERAL_PATH_BUDGET: Record<string, number> = {
   'tests/providers/host-exec-matcher.test.ts': 2,
   'tests/providers/host-fix-core.test.ts': 1,
   'tests/providers/host-runtime-core.test.ts': 17,
-  'tests/providers/host-runtime-preflight-shell.test.ts': 5,
+  'tests/providers/host-runtime-preflight-shell.test.ts': 3,
   'tests/providers/local-daemon-platform.test.ts': 1,
   'tests/providers/pty-stream-core.test.ts': 2, // the env handed to the daemon's pty core and its expected value; its spawn is a fake, never a child process
   'tests/providers/remote-daemon-dir.test.ts': 2,

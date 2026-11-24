@@ -213,9 +213,9 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/session-shell.ts'), 'utf8')
     const lines = text.split('\n').map((l) => l.trim()).filter((l) => /\bo\.shimDir\b/.test(l) && !l.startsWith('//') && !l.startsWith('*'))
     // Appended by the daemon's own fallback step (spawnFallbackPath, checked above); put first here.
-    expect(lines).toEqual([
-      `...(o.gatewayFirst ? ['export PATH=' + shellQuote(o.shimDir) + ':"$PATH"'] : []),`,
-    ])
+    // A regex, not the line's text: the exec-guard ratchet would read the quoted assignment as a child's literal PATH.
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^\.\.\.\(o\.gatewayFirst \? \['export PATH\=' \+ shellQuote\(o\.shimDir\) \+ ':"\$PATH"'\] : \[\]\),$/)
     expect(text).toMatch(/^\s+o\.fallbackPathStep,$/m)
   })
   it('both spawn paths of the daemon ask the rule', () => {

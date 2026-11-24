@@ -9,6 +9,9 @@ import { createHostRuntime } from '../../src/providers/host-runtime-core.js'
 import { claudeMissingMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
 
+/** The fake host's env (no child runs: fakeHost answers every spawn). */
+const HOST_ENV = { HOME, PATH: '/usr/bin' }
+
 const MISSING = claudeMissingMessage({ hostLabel: 'this host' })
 
 describe('preflight: shell_setup', () => {
@@ -24,7 +27,7 @@ describe('preflight: shell_setup', () => {
 
   it('shell_setup runs through the spawn preamble, in the session shell ($SHELL, else /bin/sh)', async () => {
     const files = { '/bin/bash': { content: ELF, exec: true } }
-    const ok = fakeHost(files, () => ({ code: 0, stdout: '__WALNUT_LOGIN_PATH__=/usr/bin\n' }), { HOME, PATH: '/usr/bin', SHELL: '/bin/bash' })
+    const ok = fakeHost(files, () => ({ code: 0, stdout: '__WALNUT_LOGIN_PATH__=/usr/bin\n' }), { ...HOST_ENV, SHELL: '/bin/bash' })
     const held = scratch()
     await createHostRuntime({ ...ok.deps, spawnPreamble: withSetup, shellSetupFile: held.shellSetupFile }).preflight({ shellSetup: 'source ~/.bashrc' })
     expect(ok.calls[0].file).toBe('/bin/bash')
@@ -32,17 +35,17 @@ describe('preflight: shell_setup', () => {
     expect(ok.calls[0].args[1]).toMatch(/^\. \/state\/scratch-1\/setup; printf /)
     for (const c of ok.calls) expect(c.args.join(' ')).not.toContain('source ~/.bashrc')
     expect(held.removed).toEqual(['/state/scratch-1/setup'])
-    const gone = fakeHost(files, () => ({ code: 0, stdout: '__WALNUT_LOGIN_PATH__=/usr/bin\n' }), { HOME, PATH: '/usr/bin', SHELL: '/usr/local/bin/zsh' })
+    const gone = fakeHost(files, () => ({ code: 0, stdout: '__WALNUT_LOGIN_PATH__=/usr/bin\n' }), { ...HOST_ENV, SHELL: '/usr/local/bin/zsh' })
     await createHostRuntime({ ...gone.deps, spawnPreamble: withSetup, shellSetupFile: scratch().shellSetupFile }).preflight({ shellSetup: 'source ~/.bashrc' })
     expect(gone.calls[0].file).toBe('/bin/sh')
     // The daemon names the shell its sessions start in: that one runs it.
-    const named = fakeHost(files, () => ({ code: 0, stdout: '__WALNUT_LOGIN_PATH__=/usr/bin\n' }), { HOME, PATH: '/usr/bin', SHELL: '/bin/sh' })
+    const named = fakeHost(files, () => ({ code: 0, stdout: '__WALNUT_LOGIN_PATH__=/usr/bin\n' }), { ...HOST_ENV, SHELL: '/bin/sh' })
     await createHostRuntime({ ...named.deps, spawnPreamble: withSetup, shellSetupFile: scratch().shellSetupFile, sessionShell: () => '/bin/bash' }).preflight({ shellSetup: 'source ~/.bashrc' })
     expect(named.calls[0].file).toBe('/bin/bash')
   })
 
   it('a slow shell_setup is unknown, never "not installed", and the spawn shell is not asked again', async () => {
-    const { deps, calls } = fakeHost({}, () => ({ code: 1, killed: true }), { HOME, PATH: '/usr/bin' })
+    const { deps, calls } = fakeHost({}, () => ({ code: 1, killed: true }), HOST_ENV)
     const held = scratch()
     expect((await createHostRuntime({ ...deps, spawnPreamble: withSetup, shellSetupFile: held.shellSetupFile }).preflight({ shellSetup: 'source /slow/env.sh' })).claude).toEqual({ found: false, unknown: 'shell_setup did not finish in time' })
     expect(calls).toHaveLength(1)
@@ -50,14 +53,14 @@ describe('preflight: shell_setup', () => {
   })
 
   it('a setup file that could not be written runs no shell_setup', async () => {
-    const { deps, calls } = fakeHost({}, () => ({ code: 1 }), { HOME, PATH: '/usr/bin' })
+    const { deps, calls } = fakeHost({}, () => ({ code: 1 }), HOST_ENV)
     await createHostRuntime({ ...deps, spawnPreamble: withSetup, shellSetupFile: () => null }).preflight({ shellSetup: 'export X=1' })
     for (const c of calls) expect(c.args.join(' ')).not.toContain('export X=1')
     expect(calls.some((c) => c.file === '/bin/sh' && /printf "\\n__WALNUT_LOGIN_PATH__/.test(c.args[1] || ''))).toBe(false)
   })
 
   it('a runtime with no spawn preamble (an in-process check) runs no shell_setup', async () => {
-    const { deps, calls } = fakeHost({}, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    const { deps, calls } = fakeHost({}, () => ({ code: 0 }), HOST_ENV)
     await createHostRuntime(deps).preflight({ shellSetup: 'export X=1' })
     expect(calls).toEqual([])
   })

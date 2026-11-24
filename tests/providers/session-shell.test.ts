@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { guardedPath } from '../setup/exec-guard.js'
 import { buildSessionPreamble, createShellSetupStore, runsAsShell, shellSetupStep } from '../../src/providers/session-shell.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-session-shell-')))
@@ -30,10 +31,10 @@ function run(shell: string, setup: string, tail: string, opts: { input?: string;
   if (opts.rc !== undefined) for (const rc of ['.bashrc', '.zshrc']) fs.writeFileSync(path.join(home, rc), opts.rc)
   const setupFile = path.join(home, 'setup')
   if (setup) fs.writeFileSync(setupFile, setup, { mode: 0o600 })
-  const script = buildSessionPreamble({ shimDir: path.join(root, 'shim'), shellSetupFile: setup ? setupFile : '', fallbackPathStep: 'export PATH="$PATH:' + path.join(root, 'shim') + '"' }) + '; ' + tail
+  const script = buildSessionPreamble({ shimDir: path.join(root, 'shim'), shellSetupFile: setup ? setupFile : '', fallbackPathStep: `PATH=$PATH:${path.join(root, 'shim')}; export PATH` }) + '; ' + tail
   return execFileSync(shell, [...(opts.args ?? []), '-c', script], {
     input: opts.input ?? 'the-first-line\n', encoding: 'utf8', timeout: 10_000,
-    env: { PATH: '/usr/bin:/bin', HOME: home, SHELL: shell },
+    env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home, SHELL: shell },
     stdio: ['pipe', 'pipe', 'ignore'],
   })
 }
@@ -68,7 +69,7 @@ describe.each(SHELLS)('the preamble in %s', (shell) => {
   })
 
   it('no setup: nothing of it runs', () => {
-    expect(buildSessionPreamble({ shimDir: '/x', fallbackPathStep: 'export PATH="$PATH:/x"' })).not.toContain('__walnut_eval')
+    expect(buildSessionPreamble({ shimDir: '/x', fallbackPathStep: 'PATH=$PATH:/x; export PATH' })).not.toContain('__walnut_eval')
     expect(run(shell, '', 'echo "${__walnut_eval-none}"')).toBe('none\n')
   })
 })
@@ -92,7 +93,7 @@ describe('the rc files', () => {
 
 describe('shell_setup step', () => {
   it('comes after the rc files and before the fallback dirs, and the gateway shim stays last', () => {
-    const text = buildSessionPreamble({ shimDir: '/s', shellSetupFile: '/state/setup', gatewayFirst: true, fallbackPathStep: 'export PATH="$PATH:$HOME/.local/bin:/s"' })
+    const text = buildSessionPreamble({ shimDir: '/s', shellSetupFile: '/state/setup', gatewayFirst: true, fallbackPathStep: 'PATH=$PATH:$HOME/.local/bin:/s; export PATH' })
     const rc = text.indexOf('.zshrc')
     const setup = text.indexOf(shellSetupStep('/state/setup'))
     const fallback = text.indexOf('$HOME/.local/bin')
