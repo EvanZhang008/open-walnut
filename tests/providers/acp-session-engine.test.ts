@@ -132,6 +132,12 @@ describe('AcpSession executable configuration', () => {
     expect((starts[1][1]?.env as Record<string, string>).CODEX_PATH).toBe(updatedBinary);
     expect(configRead).toHaveBeenCalledTimes(2);
     expect(starts[1][1]?.providerSessionId).toBe(sid);
+    // No task: the start names no `home` (no task dir, no call token) but still its owner, so the
+    // daemon records whose worker this is (daemon-spawn-journal.ts recordAcpRuntime).
+    for (const [, params] of starts) {
+      expect(params?.ownerHome).toBe(WALNUT_HOME);
+      expect(params?.home).toBeUndefined();
+    }
   });
 
   it('discovers Codex from the configured PATH on a cold launch', async () => {

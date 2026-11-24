@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { HOST_CALL_ALLOWLIST, HOST_HISTORY_WIRE, type HostHistoryRead } from '../../../src/core/session-channel/host-calls.js'
+import { ENGINE_REGISTRY } from '../../../src/core/agents/engine-registry.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -130,10 +131,41 @@ describe('every transcript read of a host-judged session runs on its host', () =
  * is read by its host) or reads nothing; and the journal's own primitives run only inside that
  * reader. The host's side of the read (its follower link) must let the journal through:
  * tests/providers/follower-reads-core.test.ts gates the names this reader derives.
+ *
+ * A direct read needs the journal's name: the `.acp.jsonl` suffix or the record's acpJournalPath
+ * (or a primitive below). Each file that names it is classified with its count, so a new direct
+ * read, in a new file or a classified one, fails here. A branch on an ACP engine by its id
+ * (`engine === 'codex'`) or by `case 'acp-journal'` counts as an ACP branch too. isAcpEngine()
+ * is left out: about 50 files ask it for process and routing work, and none of them can read a
+ * journal without its name, which the count catches.
  */
 const ACP_ROUTED = /\b(readAcpSessionHistory|readAcpSessionHistoryState|readProviderSessionHistory)\(/
 const ACP_PRIMITIVE = /\b(parseAcpJournal|projectAcpJournalHistory|shownAcpMessages|getAcpJournalPath|getAcpJournalPathCandidates)\(|\bnew AcpHistoryFold\(/
-const ACP_BRANCH = /historySource\s*[!=]==\s*'acp-journal'/
+/** The engines whose history is an ACP journal, from the registry itself. */
+const ACP_ENGINE_IDS = [...ENGINE_REGISTRY.values()].filter((c) => c.historySource === 'acp-journal').map((c) => c.id)
+const ACP_ID = `['"](?:${ACP_ENGINE_IDS.join('|')})['"]`
+const ACP_BRANCH = new RegExp(`historySource\\s*[!=]==\\s*'acp-journal'|case\\s+'acp-journal'|\\bengine\\)?\\s*[!=]==?\\s*${ACP_ID}|${ACP_ID}\\s*[!=]==?\\s*[\\w.]*\\bengine\\b`)
+const ACP_JOURNAL_NAME = /acp\.jsonl|\bacpJournalPath\b/g
+
+type AcpNameCls =
+  | 'routed'   // the routed reader itself
+  | 'worker'   // the daemon that runs the worker on its host: it writes and repairs the journal there
+  | 'gate'     // the follower check that lets a host read its own journal
+  | 'skips'    // lists the streams dir and leaves the journals alone (retention, compaction)
+  | 'field'    // carries the recorded path (the row, its replication, its owner, the live session); opens nothing
+
+/** Every file of src/ that names the journal, how many times (comments taken out), and why that is no unrouted read. */
+const ACP_NAME_FILES: Record<string, { cls: AcpNameCls; count: number; why: string }> = {
+  'src/providers/acp-session-history.ts': { cls: 'routed', count: 3, why: 'readAcpSessionHistoryState, a member' },
+  'src/providers/acp-daemon.ts': { cls: 'worker', count: 3, why: 'the worker\'s journal path and its tail repair at a daemon restart, on the host' },
+  'src/providers/follower-reads-core.ts': { cls: 'gate', count: 1, why: 'a session\'s own journal passes the owner check' },
+  'src/providers/stream-compact-core.ts': { cls: 'skips', count: 1, why: 'compaction leaves the journals out' },
+  'src/providers/acp-session.ts': { cls: 'field', count: 6, why: 'the live session keeps and reports the path the worker answered' },
+  'src/core/session-tracker.ts': { cls: 'field', count: 4, why: 'stores the path on the row' },
+  'src/core/types.ts': { cls: 'field', count: 1, why: 'the row\'s field' },
+  'src/core/sessions/session-row-owner.ts': { cls: 'field', count: 1, why: 'the field is the host\'s to write' },
+  'src/core/replication/kinds/sessions.ts': { cls: 'field', count: 1, why: 'the field replicates with the row' },
+}
 
 /** Every file of src/ that branches on an ACP journal engine: it reads through the routed reader, or reads nothing (why). */
 const ACP_BRANCH_FILES: Record<string, { reads: true } | { reads: false; why: string }> = {
@@ -148,6 +180,10 @@ const ACP_BRANCH_FILES: Record<string, { reads: true } | { reads: false; why: st
   'src/core/sessions/history-not-written.ts': { reads: false, why: 'an ACP session is never "not written yet"; answers false before any read' },
   'src/core/sessions/session-find.ts': { reads: false, why: 'an ACP journal has no older pages; the history it searches came from the routed reader' },
   'src/core/sessions/history-unavailable.ts': { reads: false, why: 'the wording of an unavailable history' },
+  'src/providers/claude-code-session.ts': { reads: false, why: 'a Codex draft model at a start; reads no history' },
+  'src/providers/engine-model-probe.ts': { reads: false, why: 'which binary lists an engine\'s models' },
+  'src/providers/engine-turn-watch.ts': { reads: false, why: 'which processes a turn watch expects' },
+  'src/providers/session-cost-core.ts': { reads: false, why: 'the price of a Codex turn from its usage' },
 }
 
 /** Where the journal's primitives may be called: the routed reader, and the projector that defines them. */
@@ -175,6 +211,16 @@ describe('every ACP journal read of a host-judged session runs on its host', () 
     for (const [f, c] of Object.entries(ACP_BRANCH_FILES)) {
       if (c.reads) expect(code(read(f)), `${f} reads an ACP history through the routed reader`).toMatch(ACP_ROUTED)
     }
+  })
+
+  it('each file that names the journal is classified, by how many times it names it', () => {
+    const counts: Record<string, number> = {}
+    for (const f of srcFiles('src')) {
+      const n = code(read(f)).match(ACP_JOURNAL_NAME)?.length ?? 0
+      if (n > 0) counts[f] = n
+    }
+    const want = Object.fromEntries(Object.entries(ACP_NAME_FILES).map(([f, c]) => [f, c.count]))
+    expect(counts, 'a new use of the journal\'s name: read it through readAcpSessionHistoryState (routed to the host), or classify it here with why').toEqual(want)
   })
 
   it('the journal\'s primitives run only inside the routed reader', () => {

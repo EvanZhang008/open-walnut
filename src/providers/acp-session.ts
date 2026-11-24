@@ -1886,6 +1886,10 @@ export class AcpSession {
       // The daemon makes the task's durable working directory and sets
       // WALNUT_TASK_DIR from it (task-dir-core.ts); an older daemon ignores it.
       ...(this.taskId ? { taskId: this.taskId, home: WALNUT_HOME } : {}),
+      // Whose worker this is, with a task or without one: the daemon records it so the worker's
+      // journal stays this Walnut's to read (daemon-spawn-journal.ts recordAcpRuntime). Its own
+      // field: `home` above also makes a task directory and call tokens. An older daemon ignores it.
+      ownerHome: WALNUT_HOME,
       // The worker outlives the host's daemon (work-survives.ts); an older daemon is never asked.
       ...(survive ? { survive: true } : {}),
     }, ACP_COLD_RESUME_TIMEOUT_MS))

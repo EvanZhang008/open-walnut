@@ -64,7 +64,7 @@ describe('the record of whose ACP worker a runtime id is', () => {
     expect(fs.readFileSync(recordFile(), 'utf8')).not.toMatch(/acp-rt-d|acp-rt-e|\.\.\/x/)
   })
 
-  it('a started worker is recorded with the home its start named; a failed start records nothing', async () => {
+  it('a started worker is recorded with the owner its start named, with a task or without; a failed start records nothing', async () => {
     const j = journal()
     let ok = true
     const replies: Array<{ ok: boolean }> = []
@@ -81,11 +81,18 @@ describe('the record of whose ACP worker a runtime id is', () => {
       sendOk: () => { replies.push({ ok: true }) }, sendError: () => { replies.push({ ok: false }) }, sendFrame: () => { replies.push({ ok: false }) },
       logMsg: () => {},
     })
+    // A start as an older server sends it: the owner only as the task's `home`.
     await acpSessions.cmdAcpStart({}, 1, { sid: 'acp-rt-started', cwd: base, taskId: 'task-1', home: HOME_B })
+    // A start with no task names its owner in its own field, and no `home` (no task dir, no call token).
+    await acpSessions.cmdAcpStart({}, 2, { sid: 'acp-rt-no-task', cwd: base, ownerHome: HOME_A })
+    // Both fields: the owner field decides.
+    await acpSessions.cmdAcpStart({}, 3, { sid: 'acp-rt-both', cwd: base, taskId: 'task-1', home: HOME_B, ownerHome: HOME_A })
     ok = false
-    await acpSessions.cmdAcpStart({}, 2, { sid: 'acp-rt-failed', cwd: base, taskId: 'task-1', home: HOME_B })
-    expect(replies).toEqual([{ ok: true }, { ok: false }])
+    await acpSessions.cmdAcpStart({}, 4, { sid: 'acp-rt-failed', cwd: base, taskId: 'task-1', ownerHome: HOME_B })
+    expect(replies).toEqual([{ ok: true }, { ok: true }, { ok: true }, { ok: false }])
     expect(journal().acpRuntimeOwner('acp-rt-started')).toBe(HOME_B)
+    expect(journal().acpRuntimeOwner('acp-rt-no-task')).toBe(HOME_A)
+    expect(journal().acpRuntimeOwner('acp-rt-both')).toBe(HOME_A)
     expect(journal().acpRuntimeOwner('acp-rt-failed')).toBeUndefined()
   })
 })

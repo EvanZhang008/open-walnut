@@ -94,7 +94,9 @@ export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSession
       const resp = await acp.acpStart(ws, params)
       if (resp.ok) {
         // Whose worker this is, kept on disk: its journal stays that Walnut's to read here.
-        recordAcpRuntime(params.sid, (cmd as { home?: unknown }).home)
+        // `ownerHome` names it for every start; a server older than that names `home`, with a task only.
+        const o = cmd as { ownerHome?: unknown; home?: unknown }
+        recordAcpRuntime(params.sid, o.ownerHome ?? o.home)
         sendOk(ws, id, resp.result ?? {})
       } else sendFrame(ws, { id, ok: false, error: resp.error, errorKind: resp.errorKind })
     })
