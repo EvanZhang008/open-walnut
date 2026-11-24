@@ -251,7 +251,11 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
     expect(start).toBeGreaterThan(-1)
     expect(cutoff).toBeGreaterThan(start)
     expect(cutoff).toBeLessThan(source.indexOf("    logMsg('warn', 'cmdStart: replacing existing session'", start))
-    const prefix = source.slice(start, cutoff) + '\nthrow new Error("replace path reached");\n}'
+    // The spawn gate before the cutoff (gateClaudeLaunch) is daemon-session-shell.ts: it rides along.
+    const gateAt = source.indexOf('async function gateClaudeLaunch(')
+    expect(gateAt).toBeGreaterThan(-1)
+    const gate = source.slice(gateAt, source.indexOf('\n}\n', gateAt) + 2)
+    const prefix = gate + '\n' + source.slice(start, cutoff) + '\nthrow new Error("replace path reached");\n}'
     const js = ts.transpileModule(prefix, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
     const existing = { state: 'running', pid: 4242, watcher: { offset: 100 }, jsonlPath: '/fixture/stream.jsonl', mode: 'default' }
     const sessions = new Map([['sid', existing]])
@@ -270,7 +274,7 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
       js + '\nreturn cmdStart')(
       sessions, { kill, env: {} }, { existsSync: () => true }, { handleSendCommand: send }, fifo,
       addSubscriber, sendOk, sendError, () => {}, Buffer,
-      { run: (_sid: string, work: () => Promise<unknown>) => work() }, new Map(), null, () => {}, send,
+      { run: (_sid: string, work: () => Promise<unknown>) => work() }, new Map(), () => null, () => {}, send,
       { ensureClaude }, isJournalSid, requireBudgetAllowance,
       // The start's args go through the real inline step (hook-files-v1) first.
       createCliArgvFiles({ fs, path, crypto, dir: '/nonexistent/argv' }), { fenced: false },

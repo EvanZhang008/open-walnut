@@ -88,6 +88,11 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/daemon-process-groups.ts': 4,     // the daemon's session CLI groups (it spawned them detached): its signal, liveness probe and kill ladder; every pid comes from callers in daemon-standalone.ts that prove it first
   'src/providers/daemon-changes.ts': 1,            // the session commit's own git child group (git-commit-core.ts killGroup), at its deadline
   'src/providers/daemon-host-services.ts': 1,      // a task workspace's own setup child group (workspace-core.ts killGroup), moved out of the runtime's body
+  'src/providers/daemon-session-owner.ts': 1,      // waitForStoppedProcess: SIGKILL of the group of a CLI this daemon just stopped, still alive after 3 s
+  'src/providers/daemon-usage-budget.ts': 1,       // a budget pause's owned CLI group, once the boot id and a surviving member's start time prove it is the group it stopped
+  'src/providers/daemon-session-start.ts': 1,      // a respawn's old CLI group: the session this daemon runs, still alive, ended before the sid points at the new pid
+  'src/providers/daemon-idle-scan.ts': 1,          // the idle scan's SIGKILL of a dead session CLI's leftover group (MCP children), only off service mode and while that group lives
+  'src/providers/daemon-session-stop.ts': 2,       // stopSessionProcess's SIGINT, then SIGTERM only while the pid's identity still proves it is the session's CLI
   'src/providers/codex-model-probe.ts': 1,          // its own detached model-probe child group
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
   'src/providers/daemon-service-cron-host.ts': 1, // its own service daemon (exe under its versions/) and boot supervisor (cmdline names its script), never a CLI

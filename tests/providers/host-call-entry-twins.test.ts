@@ -13,10 +13,11 @@ import * as path from 'node:path'
 import { createFollowerGateway } from '../../src/providers/follower-gateway-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { HOST_CALL_CAPABILITY } from '../../src/replica/host-call-entry.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
-const src = read('src/providers/daemon-standalone.ts')
+const src = daemonRuntimeText()
 
 function fnBody(src: string, name: string): string {
   const at = src.search(new RegExp(`^(async )?function ${name}\\(`, 'm'))

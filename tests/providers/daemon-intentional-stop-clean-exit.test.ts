@@ -42,6 +42,7 @@ import path from 'node:path'
 import { buildDeps, makeTestSession, createDaemonCore, type TestSession } from '../helpers/daemon-core-fixtures.js'
 import { assembleSnapshot, initialFoldState } from '../../src/providers/daemon-fold.js'
 import { projectProcessStatus } from '../../src/core/session-snapshot-apply.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
@@ -180,7 +181,8 @@ describe('daemon-core: an intentional stop normalizes the exit code', () => {
 describe('intentional-stop intent in the daemon source', () => {
   const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf-8')
   const coreSrc = read('src/providers/daemon-core.ts')
-  const standaloneSrc = read('src/providers/daemon-standalone.ts')
+  // The daemon runtime's whole text: daemon-standalone.ts, its session types and area modules (daemon-runtime-text.ts).
+  const standaloneSrc = daemonRuntimeText()
 
   /**
    * Slice ONE function body by brace matching, skipping string literals and

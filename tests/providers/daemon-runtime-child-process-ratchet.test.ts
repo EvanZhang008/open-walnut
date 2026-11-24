@@ -94,7 +94,10 @@ const ALLOWED: Record<string, Entry> = {
   ['src/lib/account.ts']: {
     reason: 'the passwd entry on bun (id -P on macOS, getent for NSS users), read once ahead for the login shell sessions start in (session-shell.ts)',
     injection: 'primeAccount(childUse)',
-    checks: [{ file: S, call: 'primeAccount', has: /^childUse$/ }],
+    checks: [
+      { file: S, call: 'createDaemonSessionShell', has: /\bchildUse\b/ },
+      { file: `${P}daemon-session-shell.ts`, call: 'primeAccount', has: /^childUse$/ },
+    ],
   },
   [`${P}spawn-pool.ts`]: {
     reason: 'the runtime\'s own start mechanism inside another program: its thread starts the children with the umask it is given, and their env and cwd come filled in by createDaemonChildSpawn',
@@ -104,7 +107,10 @@ const ALLOWED: Record<string, Entry> = {
   [`${P}daemon-spawn-barrier.ts`]: {
     reason: 'a service-mode session CLI starts behind the registry barrier',
     injection: 'spawnBehindRegistry(program, args, options, childUse)',
-    checks: [{ file: S, call: 'spawnBehindRegistry', has: /,\s*childUse\s*$/ }],
+    checks: [
+      { file: S, call: 'createDaemonSessionStart', has: /\bchildUse\b/ },
+      { file: `${P}daemon-session-start.ts`, call: 'spawnBehindRegistry', has: /,\s*childUse\s*$/ },
+    ],
   },
   [`${P}daemon-core.ts`]: {
     reason: 'ps for a pid\'s start time (macOS)',
@@ -113,6 +119,7 @@ const ALLOWED: Record<string, Entry> = {
       { file: S, call: 'defaultReadStartTime', has: /,\s*childUse\s*$/ },
       { file: S, call: 'defaultReadStartTimes', has: /,\s*childUse\s*$/ },
       { file: S, call: 'createAsyncStartTimeReader', has: /env: daemonEnv/ },
+      { file: `${P}daemon-session-owner.ts`, call: 'createAsyncStartTimeReader', has: /env: daemonEnv/ },
     ],
   },
   [`${P}acp-daemon.ts`]: {
@@ -209,7 +216,8 @@ const ALLOWED: Record<string, Entry> = {
     reason: '`opencode export` for a session\'s usage',
     injection: 'createUsageBudgetRuntime({ childProcess: childUse }) -> scan({ childProcess })',
     checks: [
-      { file: S, call: 'createUsageBudgetRuntime', has: /childProcess: childUse/ },
+      { file: S, call: 'createDaemonUsageBudget', has: /\bchildUse\b/ },
+      { file: `${P}daemon-usage-budget.ts`, call: 'createUsageBudgetRuntime', has: /childProcess: childUse/ },
       { file: `${P}usage-budget-runtime.ts`, call: 'scan', has: /childProcess: options\.childProcess/ },
     ],
   },
@@ -223,6 +231,7 @@ const ALLOWED: Record<string, Entry> = {
     injection: 'readCronBootId(platform, signal, childUse), createDaemonCronRuntime / prepare|consumeDaemonServiceHandover({ childProcess: childUse })',
     checks: [
       { file: S, call: 'readCronBootId', has: /,\s*childUse\s*$/ },
+      { file: `${P}daemon-usage-budget.ts`, call: 'readCronBootId', has: /,\s*childUse\s*$/ },
       { file: S, call: 'createDaemonCronRuntime', has: /childProcess: childUse/ },
       { file: S, call: 'prepareDaemonServiceHandover', has: /childProcess: childUse/ },
       { file: S, call: 'consumeDaemonServiceHandover', has: /childProcess: childUse/ },

@@ -29,6 +29,7 @@ import { pickSessionShell, runsAsShell } from '../../src/providers/session-shell
 import { testBun } from '../helpers/bun-runtime.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -188,7 +189,8 @@ describe('sessionShell: the shell a session starts under', () => {
   })
 
   it('the daemon asks pickSessionShell with its own env, and no spawn path falls back to `$SHELL || …` again', () => {
-    const src = fs.readFileSync(STANDALONE, 'utf8')
+    // The whole runtime: sessionShell is daemon-session-shell.ts.
+    const src = daemonRuntimeText()
     expect(src).toMatch(/return pickSessionShell\(\{ envShell: daemonEnv\.SHELL, loginShell: loginShell\(\), runs \}\)/)
     // Its `runs` is the file check above (an executable regular file).
     expect(src).toMatch(/const runs = \(file: string\) => runsAsShell\(fs, file\)/)

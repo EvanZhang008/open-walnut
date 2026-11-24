@@ -13,6 +13,7 @@ import {
   ClaudeRuntimeMissingError, classifyDeliveryFailure, cliStoppedBeforeFirstLine, isClaudeRuntimeMissing, cliStoppedSentence, startFailureSentence,
 } from '../../src/providers/delivery-failure.js'
 import { AGENT_WAIT_RESEND } from '../../src/core/sessions/agent-wait-resend.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.join(__dirname, '../..')
 
@@ -79,7 +80,7 @@ describe('a start whose Claude Code stopped before it read the message', () => {
       expect(cliStoppedBeforeFirstLine(`start: initial message not delivered (${reason})`), reason).toBe(kind === 'cli_gone')
     }
     // The daemon still words the failure the way the server reads it.
-    expect(fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')).toMatch(/start: initial message not delivered \(/)
+    expect(daemonRuntimeText()).toMatch(/start: initial message not delivered \(/)
     // start() throws no raw daemon text.
     const rsm = fs.readFileSync(path.join(ROOT, 'src/providers/remote-session-manager.ts'), 'utf8')
     expect(rsm).not.toMatch(/Daemon start failed on host/)

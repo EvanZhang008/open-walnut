@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readTwinText } from '../helpers/standalone-twin-text.js'
+import { areaModuleText } from '../helpers/daemon-runtime-text.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -360,15 +361,20 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
     // A compiled-file daemon runs with the serving stage's runtime dir; a session
     // that inherited it unpacked a `walnut` into that stage, or mkdir'd it back
     // inside a stage the next deploy had deleted (scripts/dev-prod.sh).
-    // The CLI's own env object: from the one key only it sets to its closing brace.
-    const at = standaloneSrc.indexOf('WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH')
+    // The CLI's own env object, in the session start (daemon-session-start.ts, as the runtime's
+    // text): from the one key only it sets there to its closing brace.
+    const startSrc = areaModuleText('src/providers/daemon-session-start.ts')
+    const at = startSrc.indexOf('WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH')
     expect(at).toBeGreaterThan(0)
-    const start = standaloneSrc.lastIndexOf('env: {', at)
-    const end = standaloneSrc.indexOf('\n    },', at)
+    const start = startSrc.lastIndexOf('env: {', at)
+    const end = startSrc.indexOf('\n    },', at)
     expect(start).toBeGreaterThan(0)
     expect(end).toBeGreaterThan(at)
-    const envObject = standaloneSrc.slice(start, end)
-    expect(envObject).toContain('...process.env')
+    const envObject = startSrc.slice(start, end)
+    // Built from the runtime's own env (daemonEnv, options.env: process.env in a daemon of its own).
+    // Before the session start moved out, this window ran from an unrelated ps env over a thousand
+    // lines of the runtime, so the old check did not read the CLI's env object at all.
+    expect(envObject).toMatch(/^env: \{\s*\.\.\.daemonEnv,/)
     // Unset, except a service set's own runtime place (service-set.ts setRuntimeTreesDirOf:
     // undefined unless the daemon is a set's and its dir is that set's), so a set's sessions
     // never unpack into the default Walnut's runtime.

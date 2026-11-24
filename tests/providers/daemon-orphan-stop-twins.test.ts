@@ -20,6 +20,7 @@ import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import ts from 'typescript'
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const SID = '11111111-2222-4333-8444-555555555555'
@@ -88,7 +89,8 @@ function buildDaemon(world: World) {
   const injected: Record<string, unknown> = {
     sessions,
     SERVICE_MODE: world.serviceMode,
-    daemonBootId: world.bootId,
+    // The runtime's late values, asked on use (daemon-session-stop.ts takes getters).
+    daemonBootId: () => world.bootId,
     fs: {
       readFileSync: (p: string) => {
         if (p === PGID_PATH && world.pgidFile !== null) return world.pgidFile
@@ -106,12 +108,12 @@ function buildDaemon(world: World) {
     // tests/providers/host-server-own-session-owner-twins.test.ts, against real daemons.
     walnutOfHome: (home: string) => home,
     servedStopRefusal: () => null,
-    SESSION_IDLE_WARNING_MS: IDLE_WARNING_MS,
-    SESSION_IDLE_KILL_MS: IDLE_KILL_MS,
+    SESSION_IDLE_WARNING_MS: () => IDLE_WARNING_MS,
+    SESSION_IDLE_KILL_MS: () => IDLE_KILL_MS,
     deriveSessionProtection: () => ({ source: world.protection.source, killMs: IDLE_KILL_MS }),
     hasRecentSchedulerFiring: () => world.schedulerFiring,
     sessionStopVersions: stopVersions,
-    cronRuntime: { get: () => null, disable: async (sid: string) => { disables.push(sid) } },
+    cronRuntime: () => ({ get: () => null, disable: async (sid: string) => { disables.push(sid) } }),
     stopSessionProcess: async (_ws: unknown, id: number, sid: string) => {
       stops.push(sid)
       replies.push({ id, ok: true, data: { stopped: true } })
@@ -120,7 +122,7 @@ function buildDaemon(world: World) {
     sendOk: (_ws: unknown, id: number, data: Record<string, unknown>) => { replies.push({ id, ok: true, data }) },
     sendError: (_ws: unknown, id: number, error: string) => { replies.push({ id, ok: false, error }) },
   }
-  const src = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  const src = daemonRuntimeText()
   const code = ['cmdStop', 'orphanStopRefusal', 'stopOwnerRefusal'].map((n) => sliceTopLevelFn(src, n)).join('\n')
   const js = ts.transpileModule(code + '\nreturn { cmdStop, orphanStopRefusal, stopOwnerRefusal, sessionStartGate };', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },

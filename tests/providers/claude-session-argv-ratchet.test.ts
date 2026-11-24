@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { buildClaudeArgv } from '../../src/providers/claude-session-argv.js'
 import { buildSessionSettings } from '../../src/providers/claude-session-settings.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const SRC = path.resolve(import.meta.dirname, '../../src')
 
@@ -45,8 +46,11 @@ describe('one builder for a session\'s claude argv and settings', () => {
   })
 
   it('the daemon\'s resume of a lost spawn record goes through the builder, with the argv it always had', () => {
-    const daemon = fs.readFileSync(path.join(SRC, 'providers/daemon-standalone.ts'), 'utf-8')
-    const resume = daemon.slice(daemon.indexOf('function cmdBridgeResume('), daemon.indexOf('// ── STT relay'))
+    const daemon = daemonRuntimeText()
+    // cmdBridgeResume, to the end of its body (daemon-session-resume.ts, dedented as the runtime's text).
+    const at = daemon.indexOf('function cmdBridgeResume(')
+    expect(at).toBeGreaterThan(-1)
+    const resume = daemon.slice(at, daemon.indexOf('\n}\n', at))
     expect(resume).toMatch(/\bbuildClaudeArgv\(\{\s*command: 'claude'/)
     // The literal list it used before the builder (2026-11-24), for a plan session with a model.
     const session = ['--permission-mode', 'plan', '--model', 'm', '--resume', 'sid-1']

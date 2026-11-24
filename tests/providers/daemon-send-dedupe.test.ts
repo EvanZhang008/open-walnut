@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { buildDeps, makeTestSession, createDaemonCore } from '../helpers/daemon-core-fixtures.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
@@ -510,7 +511,7 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
 })
 
 describe('send-dedupe-v1 wiring', () => {
-  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  const standalone = daemonRuntimeText()
   const core = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-core.ts'), 'utf-8')
 
   it('the daemon passes the dedupe flag, lostPid, bootWait and answers from the wire into the send', () => {

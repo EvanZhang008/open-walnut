@@ -6,14 +6,13 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { CRON_PROMPT_LIMIT, createCronMetadataTracker, type CronMetadataProcess } from '../../src/providers/daemon-cron-metadata.js'
 import { cliOneShotTime, nextCliCronMinute } from '../../src/providers/daemon-cron-schedule.js'
 import { DEFAULT_CRON_RESTORE_CONFIG } from '../../src/providers/daemon-cron-transcript.js'
 import { SESSION_CRON_JOB_LIMIT, SESSION_CRON_PROMPT_LIMIT, type SessionCronMetadata } from '../../src/core/types.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const PROC: CronMetadataProcess = { identity: 'process-1', alive: true, version: '2.1.258' }
 const AT = Date.UTC(2026, 8, 11, 12)
 const CONFIG = { enabled: true, recurringMaxAgeMs: 604_800_000 }
@@ -80,7 +79,8 @@ describe('cron metadata tracker', () => {
   })
 
   it('is wired into the daemon the way the daemon file spells it', () => {
-    const standalone = fs.readFileSync(path.join(REPO, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    // The whole runtime: the tailer (daemon-session-tailer.ts) is where a line reaches the tracker.
+    const standalone = daemonRuntimeText()
     expect(standalone).toContain('nextRun: nextCliCronMinute,')
     expect(standalone).toContain('promptLimit: CRON_PROMPT_LIMIT,')
     expect(standalone).toContain('oneShotTime: (cron, createdAt, id) => cronMetadataConfig ? cliOneShotTime(cron, createdAt, id, cronMetadataConfig) : null,')

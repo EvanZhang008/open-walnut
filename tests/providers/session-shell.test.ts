@@ -16,6 +16,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { guardedPath } from '../setup/exec-guard.js'
 import { buildSessionPreamble, createShellSetupStore, runsAsShell, shellSetupStep } from '../../src/providers/session-shell.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-session-shell-')))
 afterAll(() => { if (root.includes('walnut-session-shell-')) fs.rmSync(root, { recursive: true, force: true }) })
@@ -180,7 +181,8 @@ describe('one preamble for the spawn and host.preflight', () => {
   const code = (text: string) => text.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
 
   it('the daemon hands host.preflight the builder its spawns use, with the shell_setup in it', () => {
-    const daemon = code(src('daemon-standalone.ts'))
+    // The whole runtime: the builder and the store are daemon-session-shell.ts, the spawns daemon-session-start.ts.
+    const daemon = code(daemonRuntimeText())
     expect(daemon).toContain('spawnPreamble: (shellSetupFile) => buildSpawnPreamble({ shellSetupFile }),')
     expect(daemon).toContain('shellSetupFile: (setup) => shellSetupStore.scratch(setup),')
     expect(daemon).toContain('sessionShell: () => sessionShell(),')

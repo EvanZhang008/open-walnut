@@ -28,6 +28,7 @@ import nodePath from 'node:path'
 import ts from 'typescript'
 import { argvNamesSession } from '../../src/providers/daemon-core.js'
 import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const SID = '43b00853-0000-4000-8000-00000000abcd'
@@ -89,7 +90,7 @@ function buildDaemon(world: World) {
     wsId: () => 7,
     cliArgvFiles: ARGV_FILES,
   }
-  const src = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  const src = daemonRuntimeText()
   const parts = [sliceTopLevelFn(src, 'stopSessionProcess')!]
   const reused = sliceTopLevelFn(src, 'pidNowRunsAnotherProgram')
   expect(reused, 'the daemon carries pidNowRunsAnotherProgram').toBeTruthy()

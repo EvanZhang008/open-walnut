@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DAEMON_DURABLE_STATE_DIRS, moveDaemonState } from '../../src/providers/daemon-service-state-move.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 let dir: string
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-state-move-')) })
@@ -31,8 +32,8 @@ describe('moving a daemon\'s durable state between an unmanaged daemon and a ser
     expect(await moveDaemonState(from, path.join(dir, 'root'))).toEqual([])
   })
 
-  it('names every durable dir the standalone daemon moves to its state dir in service mode', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  it('names every durable dir the daemon runtime moves to its state dir in service mode', () => {
+    const src = daemonRuntimeText()
     const named = [...src.matchAll(/SERVICE_MODE && DAEMON_STATE_DIR\s*\?\s*path\.join\(DAEMON_STATE_DIR, '([^']+)'\)\s*:\s*[^\n]*\.open-walnut', 'tmp'/g)].map((m) => m[1])
     expect([...named].sort()).toEqual([...DAEMON_DURABLE_STATE_DIRS].sort())
   })

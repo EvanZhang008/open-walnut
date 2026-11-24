@@ -26,6 +26,7 @@ import { LocalDaemon } from '../../src/providers/local-daemon.js'
 import { TUNNEL_PROBE_HEADER, TUNNEL_REFUSAL_HEADER } from '../../src/core/hosts/cloud-box-host.js'
 import { notifyRevoked } from '../../src/core/device-auth.js'
 import { twinText } from '../helpers/standalone-twin-text.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const PRIMARY: TunnelCredential = { name: 'bridge-local', kind: 'machine' }
 const OTHER_MACHINE: TunnelCredential = { name: 'bridge-devbox', kind: 'machine' }
@@ -150,14 +151,14 @@ describe('the tunnel daemon spawn env', () => {
   })
 
   it('the daemon strips WALNUT_DAEMON_STATE_DIR from every CLI it spawns', () => {
-    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', 'daemon-standalone.ts'), 'utf-8')
+    const src = daemonRuntimeText()
     expect(src).toMatch(/WALNUT_DAEMON_KEEP_SESSIONS: undefined,\s*(\/\/[^\n]*\n\s*)*WALNUT_DAEMON_STATE_DIR: undefined,/)
   })
 
   // The daemon's own switch must stop at the daemon: a CLI that inherited it
   // would hand it to any daemon it starts (a `walnut` run inside a session).
   it('the daemon strips WALNUT_DAEMON_KEEP_SESSIONS from every CLI it spawns', () => {
-    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', 'daemon-standalone.ts'), 'utf-8')
+    const src = daemonRuntimeText()
     expect(src).toMatch(/WALNUT_DAEMON_PARENT_PID: undefined,\s*(\/\/[^\n]*\n\s*)*WALNUT_DAEMON_KEEP_SESSIONS: undefined,/)
   })
 })

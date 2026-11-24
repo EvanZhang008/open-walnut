@@ -27,7 +27,9 @@ const DROPPED_FOR_SESSIONS: Record<(typeof RUNTIME_PLACE_ENV)[number], Array<{ f
   // (setRuntimeTreesDirOf): a set's sessions read the set's trees, never the default's.
   WALNUT_RUNTIME_DIR: [
     { file: 'src/providers/daemon-standalone.ts', proof: /const SESSION_RUNTIME_DIR = setRuntimeTreesDirOf\(daemonEnv, fs\.realpathSync\)/ },
-    { file: 'src/providers/daemon-standalone.ts', proof: /WALNUT_RUNTIME_DIR: SESSION_RUNTIME_DIR,/ },
+    // The runtime hands it to its session start (daemon-session-start.ts), which puts it in the CLI's env.
+    { file: 'src/providers/daemon-standalone.ts', proof: /createDaemonSessionStart\(\{[\s\S]{0,400}\bSESSION_RUNTIME_DIR,/ },
+    { file: 'src/providers/daemon-session-start.ts', proof: /WALNUT_RUNTIME_DIR: SESSION_RUNTIME_DIR,/ },
   ],
   // The local daemon starts with no data home of the server's, so neither do its CLIs.
   OPEN_WALNUT_HOME: [

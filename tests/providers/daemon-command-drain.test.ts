@@ -30,13 +30,17 @@ function deferred<T = void>() {
 
 function extract(source: string, name: string): string {
   const parsed = ts.createSourceFile('fixture.ts', source, ts.ScriptTarget.ES2022, true)
+  // A function declaration of that name wins over a property or variable of it: a deps object
+  // handed to an area module names a command (`cmdStart: (ws, id, cmd) => cmdStart(...)`).
   let found: ts.Node | undefined
+  let fallback: ts.Node | undefined
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) found = node
-    else if ((ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node)) && node.name.getText(parsed) === name) found = node.initializer
+    else if (!fallback && (ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node)) && node.name.getText(parsed) === name) fallback = node.initializer
     if (!found) ts.forEachChild(node, visit)
   }
   visit(parsed)
+  found ??= fallback
   if (!found) throw new Error(`Missing ${name}`)
   return found.getText(parsed)
 }
@@ -166,7 +170,7 @@ describe('daemon command drain', () => {
         DAEMON_DIR: '/fixture', path, Buffer, sessionStartGate: gate,
         sessions: new Map(), acp: { hasWorker: () => false }, process: { kill },
         fs: { existsSync: (p: string) => cancelled.has(p), promises: { mkdir: async () => {}, writeFile: async (p: string) => { cancelled.add(p); } } },
-        sessionStopVersions: new Map(), cronRuntime: null, startSessionProcess, addSubscriber: vi.fn(), sendOk, sendError: vi.fn(),
+        sessionStopVersions: new Map(), cronRuntime: () => null, startSessionProcess, addSubscriber: vi.fn(), sendOk, sendError: vi.fn(),
       });
     await commands.cancel({}, 1, { sid: 'late-start' });
     expect(sendOk).toHaveBeenCalledWith({}, 1, { cancelled: true, alive: false });
@@ -788,7 +792,8 @@ describe('daemon command drain', () => {
       check: (sid: string, session: unknown, line: string, v: number) => Promise<void>
       cancel: (sid: string, reason: string) => void
     }>(`${functions}\nreturn { check: checkTurnRetry, cancel: cancelTurnRetry };`, {
-      daemonCommands, cronRuntime, sessions, retryCheckVersions, budgetAllowance,
+      // The turn retry (daemon-line-checks.ts) asks the runtime's cron runtime on use.
+      daemonCommands, cronRuntime: () => cronRuntime, sessions, retryCheckVersions, budgetAllowance,
       TURN_RETRY_CFG: { ...TURN_RETRY_DEFAULTS, enabled: true, backoffBaseMs: 1000 },
       applyTurnRetry, clearTurnRetryStreak, decideTurnRetry, newTurnRetryState, parseTurnErrorLine,
       turnRetryGiveUpText, turnRetryMarkerText, turnRetryMessage,
@@ -896,7 +901,7 @@ describe('daemon command drain', () => {
     await daemonCommands.close()
     const cmdBridgeResume = vi.fn()
     const fire = compile<(sid: string, attempt: number, text: null) => Promise<void>>(`${extract(source, 'fireTurnRetry')}\nreturn fireTurnRetry;`, {
-      daemonCommands, cronRuntime: null, sessions: new Map([['test-session', {}]]),
+      daemonCommands, cronRuntime: () => null, sessions: new Map([['test-session', {}]]),
       turnRetryMessage: () => 'retry', cmdBridgeResume, RETRY_WS_SINK: {}, logMsg: vi.fn(),
     })
     await fire('test-session', 1, null)
@@ -939,7 +944,7 @@ describe('standalone ACP command lifetime', () => {
       // acpStart names the task's durable directory first (task-dir-core.ts); this frame names no task.
       TASK_DIR_ROOT: '/fixture/tasks', ensureTaskDir: () => null,
       // acpStart hands the session the secrets the user shared with this host (secrets-core.ts).
-      secretsSessionEnv: () => ({}), SECRETS_ROOT: '/fixture/secrets',
+      secretsSessionEnv: () => ({}), SECRETS_ROOT: () => '/fixture/secrets',
       // acpStart starts the agent with the test-browser silencer preload (pw-silence-core.ts).
       pwSilenceAcpOptions: () => ({}), pwSilenceFile: async () => null,
       // acpStart hands the worker its host-call entry (host-call-entry-v1); this frame names no home.

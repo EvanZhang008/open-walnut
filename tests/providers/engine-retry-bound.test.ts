@@ -102,7 +102,7 @@ describe('every engine retry is bounded (guard)', () => {
     expect(worker).toMatch(/this\.turnWatch\?\.frame\(update\)/)
     // Both prompt paths (a turn and a self-report question) run under it.
     expect(worker.match(/this\.watchedPrompt\(conn\.prompt\(/g)?.length).toBe(2)
-    expect(read('src/providers/daemon-standalone.ts')).toMatch(/\.\.\.claudeRetryEnv\(daemonEnv\)/)
+    expect(read('src/providers/daemon-session-start.ts')).toMatch(/\.\.\.claudeRetryEnv\(daemonEnv\)/)
   })
 })
 

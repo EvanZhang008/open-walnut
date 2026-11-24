@@ -23,16 +23,11 @@
  * WebSocket and assert zero byte loss on the other side.
  */
 import { describe, it, expect } from 'vitest'
-import fs from 'node:fs'
-import path from 'node:path'
-
-const ROOT = path.resolve(__dirname, '../..')
-const standalonePath = path.join(ROOT, 'src/providers/daemon-standalone.ts')
-
-function readFile(p: string) { return fs.readFileSync(p, 'utf-8') }
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 describe('L1 daemon watcher lifecycle: session-bound, not ws-bound', () => {
-  const standaloneSrc = readFile(standalonePath)
+  // The runtime's whole text: its session types and area modules too (daemon-runtime-text.ts).
+  const standaloneSrc = daemonRuntimeText()
 
   describe('Data structure — session has ONE watcher + a Set of subscribers', () => {
     // subscribers is a Subscribers: a Set that remembers when it was last watched (daemon-idle-scan-watched.test.ts).

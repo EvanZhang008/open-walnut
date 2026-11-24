@@ -17,10 +17,11 @@ import { closeDb } from '../../src/core/session-db.js'
 import { bus } from '../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import { buildDeps, createDaemonCore } from '../helpers/daemon-core-fixtures.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 // The daemon's own snapshot push (assembleSessionSnapshot, emitSnapshot, pushSnapshot) and its
 // marker command, cut from daemon-standalone.ts and run against the real daemon core.
-const source = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+const source = daemonRuntimeText()
 function region(from: string, to: string): string {
   const start = source.indexOf(from)
   const end = source.indexOf(to, start)

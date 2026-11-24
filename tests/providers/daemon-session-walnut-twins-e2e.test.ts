@@ -24,6 +24,7 @@ import os from 'node:os'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { readTwinText } from '../helpers/standalone-twin-text.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 let cliPath = ''
 let root = ''
@@ -186,8 +187,10 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     [/templateShimDir: GATEWAY_SHIM_DIR,$/, 'trigger checks (trigger-check-core.ts puts it first)'],
     // Handed to the trigger modules, whose checks use it as above (daemon-trigger-runs.ts, daemon-trigger-commands.ts).
     [/^const trigger(Runs|Commands) = createDaemonTrigger(Runs|Commands)\(\{[^}]*\bGATEWAY_SHIM_DIR\b/, 'handed to the trigger checks'],
-    [/^GATEWAY_SHIM_DIR: string$/, 'a trigger module\'s deps'],
-    [/^const \{[^}]*\bGATEWAY_SHIM_DIR\b[^}]*\} = deps$/, 'a trigger module\'s deps'],
+    // Handed to the session shell (daemon-session-shell.ts), which holds the rule and the preamble below.
+    [/^const sessionShellHelpers = createDaemonSessionShell\(\{[^}]*\bGATEWAY_SHIM_DIR\b/, 'handed to the session shell'],
+    [/^GATEWAY_SHIM_DIR: string$/, 'an area module\'s deps'],
+    [/^const \{[^}]*\bGATEWAY_SHIM_DIR\b[^}]*\} = deps$/, 'an area module\'s deps'],
     [/touchDirs: \[\{ dir: GATEWAY_SHIM_DIR, /, 'kept alive in a swept /tmp'],
     // The one rule (sessionPathWithShim) and the preamble that applies it in the shell
     // (session-shell.ts buildSessionPreamble, checked below).
@@ -226,7 +229,8 @@ describe('every use of the shim dir in the daemon is a known one', () => {
   it('every session spawn of the daemon takes its OPEN_WALNUT_API_URL from what its Walnut named', () => {
     // The native spawn reads it from the CLI's settings, an ACP worker from its env; a spawn that
     // left it out would hand the session the daemon's own address (or none) again.
-    const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    // The whole runtime: the ACP start is daemon-acp-sessions.ts, the native one daemon-session-start.ts.
+    const text = daemonRuntimeText()
     const sets = text.split('\n').map((l) => l.trim()).filter((l) => /^OPEN_WALNUT_API_URL:/.test(l))
     expect(sets).toEqual([
       expect.stringMatching(/^OPEN_WALNUT_API_URL: sessionWalnutApiUrl\(params\.env\) (\?\?|\|\|) '',$/),

@@ -20,6 +20,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const SITE_PATTERNS = [
@@ -152,7 +153,7 @@ describe('remote write paths ratchet', () => {
     // Every terminal step's route (terminal-route.ts, re-exported by spawn.ts) applies the test server's isolation.
     expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/terminal-route.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     // A test daemon's identity never reaches its sessions (a nested test server's daemon would claim it).
-    const daemon = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    const daemon = daemonRuntimeText()
     for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_DAEMON_STATE_DIR']) expect(daemon, k).toContain(`${k}: undefined,`)
     // The runtime dir only as a service set's own trees dir (service-set.ts setRuntimeTreesDirOf): undefined otherwise.
     expect(daemon).toContain('WALNUT_RUNTIME_DIR: SESSION_RUNTIME_DIR,')

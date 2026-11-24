@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../../src/providers')
 const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8')
@@ -89,6 +90,7 @@ describe('quick writes (no reap, a CLI that is reading)', () => {
     // reads stdin; they never reap. A new caller must be one of those, or use
     // chainFifoWrite: add it here only after checking which.
     const count = (f: string, name: string) => callsOf(read(f), name).length
-    expect(count('daemon-standalone.ts', 'writeFifoRaw')).toBe(1)
+    // The whole runtime: its one caller is the tailer's auto-allow (daemon-session-tailer.ts).
+    expect(callsOf(daemonRuntimeText(), 'writeFifoRaw').length).toBe(1)
   })
 })

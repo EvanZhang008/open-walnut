@@ -23,6 +23,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { testBun } from '../helpers/bun-runtime.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const HOST_ALIAS = 'reroute-host'
@@ -207,7 +208,7 @@ describe.skipIf(!bunPath)('relay re-route and markers.find', () => {
 })
 
 describe('one trusted-client beat, and the send-markers flag', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  const src = daemonRuntimeText()
   it('the beat is parsed once and every trusted-client timer reads it', () => {
     // Two parses (or one shadowing the other in a block) would let the
     // keepalive and the relay pick run on different beats.

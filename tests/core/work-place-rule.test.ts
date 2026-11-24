@@ -25,6 +25,7 @@ import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks
 import { ephemeralChildEnv } from '../../src/commands/ephemeral-snapshot.js'
 import { localTaskDirRoot } from '../../src/core/sessions/task-dir-place.js'
 import type { Task } from '../../src/core/types.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(REPO, rel), 'utf-8')
@@ -137,7 +138,7 @@ describe('the program side', () => {
   })
 
   it('the daemon hands out the directory at spawn, scrubs an inherited one, and reports its root', () => {
-    const standalone = read('src/providers/daemon-standalone.ts')
+    const standalone = daemonRuntimeText()
     expect(standalone).toMatch(/WALNUT_TASK_DIR: taskDir \?\? undefined,/)
     expect(standalone).toMatch(/taskDirRoot: TASK_DIR_ROOT/)
     for (const cmd of ['taskdir.ensure', 'taskdir.list', 'taskdir.remove', 'taskdir.prune']) expect(standalone).toContain(`case '${cmd}'`)

@@ -22,6 +22,7 @@ import {
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
 import { createHostResume } from '../../src/providers/host-resume-core.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 interface TestSession extends CoreSessionData {
   watchers: Map<unknown, unknown>
@@ -669,7 +670,6 @@ describe('persistRegistry bootId', () => {
 // No process primitive is reachable: startSessionProcess / stopSessionProcess are
 // stubs and process.kill is spied on and asserted never called.
 
-const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const GATE_SID = '11111111-2222-4333-8444-555555555555'
 
 type GateRunner = { run<T>(sid: string, work: () => Promise<T>): Promise<T> }
@@ -704,8 +704,6 @@ function sliceTopLevelFn(src: string, name: string): string {
   return src.slice(at, end + 2)
 }
 
-const STANDALONE_FILE = nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts')
-
 function buildGateHarness(): GateHarness {
   const stopVersions = new Map<string, number>()
   const supervision = new Map<string, { enabled: boolean; state: string }>()
@@ -735,14 +733,15 @@ function buildGateHarness(): GateHarness {
     RETRY_WS_SINK: {},
     daemonCommands: createDaemonCommandDrain(),
     sessionStopVersions: stopVersions,
-    cronRuntime: {
+    // The runtime's cron runtime, asked on use (the session areas take a getter).
+    cronRuntime: () => ({
       get: (sid: string) => supervision.get(sid) ?? null,
       deliveryAllowed: (sid: string, fence: unknown) => !stopIds.has(sid) || stopIds.get(sid) === fence,
       disable: async (sid: string, stopId?: string) => { disables.push(sid); if (stopId) stopIds.set(sid, stopId) },
       // enable() takes the same per-sid gate, so a stop that called it from
       // inside the gate would deadlock. Nothing here may reach it.
       enable: async () => { throw new Error('a stop must never enable supervision') },
-    },
+    }),
     sendSessionMessage: async (_ws: unknown, _id: number, cmd: { sid: string }) => { sent.push(cmd.sid) },
     startSessionProcess: async (cmd: { sid: string }) => {
       starts.push(cmd.sid)
@@ -759,7 +758,7 @@ function buildGateHarness(): GateHarness {
   const names = Object.keys(injected)
   const args = names.map((n) => injected[n])
 
-  const src = nodeFs.readFileSync(STANDALONE_FILE, 'utf-8')
+  const src = daemonRuntimeText()
   // stopOwnerRefusal (owner-home-v1) rides along because cmdStop calls it first; these
   // stops name no Walnut, so it answers "allowed" without reading the journal.
   const commands = ['cmdStart', 'cmdStop', 'stopOwnerRefusal', 'cmdSend', 'spawnRecordOf', 'cmdBridgeResume', 'fireTurnRetry', 'checkTurnRetry'].map((name) => sliceTopLevelFn(src, name)).join('\n')
@@ -975,8 +974,9 @@ function buildProcessStop() {
   const reaped = vi.fn()
   const persist = vi.fn()
   const env = {
-    sessions, SERVICE_MODE: true, daemonBootId: BOOT,
-    cronRuntime: { get: () => saved },
+    // The runtime's late values, asked on use (daemon-session-stop.ts takes getters).
+    sessions, SERVICE_MODE: true, daemonBootId: () => BOOT,
+    cronRuntime: () => ({ get: () => saved }),
     process: { kill: liveness },
     readStartTime: startTime,
     killProcessGroup: groupSignal,
@@ -989,7 +989,7 @@ function buildProcessStop() {
     sendOk: (_ws: unknown, id: number, data: Record<string, unknown>) => { replies.push({ id, ok: true, data }) },
     sendError: (_ws: unknown, id: number, error: string) => { replies.push({ id, ok: false, error }) },
   }
-  const source = nodeFs.readFileSync(STANDALONE_FILE, 'utf8')
+  const source = daemonRuntimeText()
   const js = ts.transpileModule(sliceTopLevelFn(source, 'leaderGoneWithGroup') + '\n' + sliceTopLevelFn(source, 'stopSessionProcess') + '\nreturn stopSessionProcess;', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText

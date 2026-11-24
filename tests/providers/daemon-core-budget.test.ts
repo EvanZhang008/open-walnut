@@ -4,6 +4,7 @@ import ts from 'typescript'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { budgetControlExempt, createDaemonCore, type BudgetGate, type CoreSessionData, type DaemonCoreDeps } from '../../src/providers/daemon-core.js'
 import { daemonStatements } from '../helpers/standalone-twin-text.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 function fixture(allow: () => Promise<BudgetGate>) {
   const writes: string[] = []
@@ -45,11 +46,10 @@ function fixture(allow: () => Promise<BudgetGate>) {
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
-const DAEMON_FILE = new URL('../../src/providers/daemon-standalone.ts', import.meta.url)
 
 /** The daemon's real persistBudgetStops, run against a recording fs. */
 function stopWriter(events: string[], rejectSync = false) {
-  const body = fs.readFileSync(DAEMON_FILE, 'utf8')
+  const body = daemonRuntimeText()
   const start = body.indexOf('function persistBudgetStops(')
   const end = body.indexOf('async function budgetGroupMembers(', start)
   if (start < 0 || end < 0) throw new Error('Budget stop writer not found')
@@ -82,7 +82,7 @@ function stopWriter(events: string[], rejectSync = false) {
 
 /** The daemon's real budget stop sink and the protocol helpers it replies through. */
 function budgetStopSink() {
-  const body = fs.readFileSync(DAEMON_FILE, 'utf8')
+  const body = daemonRuntimeText()
   const source = ts.createSourceFile('daemon.ts', body, ts.ScriptTarget.Latest, true)
   const functions = new Map<string, ts.FunctionDeclaration>()
   for (const node of daemonStatements(ts, source)) if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node)

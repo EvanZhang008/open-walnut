@@ -37,7 +37,7 @@ const CONTENT_FLAG = /['"]--(settings|mcp-config|append-system-prompt|system-pro
 /**
  * Every file that puts a content flag into a claude argv, and how that argv
  * reaches a process. 'session' = the daemon's session start (startSessionProcess
- * in daemon-standalone.ts); 'oneshot' = a one-shot run (oneshot-core.ts, through the
+ * in daemon-session-start.ts); 'oneshot' = a one-shot run (oneshot-core.ts, through the
  * daemon or the in-process fallback in oneshot-client.ts).
  */
 const PRODUCERS: Record<string, 'session' | 'oneshot'> = {
@@ -53,7 +53,7 @@ const READERS: Record<string, string> = {
   'src/providers/cli-argv-files-core.ts': 'the rewrite itself',
   'src/providers/daemon-cron-supervision.ts': 'lists flags to keep in a cron resume; the start rewrites them',
   'src/core/sessions/spawn-prefix.ts': 'reads the inline prompt back from the registry args',
-  'src/providers/daemon-standalone.ts': 'reads the inline --settings env to pick the session PATH (walnutThroughGateway)',
+  'src/providers/daemon-session-shell.ts': 'reads the inline --settings env to pick the session PATH (walnutThroughGateway)',
   'src/providers/hook-files.ts': 'moves long hook commands out of the --settings value a start sends (hook-files-v1); the daemon writes them to files',
   'src/core/sessions/request-tag.ts': "adds the tag to a one-shot's inline --settings env inside startOneShot; that argv's spawn (oneshot-core) rewrites it to a file",
 }

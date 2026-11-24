@@ -10,12 +10,10 @@
  * new one fails here: use livedHere for "did this session run here", or add it
  * below with why it needs the file itself.
  */
-import fs from 'node:fs'
-import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
-const ROOT = path.resolve(__dirname, '../..')
-const DAEMON = 'src/providers/daemon-standalone.ts'
+const DAEMON = 'the daemon runtime (daemon-standalone.ts and its area modules)'
 const SITE = /existsSync\((?:path\.join\(STREAMS_DIR, [A-Za-z.]+ \+ '\.jsonl'\)|jsonlPath)\)/
 
 /** Functions allowed to test the file itself. */
@@ -34,7 +32,8 @@ function enclosingFunction(lines: string[], at: number): string {
 
 describe('stream residence ratchet', () => {
   it(`${DAEMON}: only livedHere and attach test a stream file's existence`, () => {
-    const lines = fs.readFileSync(path.join(ROOT, DAEMON), 'utf8').split('\n')
+    // The whole runtime: attach is daemon-session-commands.ts (dedented, so its functions sit at column 0).
+    const lines = daemonRuntimeText().split('\n')
     const sites = lines.flatMap((l, i) => (SITE.test(l) ? [{ line: i + 1, fn: enclosingFunction(lines, i) }] : []))
     const strays = sites.filter((s) => !(s.fn in ALLOWED))
     expect(strays, `use livedHere(sid) instead: ${JSON.stringify(strays)}`).toEqual([])

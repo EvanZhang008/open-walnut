@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { buildDeps, makeTestSession, createDaemonCore } from '../helpers/daemon-core-fixtures.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const RESULT = JSON.stringify({ type: 'result', subtype: 'success', stop_reason: 'end_turn', is_error: false }) + '\n'
 const INIT = JSON.stringify({ type: 'system', subtype: 'init' }) + '\n'
@@ -88,7 +89,7 @@ describe('a CLI exit reads as what this process did', () => {
   it('the daemon records where this process starts writing, at spawn', () => {
     const root = path.resolve(import.meta.dirname, '..', '..')
     const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf-8')
-    const src = read('src/providers/daemon-standalone.ts')
+    const src = daemonRuntimeText()
     expect(src).toMatch(/sessionData\.outputStartOffset = cronStartOffset/)
     expect(src).toMatch(/sessionData\.stderrStartOffset = stderrStartOffset/)
     // Both offsets come from the files session-spawn-files.ts opens for the spawn,

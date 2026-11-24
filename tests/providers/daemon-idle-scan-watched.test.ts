@@ -12,11 +12,9 @@
  * daemon-standalone.ts and evaluated with every free identifier injected. The kill is a spy; no process, file or socket is touched.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import nodeFs from 'node:fs'
-import nodePath from 'node:path'
 import ts from 'typescript'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
-const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const SID = '11111111-2222-4333-8444-555555555555'
 /** Above any real pid limit: nothing can ever answer to it. */
 const PID = 2 ** 22 + 17
@@ -26,7 +24,8 @@ const IDLE_WARNING_MS = 5 * MIN
 const IDLE_KILL_MS = 120 * MIN
 const T0 = Date.UTC(2026, 10, 23, 12, 0, 0)
 
-const DAEMON_SRC = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+// The runtime's whole text: daemon-standalone.ts, its session types and its area modules (daemon-runtime-text.ts).
+const DAEMON_SRC = daemonRuntimeText()
 
 function sliceTopLevel(src: string, head: RegExp, name: string): string {
   const at = src.search(head)

@@ -10,6 +10,8 @@
  *
  * An area module is a file in src/providers/ other than the runtime itself that imports
  * './daemon-module-deps.js' (every one does, for the answer and log types its deps share).
+ * The session types (daemon-session-types.ts) are no area, only declarations and the Subscribers
+ * set: they are read as they are.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -34,10 +36,13 @@ export function areaModuleText(rel: string): string {
   return text.slice(0, start) + text.slice(start).split('\n').map((l) => (l.startsWith('  ') ? l.slice(2) : l)).join('\n')
 }
 
-/** daemon-standalone.ts, then every area module (areaModuleText). */
+/** The types the runtime keeps its sessions and sockets in (SessionData, Subscribers, WsData): its own code, moved out whole. */
+export const DAEMON_SESSION_TYPES = 'src/providers/daemon-session-types.ts'
+
+/** daemon-standalone.ts, its session types, then every area module (areaModuleText). */
 export function daemonRuntimeText(): string {
-  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
-  return [standalone, ...daemonAreaModules().map(areaModuleText)].join('\n')
+  const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+  return [read('src/providers/daemon-standalone.ts'), read(DAEMON_SESSION_TYPES), ...daemonAreaModules().map(areaModuleText)].join('\n')
 }
 
 /**

@@ -31,6 +31,9 @@ export type DaemonLog = (level: string, msg: string, data?: Record<string, unkno
 /** The runtime's env (`options.env`): what its modules read where a program would read process.env. */
 export type DaemonEnv = Record<string, string | undefined>
 
+/** A command handler that answers on its socket itself (a session command: it streams or subscribes). */
+export type DaemonCommand<W> = (ws: W, id: number, cmd: Record<string, unknown>) => unknown
+
 /**
  * One command's answer: what sendOk (`ok: true`, the data's fields) or sendError (`ok: false`,
  * `error`, the data's fields) put in its reply. `level`: an expected refusal is logged below error.

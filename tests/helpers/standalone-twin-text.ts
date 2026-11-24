@@ -26,15 +26,19 @@ export function readTwinText(file: string): string {
 
 /**
  * The statements that hold the daemon's code: the body of createDaemonRuntime (its code lives
- * in that closure), or a file's own statements when it has none. For checks that look up one of
- * the daemon's functions in the parsed source.
+ * in that closure), then, in the runtime's whole text (daemonRuntimeText), the bodies of its area
+ * modules' create<Area> factories, where code moved out of that body lives; or a file's own
+ * statements when it has no createDaemonRuntime. For checks that look up one of the daemon's
+ * functions in the parsed source.
  */
 export function daemonStatements<S extends { statements: ReadonlyArray<unknown> }>(
   ts: typeof import('typescript'), source: S,
 ): ReadonlyArray<import('typescript').Statement> {
   const file = source as unknown as import('typescript').SourceFile
-  for (const node of file.statements) {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === 'createDaemonRuntime' && node.body) return node.body.statements
-  }
-  return file.statements
+  const bodyOf = (node: import('typescript').Statement, name: RegExp) =>
+    (ts.isFunctionDeclaration(node) && node.name && name.test(node.name.text) ? node.body : undefined)
+  const runtime = file.statements.map((node) => bodyOf(node, /^createDaemonRuntime$/)).find(Boolean)
+  if (!runtime) return file.statements
+  const areas = file.statements.flatMap((node) => [...(bodyOf(node, /^create(?!DaemonRuntime$)[A-Z]\w*$/)?.statements ?? [])])
+  return [...runtime.statements, ...areas]
 }

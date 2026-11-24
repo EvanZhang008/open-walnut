@@ -153,7 +153,7 @@ describe('demo.quiesce', () => {
 
 describe('demo.quiesce daemon wiring', () => {
   const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')
-  const standalone = read('src/providers/daemon-standalone.ts')
+  const standalone = daemonRuntimeText()
 
   it('the daemon answers it before the drain, refuses what the fence refuses, and fences every start', () => {
     const src = standalone
@@ -639,7 +639,7 @@ describe('offline host sweep and delivery in a fenced Demo', () => {
     for (const n of names) if (!found.has(n)) throw new Error('Missing ' + n)
     return names.map((n) => found.get(n)!).join('\n')
   }
-  const daemonText = read('src/providers/daemon-standalone.ts')
+  const daemonText = daemonRuntimeText()
 
   function build(text: string, isDemo: boolean) {
     // The daemon reads its fence through this view, so a test can point it at a real quiesce.

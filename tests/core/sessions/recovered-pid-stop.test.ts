@@ -59,6 +59,7 @@ import { closeDb } from '../../../src/core/session-db.js'
 import { stopThroughOwner, sweepOrphansThroughOwner, ORPHAN_STOP_CAPABILITY } from '../../../src/core/sessions/owner-stop.js'
 import { OWNER_HOME_CAPABILITY } from '../../../src/core/sessions/stop-provenance.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
+import { daemonRuntimeText } from '../../helpers/daemon-runtime-text.js'
 
 const REPO_ROOT = nodePath.resolve(__dirname, '../../..')
 const SID = '9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f'
@@ -82,7 +83,7 @@ function sliceTopLevelFn(src: string, name: string): string {
 
 /** The shared daemon's own ownership decisions, over a world where it runs SID for production. */
 function productionDaemonDecisions(): Decide {
-  const src = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  const src = daemonRuntimeText()
   const code = ['stopOwnerRefusal', 'orphanStopRefusal'].map((n) => sliceTopLevelFn(src, n)).join('\n')
   const js = ts.transpileModule(code + '\nreturn { stopOwnerRefusal, orphanStopRefusal };', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },

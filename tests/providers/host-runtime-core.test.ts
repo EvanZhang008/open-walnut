@@ -24,6 +24,7 @@ import { spawnGateSentence } from '../../src/core/hosts/host-readiness.js'
 import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
 import { shellSetupStep } from '../../src/providers/session-shell.js'
 import { daemonStatements, twinText } from '../helpers/standalone-twin-text.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 /** A plain Linux PATH for a fake host (fakeHost runs nothing for real). */
 const usrBinEnv = (extra: Record<string, string> = {}) => ({ HOME, PATH: '/usr/bin', ...extra })
@@ -424,7 +425,7 @@ describe('describeClaudeLaunchFailure', () => {
 describe('host runtime in the daemon', () => {
   it('wires the gate and the preflight', () => {
     const root = path.resolve(__dirname, '../..')
-    const src = twinText('daemon-standalone.ts', fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8'))
+    const src = twinText('daemon-standalone.ts', daemonRuntimeText())
     expect(src).toMatch(/process\.env\.PATH = withInstallHomeBin\(bootPath\.path, process\.env\)/)
     expect(src).toMatch(/case 'host\.preflight':/)
     // The server's floor reaches the daemon, and the daemon hands the runtime a sign-in check.

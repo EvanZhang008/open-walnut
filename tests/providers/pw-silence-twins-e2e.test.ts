@@ -21,6 +21,7 @@ import { PW_SILENCE_PRELOAD_NAME, pwSilencePreloadSource } from '../../src/provi
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-pw-silence-twins-')))
 afterAll(() => { if (root.includes('walnut-pw-silence-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
@@ -234,7 +235,8 @@ describe('every session spawn in the daemon carries the silencer', () => {
   // session env must set (tests/core/work-place-rule.test.ts); each must set NODE_OPTIONS and
   // BUN_OPTIONS through pwSilenceOptions or pwSilenceAcpOptions in the same object. The dynamic cases above run both kinds.
   it('daemon-standalone.ts', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    // The whole runtime: the ACP start is daemon-acp-sessions.ts, the Claude Code one daemon-session-start.ts.
+    const src = daemonRuntimeText()
     const sites = [...src.matchAll(/WALNUT_TASK_DIR: /g)].map((m) => m.index!)
     expect(sites.length).toBe(2)
     for (const at of sites) {

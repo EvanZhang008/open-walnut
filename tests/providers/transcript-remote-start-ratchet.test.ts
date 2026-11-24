@@ -37,7 +37,8 @@ describe('remote history fetches and starts', () => {
   })
 
   it('every start of a CLI in the daemon restores through restoreForStart', () => {
-    const text = files.find((f) => f.rel === 'src/providers/daemon-standalone.ts')!.text
+    // The daemon's session start (startSessionProcess) is daemon-session-start.ts.
+    const text = files.find((f) => f.rel === 'src/providers/daemon-session-start.ts')!.text
     expect(text).toMatch(/await restoreForStart\(CLAUDE_PROJECTS_DIRS, archivedSource\)/)
   })
 
