@@ -267,6 +267,19 @@ export function rowSetDigest(localKeys: readonly string[], hashes: Readonly<Reco
  */
 export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower {
   roundClockLoads.set(spec.kind, () => spec.load())
+  /**
+   * Rows the last manifest did not name and this side kept (`keep`, keptBy: a host's own sessions
+   * of a task kept local). The leader's digest has no such row, so this side's leaves them out too:
+   * with them in, the digests never matched and every round sent the whole manifest (2026-11-24:
+   * 3,619 manifests of about 450 KB to one host in a day, 6 kept rows). Memory only: after a
+   * restart the first manifest round names them again.
+   */
+  let unnamed = new Set<string>()
+  const NONE_KEPT: ReadonlySet<string> = new Set()
+  // Only rows this side still keeps as its own: one it no longer keeps counts again, so a row the
+  // leader dropped meanwhile reads as a mismatch and the manifest round removes it.
+  const digestHere = async (s: RowSetState): Promise<string> =>
+    rowSetDigest((await spec.localKeys()).filter((k) => !(unnamed.has(k) && spec.keptBy?.(k, NONE_KEPT))), s.hashes, spec.ordered)
   const sync = (body: Record<string, unknown>): Promise<ReplicaStepResult> => spec.serial(async () => {
     const refused = refusalAnswer(await spec.refuse?.() ?? null)
     if (refused) return refused
@@ -293,10 +306,14 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     }
     const removeIds: string[] = []
     let keptCount = 0
+    const keptHere = new Set<string>()
     for (const id of local) {
       if (wanted.has(id)) continue
       if (held.has(id)) { heldCount++; continue }
-      if (kept.has(id) || spec.keptBy?.(id, kept)) { keptCount++; continue }
+      // Only the rows this side keeps as its own leave the digest: a row kept because the leader
+      // could not read it this round (`keep`) stays in, so its later removal is still seen.
+      if (spec.keptBy?.(id, kept)) { keptCount++; keptHere.add(id); continue }
+      if (kept.has(id)) { keptCount++; continue }
       removeIds.push(id)
     }
     // A leader that lost its store (an empty or damaged database at boot) must
@@ -333,6 +350,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
       spec.changed()
     }
     for (const id of removeIds) delete s.hashes[id]
+    unnamed = keptHere
     s.order = order
     s.asOf = Number(body.asOf) || Date.now()
     s.at = Date.now()
@@ -378,6 +396,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
         const k = spec.key(r)
         if (refusedRows.has(k)) continue // not stored: asked for again next round
         s.hashes[k] = hashRow(r)
+        unnamed.delete(k) // the leader sent it: it names it
         stored++
       }
       await spec.save()
@@ -392,7 +411,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     const answer: ReplicaStepResult = { ok: true, stored, held: sentRows.length - stored }
     // A put sent without a manifest (the leader's delta) asks whether this side now matches.
     if (spec.digest && typeof body.digest === 'string') {
-      answer.digest = rowSetDigest(await spec.localKeys(), s.hashes, spec.ordered)
+      answer.digest = await digestHere(s)
       if (answer.digest === body.digest) await heardAsOf(s, body.asOf, held)
     }
     return answer
@@ -425,7 +444,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     const refused = refusalAnswer(await spec.refuse?.() ?? null)
     if (refused) return refused
     const s = await spec.load()
-    const digest = rowSetDigest(await spec.localKeys(), s.hashes, spec.ordered)
+    const digest = await digestHere(s)
     const inSync = typeof body.digest === 'string' && body.digest === digest
     if (inSync) await heardAsOf(s, body.asOf, await spec.held())
     return { ok: true, digest, inSync }
@@ -436,6 +455,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     const refused = refusalAnswer(await spec.refuse?.() ?? null)
     if (refused) return refused
     const { removed } = await spec.purge!()
+    unnamed = new Set()
     // A kind turned off here keeps no copy: it no longer counts toward the copies' age.
     roundClock.delete(spec.kind)
     spec.changed()

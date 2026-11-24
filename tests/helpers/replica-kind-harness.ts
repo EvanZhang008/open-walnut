@@ -36,7 +36,7 @@ export interface MemFollower {
   restart(): void
 }
 
-export function memFollower(opts: { kind?: string; schemaVersion?: number; floor?: number; digest?: boolean } = {}): MemFollower {
+export function memFollower(opts: { kind?: string; schemaVersion?: number; floor?: number; digest?: boolean; keptBy?: (id: string) => boolean } = {}): MemFollower {
   let saved: RowSetState = { asOf: 0, at: 0, order: [], hashes: {} }
   const f: MemFollower = {
     handler: null as unknown as RowSetFollower,
@@ -52,6 +52,7 @@ export function memFollower(opts: { kind?: string; schemaVersion?: number; floor
     removalFloor: opts.floor ?? 50,
     ordered: true,
     ...(opts.digest ? { digest: true } : {}),
+    ...(opts.keptBy ? { keptBy: (id: string) => opts.keptBy!(id) } : {}),
     serial: serialChain(),
     load: async () => f.state,
     save: async () => { saved = structuredClone(f.state); f.saves++ },
