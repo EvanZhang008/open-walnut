@@ -43,10 +43,10 @@ export function labelIndexes(xs: ReadonlyArray<number>, gap = LABEL_GAP): number
 }
 
 const EMPTY_METRIC: Record<TrendMetric, string> = {
-  mixed: 'No estimated errors on these days',
-  cjk: 'No Chinese words in these dictations',
-  latin: 'No English words in these dictations',
-  ms: 'No engine times recorded on these days',
+  mixed: 'These days have no estimated errors',
+  cjk: 'These dictations have no Chinese words',
+  latin: 'These dictations have no English words',
+  ms: 'These days have no engine times recorded',
 };
 
 interface Props {

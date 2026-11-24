@@ -144,7 +144,7 @@ describe('VoiceAccuracyTrend', () => {
   it('says so when the metric picked has nothing on these days', async () => {
     await render(TREND.map((d) => ({ day: d.day, engines: Object.fromEntries(Object.entries(d.engines).map(([k, p]) => [k, { ...p, latin: null }])) })))
     await pick('va-trend-latin')
-    expect(q('va-trend-none')!.textContent).toContain('No English words in these dictations')
+    expect(q('va-trend-none')!.textContent).toContain('These dictations have no English words')
     expect(q('va-trend-chart')).toBeNull()
     // The switch stays, so another metric is one click away.
     expect(q('va-trend-mixed')).not.toBeNull()
