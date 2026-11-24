@@ -269,6 +269,7 @@ SOURCES=(
   src/providers/dtach-build-core.ts
   src/providers/claude-check-core.ts
   src/providers/fs-ls-core.ts
+  src/providers/claude-session-argv.ts
   src/providers/turn-snapshot-core.ts
   src/providers/turn-guard-core.ts
   src/providers/git-attribution-core.ts

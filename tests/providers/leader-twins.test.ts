@@ -88,7 +88,7 @@ describe('leader protocol: the daemon', () => {
     // The target rules live in gatewayTargetFor (a resend asks them again); every call asks them first.
     expect(fnBody(src, 'gatewayTargetFor')).toMatch(/if \(home && leaderBook\.backupLead\(home\)\) target = null/)
     const send = fnBody(src, 'sendGatewayRequest')
-    expect(send).toMatch(/gatewayTargetFor\(home, \{ callerSid(: callerSid)?, op: payload\.name \}\)/)
+    expect(send).toMatch(/gatewayTargetFor\(home, (plan\.followerBy === undefined \? )?\{ callerSid(: callerSid)?, op: payload\.name \}/)
     // hub_unreachable here (unreachable) goes to the companion; its own hub_unreachable waits, then is held (holdWrite).
     expect(send).toMatch(/r\.error\.code === 'hub_unreachable' && !target/)
     expect(send).toMatch(/if \(unreachable\(r( as GatewayResponse)?\)\)?\s*&& forwardToBackup\(home, capability, callerSid, payload, /)

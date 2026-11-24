@@ -369,6 +369,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/claude-check-core.ts',
   // fs.ls with its per-entry and whole-listing budgets: same rule.
   'src/providers/fs-ls-core.ts',
+  // The claude argv frame of a resume whose spawn record is lost (bridgeResume).
+  'src/providers/claude-session-argv.ts',
   // Per-turn snapshots and the rewind guard: same import-or-inline rule.
   'src/providers/turn-snapshot-core.ts',
   'src/providers/turn-guard-core.ts',
