@@ -79,6 +79,7 @@ import {
   type BudgetGate,
 } from './daemon-core.js'
 import { setRuntimeTreesDirOf } from './service-set.js'
+import { applyCliLoginPath, installHomeBin, withInstallHomeBin } from './daemon-cli-path.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { buildClaudeArgv } from './claude-session-argv.js'
 import { PS_TREE_ARGS, claimedSidVerdict, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
@@ -962,11 +963,10 @@ const hostRuntime = createHostRuntime({
   spawnPreamble: () => buildSpawnPreamble(),
 })
 const bootPath = hostRuntime.computeDaemonPath()
-daemonEnv.PATH = bootPath.path
 // A test server's isolated daemon installs Claude Code and dtach under its own HOME
-// (host-fix-core.ts): its sessions find them there.
-const INSTALL_HOME_BIN = daemonEnv.WALNUT_INSTALL_HOME ? path.join(daemonEnv.WALNUT_INSTALL_HOME, '.local', 'bin') : ''
-if (INSTALL_HOME_BIN) daemonEnv.PATH = daemonEnv.PATH + path.delimiter + INSTALL_HOME_BIN
+// (host-fix-core.ts): its sessions find them there. The CLI's daemon commands get the same PATH.
+daemonEnv.PATH = withInstallHomeBin(bootPath.path, daemonEnv)
+const INSTALL_HOME_BIN = installHomeBin(daemonEnv)
 // 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts).
 const hostFix = createHostFix({
   fs, execFile, env: daemonEnv, runtime: hostRuntime, claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,
@@ -16097,11 +16097,11 @@ export async function runDaemonProcess(argv: string[] = process.argv): Promise<v
   // log, machine id and adoption files in the default runtime dir, another Walnut's when a
   // service set's install runs `<daemon> walnut daemon install --walnut <id>` (2026-11-24 drill).
   // Dynamic import keeps the daemon startup path free of CLI code; bun bundles
-  // the literal specifier into the compiled binary. Mirror daemon-source.ts.
+  // the literal specifier into the compiled binary.
   if (isDaemonCliKeyword(action)) {
     healDaemonCwd()
     // The login-shell PATH the runtime used to set first, for the service commands (daemon-cli-path.ts).
-    ;(await import('./daemon-cli-path.js')).applyCliLoginPath(argv.slice(3))
+    applyCliLoginPath(argv.slice(3))
     const { runWalnutCli } = await import('./wn-cli.js')
     process.exit(await runWalnutCli(argv.slice(3)))
   }

@@ -236,6 +236,7 @@ SOURCES=(
   src/providers/daemon-boot-proof.ts
   src/binary/runtime-tree.ts
   src/binary/asset-archive.ts
+  src/providers/daemon-cli-path.ts
   src/providers/daemon-service-handback.ts
   src/providers/daemon-update-standin.ts
   src/providers/daemon-update-shell.ts

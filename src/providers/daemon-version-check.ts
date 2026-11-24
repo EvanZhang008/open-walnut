@@ -320,6 +320,8 @@ export const DAEMON_SOURCE_FILES = [
   // Where a trial of the walnut file unpacks its runtime (walnutLineRuntimeDir, RUNTIME_TRIAL_ENV), bundled into daemon-service-cli.cjs.
   'src/binary/runtime-tree.ts',
   'src/binary/asset-archive.ts',
+  // The login-shell PATH of the daemon program and of its `walnut daemon ...` commands.
+  'src/providers/daemon-cli-path.ts',
   // `walnut daemon handback`: a stand-in hands its sessions to the LaunchAgent job (bundled into daemon-service-cli.cjs).
   'src/providers/daemon-service-handback.ts',
   'src/providers/daemon-update-standin.ts',
