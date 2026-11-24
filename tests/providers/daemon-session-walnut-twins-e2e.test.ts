@@ -234,8 +234,12 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     const shell = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-session-shell.ts'), 'utf8')
     expect(shell).toMatch(/if \(sessionWalnutApiUrl\(env\) === undefined\) return true\n\s+return typeof home === 'string' && home !== '' && followsHere\(home\)/)
     expect(STANDALONE_TEXT).toMatch(/followsHere: \(home\) => followerHere\(home\)\.here,/)
-    // The kept spec counts, so a start replayed after a handover, before the follower's hello, runs the shim.
-    expect(STANDALONE_TEXT).toMatch(/here: linked !== undefined \|\| spec !== undefined,/)
+    // The kept spec counts, so a start replayed after a handover, before the follower's hello, runs the
+    // shim; and so does this very process being the follower (a host's one Walnut service, no spec or
+    // socket needed: 2026-11-24), never a leading service (the Mac's own sessions keep the hub CLI).
+    expect(STANDALONE_TEXT).toMatch(/here: linked !== undefined \|\| spec !== undefined \|\| \(!!home && \(hostServers\.followsAsSelf\(home\) \|\| hostServers\.followsAsSelf\(walnutOfHome\(home\)\)\)\),/)
+    const core = fs.readFileSync(path.resolve(__dirname, '../../src/providers/host-server-core.ts'), 'utf8')
+    expect(core).toMatch(/followsAsSelf: \(home: string\): boolean => \{\n\s+if \(!deps\.self \|\| deps\.leads \|\| !home\) return false/)
     expect(STANDALONE_TEXT).toMatch(/const spec = !home \? undefined : hostServers\.keeps\(home\) \? home : hostServers\.keeps\(walnutOfHome\(home\)\) \? walnutOfHome\(home\) : undefined/)
   })
   it('every writer of WALNUT_AGENT_SOCKET in src/ is a known spawn, and each session spawn places the shim by the rule', () => {

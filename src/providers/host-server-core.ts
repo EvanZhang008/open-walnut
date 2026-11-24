@@ -725,6 +725,15 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
      * back from server-*.json (before any connection is taken). Whatever its state or program.
      */
     keeps: (home: string): boolean => entryOf(home) !== undefined,
+    /**
+     * Whether this very process is the follower of `home`: a host's one Walnut service (`self`) that
+     * leads no Walnut, named by its leader's home or by its own data dir (the home its own session
+     * starts name). True with or without a spec kept for it: the service is that follower.
+     */
+    followsAsSelf: (home: string): boolean => {
+      if (!deps.self || deps.leads || !home) return false
+      return isSelf(home) || (!!deps.self.dataHome && home === deps.self.dataHome)
+    },
     /** The settings the leader gave the server for `home`. */
     settingsOf: (home: string): Record<string, unknown> => entryOf(home)?.spec.settings ?? {},
     /** The program the leader configured for `home` (its node and `<appDir>/dist/cli.js`), or null: an ask's MCP mount (host-start-core.ts). */

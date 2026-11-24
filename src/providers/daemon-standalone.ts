@@ -2799,15 +2799,18 @@ const followerSaidOnline = new Map<string, boolean>()
  *   - the server spec this daemon keeps for it (hostServers): written by server.configure and read
  *     back by boot() from server-*.json before any connection is taken, so a daemon that just took
  *     over (a handover, an update) knows its follower before the follower's hello. Never a leader's
- *     own Walnut: no follower of it is configured or adopted (host-server-core.ts `leads`).
+ *     own Walnut: no follower of it is configured or adopted (host-server-core.ts `leads`);
+ * and, for `here`, a third: this very process is that follower (a host's one Walnut service, the
+ * daemon runtime inside the follower server: hostServers.followsAsSelf), whether or not it kept a
+ * spec or attached its seat yet. A leading service (the Mac's one service) is never one.
  */
 function followerHere(home: string | undefined) {
   const linked = home ? followerSockets.get(home) ?? followerSockets.get(walnutOfHome(home)) : undefined
   const spec = !home ? undefined : hostServers.keeps(home) ? home : hostServers.keeps(walnutOfHome(home)) ? walnutOfHome(home) : undefined
   return {
     linked,
-    /** A follower is linked, or this daemon keeps its server (running, starting or restarting). */
-    here: linked !== undefined || spec !== undefined,
+    /** A follower is linked, this daemon keeps its server (running, starting or restarting), or this process is it. */
+    here: linked !== undefined || spec !== undefined || (!!home && (hostServers.followsAsSelf(home) || hostServers.followsAsSelf(walnutOfHome(home)))),
     /**
      * It answers this host's own `walnut` calls: the fact the gateway routes by, so the daemon's own
      * away answers serve only a host with none (no follower configured, below the floors of
