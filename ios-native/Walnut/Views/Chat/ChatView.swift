@@ -1114,6 +1114,11 @@ struct ChatView: View {
         // container adopts its one labelled child's identifier and reports the
         // WHOLE SCREEN as that element's frame.
         .accessibilityElement(children: .contain)
+        // Shut, the layer has nothing to offer, yet as a container it still sat over the
+        // whole chat for accessibility: a touch anywhere on the tab (VoiceOver's, and
+        // XCTest's hit test) found it, not the Back key or the card's mic under it
+        // (ThreadPushR3ClaudeReview AB, ThreadFollowUpVoice). Out of the tree while shut.
+        .accessibilityHidden(!isOpen)
         .ignoresSafeArea()
     }
 
