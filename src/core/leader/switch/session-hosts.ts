@@ -26,7 +26,9 @@ export const SESSION_HOSTS_FILE = 'sessions.sqlite'
 
 const DONE_TABLE = 'leader_switch_session_hosts'
 const LOCAL = "(host IS NULL OR host = '' OR host = '__local__')"
-const LEADER_JUDGED = "NOT (payload IS NOT NULL AND instr(payload, '\"judge\"') > 0 AND json_valid(payload) AND json_extract(payload, '$.judge') = 'host')"
+// The rows the leader judges: all but those judgedByHost (session-row-owner.ts) names, judge 'host' on a named host.
+// A row with no host is the leader's whatever its payload says (judgedByHost needs a host).
+const LEADER_JUDGED = "NOT (host IS NOT NULL AND host <> '' AND payload IS NOT NULL AND instr(payload, '\"judge\"') > 0 AND json_valid(payload) AND json_extract(payload, '$.judge') = 'host')"
 
 export interface SessionHostsMove {
   /** The old leader machine's host key, as the new leader's config names it in hosts. */

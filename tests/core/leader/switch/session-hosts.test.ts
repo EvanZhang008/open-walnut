@@ -38,6 +38,8 @@ function hosts(home: string): Record<string, string | null> {
 const judgedByHost = JSON.stringify({ judge: 'host' })
 const rows: Row[] = [
   ['own-null', null, '{}'], ['own-empty', '', null], ['own-local', '__local__', '{}'],
+  // No host: the leader's row whatever its payload says (judgedByHost needs a host), so it moves too.
+  ['own-null-judged', null, judgedByHost],
   ['on-h', 'machine-h', '{}'], ['on-b', 'machine-b', '{}'], ['on-b-judged', 'machine-b', judgedByHost],
 ]
 
@@ -46,10 +48,10 @@ describe('moveSessionHosts', () => {
     const home = path.join(root, 'home')
     sessionsDb(home, rows)
     const r = moveSessionHosts(home, 's1', { oldMachine: 'machine-a', newMachine: 'machine-b' })
-    expect(r).toEqual({ toOldMachine: 3, toOwnDaemon: 1, alreadyDone: false })
+    expect(r).toEqual({ toOldMachine: 4, toOwnDaemon: 1, alreadyDone: false })
     expect(hosts(home)).toEqual({
       'on-b': null, 'on-b-judged': 'machine-b', 'on-h': 'machine-h',
-      'own-empty': 'machine-a', 'own-local': 'machine-a', 'own-null': 'machine-a',
+      'own-empty': 'machine-a', 'own-local': 'machine-a', 'own-null': 'machine-a', 'own-null-judged': 'machine-a',
     })
     // The channel's position is keyed by a host that did not move.
     const db = new Database(path.join(home, 'sessions.sqlite'), { readonly: true })
@@ -71,7 +73,7 @@ describe('moveSessionHosts', () => {
   it('without the new machine\'s key only the old leader\'s sessions move; without a sessions store nothing happens', () => {
     const home = path.join(root, 'home')
     sessionsDb(home, rows)
-    expect(moveSessionHosts(home, 's1', { oldMachine: 'machine-a' })).toEqual({ toOldMachine: 3, toOwnDaemon: 0, alreadyDone: false })
+    expect(moveSessionHosts(home, 's1', { oldMachine: 'machine-a' })).toEqual({ toOldMachine: 4, toOwnDaemon: 0, alreadyDone: false })
     expect(hosts(home)['on-b']).toBe('machine-b')
     expect(moveSessionHosts(path.join(root, 'none'), 's1', { oldMachine: 'machine-a' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, alreadyDone: false })
   })
@@ -89,7 +91,7 @@ describe('promoteCopy between machines', () => {
     const a = path.join(root, 'a')
     copyWithSessions(path.join(a, 'standby'))
     const r = await promoteCopy({ switchId: 's1', standbyDir: path.join(a, 'standby'), home: path.join(a, 'home'), previousHome: '/old/home', reverseStandbyDir: '/old/standby', reverseStandbyHost: 'machine-a', ownHostKey: 'machine-b' })
-    expect(r.sessionHosts).toEqual({ toOldMachine: 3, toOwnDaemon: 1, alreadyDone: false })
+    expect(r.sessionHosts).toEqual({ toOldMachine: 4, toOwnDaemon: 1, alreadyDone: false })
     expect(hosts(path.join(a, 'home'))['own-null']).toBe('machine-a')
     // A promotion run again (a resume after a kill) keeps them where the first put them.
     const again = await promoteCopy({ switchId: 's1', standbyDir: path.join(a, 'standby'), home: path.join(a, 'home'), previousHome: '/old/home', reverseStandbyDir: '/old/standby', reverseStandbyHost: 'machine-a', ownHostKey: 'machine-b' })

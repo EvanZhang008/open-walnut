@@ -126,3 +126,36 @@ describe('the switch stop when the copy link cannot be held', () => {
     expect(unheld).toBe(1)
   })
 })
+
+describe('the routes that read the copy link answer within their deadline', () => {
+  it('GET /switch/target: a link that does not answer is said so within 10 s, not left hanging', async () => {
+    const { noteHandedOver } = await import('../../../../src/core/leader/switch/final-stop.js')
+    const silent = { ...peer, readFile: () => new Promise(() => {}) }
+    noteHandedOver({ switchId: '20261124T000000-dddddd', to: 'machine-b', peer: silent as never, commitDeadline: Date.now() + 120_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
+    const t0 = Date.now()
+    const r = await fetch(`${base}/api/leader/switch/target?switchId=20261124T000000-dddddd`)
+    const ms = Date.now() - t0
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { why: string }).why).toMatch(/could not be read: the copy link did not answer within 10 s/)
+    expect(ms).toBeLessThan(13_000)
+  }, 20_000)
+
+  it('POST /switch/check: an old report that cannot be cleared stops the check (no job), and the peer is closed', async () => {
+    const started: string[] = []
+    Object.assign(peer, {
+      writeFile: async () => { throw new Error('fs.write on machine-b: read-only file system') },
+      verify: async () => ({ drift: 0 }),
+      startTargetJob: async (id: string) => { started.push(id); return { ok: true } },
+      readFile: async () => ({ problems: [] }),
+    })
+    try {
+      const r = await fetch(`${base}/api/leader/switch/check`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: 'machine-b', switchId: '20261124T000000-eeeeee' }) })
+      expect(r.status).toBe(409)
+      expect(((await r.json()) as { why: string }).why).toMatch(/the last check report on machine-b could not be cleared: fs.write on machine-b: read-only/)
+      expect(started).toEqual([])
+      expect(calls).toEqual(['peer close'])
+    } finally {
+      for (const k of ['writeFile', 'verify', 'startTargetJob', 'readFile']) delete (peer as Record<string, unknown>)[k]
+    }
+  })
+})

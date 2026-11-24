@@ -80,6 +80,7 @@ export type {
 import type {
   HostServerHost, HostServerSettings, HostServerPhase, HostServerView, HostCopyTarget, ManagerDeps, WorkingProgram, HostRecord, HostProgram,
 } from './manager-types.js'
+import { HOST_SERVICE_PORT_BASE, HOST_SERVICE_PORT_SPAN } from './service-ports.js'
 
 /** Unpack, check and try the file once: seconds, minutes on a slow disk. */
 const INSTALL_TIMEOUT_MS = 5 * 60_000
@@ -90,8 +91,6 @@ const DROPPED_LINE = 'The link to the host dropped for a moment; the build keeps
 const FIRST_REPORT_MS = 60_000
 /** A report older than this says the server is not answering its daemon. */
 const REPORT_STALE_MS = 20_000
-const PORT_BASE = 41_000
-const PORT_SPAN = 9_000
 
 /** A file this server cannot make for the host waits for Retry or a newer build; any other failure of getting it is tried again later. */
 function noFileYet(err: unknown): never {
@@ -259,7 +258,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     const all = readState()
     const kept = all[host.hostKey]
     if (kept && Number.isInteger(kept.publicPort)) return kept
-    const candidates = Array.from({ length: 8 }, () => PORT_BASE + crypto.randomInt(PORT_SPAN))
+    const candidates = Array.from({ length: 8 }, () => HOST_SERVICE_PORT_BASE + crypto.randomInt(HOST_SERVICE_PORT_SPAN))
     const free = [...parseFreePorts(await host.runRemoteScript(freePortsScript(program, candidates), 20_000))]
     if (free.length < 1) throw new Error('could not find a free port on the host')
     // A port forgotten after a collision (follower-port.ts) keeps the rest of the record.

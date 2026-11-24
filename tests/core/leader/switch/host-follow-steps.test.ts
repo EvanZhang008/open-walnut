@@ -20,9 +20,12 @@ describe('the host service port', () => {
     const busy = net.createServer()
     await new Promise<void>((r) => busy.listen(0, '127.0.0.1', () => r()))
     const taken = (busy.address() as net.AddressInfo).port
-    const picks = [taken, 41_234]
+    // A port of the range free now (a fixed one can be the local end of some connection on this box).
+    let open = 41_234
+    while (!(await new Promise<boolean>((r) => { const s = net.createServer(); s.once('error', () => r(false)); s.listen(open, '127.0.0.1', () => s.close(() => r(true))) }))) open++
+    const picks = [taken, open]
     try {
-      expect(await hostServicePort(home(), { random: () => picks.shift()! })).toBe(41_234)
+      expect(await hostServicePort(home(), { random: () => picks.shift()! })).toBe(open)
     } finally {
       busy.close()
     }
@@ -31,13 +34,18 @@ describe('the host service port', () => {
     expect(p).toBeLessThan(50_000)
   })
 
-  it('a handover asked again keeps the port its record names', async () => {
+  it('a handover asked again keeps the port its record names; a record of another switch is not reused', async () => {
     const { hostServicePort } = await import('../../../../src/core/leader/switch/host-follow-steps.js')
     const { hostServiceRecordFile } = await import('../../../../src/core/leader/switch/host-follow.js')
     const h = home()
     fs.mkdirSync(path.dirname(hostServiceRecordFile(h)), { recursive: true })
-    fs.writeFileSync(hostServiceRecordFile(h), JSON.stringify({ v: 1, home: h, port: 43_210 }))
-    expect(await hostServicePort(h, { random: () => { throw new Error('no pick') } })).toBe(43_210)
+    fs.writeFileSync(hostServiceRecordFile(h), JSON.stringify({ v: 1, home: h, port: 43_210, switchId: 'S1' }))
+    // The same switch: its service may hold the port already, so it is not checked for free.
+    expect(await hostServicePort(h, { switchId: 'S1', random: () => { throw new Error('no pick') }, free: async () => false })).toBe(43_210)
+    // Another switch, or none named: a fresh free port.
+    const picks = [43_210, 44_444]
+    expect(await hostServicePort(h, { switchId: 'S2', random: () => picks.shift()!, free: async (p) => p !== 43_210 })).toBe(44_444)
+    expect(await hostServicePort(h, { random: () => 45_000, free: async () => true })).toBe(45_000)
   })
 
   it('no free port among the candidates: says so', async () => {

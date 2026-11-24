@@ -11122,10 +11122,6 @@ export function credentialWaitingHosts(): Array<{ host: string; failedAt: number
   return out
 }
 
-/**
- * Disconnect all daemon connections. Called on server shutdown, so each host's
- * SSH ControlMaster is left running for the next server process to reuse.
- */
 /** Connections a server's stop leaves open: a leader switch's copy link, until its final mark (core/leader/switch/peer.ts hold). */
 const keptThroughStop = new Set<DaemonConnection>()
 
@@ -11142,6 +11138,11 @@ export function keepThroughStop(conn: DaemonConnection): () => void {
   }
 }
 
+/**
+ * Disconnect all daemon connections. Called on server shutdown, so each host's
+ * SSH ControlMaster is left running for the next server process to reuse.
+ * A connection kept through the stop (keepThroughStop) leaves the pool but stays open.
+ */
 export function disconnectAllDaemons(): void {
   for (const [key, conn] of connectionPool) {
     if (!keptThroughStop.has(conn)) conn.disconnect({ keepSshMaster: true })

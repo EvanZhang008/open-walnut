@@ -30,6 +30,7 @@ import { currentLeaderPermit } from '../../core/leader/switch/boot.js'
 import { fromThisMachine } from '../middleware/local-trust.js'
 import { log } from '../../logging/index.js'
 import { homeOnHosts as homeOnHostsNow } from '../../core/home-move.js'
+import { withDeadline } from '../../lib/with-deadline.js'
 
 export const leaderSwitchRouter = Router()
 
@@ -242,8 +243,9 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
     v: 1, switchId: o.switchId, from: o.machine, to: o.to, handover: o.record,
     sourceHome: o.home, targetHome: target.home, reverseStandbyDir: self.standbyDir,
     // Over a daemon the new leader sends its copy back the same way: to this machine, by the name its config gives it.
-    // Its sessions there name this machine by that key, and the new machine's name none (session-hosts.ts).
-    ...(peer.kind === 'daemon' && self.hostKey ? { reverseStandbyHost: self.hostKey, ...(target.hostKey ? { targetHostKey: target.hostKey } : {}) } : {}),
+    // Its sessions there name this machine by that key, and the new machine's name none (session-hosts.ts): the new
+    // machine by its hosts key, or the name this leader's standby gives it (beginRefusal allows its machine id there).
+    ...(peer.kind === 'daemon' && self.hostKey ? { reverseStandbyHost: self.hostKey, ...((target.hostKey ?? peer.host) ? { targetHostKey: target.hostKey ?? peer.host } : {}) } : {}),
     ...(self.accountHome ? { sourceAccountHome: self.accountHome } : {}), ...(target.accountHome ? { targetAccountHome: target.accountHome } : {}),
     sourceVersion: process.env.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion(),
     ...(onHosts?.home ? { sourceHomeOnHosts: { home: onHosts.home, formerHomes: onHosts.formerHomes ?? [] } } : {}),
@@ -294,12 +296,10 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
     // batch and the mark go over it last, none of it past the commit deadline. Held before the stop starts, within
     // 10 s; without it the stop would find no link for its final batch, so this server does not stop: the switch
     // waits for its stop again (the source job asks again, or the stop wait takes the handover back).
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const notHeld = await Promise.race([
+    const notHeld = await withDeadline(
       sw.peer.hold({ until: sw.commitDeadline }).then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err))),
-      new Promise<string>((r) => { timer = setTimeout(() => r('no link within 10 s'), 10_000); timer.unref?.() }),
-    ])
-    clearTimeout(timer)
+      10_000, () => 'no link within 10 s',
+    )
     if (notHeld) {
       sw.peer.unhold()
       log.web.warn('leader switch: the copy link could not be held for the stop; this server does not stop, the switch waits for its stop again', { switchId, why: notHeld })
@@ -330,8 +330,18 @@ leaderSwitchRouter.get('/switch/target', thisMachineOnly, async (req, res) => {
   const [{ handedOverSwitch }, { targetStateName }] = await Promise.all([import('../../core/leader/switch/final-stop.js'), import('../../core/leader/switch/ticket.js')])
   const sw = handedOverSwitch()
   if (!sw || sw.switchId !== switchId) { res.status(404).json({ ok: false, why: `this server handed over no switch ${switchId}` }); return }
-  res.json({ ok: true, state: await sw.peer.readFile(targetStateName(switchId)).catch(() => null) })
+  // Within its deadline (the source job asks every 300 ms within its own 30 s): a link that does not answer is said so.
+  try {
+    const state = await withDeadline(sw.peer.readFile(targetStateName(switchId)), TARGET_READ_MS, () => { throw new Error(`the copy link did not answer within ${TARGET_READ_MS / 1000} s`) })
+    res.json({ ok: true, state })
+  } catch (err) {
+    res.status(502).json({ ok: false, why: `the target job's state on ${sw.to} could not be read: ${err instanceof Error ? err.message : String(err)}` })
+  }
 })
+
+/** How long GET /switch/target waits for the copy link; how long /switch/check takes in all (its link, the clear, the verify, the job, its report). */
+const TARGET_READ_MS = 10_000
+const CHECK_DEADLINE_MS = 150_000
 
 /** The candidate's check: the target job in check mode on the new leader's machine, started over the copy link; its report. */
 leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
@@ -341,24 +351,39 @@ leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
   if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
   const p = currentLeaderPermit()
   if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
-  const link = await switchLink(to, p.machine)
-  if ('refused' in link) { res.status(409).json({ ok: false, why: link.refused }); return }
-  // An earlier report of this switch is cleared first (on every kind: a null report is none).
-  await link.peer.writeFile(checkReportName(switchId), null).catch(() => {})
-  // The copy there, verified before the candidate reads it (repaired from its chunks where it drifted).
-  const verified = await link.peer.verify().catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }))
-  const job = await link.peer.startTargetJob(switchId, { check: true })
-  if (!job.ok) { res.status(409).json({ ok: false, why: `the check did not start on ${to}: ${job.why}` }); return }
+  // One deadline for all of it (a link that drops would otherwise hold each step for its own wait); the peer is
+  // closed however it ends.
+  const until = Date.now() + CHECK_DEADLINE_MS
+  const left = () => Math.max(0, until - Date.now())
+  const late = (what: string) => (): never => { throw new Error(`${what} did not finish within the check's ${CHECK_DEADLINE_MS / 1000} s`) }
+  let peer: import('../../core/leader/switch/peer.js').SwitchPeer | null = null
+  const linking = switchLink(to, p.machine)
   try {
-    const until = Date.now() + 90_000
-    while (Date.now() < until) {
-      const report = await link.peer.readFile(checkReportName(switchId)).catch(() => null)
+    const link = await withDeadline(linking, left(), late('the copy link'))
+    if ('refused' in link) { res.status(409).json({ ok: false, why: link.refused }); return }
+    peer = link.peer
+    // An earlier report of this switch is cleared first (on every kind: a null report is none). Not cleared, an
+    // old report could be read as this check's: the check does not run.
+    const cleared = await withDeadline(link.peer.writeFile(checkReportName(switchId), null).then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err))), left(), late('clearing the last report'))
+    if (cleared) { res.status(409).json({ ok: false, why: `the last check report on ${to} could not be cleared: ${cleared}` }); return }
+    // The copy there, verified before the candidate reads it (repaired from its chunks where it drifted).
+    const verified = await withDeadline(link.peer.verify().catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) })), left(), late('the verify'))
+    const job = await withDeadline(link.peer.startTargetJob(switchId, { check: true }), left(), late('starting the check'))
+    if (!job.ok) { res.status(409).json({ ok: false, why: `the check did not start on ${to}: ${job.why}` }); return }
+    const reportMs = Math.min(90_000, left())
+    const reportBy = Date.now() + reportMs
+    while (Date.now() < reportBy) {
+      const report = await withDeadline(link.peer.readFile(checkReportName(switchId)).catch(() => null), Math.max(1, reportBy - Date.now()), () => null)
       if (report) { res.json({ ok: true, report, verify: verified }); return }
       await new Promise((r) => setTimeout(r, 300))
     }
-    res.status(504).json({ ok: false, why: `the check on ${to} did not report within 90 s` })
+    res.status(504).json({ ok: false, why: `the check on ${to} did not report within ${Math.round(reportMs / 1000)} s` })
+  } catch (err) {
+    res.status(504).json({ ok: false, why: err instanceof Error ? err.message : String(err) })
+    // A link that came after the deadline is closed when it comes.
+    if (!peer) void linking.then((l) => { if (!('refused' in l)) l.peer.close() }, () => {})
   } finally {
-    link.peer.close()
+    peer?.close()
   }
 })
 

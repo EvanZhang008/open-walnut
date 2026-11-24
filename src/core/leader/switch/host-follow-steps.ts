@@ -8,7 +8,8 @@
  *                             any host (manager.ts portsFor): a few random candidates in the same range
  *                             (41000 to 49999, clear of this server's and the daemon's own ports), the
  *                             first one free on loopback. A handover asked again (a resumed switch)
- *                             keeps the port its record names, so its service is not moved under a
+ *                             keeps the port its record names (the record of that same
+ *                             switch only), so its service is not moved under a
  *                             host that dialed it. A port taken between the pick and the service's
  *                             bind fails only that service's start, which the daemon retries, as a
  *                             follower's collision costs one try (follower-port.ts). The console
@@ -26,9 +27,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import type { HandoverHostSteps, HostStepResult } from './handover-host-steps.js'
 import type { MachinePlace } from './settings.js'
-
-const PORT_BASE = 41_000
-const PORT_SPAN = 9_000
+import { HOST_SERVICE_PORT_BASE, HOST_SERVICE_PORT_SPAN } from '../../host-server/service-ports.js'
 
 function freeOnLoopback(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -38,10 +37,14 @@ function freeOnLoopback(port: number): Promise<boolean> {
   })
 }
 
-/** The port the record of an earlier configure names, if any. */
-function keptPort(recordFile: string): number | null {
+/**
+ * The port the record of this switch's earlier configure names (a resumed switch asking again), if any. Not
+ * checked for free: that service may hold it already. A record of another switch is not reused.
+ */
+function keptPort(recordFile: string, switchId: string | undefined): number | null {
   try {
-    const r = JSON.parse(fs.readFileSync(recordFile, 'utf8')) as { port?: unknown }
+    const r = JSON.parse(fs.readFileSync(recordFile, 'utf8')) as { port?: unknown; switchId?: unknown }
+    if (!switchId || r.switchId !== switchId) return null
     return typeof r.port === 'number' && Number.isInteger(r.port) && r.port > 0 && r.port <= 65_535 ? r.port : null
   } catch {
     return null
@@ -49,11 +52,11 @@ function keptPort(recordFile: string): number | null {
 }
 
 /** A loopback port for this Walnut's host service on this machine (see the header). */
-export async function hostServicePort(home: string, o: { random?: () => number; free?: (port: number) => Promise<boolean> } = {}): Promise<number> {
+export async function hostServicePort(home: string, o: { switchId?: string; random?: () => number; free?: (port: number) => Promise<boolean> } = {}): Promise<number> {
   const { hostServiceRecordFile } = await import('./host-follow.js')
-  const kept = keptPort(hostServiceRecordFile(home))
+  const kept = keptPort(hostServiceRecordFile(home), o.switchId)
   if (kept) return kept
-  const pick = o.random ?? (() => PORT_BASE + crypto.randomInt(PORT_SPAN))
+  const pick = o.random ?? (() => HOST_SERVICE_PORT_BASE + crypto.randomInt(HOST_SERVICE_PORT_SPAN))
   const free = o.free ?? freeOnLoopback
   for (let i = 0; i < 8; i++) {
     const port = pick()
@@ -93,7 +96,7 @@ export const hostFollowSteps: HandoverHostSteps = {
     return plain(r)
   },
   async configureOldMachineHostService(o) {
-    const port = await hostServicePort(o.home)
+    const port = await hostServicePort(o.home, o.switchId ? { switchId: o.switchId } : {})
     return plain(await (await import('./host-follow.js')).configureOldMachineHostService({ ...o, port }))
   },
   async announceSwitchStop(commitWindowMs) {

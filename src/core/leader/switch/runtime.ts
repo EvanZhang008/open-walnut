@@ -187,6 +187,8 @@ function splitOwnRecords(h: PermitHandle, read: { standing: PermitRecord | null 
   const neverStood = (n: number) => answers.filter((a) => (a.held?.number ?? 0) < n || (a.held!.number > n && a.held!.by === me && a.held!.kind !== 'handover')).length > list.length - majorityOf(list)
   const own = (r: PermitReply) => {
     const x = r.held
+    // A witness that answers with its list and no record never took one: nothing of another machine stood there,
+    // and a grant there is judged by the witness itself (it takes one only once what it holds ran out).
     if (!x) return true
     if (leadsOn(x) || (x.kind === 'release' && x.by === me) || (x.kind === 'handover' && x.from === me)) return true
     if (x.kind === 'handover' && x.to === me) return mineAbove(x.number)

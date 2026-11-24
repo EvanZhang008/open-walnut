@@ -35,6 +35,8 @@ export interface SwitchPeer {
   readonly machine: MachinePlace
   /** Its standby folder (where the batches land, and the switch's files). */
   readonly standbyDir: string
+  /** Over a daemon: the name this leader's config gives that machine as a host (`standby.host`). */
+  readonly host?: string
   /** One standby batch of `home` into that folder. */
   batch(home: string): Promise<BatchOutcome>
   /** A verify pass of that folder (the copy rebuilt from its chunks where it drifted): how many paths had drifted. */
@@ -151,6 +153,8 @@ export class DaemonPeer implements SwitchPeer {
   private holding: Promise<void> | null = null
   private letGo = false
   private closed = false
+
+  get host(): string { return this.o.host }
 
   constructor(
     readonly machine: MachinePlace,
