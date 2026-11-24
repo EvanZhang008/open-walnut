@@ -234,6 +234,8 @@ SOURCES=(
   src/providers/daemon-over-busy.ts
   src/providers/daemon-service-ready.ts
   src/providers/daemon-boot-proof.ts
+  src/binary/runtime-tree.ts
+  src/binary/asset-archive.ts
   src/providers/daemon-service-handback.ts
   src/providers/daemon-update-standin.ts
   src/providers/daemon-update-shell.ts

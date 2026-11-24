@@ -41,6 +41,7 @@ import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { singleFile } from '../lib/single-file.js'
 import { RUNTIME_DIR_ENV, serviceSetEnv, type ServiceSet } from './service-set.js'
+import { RUNTIME_TRIAL_ENV } from '../binary/runtime-tree.js'
 
 export interface BootProofOptions {
   executable: string
@@ -176,6 +177,8 @@ async function trial(o: BootProofOptions): Promise<string | null> {
       WALNUT_SPAWN_JOURNAL: dir('spawn-journal.jsonl'), WALNUT_JOURNAL_DIR: dir('j'), WALNUT_TASK_DIR_ROOT: dir('t'),
       XDG_STATE_HOME: path.join(home, '.local', 'state'), XDG_CONFIG_HOME: path.join(home, '.config'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
+      // A trial's runtime tree ranks last and it prunes nothing (runtime-tree.ts).
+      [RUNTIME_TRIAL_ENV]: '1',
       WALNUT_DAEMON_LIFETIME_SECONDS: String(Math.ceil(((o.waitMs ?? BOOT_PROOF_WAIT_MS) + (o.aliveMs ?? BOOT_PROOF_ALIVE_MS)) / 1000) + LIFETIME_MARGIN_S),
     }
     for (const key of ['USER', 'LOGNAME', 'SHELL']) if (process.env[key]) env[key] = process.env[key]!

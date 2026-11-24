@@ -24,6 +24,9 @@ const KEEP_OTHER_BUILDS = 2
 /** A staging dir this old belongs to an unpack that died. */
 const STALE_PARTIAL_MS = 60 * 60_000
 
+/** Set by a boot proof's trial (daemon-boot-proof.ts): its tree ranks last and it prunes nothing. */
+export const RUNTIME_TRIAL_ENV = 'WALNUT_RUNTIME_TRIAL'
+
 /** The env keys that decide where a build's tree goes (runtimeRootsFor). */
 export const RUNTIME_PLACE_ENV = ['WALNUT_RUNTIME_DIR', 'OPEN_WALNUT_HOME'] as const
 
@@ -103,13 +106,25 @@ export function unpackRuntime(root: string, archive: Buffer, id: string): void {
   }
 }
 
-/** Remove other builds' trees past the newest KEEP_OTHER_BUILDS, and dead staging dirs. Never throws. */
+/**
+ * In a runtime place, the build its service runs (a `--service` start writes it, ensureRuntime):
+ * never pruned, however many other builds start after it. One service per place: the default
+ * set's in the data home, a set's in its own dir.
+ */
+export const RUNTIME_SERVICE_BUILD = '.walnut-runtime-service'
+
+/**
+ * Remove other builds' trees past the newest KEEP_OTHER_BUILDS (by marker mtime, which every start
+ * of a build refreshes), and dead staging dirs; never the build RUNTIME_SERVICE_BUILD names. Never throws.
+ */
 export function pruneRuntimes(parent: string, keepId: string, now = Date.now()): void {
   try {
+    let serviceBuild = ''
+    try { serviceBuild = fs.readFileSync(path.join(parent, RUNTIME_SERVICE_BUILD), 'utf8').trim() } catch { /* no service here */ }
     const others: Array<{ dir: string; mtime: number }> = []
     for (const name of fs.readdirSync(parent)) {
       const dir = path.join(parent, name)
-      if (name === keepId) continue
+      if (name === keepId || name === serviceBuild) continue
       try {
         if (name.includes('.partial-')) {
           if (now - fs.statSync(dir).mtimeMs > STALE_PARTIAL_MS) fs.rmSync(dir, { recursive: true, force: true })
@@ -145,9 +160,20 @@ export function prunesRuntimePlace(env: NodeJS.ProcessEnv): boolean {
  * prune it would otherwise push them out of by mtime. `argv` is process.argv.
  */
 export function isWalnutLineArgv(argv: readonly string[], execPath: string): boolean {
-  let at = 2
-  if (argv[at] !== undefined && (argv[at] === argv[1] || argv[at] === execPath)) at++
+  const at = firstWordAt(argv, execPath)
   return (argv[at] === 'walnut' || argv[at] === 'wn') && argv.includes('--walnut')
+}
+
+/** The launcher's `--service` start (main.ts, `__daemon --service` too): the host's service for this place. */
+export function isServiceArgv(argv: readonly string[], execPath: string): boolean {
+  const at = firstWordAt(argv, execPath)
+  return argv[at] === '--service' || (argv[at] === '__daemon' && argv[at + 1] === '--service')
+}
+
+/** Where the file's own words start in process.argv: after the program, and its own path when bun repeats it. */
+function firstWordAt(argv: readonly string[], execPath: string): number {
+  const at = 2
+  return argv[at] !== undefined && (argv[at] === argv[1] || argv[at] === execPath) ? at + 1 : at
 }
 
 /**
@@ -161,15 +187,27 @@ export function isWalnutLineArgv(argv: readonly string[], execPath: string): boo
  * its web app from. Nothing is pruned there: the dir's owner removes it whole.
  * A service set's own dir is the exception (prunesRuntimePlace). A leader's `--walnut` line
  * (`walnutLine`, runtime-root.ts) unpacks into, and prunes, the temp dir only such lines use.
+ * A `--service` start (`service`) names its build the place's RUNTIME_SERVICE_BUILD; a boot
+ * proof's trial (RUNTIME_TRIAL_ENV) prunes nothing, names nothing and ranks its tree last.
  */
-export function ensureRuntime(archivePath: string, id: string, o: { walnutLine?: boolean } = {}): string {
-  const prune = prunesRuntimePlace(process.env)
+export function ensureRuntime(archivePath: string, id: string, o: { walnutLine?: boolean; service?: boolean } = {}): string {
+  const trial = process.env[RUNTIME_TRIAL_ENV] === '1'
+  const prune = !trial && prunesRuntimePlace(process.env)
   const roots = runtimeRootsFor(process.env, id, o)
+  // In use from here on: the prune ranks by this mtime. A trial's tree ranks last until its
+  // build really starts, so a failed trial never pushes the running build's tree out.
+  const inUse = (root: string) => {
+    const t = trial ? new Date(0) : new Date()
+    try { fs.utimesSync(path.join(root, RUNTIME_MARKER), t, t) } catch { /* read-only place */ }
+    if (o.service && !trial) try { fs.writeFileSync(path.join(path.dirname(root), RUNTIME_SERVICE_BUILD), `${id}\n`) } catch { /* read-only place */ }
+    return root
+  }
   let lastError: unknown = null
   for (const root of roots) {
-    if (isComplete(root, id)) return root
+    if (isComplete(root, id)) return trial ? root : inUse(root)
     try {
       unpackRuntime(root, fs.readFileSync(archivePath), id)
+      inUse(root)
       if (prune) pruneRuntimes(path.dirname(root), id)
       return root
     } catch (err) {

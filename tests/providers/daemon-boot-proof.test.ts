@@ -144,6 +144,8 @@ describe('the trial of the compiled walnut file finds its runtime tree outside t
     expect(await proveDaemonBoot(opts(exe))).toBeNull()
     const env = Object.fromEntries(fs.readFileSync(seen(), 'utf8').trim().split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]))
     expect(env.WALNUT_RUNTIME_DIR).toBe(trialRuntimeDir())
+    // Its tree ranks last and it prunes nothing (runtime-tree.ts RUNTIME_TRIAL_ENV).
+    expect(env.WALNUT_RUNTIME_TRIAL).toBe('1')
     expect(env.WALNUT_RUNTIME_DIR.startsWith(path.dirname(env.HOME))).toBe(false)
     // One the caller names wins.
     expect(await proveDaemonBoot({ ...opts(exe), env: { WALNUT_RUNTIME_DIR: path.join(work, 'own-runtime') } })).toBeNull()

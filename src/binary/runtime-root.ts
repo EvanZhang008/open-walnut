@@ -21,7 +21,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ASSETS_ARCHIVE, ASSETS_ID, DAEMON_VERSION } from 'walnut-binary:assets'
 import { BUNDLED_MODULES } from './bundled-modules.js'
-import { ensureRuntime, isWalnutLineArgv } from './runtime-tree.js'
+import { ensureRuntime, isServiceArgv, isWalnutLineArgv } from './runtime-tree.js'
 import { fileIdentity, setSingleFile } from '../lib/single-file.js'
 import { demoRuntimeForArgv } from '../commands/demo-home.js'
 
@@ -35,7 +35,9 @@ try {
   process.exit(1)
 }
 
-export const runtimeRoot = ensureRuntime(ASSETS_ARCHIVE, ASSETS_ID, { walnutLine: isWalnutLineArgv(process.argv, process.execPath) })
+export const runtimeRoot = ensureRuntime(ASSETS_ARCHIVE, ASSETS_ID, {
+  walnutLine: isWalnutLineArgv(process.argv, process.execPath), service: isServiceArgv(process.argv, process.execPath),
+})
 ;(globalThis as Record<string, unknown>).__WALNUT_BUNDLE_URL__ = pathToFileURL(path.join(runtimeRoot, 'dist', 'cli.js')).href
 // The file as it is now, before an update can replace it (execFileReplaced).
 setSingleFile({ root: runtimeRoot, daemonVersion: DAEMON_VERSION, modules: BUNDLED_MODULES, execId: fileIdentity(process.execPath) })
