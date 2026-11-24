@@ -62,6 +62,7 @@ import { forwardHttp, forwardUpgrade, isLinkDropped, type ForwardTarget, type Up
 import { wasNotSent } from '../host-server/daemon-link.js'
 import type { Route } from '../host-server/route.js'
 import { classify, isRead, type AwayRule, type RouteDecision } from './route-table.js'
+import { HELPER_SCOPE_REFUSAL, helperCallAllowed } from '../lib/self-api-root.js'
 import { closeAtFrame, closeFrame, FrameCursor } from './ws-frames.js'
 import { LEADER_READ_DEADLINE_MS, LEADER_READ_MAX_TRIES, mayTryLeaderReadAgain } from '../core/leader-read-recovery.js'
 
@@ -193,11 +194,17 @@ export interface DispatchDeps {
    * `host-local-calls` capability): it carries the replica's in-process credential, so it is
    * answered here under the row's `localAway` (else its `away`), never forwarded, and a daemon
    * that says the Mac answers gets `needs_leader` back (the daemon then relays the call to the
-   * Mac itself). A model helper this replica spawned (the AI search child, its helper
-   * credential) is one too: its reads are answered from these copies, never sent to the Mac,
-   * which does not know its credential. Absent: no request is one.
+   * Mac itself). Absent: no request is one.
    */
   selfCall?(req: IncomingMessage): boolean
+  /**
+   * A model helper this replica spawned (the AI search child, its helper credential,
+   * lib/self-api-root.ts). Its reads of the helper paths are answered from these copies like a
+   * self call, never sent to the Mac, which does not know its credential; anything else is
+   * 403 helper_scope at once, before an away write could count it as a wrong token and fill
+   * the shared failure bucket a phone's refusals use. Absent: no request is one.
+   */
+  helperCall?(req: IncomingMessage): boolean
 }
 
 export interface Dispatcher {
@@ -734,8 +741,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // Every answer of this replica says which presence it was made under (front.ts header).
       stampPresence(res)
       const decision = decide(req.method ?? 'GET', pathOf(req))
+      const helper = deps.helperCall?.(req) === true
+      if (helper && !helperCallAllowed(req.method, pathOf(req))) return sendJson(res, 403, HELPER_SCOPE_REFUSAL)
       if (decision.cls === 'feature') return next()
-      if (deps.selfCall?.(req)) {
+      if (helper || deps.selfCall?.(req)) {
         // This host's own call: here, whoever leads (see selfCall).
         if (decision.cls === 'local') return next()
         const away = decision.row?.localAway ?? decision.away

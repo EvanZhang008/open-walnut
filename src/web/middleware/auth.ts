@@ -31,7 +31,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { isExpiredAccessToken, isPairedDeviceId, verifyDeviceToken } from '../../core/device-auth.js'
 import { recordAuthFailure, isAuthRateLimited, RATE_LIMITED_BODY, RATE_LIMIT_RETRY_AFTER_S } from './auth-rate-limit.js'
 import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
-import { helperCallAllowed, isHelperCallToken, isSelfCallToken } from '../../lib/self-api-root.js'
+import { HELPER_SCOPE_REFUSAL, helperCallAllowed, isHelperCallToken, isSelfCallToken } from '../../lib/self-api-root.js'
 import { log } from '../../logging/index.js'
 import { isHostReplica } from '../../core/server-role.js'
 import { cookieCredential } from './device-cookie.js'
@@ -110,7 +110,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   // reads the helper paths and nothing else, and a refusal is no wrong device token (not counted).
   if (selfHeader?.startsWith('Bearer ') && isHelperCallToken(selfHeader.slice(7))) {
     if (helperCallAllowed(req.method, `${req.baseUrl}${req.path}`)) { next(); return }
-    res.status(403).json({ error: 'A helper credential reads search only', code: 'helper_scope' })
+    res.status(403).json(HELPER_SCOPE_REFUSAL)
     return
   }
   if (CLOUD_MODE) {

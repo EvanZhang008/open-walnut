@@ -359,9 +359,9 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       const h = req.headers.authorization
       return typeof h === 'string' && h.startsWith('Bearer ') && verifyReplicaToken(h.slice(7)) !== null
     },
-    // This host's own calls, answered here whoever leads: a session's or plugin job's `walnut`
-    // call (with `host-local-calls`), and a model helper this server spawned (its reads).
-    selfCall: (req: IncomingMessage) => isHelperCall(req) || (!!opts.localCalls && localCallerOf(req) !== null),
+    ...(opts.localCalls ? { selfCall: (req: IncomingMessage) => localCallerOf(req) !== null } : {}),
+    // A model helper this server spawned: its reads answered here, anything else 403 (dispatch.ts).
+    helperCall: isHelperCall,
     // The same answer as the /api auth: a wrong token counts toward the shared limit.
     refuse: (req) => replicaRefusal(req.headers.authorization),
     ...(opts.writeBudgetMs ? { writeBudgetMs: opts.writeBudgetMs } : {}),

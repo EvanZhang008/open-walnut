@@ -12,12 +12,14 @@ import { sha256 } from '../helpers/replica-host-env.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-replica-auth-limit'))
 
-import { _resetReplicaAuthForTesting, replicaAuthMiddleware, replicaDeviceCopy, replicaRefusal, verifyReplicaToken, verifyReplicaUpgrade } from '../../src/replica/auth.js'
+import { _resetReplicaAuthForTesting, REPLICA_FAILURE_KEY, replicaAuthMiddleware, replicaDeviceCopy, replicaRefusal, verifyReplicaToken, verifyReplicaUpgrade } from '../../src/replica/auth.js'
 import { createDispatcher, OFFLINE_HEADER } from '../../src/replica/dispatch.js'
 import type { RouteDecision } from '../../src/replica/route-table.js'
 import http from 'node:http'
 import type net from 'node:net'
-import { _resetAuthRateLimitForTesting } from '../../src/web/middleware/auth-rate-limit.js'
+import { _resetAuthRateLimitForTesting, isAuthRateLimited } from '../../src/web/middleware/auth-rate-limit.js'
+import { getHelperCallToken, setSelfApiRoot } from '../../src/lib/self-api-root.js'
+import { isHelperCall } from '../../src/replica/write-actor.js'
 
 const PHONE_TOKEN = 'marina-phone-token'
 
@@ -101,6 +103,7 @@ describe('the dispatcher\'s away answers', () => {
       return typeof h === 'string' && h.startsWith('Bearer ') && verifyReplicaToken(h.slice(7)) !== null
     },
     refuse: (req) => replicaRefusal(req.headers.authorization),
+    helperCall: isHelperCall,
     classify: (method, p) => rows[`${method} ${p}`] ?? { cls: 'local', away: 'read', row: null },
   })
   // The auth middleware after the dispatcher: a read that passes it is answered 200.
@@ -138,6 +141,39 @@ describe('the dispatcher\'s away answers', () => {
     expect(await call('api-guess', '127.0.0.1')).toBe(429)
     // The phone's good token still passes.
     expect((await send('POST', '/api/queued/x', PHONE_TOKEN)).status).toBe(200)
+  })
+
+  it("a helper's write or other read is 403 helper_scope at once (the write port is there) and never counts", async () => {
+    setSelfApiRoot('http://127.0.0.1:45995')
+    try {
+      const helper = getHelperCallToken()!
+      const answer = (method: string, p: string) => new Promise<{ status: number; body: any }>((resolve, reject) => {
+        const body = method === 'GET' ? null : Buffer.from('{}')
+        const req = http.request({
+          host: '127.0.0.1', port, method, path: p, agent: false,
+          headers: { authorization: `Bearer ${helper}`, ...(body ? { 'content-type': 'application/json', 'content-length': String(body.length) } : {}) },
+        }, (res) => {
+          let text = ''
+          res.on('data', (c) => { text += c })
+          res.on('end', () => resolve({ status: res.statusCode!, body: JSON.parse(text) }))
+        })
+        req.on('error', reject)
+        req.end(body ?? undefined)
+      })
+      for (let i = 0; i < 15; i++) {
+        const w = await answer('POST', '/api/queued/x')
+        expect(w.status).toBe(403)
+        expect(w.body).toEqual({ error: 'A helper credential reads search only', code: 'helper_scope' })
+      }
+      expect((await answer('GET', '/api/tasks')).status).toBe(403)
+      expect((await answer('POST', '/api/mac-only')).status).toBe(403)
+      // The shared bucket is untouched: not limited, and a wrong token now is a first failure.
+      expect(isAuthRateLimited(REPLICA_FAILURE_KEY)).toBe(false)
+      expect(await call('one-guess', '127.0.0.1')).toBe(401)
+      expect((await send('POST', '/api/queued/x', PHONE_TOKEN)).status).toBe(200)
+    } finally {
+      setSelfApiRoot(null)
+    }
   })
 
   it('no token on an away write is a first contact: 401, never counted', async () => {

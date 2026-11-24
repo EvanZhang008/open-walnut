@@ -162,6 +162,9 @@ export function helperCallAllowed(method: string | undefined, fullPath: string):
   return HELPER_CALL_PATHS.includes(p)
 }
 
+/** The one answer to a helper credential outside HELPER_CALL_PATHS (403): auth.ts and a replica's dispatcher. */
+export const HELPER_SCOPE_REFUSAL = Object.freeze({ error: 'A helper credential reads search only', code: 'helper_scope' })
+
 /**
  * The ONE place a model helper this server spawns gets its Walnut (inline-subagent.ts and
  * micro-claude-warm.ts build every such child's env through it): this server's own root, and,

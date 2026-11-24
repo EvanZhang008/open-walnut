@@ -134,7 +134,9 @@ describe('the AI search child on a host replica, the Mac away', () => {
       method: 'POST', headers: { connection: 'close', 'content-type': 'application/json', authorization: `Bearer ${helper}` },
       body: JSON.stringify({ title: 'made by a helper' }),
     })
-    expect(write.status).toBeGreaterThanOrEqual(400)
+    // Refused by the dispatcher before any away write (no wrong-token count, dispatch.ts helperCall).
+    expect(write.status).toBe(403)
+    expect(await write.json()).toMatchObject({ code: 'helper_scope' })
     const phone = await get('/api/search?q=rollback&types=task,session&slim=1', PHONE_TOKEN)
     expect(phone.status).toBe(200)
     expect(JSON.stringify(phone.body)).toContain(TASK_ID)
