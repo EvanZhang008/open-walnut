@@ -1,5 +1,5 @@
 /**
- * A service set's daemon never writes the account's engine skill places, on both real twins.
+ * A service set's daemon never writes the account's engine skill places, on the real daemon.
  *
  * The hub pushes its skills on every connect (`skills.sync`): one real copy per skill in
  * ~/.open-walnut/distributed-skills/<name>/ and a link to it in each engine's skill dir
@@ -10,8 +10,7 @@
  * `skipped: 'default-service'` (held, so the hub sends nothing again), never an error.
  * The control: the same daemon as the default set writes them.
  *
- * What's real: the standalone twin under bun, the source twin under node with its sidecars, in
- * `--service` mode. MACHINE SAFETY: every dir is under this file's temp dir, and the test signals
+ * What's real: the daemon under bun, in `--service` mode. MACHINE SAFETY: every dir is under this file's temp dir, and the test signals
  * only its own children's process groups.
  */
 import { describe, it, expect, afterAll, afterEach } from 'vitest'
@@ -19,17 +18,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { guardedPath } from '../setup/exec-guard.js'
-import { TRIGGER_BUN as BUN, TriggerDaemon, buildSourceTwin, killTriggerDaemons, type Twin } from '../helpers/trigger-daemon.js'
+import { TRIGGER_BUN as BUN, TriggerDaemon, killTriggerDaemons, type Twin } from '../helpers/trigger-daemon.js'
 
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-set-skills-')))
 afterAll(() => { if (base.includes('walnut-set-skills-')) fs.rmSync(base, { recursive: true, force: true }) })
-const BIN = path.join(base, 'bin')
-if (BUN) buildSourceTwin(BIN)
 afterEach(killTriggerDaemons)
 
 const SET = '0123456789abcdef'
 const SKILL = '---\nname: walnut\n---\n<!-- walnut-managed v1: READ-ONLY -->\n# Walnut manual\n'
-const TWINS: Twin[] = BUN ? ['standalone', 'source'] : []
+const TWINS: Twin[] = BUN ? ['standalone'] : []
 
 const run = (set: string, home: string, dir: (n: string) => string) => (set ? dir('run') : path.join(home, '.cache', 'open-walnut'))
 
@@ -50,7 +47,7 @@ async function daemon(twin: Twin, set: string): Promise<{ d: TriggerDaemon; home
     XDG_CACHE_HOME: path.join(home, '.cache'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
     ...(set ? { WALNUT_SERVICE_SET: set } : {}),
   }
-  return { d: await TriggerDaemon.start(twin, { mode: '--service', env, runDir: run(set, home, dir), cwd: home, bin: BIN }), home }
+  return { d: await TriggerDaemon.start(twin, { mode: '--service', env, runDir: run(set, home, dir), cwd: home }), home }
 }
 
 /** The account-wide skill places under `home` that hold anything. */
@@ -61,7 +58,7 @@ function skillPlaces(home: string): string[] {
 }
 
 describe.skipIf(!BUN)('a service set\'s daemon leaves the account\'s engine skill places to the default service', () => {
-  it.each(TWINS)('%s twin: a set answers the push and its probe as kept by the default service, and writes nothing', async (twin) => {
+  it.each(TWINS)('%s: a set answers the push and its probe as kept by the default service, and writes nothing', async (twin) => {
     const { d, home } = await daemon(twin, SET)
     const push = await d.rpc({ cmd: 'skills.sync', hash: 'h1', skill: SKILL, skills: [{ name: 'walnut', skill: SKILL }, { name: 'walnut-trigger', skill: SKILL }] })
     expect(skillPlaces(home)).toEqual([])
@@ -73,7 +70,7 @@ describe.skipIf(!BUN)('a service set\'s daemon leaves the account\'s engine skil
     expect(skillPlaces(home)).toEqual([])
   }, 120_000)
 
-  it.each(TWINS)('%s twin: the default set\'s daemon writes them, as before', async (twin) => {
+  it.each(TWINS)('%s: the default set\'s daemon writes them, as before', async (twin) => {
     const { d, home } = await daemon(twin, '')
     const push = await d.rpc({ cmd: 'skills.sync', hash: 'h1', skill: SKILL, skills: [{ name: 'walnut', skill: SKILL }] })
     expect(push).toMatchObject({ ok: true, applied: true, changed: true })
