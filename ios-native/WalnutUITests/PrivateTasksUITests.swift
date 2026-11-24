@@ -72,7 +72,7 @@ final class PrivateTasksUITests: XCTestCase {
         let keep = app.buttons["Make local, keep its copy in Tracker"]
         XCTAssertTrue(keep.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Make local, archive it in Tracker"].exists)
-        XCTAssertTrue(app.buttons["Make local, neutralize it in Tracker"].exists)
+        XCTAssertTrue(app.buttons["Make local, neutralize in Tracker"].exists)
         shot(app, "1-synced-menu")
         keep.tap()
 

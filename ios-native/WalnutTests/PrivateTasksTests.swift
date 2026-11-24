@@ -83,6 +83,14 @@ final class PrivateTasksTests: XCTestCase {
             let row = standing.menuRow(name)
             XCTAssertTrue(SyncMenuText.fits(row, font: bold), "\"\(row)\" does not fit")
         }
+        // The server's short reasons (src/core/private-tasks/, the make-local route) show as they
+        // are: the report's "Kept local when it was created" among them.
+        for reason in ["Kept local when it was created", "You made it local", "An agent made it local",
+                       "You chose to keep it local", "Its parent task is kept local"] {
+            XCTAssertTrue(SyncMenuText.fits(reason, font: body), "\"\(reason)\" should fit two lines")
+        }
+        // A line of three lines does not.
+        XCTAssertFalse(SyncMenuText.fits("It did not pass the AI rule: the title names a person and a private matter", font: body))
         // The cut reason of the report gives way to its kind's line, and every hold kind has one.
         let cut = WalnutSyncHold(state: "chosen", target: "plugin-a",
                                  reason: String(repeating: "Kept local when it was created. ", count: 4), by: "user")

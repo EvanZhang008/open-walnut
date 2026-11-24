@@ -126,7 +126,7 @@ enum SyncMenuText: CaseIterable {
         case .projectSyncsNowhere: return "Its project syncs nowhere"
         case .makeLocalKeep: return "Make local, keep its copy in \(service)"
         case .makeLocalArchive: return "Make local, archive it in \(service)"
-        case .makeLocalNeutralize: return "Make local, neutralize it in \(service)"
+        case .makeLocalNeutralize: return "Make local, neutralize in \(service)"
         case .syncTo: return "Sync to \(service)"
         case .archiveCopy: return "Archive its copy in \(service)"
         case .neutralizeCopy: return "Neutralize its copy in \(service)"
@@ -144,9 +144,9 @@ enum SyncMenuText: CaseIterable {
         }
     }
 
-    /// The width a menu row's text gets on a phone (an iOS menu is about 250 pt wide; its icon
-    /// column and margins leave about 165 pt, measured on the iPhone 16 Pro simulator) and the
-    /// two lines it shows.
+    /// The width a menu row's text gets on a phone and the two lines it shows. On the iPhone 16
+    /// Pro simulator (iOS 26.2, 2026-11-24) the cut reason broke at about 160 pt plus its
+    /// ellipsis; a line measured right at the edge is shortened rather than trusted to fit.
     static let menuTextWidth: CGFloat = 160
     static let menuLines = 2
 
@@ -159,6 +159,8 @@ enum SyncMenuText: CaseIterable {
         let box = (text as NSString).boundingRect(
             with: CGSize(width: menuTextWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil)
-        return box.height <= font.lineHeight * CGFloat(menuLines) + 1
+        // Lines by height, with half a line to spare: TextKit's line boxes are not exactly
+        // `lineHeight` each (2026-11-24: a two-line reason measured as more than two lines).
+        return box.height < font.lineHeight * (CGFloat(menuLines) + 0.5)
     }
 }
