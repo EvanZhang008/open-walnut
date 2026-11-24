@@ -228,7 +228,7 @@ describe('the folder and the history are both gone', () => {
 })
 
 describe('a working folder that is a link to another place (2026-11-20, the notes moved into one tree)', () => {
-  it('delivers into a link, and sends what waited once the folder answers again', async () => {
+  it('delivers into a link, and what waited goes on the Retry once the folder answers again', async () => {
     // The old place is a link into the tree, as the move leaves notes/<folder>.
     const real = path.join(scratch, 'artifacts', 'projects', 'Cove', 'notes')
     await fs.mkdir(real, { recursive: true })
@@ -256,10 +256,19 @@ describe('a working folder that is a link to another place (2026-11-20, the note
       expect((await getSessionByClaudeId(sid))?.cwdGone).toMatchObject({ cwd: oldCwd })
     }, { timeout: 15_000 })
 
-    // The link is made again; the start's look sends what waited, in the same folder, and the mark goes.
+    // The user's status reads it not delivered (a folder of his own, which Walnut does not make
+    // again): from then on it is his to send, never sent by itself (review round two, N2: words he
+    // typed again would go twice). The link is made again; the start's look clears the folder's
+    // mark and sends nothing; his Retry sends it, in the same folder.
+    const { syncUserStatuses } = await import('../../src/core/user-status-sync.js')
+    await syncUserStatuses(new Set([taskId]))
+    await vi.waitFor(async () => { resetCache(); expect((await getQueue(sid))[0]?.folderWait).toBeUndefined() }, { timeout: 15_000 })
     await fs.symlink(real, oldCwd)
     since = mark()
-    expect(await sendWhereFoldersCameBack()).toMatchObject({ sessions: [sid], messages: 1 })
+    expect(await sendWhereFoldersCameBack()).toMatchObject({ sessions: [sid], messages: 0 })
+    const { sendQueuedNow } = await import('../../src/core/sessions/send-now.js')
+    resetCache()
+    expect(await sendQueuedNow({ sessionId: sid, messageId: (await getQueue(sid))[0]!.id, source: 'web-ui-retry', unpark: true })).toMatchObject({ sent: true })
     await vi.waitFor(() => {
       const start = daemon.getCommandHistoryFor('start').slice(since.start).find((c) => c.payload.sid === sid)
       expect(start?.payload.cwd).toBe(oldCwd)
@@ -321,13 +330,17 @@ describe('the start\'s look takes back only what the gap stopped', () => {
 })
 
 
-describe('the folder comes back by a way no remake knows of', () => {
-  // 2026-11-24: rows parked on a gone folder stayed parked after the folder was back, while the
-  // session itself ran in it again (src/core/sessions/folder-wait.ts).
-  it('the next message takes the one that waited with it, ahead of it, once; a row an older Walnut parked waits for a person', async () => {
+describe('a folder of the user\'s own comes back by a way no remake knows of', () => {
+  // 2026-11-24: rows parked on a gone folder stayed parked after the folder was back
+  // (src/core/sessions/folder-wait.ts). A folder Walnut does not make again (not a task's workspace)
+  // reads not delivered in the user's status, so the row then waits for his Retry instead of riding
+  // along with his next message: he may have typed it again (review round two, N2). The ride itself
+  // is pinned on a host's session in tests/e2e/host-judge-folder-back-e2e.test.ts and in
+  // tests/core/sessions/folder-wait.test.ts.
+  it('the row shown as not delivered waits for the Retry and goes once; a row an older Walnut parked waits too', async () => {
     const cwd = path.join(scratch, 'handmade', 'orchard')
     await fs.mkdir(cwd, { recursive: true })
-    const { sid } = await startIn('Orchard planner', cwd)
+    const { taskId, sid } = await startIn('Orchard planner', cwd)
     await writeTranscript(sid, cwd)
     await fs.rm(cwd, { recursive: true, force: true })
 
@@ -341,35 +354,38 @@ describe('the folder comes back by a way no remake knows of', () => {
     await sendMessageToSession(sid, 'Sent while the folder was gone', { source: 'user' })
     await vi.waitFor(async () => {
       resetCache()
-      expect((await getQueue(sid)).map((m) => `${m.message.includes('An older park') ? 'older' : 'waited'}:${m.status}:${m.folderWait === true}`))
-        .toEqual(['older:parked:false', 'waited:parked:true'])
+      expect((await getQueue(sid)).map((m) => `${m.message.includes('An older park') ? 'older' : 'waited'}:${m.status}`))
+        .toEqual(['older:parked', 'waited:parked'])
     }, { timeout: 15_000 })
+    // The user's status reads it not delivered: from then on it is his to send again.
+    const { syncUserStatuses } = await import('../../src/core/user-status-sync.js')
+    await syncUserStatuses(new Set([taskId]))
+    await vi.waitFor(async () => {
+      resetCache()
+      expect((await getQueue(sid)).map((m) => m.folderWait === true)).toEqual([false, false])
+    }, { timeout: 15_000 })
+    const waited = (await getQueue(sid)).find((m) => m.message.includes('Sent while the folder was gone'))!
 
-    // Made again by hand: no remake, no button, no host restart.
+    // Made again by hand: no remake, no button, no host restart. His next message goes alone.
     await fs.mkdir(cwd, { recursive: true })
     await writeTranscript(sid, cwd)
     const since = mark()
     await sendMessageToSession(sid, 'Sent after the folder came back', { source: 'user' })
     await vi.waitFor(() => {
-      const lines = linesTo(sid, since).map((l) => l.message)
-      const waited = lines.findIndex((m) => m.includes('Sent while the folder was gone'))
-      const after = lines.findIndex((m) => m.includes('Sent after the folder came back'))
-      expect(waited).toBeGreaterThanOrEqual(0)
-      expect(after).toBeGreaterThanOrEqual(0)
-      // Ahead of the new one: in the same line before it, or in an earlier line.
-      if (waited === after) expect(lines[waited]!.indexOf('Sent while the folder was gone')).toBeLessThan(lines[waited]!.indexOf('Sent after the folder came back'))
-      else expect(waited).toBeLessThan(after)
+      expect(linesTo(sid, since).some((l) => l.message.includes('Sent after the folder came back'))).toBe(true)
     }, { timeout: 20_000 })
-    await vi.waitFor(async () => {
-      resetCache()
-      expect((await getQueue(sid)).map((m) => `${m.id}:${m.status}`)).toEqual([`${older.id}:parked`])
-    }, { timeout: 15_000 })
-    // Each went as one line (a resend of it carries the same uuid, which the CLI takes once); the
-    // older park never went.
+    expect(linesTo(sid, since).some((l) => l.message.includes('Sent while the folder was gone'))).toBe(false)
+    resetCache()
+    expect((await getQueue(sid)).filter((m) => m.status === 'parked').map((m) => m.id).sort()).toEqual([older.id, waited.id].sort())
+
+    // His Retry on the bubble sends it, once.
+    const { sendQueuedNow } = await import('../../src/core/sessions/send-now.js')
+    expect(await sendQueuedNow({ sessionId: sid, messageId: waited.id, source: 'web-ui-retry', unpark: true })).toMatchObject({ sent: true })
+    await vi.waitFor(() => {
+      expect(linesTo(sid, since).filter((l) => l.message.includes('Sent while the folder was gone'))).not.toHaveLength(0)
+    }, { timeout: 20_000 })
     const sends = daemon.getCommandHistoryFor('send').slice(since.send).filter((c) => c.payload.sid === sid)
-    const uuidsOf = (text: string) => new Set(sends.filter((c) => String(c.payload.message).includes(text)).map((c) => c.payload.uuid))
-    expect(uuidsOf('Sent while the folder was gone').size).toBe(1)
-    expect(uuidsOf('Sent after the folder came back').size).toBe(1)
+    expect(new Set(sends.filter((c) => String(c.payload.message).includes('Sent while the folder was gone')).map((c) => c.payload.uuid)).size).toBe(1)
     expect(linesTo(sid, since).some((l) => l.message.includes('An older park'))).toBe(false)
   }, 90_000)
 })

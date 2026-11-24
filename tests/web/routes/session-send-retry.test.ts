@@ -220,6 +220,67 @@ describe('session:send retryOf — retry after a failed delivery', () => {
     }
   })
 
+  describe('a resend of a row the session\'s host keeps parked queues nothing here', () => {
+    // Review B2 (2026-11-24): the browser's own link was down when the person pressed Retry; once
+    // back, the client sent it again by itself (autoResend), the host answered "parked", and the
+    // leader, which reads only its own queue for the same send, queued it again: two copies.
+    // Each case its own user line: an answer given for one is kept for its uuid (send-once.ts sendOnce).
+    let UUID = ''
+    const HOST_ROW = { id: 'qm-parked-on-the-host', sessionId: SID, message: TEXT, status: 'parked', userUuid: '', enqueuedAt: '2026-11-24T05:01:23.850Z', parkedAt: '2026-11-24T05:01:23.928Z', parkedReason: 'Working directory no longer exists: /work/ws', parkedCode: 'cwd_missing' }
+    let asked: Array<{ member: string; args: unknown[] }> = []
+    async function onHost(uuid: string) {
+      UUID = uuid
+      HOST_ROW.userUuid = uuid
+      const { createSessionRecord } = await import('../../../src/core/session-tracker.js')
+      const { noteHostJudged } = await import('../../../src/core/sessions/judge-of.js')
+      const { setRemoteJudgedCaller } = await import('../../../src/providers/remote-judged-session.js')
+      const { _resetHostQueueRowsForTesting } = await import('../../../src/core/sessions/host-queue-rows.js')
+      _resetHostQueueRowsForTesting()
+      await createSessionRecord(SID, 't-host-retry', 'Acme', '/work/ws', { initialProcessStatus: 'idle' })
+      noteHostJudged(SID, 'devbox')
+      asked = []
+      setRemoteJudgedCaller(async (_host, body) => {
+        asked.push({ member: body.member, args: body.args })
+        if (body.member === 'sendQueuedRowNow') {
+          if (body.args[0] !== HOST_ROW.id) return { sent: false, why: 'gone' }
+          return body.args[2] === true ? { sent: true, sessionId: SID } : { sent: false, why: 'parked', reason: HOST_ROW.parkedReason }
+        }
+        if (body.member === 'readParkedRows') return [HOST_ROW]
+        if (body.member === 'lineAlreadyRan') return false
+        throw new Error(`${body.member} on devbox: no_such_member`)
+      })
+    }
+    afterEach(async () => {
+      const { _resetJudgeOfForTesting } = await import('../../../src/core/sessions/judge-of.js')
+      const { setRemoteJudgedCaller, _resetRemoteJudgedSessionsForTesting } = await import('../../../src/providers/remote-judged-session.js')
+      setRemoteJudgedCaller(null)
+      _resetJudgeOfForTesting()
+      _resetRemoteJudgedSessionsForTesting()
+    })
+
+    it('by its id (the client sending again by itself): the host says parked, and that row is the answer', async () => {
+      await onHost('11111111-2222-4333-8444-555555555555')
+      const res = await callSend({ sessionId: SID, message: TEXT, retryOf: HOST_ROW.id, autoResend: true, userUuid: UUID })
+      expect(res.messageId).toBe(HOST_ROW.id)
+      expect(await getQueue(SID)).toEqual([])
+      expect(queued).toHaveLength(0)
+    })
+
+    it('by its user line (the first answer lost, the bubble never learned the id): the host\'s parked row is that send', async () => {
+      await onHost('22222222-3333-4444-8555-666666666666')
+      const auto = await callSend({ sessionId: SID, message: TEXT, retryOf: 'temp-1795294800000-ef56', autoResend: true, userUuid: UUID })
+      expect(auto.messageId).toBe(HOST_ROW.id)
+      expect(await getQueue(SID)).toEqual([])
+      // A resend by itself leaves the park; the person's own Retry puts the host's row back in line.
+      expect(asked.filter((a) => a.member === 'sendQueuedRowNow').map((a) => a.args)).toEqual([['temp-1795294800000-ef56', 'web-ui-retry', false], [HOST_ROW.id, 'web-ui-retry', false]])
+      const person = await callSend({ sessionId: SID, message: TEXT, retryOf: 'temp-1795294800000-ef56', userUuid: UUID })
+      expect(person.messageId).toBe(HOST_ROW.id)
+      expect(asked.filter((a) => a.member === 'sendQueuedRowNow').at(-1)!.args).toEqual([HOST_ROW.id, 'web-ui-retry', true])
+      expect(await getQueue(SID)).toEqual([])
+      expect(queued).toHaveLength(0)
+    })
+  })
+
   it('a retry of a row that is still mid-flight (processing) adds nothing', async () => {
     // Racy Retry click while the batch is being delivered. The row is 'processing',
     // not 'pending' — but it is still QUEUED, so delivery hasn't settled and the

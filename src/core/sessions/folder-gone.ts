@@ -259,8 +259,11 @@ async function continueNow(sessionId: string, opts: { by?: string; pick?: Folder
     const remade = await remake.remakeForGoneFolder(record.taskId, from, record.host, { waitMs: remake.BUTTON_WAIT_MS, resume: true })
     if (remade === 'present') state = 'present'
     // The press is kept on the remake, so its end sends all that waited, as this answer promises.
-    if (remade === 'pending' && pick === 'all') await remake.notePressedDuringRemake(record.taskId, sessionId)
-    if (remade === 'pending') throw new SessionControlError(`Walnut is making this task's workspace again at ${from}; the waiting messages go out when it is ready`, 409, { code: 'workspace_remaking' })
+    // Not kept (the remake ended between its answer and the note): the folder is looked at again,
+    // and a folder there now sends them all below, as the press does.
+    if (remade === 'pending' && pick === 'all' && !await remake.notePressedDuringRemake(record.taskId, sessionId)
+      && await folderState(from, record.host) === 'present') state = 'present'
+    else if (remade === 'pending') throw new SessionControlError(`Walnut is making this task's workspace again at ${from}; the waiting messages go out when it is ready`, 409, { code: 'workspace_remaking' })
   }
   if (state === 'present') {
     // Pressed twice, or the folder came back: whatever still waits on a gone folder goes

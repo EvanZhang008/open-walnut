@@ -36,7 +36,7 @@ import { parkMessages } from '../../../src/core/session-queue-park.js'
 import { mutateStore } from '../../../src/core/session-queue-store.js'
 import { createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js'
 import { RETRY_BACKOFF_MS, stopDeliveryRetry, sweepDeliveryRetries } from '../../../src/core/sessions/delivery-retry.js'
-import { FOLDER_WAIT_MAX_AGE_MS } from '../../../src/core/sessions/folder-wait.js'
+import { FOLDER_WAIT_MAX_AGE_MS, noteToldUndelivered } from '../../../src/core/sessions/folder-wait.js'
 import { sendFolderWaiting } from '../../../src/core/sessions/folder-gone.js'
 import { classifyDeliveryFailure } from '../../../src/providers/delivery-failure.js'
 import { CwdMissingError } from '../../../src/providers/cwd-check.js'
@@ -151,6 +151,22 @@ describe('with nothing going out, the clock sends them once the folder is there'
     resetCache()
     expect((await getQueue(SID)).map((m) => [m.status, m.folderWait])).toEqual([['parked', undefined]])
     expect(sends).toEqual([])
+  })
+})
+
+describe('a row someone was told is not delivered', () => {
+  it('loses its mark, so it never goes by itself after; one a Stop came after is left as it is', async () => {
+    // Review round two, N2: shown not delivered, the user may type it again.
+    const told = await parkedOnFolder('shown as not delivered')
+    const fenced = await parkedOnFolder('before a stop')
+    await mutateStore((s) => { s.queues[SID]!.find((m) => m.id === fenced.id)!.stopFence = 'an-older-stop' })
+    resetCache()
+    for (const m of await getQueue(SID)) await noteToldUndelivered(m)
+    resetCache()
+    expect((await getQueue(SID)).map((m) => [m.message, m.folderWait])).toEqual([['shown as not delivered', undefined], ['before a stop', true]])
+    await enqueueMessage(SID, 'new one')
+    expect(await unparkRowsAhead(SID, null)).toEqual([])
+    expect(told.id).toBeTruthy()
   })
 })
 

@@ -15,7 +15,7 @@
  *  3. only a person's press releases rows Walnut did not mark: `pick: 'all'` comes from the press (and
  *     from a remake's end only for a press it recorded while on its way);
  *  4. no reader tells an asker or a person "not delivered" of a row that waits on its folder, and a
- *     reader that tells an asker drops the row's mark, so a row told it failed never goes by itself.
+ *     reader that tells drops the row's mark, so a row told it failed never goes by itself.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -105,10 +105,8 @@ describe('a message that waited on a gone folder goes once the folder is back, w
       'src/core/sessions/session-request-notify.ts', 'src/core/sessions/undelivered-requests.ts', 'src/core/user-status-sync.ts',
     ])
     for (const file of Object.keys(found)) expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(/waitsForFolderNow\(/)
-    // The two that tell an asker (the user status tells no one) drop the mark when they do.
-    for (const file of ['src/core/sessions/session-request-notify.ts', 'src/core/sessions/undelivered-requests.ts']) {
-      expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(/dropFolderWait\(/)
-    }
+    // Each tells someone (an asker, or the user's status) and drops the mark when it does.
+    for (const file of Object.keys(found)) expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(/noteToldUndelivered\(/)
   })
 
   it("only a person's press sends rows Walnut did not mark", () => {

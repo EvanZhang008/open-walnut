@@ -28,8 +28,8 @@
  * when it was pressed while the workspace was still being made again (remake.ts pressed).
  *
  * Who is told: nobody hears "not delivered" of a marked row while its folder is one Walnut makes
- * again (waitsForFolderNow). A folder of the user's own that went is reported as before, and the row
- * then loses its mark (dropFolderWait); a row past its day, or whose remake failed, loses its mark
+ * again (waitsForFolderNow). A folder of the user's own that went is reported as before (to an asker,
+ * and in the user's status), and the row then loses its mark (noteToldUndelivered); a row past its day, or whose remake failed, loses its mark
  * and its asker hears it once (endFolderWaits).
  *
  * The rule itself imports only the folder-gone words (the queue's park reads it); the clock's look
@@ -137,7 +137,7 @@ export const FOLDER_WAIT_WORDS = "its session's working folder is not there yet 
  * folder is one Walnut makes again (its task's workspace, remake.ts remakeBringsBack). A folder of the
  * user's own that went is reported as before. Every reader that tells an asker or a person "not
  * delivered" asks it first (tests/core/sessions/folder-wait-ratchet.test.ts), and one that then tells
- * an asker drops the row's mark (dropFolderWait): told it failed, it is never sent by itself after.
+ * drops the row's mark (noteToldUndelivered): told it failed, it is never sent by itself after.
  */
 export async function waitsForFolderNow(row: WaitRow & { sessionId: string }, now: number = Date.now()): Promise<boolean> {
   if (row.status !== 'parked' || row.folderWait !== true) return false
@@ -145,6 +145,20 @@ export async function waitsForFolderNow(row: WaitRow & { sessionId: string }, no
   if (fence === undefined || !waitsForFolder(row, fence, now)) return false
   const { remakeBringsBack } = await import('../workspaces/remake.js')
   return remakeBringsBack(row.sessionId).catch(() => false)
+}
+
+/**
+ * A reader just told someone (an asker, or the user's status) that `row` was not delivered. A row
+ * that would have waited by the rule, but on a folder Walnut does not make again (the user's own),
+ * then loses its mark: told it failed, it never goes by itself after, so words typed again are not
+ * sent twice when that folder comes back (review round two, N2). A row that does not wait by the
+ * rule now (a Stop pending or after it) keeps its mark: the release paths already leave it alone.
+ */
+export async function noteToldUndelivered(row: WaitRow & { id: string; sessionId: string }, now: number = Date.now()): Promise<void> {
+  if (row.status !== 'parked' || row.folderWait !== true) return
+  const fence = await stopFenceOf(row.sessionId)
+  if (fence === undefined || !waitsForFolder(row, fence, now)) return
+  await dropFolderWait(row.sessionId, [row.id]).catch(() => [])
 }
 
 /**

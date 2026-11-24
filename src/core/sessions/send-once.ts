@@ -97,6 +97,12 @@ export type SameSend =
   | { state: 'ran' }
   | { state: 'none' }
 
+/** The parked row of this user line the session's host keeps, if its host runs it. */
+async function hostTwinOf(sessionId: string, userUuid: string): Promise<{ id: string; enqueuedAt?: string } | undefined> {
+  const { hostParkedRows } = await import('./host-queue-rows.js')
+  return (await hostParkedRows(sessionId)).rows.find((m) => m.userUuid === userUuid)
+}
+
 /**
  * What became of an earlier send of this user line, from the durable record (the queue, the
  * daemon's line fate), for a resend whose first answer was lost. `lineUuid`: the uuid the line
@@ -114,7 +120,9 @@ export async function sameSendSettled(input: {
   autoResend: boolean
 }): Promise<SameSend> {
   const { sessionId, userUuid } = input
-  const twin = userUuid ? await queuedRowOfUserLine(sessionId, userUuid) : undefined
+  // This server's queue, else the rows the session's host keeps parked (a line handed to its host
+  // lives in the host's queue from then on: host-queue-rows.ts, its last answer when it is away).
+  const twin = userUuid ? await queuedRowOfUserLine(sessionId, userUuid) ?? await hostTwinOf(sessionId, userUuid) : undefined
   if (twin) {
     log.web.info('send: the send is already queued under its user line', { sessionId, messageId: twin.id, source: input.source })
     const { sendQueuedNow } = await import('./send-now.js')

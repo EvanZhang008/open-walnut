@@ -300,6 +300,10 @@ export function registerSessionChatRpc(): void {
       // The row is the host's and the host could not be asked: it may even have sent it. Said as
       // an error (the bubble stays failed, its Retry asks again), never a second copy queued here.
       if (again.why === 'unavailable') throw new Error(again.reason ?? 'The host that runs this session cannot be reached right now; try again in a moment.')
+      // Still queued, set aside (a resend by itself never puts a parked row back in line): that row
+      // is this send, here or on the session's host, never a copy (review B2: a host's parked row was
+      // queued again here, since the lookup below reads only this server's queue).
+      if (again.why === 'parked') return { messageId: data.retryOf }
       // The first send reached the queue but its answer was lost (the socket dropped after the
       // server took it), or its line already ran: the same send again is that send, never a second
       // copy (core/sessions/send-once.ts; the client resends by itself, hooks/send-auto-retry.ts).

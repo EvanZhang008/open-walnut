@@ -501,7 +501,7 @@ async function gateRequest(
       if (parkMeansNeverRan(row.parkedReason) || parkByStop(row.parkedReason)) {
         undelivered = { why: row.parkedReason || 'the message could not be delivered', stillQueued: false };
         // Told it was not delivered: a row that waited on its folder is never sent by itself after.
-        if (row.folderWait === true) await (await import('./folder-wait.js')).dropFolderWait(row.sessionId, [row.id]).catch(() => []);
+        await (await import('./folder-wait.js')).noteToldUndelivered(row);
       }
     } else if (row) {
       // Its task was completed with the message still queued: no turn will run on it

@@ -143,7 +143,7 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
       // Waiting on its session's gone folder (a workspace being made again): it goes by itself once
       // the folder is back, so its asker hears nothing now; its delivery, or its deadline, speaks
       // (folder-wait.ts). 2026-11-24: one waited 21 s and its sender was told "not delivered".
-      const { waitsForFolderNow, dropFolderWait } = await import('./folder-wait.js');
+      const { waitsForFolderNow, noteToldUndelivered } = await import('./folder-wait.js');
       if (await waitsForFolderNow(row)) {
         log.session.info('parked request: its message waits on the folder and goes by itself; the asker is not told it failed', { requestId: id, sessionId: row.sessionId, messageId: row.id });
         continue;
@@ -154,9 +154,13 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
       const retried = await parkRetriedByClock(row);
       const { getSessionRequest } = await import('../session-requests.js');
       const request = await getSessionRequest(id);
+      // Requests live in the leader's WALNUT_HOME (session-requests.ts). A host that parks a row reads
+      // none here and stops at this line, before noteToldUndelivered below: its own verdict on the
+      // folder (remakeBringsBack is false on a host, whose Walnut did not make the workspace) never
+      // tells an asker or drops a mark. Keep it so if requests ever move.
       if (!request || request.status !== 'pending') continue;
       // Told it was not delivered (a folder of the user's own that went): never sent by itself after.
-      if (!retried && row.folderWait === true) await dropFolderWait(row.sessionId, [row.id]);
+      if (!retried) await noteToldUndelivered(row);
       const { notifyRequesterFallback } = await import('./session-request-notify.js');
       await notifyRequesterFallback(request, 'error', retried ? {} : { notDelivered: row.parkedReason });
     } catch (err) {

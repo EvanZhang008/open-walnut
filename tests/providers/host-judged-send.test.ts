@@ -178,4 +178,19 @@ describe('the host takes a leader row once', () => {
     await enqueueMessage(sid, 'plain', { id: 'qm-once-1' })
     expect((await getQueue(sid)).map((m) => m.id)).toEqual(['qm-once-1'])
   })
+
+  it('one row per user line: a copy the leader queued again under another id is that send, not a second', async () => {
+    // Review round two: the leader queued a resend again while it could not see the host's parked row.
+    const { getQueue, parkMessages } = await import('../../src/core/session-message-queue.js')
+    const { queueLinesOnHost } = await import('../../src/core/sessions/handed-holds.js')
+    const sid = '50000000-0000-4000-8000-0000000000e3'
+    const line = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    await queueLinesOnHost(sid, [{ id: 'qm-line-1', message: 'the words', sentBy: 'person', userUuid: line }], 'mobile')
+    await parkMessages(await getQueue(sid), { reason: 'Working directory no longer exists: /work/ws', code: 'cwd_missing' })
+    await queueLinesOnHost(sid, [
+      { id: 'qm-line-copy', message: 'the words', sentBy: 'person', userUuid: line },
+      { id: 'qm-line-2', message: 'something new', sentBy: 'person', userUuid: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff' },
+    ], 'mobile')
+    expect((await getQueue(sid)).map((m) => `${m.id}:${m.status}`)).toEqual(['qm-line-1:parked', 'qm-line-2:pending'])
+  })
 })

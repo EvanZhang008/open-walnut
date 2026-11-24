@@ -17,6 +17,7 @@
  * where it is. The leader's panel lists the rows the host keeps parked or held, and their Retry and
  * Discard go there (host-queue-rows.ts); an edit of one is not built yet.
  */
+import { log } from '../../logging/index.js'
 import { AFTER_TURN_REASON, COLD_HOLD_REASON } from '../relay-fates.js'
 import type { QueuedMessage } from '../session-queue-store.js'
 import type { QueuedLine } from '../session-channel/host-api.js'
@@ -64,10 +65,19 @@ export async function queueLinesOnHost(sid: string, lines: readonly QueuedLine[]
   const reasons = new Set<string>()
   // All or nothing: the rows queued here before one failed are taken back, so a failure the leader
   // answers by delivering the lines itself (a resume it falls back from) leaves none to run here too.
-  const had = new Set((await getQueue(sid)).map((m) => m.id))
+  const queued = await getQueue(sid)
+  const had = new Set(queued.map((m) => m.id))
+  // A user line is one send: a line this queue already holds under another id (a leader that queued
+  // a resend again while this host could not be asked, or an older leader) is that send, not a second.
+  const lineOf = new Map(queued.filter((m) => m.userUuid).map((m) => [m.userUuid!, m.id]))
   const added: string[] = []
   try {
     for (const l of lines) {
+      const same = l.userUuid ? lineOf.get(l.userUuid) : undefined
+      if (same && same !== l.id) {
+        log.session.info('host queue: a second copy of a user line it already holds is not queued again', { sessionId: sid, messageId: l.id, heldAs: same })
+        continue
+      }
       const text = l.sentBy === 'person' ? l.message : l.sentBy === 'agent' ? frameAsWalnut(l.message, source) : frameForSource(l.message, source)
       const held = heldEnqueueOptions(l)
       if (held.heldReason) reasons.add(held.heldReason)
