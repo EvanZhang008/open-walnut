@@ -332,7 +332,7 @@ async function drainRounds(
   const { conn, v2, result } = batch;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     // Revoked while this drain runs: the rounds left stay on the host, unread and unacked (N3).
-    if (round > 0 && await drainRevoked(conn)) { batch.result.held = true; return; }
+    if (round > 0 && await drainRevoked(conn)) { batch.result.held = true; return false; }
     const sentAt = Date.now();
     const reply = await conn.send('offline.drain', { home: WALNUT_HOME, ...(v2 ? { kinds: [...APPLIED_V2_KINDS] } : {}) }, RPC_TIMEOUT_MS);
     if (reply.ok === false) throw new Error(String(reply.error ?? 'offline.drain refused'));
