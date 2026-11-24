@@ -60,12 +60,14 @@ export function fullConfigFixture(): Record<string, unknown> {
     session_server: { port: 4123 },
     hosts: {
       devbox: { hostname: 'devbox.example.com', user: 'marina', port: 22, label: 'Dev box', enabled: true, capabilities: ['gpu'], server: { enabled: true, build_env: { NPM_TOKEN: npmToken }, expose: { options: { auth_token: exposeAuth } } } },
-      'gpu-box': { hostname: 'gpu-box.walnut-net.invalid', label: 'gpu-box', enabled: true, transport: 'net', endpoint: 'e'.repeat(64), runs_sessions: true },
+      'gpu-box': { hostname: 'gpu-box.walnut-net.invalid', label: 'gpu-box', enabled: true, transport: 'net', endpoint: 'e'.repeat(64), runs_sessions: true, engines: { codex: { provider: { base_url: 'http://127.0.0.1:18402/v1', name: 'gpu-relay' } } } },
       'lab-mac': { hostname: '10.0.0.9', enabled: false, discovered: true, connect: 'ask' },
     },
     // Copy-only: config.yaml never holds it; the copy derives it from hosts.*.runs_sessions.
     hosts_run_sessions: ['gpu-box'],
     leader_capabilities: ['session-channel-v1'],
+    // Copy-only too: derived from hosts.*.engines.
+    host_engines: { 'gpu-box': { codex: { provider: { base_url: 'http://127.0.0.1:18402/v1', name: 'gpu-relay' } } } },
     hosts_warmup: { enabled: true },
     hosts_found: { asking_since: '2026-11-02T09:00:00.000Z' },
     first_run: { at: '2026-11-02T09:00:00.000Z', steps: ['hosts'], answered: { hosts: '2026-11-02T09:05:00.000Z' } },

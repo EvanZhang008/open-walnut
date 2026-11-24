@@ -46,7 +46,7 @@ describe('the leader never honours a copy-only key in its own config', () => {
   })
 
   it('the copy still says the hosts turned on, from the hosts map only', () => {
-    expect(COPY_ONLY_CONFIG_KEYS).toEqual(['hosts_run_sessions', 'leader_capabilities'])
+    expect(COPY_ONLY_CONFIG_KEYS).toEqual(['hosts_run_sessions', 'leader_capabilities', 'host_engines'])
     const off = configCopyRows({ version: 1, hosts_run_sessions: ['devbox-a'] })
     expect(off.rows.find((r) => r.key === 'hosts_run_sessions')).toBeUndefined()
     const on = configCopyRows({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example', runs_sessions: true } } })

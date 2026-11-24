@@ -24,6 +24,7 @@ import { redactSensitiveText } from '../../logging/redact.js'
 import { hostRunsSessionsAny, hostsTurnedOn } from '../session-channel/switch.js'
 import { LEADER_CHANNEL_CAP } from '../session-channel/old-leader-watch.js'
 import type { Config } from '../types.js'
+import { isLoopbackUrl } from '../service-url.js'
 
 /**
  * `true`: the whole value, only for a value that cannot grow a field (a scalar,
@@ -33,6 +34,9 @@ import type { Config } from '../types.js'
  * src/core/types.ts: a field is named here or in CONFIG_COPY_DROPPED_FIELDS.
  */
 export type AllowSpec = true | { readonly [key: string]: AllowSpec }
+
+/** An engine's provider (`engines.<id>.provider`, `hosts.<name>.engines.<id>.provider`). */
+const ENGINE_PROVIDER_SPEC: AllowSpec = { base_url: true, name: true, wire_api: true, env_key: true, model_prefix: true, withheld: true }
 
 const ALLOW: Record<string, AllowSpec> = {
   version: true,
@@ -50,7 +54,8 @@ const ALLOW: Record<string, AllowSpec> = {
   // Where each engine sends its requests, and its default model: a Codex session the
   // companion starts must use the Mac's provider (providers/codex-engine-source.ts).
   // `withheld` is the copy's own mark for a provider that held a credential (engineRows).
-  engines: { '*': { provider: { base_url: true, name: true, wire_api: true, env_key: true, model_prefix: true, withheld: true }, model: true, effort: true, transport: true } },
+  // A provider whose base_url is a loopback address is left out (withoutLoopbackProviders).
+  engines: { '*': { provider: ENGINE_PROVIDER_SPEC, model: true, effort: true, transport: true } },
   agent: {
     // region, maxTokens and available_models are retired (CONFIG_COPY_RETIRED_FIELDS), but an
     // older leader still sends them in this row, and a row with a field outside the spec is
@@ -71,6 +76,10 @@ const ALLOW: Record<string, AllowSpec> = {
   hosts_run_sessions: true,
   // Copy-only too: what this leader's build speaks (session-channel/old-leader-watch.ts LEADER_CHANNEL_CAP).
   leader_capabilities: true,
+  // Copy-only (derived from hosts.*.engines): each host's own engine provider, so a host's service
+  // starts Codex on the provider the leader set for it (providers/codex-engine-config.ts
+  // codexProviderForPlace). A row of its own: an older replica refuses only it, never the hosts row.
+  host_engines: { '*': { codex: { provider: ENGINE_PROVIDER_SPEC } } },
   session_limits: { '*': true },
   session: {
     cron_policy: true, output_mode: true, acp_walnut_mcp: true, acp_walnut_tools: true, idle_timeout_minutes: true, max_idle: true,
@@ -211,6 +220,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     connect_by: 'who gave that answer, read only where the Mac warms its hosts',
     not_offered: 'why the Mac no longer offers a found host (it is stored off, so the copy reads it off; named in the copy, an older replica would refuse the whole hosts row)',
     runs_sessions: 'the leader decides where a start goes; the copy says the hosts turned on as its own row hosts_run_sessions (named in the hosts row, an older replica would refuse the whole row)',
+    engines: 'copied as its own row host_engines (named in the hosts row, an older replica would refuse the whole row)',
   },
   stt: {
     sherpa_model_dir: 'a model path on the Mac', sherpa_model_type: 'a model of the Mac',
@@ -352,12 +362,13 @@ export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>):
       if (!Object.prototype.hasOwnProperty.call(CONFIG_COPY_DROPPED, key) && !RETIRED_CONFIG_KEYS.has(key)) unknown.push(key)
       continue
     }
-    const value = allowThrough(config[key], spec)
+    const through = allowThrough(config[key], spec)
+    const value = key === 'engines' ? withoutLoopbackProviders(through) : through
     if (value === undefined) continue
     const findings = findSecrets(value, key)
     if (findings.length > 0) {
       refused.push({ key, findings })
-      if (key === 'engines') rows.push({ key, value: withheldEngines(value, findings) })
+      if (key === 'engines' || key === 'host_engines') rows.push({ key, value: withheldEngines(value, findings, key === 'host_engines') })
       continue
     }
     rows.push({ key, value })
@@ -369,14 +380,49 @@ export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>):
 }
 
 /**
- * The copy-only `hosts_run_sessions` row: the hosts the leader's config turns on by themselves
- * (`hosts.<name>.runs_sessions: true`), none when no host is. Whatever config.yaml says under that
- * key is never copied: only the hosts map decides it.
+ * The global engine providers a replica can use: one whose base_url is a loopback address
+ * (127.0.0.1, localhost) names THIS machine, and every reader of the copy is another machine,
+ * where it reaches nothing. Left out, a replica (an older one too, which takes the copy as it is)
+ * passes no provider and Codex uses that host's own ~/.codex/config.toml, as
+ * codexProviderForPlace decides for a host with no provider of its own.
+ */
+function withoutLoopbackProviders(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const out: Record<string, unknown> = {}
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    const provider = entry && typeof entry === 'object' ? (entry as Record<string, unknown>).provider : undefined
+    if (provider && typeof provider === 'object' && isLoopbackUrl((provider as Record<string, unknown>).base_url)) {
+      const { provider: _here, ...rest } = entry as Record<string, unknown>
+      out[id] = rest
+    } else {
+      out[id] = entry
+    }
+  }
+  return out
+}
+
+/** The copy-only `host_engines` row's value: each host's own `engines`, only the hosts that set one. */
+function hostEnginesOf(hosts: unknown): Record<string, unknown> | undefined {
+  if (!hosts || typeof hosts !== 'object' || Array.isArray(hosts)) return undefined
+  const out: Record<string, unknown> = {}
+  for (const [key, def] of Object.entries(hosts as Record<string, unknown>)) {
+    const engines = def && typeof def === 'object' ? (def as { engines?: unknown }).engines : undefined
+    if (engines && typeof engines === 'object' && !Array.isArray(engines) && Object.keys(engines).length > 0) out[key] = engines
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/**
+ * The copy-only rows: `hosts_run_sessions`, the hosts the leader's config turns on by themselves
+ * (`hosts.<name>.runs_sessions: true`), none when no host is; `host_engines`, each host's own
+ * engine settings (`hosts.<name>.engines`); `leader_capabilities`. Whatever config.yaml says under
+ * those keys is never copied: only the hosts map decides them.
  */
 function withHostsRunSessions(config: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  const { hosts_run_sessions: _ignored, leader_capabilities: _ignoredToo, ...rest } = config
+  const { hosts_run_sessions: _ignored, leader_capabilities: _ignoredToo, host_engines: _ignoredThree, ...rest } = config
   const on = hostsTurnedOn(Array.isArray(config.hosts) ? null : config.hosts as Config['hosts'])
-  const withOn = on.length > 0 ? { ...rest, hosts_run_sessions: on } : rest
+  const hostEngines = hostEnginesOf(config.hosts)
+  const withOn = { ...rest, ...(on.length > 0 ? { hosts_run_sessions: on } : {}), ...(hostEngines ? { host_engines: hostEngines } : {}) }
   // While the switch is on for any host (so an older replica, which refuses this row, sees nothing
   // new while it is off), and only from a leader that runs the session channel.
   const speaks = process.env.WALNUT_LEADER_SESSION_CHANNELS !== '0' && hostRunsSessionsAny(config as Partial<Config>)
@@ -389,8 +435,20 @@ function withHostsRunSessions(config: Readonly<Record<string, unknown>>): Readon
  * a server reading the copy refuses that engine's start instead of using the host's
  * provider; the other engines are copied as they are.
  */
-function withheldEngines(value: unknown, findings: SecretFinding[]): Record<string, unknown> {
+function withheldEngines(value: unknown, findings: SecretFinding[], perHost = false): Record<string, unknown> {
   const out: Record<string, unknown> = {}
+  if (perHost) {
+    // host_engines.<host>.<engine>.provider: each flagged engine of a host is withheld the same way.
+    const flagged = new Set(findings.map((f) => f.path.split('.').slice(1, 3).join('.')))
+    for (const [host, engines] of Object.entries(value as Record<string, unknown>)) {
+      const next: Record<string, unknown> = {}
+      for (const [id, entry] of Object.entries((engines ?? {}) as Record<string, unknown>)) {
+        next[id] = flagged.has(`${host}.${id}`) ? { provider: { withheld: true } } : entry
+      }
+      out[host] = next
+    }
+    return out
+  }
   const flagged = new Set(findings.map((f) => f.path.split('.')[1]))
   for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
     out[id] = flagged.has(id) ? { provider: { withheld: true } } : entry

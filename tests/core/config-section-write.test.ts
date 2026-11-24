@@ -38,6 +38,8 @@ const MERGED = [
 const REPLACED_MAPS = [
   'providers', 'engines', 'plugins', 'plugin_ai', 'plugin_jobs', 'hosts', 'session_limits',
   'placement_weights', 'tag_display', 'tag_links', 'link_tags', 'stt_corrections',
+  // Copy-only (a host replica's config copy), never written: still a map by its type.
+  'host_engines',
 ]
 /** Not objects at all: stored as sent whatever the mode. */
 const NOT_OBJECTS = [

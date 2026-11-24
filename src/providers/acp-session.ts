@@ -1687,7 +1687,7 @@ export class AcpSession {
       // so the task's tag rides its requests beside any headers the engine's env sets.
       // A null there is '' in the overlay (engineEnvOverlayFromConfig): none of the server's lines.
       const ownHeaders = overlay?.ANTHROPIC_CUSTOM_HEADERS ?? (this.remote ? undefined : process.env.ANTHROPIC_CUSTOM_HEADERS)
-      const tagged = requestTagOn(await (await import('./codex-engine-source.js')).codexWalnutConfig().catch(() => ({})))
+      const tagged = requestTagOn(await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: this.host }).catch(() => ({})))
         ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(ownHeaders, requestTagValue(this.taskId), await requestTagProject(this.taskId, this.project)) }
         : undefined
       return { ...(descriptor ?? {}), ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}), ...(tagged ?? {}) }
@@ -1696,8 +1696,9 @@ export class AcpSession {
     // engines.codex (provider, default model and effort) merged under the user's own
     // CODEX_CONFIG, the same for a start here and on another host (codex-engine-config.ts).
     // Off the Mac the Mac's copy says what was set, and a server that cannot tell refuses
-    // (codex-engine-source.ts): never the host's own provider by default.
-    const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig()
+    // (codex-engine-source.ts). The provider is the one for the host this runs on
+    // (codexProviderForPlace): its own, else the global one unless that names another machine.
+    const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: this.host })
     const pick = record?.acpConfig ?? this.cfg.acpConfig
     const codex = resolveCodexEngine(
       walnutConfig,
@@ -2034,7 +2035,7 @@ export class AcpSession {
   private async codexPickAsStarted(stored: Record<string, string>): Promise<Record<string, string>> {
     if (this.engineId !== 'codex' || !stored.model) return stored
     try {
-      const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig()
+      const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: this.host })
       const { settings } = resolveCodexEngine(walnutConfig, codexRawConfig(walnutConfig, this.remote))
       const pick = codexPickForProvider({ model: stored.model, reasoning_effort: stored.reasoning_effort }, settings)
       if (!pick?.model) return stored

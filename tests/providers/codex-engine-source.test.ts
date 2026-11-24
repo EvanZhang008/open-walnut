@@ -18,6 +18,7 @@ vi.mock('../../src/core/server-role.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/server-role.js')>()),
   placement: () => place,
   isFollower: () => place !== 'mac',
+  isHostReplica: () => place === 'host',
 }))
 vi.mock('../../src/core/replication/kinds/config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/replication/kinds/config.js')>()),
@@ -31,13 +32,17 @@ import { updateConfig } from '../../src/core/config-manager.js'
 import { configCopyRows, configRowAdmissible } from '../../src/core/replication/config-allowlist.js'
 import { AcpSession } from '../../src/providers/acp-session.js'
 import { CodexEngineConfigError, resolveCodexEngine } from '../../src/providers/codex-engine-config.js'
-import { withCopiedEngines } from '../../src/providers/codex-engine-source.js'
+import { _resetCodexSourceNotesForTesting, codexWalnutConfig, withCopiedEngines } from '../../src/providers/codex-engine-source.js'
 
-const PROVIDER = { base_url: 'http://127.0.0.1:9000/v1', name: 'my-proxy', model_prefix: 'vendor.', env_key: 'MY_PROXY_KEY' }
+const PROVIDER = { base_url: 'http://llm.example.test:9000/v1', name: 'my-proxy', model_prefix: 'vendor.', env_key: 'MY_PROXY_KEY' }
+
+const LOOPBACK = { base_url: 'http://127.0.0.1:8402/openai/v1', name: 'local-proxy' }
+const HOST_OWN = { base_url: 'http://127.0.0.1:18402/v1', name: 'host-relay' }
 
 beforeEach(async () => {
   place = 'mac'
   copy = null
+  _resetCodexSourceNotesForTesting()
   _resetForTesting()
   _resetSessionTrackerForTesting()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -76,6 +81,37 @@ describe('the config copy carries the non-secret part of engines', () => {
     expect(row.value).toEqual({ codex: { provider: { withheld: true } }, goose: { model: 'm' } })
     expect(JSON.stringify(row)).not.toContain('hunter2')
     expect(configRowAdmissible(row)).toBe(true)
+  })
+})
+
+describe('the copy carries each host\'s own provider and never the leader\'s loopback one', () => {
+  it('a loopback global provider is left out of the engines row; the rest of engines.codex stays', () => {
+    const { rows } = configCopyRows({ engines: { codex: { provider: LOOPBACK, model: 'gpt-example' }, goose: { model: 'm' } } })
+    const row = rows.find((r) => r.key === 'engines')!
+    expect(row.value).toEqual({ codex: { model: 'gpt-example' }, goose: { model: 'm' } })
+    expect(configRowAdmissible(row)).toBe(true)
+  })
+
+  it('hosts.<name>.engines rides its own copy-only row; the hosts row is as an older replica admits it', () => {
+    const { rows } = configCopyRows({ hosts: { devbox: { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } }, plain: { hostname: 'plain' } } })
+    const hostsRow = rows.find((r) => r.key === 'hosts')!
+    expect(hostsRow.value).toEqual({ devbox: { hostname: 'devbox' }, plain: { hostname: 'plain' } })
+    expect(configRowAdmissible(hostsRow)).toBe(true)
+    const own = rows.find((r) => r.key === 'host_engines')!
+    expect(own.value).toEqual({ devbox: { codex: { provider: HOST_OWN } } })
+    expect(configRowAdmissible(own)).toBe(true)
+    // No host sets one: no row.
+    expect(configCopyRows({ hosts: { plain: { hostname: 'plain' } } }).rows.some((r) => r.key === 'host_engines')).toBe(false)
+  })
+
+  it('a host provider holding a credential is withheld for that host only', () => {
+    const { rows } = configCopyRows({ hosts: {
+      a: { hostname: 'a', engines: { codex: { provider: { base_url: 'https://user:hunter2-secret@llm.example.com/v1' } } } },
+      b: { hostname: 'b', engines: { codex: { provider: HOST_OWN } } },
+    } })
+    const row = rows.find((r) => r.key === 'host_engines')!
+    expect(row.value).toEqual({ a: { codex: { provider: { withheld: true } } }, b: { codex: { provider: HOST_OWN } } })
+    expect(JSON.stringify(rows)).not.toContain('hunter2')
   })
 })
 
@@ -130,6 +166,27 @@ describe('a Codex start off the Mac', () => {
     expect(error).toBeNull()
     expect(JSON.parse(env!.CODEX_CONFIG)).toMatchObject({ model_provider: 'my-proxy', model: 'vendor.gpt-example', model_context_window: 1000000 })
     expect(env!.WALNUT_CODEX_MODEL_PREFIX).toBe('vendor.')
+  })
+
+  it('a host\'s server running Codex itself: the leader\'s loopback provider (an older leader\'s copy) is not used there', async () => {
+    place = 'host'
+    const saved = process.env.WALNUT_HOST_KEY
+    process.env.WALNUT_HOST_KEY = 'devbox'
+    try {
+      copy = { engines: { codex: { provider: LOOPBACK, model: 'gpt-example' } } }
+      const config = await codexWalnutConfig({ host: '__local__' })
+      expect((config.engines as Record<string, Record<string, unknown>>).codex).toEqual({ model: 'gpt-example' })
+      // Its own provider from the leader's copy (host_engines) wins.
+      copy = { engines: { codex: { provider: LOOPBACK } }, host_engines: { devbox: { codex: { provider: HOST_OWN } } } }
+      const own = await codexWalnutConfig({ host: undefined })
+      expect((own.engines as Record<string, Record<string, unknown>>).codex.provider).toEqual(HOST_OWN)
+      // Another host's provider is not this one's.
+      copy = { engines: { codex: { provider: PROVIDER } }, host_engines: { other: { codex: { provider: HOST_OWN } } } }
+      expect(((await codexWalnutConfig({ host: undefined })).engines as Record<string, Record<string, unknown>>).codex.provider).toEqual(PROVIDER)
+    } finally {
+      if (saved === undefined) delete process.env.WALNUT_HOST_KEY
+      else process.env.WALNUT_HOST_KEY = saved
+    }
   })
 
   it('on the Mac its own config is read, as before', async () => {

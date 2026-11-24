@@ -9,8 +9,12 @@
  * Codex use the host's own provider (the managed one a host's config.toml names):
  * no copy yet, a Mac too old to copy engine settings, or a provider the Mac could
  * not copy because it holds a credential (readProvider's `withheld`).
+ *
+ * The provider is then the one for the machine the Codex process runs on
+ * (codex-engine-config.ts codexProviderForPlace): a host's own, else the global one,
+ * except a loopback global anywhere but the leader's own machine.
  */
-import { CodexEngineConfigError } from './codex-engine-config.js'
+import { CodexEngineConfigError, codexProviderForPlace, type CodexProviderSource } from './codex-engine-config.js'
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -35,15 +39,73 @@ export function withCopiedEngines(own: Record<string, unknown>, copy: Record<str
     const theirs = isRecord(copied[id]) ? copied[id] : {}
     engines[id] = { ...mine, ...Object.fromEntries(COPIED_ENGINE_KEYS.filter((k) => theirs[k] !== undefined).map((k) => [k, theirs[k]])) }
   }
-  return { ...own, engines }
+  const out: Record<string, unknown> = { ...own, engines }
+  if (own.hosts !== undefined || copy.host_engines !== undefined) out.hosts = withCopiedHostEngines(own.hosts, copy.host_engines)
+  return out
 }
 
-/** The config to resolve a Codex spawn against on this server. */
-export async function codexWalnutConfig(): Promise<Record<string, unknown>> {
+/**
+ * `own`'s hosts with each host's `engines` the leader's copy says (its copy-only row
+ * `host_engines`, replication/config-allowlist.ts): a host's own provider is the leader's
+ * setting, never this server's. A copy from a leader older than the row has none.
+ */
+function withCopiedHostEngines(own: unknown, copied: unknown): Record<string, unknown> {
+  const hosts: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(isRecord(own) ? own : {})) {
+    if (!isRecord(entry)) { hosts[key] = entry; continue }
+    const { engines: _mine, ...rest } = entry
+    hosts[key] = rest
+  }
+  for (const [key, engines] of Object.entries(isRecord(copied) ? copied : {})) {
+    if (!isRecord(engines)) continue
+    hosts[key] = { ...(isRecord(hosts[key]) ? hosts[key] as Record<string, unknown> : {}), engines }
+  }
+  return hosts
+}
+
+/** Where a Codex process runs: a host key, or absent (or '__local__') for this server's machine. */
+export interface CodexSpawnPlace { host: string | undefined }
+
+const noted = new Set<string>()
+
+/** One line per host and URL: the global loopback provider was not used there, and why. */
+function noteSource(source: CodexProviderSource, log: (msg: string, meta: Record<string, unknown>) => void): void {
+  if (source.from !== 'skipped-loopback') return
+  const key = `${source.host ?? ''}|${source.base_url}`
+  if (noted.has(key)) return
+  noted.add(key)
+  log('codex: the global engines.codex.provider was not used on this host: its base_url names the machine of the config it comes from (a loopback address), which is not this host; Codex uses the host\'s own ~/.codex/config.toml. Set hosts.<name>.engines.codex.provider for this host to route it elsewhere', {
+    host: source.host ?? '(this server)', base_url: source.base_url,
+  })
+}
+
+/** Tests only. */
+export function _resetCodexSourceNotesForTesting(): void { noted.clear() }
+
+/**
+ * The config to resolve a Codex spawn at `place` against on this server, its
+ * `engines.codex.provider` already the one for that place (codexProviderForPlace): the
+ * host's own, else the global one unless it is a loopback URL of another machine. Every
+ * Codex spawn path reads it here (tests/providers/codex-engine-config-ratchet.test.ts).
+ */
+export async function codexWalnutConfig(place: CodexSpawnPlace): Promise<Record<string, unknown>> {
   const { getConfig } = await import('../core/config-manager.js')
   const own = (await getConfig()) as unknown as Record<string, unknown>
   const { isFollower } = await import('../core/server-role.js')
-  if (!isFollower()) return own
-  const { readConfigCopy } = await import('../core/replication/kinds/config.js')
-  return withCopiedEngines(own, await readConfigCopy())
+  const follower = isFollower()
+  let config = own
+  if (follower) {
+    const { readConfigCopy } = await import('../core/replication/kinds/config.js')
+    config = withCopiedEngines(own, await readConfigCopy())
+  }
+  const remote = place.host && place.host !== '__local__' ? place.host : undefined
+  // A session on this machine: a host replica goes by its own host key, the leader by none.
+  const { thisHostKey } = await import('../core/sessions/session-row-owner.js')
+  const host = remote ?? (thisHostKey() || undefined)
+  const resolved = codexProviderForPlace(config, { host, configIsThisMachine: !follower && !remote })
+  if (resolved.source.from === 'skipped-loopback') {
+    const { log } = await import('../logging/index.js')
+    noteSource(resolved.source, (msg, meta) => log.session.warn(msg, meta))
+  }
+  return resolved.config
 }

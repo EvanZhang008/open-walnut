@@ -24,7 +24,7 @@ engines:
 
 With `provider` set, every Codex process Walnut starts sends its requests to `base_url`:
 sessions on this machine, sessions on your other hosts, and the probe that fills the model
-menu. The provider is handed to Codex as configuration overrides on its command line and in
+menu (a loopback `base_url` is the exception for other hosts: see "A provider per host"). The provider is handed to Codex as configuration overrides on its command line and in
 each thread's configuration (on Windows, in the thread configuration only). Codex ranks both
 above `~/.codex/config.toml`, so a host whose
 `config.toml` names another provider (for example one that a tool rewrites at every start)
@@ -55,6 +55,42 @@ engines:
 A wrong setting (no `base_url`, a name with spaces, an unknown `wire_api`) stops the session
 from starting and says which key is wrong, rather than sending the session to another
 provider.
+
+## A provider per host (`hosts.<name>.engines.codex.provider`)
+
+A `base_url` on `127.0.0.1`, `localhost` or `::1` names the machine that reads it. Set in this
+machine's `config.yaml`, it reaches your proxy only for sessions on this machine; on another host
+the same address reaches nothing there. So Walnut decides the provider per host, for every Codex
+start, resume, restart and engine switch, on this machine and on the host's own service:
+
+1. the host's own `hosts.<name>.engines.codex.provider`, when you set one (same keys as above);
+2. else the global `engines.codex.provider`, except a loopback one on any machine but this one:
+   there Walnut passes no provider, and Codex reads that host's own `~/.codex/config.toml`. The
+   server log says once per host that the global provider was not used there, and why.
+
+```yaml
+engines:
+  codex:
+    provider:
+      name: local-proxy
+      base_url: http://127.0.0.1:8402/openai/v1    # this machine's proxy
+hosts:
+  devbox:
+    hostname: devbox.example.com
+    engines:
+      codex:
+        provider:
+          name: devbox-proxy
+          base_url: http://127.0.0.1:18402/v1    # the proxy on devbox itself
+          wire_api: responses
+```
+
+A global provider on a non-loopback address (`https://llm.example.com/v1`) still reaches every
+host. The host's provider is written in `config.yaml` (or through `PUT /api/config`, like the
+global one); the copy a host's own service keeps carries it as its own row, so an older host
+reads the rest of its copy as before. An older host's service gets the global provider without a
+loopback one, and so uses its own `~/.codex/config.toml`; it does not read a host provider until it
+is updated.
 
 ## Model ids on your endpoint (`model_prefix`)
 
@@ -283,8 +319,9 @@ setting says. Only Codex has this setting: every other engine runs its own ACP a
 ## Sessions started by the companion or a host's server
 
 A Walnut companion (or a host's own server) keeps a copy of this machine's configuration. That
-copy carries `engines.<id>.provider`, `model` and `effort`, never `env` (it holds API keys) and
-never `adapter_cmd`. A Codex session the companion starts while it leads uses your provider,
+copy carries `engines.<id>.provider` (left out when it is a loopback address, which names this
+machine only), `model` and `effort`, and each host's own provider (`host_engines`), never `env`
+(it holds API keys) and never `adapter_cmd`. A Codex session the companion starts while it leads uses your provider,
 model and effort from that copy, with its own `env`, so the API key named by `env_key` must be
 set on the companion (or on the host) as well.
 

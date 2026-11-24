@@ -14036,7 +14036,7 @@ export class SessionRunner {
     // applied) and rides the new thread's config (codex-engine-config.ts).
     if (engine === 'codex' && draftModel) {
       const { codexPickForProvider, codexRawConfig, resolveCodexEngine } = await import('./codex-engine-config.js')
-      const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig()
+      const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: remoteHost })
       const { settings } = resolveCodexEngine(walnutConfig, codexRawConfig(walnutConfig, !!remoteHost))
       const mapped = codexPickForProvider({ model: draftModel }, settings)
       if (mapped?.model) draftModel = mapped.reasoning_effort ? `${mapped.model}[${mapped.reasoning_effort}]` : mapped.model

@@ -22,6 +22,12 @@ export function isLoopbackHostname(hostname: string): boolean {
     || h === '::'
 }
 
+/** Does a whole URL (`http://127.0.0.1:8402/v1`) name a loopback host? False for a non-URL. */
+export function isLoopbackUrl(url: unknown): boolean {
+  if (typeof url !== 'string') return false
+  try { return isLoopbackHostname(new URL(url.trim()).hostname) } catch { return false }
+}
+
 /**
  * Does the host a URL names refer to this known machine? Exact, or the URL uses
  * the bare short name of a known FQDN (`dev-box` for `dev-box.corp.example.com`).

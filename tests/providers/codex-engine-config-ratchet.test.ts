@@ -6,6 +6,12 @@
  * each request was refused: a spawn path that skips the function routes the same
  * way. A new such place fails here until it uses the function or says why it
  * builds no Codex env.
+ *
+ * The provider is also the one for the machine Codex runs on (codexProviderForPlace,
+ * reached only through codex-engine-source.ts codexWalnutConfig(place)): a loopback
+ * global provider names the leader's own machine, and a start on another host that
+ * took it reached nothing there (2026-11-24). So every read names its place, and only
+ * the resolver builds a provider entry or reads engines.codex.provider.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -144,5 +150,47 @@ describe('every Codex spawn applies engines.codex through one function', () => {
     const callers = files.filter(({ file, code }) => !file.endsWith('codex-engine-config.ts') && /(?<!function )\bresolveCodex(?:Engine|AdapterConfig)\(/.test(code))
     expect(callers.length).toBeGreaterThan(0)
     for (const { file, code } of callers) expect([file, /\bcodexWalnutConfig\(/.test(code)]).toEqual([file, true])
+  })
+
+  it('every codexWalnutConfig call names the place Codex runs on', () => {
+    const calls: string[] = []
+    for (const { file, code } of files) {
+      for (const m of code.matchAll(/(?<!function )\bcodexWalnutConfig\(([^)]*)\)/g)) {
+        calls.push(file)
+        // The host the session runs on (`{ host: this.host }`), or `{ host: undefined }` for this machine.
+        expect([file, m[0], /^\s*\{\s*host\s*:/.test(m[1])]).toEqual([file, m[0], true])
+      }
+    }
+    expect(calls.length).toBeGreaterThan(0)
+  })
+
+  it('the provider for a place is decided in one function, reached only through codexWalnutConfig', () => {
+    const callers = files.filter(({ code }) => /(?<!function )\bcodexProviderForPlace\(/.test(code)).map(({ file }) => file)
+    expect(callers).toEqual(['src/providers/codex-engine-source.ts'])
+  })
+
+  it('only the resolver reads engines.codex.provider or builds a Codex provider entry', () => {
+    /** Files that touch a Codex provider entry, and why each is not a second resolver. */
+    const PROVIDER_TOUCHERS: Record<string, string> = {
+      'src/providers/codex-engine-config.ts': 'the resolver: readCodexEngineSettings, codexProviderForPlace, codexConfigFromSettings',
+      'src/providers/codex-model-probe.ts': 'codexProviderStartupArgs: puts the provider the received CODEX_CONFIG names on the app-server command line',
+      'src/core/sessions/request-tag.ts': 'adds the session tag headers to the provider the resolved CODEX_CONFIG already names',
+    }
+    const TOUCH = [
+      /\bmodel_providers['"]?\s*:/, // an object key
+      /\.model_providers\s*=(?!=)/, // an assignment
+      /\.model_provider\s*=(?!=)/,
+      /[-'"`]c['"`]?\s*,\s*`model_providers\./, // a -c override
+      /\bengines\??\.codex\??\.provider\b/, // reading the setting past the resolver
+      /\bcodex\??\.provider\b/,
+    ]
+    // Prose in a string (an error naming the setting) is no read: string bodies are blanked first.
+    const noStrings = (code: string) => code.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, (m) => `${m[0]}${m[0]}`)
+    const found = files.filter(({ code }) => {
+      const bare = noStrings(code)
+      // A -c override is built in a template string, so that one is matched on the code as it is.
+      return TOUCH.slice(0, 3).some((re) => re.test(bare)) || TOUCH[3].test(code) || TOUCH.slice(4).some((re) => re.test(bare))
+    }).map(({ file }) => file).sort()
+    expect(found).toEqual(Object.keys(PROVIDER_TOUCHERS).sort())
   })
 })

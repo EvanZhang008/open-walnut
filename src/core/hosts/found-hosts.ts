@@ -263,7 +263,7 @@ export type FoundHostReason =
   | 'turned_off' | 'session' | 'task' | 'connected' | 'tunnel' | 'server' | 'edited' | 'unused'
 
 /** Fields only a person (or Walnut acting on a host it uses) writes on a host row. */
-const EDIT_FIELDS = ['shell_setup', 'keep', 'capabilities', 'server', 'transport', 'endpoint', 'server_program'] as const
+const EDIT_FIELDS = ['shell_setup', 'keep', 'capabilities', 'server', 'transport', 'endpoint', 'server_program', 'engines'] as const
 
 function text(v: unknown): string {
   return v === undefined || v === null ? '' : String(v).trim()

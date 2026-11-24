@@ -270,9 +270,10 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
   const configuredEnv = mergeAcpSpawnEnv(process.env, overlay)
   const codexPath = engine === 'codex' ? resolveSystemCodexPath({ env: configuredEnv, cwd: probeCwd }) : undefined
   // The probe lists through the provider the merged config names, with its prefix (codex-engine-config.ts).
-  // Off the Mac its engine settings come from the Mac's copy (codex-engine-source.ts).
+  // Off the Mac its engine settings come from the Mac's copy (codex-engine-source.ts); the probe
+  // runs on this machine, so it lists through this machine's provider (codexProviderForPlace).
   const codex = engine === 'codex'
-    ? resolveCodexEngine(await (await import('./codex-engine-source.js')).codexWalnutConfig(), configuredEnv.CODEX_CONFIG)
+    ? resolveCodexEngine(await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: undefined }), configuredEnv.CODEX_CONFIG)
     : undefined
   const managed = engine === 'codex'
     ? buildAcpAdapterEnv(codexPath, { sessionId: `model-probe-${engine}`, baseConfig: codex!.baseConfig, codexModelPrefix: codex!.prefix })

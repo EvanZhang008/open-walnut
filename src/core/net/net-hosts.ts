@@ -37,6 +37,7 @@ export const NET_ROW_FIELD_WRITER = {
   shell_setup: 'person',
   keep: 'person',
   runs_sessions: 'person',
+  engines: 'person',
   discovered: 'own-path',
   connect: 'own-path',
   connect_by: 'own-path',
@@ -58,6 +59,7 @@ export const PERSON_FIELD_OK: { readonly [K in PersonField]: (v: unknown) => boo
   capabilities: (v) => Array.isArray(v) && v.every((t) => typeof t === 'string'),
   keep: (v) => typeof v === 'object' && v !== null && !Array.isArray(v),
   runs_sessions: (v) => typeof v === 'boolean',
+  engines: (v) => typeof v === 'object' && v !== null && !Array.isArray(v),
 }
 
 function isPersonField(field: string): field is PersonField {

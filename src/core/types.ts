@@ -1837,11 +1837,19 @@ export interface Config {
      *  it on; absent: the experiment decides. Sessions a host already runs keep reporting either way.
      *  Config only (no Settings control). An older Walnut reads past it. */
     runs_sessions?: boolean;
+    /** This host's own engine settings, over the global `engines` for a session that runs here.
+     *  Only `codex.provider` today (src/providers/codex-engine-config.ts codexProviderForPlace,
+     *  docs/reference/codex-engine.md): a host whose model endpoint is not the global one's
+     *  (the global one names another machine's 127.0.0.1, say). An older Walnut reads past it. */
+    engines?: { codex?: { provider?: EngineProviderEntry } };
   }>;
   /** Only in a host replica's config copy, never in config.yaml: the hosts whose `runs_sessions` is
    *  true in the leader's config (replication/config-allowlist.ts derives it), so a host's service
    *  reads "on for any host" without `hosts.*.runs_sessions`, which the copy leaves out. */
   hosts_run_sessions?: string[];
+  /** Only in a host replica's config copy, never in config.yaml: each host's own `hosts.<name>.engines`
+   *  (replication/config-allowlist.ts derives it), which the copy's hosts row leaves out. */
+  host_engines?: Record<string, { codex?: { provider?: EngineProviderEntry } }>;
   /** Only in a host replica's config copy, never in config.yaml: what the leader's build speaks that
    *  a host must know before it acts (`session-channel-v1`: the session channel, so a host never takes
    *  this leader for an older one; session-channel/old-leader-watch.ts). Said while the switch is on. */

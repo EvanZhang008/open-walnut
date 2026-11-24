@@ -14,6 +14,14 @@
  *         model_prefix: vendor.   # optional, prefix the endpoint's model ids need
  *       model: <model id>         # optional default model for a session that names none
  *       effort: <effort>          # optional default reasoning effort
+ *   hosts:
+ *     <name>:
+ *       engines:
+ *         codex:
+ *           provider: { ... }     # optional, this host's own provider (same shape), over the global one
+ *
+ * Which provider a host gets is codexProviderForPlace's call: its own, else the global one,
+ * except a loopback global (127.0.0.1, localhost) on any machine but the one whose config it is.
  *
  * Why the provider rides CODEX_CONFIG: codex-acp passes `model_provider` and
  * `model_providers.<id>` from it as `-c` overrides on the app-server's command
@@ -27,6 +35,7 @@
  * `engines.codex` but `env`, the result is exactly that parsed CODEX_CONFIG.
  */
 
+import { isLoopbackUrl } from '../core/service-url.js'
 import { withCodexRequestTag } from '../core/sessions/request-tag.js'
 
 /** A provider id codex reads as a table key; codex-acp's patch passes only these. */
@@ -173,6 +182,58 @@ export function readCodexEngineSettings(config: unknown): CodexEngineSettings {
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
   }
+}
+
+/** Where a Codex process runs, as codexProviderForPlace needs it. */
+export interface CodexPlace {
+  /** The host key (`hosts.<name>`) it runs on; absent for the machine of this server that has no host key. */
+  host?: string
+  /** Is the config's global `engines.codex` this machine's own (false off the leader, and on another host)? */
+  configIsThisMachine: boolean
+}
+
+/** What codexProviderForPlace did with the provider, for one log line and the tests. */
+export type CodexProviderSource =
+  | { from: 'host'; host: string }
+  | { from: 'global' }
+  | { from: 'none' }
+  | { from: 'skipped-loopback'; host: string | undefined; base_url: string }
+
+/**
+ * THE provider a Codex process gets at `place` (every spawn path takes it, through
+ * codex-engine-source.ts codexWalnutConfig): `config` with `engines.codex.provider` replaced by
+ *
+ *   1. the host's own `hosts.<host>.engines.codex.provider`, when it is set;
+ *   2. else the global `engines.codex.provider`, EXCEPT a loopback one (127.0.0.1, localhost, ::1)
+ *      on a machine other than the one whose config it is: there it reaches nothing, so no
+ *      provider is passed and Codex uses that host's own ~/.codex/config.toml (Walnut never sets
+ *      an engine's own defaults).
+ *
+ * Pure: the caller says which machine the config is (configIsThisMachine) and logs a skip.
+ */
+export function codexProviderForPlace(
+  config: Record<string, unknown>,
+  place: CodexPlace,
+): { config: Record<string, unknown>; source: CodexProviderSource } {
+  const engines = isRecord(config.engines) ? config.engines : {}
+  const codex = isRecord(engines.codex) ? engines.codex : {}
+  const withProvider = (provider: unknown): Record<string, unknown> => {
+    const next = { ...codex }
+    if (provider === undefined) delete next.provider
+    else next.provider = provider
+    return { ...config, engines: { ...engines, codex: next } }
+  }
+  const hosts = isRecord(config.hosts) ? config.hosts : {}
+  const hostEntry = place.host && Object.hasOwn(hosts, place.host) && isRecord(hosts[place.host]) ? hosts[place.host] as Record<string, unknown> : undefined
+  const hostEngines = hostEntry && isRecord(hostEntry.engines) ? hostEntry.engines : undefined
+  const own = hostEngines && isRecord(hostEngines.codex) ? hostEngines.codex.provider : undefined
+  if (own !== undefined && own !== null) return { config: withProvider(own), source: { from: 'host', host: place.host! } }
+  const global = codex.provider
+  if (global === undefined || global === null) return { config, source: { from: 'none' } }
+  if (!place.configIsThisMachine && isRecord(global) && isLoopbackUrl(global.base_url)) {
+    return { config: withProvider(undefined), source: { from: 'skipped-loopback', host: place.host, base_url: String(global.base_url) } }
+  }
+  return { config, source: { from: 'global' } }
 }
 
 /** The CODEX_CONFIG keys the settings stand for. */

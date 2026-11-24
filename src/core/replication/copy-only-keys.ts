@@ -6,8 +6,9 @@
  *
  *   hosts_run_sessions   the hosts whose own `hosts.<name>.runs_sessions` is true (switch.ts)
  *   leader_capabilities  what the leader's build speaks (old-leader-watch.ts LEADER_CHANNEL_CAP)
+ *   host_engines         each host's own `hosts.<name>.engines` (providers/codex-engine-source.ts)
  */
-export const COPY_ONLY_CONFIG_KEYS: readonly string[] = ['hosts_run_sessions', 'leader_capabilities']
+export const COPY_ONLY_CONFIG_KEYS: readonly string[] = ['hosts_run_sessions', 'leader_capabilities', 'host_engines']
 
 const COPY_ONLY = new Set(COPY_ONLY_CONFIG_KEYS)
 
