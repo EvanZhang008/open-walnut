@@ -161,6 +161,8 @@ describe('GET /api/v1/routes (primary)', () => {
       device: 'lan-phone',
       // No Tailscale CLI, but this Mac has a tailnet address: the Mac side is done (phone guidance).
       tailscale: { installed: false, running: true },
+      // Walnut Connect is off on this box (its experiment is not on): the phone drops a stored connect route.
+      connectOff: true,
     })
     expect(stubCalls).toHaveLength(0)
   })
