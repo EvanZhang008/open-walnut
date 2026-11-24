@@ -86,7 +86,7 @@ export interface MoveRecord {
   /** The triggers were dropped on the shared daemon and the set's daemon does not have their memory yet. */
   owed?: true
   /** Since when it is owed (the first drop that took it): past SEED_OWED_MAX_MS it is given up (seedOwed). */
-  owedAt?: number
+  owedSince?: number
   /** That memory (each trigger's exact state, as triggers.state.snapshot gave it); read with keptMemory. Kept in its own file (moveStoreFor). */
   memory?: TriggerMemory[]
 }
@@ -261,7 +261,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
   const failures = failed ? r!.failures ?? 1 : resume ? r!.failures ?? 0 : 0
   // Memory a try before a restart took stays owed in any new try (a flip pointed back, a done move
   // that never reached the set): the shared daemon may no longer give all of it.
-  const owed = r?.owed ? { owed: true as const, owedAt: r.owedAt ?? r.startedAt, ...(r.memory !== undefined ? { memory: r.memory } : {}) } : {}
+  const owed = r?.owed ? { owed: true as const, owedSince: r.owedSince ?? r.startedAt, ...(r.memory !== undefined ? { memory: r.memory } : {}) } : {}
   let rec: MoveRecord = resume
     ? { ...r!, phase: 'waiting', at: d.now() }
     : { v: 1, at: d.now(), set: d.set, link: d.link, phase: 'waiting', startedAt: d.now(), stopped: [], ...(failures ? { failures } : {}), ...owed }
@@ -275,7 +275,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     const final = n >= MOVE_MAX_TRIES
     const nextTryAt = final ? undefined : d.now() + Math.min(retryMs * 2 ** (n - 1), RETRY_CAP_MS)
     // The shared daemon gets the triggers back (restore, the put-back's redial): it keeps their memory itself.
-    await save({ phase: outcome.result, why: outcome.why, failures: n, nextTryAt, owed: undefined, owedAt: undefined, memory: undefined }).catch(() => {})
+    await save({ phase: outcome.result, why: outcome.why, failures: n, nextTryAt, owed: undefined, owedSince: undefined, memory: undefined }).catch(() => {})
     const out = { ...outcome, failures: n, ...(final ? { final: true } : { nextTryAt }) }
     d.report(out)
     return out
@@ -349,7 +349,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     }
     // On disk before anything stops, so a restart from here on still has it (the copy a try before
     // a restart kept fills what this take found none for; one that cannot be read fills nothing).
-    await save({ owed: true, owedAt: rec.owedAt ?? d.now(), memory: withKept(taken, keptMemory(rec) ?? [], d.liveTriggerIds?.() ?? null) })
+    await save({ owed: true, owedSince: rec.owedSince ?? d.now(), memory: withKept(taken, keptMemory(rec) ?? [], d.liveTriggerIds?.() ?? null) })
     for (const s of quiet) {
       const res = await d.stop(s.id).catch((e): StopResult => ({ ok: false, why: `session ${s.id}: ${errText(e)}` }))
       if (!res.ok) {
@@ -377,7 +377,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
       const left = (await (d.carry?.(carried) ?? Promise.resolve()).catch(() => carried)) ?? []
       // The set's daemon has it now (or refused it for good): the record owes it no more. What a
       // cut or a failed write left stays owed, seeded before the next trigger push there.
-      await save(left.length ? { memory: left } : { owed: undefined, owedAt: undefined, memory: undefined }).catch(() => {})
+      await save(left.length ? { memory: left } : { owed: undefined, owedSince: undefined, memory: undefined }).catch(() => {})
       // Released right after the done record (X1): nothing after this waits for the hold.
       d.release()
       await d.afterMove?.().catch(() => { /* tried again at the next look */ })
@@ -436,8 +436,8 @@ export async function seedOwed(d: Pick<MoveDeps, 'set' | 'store' | 'now'> & {
 }): Promise<'none' | 'seeded' | 'lost' | 'retry' | 'given_up'> {
   const r = await d.store.read().catch(() => null)
   if (!r?.owed || r.set !== d.set) return 'none'
-  if (d.now() - (r.owedAt ?? r.startedAt) >= seedOwedMaxMs()) {
-    await d.store.write({ ...r, owed: undefined, owedAt: undefined, memory: undefined, at: d.now() }).catch(() => {})
+  if (d.now() - (r.owedSince ?? r.startedAt) >= seedOwedMaxMs()) {
+    await d.store.write({ ...r, owed: undefined, owedSince: undefined, memory: undefined, at: d.now() }).catch(() => {})
     return 'given_up'
   }
   const kept = keptMemory(r)
@@ -451,7 +451,7 @@ export async function seedOwed(d: Pick<MoveDeps, 'set' | 'store' | 'now'> & {
     await d.store.write({ ...now, memory: left, at: d.now() }).catch(() => {})
     return 'retry'
   }
-  await d.store.write({ ...now, owed: undefined, owedAt: undefined, memory: undefined, at: d.now() }).catch(() => {})
+  await d.store.write({ ...now, owed: undefined, owedSince: undefined, memory: undefined, at: d.now() }).catch(() => {})
   return 'seeded'
 }
 
