@@ -136,9 +136,11 @@ export async function pushNewLeaderDoors(doors: readonly string[]): Promise<Hook
  * still lets in only this leader, and once this leader stops nobody tells it again.
  *   told             the net hosts that took the list
  *   missed           those that did not (not connected, refused, too old), each with why
- *   newLeaderLetIn   the record's new holder is on the lists: false when its network id is not known
- *                    here (pass it in `endpoints`: machine id to network id); null with the network
- *                    off or no record naming another holder
+ *   newLeaderLetIn   the record's new holder is on the lists this sync handed out: false when its
+ *                    network id is not known here (pass it in `endpoints`: machine id to network
+ *                    id); null with the network off or no record naming another holder. It says
+ *                    nothing of whether the hosts took those lists: that is `missed`. The flow
+ *                    goes on to the stop only with both: `missed` empty and `newLeaderLetIn` not false
  * `ok: false` only when the sync itself failed (this machine's walnut-net, the companion's list).
  */
 export async function retellNetMembers(o: { endpoints?: Record<string, string> } = {}): Promise<HookResult<{ told: string[]; missed: Array<{ host: string; why: string }>; newLeaderLetIn: boolean | null }>> {
@@ -186,7 +188,8 @@ export async function oldMachineHostDirs(walnutId: string): Promise<WalnutHostDi
   const spec = checkHostRoot(hostServerRootSpec() ?? HOST_ROOT)
   const root = spec.replace('$HOME', () => os.homedir())
   let mark = ''
-  try { mark = fs.readFileSync(path.join(walnutDirs(root, null).dataDir, '.walnut-id'), 'utf8') } catch { /* none */ }
+  // Trimmed as the manager's shell check reads it ($(cat) drops a trailing newline).
+  try { mark = fs.readFileSync(path.join(walnutDirs(root, null).dataDir, '.walnut-id'), 'utf8').trim() } catch { /* none */ }
   return walnutDirsOf(root, walnutId, mark === walnutId)
 }
 
@@ -324,11 +327,13 @@ export interface SwitchLeftovers { console: boolean; hostService: boolean; crede
  * What a switch left on this machine, taken back the first time this home's server leads (boot.ts
  * onFirstLead), whichever way it came to lead: at boot, or later from waiting for the witnesses (a
  * restart after a cut that lost them too, in the B2b design). A crash after any step before the
- * handover record, or a rollback after it, so converges at the next lead. In a home that took part
- * in a switch (its `local/leader-switch/` folder; no other home has one):
- *   - this machine's console from a handover (console-credential.ts withdrawConsole; any home, as before);
- *   - the host service on this machine's daemon (removeSwitchHostService);
- *   - this machine's own door credential: the record in auth.json and the host side.
+ * handover record, or a rollback after it, so converges at the next lead. Each part looks for what
+ * it takes back itself, so no other record has to be written first:
+ *   - this machine's console from a handover (console-credential.ts withdrawConsole);
+ *   - the host service on this machine's daemon (removeSwitchHostService: its record beside the
+ *     home, or a home a switch promoted);
+ *   - this machine's own door credential, its record in auth.json and the host side, wherever
+ *     either is (a leader verifies no door of its own machine and dials none).
  * Each part tried; the answer says what went and what failed.
  */
 export async function takeBackSwitchLeftovers(o: {
@@ -348,21 +353,19 @@ export async function takeBackSwitchLeftovers(o: {
     const w = await withdrawConsole({ home, machine: o.machine })
     out.console = w.device || w.files.length > 0
   } catch (err) { failed.push(`the console: ${why(err)}`) }
-  if (fs.existsSync(path.join(home, 'local', 'leader-switch'))) {
-    const hs = await removeSwitchHostService({ home, ...(o.daemon ? { daemon: o.daemon } : {}) })
-    if (hs.ok) out.hostService = hs.removed
-    else failed.push(`the host service: ${hs.why}`)
-    try {
-      const [machineId, walnutId] = await Promise.all([
-        (o.machineId ?? (async () => (await import('../../machine-id.js')).readMachineId()))(),
-        (o.walnutId ?? (async () => (await import('../../device-store.js')).getInstanceId()))(),
-      ])
-      const own = await dropOwnCredential(machineId, walnutId)
-      out.credential = own.record
-      out.credentialFile = own.file
-      failed.push(...own.failed)
-    } catch (err) { failed.push(`this machine's credential: ${why(err)}`) }
-  }
+  const hs = await removeSwitchHostService({ home, ...(o.daemon ? { daemon: o.daemon } : {}) })
+  if (hs.ok) out.hostService = hs.removed
+  else failed.push(`the host service: ${hs.why}`)
+  try {
+    const [machineId, walnutId] = await Promise.all([
+      (o.machineId ?? (async () => (await import('../../machine-id.js')).readMachineId()))(),
+      (o.walnutId ?? (async () => (await import('../../device-store.js')).getInstanceId()))(),
+    ])
+    const own = await dropOwnCredential(machineId, walnutId)
+    out.credential = own.record
+    out.credentialFile = own.file
+    failed.push(...own.failed)
+  } catch (err) { failed.push(`this machine's credential: ${why(err)}`) }
   return failed.length ? { ok: false, why: failed.join('; ') } : { ok: true, ...out }
 }
 

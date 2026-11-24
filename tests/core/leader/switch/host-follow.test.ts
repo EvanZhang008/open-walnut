@@ -38,7 +38,7 @@ import { ownBridgeHeld, holdOwnBridge } from '../../../../src/core/leader/own-br
 import { leaderHeartbeatRunning, setRestartNotice, startLeaderHeartbeat } from '../../../../src/core/leader/primary-leader.js'
 import {
   announceSwitchStop, configureOldMachineHostService, dropOwnDaemonDuties, hostServiceRecordFile, oldMachineHostDirs, oldMachineHostServiceSpec,
-  prepareOldMachineAsHost, pushNewLeaderDoors, removeSwitchHostService, restoreOwnDaemonDuties, undoHandoverHostSteps, withdrawSwitchStop, type OwnDaemon,
+  prepareOldMachineAsHost, pushNewLeaderDoors, removeSwitchHostService, restoreOwnDaemonDuties, takeBackSwitchLeftovers, undoHandoverHostSteps, withdrawSwitchStop, type OwnDaemon,
 } from '../../../../src/core/leader/switch/host-follow.js'
 import { promotedFile } from '../../../../src/core/leader/switch/records.js'
 import { leaderPermitAtBoot } from '../../../../src/core/leader/switch/boot.js'
@@ -174,8 +174,8 @@ describe('the host service\'s dirs and its take-back, without a daemon', () => {
       fs.mkdirSync(path.join(root, 'data'), { recursive: true })
       fs.writeFileSync(path.join(root, 'data', '.walnut-id'), 'another-walnut')
       expect(await oldMachineHostDirs(WALNUT)).toEqual(own)
-      // Marked by this Walnut: it runs there, as the manager would keep it there.
-      fs.writeFileSync(path.join(root, 'data', '.walnut-id'), WALNUT)
+      // Marked by this Walnut (with the newline a shell's printf or echo may leave): it runs there, as the manager would keep it there.
+      fs.writeFileSync(path.join(root, 'data', '.walnut-id'), `${WALNUT}\n`)
       expect(await oldMachineHostDirs(WALNUT)).toEqual({ dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run` })
       // Read only: nothing is marked where there was no mark.
       fs.rmSync(path.join(root, 'data', '.walnut-id'))
@@ -185,6 +185,24 @@ describe('the host service\'s dirs and its take-back, without a daemon', () => {
       delete process.env.WALNUT_HOST_SERVER_ROOT
       expect((await oldMachineHostDirs(WALNUT)).dataDir).toBe(path.join(os.homedir(), '.open-walnut-host', 'walnuts', WALNUT.slice(0, 16), 'data'))
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('the first lead takes back this machine\'s credential wherever it is, with no switch folder beside the home', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'host-follow-cred-'))
+    try {
+      expect((await prepareOldMachineAsHost(input())).ok).toBe(true)
+      expect(fs.existsSync(path.join(home, 'local', 'leader-switch'))).toBe(false)
+      const sent: string[] = []
+      const daemon: OwnDaemon = { send: async (cmd) => { sent.push(cmd); return { ok: true } } }
+      const r = await takeBackSwitchLeftovers({ home, machine: 'machine-a', daemon, machineId: async () => MACHINE, walnutId: async () => WALNUT })
+      expect(r).toEqual({ ok: true, console: false, hostService: false, credential: true, credentialFile: true })
+      expect(await hostCredentialOf(MACHINE)).toBeNull()
+      expect(await readHostCredential(WALNUT)).toBeNull()
+      // Nothing of a host service here (no record, no promotion): its daemon is not asked.
+      expect(sent).toEqual([])
+      // Again: nothing left to take back.
+      expect(await takeBackSwitchLeftovers({ home, machine: 'machine-a', daemon, machineId: async () => MACHINE, walnutId: async () => WALNUT })).toEqual({ ok: true, console: false, hostService: false, credential: false, credentialFile: false })
+    } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 
   it('a spec adopted and not started yet (its status reads off) is still removed: nothing is left behind the record', async () => {

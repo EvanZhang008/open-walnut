@@ -4,9 +4,13 @@
  * restart that boots waiting (its earlier handover still runs out at the witnesses) describes the
  * Walnut to the host but sends no `leader.claim`, so the host never follows a leader whose permit
  * record does not stand; the claim goes the moment the doors open. With no permit it claims at once,
- * as before.
+ * as before. And no host link can reach configureHostLeader before the permit's checker is there:
+ * the server's boot awaits the permit (which registers the checker before it asks the witnesses)
+ * before it opens any daemon link.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 
 vi.mock('../../../src/constants.js', async () => {
   const { createMockConstants } = await import('../../helpers/mock-constants.js')
@@ -63,5 +67,29 @@ describe('taking a host back from the companion\'s backup lead', () => {
     await vi.waitFor(() => expect(h.sent).toEqual(['leader.configure', 'leader.configure', 'leader.configure', 'leader.claim']))
     notifyOutwardDoorsOpened()
     expect(h.sent.filter((c) => c === 'leader.claim')).toHaveLength(1)
+  })
+})
+
+describe('the boot order: the permit\'s checker is there before any daemon link', () => {
+  const src = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../../../src', rel), 'utf8')
+
+  it('startServer awaits the permit boot before it loads the daemon links or starts its own daemon\'s lane', () => {
+    const server = src('web/server.ts')
+    const boot = server.slice(server.indexOf('export async function startServer('))
+    const permit = boot.indexOf('leaderPermitHandle = await leaderPermitAtBoot(')
+    expect(permit).toBeGreaterThan(0)
+    for (const opens of ["import('../providers/daemon-connection.js')", "import('../core/hosts/link.js')", 'bootPrimaryLocalDaemonLane(', "import('../core/hosts/host-warmup.js')"]) {
+      const at = boot.indexOf(opens)
+      expect(at, opens).toBeGreaterThan(permit)
+    }
+  })
+
+  it('the permit runtime registers the checker before it first asks the witnesses', () => {
+    const rt = src('core/leader/switch/runtime.ts')
+    const start = rt.indexOf('export async function startPermitRuntime(')
+    const checker = rt.indexOf('setOutwardDoorChecker(', start)
+    expect(checker).toBeGreaterThan(start)
+    expect(rt.indexOf('await acquire(', start)).toBeGreaterThan(checker)
+    expect(rt.indexOf('await acquireInstanceLock(', start)).toBeGreaterThan(checker)
   })
 })

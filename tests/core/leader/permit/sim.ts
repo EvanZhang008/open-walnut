@@ -168,6 +168,16 @@ export class World {
   /** Each witness's direct door (way b), made at its first call; its nonces outlive a witness restart only as a real door's would not (a restart forgets them: see startWitness). */
   private doors = new Map<string, WitnessDoor>()
 
+  /**
+   * Mixed clocks (set before addMachine): the params of process `key`, else `params`. With it set,
+   * every witness is a record on one computer opened by whichever process asks (a witness dir,
+   * local-witnesses.ts): each process judges with its own params, and reads the record again, as
+   * accepted at that read, whenever another process changed it since its last call.
+   */
+  paramsOf: ((key: string) => PermitParams) | null = null
+  /** Mixed clocks: each process's view of each witness record, with the record text it last saw. */
+  private views = new Map<string, { w: PermitWitness; text: string | null }>()
+
   constructor(public params: PermitParams, public net: NetOptions = CALM, seed = 1) {
     this.rand = rng(seed)
   }
@@ -256,10 +266,11 @@ export class World {
     const clock: ElapsedClock = node.pureMonotonic
       ? createWitnessClock({ monotonic: node.clock.monotonic })
       : createHolderClock({ monotonic: node.clock.monotonic, wall: node.clock.wall, ...(node.bootClock ? { boot: { kind: 'boottime' as const, now: node.clock.boot } } : {}) })
+    const params = this.paramsOf?.(node.key) ?? this.params
     return new PermitClient({
-      id: node.id, list, clock, params: this.params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
+      id: node.id, list, clock, params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
       transport: createWitnessTransport({
-        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'mixed' ? { id, host: id, url: `https://sim/${id}`, key: simWitnessKey(id) } : { id, host: id }), params: this.params, walnutId: 'sim',
+        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'mixed' ? { id, host: id, url: `https://sim/${id}`, key: simWitnessKey(id) } : { id, host: id }), params, walnutId: 'sim',
         deliver: this.wrapDeliver ? this.wrapDeliver(node.key, (reply) => this.deliverToMachine(node.key, reply)) : (reply) => this.deliverToMachine(node.key, reply),
         remote: this.makeLink ? this.makeLink(node.key, this.simLink(node.key)) : this.way === 'mixed' ? this.simMixed(node.key) : this.simLink(node.key),
         direct: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key)) : this.simDirect(node.key),
@@ -415,10 +426,11 @@ export class World {
   }
 
   /** The witness takes the request; its reply, or null when it gives none (down, asleep, or it crashed before answering). */
-  private answerAtWitness(to: string, req: PermitRequest): PermitReply | null {
+  private answerAtWitness(to: string, req: PermitRequest, from?: string): PermitReply | null {
     const n = this.witnesses.get(to)
     if (!n || !n.w || n.clock.asleep()) return null
-    const reply = n.w.handle(req)
+    const reply = this.paramsOf && from ? this.viewOf(n, from).handle(req) : n.w.handle(req)
+    if (this.paramsOf && from) this.views.get(`${n.id}|${from}`)!.text = n.store.disk
     if (this.trace && req.type === 'propose' && reply.ok) {
       const r = req.record
       this.trace.push(`${(this.now / 1000).toFixed(3)} ${to} took #${r.number} ${r.kind} by ${r.by} -> ${r.holder} list=${r.list.join(',')}${r.joint ? ' pair=' + r.joint.join(',') : ''}${r.stage ? ' ' + r.stage : ''}`)
@@ -430,11 +442,22 @@ export class World {
     return reply
   }
 
+  /** Mixed clocks: process `from`'s view of witness `n`, read again when another process changed the record. */
+  private viewOf(n: WitnessNode, from: string): PermitWitness {
+    const key = `${n.id}|${from}`
+    let v = this.views.get(key)
+    if (!v || v.text !== n.store.disk) {
+      v = { w: new PermitWitness({ id: n.id, store: n.store, clock: createWitnessClock({ monotonic: n.clock.monotonic }), params: this.paramsOf!(from) }), text: n.store.disk }
+      this.views.set(key, v)
+    }
+    return v.w
+  }
+
   /** Called with the reply about to go out; return true to crash the witness instead of answering. */
   crashBeforeAnswer: ((witness: string, req: PermitRequest, reply: PermitReply) => boolean) | null = null
 
   private deliverToWitness(from: string, to: string, req: PermitRequest, done: (r: RemoteCallResult | null) => void, round?: number): void {
-    const reply = this.answerAtWitness(to, req)
+    const reply = this.answerAtWitness(to, req, from)
     if (!reply) return
     const wire = JSON.parse(JSON.stringify({ ok: true, reply, ...(round !== undefined ? { round } : {}) })) as unknown
     this.transmit(to, from, reply, () => done({ status: 200, body: wire }))

@@ -137,6 +137,39 @@ describe('judge: what a witness accepts', () => {
   })
 })
 
+describe('a witness record opened with two clocks (a witness dir: each process judges with its own params)', () => {
+  // A process whose permit is scaled to a tenth (WALNUT_LEADER_PERMIT_VALID_MS=6000, settings.ts permitParamsFor).
+  const S = { ...P, validMs: 6_000, renewEveryMs: 1_500, holderMarginMs: 200, witnessMarginMs: 200, minSendRemainingMs: 1_500, backoffBaseMs: 200, backoffMaxMs: 3_000 }
+  let dir = ''
+  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); dir = '' })
+
+  it('the scaled process\'s grant is refused while the default process\'s record is held there, the whole default time', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'permit-two-clocks-'))
+    const file = path.join(dir, 'permit-record.json')
+    bootstrapWitnessStore(createFilePermitStore(file), W)
+    let t = 0
+    const clock = { now: () => t }
+    // Machine B's process, default clocks, takes the record.
+    const byDefault = new PermitWitness({ id: 'w1', store: createFilePermitStore(file), clock, params: P })
+    expect(byDefault.handle({ type: 'propose', record: rec(1, 'grant', 'B') }).ok).toBe(true)
+    // Machine A's process opens the same dir with scaled clocks (it reads the record at t = 0).
+    const scaled = new PermitWitness({ id: 'w1', store: createFilePermitStore(file), clock, params: S })
+    const grantA = (n: number) => scaled.handle({ type: 'propose', record: { ...rec(n, 'grant', 'A', { nonce: 'a1' }), validMs: S.validMs } })
+    // Past the scaled hold (6.2 s), inside the default one (62 s): refused.
+    t = S.validMs + S.witnessMarginMs
+    expect(grantA(2)).toMatchObject({ ok: false, reason: 'held' })
+    t = P.validMs + P.witnessMarginMs - 1
+    expect(grantA(2)).toMatchObject({ ok: false, reason: 'held' })
+    // B's record ran out by its own validity: A's grant stands.
+    t = P.validMs + P.witnessMarginMs
+    expect(grantA(2).ok).toBe(true)
+    // The other way round only waits longer: a default judge keeps A's short record its own whole time.
+    const s: WitnessState = { ...empty, held: { ...rec(2, 'grant', 'A'), validMs: S.validMs }, acceptedAt: 0 }
+    expect(judge(s, 'w1', rec(3, 'grant', 'B'), S.validMs + S.witnessMarginMs, P)).toEqual({ ok: false, reason: 'held' })
+    expect(judge(s, 'w1', rec(3, 'grant', 'B'), P.validMs + P.witnessMarginMs, P).ok).toBe(true)
+  })
+})
+
 describe('judge: a release', () => {
   const release = (number: number, by: string, extra: Partial<PermitRecord> = {}) => rec(number, 'release', by, { holder: NO_HOLDER, from: by, ...extra })
   const holding = (h: PermitRecord, acceptedAt = 0): WitnessState => ({ ...empty, held: h, acceptedAt })

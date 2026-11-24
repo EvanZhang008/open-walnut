@@ -262,12 +262,12 @@ async function restoreMissing(members: NetMember[]): Promise<boolean> {
  * Never one Remove is taking out: its `enabled: false` would be undone. The check sits
  * right before the send, so a push that passed it went out before Remove's message.
  */
-async function pushToHost(name: string, endpoint: string, s: NetState, relayMoved: boolean): Promise<NetPushOutcome> {
+async function pushToHost(name: string, endpoint: string, s: NetState, relayMoved: boolean, view: SyncLead = { lead: netLead, refused: netRefused }): Promise<NetPushOutcome> {
   const { peekDaemonConnection } = await daemonConnections()
   // Under a permit: never while no record names this machine, and never this machine's own row
   // (a leader a switch moved to a machine on the list keeps that machine's host row).
-  if (netRefused) return { host: name, endpoint, told: false, why: 'this machine does not hold the write permission' }
-  if (netLead && endpoint === s.macId) return { host: name, endpoint, told: false, skipped: true, why: 'this machine' }
+  if (view.refused) return { host: name, endpoint, told: false, why: 'this machine does not hold the write permission' }
+  if (view.lead && endpoint === s.macId) return { host: name, endpoint, told: false, skipped: true, why: 'this machine' }
   if (removing.has(endpoint)) return { host: name, endpoint, told: false, skipped: true, why: 'being removed' }
   const conn = peekDaemonConnection(name)
   if (!conn?.connected) return { host: name, endpoint, told: false, why: 'not connected' }
@@ -285,7 +285,7 @@ async function pushToHost(name: string, endpoint: string, s: NetState, relayMove
     out = { host: name, endpoint, told: false, skipped: true, why: "another Walnut runs its walnut-net" }
   } else {
     try {
-      const r = await conn.send('net.configure', hostConfig(s, netLead, endpoint), 20_000) as { ok?: boolean; error?: string } | undefined
+      const r = await conn.send('net.configure', hostConfig(s, view.lead, endpoint), 20_000) as { ok?: boolean; error?: string } | undefined
       out = r && r.ok === false ? { host: name, endpoint, told: false, why: r.error ?? 'refused' } : { host: name, endpoint, told: true }
     } catch (err) {
       log.session.warn('net: could not hand a machine its member list', { host: name, error: (err as Error).message })
@@ -315,10 +315,13 @@ async function pushTargets(): Promise<Array<[string, string]>> {
     .map(([name, h]) => [name, h.endpoint as string])
 }
 
+/** The lead a push hands out: its sync's (a newer sync that starts meanwhile changes none of it). */
+interface SyncLead { lead: NetLead | null; refused: boolean }
+
 /** Every connected machine at once; a slow one holds up nothing (an invite never waits on it). */
-async function pushToHosts(s: NetState, relayMoved = false): Promise<NetPushOutcome[]> {
+async function pushToHosts(s: NetState, view: SyncLead, relayMoved = false): Promise<NetPushOutcome[]> {
   const targets = await pushTargets()
-  const all = await Promise.allSettled(targets.map(([name, endpoint]) => pushToHost(name, endpoint, s, relayMoved)))
+  const all = await Promise.allSettled(targets.map(([name, endpoint]) => pushToHost(name, endpoint, s, relayMoved, view)))
   return all.map((r, i) => (r.status === 'fulfilled' ? r.value : { host: targets[i]![0], endpoint: targets[i]![1], told: false, why: String(r.reason) }))
 }
 
@@ -452,7 +455,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }, report: SyncRepor
         if (modes === null) throw new NetError(409, 'net_starting', "This machine's walnut-net is still starting; try again in a minute.")
         if (!modes) throw new NetError(409, 'net_too_old', "This machine's walnut-net is older than this Walnut; the relay changes once the new version is downloaded.")
       }
-      if (relayMoved) { report.pushed = pushToHosts({ ...state }, true); await report.pushed }
+      if (relayMoved) { report.pushed = pushToHosts({ ...state }, { lead, refused: false }, true); await report.pushed }
       const conf = await local.send('net.configure', withServiceSetMembers(macConfig(state, lead), sets), 30_000) as { ok?: boolean; error?: string }
       if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
@@ -466,7 +469,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }, report: SyncRepor
       }
       if (changed.added.length || changed.removed.length) log.session.info('net: hosts updated from the member list', changed)
       await keepWhere(new Set([...state.members.map((m) => m.id), ...sets.add.map((a) => a.id)]))
-      if (!relayMoved) { report.pushed = pushToHosts({ ...state }); void report.pushed.catch(() => {}) }
+      if (!relayMoved) { report.pushed = pushToHosts({ ...state }, { lead, refused: false }); void report.pushed.catch(() => {}) }
       state.syncedAt = Date.now()
       state.error = null
     } catch (err) {
@@ -712,9 +715,9 @@ export function netState(): NetState {
   return { ...state }
 }
 
-/** The list a joined machine is handed now (what a service set's walnut-net lets in), or null before a sync. */
+/** The list a joined machine is handed now (what a service set's walnut-net lets in; under a permit, the holder's accept list), or null before a sync. */
 export function hostListNow(): Record<string, unknown> | null {
-  return state.enabled && state.syncedAt && state.macId ? hostConfig({ ...state }) : null
+  return state.enabled && state.syncedAt && state.macId ? hostConfig({ ...state }, netLead) : null
 }
 
 /** Tests. */

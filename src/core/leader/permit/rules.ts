@@ -76,9 +76,21 @@ export function checkTiming(p: PermitParams): void {
 /**
  * The witness still keeps its record for that record's holder. A release is a hold that is
  * already over: its writer stopped acting before it sent it, and never acts again.
+ *
+ * Judged by the longer of the judge's own validity and the record's (its margin scaled with it):
+ * a witness record one process opens with shorter clocks (a test's scaled permit, settings.ts
+ * permitParamsFor) while another machine's longer record is held there must keep that record
+ * its whole time. A mismatch only makes the witness wait longer, never shorter.
  */
 export function holdsForHolder(s: WitnessState, now: number, p: PermitParams): boolean {
-  return !!s.held && s.held.kind !== 'release' && now < s.acceptedAt + witnessHoldMs(p)
+  return !!s.held && s.held.kind !== 'release' && now < s.acceptedAt + heldForMs(s.held, p)
+}
+
+/** How long a witness keeps `held` for its holder: witnessHoldMs(p), longer when the record says it is valid longer. */
+function heldForMs(held: PermitRecord, p: PermitParams): number {
+  const v = held.validMs
+  if (!Number.isFinite(v) || v <= p.validMs) return witnessHoldMs(p)
+  return v + p.witnessMarginMs * (v / p.validMs)
 }
 
 /** The witness would accept a grant to another machine now. */

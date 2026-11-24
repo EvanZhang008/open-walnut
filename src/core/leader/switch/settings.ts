@@ -36,6 +36,7 @@ import YAML from 'yaml'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
 import { checkTiming } from '../permit/rules.js'
 import { experimentalEnabled, type ExperimentalFlags } from '../../experimental.js'
+import { log } from '../../../logging/index.js'
 
 /** A witness whose record is a directory on this computer (one-computer rehearsals and tests). */
 export interface LocalWitnessPlace { id: string; dir: string }
@@ -227,7 +228,7 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
       witnesses,
       machines,
       backWindowHours: Number.isFinite(hours) && hours > 0 ? hours : 168,
-      params: permitParamsFor(),
+      params: permitParamsFor(process.env, witnesses),
       commitWindowMs: seconds(o.commit_window_s, DEFAULT_COMMIT_WINDOW_S, 30),
       stopWaitMs: seconds(o.stop_wait_s, DEFAULT_STOP_WAIT_S, 10),
     },
@@ -237,16 +238,29 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
 /** The shortest record WALNUT_LEADER_PERMIT_VALID_MS may ask for (the runtime tests' 3 s). */
 const MIN_SCALED_VALID_MS = 3_000
 
+/** The knob was set where it is not honoured: said once per process. */
+let scaledRefusedSaid = false
+
 /**
  * The permit's clocks. WALNUT_LEADER_PERMIT_VALID_MS: the live tests' scaled time (as
  * WALNUT_LEADER_RESTART_GRACE_MS and WALNUT_LEADER_HEARTBEAT_MS), between 3 s and the default 60 s;
- * every other time of the permit scales with it, so the margins still cover the same drift. A
- * witness served by another machine's service keeps the default and refuses such a record
- * (bad-validity): the knob only works with witnesses this machine opens itself (witness dirs).
+ * every other time of the permit scales with it, so the margins still cover the same drift.
+ * Honoured only when every witness of `witnesses` is a witness dir (the one-computer test layout):
+ * with a machine witness or a remote one (a real setup) the default clocks run and a warning says
+ * why. A witness this machine keeps is also opened by other machines' calls with the default, and a
+ * witness on another machine refuses a scaled record (bad-validity). Whatever runs, a witness keeps
+ * a held record for the longer of the two validities (rules.ts holdsForHolder).
  */
-export function permitParamsFor(env: NodeJS.ProcessEnv = process.env): PermitParams {
+export function permitParamsFor(env: NodeJS.ProcessEnv = process.env, witnesses: readonly WitnessPlace[] = []): PermitParams {
   const want = Number(env.WALNUT_LEADER_PERMIT_VALID_MS)
   if (!Number.isFinite(want) || want < MIN_SCALED_VALID_MS || want >= DEFAULT_PERMIT_PARAMS.validMs) return { ...DEFAULT_PERMIT_PARAMS }
+  if (witnesses.length === 0 || !witnesses.every(isLocalWitness)) {
+    if (!scaledRefusedSaid) {
+      scaledRefusedSaid = true
+      log.leader.warn('leader switch: WALNUT_LEADER_PERMIT_VALID_MS is honoured only when every witness is a witness dir (a test layout); the default permit clocks run', { asked: want })
+    }
+    return { ...DEFAULT_PERMIT_PARAMS }
+  }
   const f = Math.floor(want) / DEFAULT_PERMIT_PARAMS.validMs
   const d = DEFAULT_PERMIT_PARAMS
   const scaled: PermitParams = {

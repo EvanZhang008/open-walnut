@@ -79,6 +79,18 @@ interface Variant {
    * witnesses report, and the holder adds it back (witness-setup.ts, the init of a witness missing beside records).
    */
   joinThird?: boolean
+  /**
+   * Mixed clocks on witness dirs: machine A runs a permit scaled to a tenth (validMs 6 s, as
+   * WALNUT_LEADER_PERMIT_VALID_MS=6000 gives), B and C the default; each process opens every
+   * witness record itself with its own params (World.paramsOf).
+   */
+  mixedClocks?: boolean
+}
+
+/** The default clocks at a tenth, as settings.ts permitParamsFor scales them. */
+function scaledTenth(p: PermitParams): PermitParams {
+  const f = 0.1
+  return { ...p, validMs: p.validMs * f, renewEveryMs: p.renewEveryMs * f, holderMarginMs: p.holderMarginMs * f, witnessMarginMs: p.witnessMarginMs * f, minSendRemainingMs: p.minSendRemainingMs * f, backoffBaseMs: p.backoffBaseMs * f, backoffMaxMs: p.backoffMaxMs * f }
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -88,6 +100,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     slow: v.lateSteps ? 0.1 : 0.04, slowMs: v.lateSteps ? [60_000, 300_000] : [1_000, 90_000],
   }, seed)
   const r = world.rand
+  if (v.mixedClocks) { const scaled = scaledTenth(params); world.paramsOf = (key) => (key.startsWith('A') ? scaled : params) }
   if (v.direct) world.way = 'direct'
   if (v.mixedWays) world.way = 'mixed'
   if (v.transportTimeoutMs !== undefined) world.transportTimeoutMs = v.transportTimeoutMs
@@ -541,6 +554,13 @@ describe('write permission: random schedules', () => {
     const r = await sweep(60, { direct: true, transportTimeoutMs: 15_000, ops: true, releases: true, restarts: true, members: true, tickMs: 1_000 })
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
     expect(r.sent, 'ops were sent').toBeGreaterThan(0)
+  }, 120_000)
+
+  it('never lets two machines act at once when one machine runs scaled clocks on the same witness records (200 seeds, faults, drift)', async () => {
+    const r = await sweep(200, { mixedClocks: true })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    // Not vacuous (measured 0.23: A's short records are refused while B's or C's are held).
+    expect(r.activeShare).toBeGreaterThan(0.15)
   }, 120_000)
 
   it('never lets two machines act at once when each witness is reached by its link or its door at random (200 seeds)', async () => {
