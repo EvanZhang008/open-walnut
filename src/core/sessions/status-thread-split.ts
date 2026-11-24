@@ -115,6 +115,21 @@ export function clearJoin(file: ThreadsFile, messageId: string): ThreadsFile {
   return hit ? { ...file, threads } : file;
 }
 
+/**
+ * The file with every join mark too old to be asked taken off (pure, run in each status answer's
+ * write): its message then reads as his word on its thread again (thread-view.ts uncheckedJoin), so
+ * no mark hides a message from its card for good (review 2026-11-23: a turn that never answered, a
+ * thread past the list's twelve).
+ */
+export function clearStaleJoins(file: ThreadsFile, at: string): ThreadsFile {
+  const now = Date.parse(at);
+  let out = file;
+  for (const t of file.threads) for (const m of t.messages) {
+    if (m.joined === 'recent' && now - Date.parse(m.at) > JOIN_ASK_MAX_AGE_MS) out = clearJoin(out, m.id);
+  }
+  return out;
+}
+
 /** What the splits did: the threads opened with their lines, and for each source the messages moved and the newest one the question saw that is left. */
 export interface JoinSplits {
   file: ThreadsFile;

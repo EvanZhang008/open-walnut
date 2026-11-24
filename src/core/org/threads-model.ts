@@ -61,7 +61,7 @@ import { oneCardNow } from './one-card.js';
 import { storedOptions } from '../ask-options.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
-import { ACK_PLACES, hasThreadNews, readAfter, threadReactionAt, type AckPlaced } from './thread-view.js';
+import { ACK_PLACES, hasThreadNews, readAfter, readsAsReaction, threadReactionAt, type AckPlaced } from './thread-view.js';
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
@@ -824,16 +824,29 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
       const next: OrgThread = { ...recordReaction(target, input.at), messages: [...target.messages, message], updatedAt: input.at, by: 'human' };
       return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false, joined: 'reaction' };
     }
+    // A message joined only for coming right after his last one moves nothing (2026-11-23, the user,
+    // of an answered card that left his view when he chatted on: "我随便一聊，它就直接就消失"): the
+    // card keeps its state, and no reaction is read into it (a known mark took it out of his view
+    // too); the node's status answer then says whether it is that subject (its line writes the thread,
+    // and his words read as his reaction once the mark is off) or another (status-thread-split.ts
+    // splits it out). A decision waiting on him is the exception: his words right after his own there
+    // answer it (2026-11-20: no card stays on Needs you once he followed it up), and the status
+    // question never lists a thread in needs, so nothing else would ever move it.
+    if (recent && !named && target.state !== 'needs') {
+      const filed: ThreadMessage = { ...message, joined: 'recent' };
+      const next: OrgThread = { ...target, messages: [...target.messages, filed], updatedAt: input.at, by: 'human' };
+      return { file: replace(file, next, input.at), thread: next, message: filed, created: false, duplicate: false, joined: 'recent' };
+    }
     // His own message in a snoozed thread brings it back; one he closed minutes ago opens again.
     // His answer ends its needs, and its options with it (a choice clicked is filed as his words).
     const { snoozed: _s, closed: _c, options: _o, ...rest } = target;
     const reacted = recordReaction(rest, input.at);
-    const filed: ThreadMessage = recent ? { ...message, joined: 'recent' } : message;
     const next: OrgThread = {
-      ...reacted, messages: [...reacted.messages, filed], updatedAt: input.at, by: 'human',
-      // He spoke again: a thread answered, waiting on him or pending is the node's turn again.
+      ...reacted, messages: [...reacted.messages, recent ? { ...message, joined: 'recent' as const } : message], updatedAt: input.at, by: 'human',
+      // He spoke again in it: a thread answered, waiting on him or pending is the node's turn again.
       ...(reopened || target.state === 'answered' || target.state === 'needs' || target.state === 'pending' ? { state: 'working' as ThreadState } : {}),
     };
+    const filed = next.messages[next.messages.length - 1];
     const joined = reopened ? 'reopened' as const : recent ? 'recent' as const : undefined;
     return { file: replace(file, next, input.at), thread: next, message: filed, created: false, duplicate: false, ...(joined ? { joined } : {}) };
   }
@@ -866,7 +879,8 @@ function recordReaction(t: OrgThread, at: string): OrgThread {
 
 /** Materialize legacy inferred reactions before messages change subjects. */
 function preserveReaction(t: OrgThread): OrgThread {
-  const at = t.messages.reduce((last, m) => m.at > last ? m.at : last, t.reactedAt ?? '');
+  // A message joined only for its timing is no reaction until the node checked it (thread-view.ts readsAsReaction).
+  const at = t.messages.reduce((last, m) => readsAsReaction(m) && m.at > last ? m.at : last, t.reactedAt ?? '');
   let next = at ? recordReaction(t, at) : t;
   // Legacy marks lack per-message receipts; new marks already carry their exact checked prefix.
   if (t.known && !t.messages.some((m) => m.readAt) && !t.reactedAt) {

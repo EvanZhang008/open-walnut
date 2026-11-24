@@ -1,6 +1,7 @@
 /**
  * What a status answer does to its threads before its lines, in the same locked write
  * (status-threads.ts applyThreadLines, threads-store.ts writeOwnThreads `pre`):
+ *   0. join marks too old to be asked come off (status-thread-split.ts clearStaleJoins)
  *   1. its joins: a message it says is another subject is split out (status-thread-split.ts)
  *   2. its merges, and the held titles the question asked about: merged or titled (status-thread-title.ts)
  *   3. the titles it gives (its title lines and its splits'): one that repeats another open thread is held
@@ -10,13 +11,13 @@
 import type { ThreadsFile, ThreadWriter } from '../org/threads-model.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import type { StatusReport } from '../user-status.js';
-import { linesAfterSplits, splitJoins, type JoinSplits } from './status-thread-split.js';
+import { clearStaleJoins, linesAfterSplits, splitJoins, type JoinSplits } from './status-thread-split.js';
 import { holdRepeatTitles, settleHeldTitles, throughMerges, type HeldMerge } from './status-thread-title.js';
 import type { StatusThreadLine, ThreadMark, ThreadMarks } from './status-threads.js';
 
 export interface AnswerSteps {
-  /** The steps, or none when the answer has nothing for them. */
-  pre?: (cur: ThreadsFile) => { file: ThreadsFile; out: string[] };
+  /** The steps, run first in the answer's write. */
+  pre: (cur: ThreadsFile) => { file: ThreadsFile; out: string[] };
   /** The answer's lines and marks on the threads after the steps (call after `pre` ran). */
   after: (lines: readonly StatusThreadLine[], marks: ThreadMarks) => { lines: StatusThreadLine[]; marks: ThreadMarks };
   /** What the steps did, for the log. */
@@ -31,9 +32,10 @@ export function answerSteps(report: Pick<StatusReport, 'joins_checked' | 'thread
   let holding = new Set<string>();
   let titles: Array<ThreadMark & { besides?: string }> = [...(marks.titles ?? [])];
   const merges = report.threads_merge?.length ? report.threads_merge : null;
-  const pre = joins || checks || merges || marks.titles ? (cur: ThreadsFile) => {
+  const pre = (cur: ThreadsFile) => {
     const at = new Date().toISOString();
     const out: string[] = [];
+    cur = clearStaleJoins(cur, at);
     titles = [...(marks.titles ?? [])];
     split = null;
     merged = [];
@@ -53,9 +55,9 @@ export function answerSteps(report: Pick<StatusReport, 'joins_checked' | 'thread
     holding = new Set();
     if (titles.length) ({ file: cur, held: holding } = holdRepeatTitles(cur, titles, at));
     return { file: cur, out };
-  } : undefined;
+  };
   return {
-    ...(pre ? { pre } : {}),
+    pre,
     after: (lines, m) => {
       const s = split as JoinSplits | null;
       const named = titles.filter((t) => !holding.has(t.id));

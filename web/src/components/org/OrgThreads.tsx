@@ -53,7 +53,7 @@ import { useMemo, useRef, useState } from 'react';
 import { OrgThreadsWatching, type WatchingCopy } from './OrgThreadsWatching';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
-import { cardView, exchangesOf, forHimInList, listedForHim, orderedForHim, overdueLine, threadDeadline, sharedAnswers, snoozedNow, watchedNow, watchingOf, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardMessages, cardView, exchangesOf, forHimInList, listedForHim, orderedForHim, overdueLine, threadDeadline, sharedAnswers, snoozedNow, watchedNow, watchingOf, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ICON_EYE, ICON_EYE_FILLED } from '@/components/common/Icons';
 import { DisclosureButton } from '@/components/controls';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
@@ -247,8 +247,10 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   }, [t.tasks, t.reply, t.askedIn?.task, labels]);
   const exchanges = useMemo(() => exchangesOf(t), [t]);
   const follows = t.follows ? all.find((x) => x.id === t.follows) : undefined;
-  const last = t.messages[t.messages.length - 1] ?? t.opener;
-  const count = t.messages.length + (t.opener ? 1 : 0);
+  // A message joined only for its timing is not on the card until the node checked it (thread-view.ts uncheckedJoin).
+  const onCard = cardMessages(t);
+  const last = onCard[onCard.length - 1] ?? t.opener;
+  const count = onCard.length + (t.opener ? 1 : 0);
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (

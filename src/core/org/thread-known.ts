@@ -17,7 +17,7 @@
  *
  * Pure and web-safe: the web and the server group by the same rule (thread-groups.ts).
  */
-import { hasThreadNews, lineWordsSinceAck, snoozedNow, watchedNow, type AckPlace, type AckPlaced, type ViewThread } from './thread-view.js';
+import { hasThreadNews, lineWordsSinceAck, readsAsReaction, snoozedNow, watchedNow, type AckPlace, type AckPlaced, type ViewThread } from './thread-view.js';
 
 /**
  * How long the node has to place a thread he acknowledged before Walnut does, and how long one
@@ -40,7 +40,7 @@ export interface AckWaits {
 type AckShape = Pick<ViewThread, 'closed' | 'ackedAt' | 'messages' | 'ackPlaced'> & { state: string };
 
 /** He wrote nothing on it since his Acknowledge. */
-const quietSinceAck = (t: AckShape): boolean => !!t.ackedAt && !t.messages.some((m) => m.at > t.ackedAt!);
+const quietSinceAck = (t: AckShape): boolean => !!t.ackedAt && !t.messages.some((m) => m.at > t.ackedAt! && readsAsReaction(m));
 
 /** He acknowledged it while its work ran, and it still waits (pending, open, no word of his since). Pure. */
 export function isKnown(t: AckShape): boolean {

@@ -7,11 +7,14 @@
  * The real case, in invented words: he asked in thread A (answered at once), the task's turn-end
  * status question opened thread B for its own bookkeeping (working, out of his sight), and his
  * next message two minutes later about A's subject went to a new thread C, so A's card stayed up.
- *  1. A node's thread he cannot see does not break the conversation: his next words join A, which
- *     is the node's turn again (working), so the stale card leaves his view.
+ *  1. A node's thread he cannot see does not break the conversation: his next words join A. Since
+ *     2026-11-23 a join by timing alone moves nothing on an answered A until the node's status answer
+ *     checked it (the user: his words on another subject took a card out of his view, "我随便一聊，它就
+ *     直接就消失"); once checked as A's subject, his words read as his reaction and the stale card leaves.
  *  2. A thread the node opened that he can see (needs, answered) still starts a new conversation.
- *  3. Every state that waits on him or shows him an answer (needs, answered, pending) leaves his
- *     view when he follows up within the window: no thread stays on "needs you" after his reply.
+ *  3. A thread waiting on his decision (needs) is the node's turn again when he follows up within
+ *     the window: no thread stays on "needs you" after his reply. An answered or pending one keeps its
+ *     state until the node checked the join (1), then leaves his view too.
  *  4. When his words still went elsewhere, the turn-end check names each answered thread he wrote
  *     after (answeredBeforeHim), so the node marks it known, closes it, or merges his words in.
  *  5. A thread he acknowledged himself is never reopened by a node.
@@ -22,6 +25,7 @@ import {
 } from '../../../src/core/org/threads-model.js'
 import { answeredBeforeHim, answeredBeforeHimReason } from '../../../src/core/org/thread-summary-stop.js'
 import { threadCounts } from '../../../src/core/org/thread-groups.js'
+import { clearJoin } from '../../../src/core/sessions/status-thread-split.js'
 
 const T0 = Date.UTC(2026, 10, 20, 7, 59, 12)
 const at = (s: number) => new Date(T0 + s * 1000).toISOString()
@@ -56,9 +60,10 @@ describe('his follow-up in the chat keeps the thread it follows', () => {
       expect(r.created, hidden).toBe(false)
       expect(r.thread.id).toBe(a.id)
       expect(r.joined).toBe('recent')
-      // The node's turn again: the stale answer leaves his view until its new summary.
-      expect(r.thread.state).toBe('working')
-      expect(threadCounts(r.file.threads, T0 + 150_000).shown).toBe(0)
+      // Not checked yet: A keeps its card (11-23); once the node checked it is A's subject, his words read his answer.
+      expect(r.thread.state).toBe('answered')
+      expect(threadCounts(r.file.threads, T0 + 150_000).shown).toBe(1)
+      expect(threadCounts(clearJoin(r.file, r.message.id).threads, T0 + 150_000).shown).toBe(0)
     }
   })
 
@@ -72,12 +77,14 @@ describe('his follow-up in the chat keeps the thread it follows', () => {
   })
 
   it('no thread stays on needs you (or shows a stale answer) once he followed it up in the chat', () => {
-    // Every state a node can leave a thread in for him: each one is the node's turn again after his words.
-    for (const state of ['needs', 'answered', 'pending'] as const) {
+    // A decision waiting on him is the node's turn again after his words; an answer keeps its card
+    // until the node checked the join, then his words read it (11-23).
+    for (const [state, after] of [['needs', 'working'], ['answered', 'answered'], ['pending', 'pending']] as const) {
       const { f, a } = asked(state)
       const r = follow(nodeOpens(f, 'working', 47), 144)
       expect(r.thread.id, state).toBe(a.id)
-      expect(r.thread.state, state).toBe('working')
+      expect(r.thread.state, state).toBe(after)
+      expect(threadCounts(clearJoin(r.file, r.message.id).threads, T0 + 150_000).shown, state).toBe(0)
     }
   })
 })

@@ -55,6 +55,8 @@ export interface ViewMessage {
   answer?: { text: string; at: string; about?: string[] };
   /** Answers through this time were visible when the user reacted; travels with the message. */
   readAt?: string;
+  /** Filed here only for coming right after his last message, not yet checked by the node (threads-model.ts ThreadMessage.joined). */
+  joined?: string;
   /** His reply to a thread of a task below, on its way to that task (threads-model.ts ThreadDelivery). */
   delivery?: { state: string };
 }
@@ -185,6 +187,31 @@ export interface ThreadExchange<M extends ViewMessage = ViewMessage> {
   known: boolean;
 }
 
+/**
+ * A message of his read as his reaction to what came before it in its thread. One joined only for
+ * coming right after his last message is not, until the node has checked it is this subject
+ * (2026-11-23, the user: his words on another subject, joined to the card he had just read, made it
+ * read as known and leave his view: "我随便一聊，它就直接就消失"). Pure.
+ */
+export function readsAsReaction(m: Pick<ViewMessage, 'joined'>): boolean {
+  return !uncheckedJoin(m);
+}
+
+/**
+ * Joined only for coming right after his last message, and not checked by the node yet: not his word
+ * on this card (no reaction, not shown on it, review 2026-11-23), though the node is woken for it
+ * (threadOverdue). The node's next status answer takes the mark off, and one too old to be asked is
+ * swept then (status-thread-split.ts clearStaleJoins). Pure.
+ */
+export function uncheckedJoin(m: Pick<ViewMessage, 'joined'>): boolean {
+  return m.joined === 'recent';
+}
+
+/** The messages his card shows: those not waiting on the node's check of their join (uncheckedJoin). Pure. */
+export function cardMessages<M extends ViewMessage>(t: Pick<ViewThread<M>, 'messages'>): M[] {
+  return t.messages.some(uncheckedJoin) ? t.messages.filter((m) => !uncheckedJoin(m)) : t.messages;
+}
+
 /** Group the messages by the answer that covers them, in order. Messages after the last answer wait together. */
 export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExchange<M>[] {
   const out: ThreadExchange<M>[] = [];
@@ -192,7 +219,7 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
   const ackedByHim = t.closed?.by === 'human';
   if (t.opener) {
     const o = t.opener;
-    out.push({ n: 0, messages: [], opener: o, known: ackedByHim || (!!t.ackedAt && t.ackedAt >= o.at) || readAfter(o, t.reactedAt) || t.messages.some((m) => readAfter(o, m.at)) });
+    out.push({ n: 0, messages: [], opener: o, known: ackedByHim || (!!t.ackedAt && t.ackedAt >= o.at) || readAfter(o, t.reactedAt) || t.messages.some((m) => readsAsReaction(m) && readAfter(o, m.at)) });
   }
   let n = 1;
   let i = 0;
@@ -211,7 +238,7 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
     }
     const messages = t.messages.slice(i, j);
     const answer = first.answer as NonNullable<M['answer']> | undefined;
-    const later = t.messages.slice(j).some((m) => !!answer && readAfter(answer, m.at));
+    const later = t.messages.slice(j).some((m) => !!answer && readsAsReaction(m) && readAfter(answer, m.at));
     const read = messages.some((m) => !!answer && !!m.readAt && m.readAt >= answer.at);
     const marked = !t.reactedAt && !t.messages.some((m) => m.readAt) && knownThrough >= i
       && (!t.known?.at || !answer || t.known.at >= answer.at);
@@ -265,7 +292,10 @@ export interface SummaryLine<M extends ViewMessage = ViewMessage> {
 export const STAND_IN_MAX = 160;
 const STAND_IN_MIN = 12;
 
-export function cardView<M extends ViewMessage>(t: ViewThread<M>, shared: ReadonlySet<string> = NONE): CardView<M> {
+export function cardView<M extends ViewMessage>(whole: ViewThread<M>, shared: ReadonlySet<string> = NONE): CardView<M> {
+  // A message joined only for its timing is not on the card until the node checked it is this subject.
+  const shown = cardMessages(whole);
+  const t = shown === whole.messages ? whole : { ...whole, messages: shown };
   const exchanges = exchangesOf(t);
   let lastSaid = -1;
   exchanges.forEach((x, i) => { if (x.answer || x.opener) lastSaid = i; });
@@ -467,7 +497,7 @@ export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: st
 
 /** The reaction receipt survives splitting out the follow-up; older files infer it from his messages. */
 export function threadReactionAt(t: ViewThread): string {
-  return t.messages.reduce((last, m) => m.at > last ? m.at : last, t.reactedAt ?? '');
+  return t.messages.reduce((last, m) => readsAsReaction(m) && m.at > last ? m.at : last, t.reactedAt ?? '');
 }
 
 /**
@@ -479,7 +509,7 @@ export function threadReactionAt(t: ViewThread): string {
  */
 export function lineWordsSinceAck(t: ViewThread): boolean {
   if (!t.ackedAt || t.ackedResult === false || !t.replyAt || t.replyAt <= t.ackedAt) return false;
-  if (t.messages.some((m) => m.at > t.ackedAt!)) return false;
+  if (t.messages.some((m) => m.at > t.ackedAt! && readsAsReaction(m))) return false;
   return t.lineReplyAt !== undefined ? t.lineReplyAt === t.replyAt : !!t.lineState && t.lineState >= t.ackedAt;
 }
 
@@ -530,7 +560,10 @@ export interface ThreadOverdue {
 export function threadOverdue(t: ViewThread & { state: string }, now: number = Date.now(), deadline?: string): ThreadOverdue | null {
   // The task's own ask on it keeps the ask's own clock (needs-recheck.ts), never a second one.
   if (t.closed || snoozedNow(t, now) || t.heldAsk) return null;
-  const why = t.state === 'new' || t.state === 'working' ? 'reply' : t.state === 'needs' ? 'needs' : null;
+  // His message joined only for its timing keeps the card's state, so its clock is the reply one (review 2026-11-23).
+  const tail = t.messages[t.messages.length - 1];
+  const joinedWaits = !!tail && uncheckedJoin(tail) && !tail.answer && (t.state === 'answered' || t.state === 'pending');
+  const why = t.state === 'new' || t.state === 'working' || joinedWaits ? 'reply' : t.state === 'needs' ? 'needs' : null;
   // A thread waiting on him for a decision letter: the letter's own 4-hour check asks its task (sessions/letter-recheck.ts).
   if (!why || (why === 'needs' && t.letter && !t.letter.done && !t.letter.off)) return null;
   let lastHis = '';
