@@ -899,7 +899,8 @@ proxy, on clouddev under a load of 60 to 100 on 48 cores, 2026-11-24):
 
 | Home | Copy link | Downtime | Every host connected to the new leader after |
 |---|---|---|---|
-| small (a few hundred files) | unslowed | 11.8 to 17.2 s | 3.0 to 3.9 s |
+| small (a few hundred files) | unslowed | 11.8 to 17.2 s | 1.3 to 3.9 s |
+| small (a few hundred files) | 20 Mbit/s | 18.4 s | 1.8 s |
 | 1 GB of filler | unslowed | 22.1 s | 4.7 s |
 | 1 GB of filler | 20 Mbit/s (`slow {bytesPerSec: 2_500_000}`) | 22.9 s | 5.0 s |
 
