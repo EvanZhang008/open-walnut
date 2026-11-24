@@ -163,7 +163,8 @@ describe('a liveness status ask waits STATUS_PROBE_TIMEOUT_MS at most, and no an
     const probe = dc.slice(dc.indexOf('export async function probeDaemonSession('), dc.indexOf('export async function probeDaemonSessionArgs('))
     expect(probe).toMatch(/send\('status', \{ sid: sessionId \}, timeoutMs\)/)
     const liveness = fs.readFileSync(path.join(REPO, 'src/utils/session-liveness.ts'), 'utf8')
-    expect(liveness).toMatch(/probeDaemonSession\(session\.host, session\.claudeSessionId, STATUS_PROBE_TIMEOUT_MS\)/)
+    // The host is the row's place as this server reaches it (session-row-owner.ts execHostOf).
+    expect(liveness).toMatch(/probeDaemonSession\(remoteHost, session\.claudeSessionId, STATUS_PROBE_TIMEOUT_MS\)/)
   })
 })
 
