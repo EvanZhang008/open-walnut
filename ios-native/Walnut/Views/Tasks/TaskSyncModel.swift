@@ -45,9 +45,11 @@ enum SyncStanding: Equatable {
         return false
     }
 
-    /// Why a task kept local offers no Sync when its project syncs nowhere now (the web's keptLine).
+    /// Why a task kept local offers no Sync when its project syncs nowhere now (the web's keptLine says
+    /// more). Short: a menu row shows two lines, and the longer sentence was cut at "an outside s…"
+    /// on the gate simulator (2026-11-24).
     static func projectSyncsNowhere(_ service: String) -> String {
-        "Its project does not sync to an outside service now, so it can only go to \(service) from a project that does."
+        "Its project does not sync to \(service)."
     }
 
     /// The short state the menu's Sync row reads ("Syncs to X", "Local, not in X").

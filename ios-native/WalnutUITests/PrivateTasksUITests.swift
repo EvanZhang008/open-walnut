@@ -118,7 +118,7 @@ final class PrivateTasksUITests: XCTestCase {
         let app = try launchPaired()
         openBoard(app)
         openSync(app, held, expecting: "Sync: Local, not in Tracker").tap()
-        let why = "Its project does not sync to an outside service now, so it can only go to Tracker from a project that does."
+        let why = "Its project does not sync to Tracker."
         XCTAssertTrue(app.staticTexts[why].waitForExistence(timeout: 10) || app.buttons[why].exists,
             "the menu does not say why it cannot sync")
         XCTAssertFalse(app.buttons["Sync to Tracker"].exists, "a Sync the server would refuse is offered")

@@ -132,7 +132,7 @@ final class PrivateTasksTests: XCTestCase {
         XCTAssertFalse(store.projectSources.isEmpty)
         XCTAssertNil(store.projectService(held.project), "Home syncs nowhere: no Sync to Tracker")
         XCTAssertEqual(SyncStanding.projectSyncsNowhere(store.serviceName("plugin-a")),
-                       "Its project does not sync to an outside service now, so it can only go to Tracker from a project that does.")
+                       "Its project does not sync to Tracker.")
         // The same hold in a project that syncs still offers it, and a task being checked does too.
         XCTAssertNotNil(store.projectService(task("k", hold: held.syncHold).project))
         XCTAssertTrue(SyncStanding.checking(service: "plugin-a", hold: WalnutSyncHold(state: "checking", target: "plugin-a")).isChecking)
