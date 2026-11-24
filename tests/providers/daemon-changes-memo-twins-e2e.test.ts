@@ -74,6 +74,8 @@ async function boot(twin: Twin, home: string, daemonDir: string): Promise<void> 
     WALNUT_STREAMS_DIR: path.join(root, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
+    // Logs each command's cmd_recv line: logSettled() waits for one.
+    WALNUT_DAEMON_DEBUG: '1',
   }
   const [cmd, args] = twin.command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -105,6 +107,38 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 30_000): Promise<Record<s
     ws!.on('message', onMessage)
     ws!.send(JSON.stringify({ id, ...cmd }))
   })
+}
+
+/** The daemon's log lines in its files (each line a JSON record). */
+function logRecords(daemonDir: string): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = []
+  for (const f of fs.readdirSync(daemonDir).filter((n) => /^daemon-.*\.log$/.test(n))) {
+    for (const line of fs.readFileSync(path.join(daemonDir, f), 'utf8').split('\n')) {
+      if (!line.trim()) continue
+      try { out.push(JSON.parse(line) as Record<string, unknown>) } catch { /* a line still being written */ }
+    }
+  }
+  return out
+}
+
+/**
+ * Waits until every line the daemon logged so far is on disk. The log is written by an async
+ * appender, in order (log-appender-core.ts, since 8ad44f196a), so a compute's line can land after
+ * its answer, and a SIGKILL drops what is still queued. A `list` sent now is logged (cmd_recv)
+ * after every line before it: once that line is in the file, so is everything before it.
+ */
+async function logSettled(daemonDir: string): Promise<void> {
+  const marker = await rpc({ cmd: 'list' })
+  await expect.poll(
+    () => logRecords(daemonDir).some((r) => r.msg === 'cmd_recv' && r.cmd === 'list' && r.id === marker.id),
+    { timeout: 15_000, message: 'the daemon log caught up with its answers' },
+  ).toBe(true)
+}
+
+/** Every `changes.compute done` line the daemon logged for this sid, in order, once the log caught up. */
+async function settledComputeLog(daemonDir: string, sid: string): Promise<Array<{ resumed: boolean; readBytes: number; files: number }>> {
+  await logSettled(daemonDir)
+  return computeLog(daemonDir, sid)
 }
 
 /** Every `changes.compute done` line the daemon logged for this sid, in order. */
@@ -159,7 +193,7 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
         .flatMap((g) => g.files.map((f) => f.relPath)).sort()
       expect(files).toEqual(['a.ts', 'b.ts'])
 
-      const log = computeLog(daemonDir, whale)
+      const log = await settledComputeLog(daemonDir, whale)
       expect(log).toHaveLength(2)
       expect(log[0]).toMatchObject({ resumed: false, readBytes: fs.statSync(transcript(whale)).size - Buffer.byteLength(appended) })
       expect(log[1]).toMatchObject({ resumed: true, readBytes: Buffer.byteLength(appended), files: 2 })
@@ -182,6 +216,8 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       const start = Date.now()
       expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).ok).toBe(true)
       const coldMs = Date.now() - start
+      // The SIGKILL below drops log lines still queued: the first compute's line is on disk first.
+      await logSettled(daemonDir)
       ws!.close(); ws = null
       const child = proc!
       const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
@@ -195,7 +231,7 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       const secondStart = Date.now()
       const result = await rpc({ cmd: 'changes.compute', sid, cwd: repo })
       expect(result.ok).toBe(true)
-      const records = computeLog(daemonDir, sid)
+      const records = await settledComputeLog(daemonDir, sid)
       console.log(`[changes-restart-cost] ${JSON.stringify({ twin: twin.name, coldMs, restartMs: Date.now() - secondStart, appendBytes: Buffer.byteLength(append), records })}`)
       expect((result.result as { fileCount: number }).fileCount).toBe(2)
       expect(records).toHaveLength(2)
@@ -225,12 +261,12 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       // s-0 is the least recent of 15 outputs in a 12-entry LRU: evicted.
       const again = await rpc({ cmd: 'changes.compute', sid: 's-0', cwd: repo })
       expect(again).toEqual({ ...firsts.get('s-0'), id: again.id })
-      expect(computeLog(daemonDir, 's-0')).toHaveLength(1)
+      expect(await settledComputeLog(daemonDir, 's-0')).toHaveLength(1)
 
       // A file click still needs the full content, so it computes once more.
       const file = await rpc({ cmd: 'changes.file', sid: 's-0', cwd: repo, path: path.join(repo, 's-0.ts') })
       expect(file).toMatchObject({ found: true, file: { relPath: 's-0.ts', after: 'new\n' } })
-      expect(computeLog(daemonDir, 's-0')).toHaveLength(2)
+      expect(await settledComputeLog(daemonDir, 's-0')).toHaveLength(2)
 
       // A transcript that moved is never answered from the old copy.
       fs.appendFileSync(path.join(projectDir, 's-0.jsonl'), writeLine(repo, 's-0b.ts', 'b\n'))
@@ -239,7 +275,7 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       expect((moved.result as { fileCount: number }).fileCount).toBe(2)
       // And refresh always recomputes.
       await rpc({ cmd: 'changes.compute', sid: 's-1', cwd: repo, refresh: true })
-      expect(computeLog(daemonDir, 's-1')).toHaveLength(2)
+      expect(await settledComputeLog(daemonDir, 's-1')).toHaveLength(2)
     }, 90_000)
 
     // A stopped session's transcript cannot grow until a resume, so once it has
@@ -276,20 +312,20 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       await new Promise((r) => setTimeout(r, 1600))
       expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).result).toEqual(first.result)
       expect(await rpc({ cmd: 'changes.file', sid, cwd: repo, path: path.join(repo, 'a.ts') })).toMatchObject({ found: true })
-      expect(computeLog(daemonDir, sid)).toHaveLength(1)
+      expect(await settledComputeLog(daemonDir, sid)).toHaveLength(1)
 
       // Unused past the window plus a sweep (the checks above were a use): the
       // list still answers from the light copy...
       await new Promise((r) => setTimeout(r, 5000))
       expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).result).toEqual(first.result)
-      expect(computeLog(daemonDir, sid)).toHaveLength(1)
+      expect(await settledComputeLog(daemonDir, sid)).toHaveLength(1)
       // ...and after a resume appends, the disk checkpoint restores the released parse.
       const appended = writeLine(repo, 'b.ts', 'b1\n')
       fs.appendFileSync(transcript, appended)
       fs.writeFileSync(path.join(repo, 'b.ts'), 'b1\n')
       const moved = await rpc({ cmd: 'changes.compute', sid, cwd: repo })
       expect((moved.result as { fileCount: number }).fileCount).toBe(2)
-      const log = computeLog(daemonDir, sid)
+      const log = await settledComputeLog(daemonDir, sid)
       expect(log).toHaveLength(2)
       expect(log[1]).toMatchObject({ resumed: true, readBytes: Buffer.byteLength(appended) })
     }, 90_000)
