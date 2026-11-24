@@ -37,6 +37,8 @@ export interface DaemonAcpSessionsDeps<W extends object> extends DaemonReplies<W
   /** Demo's stop fence: no new worker while it holds. */
   demoQuiesce: { readonly fenced: boolean }
   hostCallTokens: ReturnType<typeof createHostCallTokens>
+  /** Record whose worker this is (daemon-spawn-journal.ts): its journal stays that Walnut's to read. */
+  recordAcpRuntime: (runtimeId: unknown, home: unknown) => void
   isJournalSid: (sid: unknown) => sid is string
   walnutThroughGateway: (env: Record<string, unknown> | undefined) => boolean
   sessionPathWithShim: (base: string, throughGateway: boolean) => string
@@ -49,7 +51,7 @@ export interface DaemonAcpSessionsDeps<W extends object> extends DaemonReplies<W
 }
 
 export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSessionsDeps<W>) {
-  const { daemonEnv, DAEMON_DIR, TASK_DIR_ROOT, GATEWAY_SOCK_PATH, SECRETS_ROOT, sessions, acp, usageBudget, budgetGate, sessionStartGate, demoQuiesce, hostCallTokens, isJournalSid, walnutThroughGateway, sessionPathWithShim, sessionWalnutApiUrl, secretsSessionEnv, pwSilenceFile, pwSilenceAcpOptions, logMsg, sendOk, sendError, sendFrame } = deps
+  const { daemonEnv, DAEMON_DIR, TASK_DIR_ROOT, GATEWAY_SOCK_PATH, SECRETS_ROOT, sessions, acp, usageBudget, budgetGate, sessionStartGate, demoQuiesce, hostCallTokens, recordAcpRuntime, isJournalSid, walnutThroughGateway, sessionPathWithShim, sessionWalnutApiUrl, secretsSessionEnv, pwSilenceFile, pwSilenceAcpOptions, logMsg, sendOk, sendError, sendFrame } = deps
 
   async function cmdAcpStart(ws: W, id: number, cmd: Record<string, unknown>) {
     const params = cmd as unknown as AcpStartParams
@@ -90,8 +92,11 @@ export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSession
       if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
       if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts')
       const resp = await acp.acpStart(ws, params)
-      if (resp.ok) sendOk(ws, id, resp.result ?? {})
-      else sendFrame(ws, { id, ok: false, error: resp.error, errorKind: resp.errorKind })
+      if (resp.ok) {
+        // Whose worker this is, kept on disk: its journal stays that Walnut's to read here.
+        recordAcpRuntime(params.sid, (cmd as { home?: unknown }).home)
+        sendOk(ws, id, resp.result ?? {})
+      } else sendFrame(ws, { id, ok: false, error: resp.error, errorKind: resp.errorKind })
     })
   }
 

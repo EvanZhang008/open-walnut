@@ -403,7 +403,7 @@ const walnutScope = createWalnutScope({
 // ── Spawn journal (daemon-spawn-journal.ts): the CLI sessions this host started, and the Walnut a home names ──
 const spawnJournal = createDaemonSpawnJournal({ daemonEnv, HOME_DIR, STREAMS_DIR, ISOLATED_FOR: () => ISOLATED_FOR, walnutScope, hostServers: { walnutOf: (home) => hostServers.walnutOf(home), dataDirs: () => hostServers.dataDirs() } })
 const { SPAWN_JOURNAL, journaledHomes, journaledWalnuts, isJournalSid, journaledIds, forgetJournaledSids, journaledHome, servedWalnutOf, serverDataHomes,
-  walnutOfHome, livedHere, appendSpawnJournal, spawnInfoFor, namedSessionId, backfillSpawnJournal } = spawnJournal
+  walnutOfHome, livedHere, appendSpawnJournal, spawnInfoFor, namedSessionId, backfillSpawnJournal, acpRuntimeOwner, recordAcpRuntime } = spawnJournal
 // The walnut file's runtime place a session keeps: a set's own (service-set.ts), never a deploy stage's.
 const SESSION_RUNTIME_DIR = setRuntimeTreesDirOf(daemonEnv, fs.realpathSync)
 
@@ -3823,7 +3823,8 @@ const followerReads = createFollowerReads({
   streamsDir: STREAMS_DIR,
   realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } },
   sliceOwner: (sid) => offlineHost.ownerOf(sid),
-  runtimeOwner: (runtimeId) => offlineHost.runtimeOwnerOf(runtimeId),
+  // The Mac's copy first (as sliceOwner), else the record of who started the worker here.
+  runtimeOwner: (runtimeId) => offlineHost.runtimeOwnerOf(runtimeId) ?? acpRuntimeOwner(runtimeId),
   journalOwner: (sid) => journaledHome(sid),
   liveSessions: () => [...sessions].map(([sid, s]) => ({ sid, cwd: s.cwd })),
   journalSize: () => { try { return fs.statSync(SPAWN_JOURNAL).size } catch { return -1 } },
@@ -5396,7 +5397,7 @@ async function cmdTaskDirPrune(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
 // ── ACP session commands (engine=codex etc; daemon-acp-sessions.ts) ──
 // What is defined further down in the body is asked on use.
 const acpSessions = createDaemonAcpSessions({ daemonEnv, DAEMON_DIR, TASK_DIR_ROOT, GATEWAY_SOCK_PATH, SECRETS_ROOT: () => SECRETS_ROOT,
-  secretsSessionEnv: () => secretsSessionEnv(), sessions, acp, usageBudget, budgetGate, sessionStartGate, demoQuiesce, hostCallTokens, isJournalSid,
+  secretsSessionEnv: () => secretsSessionEnv(), sessions, acp, usageBudget, budgetGate, sessionStartGate, demoQuiesce, hostCallTokens, recordAcpRuntime, isJournalSid,
   walnutThroughGateway, sessionPathWithShim, sessionWalnutApiUrl, pwSilenceFile, pwSilenceAcpOptions, logMsg, sendOk, sendError, sendFrame })
 const { cmdAcpStart, cmdAcpOp, cmdAcpStop, cmdAcpSubscribe, cancelledStartPath, cmdCancelPendingStart } = acpSessions
 

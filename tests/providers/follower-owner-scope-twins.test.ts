@@ -36,6 +36,9 @@ const SB = 'bbbbbbbb-0b0b-4b0b-8b0b-0b0b0b0b0b0b'
 /** Each Walnut's ACP session: its record id and the runtime id its worker's journal is named by. */
 const ACP_A = { sid: 'cccccccc-0c0c-4c0c-8c0c-0c0c0c0c0c0c', runtimeId: 'acp-marina-runtime-1' }
 const ACP_B = { sid: 'dddddddd-0d0d-4d0d-8d0d-0d0d0d0d0d0d', runtimeId: 'acp-acme-runtime-1' }
+/** Workers of sessions no copy lists any more: only the record of their start names their Walnut. */
+const OLD_RT_A = 'acp-marina-runtime-old'
+const OLD_RT_B = 'acp-acme-runtime-old'
 /** A note path and body with non-ASCII text (\u escapes: the repo keeps sources ASCII). */
 const UNI_KEY = 'Journal/\u00e9t\u00e9 \u6e2c\u8a66.md'
 const UNI_BODY = '# \u00c9t\u00e9\n\nCaf\u00e9 \u2603 \u{1F330}\r\nline two\n'
@@ -206,6 +209,13 @@ describe.skipIf(!BUN)('standalone daemon: a follower reads its own Walnut only',
     fs.symlinkSync(cwdB, path.join(cwdA, 'escape'))
     const mock = path.join(base, 'mock-cli.cjs')
     fs.writeFileSync(mock, MOCK_CLI)
+    // Workers started here before (sessions no copy lists any more): the record of whose each is,
+    // beside the spawn journal, as a start writes it (daemon-spawn-journal.ts recordAcpRuntime).
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'acp-runtimes.jsonl'), [
+      { v: 1, runtimeId: OLD_RT_A, at: '2026-10-01T00:00:00.000Z', home: HOME_A },
+      { v: 1, runtimeId: OLD_RT_B, at: '2026-10-01T00:00:00.000Z', home: HOME_B },
+    ].map((r) => JSON.stringify(r) + '\n').join(''))
     const d = await spawnDaemon(dir)
 
     // A's picture is over one 2 MB chunk: it crosses the daemon link as two frames of base64.
@@ -289,6 +299,15 @@ describe.skipIf(!BUN)('standalone daemon: a follower reads its own Walnut only',
     expect(ownJournal.ok, JSON.stringify(ownJournal)).toBe(true)
     expect(await cmd(follower, { cmd: 'fs.stat', path: journalOf(ACP_B.runtimeId) })).toMatchObject({ ok: true, exists: false })
     expect(notFound(await cmd(follower, { cmd: 'fs.readRange', path: journalOf(ACP_B.runtimeId), start: 0, length: 4096 }))).toBe(true)
+    // A session older than the copy: its worker's record names its Walnut. A's reads, B's stays B's,
+    // and the worker's other files stay no one's.
+    for (const rt of [OLD_RT_A, OLD_RT_B]) fs.writeFileSync(journalOf(rt), `{"runtime":"${rt}"}\n`)
+    fs.writeFileSync(path.join(dir, 'streams', `${OLD_RT_A}.acp-err`), 'worker stderr\n')
+    expect(await cmd(follower, { cmd: 'fs.stat', path: journalOf(OLD_RT_A) })).toMatchObject({ ok: true, exists: true })
+    expect((await cmd(follower, { cmd: 'fs.readRange', path: journalOf(OLD_RT_A), start: 0, length: 4096 })).ok).toBe(true)
+    expect(await cmd(follower, { cmd: 'fs.stat', path: journalOf(OLD_RT_B) })).toMatchObject({ ok: true, exists: false })
+    expect(notFound(await cmd(follower, { cmd: 'fs.readRange', path: journalOf(OLD_RT_B), start: 0, length: 4096 }))).toBe(true)
+    expect(notFound(await cmd(follower, { cmd: 'fs.read', path: path.join(dir, 'streams', `${OLD_RT_A}.acp-err`) }))).toBe(true)
     // Writes stay the leader's.
     for (const c of ['fs.write', 'fs.mkdir', 'git.commitStart', 'start', 'send']) {
       expect((await cmd(follower, { cmd: c, path: path.join(cwdA, 'x'), sid: SA })).errorKind).toBe('follower_refused')

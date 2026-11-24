@@ -177,6 +177,64 @@ export function createDaemonSpawnJournal(deps: DaemonSpawnJournalDeps) {
     } catch { /* best effort: the scan also consults the streams dir */ }
   }
 
+  // An ACP worker (Codex and the rest, acp-daemon.ts) is no CLI session: it never goes into the
+  // spawn journal, whose readers take every id there for one (the external-session scan, a
+  // resume's livedHere). Its own record, beside the journal and relocated with it: one line per
+  // worker runtime id, {v, runtimeId, at, home, walnut?}, naming the Walnut that started it. The
+  // follower check reads it (follower-reads-core.ts runtimeOwner): a worker's journal
+  // (<runtimeId>.acp.jsonl) stays its Walnut's after the session left the Mac's copy, across
+  // daemon restarts and surviving workers alike. The first line per runtime id decides; each line
+  // is one O_APPEND write, so daemons sharing the host never interleave, and a torn tail is skipped.
+  const ACP_RUNTIMES = path.join(path.dirname(SPAWN_JOURNAL), 'acp-runtimes.jsonl')
+  const acpRuntimeHomes = new Map<string, { home: string; walnut?: string }>()
+  let acpRuntimesSize = -1
+  let acpRuntimesTorn = false
+
+  /** The record again when its size moved (another daemon on the host may have appended). */
+  function readAcpRuntimes(): void {
+    let size = -1
+    try { size = fs.statSync(ACP_RUNTIMES).size } catch { size = -1 }
+    if (size === acpRuntimesSize) return
+    let text = ''
+    try { text = fs.readFileSync(ACP_RUNTIMES, 'utf8') } catch { text = '' }
+    acpRuntimesSize = Buffer.byteLength(text)
+    acpRuntimesTorn = text.length > 0 && !text.endsWith('\n')
+    acpRuntimeHomes.clear()
+    for (const line of text.split('\n')) {
+      if (!line) continue
+      try {
+        const rec = JSON.parse(line)
+        if (!isJournalSid(rec?.runtimeId) || acpRuntimeHomes.has(rec.runtimeId)) continue
+        if (typeof rec.home !== 'string' || !path.isAbsolute(rec.home) || rec.home.length > 1024) continue
+        const walnut = typeof rec.walnut === 'string' && path.isAbsolute(rec.walnut) && rec.walnut.length <= 1024 ? rec.walnut : undefined
+        acpRuntimeHomes.set(rec.runtimeId, { home: rec.home, ...(walnut ? { walnut } : {}) })
+      } catch { /* torn tail from a crashed writer */ }
+    }
+  }
+
+  /** The Walnut that started the ACP worker `runtimeId` here, if recorded (as journaledHome names one). */
+  function acpRuntimeOwner(runtimeId: string): string | undefined {
+    readAcpRuntimes()
+    const rec = acpRuntimeHomes.get(runtimeId)
+    if (!rec) return undefined
+    return rec.walnut ? walnutScope.canonical(rec.walnut) : walnutOfHome(rec.home)
+  }
+
+  /** An ACP worker started here for the Walnut whose data dir is `home` (its start's own field). */
+  function recordAcpRuntime(runtimeId: unknown, home: unknown): void {
+    if (!isJournalSid(runtimeId) || typeof home !== 'string' || !path.isAbsolute(home) || home.length > 1024) return
+    readAcpRuntimes()
+    if (acpRuntimeHomes.has(runtimeId)) return
+    const walnut = servedWalnutOf(home)
+    const line = JSON.stringify({ v: 1, runtimeId, at: new Date().toISOString(), home, ...(walnut ? { walnut } : {}) }) + '\n'
+    try {
+      fs.mkdirSync(path.dirname(ACP_RUNTIMES), { recursive: true })
+      fs.appendFileSync(ACP_RUNTIMES, (acpRuntimesTorn ? '\n' : '') + line, { mode: 0o600 })
+      // Read again on the next lookup: the size moved, and the line on disk is what counts.
+      acpRuntimesSize = -2
+    } catch { /* best effort: the Mac's copy still names a recent session's runtime */ }
+  }
+
   function argValue(args: string[], flag: string): string | undefined {
     const i = args.indexOf(flag)
     return i >= 0 && typeof args[i + 1] === 'string' ? args[i + 1] : undefined
@@ -222,5 +280,5 @@ export function createDaemonSpawnJournal(deps: DaemonSpawnJournalDeps) {
     }
   }
 
-  return { SPAWN_JOURNAL, journaledHomes, journaledWalnuts, isJournalSid, journaledIds, forgetJournaledSids, journaledHome, servedWalnutOf, serverDataHomes, walnutOfHome, livedHere, appendSpawnJournal, spawnInfoFor, namedSessionId, backfillSpawnJournal }
+  return { SPAWN_JOURNAL, journaledHomes, journaledWalnuts, isJournalSid, journaledIds, forgetJournaledSids, journaledHome, servedWalnutOf, serverDataHomes, walnutOfHome, livedHere, appendSpawnJournal, spawnInfoFor, namedSessionId, backfillSpawnJournal, acpRuntimeOwner, recordAcpRuntime }
 }
