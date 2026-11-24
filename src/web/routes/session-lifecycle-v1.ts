@@ -299,6 +299,10 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
       // CLI (changeSessionMode), so only the primary can truthfully accept it.
       const metadataOnly = body.mode === undefined
       if (!metadataOnly) {
+        // A session its host judges, the Mac away: its host takes the mode over its listener link,
+        // after the caller's ceiling above (companion-host-ops.ts patchModeViaHost).
+        const viaHost = await (await import('../../core/session-channel/companion-host-ops.js')).patchModeViaHost(sessionId, body.mode, patch)
+        if (viaHost) { res.status(viaHost.status).json(viaHost.body); return }
         // While this companion leads the session's host, that host takes the
         // mode (it is the one that can truthfully accept it); the rest of the
         // patch is metadata and goes the metadata way below.

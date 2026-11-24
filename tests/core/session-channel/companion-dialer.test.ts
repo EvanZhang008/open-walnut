@@ -58,13 +58,15 @@ describe('the companion link the runtime keeps', () => {
     for (const bad of ['ws://box.example/bridge', 'ws://10.0.0.5/bridge', 'https://box.example/bridge', 'wss://u:p@box.example/bridge', '', 7]) expect(listenerUrlOf(bad), String(bad)).toBeNull()
   })
 
-  it('a companion\'s call reaches a send, an interrupt and a prompt\'s answer only', () => {
+  it('a companion\'s call reaches a send, an interrupt, a prompt\'s answer, a stop and a mode change only', () => {
     expect(listenerCallRefusal('POST', '/host-api/sessions/send', {})).toBeNull()
     expect(listenerCallRefusal('POST', '/host-api/sessions/interrupt', {})).toBeNull()
-    expect(listenerCallRefusal('POST', '/host-api/sessions/call', { member: 'resolvePermissionRequest' })).toBeNull()
+    for (const member of ['resolvePermissionRequest', 'terminateSession', 'changeSessionModeOf']) {
+      expect(listenerCallRefusal('POST', '/host-api/sessions/call', { member }), member).toBeNull()
+    }
     for (const [m, p, b] of [
       ['POST', '/host-api/sessions/start', {}], ['POST', '/host-api/sessions/drop', {}], ['POST', '/host-api/credential', {}],
-      ['POST', '/host-api/doors', {}], ['POST', '/host-api/sessions/call', { member: 'kill' }], ['POST', '/host-api/sessions/call', { member: 'terminateSession' }],
+      ['POST', '/host-api/doors', {}], ['POST', '/host-api/sessions/call', { member: 'kill' }], ['POST', '/host-api/sessions/call', { member: 'killSession' }], ['POST', '/host-api/sessions/call', { member: 'changeSessionMode' }],
       ['GET', '/host-api/sessions/send', {}], ['POST', '/host-api/sessions/send/../credential', {}],
     ] as const) expect(listenerCallRefusal(m, p, b), `${m} ${p}`).toBe('not_callable')
   })

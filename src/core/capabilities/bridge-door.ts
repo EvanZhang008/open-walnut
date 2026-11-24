@@ -36,7 +36,7 @@ export const bridgeDoor = defineCapability({
     },
     {
       path: '/host-listen',
-      opensWith: "a host that runs and judges its own sessions, so the phone sees and operates them while the Mac is away: only that host's own machine token (a bridge-<alias> record, never bridge-local, with more than status-only scope) as Authorization: Bearer or a walnut.bearer. subprotocol entry; its hello must name the alias the token was minted for and the Walnut the Mac's heartbeat names, and the door is open only while that heartbeat says the experiment host_runs_sessions is on. Failures are rate limited per address and a revoked token closes its socket",
+      opensWith: "a host that runs and judges its own sessions, so the phone sees and operates them while the Mac is away: only that host's own machine token (a bridge-<alias> record, never bridge-local, with more than status-only scope) as Authorization: Bearer or a walnut.bearer. subprotocol entry; its hello must name the alias the token was minted for and the Walnut the Mac's heartbeat names, and the door is open only while that heartbeat says the experiment host_runs_sessions is on. Over it this box calls only listener-wire.ts LISTENER_CALLS (a send, an interrupt, a prompt's answer, a stop and a mode change), each one a person's own control from a paired device's /api/v1 call (a machine token gets 401 there), the mode change under the caller's ceiling (delegated-mode.ts modeChangeRefusal), the same controls the Mac hands the host. Failures are rate limited per address and a revoked token closes its socket",
       verifiedIn: 'src/core/session-channel/listener-door.ts',
       check: "cred.kind !== 'machine' || cred.bridgeScope === 'status-only' || !cred.name.startsWith('bridge-')",
     },

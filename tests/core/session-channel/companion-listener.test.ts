@@ -47,7 +47,7 @@ const upserts = k.upserts
 import { EventEmitter } from 'node:events'
 import { attachSse, closeAllSseChannels } from '../../../src/web/sse-channels.js'
 import { _resetCompanionListenerForTesting, attachHostListener, forgetHostListener, LINK_GRACE_MS, listenedRow, standingRow, standingRows } from '../../../src/core/session-channel/companion-listener.js'
-import { _resetSavedPicturesForTesting, checkMacAway, hostOperated, hostRoute, interruptViaHost, joinListenedRows, listenedDetail, permissionViaHost, sendViaHost, streamedByListener } from '../../../src/core/session-channel/companion-host-ops.js'
+import { _resetSavedPicturesForTesting, checkMacAway, hostOperated, hostRoute, interruptViaHost, joinListenedRows, listenedDetail, modeViaHost, permissionViaHost, sendViaHost, stopViaHost, streamedByListener } from '../../../src/core/session-channel/companion-host-ops.js'
 
 const WALNUT = 'ab'.repeat(16)
 const row = (sid: string, over: Record<string, unknown> = {}) => ({ claudeSessionId: sid, taskId: 't1', judge: 'host', host: 'devbox', process_status: 'idle', startedAt: 'a', lastActiveAt: 'b', ...over })
@@ -213,6 +213,29 @@ describe('operating a host\'s session through its link', () => {
     expect(answer(200, { ok: false, error: 'not_pending' }).body.args).toEqual(['r0', false])
     expect((await q).status).toBe(404)
     expect((await permissionViaHost(t, { requestId: 'r1' })).status).toBe(400)
+  })
+
+  it('a stop is the host\'s own terminateSession, answered with the stop it recorded; its refusal keeps the host\'s code', async () => {
+    const { t, answer } = await operated()
+    const p = stopViaHost(t, true, 1000)
+    await settle()
+    const stopRequest = { id: 'st1', requestedAt: 'x', state: 'confirmed' }
+    expect(answer(200, { ok: true, value: { status: 'terminated', sessionId: 's1', stopRequest } })).toMatchObject({ path: '/host-api/sessions/call', body: { sid: 's1', target: 'lifecycle', member: 'terminateSession', args: [{ force: true }] } })
+    expect(await p).toEqual({ ok: true, result: { status: 'terminated', sessionId: 's1', stopRequest, viaHost: true } })
+    const q = stopViaHost(t, false, 1000)
+    await settle()
+    answer(409, { ok: false, error: 'Session has armed crons', code: 'crons_armed' })
+    const refused = await q
+    expect(refused.ok).toBe(false)
+    expect(!refused.ok && refused.answer).toMatchObject({ status: 409, body: { error: { code: 'crons_armed' } } })
+  })
+
+  it('a mode change is the host\'s own changeSessionModeOf, answered with the mode it kept', async () => {
+    const { t, answer } = await operated()
+    const p = modeViaHost(t, 'accept', 1000)
+    await settle()
+    expect(answer(200, { ok: true, value: { mode: 'accept' } })).toMatchObject({ path: '/host-api/sessions/call', body: { sid: 's1', target: 'lifecycle', member: 'changeSessionModeOf', args: ['accept'] } })
+    expect(await p).toEqual({ ok: true, mode: 'accept' })
   })
 })
 

@@ -63,14 +63,20 @@ export function listenerUrlOf(bridgeUrl: unknown): string | null {
 }
 
 /**
- * The host routes a companion's call frame may reach, a fixed list: a send, an interrupt, and the
- * answer to a permission prompt. Never a start (a start's bundle is the leader's to make), a drop,
- * any other call member, or the credential and doors routes.
+ * The host routes a companion's call frame may reach, a fixed list: what a person does to a session
+ * from the phone while the Mac is away (the task's brief: the phone sees AND operates a dev box's
+ * session through the companion). A send, an interrupt, the answer to a permission prompt, a Stop
+ * (`terminateSession`) and a permission mode change (`changeSessionModeOf`, under the same mode rule
+ * the companion's route applies to every mode change: sessions/delegated-mode.ts modeChangeRefusal).
+ * Each call reaches the companion only from a person's paired device (the phone API's own auth: a
+ * machine credential is no API credential there), and the host's route table checks the session is
+ * its own. Never a start (a start's bundle is the leader's to make), a drop, any other call member,
+ * or the credential and doors routes.
  */
 export const LISTENER_CALLS: Readonly<Record<string, readonly string[] | null>> = {
   [`${HOST_SESSIONS_PATH}/send`]: null,
   [`${HOST_SESSIONS_PATH}/interrupt`]: null,
-  [`${HOST_SESSIONS_PATH}/call`]: ['resolvePermissionRequest'],
+  [`${HOST_SESSIONS_PATH}/call`]: ['resolvePermissionRequest', 'terminateSession', 'changeSessionModeOf'],
 }
 
 /** Why a companion's call is refused (null: it may go to the host's routes). */

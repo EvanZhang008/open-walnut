@@ -190,7 +190,8 @@ async function call(t: OperatedSession, path: string, body: unknown, timeoutMs: 
     if (r.status === 200 && b.ok === true) return { ok: true, body: b }
     const why = typeof b.error === 'string' ? b.error : `the host answered ${r.status}`
     if (why === 'not_own_session') return { ok: false, answer: v1Error(404, 'not_found', 'The session\'s host does not run this session') }
-    return { ok: false, answer: v1Error(r.status >= 400 && r.status < 500 ? r.status : 503, r.status >= 400 && r.status < 500 ? 'bad_request' : 'bridge_offline', why) }
+    const refused = r.status >= 400 && r.status < 500
+    return { ok: false, answer: v1Error(refused ? r.status : 503, refused ? (typeof b.code === 'string' ? b.code : 'bad_request') : 'bridge_offline', why) }
   } catch (err) {
     // Not linked: nothing was sent. A timeout or a dropped link: the host may have taken it, and a
     // retry with the same message id is queued once there (the host's queue keys it by that id).
@@ -284,6 +285,53 @@ export async function interruptViaHost(t: OperatedSession, timeoutMs = 15_000): 
   const wasRunning = t.live?.turnRunning ?? t.live?.inTurn ?? t.row.process_status === 'running'
   const r = await call(t, '/host-api/sessions/interrupt', { sessionId: sid, busSource: 'mobile' }, timeoutMs)
   return r.ok ? { status: 200, body: { status: 'interrupted', sessionId: sid, wasRunning: wasRunning === true, viaHost: true } } : r.answer
+}
+
+/**
+ * The phone's Stop of the whole session (POST /sessions/:id/terminate): the host's own stop of its
+ * own session (session-lifecycle.ts terminateSession), as the Mac hands it over. Answers the host's
+ * TerminateResult (a `pending` one is the route's stop_pending), or the refusal.
+ */
+export async function stopViaHost(t: OperatedSession, force: boolean, timeoutMs = 30_000): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; answer: HostAnswer }> {
+  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'terminateSession', args: wireArgs([{ force }]) }, timeoutMs)
+  if (!r.ok) return r
+  const value = r.body.value && typeof r.body.value === 'object' ? r.body.value as Record<string, unknown> : {}
+  return { ok: true, result: { ...value, viaHost: true } }
+}
+
+/**
+ * The phone's permission mode change: the host keeps the mode on its own row and applies it to the
+ * live session (session-lifecycle.ts changeSessionModeOf, as the Mac hands it over). The caller's
+ * ceiling (delegated-mode.ts modeChangeRefusal) was applied by the route before this, as for every
+ * mode change. Answers the mode the host kept.
+ */
+export async function modeViaHost(t: OperatedSession, mode: string, timeoutMs = 20_000): Promise<{ ok: true; mode: string } | { ok: false; answer: HostAnswer }> {
+  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'changeSessionModeOf', args: wireArgs([mode]) }, timeoutMs)
+  if (!r.ok) return r
+  const kept = (r.body.value as { mode?: unknown } | null)?.mode
+  return { ok: true, mode: typeof kept === 'string' ? kept : mode }
+}
+
+/**
+ * PATCH /sessions/:id with a mode on the companion: null when the session is not one a linked host
+ * stands for with the Mac away (the route goes on as before); else the answer. The mode goes to the
+ * host (modeViaHost); the rest of the patch is metadata, kept for the Mac (control-queue.ts), as the
+ * lead path keeps it. The route applied the caller's ceiling before this.
+ */
+export async function patchModeViaHost(sid: string, mode: unknown, patch: Record<string, unknown>): Promise<HostAnswer | null> {
+  const route = await hostRoute(sid)
+  if (route.kind === 'none') return null
+  if (route.kind === 'refuse') return v1Error(route.status, route.code, route.message)
+  const { VALID_SESSION_MODE_IDS } = await import('../types.js')
+  if (typeof mode !== 'string' || !VALID_SESSION_MODE_IDS.has(mode)) return v1Error(400, 'bad_request', `mode must be one of ${[...VALID_SESSION_MODE_IDS].join(', ')}`)
+  const applied = await modeViaHost(route.t, mode)
+  if (!applied.ok) return applied.answer
+  const { mode: _mode, ...rest } = patch
+  const { keepSessionPatch } = await import('../control-queue.js')
+  const opId = Object.keys(rest).length > 0 ? await keepSessionPatch(sid, rest) : null
+  const row = route.t.row
+  const session = { claudeSessionId: sid, process_status: row.process_status, ...(row.title !== undefined ? { title: row.title } : {}), mode: applied.mode, ...rest }
+  return { status: 200, body: { session, viaHost: true, ...(opId ? { queued: true } : {}) } }
 }
 
 /**

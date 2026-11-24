@@ -36,7 +36,6 @@ const C3 = { file: EVERY, test: 'C3 bridge:' }
 const CLUSTER = 'tests/e2e/host-judged-session-cluster-e2e.test.ts'
 const LIFECYCLE = 'tests/e2e/host-judged-session-lifecycle-e2e.test.ts'
 const PHONE = 'tests/e2e/companion-host-listener-e2e.test.ts'
-const NO_PHONE_CONTROL = 'the companion operates a host session only with the calls of listener-wire.ts LISTENER_CALLS while the Mac is away; this control waits for the Mac (the phone is told so), as before the switch'
 
 const MATRIX: Record<Feature, Record<Connection, Cell[]>> = {
   start: {
@@ -62,7 +61,7 @@ const MATRIX: Record<Feature, Record<Connection, Cell[]>> = {
   stop: {
     local: [C1],
     ssh: [C2, { file: LIFECYCLE, test: 'L5:' }],
-    bridge: [{ notOffered: NO_PHONE_CONTROL }],
+    bridge: [C3],
   },
   permission: {
     local: [C1],
@@ -77,7 +76,7 @@ const MATRIX: Record<Feature, Record<Connection, Cell[]>> = {
   mode: {
     local: [{ file: 'tests/e2e/session-mode-change.test.ts', test: 'REST API returns updated mode after real-time mode change' }],
     ssh: [{ file: LIFECYCLE, test: 'L5:' }],
-    bridge: [{ notOffered: NO_PHONE_CONTROL }],
+    bridge: [C3],
   },
 }
 

@@ -49,13 +49,29 @@ export async function sendStopPending(res: Response, sessionId: string): Promise
 /** CLOUD: relay the stop to the primary and answer the phone. */
 export async function cloudTerminate(res: Response, sessionId: string, force: boolean): Promise<void> {
   // A session its host judges, the Mac away and its host not linked: refused, never a direct path.
-  const route = await (await import('../../core/session-channel/companion-host-ops.js')).hostRoute(sessionId)
+  const ops = await import('../../core/session-channel/companion-host-ops.js')
+  const route = await ops.hostRoute(sessionId)
   if (route.kind === 'refuse') { sendError(res, route.status, route.code, route.message); return }
   // Noted BEFORE the relay: a phone message this companion holds from
   // before this stop must not run by the host's direct path, though the
   // primary's list may not show the stop for a while (cloud-stop-fence.ts).
   const { noteStopRequested, clearStopNote, noteStopAnswered } = await import('../../core/sessions/cloud-stop-fence.js')
   const stopAskedAt = await noteStopRequested(sessionId)
+  // A session its host judges, the Mac away: its host stops it over its listener link, as the Mac
+  // hands a stop to it (companion-host-ops.ts stopViaHost); the Mac reads the stop from the host's row.
+  if (route.kind === 'operated') {
+    const a = await ops.stopViaHost(route.t, force)
+    if (!a.ok) {
+      // Refused by the host (crons armed, not its session): nothing was noted there.
+      if (a.answer.status >= 400 && a.answer.status < 500) await clearStopNote(sessionId, stopAskedAt)
+      res.status(a.answer.status).json(a.answer.body)
+      return
+    }
+    await noteStopAnswered(sessionId, stopAskedAt, a.result.stopRequest)
+    if (a.result.status === 'pending') { await sendStopPending(res, sessionId); return }
+    res.status(200).json(a.result)
+    return
+  }
   // While this companion leads the session's host, that host stops it
   // (core/leader/host-session-control.ts), and the Mac records the same stop later.
   const lead = await leadHostOf(sessionId)

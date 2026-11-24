@@ -75,7 +75,13 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     spillDir: path.join(dir, 'prompts'),
     commandRunsOp: (c, op) => c.includes(op),
     drop: async (sids) => { dropped.push(sids); return sids.length },
-    lifecycle: { terminateSession: async (sid, opts) => { terminated.push({ sid, opts }); return { status: 'terminated', sessionId: sid } } },
+    lifecycle: {
+      terminateSession: async (sid, opts) => {
+        // A stop the session refuses, as session-controls.ts SessionControlError says it.
+        if (sid === 'sid-crons') throw Object.assign(new Error('Session has armed crons'), { statusCode: 409, extra: { code: 'crons_armed' } })
+        terminated.push({ sid, opts }); return { status: 'terminated', sessionId: sid }
+      },
+    },
     owns: async (sid) => sid !== 'sid-leaders',
     claim: { take: (sid, row) => { claims.push(`take:${sid}:${runnerCalls.includes('started') ? 'after' : 'before'}`); if (row) claimRows.push(row) }, release: (sid) => { claims.push(`release:${sid}`) } },
     ...(notAtRest === undefined ? {} : { notAtRest: async () => notAtRest ?? null }),
@@ -215,6 +221,12 @@ describe('lifecycle and drop', () => {
       .toEqual({ ok: true, value: { status: 'terminated', sessionId: 'sid-gone' } })
     expect(terminated).toEqual([{ sid: 'sid-gone', opts: { force: true } }])
     expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'lifecycle', member: 'changeSessionMode', args: [] })).body).toEqual({ ok: false, error: 'not_allowed' })
+  })
+
+  it('a control the session refuses keeps its status and code for whoever asked (the leader, the companion)', async () => {
+    expect(await post('/host-api/sessions/call', { sid: 'sid-crons', target: 'lifecycle', member: 'terminateSession', args: [{}] }))
+      .toEqual({ status: 409, body: { ok: false, error: 'Session has armed crons', refusedWith: 409, code: 'crons_armed' } })
+    expect(terminated).toEqual([])
   })
 
   it('drop hands the leader\'s deletes to this host, also with the switch off', async () => {

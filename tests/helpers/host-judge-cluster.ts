@@ -497,7 +497,8 @@ export interface HostJudgeCluster {
   c: ReplicaCluster
   /** `companion` only: the companion and the phone's calls to it. */
   companion: CloudBoxReplica | null
-  phone(method: string, p: string, body?: unknown): Promise<{ status: number; json: any }>
+  /** As the paired phone; `as.token` calls with another credential (a machine's), `as.headers` adds headers. */
+  phone(method: string, p: string, body?: unknown, as?: { token?: string; headers?: Record<string, string> }): Promise<{ status: number; json: any }>
   phoneStream(sid: string): Promise<PhoneStream>
   /** A read of the Mac's probe. */
   mac(p: string): Promise<any>
@@ -596,11 +597,11 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
     },
   }).catch(async (err) => { await (companion as CloudBoxReplica | null)?.stop().catch(() => {}); throw err })
   const box = companion as CloudBoxReplica | null
-  const phone: HostJudgeCluster['phone'] = async (method, p, body) => {
+  const phone: HostJudgeCluster['phone'] = async (method, p, body, as) => {
     if (!box) throw new Error('host-judge-cluster: phone() needs the companion option')
     return new Promise((resolve, reject) => {
       const data = body === undefined ? null : Buffer.from(JSON.stringify(body))
-      const req = http.request({ host: '127.0.0.1', port: box.port, method, path: p, agent: false, timeout: 60_000, headers: { authorization: `Bearer ${box.tokens.phone}`, ...(data ? { 'content-type': 'application/json', 'content-length': String(data.length) } : {}) } }, (res) => {
+      const req = http.request({ host: '127.0.0.1', port: box.port, method, path: p, agent: false, timeout: 60_000, headers: { ...as?.headers, authorization: `Bearer ${as?.token ?? box.tokens.phone}`, ...(data ? { 'content-type': 'application/json', 'content-length': String(data.length) } : {}) } }, (res) => {
         const parts: Buffer[] = []
         res.on('data', (x: Buffer) => parts.push(x))
         res.on('end', () => {

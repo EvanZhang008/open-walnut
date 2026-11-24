@@ -326,7 +326,15 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       const lifecycle = o.lifecycle ?? await import('../sessions/host-lifecycle.js')
       const fn = (lifecycle as unknown as Record<string, unknown>)[body.member]
       if (typeof fn !== 'function') return { status: 200, body: { ok: false, error: 'no_such_member' } }
-      return { status: 200, body: { ok: true, value: jsonValue(await (fn as AnyFn)(...hostCallArgs('lifecycle', body.sid, args))) } }
+      try {
+        return { status: 200, body: { ok: true, value: jsonValue(await (fn as AnyFn)(...hostCallArgs('lifecycle', body.sid, args))) } }
+      } catch (err) {
+        // A control the session refused (session-controls.ts SessionControlError: a stop of a session
+        // that owns crons, a mode that is no mode) keeps its status and code for whoever asked.
+        const e = err as { statusCode?: unknown; extra?: { code?: unknown } }
+        if (typeof e?.statusCode !== 'number' || e.statusCode < 400 || e.statusCode >= 500) throw err
+        return { status: e.statusCode, body: { ok: false, error: errText(err), refusedWith: e.statusCode, ...(typeof e.extra?.code === 'string' ? { code: e.extra.code } : {}) } }
+      }
     }
     const runner = await o.runner()
     let target: Record<string, unknown> | null

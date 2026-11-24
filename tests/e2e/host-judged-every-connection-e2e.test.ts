@@ -9,8 +9,9 @@
  *               stands for the ssh tunnel), run and judged by the host's own service (judge 'host', the
  *               Mac parses none): the same six, every answer a fact the host sent
  *   C3 bridge   the same host session stopped, the Mac away (SIGSTOP): from the phone through the
- *               companion's listener link, a send resumes it on the host, then a prompt answered and an
- *               interrupt
+ *               companion's listener link, a send resumes it on the host, then a prompt answered, an
+ *               interrupt, a mode change (the caller's ceiling held), a stop and a resume; a machine
+ *               credential reaches none of them
  *
  * The matrix with every cell's test, the cells other files hold included, is
  * tests/core/session-channel/session-features-every-connection.test.ts.
@@ -86,9 +87,8 @@ describe.skipIf(!RUN)('every session feature on the local machine, an ssh host a
     expect(term.status, JSON.stringify(term.json)).toBeLessThan(300)
     await waitFor(async () => (await macRow(sid))?.process_status === 'stopped', 60_000, `the ${kind} session to read stopped`).catch(fail)
     if (kind === 'ssh') expect((await hostRow(sid))?.process_status).toBe('stopped')
-    // The stop confirmed in the Mac's copy too (the host's row record carries it): a send before that is fenced.
-    await waitFor(async () => (await macRow(sid))?.stopRequest?.state !== 'pending', 60_000, `the ${kind} stop to read confirmed on the Mac`)
-      .catch(async (err) => fail(`${err}\nmac row: ${JSON.stringify((await macRow(sid))?.stopRequest)}\nhost row: ${JSON.stringify((await hostRow(sid))?.stopRequest)}`))
+    // No wait for the stop to settle: the Mac took the host's confirmed stop into its row with the answer.
+    expect((await macRow(sid))?.stopRequest?.state, JSON.stringify((await macRow(sid))?.stopRequest)).not.toBe('pending')
     const back = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text: `ROUND ${kind} back` })
     expect(back.status, JSON.stringify(back.json)).toBeLessThan(300)
     await waitAnswer(kind, sid, `echo: ROUND ${kind} back`, `the ${kind} session's answer after the resume`)
@@ -130,12 +130,12 @@ describe.skipIf(!RUN)('every session feature on the local machine, an ssh host a
     expect(hostStream(h.c, sids.ssh).some((l) => l.type === 'result' && String(l.result).includes('echo: ROUND ssh back'))).toBe(true)
   }, 900_000)
 
-  it('C3 bridge: the Mac away, the phone resumes the stopped host session, answers its prompt and interrupts it, all on the host', async () => {
+  it('C3 bridge: the Mac away, the phone resumes the stopped host session, answers its prompt, interrupts, changes its mode and stops it, all on the host', async () => {
     const sid = sids.ssh
     expect(sid).toBeTruthy()
     const mid = () => `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
     await waitFor(async () => (await h.host('/companion')).linked, 180_000, 'the host to link the companion\'s listener door').catch(fail)
-    // Stopped on the Mac first (a phone Stop while the Mac is away is not offered: see the matrix).
+    // Stopped on the Mac first; the phone's own stop comes at the end, the Mac still away.
     const term = await h.c.mac('POST', `/api/v1/sessions/${sid}/terminate`, { force: true })
     expect(term.status, JSON.stringify(term.json)).toBeLessThan(300)
     await waitFor(async () => (await hostRow(sid))?.process_status === 'stopped', 60_000, 'the host session to stop').catch(fail)
@@ -164,5 +164,32 @@ describe.skipIf(!RUN)('every session feature on the local machine, an ssh host a
     expect(stop.status, JSON.stringify(stop.json)).toBe(200)
     expect(stop.json).toMatchObject({ status: 'interrupted', viaHost: true })
     await waitFor(async () => (await answered('ssh', sid, 'echo: interrupted')) > interruptsBefore, 60_000, 'the held turn to end on the interrupt').catch(fail)
+    await waitFor(async () => (await hostRow(sid))?.process_status !== 'running', 60_000, 'the interrupted turn to end on the host').catch(fail)
+
+    // A machine credential (a host's bridge token) is not a person's device: no stop, no mode change.
+    const machine = { token: h.companion!.tokens.otherMachine }
+    expect((await h.phone('POST', `/api/v1/sessions/${sid}/terminate`, { force: true }, machine)).status).toBe(401)
+    expect((await h.phone('PATCH', `/api/v1/sessions/${sid}`, { mode: 'bypass' }, machine)).status).toBe(401)
+    // A session caller is held to its own mode, as on the Mac (delegated-mode.ts modeChangeRefusal):
+    // this default-mode session cannot raise anything to bypass through the phone's door.
+    const above = await h.phone('PATCH', `/api/v1/sessions/${sid}`, { mode: 'bypass' }, { headers: { 'x-walnut-caller-sid': sid } })
+    expect(above.status, JSON.stringify(above.json)).toBe(403)
+    expect(above.json.error?.code ?? above.json.code ?? above.json.error).toBe('mode_above_caller')
+    expect((await hostRow(sid))?.mode).toBe('default')
+
+    // A mode change: the host keeps it on its own row.
+    const mode = await h.phone('PATCH', `/api/v1/sessions/${sid}`, { mode: 'accept' })
+    expect(mode.status, JSON.stringify(mode.json)).toBe(200)
+    expect(mode.json).toMatchObject({ viaHost: true, session: { claudeSessionId: sid, mode: 'accept' } })
+    await waitFor(async () => (await hostRow(sid))?.mode === 'accept', 30_000, 'the host row to keep the mode').catch(fail)
+
+    // A stop, answered once the host stopped it, then a send that resumes it at once.
+    const stopped = await h.phone('POST', `/api/v1/sessions/${sid}/terminate`, { force: true })
+    expect(stopped.status, JSON.stringify(stopped.json)).toBe(200)
+    expect(stopped.json).toMatchObject({ viaHost: true })
+    expect((await hostRow(sid))?.process_status).toBe('stopped')
+    const again = await h.phone('POST', `/api/v1/sessions/${sid}/messages`, { text: 'ROUND phone again', messageId: mid() })
+    expect(again.status, JSON.stringify(again.json)).toBe(202)
+    await waitAnswer('ssh', sid, 'echo: ROUND phone again', 'the phone\'s send to resume the session it stopped')
   }, 600_000)
 })
