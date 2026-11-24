@@ -53,7 +53,20 @@ const thisMachineOnly = (req: Request, res: Response, next: NextFunction) => {
  * (core/leader/switch/peer.ts); it then waits for its switch stop, and cancels the handover itself
  * when none comes within stop_wait_s.
  */
+/**
+ * The handover's answer comes within this (the source job waits 150 s for it, source-job.ts): the steps before the
+ * record start it only with AFTER_RECORD_MS left, the retell's wait fits in what is left, and a target side that does
+ * not start within the rest is taken back.
+ */
+const HANDOVER_DEADLINE_MS = 140_000
+/** What the steps after the record need at least: a short retell and the target side's ticket and job start. */
+const AFTER_RECORD_MS = 45_000
+/** Kept for the target side after the retell's wait. */
+const TARGET_SIDE_MS = 30_000
+
 leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
+  const deadline = Date.now() + HANDOVER_DEADLINE_MS
+  const left = () => deadline - Date.now()
   const p = currentLeaderPermit()
   const to = typeof req.body?.to === 'string' ? req.body.to : ''
   const switchId: unknown = req.body?.switchId
@@ -68,8 +81,14 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
     if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
     // Its target job holds the first handover's number and deadline: a switch taken back begins anew.
     if (wasTakenBack(switchId)) { res.status(409).json({ ok: false, why: `this server took the handover of switch ${switchId} back: begin a new switch` }); return }
-    link = await switchLink(to, p.machine)
-    if ('refused' in link) { res.status(409).json({ ok: false, why: link.refused }); return }
+    const linking = switchLink(to, p.machine)
+    link = await withDeadline(linking, Math.max(1, left() - AFTER_RECORD_MS), () => ({ refused: `the copy link to ${to} did not answer within the handover's deadline` }))
+    if ('refused' in link) {
+      // A link that came after the deadline is closed when it comes.
+      void linking.then((l) => { if (!('refused' in l) && l !== link) l.peer.close() }, () => {})
+      res.status(409).json({ ok: false, why: link.refused })
+      return
+    }
   }
   // What must land before the handover record (this machine's console on the new leader, ...).
   const before = await beforeHandover({ to, machine: p.machine, home: WALNUT_HOME, address: listeningAddress() })
@@ -81,6 +100,14 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
     const h = await beforeHandoverRecord(hostSteps)
     if (!h.ok) { await withdrawConsoleQuietly(p.machine, WALNUT_HOME); link!.peer.close(); res.status(409).json({ ok: false, why: `the hosts could not be readied for ${to}: ${h.why}` }); return }
   }
+  // Too late for what comes after the record: no record, the steps before it taken back.
+  if (link && !('refused' in link) && left() < AFTER_RECORD_MS) {
+    await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
+    if (hostSteps) await (await import('../../core/leader/switch/handover-host-steps.js')).undoHostSteps(hostSteps)
+    link.peer.close()
+    res.status(504).json({ ok: false, why: `the steps before the handover record took past its deadline (${HANDOVER_DEADLINE_MS / 1000} s): nothing was handed over` })
+    return
+  }
   const r = await p.runtime.handover(to)
   // Not handed over: the console minted for it will never stand, nor the host steps.
   if (!r.ok) await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
@@ -88,18 +115,23 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   if (r.ok && hostSteps && link && !('refused' in link) && typeof switchId === 'string') {
     // The switch is noted before the wait below: a take-back of it then retries until it stands, marks the switch taken
     // back, and takes the host steps back (takeBackHandover), whichever way it comes (this wait, the stop wait, a cancel).
-    await noteSwitchHandover({ switchId, to, link })
-    // Nothing stops while a net host would still let in only this leader: not all told within the wait, the handover is taken back.
-    const after = await (await import('../../core/leader/switch/handover-host-steps.js')).afterHandoverRecord(hostSteps)
+    const hs = await import('../../core/leader/switch/handover-host-steps.js')
+    // The retell's wait fits in the deadline (the target side keeps its share); the stop wait starts after it.
+    hostSteps.retellWaitMs = Math.max(5_000, Math.min(hs.retellWaitMs(hostSteps), left() - TARGET_SIDE_MS))
+    await noteSwitchHandover({ switchId, to, link, extraWaitMs: hs.retellWaitMs(hostSteps) })
+    const { handedOverSwitch } = await import('../../core/leader/switch/final-stop.js')
+    // Still this route's handover: not taken back meanwhile (the stop wait, a cancel by hand), nor in a stop.
+    const stillOurs = () => { const sw = handedOverSwitch(); return !!sw && sw.switchId === switchId && sw.phase === 'waiting' }
+    // Nothing stops while a net host would still let in only this leader: not all told within the wait, the handover is
+    // taken back. A take-back that lands meanwhile keeps this machine's daemon duties (no drop after it; its undo waits).
+    const after = await hs.afterHandoverRecord(hostSteps, { stillOurs })
+    if (!stillOurs()) {
+      res.status(409).json({ ok: false, why: 'the handover was taken back while the hosts were told (its stop wait ran out, or a cancel)' })
+      return
+    }
     if (!after.ok) {
       const c = await takeBackHandover('the network\'s hosts did not all take the new leader')
       res.status(409).json({ ok: false, why: `${c.ok ? 'the handover is taken back' : `the handover could not be taken back yet, it is tried again every 5 s (${c.why})`}: ${after.why}` })
-      return
-    }
-    // The stop wait may have run out during that wait (a short stop_wait_s): then it took the handover back, and no target side starts.
-    const sw = (await import('../../core/leader/switch/final-stop.js')).handedOverSwitch()
-    if (!sw || sw.switchId !== switchId || sw.phase !== 'waiting') {
-      res.status(409).json({ ok: false, why: 'the handover was taken back while the hosts were told (its stop wait ran out)' })
       return
     }
   }
@@ -108,7 +140,10 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
     res.status(r.ok ? 200 : 409).json({ ok: r.ok, ...(r.record ? { record: r.record.number } : {}), ...(r.why ? { why: r.why } : {}) })
     return
   }
-  const started = await startTargetSide({ switchId, to, record: r.record!.number, link, home: WALNUT_HOME, machine: p.machine, test: req.body?.test })
+  const started = await withDeadline(
+    startTargetSide({ switchId, to, record: r.record!.number, link, home: WALNUT_HOME, machine: p.machine, test: req.body?.test }),
+    Math.max(1, left()), () => ({ ok: false as const, why: `the ticket and the target job did not start on ${to} within the handover's deadline` }),
+  )
   if (!started.ok) {
     // The new leader's machine has no ticket or no job: take the handover back, lead on.
     const c = await takeBackHandover('the switch job did not start on the new leader\'s machine')
@@ -212,17 +247,18 @@ function testKnobs(raw: unknown): { killAt?: string; skipLedgerRewrite?: true; p
  * handover is retried until it stands (final-stop.ts). Its commit deadline: a resumed source job asking again keeps
  * the first one. An ordinary stop of this server ends that wait first (no take-back runs through its teardown).
  */
-async function noteSwitchHandover(o: { switchId: string; to: string; link: { peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings } }): Promise<number> {
+async function noteSwitchHandover(o: { switchId: string; to: string; link: { peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings }; extraWaitMs?: number }): Promise<number> {
   const { noteHandedOver, handedOverSwitch, forgetHandedOver } = await import('../../core/leader/switch/final-stop.js')
   const { settings } = o.link
   const had = handedOverSwitch()
   if (had && had.switchId === o.switchId) return had.commitDeadline
   ;(await import('../server.js')).onPlainStop(() => forgetHandedOver())
   return noteHandedOver({
-    switchId: o.switchId, to: o.to, peer: o.link.peer, commitDeadline: Date.now() + settings.commitWindowMs, stopWaitMs: settings.stopWaitMs,
+    // The stop wait counts from the end of the retell's wait (noted before it, so a take-back in it works the same).
+    switchId: o.switchId, to: o.to, peer: o.link.peer, commitDeadline: Date.now() + settings.commitWindowMs, stopWaitMs: settings.stopWaitMs + (o.extraWaitMs ?? 0),
     // No stop within the wait: take the handover back; when the witnesses do not answer, try again every 5 s
     // (a stop that comes between two tries is taken: the handover still stands).
-    onStopWaitOver: (sw) => { void takeBackHandover(`no switch stop came within ${Math.round(settings.stopWaitMs / 1000)} s`, { begun: sw }) },
+    onStopWaitOver: (sw) => { void takeBackHandover(`no switch stop came within ${Math.round((settings.stopWaitMs + (o.extraWaitMs ?? 0)) / 1000)} s`, { begun: sw }) },
   }).commitDeadline
 }
 

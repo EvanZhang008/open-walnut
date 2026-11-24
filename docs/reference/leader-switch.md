@@ -155,7 +155,13 @@ Source job:
    for half the commit window at most a minute. That bound is hard: each call is raced against the time left,
    and none starts with less than 5 s left. Not done by then, the server takes its handover back (the host
    steps undone once the cancel stands; a cancel that does not reach a majority is tried again every 5 s) and
-   refuses with 409, naming the hosts; nothing stops, and the same switch id is refused after. Once the record stands
+   refuses with 409, naming the hosts; nothing stops, and the same switch id is refused after. The stop wait
+   (`stop_wait_s`) counts from the end of the retell's wait, so a short one never runs out inside it. A take-back
+   that lands while the retell runs (a cancel by hand) wins: `dropOwnDaemonDuties` runs only while the handover is
+   still the route's own, and the undo waits for the retell and the drop in flight (45 s at most) before it gives
+   the daemon its duties back. The whole route answers within 140 s, under the source job's 150 s: the steps before
+   the record start it only with 45 s left, the retell's wait fits in what is left, and a target side that does not
+   start in the rest is taken back. Once the record stands
    and the hosts follow, the server writes the ticket and starts the target job; when it cannot, it
    cancels the handover and leads on. The source job waits (30 s at most) until the
    target job says it sees the handover at a majority it reaches by its own ways.

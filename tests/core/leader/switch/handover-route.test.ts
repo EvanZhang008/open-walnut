@@ -50,6 +50,7 @@ vi.mock('../../../../src/core/leader/switch/final-stop.js', async (orig) => ({ .
 vi.mock('../../../../src/core/leader/switch/handover-host-steps.js', () => ({
   beforeHandoverRecord: async () => { calls.push('host steps before'); return { ok: true } },
   afterHandoverRecord: async () => { calls.push('retell'); return { ok: false, why: 'retellNetMembers: not told: box-net-only' } },
+  retellWaitMs: () => 60_000,
   undoHostSteps: async () => { calls.push('host steps undone') },
 }))
 

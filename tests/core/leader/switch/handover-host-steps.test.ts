@@ -124,3 +124,31 @@ describe('the host steps of a handover', () => {
     expect(base({ host_key: 'a b' }).problem).toMatch(/host_key must be a host name/)
   })
 })
+
+describe('the undo and a retell in flight', () => {
+  it('a retell that lost its time race and still runs: the undo waits for it, and nothing is dropped after the handover is no longer ours', async () => {
+    const f = fakeSteps()
+    let letGo: () => void = () => {}
+    const held = new Promise<void>((r) => { letGo = r })
+    f.steps.retellNetMembers = async () => { f.calls.push('retell begins'); await held; f.calls.push('retell ends'); return { ok: true } }
+    setHandoverHostSteps(f.steps)
+    // A 50 ms wait: the retell loses its race, the steps answer not ok, the call goes on.
+    const r = await afterHandoverRecord(ctx({ retellWaitMs: 50, retellMinTryMs: 40, retellEveryMs: 10 }))
+    expect(r.ok).toBe(false)
+    const undo = undoHostSteps({ home: '/a/home', walnutId: 'walnut-1', machineId: 'machine-a', log: () => {} })
+    await new Promise((x) => setTimeout(x, 100))
+    expect(f.calls).toEqual(['retell begins'])
+    letGo()
+    await undo
+    expect(f.calls).toEqual(['retell begins', 'retell ends', 'undo'])
+  })
+
+  it('a retell that answers ok after the handover was taken back drops nothing', async () => {
+    const f = fakeSteps()
+    setHandoverHostSteps(f.steps)
+    let ours = true
+    f.steps.retellNetMembers = async () => { f.calls.push('retell'); ours = false; return { ok: true } }
+    expect(await afterHandoverRecord(ctx(), { stillOurs: () => ours })).toEqual({ ok: false, why: 'the handover was taken back while the hosts were told' })
+    expect(f.calls).toEqual(['retell'])
+  })
+})
