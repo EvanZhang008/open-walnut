@@ -200,8 +200,8 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
 
   // 0b. Remote coordination (cloud hub). Compaction REWRITES main, so with a
   // remote configured the new chain must be force-pushed — otherwise the next
-  // sync tick hits non-fast-forward, pull --rebase finds no merge base with
-  // the rewritten chain, and sync wedges permanently while every retry
+  // sync tick hits non-fast-forward, finds no merge base with the
+  // rewritten chain, and sync wedges permanently while every retry
   // re-packs gigabytes (the exact CPU-storm this module exists to prevent).
   // Preconditions before we may safely rewrite:
   //   - remote reachable (else abort — compact only when we can also push)

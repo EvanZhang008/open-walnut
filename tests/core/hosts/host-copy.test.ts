@@ -72,6 +72,12 @@ vi.mock('../../../src/core/hosts/exec-grants.js', () => ({
   findGrant: (taskId: string, host: string) => (revoked.has(host) ? undefined : { id: `g-${host}`, taskId, host }),
   grantById: (id: string) => ({ id, taskId: 'task-1', host: id.slice(2), ...(revoked.has(id.slice(2)) ? { revokedAt: 1 } : {}) }),
   isHostClosed: (host: string) => grantsLater.closed.has(host),
+  // A host in `revoked` was revoked by the user (the store records it), not a grant gone missing.
+  wasRevoked: (_taskId: string, host: string) => revoked.has(host),
+  lastRevokedAt: (_taskId: string, host: string) => (revoked.has(host) ? Date.now() : undefined),
+  grantsFileState: () => ({ path: '/test/host-exec-grants.json', readable: true }),
+  grantVanished: () => false,
+  closedHostsUnreadable: () => null,
   noteRun: async () => {},
 }))
 

@@ -20,7 +20,15 @@ import {
 } from '../utils/json-conflict-recovery.js';
 import { SECRET_IGNORE_PATTERNS } from './git-sync-secrets.js';
 import { releasePrivateDataHolds } from './git-sync-private-data.js';
-import { carryLocalCommits, type CarryResult, type GitStatusRunner } from './git-sync-rewrite-carry.js';
+import { carryLocalCommits, must, type CarryResult, type GitStatusRunner } from './git-sync-rewrite-carry.js';
+import { mergeRecords } from './git-sync-records.js';
+import { setWriteGateOverdueListener } from '../utils/write-gate.js';
+import {
+  applyInFlight, applyPending, applyTargetToWorktree, recoverInterruptedApply, type ApplyGit, type ApplyOutcome, type HeldPull,
+} from './git-sync-apply.js';
+import {
+  chooseLww, lwwMergeMessage, mergeTreeWriteTreeSupported, parseConflictStages, resolveDivergence, type DivergedResult, type LwwClock,
+} from './git-sync-merge.js';
 import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
 import {
   addListed,
@@ -422,6 +430,19 @@ export async function execGitArgsStatus(
     holdsNoLock?: boolean;
   },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
+  const { code, stdout, stderr } = await execGitArgsRaw(args, opts);
+  return { code, stdout: stdout.toString('utf-8'), stderr };
+}
+
+/**
+ * The same spawn with stdout as bytes (a blob's content, `cat-file --batch`), or
+ * written straight into `stdoutFd` (a large blob into its temp file, never held
+ * in memory).
+ */
+export async function execGitArgsRaw(
+  args: string[],
+  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; input?: string; stdoutFd?: number; holdsNoLock?: boolean },
+): Promise<{ code: number; stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
     const childEnv = gitChildEnv(opts.env);
     const [cmd, cmdArgs] = withUtilityQosClamp('git', args, { searchPath: childEnv.PATH ?? '' });
@@ -429,7 +450,7 @@ export async function execGitArgsStatus(
       cwd: opts.cwd,
       env: childEnv,
       detached: true,
-      stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      stdio: [opts.input === undefined ? 'ignore' : 'pipe', opts.stdoutFd ?? 'pipe', 'pipe'],
     });
     if (!opts.holdsNoLock) trackLiveGit(opts.cwd, child);
     if (opts.input !== undefined) {
@@ -437,12 +458,11 @@ export async function execGitArgsStatus(
       child.stdin?.on('error', () => undefined);
       child.stdin?.end(opts.input);
     }
-    let stdout = '';
+    const chunks: Buffer[] = [];
     let stderr = '';
     let timedOut = false;
-    child.stdout?.setEncoding('utf-8');
     child.stderr?.setEncoding('utf-8');
-    child.stdout?.on('data', (data: string) => { stdout += data; });
+    child.stdout?.on('data', (data: Buffer | string) => { chunks.push(typeof data === 'string' ? Buffer.from(data) : data); });
     child.stderr?.on('data', (data: string) => { stderr += data; });
 
     const killGroup = (signal: NodeJS.Signals): void => {
@@ -462,7 +482,7 @@ export async function execGitArgsStatus(
     child.on('close', (code) => {
       clearTimeout(timer);
       if (timedOut) reject(new Error(`git timed out after ${opts.timeout}ms (process group killed)`));
-      else resolve({ code: code ?? -1, stdout, stderr });
+      else resolve({ code: code ?? -1, stdout: Buffer.concat(chunks), stderr });
     });
   });
 }
@@ -1216,7 +1236,7 @@ function gitRunnerAt(root: string): (args: string[], input?: string) => Promise<
 /** Replay HEAD's commits made after an upstream rewrite's cut onto the new chain (refs untouched). */
 async function carryLocalCommitsAcrossRewrite(localHead: string, remoteRef: string, published: string | null): Promise<CarryResult> {
   const indexFile = path.join(WALNUT_HOME, '.git', 'walnut-rewrite-carry.index');
-  const run: GitStatusRunner = (args, opts) => execGitArgsStatus(args, { cwd: WALNUT_HOME, timeout: LOCAL_TIMEOUT, ...opts });
+  const run: GitStatusRunner = (args, opts) => execGitArgsStatus(args, { cwd: WALNUT_HOME, ...opts, timeout: Math.max(LOCAL_TIMEOUT, opts?.timeout ?? 0) });
   try {
     return await carryLocalCommits(run, localHead, remoteRef, indexFile, published);
   } finally {
@@ -1244,7 +1264,7 @@ async function carryLocalCommitsAcrossRewrite(localHead: string, remoteRef: stri
  */
 export async function stageAllForCommit(
   opts: { cwd?: string; cloudMode?: boolean } = {},
-): Promise<{ deferred: PendingFile[]; cloudMode: boolean }> {
+): Promise<{ deferred: PendingFile[]; cloudMode: boolean } | null> {
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
@@ -1253,6 +1273,12 @@ export async function stageAllForCommit(
   else await prepareSyncedPluginFiles(root);
   // The add's size: what it would hash, measured without hashing (git-sync-large-files.ts).
   const plan = await planRoutineAdd(root, cloudMode);
+  // Last look before `add`, with no await between (git-sync-apply-recovery.ts): a
+  // pull moving the tree, or one that stopped and is not settled, means no commit
+  // now (null, nothing staged); a held one this tick already knows leaves its own
+  // paths out (below).
+  const holdBack = root === WALNUT_HOME ? pullHoldBack : { ids: [], paths: [] };
+  if (applyPending(root, holdBack.ids)) return null;
   let deferred: PendingFile[] = [];
   if (!plan || plan.deferred.length === 0) {
     await gitAsync(stageAllArgs(cloudMode), { cwd: root, timeout: addTimeoutFor(plan?.routineBytes ?? 0) });
@@ -1272,9 +1298,24 @@ export async function stageAllForCommit(
       deferredFiles: deferred.length, deferredBytes: deferred.reduce((sum, f) => sum + f.bytes, 0),
     });
   }
+  if (holdBack.paths.length > 0) {
+    // What a held pull wrote is the hub's content, never this box's change: not staged,
+    // and not handed to the large-file lane either.
+    await unstageHeldPaths(root, holdBack.paths);
+    const held = new Set(holdBack.paths);
+    deferred = deferred.filter((f) => !held.has(f.path));
+  }
   await afterStage(gitOpts, cloudMode);
   // cloudMode travels with the deferred files: the lane's own checks follow the same answer.
   return { deferred, cloudMode };
+}
+
+/** Leave a held pull's paths out of the index (git-sync-apply-recovery.ts). */
+async function unstageHeldPaths(root: string, paths: string[]): Promise<void> {
+  const unstaged = await execGitArgsStatus(['--literal-pathspecs', 'reset', '-q', '--pathspec-from-file=-', '--pathspec-file-nul'], {
+    cwd: root, timeout: LOCAL_TIMEOUT, input: paths.map((p) => `${p}\0`).join(''),
+  });
+  if (unstaged.code !== 0) throw new Error(`could not leave a held pull's files out of the commit: ${unstaged.stderr.trim().slice(0, 300)}`);
 }
 
 /** The checks every add of the auto-commit is followed by. */
@@ -1358,11 +1399,18 @@ export async function commitDeferredLargeFiles(
   const { cloudMode } = opts;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
+  const holdBack = root === WALNUT_HOME ? pullHoldBack : { ids: [], paths: [] };
+  // A pull that starts while the lane hashes stops it: what it hashed may be older than what the pull writes.
   const lane = await runLargeFileLane(gitArgvRunnerAt(root), root, deferred, {
-    shouldStop: () => isSyncPaused() || compactionInProgress,
+    shouldStop: () => isSyncPaused() || compactionInProgress || applyPending(root, holdBack.ids),
     onFailure: (failure) => log.git.warn('git-sync: a large file could not be written to the data repo; it backs off and the rest keeps syncing', failure),
   });
   if (lane.staged.length === 0) return 0;
+  // The last look before the commit, as stageAllForCommit's: a pull under way, or one stopped part way, commits nothing.
+  if (applyPending(root, holdBack.ids)) {
+    await unstageHeldPaths(root, lane.staged).catch(() => undefined);
+    return 0;
+  }
   await afterStage(gitOpts, cloudMode);
   const staged = await gitSafeAsync('diff --cached --name-only', gitOpts);
   const count = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
@@ -1466,7 +1514,7 @@ async function prepareSyncedPluginFiles(root: string): Promise<void> {
  * plugin-files/.gitignore so later adds skip it. A tracked file that grew past the limit
  * so leaves the synced history (the commit records it deleted; the file stays on this
  * machine). `rm --cached` leaves nothing dirty: the commit right after takes the removal,
- * and the ignore line keeps the file untracked, so `pull --rebase` is never blocked.
+ * and the ignore line keeps the file untracked, so a pull is never blocked.
  * The SDK already refuses such a write; this catches a plugin that wrote into its folder
  * directly. It judges what was STAGED (the blob's size, git's own binary test), not the
  * file on disk, which may have changed since. When the unstage fails this throws, so the
@@ -1871,6 +1919,12 @@ interface SyncGuardState {
   safeModeReason: string | null;
   safeModeSince: string | null;
   consecutiveNetworkFailures: number;
+  /**
+   * A pull that stopped part way and could not be finished or undone is held
+   * (git-sync-apply-recovery.ts): its files stay out of auto-commits until a pull
+   * settles them. The server shows it as a standing card while this is set.
+   */
+  heldPull: { since: string; paths: number; ids: string[] } | null;
 }
 
 const guard: SyncGuardState = {
@@ -1878,7 +1932,11 @@ const guard: SyncGuardState = {
   safeModeReason: null,
   safeModeSince: null,
   consecutiveNetworkFailures: 0,
+  heldPull: null,
 };
+
+/** The held pulls' paths that auto-commits leave out, and which held journals they come from. */
+let pullHoldBack: { ids: string[]; paths: string[] } = { ids: [], paths: [] };
 
 /** Re-log the ongoing safe-mode refusal at most this often (first hit is always loud). */
 const SAFE_MODE_RELOG_MS = 10 * 60_000;
@@ -2059,6 +2117,8 @@ export function resetSyncGuardForTest(): void {
   guard.safeModeReason = null;
   guard.safeModeSince = null;
   guard.consecutiveNetworkFailures = 0;
+  guard.heldPull = null;
+  pullHoldBack = { ids: [], paths: [] };
   streakTold.clear();
   pushFailureStreak = 0;
   lastSafeModeRefusalLog = 0;
@@ -2094,8 +2154,9 @@ export function isGitSurgeryInProgress(repoDir = WALNUT_HOME): boolean {
 
 /**
  * Surgery state older than this is ORPHANED: no live process owns it. The only
- * rebase creator on the data repo is our own `pull --rebase` (PULL_TIMEOUT=60s),
- * so 30 minutes is 30× past any legitimate lifetime; a human mid-rebase keeps
+ * rebase creator on the data repo is the legacy pull's `rebase` (legacyWorktreePull,
+ * PULL_TIMEOUT=60s; the object-store pull writes no surgery state at all), so 30
+ * minutes is 30× past any legitimate lifetime; a human mid-rebase keeps
  * the dir's mtime fresh by advancing through picks.
  */
 export const ORPHAN_SURGERY_MIN_AGE_MS = 30 * 60_000;
@@ -2130,8 +2191,8 @@ export interface OrphanRecoveryResult {
  *      complete it is aborted — main is unfrozen either way and the rescue
  *      branch keeps the data recoverable.
  *
- * An orphaned MERGE (MERGE_HEAD, no owner) is simply aborted: lwwMerge always
- * commits within its own tick, so a leftover merge is half-applied state whose
+ * An orphaned MERGE (MERGE_HEAD, no owner) is simply aborted: the legacy pull
+ * always commits or aborts within its own tick, so a leftover merge is half-applied state whose
  * remote side is still safe in origin/<branch> — the next pull redoes it.
  */
 export async function recoverOrphanedGitSurgery(
@@ -2554,10 +2615,10 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
   // HEAD is detached, so getBranch() below would report "HEAD" rather than a
   // branch. Committing the transient tree is the incident (see
   // isGitSurgeryInProgress); pulling would be safe in isolation, but the pull
-  // path is NOT surgery-safe either — pullFromRemote runs `rebase --abort`
-  // whenever `pull --rebase` fails, which would destroy the human's in-flight
-  // rebase (verified: abort succeeds against a conflicted rebase-merge). And git
-  // itself refuses to pull mid-rebase anyway, so there is nothing to gain.
+  // path is NOT surgery-safe either: the legacy pull runs `rebase --abort`
+  // whenever its rebase fails, which would destroy the human's in-flight
+  // rebase (verified: abort succeeds against a conflicted rebase-merge), and the
+  // object-store apply would move a branch the human is rebasing.
   if (isGitSurgeryInProgress()) {
     // Self-heal an ORPHANED rebase/merge (stale state no process owns) instead
     // of freezing forever: the 2026-08-22 incident froze sync for 22 hours
@@ -2568,6 +2629,11 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     if (!recovery.recovered) logSurgerySkip('sync');
     return { pulled: 0, pushed: 0, conflicts: 0 };
   }
+
+  // A pull that stopped part way (the process died mid-apply) is undone before
+  // anything reads the status or commits; until it can be, the tick stands down.
+  const settled = await recoverInterruptedPull();
+  if (!settled.pull) return { pulled: 0, pushed: 0, conflicts: 0 };
 
   // Cached/async on purpose: this runs on the ~30s tick, and the sync twins are
   // execSync — two blocking spawns per tick before any real work started.
@@ -2625,35 +2691,39 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     logSurgerySkip('syncInner:commit');
     return { pulled, pushed: 0, conflicts };
   }
-  if (dirtyLines.length > 0 && !diskPullOnly) {
+  if (dirtyLines.length > 0 && !diskPullOnly && settled.commit) {
     const safety = await assessCommitSafety(dirtyLines);
     if (safety.ok) {
       // Never let marker text become the committed content of a JSON store
       // (2026-08-22). Runs on the dirty snapshot we already have, before add.
       await healConflictMarkeredJsonFromStatus(dirtyLines, 'syncInner:commit');
 
+      // stageAllForCommit refuses (null) when a pull started (gitPullWalnut) or stopped since the check above.
       const stage = await stageAllForCommit();
+      if (!stage) {
+        log.git.info('git-sync: commit skipped, a pull is moving the tree or stopped part way');
+      } else {
+        // …and re-check: `add -A` itself can re-track a machine-local file the
+        // instant before a pull could carry its remote deletion to disk.
+        await ensureMachineLocalUntrackedAsync();
 
-      // …and re-check: `add -A` itself can re-track a machine-local file the
-      // instant before a pull could carry its remote deletion to disk.
-      await ensureMachineLocalUntrackedAsync();
-
-      // Count from what is ACTUALLY staged at commit time. The old code
-      // counted a pre-add snapshot elsewhere, which is how the 2026-08-03
-      // 2233-rename mass revert got committed as "(1 files)".
-      const staged = await gitSafeAsync('diff --cached --name-only');
-      const stagedCount = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
-      const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
-      if (stagedCount > 0) {
-        await gitSafeAsync(`commit -m "open-walnut sync ${stamp()} (${stagedCount} files)"`);
-        pushed = 1;
+        // Count from what is ACTUALLY staged at commit time. The old code
+        // counted a pre-add snapshot elsewhere, which is how the 2026-08-03
+        // 2233-rename mass revert got committed as "(1 files)".
+        const staged = await gitSafeAsync('diff --cached --name-only');
+        const stagedCount = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
+        const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
+        if (stagedCount > 0) {
+          await gitSafeAsync(`commit -m "open-walnut sync ${stamp()} (${stagedCount} files)"`);
+          pushed = 1;
+        }
+        // Large files after the routine commit (git-sync-large-files.ts).
+        const large = await commitDeferredLargeFiles(stage.deferred, {
+          cloudMode: stage.cloudMode,
+          message: (count) => `open-walnut sync ${stamp()} (${count} large files)`,
+        });
+        if (large > 0) pushed = 1;
       }
-      // Large files after the routine commit (git-sync-large-files.ts).
-      const large = await commitDeferredLargeFiles(stage.deferred, {
-        cloudMode: stage.cloudMode,
-        message: (count) => `open-walnut sync ${stamp()} (${count} large files)`,
-      });
-      if (large > 0) pushed = 1;
     }
     // safety.ok === false → pull-only safe mode: skip commit, still pull below
     // so the box keeps receiving upstream (assessCommitSafety already logged).
@@ -2712,111 +2782,454 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
   return { pulled, pushed, conflicts };
 }
 
-/**
- * Pull with linear-history preference and LWW-merge fallback, plus the
- * incident guards: pull gets the LONG timeout (it checks out files, not just
- * transfers), success/failure feeds the outage-streak tracker, and a
- * completed pull is verified against a torn worktree.
- *
- * Clean case: rebase (keeps history linear). Conflict case: abort the rebase
- * and do a TRUE MERGE with per-file LWW resolution — a merge commit preserves
- * BOTH parents, so the losing side of every conflict remains recoverable from
- * git history (rebase would rewrite the local commits and destroy that).
- */
-async function pullFromRemote(branch: string): Promise<{ pulled: number; conflicts: number }> {
-  let pulled = 0;
-  let conflicts = 0;
+// ── Pull: the remote's commits into the live working tree ───────────────────
+// The live server reads and writes the JSON stores in this working tree while a
+// pull runs, so a pull never lets git check anything out over it. Every case is
+// computed in git's object store (a fast-forward needs nothing, a rewrite is
+// carried by git-sync-rewrite-carry.ts, a divergence is replayed or LWW-merged
+// by git-sync-merge.ts) and ONE function moves the working tree to the result
+// (git-sync-apply.ts: preflight, temp file + rename, a compare-and-swap of the
+// branch). 2026-11-24: `git merge` in the live tree left conflict markers in
+// host-exec-grants.json for seconds and three tasks' host_exec reads were
+// refused; earlier the same morning ten timed-out merges each fell back to
+// `pull -X theirs` and overwrote live stores with the hub's older content.
 
-  // Remember where the remote-tracking ref stood BEFORE this pull's fetch moves
-  // it: lwwMerge compares the two to tell a rewritten upstream from ordinary
-  // divergence (see the force-moved check there).
-  const remoteBefore = await gitSafeAsync(`rev-parse --verify -q origin/${branch}`);
-  // Sweep dead transfer corpses on EVERY pull, not only after a failed fetch.
-  // The failure-path sweep in lwwMerge cannot see the corpses younger than the
-  // age gate at the moment of the LAST failure, and a pull or fetch that
-  // succeeded never swept at all: one rewrite adoption (three 15s kills, a 60s
-  // pull kill per tick, then the 10-minute recovery fetch) left 19 corpses /
-  // 7.5GB on the cloud box for the weekly maintenance to find (2026-10-05).
-  // Age-gated, so a transfer in flight anywhere (ours runs under the latch;
-  // gitPullWalnut's touches its file continuously) is never touched.
+interface PullResult { pulled: number; conflicts: number }
+const NOTHING_PULLED: PullResult = { pulled: 0, conflicts: 0 };
+
+/**
+ * Where origin stood before a fetch that found its history rewritten (a
+ * compaction, a path scrub), kept until the adoption lands. The fetch moves the
+ * remote-tracking ref at once, so without it an adoption deferred by a busy
+ * store, or a fetch gitPullWalnut made, would leave the next tick unable to tell
+ * a shared-ancestry rewrite from ordinary divergence: it would merge the old
+ * chain back in and undo the rewrite.
+ */
+export const REWRITE_FROM_REF = 'refs/walnut/sync-rewrite-from';
+
+let pullStepTimeoutMs = LOCAL_TIMEOUT;
+/** Test hook: the budget of each git step of a pull's merge, replay and apply (null: the default). */
+export function setPullStepTimeoutForTest(ms: number | null): void {
+  pullStepTimeoutMs = ms ?? LOCAL_TIMEOUT;
+}
+
+function pullGit(): ApplyGit {
+  return {
+    run: (args, opts) => execGitArgsStatus(args, { cwd: WALNUT_HOME, ...opts, timeout: Math.max(pullStepTimeoutMs, opts?.timeout ?? 0) }),
+    raw: (args, opts) => execGitArgsRaw(args, { cwd: WALNUT_HOME, ...opts, timeout: opts?.timeout ?? pullStepTimeoutMs }),
+  };
+}
+
+/**
+ * The tick's fetch budget: a whole pull's while the link is healthy (the fetch
+ * used to ride inside `pull --rebase` under PULL_TIMEOUT), then the failure
+ * streak's ladder (fetchTimeoutForStreak), so a doomed transfer is not retried
+ * under the long budget every tick.
+ */
+export function syncFetchTimeout(streak: number): number {
+  return streak === 0 ? PULL_TIMEOUT : fetchTimeoutForStreak(streak);
+}
+
+/** A fetch that force-moved origin (not a fast-forward) records where it stood before. */
+async function noteRewriteAcrossFetch(branch: string, before: string | null): Promise<void> {
+  if (!before) return;
+  const after = await gitSafeAsync(`rev-parse --verify -q origin/${branch}`);
+  if (!after || after === before) return;
+  if (await gitSafeAsync(`merge-base --is-ancestor ${before} ${after}`) !== null) return;
+  // Keep the oldest: a second rewrite before the first is adopted is still one adoption.
+  if (await gitSafeAsync(`rev-parse --verify -q ${REWRITE_FROM_REF}`)) return;
+  await gitSafeAsync(`update-ref ${REWRITE_FROM_REF} ${before}`);
+}
+
+/**
+ * The tick's pull: fetch with every guard the fetch grew, then integrate. Success
+ * and failure feed the outage-streak tracker, and a pull that moved HEAD is
+ * checked against a torn worktree.
+ */
+async function pullFromRemote(branch: string): Promise<PullResult> {
+  // gitPullWalnut stands aside while a sync runs; a sync that starts during its pull waits for it.
+  if (pullInflight) await pullInflight.catch(() => undefined);
+  if (branch === 'HEAD') return NOTHING_PULLED; // detached: no branch of ours to move
+  // Sweep dead transfer corpses on EVERY pull, not only after a failed fetch:
+  // the failure-path sweep cannot see corpses younger than the age gate, and a
+  // fetch that succeeded never swept at all (2026-10-05: one rewrite adoption
+  // left 19 corpses / 7.5GB on the cloud box). Age-gated, so a transfer in
+  // flight anywhere is never touched.
   sweepDeadFetchPacks(WALNUT_HOME);
-  // During a fetch-failure streak the pull's fetch half is the SAME transfer
-  // that just died: retrying it under PULL_TIMEOUT is one more guaranteed kill
-  // and one more tmp_pack corpse per tick (the 1.4GB ones of 2026-10-05, four
-  // of them in six minutes), and only lwwMerge's fetch carries the widened
-  // recovery timeout. Go straight there; a merge is what a failed pull falls
-  // back to anyway.
-  const pullResult = guard.consecutiveNetworkFailures > 0
-    ? null
-    : await gitSafeAsync(`pull --rebase origin ${branch}`, { timeout: PULL_TIMEOUT });
-  if (pullResult === null) {
-    // Rebase failed — could be a content conflict or a network error.
-    // Abort any half-applied rebase (no-op if none), then take the merge path.
-    // lwwMerge's fetch outcome updates the network failure streak.
-    await gitSafeAsync('rebase --abort');
-    const merge = await lwwMerge(branch, remoteBefore);
-    conflicts = merge.conflicts;
-    if (merge.merged) pulled = 1;
-  } else {
-    noteNetworkSuccess();
-    if (pullResult.includes('Updating') || pullResult.includes('Fast-forward')) {
-      pulled = 1;
+  const before = await gitSafeAsync(`rev-parse --verify -q origin/${branch}`);
+  if (!(await fetchOriginForSync(branch))) return NOTHING_PULLED;
+  await noteRewriteAcrossFetch(branch, before);
+  const result = await integrateRemoteSafely(branch, { before, merge: true });
+  // Torn-worktree sentinel: the apply never moves the branch over a half-written
+  // tree, but this is the guard every pull path keeps (a legacy git checkout can).
+  if (result.pulled === 1) await verifyWorktreeAfterPull(`after pulling origin/${branch}`);
+  return result;
+}
+
+async function fetchOriginForSync(branch: string): Promise<boolean> {
+  // Clear stale locks BEFORE fetching: a crashed git can leave a ref lock that
+  // makes every future fetch fail (a stale refs/remotes/origin/<branch>.lock
+  // wedged sync permanently before this).
+  await clearStaleLock();
+
+  // A failure streak upgrades the timeout: a fetch that repeatedly dies at
+  // NETWORK_TIMEOUT is usually a transfer BIGGER than the window (post-
+  // compaction full-chain fetch), and killing it forever = tmp_pack_* debris
+  // filling the disk (92 corpses / 79GB in 73min, 2026-08-23). Giving one
+  // fetch 10 minutes is cheap; the single-flight latch keeps ticks from
+  // stacking behind it.
+  const fetchTimeout = syncFetchTimeout(guard.consecutiveNetworkFailures);
+  if (fetchTimeout === FETCH_RECOVERY_TIMEOUT) {
+    log.git[streakNews('widen-timeout') ? 'warn' : 'debug']('git-sync fetch failure streak — widening this fetch\'s timeout', {
+      branch, streak: guard.consecutiveNetworkFailures, timeoutMs: fetchTimeout,
+    });
+  }
+  let fetchError: unknown = null;
+  try {
+    await gitAsync(`fetch origin ${branch}`, { timeout: fetchTimeout });
+  } catch (err) {
+    fetchError = err;
+  }
+  // Lock contention is not a network failure: force-clear and retry once.
+  if (fetchError && isLockContention(fetchError)) {
+    await clearStaleLock(0);
+    try {
+      await gitAsync(`fetch origin ${branch}`, { timeout: fetchTimeout });
+      fetchError = null;
+      log.git.warn('git-sync fetch recovered after clearing a stale lock', { branch });
+    } catch (retryErr) {
+      fetchError = retryErr;
     }
   }
-
-  // Torn-worktree sentinel: if the checkout half of the pull died while the
-  // ref half landed, the tree now massively disagrees with HEAD — flag it
-  // BEFORE any later `add -A` can snapshot the stale files as a revert.
-  if (pulled === 1) {
-    await verifyWorktreeAfterPull(`pull origin/${branch}`);
+  if (fetchError) {
+    const detail = fetchError instanceof Error ? fetchError.message : String(fetchError);
+    // Feed the outage tracker: a long streak means the worktree is frozen on
+    // an old tree, and the first recovered cycle must pull BEFORE committing.
+    const streak = noteNetworkFailure();
+    log.git.warn('git-sync fetch failed — skipping merge this cycle', {
+      branch,
+      // Name the cause: 246 failures were once logged without it, and a
+      // 2.5-day-old lock went unnoticed.
+      error: detail.slice(0, 400),
+      lockContention: isLockContention(fetchError),
+      consecutiveNetworkFailures: streak,
+    });
+    // Each killed fetch leaves its partial tmp_pack behind; sweep corpses now
+    // (age-gated) instead of waiting for weekly maintenance.
+    sweepDeadFetchPacks(WALNUT_HOME);
+    return false;
   }
-
-  return { pulled, conflicts };
+  noteNetworkSuccess();
+  return true;
 }
 
-/**
- * A conflicted file's CONTENT clock: the top-level `lastUpdated` ISO stamp our
- * JSON stores write on every save (chat conversations, task DB exports, …).
- * Returns epoch ms, or null when the blob isn't JSON / has no parseable stamp.
- * Bounded read: `git show` of a data-repo JSON blob, parsed once — this runs
- * only for files that are ALREADY in same-hunk conflict (rare).
- */
-async function contentClockMs(ref: string, file: string): Promise<number | null> {
-  if (!file.endsWith('.json')) return null;
-  // Whale guard: don't buffer a multi-MB store just to read one stamp.
-  const size = Number(await gitSafeAsync(`cat-file -s ${ref}:"${file}"`) || 'NaN');
-  if (!Number.isFinite(size) || size > 8 * 1024 * 1024) return null;
-  const blob = await gitSafeAsync(`show ${ref}:"${file}"`);
-  if (blob === null) return null;
+/** integrateRemote that never throws: a timed-out probe or step leaves everything as it was. */
+async function integrateRemoteSafely(branch: string, opts: { before: string | null; merge: boolean }): Promise<PullResult> {
   try {
-    const parsed = JSON.parse(blob) as { lastUpdated?: unknown };
-    if (typeof parsed?.lastUpdated !== 'string') return null;
-    const ms = Date.parse(parsed.lastUpdated);
-    return Number.isFinite(ms) ? ms : null;
-  } catch {
-    return null;
+    return await integrateRemote(branch, opts);
+  } catch (error) {
+    log.git.warn('git-sync: the pull failed before anything moved — deferred to the next tick', {
+      branch, error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    });
+    return NOTHING_PULLED;
   }
 }
 
 /**
- * Merge origin/<branch> into the local branch with last-writer-wins conflict
- * resolution at FILE granularity:
- *
- *  - Different hunks in the same file → git auto-merges, both kept, silent.
- *  - Same-hunk conflict → the side whose latest commit touching that file is
- *    NEWER (committer time) wins. Tie or unknown → remote wins (deterministic;
- *    matches the companion-box-pulls-the-Mac common case).
- *  - The losing version is NEVER lost: the merge commit keeps both parents.
- *    RECOVERY:  git log --all --full-history -- <file>  → find the losing commit
- *               git show <losingCommit>:<file>          → read the losing content
- *    (--full-history matters: plain `git log -- <file>` simplifies away the
- *    losing parent of a merge.)
- *  - A sync:conflict-resolved event is emitted so the UI can surface
- *    "conflict auto-resolved — the other version is in history".
- *
- * If the merge fails for a NON-conflict reason (unrelated histories, etc.)
- * we abort and fall back to the legacy `pull -X theirs`, logging loudly.
+ * Bring origin/<branch> (already fetched) into HEAD and the working tree:
+ * nothing to do, a fast-forward, a rewrite adoption, or a divergence. With
+ * `merge: false` (gitPullWalnut) only a fast-forward lands; the tick does the rest.
  */
+async function integrateRemote(branch: string, opts: { before: string | null; merge: boolean }): Promise<PullResult> {
+  const remoteRef = `origin/${branch}`;
+  const localHead = await gitSafeAsync('rev-parse HEAD');
+  const remoteHead = await gitSafeAsync(`rev-parse ${remoteRef}`);
+  if (!localHead || !remoteHead) return NOTHING_PULLED;
+  // Every question below is asked so that a git that timed out or failed throws
+  // (integrateRemoteSafely defers) instead of reading as "no": a "no merge base"
+  // that was really a timeout would adopt ordinary divergence as a rewrite.
+  const { run } = pullGit();
+  const answer = async (args: string[], meaning: (code: number) => boolean | null): Promise<{ yes: boolean; stdout: string }> => {
+    const r = await run(args);
+    const yes = meaning(r.code);
+    if (yes === null) throw new Error(`git ${args.join(' ')} exited ${r.code}: ${r.stderr.trim().slice(0, 300)}`);
+    return { yes, stdout: r.stdout.trim() };
+  };
+  const zeroOrOne = (code: number): boolean | null => (code === 0 ? true : code === 1 ? false : null);
+  const recorded = await answer(['rev-parse', '--verify', '-q', REWRITE_FROM_REF], zeroOrOne);
+  const rewriteFrom = recorded.yes ? recorded.stdout : null;
+  const isAncestor = async (a: string, b: string): Promise<boolean> =>
+    (await answer(['merge-base', '--is-ancestor', a, b], zeroOrOne)).yes;
+  // HEAD holds the remote's whole chain now: a recorded rewrite is behind us.
+  const settled = async (): Promise<void> => {
+    if (rewriteFrom) await gitSafeAsync(`update-ref -d ${REWRITE_FROM_REF}`);
+  };
+
+  if (localHead === remoteHead || await isAncestor(remoteHead, localHead)) {
+    await settled();
+    return NOTHING_PULLED;
+  }
+  if (await isAncestor(localHead, remoteHead)) {
+    if (!(await moveWorktree(branch, localHead, remoteHead, 'fast-forward'))) return NOTHING_PULLED;
+    await settled();
+    return { pulled: 1, conflicts: 0 };
+  }
+  if (!opts.merge) return NOTHING_PULLED;
+
+  // Upstream history rewrite (compaction on the primary force-pushes a rewritten
+  // main). Merging would join the OLD fat chain with the rewritten one and undo
+  // the rewrite; the new chain is adopted instead (adoptRewrite). Two signals:
+  // "no common ancestor" catches a compaction that rebuilds from a new root; a
+  // path scrub (filter-repo) keeps the commits before the first scrubbed one, so
+  // only the force-move of origin tells (a replica looped 7.5h on that merge,
+  // 2026-09-11).
+  const noMergeBase = !(await answer(['merge-base', localHead, remoteHead], zeroOrOne)).yes;
+  const forceMoved = !noMergeBase && rewriteFrom !== null && !(await isAncestor(rewriteFrom, remoteHead));
+  if (noMergeBase || forceMoved) {
+    return adoptRewrite(branch, localHead, remoteHead, rewriteFrom ?? opts.before, noMergeBase ? 'no-merge-base' : 'upstream-force-moved');
+  }
+
+  if (!(await mergeTreeWriteTreeSupported(pullGit().run))) {
+    return legacyWorktreePull({ kind: 'merge', branch, localHead, remoteHead });
+  }
+  const merged = await computeDivergence(localHead, remoteHead, remoteRef);
+  if (!merged) return NOTHING_PULLED;
+  if (!(await moveWorktree(branch, localHead, merged.head, merged.kind))) return NOTHING_PULLED;
+  await settled();
+  await announceDivergence(merged, localHead, remoteHead);
+  return { pulled: 1, conflicts: merged.files.length };
+}
+
+/**
+ * Adopt a rewritten upstream: park the old head on a self-replacing backup ref
+ * (local-only commits stay recoverable there until the next rewrite), carry the
+ * local commits made after the point the rewrite was cut from onto the new chain
+ * (git-sync-rewrite-carry.ts), and move the working tree to the result.
+ */
+async function adoptRewrite(
+  branch: string, localHead: string, remoteHead: string, published: string | null, reason: string,
+): Promise<PullResult> {
+  const remoteRef = `origin/${branch}`;
+  const localOnly = published ? Number(await gitSafeAsync(`rev-list --count ${published}..HEAD`) || '0') : null;
+  await gitSafeAsync('branch -f pre-rewrite-backup HEAD');
+  let carried: CarryResult | null = null;
+  try {
+    carried = await carryLocalCommitsAcrossRewrite(localHead, remoteRef, published);
+  } catch (error) {
+    // The local commits stay on pre-rewrite-backup; say so loudly, because
+    // the adoption below leaves them out of the working tree.
+    log.git.error('git-sync: could not carry local commits across the upstream rewrite; they stay on pre-rewrite-backup', {
+      localHead, remoteHead, error: error instanceof Error ? error.message : String(error), recoveryKey: 'git',
+    });
+  }
+  let target = carried?.head ?? remoteHead;
+  // Carried onto a commit the upstream has already built on: join the rest of
+  // the new chain like any divergence.
+  let merged: DivergedResult | null = null;
+  // Without `merge-tree --write-tree` (git before 2.38) the carried chain lands
+  // as it is; it shares history with the new chain, so the next tick's legacy
+  // merge joins the rest (REWRITE_FROM_REF is dropped below, so it is no rewrite then).
+  if (carried?.head && carried.anchor?.remote !== remoteHead && await mergeTreeWriteTreeSupported(pullGit().run)) {
+    merged = await computeDivergence(carried.head, remoteHead, remoteRef);
+    if (!merged) return NOTHING_PULLED;
+    target = merged.head;
+  }
+  if (!(await moveWorktree(branch, localHead, target, 'rewrite adoption'))) return NOTHING_PULLED;
+  await gitSafeAsync(`update-ref -d ${REWRITE_FROM_REF}`);
+  log.git.warn('git-sync: upstream history rewritten — adopted the new chain; previous head saved on pre-rewrite-backup', {
+    previousHead: localHead, newHead: remoteHead, reason,
+    localOnlyCommitsParked: localOnly,
+    carriedHead: carried?.head ?? null,
+    carriedCommits: carried?.replayed ?? 0,
+    anchor: carried?.anchor ?? null,
+    keptLocal: carried?.keptLocal.slice(0, 50) ?? [],
+    keptRemote: carried?.keptRemote.slice(0, 50) ?? [],
+    keptRemoved: carried?.keptRemoved.slice(0, 50) ?? [],
+    keptMerged: carried?.keptMerged.slice(0, 50) ?? [],
+    squashed: carried?.squashed ?? false,
+    fileLevel: carried?.fileLevel ?? false,
+  });
+  try { rewriteAdoptedListener?.(); } catch { /* the listener only schedules */ }
+  if (merged && carried?.head) await announceDivergence(merged, carried.head, remoteHead);
+  return { pulled: 1, conflicts: merged?.files.length ?? 0 };
+}
+
+/** The divergence's target commit, or null when a step failed or timed out (it built objects only: nothing moved). */
+async function computeDivergence(localHead: string, remoteHead: string, remoteRef: string): Promise<DivergedResult | null> {
+  const indexFile = path.join(WALNUT_HOME, '.git', 'walnut-sync-merge.index');
+  try {
+    return await resolveDivergence(pullGit().run, localHead, remoteHead, remoteRef, indexFile);
+  } catch (error) {
+    log.git.warn('git-sync: could not compute the merge with origin — nothing changed, deferred to the next tick', {
+      localHead, remoteHead, error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    });
+    return null;
+  } finally {
+    await fs.promises.rm(indexFile, { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Move the working tree and the branch from `oldHead` to `target` through the
+ * one apply function. True when it landed; a deferral leaves the branch where it
+ * was and the next tick tries again.
+ */
+async function moveWorktree(branch: string, oldHead: string, target: string, what: string): Promise<boolean> {
+  let outcome: ApplyOutcome;
+  try {
+    outcome = await applyTargetToWorktree(pullGit(), {
+      repoDir: WALNUT_HOME, branch, oldHead, target, isMachineLocal: (file) => criticalIgnoreTarget(file) !== null,
+    });
+  } catch (error) {
+    log.git.warn('git-sync: could not move the working tree to the pulled commit — the branch did not move, deferred to the next tick', {
+      what, branch, oldHead, target, error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    });
+    return false;
+  }
+  if (outcome.status === 'needs-git') {
+    return (await legacyWorktreePull({ kind: 'move', branch, oldHead, target, reason: outcome.reason })).pulled === 1;
+  }
+  if (outcome.status === 'deferred') {
+    if (outcome.reason === 'dirty' || outcome.reason === 'raced') {
+      // A store was written since this cycle's commit: the fetch in between can
+      // take a minute, and notifications.json changes every time a card lands.
+      // Nothing is wrong with either history, and remote-wins would be the wrong
+      // answer; the next tick commits the write and pulls again.
+      log.git.warn('git-sync: a store changed while the pull was in flight — merge deferred to the next tick', {
+        what, branch, localHead: oldHead, remoteHead: target, files: outcome.files.slice(0, 20),
+        // raced: the apply had started; every path it changed was put back (leftAlone: the app rewrote them since).
+        rolledBack: outcome.rollback ? { restored: outcome.rollback.restored, leftAlone: outcome.rollback.leftAlone.slice(0, 20) } : undefined,
+      });
+      if (outcome.rollback?.failed.length) {
+        log.git.error('git-sync: an interrupted pull could not put every path back; commits wait until the next tick finishes the rollback', {
+          what, branch, failed: outcome.rollback.failed.slice(0, 20), recoveryKey: 'git',
+        });
+      }
+    } else {
+      log.git.info('git-sync: pull deferred to the next tick', { what, branch, reason: outcome.reason });
+    }
+    return false;
+  }
+  if (outcome.overwroteIgnored.length > 0) {
+    log.git.info('git-sync: the pull replaced or cleared ignored local files in its way (as git would)', {
+      what, files: outcome.overwroteIgnored.slice(0, 20),
+    });
+  }
+  if (outcome.keptLocal.length > 0) {
+    log.git.warn('git-sync: the pull left machine-local files as they are; the other side\'s version stays in history', {
+      what, files: outcome.keptLocal.slice(0, 20),
+    });
+  }
+  if (outcome.indexStale) {
+    // The tree and the branch are right; only git's index is behind. Every commit
+    // path runs `add -A` first, so it cannot record a revert, and the next tick's
+    // recovery runs `git reset -q` before anything reads the status.
+    log.git.error('git-sync: the pull landed but the index could not be refreshed; repaired on the next tick', {
+      what, branch, target, recoveryKey: 'git',
+    });
+  }
+  return true;
+}
+
+/**
+ * Finish or undo a pull that stopped part way, before anything commits: a
+ * commit of a half-applied tree would record the pulled content as a local
+ * change stamped now, and LWW would let it beat a newer hub write. `commit`:
+ * an auto-commit may run now. `pull`: the rest of the tick (pull, push) may run.
+ * A pull that cannot be settled is held: its paths stay out of every commit
+ * (pullHoldBack, applied in stageAllForCommit) and everything else syncs on; one
+ * whose journal cannot be read names no paths, so it stops auto-commits.
+ */
+export async function recoverInterruptedPull(): Promise<{ commit: boolean; pull: boolean }> {
+  const report = await recoverInterruptedApply(pullGit().run, WALNUT_HOME);
+  if (report.outcome === 'busy') return { commit: false, pull: false };
+  if (report.heldNow) {
+    log.git.error('git-sync: a pull that stopped part way could not be finished or undone; its files are left as they are and kept out of auto-commits', {
+      reason: report.heldNow.reason, branch: report.heldNow.branch, oldHead: report.heldNow.oldHead, target: report.heldNow.target,
+      failed: report.rollback?.failed.slice(0, 20),
+      hint: 'a held file settles when a pull replaces it, the app rewrites it, or HEAD holds it; an unreadable journal stays in .git/walnut-apply-held until a person removes it',
+    });
+  } else if (report.outcome === 'recovered' && (report.rollback || report.finished)) {
+    log.git.warn('git-sync: settled a pull that stopped part way (the process died, or the index could not be refreshed)', {
+      finished: report.finished ?? false,
+      restored: report.rollback?.restored ?? 0,
+      leftAlone: report.rollback?.leftAlone.slice(0, 20) ?? [],
+    });
+  }
+  if (report.released?.length) log.git.info('git-sync: a held pull is settled; its files sync again', { released: report.released });
+  if (report.outcome === 'failed') {
+    log.git.error('git-sync: could not check for an interrupted pull; auto-commits wait for the next tick', {
+      error: report.error, recoveryKey: 'git',
+    });
+    return { commit: false, pull: true };
+  }
+  const held = report.outcome === 'held' ? report.held ?? [] : [];
+  pullHoldBack = { ids: held.map((h) => h.id).sort(), paths: [...new Set(held.flatMap((h) => h.waiting))] };
+  guard.heldPull = held.length === 0 ? null : {
+    since: guard.heldPull?.since ?? new Date().toISOString(), paths: pullHoldBack.paths.length, ids: pullHoldBack.ids,
+  };
+  if (held.length === 0) return { commit: true, pull: true };
+  noteHeldPulls(held);
+  return { commit: !held.some((h) => h.reason === 'unreadable'), pull: true };
+}
+
+/** A held pull is logged when it starts holding and then every 10 minutes; the standing card is the server's (heldPull). */
+let heldPullsSaidAt = 0;
+let heldPullsSaid = '';
+function noteHeldPulls(held: HeldPull[]): void {
+  const ids = held.map((h) => h.id).join(',');
+  if (ids === heldPullsSaid && Date.now() - heldPullsSaidAt < 10 * 60_000) return;
+  heldPullsSaid = ids;
+  heldPullsSaidAt = Date.now();
+  log.git.warn('git-sync: files of a pull that stopped part way are kept out of auto-commits until a pull settles them', {
+    held: held.map((h) => ({ id: h.id, reason: h.reason, target: h.target, waiting: h.waiting.slice(0, 10), count: h.waiting.length })),
+  });
+}
+
+// A writer that waited out a pull holding the rename gate goes ahead; say so (write-gate.ts).
+setWriteGateOverdueListener((waitedMs) => {
+  log.git.warn('git-sync: a write waited for a pull longer than the gate allows and went ahead', { waitedMs });
+});
+
+/** After a divergence landed: the LWW report for a merge with conflicts, and the marker guard on the files it chose. */
+async function announceDivergence(merged: DivergedResult, localHead: string, remoteHead: string): Promise<void> {
+  if (merged.kind === 'replay') {
+    log.git.debug('git-sync: replayed local commits onto origin (linear history)', { replayed: merged.replayed, fileLevel: merged.fileLevel });
+    return;
+  }
+  if (merged.files.length === 0) {
+    log.git.info('git-sync: merged origin (no conflicts)', { localHead, remoteHead });
+    return;
+  }
+  // The chosen blobs are one side's whole file, so this should find nothing;
+  // but committing marker text as a JSON store's content is the 2026-08-22
+  // incident, and the file list is in hand. A repair is dirty, and the next
+  // auto-save commits it.
+  await healConflictMarkeredJsonFiles(merged.files.filter((f) => f.endsWith('.json')), 'lwwMerge:resolved')
+    .catch(() => undefined);
+  announceLww(merged.files, merged.localWins, merged.remoteWins, merged.clocks, localHead, remoteHead);
+}
+
+/**
+ * The UI hears about a conflict as ONE notification, never a dialog. `winner` is
+ * the majority side (per-file detail is in the merge commit); `losingCommit`
+ * points at the losing side's head for recovery:
+ *   git log --all --full-history -- <file>   then   git show <losingCommit>:<file>
+ */
+function announceLww(
+  files: string[], localWins: string[], remoteWins: string[], clocks: Record<string, LwwClock>,
+  localHead: string, remoteHead: string,
+): void {
+  const winner: 'local' | 'remote' = localWins.length > remoteWins.length ? 'local' : 'remote';
+  const losingCommit = winner === 'local' ? remoteHead : localHead;
+  log.git.warn('git-sync auto-resolved same-hunk conflict (LWW)', {
+    files, winner, losingCommit, localWins, remoteWins, clocks,
+  });
+  bus.emit(EventNames.SYNC_CONFLICT_RESOLVED, { files, winner, losingCommit }, ['web-ui'], {
+    source: 'git-sync',
+  });
+}
+
 /**
  * git's refusal when the working tree changed under a merge or rebase:
  * "Your local changes to the following files would be overwritten by merge"
@@ -2837,281 +3250,155 @@ export function dirtyFilesInRefusal(gitError: string): string[] {
   return files;
 }
 
-async function lwwMerge(branch: string, remoteBefore: string | null = null): Promise<{ merged: boolean; conflicts: number }> {
-  const remoteRef = `origin/${branch}`;
+type LegacyPlan =
+  | { kind: 'move'; branch: string; oldHead: string; target: string; reason: string }
+  | { kind: 'merge'; branch: string; localHead: string; remoteHead: string };
 
-  // Clear stale locks BEFORE fetching: a crashed git can leave a ref lock that
-  // makes every future fetch fail. Previously only commitIfDirty() did this and
-  // only for index.lock, so a stale refs/remotes/origin/<branch>.lock wedged sync
-  // permanently — it never self-healed and the warning below repeated forever.
-  await clearStaleLock();
-
-  // A failure streak upgrades the timeout: a fetch that repeatedly dies at
-  // NETWORK_TIMEOUT is usually a transfer BIGGER than the window (post-
-  // compaction full-chain fetch), and killing it forever = tmp_pack_* debris
-  // filling the disk (92 corpses / 79GB in 73min, 2026-08-23). Giving one
-  // fetch 10 minutes is cheap; the single-flight latch keeps ticks from
-  // stacking behind it.
-  const fetchTimeout = fetchTimeoutForStreak(guard.consecutiveNetworkFailures);
-  if (fetchTimeout !== NETWORK_TIMEOUT) {
-    log.git[streakNews('widen-timeout') ? 'warn' : 'debug']('git-sync fetch failure streak — widening this fetch\'s timeout', {
-      branch, streak: guard.consecutiveNetworkFailures, timeoutMs: fetchTimeout,
-    });
-  }
-  let fetchError: unknown = null;
-  try {
-    await gitAsync(`fetch origin ${branch}`, { timeout: fetchTimeout });
-  } catch (err) {
-    fetchError = err;
-  }
-
-  if (fetchError) {
-    // Distinguish lock contention from a real network failure: gitSafeAsync used
-    // to swallow the error entirely, so a self-healable lock looked identical to
-    // an unreachable remote. On lock contention, force-clear and retry once.
-    if (isLockContention(fetchError)) {
-      await clearStaleLock(0);
-      try {
-        await gitAsync(`fetch origin ${branch}`, { timeout: fetchTimeout });
-        fetchError = null;
-        log.git.warn('git-sync fetch recovered after clearing a stale lock', { branch });
-      } catch (retryErr) {
-        fetchError = retryErr;
+/**
+ * The ONE place a pull lets git itself write the working tree (named by
+ * tests/integrations/git-sync-worktree-writers-ratchet.test.ts). Two cases only:
+ *
+ *  - `move`: a target whose checkout converts content (a filter, eol or ident
+ *    attribute, autocrlf) or renames by case only; git-sync-apply.ts says which.
+ *    git's own two-tree checkout, which refuses a path written since the commit.
+ *  - `merge`: a git without `merge-tree --write-tree` (before 2.38): rebase,
+ *    else merge with per-file LWW, in the working tree as before.
+ *
+ * A timed-out, killed or failed git here aborts and defers to the next tick. It
+ * never falls back to `pull -X theirs`: remote-wins is not an answer to a slow
+ * machine (2026-11-24 07:14 to 07:25, ten 30 s merge timeouts in a row each did,
+ * overwriting live stores with the hub's older content).
+ */
+async function legacyWorktreePull(plan: LegacyPlan): Promise<PullResult> {
+  const timeout = pullStepTimeoutMs;
+  if (plan.kind === 'move') {
+    await gitSafeAsync('update-index -q --refresh', { timeout });
+    if (await gitSafeAsync(`read-tree -m -u ${plan.oldHead} ${plan.target}`, { timeout }) === null) {
+      log.git.warn('git-sync: git could not check the pulled commit out (a store changed since the commit, or git failed) — deferred to the next tick', {
+        branch: plan.branch, oldHead: plan.oldHead, target: plan.target, why: plan.reason,
+      });
+      return NOTHING_PULLED;
+    }
+    if (await gitSafeAsync(`update-ref -m "git-sync: pull" refs/heads/${plan.branch} ${plan.target} ${plan.oldHead}`, { timeout }) === null) {
+      // The tree and the index hold the target and the branch does not: the next
+      // auto-save would record the pulled content as this box's own change. Put
+      // both back to wherever the branch is now, with the same two-tree checkout.
+      const branchAt = await gitSafeAsync(`rev-parse --verify -q refs/heads/${plan.branch}`, { timeout });
+      const back = branchAt ? await gitSafeAsync(`read-tree -m -u ${plan.target} ${branchAt}`, { timeout }) : null;
+      if (back === null) {
+        // Could not: no auto-commit may take this tree until a person or a clean tree clears it.
+        enterSafeMode('pull-cas-refused', { branch: plan.branch, oldHead: plan.oldHead, target: plan.target, branchAt });
+      } else {
+        log.git.warn('git-sync: the branch moved during the pull; the tree was put back to it, deferred to the next tick', {
+          branch: plan.branch, oldHead: plan.oldHead, target: plan.target, branchAt,
+        });
       }
+      return NOTHING_PULLED;
     }
-
-    if (fetchError) {
-      const detail = fetchError instanceof Error ? fetchError.message : String(fetchError);
-      // Feed the outage tracker: a long streak means the worktree is frozen on
-      // an old tree, and the first recovered cycle must pull BEFORE committing.
-      const streak = noteNetworkFailure();
-      log.git.warn('git-sync fetch failed — skipping merge this cycle', {
-        branch,
-        // Surface WHY. 246 consecutive failures were logged without ever naming
-        // the cause, which is why a 2.5-day-old lock went unnoticed.
-        error: detail.slice(0, 400),
-        lockContention: isLockContention(fetchError),
-        consecutiveNetworkFailures: streak,
-      });
-      // Each killed fetch leaves its partial tmp_pack behind; sweep corpses
-      // now (age-gated) instead of waiting for weekly maintenance — the
-      // 30s retry loop otherwise buries the disk (79GB in 73min, 2026-08-23).
-      sweepDeadFetchPacks(WALNUT_HOME);
-      return { merged: false, conflicts: 0 };
-    }
-  }
-  noteNetworkSuccess();
-
-  const localHead = await gitSafeAsync('rev-parse HEAD');
-  const remoteHead = await gitSafeAsync(`rev-parse ${remoteRef}`);
-  if (!localHead || !remoteHead || localHead === remoteHead) {
-    return { merged: false, conflicts: 0 };
+    return { pulled: 1, conflicts: 0 };
   }
 
-  // Upstream history rewrite (weekly compaction on the primary force-pushes a
-  // rewritten main). Merging would join the OLD fat chain with the rewritten
-  // one — resurrecting the entire pre-rewrite history into the hub and undoing
-  // the rewrite. Adopt the new chain instead: park the old head on a
-  // self-replacing backup ref (any local-only commits stay recoverable from it
-  // until the next rewrite), carry the local commits made after the point the
-  // rewrite was cut from onto the new chain (git-sync-rewrite-carry.ts), then
-  // hard-reset to the result. Safe against dirty-file loss: syncInner() commits
-  // everything before pull.
-  //
-  // Two signals, because one is not enough. "No common ancestor" catches a
-  // compaction that rebuilds from a new root. A path-scrubbing rewrite
-  // (filter-repo) keeps every commit before the first scrubbed one, so the
-  // chains DO share ancestry, the merge is attempted, fails, and the tick
-  // loops on it forever (a replica burned 7.5h that way, 2026-09-11). The
-  // remote-tracking ref tells the truth directly: if where origin/main stood
-  // before this fetch is not an ancestor of where it stands now, upstream was
-  // force-moved, whatever the two chains happen to share.
-  const noMergeBase = await gitSafeAsync(`merge-base HEAD ${remoteRef}`) === null;
-  const forceMoved = !noMergeBase && remoteBefore !== null && remoteBefore !== remoteHead
-    && await gitSafeAsync(`merge-base --is-ancestor ${remoteBefore} ${remoteHead}`) === null;
-  if (noMergeBase || forceMoved) {
-    const localOnly = remoteBefore ? Number(await gitSafeAsync(`rev-list --count ${remoteBefore}..HEAD`) || '0') : null;
-    await gitSafeAsync('branch -f pre-rewrite-backup HEAD');
-    let carried: CarryResult | null = null;
-    try {
-      carried = await carryLocalCommitsAcrossRewrite(localHead, remoteRef, remoteBefore);
-    } catch (error) {
-      // The local commits stay on pre-rewrite-backup; say so loudly, because
-      // the adoption below leaves them out of the working tree.
-      log.git.error('git-sync: could not carry local commits across the upstream rewrite; they stay on pre-rewrite-backup', {
-        localHead, remoteHead, error: error instanceof Error ? error.message : String(error), recoveryKey: 'git',
-      });
-    }
-    const target = carried?.head ?? remoteRef;
-    if (await gitSafeAsync(`reset --hard ${target}`) === null) {
-      log.git.error('git-sync: upstream history rewritten but reset --hard failed — will retry next cycle', { localHead, remoteHead });
-      return { merged: false, conflicts: 0 };
-    }
-    log.git.warn('git-sync: upstream history rewritten — adopted the new chain; previous head saved on pre-rewrite-backup', {
-      previousHead: localHead, newHead: remoteHead,
-      reason: noMergeBase ? 'no-merge-base' : 'upstream-force-moved',
-      localOnlyCommitsParked: localOnly,
-      carriedHead: carried?.head ?? null,
-      carriedCommits: carried?.replayed ?? 0,
-      anchor: carried?.anchor ?? null,
-      keptLocal: carried?.keptLocal.slice(0, 50) ?? [],
-      keptRemote: carried?.keptRemote.slice(0, 50) ?? [],
-      keptRemoved: carried?.keptRemoved.slice(0, 50) ?? [],
-      squashed: carried?.squashed ?? false,
-      fileLevel: carried?.fileLevel ?? false,
-    });
-    try { rewriteAdoptedListener?.(); } catch { /* the listener only schedules */ }
-    // Carried onto a commit the upstream has already built on: merge the rest
-    // of the new chain like any divergence. Otherwise the adoption is the pull.
-    if (!carried?.head || carried.anchor?.remote === remoteHead) return { merged: true, conflicts: 0 };
-  }
+  const { branch, localHead, remoteHead } = plan;
+  const remoteRef = `origin/${branch}`;
+  const deferred = async (message: string, detail: Record<string, unknown>, level: 'warn' | 'error'): Promise<PullResult> => {
+    await gitSafeAsync('merge --abort', { timeout });
+    log.git[level](message, { branch, localHead, remoteHead, ...detail });
+    return NOTHING_PULLED;
+  };
 
-  // True merge WITHOUT -X: non-overlapping edits auto-merge; overlapping
-  // edits leave unmerged paths we resolve per-file below.
-  let mergeError: string | null = null;
+  // Linear history first, as `pull --rebase` gave (the fetch already ran).
   try {
-    await gitAsync(`merge --no-edit ${remoteRef}`);
-    return { merged: true, conflicts: 0 }; // clean auto-merge or fast-forward
+    await gitAsync(`rebase ${remoteRef}`, { timeout });
+    return { pulled: 1, conflicts: 0 };
+  } catch {
+    await gitSafeAsync('rebase --abort', { timeout });
+  }
+
+  // A true merge WITHOUT -X: non-overlapping edits auto-merge; overlapping ones
+  // leave unmerged paths, resolved per file below.
+  let mergeError: string;
+  try {
+    await gitAsync(`merge --no-edit ${remoteRef}`, { timeout });
+    return { pulled: 1, conflicts: 0 };
   } catch (err) {
     mergeError = err instanceof Error ? err.message : String(err);
   }
-
-  const unmerged = await gitSafeAsync('diff --name-only --diff-filter=U');
-  const files = (unmerged ?? '').split('\n').map((f) => f.trim()).filter(Boolean);
-  if (files.length === 0) {
-    await gitSafeAsync('merge --abort');
+  if (/timed out/i.test(mergeError)) {
+    // Killed mid-merge: whatever it wrote is half a merge. Abort it; the remote side is safe in origin.
+    return deferred('git-sync: the merge timed out — merge aborted, deferred to the next tick', { error: mergeError.slice(0, 400) }, 'warn');
+  }
+  const stages = parseConflictStages(((await gitSafeAsync('ls-files -u -z', { timeout })) ?? '').split('\0'));
+  if (stages.size === 0) {
     if (isDirtyTreeRefusal(mergeError)) {
-      // A store was rewritten between this cycle's commit and the merge: the
-      // fetch in between can take up to PULL_TIMEOUT, and notifications.json
-      // changes every time a card lands or recovers. Nothing is wrong with
-      // either history; `pull -X theirs` refuses for the same reason, and
-      // remote-wins would be the wrong answer anyway. The next tick commits
-      // the change and merges normally (2026-10-01: three of these, each
-      // followed by a push rejection that the bundle fallback then forced).
-      log.git.warn('git-sync: a store changed while the pull was in flight — merge deferred to the next tick', {
-        branch, localHead, remoteHead, files: dirtyFilesInRefusal(mergeError),
-      });
-      return { merged: false, conflicts: 0 };
+      return deferred('git-sync: a store changed while the pull was in flight — merge deferred to the next tick', {
+        files: dirtyFilesInRefusal(mergeError),
+      }, 'warn');
     }
-    // Merge failed but not from content conflicts (unrelated histories, lock…).
-    // Fall back to legacy behavior — but LOUDLY: this path silently prefers
-    // remote and should be investigated. Keyed 'git' so the next clean tick
-    // retires the card.
-    log.git.error(
-      'git-sync merge failed with a NON-conflict error — falling back to `pull -X theirs` (REMOTE WINS unconditionally). Investigate!',
-      { branch, localHead, remoteHead, error: mergeError.slice(0, 400), recoveryKey: 'git' },
-    );
-    const fallback = await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: PULL_TIMEOUT });
-    return { merged: fallback !== null, conflicts: fallback !== null ? 1 : 0 };
+    return deferred('git-sync merge failed with a NON-conflict error — merge aborted, deferred to the next tick. Investigate!', {
+      error: mergeError.slice(0, 400), recoveryKey: 'git',
+    }, 'error');
   }
 
-  // Per-file LWW. The CONTENT clock (a store's own top-level `lastUpdated`)
-  // decides first; the commit clock is only the fallback. Commit time is the
-  // PHASE of each box's 30s auto-save tick, not data freshness — 2026-08-23
-  // incident: a replica's empty pre-created chat store committed 14s after the
-  // primary's copy that held the user's message, "won" commit-time LWW, and the
-  // merge erased the message from every box. The stores' own lastUpdated
-  // stamps (written by the app at write time) had the order right.
   const localWins: string[] = [];
   const remoteWins: string[] = [];
-  const clockByFile = new Map<string, 'content' | 'commit'>();
-  for (const file of files) {
-    const localClock = await contentClockMs('HEAD', file);
-    const remoteClock = await contentClockMs(remoteRef, file);
-    let newerIsLocal: boolean;
-    if (localClock !== null && remoteClock !== null && localClock !== remoteClock) {
-      newerIsLocal = localClock > remoteClock;
-      clockByFile.set(file, 'content');
-    } else {
-      // No content clock on one side (non-JSON, unreadable, no stamp) or a
-      // dead tie — fall back to commit time; tie there → remote wins
-      // (deterministic; matches the companion-box-pulls-the-Mac common case).
-      const localTime = Number(await gitSafeAsync(`log -1 --format=%ct HEAD -- "${file}"`) || '0');
-      const remoteTime = Number(await gitSafeAsync(`log -1 --format=%ct ${remoteRef} -- "${file}"`) || '0');
-      newerIsLocal = localTime > remoteTime;
-      clockByFile.set(file, 'commit');
-    }
-    const side = newerIsLocal ? '--ours' : '--theirs';
-    if (await gitSafeAsync(`checkout ${side} -- "${file}"`) !== null) {
-      await gitSafeAsync(`add -- "${file}"`, { timeout: await fileAddTimeout(WALNUT_HOME, file) });
-    } else {
-      // Delete/modify conflict: the winning side deleted the file, so
-      // `checkout --ours/--theirs` has no blob to restore — honor the delete.
-      // TODO(edge): rename/rename conflicts land here too and resolve as
-      // delete; acceptable for a data repo of flat JSON/MD files.
-      await gitSafeAsync(`rm -f -- "${file}"`);
-    }
-    (side === '--ours' ? localWins : remoteWins).push(file);
-  }
-
-  // Anything still unmerged means resolution failed — don't commit a broken tree.
-  const stillUnmerged = await gitSafeAsync('diff --name-only --diff-filter=U');
-  if (stillUnmerged && stillUnmerged.trim().length > 0) {
-    await gitSafeAsync('merge --abort');
-    log.git.error(
-      'git-sync LWW resolution left unmerged paths — aborted merge, falling back to `pull -X theirs` (REMOTE WINS). Investigate!',
-      { branch, unresolved: stillUnmerged.split('\n') },
-    );
-    await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: PULL_TIMEOUT });
-    return { merged: true, conflicts: files.length };
-  }
-
-  // Marker guard on the resolved set. `checkout --ours/--theirs` writes a clean
-  // blob, so this should find nothing — but this is a MERGE RESOLUTION path, and
-  // committing marker text as a JSON store's content is the 2026-08-22 incident.
-  // The file list is already in hand, so the check costs one bounded read each.
-  // Staged file-by-file, never `add -A`: the app keeps writing during a pull,
-  // and sweeping those writes into the merge commit is not this function's job.
-  const markerFix = await healConflictMarkeredJsonFiles(
-    files.filter((f) => f.endsWith('.json')),
-    'lwwMerge:resolved',
-  );
-  for (const f of markerFix.restored) await gitSafeAsync(`add -- "${f}"`, { timeout: await fileAddTimeout(WALNUT_HOME, f) });
-  for (const f of markerFix.quarantined) await gitSafeAsync(`rm -q --cached --ignore-unmatch -- "${f}"`);
-
-  // Commit the merge. Parent 1 = local HEAD, parent 2 = remote head — the
-  // losing content of every conflicted file survives under one of them.
-  // Message body lists each file + winning side for auditability.
-  const detail = [
-    ...localWins.map((f) => `local  wins: ${f}`),
-    ...remoteWins.map((f) => `remote wins: ${f}`),
-  ].join('\n');
-  const msgFile = path.join(os.tmpdir(), `walnut-merge-msg-${process.pid}-${Date.now()}.txt`);
-  fs.writeFileSync(
-    msgFile,
-    `merge: LWW conflict resolution (${files.length} files)\n\n${detail}\n\n`
-    + 'Losing versions remain in history: git log --all --full-history -- <file>\n',
-    'utf-8',
-  );
-  let committed: string | null;
+  const mergedRecords: string[] = [];
+  const clocks: Record<string, LwwClock> = {};
+  const files = [...stages.keys()];
   try {
-    committed = await gitSafeAsync(`commit -F "${msgFile}"`);
-  } finally {
-    try { fs.unlinkSync(msgFile); } catch { /* best-effort */ }
-  }
-  if (committed === null) {
-    // Never leave the repo mid-merge — abort and retry on the next cycle.
-    await gitSafeAsync('merge --abort');
-    log.git.error('git-sync LWW merge commit failed — merge aborted, will retry next cycle', {
-      branch, files,
-    });
-    return { merged: false, conflicts: files.length };
-  }
+    for (const [file, s] of stages) {
+      // A store of records: both sides merged (git-sync-records.ts), staged and written from the index.
+      const records = await mergeRecords(pullGit().run, file, s.get(2), s.get(3));
+      if (records) {
+        const [mode, oid] = records.split(' ');
+        await must(pullGit().run, ['update-index', '--cacheinfo', `${mode},${oid},${file}`]);
+        await must(pullGit().run, ['checkout-index', '-f', '--', file]);
+        clocks[file] = 'records';
+        mergedRecords.push(file);
+        continue;
+      }
+      const { side, clock } = await chooseLww(pullGit().run, file, s.get(2), s.get(3), localHead, remoteHead);
+      clocks[file] = clock;
+      const flag = side === 'local' ? '--ours' : '--theirs';
+      if (await gitSafeAsync(`checkout ${flag} -- "${file}"`, { timeout }) !== null) {
+        await gitSafeAsync(`add -- "${file}"`, { timeout: Math.max(timeout, await fileAddTimeout(WALNUT_HOME, file)) });
+      } else {
+        // The winning side deleted the file: no blob to restore, the delete stands.
+        await gitSafeAsync(`rm -f -- "${file}"`, { timeout });
+      }
+      (side === 'local' ? localWins : remoteWins).push(file);
+    }
+    const stillUnmerged = await gitSafeAsync('diff --name-only --diff-filter=U', { timeout });
+    if (stillUnmerged && stillUnmerged.trim().length > 0) {
+      return deferred('git-sync LWW resolution left unmerged paths — merge aborted, deferred to the next tick. Investigate!', {
+        unresolved: stillUnmerged.split('\n'), recoveryKey: 'git',
+      }, 'error');
+    }
+    // Marker guard on the resolved set, staged file by file (never `add -A`: the
+    // app keeps writing during a pull, and sweeping those writes into the merge
+    // commit is not this function's job).
+    const markerFix = await healConflictMarkeredJsonFiles(files.filter((f) => f.endsWith('.json')), 'lwwMerge:resolved');
+    for (const f of markerFix.restored) await gitSafeAsync(`add -- "${f}"`, { timeout: Math.max(timeout, await fileAddTimeout(WALNUT_HOME, f)) });
+    for (const f of markerFix.quarantined) await gitSafeAsync(`rm -q --cached --ignore-unmatch -- "${f}"`, { timeout });
 
-  // Notify the UI: worst case of a conflict is ONE notification, never a dialog.
-  // `winner` is the majority side (per-file detail is in the merge commit);
-  // `losingCommit` points at the losing side's head for recovery.
-  const winner: 'local' | 'remote' = localWins.length > remoteWins.length ? 'local' : 'remote';
-  const losingCommit = winner === 'local' ? remoteHead : localHead;
-  log.git.warn('git-sync auto-resolved same-hunk conflict (LWW)', {
-    files, winner, losingCommit, localWins, remoteWins,
-    clocks: Object.fromEntries(clockByFile),
-  });
-  bus.emit(EventNames.SYNC_CONFLICT_RESOLVED, { files, winner, losingCommit }, ['web-ui'], {
-    source: 'git-sync',
-  });
-
-  return { merged: true, conflicts: files.length };
+    const msgFile = path.join(os.tmpdir(), `walnut-merge-msg-${process.pid}-${Date.now()}.txt`);
+    fs.writeFileSync(msgFile, lwwMergeMessage(localWins, remoteWins, mergedRecords), 'utf-8');
+    let committed: string | null;
+    try {
+      committed = await gitSafeAsync(`commit -F "${msgFile}"`, { timeout });
+    } finally {
+      try { fs.unlinkSync(msgFile); } catch { /* best-effort */ }
+    }
+    if (committed === null) {
+      return deferred('git-sync LWW merge commit failed — merge aborted, deferred to the next tick', { files }, 'error');
+    }
+  } catch (error) {
+    // A clock read timed out mid-resolution: never leave the repo mid-merge.
+    return deferred('git-sync: the LWW resolution failed — merge aborted, deferred to the next tick', {
+      files, error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    }, 'warn');
+  }
+  announceLww(files, localWins, remoteWins, clocks, localHead, remoteHead);
+  return { pulled: 1, conflicts: files.length };
 }
 
 export async function autoSync(): Promise<void> {
@@ -3133,7 +3420,7 @@ export async function autoSync(): Promise<void> {
  *
  * Single-flight: session:result and session:error can fire together (multiple
  * sessions finishing at once) — concurrent callers share ONE in-flight pull
- * instead of racing two `git pull` processes into .git/index.lock contention.
+ * instead of racing two pulls into .git/index.lock contention.
  */
 let pullInflight: Promise<void> | null = null;
 
@@ -3169,24 +3456,26 @@ export async function gitPullWalnut(): Promise<void> {
         });
         return;
       }
+      // A rebase or merge in progress is a human's (or a crashed git's): not ours to move.
+      if (isGitSurgeryInProgress()) return;
+      const branch = await getBranchAsync();
+      if (branch === 'HEAD') return;
       await clearStaleLock();
-      // gitSafeAsync applies the credential-helper guard itself (pull is a
-      // network subcommand) and swallows errors — same best-effort semantics
-      // as the old execSync version, minus the event-loop block. PULL_TIMEOUT:
-      // a pull checks out files, and killing it mid-checkout is what tears a
-      // worktree (2026-08-03 incident) — give it room to finish.
-      const pullOut = await gitSafeAsync('pull --ff-only', { timeout: PULL_TIMEOUT });
-      if (pullOut === null) {
-        // A killed pull leaves its partial tmp_pack behind like a killed fetch
-        // does; the age gate keeps a transfer still running out of reach.
+      // A fast-forward only (what `pull --ff-only` did), through the same apply
+      // as the tick: the fetch here, the working tree moved by moveWorktree. A
+      // divergence or a rewrite waits for the tick. gitSafeAsync applies the
+      // credential-helper guard itself and swallows errors (best-effort).
+      const before = await gitSafeAsync(`rev-parse --verify -q origin/${branch}`);
+      if (await gitSafeAsync(`fetch origin ${branch}`, { timeout: PULL_TIMEOUT }) === null) {
+        // A killed fetch leaves its partial tmp_pack behind; the age gate keeps
+        // a transfer still running out of reach.
         sweepDeadFetchPacks(WALNUT_HOME);
         return;
       }
-      // Same torn-worktree sentinel as the sync tick: if this pull moved HEAD
-      // but died mid-checkout, flag it before any add -A can snapshot it.
-      if (pullOut.includes('Updating') || pullOut.includes('Fast-forward')) {
-        await verifyWorktreeAfterPull('gitPullWalnut --ff-only');
-      }
+      await noteRewriteAcrossFetch(branch, before);
+      const result = await integrateRemoteSafely(branch, { before, merge: false });
+      // Same torn-worktree sentinel as the sync tick.
+      if (result.pulled === 1) await verifyWorktreeAfterPull('gitPullWalnut fast-forward');
     } catch {
       // Best-effort — don't fail callers
     } finally {
@@ -3238,7 +3527,10 @@ export async function clearStaleLock(maxAgeMs = 60_000): Promise<boolean> {
     }
   };
 
-  await removeIfStale(path.join(gitDir, 'index.lock'));
+  // An apply in this process holds index.lock through long single steps (a
+  // big blob, a refresh); its 1 s touch keeps it fresh, and this latch keeps a
+  // stall of the loop from reading it as dead (git-sync-apply-journal.ts).
+  if (!applyInFlight()) await removeIfStale(path.join(gitDir, 'index.lock'));
 
   // Top-level .git/*.lock beyond index.lock: a merge killed mid-run (e.g. by
   // execGitGroup's timeout during the 2026-08 hub CPU-starvation) leaves
@@ -3542,6 +3834,9 @@ export async function commitIfDirty(): Promise<boolean> {
     logSurgerySkip('commitIfDirty');
     return false;
   }
+  // A pull is moving the tree (it holds the index), or one stopped part way and
+  // is not undone yet: committing now would record the pulled content as ours.
+  if (applyInFlight() || !(await recoverInterruptedPull()).commit) return false;
   await clearStaleLock();
   // -uall: see syncInner — collapsed `?? dir/` lines would hide a mass
   // resurrection from the circuit breaker.
@@ -3565,7 +3860,8 @@ export async function commitIfDirty(): Promise<boolean> {
   // the status snapshot above (no extra git call), before anything is staged.
   await healConflictMarkeredJsonFromStatus(lines, 'commitIfDirty');
 
-  let stage: { deferred: PendingFile[]; cloudMode: boolean };
+  // stageAllForCommit refuses (null) when a pull started (gitPullWalnut) or stopped since the check above.
+  let stage: { deferred: PendingFile[]; cloudMode: boolean } | null;
   try {
     stage = await stageAllForCommit();
   } catch (err) {
@@ -3575,6 +3871,7 @@ export async function commitIfDirty(): Promise<boolean> {
     await clearStaleLock(5_000);
     stage = await stageAllForCommit();
   }
+  if (!stage) return false;
 
   // Honest count: from what is ACTUALLY staged at commit time, not the
   // pre-add status snapshot. The incident commit reverted 2233 renames while

@@ -4,7 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { log } from '../logging/index.js';
 import { withFileLock } from './file-lock.js';
-import { gated } from './write-gate.js';
+import { enterWrite, gated } from './write-gate.js';
 import { selfHealDataDirJson } from './json-conflict-recovery.js';
 import { noteJsonIo } from '../core/observability/json-io.js';
 
@@ -79,7 +79,14 @@ async function writeTextFileNow(
         ...(options.mode === undefined ? {} : { mode: options.mode }),
       });
     }
-    await fs.rename(tmpFile, filePath);
+    // The pull's rename gate (write-gate.ts): a pull moving the data repo's tree never
+    // replaces this file between its own check of it and its rename.
+    const release = await enterWrite();
+    try {
+      await fs.rename(tmpFile, filePath);
+    } finally {
+      release();
+    }
     if (options.mode !== undefined) await fs.chmod(filePath, options.mode);
     if (options.durable) {
       const handle = await fs.open(dir, 'r');

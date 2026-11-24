@@ -41,6 +41,8 @@ import {
   FETCH_RECOVERY_TIMEOUT,
   FETCH_STREAK_FOR_RECOVERY,
   FETCH_DEBRIS_MIN_AGE_MS,
+  PULL_TIMEOUT,
+  syncFetchTimeout,
 } from '../../src/integrations/git-sync.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { execSync } from 'node:child_process';
@@ -61,6 +63,14 @@ describe('fetchTimeoutForStreak', () => {
 
   it('recovery timeout actually fits the measured post-compaction fetch (2m33s)', () => {
     expect(FETCH_RECOVERY_TIMEOUT).toBeGreaterThan(153_000);
+  });
+
+  it('the tick\'s one fetch: a whole pull\'s budget on a healthy link, then the streak ladder', () => {
+    // The fetch used to ride inside `pull --rebase` under PULL_TIMEOUT; during a
+    // streak that long retry of the transfer that just died is what is skipped.
+    expect(syncFetchTimeout(0)).toBe(PULL_TIMEOUT);
+    for (let s = 1; s < FETCH_STREAK_FOR_RECOVERY; s++) expect(syncFetchTimeout(s)).toBe(FETCH_TIMEOUT);
+    expect(syncFetchTimeout(FETCH_STREAK_FOR_RECOVERY)).toBe(FETCH_RECOVERY_TIMEOUT);
   });
 });
 
@@ -118,13 +128,14 @@ describe('sweepDeadFetchPacks', () => {
   });
 });
 
-// ── The sweep runs on every pass, and a streak skips the doomed pull ──
+// ── The sweep runs on every pass, and a streak fetches once, under its budget ──
 //
 // 2026-10-05, cloud box: one rewrite adoption left 19 tmp_pack_* corpses
 // (7.5GB) that nothing swept. The failure-path sweep saw only corpses older
 // than the age gate at the LAST failure; the successful recovery fetch never
 // swept; and every tick first ran `pull --rebase` under the 60s budget, the
 // same transfer the 15s fetch had just lost, adding a 1.4GB corpse per tick.
+// The tick now makes ONE fetch (syncFetchTimeout) and no `pull` at all.
 
 describe('sync() over a real origin: corpse sweep and streak pull', () => {
   let bareDir: string;
@@ -183,20 +194,19 @@ describe('sync() over a real origin: corpse sweep and streak pull', () => {
     expect(fs.existsSync(fresh)).toBe(true);
   }, 30_000);
 
-  it('with no streak a diverged tick rebases (linear history, the pull path)', async () => {
+  it('with no streak a diverged tick replays (linear history, the shape `pull --rebase` gave)', async () => {
     await fsp.writeFile(path.join(cloneDir, 'other.md'), 'other\n');
     run('git add -A && git commit -q -m other && git push -q origin main', cloneDir);
     await fsp.writeFile(path.join(WALNUT_HOME, 'mine.md'), 'mine\n');
 
     await sync();
 
-    // `pull --rebase` put the local commit on top of upstream: one parent, and
-    // upstream's commit is its parent.
+    // The local commit sits on top of upstream: one parent, upstream's commit.
     expect(run('git log -1 --format=%P', WALNUT_HOME).split(' ')).toHaveLength(1);
     expect(run('git log -1 --format=%s HEAD~1', WALNUT_HOME)).toBe('other');
   }, 30_000);
 
-  it('during a fetch-failure streak the tick skips `pull --rebase` and goes to the merge path', async () => {
+  it('during a fetch-failure streak the tick fetches once and lands the same pull, closing the streak', async () => {
     await fsp.writeFile(path.join(cloneDir, 'other.md'), 'other\n');
     run('git add -A && git commit -q -m other && git push -q origin main', cloneDir);
     await fsp.writeFile(path.join(WALNUT_HOME, 'mine.md'), 'mine\n');
@@ -204,10 +214,8 @@ describe('sync() over a real origin: corpse sweep and streak pull', () => {
 
     const result = await sync();
 
-    // lwwMerge joined the two sides with a merge commit: two parents, and the
-    // streak closed on the fetch that worked.
     expect(result.pulled).toBe(1);
-    expect(run('git log -1 --format=%P', WALNUT_HOME).split(' ')).toHaveLength(2);
+    expect(run('git log -1 --format=%P', WALNUT_HOME).split(' ')).toHaveLength(1);
     expect(getSyncGuardState().consecutiveNetworkFailures).toBe(0);
     expect(run('git ls-files', WALNUT_HOME).split('\n')).toEqual(expect.arrayContaining(['base.md', 'mine.md', 'other.md']));
   }, 30_000);

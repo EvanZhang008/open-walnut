@@ -140,8 +140,8 @@ export interface RunPlacementDeps {
   hasDaemonCap(host: string, cap: string): Promise<boolean | null>;
   /** Its account's home folder, as its daemon reported it; null when unknown. */
   remoteHome(host: string): Promise<string | null>;
-  /** The user closed it to work from other hosts. */
-  closed(host: string): Promise<boolean>;
+  /** The user closed it to work from other hosts; a string says why when that is not his stop. */
+  closed(host: string): Promise<boolean | string>;
   /** Its fleet capabilities, null when no card was read for it. */
   capabilities(host: string): Promise<HostCapabilities | null>;
   /** The engine the launch would start on there (undefined = Claude Code). */
@@ -245,7 +245,8 @@ export async function hostBlocker(
 ): Promise<string | null> {
   if (host !== LOCAL_HOST) {
     if (!await deps.connected(host)) return 'it is not connected';
-    if (await deps.closed(host)) return 'it is closed to work from other hosts';
+    const closed = await deps.closed(host);
+    if (closed) return typeof closed === 'string' ? closed : 'it is closed to work from other hosts';
     for (const cap of work.daemon) {
       const has = await deps.hasDaemonCap(host, cap);
       if (has === null) return 'it is not connected';
@@ -495,7 +496,12 @@ function realDeps(): RunPlacementDeps {
       return c ? c.hasCapability(cap) : null;
     },
     remoteHome: async (host) => (await conn(host))?.remoteHome ?? null,
-    closed: async (host) => (await import('../hosts/exec-grants.js')).isHostClosed(host),
+    closed: async (host) => {
+      const grants = await import('../hosts/exec-grants.js');
+      if (!grants.isHostClosed(host)) return false;
+      // Every host counts as closed while Walnut cannot read the list (exec-grants.ts closedList): not the user's stop.
+      return grants.closedHostsUnreadable() ? 'Walnut cannot read its list of the hosts the user closed, so it counts every host as closed until it can' : true;
+    },
     async capabilities(host) {
       return (await import('../hosts/capability-reader.js')).readHostCapabilities(host);
     },

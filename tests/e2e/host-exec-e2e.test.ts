@@ -52,7 +52,7 @@ import { createHostExec } from '../../src/providers/host-exec-core.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { ANSWER_RETURN_MS, resetHostExecForTest } from '../../src/core/hosts/host-exec.js'
-import { onLetterAnswered, recordAsk, settleOwnHostAsks } from '../../src/core/hosts/exec-grants.js'
+import { onLetterAnswered, recordAsk, setExecGrantsFileForTest, settleOwnHostAsks } from '../../src/core/hosts/exec-grants.js'
 import { isOwnHost } from '../../src/core/hosts/host-exec.js'
 import * as grantGate from '../../src/core/hosts/host-exec-grant.js'
 import { answerLetter, getLetter, sendLetter, settleLetter } from '../../src/core/human-inbox/store.js'
@@ -983,6 +983,38 @@ describe('host_exec', () => {
     await fs.writeFile(file, JSON.stringify({ grants: raw.grants, asks: raw.asks }))
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).toMatchObject({ status: 403, body: { code: 'exec_host_closed' } })
     expect((await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: false })).status).toBe(200)
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).status).toBe(200)
+  }, 30_000)
+
+  it('a grants file that cannot be read whole: markers keep every grant; one never read whole makes no grant, no letter, no write (2026-11-24)', async () => {
+    const file = path.join(WALNUT_HOME, 'host-exec-grants.json')
+    const whole = await fs.readFile(file, 'utf8')
+    // A sync merge in flight: both sides in the file, with the markers git writes.
+    await fs.writeFile(file, `<<<<<<< HEAD\n${whole}=======\n{"grants":[],"asks":[]}\n>>>>>>> origin/main\n`)
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).status).toBe(200)
+    await fs.writeFile(file, whole)
+    // As a server that started while the file was broken: nothing it holds is the user's.
+    const broken = whole.slice(0, Math.floor(whole.length / 2))
+    await fs.writeFile(file, broken)
+    setExecGrantsFileForTest(file)
+    try {
+      const asksBefore = (await letters()).length
+      for (const sid of [OWN_SID, SID]) {
+        const r = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, sid)
+        expect(r).toMatchObject({ status: 503, body: { code: 'exec_grants_unreadable' } })
+        expect(String(r.body.error)).not.toMatch(/the user revoked this/i)
+      }
+      expect((await letters()).length).toBe(asksBefore)
+      expect(await fs.readFile(file, 'utf8')).toBe(broken)
+      // The user's own grant in Settings ends it: a fresh file, the broken one kept where sync never takes it.
+      expect((await api('POST', '/api/v1/host-exec/grants', { task_id: taskId, host: 'macbox' })).status).toBe(200)
+      JSON.parse(await fs.readFile(file, 'utf8'))
+      const aside = path.join(WALNUT_HOME, 'local', 'unreadable')
+      expect((await fs.readdir(aside)).some((f) => f.startsWith('host-exec-grants.json.'))).toBe(true)
+    } finally {
+      await fs.writeFile(file, whole)
+      setExecGrantsFileForTest(null)
+    }
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).status).toBe(200)
   }, 30_000)
 

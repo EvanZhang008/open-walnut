@@ -31,6 +31,9 @@ import { log } from '../../logging/index.js'
 import type { LetterRecord } from '../human-inbox/types.js'
 import type { StillNeededContext } from '../human-inbox/walnut-letters/kind.js'
 import type { HostExecSettleWhy } from '../human-inbox/walnut-letters/host-exec-ask.js'
+import { HostExecError } from './host-exec-target.js'
+import { enterWrite } from '../../utils/write-gate.js'
+import { keepAside, mergeStores, parseObject, storeOf, storeText, type Parsed, type Store } from './exec-grants-file.js'
 
 export interface ExecGrant {
   id: string
@@ -62,8 +65,6 @@ export interface ExecAsk {
   answeredAt?: number
 }
 
-interface Store { grants: ExecGrant[]; asks: ExecAsk[] }
-
 const FILE_NAME = 'host-exec-grants.json'
 export const ALLOW_ACTION = 'allow'
 export const DENY_ACTION = 'deny'
@@ -78,6 +79,12 @@ export function setExecGrantsFileForTest(f: string | null): void {
   fileOverride = f
   keptStore = null
   keptClosed = null
+  goodStore = null
+  goodClosed = null
+  closedMissingSince = null
+  closedUnknown = null
+  unreadableStore = null
+  seenLive.clear()
 }
 
 // Every lookup below runs on the server's loop, several times per command and before every part
@@ -90,6 +97,12 @@ export function setExecGrantsFileForTest(f: string | null): void {
 interface Kept<T> { key: string; value: T }
 let keptStore: Kept<Store> | null = null
 let keptClosed: Kept<string[]> | null = null
+/** The closed hosts last read whole (null before the first). */
+let goodClosed: readonly string[] | null = null
+/** Since when the closed-hosts file has been gone, after it was read whole with a host in it. */
+let closedMissingSince: number | null = null
+/** Set while the closed-hosts file cannot be read whole and never was (closedList). */
+let closedUnknown: { path: string } | null = null
 
 /** What identifies the file's current contents without reading it ('' when it is missing). */
 function statKey(f: string): string {
@@ -109,23 +122,123 @@ function deepFreeze<T>(v: T): T {
   return v
 }
 
-function parseStore(f: string): Store {
-  try {
-    const raw = JSON.parse(fs.readFileSync(f, 'utf8')) as Partial<Store>
-    return { grants: Array.isArray(raw.grants) ? raw.grants : [], asks: Array.isArray(raw.asks) ? raw.asks : [] }
-  } catch {
-    return { grants: [], asks: [] }
-  }
+function parseStore(f: string): Parsed<Store> {
+  const p = parseObject(f)
+  return p.ok ? { ok: true, value: storeOf(p.value) } : { ...p, sides: p.sides.map(storeOf) }
+}
+
+/**
+ * The grants file as it read last time it could not be read whole, while the grants read before
+ * it stand. A file that cannot be read whole is never "no grants": 2026-11-24, a data sync's merge
+ * left conflict markers in it for a few seconds, every lookup parsed nothing, and three tasks' reads
+ * on the Mac were refused as if the user had revoked their grants; a write in those seconds would
+ * have replaced all 744 grants with one.
+ */
+interface Unreadable {
+  why: 'missing' | 'unparsable'
+  /** Since when it has read this way (a switch between gone and unparsable starts the clock again). */
+  since: number
+  key: string
+  /** Each side of its conflict markers that parses whole (none when it holds no markers). */
+  sides: Store[]
+}
+let unreadableStore: Unreadable | null = null
+/** The grants last read whole from the file, or written by this process (null before the first). */
+let goodStore: Store | null = null
+/**
+ * The live grant this process last read for each `task\nhost`, so a refusal tells a grant the file
+ * no longer lists (a copy from before it came, a file taken away) from one the user revoked.
+ */
+const seenLive = new Map<string, string>()
+
+const EMPTY_STORE: Store = deepFreeze({ grants: [], asks: [] })
+
+/**
+ * A file gone this long is taken as gone (someone removed it on purpose), not as a writer's
+ * rename or a checkout in flight, which take milliseconds.
+ */
+export const MISSING_GRACE_MS = 60_000
+
+/**
+ * Whether the grants Walnut holds while the file cannot be read whole are the user's: it read the
+ * file whole before (and not only as absent before an unparsable file came), or both sides of its
+ * conflict markers parse.
+ */
+function trusted(u: Unreadable): boolean {
+  return u.sides.length === 2 || (goodStore !== null && !(goodStore === EMPTY_STORE && u.why === 'unparsable'))
+}
+
+function keep(key: string, value: Store): Store {
+  keptStore = { key, value }
+  for (const g of value.grants) if (!g.revokedAt) seenLive.set(`${g.taskId}\n${g.host}`, g.id)
+  return value
 }
 
 /** The store as the file holds it now (frozen: never change it, mutate copies it). */
 function read(): Readonly<Store> {
   const f = file()
   const key = statKey(f)
-  if (keptStore?.key === key) return keptStore.value
-  const value = deepFreeze(parseStore(f))
-  keptStore = { key, value }
-  return value
+  const goneLong = unreadableStore?.why === 'missing' && Date.now() - unreadableStore.since > MISSING_GRACE_MS
+  if (keptStore?.key === key && !goneLong) return keptStore.value
+  const parsed = parseStore(f)
+  if (goneLong && !parsed.ok && parsed.why === 'missing') {
+    log.session.warn('host exec grants: the grants file has been gone a minute; read as no grants', { file: f, kept: goodStore?.grants.length ?? null })
+    unreadableStore = null
+    goodStore = EMPTY_STORE
+    return keep(key, EMPTY_STORE)
+  }
+  if (parsed.ok) {
+    const value = deepFreeze(parsed.value)
+    goodStore = value
+    if (unreadableStore) log.session.info('host exec grants: the grants file reads whole again', { file: f, unreadableForMs: Date.now() - unreadableStore.since })
+    unreadableStore = null
+    return keep(key, value)
+  }
+  // Nothing was ever read whole and the file is not there: a new install, no grants yet.
+  if (!goodStore && parsed.why === 'missing') {
+    goodStore = EMPTY_STORE
+    return keep(key, EMPTY_STORE)
+  }
+  if (unreadableStore?.key !== key) {
+    log.session.warn('host exec grants: the grants file cannot be read whole; the grants read before it stand, with both sides of any conflict markers in it', {
+      file: f, why: parsed.why, kept: goodStore?.grants.length ?? null, sides: parsed.sides.length,
+    })
+  }
+  unreadableStore = { why: parsed.why, since: unreadableStore?.why === parsed.why ? unreadableStore.since : Date.now(), key, sides: parsed.sides }
+  // What the user's grants are: the copy read whole before, with each side of the markers (a revoke on any side wins).
+  const copies = [...(goodStore ? [goodStore] : []), ...parsed.sides]
+  return keep(key, copies.length ? deepFreeze(mergeStores(copies)) : EMPTY_STORE)
+}
+
+/**
+ * Whether the grants file reads whole now, else since when and why not, with its path: a refusal
+ * says this instead of calling a grant Walnut cannot see revoked. `trusted` is false when Walnut
+ * never read it whole and its markers do not give both versions, so the grants it holds may not be
+ * the user's.
+ */
+export function grantsFileState(): { path: string; readable: true } | { path: string; readable: false; why: 'missing' | 'unparsable'; since: number; trusted: boolean } {
+  read()
+  const f = file()
+  return unreadableStore
+    ? { path: f, readable: false, why: unreadableStore.why, since: unreadableStore.since, trusted: trusted(unreadableStore) }
+    : { path: f, readable: true }
+}
+
+/** What ends a grants file that stays unreadable: the user's own grant in Settings writes a fresh one. */
+export const GRANTS_REPAIR = 'Try again in a minute; if it lasts, the user granting the task again in Settings › Remote Hosts writes a fresh file, and the unreadable one is kept in local/unreadable/.'
+
+/** The refusal a write or a new grant gets while the grants Walnut holds may not be the user's (503). */
+function untrustedError(f: string): HostExecError {
+  return new HostExecError(`Walnut cannot read its grants file (${f}) whole and never read it whole before, so it changed nothing there and cannot tell what this task may use. The user revoked nothing. ${GRANTS_REPAIR}`, 503, 'exec_grants_unreadable')
+}
+
+/**
+ * Whether a grant this process read live for the task on the host is no longer in the file at all:
+ * then nobody revoked it (a revoke keeps the grant, marked), and a refusal must not say so.
+ */
+export function grantVanished(taskId: string, host: string): boolean {
+  const id = seenLive.get(`${taskId}\n${host}`)
+  return !!id && !read().grants.some((g) => g.id === id)
 }
 
 // One writer at a time in this process; the file is the primary's alone.
@@ -164,33 +277,61 @@ function accessChanged(live?: Set<string>): void {
   let may: AccessCheck
   try {
     const closed = new Set(closedHosts())
+    const all = closedUnknown !== null
     const keys = live ?? liveKeys(read())
-    may = (taskId, host) => !closed.has(host) && keys.has(`${taskId}\n${host}`)
+    may = (taskId, host) => !all && !closed.has(host) && keys.has(`${taskId}\n${host}`)
   } catch { return }
   for (const fn of [...accessListeners]) {
     try { fn(may) } catch { /* one listener's fault is its own */ }
   }
 }
 
-function mutate<T>(fn: (s: Store) => T): Promise<T> {
-  const next = chain.then(async () => {
+/**
+ * `repair`: the user's own write in Settings. It goes through even when the grants Walnut holds may
+ * not be his (a file never read whole), onto what it holds, the unreadable file kept aside first:
+ * else such a file would refuse every grant until someone edits it by hand (2026-11-24 review).
+ */
+function mutate<T>(fn: (s: Store) => T, opts: { repair?: boolean } = {}): Promise<T> {
+  const next = chain.then(() => heldWrite(async () => {
     const s = structuredClone(read()) as Store
+    const target = file()
+    // A file that cannot be read whole is never written over with what this process holds unless
+    // those are the user's grants (read whole before, or both sides of its markers): then the change
+    // goes onto them, and the unreadable file is kept first where the data sync never takes it.
+    if (unreadableStore) {
+      if (!trusted(unreadableStore) && !opts.repair) throw untrustedError(target)
+      if (unreadableStore.why === 'unparsable') {
+        const aside = await keepAside(target)
+        log.session.warn('host exec grants: writing the grants read before over an unreadable grants file; that file is kept aside', { file: target, aside })
+      }
+    }
     // Taken whether or not anyone listens yet: a read may start listening while this write runs.
     const before = liveKeys(s)
     const out = fn(s)
-    const target = file()
     const tmp = `${target}.${process.pid}.tmp`
     await fs.promises.mkdir(path.dirname(target), { recursive: true })
-    await fs.promises.writeFile(tmp, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 })
+    await fs.promises.writeFile(tmp, storeText({ ...s }), { mode: 0o600 })
     await fs.promises.rename(tmp, target)
     // What we just wrote is what the file holds: keep it, no parse on the next lookup.
-    keptStore = { key: statKey(target), value: deepFreeze(s) }
+    goodStore = keep(statKey(target), deepFreeze(s))
+    unreadableStore = null
     const after = liveKeys(s)
     if (!sameKeys(before, after)) accessChanged(after)
     return out
-  })
+  }))
   chain = next.catch(() => {})
   return next
+}
+
+/**
+ * A whole read, change and write of a store file under the write gate (utils/write-gate.ts): the
+ * data sync's pull lands before the read or after the rename, never between them, so neither
+ * replaces the other's write (2026-11-24 review: a pull that landed between a grants write's read
+ * and its rename was written back over, a revoke it brought included).
+ */
+async function heldWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const release = await enterWrite()
+  try { return await fn() } finally { release() }
 }
 
 /** The live grant for this task on this host, if any. */
@@ -230,36 +371,74 @@ export function closedHosts(): string[] {
 function closedList(): readonly string[] {
   const f = closedFile()
   const key = statKey(f)
-  if (keptClosed?.key !== key) {
-    let value: string[] = []
-    try {
-      const raw = JSON.parse(fs.readFileSync(f, 'utf8')) as { closed?: unknown }
-      if (Array.isArray(raw.closed)) value = raw.closed.filter((h): h is string => typeof h === 'string')
-    } catch { /* missing or unreadable: no host closed */ }
-    keptClosed = { key, value: Object.freeze(value) as string[] }
+  const goneLong = closedMissingSince !== null && Date.now() - closedMissingSince > MISSING_GRACE_MS
+  if (keptClosed?.key !== key || goneLong) {
+    const p = parseObject(f)
+    if (p.ok || p.why !== 'missing') closedMissingSince = null
+    else if (closedMissingSince === null && goodClosed?.length) closedMissingSince = Date.now()
+    const listOf = (o: Record<string, unknown>): string[] => Array.isArray(o.closed) ? o.closed.filter((h): h is string => typeof h === 'string') : []
+    let value: readonly string[]
+    closedUnknown = null
+    if (p.ok) {
+      value = Object.freeze(listOf(p.value))
+      goodClosed = value
+    } else if (p.why === 'missing' && (!goodClosed?.length || goneLong)) {
+      // Never written, or removed on purpose a minute ago: no host closed.
+      value = Object.freeze([])
+      goodClosed = value
+      closedMissingSince = null
+    } else {
+      // The user's hard stops never open because their file read badly for a moment (the same
+      // sync merge that hid the grants): the hosts closed when it last read whole stay closed,
+      // with every host either side of its conflict markers closes.
+      value = Object.freeze([...new Set([...(goodClosed ?? []), ...p.sides.flatMap(listOf)])].sort())
+      // Never read whole and no two versions in it: which hosts the user closed is not known, so
+      // every host counts as closed until it reads (isHostClosed), and the refusal says why.
+      if (!goodClosed && p.sides.length < 2) closedUnknown = { path: f }
+      if (keptClosed?.key !== key) log.session.warn('host exec grants: the closed-hosts file cannot be read whole; the hosts closed before stay closed', { file: f, why: p.why, closed: value.length, sides: p.sides.length, unknown: !!closedUnknown })
+    }
+    keptClosed = { key, value: value as string[] }
   }
   return keptClosed.value
 }
 
+/**
+ * The closed-hosts file, when Walnut never read it whole and cannot now: every host counts as
+ * closed meanwhile, and a refusal says this instead of "the user closed it". Null otherwise.
+ */
+export function closedHostsUnreadable(): string | null {
+  closedList()
+  return closedUnknown?.path ?? null
+}
+
 export function isHostClosed(host: string): boolean {
-  return closedList().includes(host)
+  const list = closedList()
+  return closedUnknown !== null || list.includes(host)
 }
 
 /** Close or open a host to tasks from other hosts (the user, in Settings). */
 export async function setHostClosed(host: string, closed: boolean): Promise<string[]> {
-  const next = chain.then(async () => {
+  const next = chain.then(() => heldWrite(async () => {
     const set = new Set(closedHosts())
+    const target = closedFile()
+    // Only the user calls this (Settings): his write ends a list Walnut cannot read, which is kept aside below.
+    if (closedUnknown) log.session.warn('host exec grants: the user set a host in Settings over a closed-hosts file Walnut never read whole; that file is kept aside', { file: target, host, closed })
     if (closed) set.add(host)
     else set.delete(host)
     const out = [...set].sort()
-    const target = closedFile()
+    // A file read badly (markers, a partial write) is kept where the data sync never takes it.
+    if (fs.existsSync(target) && !parseObject(target).ok) await keepAside(target)
     const tmp = `${target}.${process.pid}.tmp`
     await fs.promises.mkdir(path.dirname(target), { recursive: true })
-    await fs.promises.writeFile(tmp, JSON.stringify({ closed: out }, null, 2) + '\n', { mode: 0o600 })
+    await fs.promises.writeFile(tmp, storeText({ closed: out }), { mode: 0o600 })
     await fs.promises.rename(tmp, target)
+    goodClosed = Object.freeze(out)
+    closedMissingSince = null
+    closedUnknown = null
+    keptClosed = { key: statKey(target), value: goodClosed as string[] }
     accessChanged()
     return out
-  })
+  }))
   chain = next.catch(() => {})
   return next
 }
@@ -284,7 +463,7 @@ export async function grant(taskId: string, host: string, via: ExecGrant['via'])
     const g: ExecGrant = { id: `xg-${randomUUID().slice(0, 12)}`, taskId, host, grantedAt: Date.now(), via, runs: 0 }
     s.grants.push(g)
     return { g, replaced }
-  })
+  }, { repair: via === 'settings' })
   // A grant made in Settings answers the letter still asking for it (it used to stay open, asking).
   for (const a of replaced) await settleAskLetter(a.letterId, 'granted')
   return g

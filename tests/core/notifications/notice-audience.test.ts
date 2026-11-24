@@ -105,7 +105,7 @@ describe('every writer of the notification store is listed', () => {
  * reason (a literal, a pass-through, a shorthand). Anything else is Walnut Health's.
  */
 const NEEDS_YOU_SITES: Record<string, { sets: number; why: string }> = {
-  'web/server.ts': { sets: 6, why: 'publishErrorNotification passes its caller\'s reason; disk critically full and the disk alarm (disk-full); data sync safe mode (sync-stopped); the two plugin sign-in notices (pass plugin-sync-health\'s reason)' },
+  'web/server.ts': { sets: 7, why: 'publishErrorNotification passes its caller\'s reason; disk critically full and the disk alarm (disk-full); data sync safe mode and a held pull (sync-stopped); the two plugin sign-in notices (pass plugin-sync-health\'s reason)' },
   'core/plugin-sync-health.ts': { sets: 3, why: 'a plugin that needs the person to sign in again or finish setup (sign-in)' },
   'core/hosts/found-host-alert.ts': { sets: 2, why: 'a host the person chose to connect that cannot be added (own-action)' },
   'core/plugins/plugin-notifications.ts': { sets: 1, why: 'a plugin error() that says needsYou: true (plugin-asks)' },

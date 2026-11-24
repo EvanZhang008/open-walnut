@@ -36,8 +36,10 @@ export async function pinnedGrant(caller: Caller, host: string, grantId: string)
   const grants = await import('./exec-grants.js')
   const name = await hostName(host)
   if (grants.isHostClosed(host)) {
-    throw new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts); nothing ran. Walnut asked no one.`, 403, 'exec_host_closed')
+    throw hostClosedError(grants, name, `The user closed ${name} to tasks on other hosts (Settings › Remote Hosts); nothing ran. Walnut asked no one.`)
   }
+  const unknown = unreadableGrants(grants, name, 'nothing ran. Walnut made no grant and asked no one.', { grantId })
+  if (unknown) throw unknown
   const g = grants.grantById(grantId)
   if (!g || g.taskId !== caller.taskId || g.host !== host) {
     // The id to name instead, so a wrong one costs no lookup (2026-11-04 review).
@@ -99,10 +101,50 @@ export function grantRefusal(grants: Grants, taskId: string, host: string, grant
   const closed = grants.isHostClosed(host)
   log.session.info('host exec: refused at dispatch', { taskId, host, grantId, pinned, closed })
   if (closed) {
-    return new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts) while this call waited; nothing ran there.`, 403, 'exec_host_closed')
+    return hostClosedError(grants, name, `The user closed ${name} to tasks on other hosts (Settings › Remote Hosts) while this call waited; nothing ran there.`)
   }
   const newer = pinned ? newerGrant(grants, taskId, host, grantId) : ''
-  return new HostExecError(`This task's grant to use ${name} was revoked while this call waited; nothing ran there.${newer}`, 403, 'exec_grant_revoked', { grantId, ...(pinned ? current(grants, taskId, host, grantId) : {}) })
+  // The grant the call came in under: revoked (the user's), or no longer in the file (nobody's revoke).
+  if (grants.grantById(grantId)?.revokedAt) {
+    return new HostExecError(`This task's grant to use ${name} was revoked while this call waited; nothing ran there.${newer}`, 403, 'exec_grant_revoked', { grantId, ...(pinned ? current(grants, taskId, host, grantId) : {}) })
+  }
+  return missingGrant(grants, name, 'nothing ran there.', { grantId })
+}
+
+/**
+ * No live grant and no revoke: Walnut does not find the grant it had (2026-11-24: a data sync's
+ * merge left the grants file unreadable for seconds, and every refusal said "the user revoked",
+ * which he had not). Said as it is: the file that could not be read, or a grant it no longer lists.
+ */
+export function missingGrant(grants: Grants, name: string, consequence: string, details: Record<string, unknown> = {}, next = 'Call again: Walnut makes or asks for a grant the usual way.'): HostExecError {
+  const unknown = unreadableGrants(grants, name, consequence, details)
+  if (unknown) return unknown
+  return new HostExecError(`Walnut no longer finds this task's grant to use ${name} in its grants file (${grants.grantsFileState().path}), and the user did not revoke it; ${consequence} ${next}`, 403, 'exec_grant_missing', details)
+}
+
+/**
+ * The 503 while the grants Walnut holds may not be the user's (its grants file cannot be read whole
+ * and never was), else null. Every way in checks it first, so such a file never makes a grant, a
+ * letter or a write (2026-11-24 review: a new grant hit a 500 and a letter went out on every call).
+ */
+export function unreadableGrants(grants: Grants, name: string, consequence: string, details: Record<string, unknown> = {}): HostExecError | null {
+  const state = grants.grantsFileState()
+  if (state.readable || state.trusted) return null
+  return new HostExecError(`Walnut cannot read its grants file (${state.path}) whole right now, so it cannot tell whether this task may use ${name}; ${consequence} The user revoked nothing. ${grants.GRANTS_REPAIR}`, 503, 'exec_grants_unreadable', details)
+}
+
+/**
+ * The refusal for a host that counts as closed: the user's stop (403 exec_host_closed), or, while
+ * the file of closed hosts cannot be read whole and never was, that (503), since every host counts
+ * as closed then and the user closed nothing. Every exec_host_closed is made here (ratchet:
+ * tests/core/hosts/exec-grants-unreadable.test.ts).
+ */
+export function hostClosedError(grants: Grants, name: string, text: string, details: Record<string, unknown> = {}): HostExecError {
+  const unread = grants.closedHostsUnreadable()
+  if (unread) {
+    return new HostExecError(`Walnut cannot read its list of the hosts the user closed to other hosts' tasks (${unread}) whole and never read it whole, so nothing starts or shows on another host until it can; the user closed nothing. Try again in a minute; if it lasts, the user closing or opening a host in Settings › Remote Hosts writes a fresh list, and the unreadable one is kept in local/unreadable/.`, 503, 'exec_grants_unreadable', details)
+  }
+  return new HostExecError(text, 403, 'exec_host_closed', details)
 }
 
 /**
@@ -114,13 +156,18 @@ export async function mayTendRuns(caller: Caller, host: string): Promise<{ revok
   const grants = await import('./exec-grants.js')
   const g = grants.findGrant(caller.taskId, host)
   if (g) return { revoked: false, grantId: g.id }
+  // A grant the file lost may still tend its runs, and nobody revoked it: a read then says it is missing.
+  if (grants.grantVanished(caller.taskId, host)) return { revoked: false, grantId: null }
   if (grants.wasRevoked(caller.taskId, host)) return { revoked: true, grantId: null }
   return { revoked: false, grantId: await grantFor(caller, host, null) }
 }
 
+/** What gets a read going again once its grant is gone and nobody revoked it: reads never make a grant. */
+const READ_AGAIN = (name: string) => `A new host_exec call on ${name} makes or asks for a grant the usual way; with it, reads of this job work again.`
+
 /** A refusal that ends a read in flight: the user took the task's way to that host away. */
 export function isReadStop(err: unknown): boolean {
-  return err instanceof HostExecError && err.status === 403 && (err.code === 'exec_grant_revoked' || err.code === 'exec_host_closed')
+  return err instanceof HostExecError && (err.code === 'exec_grants_unreadable' || (err.status === 403 && (err.code === 'exec_grant_revoked' || err.code === 'exec_grant_missing' || err.code === 'exec_host_closed')))
 }
 
 /**
@@ -137,8 +184,15 @@ export async function assertMayRead(taskId: string, host: string, jobId: unknown
   const job = typeof jobId === 'string' ? `job ${jobId}` : 'the job'
   const then = `It keeps running to its deadline: host_exec_stop stops it, and host_exec_list shows how it ends.`
   log.session.info('host exec: read stopped', { taskId, host, jobId, closed })
-  if (closed) throw new HostExecError(`The user closed ${await hostName(host)} to tasks on other hosts (Settings › Remote Hosts) while this call waited, so Walnut shows nothing more of ${job}. ${then}`, 403, 'exec_host_closed', { jobId })
-  throw new HostExecError(`The user revoked this task's grant to use ${await hostName(host)} while this call waited, so Walnut shows nothing more of ${job}. ${then}`, 403, 'exec_grant_revoked', { jobId })
+  const name = await hostName(host)
+  if (closed) throw hostClosedError(grants, name, `The user closed ${name} to tasks on other hosts (Settings › Remote Hosts) while this call waited, so Walnut shows nothing more of ${job}. ${then}`, { jobId })
+  // A revoke counts only when the grant this process last saw live is still listed, revoked: an
+  // older revoke says nothing about a later grant the file lost.
+  const revokedAt = grants.grantVanished(taskId, host) ? undefined : grants.lastRevokedAt(taskId, host)
+  if (revokedAt !== undefined) {
+    throw new HostExecError(`The user revoked this task's grant to use ${name} ${agoText(Date.now() - revokedAt)}, so Walnut shows nothing more of ${job}. ${then}`, 403, 'exec_grant_revoked', { jobId, revokedAt })
+  }
+  throw missingGrant(grants, name, `so Walnut shows nothing more of ${job}. ${then}`, { jobId }, READ_AGAIN(name))
 }
 
 /**
@@ -176,14 +230,20 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
   const name = await hostName(host)
   // The user's hard stop for this host: nothing new starts there, whatever the grant.
   if (preview !== null && grants.isHostClosed(host)) {
-    throw new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts). Do the step another way.`, 403, 'exec_host_closed')
+    throw hostClosedError(grants, name, `The user closed ${name} to tasks on other hosts (Settings › Remote Hosts). Do the step another way.`)
   }
+  // Grants that may not be the user's make no grant, send no letter and write nothing.
+  const unknown = unreadableGrants(grants, name, preview === null ? 'so Walnut reads nothing there for it.' : 'nothing ran. Walnut made no grant and asked no one.')
+  if (unknown) throw unknown
   const g = grants.findGrant(caller.taskId, host)
   // A grant the switch made counts only while approvals stay off: turned on, this task asks.
   if (g && !(g.via === 'approvals-off' && preview !== null && await (await import('../approvals/ask-me.js')).asksPerson())) return g.id
   // Reading or stopping a job needs the grant the run had; it never asks for one.
   if (preview === null) {
-    // A revoke reads as the pinned mode reads it: one code for one state (2026-11-05 review).
+    // A grant the file lost is nobody's revoke; a revoke reads as the pinned mode reads it (2026-11-05 review).
+    if (grants.grantVanished(caller.taskId, host)) {
+      throw missingGrant(grants, name, 'so Walnut reads nothing more there for it.', {}, READ_AGAIN(name))
+    }
     if (grants.wasRevoked(caller.taskId, host)) {
       throw new HostExecError(`The user revoked this task's grant to use ${name}, so Walnut reads nothing more there for it. Runs it started there keep going to their deadline: host_exec_stop still stops them (host_exec_list lists them).`, 403, 'exec_grant_revoked')
     }

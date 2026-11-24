@@ -88,7 +88,7 @@ defineOp({
     + 'task on the user\'s own host) and sends no letter, so a refusal asks no one. The grant must be this task\'s, for `host`, and '
     + 'live, and the host open (not closed in Settings > Remote Hosts), when the call starts and again right before the run is sent '
     + '(after any wait for a slot or for the host): otherwise it answers 403 with nothing run there: exec_grant_mismatch (not this '
-    + 'task\'s grant on that host; it names the one this task holds there, as `current`), exec_grant_revoked, exec_host_closed. Everything else is host_exec\'s: the run, wait_for and wait_ms, its deadline, '
+    + 'task\'s grant on that host; it names the one this task holds there, as `current`), exec_grant_revoked, exec_grant_missing (a grant Walnut no longer finds and nobody revoked), exec_host_closed. Everything else is host_exec\'s: the run, wait_for and wait_ms, its deadline, '
     + 'its answer, job_id, and host_exec_read/host_exec_stop for its job. A server that has this op lists host-exec-pinned-v1 in '
     + 'GET /api/v1/status capabilities; an older one answers 404.',
   input: {
@@ -126,7 +126,9 @@ defineOp({
     + 'again (heldMs says so). A read that finds nothing new says so in a sentence. To go on after a match or a miss, pass the '
     + 'answer\'s waitedFor.scanned as offset; an offset inside a line tests that whole line, and only a match ending past the offset '
     + 'counts. Only the task that started a job reads or stops it. After a revoke of the task\'s grant there, or the host closed, '
-    + 'reads of its jobs are refused (403 exec_grant_revoked) until the user grants it again; host_exec_list and host_exec_stop still work.',
+    + 'reads of its jobs are refused (403 exec_grant_revoked) until the user grants it again; host_exec_list and host_exec_stop still work. '
+    + 'A grant Walnut no longer finds that nobody revoked is 403 exec_grant_missing (call again: a grant is made or asked for the usual way), '
+    + 'and a grants file Walnut cannot read whole is 503 exec_grants_unreadable (try again in a minute).',
   input: {
     host: z.string().min(1).describe('The host the job runs on'),
     job_id: z.string().min(1).describe('The jobId host_exec returned'),

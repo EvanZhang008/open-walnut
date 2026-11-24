@@ -25,6 +25,11 @@ vi.mock('../../../src/core/hosts/exec-grants.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/core/hosts/exec-grants.js')>()),
   isHostClosed: () => false,
   findGrant: (taskId: string, host: string) => (grant.live ? { id: 'xg-relay-test', taskId, host, grantedAt: 0, via: 'settings', runs: 0 } : undefined),
+  // Not live = the user revoked it (the store records the revoke).
+  wasRevoked: () => !grant.live,
+  lastRevokedAt: () => (grant.live ? undefined : Date.now()),
+  grantById: (id: string) => ({ id, taskId: 'task-1', host: '__local__', grantedAt: 0, via: 'settings', runs: 0, ...(grant.live ? {} : { revokedAt: 1 }) }),
+  grantVanished: () => false,
 }))
 import { execWaitWindow, mergeLong, ranOut, shownWait, waitOnJob } from '../../../src/core/hosts/host-exec-wait.js'
 import { budgetLeft, type Caller } from '../../../src/core/hosts/host-exec.js'

@@ -2251,6 +2251,15 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   grant there is `403 exec_grant_revoked` too (it was `exec_grant_required` before 2026-11-05).
   The list (`GET /api/v1/hosts/:host/exec`) adds `grantId`, the task's live grant on that host,
   which `host_exec_pinned` names.
+  Two more refusals (additive, 2026-11-24) say why a task has no grant when the user revoked
+  nothing, on every route above and `host_copy`: `403 exec_grant_missing` (the grants file no
+  longer lists the grant the task had: a call that runs something makes or asks for one again the
+  usual way, a read needs such a call first) and `503 exec_grants_unreadable` (the grants file, or
+  the file of closed hosts, cannot be read whole and never was, so Walnut makes no grant, sends no
+  letter and starts nothing until it can; try again in a minute). `exec_grant_revoked` now means
+  only a revoke the store records. The Settings writes (`POST /host-exec/grants`, `DELETE
+  /host-exec/grants/:id`, `PUT /host-exec/hosts/:host`) answer `503 exec_grants_unreadable` in that
+  state too, and change nothing.
 - `wait_for: { output?, flags?, partial?, port?, file? }` on both (in a read's query as JSON,
   `?wait_for={"output":"ready"}`; additive, 2026-11): the call answers as soon as a line of the
   job's output matches `output` (a JavaScript regular expression of at most 200 characters,

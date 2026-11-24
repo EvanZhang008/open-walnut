@@ -71,6 +71,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30))", reason: "negative: a poll seeing the same server tells nothing again" },
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 40))", reason: "negative: nothing is sent while the quiet window lasts (clock at 29 min)" },
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 40))", reason: "negative: nothing is sent before the 6 h cap (clock at 359 min)" },
+  { file: "tests/core/hosts/exec-grants-unreadable.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100))", reason: "negative: a grants write must not land while a pull holds the write gate" },
   { file: "tests/core/hosts/host-exec-dial-real.test.ts", sleep: "await sleep(300)", reason: "negative: lets bytes already past the blackholed proxy land first, so none answers the dial's check" },
   { file: "tests/core/hosts/host-exec-dial-real.test.ts", sleep: "await sleep(300)", reason: "negative: lets bytes already past the blackholed proxies land first, so none answers the dial's check" },
   { file: "tests/core/hosts/host-exec-dial-real.test.ts", sleep: "await sleep(1_500) // past the probe's own verdict", reason: "negative: the link must not be closed after the probe's own verdict either" },

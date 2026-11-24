@@ -68,7 +68,7 @@ vi.mock('node:child_process', async (importOriginal) => {
       return { code: 0, stdout: h.hasRemote ? 'origin\n' : '' };
     }
     if (cmd.includes('rev-parse --abbrev-ref HEAD')) return { code: 0, stdout: 'main\n' };
-    // Everything else (ls-files, status, pull, push…): succeed with no output,
+    // Everything else (ls-files, status, fetch, push…): succeed with no output,
     // which is the "clean tree, nothing to do" shape.
     return { code: 0, stdout: '' };
   };
@@ -273,13 +273,13 @@ describe('precondition probes: nothing blocking on the hot paths', () => {
     await autoSync();
     expect(h.execSyncCalls).toEqual([]);
     // …and it did do the real work, so the assertion above is not vacuous.
-    expect(count('pull --rebase origin main')).toBe(1);
+    expect(count('fetch origin main')).toBe(1);
   });
 
   it('gitPullWalnut makes ZERO execSync calls', async () => {
     await gitPullWalnut();
     expect(h.execSyncCalls).toEqual([]);
-    expect(count('pull --ff-only')).toBe(1);
+    expect(count('fetch origin main')).toBe(1);
   });
 
   it('getLastSyncAtAsync makes ZERO execSync calls', async () => {
@@ -300,7 +300,7 @@ describe('precondition probes: missing preconditions no-op cleanly', () => {
     // Same short-circuit as the old `!isGitAvailable() || !isRepo() || …`.
     expect(count(REPO_PROBE)).toBe(0);
     expect(count(REMOTE_PROBE)).toBe(0);
-    expect(count('pull')).toBe(0);
+    expect(count('fetch')).toBe(0);
     expect(count('push')).toBe(0);
   });
 
@@ -310,7 +310,7 @@ describe('precondition probes: missing preconditions no-op cleanly', () => {
     await expect(gitPullWalnut()).resolves.toBeUndefined();
     expect(count(REPO_PROBE)).toBe(1);
     expect(count(REMOTE_PROBE)).toBe(0);
-    expect(count('pull')).toBe(0);
+    expect(count('fetch')).toBe(0);
     expect(count('push')).toBe(0);
   });
 
@@ -319,7 +319,7 @@ describe('precondition probes: missing preconditions no-op cleanly', () => {
     await expect(autoSync()).resolves.toBeUndefined();
     await expect(gitPullWalnut()).resolves.toBeUndefined();
     expect(count(REMOTE_PROBE)).toBe(1);
-    expect(count('pull')).toBe(0);
+    expect(count('fetch')).toBe(0);
     expect(count('push')).toBe(0);
   });
 });
@@ -328,7 +328,7 @@ describe('precondition probes: invalidation', () => {
   it('setRemote() lets the very next tick sync — no restart, no TTL wait', async () => {
     h.hasRemote = false;
     await autoSync();
-    expect(count('pull')).toBe(0);
+    expect(count('fetch')).toBe(0);
 
     // The user configures a remote. setRemote goes through the sync helpers (CLI
     // / one-shot path) and must drop the cached "no remote" answer.
@@ -337,7 +337,7 @@ describe('precondition probes: invalidation', () => {
 
     await autoSync();
     expect(count(REMOTE_PROBE)).toBe(1);
-    expect(count('pull --rebase origin main')).toBe(1);
+    expect(count('fetch origin main')).toBe(1);
   });
 
   it('without invalidation the stale answer would persist — the TTL alone is not the fix', async () => {
@@ -350,14 +350,14 @@ describe('precondition probes: invalidation', () => {
     // makes the explicit invalidation above load-bearing rather than decorative.
     await autoSync();
     expect(count(REMOTE_PROBE)).toBe(0);
-    expect(count('pull')).toBe(0);
+    expect(count('fetch')).toBe(0);
   });
 
   it('initSync() lets the very next tick sync after the repo is created', async () => {
     h.isRepo = false;
     h.hasRemote = false;
     await autoSync();
-    expect(count('pull')).toBe(0);
+    expect(count('fetch')).toBe(0);
 
     // First-run setup: `git init` + `remote add` inside initSync are what make
     // both cached answers wrong, and both must be dropped.
@@ -369,7 +369,7 @@ describe('precondition probes: invalidation', () => {
     await autoSync();
     expect(count(REPO_PROBE)).toBe(1);
     expect(count(REMOTE_PROBE)).toBe(1);
-    expect(count('pull --rebase origin main')).toBe(1);
+    expect(count('fetch origin main')).toBe(1);
   });
 
   it('an invalidation during an in-flight probe discards that probe’s stale answer', async () => {
@@ -409,7 +409,7 @@ describe('precondition probes: git availability caching policy', () => {
 
     // …and once it expires the probe runs again and sync comes back to life.
     expect(count(VERSION_PROBE)).toBe(2);
-    expect(count('pull --rebase origin main')).toBe(1);
+    expect(count('fetch origin main')).toBe(1);
   });
 
   it('a POSITIVE answer is kept forever — git does not leave PATH mid-process', async () => {

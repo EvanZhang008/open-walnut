@@ -84,7 +84,9 @@ describe('exec-grants lookups', () => {
     expect(grants.isHostClosed('macbox')).toBe(false)
     fs.writeFileSync(path.join(dir, 'exec-grants-closed.json'), JSON.stringify({ closed: ['macbox'] }))
     expect(grants.isHostClosed('macbox')).toBe(true)
-    fs.rmSync(path.join(dir, 'exec-grants-closed.json'))
+    // Opened again by a writer: seen at once. A file that only vanished keeps its stops a minute
+    // (a rename or a checkout in flight), and reads as no stops after that (exec-grants-unreadable.test.ts).
+    fs.writeFileSync(path.join(dir, 'exec-grants-closed.json'), JSON.stringify({ closed: [] }))
     expect(grants.isHostClosed('macbox')).toBe(false)
   })
 

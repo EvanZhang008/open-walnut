@@ -384,7 +384,7 @@ async function runGc(repoDir: string): Promise<void> {
 }
 
 /**
- * Age out `pre-rewrite-backup`: lwwMerge parks the pre-compaction chain on it
+ * Age out `pre-rewrite-backup`: the pull parks the pre-compaction chain on it
  * when adopting a rewritten upstream, and while the branch exists gc can never
  * collect that chain (30k commits / most of the 9.5GB in the incident repo).
  * It is self-replacing on the next rewrite, so anything older than

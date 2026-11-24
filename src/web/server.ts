@@ -1025,6 +1025,11 @@ interface GitAutoCommitHealth {
   /** True while git-sync refuses auto-commits (mass-revert / torn-worktree guard). */
   safeMode?: boolean
   /**
+   * True while a pull that stopped part way is held: its files stay out of auto-commits
+   * until a pull settles them (src/integrations/git-sync-apply-recovery.ts).
+   */
+  heldPull?: boolean
+  /**
    * This server keeps no backup on purpose, so `protected: false` is no problem to show: the Demo
    * and a developer's test server run on a throwaway copy, a replica's copy is the Mac's
    * (2026-11-10 review: a new Demo user's first screen read "Data Backup: Not protected").
@@ -7218,6 +7223,21 @@ function startGitAutoCommit(
           })
         }
       }
+      // A held pull: a standing card until a pull settles it, never re-raised per tick.
+      const heldPull = guardState.heldPull !== null
+      if (heldPull !== (health.heldPull === true)) {
+        health.heldPull = heldPull
+        emitStatus()
+        if (heldPull) {
+          void publishErrorNotification({
+            title: 'Data Sync Holding Back Files',
+            body: `A data sync pull stopped part way and could not be finished or undone. The ${guardState.heldPull?.paths ?? 0} file(s) it had written are left as they are and kept out of auto-commits until a later pull settles them; everything else keeps syncing. Check open-walnut logs -s git.`,
+            dedupScope: 'git:held-pull',
+            recoveryKey: 'git',
+            needsYou: 'sync-stopped',
+          })
+        }
+      }
     } catch (err) {
       if (isLockContention(err)) {
         // Lock contention is transient (e.g. orphaned server processes or concurrent git pull).
@@ -7262,7 +7282,7 @@ function startGitAutoCommit(
       // once per failing→healthy edge, which is why a 30s poll doesn't turn into a
       // permanent store scan (the reason this is transition-gated and not "signal
       // on every success").
-      if (gitRecoveryTracker.observe('git', health.consecutiveFailures > 0 || health.safeMode === true)) {
+      if (gitRecoveryTracker.observe('git', health.consecutiveFailures > 0 || health.safeMode === true || health.heldPull === true)) {
         void publishRecovery(['git'])
       }
       if (!gitTickStopped) {

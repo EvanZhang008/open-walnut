@@ -26,14 +26,17 @@
  * `merge-tree` (base = the commit's own parent, so exactly its change is
  * applied), keeping its message, author and dates. A conflict is a file both
  * sides changed: the newer write wins (the store's own `lastUpdated`, else
- * commit time, as lwwMerge decides), except a file the rewrite removed, whose
+ * commit time, as chooseLww decides), except a file the rewrite removed, whose
  * removal stands: a replay never brings back a path the hub had before the
  * rewrite and the new chain lacks (a scrub must not be undone).
  * The old head stays on `pre-rewrite-backup` whatever happens here.
  */
 
+import { mergeRecords } from './git-sync-records.js';
+
 export interface GitStatusResult { code: number; stdout: string; stderr: string }
-export type GitStatusRunner = (args: string[], opts?: { env?: Record<string, string>; input?: string }) => Promise<GitStatusResult>;
+/** `timeout`: a longer budget for a step whose work scales with its bytes (hash-object); the runner keeps its own floor. */
+export type GitStatusRunner = (args: string[], opts?: { env?: Record<string, string>; input?: string; timeout?: number }) => Promise<GitStatusResult>;
 
 export interface ChainCommit {
   hash: string;
@@ -62,6 +65,8 @@ export interface CarryResult {
   keptRemote: string[];
   /** Conflicted paths the rewrite removed and the local side had changed: left removed. */
   keptRemoved: string[];
+  /** Conflicted stores merged record by record (git-sync-records.ts): both sides kept. */
+  keptMerged: string[];
   /** True when the commits were replayed as one (more than PER_COMMIT_REPLAY_MAX). */
   squashed: boolean;
   /** True when the replay ran file by file (a git without `merge-tree --merge-base`). */
@@ -127,7 +132,8 @@ async function publishedAnchor(
   return anchor;
 }
 
-async function must(run: GitStatusRunner, args: string[], opts?: { env?: Record<string, string>; input?: string }): Promise<string> {
+/** stdout of a git command that must succeed; throws with git's own words otherwise. */
+export async function must(run: GitStatusRunner, args: string[], opts?: { env?: Record<string, string>; input?: string }): Promise<string> {
   const r = await run(args, opts);
   if (r.code !== 0) throw new Error(`git ${args[0]} failed (${r.code}): ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
   return r.stdout;
@@ -145,8 +151,8 @@ async function blobEntries(run: GitStatusRunner, commit: string, paths: string[]
   return entries;
 }
 
-/** A JSON store's own `lastUpdated` (epoch ms) in a blob, or null: the clock lwwMerge trusts first. */
-async function contentClock(run: GitStatusRunner, entry: string | undefined): Promise<number | null> {
+/** A JSON store's own `lastUpdated` (epoch ms) in a blob (`"<mode> <oid>"`), or null: the clock LWW trusts first. */
+export async function contentClock(run: GitStatusRunner, entry: string | undefined): Promise<number | null> {
   const oid = entry?.split(' ')[1];
   if (!oid) return null;
   const size = Number((await run(['cat-file', '-s', oid])).stdout.trim());
@@ -174,67 +180,155 @@ async function localIsNewer(run: GitStatusRunner, file: string, mine: string, th
   return localAt >= remoteAt;
 }
 
+/**
+ * `tree` with each `<mode> <oid>\t<path>` line put in (mode 0 removes the path),
+ * written through a temporary index: the object store only, never the working
+ * tree or the repository's own index.
+ */
+export async function writeTreeEntries(run: GitStatusRunner, tree: string, lines: string[], indexFile: string): Promise<string> {
+  const env = { GIT_INDEX_FILE: indexFile };
+  await must(run, ['read-tree', tree], { env });
+  if (lines.length) await must(run, ['update-index', '-z', '--index-info'], { env, input: lines.map((l) => `${l}\0`).join('') });
+  return (await must(run, ['write-tree'], { env })).trim();
+}
+
+/** The index line that removes `file` (mode 0, the all-zero id of the repo's hash length). */
+export function removalLine(file: string, oidLength: number): string {
+  return `0 ${'0'.repeat(oidLength)}\t${file}`;
+}
+
 async function resolveConflicts(
   run: GitStatusRunner, mergedTree: string, files: string[],
   step: { base: string; onto: string; commit: string },
-  indexFile: string, out: { keptLocal: string[]; keptRemote: string[]; keptRemoved: string[] },
+  indexFile: string, out: { keptLocal: string[]; keptRemote: string[]; keptRemoved: string[]; keptMerged: string[] },
 ): Promise<string> {
-  const env = { GIT_INDEX_FILE: indexFile };
-  await must(run, ['read-tree', mergedTree], { env });
   const [local, upstream, base] = await Promise.all([
     blobEntries(run, step.commit, files), blobEntries(run, step.onto, files), blobEntries(run, step.base, files),
   ]);
-  const zero = '0'.repeat(mergedTree.length);
-  const removal = (file: string) => `0 ${zero}\t${file}`;
   const lines: string[] = [];
   for (const file of files) {
     const mine = local.get(file);
     const theirs = upstream.get(file);
+    const records = mine && theirs ? await mergeRecords(run, file, mine, theirs) : null;
     if (mine && !theirs && base.has(file)) {
-      lines.push(removal(file));
+      lines.push(removalLine(file, mergedTree.length));
       out.keptRemoved.push(file);
+    } else if (records) {
+      lines.push(`${records}\t${file}`);
+      out.keptMerged.push(file);
     } else if (mine && theirs && !(await localIsNewer(run, file, mine, theirs, step))) {
       lines.push(`${theirs}\t${file}`);
       out.keptRemote.push(file);
     } else {
-      lines.push(mine ? `${mine}\t${file}` : removal(file));
+      lines.push(mine ? `${mine}\t${file}` : removalLine(file, mergedTree.length));
       out.keptLocal.push(file);
     }
   }
-  await must(run, ['update-index', '-z', '--index-info'], { env, input: lines.map((l) => `${l}\0`).join('') });
-  return (await must(run, ['write-tree'], { env })).trim();
+  return writeTreeEntries(run, mergedTree, lines, indexFile);
 }
 
 /**
  * The same replay step without `merge-tree --merge-base` (git before 2.40, Ubuntu
  * 22.04 ships 2.34): file by file in a temporary index. A file the step changed
  * that the new chain still holds as the base had it takes the step's version; a
- * file both changed goes to resolveConflicts as a whole (no line-level merge,
- * the same per-file choice lwwMerge makes on a real conflict).
+ * file both changed is a conflict, handed back whole (no line-level merge, the
+ * same per-file choice LWW makes on a real conflict).
  */
 async function fileLevelStep(
-  run: GitStatusRunner, step: { base: string; onto: string; commit: string },
-  indexFile: string, out: { keptLocal: string[]; keptRemote: string[]; keptRemoved: string[] },
-): Promise<string> {
+  run: GitStatusRunner, step: { base: string; onto: string; commit: string }, indexFile: string,
+): Promise<{ tree: string; conflicts: string[] }> {
   const changed = (await must(run, ['diff', '--name-only', '-z', '--no-renames', step.base, step.commit]))
     .split('\0').filter(Boolean);
-  const env = { GIT_INDEX_FILE: indexFile };
-  await must(run, ['read-tree', step.onto], { env });
-  if (changed.length === 0) return (await must(run, ['write-tree'], { env })).trim();
+  if (changed.length === 0) return { tree: (await must(run, ['rev-parse', `${step.onto}^{tree}`])).trim(), conflicts: [] };
   const [local, upstream, base] = await Promise.all([
     blobEntries(run, step.commit, changed), blobEntries(run, step.onto, changed), blobEntries(run, step.base, changed),
   ]);
-  const zero = '0'.repeat(step.onto.length);
   const lines: string[] = [];
   const conflicts: string[] = [];
   for (const file of changed) {
     const [mine, theirs, was] = [local.get(file), upstream.get(file), base.get(file)];
-    if (theirs === was) lines.push(mine ? `${mine}\t${file}` : `0 ${zero}\t${file}`);
+    if (theirs === was) lines.push(mine ? `${mine}\t${file}` : removalLine(file, step.onto.length));
     else if (theirs !== mine) conflicts.push(file);
   }
-  if (lines.length) await must(run, ['update-index', '-z', '--index-info'], { env, input: lines.map((l) => `${l}\0`).join('') });
-  const tree = (await must(run, ['write-tree'], { env })).trim();
-  return conflicts.length ? resolveConflicts(run, tree, conflicts, step, indexFile, out) : tree;
+  return { tree: await writeTreeEntries(run, step.onto, lines, indexFile), conflicts };
+}
+
+export interface ReplayStep {
+  /** The commit whose change the step applies: its own diff from `base`. */
+  commit: string;
+  base: string;
+}
+
+export interface ReplayOptions {
+  indexFile: string;
+  /** Start file by file (a git known to lack `merge-tree --merge-base`). */
+  fileLevel?: boolean;
+  /**
+   * A step both sides changed: return the resolved tree. Absent, the replay
+   * stops at that step and reports it, building nothing more.
+   */
+  resolve?: (tree: string, files: string[], step: ReplayStep & { onto: string }) => Promise<string>;
+  /** A last word on each step's tree (the carry drops paths the rewrite removed). */
+  finishTree?: (tree: string) => Promise<string>;
+  /** A step's commit message; default: the original commit's own. */
+  message?: (original: string) => string;
+}
+
+export interface ReplayResult {
+  /** The last commit built, or the starting point when none was. */
+  head: string;
+  /** Commits built (a step whose change the base already held builds none). */
+  built: number;
+  /** The step whose conflict stopped the replay (only without `resolve`). */
+  stoppedAt: ReplayStep | null;
+  fileLevel: boolean;
+}
+
+/**
+ * Replay each step's change onto `onto`, one commit per step, keeping the
+ * original message, author and dates. A three-way `merge-tree` per step (base =
+ * the step's own base, so exactly its change is applied), or file by file on a
+ * git without `--merge-base`. Builds commits and trees only: refs, the index and
+ * the working tree are the caller's to move. Shared by the rewrite carry and by
+ * the pull's linear replay of local commits (git-sync-merge.ts).
+ */
+export async function replayCommits(
+  run: GitStatusRunner, steps: ReplayStep[], onto: string, opts: ReplayOptions,
+): Promise<ReplayResult> {
+  let fileLevel = opts.fileLevel === true;
+  let ontoTree = (await must(run, ['rev-parse', `${onto}^{tree}`])).trim();
+  let built = 0;
+  for (const step of steps) {
+    const at = { ...step, onto };
+    let tree: string;
+    let conflicts: string[] = [];
+    const merge = fileLevel ? null : await run([
+      '-c', 'merge.renames=false', '-c', 'merge.directoryRenames=false',
+      'merge-tree', '--write-tree', '-z', '--name-only', '--no-messages',
+      `--merge-base=${step.base}`, onto, step.commit,
+    ]);
+    if (merge && (merge.code === 0 || merge.code === 1)) {
+      const [treeField, ...rest] = merge.stdout.split('\0');
+      tree = treeField.trim();
+      if (merge.code === 1) conflicts = [...new Set(rest.filter(Boolean))];
+    } else {
+      // An older git refuses the options (usage error 129): the file-level step.
+      fileLevel = true;
+      ({ tree, conflicts } = await fileLevelStep(run, at, opts.indexFile));
+    }
+    if (conflicts.length > 0) {
+      if (!opts.resolve) return { head: onto, built, stoppedAt: step, fileLevel };
+      tree = await opts.resolve(tree, conflicts, at);
+    }
+    if (opts.finishTree) tree = await opts.finishTree(tree);
+    if (tree === ontoTree) continue;
+    const meta = await commitMeta(run, step.commit);
+    const message = opts.message ? opts.message(meta.message) : meta.message;
+    onto = (await must(run, ['commit-tree', tree, '-p', onto, '-F', '-'], { env: meta.env, input: message })).trim();
+    ontoTree = tree;
+    built++;
+  }
+  return { head: onto, built, stoppedAt: null, fileLevel };
 }
 
 /** Drop from `tree` every path in `removed` (files the rewrite took off the hub). */
@@ -242,12 +336,8 @@ async function stripRemoved(run: GitStatusRunner, tree: string, removed: string[
   if (removed.length === 0) return tree;
   const present = [...(await blobEntries(run, tree, removed)).keys()];
   if (present.length === 0) return tree;
-  const env = { GIT_INDEX_FILE: indexFile };
-  await must(run, ['read-tree', tree], { env });
-  const zero = '0'.repeat(tree.length);
-  await must(run, ['update-index', '-z', '--index-info'], { env, input: present.map((f) => `0 ${zero}\t${f}\0`).join('') });
   for (const f of present) if (!out.keptRemoved.includes(f)) out.keptRemoved.push(f);
-  return (await must(run, ['write-tree'], { env })).trim();
+  return writeTreeEntries(run, tree, present.map((f) => removalLine(f, tree.length)), indexFile);
 }
 
 /** The original commit's identity and dates, so a replayed commit reads as the write it was. */
@@ -264,14 +354,15 @@ async function commitMeta(run: GitStatusRunner, commit: string): Promise<{ env: 
 }
 
 /**
- * Replay the local commits after the anchor onto the new chain. Builds commits
- * and trees only: refs, index and working tree are the caller's to move.
+ * Replay the local commits after the anchor onto the new chain (replayCommits,
+ * conflicts resolved by the newer write). Builds commits and trees only: refs,
+ * index and working tree are the caller's to move.
  */
 export async function carryLocalCommits(
   run: GitStatusRunner, localHead: string, remoteRef: string, indexFile: string, published: string | null = null,
   opts: { fileLevel?: boolean } = {},
 ): Promise<CarryResult> {
-  let fileLevel = opts.fileLevel === true;
+  const fileLevel = opts.fileLevel === true;
   const [localChain, remoteChain] = await Promise.all([
     readFirstParentChain(run, localHead), readFirstParentChain(run, remoteRef),
   ]);
@@ -279,7 +370,7 @@ export async function carryLocalCommits(
   if (published && localChain.length > 0 && remoteChain.length > 0) {
     anchor = await publishedAnchor(run, localChain, anchor, published, remoteChain[0].hash);
   }
-  const result: CarryResult = { head: null, anchor, replayed: 0, keptLocal: [], keptRemote: [], keptRemoved: [], squashed: false, fileLevel };
+  const result: CarryResult = { head: null, anchor, replayed: 0, keptLocal: [], keptRemote: [], keptRemoved: [], keptMerged: [], squashed: false, fileLevel };
   if (!anchor || anchor.local === localHead) return result;
 
   const commits = (await must(run, ['rev-list', '--first-parent', '--reverse', `${anchor.local}..${localHead}`]))
@@ -298,36 +389,17 @@ export async function carryLocalCommits(
       .split('\0').filter(Boolean)
     : [];
 
-  let onto = anchor.remote;
-  for (const step of steps) {
-    let tree: string;
-    const merge = fileLevel ? null : await run([
-      '-c', 'merge.renames=false', '-c', 'merge.directoryRenames=false',
-      'merge-tree', '--write-tree', '-z', '--name-only', '--no-messages',
-      `--merge-base=${step.base}`, onto, step.commit,
-    ]);
-    if (merge && (merge.code === 0 || merge.code === 1)) {
-      const [treeField, ...rest] = merge.stdout.split('\0');
-      tree = treeField.trim();
-      if (merge.code === 1) {
-        const files = [...new Set(rest.filter(Boolean))];
-        tree = await resolveConflicts(run, tree, files, { ...step, onto }, indexFile, result);
-      }
-    } else {
-      // An older git refuses the options (usage error 129): the file-level step.
-      fileLevel = true;
-      tree = await fileLevelStep(run, { ...step, onto }, indexFile, result);
-    }
-    tree = await stripRemoved(run, tree, removed, indexFile, result);
-    if (tree === (await must(run, ['rev-parse', `${onto}^{tree}`])).trim()) continue;
-    const meta = await commitMeta(run, step.commit);
-    const message = result.squashed
-      ? `replayed ${commits.length} local commits made after the upstream rewrite (the originals are on pre-rewrite-backup)\n`
-      : meta.message;
-    onto = (await must(run, ['commit-tree', tree, '-p', onto, '-F', '-'], { env: meta.env, input: message })).trim();
-    result.replayed += result.squashed ? commits.length : 1;
-  }
-  result.head = result.replayed > 0 ? onto : null;
-  result.fileLevel = fileLevel;
+  const replay = await replayCommits(run, steps, anchor.remote, {
+    indexFile,
+    fileLevel,
+    resolve: (tree, files, step) => resolveConflicts(run, tree, files, step, indexFile, result),
+    finishTree: (tree) => stripRemoved(run, tree, removed, indexFile, result),
+    message: result.squashed
+      ? () => `replayed ${commits.length} local commits made after the upstream rewrite (the originals are on pre-rewrite-backup)\n`
+      : undefined,
+  });
+  result.replayed = result.squashed ? (replay.built > 0 ? commits.length : 0) : replay.built;
+  result.head = replay.built > 0 ? replay.head : null;
+  result.fileLevel = replay.fileLevel;
   return result;
 }

@@ -2,11 +2,13 @@
  * gitPullWalnut single-flight + async conversion.
  *
  * session:result and session:error handlers both call gitPullWalnut() and can
- * fire together — two parallel `git pull` processes would collide on
- * .git/index.lock. Concurrent callers must share ONE in-flight pull.
+ * fire together: two parallel pulls would collide on .git/index.lock.
+ * Concurrent callers must share ONE in-flight pull. Its network half is one
+ * `git fetch` (the working tree then moves through git-sync-apply.ts, never a
+ * `git pull`), so the fetch is what these tests count and hold open.
  *
  * child_process is mocked so we can count the underlying git invocations and
- * hold the pull open while a second caller arrives.
+ * hold the fetch open while a second caller arrives.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -66,10 +68,18 @@ vi.mock('node:child_process', async (importOriginal) => {
       return child;
     }
 
+    // Only the fetch is held open; the local reads around it (branch, refs)
+    // answer at once: on a fresh mock repo there is nothing to move.
+    if (!/\bfetch\b/.test(cmd)) {
+      setImmediate(() => {
+        if (cmd.includes('rev-parse --abbrev-ref HEAD')) child.stdout.emit('data', 'main\n');
+        child.emit('close', 0);
+      });
+      return child;
+    }
     h.asyncCalls.push(cmd);
     h.detachedFlags.push(Boolean(opts?.detached));
     h.resolvers.push(() => {
-      child.stdout.emit('data', 'Already up to date.\n');
       child.emit('close', 0);
     });
     return child;
@@ -103,17 +113,17 @@ beforeEach(() => {
 });
 
 describe('gitPullWalnut single-flight', () => {
-  it('two concurrent calls result in ONE underlying git pull', async () => {
+  it('two concurrent calls result in ONE underlying fetch', async () => {
     const p1 = gitPullWalnut();
     const p2 = gitPullWalnut(); // arrives while the first pull is in flight
 
     await vi.waitFor(() => expect(h.asyncCalls).toHaveLength(1));
-    expect(h.asyncCalls[0]).toContain('pull --ff-only');
+    expect(h.asyncCalls[0]).toContain('fetch origin main');
 
     h.resolvers.shift()!();
     await Promise.all([p1, p2]);
 
-    // Still exactly one pull — the second caller shared the in-flight promise.
+    // Still exactly one fetch: the second caller shared the in-flight promise.
     expect(h.asyncCalls).toHaveLength(1);
   });
 
@@ -129,7 +139,7 @@ describe('gitPullWalnut single-flight', () => {
     await p2;
 
     expect(h.asyncCalls).toHaveLength(2);
-    expect(h.asyncCalls[1]).toContain('pull --ff-only');
+    expect(h.asyncCalls[1]).toContain('fetch origin main');
   });
 
   it('does not block the event loop while the pull is in flight', async () => {

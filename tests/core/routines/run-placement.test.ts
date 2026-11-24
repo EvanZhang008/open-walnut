@@ -37,7 +37,7 @@ import {
   HostsFullError, __resetHostAdmissionForTesting, admitHostStart, startsAdmittedOn,
 } from '../../../src/core/sessions/host-admission.js'
 import {
-  __setRunPlacementDepsForTesting, admitRoutineLaunch, defaultRunPlacementDeps, mapWalnutHomeCwd, portableWorkOf,
+  __setRunPlacementDepsForTesting, admitRoutineLaunch, defaultRunPlacementDeps, hostBlocker, mapWalnutHomeCwd, portableWorkOf,
   routineLaunchPlacement, routinePlacementOf, sourceDownReason, type AdmitOptions, type RunPlacementDeps,
 } from '../../../src/core/routines/run-placement.js'
 import { createClaudeCodeExecutor } from '../../../src/core/routines/executors/claude-code.js'
@@ -75,7 +75,7 @@ interface HostFact {
   connected?: boolean
   caps?: string[]
   home?: string | null
-  closed?: boolean
+  closed?: boolean | string
   tags?: string[] | null
   engine?: 'codex' | undefined
   blocker?: string
@@ -121,7 +121,7 @@ function fleet(hosts: Record<string, HostFact>, opts: { order?: string[]; placeT
     connected: async (h) => hosts[h]?.connected !== false && !hosts[h]?.down,
     hasDaemonCap: async (h, cap) => (hosts[h]?.connected === false ? null : (hosts[h]?.caps ?? ['walnut-mcp-v1']).includes(cap)),
     remoteHome: async (h) => (hosts[h] && 'home' in hosts[h] ? hosts[h].home! : CLOUD_HOME),
-    closed: async (h) => !!hosts[h]?.closed,
+    closed: async (h) => hosts[h]?.closed ?? false,
     capabilities: async (h) => (hosts[h]?.tags === null ? null : { tags: hosts[h]?.tags ?? ['linux', 'cloud'] } as never),
     engineOn: async (h) => hosts[h]?.engine,
     engineBlocker: async (h) => hosts[h]?.blocker ?? null,
@@ -252,6 +252,15 @@ describe('the host it moves to must have what the run needs (unknown is a no)', 
       expect(f.mkdirs).toEqual([])
     })
   }
+
+  it('a host counted closed because Walnut cannot read its closed list says that, never that the user closed it', async () => {
+    const why = 'Walnut cannot read its list of the hosts the user closed, so it counts every host as closed until it can'
+    const f = fleet({ __local__: { full: true }, [CLOUD]: { closed: why } })
+    const work = { daemon: [], tags: [] } as unknown as Parameters<typeof hostBlocker>[1]
+    expect(await hostBlocker(CLOUD, work, triage(), {}, f.deps)).toBe(why)
+    const shut = fleet({ __local__: { full: true }, [CLOUD]: { closed: true } })
+    expect(await hostBlocker(CLOUD, work, triage(), {}, shut.deps)).toBe('it is closed to work from other hosts')
+  })
 
   it('a host that lacks one is passed over for the next that has everything', async () => {
     const f = fleet({ __local__: { full: true }, [CLOUD]: { caps: [] }, box2: {} }, { order: [CLOUD, 'box2'] })

@@ -205,6 +205,13 @@ hostExecV1Router.get('/host-exec/grants', async (req: Request, res: Response, ne
   } catch (err) { next(err) }
 })
 
+/** A grant write the store refused (its file cannot be read whole: 503 exec_grants_unreadable) answers with its own code. */
+async function grantWriteFailed(err: unknown, res: Response, next: NextFunction): Promise<void> {
+  const { HostExecError } = await import('../../core/hosts/host-exec-target.js')
+  if (err instanceof HostExecError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
+  next(err)
+}
+
 /** A grant is the user's word: only the person at this computer (no session id, a local origin) makes or revokes one. */
 function humanOnly(req: Request, res: Response): boolean {
   if (isPersonAtThisMachine(req)) return false
@@ -221,7 +228,7 @@ hostExecV1Router.post('/host-exec/grants', async (req: Request, res: Response, n
     if (!taskId || !host) { res.status(400).json({ error: 'task_id and host are required', code: 'bad_request' }); return }
     const { grant } = await import('../../core/hosts/exec-grants.js')
     res.json({ grant: await grant(taskId, host, 'settings') })
-  } catch (err) { next(err) }
+  } catch (err) { await grantWriteFailed(err, res, next) }
 })
 
 hostExecV1Router.delete('/host-exec/grants/:id', async (req: Request, res: Response, next: NextFunction) => {
@@ -231,7 +238,7 @@ hostExecV1Router.delete('/host-exec/grants/:id', async (req: Request, res: Respo
     const g = await revokeGrant(param(req.params.id))
     if (!g) { res.status(404).json({ error: 'No live grant with that id', code: 'not_found' }); return }
     res.json({ grant: g })
-  } catch (err) { next(err) }
+  } catch (err) { await grantWriteFailed(err, res, next) }
 })
 
 hostExecV1Router.put('/host-exec/hosts/:host', async (req: Request, res: Response, next: NextFunction) => {
@@ -244,7 +251,7 @@ hostExecV1Router.put('/host-exec/hosts/:host', async (req: Request, res: Respons
     if (!(await isOwnHost(host))) { res.status(404).json({ error: `Unknown host: ${host}`, code: 'unknown_host' }); return }
     const { setHostClosed } = await import('../../core/hosts/exec-grants.js')
     res.json({ closedHosts: await setHostClosed(host, closed) })
-  } catch (err) { next(err) }
+  } catch (err) { await grantWriteFailed(err, res, next) }
 })
 
 /*

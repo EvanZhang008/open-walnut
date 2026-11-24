@@ -199,7 +199,7 @@ function durationText(ms: number): string {
 }
 
 class CopyStopped extends Error {
-  constructor(public why: 'deadline' | 'revoked' | 'closed', public host?: string) {
+  constructor(public why: 'deadline' | 'revoked' | 'missing' | 'closed', public host?: string) {
     super(why)
     this.name = 'CopyStopped'
   }
@@ -218,7 +218,15 @@ export async function copyFailure(err: unknown, job: Pick<CopyJob, 'fromHost' | 
   const progress = job.total !== null ? ` after ${sizeText(job.sent)} of ${sizeText(job.total)}` : ''
   if (err instanceof CopyStopped) {
     if (err.why === 'deadline') return new HostExecError(`The copy stopped at its ${durationText(tuning.deadlineMs)} deadline${progress}. ${untouched} Copy a smaller file (split it), or ask the user.`, 504, 'copy_deadline')
-    if (err.why === 'closed') return new HostExecError(`The user closed ${await hostName(err.host ?? '')} to tasks on other hosts (Settings › Remote Hosts); the copy stopped${progress}. ${untouched}`, 403, 'exec_host_closed')
+    if (err.why === 'closed') {
+      const [grants, { hostClosedError }] = await Promise.all([import('./exec-grants.js'), import('./host-exec-grant.js')])
+      const name = await hostName(err.host ?? '')
+      return hostClosedError(grants, name, `The user closed ${name} to tasks on other hosts (Settings › Remote Hosts); the copy stopped${progress}. ${untouched}`)
+    }
+    if (err.why === 'missing') {
+      const [grants, { missingGrant }] = await Promise.all([import('./exec-grants.js'), import('./host-exec-grant.js')])
+      return missingGrant(grants, await hostName(err.host ?? ''), `the copy stopped${progress}. ${untouched}`)
+    }
     return new HostExecError(`The user revoked this task's grant for ${await hostName(err.host ?? '')}; the copy stopped${progress}. ${untouched}`, 403, 'exec_grant_revoked')
   }
   // This server's own stop closed the links, not a host going away (server-stopping.ts).
@@ -306,7 +314,7 @@ async function runCopy(job: CopyJob, mine: { from: boolean; to: boolean }, grant
   const gate = (_host?: string, command?: string) => {
     for (const h of grantIds.keys()) {
       if (grants.isHostClosed(h)) throw new CopyStopped('closed', h)
-      if (!grants.findGrant(job.taskId, h)) throw new CopyStopped('revoked', h)
+      if (!grants.findGrant(job.taskId, h)) throw new CopyStopped(grants.wasRevoked(job.taskId, h) && !grants.grantVanished(job.taskId, h) ? 'revoked' : 'missing', h)
     }
     if (command === 'fs.writePart') job.wroteAny = true
   }
