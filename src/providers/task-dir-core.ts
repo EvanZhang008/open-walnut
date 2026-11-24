@@ -535,6 +535,8 @@ function repoHolding(build: string, top: string): string | null | 'unsure' {
 
 const BUILD_SCAN_DIRS = 400_000
 const BUILD_SCAN_FILES = 2_000_000
+/** lstats between two yields of the build walk. */
+const YIELD_EVERY_FILES = 1_000
 
 /**
  * The whole build folder, walked before it may go: whether a repo (a `.git`,
@@ -547,6 +549,7 @@ async function scanBuild(root: string): Promise<{ repo: boolean; complete: boole
   let dirs = BUILD_SCAN_DIRS
   let files = BUILD_SCAN_FILES
   let newest = 0
+  let nextYieldAt = YIELD_EVERY_FILES
   const stack = [root]
   while (stack.length > 0) {
     if (--dirs < 0) return { repo: false, complete: false, newest }
@@ -561,8 +564,13 @@ async function scanBuild(root: string): Promise<{ repo: boolean; complete: boole
       if (--files < 0) return { repo: false, complete: false, newest }
       try { newest = Math.max(newest, fs.lstatSync(path.join(d, e.name)).mtimeMs) } catch { /* gone meanwhile */ }
     }
-    // Yield now and then: one walk can lstat a million files.
-    if (dirs % 2000 === 0) await new Promise((r) => setImmediate(r))
+    // Yield now and then: one walk can lstat a million files. By files too: a folder of 2,000
+    // folders of node_modules was a slice of tens of thousands of lstats (2026-11-24: the walk
+    // was 14% of the server's CPU in a memory burst after a restart).
+    if (dirs % 200 === 0 || BUILD_SCAN_FILES - files >= nextYieldAt) {
+      nextYieldAt = BUILD_SCAN_FILES - files + YIELD_EVERY_FILES
+      await new Promise((r) => setImmediate(r))
+    }
   }
   return { repo: false, complete: true, newest }
 }

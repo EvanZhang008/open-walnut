@@ -23,6 +23,7 @@
 import path from 'node:path'
 import { CRON_FILE } from '../../../constants.js'
 import { readJsonFile } from '../../../utils/fs.js'
+import { readJsonFileKept } from '../../../utils/json-kept.js'
 import type { CronJob, CronJobState, CronStateFile, CronStoreFile } from '../../cron/types.js'
 import { sha12 } from '../kind.js'
 import { onStoreWrite } from '../store-writes.js'
@@ -67,9 +68,19 @@ export function routineRowSecrets(row: RoutineRow): SecretFinding[] {
 
 let lastWarned = ''
 
+/**
+ * The last read's row of each routine with what it was made from. Every cron write reads the rows
+ * again (the kind's watch is the store's write point: about 70 times in 10 minutes on the
+ * maintainer's Mac, 2026-11-24), and nearly every write changes one routine's check log only: a
+ * definition that is the same kept object and a status that projects the same hand back the same
+ * row, so its hash and its secret scan are not done again.
+ */
+let lastRows = new Map<string, { job: object; status: string; row: RoutineRow; found: SecretFinding[] }>()
+
 /** The Mac's routine rows from its two files (tests point it at a Mac dir of their own). */
 export async function readRoutineRows(jobsPath = CRON_FILE, statePath = stateFile()): Promise<RoutineRow[]> {
-  const store = await readJsonFile<CronStoreFile>(jobsPath, { version: 2, jobs: [] }, { readErrors: 'throw' })
+  // The definitions change a few times an hour: kept (frozen, shared) while the file is unchanged.
+  const store = await readJsonFileKept<CronStoreFile>(jobsPath, { version: 2, jobs: [] }, { readErrors: 'throw' })
   if (!store || !Array.isArray(store.jobs)) throw new Error('cron-jobs.json has no jobs list')
   let states: Record<string, CronJobState> = {}
   try {
@@ -78,14 +89,20 @@ export async function readRoutineRows(jobsPath = CRON_FILE, statePath = stateFil
   } catch { /* status is recomputable: none */ }
   const rows: RoutineRow[] = []
   const withheld: Array<{ id: string; paths: string[]; reasons: string[] }> = []
+  const made = new Map<string, { job: object; status: string; row: RoutineRow; found: SecretFinding[] }>()
   for (const j of store.jobs) {
     if (!j || typeof j !== 'object' || typeof j.id !== 'string' || !j.id) continue
     const { state: embedded, updatedAtMs: _engineClock, ...job } = j as CronJob
-    const row: RoutineRow = { id: j.id, job, status: projectStatus(states[j.id] ?? embedded, { trigger: !!job.check }) }
-    const found = routineRowSecrets(row)
-    if (found.length > 0) { withheld.push({ id: j.id, paths: found.map((f) => f.path), reasons: [...new Set(found.map((f) => f.reason))] }); continue }
-    rows.push(row)
+    const status = projectStatus(states[j.id] ?? embedded, { trigger: !!job.check })
+    const statusKey = JSON.stringify(status)
+    const prior = lastRows.get(j.id)
+    const one = prior && prior.job === j && prior.status === statusKey ? prior
+      : (() => { const row: RoutineRow = { id: j.id, job, status }; return { job: j as object, status: statusKey, row, found: routineRowSecrets(row) } })()
+    made.set(j.id, one)
+    if (one.found.length > 0) { withheld.push({ id: j.id, paths: one.found.map((f) => f.path), reasons: [...new Set(one.found.map((f) => f.reason))] }); continue }
+    rows.push(one.row)
   }
+  lastRows = made
   const note = JSON.stringify(withheld)
   if (withheld.length > 0 && note !== lastWarned) {
     log.session.warn('routines copy: left routines out, something in them looks like a secret', { routines: withheld })
@@ -97,6 +114,7 @@ export async function readRoutineRows(jobsPath = CRON_FILE, statePath = stateFil
 /** Tests only. */
 export function _resetRoutinesLeaderForTesting(): void {
   lastWarned = ''
+  lastRows = new Map()
 }
 
 const hashes = new WeakMap<object, string>()

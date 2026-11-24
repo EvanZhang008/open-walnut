@@ -72,7 +72,8 @@ export async function withTaskAsks<T extends OrgThread>(taskId: string, threads:
   const needs = threads.some((t) => !t.closed && t.state === 'needs') || results;
   if (!needs && !threads.some((t) => t.reportAsk && !t.closed)) return [...threads];
   try {
-    const all = tasks ?? await (await import('../task-manager.js')).listTasks();
+    // The store's own rows, read only: a copy of every task per threads read was garbage the size of the board.
+    const all = tasks ?? await (await import('../task-manager.js')).taskStoreSnapshot();
     const node = all.find((t) => t.id === taskId);
     if (!node) return [...threads];
     // The task's own ask reads on the thread that holds it (thread-report-ask.ts); a stored needs

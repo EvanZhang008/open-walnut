@@ -116,6 +116,17 @@ export function tasksByIdOf(everything: readonly Task[]): ReadonlyMap<string, Ta
   return treeIndexOf(everything).byId;
 }
 
+/** The list's tasks by parent id (list order), shared with the tree reads of the same list. Never edit it. */
+export function tasksByParentOf(everything: readonly Task[]): ReadonlyMap<string, readonly Task[]> {
+  const index = treeIndexOf(everything);
+  if (!index.childrenOf) {
+    const built = new Map<string, Task[]>();
+    for (const t of everything) if (t.parent_task_id) (built.get(t.parent_task_id) ?? built.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
+    index.childrenOf = built;
+  }
+  return index.childrenOf;
+}
+
 /** Its leader chain, by id. */
 function ancestorsOf(task: Task, byId: ReadonlyMap<string, Task>): Set<string> {
   const out = new Set<string>();
@@ -194,12 +205,7 @@ export function treeAround(taskId: string, everything: readonly Task[], opts: Tr
     out.set(cur.id, { task: cur, relation: 'ancestor' });
     cur = cur.parent_task_id ? byId.get(cur.parent_task_id) : undefined;
   }
-  if (!index.childrenOf) {
-    const built = new Map<string, Task[]>();
-    for (const t of everything) if (t.parent_task_id) (built.get(t.parent_task_id) ?? built.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
-    index.childrenOf = built;
-  }
-  const childrenOf = index.childrenOf;
+  const childrenOf = tasksByParentOf(everything);
   const queue = [...(childrenOf.get(taskId) ?? [])];
   while (queue.length) {
     const t = queue.shift()!;

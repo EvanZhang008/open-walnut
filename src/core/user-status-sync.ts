@@ -406,14 +406,14 @@ async function readLetters(): Promise<StatusFacts['letters']> {
 async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choices']> {
   const out: StatusFacts['choices'] = new Map();
   await safely('boards', async () => {
-    const { listBoardTaskIds, getBoard } = await import('./boards/board-store.js');
+    const { listBoardTaskIds, getBoardView } = await import('./boards/board-store.js');
     const { choiceSpecs } = await import('./boards/board-html.js');
     const { resolveChoiceRef } = await import('./boards/open-choice.js');
     for (const owner of await listBoardTaskIds()) {
       let open = boardChoices.get(owner);
       if (!open) {
         open = [];
-        const board = await getBoard(owner).catch(() => null);
+        const board = await getBoardView(owner).catch(() => null);
         for (const [id, spec] of Object.entries(board?.html ? choiceSpecs(board.html) : {})) {
           if (board?.choices?.[id]) continue; // answered
           const at = board?.choice_at?.[id]?.at;

@@ -506,14 +506,19 @@ const HOST_NOTICE_ACTIVE_MS = 24 * 60 * 60_000;
  * host delivers same-host messages itself (offline-host-core.ts handleLocal), so
  * it adds the notice once per key and journals the key with that delivery.
  */
+/**
+ * Only a session that may take a line soon gets a notice in the host slice: the slice rides every
+ * push to the host, and an idle one is told by whichever path reaches it first later. Read on the
+ * slim record, so the slice fetches the spawn prompt only for these.
+ */
+export function hostNoticeActive(record: Pick<SessionRecord, 'process_status' | 'lastActiveAt'>, now = Date.now()): boolean {
+  return record.process_status === 'running' || now - Date.parse(record.lastActiveAt ?? '') < HOST_NOTICE_ACTIVE_MS;
+}
+
 export function instructionNoticeForHost(
   record: NoticeRecord & Pick<SessionRecord, 'claudeSessionId' | 'process_status' | 'lastActiveAt'>, task: InstructionTask, now = Date.now(),
 ): { policy: string; due: string } | null {
-  // Only a session that may take a line soon: the slice rides every push to the
-  // host, and an idle one is told by whichever path reaches it first later.
-  const active = record.process_status === 'running'
-    || now - Date.parse(record.lastActiveAt ?? '') < HOST_NOTICE_ACTIVE_MS;
-  if (!active) return null;
+  if (!hostNoticeActive(record, now)) return null;
   const found = dueFor(record, task, false, now);
   if (!found) return null;
   const policy = render(found.due);

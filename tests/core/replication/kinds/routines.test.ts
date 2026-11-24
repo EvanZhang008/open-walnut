@@ -437,3 +437,50 @@ describe('a routine with something secret-shaped in it never reaches a host', ()
     expect((await readRoutinesCopy({ includeDisabled: true }))!.some((j) => j.id === job(2).id)).toBe(false)
   })
 })
+
+describe('the leader reads its rows again only for what changed', () => {
+  // Every cron write reads the rows again (2026-11-24: about 70 times in 10 minutes), and nearly
+  // every write moves one trigger's check log only: an unchanged routine hands back its row.
+  const settle = () => new Promise((r) => setTimeout(r, 120)) // past the kept reader's racy window
+  const jobs = Array.from({ length: 8 }, (_, i) => job(i))
+
+  it('a write that moves no projected status hands back the same rows', async () => {
+    await settle()
+    const first = await kind.rows()
+    const states = Object.fromEntries(jobs.map((j, i) => [j.id, { ...state(i), checkLog: [{ atMs: 99, ok: true }] }]))
+    await fsp.writeFile(path.join(macDir, 'cron-state.json'), JSON.stringify({ version: 1, states }))
+    const again = await kind.rows()
+    expect(again).toHaveLength(first.length)
+    again.forEach((row, i) => expect(row).toBe(first[i]))
+  })
+
+  it('a status that moved is a new row with the new status; the rest stay', async () => {
+    await settle()
+    const first = await kind.rows()
+    const states = Object.fromEntries(jobs.map((j, i) => [j.id, state(i)]))
+    states[job(1).id as string] = { ...state(1), lastStatus: 'error', lastError: 'Acme feed timed out' }
+    await fsp.writeFile(path.join(macDir, 'cron-state.json'), JSON.stringify({ version: 1, states }))
+    const again = await kind.rows()
+    const moved = again.find((r) => r.id === job(1).id)!
+    expect(moved).not.toBe(first.find((r) => r.id === job(1).id))
+    expect(moved.status).toMatchObject({ lastStatus: 'error', lastError: 'Acme feed timed out' })
+    for (const row of again) if (row.id !== job(1).id) expect(row).toBe(first.find((r) => r.id === row.id))
+  })
+
+  it('a definition that changed is read again', async () => {
+    await settle()
+    await kind.rows()
+    const renamed = jobs.map((j, i) => (i === 3 ? { ...j, name: 'Acme digest renamed' } : j))
+    await writeMac(renamed, Object.fromEntries(jobs.map((j, i) => [j.id, state(i)])))
+    await settle()
+    expect((await kind.rows()).find((r) => r.id === job(3).id)?.job.name).toBe('Acme digest renamed')
+  })
+
+  it('a routine left out for a secret stays out when nothing moved', async () => {
+    const leaky = jobs.map((j, i) => (i === 2 ? job(2, { executor: { type: 'claude-code', config: { instructions: 'go', api_key: 'acme-held-value' } } }) : j))
+    await writeMac(leaky, Object.fromEntries(jobs.map((j, i) => [j.id, state(i)])))
+    await settle()
+    expect((await kind.rows()).map((r) => r.id)).not.toContain(job(2).id)
+    expect((await kind.rows()).map((r) => r.id)).not.toContain(job(2).id)
+  })
+})

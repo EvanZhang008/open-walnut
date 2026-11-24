@@ -7,7 +7,7 @@
  * its subtasks, so the task's own team Board is not enough.
  */
 import { choiceSpecs, type BoardChoiceOption } from './board-html.js';
-import { getBoard, listBoardTaskIds } from './board-store.js';
+import { getBoardView, listBoardTaskIds } from './board-store.js';
 import { matchIdRef } from '../../lib/id-ref.js';
 
 export interface OpenChoice {
@@ -29,7 +29,7 @@ export function resolveChoiceRef(ref: string, allIds: readonly string[]): string
 
 export async function openChoiceFor(taskId: string, allIds: readonly string[]): Promise<OpenChoice | null> {
   for (const owner of await listBoardTaskIds()) {
-    const board = await getBoard(owner).catch(() => null);
+    const board = await getBoardView(owner).catch(() => null);
     if (!board?.html) continue;
     for (const [id, spec] of Object.entries(choiceSpecs(board.html))) {
       if (board.choices?.[id]) continue; // answered

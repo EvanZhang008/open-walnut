@@ -69,9 +69,9 @@ export function optionNamedBy(text: string, options: ReadonlyArray<{ value: stri
 async function choiceSettler(input: SettleInput): Promise<() => Promise<SettledVia>> {
   const ref = input.choice;
   if (!ref) throw new SettleError('no_open_ask', `Not sent: "${input.target.title}" shows a Board choice that names no Board.`);
-  const { getBoard } = await import('../boards/board-store.js');
+  const { getBoardView } = await import('../boards/board-store.js');
   const { choiceSpecs } = await import('../boards/board-html.js');
-  const board = await getBoard(ref.board).catch(() => null);
+  const board = await getBoardView(ref.board).catch(() => null);
   const spec = board?.html ? choiceSpecs(board.html)[ref.id] : undefined;
   if (!spec || board?.choices?.[ref.id]) {
     throw new SettleError('no_open_ask', `Not sent: the Board choice "${ref.id}" on ${ref.board} is no longer open (answered, or gone from its Board).`);

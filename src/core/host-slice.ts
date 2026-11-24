@@ -23,7 +23,7 @@ import type { OfflineSliceBoard } from '../providers/offline-board-core.js';
 import type { SessionRecord, Task } from './types.js';
 import { isInfraSessionError } from './session-error-kind.js';
 import { engineCaps } from './agents/engine-registry.js';
-import { instructionNoticeForHost } from './sessions/instruction-notice.js';
+import { hostNoticeActive, instructionNoticeForHost } from './sessions/instruction-notice.js';
 import { noticeDelivering, noticeInFlight } from './sessions/instruction-notice-flight.js';
 import { hostReplyTail } from './hints/hint-send.js';
 
@@ -48,7 +48,7 @@ const THREAD_TAIL = 40;
  * exist among them.
  */
 async function teamBoards(sessionTaskIds: string[], boardKept: (taskId: string) => boolean): Promise<{ boards: OfflineSliceBoard[]; boardOf: Record<string, string> }> {
-  const [{ resolveTeamBoardTask }, { getBoard }] = await Promise.all([
+  const [{ resolveTeamBoardTask }, { getBoardView }] = await Promise.all([
     import('./boards/board-team.js'),
     import('./boards/board-store.js'),
   ]);
@@ -66,7 +66,7 @@ async function teamBoards(sessionTaskIds: string[], boardKept: (taskId: string) 
   const boards: OfflineSliceBoard[] = [];
   let chars = 0;
   for (const id of owners) {
-    const b = await getBoard(id).catch(() => null);
+    const b = await getBoardView(id).catch(() => null);
     if (!b) continue;
     chars += b.html.length;
     if (chars > BOARDS_MAX_CHARS) break;
@@ -100,21 +100,18 @@ function clip(text: string | undefined, max: number): string | undefined {
 }
 
 /**
- * Children of these tasks, straight from SQLite (indexed on parent_task_id).
- * The copy is rebuilt on every task change, so it never materializes the whole
- * board: a cold full read measured 110-390ms of blocked event loop on ~6.5k tasks.
+ * Children of these tasks, from the store's own rows (read only, never copied). The copy is
+ * rebuilt on every task change for every connected host: SQLite reads here parsed every child
+ * row again per build (2026-11-24: about a tenth of the server's CPU in a memory burst after a
+ * restart), and a whole-board copy was worse (a cold full read measured 110-390 ms).
  */
-async function childTasks(parentIds: string[]): Promise<Task[]> {
-  if (parentIds.length === 0) return [];
-  const { getDb, rowToTask } = await import('./task-db.js');
-  const db = getDb();
-  if (!db) return [];
+function childTasks(byParent: ReadonlyMap<string, readonly Task[]>, parentIds: readonly string[]): Task[] {
   const out: Task[] = [];
-  for (let i = 0; i < parentIds.length && out.length < MAX_TASKS; i += 500) {
-    const chunk = parentIds.slice(i, i + 500);
-    const rows = db.prepare(`SELECT * FROM tasks WHERE parent_task_id IN (${chunk.map(() => '?').join(',')}) LIMIT ${MAX_TASKS}`)
-      .all(...chunk) as Record<string, unknown>[];
-    for (const row of rows) out.push(rowToTask(row));
+  for (const id of parentIds) {
+    for (const t of byParent.get(id) ?? []) {
+      if (out.length >= MAX_TASKS) return out;
+      out.push(t);
+    }
   }
   return out;
 }
@@ -186,9 +183,10 @@ export function inHostCopy(s: SessionRecord, now: number): boolean {
 export async function buildHostSlice(hostKey: string | readonly string[], now = Date.now()): Promise<HostSlice> {
   const list = (typeof hostKey === 'string' ? [hostKey] : hostKey).map(normalizeHostKey);
   const keys = new Set(list);
-  const [{ sessionRowsForReplica, isListableSession, withHeavyFields }, { listTasksByIds }, requests] = await Promise.all([
+  const [{ sessionRowsForReplica, isListableSession, withHeavyFields }, { taskStoreSnapshot }, { tasksByIdOf, tasksByParentOf }, requests] = await Promise.all([
     import('./session-tracker.js'),
     import('./task-manager.js'),
+    import('./same-ask-tree.js'),
     import('./session-requests.js'),
   ]);
 
@@ -245,28 +243,31 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
   // Session tasks first (newest session first), then their parents, then the
   // team around them: their subtasks (down to MAX_SUBTASK_DEPTH below), and
   // their parents' other subtasks, so a leader and its workers read each other.
-  const own = new Map((await listTasksByIds(sessionTaskIds)).map((t) => [t.id, t]));
+  // The store's rows, read only (a write replaces a row, never edits it), indexed once per change.
+  const board = await taskStoreSnapshot();
+  const byId = tasksByIdOf(board);
+  const byParent = tasksByParentOf(board);
+  const byIds = (ids: readonly string[]): Task[] => ids.map((id) => byId.get(id)).filter((t): t is Task => !!t);
+  const own = new Map(byIds(sessionTaskIds).map((t) => [t.id, t]));
   for (const id of sessionTaskIds) add(own.get(id));
   const parentIds = [...new Set([...own.values()].map((t) => t.parent_task_id).filter((id): id is string => !!id && !own.has(id)))];
-  for (const t of await listTasksByIds(parentIds)) add(t);
+  for (const t of byIds(parentIds)) add(t);
   let level = sessionTaskIds;
   for (let depth = 0; depth < TEAM_DEPTH && level.length > 0 && picked.size < MAX_TASKS; depth++) {
     const next: string[] = [];
-    for (const t of await childTasks(level)) {
+    for (const t of childTasks(byParent, level)) {
       if (!picked.has(t.id)) next.push(t.id);
       add(t);
     }
     level = next;
   }
-  for (const t of await childTasks(parentIds)) add(t);
+  for (const t of childTasks(byParent, parentIds)) add(t);
   // A lead that handed its project over: the host refuses a session's message to it with the
   // lead that took over, as the server does (org/retired-lead.ts).
   if (leads.length > 0) {
-    const [{ taskStoreForReplica }, { successorOf }] = await Promise.all([import('./task-manager.js'), import('./org/org-tree.js')]);
-    // Read only, and used before the next await: no copy of the board per build.
-    const all = (await taskStoreForReplica()).tasks;
+    const { successorOf } = await import('./org/org-tree.js');
     for (const t of leads) {
-      const now = successorOf(all, t);
+      const now = successorOf(board, t);
       const row = picked.get(t.id);
       if (now && row && !keptOff(now.id)) row.handed_over_to = { id: now.id, title: now.title, ...(now.phase ? { phase: now.phase } : {}) };
     }
@@ -313,7 +314,8 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
         const sid = s.claudeSessionId;
         const busy = noticeDelivering(sid) || noticeInFlight(queues[sid] ?? []);
         // The notice reads the spawn prompt, which the list leaves out of a stopped session.
-        const routing = task && !busy ? instructionNoticeForHost(withHeavyFields(s), task) : null;
+        // Its spawn prompt is a SQLite read and parse: only for a session that may take the notice.
+        const routing = task && !busy && hostNoticeActive(s, now) ? instructionNoticeForHost(withHeavyFields(s), task, now) : null;
         return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
       })(),
       ...(() => {

@@ -26,6 +26,7 @@ import { bootPolicy } from '../boot-policy.js';
 import { isCompanion } from '../server-role.js';
 import { NeedsLeaderError } from '../replication/needs-leader.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
+import { readJsonFileKept } from '../../utils/json-kept.js';
 import { withFileLock } from '../../utils/file-lock.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
@@ -508,6 +509,26 @@ export function requireBoard(current: BoardFile | null): BoardFile {
 
 export async function getBoard(taskId: string): Promise<BoardFile | null> {
   return normalize(await readJsonFile<BoardFile | null>(await readBoardFile(taskId), null), taskId);
+}
+
+const boardViews = new WeakMap<object, BoardFile | null>();
+
+/**
+ * getBoard for a reader that only looks: the parsed file is kept while it is unchanged
+ * (utils/json-kept.ts) and every caller gets the same frozen board. 2026-11-24: the server read
+ * one leader's 230 KB board about 490 times in 10 minutes (host slices, status passes, choice
+ * lookups) for a file written 9 times. A caller that edits a board reads it with getBoard.
+ */
+export async function getBoardView(taskId: string): Promise<Readonly<BoardFile> | null> {
+  const raw = await readJsonFileKept<BoardFile | null>(await readBoardFile(taskId), null);
+  if (!raw || typeof raw !== 'object') return null;
+  let view = boardViews.get(raw);
+  if (view === undefined) {
+    view = normalize(raw, taskId);
+    if (view) Object.freeze(view);
+    boardViews.set(raw, view);
+  }
+  return view;
 }
 
 /** Replace the whole document (creates the board when it has none). */

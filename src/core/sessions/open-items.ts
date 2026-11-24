@@ -196,7 +196,7 @@ export async function collectOpenItems(
       ...(overdueIn.length ? { overdueIn } : {}),
       ...(partialDone.length ? { partialDone } : {}),
     };
-    const board = await (await import('../boards/board-store.js')).getBoard(task.id).catch(() => null);
+    const board = await (await import('../boards/board-store.js')).getBoardView(task.id).catch(() => null);
     if (board) {
       const msgs = Object.values(board.threads).flat();
       items.board = {

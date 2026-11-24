@@ -8129,6 +8129,20 @@ export interface TaskReplicaRegistry {
  * returns. An unchanged row keeps its object identity between writes, so the
  * replica hashes only the rows that changed.
  */
+let storeSnapshot: { gen: number; tasks: readonly Task[] } | null = null;
+
+/**
+ * The canonical rows as a list that is never edited: the same frozen list until the store changes,
+ * then a new one (a copy of the row pointers, never of the rows). Read only. A memo keyed by a list
+ * (same-ask-tree's tree index) holds for it, which taskStoreForReplica's list, patched in place,
+ * cannot give. 2026-11-24: withTaskAsks copied every task (listTasks) on each threads read.
+ */
+export async function taskStoreSnapshot(): Promise<readonly Task[]> {
+  const { tasks } = await taskStoreForReplica();
+  if (storeSnapshot?.gen !== taskStoreGen) storeSnapshot = { gen: taskStoreGen, tasks: Object.freeze([...tasks]) };
+  return storeSnapshot.tasks;
+}
+
 export async function taskStoreForReplica(): Promise<{ tasks: readonly Task[]; registry: TaskReplicaRegistry }> {
   const store = await readStoreView();
   return {
