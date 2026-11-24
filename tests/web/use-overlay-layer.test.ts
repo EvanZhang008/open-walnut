@@ -75,6 +75,28 @@ describe('useOverlayLayer stack', () => {
     layer({ el: flyout });
     expect(hasOpenOverlayLayer()).toBe(true);
   });
+  it('an if-unclaimed layer lets a field use Escape first and takes only the one nobody claimed', () => {
+    // 2026-11-24: the quote bar left every Escape typed in the composer to it, so a held passage (the
+    // composer has the focus) could not be let go by Escape at all; the composer uses Escape only
+    // while its @, / or recall list shows, and claims it then.
+    const close = layer({ el: menu, passive: true, closeOnEscape: () => 'if-unclaimed' });
+    const claimed = ev({ key: 'Escape', defaultPrevented: false });
+    overlayLayerHandlers.keydown(claimed as unknown as KeyboardEvent);
+    expect(claimed.preventDefault).not.toHaveBeenCalled();
+    expect(claimed.stopImmediatePropagation).not.toHaveBeenCalled();
+    claimed.defaultPrevented = true; // the field's own list closed on it
+    overlayLayerHandlers.keydownBubble(claimed as unknown as KeyboardEvent);
+    expect(close).not.toHaveBeenCalled();
+    const free = ev({ key: 'Escape', defaultPrevented: false });
+    overlayLayerHandlers.keydown(free as unknown as KeyboardEvent);
+    expect(close).not.toHaveBeenCalled();
+    overlayLayerHandlers.keydownBubble(free as unknown as KeyboardEvent);
+    expect(close).toHaveBeenCalledWith('escape');
+    expect(free.preventDefault).toHaveBeenCalled();
+    // Only the Escape the capture phase deferred: one the layer never saw is not its.
+    overlayLayerHandlers.keydownBubble(ev({ key: 'Escape', defaultPrevented: false }) as unknown as KeyboardEvent);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
   it('onEscape can consume the key without closing (clear search first)', () => {
     const close = layer({ el: menu, onEscape: () => true });
     const e = ev({ key: 'Escape' });

@@ -20,6 +20,7 @@
  *    value too.
  */
 import { useEffect, useRef, type RefObject } from 'react';
+import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { isImeKey } from '@/utils/ime-key';
 
 export type OverlayCloseReason = 'escape' | 'outside';
@@ -31,8 +32,11 @@ export interface OverlayLayerOptions {
   refs: readonly RefObject<HTMLElement | null>[];
   /** Selectors of child portals that count as inside (e.g. `.fb-values-flyout`). */
   exemptSelectors?: readonly string[];
-  /** Default true. A function is asked when the key is pressed (a field that owns its own Escape). */
-  closeOnEscape?: boolean | (() => boolean);
+  /** Default true. A function is asked when the key is pressed (a field that owns its own Escape).
+   *  `'if-unclaimed'` lets the page go first: the layer takes the Escape only once it has travelled
+   *  the whole page with no handler claiming it (a text field that uses Escape only while its own
+   *  list is open: the composer's @, / and recall lists). */
+  closeOnEscape?: boolean | (() => boolean | 'if-unclaimed');
   /** Default true. False blocks outside dismissal of this layer and every layer below it. */
   closeOnOutside?: boolean;
   /** Runs before closing on Escape; return true to consume the key without closing (e.g. clear a search box). */
@@ -155,12 +159,30 @@ function onKeyDownCapture(e: KeyboardEvent): void {
   if (e.key !== 'Escape' || isImeKey(e) || stack.length === 0) return;
   const top = stack[stack.length - 1];
   const opts = top.opts.current;
-  const closeOnEscape = opts.closeOnEscape;
-  if (closeOnEscape === false || (typeof closeOnEscape === 'function' && !closeOnEscape())) return;
+  const closeOnEscape = typeof opts.closeOnEscape === 'function' ? opts.closeOnEscape() : opts.closeOnEscape;
+  if (closeOnEscape === false) return;
+  if (closeOnEscape === 'if-unclaimed') { deferredEscape = { event: e, layerId: top.id }; return; }
   e.preventDefault();
   e.stopImmediatePropagation();
   if (opts.onEscape?.(e)) return;
   opts.onClose('escape');
+}
+
+/** An Escape the topmost layer let the page have first (`closeOnEscape: 'if-unclaimed'`). */
+let deferredEscape: { event: KeyboardEvent; layerId: number } | null = null;
+
+/** Window bubble: the deferred Escape came through the whole page. Unclaimed, it is the layer's. */
+function onKeyDownBubble(e: KeyboardEvent): void {
+  const deferred = deferredEscape;
+  if (!deferred || deferred.event !== e) return;
+  deferredEscape = null;
+  // Stopping propagation claims a key too, and such an event never reaches this listener.
+  if (escapeWasConsumedByOthers(e)) return;
+  const top = stack[stack.length - 1];
+  if (!top || top.id !== deferred.layerId) return;
+  e.preventDefault();
+  if (top.opts.current.onEscape?.(e)) return;
+  top.opts.current.onClose('escape');
 }
 
 /** A press on another popover's trigger opens it: the click goes through, so switching menus takes one click. */
@@ -196,6 +218,7 @@ function onClickCapture(e: MouseEvent): void {
 
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('keydown', onKeyDownCapture, true);
+  window.addEventListener('keydown', onKeyDownBubble);
   window.addEventListener('pointerdown', onPointerDownCapture, true);
   window.addEventListener('click', onClickCapture, true);
 }
@@ -213,6 +236,7 @@ export function registerOverlayLayer(opts: { current: OverlayLayerOptions }): ()
 /** The window listeners, exported for unit tests (they are installed at module load in a browser). */
 export const overlayLayerHandlers = {
   keydown: onKeyDownCapture,
+  keydownBubble: onKeyDownBubble,
   pointerdown: onPointerDownCapture,
   click: onClickCapture,
 };

@@ -768,9 +768,10 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     // It shows whenever text is selected: the page's shortcuts must keep working under it.
     passive: true,
     // Read when the key is pressed: in a field (the composer, with its @, / and recall lists, which
-    // answer Escape in their own onKeyDown), Escape is the field's, as it was before the bar was a layer.
-    // The Comment box in the bar's own menu is the bar's field: its Escape closes the bar.
-    closeOnEscape: () => !outsideFieldHasFocus([pillRef.current, menuRef.current]),
+    // answer Escape in their own onKeyDown), the field goes first, and an Escape it leaves unclaimed
+    // still lets go of the passage (a held one waits with the composer focused). The Comment box in
+    // the bar's own menu is the bar's field: its Escape closes the bar.
+    closeOnEscape: () => (outsideFieldHasFocus([pillRef.current, menuRef.current]) ? 'if-unclaimed' : true),
     passOutsideClick: true,
     onEscape: () => {
       escTaken.current = true;
