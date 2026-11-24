@@ -108,8 +108,10 @@ struct NoticeStack: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { reportFrame($0) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(animation, value: center.entries.map(\.id))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("notice.stack")
+        // No accessibility container or identifier of its own: over a single card SwiftUI folds a
+        // container into its one child, and the stack's identifier replaced the card's, so a lone
+        // notice ("chat.orgOpening", "chat.orgOpenNotice") could not be found by its id
+        // (NoticeIdentityUITests).
     }
 
     private var animation: Animation? { reduceMotion ? nil : .snappy(duration: 0.3) }
