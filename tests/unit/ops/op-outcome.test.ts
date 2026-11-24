@@ -864,7 +864,7 @@ describe('task_history resolves the task, then its transcript', () => {
     const r = historyRunner({ id: TASK.id, session_id: '7f0aa681', session_ids: ['7f0aa681'] },
       async () => ({ messages: [{ role: 'user', text: 'Reproduce, then fix.' }] }))
     const history = rec(await r.invoke({ id: TASK.id }))
-    expect(r.paths()).toEqual([TASK_READ, SESSIONS_READ, 'GET /sessions/7f0aa681/transcript'])
+    expect(r.paths()).toEqual([TASK_READ, SESSIONS_READ, 'GET /sessions/7f0aa681/transcript?ids=1'])
     expect(history.taskId).toBe(TASK.id)
     expect((history.messages as unknown[]).length).toBe(1)
   })
@@ -880,14 +880,14 @@ describe('task_history resolves the task, then its transcript', () => {
     for (const { task, sid } of cases) {
       const r = historyRunner(task, async () => ({ messages: [] }))
       await r.invoke({ id: TASK.id })
-      expect(r.paths(), JSON.stringify(task)).toEqual([TASK_READ, SESSIONS_READ, `GET /sessions/${sid}/transcript`])
+      expect(r.paths(), JSON.stringify(task)).toEqual([TASK_READ, SESSIONS_READ, `GET /sessions/${sid}/transcript?ids=1`])
     }
   })
 
   it('fresh=true forces the live read on the primary box', async () => {
     const r = historyRunner({ id: TASK.id, exec_session_id: '7f0aa681' }, async () => ({ messages: [] }))
     await r.invoke({ id: TASK.id, fresh: true })
-    expect(r.paths().at(-1)).toBe('GET /sessions/7f0aa681/transcript?fresh=1')
+    expect(r.paths().at(-1)).toBe('GET /sessions/7f0aa681/transcript?fresh=1&ids=1')
   })
 
   it('a placeholder answers not_started and no messages, with no transcript read', async () => {
