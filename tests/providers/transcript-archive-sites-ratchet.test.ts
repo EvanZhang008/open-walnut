@@ -26,6 +26,7 @@ const SITES: Record<string, string> = {
   'src/providers/daemon-stream-compaction.ts': 'the daemon\'s own stream files (STREAMS_DIR) it compacts, never a transcript',
   'src/providers/daemon-session-resume.ts': 'the daemon\'s own stream file (STREAMS_DIR), never a transcript; the resumed CLI\'s start restores first (restoreForStart)',
   'src/providers/transcript-archive.ts': 'the archive itself',
+  'src/providers/codex-thread-provider.ts': 'reads the first line of a Codex rollout under CODEX_HOME/sessions (Codex\'s own file, which the archive never moves), never a Claude transcript',
   'src/providers/history-ready-core.ts': 'reads bounded .jsonl.gz tails through gunzip without restoring; an offloaded transcript or archived rewind answers none',
   'src/core/history-remote/loading.ts': 'reads only the manifest (is the session kept remotely?) and a stat of its transcript and .gz',
   'src/core/session-file-reader.ts': 'restores: findLocalJsonlPath restores a session archived on this machine; every other read goes through the daemon file commands',
