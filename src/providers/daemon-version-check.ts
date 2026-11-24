@@ -127,6 +127,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/codex-app-server/approvals.ts',
   'src/providers/codex-app-server/errors.ts',
   'src/providers/engine-turn-watch.ts',
+  'src/core/service-url.ts',
   'src/providers/acp-worker/adapter-turn-watch.ts',
   'src/providers/child-end.ts',
   'src/providers/codex-app-server/transport.ts',
