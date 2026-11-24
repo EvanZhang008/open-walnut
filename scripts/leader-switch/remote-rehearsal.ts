@@ -113,15 +113,23 @@ async function checkHandedOverByHand(c: Checks, w: RemoteWorld, m: Machine, lead
   c.add(`${label}: its home is as before (leader data and machine data, by the manifest's classes)`, kept.ok, describeKept(kept))
 }
 
-/** A session on H through the leader `m`: start it with `message` (or send to it), and the answers it shows. */
-async function sessionTurn(w: RemoteWorld, m: Machine, o: { taskId: string; sid?: string; message: string }): Promise<{ sid: string; ok: boolean; why?: string }> {
+/** A turn of a session: started on `on` (default the third host H; `local`: the leader's own daemon), or a message to it. */
+async function sessionTurn(w: RemoteWorld, m: Machine, o: { taskId: string; sid?: string; message: string; on?: 'h' | 'local' }): Promise<{ sid: string; ok: boolean; why?: string }> {
   if (!o.sid) {
-    const r = await w.api(m, 'POST', `/api/v1/tasks/${o.taskId}/start`, { host: w.h.id, cwd: path.join(w.h.dir, 'work'), mode: 'bypass', message: o.message })
+    const where = o.on === 'local' ? { cwd: path.join(m.dir, 'work') } : { host: w.h.id, cwd: path.join(w.h.dir, 'work') }
+    const r = await w.api(m, 'POST', `/api/v1/tasks/${o.taskId}/start`, { ...where, mode: 'bypass', message: o.message })
     if (r.status !== 202) return { sid: '', ok: false, why: `start ${r.status} ${JSON.stringify(r.json)?.slice(0, 200)}` }
     return { sid: r.json.sessionId as string, ok: true }
   }
   const r = await w.api(m, 'POST', `/api/v1/sessions/${o.sid}/messages`, { message: o.message, text: o.message })
   return { sid: o.sid, ok: r.status < 300, ...(r.status < 300 ? {} : { why: `send ${r.status} ${JSON.stringify(r.json)?.slice(0, 200)}` }) }
+}
+
+/** How many times the mock CLI started session `sid` on machine `m` (its run log in the machine's HOME). */
+function cliStarts(m: Machine, sid: string): number {
+  try {
+    return fs.readFileSync(path.join(m.dir, 'mock-cli-runs.log'), 'utf8').split('\n').filter((l) => l.includes(sid) && l.includes('"what":"start"')).length
+  } catch { return 0 }
 }
 
 /** How many times each answer of the mock CLI ("echo: <message>") shows in the session's history on `m`. */
@@ -197,6 +205,11 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   const first = await sessionTurn(w, A, { taskId: task.json?.task?.id, message: 'ROUND one on A' })
   const answeredA = first.ok ? await waitFor('the first answer through A', async () => ((await answersOn(w, A, first.sid)).get('echo: ROUND one on A') ?? 0) > 0, 120_000).then(() => true).catch(() => false) : false
   c.add('main: a session on H started through A answers', answeredA, first.why ?? first.sid)
+  // A session on A's own daemon: after the switch A is a host of B, and the session is B's on host machine-a.
+  const localTask = await w.api(A, 'POST', '/api/tasks', { title: 'Session on the old leader\'s own daemon', project: 'Rehearsal' })
+  const own = await sessionTurn(w, A, { taskId: localTask.json?.task?.id, message: 'ROUND own on A', on: 'local' })
+  const answeredOwn = own.ok ? await waitFor('the own-daemon answer through A', async () => ((await answersOn(w, A, own.sid)).get('echo: ROUND own on A') ?? 0) > 0, 120_000).then(() => true).catch(() => false) : false
+  c.add('main: a session on A\'s own daemon answers', answeredOwn, own.why ?? own.sid)
   const late = { rel: 'plugins/rehearsal-plugin/data/late.json', content: JSON.stringify({ late: randomBytes(4).toString('hex') }) }
   fs.writeFileSync(path.join(A.home, late.rel), late.content)
   await waitForBatch(B.standbyDir, Date.now(), 120_000)
@@ -237,6 +250,26 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   await sleep(5_000)
   const afterSend = await answersOn(w, B, first.sid)
   c.add('main: a message sent through B right after the switch arrives once', answeredB && afterSend.get('echo: ROUND two on B') === 1 && afterSend.get('echo: ROUND one on A') === 1, `${second.why ?? ''} ${JSON.stringify([...afterSend])}`)
+  // The old machine as B's host: the handover's host steps ran on A (its credential, its host service on its own
+  // daemon, its daemon's duties dropped), and the session on A's own daemon is B's now, on host machine-a.
+  const hostService = (() => { try { return JSON.parse(fs.readFileSync(path.join(A.home, 'local', 'leader-switch', 'host-service.json'), 'utf8')) as { port?: number; hostKey?: string } } catch { return null } })()
+  c.add('main: the handover set A up as B\'s host (the host service on A\'s own daemon, recorded beside its home)', !!hostService && hostService.hostKey === A.id && Number.isInteger(hostService.port), JSON.stringify(hostService))
+  const adopted = await waitFor('the own-daemon session on B', async () => {
+    const r = await w.api(B, 'GET', `/api/v1/sessions/${own.sid}`).catch(() => null)
+    const s2 = (r?.json?.session ?? r?.json) as { host?: string | null } | null
+    return r?.status === 200 && s2?.host === A.id ? s2 : null
+  }, 120_000, 1_000).then(() => true).catch(() => false)
+  const ownOnB = await answersOn(w, B, own.sid)
+  c.add('main: the session on A\'s own daemon is B\'s now, on host machine-a, its turn there once', adopted && ownOnB.get('echo: ROUND own on A') === 1, JSON.stringify([...ownOnB]))
+  const startsBefore = { a: cliStarts(A, own.sid), b: cliStarts(B, own.sid) }
+  const ownSecond = await sessionTurn(w, B, { taskId: localTask.json?.task?.id, sid: own.sid, message: 'ROUND own two on B' })
+  const ownAnswered = ownSecond.ok ? await waitFor('the own-daemon answer through B', async () => ((await answersOn(w, B, own.sid)).get('echo: ROUND own two on B') ?? 0) > 0, 120_000).then(() => true).catch(() => false) : false
+  await sleep(5_000)
+  const ownAfter = await answersOn(w, B, own.sid)
+  // Where it ran: the mock CLI notes each start in its machine's HOME (A's for A's daemon, B's for B's).
+  const ran = { a: cliStarts(A, own.sid) - startsBefore.a, b: cliStarts(B, own.sid) - startsBefore.b }
+  c.add('main: a message to it through B runs on the old machine and arrives once', ownAnswered && ownAfter.get('echo: ROUND own two on B') === 1 && ownAfter.get('echo: ROUND own on A') === 1 && ran.a >= 1 && ran.b === 0,
+    `${ownSecond.why ?? ''} ${JSON.stringify([...ownAfter])}; CLI starts since the switch: ${ran.a} on machine-a, ${ran.b} on machine-b`)
   // Triggers once: every routine slot through a door on one machine, once.
   await sleep(17_000)
   const slotsA = cronDoorCalls(A.home).filter((l) => l.mayAct).map((l) => l.opId)
@@ -376,6 +409,33 @@ async function flagOff(c: Checks, w: RemoteWorld): Promise<void> {
   await run('flag off', (cfg) => { cfg.experimental.switchable_leader = false }, /switchable_leader is off/)
   await run('flag on, no witnesses', (cfg) => { delete cfg.leader_switch; delete cfg.standby }, /leader_switch/)
   fs.writeFileSync(cfgFile, saved)
+}
+
+/** A net host that misses the member lists after the handover record: the switch waits, then takes its handover back; nothing stopped. */
+async function netMiss(x: Ctx): Promise<void> {
+  const { c, w, roles } = x
+  const L = roles.leader
+  const O = roles.other
+  await writeAndBatch(x, 'net-miss')
+  const missFile = path.join(L.dir, 'rehearsal-retell-miss')
+  const pidBefore = w.side(L).runningServer()?.pid ?? null
+  const stopFile = path.join(L.home, 'local', 'leader-switch', 'final-stop.json')
+  const stopBefore = fs.existsSync(stopFile) ? fs.readFileSync(stopFile, 'utf8') : null
+  fs.writeFileSync(missFile, 'box-net-only')
+  let r: Awaited<ReturnType<typeof switchCmd>>
+  const t0 = Date.now()
+  try {
+    r = await switchCmd(w, L, ['--to', O.id])
+  } finally {
+    fs.rmSync(missFile, { force: true })
+  }
+  const took = Date.now() - t0
+  x.times['a net host that misses the lists: the switch waited before it rolled back'] = `${(took / 1000).toFixed(1)} s`
+  c.add('a net host misses the lists: the switch waits, then rolls back naming the host', r.code === 3 && r.state?.step === 'rolled-back' && /box-net-only/.test(`${r.state?.rollbackWhy ?? ''} ${r.out}`) && took >= 30_000, `exit ${r.code}; ${(took / 1000).toFixed(0)} s; ${r.state?.rollbackWhy?.slice(0, 200)}`)
+  const stopAfter = fs.existsSync(stopFile) ? fs.readFileSync(stopFile, 'utf8') : null
+  c.add(`a net host misses the lists: nothing was stopped (${L.id}'s server is the same process, no switch stop ran, no ticket at ${O.id})`, !!pidBefore && w.side(L).runningServer()?.pid === pidBefore && stopAfter === stopBefore && !(r.state && fs.existsSync(path.join(O.standbyDir, 'switch', `${r.state.id}.json`))), `pid ${pidBefore} -> ${w.side(L).runningServer()?.pid}`)
+  await oneLeader(x, 'a net host misses the lists', L)
+  await checkCarried(c, w, L, L, x.carried, 'a net host misses the lists')
 }
 
 /** The copy link cut right after the handover (the source job stopped there by its kill point): the final batch cannot reach the other machine. */
@@ -667,6 +727,7 @@ async function measure(x: Ctx): Promise<void> {
 }
 
 const SCENARIOS: Array<[string, (x: Ctx) => Promise<void>]> = [
+  ['net-miss', netMiss],
   ['split-after-handover', splitAfterHandover],
   ['split-after-stop', splitAfterStop],
   ['split-before-role', splitBeforeRole],

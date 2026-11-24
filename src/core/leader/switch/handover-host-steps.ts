@@ -6,11 +6,16 @@
  *
  *   before the handover record:  prepareOldMachineAsHost, pushNewLeaderDoors,
  *                                configureOldMachineHostService, announceSwitchStop (last)
- *   after the record:            retellNetMembers, dropOwnDaemonDuties
+ *   after the record:            retellNetMembers (until every net host took the lists and the new
+ *                                leader is let in: tried again for a while, else the handover is taken
+ *                                back naming the hosts), then dropOwnDaemonDuties
  *   a handover that did not happen (refused, or taken back while this server runs): undoHandoverHostSteps
+ *                                (it also restores this machine's daemon duties and withdraws the
+ *                                switch stop's announcement)
  *
- * Not set (the default): no step runs, as before hosts followed. Set but the target machine names no
- * `doors` or this machine no `host_key`: no step runs either, and the handover says why in the log.
+ * Not set (a trial start, tests): no step runs, as before hosts followed. A leader's permit sets them
+ * (boot.ts, host-follow-steps.ts). Set but the target machine names no `doors` or this machine no
+ * `host_key`: no step runs either, and the handover says why in the log.
  */
 import type { MachinePlace } from './settings.js'
 
@@ -21,7 +26,8 @@ export interface HandoverHostSteps {
   pushNewLeaderDoors(doors: readonly string[]): Promise<HostStepResult>
   configureOldMachineHostService(o: { home: string; walnutId: string; hostKey: string; switchId?: string }): Promise<HostStepResult>
   announceSwitchStop(commitWindowMs: number): Promise<unknown>
-  retellNetMembers(): Promise<HostStepResult>
+  /** Every net host told the member lists and the new leader let in; else why (the hosts it missed). */
+  retellNetMembers(o: { target: MachinePlace }): Promise<HostStepResult>
   dropOwnDaemonDuties(o: { home: string }): Promise<HostStepResult>
   undoHandoverHostSteps(o: { home: string; walnutId: string; machineId: string }): Promise<HostStepResult>
 }
@@ -41,6 +47,9 @@ export interface HostStepsContext {
   target: MachinePlace
   commitWindowMs: number
   switchId?: string
+  /** How long the network's lists are told again before the handover is taken back (default: half the commit window, at most 60 s), and how often. */
+  retellWaitMs?: number
+  retellEveryMs?: number
   log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -75,14 +84,32 @@ export async function beforeHandoverRecord(c: HostStepsContext): Promise<HostSte
   return { ok: true }
 }
 
-/** After the record stood: the network's members again, and this machine's daemon drops the old leader's duties. Logged, never refused. */
-export async function afterHandoverRecord(c: HostStepsContext): Promise<void> {
+/**
+ * After the record stood, before anything stops: the network's member lists again, until every net host
+ * took them and the new leader is let in (a net host that missed them would let in only this leader, and
+ * once it stops nobody tells it again). Tried again within its wait; not done by then: not ok, naming the
+ * hosts, and the caller takes the handover back. Then this machine's daemon drops the old leader's duties
+ * (logged when it fails: a rollback's undo pushes them again either way).
+ */
+export async function afterHandoverRecord(c: HostStepsContext): Promise<HostStepResult> {
   const h = stepsFor(c)
-  if (!h) return
-  for (const [name, step] of [['retellNetMembers', () => h.s.retellNetMembers()], ['dropOwnDaemonDuties', () => h.s.dropOwnDaemonDuties({ home: c.home })]] as const) {
-    const r = await step().catch((err: unknown): HostStepResult => ({ ok: false, why: String(err) }))
-    if (!r.ok) c.log('warn', `leader switch: ${name} after the handover failed`, { why: r.why })
+  if (!h) return { ok: true }
+  const waitMs = c.retellWaitMs ?? Math.min(60_000, Math.floor(c.commitWindowMs / 2))
+  const everyMs = c.retellEveryMs ?? 2_000
+  const until = Date.now() + waitMs
+  let told: HostStepResult
+  for (let tries = 1; ; tries++) {
+    told = await h.s.retellNetMembers({ target: c.target }).catch((err: unknown): HostStepResult => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
+    if (told.ok || Date.now() + everyMs > until) {
+      if (!told.ok) c.log('warn', 'leader switch: the network\'s hosts did not all take the new leader within the wait', { why: told.why, tries, waitMs })
+      break
+    }
+    await new Promise((r) => setTimeout(r, everyMs))
   }
+  if (!told.ok) return { ok: false, why: `retellNetMembers: ${told.why}` }
+  const d = await h.s.dropOwnDaemonDuties({ home: c.home }).catch((err: unknown): HostStepResult => ({ ok: false, why: String(err) }))
+  if (!d.ok) c.log('warn', 'leader switch: dropOwnDaemonDuties after the handover failed', { why: d.why })
+  return { ok: true }
 }
 
 /** A handover that did not happen while this server runs on: every step above taken back. */

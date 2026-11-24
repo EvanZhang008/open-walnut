@@ -145,8 +145,14 @@ Source job:
    `retellNetMembers` and `dropOwnDaemonDuties`; `undoHandoverHostSteps` when the handover does not happen
    or is taken back). They read the new leader's `leader_switch.machines[].doors` (wss:// or https://) and this
    machine's `host_key` (the name the new leader gives it in its `hosts`); with either missing, or the steps not
-   set, none runs. Once the record stands the server writes the ticket and starts the target job; when
-   it cannot, it cancels the handover and leads on. The source job waits (30 s at most) until the
+   set (a trial start: a leader's permit sets them, `host-follow-steps.ts`), none runs. The host service listens on
+   a loopback port picked as the host-server manager picks one (random candidates in 41000 to 49999, the first
+   free one; a handover asked again keeps the port its record names). After the record, `retellNetMembers` is
+   asked again every 2 s until every net host took the lists and the new leader is let in (its network id: the
+   `endpoint` of its host key in `hosts`), for half the commit window at most a minute; not done by then, the
+   server takes its handover back and refuses, naming the hosts, and nothing stops. Once the record stands
+   and the hosts follow, the server writes the ticket and starts the target job; when it cannot, it
+   cancels the handover and leads on. The source job waits (30 s at most) until the
    target job says it sees the handover at a majority it reaches by its own ways.
 3. **stop-source**: the switch stop ([below](#the-switch-stop)), asked through
    `POST /api/leader/switch/final-stop`. The downtime starts here.
@@ -924,6 +930,18 @@ trial's scan took 53 ms of the 8.4 s downtime.
 | machine or rebuildable data (manifest) | never in a batch, so it does not travel |
 | a top-level file no store of Walnut names | the user's own file in the vault: kept |
 
+**Where a session runs** (`src/core/leader/switch/session-hosts.ts`), between machines only (the copy came over a daemon
+link, so the ticket names the old machine's host key): a session row with no host (NULL, `''`, `__local__`) ran on the old
+leader's own daemon. Its folder is kept, and so is its host: the old machine, now a host of the new leader, by the
+`host_key` its `leader_switch.machines` entry gives it. A row on the new machine's `host_key` names no host now: that daemon is
+the new leader's own. A row its host's own service judges (`judge: 'host'`) keeps its key, as the session channel's tables
+do. The swap runs once per switch (the switch id is marked in `sessions.sqlite` in the same transaction, so a promotion
+resumed after a kill does not swap back). The trial's offline check does not compare that store's size and rows with the
+copy's (`offlineCheck` `changed`); its integrity check still runs. The rehearsal's `main` starts a session on A's own daemon,
+switches, and checks that B lists it on host `machine-a` with its turn once, and that a message through B starts the CLI on
+A (A's run log) and never on B. Without a `host_key` for the old machine nothing moves, and such a session would run on the
+new leader's own daemon, where its transcript is not.
+
 Anything else (a store no rule decides) fails the trial with the file, the key or row and the path, and the switch rolls back.
 The ratchet `tests/core/leader/switch/home-path-ratchet.test.ts` fills a synthetic home with the real writers (task and
 session stores, the config writer, the ledger, the folder lists), takes a real batch, promotes it to another home under
@@ -1243,8 +1261,9 @@ witness, above).
 ## Not built yet
 
 - **The copy link to another machine** is [built](#the-copy-link-to-another-machine) and rehearsed on one computer with
-  real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)). Whose host the
-  old leader's own local sessions and folders become after a switch is not decided.
+  real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)). The old leader's
+  own sessions follow by their host key ([Paths](#paths), where a session runs); a subagent run's or a detached record's host
+  is not moved.
 - **A begin forwarded from another machine**: the trust rule is built and tested (`beginRefusal`); a replica passing a
   person's `walnut leader switch` to the leader is not wired.
 - **The service role, as tested**: the two call sites and the start hook run against the real mode writer on a scratch install
@@ -1256,17 +1275,11 @@ witness, above).
   of its own, the others only over links) waits for the door. Tests: a real host daemon runtime relays the leader's `follower`/`replica` stream to a real leader door
   with the route on it (`tests/core/leader/switch/witness-twin.test.ts`), and a spy on the link module shows no link before the
   first lead, none for a refused or trial start, and the link of each host after it (`witness-link-gate.test.ts`).
-- **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)):
-  no daemon runs in the rehearsal yet, so that runs only in the real-daemon test.
-- **The host hooks are not set yet** ([the steps around the stop](#the-old-machine-as-a-host-and-the-steps-around-the-stop)):
-  the handover route calls them through `handover-host-steps.ts`, and nothing calls
-  `setHandoverHostSteps` with host-follow.ts's hooks, so none runs; each is built and tested alone.
-  Setting them needs an adapter: `configureOldMachineHostService` needs a loopback port the
-  interface does not pass, and `afterHandoverRecord` reads only `ok` from `retellNetMembers`, so a
-  host it `missed`, or a new leader not let in (`newLeaderLetIn: false`), is not yet a reason to
-  wait or refuse before the stop. The new leader also gets no host row for the old Mac from the
-  member list (a `mac` member becomes no host row, `net-rows.ts`), so the leader-dialed case needs
-  that row in the promoted config.
+- **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)) and its hooks
+  are set for every leader (`host-follow-steps.ts`); the remote rehearsal runs them with real daemons. Not run with a real
+  walnut-net network: the rehearsal's net host that misses the lists is a seam of its machine server. The new leader gets
+  no host row for the old Mac from the member list (a `mac` member becomes no host row, `net-rows.ts`), so the
+  leader-dialed case needs that row in the promoted config.
 - **Operation ids registered at the witnesses before an outward send**: the permit core has
   them (`registerOps`, `beginSend`, `reportOutcome`), no send path calls them yet. For this
   manual switch they add nothing the data does not carry: the old leader is stopped and its

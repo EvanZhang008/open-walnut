@@ -121,7 +121,10 @@ export async function makeRemoteWorld(root: string, opts: { portA: number; portB
   w.b.start = server(w.b)
   w.a.env = machineEnv(w.a, 'a', { 'machine-b': route(w.b, links.copy), 'machine-h': route(h, links.aToH) }, { WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify({ 'machine-b': links.aToBService.port }) })
   w.b.env = machineEnv(w.b, 'b', { 'machine-a': route(w.a, links.bToA), 'machine-h': route(h, links.bToH) })
-  const m = (x: Machine) => ({ id: x.id, home: x.home, standby_dir: x.standbyDir, port: x.port, start_command: x.start, env: x.env, host_key: x.id })
+  // Its door for hosts (the leader's /host-door, ws:// to loopback): the handover's host steps run only when the new leader names one.
+  const m = (x: Machine) => ({ id: x.id, home: x.home, standby_dir: x.standbyDir, port: x.port, start_command: x.start, env: x.env, host_key: x.id, doors: [`ws://127.0.0.1:${x.port}/host-door`] })
+  // Where a session on a leader's own daemon works (it becomes a session of the old machine as a host after a switch).
+  for (const x of [w.a, w.b]) fs.mkdirSync(path.join(x.dir, 'work'), { recursive: true })
   const cfg = {
     experimental: { switchable_leader: true },
     // The copy goes to B over A's link to B's daemon (the copy link kind daemon); B's program runs `standby receive` there.

@@ -87,14 +87,17 @@ export async function offlineCheck(o: {
   /** The roots the promotion moved (promote.ts moveRoots) and the rule table it used. */
   roots: readonly PathRoot[]
   rules: readonly PathRule[]
+  /** Files a step of the promotion of its own changed (session-hosts.ts): there, too, a size and a row count may move. */
+  changed?: readonly string[]
 }): Promise<CheckOutcome> {
   const exact = o.sizesAndRows !== false
   let missing = 0
   const paths = leftoverPaths(o.home, o.roots, o.rules)
   const problems: string[] = [...paths.problems]
   // The promotion may have rewritten these (a size changes; a custom rewrite may drop rows).
-  const rewritable = (rel: string) => o.rules.some((r) => r.rule === 'rewrite' && ruleCoversFile(r, rel))
-  const rowsChange = (rel: string) => o.rules.some((r) => r.rule === 'rewrite' && r.apply && ruleCoversFile(r, rel))
+  const changed = new Set(o.changed ?? [])
+  const rewritable = (rel: string) => changed.has(rel) || o.rules.some((r) => r.rule === 'rewrite' && ruleCoversFile(r, rel))
+  const rowsChange = (rel: string) => changed.has(rel) || o.rules.some((r) => r.rule === 'rewrite' && r.apply && ruleCoversFile(r, rel))
   for (const f of o.files) {
     let size = -1
     if (rewritable(f.p)) { if (!fs.existsSync(path.join(o.home, f.p))) problems.push(`${f.p}: missing`); continue }

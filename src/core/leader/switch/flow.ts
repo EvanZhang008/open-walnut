@@ -85,6 +85,7 @@ export interface TargetState {
   targetHome: string
   reverseStandbyDir: string
   reverseStandbyHost?: string
+  targetHostKey?: string
   sourceAccountHome?: string
   targetAccountHome?: string
   sourceVersion: string

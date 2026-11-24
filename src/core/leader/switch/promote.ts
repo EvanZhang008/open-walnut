@@ -22,7 +22,9 @@
  *      op id the old leader applied would apply again here), and `standby.dir` in config.yaml
  *      becomes the old machine's standby folder (the new leader's batches go there, for the
  *      switch back). The trial's self-check scans the home for what is left (self-check.ts);
- *   5. promoted.json becomes 'promoted' (the switch's commit makes it 'led').
+ *   5. between machines (the copy came over a daemon link), the old leader's own daemon's sessions
+ *      name the old machine's host key, and this machine's sessions name none (session-hosts.ts);
+ *   6. promoted.json becomes 'promoted' (the switch's commit makes it 'led').
  * Every step is safe to run again after a kill: before the copy's mark is in the home the swap
  * is still moving the old entries aside, after it the copy's entries in.
  *
@@ -36,6 +38,7 @@ import { holdsMachineRuntime, isMachineRuntimePath } from '../../home-manifest/i
 import { readPromoted, writePromoted } from './records.js'
 import { pathRoots, rewriteHomePaths, type PathRoot, type RewriteDone } from './home-paths.js'
 import { homePathRules, LEDGER_RULE } from './home-path-rules.js'
+import { moveSessionHosts, type SessionHostsResult } from './session-hosts.js'
 
 export interface PromoteInput {
   switchId: string
@@ -47,6 +50,8 @@ export interface PromoteInput {
   reverseStandbyDir: string
   /** The old leader machine's host name in this config's hosts, when the copy came over a daemon link: the batches go back over it. */
   reverseStandbyHost?: string
+  /** This machine's host key in that config, when it has one: its sessions there become its own daemon's (session-hosts.ts). */
+  ownHostKey?: string
   /** Called once the copy is the home, before any path in it is rewritten (also again on a resume): the trial's facts of the copy. */
   beforeRewrite?: (home: string) => Promise<void>
   /** The account home dirs of the old and the new machine (paths under the old one move). */
@@ -64,6 +69,8 @@ export interface PromoteResult {
   ledgerRows: number
   /** Every file the path rewrite changed, with the rules that named it. */
   rewritten: RewriteDone[]
+  /** Sessions whose host the switch between machines moved (session-hosts.ts); none for a copy this machine reaches. */
+  sessionHosts?: SessionHostsResult
   alreadyDone: boolean
 }
 
@@ -196,8 +203,10 @@ export async function promoteCopy(o: PromoteInput): Promise<PromoteResult> {
     ...(o.reverseStandbyHost ? { reverseStandbyHost: o.reverseStandbyHost } : {}),
   })
   const ledgerRows = rewritten.filter((d) => d.rules.includes(LEDGER_RULE)).reduce((n, d) => n + d.values, 0)
+  // Between machines the old one is a host now: its own daemon's sessions are on it, by its host key.
+  const sessionHosts = o.reverseStandbyHost ? moveSessionHosts(o.home, o.switchId, { oldMachine: o.reverseStandbyHost, ...(o.ownHostKey ? { newMachine: o.ownHostKey } : {}) }) : undefined
   writePromoted(o.home, { switchId: o.switchId, state: 'promoted', from: o.previousHome, at: new Date().toISOString() })
-  return { ...(fs.existsSync(before) ? { movedAside: before } : {}), ledgerRows, rewritten, alreadyDone: done }
+  return { ...(fs.existsSync(before) ? { movedAside: before } : {}), ledgerRows, rewritten, ...(sessionHosts ? { sessionHosts } : {}), alreadyDone: done }
 }
 
 /**

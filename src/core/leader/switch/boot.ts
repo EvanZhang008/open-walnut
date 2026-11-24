@@ -118,10 +118,12 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
     throw new LeaderBootRefused(d.why, d.leader ? (await import('./handed-over.js')).standbyForRecord({ home: input.home, env, leader: d.leader, record: d.record, why: d.why }) : undefined)
   }
   current = { runtime: rt, machine: id, trial: rt.decision.kind === 'trial' }
+  // A leader's handovers take its hosts along (host-follow-steps.ts); a trial start hands nothing over.
+  if (!current.trial) (await import('./handover-host-steps.js')).setHandoverHostSteps((await import('./host-follow-steps.js')).hostFollowSteps)
   // Way c over this server's door too: a host that dialed it answers its witness on that socket.
   const unreach = await (await import('./witness-transport.js')).reachDialedHosts()
   const stop = rt.stop
-  rt.stop = () => { current = null; unreach(); return stop() }
+  rt.stop = () => { current = null; unreach(); void import('./handover-host-steps.js').then((m) => m.setHandoverHostSteps(null)); return stop() }
   input.log?.('info', 'leader permit at boot', { decision: rt.decision.kind, ...(rt.decision.kind === 'waiting' ? { why: rt.decision.why } : {}) })
   return rt
 }

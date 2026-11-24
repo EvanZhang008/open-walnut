@@ -15,6 +15,7 @@ import { verifyStandby, StandbyTarget, standbyStatus } from '../../standby/index
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { appendHistory, lockHolder, promotedFile, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
+import { SESSION_HOSTS_FILE } from './session-hosts.js'
 import { homePathRules } from './home-path-rules.js'
 import { offlineCheck, onlineCheck, readCopyFacts } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
@@ -131,7 +132,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
 function newTargetState(standbyDir: string, t: SwitchTicket): TargetState {
   return {
     id: t.switchId, from: t.from, to: t.to, standbyDir, sourceHome: t.sourceHome, targetHome: t.targetHome, reverseStandbyDir: t.reverseStandbyDir,
-    ...(t.reverseStandbyHost ? { reverseStandbyHost: t.reverseStandbyHost } : {}),
+    ...(t.reverseStandbyHost ? { reverseStandbyHost: t.reverseStandbyHost } : {}), ...(t.targetHostKey ? { targetHostKey: t.targetHostKey } : {}),
     ...(t.sourceAccountHome ? { sourceAccountHome: t.sourceAccountHome } : {}), ...(t.targetAccountHome ? { targetAccountHome: t.targetAccountHome } : {}),
     sourceVersion: t.sourceVersion, ...(t.sourceHomeOnHosts ? { sourceHomeOnHosts: t.sourceHomeOnHosts } : {}),
     handover: t.handover, commitDeadline: t.commitDeadline, step: 'wait-mark', log: [], ...(t.test ? { test: t.test } : {}),
@@ -231,7 +232,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           await side.stopServer()
           const r = await promoteCopy({
             switchId: s.id, standbyDir: o.standbyDir, home: s.targetHome, previousHome: s.sourceHome, reverseStandbyDir: s.reverseStandbyDir,
-            ...(s.reverseStandbyHost ? { reverseStandbyHost: s.reverseStandbyHost } : {}), ...accountHomes(s), skipLedgerRewrite: skipLedger, afterRename: () => diesAt('during-promote'),
+            ...(s.reverseStandbyHost ? { reverseStandbyHost: s.reverseStandbyHost } : {}), ...(s.targetHostKey ? { ownHostKey: s.targetHostKey } : {}), ...accountHomes(s), skipLedgerRewrite: skipLedger, afterRename: () => diesAt('during-promote'),
             // What the copy held, read on this machine before any rewrite: the trial compares with it (never the old home).
             beforeRewrite: async (home) => {
               if (s.copyFacts) return
@@ -241,7 +242,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           })
           s.outcomeUnknown = listUnsettledSends(s.targetHome)
           const moved = r.rewritten.reduce((n, d) => n + d.values, 0)
-          save('trial', `copy is the new home${r.movedAside ? ` (what was there is kept at ${r.movedAside})` : ''}; ${r.ledgerRows} ledger rows moved to it; ${moved} old-machine paths rewritten in ${r.rewritten.length} files`)
+          save('trial', `copy is the new home${r.movedAside ? ` (what was there is kept at ${r.movedAside})` : ''}; ${r.ledgerRows} ledger rows moved to it; ${moved} old-machine paths rewritten in ${r.rewritten.length} files${r.sessionHosts && !r.sessionHosts.alreadyDone ? `; ${r.sessionHosts.toOldMachine} session(s) of the old leader's own daemon now on host ${s.reverseStandbyHost}, ${r.sessionHosts.toOwnDaemon} of this machine's now on its own daemon` : ''}`)
           diesAt('after-promote')
           break
         }
@@ -254,6 +255,8 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
             facts: s.copyFacts, home: s.targetHome, files, sizesAndRows: !s.offlineChecked,
             roots: moveRoots({ previousHome: s.sourceHome, home: s.targetHome, ...accountHomes(s) }),
             rules: homePathRules({ skipLedgerRewrite: skipLedger }),
+            // Between machines the promotion moved where sessions run (and marked the switch there).
+            ...(s.reverseStandbyHost ? { changed: [SESSION_HOSTS_FILE] } : {}),
           })
           if (!off.ok) fail(`self-check of the new home: ${off.problems.join('; ')}`)
           if (!s.offlineChecked) {

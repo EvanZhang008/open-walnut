@@ -54,6 +54,8 @@ export interface SwitchTicket {
   reverseStandbyDir: string
   /** The old machine as the new leader's config names it in hosts (its host_key), when the copy link is a daemon: the batches go back over it. */
   reverseStandbyHost?: string
+  /** The new machine's host key in that config, sent with reverseStandbyHost when the config gives one: its sessions become its own daemon's. */
+  targetHostKey?: string
   sourceAccountHome?: string
   targetAccountHome?: string
   /** The program that wrote the data: the new one must not be older. */

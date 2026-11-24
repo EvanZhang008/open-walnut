@@ -84,7 +84,16 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   // Not handed over: the console minted for it will never stand, nor the host steps.
   if (!r.ok) await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
   if (!r.ok && hostSteps) await (await import('../../core/leader/switch/handover-host-steps.js')).undoHostSteps(hostSteps)
-  if (r.ok && hostSteps) await (await import('../../core/leader/switch/handover-host-steps.js')).afterHandoverRecord(hostSteps)
+  if (r.ok && hostSteps) {
+    // Nothing stops while a net host would still let in only this leader: not all told within the wait, the handover is taken back.
+    const after = await (await import('../../core/leader/switch/handover-host-steps.js')).afterHandoverRecord(hostSteps)
+    if (!after.ok) {
+      link!.peer.close()
+      const c = await takeBackHandover('the network\'s hosts did not all take the new leader')
+      res.status(409).json({ ok: false, why: `${c.ok ? 'the handover is taken back' : `the handover could not be taken back yet (${c.why})`}: ${after.why}` })
+      return
+    }
+  }
   if (!r.ok && link && !('refused' in link)) link.peer.close()
   if (!r.ok || !link || 'refused' in link || typeof switchId !== 'string') {
     res.status(r.ok ? 200 : 409).json({ ok: r.ok, ...(r.record ? { record: r.record.number } : {}), ...(r.why ? { why: r.why } : {}) })
@@ -217,7 +226,8 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
     v: 1, switchId: o.switchId, from: o.machine, to: o.to, handover: o.record,
     sourceHome: o.home, targetHome: target.home, reverseStandbyDir: self.standbyDir,
     // Over a daemon the new leader sends its copy back the same way: to this machine, by the name its config gives it.
-    ...(peer.kind === 'daemon' && self.hostKey ? { reverseStandbyHost: self.hostKey } : {}),
+    // Its sessions there name this machine by that key, and the new machine's name none (session-hosts.ts).
+    ...(peer.kind === 'daemon' && self.hostKey ? { reverseStandbyHost: self.hostKey, ...(target.hostKey ? { targetHostKey: target.hostKey } : {}) } : {}),
     ...(self.accountHome ? { sourceAccountHome: self.accountHome } : {}), ...(target.accountHome ? { targetAccountHome: target.accountHome } : {}),
     sourceVersion: process.env.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion(),
     ...(onHosts?.home ? { sourceHomeOnHosts: { home: onHosts.home, formerHomes: onHosts.formerHomes ?? [] } } : {}),

@@ -56,6 +56,36 @@ describe('the host steps of a handover', () => {
     expect(f.calls).toEqual(['undo'])
   })
 
+  it('a net host that misses the member lists makes the handover wait and try again, then succeed once it took them', async () => {
+    const f = fakeSteps()
+    let misses = 2
+    f.steps.retellNetMembers = async () => { f.calls.push('retell'); return misses-- > 0 ? { ok: false, why: 'not told: box-h (not connected)' } : { ok: true } }
+    setHandoverHostSteps(f.steps)
+    expect(await afterHandoverRecord(ctx({ retellWaitMs: 2_000, retellEveryMs: 50 }))).toEqual({ ok: true })
+    expect(f.calls).toEqual(['retell', 'retell', 'retell', 'drop'])
+  })
+
+  it('a net host that never takes them: the wait runs out, the hosts are named, and this machine\'s daemon keeps its duties', async () => {
+    const f = fakeSteps()
+    f.steps.retellNetMembers = async () => { f.calls.push('retell'); return { ok: false, why: 'not told: box-h (not connected)' } }
+    setHandoverHostSteps(f.steps)
+    const t0 = Date.now()
+    const r = await afterHandoverRecord(ctx({ retellWaitMs: 400, retellEveryMs: 100 }))
+    expect(r).toEqual({ ok: false, why: 'retellNetMembers: not told: box-h (not connected)' })
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(f.calls.filter((c) => c === 'retell').length).toBeGreaterThan(1)
+    expect(f.calls).not.toContain('drop')
+  })
+
+  it('the retell is told the new leader (for its network id), and its wait is half the commit window, at most a minute', async () => {
+    const f = fakeSteps()
+    const seen: string[] = []
+    f.steps.retellNetMembers = async ({ target }) => { seen.push(target.id); return { ok: true } }
+    setHandoverHostSteps(f.steps)
+    await afterHandoverRecord(ctx())
+    expect(seen).toEqual(['machine-b'])
+  })
+
   it('the config: doors are wss:// or https:// (ws:// and http:// to loopback), host_key a host name', () => {
     const base = (m: Record<string, unknown>) => parseSwitchSettings({
       witnesses: [{ id: 'w1', dir: '/w/1' }, { id: 'w2', dir: '/w/2' }, { id: 'w3', dir: '/w/3' }],

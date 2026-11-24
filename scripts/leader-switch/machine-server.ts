@@ -6,8 +6,9 @@
  * hosts (an ephemeral server only reads remote hosts), and its whole world stays inside the rehearsal
  * folder (HOME, the data home, the daemon dirs; checked below).
  *
- * The one test seam: the other machines' daemons are reached on loopback ports (daemon-routes.ts,
- * WALNUT_REHEARSAL_DAEMON_ROUTES), never ssh; this server's own code decides when it dials.
+ * The test seams: the other machines' daemons are reached on loopback ports (daemon-routes.ts,
+ * WALNUT_REHEARSAL_DAEMON_ROUTES), never ssh, and this server's own code decides when it dials; the
+ * rehearsal's witness links (witness-links.ts); and a net host that misses the member lists (below).
  *
  *   bun scripts/leader-switch/machine-server.ts --port <n> [--dev]
  */
@@ -55,6 +56,19 @@ if (c.WALNUT_HOME !== path.resolve(process.env.OPEN_WALNUT_HOME!) || c.CLOUD_MOD
 const routes = process.env.WALNUT_REHEARSAL_DAEMON_ROUTES
 if (routes) await (await import('./daemon-routes.js')).routeDaemonLinks(JSON.parse(routes))
 await (await import('./witness-links.js')).linkRehearsalWitnesses()
+// A net host that misses the member lists, as the rehearsal asks: while <HOME>/rehearsal-retell-miss names a
+// host, the handover's retell says it missed that host (host-follow-steps.ts retellNetMembers), so the switch
+// waits and then takes its handover back. The real step runs whenever the file is not there.
+{
+  const fs = await import('node:fs')
+  const { hostFollowSteps } = await import('../../src/core/leader/switch/host-follow-steps.js')
+  const real = hostFollowSteps.retellNetMembers.bind(hostFollowSteps)
+  const missFile = path.join(home, 'rehearsal-retell-miss')
+  hostFollowSteps.retellNetMembers = async (o) => {
+    const missed = (() => { try { return fs.readFileSync(missFile, 'utf8').trim() } catch { return '' } })()
+    return missed ? { ok: false, why: `not told: ${missed} (a net host the rehearsal keeps from the lists)` } : real(o)
+  }
+}
 
 const { startServer, armGracefulSignalExit, standbyEnded } = await import('../../src/web/server.js')
 const { stop } = await (await import('./server-stops.js')).wireServerStops({ bailMs: 15_000 })
