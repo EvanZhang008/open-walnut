@@ -240,7 +240,8 @@ export function painsReport(entries: readonly PainEntry[], run: GuardRun | null,
 export function painsNightlyText(file: string, r: PainsReport, run: GuardRun | null): string {
   // A run that passed is said in one line too (2026-11-24 audit: a passing run showed nowhere but the file).
   const ran = run && !r.guards.some((g) => g.result === 'stale') ? `- Guard tests ran ${run.at}${run.commit ? ` on ${run.commit.slice(0, 12)}` : ''}: ${guardCountsLine(run)}.` : '';
-  if (!r.unowned.length && !r.guards.length) return ran ? `Pain registry (${r.total} pains, ${file}):\n${ran}` : '';
+  // Alone it wakes nobody: a day with nothing else for the node sends no note (the registry's header says it).
+  if (!r.unowned.length && !r.guards.length) return '';
   const lines = [`Pain registry (${r.total} pains, ${file}):`, ...(ran ? [ran] : [])];
   if (r.unowned.length) {
     lines.push(`- ${r.unowned.length} with no rule or no guard test yet: hand each to the task that owns its area, and write the rule and the test into the entry when they land.`);

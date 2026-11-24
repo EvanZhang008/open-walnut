@@ -160,12 +160,14 @@ describe('the nightly report of the registry', () => {
     expect(text).toContain('Guard test not run for pn-d')
   })
 
-  it('a run that passed says so in one line, with its counts, and so does the registry header (2026-11-24 audit)', () => {
-    const e = [guarded('pn-a'), guarded('pn-b'), guarded('pn-c')]
-    const run = { schemaVersion: 1 as const, at: iso(60), commit: '7ce6c8fef717d3201d38', results: { 'pn-a': { result: 'passed' as const }, 'pn-b': { result: 'passed' as const }, 'pn-c': { result: 'ci_only' as const } } }
+  it('a run that passed is counted in the registry header, and in the nightly note when it has something else to say (2026-11-24 audit)', () => {
+    const e = [guarded('pn-a'), guarded('pn-b'), guarded('pn-c'), { ...guarded('pn-d'), status: 'unowned' as const, rule: undefined }]
+    const run = { schemaVersion: 1 as const, at: iso(60), commit: '7ce6c8fef717d3201d38', results: { 'pn-a': { result: 'passed' as const }, 'pn-b': { result: 'passed' as const }, 'pn-c': { result: 'ci_only' as const }, 'pn-d': { result: 'passed' as const } } }
     const text = painsNightlyText('/x/pains.json', painsReport(e, run, NOW), run)
-    expect(text).toContain(`Guard tests ran ${run.at} on 7ce6c8fef717: 2 passed, 1 ci only.`)
-    expect(renderPains('Walnut VP', e, run)).toContain(`Guard tests last run: ${run.at} on 7ce6c8fef717: 2 passed, 1 ci only.`)
+    expect(text).toContain(`Guard tests ran ${run.at} on 7ce6c8fef717: 3 passed, 1 ci only.`)
+    // Alone, a passing run wakes nobody.
+    expect(painsNightlyText('/x/pains.json', painsReport(e.slice(0, 3), run, NOW), run)).toBe('')
+    expect(renderPains('Walnut VP', e, run)).toContain(`Guard tests last run: ${run.at} on 7ce6c8fef717: 3 passed, 1 ci only.`)
   })
 
   it('nothing to report is no text', () => {

@@ -106,13 +106,13 @@ describe('what the judge is told', () => {
     const input = await judgeInputOf(vp, c, { readTranscript: read, rulesText: async () => '', replyLanguage: async () => null }, [])
     expect(input.laterText).toContain('Put the reply back under the card and shipped it.')
     expect(judgePrompt(input)).toContain('LATER (the session\'s latest turns')
-    // Quotable as the session's words too.
-    expect(input.sessionText).toContain('Put the reply back under the card and shipped it.')
+    // Read for already_fixed only: never quotable as the decision judged.
+    expect(input.sessionText).not.toContain('Put the reply back under the card and shipped it.')
   })
 })
 
 describe('a correction the session may have taken up while it was judged', () => {
-  it('is held (answered_since) when its first answer to him came while the judge read', async () => {
+  it('is judged again on the next pass when its first answer to him came while the judge read', async () => {
     const messages = [{ id: 'm1', at: iso(30), text: 'the reply used to show under the card' }]
     let answered = false
     const rows = () => [
@@ -123,7 +123,13 @@ describe('a correction the session may have taken up while it was judged', () =>
     const { d, sent } = deps({ messages, rows, callModel: async () => { answered = true; return finding() } })
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
     expect(sent).toHaveLength(0)
-    expect((await readDayEntries(vp.id, localDate(NOW)))![0]).toMatchObject({ corrected: 'held', held: 'answered_since' })
+    expect((await readDayEntries(vp.id, localDate(NOW))) ?? []).toHaveLength(0)
+    // The next pass judges it with the answer: here the judge finds it taken up.
+    const taken = JSON.parse(finding()); taken.finding.already_fixed = true
+    const next = deps({ messages, rows, nowMs: () => NOW + 5 * 60_000, callModel: async () => JSON.stringify(taken) })
+    await reflectForNode(vp, 'Marina VP', [vp, worker], next.d)
+    expect(next.sent).toHaveLength(0)
+    expect((await readDayEntries(vp.id, localDate(NOW)))![0]).toMatchObject({ corrected: 'already_fixed' })
   })
 })
 
@@ -156,7 +162,35 @@ describe('held corrections go with the task\'s next send', () => {
     const { d, sent } = deps()
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
     expect(sent).toHaveLength(0)
-    expect(await fs.readFile(reflectionDayFileOf(vp.id, localDate(NOW)), 'utf-8')).toContain('Held corrections dropped: 1 waited over 24 hours')
+    expect(await fs.readFile(reflectionDayFileOf(vp.id, localDate(NOW)), 'utf-8')).toContain('Held corrections dropped: 1 for Upgrade the dock page (w-1) waited over 24 hours')
+  })
+
+  it('a send that does not go puts them back and gives the chat its hour back; the same point held twice is one, both entries marked', async () => {
+    const { holdCorrection, sendHeld } = await import('../../../src/core/org/reflection/held-corrections.js')
+    const day = localDate(NOW)
+    const { appendDayEntry } = await import('../../../src/core/org/reflection/records.js')
+    const entry = (at: string) => ({ at, signal: 'frustration' as const, task: { id: vp.id, title: vp.title }, finding: JSON.parse(finding()).finding, corrected: 'held' as const, held: 'own_cap' as const, rule: { kind: 'none' as const, text: 'no new rule' } })
+    for (const at of [iso(20), iso(10)]) {
+      await appendDayEntry(vp.id, 'Marina VP', day, entry(at))
+      await holdCorrection(vp, 'Marina VP', vp.title, { taskId: vp.id, at, date: day, entryAt: at, text: 'Answer the thread he wrote in.' }, NOW)
+    }
+    expect((await readReflectionState(vp.id, NOW)).held).toHaveLength(1)
+    const { d } = deps()
+    expect(await sendHeld(vp, 'Marina VP', [vp, worker], new Set(), { ...d, send: async () => false }, NOW)).toBe(0)
+    expect((await readReflectionState(vp.id, NOW)).held).toHaveLength(1)
+    expect((await readReflectionState(vp.id, NOW)).lastChatSendAt).toBeUndefined()
+    const sent: string[] = []
+    expect(await sendHeld(vp, 'Marina VP', [vp, worker], new Set(), { ...d, send: async (_t, text) => { sent.push(text); return true } }, NOW)).toBe(1)
+    expect(sent[0]).toContain('held 1 correction')
+    expect((await readDayEntries(vp.id, day))!.map((e) => e.sentLater)).toEqual([new Date(NOW).toISOString(), new Date(NOW).toISOString()])
+  })
+
+  it('past the few a task may wait with, the oldest go and the day says so', async () => {
+    const { holdCorrection, HELD_PER_TASK_MAX } = await import('../../../src/core/org/reflection/held-corrections.js')
+    const points = ['Show the dates in his zone.', 'Bring the reply back under the card.', 'Name the thread in the card.', 'Put the recommended button first.', 'Link the design page by its path.', 'Say what each button does.', 'Close the card he acknowledged.']
+    for (const [i, text] of points.entries()) await holdCorrection(vp, 'Marina VP', worker.title, { taskId: worker.id, at: iso(60 - i), date: localDate(NOW), entryAt: iso(60 - i), text }, NOW)
+    expect((await readReflectionState(vp.id, NOW)).held).toHaveLength(HELD_PER_TASK_MAX)
+    expect(await fs.readFile(reflectionDayFileOf(vp.id, localDate(NOW)), 'utf-8')).toContain('Held corrections dropped: 1 for Upgrade the dock page (w-1)')
   })
 
   it('a lead chat gets one an hour, not two a day', async () => {
@@ -188,6 +222,12 @@ describe('the same lesson in other words is one line', () => {
     expect(await addGuidance(vp.id, 'Marina VP', { text: 'Name the thread a card asks him to answer in.', from: 'x', date: '2026-11-24' }, { removed: [], addedToday: 0 })).toBe('added')
   })
 
+  it('a short lesson is never read as said by a long line that shares its words', async () => {
+    const { nearlySame } = await import('../../../src/core/org/reflection/records.js')
+    const longLine = 'Before you land, run the tests your change reaches, never restart the production server by hand, and ask the user only for his own decisions: spending, credentials, outward sends, deleting his data and public releases; decide the rest yourself and say what you chose.'
+    for (const short of ['Run the tests before you land.', 'Never restart the production server by hand.', 'Ask the user only for his own decisions.']) expect([short, nearlySame(longLine, short)]).toEqual([short, false])
+  })
+
   it('the tidy note counts each waiting lesson once and names the lines to merge first', () => {
     const lines = [line, line.replace('each item', 'every item'), 'Name the thread a card asks him to answer in.']
     expect(twinLines(lines)).toEqual([[1, 2]])
@@ -208,21 +248,25 @@ describe('an ask is judged where he reads it', () => {
     currentSession: currentSessionOfTask, sessionAt: (t, at) => sessionOfTaskAt(t.id, at), nowMs: () => NOW, replyLanguage: async () => null,
   } as never)).candidates.filter((c) => c.key.startsWith('card:') || c.key.startsWith('ask:'))
 
-  it('a thread card of its own is judged as the card, never the status line without its buttons', async () => {
-    const cs = await collect([thread()])
-    expect(cs.map((c) => c.key)).toEqual(['card:th-1:after:tm-1'])
+  it('the status-line ask is judged as its card shows it, buttons included, and the card as itself', async () => {
+    for (const th of [thread(), thread({ cardOfOther: true })]) {
+      const ask = (await collect([th])).find((c) => c.key.startsWith('ask:'))!
+      expect(ask.ask!.text).toContain('Thread card: Pick the dock layout')
+      expect(ask.ask!.text).not.toContain('Buttons: none')
+    }
+    const keys = (await collect([thread()])).map((c) => c.key)
+    expect(keys).toContain('card:th-1:after:tm-1')
+    expect(keys.filter((k) => k.startsWith('ask:w-1:'))).toHaveLength(1)
   })
 
-  it('a card that shows the task\'s ask lends the status line its buttons', async () => {
-    const cs = await collect([thread({ cardOfOther: true })])
-    expect(cs).toHaveLength(1)
-    expect(cs[0].ask!.text).toContain('Thread card: Pick the dock layout')
-    expect(cs[0].ask!.text).not.toContain('Buttons: none')
+  it('a card about several tasks lends no task its buttons: each ask is still judged', async () => {
+    const ask = (await collect([thread({ tasks: [worker.id, 'w-2'] })])).find((c) => c.key.startsWith('ask:'))!
+    expect(ask.ask!.text).not.toContain('Thread card:')
   })
 
   it('a card rewritten after one message of his is judged once', async () => {
     const first = await collect([thread()])
     const again = await collect([thread({ reply: 'Pick A (recommended): one column, as on the phone.' })], first.map((c) => c.key))
-    expect(again).toHaveLength(0)
+    expect(again.filter((c) => c.key.startsWith('card:'))).toHaveLength(0)
   })
 })

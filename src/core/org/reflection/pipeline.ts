@@ -108,7 +108,8 @@ export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectD
     signal: c.signal, ...(c.also?.length ? { also: c.also } : {}), taskTitle: c.task.title, ...(c.thread ? { threadTitle: c.thread.title } : {}),
     turnsText: renderTurns(turns), ...(later.length ? { laterText: renderTurns(later) } : {}), momentAt: c.to,
     // The agent's words: its turns, the ask it put to him, the card asks he answered.
-    sessionText: [...(c.ask?.text ? [c.ask.text] : []), ...cardAsks, ...[...turns, ...later].filter((t) => t.role === 'assistant').map((t) => t.text)].join('\n\n'),
+    // Quotes are checked against the turns judged: LATER is read for already_fixed, never quoted as the decision.
+    sessionText: [...(c.ask?.text ? [c.ask.text] : []), ...cardAsks, ...turns.filter((t) => t.role === 'assistant').map((t) => t.text)].join('\n\n'),
     // What he said up to the moment, and only that: a later message of his is a candidate of its own.
     // His messages are his record even where the transcript clipped them, so they count too.
     // A card answer's ask is the agent's words, never his: only his words are quotable as his.
@@ -180,13 +181,16 @@ export async function verdictOf(node: Task, c: Candidate, deps: Pick<ReflectDeps
 export async function reflectOnCandidate(
   // What this pass did already: a task id it sent a correction to, `lesson:<task>:<kind>:<text>` a lesson it kept.
   node: Task, nodeName: string, c: Candidate, deps: ReflectDeps, guidance: readonly string[], thisPass: Set<string> = new Set(),
-): Promise<{ verdict: Verdict; entry?: DayEntry }> {
+): Promise<{ verdict: Verdict; entry?: DayEntry; again?: boolean }> {
   // The session's newest answer after the moment, before the judge reads: one written while it judged was
   // not read (2026-11-24 audit: a correction went 9 seconds after the session had answered).
   const newestTurn = async () => (c.sessionId && !c.context ? (await turnsSince(c.sessionId, c.to, deps.readTranscript, 1).catch(() => []))[0]?.at ?? '' : '');
   const before = await newestTurn();
   const verdict = await verdictOf(node, c, deps, guidance);
   if (verdict.verdict !== 'bad_decision') return { verdict };
+  // It had not answered his message when the judge read, and has now: judged again on the next pass, with
+  // that answer (nothing sent or written now; the second judgment sees the answer, so it never loops).
+  if (!before && !c.context && (await newestTurn())) return { verdict: { verdict: 'unverified', why: 'the session answered while it was judged: judged again on the next pass' }, again: true };
   const f = verdict.finding;
   const unsafe = unsafeText(f);
   if (unsafe) return { verdict: { verdict: 'unverified', why: `the finding's text was refused: ${unsafe.slice(0, 160)}` } };
@@ -204,8 +208,6 @@ export async function reflectOnCandidate(
     if (c.hold) { corrected = 'held'; held = c.hold; }
     // One a pass per task: a task's old session and its current one are the same reader now.
     else if (thisPass.has(c.task.id)) { corrected = 'held'; held = 'one_per_pass'; }
-    // It had not answered his message when the judge read, and has now: what the judge called missing may be in that answer.
-    else if (!before && (await newestTurn())) { corrected = 'held'; held = 'answered_since'; }
     else {
       const check = sendCheckOf(await deps.confirmSend(node, c.task, c.sessionId).catch(() => false));
       if (check !== 'ok' && check !== 'session_changed') { corrected = 'off'; notSent = check; }
@@ -243,7 +245,7 @@ export async function reflectOnCandidate(
   await appendDayEntry(node.id, nodeName, localDate(now), entry);
   // One a pass or a chat's spacing: it waits for the task's next send, with the others held for it.
   if (held === 'one_per_pass' || held === 'own_cap') {
-    await holdCorrection(node.id, { taskId: c.task.id, at: entry.at, date: localDate(now), entryAt: entry.at, text: heldPoint(f) }, now)
+    await holdCorrection(node, nodeName, c.task.title, { taskId: c.task.id, at: entry.at, date: localDate(now), entryAt: entry.at, text: heldPoint(f) }, now)
       .catch((err) => log.task.warn('reflection: a held correction was not kept', { nodeId: node.id, taskId: c.task.id, error: err instanceof Error ? err.message : String(err) }));
   }
   return { verdict, entry };
@@ -287,14 +289,17 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     if (claim === 'budget') { (Date.parse(c.to) < now - (MOMENT_MAX_AGE_MS - 24 * 3600_000) ? dropped : left).push(c.key); continue; }
     if (claim === 'seen') continue;
     result.judged++;
-    let out: { verdict: Verdict; entry?: DayEntry };
+    let out: { verdict: Verdict; entry?: DayEntry; again?: boolean };
     try {
       out = await reflectOnCandidate(node, nodeName, c, deps, lines.map((l) => l.text), thisPass);
     } catch (err) {
       // Claimed already: a failure is never judged (or sent) again.
       out = { verdict: { verdict: 'unverified', why: `the step failed: ${err instanceof Error ? err.message : String(err)}` } };
     }
-    await updateReflectionState(node.id, (s) => { s.seen[c.key] = { at: new Date(now).toISOString(), verdict: out.verdict.verdict }; }, now);
+    await updateReflectionState(node.id, (s) => {
+      if (out.again) delete s.seen[c.key];
+      else s.seen[c.key] = { at: new Date(now).toISOString(), verdict: out.verdict.verdict };
+    }, now);
     log.task.info('reflection: judged', { nodeId: node.id, taskId: c.task.id, signal: c.signal, verdict: out.verdict.verdict, ...(out.verdict.verdict !== 'bad_decision' ? { why: out.verdict.why.slice(0, 200) } : {}) });
     result.findings.push({ candidate: c, verdict: out.verdict, ...(out.entry ? { entry: out.entry } : {}) });
   }

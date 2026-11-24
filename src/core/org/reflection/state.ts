@@ -63,7 +63,11 @@ export interface ReflectionState {
 }
 
 /** One correction held for a later send: its task, its day entry (date and time) and the point it makes. */
-export interface HeldCorrection { taskId: string; at: string; date: string; entryAt: string; text: string }
+export interface HeldCorrection {
+  taskId: string; at: string; date: string; entryAt: string; text: string;
+  /** Entries whose point this one makes too (the same point held again): marked with it. */
+  merged?: Array<{ date: string; entryAt: string }>;
+}
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
 export const SEEN_KEEP_MS = 45 * 24 * 3600_000;
@@ -214,6 +218,15 @@ export async function takeChatSend(targetId: string, nowMs = Date.now(), max = C
     s.day.chatSends = (s.day.chatSends ?? 0) + 1;
     s.lastChatSendAt = new Date(nowMs).toISOString();
     return true;
+  }, nowMs);
+}
+
+/** A chat send taken at `nowMs` that did not go: given back, so the chat's next correction need not wait the hour. */
+export async function giveBackChatSend(targetId: string, nowMs: number): Promise<void> {
+  await updateReflectionState(targetId, (s) => {
+    if (s.lastChatSendAt !== new Date(nowMs).toISOString()) return;
+    delete s.lastChatSendAt;
+    s.day.chatSends = Math.max(0, (s.day.chatSends ?? 1) - 1);
   }, nowMs);
 }
 

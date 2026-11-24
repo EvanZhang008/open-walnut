@@ -310,12 +310,11 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   const since = new Date(Math.min(p.now, askAt ? Date.parse(askAt) : p.now) - EVIDENCE_MS).toISOString();
   const own = (await p.deps.readMessages(task.id)).filter((m) => m.at > since);
   const holders = [...new Set([(managerOf(task, all) ?? node).id, node.id])];
-  // A thread card waiting on him for this task is where he reads the ask, buttons and links included
-  // (2026-11-24 audit: six findings said "no buttons, no draft" of an ask whose card had both): a card
-  // of its own is judged as that card (threadCardCandidates); a card that shows this ask is what is judged here.
-  const cards = (await Promise.all(holders.map((id) => p.threadsOf(id)))).flat().filter((th) => th.state === 'needs' && !th.closed && th.tasks?.includes(task.id));
-  if (cards.some((th) => !th.cardOfOther)) return null;
-  const card = cards[0];
+  // A thread card waiting on him about this task alone is where he reads the ask, buttons and links
+  // included (2026-11-24 audit: six findings said "no buttons, no draft" of an ask whose card had both):
+  // the ask is judged as that card shows it. A card about several tasks is not this ask's.
+  const card = (await Promise.all(holders.map((id) => p.threadsOf(id)))).flat()
+    .find((th) => th.state === 'needs' && !th.closed && th.tasks?.length === 1 && th.tasks[0] === task.id);
   const inThreads = (await Promise.all(holders.map(async (id) => (await p.threadsOf(id))
     .filter((th) => th.tasks?.includes(task.id))
     .flatMap((th) => th.messages.filter((m) => m.at > since).map((m) => ({ id: m.id, at: m.at, text: `[in the thread "${th.title}"] ${m.text}` })))))).flat();

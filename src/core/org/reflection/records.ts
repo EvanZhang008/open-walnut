@@ -102,12 +102,15 @@ export async function addGuidance(
   });
 }
 
-/** Two lessons that say much the same: most of the shorter one's character pairs are in the other (any script). */
+/** Two lessons that say much the same: of about one length, most of the shorter one's character pairs in the other (any script). */
 export function nearlySame(a: string, b: string): boolean {
   const pairs = (t: string) => { const x = normalizeForQuote(t).replace(/\s+/g, ''); const out = new Set<string>(); for (let i = 0; i < x.length - 1; i++) out.add(x.slice(i, i + 2)); return out; };
   const [p, q] = [pairs(a), pairs(b)];
   if (!p.size || !q.size) return false;
   const [small, big] = p.size <= q.size ? [p, q] : [q, p];
+  // Of about one length: a short lesson inside a long line is another lesson (2026-11-24 review: "Run the
+  // tests before you land." read as said by a 260-character line).
+  if (small.size / big.size < 0.5) return false;
   let hit = 0;
   for (const x of small) if (big.has(x)) hit++;
   return hit / small.size >= 0.6;
@@ -160,10 +163,12 @@ export interface DayEntry {
   finding: Finding;
   /** `held`: a real correction kept from the session (`held` says why), in the record and the nightly note only. */
   corrected: 'sent' | 'already_fixed' | 'failed' | 'off' | 'held';
-  /** own_cap: past a Main or lead chat's spacing; one_per_pass: its session got one this pass (both wait for a later send); no_asking_session / no_session: no known session to send to; answered_since: the session wrote again while it was judged (never sent: it may have done it). */
-  held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session' | 'answered_since';
+  /** own_cap: past a Main or lead chat's spacing; one_per_pass: its session got one this pass (both wait for a later send, held-corrections.ts); no_asking_session / no_session: no known session to send to. */
+  held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session';
   /** A held correction sent later, with others held for the same task (held-corrections.ts): when. */
   sentLater?: string;
+  /** A held correction never sent (it waited too long, or more waited for its task): when it was dropped. */
+  heldDropped?: string;
   /** With `off`: why it was not sent (pipeline.ts SendCheck). */
   notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off';
   /** Sent to the task's session now, about a turn of an earlier one. */
@@ -299,13 +304,13 @@ export async function dayNoteSaid(nodeId: string, date: string, prefix: string):
   return text.includes(`> Note: ${prefix}`);
 }
 
-/** Held entries of a day sent later: each marked with when (its JSON; the Markdown gets a note). */
-export async function markSentLater(nodeId: string, nodeName: string, date: string, taskId: string, entryAts: readonly string[], nowMs = Date.now()): Promise<void> {
+/** Held entries of a day sent later or dropped: each marked with when (its JSON; the Markdown gets a note). */
+export async function markHeld(nodeId: string, nodeName: string, date: string, taskId: string, entryAts: readonly string[], how: 'sentLater' | 'heldDropped', nowMs = Date.now()): Promise<void> {
   const file = reflectionDayFileOf(nodeId, date);
   await withFileLock(file, async () => {
     if ((await readDayJson(nodeId, date)).state !== 'ok') return;
     await writeDayJson(nodeId, nodeName, date, (d) => {
-      for (const e of d.entries) if (e.task.id === taskId && e.corrected === 'held' && entryAts.includes(e.at)) e.sentLater = new Date(nowMs).toISOString();
+      for (const e of d.entries) if (e.task.id === taskId && e.corrected === 'held' && entryAts.includes(e.at)) e[how] = new Date(nowMs).toISOString();
     });
   });
 }
