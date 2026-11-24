@@ -53,7 +53,8 @@ export interface SwitchSide {
    */
   startStandby(timeoutMs?: number): Promise<StartResult>
   /** One request to this side's server. */
-  api(method: string, urlPath: string, body?: unknown): Promise<{ status: number; json: unknown }>
+  /** A call to this machine's server: 10 s for a GET, 60 s for anything else, or `timeoutMs` (a route with a longer deadline of its own). */
+  api(method: string, urlPath: string, body?: unknown, timeoutMs?: number): Promise<{ status: number; json: unknown }>
   /**
    * What THIS machine reaches of the witnesses with no leader link (ways a and b, witness-reach.ts),
    * as it would on its own: its machine identity, and the config and Walnut id of `copyHome`, its
@@ -190,13 +191,13 @@ export class LocalSide implements SwitchSide {
     return probeWitnessReach({ places: cfg.settings.witnesses, params: cfg.settings.params, here: thisMachine(env, walnutId), walnutId })
   }
 
-  async api(method: string, urlPath: string, body?: unknown): Promise<{ status: number; json: unknown }> {
+  async api(method: string, urlPath: string, body?: unknown, timeoutMs?: number): Promise<{ status: number; json: unknown }> {
     const res = await fetch(`http://127.0.0.1:${this.machine.port}${urlPath}`, {
       method,
       headers: { 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       // A handover or cancel waits on the witnesses (seconds, more when some do not answer).
-      signal: AbortSignal.timeout(method === 'GET' ? 10_000 : 60_000),
+      signal: AbortSignal.timeout(timeoutMs ?? (method === 'GET' ? 10_000 : 60_000)),
     })
     return { status: res.status, json: await res.json().catch(() => null) }
   }

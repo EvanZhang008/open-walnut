@@ -167,7 +167,8 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           const r = await side.api('POST', '/api/leader/handover', {
             to: s.to, switchId: s.id,
             ...(Object.keys(handoverTest).length ? { test: handoverTest } : {}),
-          }).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
+            // The route's host steps, the record, the retell (a minute at most) and the target side over the copy link.
+          }, 150_000).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
           const j = r.json as { ok?: boolean; record?: number; commitDeadline?: string; why?: string } | null
           if (!j?.ok || !j.record) fail(`the old leader did not hand over: ${j?.why ?? `status ${r.status}`}`)
           s.handover = j!.record!
@@ -359,7 +360,8 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   // The new leader's own check, on its machine, started by the old leader's server over its copy link:
   // IT reaches a majority of the witnesses with no leader link, holding the old leader's record.
   if (running && !problems.length) {
-    const c = await src.api('POST', '/api/leader/switch/check', { to: st.to, switchId: st.id }).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
+    // Past the route's own deadline (150 s in all, routes/leader-switch.ts), so its answer, a timeout included, is what is read.
+    const c = await src.api('POST', '/api/leader/switch/check', { to: st.to, switchId: st.id }, 180_000).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
     const r = (c.json as { report?: CheckReport & { reach?: { id: string; answered: boolean; held: { holder?: string; kind?: string } | null }[] }; verify?: { drift?: number; error?: string }; why?: string } | null)
     const report = r?.report
     if (!report) problems.push(`the new leader's check did not report: ${r?.why ?? `status ${c.status}`}`)
