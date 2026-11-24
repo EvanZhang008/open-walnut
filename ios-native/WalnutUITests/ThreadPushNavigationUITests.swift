@@ -28,6 +28,10 @@ final class ThreadPushNavigationUITests: ThreadPushUITestCase {
         let opening = el("chat.orgOpening")
         XCTAssertTrue(opening.waitForExistence(timeout: 4), "X: nothing says the chat is on its way")
         shot("X-opening")
+        // Since 2f94b5d069 the "Opening…" card is a notice at the top of the screen, over the bar
+        // while it shows; a swipe up takes it away and frees Back (AB). The open goes on meanwhile.
+        opening.swipeUp()
+        XCTAssertTrue(opening.waitForNonExistence(timeout: 3), "X: a swipe up does not take the card away")
         back()
         XCTAssertTrue(el("org.bar.threads").waitForExistence(timeout: 10), "X: Back did not reach the VP's chat")
         XCTAssertTrue(opening.waitForNonExistence(timeout: 3), "X: the open still says it is on its way after Back")
