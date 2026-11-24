@@ -252,6 +252,7 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput,
   // on the file as it is then, so a move that lands while this write waits is seen.
   let movedTo: string | undefined;
   let mergedThere: string | undefined;
+  let answeredAsk = false;
   const res = await mutateThreads(taskId, (cur) => {
     const there = input.threadId && hops < 3 ? cur.threads.find((t) => t.id === input.threadId) : undefined;
     if (there && movedAway(there) && there.movedTo!.task !== taskId) {
@@ -260,12 +261,16 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput,
       return { file: cur, out: null };
     }
     const r = fileMessage(cur, { ...input, lang });
+    // Joined to a thread that waited on him: his answer to it, whatever its words (review 2026-11-24).
+    answeredAsk = cur.threads.find((t) => t.id === r.thread.id)?.state === 'needs';
     return { file: r.file, out: r };
   });
   // Its answer is read in the chat of the node holding it (thread-answers.ts), never this node's.
   if (movedTo) { const { sid: _sid, ...rest } = input; return fileThreadMessage(movedTo, { ...rest, ...(mergedThere ? { threadId: mergedThere } : {}), lang }, hops + 1); }
   if (!res) throw new ThreadError('bad_input', 500, 'The message was not filed.');
   if (!res.duplicate) emit({ taskId, kind: 'filed', threadId: res.thread.id });
+  // Joined only for its timing: its subject is checked now, and it leaves for a thread of its own unless it is that one (thread-join-check.ts).
+  if (!res.duplicate && res.joined === 'recent' && !answeredAsk) void import('./thread-join-check.js').then((m) => m.checkJoinedMessage(taskId, res.thread.id, res.message.id));
   return { ...res, node: taskId };
 }
 

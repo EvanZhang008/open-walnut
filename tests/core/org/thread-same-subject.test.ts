@@ -91,4 +91,19 @@ describe('one subject is one thread', () => {
     expect(reasonCoversTask(undefined, id)).toBe(false)
   })
 
+  it('two titles that each name another item (a review id, a ticket number) are two matters, whatever else they share (the thread monitor, 2026-11-24)', () => {
+    // "PR-4821 waiting on your review: orchard new platform plug-in scales with busy slots" and
+    // "Orchard new platform dashboard waiting on your review: PR-4977" (Chinese, escaped).
+    const a = 'PR-4821 \u7b49\u4f60\u5ba1\uff1aOrchard \u65b0\u5e73\u53f0\u63d2\u4ef6\u6309\u5fd9\u7684\u69fd\u4f4d\u6269\u7f29'
+    const b = 'Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1\uff1aPR-4977'
+    const tree = (title: string): TreeThreads[] => [{ task: { id: 'n', title: 'Node' }, threads: [thread('th-a', title)] }]
+    expect(strongMatch(sameSubjectCandidates(b, tree(a), NOW))).toBeUndefined()
+    // The same item named again is still a repeat, and a title naming none is judged by its words as before.
+    expect(strongMatch(sameSubjectCandidates(b.replace('PR-4977', 'PR-4821'), tree(a), NOW))?.id).toBe('th-a')
+    expect(strongMatch(sameSubjectCandidates(b.replace('\uff1aPR-4977', ''), tree(a), NOW))?.id).toBe('th-a')
+    // A long number is an item too; a date or a version is not.
+    expect(strongMatch(sameSubjectCandidates('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 1002345', tree('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 1002399'), NOW))).toBeUndefined()
+    expect(strongMatch(sameSubjectCandidates('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 v1.35', tree('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 v1.36'), NOW))?.id).toBe('th-a')
+    expect(strongMatch(sameSubjectCandidates('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 20261124', tree('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 20261125'), NOW))?.id).toBe('th-a')
+  })
 })

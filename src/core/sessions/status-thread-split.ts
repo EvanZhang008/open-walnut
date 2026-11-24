@@ -16,7 +16,8 @@
  * applyThreadLines), so a line that closes the first subject closes only what is left of it.
  */
 import type { OrgThread, ThreadsFile, ThreadWriter } from '../org/threads-model.js';
-import { splitMessageInto, splitThreadMessage, ThreadError } from '../org/threads-model.js';
+import { ThreadError } from '../org/threads-model.js';
+import { splitOutRun, splitRun } from '../org/thread-join-check.js';
 import { JOIN_CHECK_MS } from '../org/thread-view.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { markerRe } from './status-marker.js';
@@ -86,20 +87,8 @@ export function readSplitLines(
   return { ...(splits.size ? { threads_split: [...splits.values()] } : {}), joins_checked: checked };
 }
 
-/**
- * The messages one split takes out of `t`: the asked one and the joined ones right after it, up to
- * `upTo` (the newest the question saw: one he wrote after it stays, and its question comes next).
- * Empty when the asked message is gone from it or no longer marked (a split or merge moved it). Pure.
- */
-export function splitRun(t: Pick<OrgThread, 'messages'>, messageId: string, upTo?: string): string[] {
-  const i = t.messages.findIndex((m) => m.id === messageId);
-  if (i <= 0 || t.messages[i].joined !== 'recent') return [];
-  // No fence the question saw (or it moved away): the asked message alone.
-  const fence = upTo === undefined ? i : t.messages.findIndex((m) => m.id === upTo);
-  const run = [messageId];
-  for (let k = i + 1; k <= fence && t.messages[k].joined === 'recent'; k++) run.push(t.messages[k].id);
-  return run;
-}
+// The run a split takes and the split itself are one rule with the check at filing (org/thread-join-check.ts).
+export { splitRun } from '../org/thread-join-check.js';
 
 /** The file with the join mark taken off one message, wherever it is now. Pure. */
 export function clearJoin(file: ThreadsFile, messageId: string): ThreadsFile {
@@ -139,15 +128,11 @@ export function splitJoins(file: ThreadsFile, checked: readonly JoinMark[], spli
     const run = line && from ? splitRun(from, c.messageId, c.upTo) : [];
     if (!line || !run.length) { file = clearJoin(file, c.messageId); continue; }
     try {
-      let next = splitThreadMessage(file, c.id, run[0], by, at, undefined, lang, { keepOpen: true });
-      const id = next.thread.id;
-      for (const m of run.slice(1)) next = { ...splitMessageInto(next.file, c.id, m, id, by, at, lang, { keepOpen: true }), thread: next.thread };
-      const tail = new Set(run.slice(1));
       // The tail is asked next. Its title is the line's, written as a FOR_USER_THREAD_TITLE is (held when
       // it repeats another open thread: status-thread-title.ts), so the caller names it (opened[].line.title).
-      file = { ...next.file, threads: next.file.threads.map((t) => (t.id !== id ? t : {
-        ...t, messages: t.messages.map((m) => (tail.has(m.id) ? { ...m, joined: 'recent' as const } : m)),
-      })) };
+      const out = splitOutRun(file, c.id, run, by, at, lang);
+      const id = out.id;
+      file = out.file;
       // What is left of what the question saw there: a word of his after it still holds that line (review round 2).
       const ids = new Set(run);
       const fence = c.upTo === undefined ? -1 : from!.messages.findIndex((m) => m.id === c.upTo);

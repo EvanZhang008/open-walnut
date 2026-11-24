@@ -104,12 +104,31 @@ export function subjectIndex(tree: readonly TreeThreads[], now: number): Subject
   return { rows: rows.map((r) => ({ ...r, theirs: [...r.words].filter((w) => (seenIn.get(w) ?? 0) < everywhere).length })), seenIn, everywhere };
 }
 
+/** A word that names one item: a ticket or review id ("pr-4821", "tkt-100234"), a long number. */
+const ITEM_ID = /^(?:[a-z]{1,12}-\d{3,}|\d{6,})$/;
+/** A date written as one number (20261124): a day, never an item. */
+const DATE_LIKE = /^20\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])$/;
+const itemIds = (words: ReadonlySet<string>): string[] => [...words].filter((w) => ITEM_ID.test(w) && !DATE_LIKE.test(w));
+
+/**
+ * Both name items and no item is the same: two matters, however many other words they share
+ * (2026-11-24, the thread monitor's [dup]: two code reviews waiting on him in one area, each
+ * named by its own review id, read as one repeat). Pure.
+ */
+function otherItems(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  const mine = itemIds(a);
+  const theirs = itemIds(b);
+  return mine.length > 0 && theirs.length > 0 && !mine.some((w) => b.has(w));
+}
+
 /** sameSubjectCandidates over an index. Pure. */
 export function candidatesIn(index: SubjectIndex, title: string): SubjectCandidate[] {
   const { rows, seenIn, everywhere } = index;
-  const mine = new Set([...subjectWords(title)].filter((w) => (seenIn.get(w) ?? 0) < everywhere));
+  const all = subjectWords(title);
+  const mine = new Set([...all].filter((w) => (seenIn.get(w) ?? 0) < everywhere));
   const out: SubjectCandidate[] = [];
   for (const r of rows) {
+    if (otherItems(all, r.words)) continue;
     const shared = sharedCount(mine, r.words);
     if (shared) out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs: r.theirs, updatedAt: r.t.updatedAt });
   }
