@@ -91,6 +91,7 @@ import { cliAddedOf, walnutAddedOf, type CliAddedItem, type WalnutAddedItem } fr
 import { InjectedLines } from './sessions/transcript-injected.js'
 import { sendTargetRefs } from '../lib/send-targets.js'
 import { cutEnd } from './text-cut.js'
+import { archiveHeadOf, noteTailWritten, tailDigest, tailUnchanged, type ArchiveHead } from './transcript-export-memo.js'
 import type { ReplyThread } from './org/reply-thread.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
@@ -1181,10 +1182,11 @@ export async function exportSessionTranscripts(): Promise<number> {
     const refreezeAllowed = new Set<string>()
     const staleStopped: Array<{ id: string; at: string }> = []
     /** The archives read here, so the loop below reads each file once. */
-    const archives = new Map<string, SessionTranscript | null>()
+    // Parsed only when the saved file changed since this process last read it (transcript-export-memo.ts).
+    const archives = new Map<string, ArchiveHead | null>()
     for (const s of projection.sessions) {
       if (s.process_status === 'running' || s.process_status === 'idle') continue
-      const archived = parseTranscript(await readTranscriptCache(s.id))
+      const archived = await archiveHeadOf(s.id, async () => parseTranscript(await readTranscriptCache(s.id)))
       archives.set(s.id, archived)
       if (refrozenFor.get(s.id) === s.last_active_at) continue
       if (archived && archivePredatesEnd(archived, s.last_active_at)) staleStopped.push({ id: s.id, at: s.last_active_at })
@@ -1243,7 +1245,12 @@ export async function exportSessionTranscripts(): Promise<number> {
           log.session.debug('transcript export kept the saved copy over an empty read', { sessionId: s.id })
           continue
         }
+        // The same tail as this process last saved: no write and no push, but a
+        // save at least every UNCHANGED_TAIL_REWRITE_MS keeps the copy's age honest.
+        const digest = tailDigest(transcript)
+        if (await tailUnchanged(s.id, digest)) continue
         await writeTranscriptCache(s.id, transcript)
+        await noteTailWritten(s.id, digest)
         if (legacy) await writeJsonFile(path.join(SESSION_TRANSCRIPTS_DIR, `${s.id}.json`), transcript)
         pushProjectionToCloud('transcript-upsert', { sid: s.id, data: transcript })
         exported++
