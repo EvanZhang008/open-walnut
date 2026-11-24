@@ -145,15 +145,27 @@ export function serviceSetRuntimeTreesDir(installRoot: string): string {
 }
 
 /**
- * Is `dir` a set's runtime-tree parent (`<home>/.open-walnut-host/walnuts/<id16>/daemon/runtime`)?
- * The file prunes old builds' trees there as it does in its own data home: the set owns that dir
- * alone (runtime-tree.ts ensureRuntime). Never the default set's or any other dir.
+ * Is `dir` the runtime-tree parent of a service set (`<home>/.open-walnut-host/walnuts/<id16>/daemon/runtime`)
+ * that this env's process may treat as its own? The set named by WALNUT_SERVICE_SET (its daemon and
+ * that daemon's sessions carry it), whatever HOME's spelling; else a set's under HOME, compared as
+ * text and then through `realpath` (one home seen as /home/x and /local/home/x). There the walnut
+ * file prunes old builds' trees as in a data home (runtime-tree.ts), and a set's daemon keeps it in
+ * its sessions' env (daemon-standalone.ts): the set's service owns that dir alone, and no deploy deletes it.
  */
-export function isServiceSetRuntimeTreesDir(dir: string, home: string | null | undefined): boolean {
-  if (!home || !path.isAbsolute(home) || !path.isAbsolute(dir)) return false
+export function isServiceSetRuntimeTreesDir(
+  dir: string | undefined, env: { HOME?: string; WALNUT_SERVICE_SET?: string }, realpath?: (p: string) => string,
+): boolean {
+  if (!dir || !path.isAbsolute(dir)) return false
   const resolved = path.resolve(dir)
   const id = path.basename(path.dirname(path.dirname(resolved)))
-  return isServiceSetId(id) && resolved === serviceSetRuntimeTreesDir(path.join(serviceSetBase(home, id), 'daemon'))
+  if (!isServiceSetId(id) || !resolved.endsWith(path.join('/', SERVICE_SETS_SUBDIR, id, 'daemon', SET_RUNTIME_TREES_SUBDIR))) return false
+  if (isServiceSetId(env.WALNUT_SERVICE_SET)) return env.WALNUT_SERVICE_SET === id
+  const home = env.HOME
+  if (!home || !path.isAbsolute(home)) return false
+  const expected = serviceSetRuntimeTreesDir(path.join(serviceSetBase(home, id), 'daemon'))
+  if (resolved === expected) return true
+  if (!realpath) return false
+  try { return realpath(path.dirname(resolved)) === realpath(path.dirname(expected)) } catch { return false }
 }
 
 /**

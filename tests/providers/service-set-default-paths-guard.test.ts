@@ -82,6 +82,7 @@ const PLACES: Array<['binary' | 'daemon', string, Verdict]> = [
   ['daemon', "path.join(HOME_DIR, '.claude', 'teams', team", 'a session\'s own team inbox in the engine\'s place, written for that session only'],
   ['daemon', "path.join(os.homedir(), '.claude', 'debug', sid", 'read only: the CLI\'s own debug file of that session'],
   // The modules the daemon builds its parts from.
+  ['daemon', "const DEFAULT_RUNTIME_DIR = '/tmp/open-walnut'", 'the default set\'s runtime dir: a set\'s is serviceSetRuntimeDir'],
   ['daemon', "path.join(homeDir, '.open-walnut', 'tmp', 'spawned-sessions')", 'read only: an external session scan'],
   ['daemon', "path.join(homeDir, '.open-walnut', 'tmp', 'streams')", 'read only: an external session scan'],
   ['daemon', '`${home}/.cache/open-walnut/${GATEWAY_SOCKET_FILENAME}`', 'read only: where a CLI looks for a gateway socket'],
@@ -138,6 +139,13 @@ describe('every default place a set\'s service program derives is decided for a 
       const body = src.text.slice(src.text.indexOf('{', at) + 1).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//'))
       expect(body[0], src.name).toBe('if (SET_ID) {')
       expect(body.slice(1, 3).join(' '), src.name).toMatch(/skipped: 'default-service'.*kept by the default service[\s\S]*return sendOk\(/)
+    }
+  })
+
+  it('a set\'s session env keeps every set override: the daemon drops none of them unconditionally', () => {
+    const daemon = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+    for (const [key] of serviceSetEnv(ID, '/x')) {
+      expect(daemon.match(new RegExp(`^\\s*${key}: undefined,`, 'm'))?.[0], `${key} dropped from every session's env`).toBeUndefined()
     }
   })
 

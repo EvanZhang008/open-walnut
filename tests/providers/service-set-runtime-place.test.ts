@@ -122,6 +122,31 @@ describe('a service set\'s files give the walnut file a runtime place of its own
   })
 })
 
+describe('a set\'s own dir is known by its real path or its set id, not by HOME\'s spelling', () => {
+  it('prunes there when HOME names the same dir through a link (/home/x and /local/home/x)', () => {
+    const setTrees = path.join(home, '.open-walnut-host', 'walnuts', ID, 'daemon', 'runtime')
+    plantOld(setTrees)
+    const linked = `${home}-link`
+    fs.symlinkSync(home, linked)
+    try {
+      expect(startWith({ HOME: linked, WALNUT_RUNTIME_DIR: setTrees })).toBe(path.join(setTrees, BUILD))
+      expect(ls(setTrees)).toEqual([OLD[1]!, OLD[2]!, BUILD].sort())
+    } finally { fs.rmSync(linked, { force: true }) }
+  })
+
+  it('prunes there when the process names that set (WALNUT_SERVICE_SET), whatever HOME says', () => {
+    const setTrees = path.join(home, '.open-walnut-host', 'walnuts', ID, 'daemon', 'runtime')
+    plantOld(setTrees)
+    expect(startWith({ HOME: '/nowhere', WALNUT_SERVICE_SET: ID, WALNUT_RUNTIME_DIR: setTrees })).toBe(path.join(setTrees, BUILD))
+    expect(ls(setTrees)).toEqual([OLD[1]!, OLD[2]!, BUILD].sort())
+    // Another set's dir is not this process's to prune.
+    const other = path.join(home, '.open-walnut-host', 'walnuts', 'fedcba9876543210', 'daemon', 'runtime')
+    plantOld(other)
+    startWith({ HOME: '/nowhere', WALNUT_SERVICE_SET: ID, WALNUT_RUNTIME_DIR: other })
+    expect(ls(other)).toEqual([...OLD, BUILD].sort())
+  })
+})
+
 describe('a leader\'s `walnut daemon ... --walnut <id>` line run by the walnut file prunes nothing', () => {
   it('only the on-host CLI line naming a Walnut is kept from pruning', () => {
     const exe = '/x/walnut'

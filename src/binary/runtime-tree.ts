@@ -126,7 +126,7 @@ export function pruneRuntimes(parent: string, keepId: string, now = Date.now()):
  */
 export function prunesRuntimePlace(env: NodeJS.ProcessEnv): boolean {
   const override = env.WALNUT_RUNTIME_DIR
-  return !override || isServiceSetRuntimeTreesDir(override, env.HOME || os.homedir())
+  return !override || isServiceSetRuntimeTreesDir(override, { HOME: env.HOME || os.homedir(), WALNUT_SERVICE_SET: env.WALNUT_SERVICE_SET }, fs.realpathSync)
 }
 
 /**

@@ -78,6 +78,7 @@ import {
   BUDGET_CHECKING_TEXT,
   type BudgetGate,
 } from './daemon-core.js'
+import { isServiceSetRuntimeTreesDir } from './service-set.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { buildClaudeArgv } from './claude-session-argv.js'
 import { PS_TREE_ARGS, claimedSidVerdict, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
@@ -449,6 +450,8 @@ const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON
 // stay the default set's: a set keeps its own under its install root.
 const SET_ID = SERVICE_MODE && !!DAEMON_STATE_DIR && /^[0-9a-f]{16}$/.test(daemonEnv.WALNUT_SERVICE_SET ?? '') ? daemonEnv.WALNUT_SERVICE_SET! : ''
 const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR || SET_ID !== ''
+// The walnut file's runtime place a session keeps: a set's own (service-set.ts), never a deploy stage's.
+const SESSION_RUNTIME_DIR = SET_ID && isServiceSetRuntimeTreesDir(daemonEnv.WALNUT_RUNTIME_DIR, daemonEnv, fs.realpathSync) ? daemonEnv.WALNUT_RUNTIME_DIR : undefined
 const STREAMS_DIR = daemonEnv.WALNUT_STREAMS_DIR
   || (SET_ID ? path.join(DAEMON_STATE_DIR!, 'streams') : IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
 // demo.quiesce (demo-daemon-quiesce-core.ts): a Demo's own daemon closes for good before
@@ -8123,8 +8126,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // And the compiled file's runtime dir (src/binary/runtime-tree.ts): it names the
       // SERVING stage's runtime/, which a later deploy deletes. A walnut CLI the session runs
       // would unpack there or, after that deploy, mkdir it back inside a dead stage; without
-      // it a compiled walnut uses its own default tree.
-      WALNUT_RUNTIME_DIR: undefined,
+      // it a compiled walnut uses its own default tree. A service set's own dir stays: it is
+      // its install root's, which no deploy deletes, and without it every `walnut` of the
+      // set's sessions unpacked into, and pruned, the default Walnut's data home.
+      WALNUT_RUNTIME_DIR: SESSION_RUNTIME_DIR,
     },
   }
   let barrier: ReturnType<typeof spawnBehindRegistry> | null = null
