@@ -45,6 +45,8 @@ const KEEPS_NODE: Record<string, Record<string, string>> = {
 }
 /** Jobs that start no JavaScript runtime at all (ios: xcodebuild on a simulator). */
 const NO_RUNTIME: Record<string, string[]> = { 'ci.yml': ['ci-ok', 'ios'] }
+/** Jobs that call another workflow, with no steps of their own (binary-matrix.yml is judged in its own right). */
+const CALLS: Record<string, string[]> = { 'ci.yml': ['binary-matrix'] }
 
 /**
  * A run line that starts Node or one of its tools as a command: after a separator,
@@ -71,7 +73,7 @@ describe('CI jobs that build or test run on bun alone', () => {
   for (const [file, jobs] of Object.entries(NODE_FREE)) {
     const doc = workflow(file)
     it(`${file}: every job is classified`, () => {
-      const known = [...jobs, ...Object.keys(KEEPS_NODE[file] ?? {}), ...(NO_RUNTIME[file] ?? [])].sort()
+      const known = [...jobs, ...Object.keys(KEEPS_NODE[file] ?? {}), ...(NO_RUNTIME[file] ?? []), ...(CALLS[file] ?? [])].sort()
       expect(Object.keys(doc.jobs).sort(), `a new job in ${file} must be listed here: Node-free, or keeping Node for a reason`).toEqual(known)
     })
     for (const name of jobs) {

@@ -43,7 +43,7 @@ function git(...args: string[]): string {
 
 /**
  * `ci` is what the fake gh reports for any commit: green | red | pending | none | broken,
- * for CI and the binary matrix alike; `ci:matrix` (`green:red`) tells them apart.
+ * for CI and the binary matrix rows in its run alike; `ci:matrix` (`green:red`) tells them apart.
  * Async, so a slow run (git under load) never blocks the vitest worker.
  */
 function release(ci: string, ...args: string[]): Promise<{ code: number; out: string }> {
@@ -62,10 +62,13 @@ function release(ci: string, ...args: string[]): Promise<{ code: number; out: st
 const FAKE_GH = `#!/usr/bin/env node
 const endpoint = process.argv[3] || ''
 const [ciVerdict, matrixVerdict = ciVerdict] = process.env.FAKE_GH_CI.split(':')
-const ci = endpoint.includes('binary-matrix.yml') ? matrixVerdict : ciVerdict
+const ci = ciVerdict
 if (ci === 'broken') { process.stderr.write('gh: not logged in\\n'); process.exit(4) }
 const out = (o) => process.stdout.write(JSON.stringify(o))
-if (endpoint.includes('/jobs')) out({ jobs: [{ name: 'CI OK', conclusion: ci === 'green' ? 'success' : 'failure' }] })
+// CI's run, with the binary matrix's rows in it (ci.yml calls the matrix).
+const row = { name: 'Binary matrix / macos-15 (walnut-darwin-arm64)', status: matrixVerdict === 'pending' ? 'in_progress' : 'completed',
+  conclusion: matrixVerdict === 'pending' ? null : (matrixVerdict === 'green' ? 'success' : 'failure') }
+if (endpoint.includes('/jobs')) out({ jobs: [{ name: 'CI OK', conclusion: ci === 'green' ? 'success' : 'failure' }, row] })
 else if (ci === 'none') out({ workflow_runs: [] })
 else out({ workflow_runs: [{ id: 1, head_sha: 'x', created_at: '2026-10-01T00:00:00Z', html_url: 'https://example.test/runs/1',
   status: ci === 'pending' ? 'in_progress' : 'completed', conclusion: ci === 'pending' ? null : (ci === 'green' ? 'success' : 'failure') }] })

@@ -226,7 +226,7 @@ describe('the iOS job in ci.yml', () => {
 
   it('never uploads a result bundle: only the screened evidence of a failed UI test', () => {
     // The 130 MB result bundle it uploaded on failure failed the leak audit (2026-10-31).
-    const uploads = Object.values(doc.jobs).flatMap((j) => j.steps.filter((s) => s.uses?.startsWith('actions/upload-artifact')))
+    const uploads = Object.values(doc.jobs).flatMap((j) => (j.steps ?? []).filter((s) => s.uses?.startsWith('actions/upload-artifact')))
     for (const u of uploads) expect(String(u.with?.path ?? ''), 'a result bundle is never an artifact').not.toMatch(/xcresult|\/dd\b|DerivedData/i)
     const own = job.steps.filter((s) => s.uses?.startsWith('actions/upload-artifact'))
     expect(own).toHaveLength(1)

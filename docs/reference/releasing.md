@@ -127,11 +127,17 @@ Both channels publish only a commit whose `CI OK` passed (see below), and `CI OK
 | Release rehearsal (Linux, macOS) | the package this commit would publish, end to end (next section) |
 | Release rehearsal, field update (Linux, macOS) | the versions on npm today, installed as people installed them, update to this commit as a release publishes it and keep their work (the field rehearsal, below) |
 
-The binary matrix (`binary-matrix.yml`, its own workflow) must pass on the same commit too: the
-compiled file on old and new glibc, musl, arm64 and x64 Linux, both Macs and an old kernel, with
-nothing installed but the file. A release also calls it (`workflow_call` with `files`, `version`
-and `ref`) on the very files it is about to publish; that call skips the build, checks out the
-built commit, has its own concurrency group per run and is never cancelled.
+The binary matrix (`binary-matrix.yml`) must pass on the same commit too: the compiled file on
+old and new glibc, musl, arm64 and x64 Linux, both Macs and an old kernel, with nothing installed
+but the file. CI calls it from its own run (job `binary-matrix`, named `Binary matrix`, which
+`CI OK` needs), so it runs for exactly the commits CI runs and its rows are jobs of that run
+(`Binary matrix / <row>`). It has no push trigger of its own: until 2026-11-24 it ran on every
+push to main, 100 runs in a day with 4 macOS runners each, while CI on main ran 5 of those
+commits, so 95 verdicts no release could use held the macOS runners, and a row GitHub dropped
+after 20 minutes without one mailed a failure. A release also calls it (`workflow_call` with
+`files`, `version` and `ref`) on the very files it is about to publish; that call skips the
+build and checks out the built commit. It has no concurrency group: each call runs inside its
+caller's run, whose own queue decides.
 
 One more suite runs on every push and reports without blocking: the Playwright browser
 suite (eight shards, summary per shard in the run page).
@@ -244,8 +250,8 @@ the runner's own file's `--version`, and lays out the release assets). The asset
 workflow artifact (`release-files-<channel>`): the binary matrix runs those very bytes, and the
 publish job, which builds nothing, unpacks them (`scripts/release-unpack.sh`, both
 `SHA256SUMS` lines of each file) and packs the npm packages of them. So what npm and the GitHub
-Release get is what the matrix ran. Both channels also publish only a commit whose push run of
-`binary-matrix.yml` passed (`scripts/ci-gate.mjs`).
+Release get is what the matrix ran. Both channels also publish only a commit whose CI run passed
+with every row of the binary matrix it calls (`scripts/ci-gate.mjs`).
 
 - **npm** (`scripts/npm-packages.mjs`): one package per target, `@open-walnut/<target>`, holding
   the file with `os`, `cpu` and (Linux) `libc` set so npm installs only the one that matches the
@@ -478,13 +484,17 @@ stable release.
 
 ## What "CI passed" means
 
-`scripts/ci-gate.mjs` reads two workflows through `gh api`: in CI (`ci.yml`), the newest push
-run for the commit and in it the `CI OK` job, which aggregates the blocking jobs (build,
-quick tests, fresh-machine onboarding, remote host; report-only jobs do not count); then, only
-for a commit CI passed, the newest push run of `binary-matrix.yml` for it, whose own
-conclusion is the answer (every row). Both must be green. Both channels require it, because
+`scripts/ci-gate.mjs` reads CI (`ci.yml`) through `gh api`: the newest push run for the commit
+and in it the `CI OK` job, which aggregates the blocking jobs (build, quick tests, fresh-machine
+onboarding, remote host, the binary matrix; report-only jobs do not count); then, only for a
+commit CI passed, the binary matrix's rows in that same run (`Binary matrix / <row>`), every one
+of which must have passed. Both must be green. A CI run from before 2026-11-24, when the matrix
+was a push workflow of its own, has no rows; the matrix's own push run for the commit counts
+there, and a newer commit has none, so a `ci.yml` that stopped calling the matrix publishes
+nothing. Every job list is read page by page (`scripts/lib/run-jobs.mjs`): CI's run holds about
+80 jobs and GitHub lists 100 a page. Both channels require it, because
 every install updates itself on restart: a release that reaches npm reaches every install.
-A commit whose matrix run was cancelled by a newer push is passed over like one whose CI was. Locally the release script asks the same question
+A commit whose run was cancelled says nothing and is passed over. Locally the release script asks the same question
 through your signed-in `gh`; when `gh` is missing it says so and goes on, since the
 workflow asks again before it publishes.
 

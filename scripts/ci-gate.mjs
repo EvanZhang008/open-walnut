@@ -4,12 +4,15 @@
  * anything reaches npm, because every install updates itself on restart: a red
  * build published once is a red build installed everywhere.
  *
- * "Passed" means two workflows passed on a push run for that commit: the CI
- * workflow's `CI OK` gate job (the job that aggregates build, test, onboarding
- * and remote-host; report-only jobs do not count), and the binary matrix
- * (binary-matrix.yml), which runs the compiled file a release ships on every
- * system it claims. Read through `gh api`, so it works the same in GitHub
- * Actions (GH_TOKEN + GH_REPO) and on a machine where `gh` is signed in.
+ * "Passed" means the newest push run of CI (ci.yml) for that commit passed: its
+ * `CI OK` gate job (the job that aggregates build, test, onboarding, remote-host
+ * and the rest; report-only jobs do not count), and every row of the binary matrix
+ * (binary-matrix.yml, the compiled file a release ships on every system it claims),
+ * which that same run calls, so each row is a job of it ("Binary matrix / <row>").
+ * A CI run from before 2026-11-24, when the matrix was a push workflow of its own,
+ * has no such rows: the matrix's own push run for the commit counts there.
+ * Read through `gh api`, so it works the same in GitHub Actions (GH_TOKEN +
+ * GH_REPO) and on a machine where `gh` is signed in.
  *
  *   bun scripts/ci-gate.mjs commit <rev>      green | pending | red | none, exit 0 only on green
  *   bun scripts/ci-gate.mjs release <rev>     the gate for a release tag: a commit that only
@@ -20,11 +23,16 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isTransientGhFailure } from './lib/gh-transient.mjs'
+import { allJobs, jobsPage } from './lib/run-jobs.mjs'
 
 export const CI_WORKFLOW = 'ci.yml'
 export const GATE_JOB = 'CI OK'
 /** The compiled file on every system (its run passes only when every row did). */
 export const FILES_WORKFLOW = 'binary-matrix.yml'
+/** The name of ci.yml's job that calls it (tests/scripts/release-pipeline.test.ts holds them equal). */
+export const MATRIX_JOB = 'Binary matrix'
+/** GitHub names each job of a called workflow "<the calling job's name> / <its own name>". */
+export const isMatrixRow = (job) => String(job?.name ?? '').startsWith(`${MATRIX_JOB} / `)
 /**
  * What `bun run release` changes; a commit touching only these carries its parent's CI result.
  * bun.lock holds no version of its own, so a release never touches it.
@@ -40,14 +48,30 @@ export function verdictOf(runs, jobsOf) {
   const run = sorted[0]
   if (!run) return { verdict: 'none', url: null }
   const url = run.html_url ?? null
-  if (run.status !== 'completed') return { verdict: 'pending', url }
+  const runId = run.id
+  if (run.status !== 'completed') return { verdict: 'pending', url, runId }
   const gate = (jobsOf(run.id) ?? []).find((j) => j.name === GATE_JOB)
   const conclusion = gate ? gate.conclusion : run.conclusion
-  if (conclusion === 'success') return { verdict: 'green', url }
+  if (conclusion === 'success') return { verdict: 'green', url, runId }
   // A cancelled run (a newer push superseded it) says nothing about the commit,
   // whatever its gate job did: CI OK is skipped there now, and older runs ran it
   // against cancelled legs and failed.
-  if (conclusion === 'cancelled' || run.conclusion === 'cancelled') return { verdict: 'cancelled', url }
+  if (conclusion === 'cancelled' || run.conclusion === 'cancelled') return { verdict: 'cancelled', url, runId }
+  return { verdict: 'red', url, runId }
+}
+
+/**
+ * The binary matrix's verdict on the commit of a CI run, from that run's jobs: green only
+ * when it has matrix rows and every one passed (a skipped row, behind a failed build, did
+ * not). A run with no rows predates the call (2026-11-24): `ownRun()` asks the matrix's
+ * own push run for the commit then, and finds none for a commit after it, so a ci.yml that
+ * stopped calling the matrix publishes nothing.
+ */
+export function matrixVerdict(ciJobs, url, ownRun) {
+  const rows = (ciJobs ?? []).filter(isMatrixRow)
+  if (!rows.length) return ownRun()
+  if (rows.every((j) => j.conclusion === 'success')) return { verdict: 'green', url }
+  if (rows.some((j) => j.status && j.status !== 'completed')) return { verdict: 'pending', url }
   return { verdict: 'red', url }
 }
 
@@ -107,12 +131,12 @@ export function gh(endpoint) {
   }
 }
 
-const jobsOf = (runId) => gh(`repos/{owner}/{repo}/actions/runs/${runId}/jobs?per_page=100`).jobs
+const jobsOf = (runId) => allJobs((n) => gh(jobsPage(runId, n)))
 
 /**
  * One verdict from CI's and the binary matrix's: green only when both are, and
  * CI's own answer (with its run) whenever CI is not green. The matrix is asked
- * only about a commit CI passed.
+ * only about a commit CI passed. Its answer names the matrix (`workflow`).
  */
 export function combinedVerdict(ci, files) {
   if (ci.verdict !== 'green') return ci
@@ -125,8 +149,12 @@ const runsOf = (workflow, sha) => gh(`repos/{owner}/{repo}/actions/workflows/${w
 
 /** Ask GitHub about one commit. Throws when `gh` is missing, signed out or the API fails. */
 export function commitVerdict(sha) {
-  // The matrix has no gate job: its run's own conclusion is the answer.
-  return combinedVerdict(verdictOf(runsOf(CI_WORKFLOW, sha), jobsOf), () => verdictOf(runsOf(FILES_WORKFLOW, sha), () => []))
+  // The run CI OK was read from, its jobs read once.
+  const seen = new Map()
+  const jobs = (runId) => { if (!seen.has(runId)) seen.set(runId, jobsOf(runId)); return seen.get(runId) }
+  const ci = verdictOf(runsOf(CI_WORKFLOW, sha), jobs)
+  // The matrix's own older run has no gate job: its own conclusion is the answer.
+  return combinedVerdict(ci, () => matrixVerdict(jobs(ci.runId), ci.url, () => verdictOf(runsOf(FILES_WORKFLOW, sha), () => [])))
 }
 
 export function lastGreen(branch = 'main') {

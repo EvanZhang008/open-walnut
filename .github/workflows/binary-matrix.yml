@@ -3,8 +3,16 @@ name: Binary matrix
 # The compiled Walnut file (scripts/build-binary.mjs) on every system it claims:
 # old and new Linux (glibc from 2.17, musl), x64 and arm64, macOS on both chips,
 # and an old kernel. Each row runs the same rehearsal (scripts/release-rehearsal/
-# binary.mjs) with nothing installed but the file: no Node, no bun. The release
-# publishes only a commit whose push run here passed, every row (scripts/ci-gate.mjs).
+# binary.mjs) with nothing installed but the file: no Node, no bun.
+#
+# CI calls this from its own run (ci.yml, job `binary-matrix`, which CI OK needs), on a
+# push to main and on a pull request alike, so the matrix runs for exactly the commits CI
+# runs and its rows are jobs of that very run ("Binary matrix / <row>"). The release
+# publishes only a commit whose CI run passed, these rows included (scripts/ci-gate.mjs).
+# It has no push trigger of its own: until 2026-11-24 it ran on every push to main (100 runs
+# in a day, 4 macOS runners each) while CI on main runs only the newest commit when its last
+# run ends (5 of those 100), so 95 verdicts no release could use took the macOS runners the
+# others waited on, and a row GitHub dropped after 20 minutes without one mailed a failure.
 #
 # A release also calls this with the files it is about to publish (release.yml,
 # jobs `*-files`): `files` names its artifact (walnut-<version>-<target>.gz and
@@ -15,10 +23,6 @@ name: Binary matrix
 # package.json saying `version`, the version the file reports.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -35,17 +39,8 @@ on:
         type: string
         default: ''
 
-# A release's call runs inside the release's run, on its ref (main for a nightly
-# or a promote): with the push runs' group it would cancel main's push run, or
-# be cancelled by the next one. So a call gets a group of its own and is never
-# cancelled. A push to main gets a group of its own commit too: a release needs
-# this verdict on the very commit CI passed, and CI on main runs whichever commit
-# is newest when its last run ends, so every commit of main needs one (2026-10-31:
-# 45 of 60 runs here were cancelled by the next push). Only a pull request's push
-# supersedes the run before it.
-concurrency:
-  group: binary-matrix-${{ inputs.files != '' && format('{0}-{1}', github.run_id, inputs.files) || (github.event_name == 'push' && github.sha) || github.ref }}
-  cancel-in-progress: ${{ inputs.files == '' && github.event_name == 'pull_request' }}
+# No concurrency group: every caller runs it inside its own run (CI's run, a release's
+# run), so the caller's queue decides, and a run never waits on or cancels another's.
 
 env:
   # onnxruntime-node's install script fetches its CUDA provider (about 240 MB from
@@ -131,6 +126,10 @@ jobs:
       FILE: ${{ matrix.file }}
     strategy:
       fail-fast: false
+      # Called from CI's run on a push to main, at most 2 rows at a time (CI_RUNNER_SHARE in ci.yml:
+      # the push gate needs the runners; each row takes about a minute). A pull request's run and a
+      # release's call (with its files) run every row at once.
+      max-parallel: ${{ inputs.files == '' && github.event_name == 'push' && 2 || 32 }}
       matrix:
         include:
           - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'centos:7' }              # glibc 2.17
@@ -235,6 +234,10 @@ jobs:
       FILE: ${{ matrix.file }}
     strategy:
       fail-fast: false
+      # Called from CI's run on a push to main, at most 2 Macs at a time: macOS runners are the
+      # scarcest (CI_RUNNER_SHARE in ci.yml; CI's iOS and rehearsal legs want them too). A pull
+      # request's run and a release's call run all three at once.
+      max-parallel: ${{ inputs.files == '' && github.event_name == 'push' && 2 || 32 }}
       matrix:
         include:
           # The oldest macOS a hosted runner still has (macos-14 was retired 2026-11-02).

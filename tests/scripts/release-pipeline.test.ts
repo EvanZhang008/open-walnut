@@ -26,7 +26,8 @@ import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { nextVersion, rollChangelog, setManifestVersion } from '../../scripts/release.mjs'
 import { NIGHTLY_GAP_HOURS, lastNightlyCommit, newerBase, nightlyDue, nightlyVersion, servesNightly } from '../../scripts/nightly-version.mjs'
-import { combinedVerdict, isTransientGhFailure, pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
+import { MATRIX_JOB, combinedVerdict, isMatrixRow, isTransientGhFailure, matrixVerdict, pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
+import { allJobs } from '../../scripts/lib/run-jobs.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
 import { channelOf } from '../../src/core/self-update/update-check.js'
@@ -308,7 +309,43 @@ describe('ci-gate', () => {
     // A rerun is a newer run for the same commit and wins.
     const jobs = (id: number) => (id === 2 ? gate('success') : gate('failure'))
     expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'failure'), run(2, 'a', '2026-10-01T01:00:00Z', 'completed', 'success')], jobs))
-      .toEqual({ verdict: 'green', url: 'https://example.test/runs/2' })
+      .toEqual({ verdict: 'green', url: 'https://example.test/runs/2', runId: 2 })
+  })
+
+  it('the binary matrix passed only when every one of its rows in that CI run did', () => {
+    const row = (name: string, conclusion: string | null, status = 'completed') => ({ name: `${MATRIX_JOB} / ${name}`, conclusion, status })
+    const ownRun = () => { throw new Error('asked the matrix\'s own run though CI\'s run has its rows') }
+    const rows = [row('Build the files', 'success'), row('centos:7 (walnut-linux-x64)', 'success'), row('macos-15 (walnut-darwin-arm64)', 'success')]
+    expect(matrixVerdict([...gate('success'), ...rows], 'ci', ownRun)).toEqual({ verdict: 'green', url: 'ci' })
+    expect(matrixVerdict([...rows.slice(0, 2), row('macos-15 (walnut-darwin-arm64)', 'failure')], 'ci', ownRun).verdict).toBe('red')
+    // A row behind a failed build is skipped: it did not pass.
+    expect(matrixVerdict([row('Build the files', 'failure'), row('centos:7 (walnut-linux-x64)', 'skipped')], 'ci', ownRun).verdict).toBe('red')
+    expect(matrixVerdict([row('Build the files', 'success'), row('centos:7 (walnut-linux-x64)', null, 'in_progress')], 'ci', ownRun).verdict).toBe('pending')
+    // Only the called workflow's jobs count, by GitHub's "<caller> / <job>" name.
+    expect(isMatrixRow({ name: 'Binary matrix (x)' })).toBe(false)
+    expect(isMatrixRow({ name: 'Binary matrix / Build the files' })).toBe(true)
+  })
+
+  it('a CI run with no matrix rows (from before CI called it) is judged by the matrix\'s own run, which a newer commit lacks', () => {
+    let asked = 0
+    const own = (verdict: string) => () => { asked++; return { verdict, url: 'matrix' } }
+    expect(matrixVerdict(gate('success'), 'ci', own('green'))).toEqual({ verdict: 'green', url: 'matrix' })
+    expect(matrixVerdict([], 'ci', own('none')).verdict).toBe('none')
+    expect(asked).toBe(2)
+  })
+
+  it('reads every page of a run\'s jobs: CI\'s run holds about 80 and GitHub lists 100 a page', () => {
+    const jobs = Array.from({ length: 230 }, (_, i) => ({ name: `job ${i}` }))
+    const pages: number[] = []
+    const page = (n: number) => { pages.push(n); return { total_count: jobs.length, jobs: jobs.slice((n - 1) * 100, n * 100) } }
+    expect(allJobs(page)).toHaveLength(230)
+    expect(pages).toEqual([1, 2, 3])
+    // Exactly one full page: the count says it is all.
+    pages.length = 0
+    expect(allJobs((n) => { pages.push(n); return { total_count: 100, jobs: jobs.slice(0, 100) } })).toHaveLength(100)
+    expect(pages).toEqual([1])
+    // An answer that never runs short stops at its bound.
+    expect(allJobs(() => ({ jobs: jobs.slice(0, 100) })).length).toBe(1000)
   })
 
   it('a commit passes only when CI and the binary matrix both did; the matrix is asked only after CI', () => {
@@ -371,6 +408,8 @@ describe('ci-gate', () => {
       const old = commit('old, green long ago')
       const green = commit('green')
       const filesRed = commit('CI green, the binary matrix red')
+      // Since 2026-11-24 CI's own run holds the matrix rows: this one has a red row.
+      const rowRed = commit('CI OK green, a matrix row of the same run red')
       const red = commit('red')
       const docs = commit('docs only, no CI run')
       git('update-ref', 'refs/remotes/origin/main', docs)
@@ -381,12 +420,18 @@ describe('ci-gate', () => {
         [green]: [{ id: 2, head_sha: green, created_at: '2026-10-05T01:00:00Z', status: 'completed', conclusion: 'success', html_url: 'u2' }],
         [red]: [{ id: 3, head_sha: red, created_at: '2026-10-05T02:00:00Z', status: 'completed', conclusion: 'failure', html_url: 'u3' }],
         [filesRed]: [{ id: 4, head_sha: filesRed, created_at: '2026-10-05T01:30:00Z', status: 'completed', conclusion: 'success', html_url: 'u4' }],
+        [rowRed]: [{ id: 6, head_sha: rowRed, created_at: '2026-10-05T01:40:00Z', status: 'completed', conclusion: 'failure', html_url: 'u6' }],
       }
       // The binary matrix's runs: the same as CI's but where a commit has its own.
       const filesRunsFor: Record<string, unknown[]> = {
         [filesRed]: [{ id: 5, head_sha: filesRed, created_at: '2026-10-05T01:31:00Z', status: 'completed', conclusion: 'failure', html_url: 'u5' }],
       }
-      const jobsFor: Record<string, unknown[]> = { 1: [{ name: 'CI OK', conclusion: 'success' }], 2: [{ name: 'CI OK', conclusion: 'success' }], 3: [{ name: 'CI OK', conclusion: 'failure' }], 4: [{ name: 'CI OK', conclusion: 'success' }] }
+      const row = (name: string, conclusion: string) => ({ name: `Binary matrix / ${name}`, status: 'completed', conclusion })
+      const jobsFor: Record<string, unknown[]> = {
+        1: [{ name: 'CI OK', conclusion: 'success' }], 2: [{ name: 'CI OK', conclusion: 'success' }], 3: [{ name: 'CI OK', conclusion: 'failure' }], 4: [{ name: 'CI OK', conclusion: 'success' }],
+        6: [{ name: 'CI OK', conclusion: 'success' }, row('Build the files', 'success'), row('macos-15 (walnut-darwin-arm64)', 'failure')],
+        7: [{ name: 'CI OK', conclusion: 'success' }, row('Build the files', 'success'), row('macos-15 (walnut-darwin-arm64)', 'success')],
+      }
       fs.writeFileSync(path.join(tmp, 'fixture.json'), JSON.stringify({ runsFor, filesRunsFor, jobsFor }))
       // A fake `gh api <endpoint>` that logs every endpoint and answers from the fixture.
       const bin = path.join(tmp, 'bin')
@@ -403,6 +448,8 @@ if (process.env.GH_FLAKY) {
 }
 const { runsFor, filesRunsFor, jobsFor } = JSON.parse(fs.readFileSync(path.join(dir, 'fixture.json'), 'utf8'))
 let m
+// Only push runs judge a commit: a run by hand (workflow_dispatch) never does.
+if (/\\/runs\\?head_sha=/.test(endpoint) && !endpoint.includes('&event=push&')) { process.stderr.write('not a push run query ' + endpoint); process.exit(1) }
 if ((m = /binary-matrix\\.yml\\/runs\\?head_sha=([0-9a-f]+)/.exec(endpoint))) process.stdout.write(JSON.stringify({ workflow_runs: filesRunsFor[m[1]] ?? runsFor[m[1]] ?? [] }))
 else if ((m = /runs\\?head_sha=([0-9a-f]+)/.exec(endpoint))) process.stdout.write(JSON.stringify({ workflow_runs: runsFor[m[1]] ?? [] }))
 else if ((m = /runs\\/(\\d+)\\/jobs/.exec(endpoint))) process.stdout.write(JSON.stringify({ jobs: jobsFor[m[1]] ?? [] }))
@@ -414,12 +461,15 @@ else { process.stderr.write('unexpected endpoint ' + endpoint); process.exit(1) 
       expect(out).toBe(green)
       const calls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n')
       expect(calls.some((c) => c.includes('runs?branch='))).toBe(false)
-      // docs (no run), red (one run, its jobs), the commit CI passed and the matrix did not
-      // (both asked), green (both asked): then it stops.
-      expect(calls.filter((c) => c.includes('head_sha='))).toHaveLength(6)
+      // docs (no run), red (one run, its jobs), the run whose own matrix row failed (CI only:
+      // its rows are its answer), the older commits CI passed before CI called the matrix (the
+      // matrix's own run asked too), green: then it stops.
+      expect(calls.filter((c) => c.includes('head_sha='))).toHaveLength(7)
       expect(calls.filter((c) => c.includes('binary-matrix.yml/runs?head_sha='))).toEqual([
         expect.stringContaining(filesRed), expect.stringContaining(green),
       ])
+      // CI's jobs are read once per run, page by page.
+      expect(calls.filter((c) => c.includes('runs/6/jobs'))).toEqual([expect.stringContaining('per_page=100&page=1')])
       expect(calls.some((c) => c.includes(`head_sha=${old}`))).toBe(false)
 
       // GitHub answers 502 once to every call: each is asked again and the answer holds.
@@ -431,6 +481,19 @@ else { process.stderr.write('unexpected endpoint ' + endpoint); process.exit(1) 
       expect(flaky).toBe(green)
       const flakyCalls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n')
       expect(flakyCalls).toHaveLength(2 * calls.length)
+
+      // A newer commit whose CI run passed with every matrix row: taken, the matrix's own run never asked.
+      const rowsGreen = commit('CI OK and every matrix row of the same run green')
+      git('update-ref', 'refs/remotes/origin/main', rowsGreen)
+      const fixture = JSON.parse(fs.readFileSync(path.join(tmp, 'fixture.json'), 'utf8'))
+      fixture.runsFor[rowsGreen] = [{ id: 7, head_sha: rowsGreen, created_at: '2026-10-05T03:00:00Z', status: 'completed', conclusion: 'success', html_url: 'u7' }]
+      fs.writeFileSync(path.join(tmp, 'fixture.json'), JSON.stringify(fixture))
+      fs.rmSync(path.join(tmp, 'calls.log'))
+      const newest = execFileSync(process.execPath, [path.resolve(__dirname, '../../scripts/ci-gate.mjs'), 'last-green', 'main'], {
+        cwd: repo, encoding: 'utf8', env: { ...gitEnv, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+      }).trim()
+      expect(newest).toBe(rowsGreen)
+      expect(fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').includes('binary-matrix.yml')).toBe(false)
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
@@ -790,8 +853,8 @@ describe('binary-matrix.yml', () => {
   type Step = { run?: string; name?: string; if?: string; uses?: string; with?: Record<string, unknown> }
   type Job = { if?: string; needs?: string; env?: Record<string, string>; steps: Step[]; strategy?: { matrix: { include: Array<{ file: string }> } } }
   const doc = parseYaml(fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/binary-matrix.yml'), 'utf8')) as {
-    on: { workflow_call: { inputs: Record<string, { type: string; default: string }> } }
-    concurrency: { group: string; 'cancel-in-progress': string }
+    on: { workflow_call: { inputs: Record<string, { type: string; default: string }> } } & Record<string, unknown>
+    concurrency?: unknown
     jobs: Record<string, Job>
   }
   const ROWS = ['linux', 'macos', 'old-kernel']
@@ -836,16 +899,23 @@ describe('binary-matrix.yml', () => {
     expect(mac.findIndex((s) => (s.run ?? '').startsWith('codesign --verify'))).toBeGreaterThan(mac.findIndex((s) => (s.run ?? '').includes('release-unpack.sh')))
   })
 
-  it('a release\'s call never cancels, and is never cancelled by, a push run on the same ref', () => {
-    // A nightly or a promote calls it from a run on main, where main's push runs live.
-    expect(doc.concurrency.group).toBe("binary-matrix-${{ inputs.files != '' && format('{0}-{1}', github.run_id, inputs.files) || (github.event_name == 'push' && github.sha) || github.ref }}")
+  it('runs only when called (CI, a release) or by hand, never on a push or a pull request of its own', () => {
+    // 2026-11-24: on every push to main it ran 100 times in a day, 4 macOS runners each, for the
+    // 5 commits CI ran; the rest held the runners, and a row dropped without one mailed a failure.
+    expect(Object.keys(doc.on).sort()).toEqual(['workflow_call', 'workflow_dispatch'])
   })
 
-  it('every push to main gets its own verdict; only a pull request\'s newer push cancels', () => {
-    // 2026-10-31: the next push cancelled 45 of 60 runs, so the commit CI passed
-    // often had none, and ci-gate.mjs publishes a commit only when both passed.
-    expect(doc.concurrency.group).toContain("(github.event_name == 'push' && github.sha)")
-    expect(doc.concurrency['cancel-in-progress']).toBe("${{ inputs.files == '' && github.event_name == 'pull_request' }}")
+  it('is called only by CI and the release, which run it on the commits they judge', () => {
+    // A workflow that called it on every push would bring the per-push runs back.
+    const dir = path.resolve(__dirname, '../../.github/workflows')
+    const callers = fs.readdirSync(dir).filter((f) => f.endsWith('.yml') && fs.readFileSync(path.join(dir, f), 'utf8').includes('./.github/workflows/binary-matrix.yml'))
+    expect(callers.sort()).toEqual(['ci.yml', 'release.yml'])
+  })
+
+  it('has no queue of its own: each call runs inside its caller\'s run, whose queue decides', () => {
+    // A group here once had to keep a release's call and main's push runs apart; with no push
+    // runs left, a group could only make one caller wait on, or cancel, another's call.
+    expect(doc.concurrency).toBeUndefined()
   })
 })
 
@@ -862,7 +932,26 @@ describe('ci.yml', () => {
     // The informational browser suite stays out of the gate.
     expect(gate.needs).not.toContain('browser')
     const check = gate.steps.map((s) => s.run ?? '').join('\n')
-    for (const job of gate.needs as string[]) expect(check, job).toContain(`needs.${job}.result`)
+    // Each need must be success, not only printed: CI OK is what holds a failed matrix row back.
+    for (const job of gate.needs as string[]) expect(check, job).toContain(`[ "\${{ needs.${job}.result }}" = "success" ] ||`)
+  })
+
+  it('calls the binary matrix from its own run, for every commit it runs, and CI OK needs every row', () => {
+    const ciDoc = parseYaml(text) as { on: Record<string, unknown>; jobs: Record<string, { name?: string; uses?: string; if?: string; with?: unknown; needs?: string | string[]; permissions?: Record<string, string> }> }
+    const callers = Object.entries(ciDoc.jobs).filter(([, j]) => j.uses === './.github/workflows/binary-matrix.yml')
+    expect(callers.map(([k]) => k)).toEqual(['binary-matrix'])
+    const call = ciDoc.jobs['binary-matrix']!
+    // ci-gate.mjs finds the rows in CI's run by this name ("Binary matrix / <row>").
+    expect(call.name).toBe(MATRIX_JOB)
+    // On a push to main and a pull request alike, never only some of the commits CI runs,
+    // and never with a release's files.
+    expect(Object.keys(ciDoc.on)).toEqual(expect.arrayContaining(['push', 'pull_request']))
+    expect(call.if).toBeUndefined()
+    expect(call.with).toBeUndefined()
+    expect(call.needs).toBe('build')
+    // actions: read for the matrix's artifact fetch (FETCH_ARTIFACT in binary-matrix.yml).
+    expect(call.permissions).toEqual({ contents: 'read', actions: 'read' })
+    expect(gate.needs).toContain('binary-matrix')
   })
 
   it('CI OK judges every finished run but one a newer push cancelled', () => {

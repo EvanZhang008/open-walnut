@@ -31,8 +31,8 @@ name: Release
 # child of it that carries main's workflows (job `promote`).
 #
 # Both channels publish only commits CI and the binary matrix passed
-# (scripts/ci-gate.mjs reads the CI workflow's `CI OK` job and the run of
-# binary-matrix.yml), because every install updates itself on restart. The
+# (scripts/ci-gate.mjs reads the CI workflow's `CI OK` job and the binary
+# matrix rows that same run calls), because every install updates itself on restart. The
 # nightly does not rerun the tests: CI already ran them on that exact commit.
 #
 # What a version is: the compiled Walnut, one file per target, built here with

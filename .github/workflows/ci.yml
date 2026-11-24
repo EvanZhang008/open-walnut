@@ -10,7 +10,8 @@ on:
 # feedback fast. A run on main is never cancelled. A run takes about an hour and
 # main took a push every 13 minutes or so, so cancelling there left main with no
 # finished run at all (2026-10-31: 40 of 40 cancelled, none finished in 10 hours),
-# and a release publishes only a commit CI passed (scripts/ci-gate.mjs). GitHub
+# and a release publishes only a commit CI passed (scripts/ci-gate.mjs), the binary
+# matrix this run calls included (job binary-matrix). GitHub
 # keeps one pending run per group, the newest, so main gets a verdict about every
 # hour, on the newest commit when the run before it ends. Runners cost nothing
 # here: the repo is public.
@@ -24,7 +25,8 @@ concurrency:
 # and touched browser specs on that commit), so its long matrices take a few runners each, not all
 # (2026-11-09: two runs held 12 to 17 of the 20 for 80 to 90 minutes, gate jobs fell to 3 to 8
 # with 20 to 45 queued, and lands went live at 3 an hour). A pull request runs at full width.
-# tests/scripts/ci-runner-share.test.ts keeps every long matrix capped.
+# tests/scripts/ci-runner-share.test.ts keeps every long matrix capped, the binary matrix this run
+# calls included (binary-matrix.yml caps its rows on CI's push).
 
 # Runner images are pinned (ubuntu-24.04, macos-26), here and in release.yml and
 # flake-hunt.yml: a `-latest` label moves to a new OS on GitHub's date (ubuntu
@@ -1138,6 +1140,25 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # ── The compiled file on every system it claims (binary-matrix.yml) ──────
+  #
+  # Called from this run, so it runs for exactly the commits CI runs, its rows are jobs of
+  # this run (named "Binary matrix / <row>"), and CI OK needs them: a release publishes
+  # only a commit whose CI OK passed, every row included (scripts/ci-gate.mjs). Until
+  # 2026-11-24 it was a workflow of its own on every push to main: 100 runs in a day, 4 macOS
+  # runners each, for a release that could only ever use the 5 commits CI ran; the rest held
+  # the macOS runners, and a row GitHub dropped after 20 minutes without one mailed a failure.
+  # Never give it a trigger of its own again (tests/scripts/release-pipeline.test.ts).
+  # After the build, as every other gate: a commit that does not build is red already.
+  binary-matrix:
+    name: Binary matrix
+    needs: build
+    # actions: read for the matrix's artifact fetch (FETCH_ARTIFACT in binary-matrix.yml).
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/binary-matrix.yml
+
   # ── The single required check ───────────────────────────────────────────────
   #
   # Point branch protection at THIS job, never at individual matrix legs: leg
@@ -1148,7 +1169,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-24.04
-    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, live, old-node, archive-targets]
+    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, live, old-node, archive-targets, binary-matrix]
     # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
     # there it judged cancelled legs and turned the superseded run red (6 of the
     # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
@@ -1169,6 +1190,7 @@ jobs:
           echo "archive-targets: ${{ needs.archive-targets.result }}"
           echo "onboarding: ${{ needs.onboarding.result }}"
           echo "remote-host: ${{ needs.remote-host.result }}"
+          echo "binary-matrix: ${{ needs.binary-matrix.result }}"
           # A matrix job's result is 'success' only when EVERY leg succeeded.
           # None of these jobs uses continue-on-error, so the values are unambiguous.
           failed=0
@@ -1184,5 +1206,6 @@ jobs:
           [ "${{ needs.archive-targets.result }}" = "success" ] || { echo "::error::an archive a release ships (darwin-x64 or linux-arm64) did not build or run"; failed=1; }
           [ "${{ needs.onboarding.result }}" = "success" ] || { echo "::error::the documented install broke on a fresh machine"; failed=1; }
           [ "${{ needs.remote-host.result }}" = "success" ] || { echo "::error::Walnut could not onboard a fresh remote host"; failed=1; }
+          [ "${{ needs.binary-matrix.result }}" = "success" ] || { echo "::error::the compiled file failed on a system it claims (Binary matrix)"; failed=1; }
           [ "$failed" = "0" ] || exit 1
           echo "All blocking checks passed."
