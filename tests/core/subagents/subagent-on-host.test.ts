@@ -135,9 +135,9 @@ import { __setTransferConnectionResolverForTesting, type TransferConn } from '..
 import { createTransferPack, type TransferPackDeps } from '../../../src/providers/transfer-pack-core.js'
 import { createTransferCore, type TransferCoreDeps } from '../../../src/providers/transfer-core.js'
 import { recordRepoPath, repoKey } from '../../../src/core/hosts/host-profile.js'
-import { _closeOrphansForTest, _forgetLightSubagentsForTest, detachAllLightSubagents, hasRunningLightSubagents, restoreLightSubagents, RESUME_PROMPT, _resetLightSubagentsForTest, _setKeepIdleMsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, lightSubagentRows, lightSubagentSettled, markTold, sendLightSubagent, startLightSubagent, waitLightSubagent, stopLightSubagent, getLightSubagent } from '../../../src/core/subagents/registry.js'
+import { _closeOrphansForTest, _forgetLightSubagentsForTest, detachAllLightSubagents, hasRunningLightSubagents, restoreLightSubagents, restoreSubagentCallerAliases, RESUME_PROMPT, _resetLightSubagentsForTest, _setKeepIdleMsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, lightSubagentRows, lightSubagentSettled, markTold, sendLightSubagent, startLightSubagent, waitLightSubagent, stopLightSubagent, getLightSubagent } from '../../../src/core/subagents/registry.js'
 import { _setSubagentStarterForTest, _setLateStopCheckMsForTest, _setResumeCheckMsForTest, SUBAGENT_LANE_PREFIX } from '../../../src/core/subagents/on-host.js'
-import { canonicalCallerSid } from '../../../src/core/sessions/acp-caller-sid.js'
+import { canonicalCallerSid, _clearCallerAliasesForTest } from '../../../src/core/sessions/acp-caller-sid.js'
 import { grant, revokeGrant, findGrant } from '../../../src/core/hosts/exec-grants.js'
 import { listLeftRuns, noteLeft, sweepLeftRuns } from '../../../src/core/subagents/left-runs.js'
 
@@ -779,6 +779,42 @@ describe('a Walnut subagent outlives the server', () => {
     stopLightSubagent(SID, run.id, 'the test')
     await lightSubagentSettled(run.id)
     expect(W.stops).toEqual([sid])
+  }, 90_000)
+
+  // 2026-11-24: after each deploy, an iOS run's host_exec_read from a subagent on another host was
+  // refused session_only for one to five minutes (75 refusals an hour): the new process held no
+  // alias until startup recovery let the run be taken up, so the call named a session of no task.
+  it('a new server lets its calls act for the caller from the first request, before startup recovery takes it up', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'A long job.', background: true })
+    await until(() => starts.length > 0 && !!lightSubagentRows(SID)[0]?.walnutSessionId)
+    const sid = String(lightSubagentRows(SID)[0]!.walnutSessionId)
+    await updateSessionRecord(sid, { process_status: 'running', pid: 4242, status_reason: 'session_started' } as never)
+    await detachAllLightSubagents('the test restarts the server')
+    _forgetLightSubagentsForTest()
+    // A new process: nothing in memory, so the call reads as its own session, which has no task.
+    _clearCallerAliasesForTest()
+    expect(canonicalCallerSid(sid)).toBe(sid)
+    // What server.ts runs before it listens.
+    expect(restoreSubagentCallerAliases()).toBe(1)
+    expect(canonicalCallerSid(sid)).toBe(SID)
+    // And restoreLightSubagents sets it at once too, while startup recovery still runs.
+    _clearCallerAliasesForTest()
+    let recovered!: () => void
+    const restoring = restoreLightSubagents(new Promise<void>((r) => { recovered = r }))
+    expect(canonicalCallerSid(sid)).toBe(SID)
+    recovered()
+    await restoring
+    expect(canonicalCallerSid(sid)).toBe(SID)
+    release!()
+    await until(() => told(run.id).length > 0)
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+    // A closed run leaves no alias behind, and a later restart restores none for it.
+    expect(canonicalCallerSid(sid)).toBe(sid)
+    expect(restoreSubagentCallerAliases()).toBe(0)
   }, 90_000)
 
   it('a turn that ended while the server was down (its session idle, no end seen) is asked again, and the answer is told', async () => {

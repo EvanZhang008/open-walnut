@@ -28,6 +28,7 @@ import { log } from '../../logging/index.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import type { BackgroundTaskInfo } from '../event-types.js'
 import type { SessionEngine } from '../types.js'
+import { clearCallerAlias, setCallerAlias } from '../sessions/acp-caller-sid.js'
 import { LIGHT_SUBAGENT_ENGINES, LightSubagentError, RESUME_PROMPT, type LightRunner, type LightRunResult, type LightRunSpec, type LightSubagentStatus, type ReturnedFile } from './types.js'
 import type { SubagentSessionState, SubagentTurnSpec } from './on-host.js'
 
@@ -872,6 +873,27 @@ export async function detachAllLightSubagents(by: string): Promise<void> {
 }
 
 /**
+ * The runs the server before this one let go act for their callers again from this server's
+ * first request: each saved session's caller alias (acp-caller-sid.ts) is set from the file at
+ * once, before anything is taken up. Taking a run up waits for the session runner's startup
+ * recovery, a minute or more after listen; until then a subagent's `walnut` call named its own
+ * session, a row with no task, and read as no task's caller (2026-11-24 UTC: an iOS run's
+ * host_exec_read on another Mac was refused session_only for a minute or five after each deploy,
+ * 75 refusals an hour). server.ts calls this before it listens; restoreLightSubagents again.
+ */
+export function restoreSubagentCallerAliases(saved: SavedRun[] = readSaved()): number {
+  let n = 0
+  for (const s of saved) {
+    const sid = s.handle?.sessionId
+    const as = s.handle?.callerSid
+    if (s.settled || runs.has(s.run.id) || !sid || !as) continue
+    setCallerAlias(sid, as)
+    n++
+  }
+  return n
+}
+
+/**
  * A new server takes up the runs the one before it wrote down: each is listed again at once (so
  * the left-runs sweep leaves its session alone), an end its caller has not heard yet is told now,
  * a turn the restart cut off is asked again of the same session, and the messages that waited
@@ -880,6 +902,7 @@ export async function detachAllLightSubagents(by: string): Promise<void> {
 export async function restoreLightSubagents(ready: Promise<unknown> = Promise.resolve()): Promise<number> {
   letGo = false
   const saved = readSaved()
+  restoreSubagentCallerAliases(saved)
   const taken: Array<{ live: Live; s: SavedRun }> = []
   const setups: Array<Promise<boolean>> = []
   // Listed at once, before any await: the left-runs sweep leaves a listed run's session alone, and
@@ -929,6 +952,9 @@ async function takeUp(live: Live, s: SavedRun): Promise<boolean> {
     }
   } catch (err) {
     log.agent.warn('light subagent: its session could not be taken up', { id: run.id, error: err instanceof Error ? err.message : String(err) })
+    // No handle closes it: the alias set before listen goes with the run (restoreSubagentCallerAliases).
+    // An ACP run that had not named its session yet has none before listen; restore finds it by lane.
+    if (!live.handle && s.handle?.sessionId) clearCallerAlias(s.handle.sessionId)
   }
   // Stopped while it was being taken up: what it had is closed now.
   if (live.closing) { await live.closing; await live.handle?.close('subagent_stopped'); return false }

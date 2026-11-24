@@ -38,6 +38,8 @@ const aliases = new Map<string, string>()
 /** `sid`'s calls act as `as` until cleared (a subagent's session, core/subagents/on-host.ts). */
 export function setCallerAlias(sid: string, as: string): void { aliases.set(sid, as) }
 export function clearCallerAlias(sid: string): void { aliases.delete(sid) }
+/** A new process: nothing in memory (a test of a server restart). */
+export function _clearCallerAliasesForTest(): void { aliases.clear() }
 
 /** The record id for an ACP runtime id, else the sid unchanged. Never throws. */
 export function canonicalCallerSid(sid: string): string

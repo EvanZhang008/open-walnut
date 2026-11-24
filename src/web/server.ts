@@ -3513,6 +3513,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     await loadAskMeLatch()
   }
 
+  // The subagents the server before this one let go act for their callers from the first request,
+  // not only once they are taken up after startup recovery (registry.ts restoreSubagentCallerAliases).
+  try {
+    const n = (await import('../core/subagents/registry.js')).restoreSubagentCallerAliases()
+    if (n) log.web.info('subagent caller aliases restored before listen', { sessions: n })
+  } catch (err) {
+    log.web.warn('subagent caller aliases: restore before listen failed', { error: err instanceof Error ? err.message : String(err) })
+  }
+
   // -- HTTP + WebSocket --
   httpServer = createServer(app)
   attachWss(httpServer)
