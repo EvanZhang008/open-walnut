@@ -17,6 +17,10 @@
  *   auto-continue          the timed continue of a turn the upstream retries gave up on
  *   endpoint wait          the continue once the model endpoint answers again
  *   usage-limit wait       the continue once the usage window resets
+ *   delivery retry         a parked row of an own session's queue tried again by itself
+ *
+ * The leader starts the same members for the sessions it judges itself, its own machine's among them
+ * (web/server.ts); tests/core/session-channel/resend-family-both-sides.test.ts keeps the two lists one.
  *
  * What a give-up raises (the error card, the phase edge) is the leader's: it goes as a
  * `session:retry-over` fact (sessions/held-error.ts). The leader reads the host's turn state from
@@ -111,7 +115,7 @@ export async function turnOfOwnSession(): Promise<(sid: string) => { waits: unkn
 /**
  * The bus subscribers of the family's members that act on a turn end, by the name each subscribes
  * with (tests/core/session-channel/stand-down-held.test.ts checks the list against the sources).
- * turn-run listens to sends only; cold hold and the stale repair subscribe to nothing.
+ * turn-run listens to sends only; cold hold, the delivery retry and the stale repair subscribe to nothing.
  */
 export const RESEND_TURN_END_SUBSCRIBERS: readonly string[] = [
   'queue-after-turn', 'idle-compaction', 'prompt-refresh-respawn', 'context-full-recovery', 'safeguard-switch',
@@ -181,6 +185,13 @@ export async function startHostResendFamily(o: { say?: Say } = {}): Promise<Host
     const m = await import('../sessions/usage-limit-wait.js')
     if (!m.usageLimitWaitEnabled()) return
     return m.startUsageLimitWait({ handBack: cardToLeader, pickUp: true }).stop
+  })
+  // A parked row of an own session's queue (which lives here) is tried again by itself, as the
+  // leader's clock does for its own sessions' rows; the kept trigger fires stay the leader's.
+  await step('delivery-retry', async () => {
+    const m = await import('../sessions/delivery-retry.js')
+    m.startDeliveryRetry({ ownOnly: true, keptFires: false })
+    return m.stopDeliveryRetry
   })
   // The health monitor's stale-process repair, for this host's own rows (the monitor runs on no replica).
   await step('stale-repair', async () => {

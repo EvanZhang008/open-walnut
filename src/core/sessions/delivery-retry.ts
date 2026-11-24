@@ -193,6 +193,11 @@ async function kickStuckPending(sessionId: string, rows: QueuedMessage[], now: n
 
 let sweep: ReturnType<typeof setInterval> | null = null;
 let lap: Promise<string[]> | null = null;
+/**
+ * A host that runs its own sessions sweeps only the queues of the sessions it judges
+ * (sessions/judge-of.ts judgedHere: its own rows), never a copied row's: set by its start.
+ */
+let ownOnly = false;
 
 /** One look at every queue: each session's due parked rows go back in line. Returns the ids. */
 export function sweepDeliveryRetries(now = Date.now()): Promise<string[]> {
@@ -200,7 +205,9 @@ export function sweepDeliveryRetries(now = Date.now()): Promise<string[]> {
     const store = await readQueueFileFresh();
     const out: string[] = [];
     for (const sid of kicked.keys()) if (!store.queues[sid]?.some((r) => r.status === 'pending')) kicked.delete(sid);
+    const judgedHere = ownOnly ? (await import('./judge-of.js')).judgedHere : null;
     for (const [sid, rows] of Object.entries(store.queues)) {
+      if (judgedHere && !judgedHere(sid)) continue;
       try {
         const back = rows.some((r) => r.status === 'parked') ? await retrySession(sid, rows, now) : [];
         if (back === null) continue;
@@ -224,18 +231,26 @@ function sweepKeptFires(): void {
     .finally(() => { firesLap = null; });
 }
 
-/** Boot (leader): the clock runs for good; a restart's due rows go at the first lap. */
-export function startDeliveryRetry(): void {
+/**
+ * Boot: the clock runs for good; a restart's due rows go at the first lap. The leader sweeps every
+ * queue and the trigger fires it keeps. A host that runs its own sessions (session-channel/host-resend.ts)
+ * holds their queues, so it runs the same clock for them (`ownOnly`); the kept trigger fires are the
+ * leader's (`keptFires: false` there).
+ */
+export function startDeliveryRetry(o: { ownOnly?: boolean; keptFires?: boolean } = {}): void {
   if (sweep) return;
-  sweep = setInterval(() => { void sweepDeliveryRetries(); sweepKeptFires(); }, SWEEP_MS);
+  ownOnly = o.ownOnly === true;
+  const fires = o.keptFires !== false;
+  sweep = setInterval(() => { void sweepDeliveryRetries(); if (fires) sweepKeptFires(); }, SWEEP_MS);
   sweep.unref?.();
   void sweepDeliveryRetries();
-  sweepKeptFires();
+  if (fires) sweepKeptFires();
 }
 
 /** Test seam. */
 export function stopDeliveryRetry(): void {
   if (sweep) clearInterval(sweep);
   sweep = null;
+  ownOnly = false;
   kicked.clear();
 }

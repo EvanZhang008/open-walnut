@@ -36,8 +36,9 @@ import {
 import { LINE_ENDED_UNANSWERED_REASON, LINE_NOT_ANSWERED_REASON } from '../../../src/providers/claude-code-session.js';
 import {
   NEEDS_A_PERSON_CODES, NOT_LOST_REASON_PREFIXES, RETRY_BACKOFF_MS, RETRY_EVERY_MS, STUCK_PENDING_MS,
-  nextRetryAt, retryDelayMs, stopDeliveryRetry, sweepDeliveryRetries,
+  nextRetryAt, retryDelayMs, startDeliveryRetry, stopDeliveryRetry, sweepDeliveryRetries,
 } from '../../../src/core/sessions/delivery-retry.js';
+import { _resetJudgeOfForTesting, noteHostJudged } from '../../../src/core/sessions/judge-of.js';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const SID = 'dddddddd-1111-4222-8333-555555555555';
@@ -134,6 +135,28 @@ describe('never a park a person or a hold decided, nor one only a person can fix
     await mutateStore((s) => { delete s.queues[SID][0].stopFence; });
     await updateSessionRecord(SID, { archived: true } as never);
     expect(await sweepDeliveryRetries(Date.now() + RETRY_EVERY_MS)).toEqual([]);
+  });
+});
+
+describe('a host that runs its own sessions runs the same clock for their queues', () => {
+  afterEach(() => { _resetJudgeOfForTesting(); });
+
+  it('ownOnly: a queue of a session this server does not judge is left to its judge; its own are tried again', async () => {
+    const OTHER = 'eeeeeeee-1111-4222-8333-555555555555';
+    await createSessionRecord(OTHER, 't-retry-other', 'Acme', '/tmp', { initialProcessStatus: 'idle' });
+    const mine = await parked('mine', 'Not delivered: Claude Code exited before it read this message. Retry it.');
+    const theirs = await enqueueMessage(OTHER, 'theirs');
+    await parkMessages([theirs], 'Not delivered: Claude Code exited before it read this message. Retry it.');
+    // Another server judges OTHER (here: a host's session, as the leader sees it).
+    noteHostJudged(OTHER, 'devbox');
+    // The clock's own first lap runs at its start; the kept trigger fires are not this side's.
+    startDeliveryRetry({ ownOnly: true, keptFires: false });
+    // Joins that first lap (nothing is due yet).
+    expect(await sweepDeliveryRetries()).toEqual([]);
+    const due = nextRetryAt(mine);
+    expect(await sweepDeliveryRetries(due + 60_000)).toEqual([mine.id]);
+    expect(sends).toEqual([SID]);
+    expect((await getQueue(OTHER))[0]).toMatchObject({ status: 'parked' });
   });
 });
 
