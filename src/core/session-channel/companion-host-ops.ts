@@ -27,6 +27,7 @@
  */
 import { listenerLinked, callListenedHost, ListenerNotLinked, standingRow, standingRows, anyListenedRows as anyRows } from './companion-listener.js'
 import { hostJudgedAlias, hostUnreachableSentence } from './host-judged-direct.js'
+import { wireArgs } from './host-calls.js'
 import type { LiveState } from './host-api.js'
 import type { SessionRecord } from '../types.js'
 import type { SessionImage } from '../sessions/cloud-images.js'
@@ -322,7 +323,7 @@ export async function permissionViaHost(t: OperatedSession, b: Record<string, un
   }
   const patch = given !== undefined && Object.keys(given).length > 0 ? { answers: given } : undefined
   // The session's own parameters (claude-code-session.ts, acp-session.ts), shaped as every host call's (host-calls.ts wireArgs).
-  const args = (await import('./host-calls.js')).wireArgs(acp ? [requestId, allow, optionId] : [requestId, allow, message, patch, optionId])
+  const args = wireArgs(acp ? [requestId, allow, optionId] : [requestId, allow, message, patch, optionId])
   const sid = t.row.claudeSessionId
   const r = await call(t, '/host-api/sessions/call', { sid, target: acp ? 'acp' : 'session', member: 'resolvePermissionRequest', args }, timeoutMs)
   if (!r.ok) {
