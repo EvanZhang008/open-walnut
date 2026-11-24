@@ -78,6 +78,10 @@ final class WalnutConnect: @unchecked Sendable {
     /// the next send. An app that runs in the background (music playing) keeps ticking and
     /// keeps its listener, so its open connections are never reset.
     private var needsRebind = false
+    /// Suspends noticed so far: a start that ran across one must not clear `needsRebind`.
+    private var suspends: UInt64 = 0
+    /// Written only by the ticks and by a rebind that happened, never by a start: a start that
+    /// ran across a suspend must leave the gap for `holds` to see.
     private var lastTick: UInt64 = 0
     private var ticker: DispatchSourceTimer?
     private static let suspendedGap: UInt64 = 3_000_000_000
@@ -98,18 +102,19 @@ final class WalnutConnect: @unchecked Sendable {
     private func tick() {
         let now = Self.now()
         lock.lock()
-        if lastTick > 0, now &- lastTick > Self.suspendedGap { needsRebind = true }
+        if lastTick > 0, now &- lastTick > Self.suspendedGap { needsRebind = true; suspends &+= 1 }
         lastTick = now
         lock.unlock()
     }
 
-    private func startTicking() {
+    /// `since`: when the start began, so a start that ran across a suspend leaves a gap.
+    private func startTicking(since: UInt64) {
         lock.lock(); defer { lock.unlock() }
         guard ticker == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.openwalnut.connect.tick", qos: .utility))
         t.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(500))
         t.setEventHandler { [weak self] in self?.tick() }
-        lastTick = Self.now()
+        lastTick = since
         ticker = t
         t.resume()
     }
@@ -185,7 +190,11 @@ final class WalnutConnect: @unchecked Sendable {
         guard isAvailable, port > 0 else { return false }
         let now = Self.now()
         lock.lock()
-        let recheck = running != nil && (needsRebind || (lastTick > 0 && now &- lastTick > Self.suspendedGap))
+        if running != nil, lastTick > 0, now &- lastTick > Self.suspendedGap, !needsRebind {
+            needsRebind = true
+            suspends &+= 1
+        }
+        let recheck = running != nil && needsRebind
         lock.unlock()
         if recheck, !listenAgain() { return false }
         return Int(wc_listening()) == port
@@ -273,13 +282,15 @@ final class WalnutConnect: @unchecked Sendable {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: config),
               let text = String(data: data, encoding: .utf8) else { return nil }
-        lock.lock(); let rebindFirst = needsRebind; lock.unlock()
+        lock.lock(); let rebindFirst = needsRebind; let suspendsBefore = suspends; lock.unlock()
+        let startedAt = Self.now()
         let out = await onFFI {
             var out = text.withCString { ptr in Self.call { wc_start(ptr) } }
             // Back from the background: a kept client's listener may be one iOS reclaimed.
             if rebindFirst, out["ok"] as? Bool == true, out["kept"] as? Bool == true {
                 let again = Self.call { wc_rebind() }
                 if again["ok"] as? Bool == true { out["port"] = again["port"] }
+                else { out["rebindFailed"] = true }
             }
             return out
         }
@@ -289,10 +300,11 @@ final class WalnutConnect: @unchecked Sendable {
         }
         lock.lock()
         running = (peer, key, port)
-        needsRebind = false
-        lastTick = Self.now()
+        // A suspend noticed while this start ran (or a rebind it could not make) leaves the
+        // listener in doubt: the next send takes it again.
+        if suspends == suspendsBefore, out["rebindFailed"] as? Bool != true { needsRebind = false }
         lock.unlock()
-        startTicking()
+        startTicking(since: startedAt)
         if port != connectPort { await movePort(to: port) }
         return port
     }

@@ -179,7 +179,8 @@ extension AppConfig {
         let main = decodeRoutes(defaults.data(forKey: routesKey)).filter { $0.kind != .connect }
         // An older build re-pairing clears only the main list: a connect route of another
         // Walnut than the main list's is that old pairing's, never this one's.
-        let paired = Set(main.compactMap(\.instance))
+        // The companion's route names the companion, not the Mac: only the Mac's own routes count.
+        let paired = Set(main.filter { $0.kind != .cloud }.compactMap(\.instance))
         let connect = decodeRoutes(defaults.data(forKey: connectRoutesKey)).filter {
             $0.kind == .connect && (paired.isEmpty || $0.instance.map(paired.contains) == true)
         }

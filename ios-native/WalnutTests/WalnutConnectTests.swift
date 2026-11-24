@@ -155,6 +155,16 @@ final class WalnutConnectTests: XCTestCase {
         XCTAssertEqual(AppConfig.storedRoutes(in: d), [otherMac], "mac-1's connect route is not mac-2's")
     }
 
+    func testAConnectRouteBesideOnlyTheCompanionIsKept() {
+        // A Mac with no Wi-Fi or Tailscale route, and a companion: the companion's instance is
+        // its own, so it says nothing about which Mac the connect route belongs to.
+        let d = scratchDefaults()
+        let local = AppConfig.localizedConnectRoutes([connectRoute, cloud], origin: "http://127.0.0.1:41234")
+        AppConfig.storeRoutes(local, anchor: cloud.origin, in: d)
+        XCTAssertEqual(AppConfig.storedRoutes(in: d), local)
+        XCTAssertFalse(AppConfig.mergeRoutes(local, server: [cloud]) != local, "nothing to rewrite on every refresh")
+    }
+
     func testOnlyTheConnectPortIsHeldBack() {
         let connect = WalnutConnect.shared
         XCTAssertFalse(connect.isConnectURL(URL(string: "http://192.168.1.20:3456/api/v1/status")))
