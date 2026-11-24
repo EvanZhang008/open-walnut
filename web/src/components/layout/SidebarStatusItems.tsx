@@ -191,11 +191,15 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
   const navigate = useNavigate();
   const catalog = useAppCatalog();
   const focusOnOpen = useRef(takeFocus);
-  // Beside the rail, bottom edge level with the item: a point just right of the
-  // trigger's bottom corner, opening rightward and upward. Measured once per open.
+  // Beside the rail, bottom edge level with the item: a point just right of the rail's
+  // edge at the trigger's bottom, opening rightward and upward. The rail's edge, not the
+  // trigger's: the collapsed rail's round key ends 10 px inside its 56 px. Measured once per open.
   const [anchor] = useState(() => {
-    const rect = triggerRef.current?.getBoundingClientRect();
-    return rect ? { x: rect.right + 10, y: rect.bottom } : null;
+    const trigger = triggerRef.current;
+    const rect = trigger?.getBoundingClientRect();
+    if (!rect) return null;
+    const railRight = trigger?.closest('.sidebar')?.getBoundingClientRect().right ?? rect.right;
+    return { x: Math.max(rect.right, railRight) + 8, y: rect.bottom };
   });
   const placement = useMenuPlacement(true, triggerRef, popRef, {
     anchorPoint: anchor, align: 'left', preferSide: 'up', gap: 0, minHeight: 120, onAnchorLost: onClose,

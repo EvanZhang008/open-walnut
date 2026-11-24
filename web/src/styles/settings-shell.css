@@ -205,8 +205,10 @@
   align-items: center;
   gap: 12px;
   /* Exactly the title's 28px line box, from its top: Saved, Refresh and Add
-     host centre on the title line (N3-10). */
-  min-height: 28px;
+     host centre on the title line (N3-10). A fixed height, not a minimum: a
+     page's own action is the 34px default key (SettingsSection), which then
+     reaches 3px past the line on each side instead of pushing its middle down. */
+  height: 28px;
   margin-top: 0;
 }
 

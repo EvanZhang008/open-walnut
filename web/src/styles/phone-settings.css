@@ -148,6 +148,16 @@
     overflow-wrap: anywhere;
   }
 
+  /* A row's More takes a finger: its box is 44 px tall, and the negative margins keep the
+     help line at its own height (the line counts the margin box), so nothing below moves. */
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-row-help > .settings-row-more {
+    position: relative;
+    z-index: 1;
+    min-height: 44px;
+    margin-top: -14px;
+    margin-bottom: -14px;
+  }
+
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-row-label {
     font-size: var(--font-size-lg);
     line-height: 20px;
