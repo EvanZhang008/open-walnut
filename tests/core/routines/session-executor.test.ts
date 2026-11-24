@@ -293,6 +293,27 @@ describe('session executor: delivery', () => {
     expect(inherited.calls.started[0].host).toBe('devbox');
   });
 
+  it('L3: a task whose conversation lives on another host than the trigger restarts there, never on the trigger\'s host', async () => {
+    // Its errored session on this machine (no host) and the trigger on a dev host: naming the dev host is refused by task-start.
+    const local = fakeDelivery({
+      sessionsForTask: async () => [{ claudeSessionId: 'here', process_status: 'error', status_reason: 'remote_unreachable' }] as Sessions,
+      getTask: async () => ({ id: 'task-1', phase: 'IN_PROGRESS' }),
+    })
+    await createSessionExecutor(local).run(job({ check: { run: 'x', host: 'devbox' } }), REF, FIRE)
+    expect(local.calls.started).toHaveLength(1)
+    expect(local.calls.started[0].host).toBeUndefined()
+    // The newest conversation's host wins over an older one's.
+    const two = fakeDelivery({
+      sessionsForTask: async () => [
+        { claudeSessionId: 'old', process_status: 'stopped', archived: true, host: 'old-box', lastActiveAt: '2026-11-01T00:00:00Z' },
+        { claudeSessionId: 'new', process_status: 'error', host: 'new-box', lastActiveAt: '2026-11-20T00:00:00Z' },
+      ] as Sessions,
+      getTask: async () => ({ id: 'task-1', phase: 'IN_PROGRESS' }),
+    })
+    await createSessionExecutor(two).run(job({ check: { run: 'x', host: 'devbox' } }), REF, FIRE)
+    expect(two.calls.started[0].host).toBe('new-box')
+  })
+
   it('a missing task is an error plus a notification, never a new task', async () => {
     const { delivery, calls } = fakeDelivery({ getTask: async () => null });
     const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);

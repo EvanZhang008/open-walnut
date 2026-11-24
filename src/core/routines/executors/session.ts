@@ -363,11 +363,17 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
     }
 
     // No resumable session but the task is open: start a new conversation on
-    // the task, where the old one lived. The trigger's own host/cwd is the best
-    // guess when the task has none — that is where the check itself runs.
-    const host = job.check?.host && job.check.host !== '__local__'
-      ? job.check.host
-      : sessions.find((s) => s.host)?.host;
+    // the task, where the old one lived. The trigger's own host is the guess only
+    // when the task has none (that is where the check itself runs): task-start
+    // continues a task's conversation and refuses a start naming another host
+    // (refuseDifferentPlace), so the check's host would be refused once, then
+    // delivered on a retry (2026-11-24 drill, L3: an errored session on the
+    // leader's own machine and a trigger on a dev host).
+    const lived = sessions.length
+      ? sessions.reduce((a, b) => (Date.parse(b.lastActiveAt ?? '') > Date.parse(a.lastActiveAt ?? '') ? b : a))
+      : null;
+    const nonLocal = (h: string | undefined) => (h && h !== '__local__' && h !== 'local' ? h : undefined);
+    const host = lived ? nonLocal(lived.host) : nonLocal(job.check?.host);
     const cwd = task?.cwd || job.check?.cwd || WALNUT_HOME;
     let started: { sessionId?: string; queued?: true } | void;
     try {
