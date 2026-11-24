@@ -25,7 +25,7 @@ import { moveDaemonState, unmanagedStateRoot } from './daemon-service-state-move
 import { localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { RESTART_MARK_NAME } from './daemon-restart-mark.js'
 import { OVER_BUSY_FLAG, OVER_BUSY_PLAIN_MS, OVER_BUSY_WAIT_MS } from './daemon-over-busy.js'
-import { proveStagedBoot } from './daemon-boot-proof.js'
+import { proofEnvFor, proveStagedBoot } from './daemon-boot-proof.js'
 import { launchdSpawnsJobs } from './daemon-service-launchd.js'
 import { DAEMON_BUSY_WORDS } from './daemon-busy-words.js'
 import { handBackStandIn } from './daemon-service-handback.js'
@@ -472,6 +472,8 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
         const mode = 'mode' in read && read.mode.exe === prepared.executable ? read.mode : null
         return proveStagedBoot({
           ...prepared, path: servicePath(process.env.PATH, home),
+          // A set's trial unpacks a walnut file's tree in the set's own dir, where its service looks first.
+          env: proofEnvFor(set, root),
           // Asked: its own Walnut said --serve with this update; else the mode came over from the version before.
           mode: !mode ? null : options.serve?.on && options.serve.home === mode.home ? 'asked' : 'carried',
           dropMode: async () => {

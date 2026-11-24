@@ -40,6 +40,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { singleFile } from '../lib/single-file.js'
+import { RUNTIME_DIR_ENV, serviceSetEnv, type ServiceSet } from './service-set.js'
 
 export interface BootProofOptions {
   executable: string
@@ -104,6 +105,16 @@ export function trialRuntimeDir(env: NodeJS.ProcessEnv = process.env, home = os.
   if (env.WALNUT_RUNTIME_DIR && path.isAbsolute(env.WALNUT_RUNTIME_DIR)) return path.resolve(env.WALNUT_RUNTIME_DIR)
   const data = env.OPEN_WALNUT_HOME && path.isAbsolute(env.OPEN_WALNUT_HOME) ? env.OPEN_WALNUT_HOME : path.join(home, '.open-walnut')
   return path.join(data, 'local', 'runtime')
+}
+
+/**
+ * The env a service set's boot proof adds: the set's own runtime-tree dir (service-set.ts
+ * serviceSetEnv), so the trial of a staged walnut file unpacks its tree where the set's service
+ * will look for it, and that first start does not unpack the same build again inside its ready
+ * wait. None for the default set, whose trial uses trialRuntimeDir as before.
+ */
+export function proofEnvFor(set: Pick<ServiceSet, 'id'>, installRoot: string): Record<string, string> {
+  return set.id ? Object.fromEntries(serviceSetEnv(set.id, installRoot).filter(([key]) => key === RUNTIME_DIR_ENV)) : {}
 }
 
 /** As long as a started service gets to answer (daemon-service-cli.ts SERVICE_READY_WAIT_MS): a slow first start is not a broken build. */
