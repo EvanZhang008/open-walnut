@@ -366,7 +366,7 @@ export class ServiceSetLink {
     if (look && (this.provisionedAt === 0 || this.now() - this.provisionedAt >= PROVISION_EVERY_MS)) {
       this.provisionedAt = Math.max(1, this.now())
       // A look that threw (the link cut mid-line) is a look that found nothing: looked at again (drill round 3, R3-3).
-      const p: SetProvision = await this.c.provision(ask, { refresh: !movedToSet(record) })
+      const p: SetProvision = await this.c.provision(ask, { refresh: await this.mayRefresh(standing, record) })
         .catch((err: unknown) => ({ set: null, installed: false, ok: false, message: err instanceof Error ? err.message : String(err) }))
         .finally(() => { this.lookEnded = true })
       if (p.set === null) {
@@ -378,8 +378,18 @@ export class ServiceSetLink {
         this.schedule(this.lookRetryMs)
         return
       }
-      this.lookRetryMs = 0
       await recordServiceSetFrom(this.place, `service set: ${p.set || 'default'}`, p.runtimeDir)
+      if (p.retryLook) {
+        // The set's build is not this build yet and its update did not happen now: no move (it would
+        // answer no_build), the look again soon, then less often.
+        this.lookRetryMs = Math.min(Math.max(LOOK_RETRY_FIRST_MS, this.lookRetryMs * 2), PROVISION_EVERY_MS)
+        this.provisionedAt = 0
+        log.session.warn('service set: this Walnut\'s own service there has no copy of this build yet; it looks again', { host: this.c.hostKey, why: (p.message ?? '').slice(0, 300), inMs: this.lookRetryMs })
+        this.c.notice(this.noticeKey, `This Walnut's own service on ${this.c.hostKey} could not take this Walnut's build yet (${(p.message ?? '').slice(0, 300)}); its sessions stay on the service another Walnut runs there, and Walnut tries again.`)
+        this.schedule(this.lookRetryMs)
+        return
+      }
+      this.lookRetryMs = 0
       if (!p.ok) {
         this.c.notice(this.noticeKey, `This Walnut's own service on ${this.c.hostKey} could not be installed (${(p.message ?? '').slice(0, 300)}); its sessions stay on the service another Walnut runs there.`)
         return
@@ -390,6 +400,19 @@ export class ServiceSetLink {
     // The experiment gates new moves only (B7).
     if (!(await hostServiceSetsWanted())) return
     await this.move(record, force)
+  }
+
+  /**
+   * The look may update this Walnut's own set to this build (service-set-provision.ts refresh) only
+   * while nothing of this Walnut can run on it: the link read as reaching the shared daemon (a record
+   * that read, a hello naming another daemon), never moved to, and no move flipped or done (a move
+   * done before its host record kept it, a restart in the flipped phase). Review round 1, 2.
+   */
+  private async mayRefresh(standing: LinkStanding, record: HostSetRecord | null): Promise<boolean> {
+    if (standing !== 'shared' || !record?.set || movedToSet(record) || this.c.helloSet() === record.set) return false
+    const move = await serviceSetMoves.read(this.place).catch(() => undefined)
+    if (move === undefined) return false
+    return !(move?.set === record.set && (move.phase === 'flipped' || move.phase === 'done'))
   }
 
   private get noticeKey(): string { return `service-set:${this.c.hostKey}` }
