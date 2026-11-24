@@ -168,7 +168,7 @@ describe('the composers build only out of registered blocks', () => {
     const spawn = read('src/providers/claude-code-session.ts')
     expect(spawn).not.toContain('## Task Context')
     expect(spawn).not.toMatch(/appendParts\.join\(/)
-    expect(spawn).toContain("args.push('--append-system-prompt', joinAppendedPrompt(appendParts))")
+    expect(spawn).toContain("sessionArgs.push('--append-system-prompt', joinAppendedPrompt(appendParts))")
     expect(spawn.match(/joinCallerAndContext\(/g)?.length).toBe(2)
     // Walnut adds only the separators.
     expect(joinCallerAndContext('caller', 'ctx')).toBe(`caller${TASK_CONTEXT_SEPARATOR}ctx`)

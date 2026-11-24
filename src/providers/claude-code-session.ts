@@ -31,7 +31,6 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { projectOrInbox } from '../core/inbox-project.js'
 import { bashCommandParts, bashRuleCovers, claudeChoiceResponse, cliDenyMessage, MESSAGE_DENIES_PROMPT, pendingPermissionRecordFields, ruleAllowedLine, scopeOfDestination, settingsBashRules, settingsFilesOf, PermissionSaveError, type BashRuleScope, permissionDecisionLine, withPermissionDecision, UnknownPermissionOptionError, permissionEventFields, requestFromPendingRecord, type ClaudeCanUseToolRequest, type ClaudePermissionUpdate } from './claude-permission-options.js'
-import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
@@ -150,7 +149,8 @@ import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { joinQueuedRows } from '../lib/ai-only-envelope.js'
 import { isSubagentLane } from '../core/subagents/types.js'
 import { hasRunningLightSubagents } from '../core/subagents/registry.js'
-import { sessionSettingsHooks } from './session-settings-hooks.js'
+import { buildClaudeArgv } from './claude-session-argv.js'
+import { buildSessionSettings } from './claude-session-settings.js'
 import { orgRoleOfPrompt } from '../core/org/org-prompt-role.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
@@ -2898,39 +2898,9 @@ export class ClaudeCodeSession {
     },
   ): void {
     if (this._pendingCancellations.size > 0 || this._tentativeStop) throw new Error('Queued message cancellation is not saved yet. Retry before starting another turn')
-    const args = ['-p', '--output-format', 'stream-json', '--verbose']
-
-    // Token-level streaming: emit Anthropic SSE stream_event records so assistant
-    // text streams into the UI character-by-character. Default on; falsy config
-    // (explicit false) disables for fallback to per-message delivery.
-    if (streamPartialMessages !== false) {
-      args.push('--include-partial-messages')
-    }
-
-    // Claude Code trace/debug log. On by default — writes to
-    // ~/.claude/debug/<claude-session-id>.txt on whichever host the CLI is
-    // running on (local or remote daemon), with a `latest` symlink. Disable
-    // with WALNUT_CLAUDE_DEBUG=0. See CLAUDE.md § Debugging.
-    if (process.env.WALNUT_CLAUDE_DEBUG !== '0') {
-      args.push('--debug')
-    }
-
-    // Authorize the bypass CAPABILITY at startup without ACTIVATING it. Claude
-    // Code rejects a later set_permission_mode(bypassPermissions) unless the
-    // process was launched with the capability, so every session needs it —
-    // including ones that start in Plan mode.
-    //
-    // ⚠️ It MUST be `--allow-dangerously-skip-permissions`, never the bare
-    // `--dangerously-skip-permissions`. The bare flag doesn't just grant the
-    // capability, it *selects the mode*, and it OUTRANKS --permission-mode:
-    // initialPermissionModeFromCLI pushes 'bypassPermissions' onto orderedModes
-    // FIRST and takes the first viable entry, so `--dangerously-skip-permissions
-    // --permission-mode plan` silently starts in bypassPermissions. Measured on
-    // CLI 2.1.220 — with the bare flag ALL SIX requested modes reported
-    // `init permissionMode=bypassPermissions`; with the --allow- form each mode
-    // reported itself. That bug is why plan/accept/default sessions never
-    // actually restricted anything (see the mode-registry tests).
-    args.push('--allow-dangerously-skip-permissions')
+    // The mode, model, effort, id, prompt and tool flags; the frame around them and the
+    // `--settings` JSON are claude-session-argv.ts, shared with the host spawn template.
+    const sessionArgs: string[] = []
 
     // A named mode is a session choice. An unnamed start reads the engine's
     // settings on its host before spawn; only absent settings get the Auto fallback.
@@ -2939,7 +2909,7 @@ export class ClaudeCodeSession {
     const requestedMode: SessionMode = modeNamed ? mode as SessionMode : 'default'
     this._mode = requestedMode
     this._activity = requestedMode === 'plan' ? 'planning' : 'implementing'
-    if (modeNamed) args.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])
+    if (modeNamed) sessionArgs.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])
     // Map picker short IDs → CLI model aliases via the SESSION_MODELS registry
     // (single source of truth in core/types.ts). The CLI understands the [1m]
     // suffix for the 1M context window. An unknown id falls through to passthrough
@@ -2954,7 +2924,7 @@ export class ClaudeCodeSession {
     const cliModel = model ? (SESSION_MODEL_CLI_MAP[model] ?? model) : undefined
     this._cliModel = cliModel
     if (cliModel) {
-      args.push('--model', cliModel)
+      sessionArgs.push('--model', cliModel)
     }
     // Reasoning effort (low/medium/high/max) → --effort. This is the SPAWN-TIME
     // path: initial start + cold --resume (mid-session changes go through
@@ -2965,7 +2935,7 @@ export class ClaudeCodeSession {
     // unset = no flag = API default ('high'). max-gating is enforced upstream (UI).
     if (effort && modelSupportsEffort(cliModel)) {
       this._effort = effort
-      args.push('--effort', effort)
+      sessionArgs.push('--effort', effort)
     } else if (effort) {
       // effort requested but model can't use it (e.g. Haiku) — don't send the flag,
       // but keep _effort so the record/display still reflect the user's intent.
@@ -2975,17 +2945,17 @@ export class ClaudeCodeSession {
     }
     this._spawnEffort = this._effort
     if (resumeSessionId) {
-      args.push('--resume', resumeSessionId)
+      sessionArgs.push('--resume', resumeSessionId)
       // Rewind: cut the resumed transcript at a message. Only meaningful with a
       // resume (the CLI errors out otherwise). With --fork-session the cut
       // conversation lands in a fresh transcript; WITHOUT it this is an
       // in-place rewind — same id, same file, new branch (see the opts doc).
       if (opts?.resumeSessionAt) {
-        args.push('--resume-session-at', opts.resumeSessionAt)
+        sessionArgs.push('--resume-session-at', opts.resumeSessionAt)
       }
       if (forkSession) {
         // Fork creates a NEW session ID — don't claim the source ID as ours
-        args.push('--fork-session')
+        sessionArgs.push('--fork-session')
         this.claudeSessionId = null
         this._expectedSessionId = null
       } else {
@@ -3026,7 +2996,7 @@ export class ClaudeCodeSession {
     let preassignedId: string | null = null
     if (!resumeSessionId || forkSession) {
       preassignedId = opts?.preassignedSessionId ?? crypto.randomUUID()
-      args.push('--session-id', preassignedId)
+      sessionArgs.push('--session-id', preassignedId)
       this.claudeSessionId = preassignedId
       this._expectedSessionId = preassignedId
     }
@@ -3062,18 +3032,18 @@ export class ClaudeCodeSession {
       throw new Error(`session profile systemPrompt exceeds ${MAX_PROFILE_PROMPT_BYTES} bytes — too large to ride the spawn argv`)
     }
     if (profile?.systemPrompt && profile.systemPromptMode === 'replace') {
-      args.push('--system-prompt', profile.systemPrompt)
+      sessionArgs.push('--system-prompt', profile.systemPrompt)
     } else if (profile?.systemPrompt) {
       appendParts.push(profile.systemPrompt)
     }
     if (appendSystemPrompt) appendParts.push(appendSystemPrompt)
     if (appendParts.length > 0) {
-      args.push('--append-system-prompt', joinAppendedPrompt(appendParts))
+      sessionArgs.push('--append-system-prompt', joinAppendedPrompt(appendParts))
     }
     // Inline JSON is safe in an arg: the bun daemon shell-quotes every element
     // and the JS daemon spawns without a shell (no re-parsing either way).
     if (profile?.mcpServers && Object.keys(profile.mcpServers).length > 0) {
-      args.push('--mcp-config', JSON.stringify({ mcpServers: profile.mcpServers }))
+      sessionArgs.push('--mcp-config', JSON.stringify({ mcpServers: profile.mcpServers }))
       // Remember what we ASKED for: the init event reports only the servers the
       // CLI accepted, so the requested set is what makes a silent refusal visible.
       this._requestedMcpServers = Object.keys(profile.mcpServers)
@@ -3083,11 +3053,11 @@ export class ClaudeCodeSession {
     }
     // A router's read-only lookups ride the launch, never its stored profile (session-policy.ts).
     const launchTools = routerLaunchTools(profile)
-    if (launchTools.length) args.push('--allowedTools', launchTools.join(','))
+    if (launchTools.length) sessionArgs.push('--allowedTools', launchTools.join(','))
     // The AVAILABLE built-in set. A pre-approval list cannot take anything away:
     // the CLI still auto-allows read-only Bash in the cwd under any mode.
     if (profile?.tools && profile.tools.length > 0) {
-      args.push('--tools', profile.tools.join(','))
+      sessionArgs.push('--tools', profile.tools.join(','))
     }
     // A slim profile (an app's ai.run agent lane, src/core/ai/ai-agent.ts) loads none of the
     // user's or the project's Claude Code settings, so their allow rules, hooks and MCP servers
@@ -3095,8 +3065,8 @@ export class ClaudeCodeSession {
     // come back through the settings arg below, the way micro-Claude children get them
     // (inline-subagent.ts). Local only: those settings are this machine's.
     const slim = profile?.slim === true && !host
-    if (slim) args.push('--setting-sources', '', '--strict-mcp-config')
-    if (profile?.areaId) args.push('--disable-slash-commands')
+    if (slim) sessionArgs.push('--setting-sources', '', '--strict-mcp-config')
+    if (profile?.areaId) sessionArgs.push('--disable-slash-commands')
     // The in-session `walnut` CLI (and the walnut MCP child) must reach the
     // server that launched this session. They default to :3456, so a session of
     // any other server (ephemeral, fixture, vitest) wrote into the user's real
@@ -3107,10 +3077,6 @@ export class ClaudeCodeSession {
     // Same settings arg carries the post-compaction "what is still open" hook
     // (compact-open-items-hook.ts) and the /tmp git guard (git-tmp-guard-hook.ts),
     // local and remote alike.
-    // Auto can refuse before stdio asks us. Specific CLI and MCP rules keep
-    // task coordination running while the engine's deny/ask rules still win.
-    // WALNUT_AUTO_ALLOW_OPS=0 leaves them out.
-    const sessionSettings: Record<string, unknown> = slim || process.env.WALNUT_AUTO_ALLOW_OPS === '0' ? {} : { permissions: { allow: walnutCoordinationAllowRules() } }
     const slimEnv = slim ? { ...readUserSettingsEnv() } : {}
     if (profile?.areaId) {
       if (!slim) throw new Error('Area sessions require a local slim profile')
@@ -3123,29 +3089,20 @@ export class ClaudeCodeSession {
     const tagEnv: Record<string, string> = requestTagOn()
       ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(host ? undefined : readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS, requestTagValue(this.taskId), this.taskId ? this.project : undefined) }
       : {}
-    if (Object.keys(walnutEnv).length + Object.keys(slimEnv).length + Object.keys(tagEnv).length > 0) sessionSettings.env = { ...slimEnv, ...walnutEnv, ...tagEnv }
     const slimOverrides = slim ? slimChildSettingsArg() : undefined
-    if (slimOverrides) Object.assign(sessionSettings, JSON.parse(slimOverrides) as Record<string, unknown>)
     // Main's or a VP's session (read from its own prompt) is reminded of its first rule by hooks too.
     // Its own readback too (own-readback-hook.ts), when its prompt says so.
     const hookPrompt = slim ? '' : [profile?.systemPrompt ?? '', ...appendParts].join('\n\n')
-    const settingsHooks = slim ? undefined : sessionSettingsHooks(process.env, { orgRole: orgRoleOfPrompt(hookPrompt), prompt: hookPrompt, subagent: isSubagentLane(this._lane) })
-    if (settingsHooks) sessionSettings.hooks = settingsHooks
-    if (Object.keys(sessionSettings).length > 0) {
-      args.push('--settings', JSON.stringify(sessionSettings))
-    }
+    const sessionSettings = buildSessionSettings({
+      env: process.env, slim, overrides: slimOverrides ? JSON.parse(slimOverrides) as Record<string, unknown> : undefined,
+      sessionEnv: { ...slimEnv, ...walnutEnv, ...tagEnv },
+      hooks: { orgRole: orgRoleOfPrompt(hookPrompt), prompt: hookPrompt, subagent: isSubagentLane(this._lane) },
+    })
 
-    // Both local and SSH sessions use stream-json stdin via SessionIO
-    args.push('--input-format', 'stream-json')
-
-    // Permission prompt tool: intercepts sensitive-file and AskUserQuestion permission checks.
-    // For remote sessions, control_response is routed through the daemon's `sendRaw`
-    // command (see RemoteSessionManager.writeRaw → daemon-core.handleSendRawCommand).
-    // Controlled by config.session.permission_prompt (default: true).
+    // The permission prompt tool intercepts sensitive-file and AskUserQuestion checks. Controlled by
+    // config.session.permission_prompt (default: true).
     this._permissionPromptEnabled = permissionPrompt !== false
-    if (this._permissionPromptEnabled) {
-      args.push('--permission-prompt-tool', 'stdio')
-    }
+    const args = buildClaudeArgv({ env: process.env, streamPartialMessages, permissionPrompt, session: sessionArgs, settings: sessionSettings })
 
     // Store host key for liveness checks and record persistence
     this._host = host ?? null

@@ -41,7 +41,7 @@ const CONTENT_FLAG = /['"]--(settings|mcp-config|append-system-prompt|system-pro
  */
 const PRODUCERS: Record<string, 'session' | 'oneshot'> = {
   'src/providers/claude-code-session.ts': 'session',
-  'src/providers/spawn-template.ts': 'session',
+  'src/providers/claude-session-argv.ts': 'session',
   'src/providers/host-start-core.ts': 'session',
   'src/providers/inline-subagent.ts': 'oneshot',
   'src/providers/micro-claude-warm.ts': 'oneshot',

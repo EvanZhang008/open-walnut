@@ -128,8 +128,10 @@ describe('the program side', () => {
     expect(hooks.PreToolUse[0].matcher).toBe('Bash')
     expect(hooks.PostToolUse[0].matcher).toBe('Write|Bash')
     expect(hooks.SessionStart[0].matcher).toBe('compact')
+    // Both paths build their settings through the one builder, which asks for the hooks.
+    expect(read('src/providers/claude-session-settings.ts')).toMatch(/sessionSettingsHooks\(/)
     for (const file of ['src/providers/claude-code-session.ts', 'src/providers/spawn-template.ts']) {
-      expect(read(file), file).toMatch(/sessionSettingsHooks\(/)
+      expect(read(file), file).toMatch(/buildSessionSettings\(/)
       expect(read(file), file).not.toMatch(/compactOpenItemsHooks\(/)
     }
   })

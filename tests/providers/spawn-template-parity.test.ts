@@ -4,10 +4,12 @@
  * `send()` hands the daemon's `start` for the same inputs
  * (docs/plan/walnut-replica-servers-impl.md section 8, WP12).
  *
- * Why: a new ask while the Mac is away runs on the host from that template. If `send()`
- * gains a flag (a new hook in `--settings`, a capability flag) and the template does not,
- * a host-started ask runs a different CLI than the Mac would have started, which nothing
- * else notices until a user does. This drives the REAL `send()` against a mock daemon
+ * Both are built by claude-session-argv.ts and claude-session-settings.ts (a source ratchet,
+ * claude-session-argv-ratchet.test.ts, keeps it so); this test is the behavior check that the
+ * daemon's slot fill (host-start-core.ts) puts the same values where `send()` does.
+ *
+ * Why: a new ask while the Mac is away runs on the host from that template, so a host-started
+ * ask must run the CLI the Mac would have started. This drives the REAL `send()` against a mock daemon
  * (tests/helpers/mock-daemon.ts records every start payload) and compares argv element by
  * element: the `--settings` JSON with the compact hook, `--debug`, the mode, model,
  * effort, persona and tool flags. A model value outside the picker (a host catalog id)

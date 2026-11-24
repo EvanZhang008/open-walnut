@@ -34,7 +34,7 @@ describe('the hooks of a subagent\'s session', () => {
   it('reach the CLI: the session spawn hands its lane to the hooks', () => {
     // The one spawn path of a native session (send()); a subagent's starts there through SESSION_START.
     const src = fs.readFileSync(new URL('../../src/providers/claude-code-session.ts', import.meta.url), 'utf8')
-    const calls = src.match(/sessionSettingsHooks\([^)]*\)[^\n]*/g) ?? []
+    const calls = src.match(/hooks: \{[^\n]*orgRole[^\n]*/g) ?? []
     expect(calls.length).toBeGreaterThan(0)
     for (const c of calls) expect(c).toContain('subagent: isSubagentLane(this._lane)')
   })

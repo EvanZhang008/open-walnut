@@ -28,7 +28,7 @@ const SRC = path.resolve(import.meta.dirname, '../../src')
 
 /** Launch builders that get the address another way, and how. */
 const ELSEWHERE: Record<string, string> = {
-  'providers/daemon-standalone.ts': 'mirrors the address its Walnut named (sessionWalnutApiUrl), never its own',
+  'providers/claude-session-argv.ts': 'the argv frame only: its callers (send, the host spawn template) pass the session env through buildSessionSettings, each asking walnutApiEnvForSession; the daemon\'s resume of a lost spawn record mirrors the address its Walnut named (sessionWalnutApiUrl)',
   'providers/engine-model-probe.ts': 'asks an engine for its model list; runs no turn and calls no Walnut op',
 }
 
@@ -59,7 +59,7 @@ describe('every agent CLI launch path names its Walnut', () => {
     // The list names only files that still launch: a stale entry hides nothing.
     for (const rel of Object.keys(ELSEWHERE)) expect(launches, rel).toContain(rel)
     // The sweep still finds the launch builders it was written for.
-    for (const rel of ['providers/claude-code-session.ts', 'providers/acp-session.ts', 'providers/spawn-template.ts',
+    for (const rel of ['providers/acp-session.ts',
       'providers/inline-subagent.ts', 'providers/micro-claude-warm.ts', 'model/providers/adapter-claude-cli.ts']) {
       expect(launches, rel).toContain(rel)
     }

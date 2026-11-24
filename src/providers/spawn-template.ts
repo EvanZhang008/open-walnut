@@ -1,4 +1,3 @@
-import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 /**
  * The Mac's per-home SPAWN TEMPLATE for a host (docs/plan/walnut-replica-servers-impl.md
  * section 8, WP12): the argv claude-code-session.ts `send()` builds for a fresh Ask
@@ -8,17 +7,18 @@ import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
  * without the daemon ever running an argv a follower wrote. The tool lists are this
  * Mac's (each agent's lane profile, `agents`), never a follower's.
  *
- * Kept in step with `send()` by tests/providers/spawn-template-parity.test.ts, which
- * fills this template and compares it with what `send()` hands the daemon for the same
- * inputs (argv, the `--settings` JSON with the compact hook, `--debug`, a model value
- * outside the picker and its effort). A remote host's session gets no Walnut API env
+ * Built by the same code as `send()` (claude-session-argv.ts), and checked by
+ * tests/providers/spawn-template-parity.test.ts, which fills this template and compares it
+ * with what `send()` hands the daemon for the same inputs (argv, the `--settings` JSON with
+ * the compact hook, `--debug`, a model value outside the picker and its effort). A remote host's session gets no Walnut API env
  * (self-api-root.ts walnutApiEnvForSession) and no walnut MCP mount: its `walnut` CLI
  * reaches the host's gateway socket, which the daemon sets in the spawn env.
  */
 
 import type { ClaudeLaunchMode } from './claude-launch-mode.js'
-import type { AgentTools, EffortRules, SpawnTemplate } from './host-start-core.js'
-import { sessionSettingsHooks } from './session-settings-hooks.js'
+import type { AgentTools, EffortRules, SpawnSlot, SpawnTemplate } from './host-start-core.js'
+import { buildClaudeArgv } from './claude-session-argv.js'
+import { buildSessionSettings } from './claude-session-settings.js'
 import { hookArgsFor } from './hook-files.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import {
@@ -113,20 +113,14 @@ export function hostAskModes(bypassAllowed: boolean, chosen?: SessionMode): { mo
 
 export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
   const env = i.env ?? process.env
-  // The same order as send(): output flags, --debug, the bypass capability, then the slots.
-  const argv: SpawnTemplate['argv'] = [i.cliCommand ?? 'claude', '-p', '--output-format', 'stream-json', '--verbose']
-  if (i.streamPartialMessages !== false) argv.push('--include-partial-messages')
-  if (env.WALNUT_CLAUDE_DEBUG !== '0') argv.push('--debug')
-  argv.push('--allow-dangerously-skip-permissions')
-  argv.push({ slot: 'mode' }, { slot: 'model' }, { slot: 'effort' }, { slot: 'sid' }, { slot: 'persona' }, { slot: 'tools' })
-  const sessionSettings: Record<string, unknown> = { permissions: { allow: walnutCoordinationAllowRules() } }
+  // The frame and the settings JSON come from the one builder send() uses; the slots stand where
+  // a start's own fields go, in the order send() puts them.
   const walnutEnv = walnutApiEnvForSession(i.hostKey)
-  if (Object.keys(walnutEnv).length > 0) sessionSettings.env = walnutEnv
-  const hooks = sessionSettingsHooks(env)
-  if (hooks) sessionSettings.hooks = hooks
-  if (Object.keys(sessionSettings).length > 0) argv.push('--settings', JSON.stringify(sessionSettings))
-  argv.push('--input-format', 'stream-json')
-  if (i.permissionPrompt !== false) argv.push('--permission-prompt-tool', 'stdio')
+  const argv: SpawnTemplate['argv'] = buildClaudeArgv<{ slot: SpawnSlot }>({
+    command: i.cliCommand ?? 'claude', env, streamPartialMessages: i.streamPartialMessages, permissionPrompt: i.permissionPrompt,
+    session: [{ slot: 'mode' }, { slot: 'model' }, { slot: 'effort' }, { slot: 'sid' }, { slot: 'persona' }, { slot: 'tools' }],
+    settings: buildSessionSettings({ env, sessionEnv: walnutEnv }),
+  })
   const models: SpawnTemplate['models'] = {}
   for (const m of SESSION_MODELS) models[m.id] = { cli: m.cliModel, effort: modelSupportsEffort(m.cliModel) }
   return {

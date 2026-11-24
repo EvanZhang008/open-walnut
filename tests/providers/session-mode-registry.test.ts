@@ -112,9 +112,8 @@ describe('spawn flags: bypass capability must not hijack the requested mode', ()
   // One assertion per spawn site. Each used the bare flag, so each pinned its
   // process to bypassPermissions no matter what mode was asked for.
   const SPAWN_SITES = [
-    'src/providers/claude-code-session.ts',
+    'src/providers/claude-session-argv.ts',
     'src/providers/inline-subagent.ts',
-    'src/providers/daemon-standalone.ts',
   ]
 
   for (const rel of SPAWN_SITES) {
@@ -138,10 +137,10 @@ describe('spawn flags: bypass capability must not hijack the requested mode', ()
 
   it('claude-code-session derives --permission-mode from the registry, not a hand-rolled if-chain', () => {
     const src = read('src/providers/claude-code-session.ts')
-    expect(src).toContain("args.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])")
+    expect(src).toContain("sessionArgs.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])")
     // The old chain hardcoded four modes and fell through to bypass for the rest,
     // so `auto`/`dontAsk` would have spawned as bypass — worse than rejected.
-    expect(src).not.toContain("args.push('--permission-mode', 'bypassPermissions')")
+    expect(src).not.toContain("sessionArgs.push('--permission-mode', 'bypassPermissions')")
   })
 
   it('the SDK spawn path passes the mode through instead of collapsing it to bypass', () => {

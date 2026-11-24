@@ -301,7 +301,9 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
     // Must inject the capability-only spelling. The BARE flag also *selects*
     // bypassPermissions and outranks --permission-mode, so a resume that used
     // it would silently run every mode as bypass.
-    expect(standaloneSrc).toContain('--allow-dangerously-skip-permissions')
+    // A resume whose spawn record is lost takes the shared argv builder, which grants it.
+    expect(standaloneSrc).toMatch(/buildClaudeArgv\(\{\s*command: 'claude'/)
+    expect(readFile(path.join(ROOT, 'src/providers/claude-session-argv.ts'))).toContain("args.push('--allow-dangerously-skip-permissions')")
     // A stored argv goes through the shared resume builder (the daemon inject it).
     expect(standaloneSrc).toMatch(/hostResume\.resumeArgs\(spawn\.args, sid, mode\)/)
     const withoutAllow = standaloneSrc.split('--allow-dangerously-skip-permissions').join('')

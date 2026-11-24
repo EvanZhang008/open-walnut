@@ -79,6 +79,7 @@ import {
   type BudgetGate,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { buildClaudeArgv } from './claude-session-argv.js'
 import { PS_TREE_ARGS, claimedSidVerdict, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
 import { socketPeerPid, socketPeerPidReady } from './socket-peer-pid.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
@@ -3979,19 +3980,14 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   const mode = spawn ? spawn.mode : (session?.mode ?? 'default')
   const args: string[] = spawn
     ? hostResume.resumeArgs(spawn.args, sid, mode)
-    : [
-      'claude', '-p',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--include-partial-messages',
-      '--debug',
-      '--allow-dangerously-skip-permissions',
-      '--permission-mode', MODE_CLI[mode as SessionMode] || 'default',
-      ...(model ? ['--model', model] : []),
-      '--resume', sid,
-      '--input-format', 'stream-json',
-      '--permission-prompt-tool', 'stdio',
-    ]
+    // The spawn record is lost: the same frame every session starts with (claude-session-argv.ts),
+    // with no settings of its own (they were in the lost record).
+    : buildClaudeArgv({
+      command: 'claude',
+      env: daemonEnv,
+      session: ['--permission-mode', MODE_CLI[mode as SessionMode] || 'default', ...(model ? ['--model', model] : []), '--resume', sid],
+      settings: {},
+    })
 
   logMsg('info', 'bridgeResume: respawning dead session', {
     sid, cwd, recordLost: !spawn,

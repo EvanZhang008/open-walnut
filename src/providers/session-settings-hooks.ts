@@ -1,7 +1,7 @@
 /**
- * The hooks every Claude Code session gets in its `--settings` JSON, one place
- * for send() (claude-code-session.ts) and the host spawn template
- * (spawn-template.ts), which must stay identical (spawn-template-parity test).
+ * The hooks every Claude Code session gets in its `--settings` JSON. Called only by
+ * claude-session-settings.ts, which both send() (claude-code-session.ts) and the host spawn
+ * template (spawn-template.ts) use.
  * The CLI merges them with the user's own settings hooks.
  */
 import { compactOpenItemsHooks } from './compact-open-items-hook.js'
