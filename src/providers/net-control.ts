@@ -35,6 +35,8 @@ export interface NetStatus {
   lastError: string | null
   /** walnut-net's own status (relays, peers and their paths), when it answered. */
   node: Record<string, unknown> | null
+  /** The running walnut-net's control protocol (its ready line; 3 takes phones, Walnut Connect). Absent from an older daemon. */
+  protocol?: number
 }
 
 /** The endpoint id of the key in `keyFile` (`walnut-net id`), making the key on first use (no network needed). */

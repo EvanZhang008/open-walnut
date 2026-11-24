@@ -1,6 +1,6 @@
 //! The running connector: one iroh endpoint for this host, the member check on every incoming
-//! daemon connection, the join protocol (join.rs), and local forwards (127.0.0.1 listeners) to
-//! other members' daemons.
+//! daemon connection, the join protocol (join.rs), phones on Walnut Connect (web.rs), and local
+//! forwards (127.0.0.1 listeners) to other members' daemons.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::config::{Config, Member, RelayChoice, load_or_make_key};
 use crate::join::{ALPN_JOIN, Joins};
 use crate::log;
+use crate::web::{ALPN_WEB, Web};
 
 /// A stream to the peer's Walnut daemon (members only). The other protocol is ALPN_JOIN.
 pub const ALPN_DAEMON: &[u8] = b"walnut/daemon/1";
@@ -35,6 +36,8 @@ pub struct Node {
     relays: Vec<RelayUrl>,
     /// Pending invites and the join rate limits.
     pub joins: Joins,
+    /// The phones on Walnut Connect and their connections.
+    pub web: Arc<Web>,
     daemon_port_file: PathBuf,
     members: RwLock<HashMap<EndpointId, Member>>,
     /// Connections members opened to this host, so a removed member is cut at once.
@@ -91,7 +94,7 @@ async fn endpoint(cfg: &Config, port: Option<u16>) -> Result<Endpoint> {
     let mut b = b
         .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled)
         .secret_key(key)
-        .alpns(vec![ALPN_DAEMON.to_vec(), ALPN_JOIN.to_vec()]);
+        .alpns(vec![ALPN_DAEMON.to_vec(), ALPN_JOIN.to_vec(), ALPN_WEB.to_vec()]);
     let roots = cfg.root_certs()?;
     if !roots.is_empty() {
         b = b.ca_tls_config(iroh::tls::CaTlsConfig::embedded().with_extra_roots(roots));
@@ -132,6 +135,7 @@ impl Node {
             choice: cfg.relay_choice(),
             relays,
             joins: Joins::default(),
+            web: Arc::new(Web::new(cfg)),
             daemon_port_file: cfg.daemon_port_file.clone(),
             members: RwLock::new(cfg.member_map()),
             incoming: Mutex::new(HashMap::new()),
@@ -141,8 +145,9 @@ impl Node {
         }))
     }
 
-    /// New members: the ones no longer allowed in are cut, forwards to non-members stop.
+    /// New members and phones: the ones no longer allowed in are cut, forwards to non-members stop.
     pub async fn set_members(&self, cfg: &Config) -> Result<()> {
+        self.web.set(cfg).await;
         let next = cfg.member_map();
         *self.members.write().await = next.clone();
         let mut incoming = self.incoming.lock().await;
@@ -190,6 +195,11 @@ impl Node {
                 // Any peer may try a join, but only while an invite is pending (join.rs).
                 if conn.alpn() == ALPN_JOIN {
                     crate::join::accept(&node.joins, conn).await;
+                    return;
+                }
+                // A phone reaches only the Walnut server's connect door, and only when listed (web.rs).
+                if conn.alpn() == ALPN_WEB {
+                    node.web.accept(conn).await;
                     return;
                 }
                 let peer = conn.remote_id();
@@ -381,6 +391,7 @@ impl Node {
             "addrs": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
             "peers": peers,
             "invites": self.joins.status(),
+            "web": self.web.status().await,
         })
     }
 }
@@ -408,7 +419,7 @@ fn path_json(p: &iroh::endpoint::Path<'_>) -> Value {
     })
 }
 
-fn link_json(conn: &Connection) -> Value {
+pub(crate) fn link_json(conn: &Connection) -> Value {
     let paths = conn.paths();
     let sel = paths.iter().find(|p| p.is_selected());
     json!({
@@ -454,9 +465,17 @@ async fn daemon_port(file: &PathBuf) -> Result<u16> {
 }
 
 /// Bytes both ways until each side ends; an end on one side finishes the other.
-pub async fn pipe(tcp: TcpStream, mut send: iroh::endpoint::SendStream, mut recv: iroh::endpoint::RecvStream) {
+pub async fn pipe(tcp: TcpStream, send: iroh::endpoint::SendStream, recv: iroh::endpoint::RecvStream) {
     let _ = tcp.set_nodelay(true);
-    let (mut tr, mut tw) = tcp.into_split();
+    pipe_io(tcp, send, recv).await
+}
+
+/// `pipe` for any byte stream (a unix socket too).
+pub async fn pipe_io<S>(io: S, mut send: iroh::endpoint::SendStream, mut recv: iroh::endpoint::RecvStream)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let (mut tr, mut tw) = tokio::io::split(io);
     let up = async {
         let _ = tokio::io::copy(&mut tr, &mut send).await;
         let _ = send.finish();

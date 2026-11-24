@@ -15,7 +15,9 @@
 //! An incoming daemon connection is closed before any stream unless its id (proven by the TLS
 //! handshake) is a member allowed to reach this daemon (`accept: true` in the config). Each accepted
 //! stream is piped to this machine's daemon on 127.0.0.1. A join connection (join.rs) is answered
-//! from any peer, only while an invite is pending. See control.rs for the control socket.
+//! from any peer, only while an invite is pending. A phone on Walnut Connect (web.rs) reaches only
+//! the Walnut server's connect door, and only when its id is listed in `phones`. See control.rs
+//! for the control socket.
 
 mod config;
 mod control;
@@ -25,6 +27,9 @@ mod join;
 mod join_tests;
 mod log;
 mod node;
+mod web;
+#[cfg(test)]
+mod web_tests;
 
 use std::path::PathBuf;
 
@@ -36,8 +41,9 @@ use config::{Config, load_or_make_key};
 use control::Event;
 use node::Node;
 
-/// Bumped when the control socket or the config changes shape (2: relayMode, invites, join).
-const PROTOCOL: u32 = 2;
+/// Bumped when the control socket or the config changes shape (2: relayMode, invites, join;
+/// 3: phones and webSocket, Walnut Connect).
+const PROTOCOL: u32 = 3;
 /// Exit code asking the supervisor to start this again (the config changed what the endpoint is).
 const EXIT_RESTART: i32 = 75;
 /// Exit code saying the config cannot be read (EX_CONFIG): the supervisor puts back the last one that worked.

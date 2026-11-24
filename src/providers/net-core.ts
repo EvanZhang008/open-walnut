@@ -407,6 +407,8 @@ export function createNetSupervisor(deps: NetDeps) {
 
   return {
     controlPath: control,
+    /** `net.configure` takes `phones` and `webSocket` (Walnut Connect): what capability net-web-v1 says. */
+    webDoor: true as const,
     /** At daemon start: run it when this host has a config. */
     start(): void {
       if (fs.existsSync(configFile)) spawnChild()
@@ -422,7 +424,7 @@ export function createNetSupervisor(deps: NetDeps) {
       }
       return {
         available: !!(deps.bin() ?? previousBin()), enabled, running: !!child && ready, pid: child?.pid ?? null, endpointId: id, restarts,
-        lastExit, lastError, node,
+        lastExit, lastError, node, ...(ready ? { protocol } : {}),
       }
     },
 

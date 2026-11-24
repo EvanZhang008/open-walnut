@@ -713,6 +713,8 @@ let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
 let hostReplicaAway: { stop(): void } | null = null
 /** A host replica's console door (replica/console-door.ts): the handed-over leader's address on its machine. Null elsewhere. */
 let hostConsoleDoor: import('../replica/console-door.js').ConsoleDoor | null = null
+/** Walnut Connect's door (connect-door.ts): open while the experiment is on, on the leader only. */
+let connectDoor: import('./connect-door.js').ConnectDoor | null = null
 export function getHostReplicaFront(): import('../replica/front.js').ReplicaFront | null {
   return hostReplicaFront
 }
@@ -3631,6 +3633,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     void exposeRuntime.reconcile().catch((err) => log.web.warn('expose: start failed', { error: err instanceof Error ? err.message : String(err) }))
   } catch (err) {
     log.web.warn('expose runtime did not start', { error: err instanceof Error ? err.message : String(err) })
+  }
+
+  // -- Walnut Connect's door: phones reach this server through this Mac's walnut-net (off unless the experiment is on) --
+  if (bootPolicy('connect-door')) try {
+    const { startConnectDoor } = await import('./connect-door.js')
+    connectDoor = startConnectDoor({ app, mainServer: httpServer })
+    void connectDoor.reconcile()
+  } catch (err) {
+    log.web.warn('walnut connect door did not start', { error: err instanceof Error ? err.message : String(err) })
   }
 
   // -- Cloud mode: first-boot claim banner --
@@ -7882,6 +7893,9 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   const consoleDoor = hostConsoleDoor
   hostConsoleDoor = null
   await shutdownStep('host replica console door', () => consoleDoor?.stop())
+  const phoneDoor = connectDoor
+  connectDoor = null
+  await shutdownStep('walnut connect door', () => phoneDoor?.stop())
   const replicaDoor = hostReplicaDoor
   await shutdownStep('host replica door', () => replicaDoor?.close())
   hostReplicaDoor = null

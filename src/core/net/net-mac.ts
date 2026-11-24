@@ -456,7 +456,9 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }, report: SyncRepor
         if (!modes) throw new NetError(409, 'net_too_old', "This machine's walnut-net is older than this Walnut; the relay changes once the new version is downloaded.")
       }
       if (relayMoved) { report.pushed = pushToHosts({ ...state }, { lead, refused: false }, true); await report.pushed }
-      const conf = await local.send('net.configure', withServiceSetMembers(macConfig(state, lead), sets), 30_000) as { ok?: boolean; error?: string }
+      // Walnut Connect's phones and door ride the same config (core/connect/connect-net.ts).
+      const { connectNetFields } = await import('../connect/connect-net.js')
+      const conf = await local.send('net.configure', { ...withServiceSetMembers(macConfig(state, lead), sets), ...await connectNetFields(local) }, 30_000) as { ok?: boolean; error?: string }
       if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
       const { verifiedAdoptions } = await import('./net-adopt.js')

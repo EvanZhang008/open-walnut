@@ -149,7 +149,7 @@ private struct RouteRow: View {
                             .accessibilityLabel("In use")
                     }
                 }
-                Text(route.origin)
+                Text(route.displayAddress)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

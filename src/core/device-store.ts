@@ -77,6 +77,13 @@ export interface DeviceRecord {
    * console falls back to the pairing name until then.
    */
   info?: DeviceSelfInfo
+  /**
+   * Walnut Connect (core/connect/connect-phones.ts): the phone's network id (its iroh public key,
+   * 64 hex), which the Mac's walnut-net lets in on walnut/web/1, and when it was set. Set by the
+   * pairing (the QR carries the key) or by the phone itself (POST /api/v1/connect/register). It
+   * goes with the record: a revoke or a re-pairing by anyone but the phone itself drops it.
+   */
+  connect?: { endpoint: string; at: string }
   /** Copied here from the other box's registry so the same token works on both (device-adoption.ts). */
   adoptedFrom?: 'cloud' | 'primary'
   /**

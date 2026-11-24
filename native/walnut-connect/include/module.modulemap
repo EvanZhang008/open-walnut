@@ -1,0 +1,5 @@
+module WalnutConnectFFI {
+    header "walnut_connect.h"
+    link "walnut_connect"
+    export *
+}

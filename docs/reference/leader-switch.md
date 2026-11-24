@@ -421,6 +421,7 @@ trial column, and this table to the code.
 | `browser-sign-in-sweep` | off | signs out browsers a year old, writing the devices: the commit start does |
 | `focus-spaces` | off | writes the focus file and its quiet hold: the commit start does |
 | `topics-runtime` | off | posts members' replies and mails people: the trial sends nothing |
+| `connect-door` | off | Walnut Connect's door for the user's phones: a trial lets no phone in |
 
 What is not a row stays as it was: starts that only follow `role() === 'leader'` sit inside
 rows a trial turns off (the session and org clocks under `user-status`, the router wakes under

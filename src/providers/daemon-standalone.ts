@@ -2849,7 +2849,7 @@ function handleCommandFrame(ws: ServerWebSocket<WsData>, frame: unknown) {
  * forward are reached through it. A runtime inside a server's process has none, so it does not
  * claim them (the server then says the host lacks them, never a silent failure).
  */
-const DOOR_CAPABILITIES = new Set(['net-v1', 'net-join-v1', 'host-server-v1', 'hub-forward-v1'])
+const DOOR_CAPABILITIES = new Set(['net-v1', 'net-join-v1', 'net-web-v1', 'host-server-v1', 'hub-forward-v1'])
 function helloCapabilities(): string[] {
   const advertised = DOOR ? ADVERTISED_DAEMON_CAPABILITIES : ADVERTISED_DAEMON_CAPABILITIES.filter((c) => !DOOR_CAPABILITIES.has(c))
   return [...advertised, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1', 'service-update-force-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : []), ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : [])]

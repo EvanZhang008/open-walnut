@@ -696,6 +696,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // platform, addrs, relay}` asks that host to take it in. `net.configure` also takes
   // `relayMode` (custom | public | none). Not bridge- or follower-reachable.
   'net-join-v1',
+  // 'net-web-v1' — Walnut Connect: `net.configure` also takes `phones: [{id, name}]` and
+  // `webSocket` (an absolute path, the server's connect door, a unix socket). walnut-net
+  // (protocol 3) lets a listed phone in on ALPN walnut/web/1 and pipes each of its streams to
+  // the door, never to the daemon; `net.status` says the running walnut-net's `protocol`.
+  // Not bridge- or follower-reachable. Sidecar-gated in the source twin (net-core.cjs).
+  'net-web-v1',
   // 'host-mcp-v1' — a task on another host calling an MCP server configured here
   // (host-mcp-core.ts): `mcp.list {cwd}` names the servers Claude Code would see,
   // `mcp.tools {callId, taskId, server, cwd, wait}` and `mcp.call {..., tool,

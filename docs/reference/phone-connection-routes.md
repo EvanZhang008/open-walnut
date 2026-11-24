@@ -4,12 +4,13 @@ The iOS app holds one device token and several addresses ("routes") for the same
 Walnut. It uses the best route that answers and moves to another one by itself when
 that changes. Nothing about this needs the user's attention after the first pairing.
 
-## The three routes
+## The routes
 
 | Route | Address | Reaches the machine when | Needs |
 |---|---|---|---|
 | Wi-Fi (`lan`) | `http://192.168.x.y:3456` | the phone is on the same network | nothing |
 | Tailscale (`tailnet`) | `http://100.x.y.z:3456` | both devices are on the same tailnet and the machine is awake | Tailscale on the machine and the phone |
+| Walnut Connect (`connect`) | the app's own `127.0.0.1` port | from anywhere while the machine is awake, end to end encrypted | the experiment `walnut_connect` on the machine ([Walnut Connect](./walnut-connect.md)) |
 | Cloud (`cloud`) | `https://<your companion>` | always, including while the machine sleeps | a self-hosted cloud companion ([Cloud sync](./cloud-sync.md)) |
 
 The server lists a Tailscale route when it finds a 100.64/10 address on a tunnel

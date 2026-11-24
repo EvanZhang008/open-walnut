@@ -1,0 +1,35 @@
+[package]
+name = "walnut-connect"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Walnut Connect for the Walnut app: a 127.0.0.1 port whose every connection is a stream to the user's own Walnut over iroh, end to end encrypted, direct or through a relay"
+publish = false
+
+[lib]
+name = "walnut_connect"
+# staticlib: linked into the iOS app (build-apple.sh); rlib: the tests and the command below.
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+# The same connector as a command, for the end-to-end tests on a computer (no phone needed).
+name = "walnut-connect"
+path = "src/bin/walnut-connect.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+# 1.5: the first iroh that builds for iOS (its netwatch 0.20 carries the routing constants that
+# libc defines for macOS only). It speaks the same protocol as walnut-net's 1.4.1.
+iroh = "=1.5.0"
+rustls = { version = "0.23.46", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "time", "sync"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 4
+strip = true
+# panic stays unwind (the default): a panic inside the app is caught at the C boundary (lib.rs),
+# never an abort of the app.

@@ -62,6 +62,25 @@ pub struct Config {
     /// UDP port to bind (0 or absent: any free port).
     #[serde(default)]
     pub bind_port: Option<u16>,
+    /// The paired Walnut apps (phones) that may reach this host's Walnut server: Walnut Connect
+    /// (web.rs). Only a host whose own server listens on `web_socket` lists any.
+    #[serde(default)]
+    pub phones: Vec<Phone>,
+    /// The Walnut server's connect door (a unix socket). Each stream a listed phone opens on
+    /// ALPN walnut/web/1 is piped to it. Absent: no phone is let in.
+    #[serde(default)]
+    pub web_socket: Option<PathBuf>,
+}
+
+/// A phone allowed on Walnut Connect. It reaches only the server's connect door, never the
+/// daemon, and every request through it still needs the phone's device token there.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Phone {
+    /// Its endpoint id (hex), which is its public key.
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -145,6 +164,20 @@ impl Config {
         out
     }
 
+    /// The phones this build can use; one whose id is not a key is left out and logged.
+    pub fn phone_map(&self) -> HashMap<EndpointId, Phone> {
+        let mut out = HashMap::new();
+        for p in &self.phones {
+            match p.id.parse::<EndpointId>() {
+                Ok(id) => {
+                    out.insert(id, p.clone());
+                }
+                Err(e) => crate::log::warn("phone left out: its id is not a key", serde_json::json!({"name": p.name, "id": p.id, "error": e.to_string()})),
+            }
+        }
+        out
+    }
+
     pub fn root_certs(&self) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
         use rustls::pki_types::{CertificateDer, pem::PemObject};
         let mut out = vec![];
@@ -156,7 +189,8 @@ impl Config {
         Ok(out)
     }
 
-    /// What can change without a restart: the members. Anything else needs a new endpoint.
+    /// What can change without a restart: the members, the phones and the connect door. Anything
+    /// else needs a new endpoint.
     pub fn same_endpoint(&self, other: &Config) -> bool {
         self.key == other.key
             && self.relay_choice() == other.relay_choice()
@@ -331,6 +365,21 @@ mod tests {
         assert!(!none.same_endpoint(&custom_empty));
         let members = read_with(r#","relayMode":"public","members":[{"id":"x"}]"#).unwrap();
         assert!(public.same_endpoint(&members));
+    }
+
+    #[test]
+    fn phones_and_the_door_read_and_reload_without_a_restart() {
+        let id = SecretKey::from_bytes(&[5u8; 32]).public().to_string();
+        let none = read_with(r#","relayMode":"public""#).unwrap();
+        assert!(none.phones.is_empty() && none.web_socket.is_none());
+        let with = read_with(&format!(r#","relayMode":"public","phones":[{{"id":"{id}","name":"iPhone"}},{{"id":"nothex"}}],"webSocket":"/x/connect.sock""#)).unwrap();
+        let phones = with.phone_map();
+        assert_eq!(phones.len(), 1);
+        assert_eq!(phones.values().next().unwrap().name, "iPhone");
+        assert_eq!(with.web_socket.as_deref(), Some(Path::new("/x/connect.sock")));
+        // A phone is not a member: it never reaches the daemon.
+        assert!(with.member_map().is_empty());
+        assert!(none.same_endpoint(&with));
     }
 
     fn hex_of(b: &[u8]) -> String {

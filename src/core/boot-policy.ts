@@ -190,6 +190,9 @@ export const BOOT_POLICY = [
   { job: 'focus-spaces', leader: true, replica: false, trial: false, why: 'the focus file and its quiet hold are the Mac\'s' },
   // Started on every server before (its experiment decides inside):
   { job: 'topics-runtime', leader: true, replica: true, trial: false, why: 'started on every box, its experiment decides (on in the replica column)' },
+  // Walnut Connect (docs/reference/walnut-connect.md): the user's phones reach the leader's own
+  // machine; a trial opens no door a phone could use.
+  { job: 'connect-door', leader: true, replica: false, trial: false, why: 'a phone on Walnut Connect reaches the leader on its own machine' },
 ] as const satisfies readonly BootRow[]
 
 export type BootJob = (typeof BOOT_POLICY)[number]['job']

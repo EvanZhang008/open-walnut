@@ -12,6 +12,8 @@ struct SetupView: View {
     @State private var serverURL = ""
     @State private var token = ""
     @State private var deviceName = ""
+    /// Walnut Connect from the scanned or pasted pairing link (nil: none, or typed by hand).
+    @State private var pairingConnect: AppConfig.PairingConnect?
     @State private var busy = false
     @State private var testResult: TestResult?
     @State private var alertMessage: String?
@@ -234,7 +236,7 @@ struct SetupView: View {
     }
 
     private func connect() {
-        guard !serverURL.trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard !serverURL.trimmingCharacters(in: .whitespaces).isEmpty || pairingConnect != nil else {
             alertMessage = "Enter your Walnut server URL."
             return
         }
@@ -253,7 +255,8 @@ struct SetupView: View {
                 try await connection.connect(
                     serverURL: serverURL,
                     token: deviceToken,
-                    deviceName: deviceName.isEmpty ? nil : deviceName
+                    deviceName: deviceName.isEmpty ? nil : deviceName,
+                    via: pairingConnect
                 )
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             } catch {
@@ -289,9 +292,12 @@ struct SetupView: View {
             return
         }
         token = pair.token
+        // Walnut Connect: the Mac's QR carries this phone's key and where the Mac is, so the
+        // pairing works away from its Wi-Fi too.
+        pairingConnect = AppConfig.parsePairingConnect(text)
         if let name = pair.name { deviceName = name }
         if let server = pair.server { serverURL = server }
-        if serverURL.trimmingCharacters(in: .whitespaces).isEmpty {
+        if serverURL.trimmingCharacters(in: .whitespaces).isEmpty, pairingConnect == nil {
             alertMessage = "Token filled in. Enter the server address and connect."
             return
         }

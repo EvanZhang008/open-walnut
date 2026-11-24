@@ -13,6 +13,8 @@ export const NET_CONFIG_VERSION = 1
 export const ID_RE = /^[0-9a-f]{64}$/
 const NAME_MAX = 80
 const MEMBERS_MAX = 256
+/** Phones on Walnut Connect one Walnut lists at most (native/walnut-net/src/web.rs). */
+const PHONES_MAX = 64
 
 export interface NetMember {
   id: string
@@ -23,6 +25,12 @@ export interface NetMember {
   relays?: string[]
 }
 
+/** A phone on Walnut Connect: it may reach this host's Walnut server's connect door, never the daemon. */
+export interface NetPhone {
+  id: string
+  name: string
+}
+
 export interface NetConfigureRequest {
   enabled?: unknown
   /** `custom` (the relays listed: the user's own), `public` (iroh's public relays and lookup), `none`. */
@@ -30,6 +38,18 @@ export interface NetConfigureRequest {
   relays?: unknown
   relayRoots?: unknown
   members?: unknown
+  /** Walnut Connect (capability net-web-v1): the paired phones, and the server's connect door (a unix socket). */
+  phones?: unknown
+  webSocket?: unknown
+}
+
+export type ParsedNetConfig = {
+  relayMode?: 'public' | 'none'
+  relays: string[]
+  relayRoots: string[]
+  members: NetMember[]
+  phones?: NetPhone[]
+  webSocket?: string
 }
 
 export type NetRelayMode = 'custom' | 'public' | 'none'
@@ -49,7 +69,7 @@ export function socketAddr(a: unknown): boolean {
 }
 
 /** Validate a configure request into walnut-net's config fields. Throws on anything off. */
-export function parseNetConfig(req: NetConfigureRequest): { relayMode?: 'public' | 'none'; relays: string[]; relayRoots: string[]; members: NetMember[] } {
+export function parseNetConfig(req: NetConfigureRequest): ParsedNetConfig {
   // The same rules walnut-net applies when it reads the file (config.rs): a config it would
   // refuse is refused here, before it replaces one that works.
   const httpOk = process.env.WALNUT_NET_ALLOW_HTTP_RELAY === '1'
@@ -83,13 +103,40 @@ export function parseNetConfig(req: NetConfigureRequest): { relayMode?: 'public'
     for (const r of seenOn) checkRelay(r)
     return { id, name: str(o.name, NAME_MAX) ?? '', accept: o.accept === true, ...(addrs.length ? { addrs } : {}), ...(seenOn.length ? { relays: seenOn as string[] } : {}) }
   })
+  const phones = parsePhones(req.phones, seen)
+  const webSocket = req.webSocket === undefined || req.webSocket === null ? undefined : req.webSocket
+  if (webSocket !== undefined && (typeof webSocket !== 'string' || !path.isAbsolute(webSocket) || webSocket.length > 200 || webSocket.includes('\0'))) {
+    throw new Error('webSocket: an absolute path to a unix socket')
+  }
   // `custom` is written as no field at all: the config of the user's own relay reads the same
-  // as it did before relay modes, so walnut-net is not restarted for it.
-  return { ...(mode === 'public' || mode === 'none' ? { relayMode: mode } : {}), relays: relays as string[], relayRoots: roots as string[], members }
+  // as it did before relay modes, so walnut-net is not restarted for it. Walnut Connect's fields
+  // the same: absent unless a phone is listed, so a Walnut that never paired one writes the file
+  // it always wrote.
+  return {
+    ...(mode === 'public' || mode === 'none' ? { relayMode: mode } : {}), relays: relays as string[], relayRoots: roots as string[], members,
+    ...(phones.length && webSocket ? { phones, webSocket } : {}),
+  }
+}
+
+/** The phones of a configure request; `members` holds the member ids already seen (a phone is never one). */
+function parsePhones(raw: unknown, members: ReadonlySet<string>): NetPhone[] {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw new Error('phones: a list')
+  if (raw.length > PHONES_MAX) throw new Error(`at most ${PHONES_MAX} phones`)
+  const seen = new Set<string>()
+  return raw.map((p) => {
+    const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>
+    const id = typeof o.id === 'string' ? o.id.toLowerCase() : ''
+    if (!ID_RE.test(id)) throw new Error(`bad phone id ${String(o.id).slice(0, 80)}`)
+    if (seen.has(id)) throw new Error(`phone ${id} listed twice`)
+    if (members.has(id)) throw new Error(`phone ${id} is also a member`)
+    seen.add(id)
+    return { id, name: str(o.name, NAME_MAX) ?? '' }
+  })
 }
 
 /** The text of walnut-net's config.json for a checked request: the one rule every writer of it follows. */
-export function netConfigFileText(parsed: ReturnType<typeof parseNetConfig>, at: { self: string; keyFile: string; portFile: string; control: string }): string {
+export function netConfigFileText(parsed: ParsedNetConfig, at: { self: string; keyFile: string; portFile: string; control: string }): string {
   const cfg = {
     version: NET_CONFIG_VERSION, key: at.keyFile, ...parsed,
     // A member never lists this host itself.

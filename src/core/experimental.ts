@@ -337,6 +337,13 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'walnut_connect',
+    name: 'Walnut Connect',
+    summary: 'Your paired phone reaches this Mac from anywhere, end to end encrypted, with no cloud companion.',
+    description: 'The Walnut app on a paired phone reaches this computer from any network, through Walnut\'s host network: an encrypted connection straight to this computer when the two can see each other, else through a relay that passes on what it cannot read (your cloud companion\'s when one is paired, otherwise public relays). It turns the host network on, and a phone paired from now on gets its key in the pairing code; a phone paired before gets its own the next time it reaches this computer. The computer must be awake. Off: the phone reaches this computer only on the same Wi-Fi, over Tailscale or through a cloud companion, as before.',
+    default: false,
+  },
+  {
     id: 'local_chinese_voice',
     name: 'Local Chinese voice',
     summary: 'Voice mode reads Chinese answers in a local Mandarin voice on this Mac (Apple Silicon, about 2.5 GB once).',

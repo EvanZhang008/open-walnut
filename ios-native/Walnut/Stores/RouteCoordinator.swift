@@ -49,6 +49,11 @@ final class RouteCoordinator {
         var restartStreams: @MainActor () -> Void
         var isEnabled: @MainActor () -> Bool
         var now: @Sendable () -> Date
+        /// Walnut Connect: this phone's network id (nil: a build without it), how it tells
+        /// the Mac (POST /api/v1/connect/register), and the connector's "the network changed".
+        var connectEndpoint: @Sendable () -> String? = { nil }
+        var registerConnect: @Sendable (String) async throws -> Void = { _ in }
+        var networkChanged: @Sendable () -> Void = {}
 
         static var live: Environment {
             Environment(
@@ -63,7 +68,10 @@ final class RouteCoordinator {
                 // never probe or re-point anything; nothing runs before the app
                 // is first in front of the user (LaunchGate, P0-2).
                 isEnabled: { !AppConfig.routesArePinned && AppConfig.isConfigured && LaunchGate.shared.hasActivated },
-                now: { Date() }
+                now: { Date() },
+                connectEndpoint: { WalnutConnect.shared.endpointID() },
+                registerConnect: { try await WalnutAPI().registerConnect(endpoint: $0) },
+                networkChanged: { WalnutConnect.shared.networkChanged() }
             )
         }
     }
@@ -93,12 +101,16 @@ final class RouteCoordinator {
     @ObservationIgnored private nonisolated(unsafe) var pathMonitor: NWPathMonitor?
     @ObservationIgnored private var pathSignature: String?
     @ObservationIgnored private var pathDebounce: Task<Void, Never>?
+    /// The network id last sent to the Mac, and when: one registration per id, again only
+    /// after `connectRegisterRetry` when the Mac still does not list it.
+    @ObservationIgnored private var connectRegistered: (endpoint: String, at: Date)?
 
     /// A refused token is given another chance on that origin after this long
     /// (the server may have re-copied the token's hash there by then).
     static let rejectionTTL: TimeInterval = 30 * 60
     /// Network path updates settle for this long before a selection.
     static let pathDebounceSeconds: Double = 1
+    static let connectRegisterRetry: TimeInterval = 10 * 60
 
     init(environment: Environment = .live, monitorsNetworkPath: Bool = true) {
         env = environment
@@ -209,6 +221,8 @@ final class RouteCoordinator {
     func resume() {
         active = true
         refreshRoutes()
+        // Back from the background: the connector's sockets may be gone with it.
+        env.networkChanged()
         trigger(.foreground)
     }
 
@@ -229,6 +243,7 @@ final class RouteCoordinator {
         lastRun = [:]
         lastRoutesFetch = [:]
         routesMissing = []
+        connectRegistered = nil
         refreshRoutes()
     }
 
@@ -330,6 +345,7 @@ final class RouteCoordinator {
             // Kept across a list without one (a replica, a Mac still checking):
             // the last word from the Mac beats no word.
             if let hint = response.tailscale, hint != tailscaleHint { tailscaleHint = hint }
+            registerConnectIfNeeded(response)
             if env.mergeServerRoutes(response.routes) {
                 refreshRoutes()
                 AppLog.info("connectivity", "routes learned", ["routes": String(env.routes().count)])
@@ -340,6 +356,29 @@ final class RouteCoordinator {
             // ask again only on the slow interval. Anything else is transient.
             if case let APIError.server(status, _, _, _, _) = error, status == 404 {
                 routesMissing.insert(key)
+            }
+        }
+    }
+
+    /// The Mac lists a Walnut Connect route but not this phone's id: tell it (a phone paired
+    /// before Walnut Connect, or one whose QR carried no key). Once per id, again after
+    /// `connectRegisterRetry` while the Mac still does not list it.
+    private func registerConnectIfNeeded(_ response: ServerRoutesResponse) {
+        guard response.connectRoute != nil, let mine = env.connectEndpoint() else { return }
+        guard response.connectEndpoint?.lowercased() != mine.lowercased() else {
+            connectRegistered = (mine, env.now())
+            return
+        }
+        if let last = connectRegistered, last.endpoint == mine,
+           env.now().timeIntervalSince(last.at) < Self.connectRegisterRetry { return }
+        connectRegistered = (mine, env.now())
+        let register = env.registerConnect
+        Task {
+            do {
+                try await register(mine)
+                AppLog.info("connectivity", "walnut connect registered", [:])
+            } catch {
+                AppLog.info("connectivity", "walnut connect registration failed", ["error": String(describing: error)])
             }
         }
     }
@@ -394,6 +433,7 @@ final class RouteCoordinator {
     func pathUpdated(_ signature: String) {
         defer { pathSignature = signature }
         guard let previous = pathSignature, previous != signature else { return }
+        env.networkChanged()
         pathDebounce?.cancel()
         pathDebounce = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.pathDebounceSeconds))

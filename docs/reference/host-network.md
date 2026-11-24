@@ -348,6 +348,9 @@ earlier run never read, and has walnut-net forget the invites that run made. At 
 are open at once. Pairing a companion later moves the list to it (the Mac puts every
 machine it has on the companion's list).
 
+The same walnut-net also lets the user's phones reach the Mac with no companion: Walnut
+Connect, its own ALPN and list ([Walnut Connect](./walnut-connect.md)).
+
 ## What keeps strangers out
 
 - Every daemon's walnut-net closes a connection before any stream unless the peer's id

@@ -86,6 +86,7 @@ const UPGRADE_LISTENERS: Record<string, string> = {
   'src/core/leader/switch/handed-over.ts': 'the standby of a handed-over home: answers every upgrade 409 handed_over and closes the connection',
   'src/replica/leader-door.ts': "a host replica's leader door: a server on no port, fed only by streams its daemon accepted from the leader's own link (the door is the credential); upgrades only the session channel of a host that runs its sessions",
   'src/replica/console-door.ts': "the old leader's console door: stamps the console credential, then hands the upgrade to the replica's own handler",
+  'src/web/connect-door.ts': "Walnut Connect's door on the leader: a unix socket only this account reaches, fed by the leader's walnut-net; hands every upgrade to the main server's handler, which asks the device token (no loopback trust)",
 }
 
 /** Code lines only: a comment that names a call is not a use. */

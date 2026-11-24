@@ -1,13 +1,14 @@
 //! The control socket: a unix socket in a 0700 directory, mode 0600, one JSON request line per
 //! connection and one JSON answer line. Only this account (the daemon, the Walnut server) reaches it.
 //!
-//!   {"op":"status"}                    -> {"ok":true, "id", "relayMode", "homeRelay", "relays", "addrs", "peers", "invites"}
+//!   {"op":"status"}                    -> {"ok":true, "id", "relayMode", "homeRelay", "relays", "addrs", "peers", "invites", "web"}
 //!   {"op":"forward","to":"<id>"}       -> {"ok":true, "port"}   (127.0.0.1; each connection = a stream to that member's daemon)
 //!   {"op":"probe","to":"<id>"}         -> {"ok":true, "link": {"path": "direct"|"relay", "rttMs", ...}}
 //!   {"op":"reload"}                    -> {"ok":true, "restart": bool}  (re-read the config; restart: the endpoint must be rebuilt)
 //!   {"op":"invites","invites":[{"id","codeHash","expiresAt","name"}]} -> {"ok":true}  (replaces the pending invites)
 //!   {"op":"join","to","code","hostname","platform","addrs","relay"}   -> {"ok":true,"name"} | {"ok":false,"error"}
 //!
+//! `status.web` is {"door": the connect door or null, "phones": [{"id","name","connections","link"?}]} (web.rs).
 //! `status.invites` is [{"id","expiresAt","used": null | {"memberId","hostname","platform","name","at"}}].
 //! A join's error is "invalid_code", "rate_limited", "no_answer" (no dial, no stream, or refused) or a text.
 

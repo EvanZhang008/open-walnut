@@ -265,9 +265,30 @@ async function callerRecordName(req: Request): Promise<string | undefined> {
  * it is the shipped iOS pairing contract (AppConfig.parsePairingURI, the QR
  * scanner, pasted links), so changing it would break already-installed builds.
  */
-function buildPairingURI(name: string, token: string, origin?: string): string {
+function buildPairingURI(name: string, token: string, origin?: string, connect?: string): string {
   const server = origin ? `&server=${encodeURIComponent(origin)}` : ''
-  return `wn://pair?name=${encodeURIComponent(name)}&token=${token}${server}`
+  // Walnut Connect (core/connect/): the phone's key and where this Mac is, so a phone paired
+  // away from this Wi-Fi reaches it at once. An older app ignores the parameter.
+  const viaConnect = connect ? `&connect=${connect}` : ''
+  return `wn://pair?name=${encodeURIComponent(name)}&token=${token}${server}${viaConnect}`
+}
+
+/**
+ * The `connect` parameter for a new phone's QR, when Walnut Connect runs here: a key made for
+ * it (its network id goes on its record now, so this Mac's walnut-net lets it in), this Mac's
+ * network id, relay mode and relays, as base64url JSON. Null when it does not run.
+ */
+async function pairingConnect(name: string): Promise<string | null> {
+  const [{ connectRoute, scheduleConnectSync }, { mintPhoneKey, setConnectEndpointByName }, { getInstanceId }] = await Promise.all([
+    import('../../core/connect/connect-net.js'), import('../../core/connect/connect-phones.js'), import('../../core/device-auth.js'),
+  ])
+  const route = await connectRoute(await getInstanceId())
+  if (!route) return null
+  const { key, endpoint } = mintPhoneKey()
+  if (!await setConnectEndpointByName(name, endpoint)) return null
+  scheduleConnectSync('phone paired')
+  const c = route.connect
+  return Buffer.from(JSON.stringify({ k: key, id: c.id, m: c.relayMode, r: c.relays, i: route.instance })).toString('base64url')
 }
 
 /**
@@ -476,7 +497,12 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     // A re-pair is one locked step with the rules in it (device-auth.ts
     // rotateDevice), and it removes the old token's copy on the other box too.
     const { token, createdAt } = replace ? await rotateDevice(name, { by, proof: machineProof(req) }) : await createDeviceAs(name, { kind, by })
-    const pairingURI = buildPairingURI(name, token, target?.origin)
+    // A pairing that could not get its key still pairs (the phone registers one itself later).
+    const connect = kind === 'machine' ? null : await pairingConnect(name).catch((err: Error) => {
+      log.web.warn('devices: no Walnut Connect key in the pairing', { name, error: err.message })
+      return null
+    })
+    const pairingURI = buildPairingURI(name, token, target?.origin, connect ?? undefined)
     log.web.info('devices: created via console', { name, kind: kind ?? 'device', target: target?.kind ?? 'none', replace })
     res.status(201).json({
       name, token, pairingURI, createdAt,

@@ -115,6 +115,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'browser-sign-in-sweep': leaderOnly, // added with the trial column: server.ts `if (role() === 'leader')`
   'focus-spaces': leaderOnly, // added with the trial column: server.ts `if (!isFollower())`
   'topics-runtime': always, // added with the trial column: server.ts started it with no gate
+  'connect-door': leaderOnly, // new 2026-11-24 (Walnut Connect): a door on the leader's machine only
 }
 
 /**
@@ -366,18 +367,23 @@ const ADDED_WITH_TRIAL: Array<[string, boolean, boolean]> = [
   ['topics-runtime', true, true],
 ]
 
+/** Rows added after the trial column, each with its leader and replica values. */
+const ADDED_SINCE_TRIAL: Array<[string, boolean, boolean]> = [
+  ['connect-door', true, false],
+]
+
 /** What a leader switch's trial start runs: the databases and their migrations, the guard on them, a static route (routes that act outward, like backup uploads, are off). */
 const TRIAL_ON = new Set<BootJob>(['foreign-db-guard', 'plugin-apps', 'completed-task-session-migration'])
 
 describe('boot policy: the trial column', () => {
   it('the leader and replica columns are, row by row, what they were before the trial column', () => {
-    const want = [...BEFORE_TRIAL, ...ADDED_WITH_TRIAL]
+    const want = [...BEFORE_TRIAL, ...ADDED_WITH_TRIAL, ...ADDED_SINCE_TRIAL]
     expect(rows.map((r) => [r.job, r.leader, r.replica, ...(r.companionUntil ? [r.companionUntil] : [])])).toEqual(want)
   })
 
   it('a normal boot reads no trial column: every placement decides as before', () => {
     expect(bootMode()).toBe('normal')
-    for (const [job, leader, replica] of [...BEFORE_TRIAL, ...ADDED_WITH_TRIAL]) {
+    for (const [job, leader, replica] of [...BEFORE_TRIAL, ...ADDED_WITH_TRIAL, ...ADDED_SINCE_TRIAL]) {
       expect(bootPolicy(job as BootJob, 'mac'), job).toBe(leader)
       expect(bootPolicy(job as BootJob, 'host'), job).toBe(replica)
       expect(bootPolicy(job as BootJob, 'cloud'), job).toBe(OLD_TRUTH[job as BootJob](true))

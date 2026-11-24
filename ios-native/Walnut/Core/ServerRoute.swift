@@ -3,21 +3,24 @@ import Foundation
 /// One way to reach the paired Walnut: the same server (and the same device
 /// token) at a different origin.
 ///
-/// `lan` is the Mac on this Wi-Fi, `tailnet` the Mac over Tailscale, `cloud` the
-/// HTTPS companion. `custom` is the origin the user paired with when the server's
-/// own list does not contain it (an ssh forward, a reverse proxy of their own):
-/// the user chose it, so it always ranks first.
+/// `lan` is the Mac on this Wi-Fi, `tailnet` the Mac over Tailscale, `connect` the
+/// Mac over Walnut Connect (from anywhere, through this phone's own 127.0.0.1 port:
+/// WalnutConnect.swift), `cloud` the HTTPS companion. `custom` is the origin the user
+/// paired with when the server's own list does not contain it (an ssh forward, a
+/// reverse proxy of their own): the user chose it, so it always ranks first.
 struct ServerRoute: Codable, Equatable, Hashable, Sendable {
     enum Kind: String, Codable, CaseIterable, Sendable {
-        case custom, lan, tailnet, cloud
+        case custom, lan, tailnet, connect, cloud
 
-        /// Preference order, lower wins: custom > lan > tailnet > cloud.
+        /// Preference order, lower wins: custom > lan > tailnet > connect > cloud. Walnut
+        /// Connect reaches the Mac itself, so it beats the companion's copy while it answers.
         var rank: Int {
             switch self {
             case .custom: return 0
             case .lan: return 1
             case .tailnet: return 2
-            case .cloud: return 3
+            case .connect: return 3
+            case .cloud: return 4
             }
         }
 
@@ -27,6 +30,7 @@ struct ServerRoute: Codable, Equatable, Hashable, Sendable {
             case .custom: return "Custom"
             case .lan: return "Wi-Fi"
             case .tailnet: return "Tailscale"
+            case .connect: return "Walnut Connect"
             case .cloud: return "Cloud"
             }
         }
@@ -38,16 +42,20 @@ struct ServerRoute: Codable, Equatable, Hashable, Sendable {
     /// Id of the box at `origin` (`GET /api/v1/instance`). nil = not known, which
     /// is only ever true of the route the user paired with by hand.
     var instance: String?
+    /// `connect` only: where the Mac is on Walnut Connect. Its `origin` is this phone's
+    /// own port (AppConfig.localizedConnectRoutes); the server names it `walnut-connect://<id>`.
+    var connect: ConnectPeer?
 
-    init(kind: Kind, origin: String, label: String, instance: String? = nil) {
+    init(kind: Kind, origin: String, label: String, instance: String? = nil, connect: ConnectPeer? = nil) {
         self.kind = kind
         self.origin = origin
         self.label = label
         self.instance = instance
+        self.connect = connect
     }
 
     /// `label` is optional on the wire: a route without one is named by its kind.
-    private enum CodingKeys: String, CodingKey { case kind, origin, label, instance }
+    private enum CodingKeys: String, CodingKey { case kind, origin, label, instance, connect }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -56,7 +64,13 @@ struct ServerRoute: Codable, Equatable, Hashable, Sendable {
         label = try c.decodeIfPresent(String.self, forKey: .label) ?? kind.displayName
         let raw = try c.decodeIfPresent(String.self, forKey: .instance)
         instance = (raw?.isEmpty ?? true) ? nil : raw
+        connect = try c.decodeIfPresent(ConnectPeer.self, forKey: .connect)
+        // A Walnut Connect route says where the Mac is, or it is no route.
+        if kind == .connect, connect == nil {
+            throw DecodingError.dataCorruptedError(forKey: .connect, in: c, debugDescription: "a connect route without its peer")
+        }
     }
+
 
     /// The route for an origin the user paired with by hand.
     static func custom(_ origin: String) -> ServerRoute {
@@ -67,11 +81,18 @@ struct ServerRoute: Codable, Equatable, Hashable, Sendable {
 
     /// Host (and a non-default port) for display: "192.168.1.20:3456".
     var displayHost: String {
+        // Walnut Connect's origin is this phone's own port: nothing a person reads as an address.
+        if kind == .connect { return Self.connectAddressText }
         guard let c = URLComponents(string: AppConfig.normalize(origin)), let host = c.host, !host.isEmpty else {
             return origin
         }
         return c.port.map { "\(host):\($0)" } ?? host
     }
+
+    static let connectAddressText = "encrypted, from anywhere"
+
+    /// The address a route list shows: the origin, or what Walnut Connect is.
+    var displayAddress: String { kind == .connect ? displayHost : origin }
 
     /// Canonical spelling for comparing origins: scheme + host lowercased, the
     /// scheme's default port dropped, no trailing slash, no query or fragment. A
@@ -106,14 +127,18 @@ struct ServerRoutesResponse: Decodable, Sendable {
     let device: String?
     /// The Mac's Tailscale state (only the Mac sends it; see TailscaleHint).
     let tailscale: TailscaleHint?
+    /// With a Walnut Connect route: the network id this phone registered on the Mac (nil:
+    /// none yet, so it registers its own; WalnutAPI.registerConnect).
+    let connectEndpoint: String?
 
-    init(routes: [ServerRoute], device: String? = nil, tailscale: TailscaleHint? = nil) {
+    init(routes: [ServerRoute], device: String? = nil, tailscale: TailscaleHint? = nil, connectEndpoint: String? = nil) {
         self.routes = routes
         self.device = device
         self.tailscale = tailscale
+        self.connectEndpoint = connectEndpoint
     }
 
-    private enum CodingKeys: String, CodingKey { case routes, device, tailscale }
+    private enum CodingKeys: String, CodingKey { case routes, device, tailscale, connectEndpoint }
     private struct Lossy: Decodable {
         let route: ServerRoute?
         init(from decoder: Decoder) throws { route = try? ServerRoute(from: decoder) }
@@ -128,7 +153,11 @@ struct ServerRoutesResponse: Decodable, Sendable {
         // must never cost the route list.
         let hint = (try? c.decodeIfPresent(TailscaleHint.self, forKey: .tailscale)) ?? nil
         tailscale = (hint?.isEmpty ?? true) ? nil : hint
+        connectEndpoint = (try? c.decodeIfPresent(String.self, forKey: .connectEndpoint)) ?? nil
     }
+
+    /// The Walnut Connect route the server listed, if any.
+    var connectRoute: ServerRoute? { routes.first { $0.kind == .connect } }
 }
 
 // MARK: - Persistence
@@ -242,7 +271,11 @@ extension AppConfig {
         if routesArePinned { return false }
         let current = UserDefaults.standard.string(forKey: urlKey)
         let existing = routes(in: .standard, serverURL: current)
-        let merged = mergeRoutes(existing, server: server)
+        // A build without Walnut Connect (the stub library) keeps no route it cannot use.
+        let usable = WalnutConnect.shared.isAvailable
+            ? localizedConnectRoutes(server, origin: WalnutConnect.shared.localOrigin)
+            : server.filter { $0.kind != .connect }
+        let merged = mergeRoutes(existing, server: usable)
         guard merged != existing else { return false }
         storeRoutes(merged, anchor: current)
         return true
@@ -265,6 +298,30 @@ extension AppConfig {
             if route.kind == .custom || !mentioned.contains(route.kind) { kept.append(route) }
         }
         return ordered(kept + fresh)
+    }
+
+    /// Walnut Connect routes as this phone dials them: through its own port. Pure.
+    static func localizedConnectRoutes(_ routes: [ServerRoute], origin: String) -> [ServerRoute] {
+        routes.map { route in
+            guard route.kind == .connect else { return route }
+            var r = route
+            r.origin = normalize(origin)
+            return r
+        }
+    }
+
+    /// The connector had to listen on another port: the stored Walnut Connect routes, and the
+    /// current URL when it was one, name the new one.
+    static func moveConnectRoutes(toPort port: Int) {
+        if routesArePinned { return }
+        let origin = "http://127.0.0.1:\(port)"
+        let current = UserDefaults.standard.string(forKey: urlKey)
+        let stored = routes(in: .standard, serverURL: current)
+        guard stored.contains(where: { $0.kind == .connect }) else { return }
+        let wasConnect = stored.contains { $0.kind == .connect && ServerRoute.sameOrigin($0.origin, current) }
+        let moved = localizedConnectRoutes(stored, origin: origin)
+        storeRoutes(moved, anchor: wasConnect ? origin : current)
+        if wasConnect { UserDefaults.standard.set(normalize(origin), forKey: urlKey) }
     }
 
     /// Stable sort by kind preference (order within one kind is kept).

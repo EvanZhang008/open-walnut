@@ -13,16 +13,22 @@
  * A caller without a device (an API key, the loopback console) gets the routes
  * that need no adoption. Every failure on the far side leaves only that route
  * out; the answer is still 200.
+ *
+ * Walnut Connect (core/connect/, docs/reference/walnut-connect.md): the PRIMARY also lists
+ * the `connect` route while it runs, and says which network id the caller registered
+ * (`connectEndpoint`); POST /connect/register is how a paired phone names its own.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
-import { role } from '../../core/server-role.js'
+import { isFollower, role } from '../../core/server-role.js'
 import { getInstanceId, listDeviceRecords, type DeviceRecord } from '../../core/device-auth.js'
 import { recordForToken } from '../../core/device-actor.js'
 import { CLOUD_ROUTE_LABEL, directRoutes, listeningPort, type DeviceRoute } from '../../core/devices/routes.js'
 import { adoptOnCloud, adoptOnPrimary } from './device-twins.js'
 import { peekTailscaleBrief } from '../../core/tailnet.js'
+import { connectRoute, scheduleConnectSync, type ConnectRoute } from '../../core/connect/connect-net.js'
+import { ConnectRefused, registerConnectEndpoint } from '../../core/connect/connect-phones.js'
 
 export const instanceRoutesV1Router = Router()
 
@@ -48,7 +54,8 @@ instanceRoutesV1Router.get('/routes', async (req: Request, res: Response, next: 
   try {
     const instance = await getInstanceId()
     const caller = await callerRecord(req)
-    const routes: DeviceRoute[] = []
+    const routes: Array<DeviceRoute | ConnectRoute> = []
+    let connectEndpoint: string | null | undefined
     // So the phone can say "set up Tailscale on your Mac" vs "install it on this phone":
     // the Mac's own summary here, the one it sent in its adopt reply on a replica (the
     // phone that asks a replica is the one away from home); absent while the first probe runs.
@@ -64,12 +71,49 @@ instanceRoutesV1Router.get('/routes', async (req: Request, res: Response, next: 
     } else {
       // The port this request reached the server on: the direct routes use the same one.
       routes.push(...await directRoutes(req.socket.localPort || listeningPort(), instance))
+      // Listed to every caller (a phone needs this Mac's id before it can register its own);
+      // only a phone whose id is registered gets past walnut-net.
+      const connect = await connectRoute(instance)
+      if (connect) {
+        routes.push(connect)
+        connectEndpoint = caller ? caller.connect?.endpoint ?? null : null
+      }
       const cloud = caller ? await adoptOnCloud(caller) : null
       if (cloud) routes.push({ kind: 'cloud', origin: cloud.origin, label: CLOUD_ROUTE_LABEL, instance: cloud.instance })
       tailscale = await peekTailscaleBrief()
     }
-    res.json({ routes, device: caller?.name ?? null, ...(tailscale ? { tailscale } : {}) })
+    res.json({ routes, device: caller?.name ?? null, ...(tailscale ? { tailscale } : {}), ...(connectEndpoint !== undefined ? { connectEndpoint } : {}) })
   } catch (err) {
     next(err)
   }
 })
+
+/**
+ * POST /api/v1/connect/register { endpoint }: the calling phone's network id (its iroh public
+ * key), which this Mac's walnut-net then lets in on Walnut Connect. Its device token only:
+ * 403 for any other caller, 409 when another device holds that id, 404 off the primary.
+ */
+instanceRoutesV1Router.post('/connect/register', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (isFollower()) {
+      res.status(404).json({ error: 'Walnut Connect registers on the Mac', code: 'not_here' })
+      return
+    }
+    const caller = await callerRecord(req)
+    if (!caller) {
+      res.status(403).json({ error: 'Only a paired app registers for Walnut Connect', code: 'not_a_phone' })
+      return
+    }
+    const token = req.headers.authorization!.slice(7)
+    const out = await registerConnectEndpoint(token, (req.body as { endpoint?: unknown } | undefined)?.endpoint)
+    if (out.changed) scheduleConnectSync('phone registered')
+    res.json({ registered: true, endpoint: out.endpoint, changed: out.changed })
+  } catch (err) {
+    if (err instanceof ConnectRefused) {
+      res.status(err.status).json({ error: err.message, code: err.code })
+      return
+    }
+    next(err)
+  }
+})
+

@@ -194,4 +194,28 @@ struct AppConfig {
         let server = components.queryItems?.first(where: { $0.name == "server" })?.value
         return (name, token, server)
     }
+
+    /// What a pairing QR's `connect` parameter carries (Walnut Connect, the Mac's
+    /// routes/devices.ts pairingConnect): this phone's key, made for it on the Mac, and where
+    /// the Mac is. nil when the link has none or it does not read.
+    struct PairingConnect: Equatable {
+        let key: String
+        let peer: ConnectPeer
+        let instance: String?
+    }
+
+    static func parsePairingConnect(_ text: String) -> PairingConnect? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("wn://pair?"),
+              let raw = URLComponents(string: trimmed)?.queryItems?.first(where: { $0.name == "connect" })?.value
+        else { return nil }
+        var b64 = raw.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64.append("=") }
+        struct Wire: Decodable { let k: String; let id: String; let m: String?; let r: [String]?; let i: String? }
+        guard let data = Data(base64Encoded: b64), let w = try? JSONDecoder().decode(Wire.self, from: data) else { return nil }
+        let key = w.k.lowercased(), id = w.id.lowercased()
+        let hex64 = { (s: String) in s.count == 64 && s.allSatisfy(\.isHexDigit) }
+        guard hex64(key), hex64(id) else { return nil }
+        return PairingConnect(key: key, peer: ConnectPeer(id: id, relayMode: w.m ?? "public", relays: w.r ?? []), instance: w.i)
+    }
 }

@@ -345,7 +345,8 @@ leave() {
 trap leave EXIT
 
 # The sources: what git tracks plus new files not ignored, under ios-native, the shared
-# script helpers the iOS scripts source, and every repo path the iOS sources name as a
+# script helpers the iOS scripts source, the Walnut Connect library the app's first build
+# phase builds (native/walnut-connect: its Rust sources, or the stub without Rust), and every repo path the iOS sources name as a
 # literal ("tests/fixtures/ask-list", "src/core/types.ts": tests read them through
 # #filePath), so a test that starts reading another file takes it along by itself.
 repo_refs() {
@@ -356,7 +357,7 @@ REFS=()
 while IFS= read -r p; do REFS+=("$p"); done < <(repo_refs)
 # Only the files the tree has now: a tracked file deleted in the working tree (not committed yet)
 # is left out, as the build there would not see it either; tar would refuse the whole pack.
-( cd "$ROOT" && git ls-files -co --exclude-standard -z -- ios-native scripts/lib ${REFS[@]+"${REFS[@]}"} \
+( cd "$ROOT" && git ls-files -co --exclude-standard -z -- ios-native native/walnut-connect scripts/lib ${REFS[@]+"${REFS[@]}"} \
     | while IFS= read -r -d '' f; do [ -e "$f" ] && printf '%s\0' "$f"; done | tar --null -T - -czf "$LOCAL/src.tgz" ) \
   || die "could not pack the sources"
 say "packed $(du -h "$LOCAL/src.tgz" | cut -f1) of sources ($(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" status --porcelain -- ios-native | grep -q . && echo ', with uncommitted changes'))"

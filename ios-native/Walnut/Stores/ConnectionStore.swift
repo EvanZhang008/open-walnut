@@ -149,6 +149,33 @@ final class ConnectionStore {
         reportDeviceInfo()
     }
 
+    /// Setup with a QR that carries Walnut Connect (AppConfig.parsePairingConnect): the key
+    /// becomes this phone's, the Walnut Connect route is stored with the pairing, and when the
+    /// QR's own address does not answer (the phone is not on the Mac's Wi-Fi) it pairs through
+    /// Walnut Connect instead. Without one, or in a build without it, the plain setup.
+    func connect(serverURL rawURL: String, token: String, deviceName name: String?, via pc: AppConfig.PairingConnect?) async throws {
+        guard let pc, WalnutConnect.shared.isAvailable else {
+            try await connect(serverURL: rawURL, token: token, deviceName: name)
+            return
+        }
+        WalnutConnect.shared.adoptKey(pc.key)
+        let route = ServerRoute(
+            kind: .connect, origin: WalnutConnect.shared.localOrigin, label: WalnutConnect.routeLabel,
+            instance: pc.instance, connect: pc.peer)
+        let direct = rawURL.trimmingCharacters(in: .whitespaces)
+        if !direct.isEmpty, case .ok = await InstanceProbe.probe(.custom(direct)) {
+            try await connect(serverURL: direct, token: token, deviceName: name, routes: [route])
+            return
+        }
+        AppLog.info("connectivity", "pairing through walnut connect", [:])
+        guard await WalnutConnect.shared.ensureRunning(pc.peer) != nil else {
+            // Not even the connector: the plain setup says why the address failed.
+            try await connect(serverURL: direct, token: token, deviceName: name)
+            return
+        }
+        try await connect(serverURL: route.origin, token: token, deviceName: name, routes: [route], instance: pc.instance)
+    }
+
     /// Push model/OS/app version to the server. Fire-and-forget: this is
     /// cosmetic metadata and must never block or fail a connection.
     ///

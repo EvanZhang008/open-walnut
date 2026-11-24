@@ -117,9 +117,13 @@ must live under one of these top-level categories instead of directly under
   to run sessions itself.
 - [Host network](reference/host-network.md): reach a Walnut machine with no SSH door. One invite link joins it; the Mac then reaches its daemon directly or through the relay on the user's own cloud companion, and only listed machines get in.
 - [Kubernetes hosts](reference/kubernetes-hosts.md): a Walnut host as a pod. It joins the host network with one invite, keeps everything (Claude Code's history, its network key, Walnut itself) in a persistent volume at its home, so a deleted or moved pod comes back as the same host; image and manifests in `infra/kubernetes/`.
-- [Phone connection routes](reference/phone-connection-routes.md): the three ways the
-  iOS app reaches a Walnut (Wi-Fi, Tailscale, cloud companion), how one pairing works on
-  every box, and how the app picks and switches routes.
+- [Phone connection routes](reference/phone-connection-routes.md): the ways the
+  iOS app reaches a Walnut (Wi-Fi, Tailscale, Walnut Connect, cloud companion), how one
+  pairing works on every box, and how the app picks and switches routes.
+- [Walnut Connect](reference/walnut-connect.md): the phone reaches the user's own Mac from
+  anywhere with no companion: an encrypted iroh stream from a small Rust library in the app
+  to the Mac's walnut-net, which lets in only paired phones; every request still needs the
+  phone's token.
 - [Claude model configuration](reference/claude-model-configuration.md)
 - [Jev decisions](reference/jev-decisions.md) - optional System One backend for
   background classifications (session→project placement, quick-parse fields):
