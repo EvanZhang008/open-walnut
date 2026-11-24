@@ -197,6 +197,7 @@ const BRANCHING_FILES: Record<string, { max: number; why: string }> = {
   'src/core/hosts/link.ts': { max: 1, why: 'which connection a host gets: the connection machinery' },
   'src/core/hosts/placement.ts': { max: 3, why: 'automatic picks leave the small, paid cloud box out; the Move to host menu lists it (hostLoads cloudBox)' },
   'src/core/hosts/ssh-cert-expiry-alert.ts': { max: 1, why: 'an alert about SSH certificates: SSH only by nature' },
+  'src/core/leader/switch/host-follow-steps.ts': { max: 1, why: 'the new leader\'s host network id for the retell after a switch: only a host-network host has one; any other kind is told the new leader by its daemon link, and the switch waits and is taken back with the reason when the id is missing' },
   'src/core/net/net-adopt.ts': { max: 4, why: 'moving a host onto the host network: connection setup' },
   'src/core/net/net-hosts.ts': { max: 3, why: 'host network bookkeeping: connection setup' },
   'src/core/net/net-mac.ts': { max: 2, why: 'host network bookkeeping: connection setup' },
