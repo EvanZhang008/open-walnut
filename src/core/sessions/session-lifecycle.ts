@@ -26,7 +26,7 @@ import type { SessionHistoryMessage } from '../session-history.js';
 import { DEFAULT_ENGINE, engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { unavailableHistoryReason } from './history-unavailable.js';
 import { judgeOf } from './judge-of.js';
-import { cliHostOf, execHostOf } from './session-row-owner.js';
+import { cliHostOf, execHostOf, readHostOf } from './session-row-owner.js';
 
 // ── Shared helpers (moved from src/web/routes/sessions.ts) ──────────────────
 
@@ -1023,14 +1023,16 @@ async function resumeConversationExists(record: SessionRecord): Promise<boolean>
   if (record.engine && record.engine !== DEFAULT_ENGINE) return true;
   if (engineCaps(record.engine).historySource !== 'provider-jsonl') return true;
   try {
-    if (cliHostOf(record) === '__local__') {
+    // A read of its files: by the row's own name (session-row-owner.ts readHostOf).
+    const at = readHostOf(record);
+    if (!at) {
       const { findLocalJsonlPath } = await import('../session-file-reader.js');
       return (await findLocalJsonlPath(record.claudeSessionId, record.cwd ?? undefined)) !== null;
     }
     // DaemonFileReader directly (not the SessionFileReader interface): we only
     // need the path probe, findSession would pull the whole file's content.
     const { DaemonFileReader } = await import('../daemon-file-reader.js');
-    const reader = new DaemonFileReader(cliHostOf(record));
+    const reader = new DaemonFileReader(at);
     return (await reader.findSessionPath(record.claudeSessionId)) !== null;
   } catch (err) {
     log.session.warn('retry: conversation pre-flight probe failed — assuming resumable', {

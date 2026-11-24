@@ -43,7 +43,7 @@ const PROBE_MS = 5_000
 
 import { isFolderGoneReason } from './folder-gone-words.js'
 import { frameAsWalnut } from './send-frame.js'
-import { execHostOf } from './session-row-owner.js'
+import { readHostOf } from './session-row-owner.js'
 export { FOLDER_GONE_RE, isFolderGoneReason } from './folder-gone-words.js'
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -94,8 +94,8 @@ export function historyInFolder(record: Pick<SessionRecord, 'engine' | 'provider
 }
 
 /** Where the session's Claude Code transcript is on its host, wherever its project dir is. */
-export async function findTranscript(record: Pick<SessionRecord, 'claudeSessionId' | 'cwd' | 'host' | 'judge'>): Promise<{ state: 'found'; path: string } | { state: 'missing' } | { state: 'unknown' }> {
-  const at = execHostOf(record)
+export async function findTranscript(record: Pick<SessionRecord, 'claudeSessionId' | 'cwd' | 'host'>): Promise<{ state: 'found'; path: string } | { state: 'missing' } | { state: 'unknown' }> {
+  const at = readHostOf(record)
   try {
     if (isLocal(at)) {
       const { findLocalJsonlPath } = await import('../session-file-reader.js')
@@ -327,7 +327,7 @@ async function moveTranscript(record: SessionRecord, found: string, to: string):
   const sid = record.claudeSessionId
   const projectsRoot = path.posix.dirname(path.posix.dirname(found))
   // The CLI names a project dir by the folder's real path (macOS /tmp is /private/tmp).
-  const at = execHostOf(record)
+  const at = readHostOf(record)
   const realOf = async (p: string) => isLocal(at)
     ? await (await import('node:fs/promises')).realpath(p).catch(() => p)
     : await (await import('../transfer/daemon-transfer-client.js')).realpathOn(at!, p).catch(() => p)

@@ -41,7 +41,7 @@ import { handOverPending, setLeaderDelivery } from './host-handover.js'
 import { hostStandsDown, judgingHostOf } from '../core/sessions/judge-of.js'
 import { acpResumeHostOf, resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
 import { assertHostNotRevoked } from '../core/session-channel/revoked-hosts.js'
-import { cliHostOf, execHostOf, rowOwnedHere, thisHostKey } from '../core/sessions/session-row-owner.js'
+import { cliHostOf, execHostOf, readHostOf, rowOwnedHere, thisHostKey } from '../core/sessions/session-row-owner.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
@@ -4088,7 +4088,8 @@ export class ClaudeCodeSession {
     let file: { fileSize: number; streamEpoch?: string } | null = null
     if (told && typeof streamEvidence === 'string' && streamEvidence !== EVIDENCE_TIMEOUT) {
       const { statStreamFile } = await import('../core/session-reconcile.js')
-      const st = await statStreamFile(record.claudeSessionId, execHostOf(record)).catch(() => null)
+      // A read of its stream by the row's name: on a host, its own name is its follower link (readHostOf).
+      const st = await statStreamFile(record.claudeSessionId, readHostOf(record)).catch(() => null)
       if (st && typeof st !== 'string') file = { fileSize: st.size, ...(st.epoch ? { streamEpoch: st.epoch } : {}) }
     }
     const replay = judgedReplayFloor(ownJudged, session._consumedOffset, streamEvidence, told, file, healed)
@@ -16138,7 +16139,7 @@ export class SessionRunner {
       } else {
         const { readSessionJsonlContent } = await import('../core/session-file-reader.js')
         const raw = await Promise.race([
-          readSessionJsonlContent(sessionId, record.cwd, execHostOf(record)),
+          readSessionJsonlContent(sessionId, record.cwd, readHostOf(record)),
           deadline,
         ])
         if (raw === 'timeout') { timedOut(); return }
@@ -16170,7 +16171,7 @@ export class SessionRunner {
         ],
       })
       const { invalidateSessionHistoryCaches } = await import('../core/session-history.js')
-      await invalidateSessionHistoryCaches(sessionId, execHostOf(record))
+      await invalidateSessionHistoryCaches(sessionId, readHostOf(record))
       log.session.info('death-window cold resume recorded a rewind cut', {
         sessionId, rewindPoint: resumeSessionAt, lastUuidAtCommit: lastTreeUuid,
       })

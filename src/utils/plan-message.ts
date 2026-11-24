@@ -11,7 +11,7 @@ import { createFileReader, readSessionJsonlContent } from '../core/session-file-
 import { CLAUDE_HOME } from '../constants.js';
 import type { SessionRecord } from '../core/types.js';
 import { noteTranscriptLinesParsed } from '../providers/line-parse-count.js';
-import { execHostOf } from '../core/sessions/session-row-owner.js';
+import { readHostOf } from '../core/sessions/session-row-owner.js';
 
 /**
  * Read the plan file from a completed session that produced a plan.
@@ -48,7 +48,7 @@ async function readPlanFromRecord(planSessionId: string, record: SessionRecord):
     // For remote sessions, use readSessionJsonlContent (SSH)
     let jsonlContent: string | null = null;
 
-    if (!execHostOf(record)) {
+    if (!readHostOf(record)) {
       const jsonlPath = await findSessionJsonlPath(planSessionId, record.cwd);
       if (jsonlPath) {
         jsonlContent = await reader.readFile(jsonlPath);

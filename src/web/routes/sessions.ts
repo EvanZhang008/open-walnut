@@ -913,7 +913,7 @@ import {
 import { SessionControlError } from '../../core/sessions/session-controls.js'
 import { historyNotWrittenYet, transcriptNotWrittenYet } from '../../core/sessions/history-not-written.js'
 import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, hostReadFailureLevel, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
-import { execHostOf } from '../../core/sessions/session-row-owner.js'
+import { readHostOf } from '../../core/sessions/session-row-owner.js'
 
 /** A full history read this slow logs its steps ('history read slow'). */
 const SLOW_HISTORY_READ_MS = 2_000
@@ -1573,7 +1573,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // it so the hook's Phase 1 doesn't waste an event loop tick (and doesn't race
       // with the Phase 2 SSH round-trip).
       // A local session whose parse is still in memory answers from it at once (below).
-      const localWarm = !(record && execHostOf(record)) && !!(await import('../../core/session-history.js')).getCachedSessionHistory(sessionId)
+      const localWarm = !readHostOf(record) && !!(await import('../../core/session-history.js')).getCachedSessionHistory(sessionId)
       if (record && !localWarm) {
         // The view this route last served, or the session's daemon built (history-view-snapshot.ts):
         // a picture of the conversation with no host round trip, fork prefix and all. It says when

@@ -22,7 +22,7 @@ import { BUDGET_PAUSED, budgetMoney, budgetSettleReason, type BudgetPausedParams
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import type { StillNeededContext } from '../human-inbox/walnut-letters/kind.js';
 import type { LetterRecord } from '../human-inbox/types.js';
-import { cliHostOf } from '../sessions/session-row-owner.js';
+import { readHostOf } from '../sessions/session-row-owner.js';
 
 /** Engines whose per-request usage the host can price (session-cost-core.ts). */
 export { BUDGET_ENGINES };
@@ -61,7 +61,7 @@ async function target(sid: string) {
   if (!(BUDGET_ENGINES as readonly string[]).includes(engine)) {
     throw fail('budget_unsupported', 'A budget needs per-request usage, which this session\'s engine does not record.', 400);
   }
-  const host = cliHostOf(session);
+  const host = readHostOf(session) ?? '__local__';
   const conn = await hostConnection(host);
   // budget-v1 hosts priced only some Claude models; their budgets stay enforced by
   // that daemon until it updates (it does on connect), but this server cannot read them.

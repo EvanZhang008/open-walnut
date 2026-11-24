@@ -11,7 +11,7 @@ import type { SessionCostScan } from '../../providers/session-cost-core.js';
 import type { BudgetState } from '../../providers/usage-budget-runtime.js';
 import { SwrCache } from './session-cost-cache.js';
 import { settledCost } from './session-cost-settled.js';
-import { cliHostOf } from '../sessions/session-row-owner.js';
+import { readHostOf } from '../sessions/session-row-owner.js';
 
 export type { SessionCostLine, SessionCostModel, SessionCostPayload, SessionCostRates, SessionCostTier } from './session-cost-pricing.js';
 export { priceBucket } from './session-cost-pricing.js';
@@ -44,7 +44,7 @@ export async function readSessionScan(sessionId: string): Promise<SessionScanRea
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw Object.assign(new Error('session not found'), { statusCode: 404 });
   const engine = record.engine ?? 'claude';
-  const host = cliHostOf(record);
+  const host = readHostOf(record) ?? '__local__';
   const [{ getConfig }, { DaemonFileReader }, { boundHostRead, HostReconnectingError }] = await Promise.all([
     import('../config-manager.js'), import('../daemon-file-reader.js'), import('../hosts/remote-read-bound.js'), ensurePriceBook(),
   ]);

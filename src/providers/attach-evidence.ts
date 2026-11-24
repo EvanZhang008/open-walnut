@@ -30,7 +30,7 @@
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
 import type { SessionRecord } from '../core/types.js'
 import { log } from '../logging/index.js'
-import { cliHostOf } from '../core/sessions/session-row-owner.js'
+import { readHostOf } from '../core/sessions/session-row-owner.js'
 
 /** How long a send waits, in all, for an on-demand attach's optional host reads. */
 export const ON_DEMAND_ATTACH_EVIDENCE_MS = 5_000
@@ -95,7 +95,8 @@ export async function readAttachEvidence(
   deps: AttachEvidenceDeps = REAL_DEPS,
 ): Promise<AttachEvidence> {
   const sid = record.claudeSessionId
-  const host = cliHostOf(record)
+  // Its cost is read through hosts/link.ts: the row's own name (session-row-owner.ts readHostOf).
+  const host = readHostOf(record) ?? '__local__'
   const deadlineAt = opts.budgetMs !== undefined ? deps.now() + opts.budgetMs : undefined
   const startedAt = deps.now()
 

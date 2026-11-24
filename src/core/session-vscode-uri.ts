@@ -7,7 +7,7 @@ import { findGitRoot } from './session-changes.js'
 import { link, linkTarget } from './hosts/link.js'
 import type { SessionRecord } from './types.js'
 import type { SshTarget } from '../providers/session-io.js'
-import { execHostOf } from './sessions/session-row-owner.js'
+import { readHostOf } from './sessions/session-row-owner.js'
 
 const execFileAsync = promisify(execFile)
 const LOCAL_GIT_TIMEOUT_MS = 5_000
@@ -131,8 +131,7 @@ export async function buildSessionVscodeUri(
   if (!session) throw new SessionVscodeUriError('session not found', 404)
   if (!session.cwd) throw new SessionVscodeUriError('session has no working directory', 400)
 
-  // A row this host replica owns runs right here (session-row-owner.ts execHostOf).
-  const isRemote = Boolean(execHostOf(session))
+  const isRemote = Boolean(readHostOf(session))
   if (!isRemote) {
     const cwd = expandLocalHome(session.cwd)
     const root = await findLocalGitRoot(cwd) ?? cwd

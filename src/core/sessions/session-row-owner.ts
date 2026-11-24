@@ -155,6 +155,19 @@ export function cliHostOf(row: Pick<SessionRecord, 'judge' | 'host'> | null | un
   return (row ? execHostOf(row) : undefined) ?? '__local__'
 }
 
+/**
+ * The name a read of a session's files goes by (DaemonFileReader and link() of hosts/link.ts, the
+ * stream and transcript readers, their caches): the row's host, undefined for a row of none (a
+ * reader that takes a string reads that as '__local__'). Not cliHostOf: on a host replica link.ts
+ * refuses '__local__' and maps the host's own name to its follower link (replica/self-host.ts, and
+ * session-reconcile.ts daemonStreamPathCandidates names its stream dir by it), so an own row's files
+ * are read by the name the row carries. The CLI's pooled connection (the own-sessions link on a
+ * host) is cliHostOf's.
+ */
+export function readHostOf(row: Pick<SessionRecord, 'host'> | null | undefined): string | undefined {
+  return row?.host && row.host !== '__local__' ? row.host : undefined
+}
+
 /** This server's own host key: a host replica's WALNUT_HOST_KEY, '' on the leader (and anywhere else). */
 export function thisHostKey(): string {
   return isHostReplica() ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''

@@ -25,7 +25,7 @@ import path from 'node:path'
 
 const role = vi.hoisted(() => ({ replica: false }))
 vi.mock('../../src/core/server-role.js', async (orig) => ({ ...(await orig<typeof import('../../src/core/server-role.js')>()), isHostReplica: () => role.replica }))
-const { cliHostOf, execHostOf } = await import('../../src/core/sessions/session-row-owner.js')
+const { cliHostOf, execHostOf, readHostOf } = await import('../../src/core/sessions/session-row-owner.js')
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
 
@@ -76,6 +76,9 @@ const ROLE_ASKS: Record<string, Record<string, { count: number; why: string }>> 
  *    resend, the liveness and stale checks, the history and cost readers all did). The forms counted:
  *    `x.host ?? '__local__'` and `|| '__local__'`, `x.host === / !== '__local__'`, `!x.host`, and a raw
  *    `x.host` handed to a link or reader. A file that keeps one names why it is not a session's place.
+ *    Two answers, by what is reached: the CLI's pooled connection is cliHostOf/execHostOf (on a host,
+ *    '__local__', its own-sessions link); a read of the session's files through hosts/link.ts is
+ *    readHostOf, the row's own name (on a host, its follower link: link.ts refuses '__local__' there).
  */
 const ROW = String.raw`(?:record|rec|row|existing|current|stored|prior|session|s|r|caller\.record|p\.session)`
 const PLACE_FROM_ROW = new RegExp(String.raw`\b${ROW}\??\.host\s*(?:\?\?|\|\|)\s*'__local__'|\b${ROW}\??\.host\s*(?:===|!==)\s*'__local__'|!${ROW}\??\.host\b|\b(?:getConnectedDaemonConnection|getPooledSnapshotConnection|isDaemonConnected|probeDaemonSession|DaemonFileReader|statStreamFile|readSessionJsonlContent|taskDirForHost|invalidateSessionHistoryCaches|hostConnection)\(\s*${ROW}\??\.host\b`, 'g')
@@ -194,5 +197,23 @@ describe('the session classes run every session on one path, whoever is its host
       expect(cliHostOf({ host: 'devbox' })).toBe('devbox')
       expect(cliHostOf({ judge: 'host', host: 'other' })).toBe('other')
     })
+
+    it('a read of its files goes by the row\'s own name, which a host\'s link maps to its follower link (readHostOf)', () => {
+      role.replica = true
+      process.env.WALNUT_HOST_KEY = 'devbox'
+      expect(readHostOf({ judge: 'host', host: 'devbox' } as never)).toBe('devbox')
+      for (const host of [undefined, '', '__local__']) expect(readHostOf({ host })).toBeUndefined()
+      expect(readHostOf(null)).toBeUndefined()
+    })
+  })
+
+  it('a reader through hosts/link.ts is never given cliHostOf: link.ts refuses \'__local__\' on a host replica', () => {
+    const hits: string[] = []
+    for (const file of srcFiles('src')) {
+      codeLines(fs.readFileSync(path.join(ROOT, file), 'utf8')).forEach((line, i) => {
+        if (/\b(?:DaemonFileReader|link|statStreamFile|readSessionJsonlContent|invalidateSessionHistoryCaches)\(\s*(?:[\w.]+,\s*)*(?:cliHostOf|execHostOf)\(/.test(line)) hits.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(hits).toEqual([])
   })
 })
