@@ -85,6 +85,8 @@ export interface MoveRecord {
   failures?: number
   /** The triggers were dropped on the shared daemon and the set's daemon does not have their memory yet. */
   owed?: true
+  /** Since when it is owed (the first drop that took it): past SEED_OWED_MAX_MS it is given up (seedOwed). */
+  owedAt?: number
   /** That memory (each trigger's exact state, as triggers.state.snapshot gave it); read with keptMemory. Kept in its own file (moveStoreFor). */
   memory?: TriggerMemory[]
 }
@@ -143,6 +145,12 @@ export const moveRetryMs = (): number => envMs('WALNUT_SERVICE_SET_MOVE_RETRY_MS
 export const MOVE_MAX_TRIES = 4
 const RETRY_CAP_MS = 24 * 3600_000
 const POLL_MS = 15_000
+/**
+ * Owed memory that no seed could hand over for this long is given up: the triggers start afresh on
+ * the set (Walnut Health says so), so one trigger the set's daemon never takes does not keep every
+ * trigger there from starting for good. WALNUT_SERVICE_SET_SEED_OWED_MAX_MS for tests.
+ */
+export const seedOwedMaxMs = (): number => envMs('WALNUT_SERVICE_SET_SEED_OWED_MAX_MS', 2 * 3600_000)
 /** How long the hold waits for the starts and sends that passed just before it. */
 const DRAIN_MS = 30_000
 
@@ -253,7 +261,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
   const failures = failed ? r!.failures ?? 1 : resume ? r!.failures ?? 0 : 0
   // Memory a try before a restart took stays owed in any new try (a flip pointed back, a done move
   // that never reached the set): the shared daemon may no longer give all of it.
-  const owed = r?.owed ? { owed: true as const, ...(r.memory !== undefined ? { memory: r.memory } : {}) } : {}
+  const owed = r?.owed ? { owed: true as const, owedAt: r.owedAt ?? r.startedAt, ...(r.memory !== undefined ? { memory: r.memory } : {}) } : {}
   let rec: MoveRecord = resume
     ? { ...r!, phase: 'waiting', at: d.now() }
     : { v: 1, at: d.now(), set: d.set, link: d.link, phase: 'waiting', startedAt: d.now(), stopped: [], ...(failures ? { failures } : {}), ...owed }
@@ -267,7 +275,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     const final = n >= MOVE_MAX_TRIES
     const nextTryAt = final ? undefined : d.now() + Math.min(retryMs * 2 ** (n - 1), RETRY_CAP_MS)
     // The shared daemon gets the triggers back (restore, the put-back's redial): it keeps their memory itself.
-    await save({ phase: outcome.result, why: outcome.why, failures: n, nextTryAt, owed: undefined, memory: undefined }).catch(() => {})
+    await save({ phase: outcome.result, why: outcome.why, failures: n, nextTryAt, owed: undefined, owedAt: undefined, memory: undefined }).catch(() => {})
     const out = { ...outcome, failures: n, ...(final ? { final: true } : { nextTryAt }) }
     d.report(out)
     return out
@@ -341,7 +349,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     }
     // On disk before anything stops, so a restart from here on still has it (the copy a try before
     // a restart kept fills what this take found none for; one that cannot be read fills nothing).
-    await save({ owed: true, memory: withKept(taken, keptMemory(rec) ?? [], d.liveTriggerIds?.() ?? null) })
+    await save({ owed: true, owedAt: rec.owedAt ?? d.now(), memory: withKept(taken, keptMemory(rec) ?? [], d.liveTriggerIds?.() ?? null) })
     for (const s of quiet) {
       const res = await d.stop(s.id).catch((e): StopResult => ({ ok: false, why: `session ${s.id}: ${errText(e)}` }))
       if (!res.ok) {
@@ -369,7 +377,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
       const left = (await (d.carry?.(carried) ?? Promise.resolve()).catch(() => carried)) ?? []
       // The set's daemon has it now (or refused it for good): the record owes it no more. What a
       // cut or a failed write left stays owed, seeded before the next trigger push there.
-      await save(left.length ? { memory: left } : { owed: undefined, memory: undefined }).catch(() => {})
+      await save(left.length ? { memory: left } : { owed: undefined, owedAt: undefined, memory: undefined }).catch(() => {})
       // Released right after the done record (X1): nothing after this waits for the hold.
       d.release()
       await d.afterMove?.().catch(() => { /* tried again at the next look */ })
@@ -420,14 +428,18 @@ export async function settleMove(d: Pick<MoveDeps, 'set' | 'store' | 'confirm' |
  * daemon still keeps it: the caller points the link back for the move to take it again).
  * 'retry': the seed handed over only part (a link cut, a timeout, a write the set's daemon failed):
  * the rest stays owed and no trigger may be pushed yet; the next seed hands it over. `seed` answers
- * what is still owed (a throw: all of it).
+ * what is still owed (a throw: all of it). 'given_up': owed past seedOwedMaxMs, and no longer.
  */
 export async function seedOwed(d: Pick<MoveDeps, 'set' | 'store' | 'now'> & {
   seed(memory: TriggerMemory[]): Promise<TriggerMemory[]>
   live?: readonly string[] | null
-}): Promise<'none' | 'seeded' | 'lost' | 'retry'> {
+}): Promise<'none' | 'seeded' | 'lost' | 'retry' | 'given_up'> {
   const r = await d.store.read().catch(() => null)
   if (!r?.owed || r.set !== d.set) return 'none'
+  if (d.now() - (r.owedAt ?? r.startedAt) >= seedOwedMaxMs()) {
+    await d.store.write({ ...r, owed: undefined, owedAt: undefined, memory: undefined, at: d.now() }).catch(() => {})
+    return 'given_up'
+  }
   const kept = keptMemory(r)
   if (kept === null) return 'lost'
   const exists = d.live ? new Set(d.live) : null
@@ -439,7 +451,7 @@ export async function seedOwed(d: Pick<MoveDeps, 'set' | 'store' | 'now'> & {
     await d.store.write({ ...now, memory: left, at: d.now() }).catch(() => {})
     return 'retry'
   }
-  await d.store.write({ ...now, owed: undefined, memory: undefined, at: d.now() }).catch(() => {})
+  await d.store.write({ ...now, owed: undefined, owedAt: undefined, memory: undefined, at: d.now() }).catch(() => {})
   return 'seeded'
 }
 

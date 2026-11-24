@@ -325,6 +325,16 @@ export function seedRefusedForGood(err: unknown): boolean {
   return err instanceof SeedRefusedForGood || err instanceof HostRevokedError
 }
 
+/**
+ * Answers to a seed that no resend changes (the daemon's errorKind): the socket speaks for another
+ * Walnut (refuseForeignHome), a request it cannot read, a Walnut it does not know, a refusal. With
+ * an "unknown command" (a daemon that lost the command), they are refusals for good of that trigger.
+ */
+const SEED_FINAL_KINDS = new Set(['not_owner', 'bad_request', 'unknown_walnut', 'session_other_walnut', 'refused', 'forbidden', 'host_revoked'])
+function seedFinalError(r: { errorKind?: unknown; error?: unknown; message?: unknown } | null | undefined): boolean {
+  return !!r && (SEED_FINAL_KINDS.has(String(r.errorKind ?? '')) || /unknown command/i.test(String(r.error ?? r.message ?? '')))
+}
+
 /** A seed's end: what is still owed (a link cut, a timeout, a write that failed there), and the triggers the set's daemon refused for good. */
 export interface SeedOutcome { left: TriggerMemory[]; refused: string[] }
 
@@ -332,7 +342,8 @@ export interface SeedOutcome { left: TriggerMemory[]; refused: string[] }
  * Hand the memory to the set's daemon (the link reaches it now), before its triggers are pushed there.
  * Each trigger's memory is taken (seeded, or kept there already), refused for good (any other refusal:
  * the trigger is held there already, a state that does not check out), or still owed: a write that
- * failed there, and on a send that threw or a reply that is no answer, that one and every one after it.
+ * failed there, and on a send that threw or a reply that is no answer, that one and every one after it
+ * (an answer no resend changes, SEED_FINAL_KINDS, is a refusal for good of that one).
  * Throws a final refusal for all of it: a revoked host (HostRevokedError), a daemon with no seed.
  */
 export async function seedTriggerMemory(link: MoveCheckLink, memory: readonly TriggerMemory[]): Promise<SeedOutcome> {
@@ -348,10 +359,14 @@ export async function seedTriggerMemory(link: MoveCheckLink, memory: readonly Tr
     let r: Record<string, unknown>
     try {
       r = await link.send('triggers.state.seed', { home: link.home, triggerId: m.triggerId, state: m.state, digest: m.digest }, 15_000)
-    } catch {
+    } catch (err) {
+      if (seedFinalError(err as { errorKind?: unknown; message?: unknown })) { refused.push(`trigger ${m.triggerId}: ${String((err as Error).message ?? err)}`); continue }
       return { left: [...left, ...memory.slice(i)], refused }
     }
-    if (r.ok !== true) return { left: [...left, ...memory.slice(i)], refused }
+    if (r.ok !== true) {
+      if (seedFinalError(r)) { refused.push(`trigger ${m.triggerId}: ${String(r.errorKind ?? r.error)}`); continue }
+      return { left: [...left, ...memory.slice(i)], refused }
+    }
     // `state_exists`: the set already keeps its own (an earlier move there): it is kept.
     if (r.seeded === true || r.reason === 'state_exists') continue
     if (r.reason === 'write_failed') left.push(m)

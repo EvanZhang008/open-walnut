@@ -102,4 +102,12 @@ describe('takeTriggerMemory and seedTriggerMemory (M2)', () => {
     // No answer (ok: false): owed too.
     expect((await seedTriggerMemory(link(['trigger-state-seed-v1'], () => ({ ok: false, error: 'not connected' })).l, memory)).left).toEqual(memory)
   })
+
+  it('an answer no resend changes (another Walnut\'s socket, an unknown command) is a refusal for good of that trigger, the rest still go', async () => {
+    const memory = [{ triggerId: 't1', state, digest: 'd-t1' }, { triggerId: 't2', state, digest: 'd-t2' }]
+    const foreign = link(['trigger-state-seed-v1'], (_c, p) => (p.triggerId === 't1' ? { ok: false, error: 'triggers.state.seed: this socket speaks for another Walnut', errorKind: 'not_owner' } : { ok: true, seeded: true }))
+    expect(await seedTriggerMemory(foreign.l, memory)).toEqual({ left: [], refused: ['trigger t1: not_owner'] })
+    const lost = link(['trigger-state-seed-v1'], () => ({ ok: false, error: 'unknown command: triggers.state.seed' }))
+    expect((await seedTriggerMemory(lost.l, memory)).left).toEqual([])
+  })
 })

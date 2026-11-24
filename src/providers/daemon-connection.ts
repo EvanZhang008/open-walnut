@@ -2461,7 +2461,13 @@ export class DaemonConnection {
     if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
     // A service set move a leader restart cut: the set's daemon gets the memory of the triggers this
     // push carries before their first push there (service-set-move-seed.ts). Not handed over: no push.
-    if (fresh && this.serviceSetLink && !(await this.serviceSetLink.beforeTriggerPush(compiled.payload.triggers.flatMap((t) => (t && typeof t === 'object' && typeof (t as { id?: unknown }).id === 'string' ? [(t as { id: string }).id] : []))).catch(() => true))) return 'stop'
+    if (fresh && this.serviceSetLink && !(await this.serviceSetLink.beforeTriggerPush(compiled.payload.triggers.flatMap((t) => (t && typeof t === 'object' && typeof (t as { id?: unknown }).id === 'string' ? [(t as { id: string }).id] : []))).catch((err: unknown) => {
+      // A gate that cannot answer is no yes: the memory may still be owed (round 2, L-2).
+      log.session.warn('DaemonConnection: the service set gate before the first trigger push failed; nothing is pushed now, asked again in a minute', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+      const again = setTimeout(() => { if (this._connected && this._connectionEpoch === epoch) this.pushTriggers() }, 60_000)
+      again.unref?.()
+      return false
+    }))) return 'stop'
     if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
     if (!recheck && compiled.hash === this.lastTriggersPushHash) return 'next'
     // A daemon that still holds this set under its name configures it from its copy

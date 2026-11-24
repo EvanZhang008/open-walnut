@@ -8,11 +8,12 @@
  * a daemon with no seed, a trigger it holds already: logged, and those start afresh there), or not
  * finished (a link cut, a 15 s timeout, a write that failed there). What did not finish stays owed:
  * that connect pushes no trigger, Walnut Health says the triggers wait, and the push asks again after
- * a minute, then less often, and at every connect. A kept copy that cannot be read is never taken as
+ * a minute, then less often, and at every connect; memory owed past seedOwedMaxMs (2 h) is given up
+ * with a Walnut Health line, so one trigger never keeps all of them from starting. A kept copy that cannot be read is never taken as
  * no memory: the link points back at the shared daemon, which still keeps it (pointBack).
  */
 import { log } from '../logging/index.js'
-import { seedOwed, type MoveDeps } from './service-set-move.js'
+import { seedOwed, seedOwedMaxMs, type MoveDeps } from './service-set-move.js'
 import { seedRefusedForGood, seedTriggerMemory, type MoveCheckLink, type TriggerMemory } from './service-set-move-checks.js'
 import type { SetLinkConn, SetLinkDeps } from './service-set-move-link.js'
 
@@ -71,7 +72,14 @@ export class OwedMemorySeeder {
     if (owed === 'retry') { this.later(); return false }
     if (owed === 'lost') { await this.d.pointBack(); return false }
     this.retryMs = 0
-    if (owed === 'seeded' && this.noticed) { this.noticed = false; c.notice(this.d.noticeKey, null) }
+    if (owed === 'given_up') {
+      this.noticed = false
+      log.session.warn('service set: the triggers\' memory could not be handed over for too long; they start afresh on this Walnut\'s own service', { host: c.hostKey, afterMs: seedOwedMaxMs() })
+      c.notice(this.d.noticeKey, `What this Walnut's triggers on ${c.hostKey} had already reported could not be handed to its own service there for ${Math.round(seedOwedMaxMs() / 60_000)} min, so they start afresh there: a watch may report items it reported before once.`)
+      return true
+    }
+    // Seeded, or nothing owed any more (another path handed it over): a "they wait" notice goes.
+    if (this.noticed) { this.noticed = false; c.notice(this.d.noticeKey, null) }
     return true
   }
 

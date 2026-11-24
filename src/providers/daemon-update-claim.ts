@@ -28,6 +28,11 @@
  * settle window holds them only while they have deferred less than UPDATE_CLAIM_TURN_MS in a row,
  * and never a name whose update is overdue (daemon-update-behind.ts): then that name takes its turn.
  * So a name waits at most UPDATE_CLAIM_TURN_MS plus one try under way.
+ *
+ * Claims and turns live in this process's memory only: a leader restart (every deploy) forgets
+ * them, so the names start their turns over and may both try once right after it. That is the
+ * known limit; the bound that holds across restarts is the overdue clock on disk
+ * (daemon-update-behind.ts), after which a refused try of another name no longer holds anyone.
  */
 
 /** A claim no path released (a server stopped in the middle) lets go after this long. */

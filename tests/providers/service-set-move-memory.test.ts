@@ -50,6 +50,10 @@ function machine() {
     noSeed: false,
     /** The link's last push and its trigger ids (null: no push yet on this connect). */
     pushed: null as null | string[],
+    /** Called when a redial reaches the set (the connect's own first trigger push asks then). */
+    onSetHello: null as null | (() => void),
+    /** A redial that does not answer yet (a point-back's redial under way). */
+    relinkHangs: false,
   }
 }
 type Machine = ReturnType<typeof machine>
@@ -94,8 +98,10 @@ async function leader(m: Machine, cut?: 'stop' | 'reconnect-set' | 'seed') {
     relink: async () => {
       const d = await link.sshDir()
       if (d?.set === SET && cut === 'reconnect-set') return NEVER
+      if (m.relinkHangs) return NEVER
       hello = d?.set ?? ''
       m.log.push(`relink:${hello === SET ? 'set' : 'shared'}`)
+      if (hello === SET) m.onSetHello?.()
       return hello
     },
     setHold: () => {},
@@ -366,5 +372,66 @@ describe('a leader restart mid-move keeps the triggers\' memory', () => {
     ;(first.link as unknown as { d: SetLinkDeps }).d.stop = async (id) => { stops.push(id); return { ok: true } }
     await first.link.check()
     expect(stops).toEqual([])
+  })
+
+  it('the flip\'s own reconnect push waits for the move: a carry the link cut keeps it off the set, owed, and the next connect seeds it', async () => {
+    const m = machine()
+    m.seedFails = 'cut'
+    const first = await leader(m)
+    let push: Promise<boolean> | null = null
+    // What DaemonConnection.pushTriggersOnce asks at the connect the flip makes (setConnected), while the move holds the host.
+    m.onSetHello = () => { push ??= first.link.beforeTriggerPush(['mail']) }
+    await first.link.check()
+    expect(push).not.toBeNull()
+    expect(await push).toBe(false)
+    expect(await kept()).toMatchObject({ phase: 'done', owed: true })
+    expect(m.set.seeds).toEqual([])
+    m.seedFails = null
+    expect(await first.link.beforeTriggerPush(['mail'])).toBe(true)
+    expect(m.set.seeds).toEqual([{ triggerId: 'mail', state: MAIL }])
+    first.link.stop()
+  })
+
+  it('a point-back whose redial is still under way: a look right after it keeps nothing as moved', async () => {
+    const m = machine()
+    await runUntilCut(m, 'seed')
+    await spoilMemory()
+    const next = await leader(m)
+    await next.connect()
+    m.relinkHangs = true
+    expect(await next.link.beforeTriggerPush(['mail'])).toBe(false)
+    await next.link.check()
+    await proc.updateStoresSettled()
+    expect((await proc.hostServiceSets.read(PLACE))?.movedAt).toBeUndefined()
+    expect(next.said.at(-1)).toMatch(/lost in a restart/)
+  })
+
+  it('memory owed past its bound is given up with a Health line: one trigger never keeps every trigger off the set', async () => {
+    const m = machine()
+    await runUntilCut(m, 'seed')
+    const next = await leader(m)
+    await next.connect()
+    m.seedFails = 'cut'
+    process.env.WALNUT_SERVICE_SET_SEED_OWED_MAX_MS = '1'
+    try {
+      expect(await next.link.beforeTriggerPush(['mail'])).toBe(true)
+    } finally { delete process.env.WALNUT_SERVICE_SET_SEED_OWED_MAX_MS }
+    expect((await kept())?.owed).toBeUndefined()
+    expect(next.said.at(-1)).toMatch(/start afresh there/)
+  })
+
+  it('a "they wait" notice goes once nothing is owed any more, however it was handed over', async () => {
+    const m = machine()
+    await runUntilCut(m, 'seed')
+    const next = await leader(m)
+    await next.connect()
+    m.seedFails = 'cut'
+    expect(await next.link.beforeTriggerPush(['mail'])).toBe(false)
+    expect(next.said.at(-1)).toMatch(/wait to start/)
+    const r = (await kept())!
+    await proc.moveStoreFor(PLACE).write({ ...r, owed: undefined, memory: undefined })
+    expect(await next.link.beforeTriggerPush(['mail'])).toBe(true)
+    expect(next.said.at(-1)).toBeNull()
+    next.link.stop()
   })
 })

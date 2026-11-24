@@ -134,6 +134,10 @@ export class ServiceSetLink {
   private standingChain: Promise<unknown> = Promise.resolve()
   /** Bumped by each point-back of a lost memory: a look begun before it keeps nothing as moved. */
   private pointBacks = 0
+  /** A point-back's redial is under way: the hello still names the set, and nothing is kept as moved meanwhile. */
+  private pointingBack = false
+  /** The move under way on this link (moveOnce), while it runs. */
+  private moving: Promise<MoveOutcome> | null = null
   /** What a move cut by a restart still owes the set's daemon, handed over before the first trigger push there. */
   private readonly seeder: OwedMemorySeeder
 
@@ -341,8 +345,11 @@ export class ServiceSetLink {
     }
     if (standing === 'own') {
       const kept = await this.serial(async () => {
-        // A lost memory pointed the link back meanwhile (beforeTriggerPush): nothing is kept as moved, its notice stays.
-        if (this.pointBacks !== pointBacks) return false
+        // A lost memory pointed the link back meanwhile, or does now (beforeTriggerPush): nothing is
+        // kept as moved, its notice stays. Where the link stands is read again inside the turn.
+        if (this.pointBacks !== pointBacks || this.pointingBack) return false
+        const now = await this.standingFor()
+        if (now.standing !== 'own' || now.record?.set !== record!.set || !this.c.connected) return false
         await settleMove({ set: record!.set, store: this.store(), confirm: async () => {}, now: this.now })
         await markServiceSetMoved(this.place, record!.set, this.now())
         this.c.notice(this.noticeKey, null)
@@ -438,20 +445,24 @@ export class ServiceSetLink {
 
   /** Before a connect's first trigger push (DaemonConnection.pushTriggersOnce, `live`: the triggers it pushes): what a move cut by a restart still owes the set. False: push nothing. */
   async beforeTriggerPush(live?: readonly string[]): Promise<boolean> {
-    // A move under way carries the memory itself, while it holds the push.
-    if (this.holding) return true
+    // A move under way carries the memory itself: a push that comes while it holds the host (its
+    // flip's reconnect) waits for it to end, then asks like any other, so a carry that did not
+    // finish keeps that push off the set too (round 2, S-A). Only a link that reaches a set waits: on
+    // the shared daemon nothing is owed, and the move's own journal drain may wait for that push.
+    while (this.holding && this.moving && this.c.connected && this.c.helloSet()) await this.moving.catch(() => undefined)
     return this.seeder.beforePush(live ?? null)
   }
 
   /** The kept copy of owed memory cannot be read: the link goes back to the shared daemon, which still keeps it, for the move to take it again. */
   private async pointBack(): Promise<void> {
+    this.pointingBack = true
     await this.serial(async () => {
       this.pointBacks++
       log.session.warn('service set: the triggers\' memory kept for the move cannot be read; the link goes back to the shared daemon', { host: this.c.hostKey })
       this.c.notice(this.noticeKey, `What this Walnut's triggers on ${this.c.hostKey} have already reported was lost in a restart during the move to its own service there, so they were not started there without it. Walnut points ${this.c.hostKey} back at the service another Walnut runs there, which still keeps it, and moves again.`)
       await this.undoMove()
     })
-    void this.c.relink(moveReconnectMs())
+    void this.c.relink(moveReconnectMs()).catch(() => null).finally(() => { this.pointingBack = false })
   }
 
   private move(record: HostSetRecord, force: boolean): Promise<MoveOutcome> {
@@ -516,7 +527,10 @@ export class ServiceSetLink {
       // Whatever ended the move (a store that would not write included), the host's work is never left held.
       if (this.holding) { this.holding = false; this.c.setHold(false); this.c.redeliver() }
     })
-    return moveOnce(this.place, run)
+    const p = moveOnce(this.place, run)
+    this.moving = p
+    void p.catch(() => undefined).finally(() => { if (this.moving === p) this.moving = null })
+    return p
   }
 
   private report(o: MoveOutcome): void {

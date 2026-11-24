@@ -52,6 +52,14 @@ describe('a connect\'s first trigger push waits for what a cut move owes the set
     expect(wire.length).toBeGreaterThan(2)
   })
 
+  it('a gate that throws is no yes: nothing is pushed', async () => {
+    const { c, wire } = conn(async () => { throw new Error('the move store could not be read') })
+    await c.pushTriggersNow()
+    expect(wire).toEqual(['gate'])
+    expect(c.triggersPushed).toBe(false)
+    c.disconnect()
+  })
+
   it('a push the gate refuses sends no trigger, and the next push asks it again', async () => {
     let open = false
     const { c, wire } = conn(async () => open)
