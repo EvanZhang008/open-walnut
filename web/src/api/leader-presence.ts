@@ -335,6 +335,7 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   attachment_changes_need_mac: 'Pictures and files in your notes are kept on your Mac, so they are moved or deleted there.',
   // Drawings (routes/drawings.ts, route-table.ts): scene files in the main server's Notes vault.
   drawings_need_leader: 'Drawings are kept in the Notes of your main Walnut server, so they are opened and changed there.',
+  pains_need_leader: 'A lead\'s pain registry and its guard tests are kept on your main Walnut server, so they are read there.',
   // The cloud companion's other copies and Mac-only records (stage 4d: routes/stt.ts, offline-conflicts-v1.ts).
   stt_vocab_writes_need_mac: 'The word list here is a copy of the one on your Mac, so a word is added on your Mac.',
   conflict_log_needs_mac: 'The full list of conflicts is kept on your Mac.',

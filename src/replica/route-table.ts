@@ -240,6 +240,11 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'POST', pattern: '/api/v1/routines/check-test', away: 'needs-leader', localAway: 'host-write' },
   { method: W, pattern: '/api/tasks/*', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: W, pattern: '/api/sessions/*', away: 'needs-leader', why: 'session_writes_need_mac' },
+  // A reflecting node's pain registry and its guard run live in the leader's node memory folder,
+  // which no replica copies: read here it answers "missing" with no entries (2026-11-24: the
+  // daily guard run read that empty answer and wrote an empty run over the last real one).
+  { method: 'GET', pattern: '/api/v1/org/nodes/:id/pains', away: 'needs-leader', why: 'pains_need_leader' },
+  { method: 'GET', pattern: '/api/v1/org/nodes/:id/pains-tests', away: 'needs-leader', why: 'pains_need_leader' },
   // WP5 copies: the conversation lists, routines, prefs, favorites and the config
   // read from this replica's copies while away (the default read row). Only the
   // lists are copied, never a conversation body: a body read is the Mac's.
