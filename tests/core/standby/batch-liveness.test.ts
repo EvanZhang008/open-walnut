@@ -46,8 +46,8 @@ function seedFiller(home: string, files: number): void {
  * The git writer, as a process of its own: git's own write patterns on a fake object store.
  * Every tick it writes a loose object (a temp file renamed to the hash of its bytes) and touches
  * an older one (git freshens an object it writes again); every 8th tick it moves the branch and
- * rewrites the index through a lock file renamed into place; every 12th it packs the loose
- * objects into a new pack (pack, then idx) and removes the loose ones it packed, and every 36th
+ * rewrites the index through a lock file renamed into place; every 25th it packs the loose
+ * objects into a new pack (pack, then idx) and removes the loose ones it packed, and every 75th
  * packs everything and removes the old packs. A plain file is rewritten in place every tick (a
  * writer outside the write gate).
  */
@@ -110,7 +110,7 @@ const tick = () => {
     replace(path.join(git, 'refs/heads/main.lock'), path.join(git, 'refs/heads/main'), newest + '\n')
     replace(path.join(git, 'index.lock'), path.join(git, 'index'), 'index at ' + n + '\n')
   }
-  if (n % 12 === 0) repack(n % 36 === 0)
+  if (n % 25 === 0) repack(n % 75 === 0)
   fs.writeFileSync(path.join(home, 'notes/journal.md'), 'journal entry ' + n + '\n')
 }
 const t = setInterval(tick, 40)

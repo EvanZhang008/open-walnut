@@ -19,8 +19,8 @@
  * filesystem's clock read just before, and the copy counts at the moment only while a stat read
  * after the moment still equals the one it returns (ctime only moves forward, so no write fell
  * between). A git object or pack (change-rules.ts `content-addressed`) is named by the hash of
- * its content: its times do not count (git freshens an object by touching it), only that the
- * same file, at the same size, was read whole.
+ * its content: its times do not count (git freshens an object by touching it), nor its removal
+ * after it was opened, only that it was read whole.
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -62,7 +62,10 @@ export async function stageFile(rel: string, ctx: StageContext, sink: ChunkSink)
   await ctx.afterCopy?.(rel)
   const after = await fs.lstat(abs).catch(() => null)
   const st = toSourceStat(before)
-  const same = named ? !!after && after.ino === before.ino && after.size === before.size : !!after && sameStat(st, toSourceStat(after))
+  // A git object or pack is never written in place (git writes a temp file and renames it):
+  // the bytes read from the one open file, as many as its size, are its content even when it
+  // was removed or touched meanwhile.
+  const same = named || (!!after && sameStat(st, toSourceStat(after)))
   if (!same || read.size !== before.size) return { ok: false, rel, why: 'changed' }
   return { ok: true, rel, st, x: (before.mode & 0o111) !== 0, h: read.h, size: read.size, chunks: read.chunks }
 }

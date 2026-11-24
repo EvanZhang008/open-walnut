@@ -26,6 +26,25 @@ describe('change rules', () => {
     for (const e of leaderEntries()) for (const rule of manifestEntryRules(e)!) expect(CHANGE_RULES[rule], `${e.id}: ${rule}`).toBeTruthy()
   })
 
+  it('the code\'s classifier gives each entry\'s files a rule the entry states', () => {
+    const repo = leaderEntries().find((e) => e.id === 'data-repo')!
+    // The git rules' paths are anchored at the data repo's place.
+    expect(repo.path).toBe('.git')
+    const wrong: string[] = []
+    for (const e of leaderEntries()) {
+      if (!e.path) continue
+      const stated = manifestEntryRules(e)!
+      const samples = e.kind === 'dir'
+        ? (e.id === 'data-repo' ? ['.git/index', '.git/index.lock', `.git/objects/ab/${SHA1}`, `.git/objects/pack/pack-${'c'.repeat(40)}.pack`] : [`${e.path}/x.md`])
+        : [e.path]
+      for (const rel of samples) {
+        const rule = changeRuleOf(rel, { db: e.kind === 'sqlite', appendOnly: isAppendOnlyHomePath(rel) })
+        if (!stated.includes(rule)) wrong.push(`${e.id}: ${rel} is ${rule}, the entry states ${stated.join(', ')}`)
+      }
+    }
+    expect(wrong).toEqual([])
+  })
+
   it('names no dir the manifest does not have, and only leader-data dirs', () => {
     const dirs = new Set(leaderEntries().filter((e) => e.kind === 'dir').map((e) => e.id))
     expect(Object.keys(LEADER_DIRS).filter((id) => !dirs.has(id))).toEqual([])

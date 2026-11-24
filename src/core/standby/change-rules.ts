@@ -73,12 +73,15 @@ export function isNotCopiedDir(rel: string): boolean {
 
 /**
  * A dir of git's object store, whose names are content-addressed objects and packs, scratch, or
- * the next dir down. Its names at the moment need not be known exactly: an object or pack in the
- * batch that came after the moment is one more object git ignores until a ref names it, and one
- * that went after it is still found where git moved it (git deletes an object file only once its
- * content is in a pack, or once it is unreachable and older than the prune age: an hour in
- * git-maintenance.ts). So a name the batch has a whole copy of is taken whether or not it
- * existed at the moment, and a name it saw with no copy fails the round.
+ * the next dir down. Its names at the moment need not be known exactly: an object or pack that
+ * came after the moment is one more object git ignores until a ref names it, and one that went
+ * after it is still found where git moved it (git deletes an object file only once its content
+ * is in a pack, or once it is unreachable and older than the prune age: an hour in
+ * git-maintenance.ts). So the batch takes every object name it sees there now, whether or not it
+ * existed at the moment, and one it saw that may have existed then and went with no copy fails
+ * the round (batch-place.ts). Two checks close what that leaves: a pack that comes or goes while
+ * a round reads the store fails it (the pack an object went into might be missing from the
+ * walk), and so does a ref of the batch naming an object the batch lacks (git-tips.ts).
  */
 export function isObjectStoreDir(rel: string): boolean {
   return /^\.git\/objects(?:\/(?:[0-9a-f]{2}|pack))?$/.test(rel)

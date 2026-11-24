@@ -26,6 +26,7 @@ import { log } from '../../logging/index.js'
 import { isAppendOnlyHomePath } from '../home-manifest/index.js'
 import { RoundFailed, VoidBatch, fsClock, newStats, type BatchOptions, type BatchOutcome, type BatchRun } from './batch-run.js'
 import { hasCopy, recordRead, runRound } from './batch-round.js'
+import { changeRuleOf } from './change-rules.js'
 import { limiter, scanHome, type ScanResult } from './scan.js'
 import { STAGING_NAME, removeDeadOwners } from './scratch.js'
 import { stageFile, type StageOutcome } from './stage.js'
@@ -39,15 +40,23 @@ export { VoidBatch, RoundFailed, databaseStat, type BatchOptions, type BatchOutc
  * clock read just before; a read not taken leaves its file hot for the round. Returns its time.
  */
 async function catchUp(run: BatchRun, s1: ScanResult): Promise<number> {
-  const need = [...s1.files.values()].filter((e) => !e.db && !isAppendOnlyHomePath(e.p) && !hasCopy(run, e))
+  const need = [...s1.files.values()].filter((e) => {
+    const rule = changeRuleOf(e.p, { db: e.db, appendOnly: isAppendOnlyHomePath(e.p) })
+    return (rule === 'quiet-through-moment' || rule === 'content-addressed') && !hasCopy(run, e)
+  })
   if (!need.length) return 0
   const start = performance.now()
-  const checkedAt = await fsClock(run.stagingDir, run.opts.home)
-  const ctx = { home: run.opts.home, momentMs: checkedAt, afterCopy: run.opts.hooks?.afterCopy }
+  // The filesystem's clock, read again every half second of a long read (a file written since
+  // the last reading is late for it, and read in the next pass).
+  const ctx = { home: run.opts.home, momentMs: await fsClock(run.stagingDir, run.opts.home), afterCopy: run.opts.hooks?.afterCopy }
+  let readAt = performance.now()
   const slot = limiter(4)
   // Every read ends before any is judged, so none runs on after the batch returns.
-  const outs: StageOutcome[] = await Promise.all(need.map((e) => slot(() => stageFile(e.p, ctx, run.send))))
-  for (const out of outs) recordRead(run, out, checkedAt)
+  const outs: StageOutcome[] = await Promise.all(need.map((e) => slot(async () => {
+    if (performance.now() - readAt > 500) { readAt = performance.now(); ctx.momentMs = await fsClock(run.stagingDir, run.opts.home) }
+    return stageFile(e.p, { ...ctx }, run.send)
+  })))
+  for (const out of outs) recordRead(run, out, null)
   const ms = performance.now() - start
   run.stats.catchUpMs += ms
   return ms
@@ -100,7 +109,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       stats.rounds++
       let placed
       try {
-        placed = await runRound(run, s1, scanClock)
+        placed = await runRound(run, s1, scanClock, stats.rounds)
       } catch (err) {
         if (!(err instanceof RoundFailed)) throw err
         stats.roundFailures.push(err.message)

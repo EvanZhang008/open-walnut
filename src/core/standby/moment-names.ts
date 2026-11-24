@@ -17,6 +17,7 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { isContentAddressed, isObjectStoreDir } from './change-rules.js'
 import { DB_NAME, dirMayHoldLeaderData, limiter, makeBatchFileTest, toSourceStat, type ScanResult } from './scan.js'
 import type { SourceStat } from './types.js'
 
@@ -106,7 +107,8 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
     if (!after || after.ctimeMs >= momentMs) unsettled.push(rel)
     changed.set(rel, { names })
     listed.push(...files)
-    await Promise.all(files.map((f) => slot(async () => {
+    // A git object's stat proves nothing (any copy of its name holds): not read in the hold.
+    await Promise.all(files.filter((f) => !isContentAddressed(f)).map((f) => slot(async () => {
       const st = await fs.lstat(path.join(home, f)).catch(() => null)
       if (st?.isFile()) heldStats.set(f, toSourceStat(st))
     })))
@@ -123,8 +125,13 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
   const unknown = new Set(unsettled)
   /** Did dir `dir` name `name` at the moment? */
   const named = (dir: string, name: string): boolean | null => {
-    if (unknown.has(dir)) return null
     const c = changed.get(dir)
+    if (unknown.has(dir)) {
+      // Git's object store: a name in the walk's listing and in this one was there before and
+      // after the moment; its dirs are never removed but for an emptied xx dir, whose objects
+      // are placed one by one anyway (batch-place.ts).
+      return isObjectStoreDir(dir) && fromScan.get(dir)?.has(name) && c !== undefined && c !== 'gone' && c.names.has(name) ? true : null
+    }
     if (c === undefined) {
       // Unchanged since the first scan (or never walked: then nothing of the batch is in it).
       return fromScan.get(dir)?.has(name) ?? false

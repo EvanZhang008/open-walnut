@@ -105,10 +105,13 @@ export interface Proof {
   size: number
   chunks: string[]
   /**
-   * The clock reading its ctime was checked against (stage.ts): when it is the round's moment,
-   * the copy is the file at the moment; else it is, while a stat read after the moment equals `st`.
+   * The round whose moment its read was checked against (stage.ts), read in or after that
+   * round's hold: the copy is the file at that moment. Null (a catch-up read) or another
+   * round's: it is the file at a moment only while a stat read after that moment equals `st`.
+   * A round number, not a clock reading: on a coarse filesystem clock a catch-up's reading and
+   * a moment can be equal.
    */
-  checkedAt: number
+  round: number | null
 }
 
 export interface BatchRun {

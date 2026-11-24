@@ -25,13 +25,14 @@ experiment `switchable_leader` (off by default).
 A home of real size takes minutes to read (about 4.5 minutes for 20 GB), and the leader never
 stops writing meanwhile: its git auto-commit every 30 s, its stores, sessions, notes. So a
 batch **reads first and fixes its moment after**, when little is left to read (`batch.ts`,
-`batch-round.ts`):
+`batch-round.ts`, `batch-hold.ts`, `batch-place.ts`):
 
 1. **Pass.** Walk the home (`scan.ts`, about 0.4 s for 100k files) and compare each file's
    stat with the last batch: size, mtime, **ctime** and inode. Each dir's stat is noted too,
    before it is listed. Then the **catch-up read**: every changed file the batch holds no copy
    of is read, four at a time, by the read rule below against the filesystem's clock read just
-   before (a first batch reads the whole home here, with no hold). A catch-up that took over a
+   before, read again every half second (a first batch reads the whole home here, with no
+   hold). A catch-up that took over a
    second is followed by another pass, which reads only what changed meanwhile (at most eight
    such passes), so the round below starts with little left to read.
 2. **Round: hold.** Hold Walnut's own gated writes for an instant (`src/utils/write-gate.ts`:
@@ -57,7 +58,8 @@ batch **reads first and fixes its moment after**, when little is left to read (`
    read transaction, in the worker's memory: page for page, so only the chunks whose pages
    changed are new); each pin ends once its database is copied.
 4. **Round: place.** Walk again and give each path that existed at the moment its content then,
-   by its kind's rule (the table below). A path no rule places fails the round.
+   by its kind's rule (the table below; `batch-place.ts`). A path no rule places fails the round,
+   and so do the two git checks in the table (`batch-round.ts`).
 5. **Commit.** Fixed 1 MiB chunks named by their sha256 (`chunks.ts`) went to the target as they
    were read, only those it lacks; the commit names them. Fixed, not content-defined like the
    backup's chunker: cutting by content is a JavaScript pass over every byte, and made one
@@ -78,14 +80,18 @@ or kind with none):
 |---|---|---|
 | Snapshot | every SQLite database (manifest kind `sqlite`, or a database by name and header) | pinned at the moment in a read transaction; commits after it never reach the copy |
 | Prefix | files the manifest marks `appendOnly` | their bytes up to their size at the mark, while they only grew (below) |
-| Content-addressed | git's loose objects (`.git/objects/xx/<hash>`) and pack files (`pack-<hash>.pack`, `.idx`, `.rev`, `.bitmap`, `.mtimes`) | git names each by the hash of its content and writes it once (a temp file renamed into place), so any whole copy of that name is its content: its times do not count (git freshens an object by touching it), only that the same file was read whole at one size. A dir of the object store need not have known names at the moment: an object new after it is one more object no ref names yet, and one removed after it (a repack) is taken from the copy the batch read; one the batch saw and never read fails the round |
+| Content-addressed | git's loose objects (`.git/objects/xx/<hash>`) and pack files (`pack-<hash>.pack`, `.idx`, `.rev`, `.bitmap`, `.mtimes`) | git names each by the hash of its content and writes it once (a temp file renamed into place), so any whole copy of that name is its content: its times do not count (git freshens an object by touching it), nor its removal once it was opened, only that it was read whole. Every object or pack the round's second walk finds is taken, whether or not it existed at the moment (one that came after it is one more object no ref names yet; the pack a repack moved an object into is never left out), and so is one removed after the moment that the batch read before; one that may have existed at the moment and went with no copy fails the round. A pack that comes or goes while the round reads the store fails the round, and so does a ref of the batch that names an object the batch lacks while the home holds it (`git-tips.ts`, reading the refs and the packs' `.idx`) |
 | Not copied | a git command's scratch: every `*.lock` in `.git`, `tmp_*` objects, packs and commit graphs, `incoming-*` quarantine dirs, `gc.pid` | there only while that command runs, which does not run on the standby: a copied `index.lock` would stop every git command there, a copied `gc.pid` its gc for 12 hours. The walk skips them |
 | Quiet through the moment | every other file: Walnut's stores, notes, config, git's refs, index and logs | a copy counts when a stat read after the moment equals the one its read proved (ctime only moves forward, so nothing wrote it between); else, when its last change came before the moment, it is read now; else the round fails |
 
 The git answers rest on git's own rule: it deletes an object file only once the object is in a
 pack, or once it is unreachable and older than the prune age (an hour in `git-maintenance.ts`).
 A history rewrite (`git-compaction.ts`, `gc --prune=now`) during a batch only fails its rounds:
-an object the batch saw at the moment and holds no copy of is never left out silently.
+an object the batch saw at the moment and holds no copy of is never left out silently. What the
+argument does not cover: a ref moved away and its objects pruned within the seconds between one
+round's moment and its second walk; the ref check catches it for the objects the refs name
+themselves, not for their trees and parents. Repositories nested inside the home (a clone under
+`repositories/`) take the general rule: correct, only more rounds when git writes there.
 
 **The rule every read follows** (`stage.ts`): before the read, the file's ctime must be below
 the filesystem's clock read just before (the moment itself, for a read in or after the hold);
