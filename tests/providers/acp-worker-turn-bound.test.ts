@@ -99,7 +99,8 @@ describe('an adapter turn past its bound', () => {
     await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'engine-retries-deaf' })
     await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end')
     const sent = await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'hello' })
-    // The daemon answers it as no live worker: the session starts a fresh one and sends again.
+    // Refused before any journal row: in a real worker the adapter-gone exit usually reaches the daemon first
+    // ("worker died"), and the queue sends the row again on its delivery retry, so it is sent once, never lost.
     expect(sent.ok, JSON.stringify(sent)).toBe(false)
     expect(sent.error?.kind).toBe('no_worker')
     expect(gone).toBeGreaterThan(0)
