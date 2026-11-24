@@ -72,7 +72,9 @@ start, resume, restart and engine switch, on this machine and on the host's own 
    `hosts.<name>.engines.codex.provider` to set: a start or an engine switch answers `422
    engine_config` with it and the task's last start keeps it; a restart answers it, and a message
    to a session that can no longer start there is held with it in the chat. A retry fails the
-   same way until the setting changes. Walnut never falls back to the host's own
+   same way until the setting changes; once the config changes (on this machine, or a new copy
+   of it on the host), each held message goes out by itself once. A server that has no copy of
+   this machine's settings yet only waits: its messages stay in line and go when the copy comes. Walnut never falls back to the host's own
    `~/.codex/config.toml` there, which may send the session to another account.
 
 The `engines.codex.env` this machine sends with a start on another host loses every provider entry

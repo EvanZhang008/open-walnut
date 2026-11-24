@@ -85,7 +85,8 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   // A revoked host runs nothing new and takes no automated line (revoked-reach.ts): the same answer until an allow.
   if (err instanceof HostRevokedError) return { kind: 'permanent', code: 'host_revoked', reason: `Not sent: ${reason}` };
   // A setting stops the engine from starting (codex-engine-config.ts): the same on every retry until it is changed.
-  if (isCodexEngineConfigError(err)) return { kind: 'permanent', code: ENGINE_CONFIG_CODE, reason: `Not sent: ${message.trim().slice(0, CONFIG_REASON_MAX)}` };
+  // One whose deciding settings are still on their way (`transient`, no copy of them yet) is not: it stays pending.
+  if (isCodexEngineConfigError(err) && !err.transient) return { kind: 'permanent', code: ENGINE_CONFIG_CODE, reason: `Not sent: ${message.trim().slice(0, CONFIG_REASON_MAX)}` };
   // Another process holds the session on its host: every retry is refused the
   // same way until that process ends, so the batch waits for the user's Retry.
   if (err instanceof SessionHeldElsewhereError) return { kind: 'permanent', code: 'session_live', reason: err.message.slice(0, HELD_REASON_MAX) };

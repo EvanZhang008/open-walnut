@@ -14372,6 +14372,13 @@ export class SessionRunner {
           reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message)
           this.armBudgetRetry(deliverySessionId)
         } else {
+          // The leader's settings that decide the engine's provider are not here yet: the rows
+          // stay pending and go when the copy arrives (core/sessions/engine-config-resend.ts).
+          const { isCodexEngineConfigError } = await import('./codex-engine-config.js')
+          if (isCodexEngineConfigError(err) && err.transient) {
+            const { noteAwaitingConfigCopy } = await import('../core/sessions/engine-config-resend.js')
+            noteAwaitingConfigCopy(deliverySessionId)
+          }
           // Nothing reaches the worker's host: the rows wait for it, said as a wait (the
           // reconnect delivers them), never a grey bubble with no word.
           const linkHost = await this.linkDownHost(deliverySessionId, err)

@@ -695,6 +695,7 @@ let unsubscribeHostPhase: (() => void) | null = null
 /** Unhooks the local Claude Code readiness → system:health push. */
 let unsubscribeLocalClaude: (() => void) | null = null
 let unsubscribeAgentWaitResend: (() => void) | null = null
+let unsubscribeEngineConfigResend: (() => void) | null = null
 /** The primary's leader heartbeat, or the companion's takeover loop (core/leader/). */
 let leaderLoopHandle: { stop: () => void } | null = null
 /** The leader side of the session channels (leader-boot.ts startLeaderSessionChannels): its stop, once it started. */
@@ -1996,6 +1997,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { wireAgentWaitResend } = await import('../core/sessions/agent-wait-resend.js')
     unsubscribeAgentWaitResend?.()
     unsubscribeAgentWaitResend = await wireAgentWaitResend()
+  }
+  // A message an engine setting held goes out once the config changes, here or as a new copy of
+  // the leader's on a host (core/sessions/engine-config-resend.ts). Every server that runs sessions.
+  {
+    const { wireEngineConfigResend } = await import('../core/sessions/engine-config-resend.js')
+    unsubscribeEngineConfigResend?.()
+    unsubscribeEngineConfigResend = await wireEngineConfigResend()
   }
 
   const app = express()
@@ -8057,6 +8065,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   unsubscribeLocalClaude = null
   unsubscribeAgentWaitResend?.()
   unsubscribeAgentWaitResend = null
+  unsubscribeEngineConfigResend?.()
+  unsubscribeEngineConfigResend = null
   bus.unsubscribe('host-status-defs')
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
   bus.unsubscribe('user-status-sync') // core/user-status-sync.ts; its timers stop below

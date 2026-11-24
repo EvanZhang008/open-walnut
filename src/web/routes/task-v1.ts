@@ -562,7 +562,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     const { QuickStartError } = await import('../../core/sessions/quick-start.js')
     const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
     const { HostsFullError } = await import('../../core/sessions/host-admission.js')
-    const { launchErrorCode } = await import('../../core/sessions/mobile-launch.js')
+    const { launchErrorCodeOf } = await import('../../core/sessions/mobile-launch.js')
     try {
       const started = await startSessionForTask({
         taskIdPrefix: id,
@@ -626,7 +626,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         // A lead that handed its project over: its own code and where to send instead (org/retired-lead.ts).
         const { code, ...detail } = err.body ?? {}
         if (code === 'lead_handed_over' || code === 'no_capable_host' || code === 'bad_selector' || code === 'org_off' || code === 'engine_config') sendError(res, err.statusCode, code, err.message, detail)
-        else sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+        else sendError(res, err.statusCode, launchErrorCodeOf(err), err.message)
         return
       }
       if (err instanceof HostsFullError) {

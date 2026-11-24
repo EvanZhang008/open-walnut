@@ -39,6 +39,15 @@ const post = (body: unknown) => fetch(`${base}/api/v1/tasks/t1/switch-engine`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 })
 
+describe('the launch routes read a setting\'s refusal as engine_config', () => {
+  it('launchErrorCodeOf keeps engine_config, and reads every other refusal by its status', async () => {
+    const { launchErrorCodeOf } = await import('../../src/core/sessions/mobile-launch.js')
+    expect(launchErrorCodeOf(new QuickStartError(refusal, 422, { code: 'engine_config' }))).toBe('engine_config')
+    expect(launchErrorCodeOf(new QuickStartError('busy', 409, { code: 'something_else' }))).toBe('conflict')
+    expect(launchErrorCodeOf(new QuickStartError('broke', 502))).toBe('internal')
+  })
+})
+
 describe('an engine switch refused by a setting', () => {
   it('answers 422 engine_config with the setting\'s words', async () => {
     const res = await post({ engine: 'codex', text: 'go on' })

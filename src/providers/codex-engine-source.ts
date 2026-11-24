@@ -25,10 +25,10 @@ const COPIED_ENGINE_KEYS = ['provider', 'model', 'effort', 'transport'] as const
 /** `own` with the copy's engine settings over it. Throws when the copy cannot say. */
 export function withCopiedEngines(own: Record<string, unknown>, copy: Record<string, unknown> | null): Record<string, unknown> {
   if (!copy) {
-    throw new CodexEngineConfigError('this server holds no copy of the Mac\'s settings yet, so it cannot tell which provider Codex must use. Start the session from the Mac, or try again once the copy has arrived')
+    throw new CodexEngineConfigError('this server holds no copy of the Mac\'s settings yet, so it cannot tell which provider Codex must use. Start the session from the Mac, or try again once the copy has arrived', { transient: true })
   }
   if (!Object.hasOwn(copy, 'engines')) {
-    throw new CodexEngineConfigError('the Mac\'s Walnut is older than copying engine settings, so this server cannot tell which provider Codex must use. Update Walnut on the Mac, or start the session from the Mac')
+    throw new CodexEngineConfigError('the Mac\'s Walnut is older than copying engine settings, so this server cannot tell which provider Codex must use. Update Walnut on the Mac, or start the session from the Mac', { transient: true })
   }
   const ownEngines = isRecord(own.engines) ? own.engines : {}
   const copied = isRecord(copy.engines) ? copy.engines : {}

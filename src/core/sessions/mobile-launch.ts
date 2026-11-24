@@ -91,6 +91,11 @@ export interface MobileLaunchInput {
   workspaceInputs?: Record<string, unknown>;
 }
 
+/** A refusal's code for the frozen v1 shape: a setting's (422 engine_config, task-start.ts) as it is, else by its status. */
+export function launchErrorCodeOf(err: QuickStartError): string {
+  return err.body?.code === 'engine_config' ? 'engine_config' : launchErrorCode(err.statusCode);
+}
+
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
 export function launchErrorCode(status: number): string {
   if (status === 404) return 'not_found';
@@ -498,7 +503,7 @@ export async function handleLaunchRelayRequest(
       // phone gets a bare "conflict" with no host, headline, hint or Start anyway.
       const gate = hostGateRelayFields(err);
       if (gate) return { ok: false, error: err.message, errorKind: gate.code, details: gate.details };
-      return { ok: false, error: err.message, errorKind: launchErrorCode(err.statusCode) };
+      return { ok: false, error: err.message, errorKind: launchErrorCodeOf(err) };
     }
     const message = err instanceof Error ? err.message : String(err);
     log.web.error('launch relay failed', { action, error: message });

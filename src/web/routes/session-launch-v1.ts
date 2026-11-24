@@ -58,7 +58,7 @@ import { hasCapability } from '../../core/capabilities.js'
 import { bridgeOfflineMessage } from './bridge-offline-copy.js'
 import {
   computeLaunchOptions,
-  launchErrorCode,
+  launchErrorCodeOf,
   performMobileLaunch,
   validateMobileLaunchBody,
 } from '../../core/sessions/mobile-launch.js'
@@ -87,7 +87,7 @@ function sendLaunchError(res: Response, err: QuickStartError): void {
     sendError(res, err.statusCode, code, typeof error === 'string' ? error : err.message, rest)
     return
   }
-  sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+  sendError(res, err.statusCode, launchErrorCodeOf(err), err.message)
 }
 
 // ── Cloud relay: phone → cloud → bridge(__local__) → daemon → primary ───────
@@ -164,6 +164,7 @@ function relayErrorStatus(errorKind: string): number {
   if (errorKind === 'not_found') return 404
   if (errorKind === 'conflict' || errorKind.startsWith('host_')) return 409
   if (errorKind === 'internal') return 500
+  if (errorKind === 'engine_config') return 422
   return 400
 }
 
@@ -390,7 +391,7 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
       input = validateMobileLaunchBody(req.body)
     } catch (err) {
       if (err instanceof QuickStartError) {
-        sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+        sendError(res, err.statusCode, launchErrorCodeOf(err), err.message)
         return
       }
       throw err

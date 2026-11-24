@@ -77,14 +77,22 @@ export interface CodexEngineSettings {
 /**
  * A wrong `engines.codex` setting: the start or probe fails with this rather than routing to another
  * provider. A setting, not a passing failure: a route answers it 422 with `code` (engine-switch-v1.ts
- * reads `status` and `code`), and a delivery parks on it with its words (delivery-failure.ts).
+ * reads `status` and `code`), and a delivery parks on it with its words (delivery-failure.ts), until
+ * the config changes (sessions/engine-config-resend.ts).
+ *
+ * `transient`: what decides the provider is not here yet, and comes by itself (this server's copy
+ * of the leader's settings, codex-engine-source.ts): no status or code of a setting, a delivery
+ * stays pending and goes once the copy arrives, a start answers as any failure that a retry may fix.
  */
 export class CodexEngineConfigError extends Error {
-  readonly status = 422
-  readonly code = ENGINE_CONFIG_CODE
-  constructor(message: string) {
+  readonly status?: number
+  readonly code?: string
+  readonly transient: boolean
+  constructor(message: string, opts: { transient?: boolean } = {}) {
     super(`engines.codex: ${message}`)
     this.name = 'CodexEngineConfigError'
+    this.transient = opts.transient === true
+    if (!this.transient) { this.status = 422; this.code = ENGINE_CONFIG_CODE }
   }
 }
 export const ENGINE_CONFIG_CODE = 'engine_config'

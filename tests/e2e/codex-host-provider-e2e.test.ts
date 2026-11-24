@@ -135,7 +135,7 @@ describe('the Codex provider of a start, by the host it runs on', () => {
     expect(JSON.stringify(env)).not.toContain(GLOBAL.base_url)
   }, 60_000)
 
-  it('a session whose host lost its provider: its restart and its next message say why in its chat, and nothing reaches the host', async () => {
+  it('a session whose host lost its provider: its restart and its next message say why in its chat, nothing reaches the host, and once the host has a provider again the message goes out by itself', async () => {
     let hostDaemon: MockDaemon | undefined
     const failed: Array<{ sessionId: string; messageIds: string[]; error: string; parked?: boolean }> = []
     bus.subscribe('test-batch-failed', (e) => { failed.push(e.data as never) }, { global: true, interest: [EventNames.SESSION_BATCH_FAILED] })
@@ -170,6 +170,19 @@ describe('the Codex provider of a start, by the host it runs on', () => {
       expect(row?.parkedReason).toContain('host "relaybox"')
       // Nothing was started on the host for it.
       expect(daemon.getCommandHistoryFor('acpStart').length, restartText).toBe(before)
+
+      // The user gives the host its provider again (Settings, PUT /api/config): the held message goes
+      // out by itself, once, on that provider, and leaves the queue.
+      const put = await fetch(`http://localhost:${port}/api/config`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hosts: { relaybox: { hostname: 'relaybox.invalid', enabled: true, engines: { codex: { provider: HOST_OWN } } } } }),
+      })
+      expect(put.status, await put.text()).toBeLessThan(300)
+      const resent = await waitFor(() => daemon.getCommandHistoryFor('acpStart')[before], 'the held message\'s start on the host')
+      const env = (resent.payload.env ?? {}) as Record<string, string>
+      expect(JSON.parse(env.CODEX_CONFIG ?? '{}')).toMatchObject({ model_provider: 'host-relay' })
+      await waitFor(async () => !(await getQueue(sessionId)).some((r) => r.id === row!.id), 'the held message delivered')
+      expect(daemon.getCommandHistoryFor('acpStart').length).toBe(before + 1)
     } finally {
       bus.unsubscribe('test-batch-failed')
       const { setPooledConnectionForTest } = await import('../../src/providers/daemon-connection.js')

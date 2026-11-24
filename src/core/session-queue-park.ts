@@ -206,19 +206,25 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
   return ok;
 }
 
+/** A row parked only for the agent to run on its host (`waitsFor`): the default of the waiting-row helpers. */
+const isAgentWaitRow = (m: QueuedMessage): boolean => !!m.waitsFor
+
 /**
  * The agent can run on the session's host now: the rows parked only for that
  * (`waitsFor`) go back in line, as a Retry would put them (sessions/agent-wait-resend.ts).
  * Never a row parked for anything else, and never one a Stop came after: a row whose
  * stop fence is not the session's current one stays parked for the person (their Stop
  * wins), and a deleted row is gone. `onlyWithPending`: only when another row of the
- * session is going out now (it rides ahead of it, in its own order). Returns the ids.
+ * session is going out now (it rides ahead of it, in its own order). `match`: the rows
+ * another wait sends the same way (an engine setting changed, sessions/engine-config-resend.ts).
+ * Returns the ids.
  */
 export async function unparkAgentWaitRows(
-  sessionId: string, stopFence: string | null, opts?: { onlyWithPending?: boolean },
+  sessionId: string, stopFence: string | null, opts?: { onlyWithPending?: boolean; match?: (m: QueuedMessage) => boolean },
 ): Promise<string[]> {
-  const ids = await unparkWhere(sessionId, (msg) => !!msg.waitsFor && (msg.stopFence ?? null) === stopFence, opts?.onlyWithPending === true);
-  if (ids.length > 0) log.session.info('parked messages sent again: the agent can run now', { sessionId, messageIds: ids });
+  const match = opts?.match ?? isAgentWaitRow;
+  const ids = await unparkWhere(sessionId, (msg) => match(msg) && (msg.stopFence ?? null) === stopFence, opts?.onlyWithPending === true);
+  if (ids.length > 0) log.session.info(opts?.match ? 'parked messages sent again: what held them changed' : 'parked messages sent again: the agent can run now', { sessionId, messageIds: ids });
   return ids;
 }
 
@@ -490,10 +496,10 @@ export async function rollbackSessionQueueMigration(
   }, true);
 }
 
-/** Sessions holding a row parked only because the agent could not run (QueuedMessage.waitsFor). */
-export async function sessionsWithAgentWaitRows(): Promise<string[]> {
+/** Sessions holding a row parked only because the agent could not run (QueuedMessage.waitsFor), or another wait's (`match`). */
+export async function sessionsWithAgentWaitRows(match: (m: QueuedMessage) => boolean = isAgentWaitRow): Promise<string[]> {
   const store = await readQueueFileFresh();
   return Object.entries(store.queues)
-    .filter(([, rows]) => rows.some((m) => m.status === 'parked' && !!m.waitsFor))
+    .filter(([, rows]) => rows.some((m) => m.status === 'parked' && match(m)))
     .map(([sid]) => sid);
 }
