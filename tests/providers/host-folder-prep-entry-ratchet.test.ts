@@ -50,6 +50,7 @@ const WAKES: Record<string, string> = {
   'acp.reattachWatcher': 'watches a running worker\'s journal; starts nothing',
   'session.awaitSpawn': 'waits for a spawn already under way; starts nothing',
   'lifecycle.sendFolderWaiting': 'sent only once the folder is back (folder-gone.ts sendWaiting)',
+  'lifecycle.sendQueuedRowNow': 'the host sends its own row through its own delivery, which checks the folder there (a gone one parks the row: sessions/folder-wait.ts)',
 }
 const WAKE_NAME = /retry|restart|resume|spawn|reinit|attach|recover|send|ModeOf|PermissionMode/i
 
