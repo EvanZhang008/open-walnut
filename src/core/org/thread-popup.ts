@@ -5,9 +5,11 @@
  * leaders above it, its VP and Main read it as a VIEW: while it waits on him (needs), or while his
  * reply on it is still on its way, it is listed after their own threads, the same record with the
  * same id, carrying `owner` and `can_answer_now`; once it is neither it leaves every list above at
- * once. A result of it for him is listed only on the one node whose own thread names it on that
- * subject (`carries`, thread-subject-pairs.ts; carriedRows), never on every level. His reply on it at any level is written into that one record and goes to the owner's
- * session (thread-reply.ts).
+ * once. A result of it for him is listed only on a node whose own thread names that task on that
+ * subject (`carries`, thread-subject-pairs.ts; carriedRows), in that thread's place, never on every
+ * level: two nodes that both name it there (its VP and Main) both list the same record, and his
+ * Acknowledge on either closes it for both. His reply on it at any level is written into that one
+ * record and goes to the owner's session (thread-reply.ts).
  *
  * Who sees a task's thread (viewersOf): every task above it in its parent chain, and the Org
  * nodes it reports up through (thread-follow.ts orgNodesAbove: its lead, that lead's VP, Main).
@@ -112,7 +114,7 @@ export async function poppedIndex(opts: { all?: readonly Task[]; onlyViewer?: st
   for (const owner of owners) {
     const file = await store.readThreads(owner.id);
     if (!file.threads.some((t) => !t.closed && (t.state === 'needs' || t.messages.some(deliveryOpen)))) continue;
-    const read = await store.withTaskAsks(owner.id, file.threads, c.all as Task[]);
+    const read = await store.withTaskAsks(owner.id, file.threads, c.all as Task[], { carry: false });
     const shared = sharedAnswers(read);
     const listed = read.filter((t) => listedAbove(t, shared, now));
     if (!listed.length) continue;
@@ -180,9 +182,20 @@ export async function canAnswerNow(owner: Task): Promise<boolean> {
 export async function findThreadOwner(viewerId: string, threadId: string): Promise<{ node: string; task?: Task; thread: OrgThread } | null> {
   const c = await context();
   const store = await import('./threads-store.js');
-  for (const owner of ownersBelow(viewerId, c.all, c.places, new Set(await store.threadTaskIds()))) {
+  const holders = new Set(await store.threadTaskIds());
+  const tried = new Set<string>();
+  for (const owner of ownersBelow(viewerId, c.all, c.places, holders)) {
+    tried.add(owner.id);
     const t = (await store.readThreads(owner.id)).threads.find((x) => x.id === threadId && !movedAway(x));
     if (t) return { node: owner.id, task: owner, thread: t };
+  }
+  // A result it carries (thread-subject-pairs.ts) lives on a task its own open threads name, often a
+  // completed one ownersBelow leaves out: those few files before a read of every node.
+  const named = new Set((await store.readThreads(viewerId)).threads.flatMap((x) => (x.closed ? [] : x.tasks ?? [])));
+  for (const id of named) {
+    if (tried.has(id) || id === viewerId || !holders.has(id)) continue;
+    const t = (await store.readThreads(id)).threads.find((x) => x.id === threadId && !movedAway(x));
+    if (t) return { node: id, task: c.byId.get(id), thread: t };
   }
   const found = await locateThread(threadId, viewerId);
   return found ? { ...found, task: c.byId.get(found.node) } : null;

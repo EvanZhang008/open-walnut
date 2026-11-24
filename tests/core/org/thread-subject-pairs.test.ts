@@ -9,7 +9,8 @@ import { subjectPairs } from '../../../src/core/org/thread-subject-pairs.js'
 import { askPointerView } from '../../../src/core/org/thread-task-ask.js'
 import { carriedAbove, forHimInList, listedAbove, listedForHim, shownToHim } from '../../../src/core/org/thread-view.js'
 import { threadCounts } from '../../../src/core/org/thread-groups.js'
-import type { OrgThread } from '../../../src/core/org/threads-model.js'
+import { ackKnown } from '../../../src/core/org/thread-ack.js'
+import { emptyThreads, type OrgThread } from '../../../src/core/org/threads-model.js'
 import type { Task } from '../../../src/core/types.js'
 
 const NOW = Date.parse('2026-11-24T12:00:00Z')
@@ -88,21 +89,44 @@ describe('a task\'s result on the subject of its lead\'s own thread', () => {
     expect(pairs([asked({ state: 'needs', needsAt: iso(25) })], [fixed()]).carried).toEqual([])
   })
 
-  it('once he read the result there, it leaves the lead and the lead\'s older result stays quiet', () => {
+  it('once he read the result there, it leaves the lead and the lead\'s older card stays quiet, whatever state his Acknowledge left it in', () => {
     const acked = fixed({ closed: { how: 'acked', at: iso(1), by: 'human' } as never })
-    // His Acknowledge kept open while its work runs (thread-known.ts): a human known mark and ackedAt.
-    const known = fixed({ known: { through: 'all', at: iso(1), by: 'human' }, ackedAt: iso(1) })
+    // His Acknowledge as it is written with ack_means_known on (thread-ack.ts ackKnown): pending,
+    // reactedAt and ackedAt; later closed by Walnut's placement, still pending.
+    const known = ackKnown({ ...emptyThreads(FIX), threads: [fixed()] }, 'th-fix001', iso(1)).thread
+    expect(known.state).toBe('pending')
+    const placed = { ...known, closed: { how: 'acked', at: iso(0.8), by: 'walnut' } } as OrgThread
     expect(shownToHim(known, undefined, NOW)).toBe(false)
-    const older = asked({ state: 'answered', reply: 'The task is on it.', replyAt: iso(10), updatedAt: iso(10) })
-    for (const x of [acked, known]) {
+    // The lead's card set aside while the task works (his VP's four such cards on 11-24 were all pending).
+    const older = asked({ state: 'pending', reply: 'Handed to the panel fix.', replyAt: iso(10), updatedAt: iso(10) })
+    for (const x of [acked, known, placed]) {
       const r = pairs([older], [x])
       expect(r.carried).toEqual([])
       expect(r.held.get('th-lead01')).toMatchObject({ via: 'thread', thread: 'th-fix001', result: true, answered: true })
-      // A card in progress is out of his sight anyway: nothing holds it.
-      expect(pairs([asked()], [x]).held.size).toBe(0)
+      // An overdue card in progress (shown as having no reply) waits too: the result was its reply.
+      const overdue = asked()
+      expect(shownToHim(overdue, undefined, NOW)).toBe(true)
+      expect(pairs([overdue], [x]).held.get('th-lead01')).toMatchObject({ result: true, answered: true })
     }
     // The lead writing its card again after he read it is news: it shows.
     expect(pairs([{ ...older, replyAt: iso(0.5), updatedAt: iso(0.5) }], [acked]).held.size).toBe(0)
+    // A result he never saw, closed by the node, holds nothing.
+    expect(pairs([older], [fixed({ state: 'pending' })]).held.size).toBe(0)
+  })
+
+  it('a lead card with news of its own he has not read, or his newer word on it, is never hidden: the result is listed beside it', () => {
+    // "mark the margins live + revert the status icon" (answered, unread) paired with the task's "status icon: reverted".
+    const news = asked({ state: 'answered', reply: 'The margins are live; the icon goes back next.', replyAt: iso(10), updatedAt: iso(10) })
+    expect(shownToHim(news, undefined, NOW)).toBe(true)
+    const r = pairs([news], [fixed()])
+    expect(r.carried.map((c) => c.carries)).toEqual(['th-lead01'])
+    expect(r.held.size).toBe(0)
+    // Nor after he read the result: the margins stay on his card.
+    expect(pairs([news], [fixed({ closed: { how: 'acked', at: iso(1), by: 'human' } as never })]).held.size).toBe(0)
+    // His word on the lead card after the task's result is a new ask: it stays.
+    const asksAgain = asked({ messages: [{ id: 'tm-lead0102', at: iso(1), text: 'it still flashes on the phone', via: 'chat' }] as never })
+    expect(pairs([asksAgain], [fixed()]).held.size).toBe(0)
+    expect(pairs([asksAgain], [fixed()]).carried).toHaveLength(1)
   })
 
   it('a task\'s ask outranks its result for the same card, and a result after his answer there is carried', () => {

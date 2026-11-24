@@ -286,7 +286,7 @@ async function readNodeThreads(tasks: readonly Task[], everything?: readonly Tas
   if (!nodes.length) return out;
   const { readThreads } = await import('./org/threads-store.js');
   const { threadCounts } = await import('./org/thread-groups.js');
-  const { carriedRows, poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
+  const { carriedRows, poppedIndex } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
   let below: ReturnType<typeof poppedIndex> | undefined;
   // A targeted status pass may contain only the lead. Its linked owners still belong in the read:
@@ -318,7 +318,7 @@ async function readNodeThreads(tasks: readonly Task[], everything?: readonly Tas
     const counts = await safely('threads', async () => {
       // The tasks as they are now: one read a pass, shared by every node.
       all ??= await (await import('./task-manager.js')).listTasks();
-      const popUp = threadsPopUpNow();
+      const popUp = popUpNow();
       const view = await joinedAsks(t.id, threads, all, now, popUp);
       if (!popUp) return threadCounts(view.threads, now);
       // What waits on him below counts here too, never as this task's Needs you (thread-groups.ts

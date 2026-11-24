@@ -189,7 +189,7 @@ export async function threadWaitItems(task: Pick<Task, 'id' | 'parent_task_id'>,
       const file = await readThreads(node).catch(() => null);
       const mine = (file?.threads ?? []).filter((t) => threadNamesTask(t, task.id, { node, chain, saysWaits }));
       if (!mine.length) continue;
-      const shown = await withTaskAsks(node, mine, all);
+      const shown = await withTaskAsks(node, mine, all, { carry: false });
       for (const t of shown) if (!t.closed && t.state === 'needs' && !t.askedIn) out.push({ node, id: t.id, text: threadItemText(t, threadAskText) });
     }
   } catch { /* unread: nothing */ }

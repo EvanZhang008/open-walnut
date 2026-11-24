@@ -24,7 +24,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { ensureMainTask, ensureProjectLead } from '../../src/core/org/org-store.js'
-import { openNodeThread, patchThread, readThreads } from '../../src/core/org/threads-store.js'
+import { nodeView, openNodeThread, patchThread, readThreads } from '../../src/core/org/threads-store.js'
 import { listedForHim } from '../../src/core/org/thread-view.js'
 import { threadsPopUpNow } from '../../src/core/org/thread-popup.js'
 import { syncUserStatuses, settleUserStatusSync } from '../../src/core/user-status-sync.js'
@@ -120,7 +120,24 @@ describe('the task\'s result on the subject he asked the VP about', () => {
     expect(own?.owner).toBeUndefined()
   })
 
+  it('every other read of the VP agrees: its Board card, a change made from its list, and a needs-only reader skips the read', async () => {
+    // The VP's Board card reads the result to read, not "waiting" behind it (brief_off).
+    const states = await api<{ on: boolean; states: Record<string, { state: string; id: string }> }>('GET', `/thread-states?ids=${ids.vp}`)
+    expect(states.json.states[ids.vp]).toMatchObject({ state: 'read', id: ids.result })
+    // A change from the VP's list answers the card as the list draws it: still carried, its Acknowledge kept.
+    const watched = await api<{ thread: Listed }>('PATCH', `/tasks/${ids.vp}/threads/${ids.result}`, { watch: true })
+    expect(watched.status).toBe(200)
+    expect(watched.json.thread).toMatchObject({ id: ids.result, owner: { task_id: ids.fix }, carries: ids.his })
+    // A reader of the VP's needs alone reads no task below for it.
+    const own = (await readThreads(ids.vp)).threads
+    expect((await nodeView(ids.vp, own, undefined, { carry: false })).carried).toEqual([])
+    expect((await nodeView(ids.vp, own)).carried.map((c) => c.thread.id)).toEqual([ids.result])
+  })
+
   it('his Acknowledge on the VP\'s list closes it on the task, and nothing of the subject is left for him', async () => {
+    // Most results come as their task completes: the record is found on the task the VP's card names.
+    await updateTaskRaw(ids.fix, { phase: 'COMPLETE', status: 'done' } as never, { emitEvent: true })
+    expect((await vpReads()).inSight).toEqual([ids.result])
     const ack = await api<{ thread: Listed }>('PATCH', `/tasks/${ids.vp}/threads/${ids.result}`, { close: 'acked' })
     expect(ack.status).toBe(200)
     const stored = (await readThreads(ids.fix)).threads.find((t) => t.id === ids.result)

@@ -14,11 +14,16 @@
  *   carried   (`carry`, experiment threads_pop_up) the task's thread holds a result for him newer
  *             than anything the node wrote on its thread: that result is listed above the node
  *             (thread-popup.ts, with `carries`), and the node's thread waits behind it;
- *   read      he read that result there (his reaction, his Acknowledge): the node's result stays quiet.
- * Asking outranks a carried result, which outranks a quiet one. Pure.
+ *   read      he read that result there (his reaction, his Acknowledge, whatever state that left it
+ *             in): the node's thread stays quiet until the node writes it again.
+ * Asking outranks a carried result, which outranks a quiet one. A node's thread holding news of its
+ * own he has not read, or a word of his newer than the task's result, never waits behind it: the
+ * result is listed beside it, so a pairing on a few shared words can add a card, never hide one
+ * (2026-11-24 review: "mark the margins live + revert the status icon" paired with "status icon:
+ * reverted" would have hidden the margins). Pure.
  */
 import { sameTaskArea, type AreaScoped } from '../router/same-area.js';
-import { shownToHim, threadReactionAt, type ThreadAskedIn } from './thread-view.js';
+import { hasUnseenAnswer, shownToHim, threadReactionAt, type ThreadAskedIn } from './thread-view.js';
 import type { OrgThread } from './threads-model.js';
 import { candidatesIn, sharedPlaces, subjectIndex, type SubjectIndex } from './thread-same-subject.js';
 import type { AskPointerFacts, AskTask, OwnThread } from './thread-task-ask.js';
@@ -93,6 +98,19 @@ const seenThereAt = (x: OwnThread): string =>
   [threadReactionAt(x), x.known?.by === 'human' ? x.known.at : undefined, x.closed?.by === 'human' ? x.closed.at : undefined]
     .filter((v): v is string => !!v).sort().pop() ?? '';
 
+/**
+ * The task's thread held a result and he read it there: a summary, and his reaction or Acknowledge
+ * after its last write. His Acknowledge leaves it pending, closed or answered (thread-ack.ts ackKnown):
+ * the state says nothing of it.
+ */
+const readThere = (x: OwnThread): boolean => !!x.reply?.trim() && seenThereAt(x) > lastWrittenAt(x);
+
+/** The node's thread has something of its own for him he has not read: its summary, or an answer of the node's on it. */
+const ownNews = (t: OrgThread, now: number): boolean => shownToHim(t, undefined, now) && (t.state === 'answered' || hasUnseenAnswer(t));
+
+/** A result `after` may stand for the node's thread `t`: nothing of `t`'s own is unread, and no word of his on `t` is newer. */
+const waitsBehind = (t: OrgThread, after: string, now: number): boolean => !ownNews(t, now) && hisLastAt(t as OwnThread) < after;
+
 /** A result is paired on this many shared telling words with the task's thread, standing in this many places of its title. */
 const RESULT_SHARED = 3;
 const RESULT_PLACES = 2;
@@ -151,7 +169,7 @@ export function subjectPairs<T extends OrgThread>(node: AreaScoped, threads: rea
       // A result for him there outranks his answer there: it is news since.
       const result = carry && !x.closed && x.state === 'answered' && shownToHim(x, undefined, now);
       const answered = !asking && !result && oldest !== undefined && answeredThere(x) && hisLastAt(x) > oldest;
-      const read = !asking && !answered && !result && carry && x.state === 'answered' && oldest !== undefined && seenThereAt(x) > oldest;
+      const read = !asking && !answered && !result && carry && readThere(x);
       if (!asking && !answered && !result && !read) continue;
       const t = nearestCard(index, x.title, mine);
       if (!t) continue;
@@ -165,11 +183,11 @@ export function subjectPairs<T extends OrgThread>(node: AreaScoped, threads: rea
       }
       // A result older than what the node wrote on its own thread is not news over it.
       if (lastWrittenAt(x) <= lastWrittenAt(t)) continue;
+      if (!carryCandidate(t)) continue;
       if (result) {
-        if (t.state === 'needs') continue;
         carried.push({ thread: x, task, carries: t.id });
-        hold(t.id, { ...p, result: true });
-      } else if (heldCandidate(t, now) && seenThereAt(x) > lastWrittenAt(t)) {
+        if (waitsBehind(t, lastWrittenAt(x), now)) hold(t.id, { ...p, result: true });
+      } else if (seenThereAt(x) > lastWrittenAt(t) && waitsBehind(t, seenThereAt(x), now)) {
         hold(t.id, { ...p, result: true, answered: true });
       }
     }

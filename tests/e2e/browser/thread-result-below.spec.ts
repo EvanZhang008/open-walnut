@@ -86,7 +86,7 @@ test('the task\'s result is on the lead\'s Threads where he asked, and his Ackno
   const own = card(page, ids.his)
   await expect(own).toBeVisible()
   await expect(own).toHaveAttribute('data-asked-in', ids.owner)
-  await expect(own.getByTestId('org-thread-asked-in')).toContainText('has the result on this: read it on its card')
+  await expect(own.getByTestId('org-thread-asked-in')).toContainText('has the result on this: read it on its card above')
   await page.waitForTimeout(1_500)
   await shot(page, 'thread-result-below', '1-result-on-lead')
 

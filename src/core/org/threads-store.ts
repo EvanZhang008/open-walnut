@@ -66,9 +66,16 @@ export async function readThreads(taskId: string): Promise<ThreadsFile> {
  * (the route, the status counts, the recheck, the push), so they agree. A store Walnut cannot read
  * leaves the threads as they are: a miss shows an ask twice, never hides one.
  */
-export async function withTaskAsks<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>> {
-  return (await nodeView(taskId, threads, tasks)).threads;
+export async function withTaskAsks<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[], opts: NodeViewOpts = {}): Promise<Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>> {
+  return (await nodeView(taskId, threads, tasks, opts)).threads;
 }
+
+/**
+ * `carry: false`: a reader of the node's needs alone (the push, the threads below, owed waits) skips
+ * the results below, which only ever hold threads that do not ask him (thread-subject-pairs.ts): no
+ * read of the linked tasks' Threads for it. Every reader of what he sees in the node's list keeps it.
+ */
+export interface NodeViewOpts { carry?: boolean }
 
 /** A result of a task below that answers the subject of one of the node's own threads (thread-subject-pairs.ts carriedResults). */
 export interface CarriedBelow { thread: OrgThread; task: import('../types.js').Task; carries: string }
@@ -78,10 +85,10 @@ export interface CarriedBelow { thread: OrgThread; task: import('../types.js').T
  * threads, which those threads wait behind (thread-subject-pairs.ts): the route and the status counts
  * list them above the node (thread-popup.ts carriedRows).
  */
-export async function nodeView<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<{ threads: Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>; carried: CarriedBelow[] }> {
+export async function nodeView<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[], opts: NodeViewOpts = {}): Promise<{ threads: Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>; carried: CarriedBelow[] }> {
   const now = Date.now();
   const plain = (list: readonly T[]) => ({ threads: [...list] as Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>, carried: [] as CarriedBelow[] });
-  const carry = threadsPopUpNow() && threads.some((t) => !t.closed && t.state !== 'needs' && !!t.tasks?.some((id) => id !== taskId));
+  const carry = opts.carry !== false && threadsPopUpNow() && threads.some((t) => !t.closed && t.state !== 'needs' && !!t.tasks?.some((id) => id !== taskId));
   // A result a linked task's own thread may hold (thread-subject-pairs.ts) is read like a needs thread.
   const results = threads.some((t) => heldCandidate(t, now)) || carry;
   const needs = threads.some((t) => !t.closed && t.state === 'needs') || results;
@@ -185,7 +192,7 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
     const threads = entered;
     // A push must never fail or slow the write that triggered it. A thread whose decision a task
     // already asks him buzzes nothing: that task's ask is the one he answers (thread-task-ask.ts).
-    void withTaskAsks(taskId, threads)
+    void withTaskAsks(taskId, threads, undefined, { carry: false })
       .then(async (read) => {
         // A thread holding a decision letter buzzes nothing either: the letter's own push did (letter-thread-model.ts).
         const own = threads.filter((t) => !read.find((r) => r.id === t.id)?.askedIn && !liveLetter(t));

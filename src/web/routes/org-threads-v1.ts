@@ -149,8 +149,8 @@ const positive = (v: unknown) => {
 /**
  * GET /api/v1/thread-states?ids=a,b,c  { on, states: { [taskId]: { state, id, title } }, more? }
  * What each task's own open threads give it (thread-groups.ts threadStateOf: needs > read >
- * working > waiting; Acknowledged reads waiting), read as his Threads read them (withTaskAsks: a
- * decision a task asks waits here), for a Board card's status while the Brief is off (experiment brief_off). Only the tasks
+ * working > waiting; Acknowledged reads waiting), read as his Threads read them (nodeView: a
+ * decision a task asks waits here, a result below it carries reads in its thread's place), for a Board card's status while the Brief is off (experiment brief_off). Only the tasks
  * that have threads are read, at most THREAD_STATES_MAX of them (`more`: how many were left out).
  * Off, or for a task with no open thread, nothing: the card keeps its own status.
  */
@@ -168,7 +168,9 @@ orgThreadsV1Router.get('/thread-states', route(async (req, res) => {
   for (const id of ids) {
     const file = await readThreads(id).catch(() => null)
     if (!file?.threads.length) continue
-    const got = threadStateOf(await withTaskAsks(id, file.threads, tasks), now)
+    // A result below it carries stands in its own thread's place (thread-subject-pairs.ts): the card reads it as to read.
+    const view = await nodeView(id, file.threads, tasks)
+    const got = threadStateOf([...view.threads, ...view.carried.map((c) => c.thread)], now)
     if (got) states[id] = got
   }
   res.json({ on: true, states, ...(asked.length > ids.length ? { more: asked.length - ids.length } : {}) })
@@ -412,7 +414,9 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   if (there) {
     thread = await patchThread(there.node, id, patch, by, source)
     log.task.info('org thread updated on its owner', { taskId: task.id, owner: there.node, threadId: id, by, fields: Object.keys(patch) })
-    res.json({ task_id: task.id, thread: await poppedOne({ node: there.node, thread: await projected(there.node, thread) }) })
+    // Still a result carried here: its card keeps `carries` (its Acknowledge), as the list reads it.
+    const carries = (await nodeView(task.id, (await readThreads(task.id)).threads)).carried.find((c) => c.thread.id === id)?.carries
+    res.json({ task_id: task.id, thread: { ...await poppedOne({ node: there.node, thread: await projected(there.node, thread) }), ...(carries ? { carries } : {}) } })
     return
   }
   if (Object.keys(patch).length) thread = await patchThread(task.id, id, patch, by, source)
