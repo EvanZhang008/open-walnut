@@ -54,7 +54,7 @@ export const USAGE_ALARMS: readonly AlarmDef[] = [
   {
     id: 'usage.page',
     title: 'A page keeps failing',
-    description: 'The same error in Walnut\'s pages (a timed-out request, a request the browser refused, or the same thrown error). A request that never reached the server (rejected or failed) is not counted, nor one whose route already rings for server errors; timeouts of several requests together count once as a stall, and none right after a restart.',
+    description: 'The same error in Walnut\'s pages (a request the browser refused, or the same thrown error). A request that went wrong on its way (never reached the server, never sent, or timed out) is not counted alone: a route that held its page until the page gave up rings as its own slow read. Timeouts of several requests together count once as a stall, and none right after a restart.',
     metric: 'usage.page.errors{kind=*}', kind: 'counter', stat: 'sum', periodMin: 360, comparison: '>=', threshold: 5,
     evaluationPeriods: 1, datapointsToAlarm: 1, missing: 'notBreaching', unit: 'errors in 6 h', action: route,
   },

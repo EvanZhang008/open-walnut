@@ -46,20 +46,26 @@ export function setWatchedOps(ops: Iterable<string>): void {
   watchedOps = new Set(ops)
 }
 /**
- * When each route last answered with a server error or read slowly, so a page failure of the same
- * cause is not alarmed twice: it rings on the route's own alarm (watches.ts judges the same per hour).
+ * When each route last answered with a server error, read slowly or could not reach its host, so a
+ * page failure of the same cause is not alarmed twice: it rings on the route's own alarm.
  */
 const routeTroubleAt = new Map<string, number>()
-/** Whether `route` read slowly or failed in the clock hour of `at`: the rule watches.ts pageErrorsOf judges by. */
+/** Whether `route` read slowly, failed or could not reach its host in the clock hour of `at`. */
 const routeTroubledInHourOf = (route: string, at: number): boolean => {
   const t = routeTroubleAt.get(route)
   return t !== undefined && Math.floor(t / HOUR_MS) === Math.floor(at / HOUR_MS)
 }
 
 /**
- * A page request that timed out is held this long before it may ring: when several different
- * requests time out within it, the server or the network stalled, which rings on its own; one
- * route timing out alone is that route's (2026-11-22: the threads route, also a slow read).
+ * A page request that timed out is held this long: when several different requests time out within
+ * it, the page, the server or the way between them stalled, which counts once as a stall. One timing
+ * out alone never rings: a route that held the page until it gave up rings as its own slow read (the
+ * page's deadline aborts its fetch, and recordHttp counts the hang-up), and one the server answered in
+ * time or never saw is neither the route's nor the page's (2026-11-24: a notes list the server
+ * answered in 24 ms that the page waited 15 s for, and servers requests on a server being replaced
+ * for a deploy, rang the watches of tasks that changed neither). What a lone timeout no longer shows
+ * rings elsewhere: a server that read the request late (a stalled event loop) on Walnut Health's
+ * event-loop alarm, a host it could not reach on its host link, a server down on its server alarms.
  */
 const OUTAGE_WINDOW_MS = 60_000
 const OUTAGE_KINDS = 3
@@ -161,6 +167,12 @@ export interface HttpRequest {
   ms: number
   /** A read that waits on purpose or a stream: its time is no latency. */
   waits: boolean
+  /**
+   * The client left before any answer was sent (a page's deadline aborts its fetch, a closed tab):
+   * its time is how long the client waited, the least the answer would have taken. A client leaving
+   * an answer already under way (a player seeking in a video, a cancelled download) is not one.
+   */
+  hungUp?: boolean
   /** A 503 saying the host it reads through is not reachable now (web/middleware/host-unreachable-answer.ts). */
   hostUnreachable?: boolean
   now?: number
@@ -181,7 +193,13 @@ export function recordHttp(r: HttpRequest): void {
   const unreachable = r.status === 503 && r.hostUnreachable === true
   const serverError = r.status >= 500 && r.status !== 501 && !unreachable
   const cls: OutcomeClass = unreachable ? 'unreachable' : serverError ? 'error' : r.status >= 400 ? 'refused' : 'ok'
-  addCall(agg, { cls, ...(r.status >= 400 ? { code: `http_${r.status}` } : {}), chars: 0, ms: r.waits ? 0 : r.ms })
+  // A client that left before any answer waited that long: a read held past the slow line is the
+  // route holding it (2026-11-24: such hang-ups were counted as waits of 0 ms, so a route that held
+  // its page until the page gave up read as fast). A shorter one, or a write's, stays a wait: it
+  // says nothing of the route, and a write that waits on purpose (a long poll by POST) would skew
+  // its p95.
+  const waited = r.waits || (r.hungUp === true && !(r.method === 'GET' && r.ms > SLOW_READ_MS))
+  addCall(agg, { cls, ...(r.status >= 400 ? { code: `http_${r.status}` } : {}), chars: 0, ms: waited ? 0 : r.ms })
   const labels = { route: labelValue(name) }
   if (unreachable) {
     routeTroubleAt.set(name, now)
@@ -193,7 +211,7 @@ export function recordHttp(r: HttpRequest): void {
     routeTroubleAt.set(name, now)
     event({ at: now, kind: 'http', name, problem: 'server_error', code: `http_${r.status}`, ms: r.ms })
   }
-  if (!r.waits && r.method === 'GET' && r.ms > SLOW_READ_MS) {
+  if (!waited && r.method === 'GET' && r.ms > SLOW_READ_MS) {
     agg.slow++
     routeTroubleAt.set(name, now)
     count('usage.http.slow', 1, labels)
@@ -212,18 +230,21 @@ export function recordPageError(k: PageErrorKind, now = Date.now()): void {
   // failed never reached the server (a network error: it was down, restarting or asleep, or the
   // network was): their cause rings on its own (slow reads, server errors, Walnut Health's server
   // alarms) or is not Walnut's. Shown in the table, never rung (2026-11-22: a restart made 19 at
-  // once, and a sleeping Mac's page nine at one instant). A timed-out one can be its route's: it
-  // waits a minute (settlePageFailures). A thrown error, or a request the browser refused, rings.
+  // once, and a sleeping Mac's page nine at one instant). A timed-out one is the same alone; it waits
+  // a minute only to see whether it was part of a stall (settlePageFailures). A thrown error, or a
+  // request the browser refused, rings.
   const hold = (judged: boolean) => { if (held.length < MAX_HELD) held.push({ at: now, kind: k.kind, ...(k.route ? { route: k.route } : {}), judged }) }
   if (!k.request || k.how === 'refused') { if (!sameCause) count('usage.page.errors', 1, { kind: labelValue(k.kind) }) }
   else if (k.how === 'rejected') { /* a hung route fills the queue: never context for its own timeouts */ }
-  // Context for the window only: what failed with it, what came right after a restart.
-  else if (k.how !== 'timed out' || sameCause || now - startedAt < START_GRACE_MS) hold(true)
+  // Right after this server started, what the page lost is the restart's: not even context for a stall.
+  else if (now - startedAt < START_GRACE_MS) { /* the restart's */ }
+  // Context for the window only: what failed with it, and timeouts their route already rang for.
+  else if (k.how !== 'timed out' || sameCause) hold(true)
   else hold(false)
   event({ at: now, kind: 'page', name: k.kind, problem: k.request ? 'request_failed' : 'error' })
 }
 
-/** Rings the held page timeouts whose window has passed: alone by their route, together once as a stall. */
+/** Settles the held page timeouts whose window has passed: several kinds together count once as a stall. */
 export function settlePageFailures(now = Date.now()): void {
   for (let i = 0; i < held.length; i++) {
     const f = held[i]!
@@ -231,8 +252,7 @@ export function settlePageFailures(now = Date.now()): void {
     f.judged = true
     // Its route read slowly or failed in its hour (its answer lands after the page gave up): the route's.
     if (f.route && routeTroubledInHourOf(f.route, f.at)) continue
-    if (kindsNear(i) < OUTAGE_KINDS) count('usage.page.errors', 1, { kind: labelValue(f.kind) })
-    else if (f.at - lastStallAt > OUTAGE_WINDOW_MS) {
+    if (kindsNear(i) >= OUTAGE_KINDS && f.at - lastStallAt > OUTAGE_WINDOW_MS) {
       lastStallAt = f.at
       count('usage.page.errors', 1, { kind: STALL_KIND })
     }

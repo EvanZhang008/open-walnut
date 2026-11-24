@@ -121,27 +121,35 @@ export type PageRequestHow = 'rejected' | 'failed' | 'timed out' | 'refused'
 /** A fetch that threw for the network (Chromium, WebKit, Firefox), not for the request itself. */
 const NETWORK_ERROR_RE = /Failed to fetch|Load failed|NetworkError|network connection was lost|Could not connect|ERR_[A-Z_]{4,}/i
 
+/**
+ * How a request can go wrong on its way, as pageErrorKind names it: never the page's own error, and
+ * never rung alone (usage-watch/record.ts recordPageError). Ratchet: tests/core/usage-watch/usage-watch.test.ts.
+ */
+export const PAGE_REQUEST_HOWS = ['failed', 'rejected', 'timed out'] as const
+type OnTheWay = (typeof PAGE_REQUEST_HOWS)[number]
+
 /** A page kind of a request that went wrong on its way, as pageErrorKind writes it: its route, then how. */
-const PAGE_REQUEST_KIND_RE = /^((?:GET|POST|PUT|PATCH|DELETE) (?:\/\S*|unknown request)) (failed|rejected|timed out) in the page$/
+const PAGE_REQUEST_KIND_RE = new RegExp(`^((?:GET|POST|PUT|PATCH|DELETE) (?:/\\S*|unknown request)) (${PAGE_REQUEST_HOWS.join('|')}) in the page$`)
 
 /**
  * The request a page kind names when it went wrong on its way, with how: its route's template
  * (`GET /api/sessions/:sessionId/supervision`, or `GET unknown request`), else null (an error thrown
  * in the page, or a request the browser itself refused to send: the page's own).
  */
-export function pageRequestOf(kind: string): { route: string; how: 'failed' | 'rejected' | 'timed out' } | null {
+export function pageRequestOf(kind: string): { route: string; how: OnTheWay } | null {
   const m = PAGE_REQUEST_KIND_RE.exec(kind)
-  return m ? { route: m[1]!, how: m[2] as 'failed' | 'rejected' | 'timed out' } : null
+  return m ? { route: m[1]!, how: m[2] as OnTheWay } : null
 }
 
 /**
  * Whether a page kind is the page's own failure: an error thrown in the page, or a request the
  * browser itself refused to send. A request that went wrong on its way never is: one that failed for
  * the network never reached the server (a deploy restart, sleep, the network), one the page's queue
- * rejected was never sent, and one that timed out waited on its route or its server (2026-11-24:
- * 253 restart failures on the session page; then supervision timeouts in the minutes its server read
- * slowly, and four servers timeouts on a server being replaced for a deploy, which never recorded
- * them, failed the page:session watches of tasks that changed only how controls look).
+ * rejected was never sent, and one that timed out waited on its route, its server or the way
+ * between them (2026-11-24: 253 restart failures on the session page; then supervision timeouts in
+ * the minutes its server read slowly, four servers timeouts on a server being replaced for a deploy,
+ * which never recorded them, and a notes list the server answered in 24 ms that the page waited 15 s
+ * for, failed the page watches of tasks that changed only how controls look).
  */
 export function pageKindIsPagesOwn(kind: string): boolean {
   return pageRequestOf(kind) === null

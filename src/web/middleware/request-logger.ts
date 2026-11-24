@@ -317,7 +317,10 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     // to the API (ops/executor.ts OP_CALL_HEADER) is counted under its tool instead; a test run's
     // requests stay out.
     if (fullPath.startsWith('/api/') && !req.headers['x-walnut-op-call'] && !req.headers['x-walnut-test-run']) {
-      recordRequestUse(req.method, req.baseUrl, req.route?.path, status, duration, isStream || isLongPoll(url) || aborted, isHostUnreachableAnswer(res))
+      // A client that left before any answer was sent is a hang-up, not a wait: past the slow line its
+      // route held it (usage-watch/record.ts recordHttp). One that left an answer under way (a video
+      // seeking, a cancelled download) stays a wait.
+      recordRequestUse(req.method, req.baseUrl, req.route?.path, status, duration, { waits: isStream || isLongPoll(url) || (aborted && res.headersSent), hungUp: aborted && !res.headersSent, hostUnreachable: isHostUnreachableAnswer(res) })
     }
     observe(isStream ? 'http.sse' : 'http.request', duration, {
       route: routeGroup,

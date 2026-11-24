@@ -87,19 +87,17 @@ export function targetProblem(t: string): string | null {
 /**
  * Whether a recorded name is covered by a watch target: what its verdict judges, whose alarm comes
  * to it, what its report shows. A page target covers only the page's own errors (normalize.ts
- * pageKindIsPagesOwn); a request that went wrong on its way is named in its verdict, not judged, and
- * a timed-out one rings the watch on its route.
+ * pageKindIsPagesOwn); a request that went wrong on its way is named in its verdict, not judged. A
+ * route target covers only what its server recorded: a route that held a page until the page gave
+ * up is there as a slow read (record.ts recordHttp), and a timeout its server answered in time or
+ * never saw is neither's.
  */
 export function targetCovers(target: string, kind: UsageKind, name: string): boolean {
   if (target.startsWith('op:')) return kind === 'op' && name === target.slice(3)
   if (target.startsWith('route:')) {
-    // A page's timed-out read of the route rings the route's watch (record.ts rings one only while
-    // the route itself read in time); its verdict stays its server's numbers (mergedFor reads http).
-    const timedOut = kind === 'page' ? pageRequestOf(name) : null
-    const route = kind === 'http' ? name : timedOut?.how === 'timed out' ? timedOut.route : null
-    if (route === null) return false
+    if (kind !== 'http') return false
     const want = target.slice(6)
-    return want.includes(' ') ? route === want : route.endsWith(` ${want}`)
+    return want.includes(' ') ? name === want : name.endsWith(` ${want}`)
   }
   return kind === 'page' && name.includes(target.slice(5)) && pageKindIsPagesOwn(name)
 }

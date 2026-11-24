@@ -11,8 +11,8 @@ import express from 'express'
 import { setUsageWatchFile, readHours, readEvents, closeUsageWatchStore, markAlive } from '../../../src/core/usage-watch/store.js'
 import { addObserveTap } from '../../../src/core/observability/metrics.js'
 import { usageReport } from '../../../src/core/usage-watch/report.js'
-import { _resetUsageRecorderForTesting, flushUsage, recordConfirmedCut, recordHttp, recordOpCall, recordPageError } from '../../../src/core/usage-watch/record.js'
-import { TemplateMatcher, agentCutChars, failureClass, pageErrorKind, pageKindIsPagesOwn, pageRequestOf, registeredTemplate, walnutOpOfToolCall, type PageRequestHow } from '../../../src/core/usage-watch/normalize.js'
+import { _resetUsageRecorderForTesting, STALL_KIND, flushUsage, recordConfirmedCut, recordHttp, recordOpCall, recordPageError } from '../../../src/core/usage-watch/record.js'
+import { PAGE_REQUEST_HOWS, TemplateMatcher, agentCutChars, failureClass, pageErrorKind, pageKindIsPagesOwn, pageRequestOf, registeredTemplate, walnutOpOfToolCall, type PageRequestHow } from '../../../src/core/usage-watch/normalize.js'
 import { judgeWatch, newWatch, putWatch, listWatches, armedWatchesFor, targetCovers } from '../../../src/core/usage-watch/watches.js'
 import { BATCH_GAP_MS, _sendsForTesting, noteText, routeUsageAlarm, sendDueNotes, type RouteDeps } from '../../../src/core/usage-watch/route.js'
 import { recordShip, shipFailed, shipOfCommand } from '../../../src/core/usage-watch/ships.js'
@@ -123,16 +123,20 @@ describe('what is kept', () => {
       .toEqual({ kind: 'GET /api/sessions/search refused by the browser', route: 'GET /api/sessions/search', request: true, how: 'refused' })
   })
 
-  it('the minute flush rings a timeout once its minute has passed, never before', () => {
+  it('the minute flush settles timeouts once their minute has passed: alone never rung, three kinds together once as a stall', () => {
     const seen: string[] = []
     const off = addObserveTap((name, _v, labels) => { if (name === 'usage.page.errors') seen.push(labels?.kind ?? '') })
+    const timedOut = (route: string) => ({ kind: `${route} timed out in the page`, route, request: true, how: 'timed out' as const })
     try {
-      recordPageError({ kind: 'GET /api/x timed out in the page', route: 'GET /api/x', request: true, how: 'timed out' }, T0)
-      flushUsage(T0 + 30_000)
-      expect(seen).toEqual([])
+      recordPageError(timedOut('GET /api/x'), T0)
       flushUsage(T0 + 61_000)
-      expect(seen).toEqual(['GET /api/x timed out in the page'])
-      flushUsage(T0 + 200_000)
+      expect(seen).toEqual([])
+      for (const r of ['GET /api/a', 'GET /api/b', 'GET /api/c']) recordPageError(timedOut(r), T0 + 200_000)
+      flushUsage(T0 + 230_000)
+      expect(seen).toEqual([])
+      flushUsage(T0 + 261_000)
+      expect(seen).toEqual([STALL_KIND])
+      flushUsage(T0 + 400_000)
       expect(seen).toHaveLength(1)
     } finally { off() }
   })
@@ -360,10 +364,11 @@ describe('a watch', () => {
     expect(own.summary).toContain('31 requests that went wrong on the way')
   })
 
-  // 2026-11-24: 15 supervision timeouts in the page fell in the minutes its server read slowly and
-  // failed the page:session watches of tasks that changed only how controls look; their alarms went
-  // to those tasks.
-  it('a page timeout rings its route\'s watch only while the route read in time, and never the page\'s', () => {
+  // 2026-11-24: page timeouts failed the page watches of tasks that changed only how controls look,
+  // then rang the watch of a route that answered in time (a notes list answered in 24 ms that the
+  // page waited 15 s for). A request that went wrong on its way is neither the page's nor its route's;
+  // a route that held its page until the page gave up is its own slow read, recorded by its server.
+  it('a request that went wrong on its way rings no watch, page or route; a route that held its page reads slow', () => {
     const t = new TemplateMatcher()
     t.add('GET', '/api/sessions/:sessionId/supervision')
     const slowKind = pageErrorKind(LINES['timed out'][0], LINES['timed out'][1], t)!
@@ -371,36 +376,45 @@ describe('a watch', () => {
     expect(pageRequestOf('TypeError in the session-chat chunk')).toBeNull()
     expect(pageRequestOf('GET unknown request timed out in the page')).toEqual({ route: 'GET unknown request', how: 'timed out' })
     const ROUTE = 'route:GET /api/sessions/:sessionId/supervision'
-    expect(targetCovers('page:session', 'page', slowKind.kind)).toBe(false)
-    expect(targetCovers(ROUTE, 'page', slowKind.kind)).toBe(true)
-    expect(targetCovers('route:/api/sessions/:sessionId/supervision', 'page', slowKind.kind)).toBe(true)
-    expect(targetCovers(ROUTE, 'page', pageErrorKind(LINES.failed[0], LINES.failed[1], t)!.kind)).toBe(false)
-    expect(targetCovers('route:GET /api/sessions/:sessionId/servers', 'page', slowKind.kind)).toBe(false)
-    const refused = pageErrorKind(LINES.refused[0], LINES.refused[1], t)!
-    expect(targetCovers('page:session', 'page', refused.kind)).toBe(true)
-    expect(targetCovers(ROUTE, 'page', refused.kind)).toBe(false)
     putWatch(newWatch({ taskId: 't-page', targets: ['page:session'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 }))
     putWatch(newWatch({ taskId: 't-route', targets: [ROUTE], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 }))
-    expect(armedWatchesFor('page', slowKind.kind, T0 + H).map((w) => w.taskId)).toEqual(['t-route'])
+    // Every way on the way, enumerated from the source: a new one is checked here as it lands.
+    for (const how of PAGE_REQUEST_HOWS) {
+      const kind = `GET /api/sessions/:sessionId/supervision ${how} in the page`
+      expect(pageRequestOf(kind)?.how, how).toBe(how)
+      for (const target of ['page:session', 'page:supervision', ROUTE, 'route:/api/sessions/:sessionId/supervision']) expect(targetCovers(target, 'page', kind), `${how} ${target}`).toBe(false)
+      expect(armedWatchesFor('page', kind, T0 + H), how).toEqual([])
+    }
+    expect(targetCovers(ROUTE, 'http', 'GET /api/sessions/:sessionId/supervision')).toBe(true)
+    const refused = pageErrorKind(LINES.refused[0], LINES.refused[1], t)!
+    expect(targetCovers('page:session', 'page', refused.kind)).toBe(true)
     expect(armedWatchesFor('page', 'TypeError in the session-chat chunk', T0 + H).map((w) => w.taskId)).toEqual(['t-page'])
     const seen: string[] = []
-    const off = addObserveTap((name, _v, labels) => { if (name === 'usage.page.errors') seen.push(labels?.kind ?? '') })
+    const off = addObserveTap((name, _v, labels) => { if (name.startsWith('usage.page') || name === 'usage.http.slow') seen.push(`${name} ${labels?.kind ?? labels?.route ?? ''}`) })
     try {
-      // Hour 1: the route reads slowly; the page's timeouts land before and after its slow answer:
-      // the route's own slow alarm rings, not one for each timeout.
-      recordPageError(slowKind, T0 + H + 1_000)
-      recordHttp({ method: 'GET', template: '/api/sessions/:sessionId/supervision', status: 200, ms: 5_002, waits: false, now: T0 + H + 6_000 })
-      recordPageError(slowKind, T0 + H + 9_000)
-      flushUsage(T0 + H + 120_000)
+      // Each way alone, five times an hour apart from the rest: never rung.
+      for (const how of PAGE_REQUEST_HOWS) {
+        for (let n = 0; n < 5; n++) recordPageError({ kind: `GET /api/x ${how} in the page`, route: 'GET /api/x', request: true, how }, T0 + H + n * 120_000)
+      }
+      flushUsage(T0 + 2 * H)
       expect(seen).toEqual([])
-      // Hour 3: the route answered in time; the timeout alone rings (its route's watch hears it). A
-      // slow read near the end of hour 2 does not take it: the clock hour decides.
-      recordHttp({ method: 'GET', template: '/api/sessions/:sessionId/supervision', status: 200, ms: 5_002, waits: false, now: T0 + 3 * H - 600_000 })
+      // The route answered in 40 ms and the page still gave up: still nobody's.
       recordHttp({ method: 'GET', template: '/api/sessions/:sessionId/supervision', status: 200, ms: 40, waits: false, now: T0 + 3 * H })
-      recordPageError(slowKind, T0 + 3 * H + 1_000)
+      recordPageError(slowKind, T0 + 3 * H + 15_000)
       flushUsage(T0 + 3 * H + 120_000)
-      expect(seen).toEqual([slowKind.kind])
+      expect(seen).toEqual([])
+      // The page gave up after 15 s and its fetch was aborted: the server's hang-up is a slow read of
+      // the route, timed as long as the page waited. A short hang-up (a closed tab) and a stream's end are not.
+      recordHttp({ method: 'GET', template: '/api/sessions/:sessionId/supervision', status: 200, ms: 15_003, waits: false, hungUp: true, now: T0 + 4 * H })
+      recordHttp({ method: 'GET', template: '/api/sessions/:sessionId/supervision', status: 200, ms: 900, waits: false, hungUp: true, now: T0 + 4 * H })
+      recordHttp({ method: 'GET', template: '/api/v1/events', status: 200, ms: 600_000, waits: true, hungUp: true, now: T0 + 4 * H })
+      recordPageError(slowKind, T0 + 4 * H + 1)
+      flushUsage(T0 + 4 * H + 120_000)
+      expect(seen).toEqual(['usage.http.slow GET /api/sessions/:sessionId/supervision'])
+      const agg = readHours(0).find((r) => r.kind === 'http' && r.name === 'GET /api/sessions/:sessionId/supervision' && r.hour === T0 + 4 * H)!.agg
+      expect(agg).toMatchObject({ calls: 2, slow: 1, msMax: 15_003 })
     } finally { off() }
+    expect(judgeWatch(listWatches({}).find((w) => w.taskId === 't-page')!, T0 + 5 * H).state).not.toBe('failed')
   })
 
   it('reads Unknown when the server was not recording', () => {
