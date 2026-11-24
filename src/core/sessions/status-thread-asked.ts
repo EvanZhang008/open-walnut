@@ -7,6 +7,7 @@
  * question names the thread and says where a decision goes: FOR_USER_ASK for a task, a thread_update
  * into needs for an Org node. Kept in memory: after a restart the next such line is caught again.
  */
+import { asksHimNow } from '../org/thread-summary-content.js';
 
 /** How long a dropped line is named in the questions that follow. */
 const NAMED_MS = 24 * 3_600_000;
@@ -31,6 +32,8 @@ export function linesThatAsked(taskId: string, now = Date.now()): Set<string> {
 
 /** The mark beside such a thread in the question. */
 export const ASKED_MARK = 'your last line asked the user to decide and was not written';
+/** The mark beside a thread whose stored card asks him to decide outside needs (an older build wrote it; status-thread-pick.ts asks it first). */
+export const CARD_ASKS_MARK = 'its card asks the user to decide, with no buttons and outside his Needs you';
 
 /** The rule the question adds when a listed thread carries ASKED_MARK. */
 export function askedRule(org: boolean, oneCard: boolean): string {
@@ -38,6 +41,15 @@ export function askedRule(org: boolean, oneCard: boolean): string {
     ? 'a thread_update into needs, with user_kind and options when he picks among choices'
     : `FOR_USER_ASK, with FOR_USER_ASK_OPTIONS when he picks among choices${oneCard ? ' and FOR_USER_ASK_THREAD: <ref>' : ''}`;
   return `A line that asks the user to decide is never written: his card would read it as a result with no buttons. Ask a decision that still waits on ${where}, and give each marked thread a line with its result only.`;
+}
+
+/**
+ * The listed threads with their marks: a line dropped for asking (`asked`), else a card stored asking
+ * him outside needs (`cardAsks`: an older build wrote it, and only a line or a thread_update can fix
+ * it, so the question names it). Pure.
+ */
+export function markAsks<T extends { id: string; state: string; reply?: string }>(listed: readonly T[], dropped: ReadonlySet<string>): Array<T & { asked?: boolean; cardAsks?: boolean }> {
+  return listed.map((t) => (dropped.has(t.id) ? { ...t, asked: true } : t.state !== 'needs' && asksHimNow(t.reply) ? { ...t, cardAsks: true } : t));
 }
 
 /** Tests only. */

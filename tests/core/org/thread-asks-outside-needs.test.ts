@@ -15,7 +15,7 @@ import { ASKS_OUTSIDE_NEEDS, asksHimNow, asksHimToDecide, summaryPointsElsewhere
 import { listsChoices } from '../../../src/core/org/thread-options.js'
 import { emptyThreads, fileMessage, setAnswers, updateThread, ThreadError, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import { listForQuestion, planThreadWrites, readThreadLines, threadQuestionBlock } from '../../../src/core/sessions/status-threads.js'
-import { ASKED_MARK, linesThatAsked, noteLineAsks, resetLineAsks } from '../../../src/core/sessions/status-thread-asked.js'
+import { ASKED_MARK, CARD_ASKS_MARK, linesThatAsked, markAsks, noteLineAsks, resetLineAsks } from '../../../src/core/sessions/status-thread-asked.js'
 import { setThreadsKept } from '../../../src/core/org/threads-kept.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 24, 9, min)).toISOString()
@@ -123,5 +123,22 @@ describe('every door that writes a node\'s summary', () => {
     expect(ok.writes.map((w) => w.id)).toEqual([t.id])
     noteLineAsks('lead-1', ok.asked, ok.writes.map((w) => w.id))
     expect(linesThatAsked('lead-1').size).toBe(0)
+  })
+
+  it('a card an older build stored asking him outside needs is named in the question, so its line fixes it', () => {
+    setThreadsKept(true)
+    const f = answered()
+    // Written before the guard: the stored summary asks him, its state is answered.
+    const stored = { ...f.threads[0], reply: AGAIN }
+    const { listed } = listForQuestion({ ...f, threads: [stored] }, [stored])
+    const [marked] = markAsks(listed, new Set())
+    expect(marked).toMatchObject({ cardAsks: true })
+    const q = threadQuestionBlock([marked], undefined, { org: true })
+    expect(q.block).toContain(CARD_ASKS_MARK)
+    expect(q.block).toContain('a thread_update into needs')
+    // A dropped line is named as that, not twice; a card that asks nothing is not named.
+    expect(markAsks(listed, new Set([stored.id]))[0]).toMatchObject({ asked: true })
+    expect(markAsks(listed, new Set([stored.id]))[0].cardAsks).toBeUndefined()
+    expect(markAsks(listForQuestion(f, f.threads).listed, new Set())[0].cardAsks).toBeUndefined()
   })
 })
