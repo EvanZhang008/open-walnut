@@ -303,14 +303,49 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
     m.stop()
   })
 
-  it('a probe that says the host is this computer does not stop it', async () => {
-    const h = await servingHost()
+  it('a row that reaches this computer, itself the leading one service, is still this computer: nothing sent', async () => {
+    // A leader that runs as its own one service says walnut-serve with its own home too (its in-process
+    // daemon's hello), so the probe must still rule the row out, or the follower spec it got restarted
+    // the leading service at every try (review of 93b40e398b).
+    const h = host()
+    h.serves = { serves: 'walnut-serve', serviceHome: HOME }
     h.reachesThisComputer = async () => true
+    settings = onByDefault()
     const m = createHostServerManager(deps())
     await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'this-computer' } })
+    expect(h.calls.filter((c) => c === 'send server.configure' || c === 'launch')).toEqual([])
+    expect(h.uploads).toEqual([])
+    expect(fileAsks).toEqual([])
+  })
+
+  it('a hello without the server features reads as not settled, never as no follower', async () => {
+    const h = await servingHost()
+    h.caps.delete('stream-relay-v1')
+    const m = createHostServerManager(deps())
+    await m.connected(h)
+    expect(m.view('devbox').phase).toBe('checking')
+    expect(m.followerFact('devbox')).toEqual({ kind: 'unknown' })
     expect(removed(h)).toBe(0)
+  })
+
+  it('a late report the poll reads settles Walnut Health and ends the wait to try again', async () => {
+    const h = await servingHost()
+    h.reports = false
+    const settled: string[] = []
+    const failed: string[] = []
+    const m = createHostServerManager(deps({ firstReportMs: 10, pollMs: 20, tryLaterMs: { failed: [150] }, health: { failed: (k) => { failed.push(k) }, settled: (k) => { settled.push(k) } } }))
+    await m.connected(h)
+    expect(failed).toEqual(['devbox'])
+    expect(m.view('devbox').retryAt).toEqual(expect.any(Number))
+    const configures = h.calls.filter((c) => c === 'send server.configure').length
+    h.reports = true
+    await vi.waitFor(() => expect(settled).toEqual(['devbox']))
     expect(m.view('devbox').phase).toBe('running')
-    expect(m.followerFact('devbox')).toEqual({ kind: 'replica' })
+    // The ladder's timer is gone: no setup runs again by itself.
+    await new Promise((r) => setTimeout(r, 300))
+    expect(h.calls.filter((c) => c === 'send server.configure').length).toBe(configures)
+    m.stop()
   })
 
   it('no file for the host (with no program kept as working) is no "no follower there"', async () => {
@@ -363,47 +398,85 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
 
   it('every way manager.ts takes a server down or rules a host out is gated for a one-service host', () => {
     // A new call site fails here until it is classified: one a failure can reach must leave a host whose
-    // one service is this Walnut's follower as it is, or that host is switched back to two programs.
+    // one service is this Walnut's follower as it is, or that host is switched back to two programs
+    // (a removed spec restarts the service as the plain daemon; a "none" follower asks for the daemon mode).
     const src = fs.readFileSync(path.join(__dirname, '../../src/core/host-server/manager.ts'), 'utf8')
     // The manager's own functions and the methods of the object it returns, by where each starts.
     const defs = [...src.matchAll(/\n  (?:async )?function (\w+)\(|\n    (?:async )?(\w+)\([^)\n]*\)[^\n]*\{\n/g)].map((x) => ({ at: x.index!, name: x[1] ?? x[2]! }))
     const defOf = (at: number) => defs.filter((d) => d.at < at).at(-1)!
     const fnStart = (at: number) => defOf(at).at
     const fnName = (at: number) => defOf(at).name
-    // The follower spec is removed in one place only, behind the gate.
-    const nulls = [...src.matchAll(/spec: null/g)].map((x) => x.index!)
-    expect(nulls.map(fnName)).toEqual(['takeDown'])
-    const body = src.slice(fnStart(nulls[0]!), nulls[0])
-    expect(body).toMatch(/if \(why !== 'off' && oneServiceHere\(host\)\)[^]*return false/)
-    // Every server.configure goes through configure, takeDown or the tunnel retry (which resends the spec it has).
-    const configures = [...src.matchAll(/send\('server\.configure'/g)].map((x) => fnName(x.index!))
-    expect(configures.sort()).toEqual(['configure', 'retryExpose', 'takeDown'])
-    // Every takeDown names why; only 'off' (the settings) may stop a host's one service.
-    const downs = [...src.matchAll(/takeDown\(hostKey, [^,]+(?:, '([a-z-]+)')?/g)].filter((x) => !src.slice(x.index! - 15, x.index!).includes('function'))
-    expect(downs.map((x) => x[1]).sort()).toEqual(['failed', 'off', 'this-computer'])
-    // Every gate on the host (a "none" for the service's offer) is the name's, or skipped for a one-service host.
-    const gates = [...src.matchAll(/notEligible\(hostKey, ([^,]+),/g)].map((x) => ({ reason: x[1]!, at: x.index! }))
-    const classified: Record<string, RegExp> = {
-      // A name's gate: its follower fact reads the keeper's (the test above checks keeperOf).
-      "'another-name'": /keeper !== hostKey/,
-      'judged.gate.reason': /firstOnByDefault\(host/,
-      "'this-computer'": /!oneServiceHere\(host\)/,
-      "'no-build'": /!service\b/,
-    }
-    expect(gates.map((g) => g.reason).sort()).toEqual(Object.keys(classified).sort())
-    // The lines that open the blocks a call sits in (braces balance in this source, template literals too).
-    const enclosing = (at: number): string => {
+    // The lines that open the blocks a call sits in, and what came before it in its own block
+    // (braces balance in this source, template literals too).
+    const scope = (at: number): { headers: string; before: string } => {
       const open: number[] = []
       for (let i = fnStart(at); i < at; i++) {
         if (src[i] === '{') open.push(i)
         else if (src[i] === '}') open.pop()
       }
-      return open.map((i) => src.slice(src.lastIndexOf('\n', i) + 1, i)).join('\n')
+      // The innermost block that ends its line (an inline object literal is no block).
+      const block = open.filter((i) => src[i + 1] === '\n').at(-1)!
+      return { headers: open.map((i) => src.slice(src.lastIndexOf('\n', i) + 1, i)).join('\n'), before: src.slice(block, at) }
     }
-    for (const g of gates) expect(enclosing(g.at), g.reason).toMatch(classified[g.reason]!)
-    expect(src.slice(src.indexOf('async function firstOnByDefault'), src.indexOf('async function firstOnByDefault') + 600)).toContain('oneServiceHere(host)')
-    // The failed start's takeDown is skipped for it, and a build is installed only after the held service is looked at.
+    const notDef = (x: RegExpMatchArray) => !/function \w*$/.test(src.slice(x.index! - 30, x.index!))
+
+    // Every server.configure names its spec: configureSelf reads a missing spec as a removal too.
+    const sends = [...src.matchAll(/send\('server\.configure', ([^)]*?), \d/g)]
+    expect(sends.map((x) => `${fnName(x.index!)}: ${x[1]}`).sort()).toEqual([
+      'configure: { home: deps.home, spec }',
+      'retryExpose: { home: deps.home, spec: next }',
+      'takeDown: { home: deps.home, spec: null }',
+    ])
+    // The one removal sits behind the gate.
+    const removal = sends.find((x) => x[1]!.includes('spec: null'))!.index!
+    expect(src.slice(fnStart(removal), removal)).toMatch(/if \(why !== 'off' && oneServiceHere\(host\)\)[^]*return false/)
+
+    // Every takeDown names why; only 'off' (the settings) may stop a host's one service.
+    const downs = [...src.matchAll(/takeDown\(([^,]+), ([^,]+)(?:, '([a-z-]+)')?/g)].filter(notDef)
+    const downWhy: Record<string, RegExp> = {
+      off: /if \(!enabled\)/,
+      // A remote follower service never probes true; the leader's own row is skipped, then ruled out.
+      'this-computer': /!oneServiceHere\(host\) && !\(await $/,
+      failed: /if \(byDefault\) await $/,
+    }
+    expect(downs.map((x) => x[3]).sort()).toEqual(Object.keys(downWhy).sort())
+    for (const d of downs) {
+      const { headers, before } = scope(d.index!)
+      expect(`${headers}\n${before}`, d[3]).toMatch(downWhy[d[3]!]!)
+    }
     expect(src).toMatch(/const byDefault = [^\n]*&& !service\n/)
+
+    // Every gate on the host is classified.
+    const gates = [...src.matchAll(/notEligible\(([^,]+), ([^,]+),/g)].filter(notDef).map((x) => ({ reason: x[2]!, at: x.index! }))
+    const gateWhy: Record<string, RegExp> = {
+      // A name's gate: its follower fact reads the keeper's (the alias tests check keeperOf).
+      "'another-name'": /keeper !== hostKey/,
+      'judged.gate.reason': /firstOnByDefault\(host/,
+      // Only this computer probes true, even when it leads as its own one service.
+      "'this-computer'": /self === true/,
+      "'no-build'": /!service\b/,
+    }
+    expect(gates.map((g) => g.reason).sort()).toEqual(Object.keys(gateWhy).sort())
+    for (const g of gates) expect(scope(g.at).headers, g.reason).toMatch(gateWhy[g.reason]!)
+    expect(src.slice(src.indexOf('async function firstOnByDefault'), src.indexOf('async function firstOnByDefault') + 600)).toContain('oneServiceHere(host)')
+
+    // Every phase the follower fact reads as "none" (ownFollowerFact), written directly, is classified.
+    const nones = [...src.matchAll(/phase: '(off|not-eligible|unsupported)'/g)].map((x) => ({ phase: x[1]!, fn: fnName(x.index!), at: x.index! }))
+      .filter((x) => x.fn !== 'ownFollowerFact')
+    expect(nones.map((x) => `${x.fn}: ${x.phase}`).sort()).toEqual([
+      'notEligible: not-eligible', 'notEligible: not-eligible',
+      'reconcileOnce: off', 'reconcileOnce: unsupported',
+      // A fresh view: the fact is unknown until a reconcile read settings (lastSettings).
+      'view: off',
+    ])
+    for (const x of nones.filter((n) => n.fn === 'reconcileOnce')) {
+      const { headers, before } = scope(x.at)
+      // 'off' only by the settings; 'unsupported' after a one-service host has left the block.
+      if (x.phase === 'off') expect(headers).toMatch(/if \(!enabled\)/)
+      else expect(before).toMatch(/if \(oneServiceHere\(host\)\) \{[^]*return\n\s*\}/)
+    }
+
+    // A build is installed only after the held service is looked at.
     const installs = [...src.matchAll(/await ensureInstalled\(/g)].map((x) => x.index!)
     expect(installs).toHaveLength(1)
     expect(src.lastIndexOf('serviceHolds(host)', installs[0])).toBeGreaterThan(fnStart(installs[0]!))

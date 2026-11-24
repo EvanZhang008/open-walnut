@@ -643,6 +643,19 @@ describe('a leading service runs no follower of the Walnut it leads', () => {
     expect(() => sup.configure('/h', spec({ port: 4001 }))).toThrow(/this machine leads Walnut w1/)
     expect(spawned).toHaveLength(1)
   })
+
+  it('as its own one service (self is the leader\'s home), refuses that spec and never restarts for it', () => {
+    // Its in-process daemon names the leader's home as self: a configure of this Walnut's follower
+    // lands in the self path, which kept the spec and restarted the service at every retry.
+    const changes: string[] = []
+    const sup = createHostServerSupervisor({ ...deps(), leads: 'w1', self: { home: '/h', pid: 4242, changed: (why: string) => { changes.push(why) } } })
+    sup.boot()
+    expect(() => sup.configure('/h', spec())).toThrow(/this machine leads Walnut w1/)
+    expect(fs.existsSync(path.join(dir, `server-${Buffer.from('/h').toString('hex').slice(0, 16)}.json`))).toBe(false)
+    sup.configure('/h', null)
+    expect(changes).toEqual([])
+    expect(spawned).toEqual([])
+  })
 })
 
 describe('the pid file has one reader (heldServerAt)', () => {

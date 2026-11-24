@@ -588,18 +588,24 @@ export function createHostServerManager(deps: ManagerDeps) {
       return
     }
     if (!host.hasCapability('host-server-v1') || !host.hasCapability('follower-v1') || !host.hasCapability('stream-relay-v1')) {
+      // A host's one service of this Walnut runs the follower whatever its hello names: never "none" for it.
+      if (oneServiceHere(host)) {
+        set(hostKey, { enabled: true, phase: 'checking', message: 'This host\'s Walnut service did not name the features its server needs; Walnut looks again on its next connect.' })
+        return
+      }
       set(hostKey, { enabled: true, phase: 'unsupported', message: 'This host\'s Walnut daemon is older than this feature; it updates on its next connect.' })
       return
     }
     // A host row that is really this computer (its link reaches this computer's own daemon) runs
     // no second Walnut by default: this server is the one there. The person's switch still can.
     // Not known yet (this computer's own daemon is not linked yet, as at a start): nothing is
-    // installed on an unknown; it is looked at again soon. A host whose one service is this Walnut's
-    // follower is not this computer (a leader runs no follower of itself): no probe answer stops it.
-    if (settings!.byDefault && !settings!.carriesTunnel && !oneServiceHere(host)) {
+    // installed on an unknown; it is looked at again soon. This computer running as its own leading
+    // one service says walnut-serve with this home in its hello too: the probe still applies. A
+    // remote follower service never probes true; for a one-service host only the takedown is skipped.
+    if (settings!.byDefault && !settings!.carriesTunnel) {
       const self = host.reachesThisComputer ? await host.reachesThisComputer().catch(() => null) : false
       if (self === true) {
-        if (!(await takeDown(hostKey, host, 'this-computer'))) return
+        if (!oneServiceHere(host) && !(await takeDown(hostKey, host, 'this-computer'))) return
         notEligible(hostKey, 'this-computer', 'No Walnut server runs on this host by default: it is this computer, which runs Walnut already.')
         return
       }
@@ -866,10 +872,17 @@ export function createHostServerManager(deps: ManagerDeps) {
   async function poll(hostKey: string): Promise<void> {
     const host = hosts.get(hostKey)
     if (!host?.connected || running.has(hostKey)) return
+    const was = view(hostKey).phase
     try {
       await refreshStatus(host)
     } catch (err) {
       set(hostKey, { phase: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+    // A report that came late (a slow link after a failed setup): it runs, so the setup waits no more
+    // and Walnut Health hears it settled, as a reconcile that ends running says.
+    if (was !== 'running' && view(hostKey).phase === 'running') {
+      tryLater.clear(hostKey)
+      deps.health?.settled(hostKey)
     }
     // A held build goes once its window passed, or once the program there is too old for the copies.
     // Once per hold: an install that then fails waits for the next connect, deploy or Retry.

@@ -564,11 +564,15 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       entries.delete(home)
       try { fs.unlinkSync(specFile(home)) } catch { /* none */ }
       deps.log('info', 'host server: removed (the service\'s own)', { home })
-      deps.self!.changed('the leader removed the follower')
+      // A leading service runs no follower from it: nothing to restart.
+      if (!deps.leads) deps.self!.changed('the leader removed the follower')
       return statusOf(undefined)
     }
     const asked = validate(raw)
     if (asked.home !== named) throw new Error('server.configure: the spec belongs to another Walnut')
+    // As for any other home (configure): a leading service never takes a follower spec of the Walnut
+    // it leads. Kept, it restarted the service, whose start skips that spec (boot), at every retry.
+    if (deps.leads && asked.walnutId === deps.leads) throw new Error(`server.configure: this machine leads Walnut ${deps.leads}; no follower of it runs here`)
     // Kept under the service's home, the one its mode file and its next start match.
     const spec: HostServerSpec = { ...asked, home }
     checkDataDirs(spec, home)
