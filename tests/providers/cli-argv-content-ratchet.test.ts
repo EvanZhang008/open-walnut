@@ -17,6 +17,7 @@ import os from 'node:os'
 import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
 import { compactHookArgs, HOOK_FILE_FLAG } from '../../src/providers/hook-files.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -75,7 +76,8 @@ describe('every content flag in an argv reaches the CLI as a file', () => {
   })
 
   it('every spawn point that runs a claude rewrites its argv first, in the daemon and the in-process fallback', () => {
-    const bun = read('src/providers/daemon-standalone.ts')
+    // The whole runtime: the one-shot core is created in daemon-host-transfer.ts.
+    const bun = daemonRuntimeText()
     const client = read('src/providers/oneshot-client.ts')
     // The session start: what the shell execs.
     expect(bun).toMatch(/const escapedArgs = cliArgvFiles\.toFiles\(launch\.args\)/)

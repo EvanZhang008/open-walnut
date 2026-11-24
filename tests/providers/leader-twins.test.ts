@@ -9,11 +9,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { createFollowerReads } from '../../src/providers/follower-reads-core.js'
-import { twinText } from '../helpers/standalone-twin-text.js'
+import { readTwinText, twinText } from '../helpers/standalone-twin-text.js'
 
 const root = path.join(import.meta.dirname, '..', '..')
 const read = (f: string) => twinText(f, fs.readFileSync(path.join(root, f), 'utf-8'))
-const src = read('src/providers/daemon-standalone.ts')
+// The whole runtime: daemon-standalone.ts and its area modules (the triggers are daemon-trigger-*.ts).
+const src = readTwinText('src/providers/daemon-standalone.ts')
 
 /** The allowlist's entries, comments stripped (they name commands that are NOT allowed). */
 function allowlist(src: string): string {

@@ -53,7 +53,7 @@ describe('walnut-trigger', () => {
     expect(standaloneSrc).toMatch(drained('cmdTriggersRun'))
     expect(standaloneSrc).toMatch(drained('cmdTriggersAck'))
     // triggers.test writes nothing, so it never rides the drain.
-    expect(standaloneSrc).toMatch(/case 'triggers\.test': return cmdTriggersTest\(ws, id/)
+    expect(standaloneSrc).toMatch(/case 'triggers\.test': return triggerCommands\.cmdTriggersTest\(ws, id/)
     expect(standaloneSrc).toMatch(/triggers\.configure: invalid config: /)
     // Persistence layout: the set plus one state file per trigger.
     expect(standaloneSrc).toMatch(/TRIGGERS_FILE = path\.join\(/)
@@ -103,7 +103,9 @@ describe('walnut-trigger', () => {
 
   it('daemon: run one 5s clock, skip an overlapping run, and stop the clock in cleanup', () => {
     expect(standaloneSrc).toMatch(/TRIGGER_TICK_MS = 5[_]?000/)
-    expect(standaloneSrc).toMatch(/triggerTickTimer = setInterval\(tickTriggers, TRIGGER_TICK_MS\)/)
+    // The clock is the trigger runs' (daemon-trigger-runs.ts): startTriggers sets it, Main calls it.
+    expect(standaloneSrc).toMatch(/function startTriggers\(\)[^{]*\{\n\s*triggerTickTimer = setInterval\(tickTriggers, TRIGGER_TICK_MS\)/)
+    expect(standaloneSrc).toMatch(/triggerRuns\.startTriggers\(\)/)
     const tickStart = standaloneSrc.indexOf('function tickTriggers(')
     expect(tickStart).toBeGreaterThan(-1)
     const tickBody = standaloneSrc.slice(tickStart, standaloneSrc.indexOf('\n}', tickStart))
@@ -111,7 +113,11 @@ describe('walnut-trigger', () => {
     expect(tickBody).toMatch(/entry\.running \|\| entry\.nextRunAtMs > now/)
     const cleanupStart = standaloneSrc.indexOf('function cleanup(')
     const cleanupBody = standaloneSrc.slice(cleanupStart, standaloneSrc.indexOf('\n}', cleanupStart))
-    expect(cleanupBody).toMatch(/clearInterval\(triggerTickTimer\)/)
+    // cleanup stops it through stopTriggers, which clears the timer.
+    expect(cleanupBody).toMatch(/triggerRuns\.stopTriggers\(\)/)
+    const stopStart = standaloneSrc.indexOf('function stopTriggers(')
+    expect(stopStart).toBeGreaterThan(-1)
+    expect(standaloneSrc.slice(stopStart, standaloneSrc.indexOf('\n}', stopStart))).toMatch(/clearInterval\(triggerTickTimer\)/)
     // A configure landing mid-run must not have its state file resurrected by
     // the run it raced, nor a fire sent for an id the server just dropped.
     const runStart = standaloneSrc.indexOf('async function runTrigger(')

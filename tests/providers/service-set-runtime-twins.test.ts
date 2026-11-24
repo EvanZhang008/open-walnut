@@ -12,13 +12,15 @@ import { describe, expect, it } from 'vitest'
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import ts from 'typescript'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const HOME = '/home/walnut'
 const ID = '0123456789abcdef'
 const R = `${HOME}/.open-walnut-host/walnuts/${ID}`
 
-const DAEMON = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+// The whole runtime: daemon-standalone.ts and its area modules (the vitals and net dirs are daemon-host-*.ts).
+const DAEMON = daemonRuntimeText()
 
 function between(src: string, start: RegExp, end: RegExp, name: string): string {
   const at = src.search(start)

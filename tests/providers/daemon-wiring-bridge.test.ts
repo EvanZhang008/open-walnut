@@ -172,7 +172,7 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
     for (const c of ['workspace.configure', 'workspace.detect', 'workspace.create', 'workspace.job', 'workspace.status', 'workspace.repos', 'workspace.remove']) {
       expect(standaloneSrc).toContain(`case '${c}':`)
     }
-    expect(standaloneSrc).toMatch(/return cmdWorkspace\(ws, id/)
+    expect(standaloneSrc).toMatch(/return hostServices\.cmdWorkspace\(ws, id/)
     expect(standaloneSrc).toMatch(/function cmdWorkspace\(/)
     expect(standaloneSrc).toMatch(/workspaceCore\.handle\(/)
     // A refusal carries the core's code to the server (providers_stale drives the re-push).

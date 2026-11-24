@@ -736,7 +736,8 @@ is parked with why. Reads that only bring an answer back stay.
 **The runtime is split by area:** `createDaemonRuntime` (`daemon-standalone.ts`) keeps the state it
 shares, the dispatcher and its name tables, and creates one area module per area
 (`daemon-git.ts`, `daemon-skills.ts`, `daemon-fs-read.ts`, `daemon-fs-write.ts`, `daemon-changes.ts`,
-`daemon-transcripts.ts`, `daemon-process-groups.ts`): `create<Area>(deps)`, where deps carry only the
+`daemon-transcripts.ts`, `daemon-process-groups.ts`, `daemon-hooks.ts`, the four `daemon-trigger-*.ts`
+(store, runs and clock, set, commands), `daemon-host-transfer.ts`, `daemon-host-services.ts`): `create<Area>(deps)`, where deps carry only the
 runtime names the area uses, under the same names (`daemon-module-deps.ts`), and the dispatcher calls
 `area.cmdX(ws, id, cmd)`. A module reads no env and starts children only through the
 `childUse` it is handed. Each new module goes in both version lists (`scripts/build-daemon.sh`,

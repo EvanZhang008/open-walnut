@@ -10,6 +10,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createFollowerTriggerDelivery, type TriggerFire, type TriggerDeliveryResult } from '../../src/providers/follower-trigger-delivery-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -219,7 +220,8 @@ describe('a host server that kept failing sits out (no three timeouts before eve
 })
 
 describe('follower trigger delivery daemon wiring', () => {
-  const src = read('src/providers/daemon-standalone.ts')
+  // The whole runtime: daemon-standalone.ts and its area modules (the trigger runs are daemon-trigger-runs.ts).
+  const src = daemonRuntimeText()
   const CORE = 'src/providers/follower-trigger-delivery-core.ts'
   const RULE = 'src/core/routines/host-trigger-target.ts'
 

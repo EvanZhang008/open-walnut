@@ -59,6 +59,13 @@ SOURCES=(
   src/providers/daemon-fs-write.ts
   src/providers/daemon-changes.ts
   src/providers/daemon-transcripts.ts
+  src/providers/daemon-hooks.ts
+  src/providers/daemon-trigger-store.ts
+  src/providers/daemon-trigger-runs.ts
+  src/providers/daemon-trigger-set.ts
+  src/providers/daemon-trigger-commands.ts
+  src/providers/daemon-host-transfer.ts
+  src/providers/daemon-host-services.ts
   src/providers/daemon-process-groups.ts
   src/providers/daemon-core.ts
   src/providers/daemon-fold.ts

@@ -8,10 +8,12 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), 'utf-8')
-const standaloneSrc = read('src/providers/daemon-standalone.ts')
+// The whole runtime: daemon-standalone.ts and its area modules (the commands are daemon-trigger-commands.ts).
+const standaloneSrc = daemonRuntimeText()
 /** The body of a named function, up to the next top-level function. */
 function bodyOf(src: string, name: string): string {
   const start = src.indexOf(`function ${name}(`)
@@ -22,7 +24,7 @@ function bodyOf(src: string, name: string): string {
 
 describe('trigger-state-snapshot-v1 in the daemon', () => {
   it('the daemon dispatches the command through the command drain', () => {
-    expect(standaloneSrc).toMatch(/case 'triggers\.state\.snapshot': return daemonCommands\.run\(\(\) => cmdTriggersStateSnapshot\(ws, id as number, cmd\)\)/)
+    expect(standaloneSrc).toMatch(/case 'triggers\.state\.snapshot': return daemonCommands\.run\(\(\) => triggerCommands\.cmdTriggersStateSnapshot\(ws, id as number, cmd\)\)/)
   })
 
   it('tracks running checks across a disarm, added before the spawn and removed in finally', () => {
@@ -71,7 +73,7 @@ describe('trigger-state-snapshot-v1 in the daemon', () => {
 
 describe('trigger-state-seed-v1 in the daemon', () => {
   it('dispatches the command through the drain, refuses a foreign home, and takes every rule from the core behind the configure gate', () => {
-    expect(standaloneSrc).toMatch(/case 'triggers\.state\.seed': return daemonCommands\.run\(\(\) => cmdTriggersStateSeed\(ws, id as number, cmd\)\)/)
+    expect(standaloneSrc).toMatch(/case 'triggers\.state\.seed': return daemonCommands\.run\(\(\) => triggerCommands\.cmdTriggersStateSeed\(ws, id as number, cmd\)\)/)
     const cmd = bodyOf(standaloneSrc, 'cmdTriggersStateSeed')
     expect(cmd).toMatch(/refuseForeignHome\(ws, id, cmd, 'triggers\.state\.seed'\)/)
     expect(cmd).toContain("triggersConfigureGate.run('triggers.configure'")

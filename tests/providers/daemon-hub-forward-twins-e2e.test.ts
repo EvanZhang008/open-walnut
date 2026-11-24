@@ -53,6 +53,7 @@ import { hubPortStatus, resetHubPortsForTest } from '../../src/core/hosts/hub-po
 import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 let root = ''
 let daemonDir = ''
@@ -476,9 +477,10 @@ async function leaderlessProbe(port: number): Promise<WebSocket> {
 
 describe('hub-forward-v1 wiring in the session daemon', () => {
   it('listens on 127.0.0.1 through the core, reads its own file beside the net key, and answers hub.status to its primary only', () => {
-    const src = fs.readFileSync(STANDALONE, 'utf8')
+    // The whole runtime: the hub forwards are daemon-host-services.ts.
+    const src = daemonRuntimeText()
     expect(src).toMatch(/HUB_FORWARDS_FILE = path\.join\(NET_STATE_DIR, 'hub-forwards\.json'\)/)
-    expect(src).toMatch(/case 'hub\.status': return cmdHubStatus\(ws, id/)
+    expect(src).toMatch(/case 'hub\.status': return hostServices\.cmdHubStatus\(ws, id/)
     const at = src.indexOf('function cmdHubStatus')
     expect(src.slice(at, at + 300)).toMatch(/if \(!isServerClient\(ws\)\) return sendError/)
     // The host a listener binds comes from the core (always 127.0.0.1), never the daemon.

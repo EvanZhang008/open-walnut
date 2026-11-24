@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { daemonAreaModules } from '../../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -81,12 +82,17 @@ describe('every task-only host route is one a check reaches', () => {
 })
 
 describe('every check the daemon starts carries its run\'s token', () => {
-  it('src/providers/daemon-standalone.ts', () => {
-    const file = 'src/providers/daemon-standalone.ts'
-    const lines = read(file).split('\n')
-    const starts = lines.flatMap((l, i) => (/runCheckProcess\(/.test(l) && !/function runCheckProcess/.test(l) ? [i] : []))
-    expect(starts.length, 'the daemon runs checks').toBeGreaterThanOrEqual(2)
-    const bare = starts.filter((i) => !lines.slice(Math.max(0, i - 6), i + 1).some((l) => /checkCallers\.mint\(/.test(l)))
-    expect(bare.map((i) => `${file}:${i + 1}`), 'a check started here has no token (trigger-check-core.ts checkCallers)').toEqual([])
+  it('src/providers/daemon-standalone.ts and its area modules', () => {
+    // The whole runtime: its checks start in the trigger modules (daemon-trigger-runs.ts, daemon-trigger-commands.ts).
+    let total = 0
+    const bare: string[] = []
+    for (const file of ['src/providers/daemon-standalone.ts', ...daemonAreaModules()]) {
+      const lines = read(file).split('\n')
+      const starts = lines.flatMap((l, i) => (/runCheckProcess\(/.test(l) && !/function runCheckProcess/.test(l) ? [i] : []))
+      total += starts.length
+      bare.push(...starts.filter((i) => !lines.slice(Math.max(0, i - 6), i + 1).some((l) => /checkCallers\.mint\(/.test(l))).map((i) => `${file}:${i + 1}`))
+    }
+    expect(total, 'the daemon runs checks').toBeGreaterThanOrEqual(2)
+    expect(bare, 'a check started here has no token (trigger-check-core.ts checkCallers)').toEqual([])
   })
 })

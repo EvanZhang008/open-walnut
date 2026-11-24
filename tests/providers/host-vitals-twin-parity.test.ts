@@ -10,11 +10,12 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { createHostVitals, type HostVitalsDeps } from '../../src/providers/host-vitals-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { twinText } from '../helpers/standalone-twin-text.js'
+import { readTwinText, twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => twinText(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8'))
-const standalone = read('src/providers/daemon-standalone.ts')
+// The whole runtime: the vitals ledger is created in daemon-host-transfer.ts.
+const standalone = readTwinText('src/providers/daemon-standalone.ts')
 const CORE = 'src/providers/host-vitals-core.ts'
 
 function setLiteral(src: string, name: string): string {

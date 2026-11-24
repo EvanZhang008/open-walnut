@@ -74,7 +74,8 @@ describe('an own-work watch is work going on only while that work is in flight',
   })
 
   it('the daemon sends the idle mark on a quiet check, from the shared rule', () => {
-    const text = files.find((f) => f.rel === 'src/providers/daemon-standalone.ts')!.text
+    // A check's run is the trigger runs' (daemon-trigger-runs.ts, an area module of the daemon runtime).
+    const text = files.find((f) => f.rel === 'src/providers/daemon-trigger-runs.ts')!.text
     expect(text).toMatch(/checkIdleOf\(output, decision, entry\.state\)/)
   })
 })

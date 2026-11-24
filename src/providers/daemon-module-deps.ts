@@ -17,6 +17,9 @@ export interface DaemonReplies<W> {
   sendError: (ws: W, id: number | null, error: string, data?: Record<string, unknown>, level?: 'error' | 'warn' | 'info') => void
 }
 
+/** The runtime's push of one event to one socket (sendEvent, "Protocol helpers"). */
+export type DaemonSendEvent<W> = (ws: W, ev: string, data: Record<string, unknown>) => void
+
 /** The runtime's log (logMsg): one JSON line in the daemon's log; debug lines only on opt-in. */
 export type DaemonLog = (level: string, msg: string, data?: Record<string, unknown>) => void
 

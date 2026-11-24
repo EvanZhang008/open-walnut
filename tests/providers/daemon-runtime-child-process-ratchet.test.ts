@@ -160,10 +160,12 @@ const ALLOWED: Record<string, Entry> = {
   },
   [`${P}trigger-check-core.ts`]: {
     reason: 'a trigger\'s check script (sh -c)',
-    injection: 'runCheckProcess(spec, stdin, { ...checkRunFence() }) with checkRunFence() carrying childProcess: childUse',
+    injection: 'createDaemonTriggerRuns({ childUse }); its runs and the trigger commands call runCheckProcess(spec, stdin, { ...checkRunFence() }) with checkRunFence() carrying childProcess: childUse',
     checks: [
-      { file: S, call: 'runCheckProcess', has: /\.\.\.checkRunFence\(\)/ },
-      { file: S, re: /function checkRunFence\(\)[^\n]*\n\s*return \{[^\n]*childProcess: childUse/ },
+      { file: S, call: 'createDaemonTriggerRuns', has: /\bchildUse\b/ },
+      { file: `${P}daemon-trigger-runs.ts`, call: 'runCheckProcess', has: /\.\.\.checkRunFence\(\)/ },
+      { file: `${P}daemon-trigger-commands.ts`, call: 'runCheckProcess', has: /\.\.\.checkRunFence\(\)/ },
+      { file: `${P}daemon-trigger-runs.ts`, re: /function checkRunFence\(\)[^\n]*\n\s*return \{[^\n]*childProcess: childUse/ },
     ],
   },
   [`${P}session-changes-core.ts`]: {
@@ -186,8 +188,11 @@ const ALLOWED: Record<string, Entry> = {
   },
   [`${P}port-scan-core.ts`]: {
     reason: 'lsof, ps and ss for the servers a session started',
-    injection: 'createDaemonPorts({ io: defaultPortScanIo(childUse) })',
-    checks: [{ file: S, call: 'createDaemonPorts', has: /io: defaultPortScanIo\(childUse\)/ }],
+    injection: 'createDaemonHostServices({ childUse }) -> createDaemonPorts({ io: defaultPortScanIo(childUse) })',
+    checks: [
+      { file: S, call: 'createDaemonHostServices', has: /\bchildUse\b/ },
+      { file: `${P}daemon-host-services.ts`, call: 'createDaemonPorts', has: /io: defaultPortScanIo\(childUse\)/ },
+    ],
   },
   [`${P}task-dir-core.ts`]: {
     reason: 'git for the task dir sweeps, lsof for the paths in use',

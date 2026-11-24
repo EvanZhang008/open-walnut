@@ -13,10 +13,13 @@ import { describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
-const standalone = read('src/providers/daemon-standalone.ts')
+// The whole runtime: the transfer core is created in daemon-host-transfer.ts.
+const standalone = daemonRuntimeText()
+const runtimeBody = read('src/providers/daemon-standalone.ts')
 const core = read('src/providers/transfer-core.ts')
 const client = read('src/core/transfer/daemon-transfer-client.ts')
 
@@ -42,9 +45,9 @@ describe('transfer-private-v1 daemon wiring', () => {
 
   it('the daemon gives the factory getuid, the raw owner stamp and this incarnation\'s id', () => {
     expect(standalone).toMatch(/createTransferCore\(\{[\s\S]{0,400}getuid: \(\) => process\.getuid!\(\),\s*ownerStamp: readDaemonOwnerStamp,\s*instanceId: DAEMON_INSTANCE_ID,\s*\}\)/)
-    // The id is defined once per process, before the factory runs.
-    expect(standalone.indexOf('const DAEMON_INSTANCE_ID = ')).toBeGreaterThan(0)
-    expect(standalone.indexOf('const DAEMON_INSTANCE_ID = ')).toBeLessThan(standalone.indexOf('ownerStamp: readDaemonOwnerStamp,'))
+    // The id is defined once per process, before the factory runs (the runtime hands it to daemon-host-transfer.ts).
+    expect(runtimeBody.indexOf('const DAEMON_INSTANCE_ID = ')).toBeGreaterThan(0)
+    expect(runtimeBody.indexOf('const DAEMON_INSTANCE_ID = ')).toBeLessThan(runtimeBody.search(/createDaemonHostTransfer\(\{[^\n]*\bDAEMON_INSTANCE_ID\b/))
   })
 
   it('the daemon reads the stamp from its own daemon dir without blocking', () => {

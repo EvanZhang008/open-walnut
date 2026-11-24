@@ -82,6 +82,12 @@ const CORE_HELPERS = new Set([
 /** The process modules allowed to load task logic (the runtime wires it in; task logic loads its own parts). */
 const TASK_LOGIC_CALLERS = new Set([
   'src/providers/daemon-standalone.ts',
+  // The trigger area of the runtime, moved out of its body as it was: deleted or moved into the
+  // service with the trigger judging, in the last step of phase 4.
+  'src/providers/daemon-trigger-store.ts',
+  'src/providers/daemon-trigger-runs.ts',
+  'src/providers/daemon-trigger-set.ts',
+  'src/providers/daemon-trigger-commands.ts',
 ])
 
 describe('the process manager holds no task logic of its own', () => {

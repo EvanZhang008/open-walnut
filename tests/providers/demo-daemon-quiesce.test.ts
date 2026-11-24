@@ -397,8 +397,8 @@ describe('demo.quiesce stops the daemon\'s own background work', () => {
 })
 
 describe('demo.quiesce background wiring in the daemon', () => {
-  const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')
-  const src = read('src/providers/daemon-standalone.ts')
+  // The whole runtime: daemon-standalone.ts and its area modules (the triggers are daemon-trigger-*.ts).
+  const src = daemonRuntimeText()
 
   /** One top-level function's text, from its declaration to its closing brace at column 0. */
   function fn(src: string, name: string): string {
@@ -497,7 +497,9 @@ describe('demo.quiesce background wiring in the daemon', () => {
   it('the check fence: an abort controller only demo.quiesce and the daemon\'s own cleanup abort, a pid set, the final gate', () => {
     // demo.quiesce, and cleanup(): a check run never outlives its daemon (2026-11-23, repeat-answers.test.ts).
     expect([...src.matchAll(/demoTriggerChecks\.abort\(\)/g)]).toHaveLength(2)
-    expect(fn(src, 'cleanup')).toMatch(/demoTriggerChecks\.abort\(\)/)
+    // cleanup() aborts them through the trigger runs' stop (daemon-trigger-runs.ts).
+    expect(fn(src, 'cleanup')).toMatch(/triggerRuns\.stopTriggers\(\)/)
+    expect(fn(src, 'stopTriggers')).toMatch(/demoTriggerChecks\.abort\(\)/)
     const fence = fn(src, 'checkRunFence')
     expect(fence).toContain('!demoQuiesce.fenced')
     expect(fence).toContain('demoTriggerChecks.signal')
@@ -518,7 +520,8 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts', () => {
     for (const n of names) if (!found.has(n)) throw new Error('Missing ' + n)
     return names.map((n) => found.get(n)!).join('\n')
   }
-  const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  // The whole runtime: the trigger runs are daemon-trigger-runs.ts.
+  const text = daemonRuntimeText()
 
   it('the daemon\'s trigger functions', async () => {
     const core = await import('../../src/providers/trigger-check-core.js')

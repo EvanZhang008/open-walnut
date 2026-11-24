@@ -19,6 +19,7 @@ import { requestLogger } from '../../../src/web/middleware/request-logger.js'
 import { markRepeatAnswerIf, markHostRefusalRepeat } from '../../../src/web/middleware/handled-failure.js'
 import { log } from '../../../src/logging/index.js'
 import { lostRunLines } from '../../../src/providers/host-exec-run-id.js'
+import { daemonRuntimeText } from '../../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -148,11 +149,16 @@ describe('the class: answers about an id with no run', () => {
   })
 
   it('a daemon that stops ends the check runs it started (2026-11-23: orphaned runs got 403 session_only)', () => {
-    const text = read('src/providers/daemon-standalone.ts')
-    const at = text.search(/\nfunction cleanup\(/)
-    expect(at).toBeGreaterThan(0)
-    const body = text.slice(at, text.indexOf('\n}\n', at))
-    expect(body, "cleanup() must abort the check runs' signal").toMatch(/demoTriggerChecks\.abort\(\)/)
+    // The whole runtime: the check runs are the trigger runs' (daemon-trigger-runs.ts).
+    const text = daemonRuntimeText()
+    const bodyOf = (name: string) => {
+      const at = text.search(new RegExp(`\\nfunction ${name}\\(`))
+      expect(at, name).toBeGreaterThan(0)
+      return text.slice(at, text.indexOf('\n}\n', at))
+    }
+    // cleanup() stops the trigger runs, and that stop aborts the check runs' signal.
+    expect(bodyOf('cleanup'), 'cleanup() must stop the trigger runs').toMatch(/triggerRuns\.stopTriggers\(\)/)
+    expect(bodyOf('stopTriggers'), "cleanup() must abort the check runs' signal").toMatch(/demoTriggerChecks\.abort\(\)/)
     // The only signal every check run listens to is that one (checkRunFence): a new one would need its own abort here.
     expect(text.match(/signal: demoTriggerChecks\.signal|fence\.signal = demoTriggerChecks\.signal/g)?.length).toBe(1)
   })

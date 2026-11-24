@@ -23,7 +23,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
-import { twinText } from '../helpers/standalone-twin-text.js'
+import { readTwinText } from '../helpers/standalone-twin-text.js'
 
 let cliPath = ''
 let root = ''
@@ -184,6 +184,10 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     [/path\.join\(GATEWAY_SHIM_DIR, /, 'a file in it'],
     [/fs\.(readdirSync|mkdirSync)\(GATEWAY_SHIM_DIR[,)]/, 'its own upkeep'],
     [/templateShimDir: GATEWAY_SHIM_DIR,$/, 'trigger checks (trigger-check-core.ts puts it first)'],
+    // Handed to the trigger modules, whose checks use it as above (daemon-trigger-runs.ts, daemon-trigger-commands.ts).
+    [/^const trigger(Runs|Commands) = createDaemonTrigger(Runs|Commands)\(\{[^}]*\bGATEWAY_SHIM_DIR\b/, 'handed to the trigger checks'],
+    [/^GATEWAY_SHIM_DIR: string$/, 'a trigger module\'s deps'],
+    [/^const \{[^}]*\bGATEWAY_SHIM_DIR\b[^}]*\} = deps$/, 'a trigger module\'s deps'],
     [/touchDirs: \[\{ dir: GATEWAY_SHIM_DIR, /, 'kept alive in a swept /tmp'],
     // The one rule (sessionPathWithShim) and the preamble that applies it in the shell
     // (session-shell.ts buildSessionPreamble, checked below).
@@ -193,7 +197,8 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     // A plugin job is no session: it carries no OPEN_WALNUT_API_URL to judge by.
     [/^env\.PATH = \(process\.env\.PATH \|\| ''\) \+ path\.delimiter \+ GATEWAY_SHIM_DIR;?$/, 'plugin job'],
   ]
-  const STANDALONE_TEXT = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
+  // The whole runtime: daemon-standalone.ts and its area modules (the trigger checks are daemon-trigger-*.ts).
+  const STANDALONE_TEXT = readTwinText(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'))
   it('src/providers/daemon-standalone.ts', () => {
     const lines = STANDALONE_TEXT.split('\n')
       .map((l) => l.trim())

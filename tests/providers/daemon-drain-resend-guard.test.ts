@@ -22,6 +22,7 @@ import {
   DRAIN_RESEND_EXEMPT, RESEND_AFTER_LOST, isDaemonDrainRefusal, resendThroughSwap, resendsAfter, wakeHostLink, waitHostLink,
 } from '../../src/providers/daemon-drain-resend.js'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
+import { daemonAreaModules } from '../helpers/daemon-runtime-text.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(REPO, rel), 'utf8')
@@ -149,7 +150,9 @@ function sources(dir: string, out: string[] = []): string[] {
 }
 
 describe('every client of a daemon is listed', () => {
-  const found = sources('src').filter((rel) => rel !== DAEMON && FRAME.test(code(rel))).sort()
+  // The runtime's area modules are the daemon's own code (its handlers' (ws, id, cmd)), never a client.
+  const runtime = new Set([DAEMON, ...daemonAreaModules()])
+  const found = sources('src').filter((rel) => !runtime.has(rel) && FRAME.test(code(rel))).sort()
 
   it('the scan finds the known clients', () => {
     expect(found).toContain('src/providers/daemon-connection.ts')

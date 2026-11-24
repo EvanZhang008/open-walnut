@@ -16,6 +16,7 @@ import { createTransferCore, type TransferCoreDeps } from '../../src/providers/t
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { isUploadName, withFilePaths, withoutAttachmentHeaders, FILES_ATTACHED_LINE } from '../../src/core/sessions/session-uploads.js'
 import { IMAGES_ATTACHED_LINE, withImagePaths } from '../../src/core/sessions/cloud-images.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-upload-part-')))
 afterAll(() => { if (tmp.includes('walnut-upload-part-')) fs.rmSync(tmp, { recursive: true, force: true }) })
@@ -248,7 +249,8 @@ describe('upload.part daemon wiring', () => {
   }
 
   it('the daemon dispatches it, allows it over the bridge, and never to a follower', () => {
-    const src = read('src/providers/daemon-standalone.ts')
+    // The whole runtime: the uploads folder is daemon-host-transfer.ts's.
+    const src = daemonRuntimeText()
     expect(src).toContain("case 'upload.part':")
     expect(setLiteral(src, 'BRIDGE_ALLOWED_COMMANDS')).toContain("'upload.part'")
     expect(setLiteral(src, 'FOLLOWER_ALLOWED_COMMANDS')).not.toContain("'upload.part'")

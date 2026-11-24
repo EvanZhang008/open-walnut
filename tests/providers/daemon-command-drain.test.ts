@@ -319,8 +319,8 @@ describe('daemon command drain', () => {
     const handle = compileHandle(source, {
       daemonCommands, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(), resolveAgentCommand,
       cmdStart: operation, cmdSend: operation, cmdSendRaw: operation, cmdStop: operation,
-      cmdHooksConfigure: operation, cmdCronSupervision: operation, cmdBridgeResume: operation, cmdServiceHandover: operation,
-      cmdTriggersConfigure: operation, cmdTriggersRun: operation, cmdTriggersAck: operation,
+      hooks: { cmdHooksConfigure: operation }, cmdCronSupervision: operation, cmdBridgeResume: operation, cmdServiceHandover: operation,
+      triggerSet: { cmdTriggersConfigure: operation }, triggerCommands: { cmdTriggersRun: operation, cmdTriggersAck: operation },
     })
     handle({}, JSON.stringify({ id: 1, ...frame }))
     let closed = false
@@ -726,7 +726,7 @@ describe('daemon command drain', () => {
     const usageBudget = { close: vi.fn(() => { order.push('budget-close') }) }
     const budgetControl = { close: vi.fn(() => { order.push('budget-control-close') }) }
     const cleanup = compile<() => void>(`${extract(source, 'stopSessionWatcher')}\n${extract(source, 'cleanup')}\nreturn cleanup;`, {
-      sessions, cronRuntime: null, usageBudget, budgetControl, stopBridge: vi.fn(), vscodeServerCore: null, triggerTickTimer: null,
+      sessions, cronRuntime: null, usageBudget, budgetControl, stopBridge: vi.fn(), vscodeServerCore: null, triggerRuns: { stopTriggers: vi.fn() },
       runtimeKeepTimer: null,
       shouldReapOnExit: () => false, reapAllSessionGroupsSync, persistRegistryNow: persistRegistry, logAppender: null,
       clearInterval: (timer: unknown) => { cleared.add(timer); order.push(String(timer)) },
