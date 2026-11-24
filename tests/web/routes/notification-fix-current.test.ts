@@ -22,6 +22,12 @@ const mocks = vi.hoisted(() => ({
   broadcastEvent: vi.fn(),
   backup: vi.fn(() => ({ protected: true, consecutiveFailures: 0, error: undefined as string | undefined, lastCommitAt: '2026-10-21T00:00:00.000Z' })),
 }))
+// The Fix starts run in a made-up checkout; the refusal of a folder that is gone has its own
+// tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}))
 vi.mock('../../../src/web/server.js', () => ({ getGitAutoCommitHealth: mocks.backup }))
 vi.mock('../../../src/web/ws/handler.js', () => ({
   broadcastEvent: mocks.broadcastEvent, sendToClient: vi.fn(), sendStreamEvent: vi.fn(),

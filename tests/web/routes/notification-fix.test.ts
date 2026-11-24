@@ -24,6 +24,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
+// The Fix starts run in a made-up checkout; the refusal of a folder that is gone has its own
+// tests (tests/core/sessions/start-folder-gone-guard.test.ts, quick-start-create-cwd.test.ts).
+vi.mock('../../../src/core/sessions/folder-gone.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/sessions/folder-gone.js')>()),
+  missingStartFolder: async () => null,
+}))
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-notiffix', {
   WALNUT_INSTALL_DIR: '/fake/walnut-checkout',
   WALNUT_PACKAGE_ROOT: '/fake/walnut-checkout',
