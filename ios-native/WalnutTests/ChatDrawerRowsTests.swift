@@ -89,7 +89,9 @@ final class ChatDrawerRowsTests: XCTestCase {
     @MainActor
     func testNewChatNeverSharesAPointWithAConversationRow() {
         let width = 329, height = 874
-        let tint = UIColor(Theme.tint).resolvedColor(
+        // The drawer is part of the chat, so its New chat key is the chat palette's key fill
+        // (`Theme.Chat.keyFillColor`, a dark grey), not the app's brown.
+        let tint = Theme.Chat.keyFillColor.resolvedColor(
             with: UITraitCollection(userInterfaceStyle: .light))
         var tintRGB = (r: CGFloat(0), g: CGFloat(0), b: CGFloat(0), a: CGFloat(0))
         tint.getRed(&tintRGB.r, green: &tintRGB.g, blue: &tintRGB.b, alpha: &tintRGB.a)
@@ -147,18 +149,26 @@ final class ChatDrawerRowsTests: XCTestCase {
             return XCTFail("the drawer did not render — nothing was measured")
         }
 
-        // The pill: tint-coloured pixels.
+        // The pill: key-fill pixels in a solid horizontal run. A grey key fill also matches
+        // the anti-aliased edges of black text, which are never 12 such pixels in a row.
+        func isFill(_ x: Int, _ y: Int) -> Bool {
+            let i = (y * width + x) * 4
+            return abs(Int(many[i]) - Int(target.0)) < 10
+                && abs(Int(many[i + 1]) - Int(target.1)) < 10
+                && abs(Int(many[i + 2]) - Int(target.2)) < 10
+        }
+        let run = 12
         var pillMinY = height, pillMaxY = -1, pillMinX = width, pillMaxX = -1
         // The rows: where the 24-row drawer differs from the 1-row one.
         var rowsMinY = height, rowsMaxY = -1
         for y in 0..<height {
+            var streak = 0
             for x in 0..<width {
                 let i = (y * width + x) * 4
-                if abs(Int(many[i]) - Int(target.0)) < 24,
-                   abs(Int(many[i + 1]) - Int(target.1)) < 24,
-                   abs(Int(many[i + 2]) - Int(target.2)) < 24 {
+                streak = isFill(x, y) ? streak + 1 : 0
+                if streak >= run {
                     pillMinY = min(pillMinY, y); pillMaxY = max(pillMaxY, y)
-                    pillMinX = min(pillMinX, x); pillMaxX = max(pillMaxX, x)
+                    pillMinX = min(pillMinX, x - run + 1); pillMaxX = max(pillMaxX, x)
                 }
                 if abs(Int(many[i]) - Int(one[i])) > 12
                     || abs(Int(many[i + 1]) - Int(one[i + 1])) > 12
