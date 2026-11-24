@@ -20,6 +20,17 @@ export const ENGINE_FULL_NAMES: Readonly<Record<SessionEngine, string>> = {
   custom: 'Custom (ACP)',
 };
 
+/**
+ * The name a usage limit goes by where it is not the engine's own: Claude Code's limit is its
+ * Claude subscription's ("Claude weekly limit"). Every other engine's limit reads its full name.
+ */
+const LIMIT_NAMES: Readonly<Partial<Record<SessionEngine, string>>> = { claude: 'Claude' };
+
+/** "Claude", "Codex", "Antigravity": whose limit a usage limit is. */
+export function engineLimitName(engine: string): string {
+  return (LIMIT_NAMES as Record<string, string>)[engine] ?? engineFullName(engine);
+}
+
 /** The engine's full name; an id this build does not know, capitalized. */
 export function engineFullName(engine: string): string {
   return (ENGINE_FULL_NAMES as Record<string, string>)[engine] ?? `${engine.charAt(0).toUpperCase()}${engine.slice(1)}`;

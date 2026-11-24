@@ -227,6 +227,8 @@ export function createEngineSignIn(deps: EngineSignInDeps) {
       const finish = (v: T) => { if (done) return; done = true; clearTimeout(timer); stop(proc); resolve(v) }
       const timer = setTimeout(() => finish(onTimeout), wait.acp)
       proc.on('error', () => finish(onTimeout))
+      // A server that stopped reading makes the next write an EPIPE: its exit answers every call.
+      proc.stdin?.on('error', (err: Error) => log('info', 'engine acp check stdin error', { error: err.message }))
       proc.on('exit', () => { for (const r of pending.values()) r({ error: { message: 'the ACP server exited' } }); pending.clear() })
       proc.stderr?.resume()
       proc.stdout?.on('data', (chunk: Buffer) => {

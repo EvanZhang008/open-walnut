@@ -93,6 +93,8 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/daemon-session-start.ts': 1,      // a respawn's old CLI group: the session this daemon runs, still alive, ended before the sid points at the new pid
   'src/providers/daemon-idle-scan.ts': 1,          // the idle scan's SIGKILL of a dead session CLI's leftover group (MCP children), only off service mode and while that group lives
   'src/providers/daemon-session-stop.ts': 2,       // stopSessionProcess's SIGINT, then SIGTERM only while the pid's identity still proves it is the session's CLI
+  'src/providers/acp-engine-sign-in.ts': 1,        // its own detached sign-in or check child's group (agy acp --login, agy acp), at its end or deadline
+  'src/providers/acp-engine-install.ts': 1,        // its own detached engine installer's group (its recorded pid, never <= 1), past the install deadline
   'src/providers/codex-model-probe.ts': 1,          // its own detached model-probe child group
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
   'src/providers/daemon-service-cron-host.ts': 1, // its own service daemon (exe under its versions/) and boot supervisor (cmdline names its script), never a CLI
