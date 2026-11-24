@@ -48,7 +48,7 @@ describe('a daemon answers a call itself while its host has a follower', () => {
       found[fn] ??= { handle: 0, handleLocal: 0 }
       found[fn][m[1] as 'handle' | 'handleLocal']++
     }
-    expect(found, 'a new offlineHost.handle/handleLocal call: route it to the follower when the host has one (followerKept), count it, then add it to SITES').toEqual(SITES)
+    expect(found, 'a new offlineHost.handle/handleLocal call: route it to the follower when the host has one (followerHere(home).kept), count it, then add it to SITES').toEqual(SITES)
   })
 
   it('in sendGatewayRequest, the follower comes first: its hand-off, then its wait, then any own answer', () => {
@@ -61,7 +61,7 @@ describe('a daemon answers a call itself while its host has a follower', () => {
     expect(own.length).toBe(3)
     for (const at of own) expect(at, 'an own answer before the follower check').toBeGreaterThan(wait)
     // The wait asks the fact, never "linked right now".
-    expect(body).toMatch(/const waitForFollower = \(\): boolean => \{\n\s+if \(!home \|\| plan\.never \|\| plan\.ownServerAsked \|\| !followerKept\(home\)\) return false/)
+    expect(body).toMatch(/const waitForFollower = \(\): boolean => \{\n\s+if \(!home \|\| plan\.never \|\| plan\.ownServerAsked \|\| !followerHere\(home\)\.kept\) return false/)
     // An outside caller's read is the follower's too (case 1); its writes never reached an own answer.
     expect(body).toContain('const followers = !!home && (!target || offlineHost.pendingHandover(home)) && (!external || readable) && !plan.ownServerAsked')
     expect(body).not.toContain('callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked')
@@ -78,19 +78,20 @@ describe('a daemon answers a call itself while its host has a follower', () => {
     const local = body.indexOf('offlineHost.handleLocal(')
     const lead = body.slice(body.lastIndexOf('// A follower that takes same-host sends', local), local)
     expect(lead).toContain("followerSaidOnline.get(home) === true && offlineHost.localCandidate(home, callerSid, capability, payload) && waitForFollower()) return")
-    expect(lead).toContain('const kept = followerKept(home)')
+    expect(lead).toContain('const kept = followerHere(home).kept')
     expect(body.slice(local, local + 600)).toContain("if (linked || kept) followerGateway.noteOwnAnswer(payload.name, linked ? 'follower_linked' : followerSaidOnline.get(home) === true ? 'follower_away' : 'same_host', callerSid)")
     // The late read.
     const late = fnBody('relayAttemptEnded').body
-    expect(late.indexOf("if (followerKept(call.home)) followerGateway.noteOwnAnswer(call.payload.name, 'read_late', call.callerSid)"))
+    expect(late.indexOf("if (followerHere(call.home).kept) followerGateway.noteOwnAnswer(call.payload.name, 'read_late', call.callerSid)"))
       .toBeGreaterThan(0)
     expect(late.indexOf("followerGateway.noteOwnAnswer(call.payload.name, 'read_late'")).toBeLessThan(late.indexOf('offlineHost.handle('))
   })
 
   it('"has a follower" is a kept fact (the spec this daemon keeps), not the socket linked now', () => {
-    const kept = fnBody('followerKept').body
-    expect(kept).toContain('hostServers.answersCalls(home)')
-    expect(src).toMatch(/kept: \(home\) => followerKept\(home\),/)
+    const kept = fnBody('followerHere').body
+    expect(kept).toContain('hostServers.answersCalls(spec)')
+    expect(kept).toContain('hostServers.keeps(home)')
+    expect(src).toMatch(/kept: \(home\) => followerHere\(home\)\.kept,/)
     // A follower saying hello wakes the calls that wait for it (both ways in: a socket, the in-process seat).
     expect(fnBody('cmdFollowerHello').body).toContain('wakeWaitingCalls()')
     expect(src).toContain('setTimeout(wakeWaitingCalls, 0)')

@@ -1077,7 +1077,7 @@ async function reapAllSessionGroups(): Promise<void> {
 // ── Shell helpers: the session shell, shell_setup, the preamble, the launch gate (daemon-session-shell.ts) ──
 const sessionShellHelpers = createDaemonSessionShell({ daemonEnv, SERVICE_MODE, DAEMON_STATE_DIR, DAEMON_DIR, GATEWAY_SHIM_DIR, INSTALL_HOME_BIN, childUse, hostRuntime,
   // Defined further down (the session owners, the followers), so asked on use.
-  walnutOfHome, followsHere: (home) => followsHere(home), sessionHomeOf: (sid) => sessionHomeOf(sid), spawnFallbackPath, setTimeout, clearTimeout, logMsg })
+  walnutOfHome, followsHere: (home) => followerHere(home).here, sessionHomeOf: (sid) => sessionHomeOf(sid), spawnFallbackPath, setTimeout, clearTimeout, logMsg })
 const { passwdReady, sessionShell, shellSetupStore, shellSetupOfStart, buildSpawnPreamble, walnutThroughGateway, sessionWalnutApiUrl, sessionPathWithShim, settingsEnvOf, gateClaudeLaunch } = sessionShellHelpers
 
 /** The fallback tool dirs and the shim dir, read each time a preamble is built. */
@@ -2785,16 +2785,40 @@ const seatSockets = new WeakSet<ServerWebSocket<WsData>>()
  * kept while its socket is gone: a same-host send in a restart of one that takes them waits for it.
  */
 const followerSaidOnline = new Map<string, boolean>()
-/** The follower socket of the Walnut of `home` (a server's own data dir names its leader's Walnut: walnutOfHome). */
-function followerOf(home: string): ServerWebSocket<WsData> | undefined {
-  return followerSockets.get(home) ?? followerSockets.get(walnutOfHome(home))
-}
 /**
- * Whether a Walnut service of the Walnut of `home` follows its leader on this host: its socket now,
- * or what it said while it is gone (a restart). The session PATH rule asks it (walnutThroughGateway).
+ * This host's follower of the Walnut of `home`, as this daemon knows it now: the one answer to
+ * "does this host have a follower", for the session PATH rule (walnutThroughGateway), the call entry
+ * and the gateway's waits. Two facts, each also under the Walnut a server's own data dir names
+ * (walnutOfHome):
+ *   - `linked`: its socket now (a hello, or the in-process seat);
+ *   - the server spec this daemon keeps for it (hostServers): written by server.configure and read
+ *     back by boot() from server-*.json before any connection is taken, so a daemon that just took
+ *     over (a handover, an update) knows its follower before the follower's hello. Never a leader's
+ *     own Walnut: no follower of it is configured or adopted (host-server-core.ts `leads`).
  */
-function followsHere(home: string): boolean {
-  return followerOf(home) !== undefined || followerSaidOnline.has(home) || followerSaidOnline.has(walnutOfHome(home))
+function followerHere(home: string | undefined) {
+  const linked = home ? followerSockets.get(home) ?? followerSockets.get(walnutOfHome(home)) : undefined
+  const spec = !home ? undefined : hostServers.keeps(home) ? home : hostServers.keeps(walnutOfHome(home)) ? walnutOfHome(home) : undefined
+  return {
+    linked,
+    /** A follower is linked, or this daemon keeps its server (running, starting or restarting). */
+    here: linked !== undefined || spec !== undefined,
+    /**
+     * It answers this host's own `walnut` calls: the fact the gateway routes by, so the daemon's own
+     * away answers serve only a host with none (no follower configured, below the floors of
+     * core/host-server/eligibility.ts, or turned off by its person: the leader then sends no spec).
+     * Its linked socket's word when linked, else its kept spec's (hostServers.answersCalls). Never
+     * "linked right now": a follower restarting, or not linked yet after a boot, is still this host's.
+     */
+    kept: linked ? linked.data?.answersLocal === true : spec !== undefined && hostServers.answersCalls(spec),
+    /** It may answer by `by`: linked, its server starting or running, or restarting before then. */
+    dueBy(by: number): boolean {
+      if (linked) return true
+      if (spec === undefined) return false
+      const st = hostServers.status(spec)
+      return st.state === 'starting' || st.state === 'running' || (st.state === 'retrying' && typeof st.nextRetryAt === 'number' && st.nextRetryAt < by)
+    },
+  }
 }
 /**
  * When a call last waited its whole room for this host's follower and got no answer (waitForFollower):
@@ -2814,7 +2838,7 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   answersOnline: (ws) => ws.data?.answersOnline === true,
   // One rule for "the leader is away": the test follower.op applies (followerEntry.mayWrite).
   mayWrite: (home) => followerEntry.mayWrite(home),
-  kept: (home) => followerKept(home),
+  kept: (home) => followerHere(home).kept,
   // The companion leading takes what the follower refuses for want of a leader: relayed to it on its
   // link, held for the Mac when it takes nothing either (follower-gateway-core.ts askElsewhere).
   leaderElsewhere: (home) => leaderBook.backupLead(home) !== null,
@@ -2831,31 +2855,6 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   log: (level, msg, data) => logMsg(level, msg, data),
   stopping: () => daemonCommands.closed,
 })
-
-/**
- * This host has a follower for `home` that answers its calls: the fact the gateway routes by, so the
- * daemon's own away answers serve only a host with none (no follower configured, below the floors of
- * core/host-server/eligibility.ts, or turned off by its person: the leader then sends no spec). Its
- * linked socket's word when it is linked; else the spec the leader configured and this daemon keeps
- * (hostServers.answersCalls). Never "linked right now": a follower restarting, or not linked yet
- * after a boot, is still this host's.
- */
-function followerKept(home: string | undefined): boolean {
-  if (!home) return false
-  const ws = followerSockets.get(home)
-  if (ws) return ws.data?.answersLocal === true
-  return hostServers.answersCalls(home)
-}
-
-/**
- * The follower of `home` may answer by `by`: linked (it waits for the leader's quiet window to
- * end), its server starting or running (booting, linking), or restarting before then.
- */
-function followerDueBy(home: string, by: number): boolean {
-  if (followerSockets.get(home)) return true
-  const st = hostServers.status(home)
-  return st.state === 'starting' || st.state === 'running' || (st.state === 'retrying' && typeof st.nextRetryAt === 'number' && st.nextRetryAt < by)
-}
 
 // Trigger fires no server claimed, delivered by this host's own Walnut server while its
 // leader is away ('follower-trigger-delivery-v1', follower-trigger-delivery-core.ts): it picks
@@ -2949,7 +2948,7 @@ const hostCallTokens = createHostCallTokens({
   fs, path, crypto, dir: DAEMON_DIR,
   uid: typeof process.getuid === 'function' ? process.getuid() : null,
   // A host server's own data dir names its leader's Walnut (walnutOfHome): its ACP and job starts name that dir.
-  socketFor: (home) => { const ws = followerOf(home); return ws?.data?.answersLocal === true ? ws.data.callSocket : undefined },
+  socketFor: (home) => { const ws = followerHere(home).linked; return ws?.data?.answersLocal === true ? ws.data.callSocket : undefined },
   log: (level, msg, data) => logMsg(level, msg, data),
 })
 
@@ -3242,7 +3241,10 @@ function cmdServerConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   const spec = cmd.spec as { walnutId?: unknown } | null | undefined
   if (spec && spec.walnutId !== leaderBook.recordOf(home)?.walnutId) return sendError(ws, id, 'server.configure: the spec names another Walnut')
   try {
-    sendOk(ws, id, { status: hostServers.configure(home, spec ?? null, { freshLink: freshServerLink(ws) }) })
+    const status = hostServers.configure(home, spec ?? null, { freshLink: freshServerLink(ws) })
+    // Its follower is removed: what it last said about same-host sends goes with it.
+    if (!spec) followerSaidOnline.delete(home)
+    sendOk(ws, id, { status })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
   }
@@ -4052,12 +4054,12 @@ function sendGatewayRequest(
   // again when it says hello or a step later. The daemon's own away answer below is for a host with no
   // follower, or a call whose wait is over (FOLLOWER_WAIT_MS, or what the server needs of its time left).
   const waitForFollower = (): boolean => {
-    if (!home || plan.never || plan.ownServerAsked || !followerKept(home)) return false
+    if (!home || plan.never || plan.ownServerAsked || !followerHere(home).kept) return false
     const now = Date.now()
     if (plan.followerBy === undefined && now - (followerWaitMissed.get(home) ?? -Infinity) < FOLLOWER_MISS_HOLD_MS) return false
     const by = plan.followerBy ?? now + FOLLOWER_WAIT_MS
     const room = Math.min(by, deadline - FOLLOWER_WAIT_SPARE_MS) - now
-    if (room <= 0 || !followerDueBy(home, now + room)) {
+    if (room <= 0 || !followerHere(home).dueBy(now + room)) {
       // A wait that ran out: the next calls answer at once for a while (followerWaitMissed).
       if (plan.followerBy !== undefined) followerWaitMissed.set(home, now)
       return false
@@ -4146,7 +4148,7 @@ function sendGatewayRequest(
     // is not linked this moment (a restart): the send waits for it, as a call with no leader does.
     if (followerSaidOnline.get(home) === true && offlineHost.localCandidate(home, callerSid, capability, payload) && waitForFollower()) return
     // What this host's follower said: it is linked, or kept here and away.
-    const kept = followerKept(home)
+    const kept = followerHere(home).kept
     const linked = followerGateway.answersOnline(home)
     void offlineHost.handleLocal(home, callerSid, capability, payload).then((r) => {
       if (r) {
@@ -4367,7 +4369,7 @@ function relayAttemptEnded(relayId: number): void {
     // The daemon's own answer although this host has a follower: that server's reads go to the same
     // leader while it answers, so it would be as late (replica/dispatch.ts), and it refuses a call
     // while it sees the leader answer (replica/local-calls.ts `leader_answers`). Counted.
-    if (followerKept(call.home)) followerGateway.noteOwnAnswer(call.payload.name, 'read_late', call.callerSid)
+    if (followerHere(call.home).kept) followerGateway.noteOwnAnswer(call.payload.name, 'read_late', call.callerSid)
     void offlineHost.handle(call.home, call.callerSid, call.capability, call.payload).then((r) => entry.respond(r as GatewayResponse))
     return
   }
@@ -5419,7 +5421,7 @@ const sessionStart = createDaemonSessionStart({ daemonEnv, SERVICE_MODE, STREAMS
   hostResume, strictStartRefusal, waitForStoppedProcess, requireBudgetAllowance, budgetRefusal, cancelledStartPath, isJournalSid, readStartTime,
   readStartTimeAsync, killProcessGroup, reapSession, broadcastSessionState, persistRegistryDurable, logStateTransition, spawnInfoFor, appendSpawnJournal,
   namedSessionId, emptyTaskState, statSizeOrZero, streamFold, streamWriterGone, streamCompact, foldCheckpoint, cronMetadata,
-  cronMetadataConfig: () => cronMetadataConfig, cronProcess, hostCallTokens, walnutOfHome, sessionWalnutApiUrl, walnutThroughGateway, settingsEnvOf,
+  cronMetadataConfig: () => cronMetadataConfig, cronProcess, hostCallTokens, sessionWalnutApiUrl, walnutThroughGateway, settingsEnvOf,
   buildSpawnPreamble, sessionShell, passwdReady, shellSetupOfStart, gateClaudeLaunch, pwSilenceFile, pwSilenceOptions,
   turnSnapshots: { onTurnStart: (sid, cwd) => turnSnapshots.onTurnStart(sid, cwd) },
   ensureWatcher: (sid) => ensureWatcher(sid),

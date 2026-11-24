@@ -103,7 +103,7 @@ export interface FollowerGatewayDeps<S> {
   answersOnline?(ws: S): boolean
   /**
    * This host keeps a follower of `home` that answers its calls, linked now or not (the twins'
-   * followerKept: a spec the leader configured for a program that answers them). Counts an own
+   * followerHere(home).kept: a spec the leader configured for a program that answers them). Counts an own
    * answer given while it is away (restarting, not linked yet) as `follower_away`.
    */
   kept?(home: string): boolean

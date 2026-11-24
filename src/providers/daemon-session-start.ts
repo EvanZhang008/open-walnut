@@ -95,7 +95,6 @@ export interface DaemonSessionStartDeps<W extends object> extends DaemonReplies<
   cronMetadataConfig: () => Awaited<ReturnType<typeof readCronCliConfig>> | null
   cronProcess: (session: SessionData<W>) => Parameters<ReturnType<typeof createCronMetadataTracker>['configure']>[1]
   hostCallTokens: ReturnType<typeof createHostCallTokens>
-  walnutOfHome: (home: string) => string
   sessionWalnutApiUrl: (env: Record<string, unknown> | undefined) => string | undefined
   walnutThroughGateway: (env: Record<string, unknown> | undefined, home: unknown) => boolean
   settingsEnvOf: (args: string[]) => Record<string, unknown> | undefined
@@ -117,7 +116,7 @@ export interface DaemonSessionStartDeps<W extends object> extends DaemonReplies<
 }
 
 export function createDaemonSessionStart<W extends object>(deps: DaemonSessionStartDeps<W>) {
-  const { daemonEnv, SERVICE_MODE, STREAMS_DIR, TASK_DIR_ROOT, GATEWAY_SOCK_PATH, SECRETS_ROOT, SESSION_RUNTIME_DIR, CLAUDE_PROJECTS_DIRS, sessions, core, spawn, execFile, childUse, spawnPool, runtimeTimers, clearInterval, sessionStopVersions, sessionStartGate, cronRuntime, daemonBootId, demoQuiesce, cliArgvFiles, cliOwner, hostResume, strictStartRefusal, waitForStoppedProcess, requireBudgetAllowance, budgetRefusal, cancelledStartPath, isJournalSid, readStartTime, readStartTimeAsync, killProcessGroup, reapSession, broadcastSessionState, persistRegistryDurable, logStateTransition, spawnInfoFor, appendSpawnJournal, namedSessionId, emptyTaskState, statSizeOrZero, streamFold, streamWriterGone, streamCompact, foldCheckpoint, cronMetadata, cronMetadataConfig, cronProcess, hostCallTokens, walnutOfHome, secretsSessionEnv, sessionWalnutApiUrl, walnutThroughGateway, settingsEnvOf, buildSpawnPreamble, sessionShell, passwdReady, shellSetupOfStart, gateClaudeLaunch, pwSilenceFile, pwSilenceOptions, turnSnapshots, ensureWatcher, addSubscriber, stopSessionWatcher, logMsg, sendOk, sendError } = deps
+  const { daemonEnv, SERVICE_MODE, STREAMS_DIR, TASK_DIR_ROOT, GATEWAY_SOCK_PATH, SECRETS_ROOT, SESSION_RUNTIME_DIR, CLAUDE_PROJECTS_DIRS, sessions, core, spawn, execFile, childUse, spawnPool, runtimeTimers, clearInterval, sessionStopVersions, sessionStartGate, cronRuntime, daemonBootId, demoQuiesce, cliArgvFiles, cliOwner, hostResume, strictStartRefusal, waitForStoppedProcess, requireBudgetAllowance, budgetRefusal, cancelledStartPath, isJournalSid, readStartTime, readStartTimeAsync, killProcessGroup, reapSession, broadcastSessionState, persistRegistryDurable, logStateTransition, spawnInfoFor, appendSpawnJournal, namedSessionId, emptyTaskState, statSizeOrZero, streamFold, streamWriterGone, streamCompact, foldCheckpoint, cronMetadata, cronMetadataConfig, cronProcess, hostCallTokens, secretsSessionEnv, sessionWalnutApiUrl, walnutThroughGateway, settingsEnvOf, buildSpawnPreamble, sessionShell, passwdReady, shellSetupOfStart, gateClaudeLaunch, pwSilenceFile, pwSilenceOptions, turnSnapshots, ensureWatcher, addSubscriber, stopSessionWatcher, logMsg, sendOk, sendError } = deps
 
   async function cmdStart(ws: W, id: number, cmd: Record<string, unknown>) {
     const sid = cmd.sid as string
@@ -400,9 +399,10 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
     // Spawn Claude through the user's shell, its rc file and the host's shell_setup, to activate
     // nvm/pyenv/volta and the sign-in variables they set, even on hosts where nvm binaries need a
     // newer GLIBC than the system provides.
-    // The Walnut this start is for: its origin's home, or the one its resume record kept.
-    const startWalnut = walnutOfHome(spawnInfo.home ?? resumeRec?.home ?? '')
-    const preamble = buildSpawnPreamble({ nodeDir: launch.nodeDir, gatewayFirst: walnutThroughGateway(settingsEnvOf(launch.args), startWalnut), shellSetupFile })
+    // The home this start is for, as it names it: its origin's, or the one its resume record kept
+    // (the rule and the call entry each find its Walnut from it: daemon-standalone.ts followerHere).
+    const startHome = spawnInfo.home ?? resumeRec?.home
+    const preamble = buildSpawnPreamble({ nodeDir: launch.nodeDir, gatewayFirst: walnutThroughGateway(settingsEnvOf(launch.args), startHome), shellSetupFile })
     // Content arguments go to files: the shell's and the CLI's argv carry paths (cli-argv-files-core.ts).
     const escapedArgs = cliArgvFiles.toFiles(launch.args).map((a: string) => shellQuote(a)).join(' ')
     const shellCmd = `${preamble}; exec ${escapedArgs}`
@@ -487,7 +487,7 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
         // when its follower said a socket (hostCallTokens.envFor); unset otherwise, never inherited.
         WALNUT_CALL_SOCKET: undefined,
         WALNUT_CALL_TOKEN: undefined,
-        ...hostCallTokens.envFor(startWalnut, sid),
+        ...hostCallTokens.envFor(startHome, sid),
         // Unset when the task has none, so a value this daemon inherited (it was
         // started from inside a session) never names another task's directory.
         WALNUT_TASK_DIR: taskDir ?? undefined,

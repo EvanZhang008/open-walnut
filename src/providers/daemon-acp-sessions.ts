@@ -68,7 +68,9 @@ export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSession
     // appended in-shell like the native spawn) because ACP workers don't run
     // through the RC-sourcing shell wrapper.
     const taskDir = ensureTaskDir(TASK_DIR_ROOT, (cmd as { taskId?: unknown }).taskId, (cmd as { home?: unknown }).home)
-    const throughGateway = walnutThroughGateway(params.env, (cmd as { home?: unknown }).home)
+    // The home this start is for, as it names it (the rule and the call entry each find its Walnut from it).
+    const startHome = (cmd as { home?: unknown }).home
+    const throughGateway = walnutThroughGateway(params.env, startHome)
     params.env = {
       ...secretsSessionEnv(),
       ...params.env,
@@ -86,7 +88,7 @@ export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSession
       // host-call-entry-v1, as for the native spawn ('' unsets): the worker's own WALNUT_SESSION_ID is the caller.
       WALNUT_CALL_SOCKET: '',
       WALNUT_CALL_TOKEN: '',
-      ...hostCallTokens.envFor((cmd as { home?: unknown }).home, typeof params.env?.WALNUT_SESSION_ID === 'string' && params.env.WALNUT_SESSION_ID ? params.env.WALNUT_SESSION_ID : params.sid),
+      ...hostCallTokens.envFor(startHome, typeof params.env?.WALNUT_SESSION_ID === 'string' && params.env.WALNUT_SESSION_ID ? params.env.WALNUT_SESSION_ID : params.sid),
     }
     return sessionStartGate.run(params.sid, async () => {
       if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')

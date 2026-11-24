@@ -35,8 +35,9 @@ export interface DaemonSessionShellDeps {
   hostRuntime: Pick<ReturnType<typeof createHostRuntime>, 'ensureClaude' | 'shellCanRun'>
   walnutOfHome: (home: string) => string
   /**
-   * Whether a Walnut service of the Walnut of `home` runs on this host as its follower (a host
-   * replica: its own HTTP root takes no call without a credential, and it said hello here).
+   * Whether a Walnut service of the Walnut of `home` follows its leader on this host (a host
+   * replica, whose own HTTP root takes no call without a credential): linked now, or its server
+   * kept by this daemon (daemon-standalone.ts followerHere).
    */
   followsHere: (home: string) => boolean
   sessionHomeOf: (sid: string) => string
@@ -145,7 +146,8 @@ export function createDaemonSessionShell(deps: DaemonSessionShellDeps) {
    *    without a credential (boot-policy.ts self-api-credential), so only Walnut's own CLI, the
    *    shim (the gateway socket, or the host call entry with WALNUT_CALL_TOKEN), reaches it. An
    *    older released `walnut` the box installed ahead on PATH answered 401 not_paired
-   *    (2026-11-24).
+   *    (2026-11-24). The follower counts from the spec this daemon keeps, so a start replayed
+   *    right after a daemon handover, before the follower's hello, still runs the shim.
    *
    * `home`: the Walnut the start is for (its origin's home, or the one its resume record kept).
    */
