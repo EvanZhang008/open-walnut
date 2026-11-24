@@ -58,6 +58,7 @@ import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
 import { MOVE_LINK_WAIT_MS, noLinkWait, withLinkWait } from '../transfer/link-wait.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
+  unansweredNote, unansweredPersonWords,
 } from './engine-switch-context.js';
 
 export class EngineSwitchError extends Error {
@@ -306,15 +307,19 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     // another host (a bare start fell back to the task's own directory, 2026-11-24).
     const fromHost = from ? normalizeHost(from.host) : undefined;
     const keepPlace = !!from?.cwd && (req.host === undefined || normalizeHost(req.host) === fromHost);
+    // The user's message a failed start never answered is the new session's first turn.
+    const owed = message.trim() || !from ? undefined
+      : await readActiveContext(from).then((c) => unansweredPersonWords(c.messages)).catch(() => undefined);
+    const first = owed ? (await import('./send-frame.js')).frameAsWalnut(unansweredNote(owed), 'engine-switch') : message;
     const { startSessionForTask } = await import('./task-start.js');
     let started: Awaited<ReturnType<typeof startSessionForTask>>;
     try {
       started = await startSessionForTask({
-        taskIdPrefix: task.id, message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
+        taskIdPrefix: task.id, message: first, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
         callerSid: req.callerSid, callerUnproven: req.callerUnproven, expectReply: false, source: req.source, ownMove: true,
         ...(keepPlace ? { host: fromHost, cwd: from!.cwd } : req.host !== undefined ? { host: normalizeHost(req.host) } : {}),
         // Nothing to say: the task's description is not run as if it were (the same as a switch).
-        ...(message.trim() ? {} : { idle: true }),
+        ...(first.trim() ? {} : { idle: true }),
       });
     } catch (err) {
       // A start that failed after its row was made leaves that row as the task's session: the
@@ -938,8 +943,11 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
       taskId: task.id, trimmedTurns: carried.trimmedTurns, budgetTokens: carried.budgetTokens,
     });
   }
-  // No message: no turn now. The context waits for the session's next message (stashSwitchContext).
-  const words = await switchWords(state);
+  // No message: no turn now. The context waits for the session's next message (stashSwitchContext),
+  // unless the user's last message there got no answer: the new session answers it at once.
+  const owed = state.message?.trim() ? undefined : await unansweredPersonWords(ctx.messages);
+  if (owed) log.session.info('engine switch: the user\'s last message got no answer; the new session answers it', { taskId: task.id, switchId: state.id });
+  const words = owed ? (await import('./send-frame.js')).frameAsWalnut(unansweredNote(owed), 'engine-switch') : await switchWords(state);
   // The session resumed may itself hold a context it never read (resumed idle earlier): it stays,
   // ahead of the turns it missed since (review round 5), under the same one budget.
   const targetUnread = resume ? (await tracker.getSessionByClaudeId(resume.prev.claudeSessionId).catch(() => undefined))?.switchContext?.text : undefined;

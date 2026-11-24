@@ -369,3 +369,28 @@ export async function targetWindowTokens(
   if (!isAcpEngine(target)) return named ?? CLAUDE_DEFAULT_WINDOW;
   return DEFAULT_WINDOWS[target] ?? OTHER_DEFAULT_WINDOW;
 }
+
+/**
+ * The words of the user's last message when the session never answered it: its turn failed (an
+ * engine error) or the switch cut it. A switch with no message of its own runs no turn, so these
+ * words sat in the carried context unanswered (2026-11-24: three messages to a Pi session whose
+ * every turn failed waited nine hours). Undefined when an answer came after them, or when the last
+ * user row is not a person's (a notice, another task's mail).
+ */
+export async function unansweredPersonWords(messages: readonly SessionHistoryMessage[]): Promise<string | undefined> {
+  const { personTextOf, transcriptSentBy } = await import('./transcript-sent-by.js');
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'assistant' && m.text.trim()) return undefined;
+    if (m.role !== 'user' || transcriptSentBy(m) !== 'person') continue;
+    const words = (personTextOf(m.text) ?? m.text).trim();
+    return words || undefined;
+  }
+  return undefined;
+}
+
+/** The line that runs the new session's turn for those words (framed as Walnut's, never the user's). */
+export function unansweredNote(words: string): string {
+  const quoted = words.length > 600 ? `${words.slice(0, 600)}...` : words;
+  return `The user's last message in the conversation above got no answer before the switch (the earlier session's turn failed or was stopped): "${quoted}". Answer it now.`;
+}
