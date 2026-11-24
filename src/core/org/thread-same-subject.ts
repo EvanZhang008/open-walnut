@@ -101,8 +101,13 @@ export function sameSubjectRefusal(candidates: readonly SubjectCandidate[], ownT
     + 'or task_send the task that holds it. If it is another subject, call thread_create again with separate_reason saying how it differs.';
 }
 
-/** The task's own threads and those of the tasks above, below and beside it (its team) that keep threads. */
-export async function treeOpenThreads(taskId: string): Promise<TreeThreads[]> {
+/**
+ * The task's own threads and those of the tasks above, below and beside it (its team) that keep
+ * threads: the ones `named` (a thread's tasks) always, then up to TREE_TASKS_MAX by relation and newest
+ * change. 2026-11-24, the thread monitor's [copy]: his VP has 59 open tasks below it, and the one its
+ * thread named came 47th in tree order, past the cap, so the copy rule never read it.
+ */
+export async function treeOpenThreads(taskId: string, named: readonly string[] = []): Promise<TreeThreads[]> {
   const { listTasks } = await import('../task-manager.js');
   const { treeAround } = await import('../same-ask-tree.js');
   const { keepsThreads } = await import('./keeps-threads.js');
@@ -115,10 +120,14 @@ export async function treeOpenThreads(taskId: string): Promise<TreeThreads[]> {
   // single task ... it wouldn't cause a single thread to appear in all different places").
   const rank = { ancestor: 0, descendant: 1, team: 2 } as Record<string, number>;
   // A finished task's leftover threads hold no subject open any more (review 2026-11-23).
-  const around = treeAround(taskId, everything)
-    .filter((a) => a.task.phase !== 'COMPLETE' && (keepsThreads(a.task) || !!a.task.org_role))
-    .sort((a, b) => (rank[a.relation] ?? 3) - (rank[b.relation] ?? 3))
-    .slice(0, TREE_TASKS_MAX);
+  const wanted = new Set(named);
+  const live = treeAround(taskId, everything).filter((a) => a.task.phase !== 'COMPLETE' && (keepsThreads(a.task) || !!a.task.org_role));
+  const around = [
+    ...live.filter((a) => wanted.has(a.task.id)),
+    ...live.filter((a) => !wanted.has(a.task.id))
+      .sort((a, b) => (rank[a.relation] ?? 3) - (rank[b.relation] ?? 3) || (b.task.updated_at ?? '').localeCompare(a.task.updated_at ?? ''))
+      .slice(0, TREE_TASKS_MAX),
+  ];
   // Below it: its subtasks, and for Main or a lead the tasks of its team.
   const isBelow = (relation: string) => relation === 'descendant' || (relation === 'team' && !!self.org_role);
   const out: TreeThreads[] = [];
@@ -180,7 +189,7 @@ export async function refuseSameSubjectThread(taskId: string, title: string, by:
   const reasoned = typeof input.separate_reason === 'string' && input.separate_reason.trim().length >= 10;
   // Nothing named below and a reason given: no tree to read.
   if (reasoned && !input.tasks?.length) return;
-  const tree = await treeOpenThreads(taskId);
+  const tree = await treeOpenThreads(taskId, input.tasks ?? []);
   const { ThreadError } = await import('./threads-model.js');
   // It names a task below that keeps open threads: that task does the work, so it keeps the subject,
   // its questions to him included (they show on this node's Threads from there). Not narrowed to titles

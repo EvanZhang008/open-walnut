@@ -82,3 +82,18 @@ describe('thread_create on a subject a task of the team already follows', () => 
     expect((await open({ title: 'Quarterly budget review' })).status).toBe(201)
   })
 })
+
+describe('a lead with a big team', () => {
+  // 2026-11-24, the thread monitor's [copy] on his VP: 59 open tasks below it, the one its thread named
+  // 47th, past the 40 tasks the tree reads, so the copy rule never saw it and a reason about other
+  // asks opened a copy of that task's subject.
+  it('a thread naming a task below is checked against it however many open tasks come first', async () => {
+    for (let i = 0; i < 45; i++) await updateTask((await addTask({ title: `Orchard row ${i + 1}`, project: 'Acme' })).task.id, { threads_on: true })
+    const late = (await addTask({ title: 'Cloud box merge', project: 'Acme' })).task.id
+    await updateTask(late, { threads_on: true })
+    await openNodeThread(late, { title: 'Merge the cloud box into one service', text: 'The plan is ready.', from: 'node', state: 'answered' }, `task:${late}`)
+    const res = await open({ title: 'May we use your cloud profile on the box', tasks: [late], separate_reason: 'The other open asks are different decisions that stay open.' })
+    expect(res.status).toBe(409)
+    expect(JSON.stringify(await res.json())).toContain('keeps its own Threads')
+  }, 60_000)
+})
