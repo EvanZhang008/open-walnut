@@ -207,7 +207,13 @@ test.describe('Choices around the comment card', () => {
     await page.waitForTimeout(400)
     const big = (await c.boundingBox())!
     expect(Math.abs(big.y - (await passageBottom()) - gap)).toBeLessThan(2)
-    expect(await maxHeight()).toBeGreaterThan(placedMax * 1.25)
+    // Allowed to be taller: as tall as the timeline's box under the header, less the room kept for the
+    // passage's last line and the jump-to-bottom key (CARD_GROWN_HEADROOM, 96px, useThreadCardPlace.ts).
+    // The rule itself rather than a share of the placed card: the header grew to two 28px key rows
+    // (1fe4084c48, b9516f627d), so at this window the grown card is 1.22 times the placed one.
+    const room = await panel.locator('.session-panel-body .session-history').first().evaluate((el) => el.clientHeight - (parseFloat(getComputedStyle(el).paddingTop) || 0))
+    expect(Math.abs((await maxHeight()) - Math.round(room - 96))).toBeLessThanOrEqual(1)
+    expect(await maxHeight()).toBeGreaterThan(placedMax)
     const hb = (await panel.locator('.session-history').boundingBox())!
     expect(big.x).toBeGreaterThanOrEqual(hb.x)
     expect(big.x + big.width).toBeLessThanOrEqual(hb.x + hb.width + 1)
