@@ -145,6 +145,10 @@ export class CodexDirectConnection {
   }
 
   get pid(): number | undefined { return this.rpc.pid }
+  /** The app-server still runs. */
+  get alive(): boolean { return this.rpc.alive }
+  /** A stalled turn being ended at Codex (or with its process): the worker's next prompt waits for it. */
+  get settling(): Promise<void> | null { return this.stallCleanup }
   get version(): string { return this.launch.version }
 
   async initialize(): Promise<Record<string, unknown>> {
@@ -691,14 +695,14 @@ export class CodexDirectConnection {
    */
   private async cancelStalled(turn: LiveTurn): Promise<void> {
     const turnId = turn.id
-    if (!turnId || !this.threadId) { this.rpc.kill(); return }
+    if (!turnId || !this.threadId) { await this.rpc.killAndWait(); return }
     const ended = new Promise<true>((res) => this.endWaiters.set(turnId, () => res(true)))
     const deadline = Date.now() + INTERRUPT_TIMEOUT_MS
     try {
       await this.rpc.request('turn/interrupt', { threadId: this.threadId, turnId }, INTERRUPT_TIMEOUT_MS)
-      if (await withTimeout(ended, Math.max(1, deadline - Date.now())) !== true) this.rpc.kill()
+      if (await withTimeout(ended, Math.max(1, deadline - Date.now())) !== true) await this.rpc.killAndWait()
     } catch {
-      this.rpc.kill()
+      await this.rpc.killAndWait()
     } finally {
       this.endWaiters.delete(turnId)
     }

@@ -105,6 +105,9 @@ SOURCES=(
   src/providers/codex-app-server/events.ts
   src/providers/codex-app-server/approvals.ts
   src/providers/codex-app-server/errors.ts
+  src/providers/engine-turn-watch.ts
+  src/providers/acp-worker/adapter-turn-watch.ts
+  src/providers/child-end.ts
   src/providers/codex-app-server/transport.ts
   src/providers/codex-app-server/turn.ts
   src/providers/codex-app-server/background.ts

@@ -70,7 +70,7 @@ describe('an adapter turn past its bound', () => {
     await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end')
     const err = errorOf('c1')
     expect(err?.errorKind).toBe('connection')
-    expect(String(err?.message)).toMatch(/could not reach its model for \d+ seconds? \(it retried \d+ times by itself\), so Walnut stopped the turn \(network error\)\./)
+    expect(String(err?.message)).toMatch(/could not reach its model for \d+ seconds? and Walnut stopped the turn \(network error; \d+ retries\)\.$/)
     // Walnut's turn-retry reads it as transient, as it does Codex's own lost connection.
     expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
     expect(turnEnd('c1')?.type).toBe('turn-interrupted')
@@ -92,13 +92,55 @@ describe('an adapter turn past its bound', () => {
     await waitFor(() => gone, (g) => g > 0, 'the adapter to be ended')
   })
 
+  // Review of 64e47b3630 (S1): a message sent while that adapter was being ended went into the dying
+  // adapter, was journaled as dispatched, and was lost as a worker crash.
+  it('a message sent while an adapter that ignores the cancel is being ended is refused before anything is journaled', async () => {
+    const w = await session({ WALNUT_ENGINE_RETRY_LIMIT_MS: '400', WALNUT_TURN_CANCEL_GRACE_MS: '800' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'engine-retries-deaf' })
+    await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end')
+    const sent = await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'hello' })
+    // The daemon answers it as no live worker: the session starts a fresh one and sends again.
+    expect(sent.ok, JSON.stringify(sent)).toBe(false)
+    expect(sent.error?.kind).toBe('no_worker')
+    expect(gone).toBeGreaterThan(0)
+    expect(metas().filter((e) => e.commandId === 'c2')).toEqual([])
+    expect(metas().filter((e) => e.type === 'error').map((e) => e.commandId)).toEqual(['c1'])
+  })
+
+  it('an adapter that ignores the cancel and SIGTERM is ended with SIGKILL', async () => {
+    const w = await session({ WALNUT_ENGINE_RETRY_LIMIT_MS: '400', WALNUT_TURN_CANCEL_GRACE_MS: '200', MOCK_ACP_IGNORE_SIGTERM: '1' })
+    const pid = ((await op(w, 'getState')).result as WorkerStateSnapshot).adapterPid!
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'engine-retries-deaf' })
+    await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end')
+    await waitFor(() => gone, (g) => g > 0, 'the adapter to be ended', 12_000)
+    expect(() => process.kill(pid, 0)).toThrow()
+  }, 20_000)
+
+  it("Pi's retry text is a retry, not progress: the turn stops at the retry limit", async () => {
+    const w = await session({ WALNUT_ENGINE_RETRY_LIMIT_MS: '500', WALNUT_TURN_STALL_MS: '60000' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'pi-retries-forever' })
+    await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end')
+    const err = errorOf('c1')
+    expect(err?.errorKind).toBe('turn_stalled')
+    expect(String(err?.message)).toMatch(/ kept retrying its model for \d+ seconds? and Walnut stopped the turn \(operation timed out; \d+ retries\)\.$/)
+    expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
+  })
+
+  it("an adapter's own error data never puts its words in the journal", async () => {
+    const w = await session({})
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'adapter-claims-words' })
+    await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end')
+    expect(JSON.stringify(metas())).not.toContain('ADAPTER SAYS')
+    expect(errorOf('c1')?.message).toBe('ACP provider protocol operation failed')
+  })
+
   it('a turn that goes quiet ends as stalled, in words that say for how long', async () => {
     const w = await session({ WALNUT_TURN_STALL_MS: '400' })
     await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'engine-goes-quiet' })
     await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end')
     const err = errorOf('c1')
     expect(err?.errorKind).toBe('turn_stalled')
-    expect(String(err?.message)).toMatch(/ sent nothing for \d+ seconds?, so Walnut stopped the turn \(operation timed out\)\./)
+    expect(String(err?.message)).toMatch(/ sent nothing for \d+ seconds? and Walnut stopped the turn \(operation timed out\)\.$/)
     expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
   })
 
@@ -124,6 +166,22 @@ describe('a turn that gets somewhere is never cut', () => {
   it('a quiet tool call is held to the longer item limit, not the idle one', async () => {
     const w = await session({ WALNUT_TURN_STALL_MS: '300', WALNUT_TURN_STALL_ITEM_MS: '20000' })
     await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'steady-tool 1200' })
+    await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end', 10_000)
+    expect(turnEnd('c1')?.type).toBe('turn-ended')
+    expect(errorOf('c1')).toBeUndefined()
+  })
+
+  it('a tool reported only by tool_call_update (in_progress) is held to the item limit', async () => {
+    const w = await session({ WALNUT_TURN_STALL_MS: '300', WALNUT_TURN_STALL_ITEM_MS: '20000' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'steady-update-tool 1200' })
+    await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end', 10_000)
+    expect(turnEnd('c1')?.type).toBe('turn-ended')
+    expect(errorOf('c1')).toBeUndefined()
+  })
+
+  it('a long thinking (thought chunks only) is progress', async () => {
+    const w = await session({ WALNUT_ENGINE_RETRY_LIMIT_MS: '300', WALNUT_TURN_STALL_MS: '300' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'steady-thought 1200' })
     await waitFor(() => turnEnd('c1'), Boolean, 'the turn to end', 10_000)
     expect(turnEnd('c1')?.type).toBe('turn-ended')
     expect(errorOf('c1')).toBeUndefined()

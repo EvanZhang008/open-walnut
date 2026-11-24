@@ -1401,10 +1401,11 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       const retryAt = Date.parse(input.autoRetryAt ?? '');
       if (Number.isFinite(retryAt)) {
         const at = new Date(retryAt).toISOString().slice(11, 16);
-        return strip({ state: 'waiting', kind: 'machine', waitingOn: clipped(`Walnut, retrying its failed turn by itself at ${at} UTC${why ? ` (${why.slice(0, 140)})` : ''}`, 240), ...w, stoppedBy: 'machine' });
+        return strip({ state: 'waiting', kind: 'machine', waitingOn: clipped(`Walnut, retrying its failed turn by itself at ${at} UTC${why ? ` (${clipped(why, 140)})` : ''}`, 240), ...w, stoppedBy: 'machine' });
       }
-      return failureOf(input, w, why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.',
-        why ? `its session failed again after Walnut's own retry (${why.slice(0, 160)})` : 'its session failed', false, why);
+      // Cut at a word (2026-11-24: "…so Walnut stopped the tur). Retry it").
+      return failureOf(input, w, why ? `Its session failed (${clipped(why, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.',
+        why ? `its session failed again after Walnut's own retry (${clipped(why, 160)})` : 'its session failed', false, why);
     }
     // Its team was stopped in one step (sessions/team-stop.ts) and it ran no turn since: it waits
     // for the resume or a message, and says so, rather than reading as a session that stopped for

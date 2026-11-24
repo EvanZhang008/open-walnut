@@ -198,15 +198,25 @@ codex-acp adapter's sessions write, so the web and phone apps read both alike. W
   waiting for network", an `error` with `willRetry`) do not count as getting anywhere: a turn that
   keeps retrying for 30 minutes with nothing else (`WALNUT_ENGINE_RETRY_LIMIT_MS`) is stopped too,
   and its row says so in Walnut's words ("Codex could not reach its model at <base_url> for 30
-  minutes (it retried 28 times by itself), so Walnut stopped the turn (network error)"); the session
-  record keeps those words, so the task's status says why. Codex is then asked to end it too, and
+  minutes and Walnut stopped the turn (network error; 28 retries)", the URL left out when it would
+  read as a final failure); the session record keeps those words, so the task's status says why. Codex is then asked to end it too, and
   the next message waits for that; a turn Codex does not end in 10 seconds is ended with its
   process. A stop that had to end the process says so in the transcript. The same bound, one policy
   (`src/providers/engine-turn-watch.ts`), covers a turn through any ACP adapter (the worker's
-  `acp-worker/adapter-turn-watch.ts`, which cancels the adapter's turn and ends an adapter that does
-  not stop) and Claude Code's unattended retry mode (the daemon passes
-  `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS`); `tests/providers/engine-retry-bound.test.ts` fails on
-  an engine or a retry signal with no bound.
+  `acp-worker/adapter-turn-watch.ts`: it cancels the adapter's turn, ends an adapter that does not
+  stop with SIGTERM then SIGKILL and waits until it is gone; a message sent meanwhile is refused
+  before anything is journaled and goes to a fresh worker). A tool reported by `tool_call` or only by
+  `tool_call_update` (pending, in progress) gets the 90-minute limit; thought chunks are progress.
+  The retry frames each adapter sends are listed per engine (`ACP_RETRY_SHAPES`, read from the
+  adapters' source: codex-acp's `_meta.codex.error.willRetry`, pi-acp's "Retrying (attempt n/m,
+  waiting Ns)..." text); Gemini, OpenCode, Goose and DeepSeek Harness have no known retry frame, so
+  only the silence limit holds for them. Claude Code's unattended retry mode is bounded by the daemon
+  passing `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS` (a value the host or the user's Claude Code
+  settings set wins). That, like `CLAUDE_CODE_MAX_RETRIES` beside it, is a deliberate exception to
+  "Walnut never sets an engine's own defaults": both are safety ceilings on an engine that would
+  otherwise retry without end, never a model or behaviour choice.
+  `tests/providers/engine-retry-bound.test.ts` fails on an engine, an ACP adapter or a retry signal
+  with no bound.
 - **Commands left running.** Codex can end its turn while a command it started goes on (a build
   or test run in one of its background terminals), and nothing of Codex's wakes it when that
   command ends. The client asks Codex what still runs at each turn's end

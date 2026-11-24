@@ -41,8 +41,9 @@ import { mergeAcpSpawnEnv, OP_REFUSAL_KINDS, snapshotAcpTurnUsage } from './prot
 import { matchesUsageLimitText, parseUsageLimitReset } from '../usage-limit-text.js'
 import { ACP_AUTH_ENV, pickAcpAuthMethod } from './adapter-env.js'
 import { TurnTextTail, turnEndFailure } from './executor-error.js'
-import { CodexDirectConnection, type AcpClientHandler } from '../codex-app-server/connection.js'
-import { AdapterTurnWatch, WalnutTurnStop, walnutWordsOf } from './adapter-turn-watch.js'
+import { CodexDirectConnection, CodexTurnError, type AcpClientHandler } from '../codex-app-server/connection.js'
+import { AdapterTurnWatch, WalnutTurnStop } from './adapter-turn-watch.js'
+import { childGone, endChild } from '../child-end.js'
 import { CodexLaunchError, prepareCodexLaunch } from '../codex-app-server/launch.js'
 import { AppServerRpcError } from '../codex-app-server/rpc.js'
 import { classifyCodexFailure } from '../codex-app-server/errors.js'
@@ -243,7 +244,7 @@ export class AcpWorker {
       engine: () => agentNameOf(this.initializeResponse),
       holding: () => this.pendingPermissions.size > 0,
       cancel: () => this.providerSessionId && this.conn ? this.conn.cancel({ sessionId: this.providerSessionId }) : Promise.resolve(),
-      kill: () => { if (adapter.exitCode === null && adapter.signalCode === null) adapter.kill('SIGTERM') },
+      kill: () => endChild(adapter, { signal: 'SIGTERM', graceMs: 3_000 }),
     })
     adapter.on('exit', () => {
       // Adapter death mid-turn = the turn is gone (no hot reattach exists).
@@ -364,9 +365,16 @@ export class AcpWorker {
     return this.turnWatch ? this.turnWatch.watched(prompt) : prompt
   }
 
-  /** A turn Walnut stopped at the adapter is still being cancelled there: the next one waits. */
+  /**
+   * A turn Walnut stopped is still being ended at the adapter or app-server: the next one waits,
+   * and when that ended the process, the prompt is refused before anything is journaled
+   * (`no_worker`): this worker goes with it, and the caller starts a fresh one and sends again.
+   */
   private async adapterTurnSettled(): Promise<void> {
     if (this.turnWatch?.cleanup) await this.turnWatch.cleanup
+    if (this.direct?.settling) await this.direct.settling
+    const gone = this.direct ? !this.direct.alive : this.adapter !== null && childGone(this.adapter)
+    if (gone) throw <WorkerError>{ kind: 'no_worker', message: 'this ACP worker\'s provider ended; a fresh worker takes the message' }
   }
 
   /**
@@ -1268,6 +1276,17 @@ function isWorkerError(e: unknown): e is WorkerError {
   return typeof e === 'object' && e !== null && 'kind' in e && 'message' in e && !(e instanceof Error)
 }
 
+/**
+ * Walnut's own words a turn Walnut stopped carries (a stall, an engine that kept retrying). Only
+ * from Walnut's own errors: an adapter's JSON-RPC error has a `data` of the adapter's choosing,
+ * whose words must never reach the journal.
+ */
+function walnutWordsOf(error: unknown): string | undefined {
+  if (!(error instanceof WalnutTurnStop) && !(error instanceof CodexTurnError)) return undefined
+  const words = error.data.walnutWords
+  return typeof words === 'string' && words ? words : undefined
+}
+
 /** The adapter's own name for the words of a stopped turn ("OpenCode"), short and plain; "The agent" when it gave none. */
 function agentNameOf(initializeResponse: unknown): string {
   const info = asObject(asObject(initializeResponse).agentInfo)
@@ -1366,6 +1385,7 @@ function safeWorkerErrorMessage(kind: WorkerError['kind']): string {
     case 'context_window': return 'Codex context window exceeded: the conversation is too long for the model'
     case 'app_server_exited': return 'Codex app-server stopped unexpectedly (connection closed); the next message starts it again'
     case 'turn_stalled': return 'Codex sent nothing for too long, so Walnut stopped the turn (operation timed out)'
+    case 'no_worker': return 'ACP worker provider ended; a fresh worker takes the message'
     case 'internal': return 'ACP worker operation failed'
   }
 }

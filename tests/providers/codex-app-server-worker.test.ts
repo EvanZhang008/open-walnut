@@ -521,7 +521,7 @@ describe('direct Codex: failures', () => {
     await waitTurn('c1', 5000)
     const err = errorRows().find((e) => e.commandId === 'c1')
     expect(err?.errorKind).toBe('connection')
-    expect(String(err?.message)).toMatch(/^Codex could not reach its model at http:\/\/127\.0\.0\.1:9\/openai\/v1 for \d+ seconds? \(it retried \d+ times by itself\), so Walnut stopped the turn \(network error\)\.$/)
+    expect(String(err?.message)).toMatch(/^Codex could not reach its model at http:\/\/127\.0\.0\.1:9\/openai\/v1 for \d+ seconds? and Walnut stopped the turn \(network error; \d+ retries\)\.$/)
     expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
     expect(requests('turn/interrupt')).toHaveLength(1)
     const next = await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'after the retries' })
@@ -530,13 +530,23 @@ describe('direct Codex: failures', () => {
     expect(agentText()).toContain('echo: after the retries')
   })
 
+  it('an endpoint URL that reads as a final failure is left out of the words, so the stop stays retryable', async () => {
+    const config = { model_provider: 'lp', model_providers: { lp: { name: 'lp', base_url: 'http://127.0.0.1:401/billing/v1', wire_api: 'responses' } } }
+    const { w } = await startSession({ WALNUT_ENGINE_RETRY_LIMIT_MS: '400', CODEX_CONFIG: JSON.stringify(config) })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'RETRY_FOREVER' })
+    await waitTurn('c1', 5000)
+    const err = errorRows().find((e) => e.commandId === 'c1')
+    expect(String(err?.message)).toMatch(/^Codex could not reach its model for /)
+    expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
+  })
+
   it('a turn Codex keeps retrying on a rate limit is a rate_limited row', async () => {
     const { w } = await startSession({ WALNUT_ENGINE_RETRY_LIMIT_MS: '400' })
     await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'RETRY_429' })
     await waitTurn('c1', 5000)
     const err = errorRows().find((e) => e.commandId === 'c1')
     expect(err?.errorKind).toBe('rate_limited')
-    expect(String(err?.message)).toMatch(/^Codex was rate limited by its model for /)
+    expect(String(err?.message)).toMatch(/^Codex was rate limited by its model for .* \(HTTP 429; \d+ retries\)\.$/)
     expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
   })
 
@@ -563,6 +573,16 @@ describe('direct Codex: failures', () => {
     // next message starts a fresh app-server instead of meeting "a turn is already running".
     await waitFor(() => gone, (g) => g.length > 0, 'adapter gone', 15_000)
     await waitFor(() => { try { process.kill(pid, 0); return true } catch { return false } }, (a) => !a, 'app-server exit', 3000)
+  }, 25_000)
+
+  it('a message sent while that app-server is being ended is refused before anything is journaled', async () => {
+    const { w } = await startSession({ WALNUT_CODEX_STALL_MS: '400' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'HANG_DEAF' })
+    await waitTurn('c1', 5000)
+    const sent = await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'hello' })
+    expect(sent.ok, JSON.stringify(sent)).toBe(false)
+    expect(sent.error?.kind).toBe('no_worker')
+    expect(metas().filter((e) => e.commandId === 'c2')).toEqual([])
   }, 25_000)
 
   it('refuses a Codex older than the supported range in words that name the way back', async () => {

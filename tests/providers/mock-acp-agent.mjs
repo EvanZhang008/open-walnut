@@ -18,6 +18,11 @@
  *   - "engine-goes-quiet" → sends nothing until cancelled
  *   - "steady-progress <ms>" → a chunk every 100ms for <ms>, then end_turn
  *   - "steady-tool <ms>" → one tool call that runs <ms> with no update, then end_turn
+ *   - "steady-update-tool <ms>" → the same, reported only by tool_call_update (in_progress, then completed)
+ *   - "steady-thought <ms>" → a thought chunk every 100ms for <ms>, then end_turn
+ *   - "pi-retries-forever" → Pi's retry notice as text ("Retrying (attempt n/99, waiting 1s)...") until cancelled
+ *   - "adapter-claims-words" → a JSON-RPC error whose data carries walnutWords (the worker must not trust it)
+ * Set MOCK_ACP_IGNORE_SIGTERM=1 for an adapter that traps SIGTERM (only SIGKILL ends it).
  *   - anything else     → streams 2 message chunks then end_turn
  *
  * session/load replays one historical message chunk (marker: "replayed:") so
@@ -84,6 +89,8 @@ const availableModels = [
 if (process.env.MOCK_ACP_STDERR_SECRET) {
   process.stderr.write(`adapter auth diagnostic: ${process.env.MOCK_ACP_STDERR_SECRET}\n`);
 }
+
+if (process.env.MOCK_ACP_IGNORE_SIGTERM === '1') process.on('SIGTERM', () => {});
 
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -233,6 +240,40 @@ async function handlePrompt(id, params) {
       await sleep(every);
     }
     reply(id, { stopReason: 'cancelled' });
+    return;
+  }
+  if (text.includes('pi-retries-forever')) {
+    let attempt = 0;
+    while (!cancelled) {
+      chunk(sessionId, `Retrying (attempt ${++attempt}/99, waiting 1s)...`);
+      await sleep(Number(process.env.MOCK_ACP_RETRY_EVERY_MS) || 50);
+    }
+    reply(id, { stopReason: 'cancelled' });
+    return;
+  }
+  if (text.includes('adapter-claims-words')) {
+    send({ jsonrpc: '2.0', id, error: { code: -32603, message: 'Internal error', data: { walnutWords: 'ADAPTER SAYS: token sk-live-123' } } });
+    return;
+  }
+  if (text.includes('steady-thought')) {
+    const ms = Number(/steady-thought (\d+)/.exec(text)?.[1]) || 1000;
+    const until = Date.now() + ms;
+    while (!cancelled && Date.now() < until) {
+      notify('session/update', { sessionId, update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking ' } } });
+      await sleep(100);
+    }
+    chunk(sessionId, 'steady done');
+    reply(id, { stopReason: cancelled ? 'cancelled' : 'end_turn' });
+    return;
+  }
+  if (text.includes('steady-update-tool')) {
+    const ms = Number(/steady-update-tool (\d+)/.exec(text)?.[1]) || 1000;
+    const until = Date.now() + ms;
+    notify('session/update', { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'steady-u1', status: 'in_progress' } });
+    while (!cancelled && Date.now() < until) await sleep(20);
+    notify('session/update', { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'steady-u1', status: 'completed' } });
+    chunk(sessionId, 'steady done');
+    reply(id, { stopReason: cancelled ? 'cancelled' : 'end_turn' });
     return;
   }
   if (text.includes('engine-goes-quiet')) {

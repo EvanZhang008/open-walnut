@@ -12,6 +12,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { endChild } from '../child-end.js'
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 const MAX_LINE_CHARS = 64 * 1024 * 1024
@@ -148,6 +149,11 @@ export class AppServerRpc {
   /** Immediate end (the worker is going away). */
   kill(): void {
     if (this.child && !this.exited) try { this.child.kill('SIGKILL') } catch { /* gone */ }
+  }
+
+  /** The same, resolving once the process is gone (its exit seen, every waiting request failed). */
+  async killAndWait(): Promise<void> {
+    if (this.child && !this.exited) await endChild(this.child, { signal: 'SIGKILL' })
   }
 
   private write(msg: Record<string, unknown>): void {

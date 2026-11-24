@@ -18,9 +18,10 @@
  * the direct Codex client (codex-app-server/connection.ts) and the ACP worker for every adapter
  * (acp-worker/worker.ts). Both run on the host that runs the session, so the bound holds with the
  * leader away. Claude Code bounds its own retries once Walnut gives it the same limit
- * (claudeRetryEnv, in the daemon's spawn env). It imports only errors.ts, which imports nothing (the daemon bundles it).
+ * (claudeRetryEnv, in the daemon's spawn env).
  */
 import { classifyCodexFailure } from './codex-app-server/errors.js'
+import { classifyTurnError } from './daemon-core.js'
 
 /** How long an engine may keep retrying with nothing else from the turn: the same ~30 minutes Claude Code's retry budget covers (the daemon's CLAUDE_CODE_MAX_RETRIES 60). */
 export const ENGINE_RETRY_LIMIT_DEFAULT_MS = 30 * 60_000
@@ -50,11 +51,12 @@ export function watchTickMs(env: NodeJS.ProcessEnv): number {
   return Math.max(50, Math.min(15_000, Math.floor(Math.min(stallIdleMs(env), retryLimitMs(env)) / 4)))
 }
 
-/** What kind of failure the engine kept retrying, read from its notice (Codex's error code first). */
-export type RetryKind = 'connection' | 'rate_limited' | 'overloaded' | 'server_error'
+/** What kind of failure the engine kept retrying, read from its notice (Codex's error code first); `unknown` when the notice names none. */
+export type RetryKind = 'connection' | 'rate_limited' | 'overloaded' | 'server_error' | 'unknown'
 
 export interface TurnVerdict {
-  kind: 'turn_stalled' | RetryKind
+  /** The worker's error kind of the stopped turn: a retry of no named kind is a stall Walnut ended. */
+  kind: 'turn_stalled' | Exclude<RetryKind, 'unknown'>
   /** Walnut's own words (no provider text, no secret): what happened, for how long, and that the turn was stopped. */
   words: string
 }
@@ -96,11 +98,12 @@ export class TurnWatch {
     if (f.holding) return null
     const s = this.streak
     if (s && f.now - s.since >= retryLimitMs(f.env)) {
-      return { kind: s.kind, words: retryWords(f.engine, s.kind, s.count, f.now - s.since, f.endpoint) }
+      const kind = s.kind === 'unknown' ? 'turn_stalled' : s.kind
+      return { kind, words: retryWords(kind, f.engine, s.kind, s.count, f.now - s.since, f.endpoint) }
     }
     const quiet = f.now - this.lastEventAt
     if (quiet < (f.itemRunning ? stallItemMs(f.env) : stallIdleMs(f.env))) return null
-    return { kind: 'turn_stalled', words: `${f.engine} sent nothing for ${duration(quiet)}, so Walnut stopped the turn (operation timed out).` }
+    return { kind: 'turn_stalled', words: `${f.engine} sent nothing for ${duration(quiet)} and Walnut stopped the turn (operation timed out).` }
   }
 }
 
@@ -113,19 +116,23 @@ export function duration(ms: number): string {
 
 // Each kind's tail is the signature Walnut's turn-retry reads as transient (daemon-core.ts classifyTurnError).
 // Not "connection error": that is the endpoint wait's (endpoint-unreachable.ts), which resumes only
-// Claude Code turns, so an ACP session would read Waiting with nothing behind it.
+// Claude Code turns, so an ACP session would read Waiting with nothing behind it. The words stay
+// short (the task's status shows about 140 characters of them).
 const RETRY_PHRASES: Record<RetryKind, { what: (at: string) => string; tail: string }> = {
   connection: { what: (at) => `could not reach its model${at}`, tail: 'network error' },
   rate_limited: { what: (at) => `was rate limited by its model${at}`, tail: 'HTTP 429' },
   overloaded: { what: (at) => `found its model${at} overloaded`, tail: 'HTTP 503' },
   server_error: { what: (at) => `got server errors from its model${at}`, tail: 'internal server error' },
+  unknown: { what: (at) => `kept retrying its model${at}`, tail: 'operation timed out' },
 }
 
-function retryWords(engine: string, kind: RetryKind, count: number, ms: number, endpoint?: string): string {
+function retryWords(errorKind: string, engine: string, kind: RetryKind, count: number, ms: number, endpoint?: string): string {
   const p = RETRY_PHRASES[kind]
-  const at = endpoint ? ` at ${endpoint}` : ''
-  const tries = count === 1 ? 'once' : `${count} times`
-  return `${engine} ${p.what(at)} for ${duration(ms)} (it retried ${tries} by itself), so Walnut stopped the turn (${p.tail}).`
+  const say = (at: string) => `${engine} ${p.what(at)} for ${duration(ms)} and Walnut stopped the turn (${p.tail}; ${count} ${count === 1 ? 'retry' : 'retries'}).`
+  const words = say(endpoint ? ` at ${endpoint}` : '')
+  // A URL can carry what reads as a final failure (a port 401, a path with "billing"): then the
+  // turn-retry would give up on a transient stop, so the words go without it.
+  return endpoint && classifyTurnError(`${errorKind}: ${words}`) !== 'retryable' ? say('') : words
 }
 
 /**
@@ -150,15 +157,55 @@ export function retryKindOf(error: unknown): RetryKind {
   return kind === 'rate_limited' || kind === 'overloaded' || kind === 'server_error' ? kind : 'connection'
 }
 
+/** The frames an ACP adapter is known to report its own retries with (read from each adapter's source). */
+export type RetryShape = 'codex-meta' | 'pi-text'
+
+const PI_RETRY_TEXT = /^Retrying(?: \(attempt \d+\/\d+, waiting \d+s\))?\.\.\.$/
+
+/** One matcher per shape: the kind of what is retried, or null when the frame is no retry notice. */
+export const RETRY_SHAPE_MATCHERS: Record<RetryShape, (update: Record<string, unknown>) => RetryKind | null> = {
+  // codex-acp 1.4 and the direct Codex client (events.ts): `session_info_update` with
+  // `_meta.codex.error.willRetry`. Read under any key, so an adapter that reports the same way is
+  // bounded too. (codex-acp's typed "session failure" frames go only to a client that advertises
+  // them, which Walnut does not.)
+  'codex-meta': (update) => {
+    if (update.sessionUpdate !== 'session_info_update' || !isRecord(update._meta)) return null
+    for (const ns of Object.values(update._meta)) {
+      if (isRecord(ns) && isRecord(ns.error) && ns.error.willRetry === true) return retryKindOf(ns.error)
+    }
+    return null
+  },
+  // pi-acp 0.0.33 maps Pi's auto_retry_start to an agent_message_chunk of exactly
+  // "Retrying (attempt 2/3, waiting 4s)..." ("Retrying..." without the numbers); its
+  // auto_retry_end ("Retry finished, resuming.") is progress.
+  'pi-text': (update) => {
+    if (update.sessionUpdate !== 'agent_message_chunk' || !isRecord(update.content)) return null
+    const text = update.content.type === 'text' ? update.content.text : undefined
+    return typeof text === 'string' && PI_RETRY_TEXT.test(text.trim()) ? 'unknown' : null
+  },
+}
+
 /**
- * An ACP `session_info_update` that says the engine retries by itself: the shape the direct Codex
- * client and codex-acp send (`_meta.codex.error.willRetry`), read under any engine's key so an
- * adapter that reports retries the same way is bounded too. Returns the notice's error, or null.
+ * Each ACP engine's retry frames, or why none is listed. The guard test fails on an ACP engine of
+ * the registry with no row, so a new adapter is looked at before it ships. Every adapter also has
+ * the silence bound, whatever it reports.
  */
-export function acpRetryNotice(update: unknown): Record<string, unknown> | null {
-  if (!isRecord(update) || update.sessionUpdate !== 'session_info_update' || !isRecord(update._meta)) return null
-  for (const ns of Object.values(update._meta)) {
-    if (isRecord(ns) && isRecord(ns.error) && ns.error.willRetry === true) return ns.error
+export const ACP_RETRY_SHAPES: Record<string, { shapes: readonly RetryShape[]; basis: string }> = {
+  codex: { shapes: ['codex-meta'], basis: 'codex-acp 1.4.0 (node_modules/@agentclientprotocol/codex-acp) and codex-app-server/events.ts: an app-server `error` with willRetry becomes _meta.codex.error.willRetry' },
+  pi: { shapes: ['pi-text'], basis: "pi-acp 0.0.33 (node_modules/pi-acp) sends Pi's auto_retry_start as a text chunk; Pi itself stops after retry.maxRetries (3 by default)" },
+  gemini: { shapes: [], basis: 'Gemini CLI source not available on the build host (2026-11-24): no retry frame is known, so only the silence bound holds' },
+  opencode: { shapes: [], basis: 'OpenCode is a compiled binary whose source is not on the build host (2026-11-24): no retry frame is known, so only the silence bound holds' },
+  goose: { shapes: [], basis: 'Goose source not available on the build host (2026-11-24): no retry frame is known, so only the silence bound holds' },
+  dsh: { shapes: [], basis: 'DeepSeek Harness source not available on the build host (2026-11-24): no retry frame is known, so only the silence bound holds' },
+  custom: { shapes: [], basis: 'any adapter the user configures: a codex-shaped notice is still read (codex-meta reads every _meta key); otherwise only the silence bound holds' },
+}
+
+/** An ACP session/update that says the engine retries by itself, in any known shape: the kind retried, or null. */
+export function acpRetryNotice(update: unknown): RetryKind | null {
+  if (!isRecord(update)) return null
+  for (const match of Object.values(RETRY_SHAPE_MATCHERS)) {
+    const kind = match(update)
+    if (kind) return kind
   }
   return null
 }
@@ -171,15 +218,15 @@ export function acpRetryNotice(update: unknown): Record<string, unknown> | null 
 export const ENGINE_RETRY_BOUNDS = {
   'claude-cli': {
     signals: ["stream-json system line subtype 'api_retry'"],
-    bound: 'Claude Code ends the turn itself: CLAUDE_CODE_MAX_RETRIES (60, about 30 minutes) and, in its unattended retry mode, CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS, which the daemon sets to retryLimitMs (claudeRetryEnv); its stream idle watchdog ends a silent request. The failed turn is an error result with its words.',
+    bound: 'Claude Code ends the turn itself: CLAUDE_CODE_MAX_RETRIES (60, about 30 minutes of backoff) and, in its unattended retry mode, CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS, which daemon-standalone.ts sets to retryLimitMs (claudeRetryEnv); its stream idle watchdog ends a silent request. The failed turn is an error result with its words.',
   },
   'codex-app-server': {
     signals: ["app-server notification 'error' with willRetry: true", 'no notification while a turn is open'],
     bound: 'codex-app-server/connection.ts checkStall: a TurnWatch per turn; the turn fails with Walnut words, and Codex is interrupted (its process ended when it does not stop).',
   },
   'acp-adapter': {
-    signals: ['session_info_update with _meta.<engine>.error.willRetry: true', 'no session/update while a prompt is open'],
-    bound: 'acp-worker/worker.ts watchAdapterTurn: a TurnWatch per turn; the turn fails with Walnut words, the adapter is cancelled (and ended when it does not stop).',
+    signals: ["each adapter's retry frames (ACP_RETRY_SHAPES)", 'no session/update while a prompt is open'],
+    bound: 'acp-worker/adapter-turn-watch.ts AdapterTurnWatch (made in worker.ts opInitialize): a TurnWatch per turn; the turn fails with Walnut words, the adapter is cancelled, and one that does not end the turn is ended (SIGTERM, then SIGKILL) before the next prompt.',
   },
 } as const
 
@@ -199,7 +246,12 @@ export function transportsOf(engine: string, runtimeKind: string): TurnTransport
 /**
  * The spawn env that bounds Claude Code's unattended retry mode (CLAUDE_CODE_RETRY_WATCHDOG, which
  * otherwise waits with no limit) at the same limit as every other engine. A value the host already
- * has wins.
+ * has wins (and a value in the user's own Claude Code settings wins inside the CLI).
+ *
+ * An exception to "Walnut never sets an engine's own defaults", as CLAUDE_CODE_MAX_RETRIES beside it
+ * is: both are safety ceilings, never a model or behaviour choice, and the user asked that an engine
+ * retrying with no limit becomes an error after one (2026-11-24). The CLI counts only its backoff
+ * waits against it, so the wall time of a stopped turn is somewhat longer than the limit.
  */
 export function claudeRetryEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   if (env.CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS) return {}

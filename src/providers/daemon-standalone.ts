@@ -7947,6 +7947,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
       // Its unattended retry mode (CLAUDE_CODE_RETRY_WATCHDOG, a user setting) otherwise retries
       // with no limit while the session reads Running: the same bound as every engine (engine-turn-watch.ts).
+      // Like CLAUDE_CODE_MAX_RETRIES, a safety ceiling: the one kind of engine setting Walnut sets.
       ...claudeRetryEnv(daemonEnv),
       ...(daemonEnv.WALNUT_DISABLE_FILE_CHECKPOINTS === '1'
         ? {}

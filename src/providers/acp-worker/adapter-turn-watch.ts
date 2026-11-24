@@ -7,10 +7,10 @@
  * streak, every other frame is progress, an open tool call stretches the quiet limit, and a
  * permission the person has not answered holds it. Past a limit `watched` rejects with a
  * WalnutTurnStop, which the worker's prompt handler journals as the turn's error (its Walnut
- * words) and its end, then `stop` cancels the turn at the adapter and ends an adapter that does
- * not end it in time, so the next message never meets the old turn.
+ * words) and its end; then the turn is cancelled at the adapter, and an adapter that does not end
+ * it in time is ended and waited for (`cleanup`), so the next message never meets the old turn.
  */
-import { TurnWatch, acpRetryNotice, retryKindOf, watchTickMs, type TurnVerdict } from '../engine-turn-watch.js'
+import { TurnWatch, acpRetryNotice, watchTickMs, type TurnVerdict } from '../engine-turn-watch.js'
 
 /** A turn Walnut stopped: read by the worker's prompt handler as `data.walnutError` (codex-app-server/errors.ts). */
 export class WalnutTurnStop extends Error {
@@ -24,14 +24,9 @@ export class WalnutTurnStop extends Error {
   }
 }
 
-/** Walnut's own words a stopped turn carries (never the provider's), or undefined. */
-export function walnutWordsOf(error: unknown): string | undefined {
-  const data = error && typeof error === 'object' ? (error as { data?: unknown }).data : undefined
-  const words = data && typeof data === 'object' ? (data as { walnutWords?: unknown }).walnutWords : undefined
-  return typeof words === 'string' && words ? words : undefined
-}
-
 const ENDED_TOOL = new Set(['completed', 'failed'])
+/** A tool call update that says the tool runs: an adapter may send only these, never a `tool_call`. */
+const RUNNING_TOOL = new Set(['pending', 'in_progress'])
 /** How long a cancelled turn may take to end at the adapter before the adapter is ended (as the direct client's interrupt). */
 function cancelGraceMs(env: NodeJS.ProcessEnv): number {
   const n = Number(env.WALNUT_TURN_CANCEL_GRACE_MS)
@@ -46,8 +41,8 @@ export interface AdapterTurnHooks {
   holding(): boolean
   /** Ask the adapter to cancel the turn (ACP session/cancel). */
   cancel(): Promise<unknown>
-  /** End the adapter: it did not end the cancelled turn in time. */
-  kill(): void
+  /** End the adapter (it did not end the cancelled turn in time), resolving once it is gone. */
+  kill(): Promise<unknown>
 }
 
 export class AdapterTurnWatch {
@@ -89,16 +84,16 @@ export class AdapterTurnWatch {
   frame(update: unknown): void {
     const watch = this.watch
     if (!watch) return
-    const notice = acpRetryNotice(update)
-    if (notice) { watch.retried(retryKindOf(notice)); return }
+    const retried = acpRetryNotice(update)
+    if (retried) { watch.retried(retried); return }
+    // Every other frame is progress: a thought chunk of a long thinking, a plan, a usage update.
     watch.progress()
     const u = update as { sessionUpdate?: unknown; toolCallId?: unknown; status?: unknown }
     if (typeof u.toolCallId !== 'string') return
-    if (u.sessionUpdate === 'tool_call') {
-      if (!ENDED_TOOL.has(String(u.status))) this.openTools.add(u.toolCallId)
-    } else if (u.sessionUpdate === 'tool_call_update' && ENDED_TOOL.has(String(u.status))) {
-      this.openTools.delete(u.toolCallId)
-    }
+    const status = String(u.status)
+    if (ENDED_TOOL.has(status)) this.openTools.delete(u.toolCallId)
+    // A tool_call with no status is pending (ACP's default); an update says so only when it moves.
+    else if ((u.sessionUpdate === 'tool_call' && u.status === undefined) || RUNNING_TOOL.has(status)) this.openTools.add(u.toolCallId)
   }
 
   /** Something of the turn that is no frame (the person answered a permission). */
@@ -117,6 +112,8 @@ export class AdapterTurnWatch {
     let timer: ReturnType<typeof setTimeout> | undefined
     const ended = await Promise.race([settled, new Promise<false>((res) => { timer = setTimeout(() => res(false), cancelGraceMs(this.hooks.env)) })])
     if (timer) clearTimeout(timer)
-    if (ended !== true) this.hooks.kill()
+    // Resolved only once the adapter is gone: a prompt waiting on this cleanup must never be sent
+    // into an adapter that is still dying (it would read as that turn's crash).
+    if (ended !== true) await this.hooks.kill()
   }
 }

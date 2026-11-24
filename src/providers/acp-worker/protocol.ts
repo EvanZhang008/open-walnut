@@ -60,6 +60,7 @@ export interface WorkerError {
     | 'context_window'         // contextWindowExceeded
     | 'app_server_exited'      // the codex app-server process ended
     | 'turn_stalled'           // no event for too long (the worker's watchdog), or a request ran out of time
+    | 'no_worker'              // this worker's provider ended (a turn Walnut stopped took it): the caller starts a fresh worker
     | 'internal'
   message: string
   /** The message is Walnut's own words (no provider text, no secret): kept as is past the worker's sanitizer. */
@@ -77,6 +78,9 @@ export interface WorkerError {
  */
 export const OP_REFUSAL_KINDS: ReadonlySet<string> = new Set<WorkerError['kind']>([
   'turn_active', 'no_turn', 'steer_unsupported', 'steer_race',
+  // The provider ended before the prompt went: nothing was journaled, and the daemon's own
+  // `no_worker` answer makes the session start a fresh worker and send again (acp-session.ts).
+  'no_worker',
 ])
 
 /** A journaled `error` record that only says an op was refused (see OP_REFUSAL_KINDS). */
