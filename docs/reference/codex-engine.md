@@ -68,14 +68,30 @@ start, resume, restart and engine switch, on this machine and on the host's own 
    daemon links reach one daemon process);
 2. else the global `engines.codex.provider`, except a loopback one on any machine but this one
    (a host entry that reaches this machine's own daemon counts as this machine): there the Codex
-   session does not start. Its error, in the session and on its task, names the host and shows
-   the `hosts.<name>.engines.codex.provider` to set. Walnut never falls back to the host's own
+   session does not start. Its error names the host and shows the
+   `hosts.<name>.engines.codex.provider` to set: a start or an engine switch answers `422
+   engine_config` with it and the task's last start keeps it; a restart answers it, and a message
+   to a session that can no longer start there is held with it in the chat. A retry fails the
+   same way until the setting changes. Walnut never falls back to the host's own
    `~/.codex/config.toml` there, which may send the session to another account.
 
-Wherever the global provider is not the one used, the `engines.codex.env` entries that point at
-it are not sent either: a `MODEL_PROVIDER` naming it, the variable named by its `env_key`, a
-value holding its `base_url`, and its entry (and a `model_provider` naming it) in a
-`CODEX_CONFIG` there.
+The `engines.codex.env` this machine sends with a start on another host loses every provider entry
+that reaches nothing there:
+
+- the global provider's, where the host uses another one (another `name` and another server): a
+  `MODEL_PROVIDER` naming it, the variable named by its `env_key`, a value holding its server, and
+  its entry in a `CODEX_CONFIG`;
+- every loopback server but the one of the host's provider, however it is written (`localhost`,
+  `127.x`, `[::1]`): a `CODEX_CONFIG` `model_providers` entry at one, a `model_provider` or a
+  profile's `model_provider` naming such an entry, a `MODEL_PROVIDER` naming one, a value holding
+  such a URL.
+
+What points at the provider used there stays: a host provider that is the global one again (the
+same proxy at the same port on every machine, under its name or another) keeps your
+`CODEX_CONFIG` entry for it (`http_headers`, `request_max_retries`) and an `OPENAI_BASE_URL` at it,
+and a `CODEX_CONFIG` entry under the host provider's own name keeps its other keys at the host
+provider's address. A session on this machine, and a host's own service reading its own
+`engines.codex.env`, keep the env as written.
 
 Only the provider is per host. `model`, `effort` and every other key of `engines.codex` stay the
 global ones on every host, so the default `model` must exist on each host's provider too. The

@@ -123,7 +123,7 @@ export async function codexWalnutConfig(place: CodexSpawnPlace): Promise<Record<
   const resolve = () => {
     const ties = host ? sameDaemonKeysNow(host) : []
     const thisMachine = !follower && (!remote || ties.includes('__local__'))
-    return codexProviderForPlace(config, { host, aliases: ties.filter((k) => k !== '__local__'), configIsThisMachine: thisMachine })
+    return codexProviderForPlace(config, { host, aliases: ties.filter((k) => k !== '__local__'), configIsThisMachine: thisMachine, follower })
   }
   let resolved = resolve()
   // A host key that may be this leader's own machine is told apart only by both daemon links being

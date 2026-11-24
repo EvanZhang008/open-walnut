@@ -30,6 +30,8 @@ import {
   resolveCodexAdapterConfig,
   resolveCodexEngine,
 } from '../../src/providers/codex-engine-config.js'
+import { classifyDeliveryFailure } from '../../src/providers/delivery-failure.js'
+import { isLoopbackUrl } from '../../src/core/service-url.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const ARTIFACTS = { workerCmd: ['worker'], adapterCmd: ['adapter'] }
@@ -354,10 +356,103 @@ describe('codexProviderForPlace: the provider for the machine Codex runs on', ()
     expect(codexEnvAtPlace(undefined, atHost)).toBeUndefined()
   })
 
+  it('a host provider that is the global one (its id, or its server) keeps the user\'s own CODEX_CONFIG and env for it', () => {
+    // Every machine runs the same proxy at the same port: the host's provider repeats the global one.
+    const userConfig = {
+      model_context_window: 1000000,
+      model_providers: { 'local-proxy': { base_url: 'http://127.0.0.1:8402/openai/v1', http_headers: { 'x-team': 'a' }, request_max_retries: 7 } },
+    }
+    const env = { MODEL_PROVIDER: 'local-proxy', OPENAI_BASE_URL: 'http://127.0.0.1:8402/openai/v1', CODEX_CONFIG: JSON.stringify(userConfig) }
+    for (const own of [{ ...LOOPBACK }, { ...LOOPBACK, name: 'devbox-proxy' }]) {
+      const config = { engines: { codex: { provider: LOOPBACK, env } }, hosts: { devbox: { hostname: 'd', engines: { codex: { provider: own } } } } }
+      const out = codexOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })).env as Record<string, string>
+      expect(out, own.name).toEqual(env)
+    }
+  })
+
+  it('the user\'s CODEX_CONFIG entry of the used provider\'s id keeps its other keys, at the server it is at there', () => {
+    const userConfig = { model_providers: { 'host-relay': { base_url: 'http://localhost:8402/openai/v1', http_headers: { 'x-team': 'a' } } } }
+    const config = { engines: { codex: { provider: LOOPBACK, env: { CODEX_CONFIG: JSON.stringify(userConfig) } } }, hosts: { devbox: { hostname: 'd', engines: { codex: { provider: HOST_OWN } } } } }
+    const own = codexOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false }))
+    const resolved = resolveCodexEngine({ engines: { codex: own } }, (own.env as Record<string, string>).CODEX_CONFIG)
+    expect((resolved.baseConfig!.model_providers as Record<string, unknown>)['host-relay']).toEqual({ base_url: HOST_OWN.base_url, http_headers: { 'x-team': 'a' } })
+  })
+
+  it('an env sent to another machine loses every loopback provider but the one used there: any spelling, a profile, MODEL_PROVIDER, a URL value', () => {
+    const userConfig = {
+      model_provider: 'lp2', profile: 'lp',
+      profiles: { lp: { model_provider: 'local-proxy', model: 'm' }, far: { model_provider: 'far' } },
+      model_providers: { lp2: { base_url: 'http://localhost:8402/openai/v1' }, v6: { base_url: 'http://[::1]:8402/v1' }, far: { base_url: 'https://far.example.com/v1' }, mine: { base_url: 'http://127.0.0.1:18402/other' } },
+    }
+    const env = { MODEL_PROVIDER: 'v6', OPENAI_BASE_URL: 'http://localhost:8402/openai/v1', HOST_URL: 'http://127.0.0.1:18402/v1', CODEX_CONFIG: JSON.stringify(userConfig), PLAIN: 'kept' }
+    const config = { engines: { codex: { provider: LOOPBACK, env } }, hosts: { devbox: { hostname: 'd', engines: { codex: { provider: HOST_OWN } } } } }
+    const out = codexOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })).env as Record<string, string>
+    expect(Object.keys(out).sort()).toEqual(['CODEX_CONFIG', 'HOST_URL', 'PLAIN'])
+    expect(JSON.parse(out.CODEX_CONFIG)).toEqual({
+      profile: 'lp',
+      profiles: { lp: { model: 'm' }, far: { model_provider: 'far' } },
+      // The host's own server (another path on its port) stays; the far one is not loopback.
+      model_providers: { far: { base_url: 'https://far.example.com/v1' }, mine: { base_url: 'http://127.0.0.1:18402/other' } },
+    })
+    // This machine, and a follower reading its own env, keep all of it.
+    expect(codexOf(codexProviderForPlace(config, { configIsThisMachine: true })).env).toEqual(env)
+    expect(codexOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false, follower: true })).env).toEqual(env)
+  })
+
+  it('guard: at another machine, no loopback endpoint but the used one is left, and every provider named is one defined', () => {
+    // Every loopback spelling isLoopbackHostname knows, written in every place a provider can be named.
+    const spellings = ['127.0.0.1', '127.9.9.9', 'localhost', 'a.localhost', '[::1]', '[::ffff:127.0.0.1]', '0.0.0.0', '[::]']
+    for (const host of spellings) expect(isLoopbackUrl(`http://${host}:1/`), host).toBe(true)
+    for (const spelling of spellings) {
+      const at = `http://${spelling}:8402/v1`
+      const userConfig = { model_provider: 'p', profiles: { x: { model_provider: 'p' } }, model_providers: { p: { base_url: at } } }
+      const env = { MODEL_PROVIDER: 'p', SOME_URL: at, CODEX_CONFIG: JSON.stringify(userConfig) }
+      for (const hostProvider of [HOST_OWN, undefined]) {
+        for (const global of [LOOPBACK, PROXY]) {
+          const config = { engines: { codex: { provider: global, env } }, hosts: { devbox: { hostname: 'd', ...(hostProvider ? { engines: { codex: { provider: hostProvider } } } : {}) } } }
+          const out = codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })
+          const left = codexOf(out).env as Record<string, string>
+          const usedUrl = hostProvider?.base_url ?? (global === PROXY ? PROXY.base_url : undefined)
+          let resolved: Record<string, unknown> = {}
+          try { resolved = resolveCodexEngine(out.config, left.CODEX_CONFIG).baseConfig ?? {} } catch { /* a refusal: only the env is judged */ }
+          const text = JSON.stringify({ left, resolved })
+          for (const url of text.match(/https?:\/\/[^\s"\\,]+/g) ?? []) {
+            if (!isLoopbackUrl(url)) continue
+            expect(usedUrl && new URL(url).port === new URL(usedUrl).port, `${spelling}: ${url} left`).toBeTruthy()
+          }
+          const defined = new Set(Object.keys((resolved.model_providers as Record<string, unknown> | undefined) ?? {}))
+          const parsed = left.CODEX_CONFIG ? JSON.parse(left.CODEX_CONFIG) as Record<string, unknown> : {}
+          const named = [left.MODEL_PROVIDER, parsed.model_provider, ...Object.values((parsed.profiles as Record<string, Record<string, unknown>> | undefined) ?? {}).map((p) => p.model_provider)]
+          for (const id of named.filter((v): v is string => typeof v === 'string')) expect(defined.has(id), `${spelling}: ${id} named, not defined`).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('the refusal and the env rule are plain data: a deep copy of the resolved config still refuses and still strips', () => {
+    const config = { engines: { codex: REAL_SHAPED } }
+    const out = codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })
+    for (const copy of [structuredClone(out.config), JSON.parse(JSON.stringify(out.config)) as Record<string, unknown>]) {
+      expect(refusalOf({ config: copy })).toContain('hosts.<name>.engines.codex.provider')
+      expect(codexEnvAtPlace({ MODEL_PROVIDER: 'local-proxy', OTHER: 'x' }, copy)).toEqual({ OTHER: 'x' })
+    }
+  })
+
+  it('a refusal is a setting: 422 with its code, and a permanent delivery failure that keeps its words', () => {
+    const out = codexProviderForPlace({ engines: { codex: REAL_SHAPED } }, { host: 'devbox', configIsThisMachine: false })
+    let caught: unknown
+    try { resolveCodexEngine(out.config, undefined) } catch (err) { caught = err }
+    expect(caught).toMatchObject({ status: 422, code: 'engine_config' })
+    const verdict = classifyDeliveryFailure(caught)
+    expect(verdict).toMatchObject({ kind: 'permanent', code: 'engine_config' })
+    expect(verdict.reason).toContain('base_url: http://127.0.0.1:<port of the proxy on that host>/v1')
+  })
+
   it('a non-loopback global reaches every host, with its env', () => {
     const config = { engines: { codex: { provider: PROXY, env: { MODEL_PROVIDER: 'my-proxy' } } } }
     const out = codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })
-    expect(out.config).toBe(config)
+    expect(codexOf(out).provider).toBe(PROXY)
+    expect(codexOf(out).env).toEqual({ MODEL_PROVIDER: 'my-proxy' })
     expect(out.source).toEqual({ from: 'global' })
   })
 
@@ -382,7 +477,11 @@ describe('codexProviderForPlace: the provider for the machine Codex runs on', ()
 
   it('nothing set: nothing changes', () => {
     const config = { hosts: { devbox: { hostname: 'devbox' } } }
-    expect(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })).toEqual({ config, source: { from: 'none' } })
+    const out = codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })
+    expect(out.source).toEqual({ from: 'none' })
+    expect(readCodexEngineSettings(out.config)).toEqual({})
+    // On this machine nothing changes at all.
+    expect(codexProviderForPlace(config, { configIsThisMachine: true })).toEqual({ config, source: { from: 'none' } })
   })
 })
 
@@ -407,6 +506,19 @@ describe('AcpSession: the provider is the one for the host the session runs on',
     const local = await startEnv()
     expect(codexConfigOf(local)).toMatchObject({ model_provider: 'local-proxy' })
     expect(local.MODEL_PROVIDER).toBe('local-proxy')
+  })
+
+  it('another engine on a host reads no Codex provider: no refusal, no warn about one, its own env as written', async () => {
+    await updateConfig({ engines: { codex: REAL_SHAPED, opencode: { env: { OPENCODE_SETTING: 'x' } } }, session: { tag_requests: true } } as never)
+    const { log } = await import('../../src/logging/index.js')
+    ;(await import('../../src/providers/codex-engine-source.js'))._resetCodexSourceNotesForTesting()
+    const warn = vi.spyOn(log.session, 'warn')
+    const session = new AcpSession({ taskId: 't-1', project: '', cwd: '/tmp', mode: 'default', engine: 'opencode', host: 'devbox', artifacts: ARTIFACTS })
+    const env = await (session as unknown as { buildAdapterEnv: (p: string | undefined) => Promise<Record<string, string>> }).buildAdapterEnv(undefined)
+    expect(env.OPENCODE_SETTING).toBe('x')
+    // session.tag_requests still tags its requests.
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBeTruthy()
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('codex:'))).toEqual([])
   })
 
   it('the host\'s own model_prefix applies to a pick there, the global one\'s here', async () => {

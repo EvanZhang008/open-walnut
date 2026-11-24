@@ -19,6 +19,7 @@ import type { SessionEffort, SessionEngine, SessionMode, SessionRecord, Task } f
 import { missingIsNull } from '../../lib/id-ref.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
+import { QuickStartError } from '../../core/sessions/quick-start.js'
 
 export const engineSwitchV1Router = Router()
 
@@ -32,6 +33,11 @@ function sendError(res: Response, err: unknown, next: NextFunction): void {
   const status = (err as { status?: number }).status
   if (typeof status === 'number') {
     res.status(status).json({ error: err instanceof Error ? err.message : String(err), code: (err as { code?: string }).code })
+    return
+  }
+  // The new session's start was refused with its own answer (task-start.ts): a setting is 422 engine_config.
+  if (err instanceof QuickStartError && typeof err.body?.code === 'string') {
+    res.status(err.statusCode).json({ error: err.message, code: err.body.code })
     return
   }
   next(err)

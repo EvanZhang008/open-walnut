@@ -15,7 +15,7 @@ import type { VouchedJob } from '../plugin-jobs/job-caller.js';
 import { isRouterAreaSession, routerAreaProfile, runsAreaProfile } from '../router/session-policy.js';
 import { inheritedEnginePick, projectLaunchDefaultsOf, type LaunchSourceRecord, type LaunchValueSource, type ProjectLaunchDefaults } from './project-launch-defaults.js';
 import { engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
-import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
+import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
 import { PROGRAM_RUN_SEND_SOURCE } from '../phase.js';
 import { withInboxStartAuthorization } from '../human-inbox/item-ledger.js';
@@ -819,6 +819,10 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
           if (request) await notifyRequesterFallback(request, 'error');
         }
         if (uncertain) return result;
+        // A setting refused it (engines.codex, say): a retry fails the same way until the setting is changed.
+        if (classifyDeliveryFailure(err).code === 'engine_config') {
+          throw new QuickStartError(`Task ${task.id} could not start: ${message}. A setting stops it, so a retry fails the same way until that setting is changed; then retry task_start with the same id.`, 422, { code: 'engine_config' });
+        }
         throw new QuickStartError(`Task ${task.id} could not start: ${message}. Fix the cause and retry task_start with the same id.`, 502);
       } finally {
         delivered?.();

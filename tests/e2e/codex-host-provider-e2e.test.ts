@@ -33,6 +33,7 @@ import { bus, EventNames } from '../../src/core/event-bus.js'
 import { addTask, getTask } from '../../src/core/task-manager.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
+import { getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
 
 const REPO = path.resolve(import.meta.dirname, '../..')
 const MOCK_CLI = path.join(REPO, 'tests/providers/mock-claude.mjs')
@@ -58,7 +59,7 @@ async function waitFor<T>(fn: () => T | undefined | false | Promise<T | undefine
 }
 
 /** Start a Codex session the way the UI's session:start does and return its acpStart's env and CODEX_CONFIG. */
-async function codexStartOn(host: string | undefined): Promise<{ env: Record<string, string>; config: Record<string, unknown> }> {
+async function codexStartOn(host: string | undefined): Promise<{ env: Record<string, string>; config: Record<string, unknown>; taskId: string }> {
   const before = daemon.getCommandHistoryFor('acpStart').length
   const { task } = await addTask({ title: `Codex on ${host ?? 'this machine'}`, project: 'marina' })
   bus.emit(EventNames.SESSION_START, {
@@ -66,7 +67,7 @@ async function codexStartOn(host: string | undefined): Promise<{ env: Record<str
   }, ['session-runner'], { source: 'web-ui' })
   const cmd = await waitFor(() => daemon.getCommandHistoryFor('acpStart')[before], `the acpStart on ${host ?? 'this machine'}`)
   const env = (cmd.payload.env ?? {}) as Record<string, string>
-  return { env, config: env.CODEX_CONFIG ? JSON.parse(env.CODEX_CONFIG) as Record<string, unknown> : {} }
+  return { env, config: env.CODEX_CONFIG ? JSON.parse(env.CODEX_CONFIG) as Record<string, unknown> : {}, taskId: task.id }
 }
 
 beforeAll(async () => {
@@ -114,7 +115,9 @@ describe('the Codex provider of a start, by the host it runs on', () => {
     })
     // The caller (a person's start, an agent's task_start) gets the reason and the fix.
     const answer = JSON.stringify(await res.json())
-    expect(res.status).toBe(502)
+    // A setting, not a passing failure: 422 with its own code, so a caller does not retry it as is.
+    expect(res.status).toBe(422)
+    expect(JSON.parse(answer).error?.code ?? JSON.parse(answer).code).toBe('engine_config')
     for (const words of ['engines.codex: provider \\"local-proxy\\"', 'host \\"devbox\\"', 'hosts:\\n  devbox:\\n    engines:\\n      codex:\\n        provider:']) expect(answer).toContain(words)
     // The task keeps it as its failed start, which its status reads (user-status-sync.ts startFailed).
     const stored = await getTask(task.id)
@@ -131,4 +134,48 @@ describe('the Codex provider of a start, by the host it runs on', () => {
     expect(env.MODEL_PROVIDER).toBeUndefined()
     expect(JSON.stringify(env)).not.toContain(GLOBAL.base_url)
   }, 60_000)
+
+  it('a session whose host lost its provider: its restart and its next message say why in its chat, and nothing reaches the host', async () => {
+    let hostDaemon: MockDaemon | undefined
+    const failed: Array<{ sessionId: string; messageIds: string[]; error: string; parked?: boolean }> = []
+    bus.subscribe('test-batch-failed', (e) => { failed.push(e.data as never) }, { global: true, interest: [EventNames.SESSION_BATCH_FAILED] })
+    try {
+      const { taskId } = await codexStartOn('relaybox')
+      const sessionId = await waitFor(async () => (await getTask(taskId)).session_id, 'the session of the task')
+      // The host's link, as the pool holds it: the restart asks it before it starts the worker again.
+      // Its own daemon process (another instance id than this machine's), so it is another machine.
+      const { DaemonConnection, setPooledConnectionForTest } = await import('../../src/providers/daemon-connection.js')
+      hostDaemon = await createMockDaemon()
+      const conn = new DaemonConnection('relaybox', { hostname: 'relaybox.invalid' })
+      const url = `ws://127.0.0.1:${hostDaemon.port}`
+      conn.connect = () => conn.connectDirect(url)
+      setPooledConnectionForTest('relaybox', conn)
+      await conn.connectDirect(url)
+      // The host's provider is taken away: the global loopback one is all that is left.
+      await updateConfig({ hosts: { relaybox: { hostname: 'relaybox.invalid', enabled: true, engines: { codex: { provider: null } } } } } as never)
+      const before = daemon.getCommandHistoryFor('acpStart').length
+      const restart = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/restart`, { method: 'POST' })
+      const restartText = await restart.text()
+      // The restart's own answer is the refusal: a setting, 422, with what to set.
+      expect(restart.status, restartText).toBe(422)
+      expect(restartText).toContain('hosts.<name>.engines.codex.provider')
+      await sendMessageToSession(sessionId, 'are you there', { source: 'ui', taskId })
+      // The chat's bubble of that message turns failed with the reason and what to set, and the row keeps it.
+      const report = await waitFor(() => failed.find((f) => f.sessionId === sessionId && f.error.includes('host "relaybox"')), 'the failed bubble with its reason')
+      expect(report.error).toContain('hosts.<name>.engines.codex.provider')
+      expect(report.parked).toBe(true)
+      const rows = await getQueue(sessionId)
+      const row = rows.find((r) => report.messageIds.includes(r.id))
+      expect(row).toMatchObject({ status: 'parked' })
+      expect(row?.parkedReason).toContain('host "relaybox"')
+      // Nothing was started on the host for it.
+      expect(daemon.getCommandHistoryFor('acpStart').length, restartText).toBe(before)
+    } finally {
+      bus.unsubscribe('test-batch-failed')
+      const { setPooledConnectionForTest } = await import('../../src/providers/daemon-connection.js')
+      setPooledConnectionForTest('relaybox', null)
+      await hostDaemon?.stop()
+      await updateConfig({ hosts: { relaybox: { hostname: 'relaybox.invalid', enabled: true, engines: { codex: { provider: HOST_OWN } } } } } as never)
+    }
+  }, 90_000)
 })

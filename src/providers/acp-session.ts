@@ -1687,7 +1687,8 @@ export class AcpSession {
       // so the task's tag rides its requests beside any headers the engine's env sets.
       // A null there is '' in the overlay (engineEnvOverlayFromConfig): none of the server's lines.
       const ownHeaders = overlay?.ANTHROPIC_CUSTOM_HEADERS ?? (this.remote ? undefined : process.env.ANTHROPIC_CUSTOM_HEADERS)
-      const tagged = requestTagOn(await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: this.host }).catch(() => ({})))
+      // session.tag_requests is this server's own setting: read without the Codex provider's resolution.
+      const tagged = requestTagOn(await (await sessionPort().config.loadConfigManager()).getConfig().catch(() => ({})))
         ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(ownHeaders, requestTagValue(this.taskId), await requestTagProject(this.taskId, this.project)) }
         : undefined
       return { ...(descriptor ?? {}), ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}), ...(tagged ?? {}) }
@@ -1699,8 +1700,8 @@ export class AcpSession {
     // (codex-engine-source.ts). The provider is the one for the host this runs on
     // (codexProviderForPlace): its own, else the global one unless that names another machine.
     const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig({ host: this.host })
-    // The engine env as the place's resolution left it: an entry that points at a global provider not
-    // used here (a MODEL_PROVIDER naming it, its key) is gone (codex-engine-config.ts withoutProviderEnv).
+    // The engine env as the place's resolution left it: a provider entry that reaches nothing where this
+    // runs (the set-aside global's, another machine's loopback ones) is gone (codex-engine-config.ts codexEnvAtPlace).
     const codexOverlay = codexEnvAtPlace(overlay, walnutConfig)
     const pick = record?.acpConfig ?? this.cfg.acpConfig
     const codex = resolveCodexEngine(

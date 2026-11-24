@@ -23,13 +23,14 @@ import { InheritedSessionRefusedError, isInheritedSessionText } from './ephemera
 import { HostRevokedError } from '../core/session-channel/revoked-hosts.js';
 import { thisServer } from '../core/server-self-name.js';
 import { DaemonFrameTooLargeError, FRAME_TOO_LARGE } from './daemon-frame-cap.js';
+import { ENGINE_CONFIG_CODE, isCodexEngineConfigError } from './codex-engine-config.js';
 
 export type DeliveryFailureKind = 'permanent' | 'transient';
 
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing' | 'history_unavailable' | 'host_revoked';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing' | 'history_unavailable' | 'host_revoked' | typeof ENGINE_CONFIG_CODE;
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
   /**
@@ -44,6 +45,8 @@ export interface DeliveryFailureVerdict {
 const REASON_MAX = 300;
 /** The held-elsewhere reason is read by people and agents deciding what to do: kept whole. */
 const HELD_REASON_MAX = 600;
+/** An engine setting's refusal names the setting and shows it in YAML: kept whole for the person who fixes it. */
+const CONFIG_REASON_MAX = 1500;
 
 /**
  * The working directory is gone (local existsSync / remote fs.ls ENOENT), or was
@@ -81,6 +84,8 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   if (err instanceof InheritedSessionRefusedError || isInheritedSessionText(message)) return { kind: 'permanent', code: 'inherited_session', reason: reason.replace(/^inherited_session:\s*/, '') };
   // A revoked host runs nothing new and takes no automated line (revoked-reach.ts): the same answer until an allow.
   if (err instanceof HostRevokedError) return { kind: 'permanent', code: 'host_revoked', reason: `Not sent: ${reason}` };
+  // A setting stops the engine from starting (codex-engine-config.ts): the same on every retry until it is changed.
+  if (isCodexEngineConfigError(err)) return { kind: 'permanent', code: ENGINE_CONFIG_CODE, reason: `Not sent: ${message.trim().slice(0, CONFIG_REASON_MAX)}` };
   // Another process holds the session on its host: every retry is refused the
   // same way until that process ends, so the batch waits for the user's Retry.
   if (err instanceof SessionHeldElsewhereError) return { kind: 'permanent', code: 'session_live', reason: err.message.slice(0, HELD_REASON_MAX) };

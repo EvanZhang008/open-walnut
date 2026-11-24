@@ -14357,11 +14357,13 @@ export class SessionRunner {
       // A worker that could not start because its folder is gone parks the turn too: no
       // retry can bring the folder back, and the panel offers to continue in a new one
       // (core/sessions/folder-gone.ts). Asked only on a failure, never on a send.
-      const goneCwd = err instanceof BudgetPausedError || err instanceof BudgetCheckingError ? null : await acpFolderGone(session)
-      if (err instanceof BudgetPausedError) {
+      // A setting that refuses the engine (engines.codex) parks it the same way, its words on the row, until it is changed.
+      const configRefused = classifyDeliveryFailure(err).code === 'engine_config'
+      const goneCwd = err instanceof BudgetPausedError || err instanceof BudgetCheckingError || configRefused ? null : await acpFolderGone(session)
+      if (err instanceof BudgetPausedError || configRefused) {
         this.cancelBudgetRetry(deliverySessionId)
         await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
-        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason)
+        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason, configRefused ? {} : undefined)
       } else if (goneCwd) {
         await parkOnGoneFolder(deliverySessionId, rows, `Working directory no longer exists: ${goneCwd}`, { cwd: goneCwd })
       } else {
