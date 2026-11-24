@@ -175,6 +175,67 @@ describe('the copy link over a daemon, against a fake link', () => {
   })
 })
 
+describe('the copy link held through a switch stop', () => {
+  /** The peer as the server makes it (peerFor): the batches' target rides the peer's own link too. */
+  async function heldPeer(root: string, connect: () => Promise<DaemonLink>): Promise<DaemonPeer> {
+    const m = machine(root)
+    const p = await peerFor({ to: m, standby: { dir: m.standbyDir, host: 'dev-b' }, home: path.join(root, 'a'), connect, linkWaitMs: 30_000 })
+    return p as DaemonPeer
+  }
+
+  it('a held link that drops fails every command at once (no new link is dialled in a stop), the batches\' target too', async () => {
+    const root = dir()
+    let dials = 0
+    let up = true
+    const link = fakeLink(DAEMON_PEER_CAPABILITIES, () => (up ? { ok: true } : markLinkFailure(new Error('socket closed'), 'lost')))
+    const peer = await heldPeer(root, async () => { dials++; return link })
+    await peer.hold({ until: Date.now() + 60_000 })
+    await peer.writeFile('S4.final.json', { v: 1 })
+    up = false
+    const t0 = Date.now()
+    await expect(peer.writeFile('S4.final.json', { v: 1 })).rejects.toThrow(/held for the switch stop dropped/)
+    await expect(peer.verify()).rejects.toThrow(/held for the switch stop dropped/)
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(dials).toBe(1)
+    peer.close()
+  })
+
+  it('no command over the held link outlives the commit deadline: a slow answer is cut at it, and none starts after it', async () => {
+    const root = dir()
+    const timeouts: Array<number | undefined> = []
+    const slow: DaemonLink = {
+      hasCapability: () => true,
+      send: async (_cmd, _p, timeoutMs) => {
+        timeouts.push(timeoutMs)
+        await new Promise((r) => setTimeout(r, timeoutMs ?? 60_000))
+        throw markLinkFailure(new Error(`no answer within ${timeoutMs} ms`), 'no-answer')
+      },
+    }
+    const peer = await heldPeer(root, async () => slow)
+    const until = Date.now() + 400
+    await peer.hold({ until })
+    const t0 = Date.now()
+    await expect(peer.writeFile('S5.final.json', { v: 1 })).rejects.toThrow(/dropped/)
+    expect(Date.now() - t0).toBeLessThan(1_500)
+    expect(timeouts[0]).toBeLessThanOrEqual(400)
+    await expect(peer.readFile('S5.final.json')).rejects.toThrow(/past its commit deadline/)
+    expect(timeouts.length).toBe(1)
+    peer.close()
+  })
+
+  it('unhold gives the link back: commands go over the pool\'s link again', async () => {
+    const root = dir()
+    let dials = 0
+    const link = fakeLink(DAEMON_PEER_CAPABILITIES, () => ({ ok: true }))
+    const peer = await heldPeer(root, async () => { dials++; return link })
+    await peer.hold({ until: Date.now() + 60_000 })
+    peer.unhold()
+    await peer.writeFile('S6.final.json', { v: 1 })
+    expect(dials).toBe(2)
+    peer.close()
+  })
+})
+
 describe.skipIf(!BUN)('the copy link over a REAL daemon (the standalone twin)', () => {
   it('carries a batch, the ticket and its read back, and starts the target job there with the other machine\'s home', async () => {
     const root = dir()

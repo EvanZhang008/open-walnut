@@ -49,8 +49,12 @@ export interface SwitchPeer {
   /**
    * Keep the link this switch stop needs open past the stop's teardown of every host link (its sessions'
    * runtime ends first; the final batch and the mark come after): called when the switch stop begins.
+   * `until` (the commit deadline): no command over the held link waits past it, and a held link that
+   * dropped fails at once (a stopping server dials nothing, so waiting for a new link only loses time).
    */
-  hold(): Promise<void>
+  hold(o?: { until?: number }): Promise<void>
+  /** Let a held link go again (the switch stop did not start): the server's pool owns it as before. */
+  unhold(): void
   /** Stop sending there (the final stop closes every link). */
   close(): void
 }
@@ -105,6 +109,7 @@ export class LocalPeer implements SwitchPeer {
   }
 
   async hold(): Promise<void> { /* a folder here: no link */ }
+  unhold(): void { /* nothing held */ }
   close(): void { /* nothing held */ }
 }
 
@@ -140,8 +145,11 @@ export class DaemonPeer implements SwitchPeer {
   readonly kind = 'daemon' as const
   private readonly target: import('../../standby/remote-transport.js').RemoteStandbyTarget
   private link: DaemonLink | null = null
-  /** The connection held through the switch stop (hold), and its release. */
-  private held: { link: DaemonLink; release: () => void } | null = null
+  /** The connection held through the switch stop (hold), its release, and the time no command over it may outlive. */
+  private held: { link: DaemonLink; release: () => void; until?: number } | null = null
+  /** A hold asked for and not yet in place, and whether it was let go meanwhile (unhold before it came). */
+  private holding: Promise<void> | null = null
+  private letGo = false
   private closed = false
 
   constructor(
@@ -162,27 +170,63 @@ export class DaemonPeer implements SwitchPeer {
     this.target = o.target
   }
 
-  /** The link every command of this copy link goes over: the held one in a switch stop, else the server's pooled link. */
+  /**
+   * The link every command of this copy link goes over: the held one in a switch stop, else the server's pooled link.
+   * A held link answers within its `until`, and one that dropped (or is past it) fails at once with an error that is
+   * no link failure, so no retry loop (here or in the batches' target) waits for a link a stopping server cannot dial.
+   */
   async via(): Promise<DaemonLink> {
     if (this.closed) throw new Error('the copy link was closed')
-    return this.held?.link ?? this.o.connect()
+    const h = this.held
+    if (!h) return this.o.connect()
+    heldUsable(h)
+    return {
+      send: async (cmd, params, timeoutMs) => {
+        heldUsable(h)
+        const left = h.until !== undefined ? Math.max(1, h.until - Date.now()) : undefined
+        const ms = left !== undefined ? Math.min(timeoutMs ?? left, left) : timeoutMs
+        try {
+          return await h.link.send(cmd, params, ms)
+        } catch (err) {
+          const { linkFailureKind } = await import('../../../providers/link-failure.js')
+          if (!linkFailureKind(err)) throw err
+          throw new Error(`the copy link held for the switch stop dropped (${err instanceof Error ? err.message : String(err)}): no new link is dialled in a stop`)
+        }
+      },
+      ...(typeof h.link.hasCapability === 'function' ? { hasCapability: (x: string) => h.link.hasCapability!(x) } : {}),
+    }
   }
 
   private async conn(): Promise<DaemonLink> {
     if (this.closed) throw new Error('the copy link was closed')
+    // Held: asked afresh each time (its checks run per command).
+    if (this.held) return this.via()
     this.link ??= await this.via()
     return this.link
   }
 
-  async hold(): Promise<void> {
+  async hold(o: { until?: number } = {}): Promise<void> {
     if (this.held || this.closed) return
-    const link = await this.o.connect()
-    const { keepThroughStop } = await import('../../../providers/daemon-connection.js')
-    const release = typeof (link as { disconnect?: unknown }).disconnect === 'function'
-      ? keepThroughStop(link as import('../../../providers/daemon-connection.js').DaemonConnection)
-      : () => {}
-    this.held = { link, release }
-    this.link = link
+    this.letGo = false
+    this.holding ??= (async () => {
+      const link = await this.o.connect()
+      // Let go (the stop gave up on this hold) or closed while it was dialled: nothing is kept.
+      if (this.letGo || this.closed) return
+      const { keepThroughStop } = await import('../../../providers/daemon-connection.js')
+      const release = typeof (link as { disconnect?: unknown }).disconnect === 'function'
+        ? keepThroughStop(link as import('../../../providers/daemon-connection.js').DaemonConnection)
+        : () => {}
+      this.held = { link, release, ...(o.until !== undefined ? { until: o.until } : {}) }
+      this.link = null
+    })().finally(() => { this.holding = null })
+    await this.holding
+  }
+
+  unhold(): void {
+    this.letGo = true
+    this.held?.release()
+    this.held = null
+    this.link = null
   }
 
   /** One command, sent again over a new link while the link is down (for `linkWaitMs`); a refusal throws. */
@@ -194,7 +238,7 @@ export class DaemonPeer implements SwitchPeer {
       try {
         reply = await (await this.conn()).send(cmd, params, timeoutMs)
       } catch (err) {
-        if (!linkFailureKind(err) || Date.now() >= until || this.closed) throw err
+        if (!linkFailureKind(err) || Date.now() >= until || this.closed || this.held) throw err
         this.link = null
         await new Promise((r) => setTimeout(r, Math.min(5_000, 250 * 2 ** attempt)))
         continue
@@ -260,10 +304,17 @@ export class DaemonPeer implements SwitchPeer {
 
   close(): void {
     this.closed = true
+    this.letGo = true
     this.target.close()
     this.held?.release()
     this.held = null
   }
+}
+
+/** A held link that may carry a command now: not past its `until`, not dropped (a DaemonConnection says `connected`). */
+function heldUsable(h: { link: DaemonLink; until?: number }): void {
+  if (h.until !== undefined && Date.now() >= h.until) throw new Error('the switch stop is past its commit deadline: nothing more goes over the copy link')
+  if ((h.link as { connected?: unknown }).connected === false) throw new Error('the copy link held for the switch stop dropped: no new link is dialled in a stop')
 }
 
 /**

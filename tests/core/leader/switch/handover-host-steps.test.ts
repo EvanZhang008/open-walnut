@@ -61,7 +61,7 @@ describe('the host steps of a handover', () => {
     let misses = 2
     f.steps.retellNetMembers = async () => { f.calls.push('retell'); return misses-- > 0 ? { ok: false, why: 'not told: box-h (not connected)' } : { ok: true } }
     setHandoverHostSteps(f.steps)
-    expect(await afterHandoverRecord(ctx({ retellWaitMs: 2_000, retellEveryMs: 50 }))).toEqual({ ok: true })
+    expect(await afterHandoverRecord(ctx({ retellWaitMs: 2_000, retellEveryMs: 50, retellMinTryMs: 50 }))).toEqual({ ok: true })
     expect(f.calls).toEqual(['retell', 'retell', 'retell', 'drop'])
   })
 
@@ -70,11 +70,38 @@ describe('the host steps of a handover', () => {
     f.steps.retellNetMembers = async () => { f.calls.push('retell'); return { ok: false, why: 'not told: box-h (not connected)' } }
     setHandoverHostSteps(f.steps)
     const t0 = Date.now()
-    const r = await afterHandoverRecord(ctx({ retellWaitMs: 400, retellEveryMs: 100 }))
+    const r = await afterHandoverRecord(ctx({ retellWaitMs: 400, retellEveryMs: 100, retellMinTryMs: 50 }))
     expect(r).toEqual({ ok: false, why: 'retellNetMembers: not told: box-h (not connected)' })
     expect(Date.now() - t0).toBeLessThan(2_000)
     expect(f.calls.filter((c) => c === 'retell').length).toBeGreaterThan(1)
     expect(f.calls).not.toContain('drop')
+  })
+
+  it('the wait is a hard bound: a retell that never answers loses to it, and none starts with too little time left', async () => {
+    const f = fakeSteps()
+    // The first call answers late (a sync already running), the second never.
+    let n = 0
+    f.steps.retellNetMembers = async () => {
+      f.calls.push('retell')
+      n++
+      return n === 1 ? new Promise((r) => setTimeout(() => r({ ok: false, why: 'not told: box-h (not connected)' }), 300)) : new Promise(() => {})
+    }
+    setHandoverHostSteps(f.steps)
+    const t0 = Date.now()
+    const r = await afterHandoverRecord(ctx({ retellWaitMs: 1_000, retellEveryMs: 50, retellMinTryMs: 200 }))
+    const took = Date.now() - t0
+    expect(r).toEqual({ ok: false, why: 'retellNetMembers: no answer within the 1 s wait' })
+    expect(took).toBeGreaterThanOrEqual(950)
+    expect(took).toBeLessThan(1_400)
+    expect(f.calls).toEqual(['retell', 'retell'])
+    // With less than the minimum left after a failed try, no new call starts.
+    const g = fakeSteps()
+    g.steps.retellNetMembers = async () => { g.calls.push('retell'); return new Promise((res) => setTimeout(() => res({ ok: false, why: 'not told: box-h' }), 700)) }
+    setHandoverHostSteps(g.steps)
+    const t1 = Date.now()
+    expect(await afterHandoverRecord(ctx({ retellWaitMs: 1_000, retellEveryMs: 50, retellMinTryMs: 400 }))).toEqual({ ok: false, why: 'retellNetMembers: not told: box-h' })
+    expect(Date.now() - t1).toBeLessThan(950)
+    expect(g.calls).toEqual(['retell'])
   })
 
   it('the retell is told the new leader (for its network id), and its wait is half the commit window, at most a minute', async () => {

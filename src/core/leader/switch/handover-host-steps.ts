@@ -50,6 +50,8 @@ export interface HostStepsContext {
   /** How long the network's lists are told again before the handover is taken back (default: half the commit window, at most 60 s), and how often. */
   retellWaitMs?: number
   retellEveryMs?: number
+  /** No retell starts with less than this left of the wait (default 5 s). */
+  retellMinTryMs?: number
   log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -96,12 +98,27 @@ export async function afterHandoverRecord(c: HostStepsContext): Promise<HostStep
   if (!h) return { ok: true }
   const waitMs = c.retellWaitMs ?? Math.min(60_000, Math.floor(c.commitWindowMs / 2))
   const everyMs = c.retellEveryMs ?? 2_000
+  // A hard bound: every call races the time left (a call can wait for a sync already running, and each host's
+  // configure for up to 20 s), and no call starts with less than `minTryMs` left. A call that loses the race goes on
+  // unheard: the switch is taken back, and the hosts follow the record, which names this leader again.
+  const minTryMs = c.retellMinTryMs ?? 5_000
   const until = Date.now() + waitMs
-  let told: HostStepResult
+  let told: HostStepResult = { ok: false, why: 'not asked' }
   for (let tries = 1; ; tries++) {
-    told = await h.s.retellNetMembers({ target: c.target }).catch((err: unknown): HostStepResult => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
-    if (told.ok || Date.now() + everyMs > until) {
-      if (!told.ok) c.log('warn', 'leader switch: the network\'s hosts did not all take the new leader within the wait', { why: told.why, tries, waitMs })
+    const left = until - Date.now()
+    if (tries > 1 && left < minTryMs) {
+      c.log('warn', 'leader switch: the network\'s hosts did not all take the new leader within the wait', { why: told.why, tries: tries - 1, waitMs })
+      break
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    told = await Promise.race([
+      h.s.retellNetMembers({ target: c.target }).catch((err: unknown): HostStepResult => ({ ok: false, why: err instanceof Error ? err.message : String(err) })),
+      new Promise<HostStepResult>((r) => { timer = setTimeout(() => r({ ok: false, why: `no answer within the ${Math.round(waitMs / 1000)} s wait` }), Math.max(1, left)) }),
+    ])
+    clearTimeout(timer)
+    if (told.ok) break
+    if (until - Date.now() < minTryMs + everyMs) {
+      c.log('warn', 'leader switch: the network\'s hosts did not all take the new leader within the wait', { why: told.why, tries, waitMs })
       break
     }
     await new Promise((r) => setTimeout(r, everyMs))

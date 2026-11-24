@@ -84,13 +84,21 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   // Not handed over: the console minted for it will never stand, nor the host steps.
   if (!r.ok) await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
   if (!r.ok && hostSteps) await (await import('../../core/leader/switch/handover-host-steps.js')).undoHostSteps(hostSteps)
-  if (r.ok && hostSteps) {
+  if (r.ok && hostSteps && link && !('refused' in link) && typeof switchId === 'string') {
+    // The switch is noted before the wait below: a take-back of it then retries until it stands, marks the switch taken
+    // back, and takes the host steps back (takeBackHandover), whichever way it comes (this wait, the stop wait, a cancel).
+    await noteSwitchHandover({ switchId, to, link })
     // Nothing stops while a net host would still let in only this leader: not all told within the wait, the handover is taken back.
     const after = await (await import('../../core/leader/switch/handover-host-steps.js')).afterHandoverRecord(hostSteps)
     if (!after.ok) {
-      link!.peer.close()
       const c = await takeBackHandover('the network\'s hosts did not all take the new leader')
-      res.status(409).json({ ok: false, why: `${c.ok ? 'the handover is taken back' : `the handover could not be taken back yet (${c.why})`}: ${after.why}` })
+      res.status(409).json({ ok: false, why: `${c.ok ? 'the handover is taken back' : `the handover could not be taken back yet, it is tried again every 5 s (${c.why})`}: ${after.why}` })
+      return
+    }
+    // The stop wait may have run out during that wait (a short stop_wait_s): then it took the handover back, and no target side starts.
+    const sw = (await import('../../core/leader/switch/final-stop.js')).handedOverSwitch()
+    if (!sw || sw.switchId !== switchId || sw.phase !== 'waiting') {
+      res.status(409).json({ ok: false, why: 'the handover was taken back while the hosts were told (its stop wait ran out)' })
       return
     }
   }
@@ -198,27 +206,35 @@ function testKnobs(raw: unknown): { killAt?: string; skipLedgerRewrite?: true; p
   return Object.keys(out).length ? out : undefined
 }
 
+/**
+ * The handover of `switchId` stood: from here the stop wait runs, and whatever fails after it, the take-back of this
+ * handover is retried until it stands (final-stop.ts). Its commit deadline: a resumed source job asking again keeps
+ * the first one. An ordinary stop of this server ends that wait first (no take-back runs through its teardown).
+ */
+async function noteSwitchHandover(o: { switchId: string; to: string; link: { peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings } }): Promise<number> {
+  const { noteHandedOver, handedOverSwitch, forgetHandedOver } = await import('../../core/leader/switch/final-stop.js')
+  const { settings } = o.link
+  const had = handedOverSwitch()
+  if (had && had.switchId === o.switchId) return had.commitDeadline
+  ;(await import('../server.js')).onPlainStop(() => forgetHandedOver())
+  return noteHandedOver({
+    switchId: o.switchId, to: o.to, peer: o.link.peer, commitDeadline: Date.now() + settings.commitWindowMs, stopWaitMs: settings.stopWaitMs,
+    // No stop within the wait: take the handover back; when the witnesses do not answer, try again every 5 s
+    // (a stop that comes between two tries is taken: the handover still stands).
+    onStopWaitOver: (sw) => { void takeBackHandover(`no switch stop came within ${Math.round(settings.stopWaitMs / 1000)} s`, { begun: sw }) },
+  }).commitDeadline
+}
+
 /** After the handover stood: the ticket and the target job over the copy link, and the wait for the switch stop. */
 async function startTargetSide(o: { switchId: string; to: string; record: number; link: { peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings }; home: string; machine: string; test?: unknown }): Promise<{ ok: true; commitDeadline: string } | { ok: false; why: string }> {
-  const [{ noteHandedOver, handedOverSwitch, forgetHandedOver }, { ticketName }, { machineById }, { getVersion }] = await Promise.all([
-    import('../../core/leader/switch/final-stop.js'), import('../../core/leader/switch/ticket.js'), import('../../core/leader/switch/settings.js'), import('../../core/version.js'),
+  const [{ ticketName }, { machineById }, { getVersion }] = await Promise.all([
+    import('../../core/leader/switch/ticket.js'), import('../../core/leader/switch/settings.js'), import('../../core/version.js'),
   ])
   const { peer, settings } = o.link
   const self = machineById(settings, o.machine)
   const target = machineById(settings, o.to)!
   if (!self) return { ok: false, why: `this machine (${o.machine}) is not in leader_switch.machines` }
-  // A resumed source job asks again: the same switch keeps its deadline.
-  const had = handedOverSwitch()
-  const deadline = had && had.switchId === o.switchId ? had.commitDeadline : Date.now() + settings.commitWindowMs
-  // From here the stop wait runs: whatever fails below, the take-back of this handover is retried until it stands.
-  // An ordinary stop of this server ends that wait first (no take-back runs through its teardown).
-  ;(await import('../server.js')).onPlainStop(() => forgetHandedOver())
-  noteHandedOver({
-    switchId: o.switchId, to: o.to, peer, commitDeadline: deadline, stopWaitMs: settings.stopWaitMs,
-    // No stop within the wait: take the handover back; when the witnesses do not answer, try again every 5 s
-    // (a stop that comes between two tries is taken: the handover still stands).
-    onStopWaitOver: (sw) => { void takeBackHandover(`no switch stop came within ${Math.round(settings.stopWaitMs / 1000)} s`, { begun: sw }) },
-  })
+  const deadline = await noteSwitchHandover({ switchId: o.switchId, to: o.to, link: o.link })
   const onHosts = await homeOnHostsNow().catch(() => null)
   const knobs = testKnobs(o.test)
   const test = knobs ? { ...(knobs.killAt ? { killAt: knobs.killAt } : {}), ...(knobs.skipLedgerRewrite ? { skipLedgerRewrite: true } : {}) } : undefined
@@ -275,12 +291,21 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
   // caller must not leave this server taken for a stop that never runs).
   setImmediate(async () => {
     // The copy link outlives the stop's teardown of every host link (a stopping server dials nothing): the final
-    // batch and the mark go over it last. Held before the stop starts, for at most 10 s.
-    const held = await Promise.race([
-      sw.peer.hold().then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err))),
-      new Promise<string>((r) => setTimeout(() => r('no link within 10 s'), 10_000).unref?.()),
+    // batch and the mark go over it last, none of it past the commit deadline. Held before the stop starts, within
+    // 10 s; without it the stop would find no link for its final batch, so this server does not stop: the switch
+    // waits for its stop again (the source job asks again, or the stop wait takes the handover back).
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const notHeld = await Promise.race([
+      sw.peer.hold({ until: sw.commitDeadline }).then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err))),
+      new Promise<string>((r) => { timer = setTimeout(() => r('no link within 10 s'), 10_000); timer.unref?.() }),
     ])
-    if (held) log.web.warn('leader switch: the copy link could not be held for the stop (the final batch may find no link, and the switch rolls back)', { switchId, why: held })
+    clearTimeout(timer)
+    if (notHeld) {
+      sw.peer.unhold()
+      log.web.warn('leader switch: the copy link could not be held for the stop; this server does not stop, the switch waits for its stop again', { switchId, why: notHeld })
+      abandonSwitchStop(sw)
+      return
+    }
     const taken = server.requestSwitchStop({
       windowMs: Math.max(0, sw.commitDeadline - Date.now()),
       abort: (why) => abort.abort(why),
@@ -293,6 +318,7 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
     })
     if (!taken) {
       log.web.warn('leader switch: the switch stop could not start in this process; it waits for its stop again', { switchId })
+      sw.peer.unhold()
       abandonSwitchStop(sw)
     }
   })

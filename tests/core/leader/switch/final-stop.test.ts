@@ -47,6 +47,7 @@ function fakePeer(changes: Array<boolean | 'void'>, files: Map<string, unknown> 
     async readFile<T>(name: string) { return (files.get(name) ?? null) as T | null },
     async startTargetJob() { return { ok: true } },
     async hold() {},
+    unhold() {},
     close() {},
   }
   return p
