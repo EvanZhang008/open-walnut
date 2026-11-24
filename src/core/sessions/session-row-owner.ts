@@ -109,19 +109,25 @@ export function mergeLeaderCopy(own: SessionRecord, fromLeader: SessionRecord): 
  */
 export function mergeHostFacts(leaderRow: SessionRecord | null, change: Readonly<Record<string, unknown>>, whole: boolean): SessionRecord {
   const out: Record<string, unknown> = leaderRow ? { ...leaderRow } : {}
+  // A record from before a stop the host already answered here as done (host-judged-controls.ts
+  // terminateOnHost): the same stop still pending in it. Neither that stop nor the process fields
+  // it ends read as they were then; the host's record of the stop's end writes them.
+  const stale = stopWentBack(leaderRow?.stopRequest, change.stopRequest)
+  const keep = (k: string): boolean => stale && STOP_ENDS.has(k)
   if (leaderRow && whole) {
-    for (const k of Object.keys(out)) if (sessionFieldOwner(k) === 'host' && !(k in change)) delete out[k]
+    for (const k of Object.keys(out)) if (sessionFieldOwner(k) === 'host' && !(k in change) && !keep(k)) delete out[k]
   }
   for (const [k, v] of Object.entries(change)) {
     if (leaderRow && sessionFieldOwner(k) === 'leader') continue
-    // A stop the host already answered here as done (host-judged-controls.ts terminateOnHost) never
-    // reads `pending` again from an older record of the same stop.
-    if (k === 'stopRequest' && stopWentBack(leaderRow?.stopRequest, v)) continue
+    if (keep(k)) continue
     if (v === null || v === undefined) delete out[k]
     else out[k] = v
   }
   return out as unknown as SessionRecord
 }
+
+/** The host fields a stop's end writes (session-stop.ts confirm): an older record's never undo it. */
+const STOP_ENDS: ReadonlySet<string> = new Set(['stopRequest', 'process_status', 'pid', 'activity', 'errorMessage', 'status_reason', 'status_changed_by'])
 
 function stopWentBack(held: SessionRecord['stopRequest'] | undefined, next: unknown): boolean {
   if (!held || held.state === 'pending' || !next || typeof next !== 'object') return false

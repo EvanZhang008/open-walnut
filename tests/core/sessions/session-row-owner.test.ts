@@ -110,11 +110,15 @@ describe('a host\'s facts over the leader\'s copy', () => {
   const at = '2026-11-24T00:00:00.000Z'
   const held = (state: 'pending' | 'confirmed' | 'failed') => hostRow({ stopRequest: { id: 'st1', requestedAt: at, state } })
 
-  it('a stop answered here as done never reads pending again from an older record of the same stop', () => {
+  it('a stop answered here as done never reads pending again from an older record of the same stop, nor its process as running', () => {
     for (const whole of [false, true]) {
-      const out = mergeHostFacts(held('confirmed'), { stopRequest: { id: 'st1', requestedAt: at, state: 'pending' }, process_status: 'running' }, whole)
+      const stopped = hostRow({ stopRequest: { id: 'st1', requestedAt: at, state: 'confirmed' }, process_status: 'stopped', messageCount: 5 })
+      const out = mergeHostFacts(stopped, { stopRequest: { id: 'st1', requestedAt: at, state: 'pending' }, process_status: 'running', pid: 4242, messageCount: 7 }, whole)
       expect(out.stopRequest, String(whole)).toEqual({ id: 'st1', requestedAt: at, state: 'confirmed' })
-      expect(out.process_status).toBe('running')
+      expect(out.process_status, String(whole)).toBe('stopped')
+      expect(out.pid, String(whole)).toBeUndefined()
+      // The record's other facts still count.
+      expect(out.messageCount, String(whole)).toBe(7)
     }
   })
 
