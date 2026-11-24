@@ -59,6 +59,7 @@ const REMOTE_SH_ALLOWED: Record<string, string> = {
   'src/providers/remote-fold-prewarm.ts': 'the SSH route: prewarm before the daemon answers',
   'src/providers/remote-isolation.ts': 'the SSH route: a test server\'s isolated daemon scripts',
   'src/providers/ssh-control-master.ts': 'the SSH route: control master',
+  'src/providers/ssh-client-options.ts': 'the SSH route: asks this computer\'s own ssh client which options it takes (ssh -G dials nothing)',
   'src/providers/upload-resume.ts': 'the SSH route: chunked deploy upload',
   'src/providers/walnut-file-delta.ts': 'the SSH route: the walnut file sent as a delta',
   'src/core/host-server/install.ts': 'installing a host server over SSH',

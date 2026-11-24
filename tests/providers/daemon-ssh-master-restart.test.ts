@@ -14,13 +14,14 @@
  * The real OpenSSH behaviour this relies on is pinned by
  * tests/providers/ssh-control-master.live.test.ts.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DaemonConnection, disconnectAllDaemons, setPooledConnectionForTest } from '../../src/providers/daemon-connection.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { _resetSshClientOptionsForTesting } from '../../src/providers/ssh-client-options.js'
 
 const TARGET: SshTarget = { hostname: 'devbox.example.com', user: 'tester' }
 const FAKE = path.resolve(__dirname, 'fixtures/fake-ssh-master.mjs')
@@ -90,6 +91,9 @@ afterEach(() => {
   else process.env.FAKE_SSH_STATE = savedState
   fs.rmSync(state, { recursive: true, force: true })
 })
+
+// The client's options are taken as learned (a current ssh): the probe's `ssh -G` would be one more call to count.
+beforeAll(() => _resetSshClientOptionsForTesting(true))
 
 describe('the SSH ControlMaster across a server restart', () => {
   it('the next process reuses the master the last one left, with no login, also once the credential has expired', async () => {

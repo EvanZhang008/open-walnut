@@ -25,7 +25,10 @@ vi.mock('../../src/core/session-tracker.js', async (orig) => ({
   },
   emitSessionStatusChanged: () => {},
 }))
-vi.mock('../../src/core/sessions/judge-of.js', () => ({ judgedHereRecords: (records: unknown[]) => records }))
+vi.mock('../../src/core/sessions/judge-of.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  judgedHereRecords: (records: unknown[]) => records,
+}))
 vi.mock('../../src/core/sessions/restart-death.js', () => ({
   noteRestartDeath: async (record: { claudeSessionId: string }) => { state.noted.push(record.claudeSessionId); return true },
 }))

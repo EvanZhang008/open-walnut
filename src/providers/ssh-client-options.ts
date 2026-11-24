@@ -50,8 +50,8 @@ export function remoteCommandNone(): string[] {
   return remoteCommand === false ? [] : ['-o', 'RemoteCommand=none']
 }
 
-/** Tests: forget what the client said. */
+/** Tests: forget what the client said, or (a value) take it as already learned, so no probe runs. */
 export function _resetSshClientOptionsForTesting(value: boolean | null = null): void {
   remoteCommand = value
-  learning = null
+  learning = value === null ? null : Promise.resolve()
 }
