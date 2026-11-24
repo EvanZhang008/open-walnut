@@ -155,8 +155,10 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
       </button>
     );
   }
-  const views = ids.filter((id) => TOOL_ITEMS[id]?.kind !== 'window');
-  const windows = ids.filter((id) => TOOL_ITEMS[id]?.kind === 'window');
+  // Window buttons, and a fixed one a very narrow row moved here (Locate, Watch), list after the views.
+  const isButton = (id: string) => TOOL_ITEMS[id]?.kind === 'window' || TOOL_ITEMS[id]?.kind === 'fixed';
+  const views = ids.filter((id) => !isButton(id));
+  const windows = ids.filter(isButton);
   const label = (id: string) => nameOf(rowRef.current, id);
   return (
     <>

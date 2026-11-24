@@ -150,8 +150,9 @@ describe('fitToolRow', () => {
   });
 
   it('treats no room as no room, not as unknown (the hooks skip rows with no width)', () => {
-    expect(fitToolRow(ROW, 0, OPTS).visible).toEqual(['fork', 'lock', 'expand', 'close']);
-    expect(fitToolRow(ROW, -50, OPTS).visible).toEqual(['fork', 'lock', 'expand', 'close']);
+    // No room is the narrowest row: only what never leaves, and everything else in "...".
+    expect(fitToolRow(ROW, 0, OPTS).visible).toEqual(['lock', 'expand', 'close']);
+    expect(fitToolRow(ROW, -50, OPTS).visible).toEqual(['lock', 'expand', 'close']);
   });
 
   it('never hides Lock, Expand or Close, whatever the width', () => {
@@ -271,9 +272,40 @@ describe('fitToolRow', () => {
     expect(TOOL_ITEMS.popout).toBeUndefined();
   });
 
-  it('keeps the top chip even where it does not fit', () => {
-    const r = fitToolRow(ROW, 30, OPTS);
-    expect(r.visible).toEqual(['fork', 'lock', 'expand', 'close']);
+  it('puts the top chip into the menu before the "..." button would leave the row', () => {
+    // Fixed 72 + "..." 22 + gap 6 = 100; Fork beside them needs 148.
+    const r = fitToolRow(ROW, 120, OPTS);
+    expect(r.visible).toEqual(['lock', 'expand', 'close']);
+    expect(r.inMore[0]).toBe('fork');
+    expect(toolRowWidth(ROW.filter((i) => r.visible.includes(i.id)), true, OPTS)).toBeLessThanOrEqual(120);
+  });
+
+  it('moves the fixed buttons that may yield into the menu, Locate first, so "..." stays on the row (180 px)', () => {
+    const row: ToolRowItem[] = [
+      { id: 'fork', kind: 'chip', priority: 2, width: 46 },
+      { id: 'changed', kind: 'chip', priority: 3, width: 71 },
+      { id: 'watch', kind: 'fixed', priority: 0, width: 28, lastResort: 2 },
+      { id: 'locate', kind: 'fixed', priority: 0, width: 28, lastResort: 1 },
+      { id: 'minimize', kind: 'window', priority: 8, width: 28 },
+      { id: 'lock', kind: 'fixed', priority: 0, width: 28 },
+      { id: 'expand', kind: 'fixed', priority: 0, width: 28 },
+      { id: 'close', kind: 'fixed', priority: 0, width: 28 },
+    ];
+    const opts = { ...OPTS, moreWidth: 28 };
+    // Five fixed buttons (152) leave no room for "..." in 151 px: Locate goes; still too wide, Watch goes.
+    const narrow = fitToolRow(row, 151, opts);
+    expect(narrow.visible).toEqual(['lock', 'expand', 'close']);
+    expect(narrow.inMore).toEqual(['fork', 'changed', 'watch', 'locate', 'minimize']);
+    expect(toolRowWidth(row.filter((i) => narrow.visible.includes(i.id)), true, opts)).toBeLessThanOrEqual(151);
+    // With room for "..." beside all five, none of them yields.
+    const roomy = fitToolRow(row, 200, opts);
+    for (const id of ['watch', 'locate', 'lock', 'expand', 'close']) expect(roomy.visible).toContain(id);
+    // Every width that holds Lock, Expand, Close and "..." (124 px): whatever is in the menu, its
+    // button fits on the row with what stays.
+    for (let w = 124; w <= 400; w += 7) {
+      const r = fitToolRow(row, w, opts);
+      if (r.inMore.length > 0) expect(toolRowWidth(row.filter((i) => r.visible.includes(i.id)), true, opts), `${w}px`).toBeLessThanOrEqual(w);
+    }
   });
 
   it('a late Plan never pushes a host chip into the menu, at any width', () => {

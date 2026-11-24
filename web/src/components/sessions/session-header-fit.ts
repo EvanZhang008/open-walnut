@@ -25,8 +25,10 @@
  * where they fit and keeps its icons where they do not. Lock, Expand and Close never
  * leave: a cramped column is the moment to go full screen, and the user asked for
  * Expand and Close (2026-10-03) and for Lock (2026-10-04) to stay whatever the
- * width. Nothing from this row goes into the title row's kebab, which is the
- * task's menu.
+ * width. Once anything is in the menu its "..." button always stays on the row: Fork
+ * goes into the menu before "...", and in a column too narrow for the fixed buttons and
+ * "..." (180 px) Locate, then Watch, go in too (2026-11-24). Nothing from this row goes
+ * into the title row's kebab, which is the task's menu.
  *
  * The title row has no fit of its own: its labels are one folded control
  * (SessionHeaderLabels.tsx), so the title takes the rest of the line.
@@ -43,6 +45,9 @@ export interface ToolRowItem {
   width?: number;
   /** Its width folded to its short form (its `[data-fit-label]` words hidden); only items that have one. */
   shortWidth?: number;
+  /** A fixed item that goes into the "..." menu, lowest first, only when the row cannot hold the
+   *  fixed items and the menu's button. Unset: it never leaves (Lock, Expand, Close). */
+  lastResort?: number;
 }
 
 export interface ToolRowFit {
@@ -122,19 +127,23 @@ export function fitToolRow(fullItems: ToolRowItem[], availableWidth: number, opt
     // Only the time is out: nothing goes into the menu, so the row pays for no "..." button.
     kept.push(...listed);
   } else {
-    // Something goes into the menu, so the row pays for its button. The top item
-    // stays even where it does not fit: a row with only a "..." button hides the
-    // one thing people reach for most. The chips follow in priority order up to
-    // the FIRST that does not fit: the order is the whole contract ("Terminal
-    // leaves before Board"), and a strict prefix is the one rule under which a
-    // narrower row never shows a chip a wider one hid. The window buttons are
-    // small and all the same size: each takes the room the chips left if it
-    // fits, so a wide chip that just missed the cut never leaves a button-sized
-    // hole beside the "..." menu (2026-10-04).
-    if (listed.length > 0) kept.push(listed[0]!);
-    const rest = listed.slice(1);
+    // Something goes into the menu, so the row pays for its button, and the button always stays
+    // where it can be pressed: a row whose fixed buttons fill it pushed Fork and "..." off its left
+    // edge, so nothing in the menu could be reached (2026-11-24, a 180 px column). A fixed button
+    // that may yield (`lastResort`: Locate, then Watch) goes into the menu before "..." is cut;
+    // Lock, Expand and Close never do.
+    for (const f of fixed.filter((i) => i.lastResort != null).sort((a, b) => a.lastResort! - b.lastResort!)) {
+      if (fits(kept, true)) break;
+      kept.splice(kept.indexOf(f), 1);
+    }
+    // The chips follow in priority order up to the FIRST that does not fit, Fork (the top one)
+    // included: it goes into the menu first rather than push "..." out. The order is the whole
+    // contract ("Terminal leaves before Board"), and a strict prefix is the one rule under which a
+    // narrower row never shows a chip a wider one hid. The window buttons are small and all the
+    // same size: each takes the room the chips left if it fits, so a wide chip that just missed
+    // the cut never leaves a button-sized hole beside the "..." menu (2026-10-04).
     let chipsOpen = true;
-    for (const item of rest) {
+    for (const item of listed) {
       if (item.kind === 'chip' && !chipsOpen) continue;
       if (fits([...kept, item], true)) kept.push(item);
       else if (item.kind === 'chip') chipsOpen = false;
@@ -143,13 +152,13 @@ export function fitToolRow(fullItems: ToolRowItem[], availableWidth: number, opt
   // The time has the least claim on the room: it takes what is left, and nothing lists it. Once a
   // chip is in the menu the row is cramped, and the room that chip left goes to the buttons, so the
   // time does not come back as the row narrows.
-  const moreShown = listed.some((c) => !kept.includes(c));
+  const moreShown = listed.some((c) => !kept.includes(c)) || fixed.some((c) => !kept.includes(c));
   if (!moreShown) for (const item of info) if (fits([...kept, item], false)) kept.push(item);
   const keptIds = new Set(kept.map((i) => i.id));
   const hidden = items.filter((i) => !keptIds.has(i.id));
   return {
     visible: byOrder(keptIds),
-    inMore: byOrder(new Set(hidden.filter((i) => i.kind === 'chip' || i.kind === 'window').map((i) => i.id))),
+    inMore: byOrder(new Set(hidden.filter((i) => i.kind !== 'info').map((i) => i.id))),
     dropped: byOrder(new Set(hidden.filter((i) => i.kind === 'info').map((i) => i.id))),
     short: byOrder(new Set([...folded].filter((id) => keptIds.has(id)))),
   };

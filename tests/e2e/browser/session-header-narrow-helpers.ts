@@ -93,6 +93,7 @@ interface HeaderState {
     pillGap: number
   }
   moreVisible: boolean
+  moreReachable: boolean
 }
 
 /** Everything the header shows, read in one pass. */
@@ -158,6 +159,14 @@ async function headerState(panel: Locator): Promise<HeaderState> {
         })(),
       },
       moreVisible: !!header.querySelector('[data-header-more]'),
+      // The "..." key, when it lists anything, is on the row where a click lands on it.
+      moreReachable: (() => {
+        const more = header.querySelector<HTMLElement>('[data-testid="session-header-more-btn"]')
+        if (!more) return true
+        const b = more.getBoundingClientRect()
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
+        return b.width > 0 && b.left >= panelBox.left - 0.5 && b.right <= panelBox.right + 0.5 && !!hit && more.contains(hit)
+      })(),
     }
   })
 }
@@ -208,12 +217,13 @@ function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.toolRow.visible, `${label}: close must stay`).toContain('close')
   expect(state.toolRow.visible, `${label}: expand must stay`).toContain('expand')
   expect(state.toolRow.visible, `${label}: lock must stay`).toContain('lock')
-  expect(state.toolRow.visible, `${label}: watch must stay`).toContain('watch')
-  expect(state.toolRow.visible, `${label}: locate must stay`).toContain('locate')
   expect(state.toolRow.visible.slice(-3), `${label}: Lock, Expand and Close end the row, in that order`).toEqual(['lock', 'expand', 'close'])
   // The window buttons, in order: Watch, Locate, (Minimize, the one that folds), Lock, Expand, Close.
+  // Watch and Locate leave only for "..." where the row cannot hold them both (2026-11-24, 180 px).
   const fixedWindow = state.toolRow.visible.filter((id) => ['watch', 'locate', 'lock', 'expand', 'close'].includes(id))
-  expect(fixedWindow, `${label}: Watch and Locate lead the window buttons`).toEqual(['watch', 'locate', 'lock', 'expand', 'close'])
+  expect(fixedWindow, `${label}: Watch and Locate lead the window buttons`).toEqual(['watch', 'locate', 'lock', 'expand', 'close'].filter((id) => fixedWindow.includes(id)))
+  // Whatever is in the menu, its "..." key stays on the row where it can be pressed.
+  expect(state.moreReachable, `${label}: the "..." key is off the row or covered`).toBe(true)
 }
 
 /** The header alone, or the header plus `below` px of the page under it (an open menu). */
@@ -234,7 +244,7 @@ const WINDOW_BUTTONS = ['minimize']
 /** The chips a "..." row stands in for. */
 const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal']
 /** Everything the "..." menu lists: the time is the one hidden item it does not. */
-const LISTED = [...VIEW_CHIPS, ...WINDOW_BUTTONS]
+const LISTED = ['fork', ...VIEW_CHIPS, ...WINDOW_BUTTONS, 'watch', 'locate']
 
 /** The rules every width must obey, whatever the exact pixel widths of the chips. */
 function expectRules(state: HeaderState, label: string) {
@@ -326,7 +336,11 @@ export function headerNarrowTests(): void {
     // 240px cannot hold five chips (Board, the first to leave, is gone); 180px holds Fork and little else.
     expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['board']))
     expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal']))
-    expect(states[180].toolRow.visible[0]).toBe('fork')
+    // Watch and Locate stay down to 240px. At 180px the five fixed keys fill the row: "..." stays,
+    // and Fork, then Locate and Watch, go into it (2026-11-24); Lock, Expand and Close stay.
+    for (const state of [wide, states[400], states[320], states[240]]) expect(state.toolRow.visible).toEqual(expect.arrayContaining(['watch', 'locate']))
+    expect(states[180].toolRow.visible).toEqual(['lock', 'expand', 'close'])
+    expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['fork', 'watch', 'locate']))
     // A narrow row puts the pills, in full, on a line under the title; a wide one keeps them beside it.
     expect(wide.titleRow.tight).toBe(false)
     expect(wide.titleRow.lines).toBe(1)
@@ -344,9 +358,10 @@ export function headerNarrowTests(): void {
     for (const id of states[180].toolRow.hidden.filter((h) => VIEW_CHIPS.includes(h))) {
       await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveText(id[0]!.toUpperCase() + id.slice(1))
     }
-    // Watch and Locate are fixed window buttons (2026-11-19): never "..." rows.
-    await expect(more.getByTestId('session-header-more-item-locate')).toHaveCount(0)
-    await expect(more.getByTestId('session-header-more-item-watch')).toHaveCount(0)
+    // At 180px Watch and Locate are "..." rows (they gave the key its room); Lock never is.
+    await expect(more.getByTestId('session-header-more-item-fork')).toHaveText('Fork')
+    await expect(more.getByTestId('session-header-more-item-locate')).toHaveText(/Locate task/)
+    await expect(more.getByTestId('session-header-more-item-watch')).toHaveText(/Watch/)
     await expect(more.getByTestId('session-header-more-item-lock')).toHaveCount(0)
     // Open in new tab is the ⋮ menu's Window row, never a "..." row (2026-11-19).
     await expect(more.getByTestId('session-header-more-item-popout')).toHaveCount(0)
@@ -354,7 +369,8 @@ export function headerNarrowTests(): void {
     await expect(more.getByTestId('session-header-more-item-minimize')).toHaveText(/Minimize/)
     await expect(more.getByTestId('session-header-more-item-expand')).toHaveCount(0)
     const moreRows = await more.locator('[role="menuitem"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace('session-header-more-item-', '')))
-    expect(moreRows.slice(-1), 'the window button comes after the views').toEqual(['minimize'])
+    expect(moreRows.slice(-3), 'the window buttons come after the views, in the row\'s order').toEqual(['watch', 'locate', 'minimize'])
+    expect(moreRows[0], 'Fork leads the views').toBe('fork')
     // Each window button's icon draws on its menu row's middle, as on the header row.
     for (const ink of await iconInkOffsets(more.locator('[role="menuitem"]'))) {
       expect(Math.abs(ink.dy), `${ink.id} icon is ${ink.dy.toFixed(2)}px off its row's middle`).toBeLessThan(ICON_CENTER_TOLERANCE_PX)
@@ -380,8 +396,9 @@ export function headerNarrowTests(): void {
     await expect(kebab.getByTestId('kebab-group-move').or(kebab.getByTestId('task-kebab-background')).first()).toBeVisible({ timeout: 30_000 })
     await expect(kebab.getByTestId('session-menu-locate')).toHaveCount(0)
     await expect(kebab.getByTestId('task-kebab-watch')).toHaveCount(0)
-    await expect(panel.getByTestId('session-locate-btn')).toBeVisible()
-    await expect(panel.getByTestId('session-watch-btn')).toBeVisible()
+    // At 180px they wait in "..." (above), not here.
+    await expect(panel.getByTestId('session-locate-btn')).toBeHidden()
+    await expect(panel.getByTestId('session-watch-btn')).toBeHidden()
     await page.keyboard.press('Escape')
     await expect(kebab).toHaveCount(0, { timeout: 10_000 })
 

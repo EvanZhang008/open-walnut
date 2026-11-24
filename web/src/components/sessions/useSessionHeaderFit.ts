@@ -33,7 +33,7 @@ export interface ToolRowState {
 const NO_TOOL_FIT: ToolRowState = { hidden: new Set(), short: new Set(), inMore: [] };
 
 /** Priority (1 leaves last) and kind of every tool row item, by its `data-header-id`. */
-export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; name: string }> = {
+export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; name: string; lastResort?: number }> = {
   // Plan is known only once the session record (or its plan) has loaded, so it may join
   // the row after first paint: it leaves before every host chip, so arriving it only takes
   // room nobody uses or joins the "..." menu, and never pushes a chip out from under a
@@ -65,8 +65,10 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // 2026-10-03), and Lock is the one that keeps the panel there (2026-10-04).
   // Watch and Locate stay at every width too (2026-11-19, the user: "why locate task is not at
   // top right?"; of the label row's Watching pill: "放到上面").
-  watch: { kind: 'fixed', priority: 0, name: 'Watch' },
-  locate: { kind: 'fixed', priority: 0, name: 'Locate task' },
+  // Where even the fixed buttons and "..." do not fit (a 180 px column), Locate and then Watch go into
+  // "..." rather than push it off the row (2026-11-24): the menu stays reachable.
+  watch: { kind: 'fixed', priority: 0, name: 'Watch', lastResort: 2 },
+  locate: { kind: 'fixed', priority: 0, name: 'Locate task', lastResort: 1 },
   lock: { kind: 'fixed', priority: 0, name: 'Lock panel' },
   expand: { kind: 'fixed', priority: 0, name: 'Expand' },
   close: { kind: 'fixed', priority: 0, name: 'Close' },
@@ -80,7 +82,7 @@ export const SLOT_ID_PREFIX = 'slot:';
  * is a chip that leaves before every chip of the host's own (priority past Terminal),
  * and is named by the slot's title, which the row carries as `data-header-name`.
  */
-export function toolItemSpec(id: string, el?: HTMLElement | null): { kind: ToolItemKind; priority: number; name: string } | undefined {
+export function toolItemSpec(id: string, el?: HTMLElement | null): { kind: ToolItemKind; priority: number; name: string; lastResort?: number } | undefined {
   const own = TOOL_ITEMS[id];
   // The App chip is named by its App (Drawing), which the row carries like a slot's title.
   if (own) return el?.dataset.headerName ? { ...own, name: el.dataset.headerName } : own;
@@ -132,6 +134,7 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
       }
       items.push({
         id, kind: spec.kind, priority: spec.priority, width: widths.current.get(id),
+        ...(spec.lastResort != null ? { lastResort: spec.lastResort } : {}),
         ...(labels.length > 0 ? { shortWidth: shortWidths.current.get(id) } : {}),
       });
     }
