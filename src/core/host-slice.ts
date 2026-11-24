@@ -186,13 +186,16 @@ export function inHostCopy(s: SessionRecord, now: number): boolean {
 export async function buildHostSlice(hostKey: string | readonly string[], now = Date.now()): Promise<HostSlice> {
   const list = (typeof hostKey === 'string' ? [hostKey] : hostKey).map(normalizeHostKey);
   const keys = new Set(list);
-  const [{ listSessions, isListableSession, withHeavyFields }, { listTasksByIds }, requests] = await Promise.all([
+  const [{ sessionRowsForReplica, isListableSession, withHeavyFields }, { listTasksByIds }, requests] = await Promise.all([
     import('./session-tracker.js'),
     import('./task-manager.js'),
     import('./session-requests.js'),
   ]);
 
-  const allSessions = await listSessions();
+  // The store's own rows, read only (a write replaces a row, never edits it): the slice keeps a
+  // few hundred of about 7.5k, and a copy of every row per build was 830 whole-table copies in ten
+  // minutes after a restart (2026-11-24, the sessionCopiesBy note), most of the server's garbage.
+  const allSessions = await sessionRowsForReplica();
   // A notice the server already has on its way into a session: the host must not add a second.
   const { getStore } = await import('./session-queue-store.js');
   const queues = (await getStore()).queues;
@@ -259,8 +262,9 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
   // A lead that handed its project over: the host refuses a session's message to it with the
   // lead that took over, as the server does (org/retired-lead.ts).
   if (leads.length > 0) {
-    const [{ listTasks }, { successorOf }] = await Promise.all([import('./task-manager.js'), import('./org/org-tree.js')]);
-    const all = await listTasks();
+    const [{ taskStoreForReplica }, { successorOf }] = await Promise.all([import('./task-manager.js'), import('./org/org-tree.js')]);
+    // Read only, and used before the next await: no copy of the board per build.
+    const all = (await taskStoreForReplica()).tasks;
     for (const t of leads) {
       const now = successorOf(all, t);
       const row = picked.get(t.id);
