@@ -22,49 +22,81 @@ experiment `switchable_leader` (off by default).
 
 ## One moment
 
-A batch runs in six steps (`batch.ts`):
+A home of real size takes minutes to read (about 4.5 minutes for 20 GB), and the leader never
+stops writing meanwhile: its git auto-commit every 30 s, its stores, sessions, notes. So a
+batch **reads first and fixes its moment after**, when little is left to read (`batch.ts`,
+`batch-round.ts`):
 
-1. **Scan.** Walk the home (`scan.ts`, about 0.4 s for 100k files) and compare each file's
+1. **Pass.** Walk the home (`scan.ts`, about 0.4 s for 100k files) and compare each file's
    stat with the last batch: size, mtime, **ctime** and inode. Each dir's stat is noted too,
-   before it is listed.
-2. **Hold.** Hold Walnut's own gated writes for an instant (`src/utils/write-gate.ts`: every
-   `withFileLock` section and every `writeTextFile`/`writeJsonFile`), wait for the ones under
-   way, let 15 ms pass, read the filesystem's clock (the ctime of a probe file in
-   `tmp/standby-staging/`: that is the batch's **moment**), then pin every database at once
-   (`sqlite-pin.ts`: a worker thread holds a read-only connection to each and starts a read
-   transaction on all of them; a commit that lands between the first pin and the last, seen
-   by the `-wal` size or its header, which a WAL restart changes, makes it pin again; a
-   database replaced since the scan voids the batch). Then the **names at the moment**
-   (`moment-names.ts`): every dir whose stat moved since the scan, or whose ctime is at or past
-   the filesystem clock read just before the scan (a second change in the tick the scan listed
-   it does not move a coarse ctime), is listed again, so a file made after the scan is known to
-   have existed at the moment even if it is replaced or removed right after. A dir listed again
-   that changed after the moment too voids the batch: a name made and removed around the moment
-   is in neither listing. Changed plain files and such new files, smallest first, up to 8 MB and 200 ms, are read
-   into memory (the staging area) while the hold is on. Then writes go on.
-3. **Stage.** Read the changed files the hold did not.
-4. **Re-scan.** Walk again and place every path of either scan or of the moment's names: a
-   path that did not exist at the moment is the next batch's; a file whose last change came
-   before the moment is taken now; anything else (changed after the moment with no copy from
-   before it, a dir whose names at the moment cannot be told) voids the batch.
-5. **Databases.** Copy each changed database as pinned (`sqlite3_serialize` inside its read
-   transaction, in the worker's memory: page for page, so only the chunks whose pages changed
-   are new). The pins hold since the moment, so this comes after the re-scan: the window in
-   which a plain file's change can void the batch is the scan time, not the databases' copy.
-6. **Send.** Fixed 1 MiB chunks named by their sha256 (`chunks.ts`), sent as they are read,
-   only those the target lacks. Then commit. Fixed, not content-defined like the backup's
-   chunker: cutting by content is a JavaScript pass over every byte, and made one batch of a
-   1.2 GB database take about 100 s; a home's large files (databases, appended logs,
-   recordings) change in place or at the end, where fixed chunks dedupe as well.
+   before it is listed. Then the **catch-up read**: every changed file the batch holds no copy
+   of is read, four at a time, by the read rule below against the filesystem's clock read just
+   before (a first batch reads the whole home here, with no hold). A catch-up that took over a
+   second is followed by another pass, which reads only what changed meanwhile (at most eight
+   such passes), so the round below starts with little left to read.
+2. **Round: hold.** Hold Walnut's own gated writes for an instant (`src/utils/write-gate.ts`:
+   every `withFileLock` section and every `writeTextFile`/`writeJsonFile`), wait for the ones
+   under way, let 15 ms pass, mark the append-only files, read the filesystem's clock (the
+   ctime of a probe file in `tmp/standby-staging/`: that is the round's **moment**), then pin
+   every database at once (`sqlite-pin.ts`: a worker thread holds a read-only connection to
+   each and starts a read transaction on all of them; a commit that lands between the first
+   pin and the last, seen by the `-wal` size or its header, which a WAL restart changes, makes
+   it pin again). Then the stat of each **hot** file (changed in the minute before the batch
+   started or since, or a read of it was not taken; at most 4,096, the newest first), and a
+   read of each hot file that changed before the moment since its copy. Then the **names at
+   the moment** (`moment-names.ts`): every dir whose stat moved since the walk, or whose ctime
+   is at or past the filesystem clock read just before the walk (a second change in the tick
+   the walk listed it does not move a coarse ctime), is listed again with the stat of each of
+   its files, so a file made after the walk is known to have existed at the moment even if it
+   is replaced or removed right after. A dir listed again that changed after the moment too
+   fails the round (a name made and removed around the moment is in neither listing), except a
+   dir of git's object store (below). The listed files that changed since their copy, and the
+   git objects new since the walk, are read too. Every read in the hold goes smallest first, up
+   to 8 MB and 200 ms, into memory. Then writes go on.
+3. **Round: databases.** Copy each changed database as pinned (`sqlite3_serialize` inside its
+   read transaction, in the worker's memory: page for page, so only the chunks whose pages
+   changed are new); each pin ends once its database is copied.
+4. **Round: place.** Walk again and give each path that existed at the moment its content then,
+   by its kind's rule (the table below). A path no rule places fails the round.
+5. **Commit.** Fixed 1 MiB chunks named by their sha256 (`chunks.ts`) went to the target as they
+   were read, only those it lacks; the commit names them. Fixed, not content-defined like the
+   backup's chunker: cutting by content is a JavaScript pass over every byte, and made one
+   batch of a 1.2 GB database take about 100 s; a home's large files (databases, appended
+   logs, recordings) change in place or at the end, where fixed chunks dedupe as well.
+
+**A failed round** is not a void batch: the batch goes back to step 1 and keeps every copy it
+read, so the next pass reads only what changed again, and the next round has a moment of its
+own. The batch is void after ten failed rounds (`maxRounds`), with the last round's reason.
+
+### Changes while a batch reads
+
+Each kind of leader data has one answer to "this changed after the moment, or while the batch
+read it" (`change-rules.ts`; `tests/core/standby/change-rules.test.ts` fails for a manifest entry
+or kind with none):
+
+| Kind | Which files | Answer |
+|---|---|---|
+| Snapshot | every SQLite database (manifest kind `sqlite`, or a database by name and header) | pinned at the moment in a read transaction; commits after it never reach the copy |
+| Prefix | files the manifest marks `appendOnly` | their bytes up to their size at the mark, while they only grew (below) |
+| Content-addressed | git's loose objects (`.git/objects/xx/<hash>`) and pack files (`pack-<hash>.pack`, `.idx`, `.rev`, `.bitmap`, `.mtimes`) | git names each by the hash of its content and writes it once (a temp file renamed into place), so any whole copy of that name is its content: its times do not count (git freshens an object by touching it), only that the same file was read whole at one size. A dir of the object store need not have known names at the moment: an object new after it is one more object no ref names yet, and one removed after it (a repack) is taken from the copy the batch read; one the batch saw and never read fails the round |
+| Not copied | a git command's scratch: every `*.lock` in `.git`, `tmp_*` objects, packs and commit graphs, `incoming-*` quarantine dirs, `gc.pid` | there only while that command runs, which does not run on the standby: a copied `index.lock` would stop every git command there, a copied `gc.pid` its gc for 12 hours. The walk skips them |
+| Quiet through the moment | every other file: Walnut's stores, notes, config, git's refs, index and logs | a copy counts when a stat read after the moment equals the one its read proved (ctime only moves forward, so nothing wrote it between); else, when its last change came before the moment, it is read now; else the round fails |
+
+The git answers rest on git's own rule: it deletes an object file only once the object is in a
+pack, or once it is unreachable and older than the prune age (an hour in `git-maintenance.ts`).
+A history rewrite (`git-compaction.ts`, `gc --prune=now`) during a batch only fails its rounds:
+an object the batch saw at the moment and holds no copy of is never left out silently.
 
 **The rule every read follows** (`stage.ts`): before the read, the file's ctime must be below
-the moment; after it, its size, mtime, ctime and inode are unchanged and as many bytes were
-read as its size. No program can set a ctime, so this proves nothing touched the file from
-before the moment until the read ended. The moment is read on the filesystem's own clock
+the filesystem's clock read just before (the moment itself, for a read in or after the hold);
+after it, its size, mtime, ctime and inode are unchanged and as many bytes were read as its
+size. No program can set a ctime, so this proves nothing touched the file from before that
+clock reading until the read ended; a catch-up copy then counts at the moment while a stat
+read after the moment still equals it. The moment is read on the filesystem's own clock
 because a ctime comes from a coarse kernel clock: on clouddev a write's ctime lagged the wall
 clock by 10 ms, enough to place a write made after a wall-clock moment before it (seen in a
 test, 2026-11-21). The content is hashed once, while it is read; a second hash after the read
-would cost a second full read and prove nothing the unchanged ctime does not. The hold makes a void batch
+would cost a second full read and prove nothing the unchanged ctime does not. The hold makes a failed round
 rarer; this rule, with the names at the moment, is what keeps a committed batch to one
 moment, whatever the writer: the notes app, a plugin's process, a person. It rests on the
 filesystem keeping ctimes as POSIX says (a name added to or removed from a dir moves the dir's
@@ -84,7 +116,7 @@ least that size before and after the read, the noted tail unchanged, and, when t
 holds the same inode, its first (last batch's size) bytes still the last batch's content. A
 file replaced by a compacted copy (a new inode) is taken as the new file. One that did not only
 grow (cut, rewritten in place) goes to the general rule: taken if it was quiet since before the
-moment, else the batch is void, so one rewrite never voids every batch after it. Not caught: a
+moment, else the round fails, so one rewrite never voids every batch after it. Not caught: a
 rewrite in place, after the mark, of bytes between the last batch's end (the file's start, when
 the last batch holds no copy of this inode) and the noted tail. A marked file whose stat is the
 last batch's is only stat'ed in the hold; the marks run 64 at a time.
@@ -94,10 +126,11 @@ An entry is marked only after reading every writer of it (2026-11-21: `session-a
 daily log) are not marked, since an editor may write in place.
 
 **A void batch** commits nothing, the target's position does not move, and the runner tries
-again two seconds later (three times), then at the next period. Void when: a file or
-database cannot be read; a database cannot be pinned or copied (a damaged one, one that went
-away); a file changed while it was copied; a change cannot be placed before or after the
-moment; the writes under way did not end within 300 ms.
+again two seconds later (three times), then at the next period. Void at once when a file or
+database cannot be read, or a database cannot be opened or copied (a damaged one); void after
+ten failed rounds, each failed by a change it could not place at its moment (a file changed
+after the moment with no copy from before, a database replaced or not pinned, a dir whose
+names at the moment cannot be told, writes under way that did not end within 300 ms).
 
 ## The target
 

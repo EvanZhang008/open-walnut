@@ -17,7 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { setWriteGateEnabled } from '../../utils/write-gate.js'
-import { snapshotTo, standbyStatus, takeBatch, verifyStandby, type BatchOutcome, type DriftReport } from './index.js'
+import { snapshotTo, standbyStatus, takeBatch, verifyStandby, type BatchOutcome, type BatchStats, type DriftReport } from './index.js'
 import { RemoteStandbyTarget, type DaemonLink } from './remote-transport.js'
 
 const SUBSCRIBER = 'standby-runner'
@@ -240,8 +240,13 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
       for (let attempt = 0; attempt <= RETRIES && !ended; attempt++) {
         if (attempt) await new Promise((r) => setTimeout(r, RETRY_MS))
         out = await site.batch().catch((err) => ({ ok: false as const, reason: String(err), stats: {} as never }))
-        if (out.ok) break
-        log.session.info('standby: batch void', { reason: out.reason, attempt })
+        const st = out.stats as Partial<BatchStats>
+        const how = { totalMs: st.totalMs, rounds: st.rounds, passes: st.passes, roundFailures: st.roundFailures?.slice(-3), catchUpMs: st.catchUpMs, holdMs: st.holdMs, pinMs: st.pinMs, stagedBytes: st.stagedBytes, sentBytes: st.sentBytes }
+        if (out.ok) {
+          log.session.info('standby: batch committed', { batch: out.manifest.batch, files: st.files, unchanged: out.commit.unchanged, ...how })
+          break
+        }
+        log.session.info('standby: batch void', { reason: out.reason, attempt, ...how })
         // A void batch is tried again soon; a host out of reach is not (the next tick tries).
         if (site.unreachable?.()) break
       }

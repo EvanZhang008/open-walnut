@@ -125,17 +125,23 @@ describe('an append-only file', () => {
     expect(copy(LOG)).toBe('{"n')  // cut to 3 bytes
   })
 
-  it('its tail rewritten in place after it was marked voids the batch', async () => {
+  it('its tail rewritten in place after it was marked fails the round (void in a batch of one round)', async () => {
     sb = await sandbox('append-tail')
     await first()
     fs.appendFileSync(home(LOG), '{"n":1}\n')
     await settle()
     const size = fs.statSync(home(LOG)).size
-    const out = await snapshotTo(sb.home, sb.target, {
-      hooks: { afterHold: () => { const fd = fs.openSync(home(LOG), 'r+'); fs.writeSync(fd, 'Z', size - 3); fs.closeSync(fd) } },
-    })
+    const rewriteTail = (byte: string) => () => { const fd = fs.openSync(home(LOG), 'r+'); fs.writeSync(fd, byte, size - 3); fs.closeSync(fd) }
+    const out = await snapshotTo(sb.home, sb.target, { maxRounds: 1, hooks: { afterHold: rewriteTail('Z') } })
     expect(out.ok).toBe(false)
     expect(!out.ok && out.reason).toMatch(/late|changed/)
+    // With rounds: the second round's mark comes after the rewrite, and the same byte written
+    // again after it changes nothing in the file, so the second round takes it as rewritten.
+    const next = await snapshotTo(sb.home, sb.target, { hooks: { afterHold: rewriteTail('Y') } })
+    expect(next.ok, next.ok ? '' : next.reason).toBe(true)
+    expect(next.ok && next.stats.rounds).toBe(2)
+    expect(copy(LOG)).toBe(fs.readFileSync(home(LOG), 'utf8'))
+    expect(copy(LOG).at(-3)).toBe('Y')
   })
 
   it('replaced by a new file (rotated) is taken as the new file', async () => {

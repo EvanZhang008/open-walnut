@@ -211,8 +211,9 @@ export class StandbyTarget {
     let patched = 0
     let patchFailed = 0
     let bytesWritten = 0
-    try {
-      await Promise.all(puts.map((f) => slot(async () => {
+    // Every build ends before any failure is judged: a cleanup while others still write into
+    // .apply/new fails (ENOTEMPTY) and hides the failure that started it.
+    const built = await Promise.allSettled(puts.map((f) => slot(async () => {
         const dest = path.join(this.t.applyNew, f.p)
         const old = before.get(f.p)
         if (old && chunkIds(old).length >= PATCH_MIN_CHUNKS && chunkIds(f).length >= PATCH_MIN_CHUNKS) {
@@ -234,9 +235,10 @@ export class StandbyTarget {
         await this.build(f, dest)
         bytesWritten += f.size
       })))
-    } catch (err) {
+    const failed = built.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (failed) {
       await removeTree(this.t.apply)
-      throw err
+      throw failed.reason
     }
     await hooks.point?.('files-built')
     const journal: Journal = {

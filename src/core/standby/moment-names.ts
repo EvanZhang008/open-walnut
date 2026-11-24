@@ -11,13 +11,13 @@
  *   - otherwise: list it again now; when its ctime, read after that listing, is still below
  *     the moment, its last change came before the moment and the listing is the moment's;
  *     else it also changed at or after the moment, and the names at the moment cannot be told
- *     (`unsettled`: the batch is void).
+ *     (`unsettled`: names in it read as unknown).
  * A new dir under a changed one is listed the same way. A path existed when every dir above it
  * existed and named the next step.
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { DB_NAME, dirMayHoldLeaderData, limiter, makeFileClass, toSourceStat, type ScanResult } from './scan.js'
+import { DB_NAME, dirMayHoldLeaderData, limiter, makeBatchFileTest, toSourceStat, type ScanResult } from './scan.js'
 import type { SourceStat } from './types.js'
 
 interface DirAtMoment {
@@ -38,7 +38,11 @@ export interface MomentNames {
   heldStats: Map<string, SourceStat>
   /** Dirs listed again (changed since the scan, or changed in its tick). */
   changedDirs: number
-  /** Dirs that changed at or after the moment too: the batch is void. */
+  /**
+   * Dirs that changed at or after the moment too: their names at the moment are unknown
+   * (`existed` says null for each name in one). The batch's round fails over one, unless it is
+   * a dir of git's object store (change-rules.ts isObjectStoreDir).
+   */
   unsettled: string[]
   ms: number
 }
@@ -64,7 +68,7 @@ function scanNames(s1: ScanResult): Map<string, Set<string>> {
 export async function namesAtMoment(home: string, s1: ScanResult, momentMs: number, scanClock: number): Promise<MomentNames> {
   const start = performance.now()
   const slot = limiter(64)
-  const fileClass = makeFileClass()
+  const isBatchFile = makeBatchFileTest()
   const fromScan = scanNames(s1)
   const changed = new Map<string, DirAtMoment | 'gone'>()
   const listed: string[] = []
@@ -90,7 +94,7 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
         if (!dirMayHoldLeaderData(child)) continue
         names.add(e.name)
         if (!s1.dirs.has(child)) fresh.push(child)
-      } else if (e.isFile() && fileClass(rel, e.name) === 'leader-data') {
+      } else if (e.isFile() && isBatchFile(rel, e.name)) {
         // A database's side files are never a batch's plain files.
         const side = SIDE.exec(e.name)
         if (side && all.has(e.name.slice(0, -side[0].length)) && DB_NAME.test(e.name.slice(0, -side[0].length))) continue
@@ -116,8 +120,10 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
   })))
   await Promise.all(moved.map((rel) => list(rel)))
 
+  const unknown = new Set(unsettled)
   /** Did dir `dir` name `name` at the moment? */
   const named = (dir: string, name: string): boolean | null => {
+    if (unknown.has(dir)) return null
     const c = changed.get(dir)
     if (c === undefined) {
       // Unchanged since the first scan (or never walked: then nothing of the batch is in it).

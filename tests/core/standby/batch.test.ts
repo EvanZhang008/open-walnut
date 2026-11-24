@@ -5,6 +5,7 @@
  * that cannot be read) leaves a complete copy that verifies.
  */
 import { afterEach, describe, expect, it } from 'vitest'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { homePathClass } from '../../../src/core/home-manifest/index.js'
@@ -132,15 +133,89 @@ describe('a void batch', () => {
     expect(fs.existsSync(path.join(sb.home, 'tmp/standby-staging')) ? fs.readdirSync(path.join(sb.home, 'tmp/standby-staging')) : []).toEqual([])
   })
 
-  it('a file changed after the moment with no copy from before it voids the batch', async () => {
+  it('a file changed after the moment with no copy from before it fails the round; a batch of one round is void', async () => {
     sb = await sandbox('late')
     dbs.push(...seedHome(sb.home).dbs)
     await settle()
     expect((await batch()).ok).toBe(true)
     // Unchanged at the scan, changed right after the hold: its content at the moment is unknown.
-    const out = await batch({ afterHold: () => write(sb.home, 'user-own-folder/plan.md', 'changed after the moment\n') })
+    const late = () => write(sb.home, 'user-own-folder/plan.md', 'changed after the moment\n')
+    // Not hot (hotWindowMs 0: written before the batch started), so the hold reads no stat of it.
+    const out = await snapshotTo(sb.home, sb.target, { maxRounds: 1, hotWindowMs: 0, hooks: { afterHold: late } })
     expect(out.ok).toBe(false)
     expect(!out.ok && out.reason).toMatch(/plan\.md changed or went after the batch's moment/)
+    expect((await standbyStatus(sb.target)).batch).toBe(1)
+  })
+
+  it('a hot file changed after the moment is taken as it was then: the hold read its stat', async () => {
+    sb = await sandbox('late-hot')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    // Written in the minute before the batch: hot, so its stat in the hold proves the last copy.
+    const out = await snapshotTo(sb.home, sb.target, { maxRounds: 1, hooks: { afterHold: () => write(sb.home, 'user-own-folder/plan.md', 'changed after the moment\n') } })
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(fs.readFileSync(copyOf('user-own-folder/plan.md'), 'utf8')).toBe('unknown names are leader-data\n')
+  })
+
+  it('a round that fails inside its hold still sends what the hold read: the next round commits a whole batch', async () => {
+    sb = await sandbox('held-sent')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    write(sb.home, 'memory/MEMORY.md', '# second version\n')
+    await settle()
+    let reads = 0
+    const out = await batch({
+      afterCopy: (rel) => {
+        if (rel !== 'memory/MEMORY.md') return
+        reads++
+        // The catch-up read: written while read, so not taken (the file is hot from now on).
+        if (reads === 1) write(sb.home, rel, `# third version ${crypto.randomUUID()}\n`)
+        // The hold's read of it: taken; then a name made in another dir after the moment fails the round inside the hold.
+        if (reads === 2) write(sb.home, 'user-own-folder/made-in-the-hold.md', 'new\n')
+      },
+    })
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    if (!out.ok) return
+    expect(out.stats.roundFailures).toEqual([expect.stringMatching(/user-own-folder: names changed at the batch's moment/)])
+    expect(reads).toBe(2)
+    expect(fs.readFileSync(copyOf('memory/MEMORY.md'), 'utf8')).toMatch(/^# third version /)
+    expect((await verifyStandby(sb.target, { deep: true })).drift).toEqual([])
+  })
+
+  it('a round that fails is followed by one at a new moment, which takes the file as it was then', async () => {
+    sb = await sandbox('late-next')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    let writes = 0
+    // Rewritten after every round's moment; the second round's moment comes after the first write.
+    // Not hot at first (hotWindowMs 0), so the first round has no stat of it from the hold.
+    const out = await snapshotTo(sb.home, sb.target, { hotWindowMs: 0, hooks: { afterHold: () => { writes++; write(sb.home, 'user-own-folder/plan.md', `write ${writes}\n`) } } })
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    if (!out.ok) return
+    expect(out.stats.rounds).toBe(2)
+    expect(out.stats.roundFailures).toEqual([expect.stringMatching(/plan\.md changed or went after the batch's moment/)])
+    // The content at the second round's moment: the first write (the second came after it).
+    expect(fs.readFileSync(copyOf('user-own-folder/plan.md'), 'utf8')).toBe('write 1\n')
+    expect((await standbyStatus(sb.target)).batch).toBe(2)
+    expect((await verifyStandby(sb.target, { deep: true })).drift).toEqual([])
+  })
+
+  it('a file changed every time it is read voids the batch after the last round, with the reason', async () => {
+    sb = await sandbox('void-rounds')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    write(sb.home, 'memory/MEMORY.md', '# second version\n')
+    await settle()
+    let n = 0
+    const out = await snapshotTo(sb.home, sb.target, { maxRounds: 3, hooks: { afterCopy: (rel) => { if (rel === 'memory/MEMORY.md') write(sb.home, rel, `# edit ${++n}\n`) } } })
+    expect(out.ok).toBe(false)
+    expect(out.stats.rounds).toBe(3)
+    expect(out.stats.roundFailures).toHaveLength(3)
+    expect(!out.ok && out.reason).toMatch(/memory\/MEMORY\.md: changed/)
     expect((await standbyStatus(sb.target)).batch).toBe(1)
   })
 

@@ -11,12 +11,21 @@
  *      bytes read are as many as its size.
  * Then nothing changed it from before the moment until the read ended, so the chunks are its
  * content at the moment. Anything else is `late` (it changed at or after the moment) or
- * `changed` (it changed while it was read): the caller voids the batch. Chunks a void read
- * already sent are harmless: no batch names them, and a deep verify removes them.
+ * `changed` (it changed while it was read): the caller does not take that read (batch.ts reads
+ * it again, in the batch's next round if need be). Chunks of a read not taken are harmless: no
+ * batch names them, and a deep verify removes them.
+ *
+ * `momentMs` need not be the batch's moment: a read before it (batch.ts's catch-up) passes the
+ * filesystem's clock read just before, and the copy counts at the moment only while a stat read
+ * after the moment still equals the one it returns (ctime only moves forward, so no write fell
+ * between). A git object or pack (change-rules.ts `content-addressed`) is named by the hash of
+ * its content: its times do not count (git freshens an object by touching it), only that the
+ * same file, at the same size, was read whole.
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { digestFile, type ChunkSink } from './chunks.js'
+import { isContentAddressed } from './change-rules.js'
 import { sameStat, toSourceStat } from './scan.js'
 import type { SourceStat } from './types.js'
 
@@ -41,7 +50,8 @@ export async function stageFile(rel: string, ctx: StageContext, sink: ChunkSink)
     return { ok: false, rel, why: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'gone' : 'unreadable', detail: String(err) }
   }
   if (!before.isFile()) return { ok: false, rel, why: 'not-a-file' }
-  if (before.ctimeMs >= ctx.momentMs) return { ok: false, rel, why: 'late' }
+  const named = isContentAddressed(rel)
+  if (!named && before.ctimeMs >= ctx.momentMs) return { ok: false, rel, why: 'late' }
   let read: Awaited<ReturnType<typeof digestFile>>
   try {
     read = await digestFile(abs, sink)
@@ -52,6 +62,7 @@ export async function stageFile(rel: string, ctx: StageContext, sink: ChunkSink)
   await ctx.afterCopy?.(rel)
   const after = await fs.lstat(abs).catch(() => null)
   const st = toSourceStat(before)
-  if (!after || !sameStat(st, toSourceStat(after)) || read.size !== before.size) return { ok: false, rel, why: 'changed' }
+  const same = named ? !!after && after.ino === before.ino && after.size === before.size : !!after && sameStat(st, toSourceStat(after))
+  if (!same || read.size !== before.size) return { ok: false, rel, why: 'changed' }
   return { ok: true, rel, st, x: (before.mode & 0o111) !== 0, h: read.h, size: read.size, chunks: read.chunks }
 }

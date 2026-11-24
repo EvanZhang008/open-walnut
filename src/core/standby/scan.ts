@@ -6,7 +6,8 @@
  * It follows the manifest and nothing else: `machine` and `rebuildable` places are never
  * read, a dir of another class is not entered unless a `leader-data` place sits inside it
  * (cache/applied-ops.sqlite, tmp/file-history), and a SQLite database's -wal, -shm and
- * -journal are left out (the database rides as a snapshot, sqlite-pin.ts).
+ * -journal are left out (the database rides as a snapshot, sqlite-pin.ts). Nor is a git command's
+ * scratch (a lock, a temp object: change-rules.ts `not-copied`) ever part of a batch.
  *
  * Fast on purpose: the stats run many at a time, with a cap on open dirs and stats so a Mac's
  * low open-file limit is never hit, and a file is classified by its dir (fileClass below)
@@ -16,6 +17,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homeEntries, homePathClass, type DataClass } from '../home-manifest/index.js'
+import { isNotCopiedDir, isNotCopiedPath } from './change-rules.js'
 import type { SourceStat } from './types.js'
 
 export interface ScanEntry {
@@ -54,7 +56,9 @@ const PATTERNS = ENTRIES.filter((e) => e.match).map((e) => e.match as RegExp)
 const COPY_LIKE = /\.(bak|backup|tmp|conflicted|corrupt|unreadable|migrated)([.-][^/]*)?$/
 const PROBE = 'standby-probe-name'
 
+/** A dir the walk enters: one that is, or leads to, leader data, and no git scratch dir. */
 export function dirMayHoldLeaderData(rel: string): boolean {
+  if (isNotCopiedDir(rel)) return false
   if (homePathClass(rel) === 'leader-data') return true
   return LEADER_PATHS.some((p) => p.startsWith(`${rel}/`))
 }
@@ -80,6 +84,12 @@ export function makeFileClass(): (dir: string, name: string) => DataClass {
     }
     return cls ?? homePathClass(rel)
   }
+}
+
+/** Whether file `name` in dir `dir` is one a batch takes: leader data, and no git command's scratch. */
+export function makeBatchFileTest(): (dir: string, name: string) => boolean {
+  const fileClass = makeFileClass()
+  return (dir, name) => fileClass(dir, name) === 'leader-data' && !isNotCopiedPath(dir ? `${dir}/${name}` : name)
 }
 
 export function toSourceStat(st: { size: number; mtimeMs: number; ctimeMs: number; ino: number }): SourceStat {
@@ -130,7 +140,7 @@ export async function scanHome(home: string): Promise<ScanResult> {
   const unreadable: string[] = []
   const dirSlot = limiter(32)
   const statSlot = limiter(256)
-  const fileClass = makeFileClass()
+  const isBatchFile = makeBatchFileTest()
   const candidates: Array<{ rel: string; abs: string }> = []
 
   const walk = async (rel: string): Promise<void> => {
@@ -153,7 +163,7 @@ export async function scanHome(home: string): Promise<ScanResult> {
       if (e.isDirectory()) {
         if (dirMayHoldLeaderData(child)) subdirs.push(walk(child))
       } else if (e.isFile()) {
-        if (fileClass(rel, e.name) === 'leader-data') candidates.push({ rel: child, abs: path.join(abs, e.name) })
+        if (isBatchFile(rel, e.name)) candidates.push({ rel: child, abs: path.join(abs, e.name) })
       }
     }
     await Promise.all(subdirs)
