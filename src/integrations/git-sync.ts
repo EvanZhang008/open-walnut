@@ -1760,6 +1760,25 @@ function writeOrHealGitignore(): void {
 }
 
 /**
+ * An existing data repo with no .gitignore on disk gets one back: the committed one when HEAD
+ * holds it (byte for byte, so it is not a change), else the template. Found by a 20 GB leader
+ * switch rehearsal (2026-11-24): the standby leaves the .gitignore out as rebuildable
+ * (home-entries.ts data-repo-ignore) and a promoted home keeps the copied `.git`, so the new
+ * leader booted an existing repo with no ignore list. ensureCriticalIgnores() returns when the
+ * file is missing, so nothing wrote it, and the auto-commit's `git add -A` took in tmp/ (the
+ * standby's own spool), /voice-archive/, local/ and every machine-local store, and committed the
+ * .gitignore's deletion.
+ */
+async function restoreMissingGitignore(): Promise<void> {
+  const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
+  if (fs.existsSync(gitignorePath)) return;
+  const committed = await execGitArgsRaw(['show', 'HEAD:.gitignore'], { cwd: WALNUT_HOME, timeout: LOCAL_TIMEOUT });
+  const from = committed.code === 0 ? 'HEAD' : 'template';
+  fs.writeFileSync(gitignorePath, committed.code === 0 ? committed.stdout : GITIGNORE_CONTENT);
+  log.git.warn('git-sync: the data repo had no .gitignore; written back', { from });
+}
+
+/**
  * The data repo's own settings, made at every boot (ensureRepo) and setup (initSync).
  *
  * Identity: the data repo auto-commits without user interaction. Fresh CI runners
@@ -4015,6 +4034,10 @@ export async function ensureRepo(): Promise<{ available: boolean; error?: string
         available: false,
         error: `git repo config setup failed: ${err instanceof Error ? err.message : String(err)}`,
       };
+    }
+    // A repo whose .gitignore is gone gets it back before anything stages.
+    try { await restoreMissingGitignore(); } catch (err) {
+      log.git.warn('git-sync: the data repo has no .gitignore and it could not be written back', { error: err instanceof Error ? err.message : String(err) });
     }
     // Pre-existing repo: self-heal the .gitignore so sensitive/machine-local
     // files added after the repo was initialized never enter the sync history
