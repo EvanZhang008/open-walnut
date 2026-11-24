@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { log } from '../../logging/index.js';
 import { LOG_DIR } from '../../constants.js';
+import { physFootprintMb } from './footprint.js';
 
 export interface MemoryHolderReading {
   /** Entries held (rows, sessions, nodes). */
@@ -104,15 +105,30 @@ export function readMemoryHolders(): MemoryHolderRow[] {
 const MB = 1048576;
 const mb = (n: number | undefined): number | undefined => (n === undefined ? undefined : Math.round(n / MB));
 
-export interface ProcessMemoryMb { rssMb: number; heapUsedMb: number; heapTotalMb: number; externalMb: number; arrayBuffersMb: number }
+export interface ProcessMemoryMb {
+  rssMb: number; heapUsedMb: number; heapTotalMb: number; externalMb: number; arrayBuffersMb: number;
+  /** The physical footprint (Activity Monitor's Memory), where it can be read (macOS). */
+  footprintMb?: number;
+}
 
 /** This process's memory in whole MB: the one place every report and log line reads it. */
 export function processMemoryMb(): ProcessMemoryMb {
   const m = process.memoryUsage();
+  const footprintMb = physFootprintMb();
   return {
     rssMb: mb(m.rss)!, heapUsedMb: mb(m.heapUsed)!, heapTotalMb: mb(m.heapTotal)!,
     externalMb: mb(m.external)!, arrayBuffersMb: mb(m.arrayBuffers)!,
+    ...(footprintMb !== null ? { footprintMb } : {}),
   };
+}
+
+/**
+ * The reading the collection asks and the burst lines go by: the footprint where it can be read,
+ * else RSS. On macOS RSS also counts pages the allocator already freed (footprint.ts): a nudge or
+ * a burst line on those collects nothing and names nothing.
+ */
+export function memoryReadingMb(): number {
+  return physFootprintMb() ?? rssOnlyMb();
 }
 
 interface JscModule {
@@ -271,7 +287,7 @@ function bunGc(): GcFn | null {
  * Health-tick hook (every 30 s): ask the engine for a collection when the process is
  * over GC_NUDGE_RSS_MB, and log what the last one gave back at the next tick.
  */
-export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc(), rssMb = processMemoryMb().rssMb): void {
+export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc(), rssMb = memoryReadingMb()): void {
   if (process.env.WALNUT_GC_NUDGE === '0' || !gc) return;
   settleNudge(rssMb);
   troughMb = Math.min(troughMb, rssMb);
@@ -289,7 +305,7 @@ export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc()
  * after the peak. On a 2 GB live heap a burst of parsing peaked at 4.2 to 4.6 GB without the
  * ask and 3.5 to 3.8 GB with it, at the same throughput.
  */
-export function nudgeGcOnRise(now = Date.now(), gc: GcFn | null = bunGc(), rssMb = processMemoryMb().rssMb): boolean {
+export function nudgeGcOnRise(now = Date.now(), gc: GcFn | null = bunGc(), rssMb = memoryReadingMb()): boolean {
   if (process.env.WALNUT_GC_NUDGE === '0' || !gc) return false;
   troughMb = Math.min(troughMb, rssMb);
   if (rssMb < GC_NUDGE_RSS_MB || rssMb - troughMb < GC_NUDGE_RISE_MB || now - lastNudgeAt < GC_NUDGE_MIN_GAP_MS) return false;
@@ -356,7 +372,7 @@ let lastBurstHeapWalkAt = -Infinity;
 let lastBurstHeapWalkRssMb = Infinity;
 
 /** Health-tick hook (every 30 s): log what was in flight when the footprint jumped. */
-export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb().rssMb): Promise<boolean> {
+export async function watchMemoryBurst(now = Date.now(), rssMb = memoryReadingMb()): Promise<boolean> {
   while (recentRss.length > 0 && now - recentRss[0]!.at > BURST_WINDOW_MS) recentRss.shift();
   const low = recentRss.reduce((m, r) => Math.min(m, r.rssMb), rssMb);
   recentRss.push({ at: now, rssMb });
@@ -388,7 +404,8 @@ export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb
     };
   }
   log.obs.warn('memory burst', {
-    ...processMemoryMb(), lowMb: low, riseMb: rssMb - low, uptimeSec: Math.round(process.uptime()),
+    // lowMb, riseMb and readingMb are the footprint where it can be read (memoryReadingMb).
+    ...processMemoryMb(), readingMb: rssMb, lowMb: low, riseMb: rssMb - low, uptimeSec: Math.round(process.uptime()),
     ...(newPeak ? { newPeak: true } : {}),
     holdersMb: Math.round(readMemoryHolders().reduce((n, r) => n + r.bytes, 0) / MB),
     ...(u ? { engineMb: mb(u.current), engineCommitMb: mb(u.currentCommit) } : {}), ...(heap ? { heap } : {}), context,
@@ -410,7 +427,7 @@ function rssOnlyMb(): number {
 }
 
 /** Start the fast burst probe; returns its stop. */
-export function startMemoryBurstProbe(everyMs = BURST_PROBE_EVERY_MS, readRssMb: () => number = rssOnlyMb): () => void {
+export function startMemoryBurstProbe(everyMs = BURST_PROBE_EVERY_MS, readRssMb: () => number = memoryReadingMb): () => void {
   if (process.env.WALNUT_MEMORY_PROBE === '0') return () => {};
   let busy = false;
   const timer = setInterval(() => {
