@@ -187,8 +187,9 @@ describe('every place that names a sender reads the origin', () => {
       'core/sessions/transcript-from-jsonl.ts': 1, // userRow: nonHumanOrigin(line.origin)
       'core/sessions/transcript-sent-by.ts': 1,    // the definition
       'core/recent-task-touch.ts': 1,              // a send's own row: the queue's sentBy is its origin, read before it
+      'core/sessions/engine-switch-context.ts': 1, // unansweredPersonWords: the history row carries agentOrigin
     });
-    for (const f of ['core/session-projection.ts', 'core/sessions/transcript-from-jsonl.ts']) {
+    for (const f of ['core/session-projection.ts', 'core/sessions/transcript-from-jsonl.ts', 'core/sessions/engine-switch-context.ts']) {
       expect(fs.readFileSync(path.join(SRC, f), 'utf8'), f).toMatch(/agentOrigin/);
     }
   });

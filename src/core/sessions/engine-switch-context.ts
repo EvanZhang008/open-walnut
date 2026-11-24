@@ -394,6 +394,7 @@ export async function unansweredPersonWords(messages: readonly SessionHistoryMes
     if (m.role !== 'user') continue;
     const again = owedWordsOf(m.text);
     if (again !== undefined) return failed || opts.turnCut ? again : undefined;
+    // The history row carries its line's origin (`agentOrigin`): another session's mail is never a person's.
     if (transcriptSentBy(m) !== 'person') continue;
     const words = (personTextOf(m.text) ?? m.text).trim();
     if (!words || /^\/[\w:-]+(\s|$)/.test(words)) continue;
