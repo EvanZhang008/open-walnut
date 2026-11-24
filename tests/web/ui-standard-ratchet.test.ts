@@ -153,6 +153,9 @@ describe('UI standard: one look per kind of control', () => {
     expect(isSquareKey('.my-thing-btn', '6px', keys)).toBe(true);
     expect(isSquareKey('.org-ask-tool:hover', 'var(--radius-sm)', keys)).toBe(true);
     expect(isSquareKey('.scope .btn', '8px', keys)).toBe(true);
+    // A pressable named like a menu is the key that opens it; a menu that is no key keeps its corner.
+    expect(isSquareKey('.todo-section-tabs-menu', '6px', new Set(['todo-section-tabs-menu']))).toBe(true);
+    expect(isSquareKey('.todo-section-tabs-menu', '6px', new Set())).toBe(false);
     expect(isSquareKey('.my-count', 'var(--radius-xs)', keys)).toBe(true);
     expect(isSquareKey('.my-thing-btn', 'var(--radius-full)', keys)).toBe(false);
     expect(isSquareKey('.my-thing-btn', '50%', keys)).toBe(false);

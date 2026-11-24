@@ -485,12 +485,9 @@
 .todo-section-tabs-list { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .todo-section-tab[aria-selected='true'] { flex-shrink: 0; }
 .todo-section-tab-all .todo-section-tab-label { max-width: none; opacity: 1; }
-.todo-section-tabs-menu {
-  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 2px;
-  border: 0; border-radius: 6px; background: none; color: var(--fg-muted); cursor: pointer;
-}
-.todo-section-tabs-menu:hover, .todo-section-tabs-menu[aria-expanded="true"] { background: var(--bg-hover); color: var(--fg); }
-.todo-section-tabs-menu:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The tab bar's options key is the family's small icon key (a ghost key with "More" when the bar is
+   wide): round, with the family's hover and open-menu looks. */
+.todo-section-tabs-menu { flex: none; margin-left: 2px; }
 
 /* Sticky headings (the user's call, 2026-09-24: "if in Satellite, keep Satellite, if project,
    keep the Project"). While the list scrolls, the heading of each level it is inside stays at

@@ -160,7 +160,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
       </TabList>
       <button
         type="button"
-        className="todo-section-tabs-menu"
+        className={`btn btn-sm ${wide ? 'btn-ghost' : 'btn-icon'} todo-section-tabs-menu`}
         aria-label="Tab bar options"
         aria-haspopup="menu"
         aria-expanded={!!menu}

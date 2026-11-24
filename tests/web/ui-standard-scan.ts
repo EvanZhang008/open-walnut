@@ -226,6 +226,7 @@ const NO_PAINT = /^(none|transparent|inherit|initial|unset|0|currentColor)$/i;
  * soft corner of their container, so a name ending in one of those is not a key.
  */
 const KEY_NAME = /-(btn|button|pill|chip|toggle|tab|badge|tag|count)$/;
+const MENU_KEY = /-menu$/;
 const NOT_A_KEY = /(-(row|rows|card|block|rail|bar|head|header|item|cell|aside|drop|panel|menu|list|option|opt|seg|segs|entry|tile|line|section|preview|thumb|frame|daynum|title|result|link|caption|value|marker|text|checkbox|dir|file)|^wn-(field|notice|overlay|dialog|input))$/;
 /** A corner that is round, flat or the parent's: everything else on a key is a square key. */
 const ROUND_CORNER = /^(var\(--radius-full\)|50%|inherit|0|0px|none|initial|unset)$/; // a literal 999px is the token's job (pillRadius)
@@ -277,7 +278,9 @@ export function isSquareKey(selector: string, radius: string, pressables: Set<st
   if (/\[aria-orientation=['"]?vertical/.test(selector)) return false; // a vertical tab list is a list of rows
   if (selector.includes('::')) return false; // a mark drawn inside the key (a tick, a ring), not the key
   const cls = lastCompoundClasses(selector);
-  if (cls.some((c) => NOT_A_KEY.test(c))) return false;
+  // A class on a pressable named like a menu is the key that opens it (`todo-section-tabs-menu`,
+  // 2026-11-24: a 22 px square trigger the name kept out of this count), not the menu.
+  if (cls.some((c) => NOT_A_KEY.test(c) && !(MENU_KEY.test(c) && pressables.has(c)))) return false;
   const isKey = cls.some((c) => c === 'btn' || c === 'badge' || pressables.has(c) || KEY_NAME.test(c));
   // The label corner is a label's: a key that writes it is a square key in a label's name.
   if (label) return isKey && !cls.some((c) => c === 'badge' || /-(badge|tag|pill|chip)$/.test(c));

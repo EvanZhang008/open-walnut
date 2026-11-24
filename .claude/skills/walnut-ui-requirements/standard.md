@@ -121,7 +121,9 @@ One shape family (2026-11-22, the user, of the 8 px corners every key had taken 
   `tests/web/ui-standard-scan.ts`): a rule whose element is a key (a class on a `<button>`, on a
   `role="button"` or `"tab"` element, beside `btn`, or named `-btn`, `-button`, `-pill`, `-chip`,
   `-toggle`, `-tab`, `-badge`, `-tag`, `-count`) and whose corner is short of round. Rows, cards,
-  rails, bars and menus are told by their names (`-row`, `-card`, `-item`, ...); a row whose class
+  rails, bars and menus are told by their names (`-row`, `-card`, `-item`, ...), except that a
+  `-menu` class on a pressable is the key that opens the menu (`.todo-section-tabs-menu`, 2026-11-24);
+  a row whose class
   is named like a key (`.org-channel`, `.todo-row-pill`) says so on its corner:
   `border-radius: var(--radius-sm); /* shape: <why> */`, and so does a row's or card's focus ring.
   A label's own class may take `--label-radius` (the badge's corner); a key may not. `roundRow`
@@ -622,10 +624,10 @@ Counted on 2026-11-23 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
 
 - 1 rule restyles `.btn` outside the family's two homes (`styles/buttons.css`, and the card
   family in `components/actions/ask-card.css`): `styles/inline-answer.css`.
-- 306 rules in 97 files give a key its own fill and corner instead of a `.btn` variant: a
+- 305 rules in 97 files give a key its own fill and corner instead of a `.btn` variant: a
   `*-btn`, `*-button`, `*-pill` or `*-chip` class, or any class written on a `<button>` outside the
   family (`.nfc-card-action` had no such name, 2026-11-23).
-- 930 `<button>` elements in 377 TSX files (the console's and the plugins' in `plugin-store/`) carry no `btn` class (choice controls with role tab,
+- 927 `<button>` elements in 376 TSX files (the console's and the plugins' in `plugin-store/`) carry no `btn` class (choice controls with role tab,
   radio, switch, checkbox or option aside). A new file starts at 0.
 - A key's own behaviour drawn beside the family's look is listed with its reason in
   `OWN_BEHAVIOUR` (`tests/web/ui-standard-scan.ts`): a permission rule's 5 s armed countdown bar
