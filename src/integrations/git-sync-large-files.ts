@@ -422,6 +422,8 @@ async function prehashInBackground(
     try {
       await hashBatch(batch);
     } catch (error) {
+      // Stopped under it (a leader switch's stop ends the lane's git): no failure of the file, it is listed again next time.
+      if (shouldStop()) return;
       if (batch.length === 1) {
         const failure = recordFailure(batch[0], error, now());
         onFailure?.(failure);
@@ -431,6 +433,7 @@ async function prehashInBackground(
         try {
           await hashBatch([f]);
         } catch (single) {
+          if (shouldStop()) return;
           const failure = recordFailure(f, single, now());
           onFailure?.(failure);
         }

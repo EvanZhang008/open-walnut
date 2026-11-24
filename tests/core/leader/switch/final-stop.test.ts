@@ -81,6 +81,35 @@ describe('the final batch', () => {
     expect(readFinalStopResult(home, 'S1')?.ok).toBe(false)
   })
 
+  it('says who still wrote: this server\'s own writer that did not stop in time, else one it does not run (never "outside Walnut" for its own)', async () => {
+    const own = await runFinalBatch({ home: '/x/a', peer: fakePeer([true]), deadlineAt: Date.now() + 100, signal: live(), writers: { late: ['git auto-commit'], ms: 30_000 } })
+    expect(!own.ok && own.why).toMatch(/still changed .*this server's own git auto-commit did not stop within its budget/)
+    expect(!own.ok && own.why).not.toMatch(/outside Walnut/)
+    const other = await runFinalBatch({ home: '/x/a', peer: fakePeer([true]), deadlineAt: Date.now() + 100, signal: live(), writers: { late: [], ms: 5 } })
+    expect(!other.ok && other.why).toMatch(/a writer this server does not run/)
+  })
+
+  it('a final batch that only ran out of time (the copy link too slow for what it carries) says so, not "a writer"', async () => {
+    // The rehearsal's case: every try was cut at the commit deadline over the held link.
+    const peer = fakePeer(['void'])
+    Object.assign(peer, { batch: async () => ({ ok: false, reason: 'the switch stop is past its commit deadline: nothing more goes over the copy link', stats: {} }) })
+    const r = await runFinalBatch({ home: '/x/a', peer, deadlineAt: Date.now() + 100, signal: live() })
+    expect(!r.ok && r.why).toMatch(/did not finish within the commit window .*past its commit deadline/)
+    expect(!r.ok && r.why).not.toMatch(/writer/)
+  })
+
+  it('the target applying this server\'s last periodic batch: tried again each second, never spun', async () => {
+    let n = 0
+    const peer = fakePeer([false])
+    const real = peer.batch.bind(peer)
+    Object.assign(peer, { batch: async () => (++n <= 2 ? { ok: false, reason: 'standby receive init on the host: the target is busy: an apply of batch 7 runs there since x', stats: {} } : real()) })
+    const t0 = Date.now()
+    const r = await runFinalBatch({ home: '/x/a', peer, deadlineAt: Date.now() + 30_000, signal: live() })
+    expect(r.ok).toBe(true)
+    expect(n).toBe(3)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_900)
+  })
+
   it('a signal during it ends it before its mark (the switch rolls back)', async () => {
     const home = dir()
     const peer = fakePeer([true, false])

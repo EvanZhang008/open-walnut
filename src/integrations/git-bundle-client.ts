@@ -45,6 +45,7 @@ import https from 'node:https'
 import os from 'node:os'
 import path from 'node:path'
 import { gitChildEnv } from '../lib/git-env.js'
+import { refuseGitInQuiet, trackOwnGit } from './git-children.js'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 
@@ -201,14 +202,16 @@ export function bundleEndpointFromRemote(remoteUrl: string): { base: string; aut
   return { base, auth: `Bearer ${token}` }
 }
 
-/** Run git (list-args, no shell) in repoDir; resolve stdout or reject. */
+/** Run git (list-args, no shell) in repoDir; resolve stdout or reject. A leader switch's stop ends it (git-children.ts). */
 function runGit(repoDir: string, args: string[], timeoutMs: number, stdin?: string): Promise<string> {
   return new Promise((resolve, reject) => {
+    refuseGitInQuiet(repoDir)
     const child = spawn('git', args, { cwd: repoDir, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true, env: gitChildEnv() })
     if (stdin !== undefined) {
       child.stdin?.on('error', () => { /* git exited early: its exit code tells */ })
       child.stdin?.end(stdin)
     }
+    trackOwnGit(repoDir, child)
     let out = ''
     let err = ''
     const timer = setTimeout(() => {

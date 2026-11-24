@@ -7,7 +7,9 @@
  * an API call (`POST /api/leader/switch/final-stop`), not a signal:
  *
  *   1. the server stops as on any planned stop: doors closed at once, every store and job closed,
- *      the HTTP server closed. No release record: the handover stands already
+ *      the HTTP server closed. No release record: the handover stands already. Its own background
+ *      writers of the home are stopped and waited for (server.ts, switch-stop-writers.ts): git starts no
+ *      more and the ones running end, the standby's own batches stop
  *   2. the final batch, as the LAST step of stopServer, over its copy link (peer.ts): batches until one
  *      finds nothing changed (a writer that lands after one is in the next), bounded by the commit window
  *   3. a verify pass, then the final mark, its last write to the other machine
@@ -24,6 +26,7 @@ import { finalStopResultFile, writeDurableJson, type FinalStopResult } from './r
 import { machineById, type LeaderSwitchSettings } from './settings.js'
 import { killPoint, type StartedBy } from './flow.js'
 import { hostLeadRefusal, type HostServiceFacts } from './service-role.js'
+import { standbyBusy } from './catch-up.js'
 
 export interface HandedOverSwitch {
   switchId: string
@@ -143,41 +146,76 @@ export interface FinalBatchTest {
 export type FinalBatchOutcome = { ok: true; batch: number; batches: number } | { ok: false; why: string; batches: number }
 
 /**
+ * What the switch stop's settle of this server's own writers found (server.ts settleWritersForFinalBatch): the ones
+ * still at it past their budget. A home that keeps changing is then named by who: this server's own, or another.
+ */
+export interface WritersSettled { late: string[]; ms: number }
+
+/** Between two tries after a void batch: the target busy with an apply (this server's last periodic batch) is waited out. */
+const VOID_RETRY_MS = 250
+const BUSY_RETRY_MS = 1_000
+
+/**
  * Batches of `home` into the peer until one finds nothing changed, then a verify pass. A void batch (a
  * write at the wrong instant) is tried again. Ends with a refusal when `signal` aborts or the deadline passes.
  */
-export async function runFinalBatch(o: { home: string; peer: SwitchPeer; deadlineAt: number; signal: AbortSignal; test?: FinalBatchTest; now?: () => number }): Promise<FinalBatchOutcome> {
+export async function runFinalBatch(o: { home: string; peer: SwitchPeer; deadlineAt: number; signal: AbortSignal; test?: FinalBatchTest; now?: () => number; writers?: WritersSettled }): Promise<FinalBatchOutcome> {
   const now = o.now ?? Date.now
   let batches = 0
   let last = ''
+  /** Batches that stood, and those after the first that still found the home changed (a writer at it since the stop). */
+  let stood = 0
+  let laterChanges = 0
+  const stopped = () => ({ ok: false as const, why: `the final batch was stopped (${String(o.signal.reason ?? 'a signal')}): no final mark`, batches })
   for (;;) {
-    if (o.signal.aborted) return { ok: false, why: `the final batch was stopped (${String(o.signal.reason ?? 'a signal')}): no final mark`, batches }
-    if (now() > o.deadlineAt) return { ok: false, why: `the home still changed when the commit window ended (${last || 'no batch finished'}): a writer outside Walnut is still at it`, batches }
+    if (o.signal.aborted) return stopped()
+    if (now() > o.deadlineAt) return { ok: false, why: lateWhy({ writer: laterChanges > 0, last, batches, writers: o.writers }), batches }
     const r = await o.peer.batch(o.home).catch((err: unknown) => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err) }))
     batches++
-    if (o.signal.aborted) return { ok: false, why: `the final batch was stopped (${String(o.signal.reason ?? 'a signal')}): no final mark`, batches }
+    if (o.signal.aborted) return stopped()
     if (batches === 1) killPoint(o.test?.killAt, 'server-during-final-batch')
-    if (batches === 1 && o.test?.pauseAfterFirstBatchMs) {
-      await new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, o.test!.pauseAfterFirstBatchMs)
-        o.signal.addEventListener('abort', () => { clearTimeout(t); resolve() }, { once: true })
-      })
+    if (batches === 1 && o.test?.pauseAfterFirstBatchMs) await pause(o.test.pauseAfterFirstBatchMs, o.signal)
+    if (!r.ok) {
+      last = `void: ${r.reason}`
+      await pause(standbyBusy(r.reason) ? BUSY_RETRY_MS : VOID_RETRY_MS, o.signal)
+      continue
     }
-    if (!r.ok) { last = `void: ${r.reason}`; continue }
-    if (!r.commit.unchanged) { last = `${r.commit.written} written, ${r.commit.deleted} deleted`; continue }
+    stood++
+    // The first carries what changed since the last periodic batch; a later one that finds changes found a writer.
+    if (!r.commit.unchanged) { last = `${r.commit.written} written, ${r.commit.deleted} deleted`; if (stood > 1) laterChanges++; continue }
     await o.peer.verify()
     return { ok: true, batch: r.commit.batch, batches }
   }
+}
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) { resolve(); return }
+    const t = setTimeout(resolve, ms)
+    signal.addEventListener('abort', () => { clearTimeout(t); resolve() }, { once: true })
+  })
+}
+
+/**
+ * Why the final batch ran out of the commit window. A batch that found the home changed names the writer: this
+ * server's own background work that did not stop in time (WritersSettled), else one this server does not run.
+ */
+function lateWhy(o: { writer: boolean; last: string; batches: number; writers?: WritersSettled }): string {
+  if (!o.writer) return `the final batch did not finish within the commit window (${o.batches} batch(es); last: ${o.last || 'none finished'})`
+  const who = o.writers?.late.length
+    ? `this server's own ${o.writers.late.join(', ')} did not stop within its budget`
+    : 'a writer this server does not run (another process on this machine) is still at it'
+  return `the home still changed when the commit window ended (${o.batches} batch(es); last: ${o.last}): ${who}`
 }
 
 /**
  * The whole switch stop's last step (stopServer runs it after every store closed): the final batch,
  * the mark, the result beside the home. Never throws: a failure is the result (no mark).
  */
-export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; stoppedAt: string; signal: AbortSignal; test?: FinalBatchTest; log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void }): Promise<FinalStopResult> {
+export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; stoppedAt: string; signal: AbortSignal; test?: FinalBatchTest; writers?: WritersSettled; log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void }): Promise<FinalStopResult> {
   const write = (r: FinalStopResult) => { try { writeDurableJson(finalStopResultFile(o.home), r) } catch (err) { o.log('warn', 'leader switch: the switch stop\'s result could not be written', { error: String(err) }) } return r }
   try {
-    const b = await runFinalBatch({ home: o.home, peer: o.sw.peer, deadlineAt: o.sw.commitDeadline, signal: o.signal, ...(o.test ? { test: o.test } : {}) })
+    const b = await runFinalBatch({ home: o.home, peer: o.sw.peer, deadlineAt: o.sw.commitDeadline, signal: o.signal, ...(o.test ? { test: o.test } : {}), ...(o.writers ? { writers: o.writers } : {}) })
     if (!b.ok) {
       o.log('warn', 'leader switch: no final mark (the switch rolls back)', { switchId: o.sw.switchId, why: b.why, batches: b.batches })
       return write({ switchId: o.sw.switchId, ok: false, why: b.why, stoppedAt: o.stoppedAt, at: new Date().toISOString() })

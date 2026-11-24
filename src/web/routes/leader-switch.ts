@@ -324,8 +324,8 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
     const taken = server.requestSwitchStop({
       windowMs: Math.max(0, sw.commitDeadline - Date.now()),
       abort: (why) => abort.abort(why),
-      run: async () => {
-        const r = await finishSwitchStop({ home: WALNUT_HOME, sw, stoppedAt, signal: abort.signal, ...(test ? { test } : {}), log: (level, msg, data) => log.web[level](msg, data) })
+      run: async (writers) => {
+        const r = await finishSwitchStop({ home: WALNUT_HOME, sw, stoppedAt, signal: abort.signal, writers, ...(test ? { test } : {}), log: (level, msg, data) => log.web[level](msg, data) })
         // The last command to the other machine is behind it: every host link closes with this process.
         try { (await import('../../providers/daemon-connection.js')).disconnectAllDaemons() } catch { /* none open */ }
         return r.ok

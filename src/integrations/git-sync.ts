@@ -10,6 +10,7 @@ import { NOTE_ATTACHMENT_DIR } from '../core/notes/attachment-dir.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { markCriticalSection } from '../core/event-loop-monitor.js';
 import { safeKillProcessGroup } from '../core/process-group-kill.js';
+import { gitQuietAt, oldestOwnGitStart, refuseGitInQuiet, trackOwnGit } from './git-children.js';
 import { log } from '../logging/index.js';
 import { SYNCED_FILE_EXTENSIONS, SYNCED_FILE_MAX_BYTES, SYNCED_FILES_DIR } from '../core/plugins/plugin-file-rules.js';
 import {
@@ -268,6 +269,7 @@ export async function credentialGuardArgsAsync(cwd?: string): Promise<string[]> 
 }
 
 export function git(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): string {
+  refuseGitInQuiet(options?.cwd ?? WALNUT_HOME);
   const guard = NETWORK_GIT_RE.test(args) ? credentialGuardArgs(options?.cwd).join(' ') : '';
   return execSync(`git ${guard ? `${guard} ` : ''}${args}`, {
     cwd: options?.cwd ?? WALNUT_HOME,
@@ -300,38 +302,8 @@ export function gitSafe(args: string, options?: { cwd?: string; timeout?: number
 // the leftover: they kept using gitSafe() and so kept freezing the loop on every
 // tick and every session result. See "Cached async preconditions" below.
 
-/**
- * Git children of THIS process that may hold a lock in their repo, per repo folder.
- * A long add holds .git/index.lock for its whole run and its mtime is its start, so
- * the age test in clearStaleLock cannot tell it from a dead process's: while one of
- * ours runs there, clearStaleLock leaves the locks alone (git-sync-large-files.ts
- * made adds of several minutes legitimate).
- */
-const liveGitChildren = new Map<string, Set<{ startedAt: number }>>();
-
-function trackLiveGit(cwd: string, child: ReturnType<typeof spawn>): void {
-  const key = path.resolve(cwd);
-  const entry = { startedAt: Date.now() };
-  const live = liveGitChildren.get(key) ?? new Set();
-  live.add(entry);
-  liveGitChildren.set(key, live);
-  const release = (): void => {
-    live.delete(entry);
-    if (live.size === 0 && liveGitChildren.get(key) === live) liveGitChildren.delete(key);
-  };
-  child.once('close', release);
-  child.once('error', release);
-}
-
-/**
- * When the oldest git child of this process that may hold a lock in `repoDir`
- * started, or null when none runs. A lock older than that cannot be ours.
- */
-export function oldestOwnGitStart(repoDir: string): number | null {
-  const live = liveGitChildren.get(path.resolve(repoDir));
-  if (!live || live.size === 0) return null;
-  return Math.min(...[...live].map((e) => e.startedAt));
-}
+// Git children of this process, and a leader switch's stop of them: git-children.ts.
+export { GitQuiet, endGitQuiet, gitQuietAt, oldestOwnGitStart, quietGitWriters } from './git-children.js';
 
 /**
  * Run git in its own process GROUP and kill the whole group on timeout.
@@ -355,6 +327,7 @@ export async function execGitGroup(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
+    refuseGitInQuiet(opts.cwd);
     // Backups, gc and repacks are background work: in the utility band when the
     // server was raised above it (background-qos.ts). The clamp execs, so the
     // group leader is still the child and the group kill below still reaps it.
@@ -368,7 +341,7 @@ export async function execGitGroup(
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    trackLiveGit(opts.cwd, child);
+    trackOwnGit(opts.cwd, child);
 
     let stdout = '';
     let stderr = '';
@@ -445,6 +418,7 @@ export async function execGitArgsRaw(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; input?: string; stdoutFd?: number; holdsNoLock?: boolean },
 ): Promise<{ code: number; stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
+    refuseGitInQuiet(opts.cwd);
     const childEnv = gitChildEnv(opts.env);
     const [cmd, cmdArgs] = withUtilityQosClamp('git', args, { searchPath: childEnv.PATH ?? '' });
     const child = spawn(cmd, cmdArgs, {
@@ -453,7 +427,7 @@ export async function execGitArgsRaw(
       detached: true,
       stdio: [opts.input === undefined ? 'ignore' : 'pipe', opts.stdoutFd ?? 'pipe', 'pipe'],
     });
-    if (!opts.holdsNoLock) trackLiveGit(opts.cwd, child);
+    trackOwnGit(opts.cwd, child, !opts.holdsNoLock);
     if (opts.input !== undefined) {
       // A git that exits before reading it all reports through 'close'; the pipe error is noise.
       child.stdin?.on('error', () => undefined);
@@ -1412,7 +1386,7 @@ export async function commitDeferredLargeFiles(
   const holdBack = root === WALNUT_HOME ? pullHoldBack : { ids: [], paths: [] };
   // A pull that starts while the lane hashes stops it: what it hashed may be older than what the pull writes.
   const lane = await runLargeFileLane(gitArgvRunnerAt(root), root, deferred, {
-    shouldStop: () => isSyncPaused() || compactionInProgress || applyPending(root, holdBack.ids),
+    shouldStop: () => isSyncPaused() || compactionInProgress || gitQuietAt(root) || applyPending(root, holdBack.ids),
     onFailure: (failure) => log.git.warn('git-sync: a large file could not be written to the data repo; it backs off and the rest keeps syncing', failure),
   });
   if (lane.staged.length === 0) return 0;

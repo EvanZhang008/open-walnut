@@ -103,7 +103,7 @@ import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
+import { gitPullWalnut, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY, gitQuietAt, endGitQuiet, quietGitWriters, waitForSyncSettled } from '../integrations/git-sync.js'
 import { bootPull, dataRepoReady } from './data-repo-boot.js'
 import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, isStoreSourcePlugin, getPluginJobSources, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsDeclaringHubPorts, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
@@ -217,6 +217,7 @@ import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { initLetterPush } from '../core/push/letter-push.js'
 import { takeQosClampRequest } from '../lib/background-qos.js'
+import { withDeadline } from '../lib/with-deadline.js'
 import { takeLauncherEnv } from './launcher-env.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, recordLaneWindow } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
@@ -755,7 +756,14 @@ let notesWatcherHandle: { stop: () => void } | null = null
 let cancelNotesWarmup: (() => void) | null = null
 let searchV2WiringHandle: { stop(): Promise<void> } | null = null
 /** The git auto-commit loop; `ready`: the data repo was checked (ensureRepo, after the recovery) and is there. */
-interface GitAutoCommitHandle { stop: () => void; health: GitAutoCommitHealth; ready: Promise<boolean> }
+interface GitAutoCommitHandle {
+  /** `finalCommit: false` (a leader switch's stop): no last commit on the way out; the next leader commits what is left. */
+  stop: (o?: { finalCommit?: boolean }) => void
+  /** Resolves once no tick, boot commit, pull or large-file write of it runs (after stop: nothing starts again). */
+  settled: () => Promise<void>
+  health: GitAutoCommitHealth
+  ready: Promise<boolean>
+}
 let gitAutoCommitHandle: GitAutoCommitHandle | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
 let backupSchedulerHandle: import('../core/backup/backup-scheduler.js').BackupSchedulerHandle | null = null
@@ -784,6 +792,8 @@ let threadAnswersHandle: { stop: () => void } | null = null
 let threadAuditHandle: { stop: () => void } | null = null
 let topicsHandle: { stop: () => void } | null = null
 let standbyHandle: { stop: () => void } | null = null
+/** The forked history rewrite (git-compaction worker) while it runs: a leader switch's stop waits for it. */
+let compactionChild: import('node:child_process').ChildProcess | null = null
 /** The write permission of a switchable leader (core/leader/switch/boot.ts); null with the experiment off. */
 let leaderPermitHandle: { stop: () => Promise<void>; decision: { kind: string } } | null = null
 /** A home that handed the leader over runs this instead of the server (core/leader/switch/handed-over.ts). */
@@ -795,7 +805,64 @@ let handedOverServer: import('../core/leader/switch/handed-over.js').StandbyList
  * the final mark. `commands/web.ts` registers how this process stops for it (its bail stretched to the
  * commit window); a signal during it calls `abort` (no mark, the switch rolls back).
  */
-export interface SwitchStop { windowMs: number; run: () => Promise<boolean>; abort: (why: string) => void }
+export interface SwitchStop { windowMs: number; run: (writers: import('../core/leader/switch/final-stop.js').WritersSettled) => Promise<boolean>; abort: (why: string) => void }
+
+/**
+ * A leader switch's stop: this server's own writers of the home's leader data that outlive their ordinary stop()
+ * (a git child: the auto-commit's tick, its large-file lane, a gc; the forked history rewrite; a standby batch under
+ * way), stopped at the stop's start and waited for before the final batch, so the batch finds the home still
+ * (docs/reference/leader-switch.md, "The switch stop"). Every other stop of stopServer leaves at most one short write
+ * in flight, which the final batch's next pass carries. The source ratchet
+ * (tests/core/leader/switch/switch-stop-writers-ratchet.test.ts) classifies every stop of stopServer that is not
+ * awaited and every git child outside git-sync.ts, and fails on one it does not know.
+ */
+const SWITCH_STOP_SETTLE_MS = 30_000
+type SwitchStopWriter = { name: string; done: Promise<unknown> }
+
+/** Synchronous up to its returned promises: nothing of these starts again from the call on. */
+function stopWritersForSwitch(budgetMs: number): SwitchStopWriter[] {
+  const out: SwitchStopWriter[] = []
+  // The data repo's git: no git of this server starts in the home any more; one that holds no lock (the large-file
+  // lane's hash-object) ends now, one that may (an add, a commit, a gc) gets the budget. No last commit on the way
+  // out: the next leader commits what is left at its start.
+  const autoCommit = gitAutoCommitHandle
+  gitAutoCommitHandle = null
+  autoCommit?.stop({ finalCommit: false })
+  gitMaintenanceHandle?.stop()
+  gitMaintenanceHandle = null
+  out.push({ name: 'git', done: quietGitWriters(WALNUT_HOME, { budgetMs }).then((r) => { log.web.info('leader switch: this server\'s git in the home ended for the final batch', r) }) })
+  if (autoCommit) out.push({ name: 'git auto-commit', done: autoCommit.settled() })
+  // The history rewrite runs in its own process: let it end within the budget, else end it (its next run starts over).
+  const rewrite = compactionChild
+  if (rewrite) out.push({ name: 'git history compaction', done: endChild(rewrite, budgetMs) })
+  // This server's own periodic standby batches: the final batch goes over the copy link instead, and waits out an
+  // apply of the last one on the other machine (final-stop.ts).
+  standbyHandle?.stop()
+  standbyHandle = null
+  return out
+}
+
+/** Each writer's end, bounded: the ones still at it past the budget are named (the final batch's refusal names them). */
+async function settleWritersForSwitch(list: SwitchStopWriter[], budgetMs: number): Promise<import('../core/leader/switch/final-stop.js').WritersSettled> {
+  const t0 = Date.now()
+  const late: string[] = []
+  await Promise.all(list.map(async (w) => {
+    if (!await withDeadline(w.done.then(() => true, () => true), budgetMs + 10_000, () => false)) late.push(w.name)
+  }))
+  const r = { late, ms: Date.now() - t0 }
+  log.web[late.length ? 'warn' : 'info']('leader switch: this server\'s writers of the home are stopped for the final batch', { writers: list.map((w) => w.name), ...r })
+  return r
+}
+
+/** A child process ended within `ms`, else sent SIGTERM (SIGKILL 3 s later); resolves on its exit. */
+function endChild(child: import('node:child_process').ChildProcess, ms: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const term = setTimeout(() => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 3_000).unref?.() }, ms)
+    term.unref?.()
+    child.once('exit', () => { clearTimeout(term); resolve() })
+  })
+}
 let switchStop: SwitchStop | null = null
 let switchStopper: ((stop: SwitchStop) => boolean) | null = null
 let serverStopping = false
@@ -4649,12 +4716,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           }
           return
         }
+        // A leader switch's stop under way: no history rewrite starts (its final batch needs the repo still).
+        if (gitSync.gitQuietAt(WALNUT_HOME)) return
         setCompactionInProgress(true)
         await waitForSyncSettled() // a tick already in flight still moves main — let it drain first
         // A history rewrite is minutes of git CPU nobody waits on: keep it in the
         // utility band when this server was raised above it (background-qos.ts).
         const { utilityQosForkExec } = await import('../lib/background-qos.js')
+        if (gitSync.gitQuietAt(WALNUT_HOME)) { setCompactionInProgress(false); return }
         const child = fork(workerPath, [], { stdio: 'ignore', ...utilityQosForkExec(process.execArgv) })
+        compactionChild = child
+        child.once('exit', () => { if (compactionChild === child) compactionChild = null })
         let reply: { ok: boolean; result?: { skipped?: boolean; before: number; after: number; error?: string }; error?: string } | null = null
         child.on('message', (msg) => { reply = msg as typeof reply })
         // 'error' without 'exit' (spawn failure) must not leave the tick
@@ -7133,6 +7205,8 @@ function startGitAutoCommit(
   let lockContentionCount = 0
   // A fresh poll loop has observed nothing (tests start several servers in one process).
   gitRecoveryTracker.reset()
+  // A leader switch's stop of an earlier server in this process stopped git in the home (tests).
+  endGitQuiet(WALNUT_HOME)
 
   const emitStatus = () => {
     broadcastEvent('git-sync:status', { ...health, heldFiles: [] })
@@ -7169,7 +7243,7 @@ function startGitAutoCommit(
   //
   // Still non-blocking: this is a detached promise chain, so server listen and
   // the rest of startup are not gated on git.
-  void ready.then((ok): Promise<void> | undefined => (!ok || gitTickStopped) ? undefined : commitIfDirty()
+  const bootChain = ready.then((ok): Promise<void> | undefined => (!ok || gitTickStopped) ? undefined : commitIfDirty()
     .then((committed) => {
       if (committed) {
         health.lastCommitAt = new Date().toISOString()
@@ -7192,7 +7266,12 @@ function startGitAutoCommit(
   // concurrent ticks — same shape as startPluginSyncPolling below.
   let gitTickTimer: ReturnType<typeof setTimeout> | null = null
   let gitTickStopped = false
-  const gitTick = async (): Promise<void> => {
+  let tickInFlight: Promise<void> | null = null
+  const gitTick = (): Promise<void> => {
+    tickInFlight = runGitTick().finally(() => { tickInFlight = null })
+    return tickInFlight
+  }
+  const runGitTick = async (): Promise<void> => {
     try {
       const committed = await commitIfDirty()
       if (committed) {
@@ -7292,6 +7371,8 @@ function startGitAutoCommit(
         }
       }
     } catch (err) {
+      // Stopped for a leader switch under this tick (its git refused or ended): no failure, the next leader commits what is left.
+      if (gitTickStopped && gitQuietAt(WALNUT_HOME)) return
       if (isLockContention(err)) {
         // Lock contention is transient (e.g. orphaned server processes or concurrent git pull).
         // Don't count toward consecutive failures — the retry in commitIfDirty already tried once.
@@ -7351,11 +7432,15 @@ function startGitAutoCommit(
   })
 
   return {
-    stop() {
+    stop(o = {}) {
       gitTickStopped = true
       if (gitTickTimer) clearTimeout(gitTickTimer)
       // Final commit on shutdown (fire-and-forget — process is exiting); only into a repo ensureRepo vouched for.
-      if (health.protected) commitIfDirty().catch(() => {})
+      if (health.protected && o.finalCommit !== false) commitIfDirty().catch(() => {})
+    },
+    async settled() {
+      const { prehashInFlight } = await import('../integrations/git-sync-large-files.js')
+      await Promise.all([tickInFlight, bootChain, prehashInFlight(), waitForSyncSettled()].map((p) => Promise.resolve(p).catch(() => {})))
     },
     health,
     ready,
@@ -7893,6 +7978,9 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   serverStopping = true
   const finalStop = switchStop
   switchStop = null
+  // A switch's stop: this server's own writers of the home stop now, and its final batch waits for them below.
+  const settleMs = finalStop ? Math.min(SWITCH_STOP_SETTLE_MS, Math.floor(finalStop.windowMs / 10)) : 0
+  const switchWriters = finalStop ? stopWritersForSwitch(settleMs) : []
   // Any other stop of a server that handed over: nothing waits for its switch stop any more (no take-back
   // runs through the teardown; a rolled-back switch's next boot waits for the handover to run out).
   if (!finalStop) plainStopHook?.()
@@ -8488,9 +8576,13 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     await shutdownStep('threads files, last', async () => (await import('../core/org/threads-sync.js')).flushThreadsExports(), { budgetMs: 800, afterClose: true })
     // Held notes and notices the requests the close drained wrote (core/sessions/held-notices-store.ts).
     await shutdownStep('held notices, last', async () => (await import('../core/sessions/held-notices-sweep.js')).stopHeldNotices(), { budgetMs: 800, afterClose: true })
-    // A switch's stop: every writer of the home is closed now, so its final batch is the home's last state.
-    // As long as it takes, bounded by the commit window (commands/web.ts stretched its bail); never throws.
-    if (finalStop) await finalStop.run().catch((err: unknown) => { log.web.warn('leader switch: the switch stop failed', { error: err instanceof Error ? err.message : String(err) }) })
+    // A switch's stop: every store and door is closed now, and this server's long-running writers of the home (stopped
+    // at the entry) are waited for, so its final batch is the home's last state. As long as it takes, bounded by the
+    // commit window (commands/web.ts stretched its bail); never throws.
+    if (finalStop) {
+      const writers = await settleWritersForSwitch(switchWriters, settleMs)
+      await finalStop.run(writers).catch((err: unknown) => { log.web.warn('leader switch: the switch stop failed', { error: err instanceof Error ? err.message : String(err) }) })
+    }
   } finally {
     serverStopping = false
     releaseSelfApiRoot()
