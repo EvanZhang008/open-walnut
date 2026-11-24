@@ -21,6 +21,7 @@ import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cro
 import { makeRemoteWorld, type RemoteWorld } from './remote-world.js'
 import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
+import { handOffLine } from '../../src/core/leader/switch/candidate-command.js'
 import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, leaderRelaySocketPath, relayRequest, relaySocketOpener } from '../../src/core/leader/switch/leader-relay.js'
 import { newSwitchId } from '../../src/core/leader/switch/ticket.js'
 import { computeExpectedDaemonVersion } from '../../src/providers/daemon-version-check.js'
@@ -476,6 +477,8 @@ async function forwarded(x: Ctx): Promise<void> {
   const done = r.code === 0 && st?.step === 'done' && t?.step === 'done'
   c.add(`forwarded: the command run on ${O.id} switches to it (its check there, the begin over its host link, the source job started on ${L.id} by its server)`, done, `exit ${r.code}; source ${st?.step}; target ${t?.step}; ${last(r.out, 4)}`)
   c.add(`forwarded: ${L.id} recorded who began it: ${O.id}, forwarded`, st?.startedBy?.machine === O.id && st.startedBy.via === 'forwarded', JSON.stringify(st?.startedBy ?? null))
+  const lastLine = r.out.split('\n').map((l) => l.trim()).filter(Boolean).at(-1) ?? ''
+  c.add(`forwarded: the command's last line on ${O.id} says ${L.id} still has its hand-off step, and to check it there with --status`, lastLine === handOffLine(L.id), lastLine)
   c.add(`forwarded: the command on ${O.id} printed the source job's lines from ${L.id} while it ran`, r.out.includes(`[on ${L.id}] `), last(r.out.split('\n').filter((l) => l.includes(`[on ${L.id}]`)).join('\n'), 2))
   if (!done) return
   x.roles.leader = O

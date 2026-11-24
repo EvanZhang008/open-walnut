@@ -9,7 +9,8 @@
  *      and starts the source job on its own machine. Where this machine has no link to the leader, it says so
  *      and names the machine to run the command on;
  *   3. it follows: the source job's lines over the same link while the leader runs, then this machine's own
- *      target job (its state and output under the standby folder), until it ends.
+ *      target job (its state and output under the standby folder), until it ends. Its last line says the
+ *      old leader's machine still has its hand-off step, and where to check it (handOffLine).
  * Exit codes as on the leader's machine: 0 switched, 1 refused, 3 rolled back, 4 a job died part way.
  */
 import path from 'node:path'
@@ -132,7 +133,7 @@ export async function runCandidateSwitch(o: CandidateSwitchOptions): Promise<Swi
     const tgt = readTargetState(standbyDir, switchId)
     if (tgt && TARGET_FINAL.has(tgt.step) && !targetJobRunning(standbyDir, switchId)) {
       return tgt.step === 'done'
-        ? { code: 0, source: null, target: tgt, message: `${self.id} leads` }
+        ? { code: 0, source: null, target: tgt, message: `Switched: ${self.id} leads.\n${handOffLine(leaderId)}` }
         : { code: 3, source: null, target: tgt, message: `rolled back: ${tgt.rollbackWhy ?? 'unknown reason'}` }
     }
     // The leader's job ended before any target job here: refused at its preflight, or rolled back before the ticket.
@@ -153,6 +154,14 @@ export async function runCandidateSwitch(o: CandidateSwitchOptions): Promise<Swi
   function refused(message: string): SwitchOutcome {
     return { code: 1, source: null, target: null, message }
   }
+}
+
+/**
+ * The command's last line after a switch begun here: the source job's last step runs on the old leader's machine
+ * after its server stopped (so nothing here follows it), and only that machine shows how it ended.
+ */
+export function handOffLine(leader: string): string {
+  return `${leader} still has its final hand-off step (its old home marked handed over, its service set to follow this machine): check it on ${leader} with \`walnut leader switch --status\``
 }
 
 /** The holder a majority of the witnesses the check reached name, or null. */

@@ -66,6 +66,9 @@ export async function runLeaderSwitchCommand(options: Record<string, unknown>): 
       const { readUnresolvedOps } = await import('../core/leader/switch/records.js')
       const ops = readUnresolvedOps(st.targetHome)
       if (ops.length) console.log(`Outward ops ${st.from} registered and never reported (never sent again, check by hand): ${ops.map((o) => o.id).join(', ')}`)
+    } else if (r.code === 0) {
+      // Begun on this machine (candidate-command.ts): no source state here; its message ends with the hand-off line.
+      console.log(r.message)
     } else if (r.code === 3) {
       console.log(`Rolled back: ${r.message.replace(/^rolled back: /, '')}. ${st?.from ?? 'The old leader'} leads as before.`)
     } else {

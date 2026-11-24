@@ -66,12 +66,37 @@ describe('the leader takes a forwarded begin only from the machine it goes to', 
     expect(f.started).toEqual([])
   })
 
-  it('a link whose machine id is not known is refused, unless it is the leader\'s own host for `to` (its host_key)', async () => {
-    const f = deps({ links: { 'dev-b': null } })
-    expect((await beginForwarded('dev-b', { to: 'machine-b', switchId: 'S-2' }, f.d)).json.why).toMatch(/not from an unknown machine \(host dev-b\)/)
-    const keyed = { ...settings, machines: settings.machines.map((m) => (m.id === 'machine-b' ? { ...m, hostKey: 'dev-b' } : m)) } as LeaderSwitchSettings
-    expect((await beginForwarded('dev-b', { to: 'machine-b', switchId: 'S-2k' }, deps({ links: { 'dev-b': 'f'.repeat(32) }, settings: keyed }).d)).status).toBe(200)
-    // Another host's link for machine-b, whatever its own id: refused.
+  const keyed = { ...settings, machines: settings.machines.map((m) => (m.id === 'machine-b' ? { ...m, hostKey: 'dev-b' } : m)) } as LeaderSwitchSettings
+
+  it('taken by the first condition: the machine id the link\'s own hello said is `to` (no host_key needed)', async () => {
+    const f = deps({ links: { 'host-of-b': 'machine-b' } })
+    expect((await beginForwarded('host-of-b', { to: 'machine-b', switchId: 'S-2a' }, f.d)).status).toBe(200)
+    expect(f.started).toEqual([{ switchId: 'S-2a', to: 'machine-b' }])
+  })
+
+  it('taken by the second condition: the link is the leader\'s host whose key leader_switch.machines gives `to` (its hello says another id)', async () => {
+    const f = deps({ links: { 'dev-b': 'f'.repeat(32) }, settings: keyed })
+    expect((await beginForwarded('dev-b', { to: 'machine-b', switchId: 'S-2k' }, f.d)).status).toBe(200)
+    // Neither: the same link with no host_key for machine-b, and a hello id that is not machine-b.
+    expect((await beginForwarded('dev-b', { to: 'machine-b', switchId: 'S-2n' }, deps({ links: { 'dev-b': 'f'.repeat(32) } }).d)).json.why).toMatch(/not from f{32} \(host dev-b\)/)
+    // A hello with no id at all, no host_key: refused by name.
+    expect((await beginForwarded('dev-b', { to: 'machine-b', switchId: 'S-2' }, deps({ links: { 'dev-b': null } }).d)).json.why).toMatch(/not from an unknown machine \(host dev-b\)/)
+  })
+
+  it('the source is the link alone: a body that claims to be `to` (or its host) over another host\'s link is refused', async () => {
+    const f = deps({ settings: keyed })
+    const claims = { to: 'machine-b', switchId: 'S-2b', from: 'machine-b', machine: 'machine-b', machineId: 'machine-b', hostKey: 'dev-b', host: 'dev-b', startedBy: { machine: 'machine-b', via: 'forwarded' } }
+    const r = await beginForwarded('dev-c', claims, f.d)
+    expect(r.status).toBe(403)
+    expect(r.json.why).toMatch(/taken only from the machine it goes to \(machine-b\), not from machine-c \(host dev-c\)/)
+    expect(f.recorded).toEqual([])
+    expect(f.started).toEqual([])
+  })
+
+  it('a link from a host that is not `to`\'s (no machine of leader_switch.machines, or another one) is refused', async () => {
+    // A host nobody lists, whose hello names a machine nobody lists.
+    expect((await beginForwarded('stray', { to: 'machine-b', switchId: 'S-2s' }, deps({ links: { stray: 'machine-z' }, settings: keyed }).d)).json.why).toMatch(/not from machine-z \(host stray\)/)
+    // Another listed machine's host (machine-c), whatever it asks for machine-b.
     expect((await beginForwarded('dev-c', { to: 'machine-b', switchId: 'S-2c' }, deps({ settings: keyed }).d)).json.why).toMatch(/not from machine-c \(host dev-c\)/)
   })
 
@@ -191,7 +216,8 @@ describe('the command run on the machine that will lead', () => {
     }
     const r = await run({ link })
     expect(r.code).toBe(0)
-    expect(r.message).toBe('machine-b leads')
+    // Its last line: the old leader still has its hand-off step, and where to check it.
+    expect(r.message.split('\n')).toEqual(['Switched: machine-b leads.', 'machine-a still has its final hand-off step (its old home marked handed over, its service set to follow this machine): check it on machine-a with `walnut leader switch --status`'])
     expect(lines).toContain('[on machine-a] preflight')
   })
 
