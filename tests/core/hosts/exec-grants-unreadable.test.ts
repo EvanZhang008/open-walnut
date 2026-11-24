@@ -132,6 +132,7 @@ describe('a grants file that cannot be read whole', () => {
     const revoked = { ...before, grants: before.grants.map((x) => (x.id === one.id ? { ...x, revokedAt: 7 } : x)) }
     fs.writeFileSync(file, `<<<<<<< HEAD\n${JSON.stringify(before, null, 2)}\n=======\n${JSON.stringify(revoked, null, 2)}\n>>>>>>> origin/main\n`)
     await grants.noteRun(two.id, 'ls')
+    await grants.flushRunNotes()
     const now = JSON.parse(fs.readFileSync(file, 'utf8')) as { grants: grants.ExecGrant[]; lastUpdated?: string }
     expect(now.grants.find((x) => x.id === one.id)?.revokedAt).toBe(7)
     expect(now.grants.find((x) => x.id === two.id)?.runs).toBe(1)
@@ -301,7 +302,8 @@ describe('a pull applying never lands between a grants write\'s check and its re
     const g = await grants.grant('t1', HOST, 'own-host')
     expect(await closeWrites(5000)).toBe(true)
     // A write comes while the pull holds the gate: it waits, and has read nothing yet.
-    const run = grants.noteRun(g.id, 'ls')
+    await grants.noteRun(g.id, 'ls')
+    const run = grants.flushRunNotes()
     await new Promise((r) => setTimeout(r, 50))
     // The pull lands a revoke made on another machine.
     const s = JSON.parse(fs.readFileSync(file, 'utf8'))

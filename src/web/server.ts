@@ -7915,6 +7915,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   ;(await import('../core/push/work-card.js')).stopWorkCard()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await shutdownStep('page visits flush', async () => (await import('../core/page-visits.js')).flushVisitsNow())
+  // Host-exec runs noted since the grants were last written (at most RUN_NOTE_FLUSH_MS of them).
+  await shutdownStep('grant runs flush', async () => (await import('../core/hosts/exec-grants.js')).flushRunNotes())
   // Threads changes still waiting to go out to their JSON files (experiment threads_sqlite; a no-op
   // otherwise). From here every Threads write goes to its file within its own call; the writes of the
   // requests the HTTP close drains are awaited again after it ('threads files, last').

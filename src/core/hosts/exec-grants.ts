@@ -85,6 +85,7 @@ export function setExecGrantsFileForTest(f: string | null): void {
   closedUnknown = null
   unreadableStore = null
   seenLive.clear()
+  takePendingRuns()
 }
 
 // Every lookup below runs on the server's loop, several times per command and before every part
@@ -308,10 +309,21 @@ function mutate<T>(fn: (s: Store) => T, opts: { repair?: boolean } = {}): Promis
     // Taken whether or not anyone listens yet: a read may start listening while this write runs.
     const before = liveKeys(s)
     const out = fn(s)
+    // Every write carries the runs noted since the last one (noteRun).
+    const runs = takePendingRuns()
+    for (const [id, p] of runs) {
+      const g = s.grants.find((x) => x.id === id)
+      if (g) applyRuns(g, p)
+    }
     const tmp = `${target}.${process.pid}.tmp`
-    await fs.promises.mkdir(path.dirname(target), { recursive: true })
-    await fs.promises.writeFile(tmp, storeText({ ...s }), { mode: 0o600 })
-    await fs.promises.rename(tmp, target)
+    try {
+      await fs.promises.mkdir(path.dirname(target), { recursive: true })
+      await fs.promises.writeFile(tmp, storeText({ ...s }), { mode: 0o600 })
+      await fs.promises.rename(tmp, target)
+    } catch (error) {
+      restorePendingRuns(runs)
+      throw error
+    }
     // What we just wrote is what the file holds: keep it, no parse on the next lookup.
     goodStore = keep(statKey(target), deepFreeze(s))
     unreadableStore = null
@@ -450,6 +462,13 @@ export function findAsk(taskId: string, host: string): ExecAsk | undefined {
 /** Every grant, newest first; revoked ones only with `all`. */
 export function listGrants(opts: { all?: boolean } = {}): ExecGrant[] {
   return read().grants.filter((g) => opts.all || !g.revokedAt).sort((a, b) => b.grantedAt - a.grantedAt)
+    .map((g) => {
+      const p = pendingRuns.get(g.id)
+      if (!p) return g
+      const shown = { ...g }
+      applyRuns(shown, p)
+      return shown
+    })
 }
 
 export async function grant(taskId: string, host: string, via: ExecGrant['via']): Promise<ExecGrant> {
@@ -493,14 +512,62 @@ export async function revokeGrant(id: string): Promise<ExecGrant | null> {
   })
 }
 
+/**
+ * Runs noted since the grants were last written, written with the next change or within
+ * RUN_NOTE_FLUSH_MS. The file syncs to every machine, and writing it on every run (every few
+ * seconds while a loop polls a host) kept it changing inside every data-sync pull's window: each
+ * pull was deferred for it, and nothing synced for hours (2026-11-24, 46 rewrites in 40 minutes).
+ * A crash loses at most that long of counts; who may run is never deferred.
+ */
+export const RUN_NOTE_FLUSH_MS = 10 * 60_000
+type PendingRun = { runs: number; lastRunAt: number; lastCommand: string }
+const pendingRuns = new Map<string, PendingRun>()
+let runFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+function takePendingRuns(): Map<string, PendingRun> {
+  const taken = new Map(pendingRuns)
+  pendingRuns.clear()
+  if (runFlushTimer) { clearTimeout(runFlushTimer); runFlushTimer = null }
+  return taken
+}
+
+/** Put runs a failed write took back, ahead of any noted since. */
+function restorePendingRuns(taken: Map<string, PendingRun>): void {
+  for (const [id, p] of taken) {
+    const now = pendingRuns.get(id)
+    pendingRuns.set(id, now ? { runs: p.runs + now.runs, lastRunAt: now.lastRunAt, lastCommand: now.lastCommand } : p)
+  }
+  if (pendingRuns.size) scheduleRunFlush()
+}
+
+function applyRuns(g: ExecGrant, p: PendingRun): void {
+  g.runs += p.runs
+  if (p.lastRunAt >= (g.lastRunAt ?? 0)) { g.lastRunAt = p.lastRunAt; g.lastCommand = p.lastCommand }
+}
+
+function scheduleRunFlush(): void {
+  if (runFlushTimer) return
+  runFlushTimer = setTimeout(() => { runFlushTimer = null; void flushRunNotes() }, RUN_NOTE_FLUSH_MS)
+  runFlushTimer.unref?.()
+}
+
 export async function noteRun(grantId: string, command: string): Promise<void> {
-  await mutate((s) => {
-    const g = s.grants.find((x) => x.id === grantId)
-    if (!g) return
-    g.runs += 1
-    g.lastRunAt = Date.now()
-    g.lastCommand = command.slice(0, 200)
-  }).catch((err) => log.session.warn('host exec: grant run not recorded', { grantId, error: String(err) }))
+  const p = pendingRuns.get(grantId) ?? { runs: 0, lastRunAt: 0, lastCommand: '' }
+  p.runs += 1
+  p.lastRunAt = Date.now()
+  p.lastCommand = command.slice(0, 200)
+  pendingRuns.set(grantId, p)
+  scheduleRunFlush()
+}
+
+/** Write the runs noted so far now (the timer, a shutdown, tests). */
+export async function flushRunNotes(): Promise<void> {
+  if (!pendingRuns.size) return
+  await mutate(() => undefined).catch((err) => {
+    // A store that cannot be written now (unreadable, untrusted) keeps the runs: try again later.
+    log.session.warn('host exec: grant runs not recorded yet', { grants: pendingRuns.size, error: String(err) })
+    if (pendingRuns.size) scheduleRunFlush()
+  })
 }
 
 export async function recordAsk(ask: ExecAsk): Promise<void> {

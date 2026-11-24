@@ -1765,20 +1765,58 @@ function writeOrHealGitignore(): void {
   }
 }
 
-/** Async twin of ensureGitIdentity(), for the server's boot (ensureRepo). */
-async function ensureGitIdentityAsync(): Promise<void> {
-  if (!(await gitSafeAsync('config user.name'))) await gitAsync('config user.name "Open Walnut"');
-  if (!(await gitSafeAsync('config user.email'))) await gitAsync('config user.email "open-walnut@localhost"');
+/**
+ * The data repo's own settings, made at every boot (ensureRepo) and setup (initSync).
+ *
+ * Identity: the data repo auto-commits without user interaction. Fresh CI runners
+ * and minimal self-hosted installs often have no global Git identity, which used
+ * to make initial commits and later auto-saves silently fail. An existing user
+ * identity is kept; the repo-local fallback is set only when Git resolves none.
+ *
+ * Attributes: the user's own attributes file (core.attributesFile, or git's
+ * default ~/.config/git/attributes) never applies here. Git-sync merges the data
+ * stores itself (git-sync-merge.ts: per-file LWW, record merges), and a personal
+ * merge driver mapped to `*.json` / `*.md` ran inside every pull's merge-tree
+ * instead (2026-11-24: a syntax-aware driver took over 30 s, the merge timed
+ * out on every tick for six hours, nothing synced, and each push was rejected
+ * as diverged). The same file can carry a filter, eol or diff driver that would
+ * rewrite what the stores hold on disk. A repo-local empty value outranks the
+ * global one and every default, for every git process in this repo.
+ *
+ * Signing: a global commit.gpgsign would make every 30-second auto-commit ask
+ * a signing agent the server has no session for, and each one fail silently.
+ *
+ * A setting that cannot be written (a stale config.lock) is logged and retried
+ * at the next boot; it never turns sync off.
+ */
+const DATA_REPO_SETTINGS: ReadonlyArray<readonly [key: string, value: string]> = [
+  ['core.attributesFile', ''],
+  ['commit.gpgsign', 'false'],
+];
+
+function settingFailed(key: string, error: unknown): void {
+  log.git.warn('git-sync: could not write a data repo setting; retried at the next boot', {
+    key, error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+  });
 }
 
-function ensureGitIdentity(): void {
-  // The data repo auto-commits without user interaction. Fresh CI runners and
-  // minimal self-hosted installs often have no global Git identity, which used
-  // to make initial commits and later auto-saves silently fail.
-  // Preserve an existing user identity; provide a repo-local fallback only
-  // when Git cannot resolve one.
+async function ensureDataRepoConfigAsync(): Promise<void> {
+  if (!(await gitSafeAsync('config user.name'))) await gitAsync('config user.name "Open Walnut"');
+  if (!(await gitSafeAsync('config user.email'))) await gitAsync('config user.email "open-walnut@localhost"');
+  for (const [key, value] of DATA_REPO_SETTINGS) {
+    if ((await gitSafeAsync(`config --local --get ${key}`)) === value) continue;
+    try { await gitAsync(`config --local ${key} "${value}"`); } catch (error) { settingFailed(key, error); }
+  }
+}
+
+/** Sync twin of ensureDataRepoConfigAsync(), for the CLI's setup (initSync). */
+function ensureDataRepoConfig(): void {
   if (!gitSafe('config user.name')) git('config user.name "Open Walnut"');
   if (!gitSafe('config user.email')) git('config user.email "open-walnut@localhost"');
+  for (const [key, value] of DATA_REPO_SETTINGS) {
+    if (gitSafe(`config --local --get ${key}`) === value) continue;
+    try { git(`config --local ${key} "${value}"`); } catch (error) { settingFailed(key, error); }
+  }
 }
 
 export function initSync(remoteUrl?: string): void {
@@ -1799,7 +1837,7 @@ export function initSync(remoteUrl?: string): void {
     }
   }
 
-  ensureGitIdentity();
+  ensureDataRepoConfig();
   writeOrHealGitignore();
 
   if (remoteUrl) {
@@ -2123,6 +2161,7 @@ export function resetSyncGuardForTest(): void {
   guard.heldPull = null;
   pullHoldBack = { ids: [], paths: [] };
   streakTold.clear();
+  clearStalledPulls();
   pushFailureStreak = 0;
   lastSafeModeRefusalLog = 0;
   lastSurgeryWarnLog = 0;
@@ -2863,6 +2902,7 @@ async function pullFromRemote(branch: string): Promise<PullResult> {
   if (!(await fetchOriginForSync(branch))) return NOTHING_PULLED;
   await noteRewriteAcrossFetch(branch, before);
   const result = await integrateRemoteSafely(branch, { before, merge: true });
+  if (result.pulled === 1) clearStalledPulls();
   // Torn-worktree sentinel: the apply never moves the branch over a half-written
   // tree, but this is the guard every pull path keeps (a legacy git checkout can).
   if (result.pulled === 1) await verifyWorktreeAfterPull(`after pulling origin/${branch}`);
@@ -2969,6 +3009,7 @@ async function integrateRemote(branch: string, opts: { before: string | null; me
   };
 
   if (localHead === remoteHead || await isAncestor(remoteHead, localHead)) {
+    clearStalledPulls();
     await settled();
     return NOTHING_PULLED;
   }
@@ -3063,13 +3104,50 @@ async function computeDivergence(localHead: string, remoteHead: string, remoteRe
   try {
     return await resolveDivergence(pullGit().run, localHead, remoteHead, remoteRef, indexFile);
   } catch (error) {
+    const detail = (error instanceof Error ? error.message : String(error)).slice(0, 400);
+    notePullStalled(`the merge could not be computed: ${detail}`);
     log.git.warn('git-sync: could not compute the merge with origin — nothing changed, deferred to the next tick', {
-      localHead, remoteHead, error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+      localHead, remoteHead, error: detail,
     });
     return null;
   } finally {
     await fs.promises.rm(indexFile, { force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * A pull that keeps failing to land leaves nothing synced while each tick logs one ordinary
+ * deferral, and the visible symptom is a "push rejected" spike (2026-11-24: first a merge that
+ * timed out on every tick, then host-exec-grants.json rewritten on every host_exec run, blocked
+ * the pull for six hours). STALLED_PULL_TICKS pulls in a row that did not land, whatever the
+ * reason, are named once as an error with the reason and the files that blocked every one of
+ * them, so Health shows the cause. A pull that lands, or nothing to pull, ends the streak.
+ */
+const STALLED_PULL_TICKS = 10;
+const stalled = { ticks: 0, named: false, reason: '', files: null as Set<string> | null };
+
+export function notePullStalled(reason: string, files: string[] = []): void {
+  stalled.ticks++;
+  stalled.reason = reason;
+  // Files in the way of every deferral of the streak (none once one deferral had none).
+  stalled.files = stalled.files === null ? new Set(files) : new Set(files.filter((f) => stalled.files!.has(f)));
+  if (stalled.ticks < STALLED_PULL_TICKS || stalled.named) return;
+  stalled.named = true;
+  log.git.error('git-sync: the pull has not landed for many ticks in a row, so nothing syncs', {
+    pullsNotLanded: stalled.ticks, lastReason: reason.slice(0, 400), filesInTheWay: [...stalled.files].slice(0, 20), recoveryKey: 'git',
+  });
+}
+
+function clearStalledPulls(): void {
+  stalled.ticks = 0;
+  stalled.named = false;
+  stalled.reason = '';
+  stalled.files = null;
+}
+
+/** Tests: the streak notePullStalled keeps. */
+export function stalledPullsForTest(): { ticks: number; named: boolean; reason: string; files: string[] } {
+  return { ticks: stalled.ticks, named: stalled.named, reason: stalled.reason, files: [...(stalled.files ?? [])] };
 }
 
 /**
@@ -3084,8 +3162,10 @@ async function moveWorktree(branch: string, oldHead: string, target: string, wha
       repoDir: WALNUT_HOME, branch, oldHead, target, isMachineLocal: (file) => criticalIgnoreTarget(file) !== null,
     });
   } catch (error) {
+    const detail = (error instanceof Error ? error.message : String(error)).slice(0, 400);
+    notePullStalled(`the working tree could not be moved: ${detail}`);
     log.git.warn('git-sync: could not move the working tree to the pulled commit — the branch did not move, deferred to the next tick', {
-      what, branch, oldHead, target, error: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+      what, branch, oldHead, target, error: detail,
     });
     return false;
   }
@@ -3098,6 +3178,7 @@ async function moveWorktree(branch: string, oldHead: string, target: string, wha
       // take a minute, and notifications.json changes every time a card lands.
       // Nothing is wrong with either history, and remote-wins would be the wrong
       // answer; the next tick commits the write and pulls again.
+      notePullStalled('a store was rewritten while the pull was in flight', outcome.files)
       log.git.warn('git-sync: a store changed while the pull was in flight — merge deferred to the next tick', {
         what, branch, localHead: oldHead, remoteHead: target, files: outcome.files.slice(0, 20),
         // raced: the apply had started; every path it changed was put back (leftAlone: the app rewrote them since).
@@ -3109,6 +3190,7 @@ async function moveWorktree(branch: string, oldHead: string, target: string, wha
         });
       }
     } else {
+      notePullStalled(`the apply deferred: ${outcome.reason}`, outcome.files)
       log.git.info('git-sync: pull deferred to the next tick', { what, branch, reason: outcome.reason });
     }
     return false;
@@ -3131,6 +3213,7 @@ async function moveWorktree(branch: string, oldHead: string, target: string, wha
       what, branch, target, recoveryKey: 'git',
     });
   }
+  clearStalledPulls();
   return true;
 }
 
@@ -3920,7 +4003,7 @@ export async function ensureRepo(): Promise<{ available: boolean; error?: string
       } finally {
         invalidateSyncProbeCache();
       }
-      await ensureGitIdentityAsync();
+      await ensureDataRepoConfigAsync();
       writeOrHealGitignore();
       // The first commit holds the .gitignore alone, as initSync's does.
       if ((await gitSafeAsync('log --oneline -1')) === null) {
@@ -3932,11 +4015,11 @@ export async function ensureRepo(): Promise<{ available: boolean; error?: string
     }
   } else {
     try {
-      await ensureGitIdentityAsync();
+      await ensureDataRepoConfigAsync();
     } catch (err) {
       return {
         available: false,
-        error: `git identity setup failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: `git repo config setup failed: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
     // Pre-existing repo: self-heal the .gitignore so sensitive/machine-local
