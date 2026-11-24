@@ -98,6 +98,26 @@ describe('provisionWith', () => {
       expect(h.lines.some((l) => l.includes('echo build:yes') || l.includes(' update '))).toBe(false)
     })
 
+    it('guard: after a leader update, the look leaves the set with the build the move\'s set lines run', async () => {
+      // A fake host: the builds in the set's install root, the CLI lines the look runs, and the set line the move runs.
+      for (const leader of ['walnut-daemon-aaaaaaaaaaaa', 'walnut-daemon-bbbbbbbbbbbb', 'walnut-daemon-cccccccccccc']) {
+        const builds = new Set(['walnut-daemon-000000000000'])
+        const io = {
+          run: async (c: string) => {
+            if (c.includes('echo build:yes')) return builds.has(/= (walnut-daemon-[0-9a-f]+) \]/.exec(c)![1]) ? 'build:yes' : 'build:no'
+            if (c.includes(' update ')) { builds.add(leader); return `service set: ${SET}\n{"ok":true}` }
+            if (c.includes(' status')) return `service set: ${SET}\n{"installed":true}`
+            if (c.includes('id -u')) return '/home/u\n1000\n'
+            return ''
+          },
+        }
+        expect(await provisionWith(EXE, io, ask, { expected: leader })).toMatchObject({ set: SET, ok: true })
+        // What setCliCommand finds: this leader's build in the set, or no_build (the move could never start).
+        const line = setCliCommand(SET, leader, 'net-id')
+        expect(builds.has(/= (walnut-daemon-[0-9a-f]+) \]/.exec(line)![1])).toBe(true)
+      }
+    })
+
     it('an update the host refused is reported, the set kept installed (never removed)', async () => {
       const h = host({ ...installed, 'echo build:yes': 'build:no\n', ' update ': `service set: ${SET}\n{"ok":false,"failure":{"message":"probation failed","rollback":"the build before runs"}}` })
       const p = await provisionWith(EXE, h.io, ask, { expected: BUILD })
