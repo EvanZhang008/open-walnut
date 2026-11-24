@@ -329,11 +329,13 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
  */
 export async function followHostSwitch(o: StartHostSessionsOptions): Promise<() => Promise<void>> {
   const say = o.log ?? (() => {})
-  const [{ hostRunsSessionsAny }, { getConfig }, { onConfigCopyChanged }] = await Promise.all([
-    import('./switch.js'), import('../config-manager.js'), import('../replication/kinds/config.js'),
+  const [{ hostRunsSessionsAnyNow }, { onConfigCopyChanged }] = await Promise.all([
+    import('./switch.js'), import('../replication/kinds/config.js'),
   ])
   return followSwitch({
-    isOn: async () => hostRunsSessionsAny(await getConfig().catch(() => null)) || hostRanSessions(o.walnutId, o.stateDir),
+    // Off until the leader's first config copy (switch.ts configNow): a host does not start its
+    // session side on the registry default before it knows whether its leader turned it off.
+    isOn: async () => (await hostRunsSessionsAnyNow().catch(() => false)) || hostRanSessions(o.walnutId, o.stateDir),
     isUp: () => current !== null,
     start: async () => { await startHostSessions(o) },
     stop: stopHostSessions,

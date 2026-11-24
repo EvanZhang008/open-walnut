@@ -87,16 +87,23 @@ export function hostRunsSessionsAny(config: Partial<SwitchConfig> | null | undef
   return Array.isArray(copied) && copied.some((k) => typeof k === 'string' && k !== '')
 }
 
+/**
+ * This server's config now, or null when it cannot be read. A host replica's config is the leader's
+ * copy: before the first copy round it reads the defaults, where the experiment's registry default
+ * (on) would start a session side the leader may have turned off, so a host with no copy yet reads
+ * no config, and so off, until the leader's word comes (host-boot.ts followHostSwitch starts it then).
+ */
 async function configNow(): Promise<Config | null> {
   try {
-    const { getConfig } = await import('../config-manager.js')
+    const [{ getConfig }, { isHostReplicaProgram }] = await Promise.all([import('../config-manager.js'), import('../server-role.js')])
+    if (isHostReplicaProgram() && !(await (await import('../replication/kinds/config.js')).readConfigCopy())) return null
     return await getConfig()
   } catch {
     return null
   }
 }
 
-/** hostRunsSessionsAny on this server's config now (false when it cannot be read). */
+/** hostRunsSessionsAny on this server's config now (false when it cannot be read, or on a host before its first config copy). */
 export async function hostRunsSessionsAnyNow(): Promise<boolean> {
   const f = forced()
   if (f !== null) return f

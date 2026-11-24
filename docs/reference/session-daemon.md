@@ -669,6 +669,13 @@ place (`src/core/session-channel/switch.ts`):
   `false` keeps it off even with the experiment on, absent follows the experiment. So one host is
   turned on at a time, and default-on later needs no entry per host.
 
+A host replica with no config copy yet reads the switch as off (`switch.ts` configNow): it starts its
+session side only after the leader's first copy round says on, so a stored `false` never starts one
+there, not even for the moments after a boot. Its door and companion dialers read the same: a host
+that ran sessions before (its fact log keeps the session side up) but has no copy on disk dials
+neither until the first round. The copy is kept on disk (`cache/replica/config.json`), so only a
+deleted cache file or a forced `WALNUT_HOST_RUNS_SESSIONS` reaches that.
+
 Only the leader's start decision reads it per host (`hostRunsSessionsFor`, the start probe of
 `judge-of.ts`): a new start on a host goes to its service when the switch is on for that host and the
 service names `session-judge-v1`. Every other reader asks "on for any host" (`hostRunsSessionsAny`):
