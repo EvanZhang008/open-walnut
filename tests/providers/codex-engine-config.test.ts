@@ -303,6 +303,18 @@ describe('codexProviderForPlace: the provider for the machine Codex runs on', ()
     expect(out.source).toEqual({ from: 'global' })
   })
 
+  it('a provider written under another name of the same machine is found (its aliases)', () => {
+    const config = { engines: { codex: { provider: LOOPBACK } }, hosts: { 'devbox-ssh': { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } }, devbox: { hostname: 'devbox.walnut-net.invalid' } } }
+    const out = codexProviderForPlace(config, { host: 'devbox', aliases: ['devbox-ssh'], configIsThisMachine: false })
+    expect(providerOf(out)).toEqual(HOST_OWN)
+    expect(out.source).toEqual({ from: 'host', host: 'devbox-ssh' })
+    // Its own key wins over an alias's.
+    const both = { ...config, hosts: { ...config.hosts, devbox: { hostname: 'x', engines: { codex: { provider: PROXY } } } } }
+    expect(providerOf(codexProviderForPlace(both, { host: 'devbox', aliases: ['devbox-ssh'], configIsThisMachine: false }))).toEqual(PROXY)
+    // No proven alias: not found.
+    expect(providerOf(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false }))).toBeUndefined()
+  })
+
   it('nothing set: nothing changes', () => {
     const config = { hosts: { devbox: { hostname: 'devbox' } } }
     expect(codexProviderForPlace(config, { host: 'devbox', configIsThisMachine: false })).toEqual({ config, source: { from: 'none' } })

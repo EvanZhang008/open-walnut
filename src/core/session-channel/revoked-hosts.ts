@@ -87,10 +87,22 @@ export function sameMachine(a: string, b: string): boolean {
 export function oneDaemonNow(a: string, b: string): boolean {
   if (a === b) return !!a
   if (!a || !b || a === LOCAL || b === LOCAL) return false
+  return sameDaemonKeysNow(a).includes(b) || sameDaemonKeysNow(b).includes(a)
+}
+
+/**
+ * The other names oneDaemonNow's one tie proves for `hostKey` right now: the host keys whose daemon
+ * link THIS leader opened reaches the same live daemon process, `__local__` among them when that
+ * process is this leader's own daemon (the key then names this very machine). Empty off the leader,
+ * and for a link that cannot be read. A setting written under one name of a machine is found under
+ * its other names by this (providers/codex-engine-source.ts: a host's own Codex provider).
+ */
+export function sameDaemonKeysNow(hostKey: string): string[] {
+  if (!hostKey) return []
   try {
-    return (resolver?.sameDaemonNow?.(a) ?? []).includes(b) || (resolver?.sameDaemonNow?.(b) ?? []).includes(a)
+    return [...new Set(resolver?.sameDaemonNow?.(hostKey) ?? [])].filter((k) => !!k && k !== hostKey)
   } catch {
-    return false // a link that cannot be read proves nothing
+    return [] // a link that cannot be read proves nothing
   }
 }
 

@@ -188,6 +188,8 @@ export function readCodexEngineSettings(config: unknown): CodexEngineSettings {
 export interface CodexPlace {
   /** The host key (`hosts.<name>`) it runs on; absent for the machine of this server that has no host key. */
   host?: string
+  /** The host's other keys, proven to reach the same daemon (revoked-hosts.ts sameDaemonKeysNow): its provider may be written under any. */
+  aliases?: readonly string[]
   /** Is the config's global `engines.codex` this machine's own (false off the leader, and on another host)? */
   configIsThisMachine: boolean
 }
@@ -203,7 +205,8 @@ export type CodexProviderSource =
  * THE provider a Codex process gets at `place` (every spawn path takes it, through
  * codex-engine-source.ts codexWalnutConfig): `config` with `engines.codex.provider` replaced by
  *
- *   1. the host's own `hosts.<host>.engines.codex.provider`, when it is set;
+ *   1. the host's own `hosts.<host>.engines.codex.provider`, when it is set (under its own key, else
+ *      under another name of the same machine, `place.aliases`);
  *   2. else the global `engines.codex.provider`, EXCEPT a loopback one (127.0.0.1, localhost, ::1)
  *      on a machine other than the one whose config it is: there it reaches nothing, so no
  *      provider is passed and Codex uses that host's own ~/.codex/config.toml (Walnut never sets
@@ -224,10 +227,17 @@ export function codexProviderForPlace(
     return { ...config, engines: { ...engines, codex: next } }
   }
   const hosts = isRecord(config.hosts) ? config.hosts : {}
-  const hostEntry = place.host && Object.hasOwn(hosts, place.host) && isRecord(hosts[place.host]) ? hosts[place.host] as Record<string, unknown> : undefined
-  const hostEngines = hostEntry && isRecord(hostEntry.engines) ? hostEntry.engines : undefined
-  const own = hostEngines && isRecord(hostEngines.codex) ? hostEngines.codex.provider : undefined
-  if (own !== undefined && own !== null) return { config: withProvider(own), source: { from: 'host', host: place.host! } }
+  const providerOf = (key: string): unknown => {
+    const entry = Object.hasOwn(hosts, key) && isRecord(hosts[key]) ? hosts[key] as Record<string, unknown> : undefined
+    const engines = entry && isRecord(entry.engines) ? entry.engines : undefined
+    const own = engines && isRecord(engines.codex) ? engines.codex.provider : undefined
+    return own === null ? undefined : own
+  }
+  // The host's own key first, then its other names of the same machine.
+  for (const key of place.host ? [place.host, ...(place.aliases ?? [])] : []) {
+    const own = providerOf(key)
+    if (own !== undefined) return { config: withProvider(own), source: { from: 'host', host: key } }
+  }
   const global = codex.provider
   if (global === undefined || global === null) return { config, source: { from: 'none' } }
   if (!place.configIsThisMachine && isRecord(global) && isLoopbackUrl(global.base_url)) {

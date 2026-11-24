@@ -33,6 +33,7 @@ import { configCopyRows, configRowAdmissible } from '../../src/core/replication/
 import { AcpSession } from '../../src/providers/acp-session.js'
 import { CodexEngineConfigError, resolveCodexEngine } from '../../src/providers/codex-engine-config.js'
 import { _resetCodexSourceNotesForTesting, codexWalnutConfig, withCopiedEngines } from '../../src/providers/codex-engine-source.js'
+import { setRevokedHostResolver } from '../../src/core/session-channel/revoked-hosts.js'
 
 const PROVIDER = { base_url: 'http://llm.example.test:9000/v1', name: 'my-proxy', model_prefix: 'vendor.', env_key: 'MY_PROXY_KEY' }
 
@@ -48,7 +49,20 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  setRevokedHostResolver(null)
+})
+
+/** The leader's links: each group of keys reaches one live daemon process (`__local__` is this machine's). */
+function linksReach(...groups: string[][]): void {
+  setRevokedHostResolver({
+    machineOf: () => null,
+    aliasesOf: () => [],
+    sameDaemonNow: (key) => groups.find((g) => g.includes(key))?.filter((k) => k !== key) ?? [],
+  })
+}
+const codexOf = (config: Record<string, unknown>) => ((config.engines as Record<string, Record<string, unknown>> | undefined)?.codex ?? {})
 
 describe('the config copy carries the non-secret part of engines', () => {
   it('provider, model and effort go; env and adapter_cmd never do', () => {
@@ -102,6 +116,16 @@ describe('the copy carries each host\'s own provider and never the leader\'s loo
     expect(configRowAdmissible(own)).toBe(true)
     // No host sets one: no row.
     expect(configCopyRows({ hosts: { plain: { hostname: 'plain' } } }).rows.some((r) => r.key === 'host_engines')).toBe(false)
+  })
+
+  it('a host\'s provider written under another name of its machine reaches the copy under each name', () => {
+    const config = { hosts: { 'devbox-ssh': { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } }, devbox: { hostname: 'devbox.walnut-net.invalid' }, other: { hostname: 'other' } } }
+    const aliasesOf = (k: string) => (k === 'devbox' ? ['devbox-ssh'] : k === 'devbox-ssh' ? ['devbox'] : [])
+    const row = configCopyRows(config, { aliasesOf }).rows.find((r) => r.key === 'host_engines')!
+    expect(row.value).toEqual({ 'devbox-ssh': { codex: { provider: HOST_OWN } }, devbox: { codex: { provider: HOST_OWN } } })
+    expect(configRowAdmissible(row)).toBe(true)
+    // Without the tie only the key it was written under.
+    expect(configCopyRows(config).rows.find((r) => r.key === 'host_engines')!.value).toEqual({ 'devbox-ssh': { codex: { provider: HOST_OWN } } })
   })
 
   it('a host provider holding a credential is withheld for that host only', () => {
@@ -187,6 +211,25 @@ describe('a Codex start off the Mac', () => {
       if (saved === undefined) delete process.env.WALNUT_HOST_KEY
       else process.env.WALNUT_HOST_KEY = saved
     }
+  })
+
+  it('on the leader, a host\'s provider is found under another name of the same machine (one live daemon)', async () => {
+    await updateConfig({ engines: { codex: { provider: LOOPBACK } }, hosts: { 'devbox-ssh': { hostname: 'devbox', engines: { codex: { provider: HOST_OWN } } }, devbox: { hostname: 'devbox.example.com' } } } as never)
+    linksReach(['devbox', 'devbox-ssh'])
+    expect(codexOf(await codexWalnutConfig({ host: 'devbox' })).provider).toEqual(HOST_OWN)
+    // A name of another machine does not take it.
+    linksReach(['devbox'], ['devbox-ssh'])
+    expect(codexOf(await codexWalnutConfig({ host: 'devbox' })).provider).toBeUndefined()
+  })
+
+  it('on the leader, a host entry that reaches this machine\'s own daemon is this machine: the loopback provider applies', async () => {
+    await updateConfig({ engines: { codex: { provider: LOOPBACK } }, hosts: { 'mac-alias': { hostname: 'mac.example.com' }, devbox: { hostname: 'devbox.example.com' } } } as never)
+    linksReach(['__local__', 'mac-alias'])
+    expect(codexOf(await codexWalnutConfig({ host: 'mac-alias' })).provider).toEqual(LOOPBACK)
+    expect(codexOf(await codexWalnutConfig({ host: 'devbox' })).provider).toBeUndefined()
+    // Only the live tie counts: without it the alias is another machine.
+    setRevokedHostResolver(null)
+    expect(codexOf(await codexWalnutConfig({ host: 'mac-alias' })).provider).toBeUndefined()
   })
 
   it('on the Mac its own config is read, as before', async () => {

@@ -15,6 +15,12 @@
  * door, as the link does with the streams the daemon relays from the Mac). The CLI is a shell
  * script answering every stdin user line with one assistant line and one result line.
  *
+ * A Codex session started the same way is assembled here too, so its provider is decided here, from
+ * this host's copy of the leader's config: a fake `codex` records the command line and CODEX_CONFIG
+ * its app-server is started with. The leader's `engines.codex.provider` names the leader's own
+ * 127.0.0.1 proxy, which reaches nothing on this host: the session carries this host's own provider
+ * (the copy's `host_engines` row) or none (providers/codex-engine-config.ts codexProviderForPlace).
+ *
  * Isolation: one temp base for HOME, data dir, run dir, the runtime's daemon and state dirs;
  * PATH leads with the fake `claude`, then the test run's exec guard (guardedPath,
  * childExecGuardEnv), then the system dirs. The child is stopped by the pid this test spawned.
@@ -30,6 +36,7 @@ import { WebSocket } from '#ws'
 import type { ChannelFrame } from '../../src/core/session-channel/channel.js'
 import type { FactRecord } from '../../src/core/session-channel/fact-log.js'
 import { childExecGuardEnv, guardedPath } from '../setup/exec-guard.js'
+import { configCopyRows } from '../../src/core/replication/config-allowlist.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 const SRC = path.join(REPO_ROOT, 'src')
@@ -41,7 +48,9 @@ let base = ''
 let child: ChildProcess | null = null
 let stderr = ''
 let doorPort = 0
+let dataDir = ''
 const work = () => path.join(base, 'work')
+const codexLog = () => path.join(base, 'codex-argv.log')
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -72,6 +81,24 @@ const FAKE_CLI = [
   '',
 ].join('\n')
 
+/** A `codex` that says its version and, as an app-server, writes its command line and CODEX_CONFIG, then fails. */
+const FAKE_CODEX = (log: string) => [
+  '#!/bin/sh',
+  'if [ "$1" = "--version" ]; then echo "codex-cli 0.150.0"; exit 0; fi',
+  `printf 'ARGV %s\\n' "$*" >> ${JSON.stringify(log)}`,
+  `printf 'CODEX_CONFIG %s\\n' "$CODEX_CONFIG" >> ${JSON.stringify(log)}`,
+  'exit 1',
+  '',
+].join('\n')
+
+/** The leader's config as this host's copy holds it: the leader's real copy rows, where the config copy kind keeps them. */
+async function leaderCopyIs(leaderConfig: Record<string, unknown>): Promise<void> {
+  const { rows } = configCopyRows(leaderConfig)
+  const file = path.join(dataDir, 'cache', 'replica', 'config.json')
+  await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  await fsp.writeFile(file, JSON.stringify({ v: 1, asOf: Date.now(), at: Date.now(), hashes: {}, rows: Object.fromEntries(rows.map((r) => [r.key, r])) }), { mode: 0o600 })
+}
+
 const RUNNER = path.join(REPO_ROOT, 'tests/providers/fixtures/one-service-runner.ts')
 
 /** What the service imports once its server answers (WALNUT_TEST_SERVICE_AFTER): checks, and the door on a loopback port. */
@@ -98,6 +125,8 @@ beforeAll(async () => {
   const fakeBin = path.join(base, 'fakebin')
   for (const x of [d.data, d.run, d.hostd, path.join(d.state, 'host-server'), d.launcher, fakeBin, work()]) await fsp.mkdir(x, { recursive: true, mode: 0o700 })
   await fsp.writeFile(path.join(fakeBin, 'claude'), FAKE_CLI, { mode: 0o755 })
+  await fsp.writeFile(path.join(fakeBin, 'codex'), FAKE_CODEX(codexLog()), { mode: 0o755 })
+  dataDir = d.data
   const after = path.join(base, 'after.mts')
   await fsp.writeFile(after, AFTER(d.data))
   const port = await freePort()
@@ -194,5 +223,57 @@ describe('a host that runs and judges its sessions', () => {
     for (const n of names) expect(n === 'row' || n === 'live' || n.startsWith('session:') || n.startsWith('transfer:'), n).toBe(true)
     const result = mine.find((x) => x.name === 'session:result')!
     expect((result.data as { result?: string }).result).toBe('answer 1')
+  }, 120_000)
+})
+
+describe('a Codex session this host runs itself gets the provider for this host', () => {
+  const LEADER_LOOPBACK = { base_url: 'http://127.0.0.1:8402/openai/v1', name: 'local-proxy', wire_api: 'responses' }
+  const HOST_OWN = { base_url: 'http://127.0.0.1:18402/v1', name: 'host-relay', wire_api: 'responses' }
+
+  /** Start Codex through the door; the app-server's command line and CODEX_CONFIG the fake codex wrote. */
+  async function codexStart(n: number): Promise<{ argv: string; config: string }> {
+    await fsp.rm(codexLog(), { force: true })
+    const taskId = `task-marina-codex-${n}`
+    void fetch(`http://127.0.0.1:${doorPort}/host-api/sessions/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json', connection: 'close' },
+      body: JSON.stringify({
+        taskId, message: 'hello', cwd: work(), mode: 'bypass', engine: 'codex', preassignedSessionId: crypto.randomUUID(), project: 'Marina',
+        attributed: true, attributionSource: 'test',
+        startBundle: {
+          task: { id: taskId, title: 'Host Codex run', project: 'Marina', status: 'todo', phase: 'TODO', priority: 'none', source: 'local', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), tags: [] },
+          hintsApplied: true,
+        },
+      }),
+    }).then((r) => r.text(), () => '')
+    const end = Date.now() + 60_000
+    let text = ''
+    while (Date.now() < end) {
+      text = await fsp.readFile(codexLog(), 'utf8').catch(() => '')
+      if (/^ARGV .*app-server/m.test(text) && /^CODEX_CONFIG /m.test(text)) break
+      await sleep(100)
+    }
+    const argv = /^ARGV (.*app-server.*)$/m.exec(text)?.[1] ?? ''
+    expect(argv, `no app-server start\n${stderr.slice(-3000)}`).not.toBe('')
+    return { argv, config: /^CODEX_CONFIG (.*)$/m.exec(text)?.[1] ?? '' }
+  }
+
+  it('the leader\'s loopback provider is not passed: Codex uses this host\'s own config.toml', async () => {
+    await leaderCopyIs({ engines: { codex: { provider: LEADER_LOOPBACK } } })
+    const { argv, config } = await codexStart(1)
+    expect(argv).not.toContain('model_providers.')
+    expect(argv).not.toContain(LEADER_LOOPBACK.base_url)
+    expect(config).not.toContain('model_provider')
+  }, 120_000)
+
+  it('this host\'s own provider from the copy\'s host_engines row is passed', async () => {
+    await leaderCopyIs({
+      engines: { codex: { provider: LEADER_LOOPBACK } },
+      hosts: { [HOST_KEY]: { hostname: 'marina-box.invalid', engines: { codex: { provider: HOST_OWN } } }, other: { hostname: 'other.invalid' } },
+    })
+    const { argv, config } = await codexStart(2)
+    expect(argv).toContain('model_providers.host-relay=')
+    expect(argv).toContain(HOST_OWN.base_url)
+    expect(argv).not.toContain(LEADER_LOOPBACK.base_url)
+    expect(JSON.parse(config)).toMatchObject({ model_provider: 'host-relay' })
   }, 120_000)
 })

@@ -54,7 +54,9 @@ export async function readLeaderConfig(): Promise<Record<string, unknown>> {
 let lastWarned = ''
 
 async function leaderRows(): Promise<ConfigCopyRow[]> {
-  const { rows, refused, unknown } = configCopyRows(await readLeaderConfig())
+  // A host's own engine settings reach it under each name its machine goes by (one live daemon).
+  const { sameDaemonKeysNow } = await import('../../session-channel/revoked-hosts.js')
+  const { rows, refused, unknown } = configCopyRows(await readLeaderConfig(), { aliasesOf: sameDaemonKeysNow })
   const note = JSON.stringify({ refused: refused.map((r) => [r.key, r.findings.map((f) => `${f.path}:${f.reason}`)]), unknown })
   if ((refused.length > 0 || unknown.length > 0) && note !== lastWarned) {
     lastWarned = note

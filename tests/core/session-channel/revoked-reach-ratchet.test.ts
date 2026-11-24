@@ -253,6 +253,8 @@ describe('a ban is read only through the one alias-aware function', () => {
       'src/core/session-channel/handed-sessions.ts': 'a hand under another name of one daemon is that daemon\'s (oneDaemonNow)',
       'src/core/session-channel/handover-marks.ts': 'a hand-over mark under another name of one daemon ends with its row (oneDaemonNow)',
       'src/core/session-tracker.ts': 'a seed of another name of one daemon moves to its service\'s name (handSeedToHost, oneDaemonNow)',
+      'src/providers/codex-engine-source.ts': 'a host\'s Codex provider written under another name of one daemon, and a host key that is this machine\'s own daemon (sameDaemonKeysNow), never the ban',
+      'src/core/replication/kinds/config.ts': 'a host\'s engine settings copied under each name of one daemon (sameDaemonKeysNow), never the ban',
     }
     const checks = new Set(Object.values(REVOKED_REACH).flatMap((r) => (r.verdict === 'refused' ? [r.check.file] : [])))
     const readers = SRC.filter((f) => READS_BAN.test(read(f).replace(/^\s*(\/\/|\*).*$/gm, '')) || /revoked-hosts\.js/.test(read(f)))

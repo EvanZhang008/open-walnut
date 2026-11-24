@@ -102,7 +102,12 @@ export async function codexWalnutConfig(place: CodexSpawnPlace): Promise<Record<
   // A session on this machine: a host replica goes by its own host key, the leader by none.
   const { thisHostKey } = await import('../core/sessions/session-row-owner.js')
   const host = remote ?? (thisHostKey() || undefined)
-  const resolved = codexProviderForPlace(config, { host, configIsThisMachine: !follower && !remote })
+  // The host's other names, and whether it is this leader's own machine: only the tie the
+  // leader's own links prove (one live daemon process, revoked-hosts.ts sameDaemonKeysNow).
+  const { sameDaemonKeysNow } = await import('../core/session-channel/revoked-hosts.js')
+  const ties = host ? sameDaemonKeysNow(host) : []
+  const thisMachine = !follower && (!remote || ties.includes('__local__'))
+  const resolved = codexProviderForPlace(config, { host, aliases: ties.filter((k) => k !== '__local__'), configIsThisMachine: thisMachine })
   if (resolved.source.from === 'skipped-loopback') {
     const { log } = await import('../logging/index.js')
     noteSource(resolved.source, (msg, meta) => log.session.warn(msg, meta))

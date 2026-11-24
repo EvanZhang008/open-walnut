@@ -350,9 +350,14 @@ export interface ConfigCopyRows {
   unknown: string[]
 }
 
-/** The config copy's rows: allowlisted top-level keys, each through its spec, each with no secret in it. */
-export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>): ConfigCopyRows {
-  const config = withHostsRunSessions(leaderConfig)
+/**
+ * The config copy's rows: allowlisted top-level keys, each through its spec, each with no secret in it.
+ * `aliasesOf`: a host key's other names of one machine (the leader's revoked-hosts.ts
+ * sameDaemonKeysNow), so a host's own engine settings written under one name reach the service
+ * that goes by another.
+ */
+export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>, options: { aliasesOf?: (hostKey: string) => readonly string[] } = {}): ConfigCopyRows {
+  const config = withHostsRunSessions(leaderConfig, options.aliasesOf)
   const rows: ConfigCopyRow[] = []
   const refused: ConfigCopyRows['refused'] = []
   const unknown: string[] = []
@@ -401,13 +406,26 @@ function withoutLoopbackProviders(value: unknown): unknown {
   return out
 }
 
-/** The copy-only `host_engines` row's value: each host's own `engines`, only the hosts that set one. */
-function hostEnginesOf(hosts: unknown): Record<string, unknown> | undefined {
+/**
+ * The copy-only `host_engines` row's value: each host's own `engines`, only the hosts that set one.
+ * A host key that sets none takes the one written under another name of its machine (`aliasesOf`).
+ */
+function hostEnginesOf(hosts: unknown, aliasesOf?: (hostKey: string) => readonly string[]): Record<string, unknown> | undefined {
   if (!hosts || typeof hosts !== 'object' || Array.isArray(hosts)) return undefined
-  const out: Record<string, unknown> = {}
+  const own: Record<string, unknown> = {}
   for (const [key, def] of Object.entries(hosts as Record<string, unknown>)) {
     const engines = def && typeof def === 'object' ? (def as { engines?: unknown }).engines : undefined
-    if (engines && typeof engines === 'object' && !Array.isArray(engines) && Object.keys(engines).length > 0) out[key] = engines
+    if (engines && typeof engines === 'object' && !Array.isArray(engines) && Object.keys(engines).length > 0) own[key] = engines
+  }
+  const out: Record<string, unknown> = { ...own }
+  if (aliasesOf) {
+    for (const key of Object.keys(hosts as Record<string, unknown>)) {
+      if (Object.hasOwn(own, key)) continue
+      let names: readonly string[] = []
+      try { names = aliasesOf(key) } catch { names = [] }
+      const from = names.find((n) => Object.hasOwn(own, n))
+      if (from) out[key] = own[from]
+    }
   }
   return Object.keys(out).length > 0 ? out : undefined
 }
@@ -418,10 +436,10 @@ function hostEnginesOf(hosts: unknown): Record<string, unknown> | undefined {
  * engine settings (`hosts.<name>.engines`); `leader_capabilities`. Whatever config.yaml says under
  * those keys is never copied: only the hosts map decides them.
  */
-function withHostsRunSessions(config: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+function withHostsRunSessions(config: Readonly<Record<string, unknown>>, aliasesOf?: (hostKey: string) => readonly string[]): Readonly<Record<string, unknown>> {
   const { hosts_run_sessions: _ignored, leader_capabilities: _ignoredToo, host_engines: _ignoredThree, ...rest } = config
   const on = hostsTurnedOn(Array.isArray(config.hosts) ? null : config.hosts as Config['hosts'])
-  const hostEngines = hostEnginesOf(config.hosts)
+  const hostEngines = hostEnginesOf(config.hosts, aliasesOf)
   const withOn = { ...rest, ...(on.length > 0 ? { hosts_run_sessions: on } : {}), ...(hostEngines ? { host_engines: hostEngines } : {}) }
   // While the switch is on for any host (so an older replica, which refuses this row, sees nothing
   // new while it is off), and only from a leader that runs the session channel.
