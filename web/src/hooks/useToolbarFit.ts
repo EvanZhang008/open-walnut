@@ -66,7 +66,7 @@ export function nextToolbarFold({
 export interface UseToolbarFitOptions {
   /** The search field inside the row (its own box, not the bar around it). */
   inputSelector: string;
-  /** What typing shows beside the field (a clear button, a result count, a spinner). */
+  /** What typing shows beside the field (a clear button, a result count); a search's busy ring takes the field's icon slot, not room beside it (SearchField). */
   typingSelector?: string;
   minPx?: number;
   reservePx?: number;

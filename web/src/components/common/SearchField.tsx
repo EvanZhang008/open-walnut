@@ -1,6 +1,6 @@
 /**
- * The one search field: a magnifier, the words, then its keys (a busy ring, the hit count, the
- * clear key, the mic), all drawn by styles/input-box.css ("Fields", `wn-field`) as the message box
+ * The one search field: a magnifier, the words, then its keys (the hit count, the clear key, the
+ * mic), all drawn by styles/input-box.css ("Fields", `wn-field`) as the message box
  * is: one corner, fill, edge and focus, 34 px tall (28 px with `small`, beside `.btn-sm`).
  *
  * 2026-11-21 UI audit: the Home, Display menu, Mail, Apps, Memory and Settings searches each drew
@@ -10,13 +10,17 @@
  * It is a MicInput, so typing, voice input, Enter and blur waiting for dictated words all work as
  * there. Esc and the keys a page binds stay the owner's (`onKeyDown`); the clear key shows while
  * there are words and runs `onClear`, then puts the caret back in the field.
+ *
+ * A search still running turns the magnifier into the busy ring, in the same slot: the words keep the
+ * width they have when it ends (2026-11-24: in a 25% Home panel a ring beside the keys left the
+ * typed words 50 px while the search ran, 74 px once it ended).
  */
 import { useRef, type PointerEvent, type ReactNode, type Ref } from 'react';
 import { MicInput, type MicInputProps } from '@/components/common/BoxMic';
 import { ICON_CLOSE, ICON_SEARCH } from '@/components/common/Icons';
 
 export interface SearchFieldProps extends Omit<MicInputProps, 'before' | 'after' | 'compact'> {
-  /** A search still running: a small ring before the keys. */
+  /** A search still running: the ring in the leading icon's slot, never a key of its own. */
   busy?: boolean;
   /** The ring's own class, a hook for tests (`todo-search-spinner`). */
   busyClassName?: string;
@@ -52,9 +56,10 @@ export function SearchField({ busy, busyClassName, count, countTitle, onClear, s
       ref={setRefs as Ref<HTMLInputElement>}
       value={value}
       fieldClassName={cls}
-      before={<span className="wn-field-icon" aria-hidden="true" onPointerDown={focusBox}>{icon}</span>}
+      before={<span className="wn-field-icon" aria-hidden="true" onPointerDown={focusBox}>
+        {busy ? <span className={busyClassName ? `wn-field-busy ${busyClassName}` : 'wn-field-busy'} /> : icon}
+      </span>}
       after={<>
-        {busy && <span className={busyClassName ? `wn-field-busy ${busyClassName}` : 'wn-field-busy'} aria-hidden="true" />}
         {value && count != null && <span className="wn-field-count" title={countTitle}>{count}</span>}
         {(value || showClear) && onClear && (
           <button

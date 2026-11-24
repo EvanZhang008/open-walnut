@@ -301,11 +301,12 @@ input[list]::-webkit-list-button { display: none !important; opacity: 0; }
 }
 /* A number's unit ("min"), inside its field, where the keys would be. */
 .wn-field-unit { flex: none; padding: 0 calc(8px - var(--input-key-inset)) 0 4px; color: var(--fg-muted); }
+/* The busy ring sits in the leading icon's slot (SearchField), exactly the icon's 14 px. */
 .wn-field-busy {
   flex: none;
+  box-sizing: border-box;
   width: 14px;
   height: 14px;
-  margin: 0 4px;
   border: 2px solid var(--border);
   border-top-color: var(--accent);
   border-radius: 50%;

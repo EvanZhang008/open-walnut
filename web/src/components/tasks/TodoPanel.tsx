@@ -2370,7 +2370,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const phoneToolbar = usePhoneLayout();
   useToolbarFit(toolbarRef, {
-    inputSelector: '.todo-search-input', typingSelector: '.todo-search-clear, .todo-search-spinner',
+    inputSelector: '.todo-search-input', typingSelector: '.todo-search-clear',
     enabled: !phoneToolbar,
   });
   const pinIntoTier = useLeanCallback((id: string, tier: FocusTier, order?: string[]) => {

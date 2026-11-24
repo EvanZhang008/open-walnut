@@ -75,6 +75,26 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await expect(page.locator('.todo-panel-toolbar')).toHaveAttribute('data-toolbar-fold', foldTyped!);
 });
 
+test('a search still running keeps the typed words the width they have when it ends', async ({ page, baseURL }) => {
+  // 2026-11-24: beside the keys the busy ring left the words 50 px in this narrow panel while the
+  // search ran, 74 px once it ended. It now takes the field's icon slot (SearchField).
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => { release = r; });
+  await page.route('**/api/search?**', async (route) => { await held; await route.continue(); });
+  await boot(page, baseURL!);
+  await search(page, 'marmalade');
+  const spinner = page.locator('.todo-search-spinner');
+  await expect(spinner).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('.todo-search-bar .wn-field-icon .todo-search-spinner')).toHaveCount(1);
+  await expect(page.locator('.todo-panel-toolbar')).toHaveAttribute('data-toolbar-fold', '2');
+  const busyPx = (await page.locator('.todo-search-input').boundingBox())!.width;
+  release();
+  await expect(spinner).toHaveCount(0, { timeout: 20_000 });
+  const donePx = (await page.locator('.todo-search-input').boundingBox())!.width;
+  expect(busyPx).toBe(donePx);
+  expect(busyPx).toBeGreaterThan(70);
+});
+
 test('search honors a Status chip the user added', async ({ page, baseURL }) => {
   await boot(page, baseURL!);
   await setStatus(page, ['Completed']);
