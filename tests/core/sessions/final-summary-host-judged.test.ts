@@ -51,7 +51,7 @@ import {
 } from '../../../src/core/session-hooks/builtins.js'
 import { setSessionHookDispatcher, type SessionHookDispatcher } from '../../../src/core/session-hooks/index.js'
 import { _pendingSelfCompleteStopsForTest, _resetSelfCompleteStopsForTest } from '../../../src/core/sessions/self-complete-stop.js'
-import { _resetHostJudgedCompleteForTesting, noteHostCompleteStop } from '../../../src/core/sessions/host-judged-complete.js'
+import { _resetHostJudgedCompleteForTesting, hostAwaitsCompletionStop, noteHostCompleteStop } from '../../../src/core/sessions/host-judged-complete.js'
 import { writingAsHost } from '../../../src/core/sessions/session-row-owner.js'
 import type { OnTurnCompletePayload } from '../../../src/core/session-hooks/types.js'
 import type { Task } from '../../../src/core/types.js'
@@ -160,6 +160,25 @@ describe('the last turn of a host-judged session that completed its own task', (
       { sid, member: 'completionSummaryDone', arg: { gen: 3 } },
     ]))
     expect((await getTask(task.id)).note).toContain('closed the task on the host')
+  })
+
+  it('a host not reported yet whose row shows its marker: its last turn is still summarized at once; an older host\'s is not', async () => {
+    const sid = 'fh-down'
+    await hostTask(sid)
+    await hostWrites(sid, { taskCompleteStop: { at: new Date().toISOString(), state: 'turn_end', actor: true, reopens: 0 } })
+    _resetHostJudgedCompleteForTesting()
+    expect(await hostAwaitsCompletionStop(sid)).toBe(true)
+    noteHostCompleteStop(HOST, 'old')
+    expect(await hostAwaitsCompletionStop(sid)).toBe(false)
+  })
+
+  it('the turn_end ask says whether a summary will come: the hook on, yes', async () => {
+    const sid = 'fh-ask'
+    liveSession(sid)
+    const task = await hostTask(sid)
+    await completeTask(task.id, { actorSid: sid })
+    await vi.waitFor(() => expect(hostCalls.map((c) => c.member)).toEqual(['takeCompletionStop']))
+    expect(hostCalls[0]!.arg.summary).toBeUndefined()
   })
 
   it('a host-judged session with no stop asked keeps the debounce', async () => {

@@ -4251,8 +4251,9 @@ export interface SessionRecord {
    *  record keeps its state and the stop is sent when the host connects (`actor`: it was the session
    *  that completed the task, so it still waits for its turn's end). On a host-judged row the host
    *  writes it when its leader asks (sessions/host-judged-complete.ts), with `reopens`, the task's
-   *  reopen count then: a task copy that counts more says the task was reopened since. */
-  taskCompleteStop?: { at: string; state: 'turn_end' | 'undelivered'; actor?: boolean; reopens?: number };
+   *  reopen count then: a task copy that counts more says the task was reopened since; `summary: false`,
+   *  the leader said no summary of the last turn would come, so the host does not wait for one. */
+  taskCompleteStop?: { at: string; state: 'turn_end' | 'undelivered'; actor?: boolean; reopens?: number; summary?: false };
   /** Its host could not be reached when it was stopped (sessions/host-lost.ts): stopped here at
    *  `at`, its stop request kept pending until the host reconnects and ends the process
    *  (`endedAt`). `by`: 'human' or 'task:<id>'; `why`: what the connect answered. */

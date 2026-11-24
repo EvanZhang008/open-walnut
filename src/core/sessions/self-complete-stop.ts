@@ -129,9 +129,16 @@ async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void>
     // says when that is done; the CLI must still answer the self-report until then.
     if (await host.ownRowHere(await getSessionByClaudeId(sessionId))) {
       await host.awaitLeaderSummary(sessionId);
-      if (!await stillComplete(sessionId)) return;
-      // Another turn started meanwhile (a background command's follow-up): its end stops it.
-      if ((await getSessionByClaudeId(sessionId))?.process_status === 'running') { stopWhenTurnEnds(sessionId, wait.since); return; }
+      if (!await stillComplete(sessionId)) {
+        await (await taskCompleteStop()).clearTaskCompleteStop(sessionId, 'turn_end');
+        return;
+      }
+      // Another turn started meanwhile (a background command's follow-up): its end stops it, after its own summary.
+      if ((await getSessionByClaudeId(sessionId))?.process_status === 'running') {
+        host.waitForNextSummaryWord(sessionId);
+        stopWhenTurnEnds(sessionId, wait.since);
+        return;
+      }
       await host.stopOwnCompleted(sessionId);
       return;
     }
@@ -156,6 +163,11 @@ async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void>
 
 export function _pendingSelfCompleteStopsForTest(): string[] {
   return [...new Set([...waiter.keys(), ...stopping])];
+}
+
+/** The sessions whose stop is running now (the wait over, the stop not yet). */
+export function _selfCompleteStoppingForTest(): string[] {
+  return [...stopping];
 }
 
 export function _resetSelfCompleteStopsForTest(): void {

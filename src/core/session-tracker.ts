@@ -3318,11 +3318,11 @@ export async function completeTaskSessions(
         const session = rowToSession(row);
         if (judgedByHost(session) && !rowOwnedHere(session, hereKey)) {
           if (isTerminalSession(session) || (session.process_status === 'stopped' && session.pid == null)) continue;
-          // An ask is on its way; or its host, which takes the stop itself, keeps it on its own row
-          // already and this pass decided nothing new (host-judged-complete.ts). A new decision asks
-          // again (the host takes it once: its marker may be one it dropped since), and the marker
+          // This pass decided nothing new, and an ask is on its way, or its host, which takes the stop
+          // itself, keeps it on its own row already (host-judged-complete.ts). A new decision asks
+          // again, behind one on its way (the host takes it once: its marker may be one it dropped since), and the marker
           // of a host that went back to an older Walnut is not read: that host is handed the stop.
-          if (completionAskPending(sid)) continue;
+          if (opts?.gentle && completionAskPending(sid)) continue;
           if (opts?.gentle && session.taskCompleteStop?.state === 'turn_end' && hostCompleteStopState(session.host!) === 'takes') continue;
           // It completed its own task mid-turn: it stops when that turn ends, as does any session a
           // pass that did not just decide the completion finds live.

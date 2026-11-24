@@ -42,6 +42,8 @@ export interface HostCompletionAsk {
   when: 'now' | 'turn_end' | 'cancel'
   /** The task's reopen count when it was decided (absent: not known); a host whose task copy counts more drops the stop. */
   reopens?: number
+  /** false: this leader will not summarize the last turn (its summary hook is off, or skips such a session): the host does not wait for a word. */
+  summary?: false
 }
 
 export interface HostCompletionStop { sid: string; host: string; when: HostCompletionAsk['when'] }
@@ -91,8 +93,10 @@ function park(s: HostCompletionStop): void {
 async function askOne(s: HostCompletionStop): Promise<void> {
   const state = hostCompleteStopState(s.host)
   if (state === 'down') { park(s); return }
-  if (inFlight.has(s.sid)) { if (s.when === 'cancel') park(s); return }
+  // One on its way already: this later decision waits behind it and goes when it is answered.
+  if (inFlight.has(s.sid)) { park(s); return }
   inFlight.add(s.sid)
+  let answered = false
   try {
     if (state === 'old') {
       if (s.when === 'cancel') {
@@ -107,19 +111,39 @@ async function askOne(s: HostCompletionStop): Promise<void> {
       }
     } else {
       const { onJudgingHost } = await import('./host-judged-controls.js')
-      const ask: HostCompletionAsk = { at: new Date().toISOString(), when: s.when, ...await reopensOf(s.sid) }
+      const ask: HostCompletionAsk = {
+        at: new Date().toISOString(), when: s.when, ...await reopensOf(s.sid),
+        ...(s.when === 'turn_end' && !await leaderSummarizes(s.sid) ? { summary: false as const } : {}),
+      }
       const answer = await onJudgingHost(s.sid, 'takeCompletionStop', [ask]) as HostCompletionAnswer
       if (s.when === 'turn_end' && answer?.state === 'turn_end') rememberTurnEndAsk(s.sid)
       log.session.info('completing a task: its host took the stop of its session', { sessionId: s.sid, host: s.host, when: s.when, state: answer?.state })
     }
-    waiting.get(s.host)?.delete(s.sid)
+    answered = true
+    // Only this ask's own entry goes: one parked while it was on its way is newer and goes next.
+    const m = waiting.get(s.host)
+    if (m?.get(s.sid) === s) m.delete(s.sid)
   } catch (err) {
-    park(s)
+    // A newer decision parked meanwhile wins over this one.
+    if (!waiting.get(s.host)?.has(s.sid)) park(s)
     log.session.warn('completing a task: its host did not take the stop of its session; it goes when the host links', {
       sessionId: s.sid, host: s.host, when: s.when, error: err instanceof Error ? err.message : String(err),
     })
   } finally {
     inFlight.delete(s.sid)
+    const next = answered ? waiting.get(s.host)?.get(s.sid) : undefined
+    if (next && next !== s) { waiting.get(s.host)!.delete(s.sid); void askOne(next) }
+  }
+}
+
+/** Will this leader's summary hook summarize `sid`'s last turn (session-hooks/builtins.ts)? Yes when it cannot tell. */
+async function leaderSummarizes(sid: string): Promise<boolean> {
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js')
+    const { finalSummaryRunsFor } = await import('../session-hooks/builtins.js')
+    return await finalSummaryRunsFor(await getSessionByClaudeId(sid).catch(() => null))
+  } catch {
+    return true
   }
 }
 
@@ -181,8 +205,11 @@ export async function cancelHostCompletionStops(task: Pick<Task, 'session_ids'> 
 export async function hostAwaitsCompletionStop(sid: string): Promise<boolean> {
   const { getSessionByClaudeId } = await import('../session-tracker.js')
   const rec = await getSessionByClaudeId(sid).catch(() => null)
-  if (!hostsRow(rec) || hostCompleteStopState(rec.host!) !== 'takes') return false
-  return rec.taskCompleteStop?.state === 'turn_end' || turnEndAsked.has(sid)
+  // A host's marker says it takes the stop (only such a host writes one), so a host not reported
+  // yet (its link down, this leader just started) counts; one known to be older does not.
+  if (!hostsRow(rec) || hostCompleteStopState(rec.host!) === 'old') return false
+  if (rec.taskCompleteStop?.state === 'turn_end') return true
+  return hostCompleteStopState(rec.host!) === 'takes' && turnEndAsked.has(sid)
 }
 
 /** The summary of its last turn is in the task note (or failed): its host may stop it now. */
@@ -253,7 +280,10 @@ export async function takeCompletionStop(sid: string, ask: HostCompletionAsk): P
   const at = typeof ask?.at === 'string' && Number.isFinite(Date.parse(ask.at)) ? ask.at : new Date().toISOString()
   if (!marked) {
     await updateSessionRecord(sid, {
-      taskCompleteStop: { at, state: 'turn_end', actor: true, ...(typeof ask?.reopens === 'number' ? { reopens: ask.reopens } : {}) },
+      taskCompleteStop: {
+        at, state: 'turn_end', actor: true,
+        ...(typeof ask?.reopens === 'number' ? { reopens: ask.reopens } : {}), ...(ask?.summary === false ? { summary: false as const } : {}),
+      },
     })
     takenAt.set(sid, Date.now())
   }
@@ -289,7 +319,10 @@ async function summaryCovers(sid: string): Promise<boolean> {
 }
 
 /** On the host, before its stop: wait for the leader's word that the last turn is in the note, at most hostSummaryWaitMs. */
-export async function awaitLeaderSummary(sid: string): Promise<'done' | 'timeout'> {
+export async function awaitLeaderSummary(sid: string): Promise<'done' | 'none' | 'timeout'> {
+  // The leader said at the ask that no summary would come.
+  const { getSessionByClaudeId } = await import('../session-tracker.js')
+  if ((await getSessionByClaudeId(sid).catch(() => null))?.taskCompleteStop?.summary === false) return 'none'
   if (await summaryCovers(sid)) return 'done'
   if (hostSummaryWaitMs <= 0) return 'timeout'
   const heard = await new Promise<'word' | 'dropped' | 'limit'>((resolve) => {
@@ -318,6 +351,12 @@ export async function hostCompletionStillWanted(rec: SessionRecord): Promise<boo
     if (task && task.phase !== 'COMPLETE' && (task.reopens ?? 0) > marker.reopens) return false
   } catch { /* no copy readable: the marker's word */ }
   return true
+}
+
+/** Another turn of it started after the word came: that turn's own word is waited for. */
+export function waitForNextSummaryWord(sid: string): void {
+  summaryDone.delete(sid)
+  takenAt.set(sid, Date.now())
 }
 
 function forgetHostCompletion(sid: string): void {

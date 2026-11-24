@@ -17,13 +17,15 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import fsp from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
-const { HOST, connected, handed, asked } = vi.hoisted(() => ({
+const { HOST, connected, handed, asked, gate } = vi.hoisted(() => ({
   HOST: 'devbox',
+  /** While set, the host's answer waits for it (an ask on its way). */
+  gate: { hold: null as Promise<void> | null },
   connected: new Set<string>(),
   /** terminateOnHost calls: the old way's whole stop. */
   handed: [] as Array<{ sid: string; force?: boolean; by?: string }>,
   /** takeCompletionStop asks of a host that takes them. */
-  asked: [] as Array<{ sid: string; when: string; reopens?: number }>,
+  asked: [] as Array<{ sid: string; when: string; reopens?: number; summary?: false }>,
 }))
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-task-complete-stop-host-judged'))
@@ -41,8 +43,9 @@ vi.mock('../../../src/core/sessions/host-judged-controls.js', () => ({
   onJudgingHost: async (sid: string, member: string, args: unknown[]) => {
     if (!connected.has(HOST)) throw new Error('host not linked')
     if (member !== 'takeCompletionStop') throw new Error(`unexpected member ${member}`)
-    const a = args[0] as { when: string; reopens?: number }
-    asked.push({ sid, when: a.when, ...(a.reopens !== undefined ? { reopens: a.reopens } : {}) })
+    const a = args[0] as { when: string; reopens?: number; summary?: false }
+    asked.push({ sid, when: a.when, ...(a.reopens !== undefined ? { reopens: a.reopens } : {}), ...(a.summary === false ? { summary: false } : {}) })
+    if (gate.hold) await gate.hold
     return { state: a.when === 'now' ? 'stopped' : a.when === 'cancel' ? 'cancelled' : 'turn_end' }
   },
 }))
@@ -119,6 +122,7 @@ beforeEach(async () => {
   connected.add(HOST)
   handed.length = 0
   asked.length = 0
+  gate.hold = null
   signals = []
   vi.spyOn(process, 'kill').mockImplementation(((pid: number, sig?: string | number) => {
     if (sig === 0) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
@@ -141,7 +145,7 @@ describe('a host that takes the stop itself (session-complete-stop-v1)', () => {
   it('a session that completes its own task mid-turn: its host is asked turn_end; the leader neither waits nor cuts it', async () => {
     const task = await hostTask('self')
     await completeTask(task.id, { actorSid: 'self' })
-    await vi.waitFor(() => expect(asked).toEqual([{ sid: 'self', when: 'turn_end', reopens: 0 }]))
+    await vi.waitFor(() => expect(asked).toEqual([{ sid: 'self', when: 'turn_end', reopens: 0, summary: false }]))
     expect(_pendingSelfCompleteStopsForTest(), 'the wait is the host\'s').toEqual([])
     expect(handed).toEqual([])
     // The host keeps it on its row; a later write to the complete task asks nothing more.
@@ -188,7 +192,7 @@ describe('a host that takes the stop itself (session-complete-stop-v1)', () => {
     // The host reports (it takes the stop) and links.
     connected.add(HOST)
     noteHostCompleteStop(HOST, 'takes')
-    await vi.waitFor(() => expect(asked).toEqual([{ sid: 'self', when: 'turn_end', reopens: 0 }]))
+    await vi.waitFor(() => expect(asked).toEqual([{ sid: 'self', when: 'turn_end', reopens: 0, summary: false }]))
     retryCompletionStopsFor(HOST)
     await settle()
     expect(asked).toHaveLength(1)
@@ -218,6 +222,42 @@ describe('a host that takes the stop itself (session-complete-stop-v1)', () => {
     await updateTask(task.id, { title: 'Ship the fix, refined' })
     await settle()
     expect(asked).toHaveLength(3)
+  })
+
+  it('this leader\'s summary hook is off: the turn_end ask says no summary will come', async () => {
+    const task = await hostTask('self')
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(asked).toEqual([{ sid: 'self', when: 'turn_end', reopens: 0, summary: false }]))
+  })
+
+  it('a reopen while the turn_end ask is on its way: the cancel goes after it, not lost', async () => {
+    const task = await hostTask('self')
+    let release!: () => void
+    gate.hold = new Promise<void>((r) => { release = r })
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(asked.map((a) => a.when)).toEqual(['turn_end']))
+    await updateTask(task.id, { phase: 'IN_PROGRESS' }, { source: 'api' })
+    await vi.waitFor(() => expect(_completionStopsWaitingForTesting(HOST)).toEqual(['self']))
+    gate.hold = null
+    release()
+    await vi.waitFor(() => expect(asked.map((a) => a.when)).toEqual(['turn_end', 'cancel']))
+    expect(_completionStopsWaitingForTesting(HOST)).toEqual([])
+  })
+
+  it('a completion right after a reopen, while the cancel is on its way: the new ask goes after it', async () => {
+    const task = await hostTask('self')
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(asked).toHaveLength(1))
+    await hostWrites('self', { taskCompleteStop: { at: new Date().toISOString(), state: 'turn_end', actor: true, reopens: 0 } })
+    let release!: () => void
+    gate.hold = new Promise<void>((r) => { release = r })
+    await updateTask(task.id, { phase: 'IN_PROGRESS' }, { source: 'api' })
+    await vi.waitFor(() => expect(asked.map((a) => a.when)).toEqual(['turn_end', 'cancel']))
+    await completeTask(task.id)
+    await vi.waitFor(() => expect(_completionStopsWaitingForTesting(HOST)).toEqual(['self']))
+    gate.hold = null
+    release()
+    await vi.waitFor(() => expect(asked.map((a) => a.when)).toEqual(['turn_end', 'cancel', 'now']))
   })
 
   it('a completion decided from the board asks now', async () => {

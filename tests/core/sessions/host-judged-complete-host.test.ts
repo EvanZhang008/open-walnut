@@ -45,7 +45,7 @@ import {
   completionSummaryDone, takeCompletionStop,
 } from '../../../src/core/sessions/host-judged-complete.js'
 import {
-  __setSelfCompleteSettleMs, _pendingSelfCompleteStopsForTest, _resetSelfCompleteStopsForTest,
+  __setSelfCompleteSettleMs, _pendingSelfCompleteStopsForTest, _resetSelfCompleteStopsForTest, _selfCompleteStoppingForTest,
 } from '../../../src/core/sessions/self-complete-stop.js'
 import { resumeTaskCompleteStops } from '../../../src/core/sessions/task-complete-stop.js'
 import { loadTurnRetriers } from '../../../src/core/sessions/turn-run.js'
@@ -131,6 +131,48 @@ describe('the host waits for its leader\'s summary of the last turn before it st
     expect(await completionSummaryDone(sid, {})).toEqual({ ok: true })
     await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
     expect(_awaitingLeaderSummaryForTest()).toEqual([])
+  })
+
+  it('no summary will come (the leader said so at the ask): the stop does not wait', async () => {
+    __setHostSummaryWaitMs(60_000)
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, { ...ask('turn_end'), summary: false })
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
+  })
+
+  it('a word for the turn that ended does not stand for a follow-up turn: that one waits for its own', async () => {
+    __setHostSummaryWaitMs(60_000)
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, ask('turn_end'))
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(_awaitingLeaderSummaryForTest()).toEqual([sid]), { timeout: 5_000 })
+    // A follow-up turn starts before the word comes.
+    await tracker.updateSessionRecord(sid, { process_status: 'running' })
+    await completionSummaryDone(sid, {})
+    // The stop saw the turn running again and waits for its end (the wait, not the stop, holds it).
+    await vi.waitFor(() => {
+      expect(_selfCompleteStoppingForTest()).toEqual([])
+      expect(_pendingSelfCompleteStopsForTest()).toEqual([sid])
+    }, { timeout: 5_000 })
+    expect(stops).toEqual([])
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(_awaitingLeaderSummaryForTest()).toEqual([sid]), { timeout: 5_000 })
+    expect(stops, 'waits for the follow-up turn\'s own word').toEqual([])
+    await completionSummaryDone(sid, {})
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
+  })
+
+  it('a reopen the task copy shows by the time the word comes: the marker goes, nothing stops', async () => {
+    __setHostSummaryWaitMs(60_000)
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, ask('turn_end', 0))
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(_awaitingLeaderSummaryForTest()).toEqual([sid]), { timeout: 5_000 })
+    taskCopy.set(TASK, { id: TASK, phase: 'IN_PROGRESS', reopens: 1 })
+    await completionSummaryDone(sid, {})
+    await vi.waitFor(async () => expect((await tracker.getSessionByClaudeId(sid))?.taskCompleteStop).toBeUndefined(), { timeout: 5_000 })
+    expect(stops).toEqual([])
   })
 
   it('a word that came before the turn\'s end counts; no word stops it after the wait\'s limit', async () => {

@@ -190,6 +190,14 @@ export function __setFinalSummaryLimits(limits?: Partial<typeof FINAL_SUMMARY_LI
  * summary hook is off, or the turn produced no onTurnComplete), 'timeout' when
  * it outlived the finish limit.
  */
+/** Will the summary hook summarize a final turn of this session here (it is on, and does not skip such a session)? */
+export async function finalSummaryRunsFor(session: SessionRecord | null | undefined): Promise<boolean> {
+  const { getSessionHookDispatcher } = await import('./index.js');
+  if (!getSessionHookDispatcher()?.getHooks().some((h) => h.id === turnCompleteTriageHook.id)) return false;
+  if (!session?.taskId) return false;
+  return !isChatLaneSession(session) && session.provider !== 'embedded';
+}
+
 export async function awaitFinalSummary(sessionId: string, since: number): Promise<'done' | 'none' | 'timeout'> {
   const { getSessionHookDispatcher } = await import('./index.js');
   if (!getSessionHookDispatcher()?.getHooks().some((h) => h.id === turnCompleteTriageHook.id)) return 'none';
