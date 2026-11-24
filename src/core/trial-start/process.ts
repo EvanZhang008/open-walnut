@@ -4,7 +4,8 @@
  * (src/core/backup/restore-drill-boot.ts).
  */
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { singleFile } from '../../lib/single-file.js';
@@ -19,7 +20,7 @@ export function alive(pid: number): boolean {
  * and the process's start time in clock ticks since boot (/proc/<pid>/stat field 22); elsewhere (macOS) the boot
  * time and the start time `ps` gives. Null when it cannot be read (the process is gone, or no way to ask).
  */
-export function processStartMark(pid: number): string | null {
+export async function processStartMark(pid: number): Promise<string | null> {
   if (!Number.isInteger(pid) || pid <= 1) return null;
   try {
     if (process.platform === 'linux') {
@@ -29,8 +30,9 @@ export function processStartMark(pid: number): string | null {
       const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
       return start ? `${boot}:${start}` : null;
     }
-    const start = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 }).trim();
-    const boot = execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8', timeout: 5_000 }).trim();
+    const run = promisify(execFile);
+    const start = (await run('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 })).stdout.trim();
+    const boot = (await run('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8', timeout: 5_000 })).stdout.trim();
     return start ? `${boot}|${start}` : null;
   } catch {
     return null;
@@ -38,9 +40,9 @@ export function processStartMark(pid: number): string | null {
 }
 
 /** The process `p` names is still the one that was there when `p.start` was read (processStartMark): same pid, same start. */
-export function sameProcess(p: { pid: number; start: string | null }): boolean {
+export async function sameProcess(p: { pid: number; start: string | null }): Promise<boolean> {
   if (!alive(p.pid)) return false;
-  const now = processStartMark(p.pid);
+  const now = await processStartMark(p.pid);
   return p.start !== null && now !== null && now === p.start;
 }
 

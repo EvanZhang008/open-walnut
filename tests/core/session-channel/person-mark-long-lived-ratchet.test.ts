@@ -76,8 +76,9 @@ const CLASSIFIED: Record<string, Record<string, Class>> = {
   'src/core/hosts/host-exec.ts': { 'slotFreed timer': 'call', 'dial timer': 'call' },
   'src/core/hosts/host-mcp-images.ts': { 'saveCallImages timer': 'call' },
   'src/core/hosts/host-script.ts': { 'runScriptOnHost timer': 'call' },
-  // A switch job on this machine, detached and unref'd: nothing of it calls back here.
-  'src/core/leader/switch/peer.ts': { 'startTargetJob process': 'no-send' },
+  // A switch job on this machine, detached and unref'd: nothing of it calls back here. The copy link's daemon
+  // link is the host pool's (hosts/link.ts, dialled outside any mark); its retry pause is its own call's.
+  'src/core/leader/switch/peer.ts': { 'via dial': 'link', 'hold dial': 'link', 'call timer': 'call', 'startTargetJob process': 'no-send' },
   // A host service's link to the daemon runtime in its own process.
   'src/core/link/follower-link-direct.ts': { 'createDirectFollowerLink timer': 'local', 'createDirectFollowerLink timer #2': 'local', 'createDirectFollowerLink timer #3': 'local' },
   'src/core/routines/trigger-api.ts': { 'relinkTriggerDaemon timer': 'call' },

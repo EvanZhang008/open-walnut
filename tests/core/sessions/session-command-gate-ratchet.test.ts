@@ -128,6 +128,7 @@ const VARIABLE_SENDS: Record<string, [number, string]> = {
   'src/core/turn-snapshots/service.ts': [1, 'turns.* (host-local work)'],
   'src/core/transfer/daemon-transfer-client.ts': [1, 'transfer.* (host-local work)'],
   'src/core/standby/remote-transport.ts': [1, 'a standby leader\'s spool commands (maintenance)'],
+  'src/core/leader/switch/peer.ts': [2, 'the leader switch\'s copy link: fs.write and fs.read of its switch files, exec.run and exec.list of its target job, and the standby batches\' commands (maintenance)'],
   'src/core/workspaces/daemon-client.ts': [1, 'workspace.* and taskdir.* (host-local work)'],
   'src/core/link/daemon-connection-link.ts': [1, 'the follower link\'s requests (maintenance)'],
   'src/core/hosts/host-mcp.ts': [1, 'mcp.* (host-local work)'],

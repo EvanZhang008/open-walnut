@@ -263,7 +263,7 @@ cross it:
 | batches (periodic and final) | `fs.writePart` of the batch, `walnut standby receive` there (`exec.script`), as `RemoteStandbyTarget` |
 | the ticket, the final mark, a cleared check report | `fs.write` with `atomic` (fsync, then rename: `fs-write-atomic-v1`) into `standby_dir/switch/` |
 | the check report, the target state | `fs.read` |
-| the target job (and its `--check`) | `exec.run` with `detach` and `endGroup`, job id `hx-leader-switch-<id>`, the machine's `env` from `leader_switch.machines` as an `env K=V` prefix. A second start answers `job_exists`: the job is read (`exec.read`), and one still running or ended at `done` or `rolled-back` counts as started; one ended anywhere else (killed, the machine restarted) runs again under `hx-leader-switch-<id>-r<hex>` and resumes from its state file |
+| the target job (and its `--check`) | `exec.run` with `detach` and `endGroup`, job id `hx-leader-switch-<id>`, the machine's `env` from `leader_switch.machines` as an `env K=V` prefix. A second start answers `job_exists`: the daemon's list of its runs (`exec.list`, never the job's output) says whether it runs, and one still running or ended at `done` or `rolled-back` counts as started; one ended anywhere else (killed, the machine restarted) runs again under `hx-leader-switch-<id>-r<hex>` and resumes from its state file |
 | verify | `walnut standby receive verify` there (`exec.script`), as `RemoteStandbyTarget.verify` |
 
 The preflight asks the daemon's hello first and names each capability it lacks

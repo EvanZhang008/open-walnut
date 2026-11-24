@@ -83,6 +83,7 @@ const EXEC_RUN_ALLOWED: Record<string, string> = {
   'src/core/hosts/host-script.ts': 'exec.script: a plugin\'s script (hosts.run), through host_exec\'s dial',
   'src/providers/daemon-net-update-io.ts': 'a daemon update over the host network: the link is the very daemon being replaced',
   'src/providers/local-daemon.ts': 'this machine\'s own daemon, its login session probe over loopback',
+  'src/core/leader/switch/peer.ts': 'the leader switch\'s target job on the new leader\'s machine, a fixed walnut command (leader-switch target) over the standby link the user turned on (standby.host), detached so it outlives the old leader\'s stop',
   'src/core/standby/remote-apply.ts': 'the standby copy\'s apply on its host, a fixed walnut command the user turned on (standby.host): a background job, since exec.script stops at 10 minutes and a first batch applies longer; one job id per batch, so it never runs twice',
 }
 

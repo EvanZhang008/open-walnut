@@ -148,7 +148,8 @@ describe('the copy link over a daemon, against a fake link', () => {
   it('starts the target job detached, with the other machine\'s env and home in front, once (a start sent again is taken)', async () => {
     const root = dir()
     let n = 0
-    const link = fakeLink(DAEMON_PEER_CAPABILITIES, (cmd) => (cmd === 'exec.run' ? (n++ === 0 ? { ok: true, jobId: 'x' } : { ok: false, code: 'job_exists', error: 'job exists' }) : { ok: true }))
+    const link = fakeLink(DAEMON_PEER_CAPABILITIES, (cmd) => (cmd === 'exec.run' ? (n++ === 0 ? { ok: true, jobId: 'x' } : { ok: false, code: 'job_exists', error: 'job exists' })
+      : cmd === 'exec.list' ? { ok: true, jobs: [{ jobId: 'hx-leader-switch-20261123T010203-abc123', running: true }] } : { ok: true }))
     const peer = peerOver(async () => link, root)
     expect(await peer.startTargetJob('20261123T010203-abc123', { check: false })).toEqual({ ok: true })
     expect(await peer.startTargetJob('20261123T010203-abc123', { check: false })).toEqual({ ok: true })
@@ -165,15 +166,20 @@ describe('the copy link over a daemon, against a fake link', () => {
 
   it('a start that finds its job ended short of done runs it again under a fresh id; one ended at done is taken', async () => {
     const root = dir()
-    const answerFor = (step: string) => {
+    const answerFor = (step: string, running = false) => {
       const link = fakeLink(DAEMON_PEER_CAPABILITIES, (cmd, p) => {
         if (cmd === 'exec.run') return p.jobId === 'hx-leader-switch-S3' ? { ok: false, code: 'job_exists', error: 'job exists' } : { ok: true, pid: 42 }
-        if (cmd === 'exec.read') return { ok: true, jobId: p.jobId, running: false, exitCode: 137 }
+        if (cmd === 'exec.list') return { ok: true, jobs: [{ jobId: 'hx-other', running: true }, { jobId: 'hx-leader-switch-S3', running, exitCode: running ? null : 137 }] }
         if (cmd === 'fs.read') return { ok: true, data: JSON.stringify({ id: 'S3', step }) }
         return { ok: true }
       })
       return link
     }
+    // Still running there: it is the job asked for, nothing starts again, and its output is never read.
+    const running = answerFor('trial', true)
+    expect(await peerOver(async () => running, root).startTargetJob('S3', { check: false })).toEqual({ ok: true })
+    expect(running.sent.filter((x) => x.cmd === 'exec.run')).toHaveLength(1)
+    expect(running.sent.some((x) => x.cmd === 'exec.read')).toBe(false)
     const killed = answerFor('trial')
     expect(await peerOver(async () => killed, root).startTargetJob('S3', { check: false })).toEqual({ ok: true, pid: 42 })
     const runs = killed.sent.filter((x) => x.cmd === 'exec.run').map((x) => String(x.p.jobId))

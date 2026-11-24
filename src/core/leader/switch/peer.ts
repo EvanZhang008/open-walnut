@@ -308,8 +308,10 @@ export class DaemonPeer implements SwitchPeer {
     // running, or ended at done or rolled-back, it is the job asked for. Ended anywhere else (killed there, the
     // machine restarted), the same command again under a fresh id: the target job resumes from its state file.
     try {
-      const job = await this.call('exec.read', { jobId, maxBytes: 1 })
-      if (job.running !== false) return { ok: true }
+      // The daemon's list of its runs says whether this one still runs (its output is no business of the switch).
+      const listed = await this.call('exec.list', {})
+      const job = Array.isArray(listed.jobs) ? (listed.jobs as Array<{ jobId?: unknown; running?: unknown }>).find((j) => j.jobId === jobId) : undefined
+      if (job?.running === true) return { ok: true }
       const st = await this.readFile<{ step?: string }>(targetStateName(switchId))
       if (st?.step === 'done' || st?.step === 'rolled-back') return { ok: true }
       return await run(`${jobId}-r${randomBytes(3).toString('hex')}`)

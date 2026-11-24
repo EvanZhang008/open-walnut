@@ -225,6 +225,7 @@ const EXEMPT: Record<string, string> = {
   'src/lib/sqlite.ts': 'the VACUUM INTO and inspect workers: one read-only connection per copy or check, ended with it',
   'src/core/leader/switch/flow.ts': 'the leader switch lists unsettled mail sends in the promoted home: one read-only connection, closed before it returns',
   'src/core/leader/switch/home-path-rules.ts': 'the leader switch rewrites the promoted home\'s ledger once, with no server running on it: opened and closed in one call',
+  'src/core/leader/switch/session-hosts.ts': 'the leader switch moves the promoted home\'s session hosts once, with no server running on it: opened and closed in one call',
   'src/core/leader/switch/home-paths.ts': 'the leader switch scans and rewrites the promoted home\'s absolute paths, with no server running on it: each database opened and closed in one call',
   'src/core/standby/sqlite-pin.ts': 'the standby pin worker: read-only connections opened for one batch and closed with it',
   'src/lib/hybrid-search/embed-worker.ts': 'an embedding worker\'s read-only connection, ended with the worker',
