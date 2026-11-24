@@ -202,6 +202,39 @@ describe('usage_watch errors reads them grouped', () => {
     expect(r.outcome).toContain('of search')
   })
 
+  // 2026-11-24: the watch on usage_watch itself failed at 14%. Besides one task's retry loop, sessions
+  // were refused these calls as bad arguments; each, as a session sent it, is taken now.
+  it('takes the calls sessions were refused: a watch by id, one code\'s failures, a tool as target, 48 hours', async () => {
+    const { getOp } = await import('../../../src/ops/index.js')
+    const { parseOpArgs } = await import('../../../src/ops/executor.js')
+    const asked = [
+      { action: 'get', id: 'uw-5731107c-637' },
+      { action: 'errors', target: 'op:thread_update', code: 'reply_language' },
+      { action: 'errors', target: 'op:thread_update', range: '48h' },
+      { action: 'report', target: 'page:notes', range: '48h' },
+    ]
+    for (const a of asked) expect(parseOpArgs(getOp('usage_watch')!, a).ok, JSON.stringify(a)).toBe(true)
+    seed()
+    recordToolError({ at: at - 30 * 3_600_000, sid: 's-cloud', host: 'clouddev', op: 'task_get', client: 'cli', code: 'no_such_tool' })
+    flushUsage(at)
+    const pick = (args: Record<string, unknown>) => runUsageWatchAction({ action: 'errors', ...args }, { ...ctx, now: at }) as Promise<{ total: number; outcome: string }>
+    const two = await pick({ target: 'op:task_get', code: 'no_such_tool', range: '48h' })
+    expect(two.total).toBe(2)
+    expect(two.outcome).toContain('in 48h of task_get with code no_such_tool')
+    expect((await pick({ op: 'task_get', code: 'no_such_tool', range: '24h' })).total).toBe(1)
+    expect((await pick({ op: 'task_get', code: 'no_such_tool' })).total).toBe(3)
+    expect((await pick({ code: 'bad_args', range: '24h' })).total).toBe(2)
+    await expect(pick({ target: 'page:notes' })).rejects.toMatchObject({ code: 'bad_target' })
+    const { usageReport } = await import('../../../src/core/usage-watch/report.js')
+    expect(usageReport('48h', { now: at }).from).toBe(Math.floor(at / 3_600_000) * 3_600_000 + 3_600_000 - 48 * 3_600_000)
+    const { newWatch, putWatch } = await import('../../../src/core/usage-watch/watches.js')
+    const w = newWatch({ taskId: 't-ship', targets: ['op:search'], checks: {}, who: 'this task', checkAt: at + 3_600_000, createdAt: at })
+    putWatch(w)
+    const got = await runUsageWatchAction({ action: 'get', id: w.id }, ctx) as { watch: { id: string; task: string; state: string; targets: string[] } }
+    expect(got.watch).toMatchObject({ id: w.id, task: 't-ship', state: 'watching', targets: ['op:search'] })
+    await expect(runUsageWatchAction({ action: 'get', id: 'uw-none' }, ctx)).rejects.toMatchObject({ code: 'unknown_watch', status: 404 })
+  })
+
   it('help names each action with a call that works, and every exemption kind', async () => {
     const r = await runUsageWatchAction({ action: 'help' }, ctx) as { actions: Record<string, string> }
     const { getOp } = await import('../../../src/ops/index.js')

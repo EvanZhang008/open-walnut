@@ -8,7 +8,11 @@ import { readAlive, readEvents, readHours, type UsageEvent } from './store.js'
 import { recordedShare, targetCovers } from './watches.js'
 
 const HOUR_MS = 3_600_000
-export type ReportRange = '24h' | '7d'
+export type ReportRange = '24h' | '48h' | '7d'
+/** Each range's hours and the step its series is drawn in (2026-11-24: sessions asked for 48h). */
+export const RANGE_HOURS: Record<ReportRange, { hours: number; step: number }> = { '24h': { hours: 24, step: 4 }, '48h': { hours: 48, step: 8 }, '7d': { hours: 168, step: 24 } }
+/** The range a caller named, else 7 days. */
+export const readRange = (v: unknown): ReportRange => (typeof v === 'string' && Object.hasOwn(RANGE_HOURS, v) ? v as ReportRange : '7d')
 
 export interface ReportRow {
   kind: UsageKind
@@ -52,11 +56,11 @@ function badOf(kind: UsageKind, a: Agg): number {
   return a.calls
 }
 
-/** The report over the last 24 hours or 7 days, optionally one target's rows only. */
+/** The report over the last 24 hours, 48 hours or 7 days, optionally one target's rows only. */
 export function usageReport(range: ReportRange, opts: { now?: number; target?: string } = {}): UsageReport {
   const now = opts.now ?? Date.now()
-  const span = range === '24h' ? 24 * HOUR_MS : 7 * 24 * HOUR_MS
-  const step = range === '24h' ? 4 * HOUR_MS : 24 * HOUR_MS
+  const span = RANGE_HOURS[range].hours * HOUR_MS
+  const step = RANGE_HOURS[range].step * HOUR_MS
   const to = Math.floor(now / HOUR_MS) * HOUR_MS + HOUR_MS
   const from = to - span
   const steps = span / step

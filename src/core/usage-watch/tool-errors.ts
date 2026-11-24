@@ -7,6 +7,7 @@
  * a refusal the server never saw (Walnut unreachable, a tool gone after a disconnect, Claude Code
  * refusing the input) is counted too. Ids, names and codes only, never what the call said.
  */
+import { RANGE_HOURS, type ReportRange } from './report.js'
 import { oldestToolError, readToolErrors, type ToolErrorRow } from './store.js'
 
 export const ERROR_GROUPS = ['op', 'code', 'session', 'host'] as const
@@ -35,16 +36,16 @@ function keyOf(r: ToolErrorRow, by: ErrorGroup): string {
   return by === 'op' ? r.op : by === 'code' ? r.code : by === 'host' ? r.host : r.sid
 }
 
-export function toolErrorsReport(opts: { range: '24h' | '7d'; by: ErrorGroup; session?: string; op?: string; now?: number }): {
+export function toolErrorsReport(opts: { range: ReportRange; by: ErrorGroup; session?: string; op?: string; code?: string; now?: number }): {
   range: string; by: ErrorGroup; from: string; total: number; rows: ErrorRow[]; more: number; hosts: Record<string, number>
   /** When the record starts, when that is inside the range: before it nothing was recorded, not nothing failed. */
   dataFrom?: string
   recent?: { at: string; op: string; code: string; client: string; host: string }[]
 } {
   const now = opts.now ?? Date.now()
-  const since = now - (opts.range === '24h' ? 24 : 7 * 24) * 3_600_000
+  const since = now - RANGE_HOURS[opts.range].hours * 3_600_000
   const read = readToolErrors({ since, ...(opts.session ? { session: opts.session } : {}) })
-  const all = opts.op ? read.filter((r) => r.op === opts.op) : read
+  const all = read.filter((r) => (!opts.op || r.op === opts.op) && (!opts.code || r.code === opts.code))
   const groups = new Map<string, ToolErrorRow[]>()
   const hosts = new Map<string, number>()
   for (const r of all) {

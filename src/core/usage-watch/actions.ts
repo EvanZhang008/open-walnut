@@ -4,7 +4,7 @@
  * or host, record a ship from another release tool, and the drill's probe. Answers stay small on purpose: a report lists at most 15 rows.
  */
 import { lastShipOf, recordShip } from './ships.js'
-import { usageReport, targetEvents, type ReportRow } from './report.js'
+import { readRange, usageReport, targetEvents, type ReportRow } from './report.js'
 import { ERROR_GROUPS, toolErrorsReport, type ErrorGroup } from './tool-errors.js'
 import {
   EXEMPT_KINDS, MAX_CHECK_AFTER_MS, MIN_CHECK_AFTER_MS, getWatch, listWatches, newWatch, putWatch, targetProblem,
@@ -100,7 +100,8 @@ const USAGE_WATCH_HELP = {
   set: '{"action":"set","targets":["op:task_send","route:GET /api/tasks/:id","page:session"],"who":"this task","check_after":"24h"}',
   exempt: `{"action":"exempt","kind":"not_shipped","reason":"Investigation only: nothing was landed or deployed."} (kind: ${EXEMPT_KINDS.join(', ')})`,
   report: '{"action":"report","target":"op:task_send","range":"24h"} (no target: the names with the most problems)',
-  errors: '{"action":"errors","by":"code","op":"task_send","range":"24h"} (by: op, code, session or host; session: one session or task)',
+  errors: '{"action":"errors","by":"code","op":"task_send","range":"24h"} (by: op, code, session or host; session: one session or task; code: one error code\'s)',
+  get: '{"action":"get","id":"uw-..."} (one watch: its targets, state and verdict)',
   list: '{"action":"list"}',
   drop: '{"action":"drop","id":"uw-..."}',
   ship: '{"action":"ship","how":"app store release"} (a ship another release tool made)',
@@ -153,6 +154,13 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       putWatch(w)
       return { watch: watchView(w), outcome: `Recorded: no watch for this ship (${kind}): ${reason}`, next: 'Complete the task again.' }
     }
+    case 'get': {
+      // 2026-11-24: two sessions asked for a watch by the id its alarm named, and were refused.
+      const id = String(body.id ?? '').trim()
+      const w = id ? getWatch(id) : null
+      if (!w) throw new UsageWatchError(404, 'unknown_watch', id ? `No watch ${id}.` : 'Name the watch: "id":"uw-...".')
+      return { watch: watchView(w), outcome: `Watch ${id} of task ${w.taskId}: ${w.state}.` }
+    }
     case 'drop': {
       const id = String(body.id ?? '')
       const w = getWatch(id)
@@ -169,7 +177,7 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
     case 'report': {
       const target = typeof body.target === 'string' && body.target.trim() ? body.target.trim() : undefined
       if (target) { const p = targetProblem(target); if (p) throw new UsageWatchError(400, 'bad_target', p) }
-      const range = body.range === '24h' ? '24h' : '7d'
+      const range = readRange(body.range)
       const rep = usageReport(range, { now, ...(target ? { target } : {}) })
       const rows = rep.rows.sort((a, b) => problemScore(b) - problemScore(a) || b.calls - a.calls).slice(0, 15)
       return {
@@ -183,13 +191,17 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       const by = (body.by === undefined ? 'op' : String(body.by)) as ErrorGroup
       if (!(ERROR_GROUPS as readonly string[]).includes(by)) throw new UsageWatchError(400, 'bad_by', `by is one of ${ERROR_GROUPS.join(', ')}.`)
       const session = typeof body.session === 'string' && body.session.trim() ? body.session.trim().slice(0, 80) : undefined
-      const op = typeof body.op === 'string' && body.op.trim() ? body.op.trim().slice(0, 80) : undefined
-      const range = body.range === '24h' ? '24h' : '7d'
-      const rep = toolErrorsReport({ range, by, now, ...(session ? { session } : {}), ...(op ? { op } : {}) })
+      // A tool named as a report's target ("op:thread_update") is the same filter as op.
+      const target = typeof body.target === 'string' ? body.target.trim() : ''
+      if (target && !target.startsWith('op:')) throw new UsageWatchError(400, 'bad_target', `errors reads failed tool calls: name the tool as "op":"<tool>" (or "target":"op:<tool>"); ${target} is not one. A route's or a page's numbers are in report.`)
+      const op = typeof body.op === 'string' && body.op.trim() ? body.op.trim().slice(0, 80) : target ? target.slice(3).slice(0, 80) : undefined
+      const code = typeof body.code === 'string' && body.code.trim() ? body.code.trim().slice(0, 80) : undefined
+      const range = readRange(body.range)
+      const rep = toolErrorsReport({ range, by, now, ...(session ? { session } : {}), ...(op ? { op } : {}), ...(code ? { code } : {}) })
       return {
         ...rep,
-        outcome: `${rep.total} failed Walnut tool call(s) in ${range}${op ? ` of ${op}` : ''}${session ? ` of ${session}` : ''}, by ${by}${rep.more ? `; the ${rep.rows.length} with the most listed` : ''}.`,
-        next: 'by: op, code, session or host; op: one tool\'s failures; session: a session or task id (or its start) for its own failures one by one.',
+        outcome: `${rep.total} failed Walnut tool call(s) in ${range}${op ? ` of ${op}` : ''}${code ? ` with code ${code}` : ''}${session ? ` of ${session}` : ''}, by ${by}${rep.more ? `; the ${rep.rows.length} with the most listed` : ''}.`,
+        next: 'by: op, code, session or host; op: one tool\'s failures; code: one error code\'s; session: a session or task id (or its start) for its own failures one by one.',
       }
     }
     case 'ship': {
@@ -206,6 +218,6 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
     case 'help':
       return { actions: USAGE_WATCH_HELP, outcome: `usage_watch takes ${Object.keys(USAGE_WATCH_HELP).length} actions, each with an example.` }
     default:
-      throw new UsageWatchError(400, 'bad_action', 'action is one of set, exempt, drop, list, report, errors, ship, probe, help.')
+      throw new UsageWatchError(400, 'bad_action', 'action is one of set, exempt, get, drop, list, report, errors, ship, probe, help.')
   }
 }
