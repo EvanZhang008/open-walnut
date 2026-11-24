@@ -39,6 +39,7 @@ import { assertOutwardDoor, leaderPermitActive } from '../core/leader/switch/doo
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { CliHolderAnswer } from './remote-session-manager.js'
 import type { MoveSession, StopResult } from './service-set-move.js'
+import { HostRevokedError, revokedAs } from '../core/session-channel/revoked-hosts.js'
 
 /** The link's part these checks use (service-set-move-link.ts SetLinkConn). */
 export interface MoveCheckLink {
@@ -319,6 +320,9 @@ export async function takeTriggerMemory(link: MoveCheckLink, ids: readonly strin
 /** Hand the memory to the set's daemon (the link reaches it now), before its triggers are pushed there. Throws on the first that does not land. */
 export async function seedTriggerMemory(link: MoveCheckLink, memory: readonly TriggerMemory[]): Promise<void> {
   if (!memory.length) return
+  // A revoked host is handed none of this Walnut's trigger memory (session-channel/revoked-reach.ts).
+  const as = revokedAs(link.hostKey)
+  if (as) throw new HostRevokedError(link.hostKey, 'trigger memory is not handed to it', as)
   if (!link.hasCapability(SEED_CAPABILITY)) throw new Error(`the set's daemon takes no trigger memory (no ${SEED_CAPABILITY})`)
   for (const m of memory) {
     const r = await link.send('triggers.state.seed', { home: link.home, triggerId: m.triggerId, state: m.state, digest: m.digest }, 15_000)

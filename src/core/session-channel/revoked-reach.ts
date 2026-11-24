@@ -136,6 +136,7 @@ export const REVOKED_REACH: Readonly<Record<string, Reach>> = {
   'cmd:host.slice': refused('its copy of tasks, notes and memory', DC, '  pushHostSlice(): void {'),
   'cmd:skills.sync': refused('this Walnut\'s skills', DC, '  pushSkillSync(): void {'),
   'cmd:triggers.configure': refused('this Walnut\'s triggers', DC, '  pushTriggersNow(): Promise<void> {'),
+  'cmd:triggers.state.seed': refused('this Walnut\'s trigger memory, moved to its service set there', 'src/providers/service-set-move-checks.ts', 'export async function seedTriggerMemory('),
   'cmd:bridge.configure': refused('a machine token for the cloud bridge (the bridge is turned off there)', DC, '  pushBridgeConfig(): void {'),
   ...rows(refused('its replica\'s files and pictures', DC, '  pushHostReplica(): void {'), words(`replica.put replica.sync replica.drop attachments.put attachments.sync attachments.drop attachments.status`), 'cmd:'),
   ...rows(refused('a secret of the person\'s (new or rotated)', 'src/core/secrets/fleet-secrets.ts', 'export function reconcileHost('), words(`secrets.put secrets.sync`), 'cmd:'),
