@@ -70,8 +70,7 @@ describe('a message waiting for its host to sign the engine in', () => {
     expect(await status('s-devbox')).toEqual(['pending'])
     expect(await status('s-other-host')).toEqual(['parked'])
     expect(await status('s-other-engine')).toEqual(['parked'])
-    await new Promise((r) => setTimeout(r, 20))
-    expect(sends).toEqual(['s-devbox'])
+    await vi.waitFor(() => expect(sends).toEqual(['s-devbox']))
   });
 
   it('a saved API key (every host) sends every host\'s waiting rows of the engine', async () => {

@@ -180,6 +180,7 @@ const ACP_BRANCH_FILES: Record<string, { reads: true } | { reads: false; why: st
   'src/core/sessions/history-not-written.ts': { reads: false, why: 'an ACP session is never "not written yet"; answers false before any read' },
   'src/core/sessions/session-find.ts': { reads: false, why: 'an ACP journal has no older pages; the history it searches came from the routed reader' },
   'src/core/sessions/history-unavailable.ts': { reads: false, why: 'the wording of an unavailable history' },
+  'src/core/agents/fallback-engine-words.ts': { reads: false, why: 'names the custom engine in a sentence; reads no history' },
   'src/providers/claude-code-session.ts': { reads: false, why: 'a Codex draft model at a start; reads no history' },
   'src/providers/engine-model-probe.ts': { reads: false, why: 'which binary lists an engine\'s models' },
   'src/providers/engine-turn-watch.ts': { reads: false, why: 'which processes a turn watch expects' },
