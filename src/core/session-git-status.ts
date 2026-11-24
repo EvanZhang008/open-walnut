@@ -61,13 +61,14 @@ const HOST_PARALLEL = 2;
 const READ_SHARE_MS = 5_000;
 const RPC_TIMEOUT_MS = 15_000;
 /**
- * How long the batch route waits for a recompute before it answers with what it has. A refresh (an
- * open Changed tab) waits a little longer than a cold row, but stays under the usage watch's slow
- * read (SLOW_READ_MS, 5 s): a later answer reaches the page as GIT_STATUS_EVENT, so a longer wait
- * only held the request (2026-11-23: 8 s waits on a loaded host's large checkout, 10 slow reads an hour).
+ * How long the batch route waits for a recompute before it answers with what it has: a later answer
+ * reaches the page as GIT_STATUS_EVENT, so a longer wait only holds the request. A refresh (an open
+ * Changed tab) waits no longer than a cold row: on a loaded host's large checkout most refreshes run
+ * to the cap, so the cap is the route's p95 and stays under a watch's p95 check (2026-11-23: 8 s,
+ * 10 slow reads an hour; 2026-11-24: at 3 s the route's p95 was 3,080 ms against 2,000).
  */
 export const GLANCE_COLD_WAIT_MS = 1_500;
-export const GLANCE_REFRESH_WAIT_MS = 3_000;
+export const GLANCE_REFRESH_WAIT_MS = 1_500;
 const MAX_DIRS = 8;
 const CACHE_MAX = 500;
 /** Background Changed counts: the gap between two, how soon one is tried again (sooner

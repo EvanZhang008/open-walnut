@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { SLOW_READ_MS } from '../../../src/core/usage-watch/record.js'
+import { DEFAULT_CHECKS } from '../../../src/core/usage-watch/watches.js'
 import { SUPERVISION_READ_DEADLINE_MS } from '../../../src/core/sessions/session-supervision.js'
 import { GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS } from '../../../src/core/session-git-status.js'
 
@@ -14,6 +15,11 @@ const ROOT = path.resolve(__dirname, '../../..')
 describe('read routes answer before the slow-read line', () => {
   it('the git glance and supervision waits stay under SLOW_READ_MS', () => {
     for (const ms of [GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS, SUPERVISION_READ_DEADLINE_MS]) expect(ms).toBeLessThan(SLOW_READ_MS)
+  })
+
+  // A wait most requests run into (a refresh on a loaded host's large checkout) is the route's p95.
+  it('the git glance waits stay under a watch\'s default p95 check', () => {
+    for (const ms of [GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS]) expect(ms).toBeLessThan(DEFAULT_CHECKS.max_p95_ms)
   })
 
   it('the supervision read deadline is under the page\'s own timeout for it', () => {
