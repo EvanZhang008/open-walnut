@@ -428,14 +428,15 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     async callHost(hostKey: string, body: { sid: string; target: string; member: string; args: unknown[]; read?: { id: string; known?: string } }, timeoutMs?: number): Promise<unknown> {
       const a = await request(hostKey, 'call', { ...body, ...callArgsOut(body.args) }, timeoutMs ?? deps.callTimeoutMs ?? 60_000)
       if (a.ok === true) return a.value
-      const err = new Error(`${body.member} on ${hostKey}: ${a.error ?? 'refused'}`) as Error & { statusCode?: number; extra?: Record<string, unknown> }
-      // A control the session refused on its host keeps the status and code a session here gives
-      // (host-routes.ts: SessionControlError's), so the person's route answers it alike.
+      // A control the session refused on its host (host-routes.ts: a SessionControlError there, its
+      // status in `refusedWith`) is the same SessionControlError here, its words, status and code
+      // kept, so the person's route answers it as for a session of this machine (a stop of a session
+      // that owns crons: 409 cron_owner).
       if (typeof a.refusedWith === 'number' && a.refusedWith >= 400 && a.refusedWith < 500) {
-        err.statusCode = a.refusedWith
-        if (typeof a.code === 'string') err.extra = { code: a.code }
+        const { SessionControlError } = await import('../sessions/session-controls.js')
+        throw new SessionControlError(a.error ?? `${body.member} was refused on ${hostKey}`, a.refusedWith, typeof a.code === 'string' ? { code: a.code } : undefined)
       }
-      throw err
+      throw new Error(`${body.member} on ${hostKey}: ${a.error ?? 'refused'}`)
     },
     async startOnHost(hostKey: string, payload: unknown): Promise<HostCallAnswer> {
       return request(hostKey, 'start', payload, deps.startTimeoutMs ?? 120_000)

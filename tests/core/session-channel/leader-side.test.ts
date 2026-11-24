@@ -249,15 +249,20 @@ describe('the leader side of a host that runs its sessions', () => {
 
   it('a control the host refused keeps its status and code on the error; any other refusal is a plain error', async () => {
     const answers: Array<Record<string, unknown>> = [
-      { ok: false, error: 'Session has armed crons', refusedWith: 409, code: 'crons_armed' },
+      { ok: false, error: 'Session has armed crons', refusedWith: 409, code: 'cron_owner' },
       { ok: false, error: 'no_live_session' },
     ]
     side = makeSide(0, leaderStore(), { extra: { request: async () => answers.shift() as never } })
     const body = { sid: 's1', target: 'lifecycle', member: 'terminateSession', args: [{}] }
-    await expect(side.callHost('devbox', body)).rejects.toMatchObject({ message: 'terminateSession on devbox: Session has armed crons', statusCode: 409, extra: { code: 'crons_armed' } })
+    const refused = await side.callHost('devbox', body).catch((e: unknown) => e)
+    const { SessionControlError } = await import('../../../src/core/sessions/session-controls.js')
+    // The same error a session of this machine gives, so the person's routes answer it alike.
+    expect(refused).toBeInstanceOf(SessionControlError)
+    expect(refused).toMatchObject({ message: 'Session has armed crons', statusCode: 409, extra: { code: 'cron_owner' } })
     const plain = await side.callHost('devbox', body).catch((e: unknown) => e as Record<string, unknown>)
     expect(plain).toMatchObject({ message: 'terminateSession on devbox: no_live_session' })
     expect(plain.statusCode).toBeUndefined()
+    expect(plain).not.toBeInstanceOf(SessionControlError)
   })
 
   it('a session born on the host is said as started at its row\'s place, once; a refused row or a resync of the rows says none', async () => {
