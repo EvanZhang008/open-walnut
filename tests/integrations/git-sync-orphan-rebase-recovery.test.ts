@@ -144,6 +144,34 @@ describe('recoverOrphanedGitSurgery — orphaned rebase (the incident shape)', (
     expect(isGitSurgeryInProgress(repo)).toBe(false);
     expect(run('git rev-parse --abbrev-ref HEAD', repo)).toBe('main');
   });
+
+  // The snapshot's `add -A` failing (a file too big for its timeout, one git cannot
+  // read) used to be ignored, and step 2's `checkout -f` then overwrote every live
+  // edit of a tracked file that the snapshot had not taken.
+  it.skipIf(typeof process.getuid !== 'function' || process.getuid() === 0)(
+    'stops before checkout -f when the snapshot cannot be staged, and recovers once it can',
+    async () => {
+      await fsp.writeFile(path.join(repo, 'keep.md'), 'committed\n');
+      await startConflictedRebase(repo);
+      await fsp.writeFile(path.join(repo, 'keep.md'), 'live edit during the freeze\n');
+      const unreadable = path.join(repo, 'video.bin');
+      await fsp.writeFile(unreadable, Buffer.alloc(4096, 1));
+      await fsp.chmod(unreadable, 0o000);
+      await backdate(path.join(repo, '.git', 'rebase-merge'));
+      try {
+        const refused = await recoverOrphanedGitSurgery(repo);
+        expect(refused.recovered).toBe(false);
+        expect(refused.error).toMatch(/could not be staged/);
+        expect(fs.readFileSync(path.join(repo, 'keep.md'), 'utf-8')).toBe('live edit during the freeze\n');
+        expect(fs.existsSync(path.join(repo, '.git', 'rebase-merge'))).toBe(true);
+      } finally {
+        await fsp.chmod(unreadable, 0o644);
+      }
+      const result = await recoverOrphanedGitSurgery(repo);
+      expect(result.recovered).toBe(true);
+      expect(fs.readFileSync(path.join(repo, 'keep.md'), 'utf-8')).toBe('live edit during the freeze\n');
+    },
+  );
 });
 
 describe('recoverOrphanedGitSurgery — other orphan kinds', () => {

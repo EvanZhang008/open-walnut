@@ -22,6 +22,18 @@ import { SECRET_IGNORE_PATTERNS } from './git-sync-secrets.js';
 import { releasePrivateDataHolds } from './git-sync-private-data.js';
 import { carryLocalCommits, type CarryResult, type GitStatusRunner } from './git-sync-rewrite-carry.js';
 import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
+import {
+  addListed,
+  addTimeoutFor,
+  listPendingFiles,
+  planStage,
+  routinePathspecs,
+  runLargeFileLane,
+  STAGE_BIG_FILE_THRESHOLD,
+  type GitRunner,
+  type PendingFile,
+  type StagePlan,
+} from './git-sync-large-files.js';
 
 export interface SyncStatus {
   initialized: boolean;
@@ -36,6 +48,8 @@ export interface SyncStatus {
 }
 
 const LOCAL_TIMEOUT = 30_000;
+/** The least a tick's status waits (porcelainStatus scales it up for what it may hash). */
+const STATUS_TIMEOUT = 120_000;
 /** Fetch/push/ls-remote — pure network transfers, fail fast. */
 const NETWORK_TIMEOUT = 15_000;
 /**
@@ -278,6 +292,39 @@ export function gitSafe(args: string, options?: { cwd?: string; timeout?: number
 // tick and every session result. See "Cached async preconditions" below.
 
 /**
+ * Git children of THIS process that may hold a lock in their repo, per repo folder.
+ * A long add holds .git/index.lock for its whole run and its mtime is its start, so
+ * the age test in clearStaleLock cannot tell it from a dead process's: while one of
+ * ours runs there, clearStaleLock leaves the locks alone (git-sync-large-files.ts
+ * made adds of several minutes legitimate).
+ */
+const liveGitChildren = new Map<string, Set<{ startedAt: number }>>();
+
+function trackLiveGit(cwd: string, child: ReturnType<typeof spawn>): void {
+  const key = path.resolve(cwd);
+  const entry = { startedAt: Date.now() };
+  const live = liveGitChildren.get(key) ?? new Set();
+  live.add(entry);
+  liveGitChildren.set(key, live);
+  const release = (): void => {
+    live.delete(entry);
+    if (live.size === 0 && liveGitChildren.get(key) === live) liveGitChildren.delete(key);
+  };
+  child.once('close', release);
+  child.once('error', release);
+}
+
+/**
+ * When the oldest git child of this process that may hold a lock in `repoDir`
+ * started, or null when none runs. A lock older than that cannot be ours.
+ */
+export function oldestOwnGitStart(repoDir: string): number | null {
+  const live = liveGitChildren.get(path.resolve(repoDir));
+  if (!live || live.size === 0) return null;
+  return Math.min(...[...live].map((e) => e.startedAt));
+}
+
+/**
  * Run git in its own process GROUP and kill the whole group on timeout.
  *
  * Why not execAsync's `timeout`: it signals only the top-level `git`, but a
@@ -312,6 +359,7 @@ export async function execGitGroup(
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    trackLiveGit(opts.cwd, child);
 
     let stdout = '';
     let stderr = '';
@@ -354,7 +402,7 @@ export async function execGitGroup(
 
 export async function execGitArgsGroup(
   args: string[],
-  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; /** Written to git's stdin, which is closed otherwise. */ input?: string },
+  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; /** Written to git's stdin, which is closed otherwise. */ input?: string; holdsNoLock?: boolean },
 ): Promise<string> {
   const { code, stdout, stderr } = await execGitArgsStatus(args, opts);
   if (code === 0) return stdout.trim();
@@ -368,7 +416,11 @@ export async function execGitArgsGroup(
  */
 export async function execGitArgsStatus(
   args: string[],
-  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; input?: string },
+  opts: {
+    cwd: string; timeout: number; env?: NodeJS.ProcessEnv; input?: string;
+    /** A command that takes no lock in .git (hash-object, ls-files): it does not stop clearStaleLock. */
+    holdsNoLock?: boolean;
+  },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const childEnv = gitChildEnv(opts.env);
@@ -379,6 +431,7 @@ export async function execGitArgsStatus(
       detached: true,
       stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    if (!opts.holdsNoLock) trackLiveGit(opts.cwd, child);
     if (opts.input !== undefined) {
       // A git that exits before reading it all reports through 'close'; the pipe error is noise.
       child.stdin?.on('error', () => undefined);
@@ -1129,17 +1182,35 @@ const NEVER_STAGE_PATHS = [...CLOUD_NEVER_STAGE_DIRS, ...CLOUD_NEVER_STAGE_FILES
  */
 export function stageAllArgs(cloudMode: boolean): string {
   if (!cloudMode || NEVER_STAGE_PATHS.length === 0) return 'add -A';
-  // The bare name excludes a directory or a file; the /** form keeps a directory's
-  // contents out too.
-  const excludes = [
-    ...CLOUD_NEVER_STAGE_DIRS.map(dir => `':(exclude)${dir}' ':(exclude)${dir}/**'`),
-    ...CLOUD_NEVER_STAGE_FILES.map(file => `':(exclude)${file}'`),
-  ].join(' ');
-  return `add -A -- . ${excludes}`;
+  return `add -A -- . ${neverStageTreeExcludes().map((spec) => `'${spec}'`).join(' ')}`;
+}
+
+/**
+ * The replica's never-author paths as pathspecs of a whole-tree add. The bare name
+ * excludes a directory or a file; the /** form keeps a directory's contents out too.
+ */
+function neverStageTreeExcludes(): string[] {
+  return [
+    ...CLOUD_NEVER_STAGE_DIRS.flatMap((dir) => [`:(exclude)${dir}`, `:(exclude)${dir}/**`]),
+    ...CLOUD_NEVER_STAGE_FILES.map((file) => `:(exclude)${file}`),
+  ];
+}
+
+/** Whether a repo path is one of the replica's never-author paths, or inside one. */
+function isNeverStagePath(file: string): boolean {
+  return NEVER_STAGE_PATHS.some((p) => file === p || file.startsWith(`${p}/`));
+}
+
+/** The one git runner factory of the staging paths: argv, a timeout, stdin. */
+function gitArgvRunnerAt(root: string): GitRunner {
+  return (args, o) => execGitArgsGroup(args, {
+    cwd: root, timeout: o.timeout, holdsNoLock: o.holdsNoLock, ...(o.input === undefined ? {} : { input: o.input }),
+  });
 }
 
 function gitRunnerAt(root: string): (args: string[], input?: string) => Promise<string> {
-  return (args, input) => execGitArgsGroup(args, { cwd: root, timeout: LOCAL_TIMEOUT, ...(input === undefined ? {} : { input }) });
+  const run = gitArgvRunnerAt(root);
+  return (args, input) => run(args, { timeout: LOCAL_TIMEOUT, input });
 }
 
 /** Replay HEAD's commits made after an upstream rewrite's cut onto the new chain (refs untouched). */
@@ -1173,14 +1244,40 @@ async function carryLocalCommitsAcrossRewrite(localHead: string, remoteRef: stri
  */
 export async function stageAllForCommit(
   opts: { cwd?: string; cloudMode?: boolean } = {},
-): Promise<void> {
+): Promise<{ deferred: PendingFile[] }> {
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
   await releasePrivateDataHolds(gitRunnerAt(root), root);
   if (cloudMode) await restoreNeverStagePaths(gitOpts);
   else await prepareSyncedPluginFiles(root);
-  await gitAsync(stageAllArgs(cloudMode), gitOpts);
+  // The add's size: what it would hash, measured without hashing (git-sync-large-files.ts).
+  const plan = await planRoutineAdd(root, cloudMode);
+  let deferred: PendingFile[] = [];
+  if (!plan || plan.deferred.length === 0) {
+    await gitAsync(stageAllArgs(cloudMode), { cwd: root, timeout: addTimeoutFor(plan?.routineBytes ?? 0) });
+  } else {
+    deferred = plan.deferred;
+    const pathspecs = routinePathspecs(plan, cloudMode ? neverStageTreeExcludes() : []);
+    if (pathspecs?.[0] === '.') {
+      await execGitArgsGroup(['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], {
+        cwd: root, timeout: addTimeoutFor(plan.routineBytes), input: pathspecs.join('\0'),
+      });
+    } else if (pathspecs) {
+      // Only the routine files, named: one removed since the listing must not fail the rest.
+      await addListed(gitArgvRunnerAt(root), root, plan.routine, { timeout: addTimeoutFor(plan.routineBytes) });
+    }
+    log.git.info('git-sync: large files wait for the background lane; the rest commits now', {
+      routineFiles: plan.routine.length, routineBytes: plan.routineBytes,
+      deferredFiles: deferred.length, deferredBytes: deferred.reduce((sum, f) => sum + f.bytes, 0),
+    });
+  }
+  await afterStage(gitOpts, cloudMode);
+  return { deferred };
+}
+
+/** The checks every add of the auto-commit is followed by. */
+async function afterStage(gitOpts: { cwd?: string } | undefined, cloudMode: boolean): Promise<void> {
   if (!cloudMode) {
     await keepUnfitPluginFilesOut(gitOpts);
   } else {
@@ -1190,6 +1287,88 @@ export async function stageAllForCommit(
       await gitSafeAsync(`reset -q -- "${p}"`, gitOpts);
     }
   }
+}
+
+/**
+ * Measure the pending add and split it at the routine budget. Null when git cannot
+ * list it: the add then runs as it always did, with the base timeout.
+ */
+async function planRoutineAdd(root: string, cloudMode: boolean): Promise<StagePlan | null> {
+  try {
+    const files = await listPendingFiles(gitArgvRunnerAt(root), root, cloudMode ? isNeverStagePath : undefined);
+    return planStage(files);
+  } catch (error) {
+    log.git.warn('git-sync: could not measure the pending add; staging it whole', { error: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
+/** The timeout of a whole-tree `add -A` that may not defer anything: every pending byte, scaled. */
+async function wholeTreeAddTimeout(root: string): Promise<number> {
+  try {
+    const files = await listPendingFiles(gitArgvRunnerAt(root), root);
+    return addTimeoutFor(files.reduce((sum, f) => sum + f.bytes, 0));
+  } catch {
+    return addTimeoutFor(0);
+  }
+}
+
+/**
+ * `status --porcelain -uall` of the data repo for the tick. status hashes a tracked
+ * file whose stat moved but whose size did not, and over git's big-file threshold
+ * (512 MiB) it streams that hash about 7x slower than it reads (measured 2026-11-24:
+ * 32 s for a touched 600 MB file, 6 s with the threshold raised). A status that times
+ * out reads as a clean tree and the tick commits nothing, every tick: so the threshold
+ * is raised and the timeout covers the bytes `diff-files` (stat only, no hashing) says
+ * it may hash.
+ */
+async function porcelainStatus(root = WALNUT_HOME): Promise<string | null> {
+  return gitSafeAsync(`-c core.bigFileThreshold=${STAGE_BIG_FILE_THRESHOLD} status --porcelain -uall`, {
+    cwd: root, timeout: await statusTimeout(root),
+  });
+}
+
+async function statusTimeout(root: string): Promise<number> {
+  try {
+    const tracked = await listPendingFiles(gitArgvRunnerAt(root), root, undefined, { untracked: false });
+    return Math.max(STATUS_TIMEOUT, addTimeoutFor(tracked.reduce((sum, f) => sum + f.bytes, 0)));
+  } catch {
+    return STATUS_TIMEOUT;
+  }
+}
+
+/** The timeout of an add of one named file: its size, scaled (a conflicted file may be any size). */
+async function fileAddTimeout(root: string, file: string): Promise<number> {
+  const stat = await fs.promises.lstat(path.join(root, file)).catch(() => null);
+  return addTimeoutFor(stat?.isFile() ? stat.size : 0);
+}
+
+/**
+ * The large-file lane, after the routine commit: stage and commit the deferred files
+ * whose objects the background lane wrote already, and start writing the rest
+ * (git-sync-large-files.ts). One file's failure only backs that file off. Returns
+ * the files committed.
+ */
+export async function commitDeferredLargeFiles(
+  deferred: PendingFile[],
+  opts: { cwd?: string; cloudMode?: boolean; message: (count: number) => string },
+): Promise<number> {
+  if (deferred.length === 0) return 0;
+  const cloudMode = opts.cloudMode ?? CLOUD_MODE;
+  const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
+  const root = gitOpts?.cwd ?? WALNUT_HOME;
+  const lane = await runLargeFileLane(gitArgvRunnerAt(root), root, deferred, {
+    shouldStop: () => isSyncPaused() || compactionInProgress,
+    onFailure: (failure) => log.git.warn('git-sync: a large file could not be written to the data repo; it backs off and the rest keeps syncing', failure),
+  });
+  if (lane.staged.length === 0) return 0;
+  await afterStage(gitOpts, cloudMode);
+  const staged = await gitSafeAsync('diff --cached --name-only', gitOpts);
+  const count = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
+  if (count === 0) return 0;
+  if (await gitSafeAsync(`commit -m "${opts.message(count)}"`, gitOpts) === null) return 0;
+  log.git.info('git-sync: committed large files', { files: lane.staged.length, waiting: lane.left.length });
+  return count;
 }
 
 const unfitPluginFilesReported = new Set<string>();
@@ -1987,7 +2166,7 @@ export async function recoverOrphanedGitSurgery(
     //    snapshot below is an unconditional `add -A`, so without this the marker
     //    text becomes a commit and then rides the merge-back into the live file
     //    (2026-08-22: ui-prefs.json + a conversation file, both unreadable).
-    const preSnapshot = (await gitSafeAsync('status --porcelain -uall', opts)) ?? '';
+    const preSnapshot = (await porcelainStatus(repoDir)) ?? '';
     await healConflictMarkeredJsonFromStatus(
       preSnapshot.split('\n').filter((l) => l.trim().length > 0),
       'orphan-rebase-recovery:pre-snapshot',
@@ -2004,7 +2183,12 @@ export async function recoverOrphanedGitSurgery(
     // plugin-files/ gets the tick's guard around the add: a nested repo without a commit
     // would make this add fail (and step 2 then overwrite what it did not snapshot).
     await prepareSyncedPluginFiles(repoDir);
-    await gitSafeAsync('add -A', opts);
+    // Whole tree, so no large-file lane here: a timeout scaled to every pending byte
+    // instead, and a snapshot that still fails stops the recovery BEFORE step 2's
+    // `checkout -f` could overwrite what it did not take (git-sync-large-files.ts).
+    if (await gitSafeAsync('add -A', { ...opts, timeout: await wholeTreeAddTimeout(repoDir) }) === null) {
+      return { recovered: false, kind: 'rebase', rescueBranch, error: 'the live worktree could not be staged for the rescue snapshot' };
+    }
     if (!CLOUD_MODE) await keepUnfitPluginFilesOut({ cwd: repoDir }).catch(() => undefined);
     await gitSafeAsync('commit -q -m "rescue: live worktree at orphaned-rebase recovery"', opts);
     const rescueTip = await gitSafeAsync('rev-parse HEAD', opts);
@@ -2035,7 +2219,7 @@ export async function recoverOrphanedGitSurgery(
         for (const file of unmerged.split('\n').filter(Boolean)) {
           const take = await gitSafeAsync(`checkout ${rescueBranch} -- "${file}"`, opts);
           if (take === null && await gitSafeAsync(`rm -q -- "${file}"`, opts) === null) resolvedAll = false;
-          else if (take !== null) await gitSafeAsync(`add -- "${file}"`, opts);
+          else if (take !== null) await gitSafeAsync(`add -- "${file}"`, { ...opts, timeout: await fileAddTimeout(repoDir, file) });
         }
         if (resolvedAll
           && await gitSafeAsync('commit -q --no-edit -m "rescue: merge orphaned-rebase live snapshot"', opts) !== null) {
@@ -2063,7 +2247,7 @@ export async function recoverOrphanedGitSurgery(
         repoDir,
       );
       if (healed.restored.length > 0 || healed.quarantined.length > 0) {
-        await gitSafeAsync('add -A', opts);
+        await gitSafeAsync('add -A', { ...opts, timeout: await wholeTreeAddTimeout(repoDir) });
         await gitSafeAsync('commit -q -m "rescue: restore JSON files that carried conflict markers"', opts);
       }
     }
@@ -2227,7 +2411,7 @@ export async function assessCommitSafety(
  * revert. Enter pull-only safe mode so no `add -A` can snapshot it.
  */
 export async function verifyWorktreeAfterPull(context: string): Promise<boolean> {
-  const status = await gitSafeAsync('status --porcelain -uall');
+  const status = await porcelainStatus();
   const lines = (status ?? '').split('\n').filter((l) => l.trim().length > 0);
   const massThreshold = await effectiveMassDirtyThreshold();
   if (lines.length < massThreshold) return true;
@@ -2397,7 +2581,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
 
   // -uall: an entirely-untracked directory otherwise collapses to one `?? dir/`
   // line, hiding a mass resurrection from both the threshold and the heuristic.
-  const preStatus = await gitSafeAsync('status --porcelain -uall');
+  const preStatus = await porcelainStatus();
   const preLines = (preStatus ?? '').split('\n').filter((l) => l.trim().length > 0);
 
   // ── Order inversion after an outage ──
@@ -2424,7 +2608,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
 
   // ── Commit local changes (guarded) ──
   // Re-read after a possible pull; the pull may have absorbed or changed dirt.
-  const status = pullFirst ? await gitSafeAsync('status --porcelain -uall') : preStatus;
+  const status = pullFirst ? await porcelainStatus() : preStatus;
   const dirtyLines = pullFirst
     ? (status ?? '').split('\n').filter((l) => l.trim().length > 0)
     : preLines;
@@ -2447,7 +2631,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
       // (2026-08-22). Runs on the dirty snapshot we already have, before add.
       await healConflictMarkeredJsonFromStatus(dirtyLines, 'syncInner:commit');
 
-      await stageAllForCommit();
+      const stage = await stageAllForCommit();
 
       // …and re-check: `add -A` itself can re-track a machine-local file the
       // instant before a pull could carry its remote deletion to disk.
@@ -2458,11 +2642,16 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
       // 2233-rename mass revert got committed as "(1 files)".
       const staged = await gitSafeAsync('diff --cached --name-only');
       const stagedCount = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
+      const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
       if (stagedCount > 0) {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        await gitSafeAsync(`commit -m "open-walnut sync ${timestamp} (${stagedCount} files)"`);
+        await gitSafeAsync(`commit -m "open-walnut sync ${stamp()} (${stagedCount} files)"`);
         pushed = 1;
       }
+      // Large files after the routine commit (git-sync-large-files.ts).
+      const large = await commitDeferredLargeFiles(stage.deferred, {
+        message: (count) => `open-walnut sync ${stamp()} (${count} large files)`,
+      });
+      if (large > 0) pushed = 1;
     }
     // safety.ok === false → pull-only safe mode: skip commit, still pull below
     // so the box keeps receiving upstream (assessCommitSafety already logged).
@@ -2842,7 +3031,7 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
     }
     const side = newerIsLocal ? '--ours' : '--theirs';
     if (await gitSafeAsync(`checkout ${side} -- "${file}"`) !== null) {
-      await gitSafeAsync(`add -- "${file}"`);
+      await gitSafeAsync(`add -- "${file}"`, { timeout: await fileAddTimeout(WALNUT_HOME, file) });
     } else {
       // Delete/modify conflict: the winning side deleted the file, so
       // `checkout --ours/--theirs` has no blob to restore — honor the delete.
@@ -2875,7 +3064,7 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
     files.filter((f) => f.endsWith('.json')),
     'lwwMerge:resolved',
   );
-  for (const f of markerFix.restored) await gitSafeAsync(`add -- "${f}"`);
+  for (const f of markerFix.restored) await gitSafeAsync(`add -- "${f}"`, { timeout: await fileAddTimeout(WALNUT_HOME, f) });
   for (const f of markerFix.quarantined) await gitSafeAsync(`rm -q --cached --ignore-unmatch -- "${f}"`);
 
   // Commit the merge. Parent 1 = local HEAD, parent 2 = remote head — the
@@ -3024,6 +3213,9 @@ export async function gitPullWalnut(): Promise<void> {
 export async function clearStaleLock(maxAgeMs = 60_000): Promise<boolean> {
   const gitDir = path.join(WALNUT_HOME, '.git');
   let removed = false;
+  // A lock made since our oldest live git started may be that git's (a long add):
+  // never ours to sweep. One older than all of them is a dead process's.
+  const ownSince = oldestOwnGitStart(WALNUT_HOME);
 
   // Async on purpose: this runs on every 30s tick on the server's event loop,
   // and the refs walk below was a synchronous readdir per directory. With one
@@ -3034,6 +3226,8 @@ export async function clearStaleLock(maxAgeMs = 60_000): Promise<boolean> {
     try {
       const stat = await fs.promises.stat(lockPath);
       if (Date.now() - stat.mtimeMs <= maxAgeMs) return;
+      // 2 s of slack: a file system's mtime can trail the clock we read.
+      if (ownSince !== null && stat.mtimeMs >= ownSince - 2_000) return;
       await fs.promises.unlink(lockPath);
       removed = true;
       log.git.warn('git-sync removed stale lock', { lock: path.relative(gitDir, lockPath) });
@@ -3349,7 +3543,7 @@ export async function commitIfDirty(): Promise<boolean> {
   await clearStaleLock();
   // -uall: see syncInner — collapsed `?? dir/` lines would hide a mass
   // resurrection from the circuit breaker.
-  const status = await gitSafeAsync('status --porcelain -uall');
+  const status = await porcelainStatus();
   if (!status || status.trim().length === 0) {
     // Clean tree while in safe mode = the anomaly is gone (human repaired it).
     if (guard.safeMode) clearSyncSafeMode('worktree clean');
@@ -3369,14 +3563,15 @@ export async function commitIfDirty(): Promise<boolean> {
   // the status snapshot above (no extra git call), before anything is staged.
   await healConflictMarkeredJsonFromStatus(lines, 'commitIfDirty');
 
+  let stage: { deferred: PendingFile[] };
   try {
-    await stageAllForCommit();
+    stage = await stageAllForCommit();
   } catch (err) {
     if (!isLockContention(err)) throw err;
     // Lock held by another process — wait briefly (async, loop keeps running) and retry once
     await new Promise((r) => setTimeout(r, 300));
     await clearStaleLock(5_000);
-    await stageAllForCommit();
+    stage = await stageAllForCommit();
   }
 
   // Honest count: from what is ACTUALLY staged at commit time, not the
@@ -3384,11 +3579,17 @@ export async function commitIfDirty(): Promise<boolean> {
   // its message claimed "(1 files)" because the count predated the add.
   const staged = await gitSafeAsync('diff --cached --name-only');
   const stagedCount = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
-  if (stagedCount === 0) return false; // e.g. everything dirty was gitignored/untracked-only noise
-
-  const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
-  await gitSafeAsync(`commit -m "auto-save ${timestamp} (${stagedCount} files)"`);
-  return true;
+  const stamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+  let committed = false;
+  if (stagedCount > 0) {
+    await gitSafeAsync(`commit -m "auto-save ${stamp()} (${stagedCount} files)"`);
+    committed = true;
+  }
+  // Large files go after the routine commit, so they can never hold it back.
+  const large = await commitDeferredLargeFiles(stage.deferred, {
+    message: (count) => `auto-save ${stamp()} (${count} large files)`,
+  });
+  return committed || large > 0;
 }
 
 /**
