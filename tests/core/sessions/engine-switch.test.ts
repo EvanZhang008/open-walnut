@@ -1032,9 +1032,9 @@ describe('engine switch inside a task', () => {
     const pi = (await requestEngineSwitch({ taskId, engine: 'pi', message: 'On Pi.', source: 'ui' })).sessionId!;
     edges.history[pi] = [
       { role: 'user', text: 'On Pi.', timestamp: '2026-10-20T11:00:00Z', hints: [{ kind: 'engine-switch', text: 'carried: the magic word is PELICAN' }] },
-      { role: 'system', text: 'protocol: ACP provider protocol operation failed', timestamp: '2026-10-20T11:00:01Z' },
+      { role: 'system', systemVariant: 'error', text: 'protocol: ACP provider protocol operation failed', timestamp: '2026-10-20T11:00:01Z' },
       { role: 'user', text: 'this is crazy', timestamp: '2026-10-20T11:01:00Z' },
-      { role: 'system', text: 'protocol: ACP provider protocol operation failed', timestamp: '2026-10-20T11:01:01Z' },
+      { role: 'system', systemVariant: 'error', text: 'protocol: ACP provider protocol operation failed', timestamp: '2026-10-20T11:01:01Z' },
     ];
     await updateSessionRecord(pi, { process_status: 'error', status_reason: 'api_error', messageCount: 2 } as never);
     const back = await requestEngineSwitch({ taskId, engine: 'claude', source: 'ui' });
@@ -1046,24 +1046,62 @@ describe('engine switch inside a task', () => {
     expect(transcriptSentBy({ role: 'user', text: parseHinted(row).text })).toBe('agent');
   });
 
-  it('a switch with no message over a turn it cut answers the question that turn never answered', async () => {
-    const { taskId, sid } = await taskOn('claude');
+  it('a person\'s pick over a turn the switch cuts answers the question that turn never answered', async () => {
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
     edges.history[sid] = [...HISTORY,
       { role: 'user', text: 'did u finish it', timestamp: '2026-10-20T12:00:00Z' },
       { role: 'assistant', text: '', timestamp: '2026-10-20T12:00:05Z', tools: [{ name: 'Bash', input: { command: 'git log -1' }, result: 'abc' }] },
     ];
-    const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'ui' });
-    expect(res.state).toBe('done');
-    const start = edges.starts.at(-1)!;
-    expect(String(start.message)).toContain('"did u finish it"');
-    expect(start.idle).toBeUndefined();
+    await mutateStore((st) => {
+      st.queues[sid] = [{ id: 'qm-p', sessionId: sid, message: 'did u finish it', status: 'processing', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    bus.subscribe('test-interrupt-owed', async (e) => {
+      if (e.name !== EventNames.SESSION_INTERRUPT) return;
+      const id = (e.data as { sessionId: string }).sessionId;
+      await updateSessionRecord(id, { process_status: 'idle' } as never);
+      await mutateStore((st) => { delete st.queues[id]; }, false, true);
+    }, { global: true });
+    try {
+      const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'ui' });
+      expect(res.state).toBe('done');
+      const start = edges.starts.at(-1)!;
+      expect(String(start.message)).toContain('"did u finish it');
+      expect(start.idle).toBeUndefined();
+    } finally {
+      bus.unsubscribe('test-interrupt-owed');
+    }
+  }, 20_000);
+
+  it('a turn the user stopped himself is not owed: a switch with no message after it runs no turn', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    edges.history[sid] = [...HISTORY,
+      { role: 'user', text: 'delete these branches', timestamp: '2026-10-20T12:00:00Z' },
+      { role: 'assistant', text: '', timestamp: '2026-10-20T12:00:05Z', tools: [{ name: 'Bash', input: { command: 'git branch' }, result: 'a b' }] },
+      { role: 'user', text: '[Request interrupted by user]', timestamp: '2026-10-20T12:00:06Z' },
+    ];
+    await requestEngineSwitch({ taskId, engine: 'codex', source: 'ui' });
+    expect(edges.starts.at(-1)?.message).toBe('');
+    expect(edges.starts.at(-1)?.idle).toBe(true);
+  });
+
+  it('owed words whose own turn failed again on the next engine are owed on the switch after it', async () => {
+    const { owedLine, unansweredPersonWords } = await import('../../../src/core/sessions/engine-switch-context.js');
+    const line = await owedLine('this is "crazy" <ok>', true);
+    const failedAgain = [{ role: 'user', text: line, timestamp: 'a' }, { role: 'system', systemVariant: 'error', text: 'failed', timestamp: 'b' }];
+    expect(await unansweredPersonWords(failedAgain as never)).toBe('this is "crazy" <ok>');
+    // Answered on that engine: nothing is owed any more.
+    expect(await unansweredPersonWords([...failedAgain, { role: 'assistant', text: 'done', timestamp: 'c' }] as never)).toBeUndefined();
   });
 
   it('a switch with no message from a session that answered runs no turn; a notice is not the user\'s words', async () => {
     const { unansweredPersonWords } = await import('../../../src/core/sessions/engine-switch-context.js');
     expect(await unansweredPersonWords(HISTORY as never)).toBeUndefined();
     expect(await unansweredPersonWords([...HISTORY, { role: 'user', text: '<walnut-message kind="notification" from="Walnut" note="n">\nthreads due\n</walnut-message>', timestamp: 'x' }] as never)).toBeUndefined();
-    expect(await unansweredPersonWords([{ role: 'user', text: 'continue', timestamp: 'x' }, { role: 'system', text: 'failed', timestamp: 'y' }] as never)).toBe('continue');
+    expect(await unansweredPersonWords([{ role: 'user', text: 'continue', timestamp: 'x' }, { role: 'system', systemVariant: 'error', text: 'failed', timestamp: 'y' }] as never)).toBe('continue');
+    // No failure and no cut (the turn simply ended without text): not owed.
+    expect(await unansweredPersonWords([{ role: 'user', text: 'continue', timestamp: 'x' }] as never)).toBeUndefined();
+    // A local slash command is not a question.
+    expect(await unansweredPersonWords([{ role: 'user', text: '/context', timestamp: 'x' }, { role: 'system', systemVariant: 'error', text: 'failed', timestamp: 'y' }] as never)).toBeUndefined();
   });
 
   it('a failed switched-to session handed to a third engine carries the task\'s context there', async () => {
@@ -1135,7 +1173,7 @@ describe('engine switch inside a task', () => {
 
   it('a switch with no message from a failed start runs the message that start never answered', async () => {
     const { taskId, sid } = await taskOn('pi');
-    edges.history[sid] = [{ role: 'user', text: 'hello there', timestamp: '2026-10-20T11:00:00Z' }, { role: 'system', text: 'protocol: ACP provider protocol operation failed', timestamp: '2026-10-20T11:00:01Z' }];
+    edges.history[sid] = [{ role: 'user', text: 'hello there', timestamp: '2026-10-20T11:00:00Z' }, { role: 'system', systemVariant: 'error', text: 'protocol: ACP provider protocol operation failed', timestamp: '2026-10-20T11:00:01Z' }];
     await updateSessionRecord(sid, { process_status: 'error', status_reason: 'api_error', messageCount: 1 } as never);
     await requestEngineSwitch({ taskId, engine: 'claude', source: 'ui' });
     const start = edges.starts.at(-1)!;

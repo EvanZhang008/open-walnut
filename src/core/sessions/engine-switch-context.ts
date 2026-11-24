@@ -370,27 +370,54 @@ export async function targetWindowTokens(
   return DEFAULT_WINDOWS[target] ?? OTHER_DEFAULT_WINDOW;
 }
 
+/** The words every owed line carries, so the next switch reads one back (review: a second switch lost it). */
+const OWED_MARK = 'got no answer before the switch';
+const OWED_END = '". Answer it now.';
+
 /**
  * The words of the user's last message when the session never answered it: its turn failed (an
- * engine error) or the switch cut it. A switch with no message of its own runs no turn, so these
- * words sat in the carried context unanswered (2026-11-24: three messages to a Pi session whose
- * every turn failed waited nine hours). Undefined when an answer came after them, or when the last
- * user row is not a person's (a notice, another task's mail).
+ * error row after it) or this switch cut it (`turnCut`). A switch with no message of its own runs no
+ * turn, so these words sat in the carried context unanswered (2026-11-24: three messages to a Pi
+ * session whose every turn failed waited nine hours). Not owed: an answer after them, a turn the
+ * user stopped himself (no error, not cut by the switch), a local slash command, or a last user row
+ * that is not a person's (a notice, another task's mail). An owed line of an earlier switch whose
+ * own turn failed again is owed still: its quoted words come back.
  */
-export async function unansweredPersonWords(messages: readonly SessionHistoryMessage[]): Promise<string | undefined> {
+export async function unansweredPersonWords(messages: readonly SessionHistoryMessage[], opts: { turnCut?: boolean } = {}): Promise<string | undefined> {
   const { personTextOf, transcriptSentBy } = await import('./transcript-sent-by.js');
+  let failed = false;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role === 'assistant' && m.text.trim()) return undefined;
-    if (m.role !== 'user' || transcriptSentBy(m) !== 'person') continue;
+    if (m.role === 'system' && m.systemVariant === 'error') { failed = true; continue; }
+    if (m.role !== 'user') continue;
+    const again = owedWordsOf(m.text);
+    if (again !== undefined) return failed || opts.turnCut ? again : undefined;
+    if (transcriptSentBy(m) !== 'person') continue;
     const words = (personTextOf(m.text) ?? m.text).trim();
-    return words || undefined;
+    if (!words || /^\/[\w:-]+(\s|$)/.test(words)) continue;
+    return failed || opts.turnCut ? words : undefined;
   }
   return undefined;
 }
 
-/** The line that runs the new session's turn for those words (framed as Walnut's, never the user's). */
-export function unansweredNote(words: string): string {
+/** The words an owed line quotes, or undefined when `text` is not one. */
+export function owedWordsOf(text: string): string | undefined {
+  const at = text.indexOf(OWED_MARK);
+  if (at < 0) return undefined;
+  const start = text.indexOf(': "', at);
+  const end = text.lastIndexOf(OWED_END);
+  if (start < 0 || end <= start) return undefined;
+  return text.slice(start + 3, end).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+}
+
+/**
+ * The line that runs the new session's turn for those words, framed as Walnut's (never the user's).
+ * `carried`: the conversation rides above it; without it (a failed start replaced) there is none.
+ */
+export async function owedLine(words: string, carried: boolean): Promise<string> {
+  const { frameAsWalnut } = await import('./send-frame.js');
   const quoted = words.length > 600 ? `${words.slice(0, 600)}...` : words;
-  return `The user's last message in the conversation above got no answer before the switch (the earlier session's turn failed or was stopped): "${quoted}". Answer it now.`;
+  const where = carried ? 'in the conversation above ' : '';
+  return frameAsWalnut(`The user's last message ${where}${OWED_MARK} (the earlier session's turn failed or was stopped): "${quoted}${OWED_END}`, 'engine-switch');
 }

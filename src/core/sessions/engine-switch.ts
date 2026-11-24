@@ -58,8 +58,11 @@ import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
 import { MOVE_LINK_WAIT_MS, noLinkWait, withLinkWait } from '../transfer/link-wait.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
-  unansweredNote, unansweredPersonWords,
+  owedLine, unansweredPersonWords,
 } from './engine-switch-context.js';
+
+/** How long a switch waits to read what a failed start's session still owes the user. */
+const OWED_READ_MS = 5_000;
 
 export class EngineSwitchError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -298,7 +301,8 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     const { taskSessionRows } = await import('./task-session-claim.js');
     const { updateSessionRecord } = await import('../session-tracker.js');
     // A row already archived as lost keeps that reason (the start's claim takes it off the task).
-    const empty = (await taskSessionRows(task.id)).empty.filter((r) => !r.archive_reason);
+    const empty = (await taskSessionRows(task.id)).empty.filter((r) => !r.archive_reason)
+      .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''));
     const replaced = (rows: SessionRecord[], fields: Partial<SessionRecord>) =>
       Promise.all(rows.map((r) => updateSessionRecord(r.claudeSessionId, fields).catch(() => {})));
     await replaced(empty, { archived: true, archive_reason: engineSwitchedReason(engine) });
@@ -308,9 +312,12 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     const fromHost = from ? normalizeHost(from.host) : undefined;
     const keepPlace = !!from?.cwd && (req.host === undefined || normalizeHost(req.host) === fromHost);
     // The user's message a failed start never answered is the new session's first turn.
-    const owed = message.trim() || !from ? undefined
-      : await readActiveContext(from).then((c) => unansweredPersonWords(c.messages)).catch(() => undefined);
-    const first = owed ? (await import('./send-frame.js')).frameAsWalnut(unansweredNote(owed), 'engine-switch') : message;
+    // Read under a deadline: an unreachable host never holds the switch.
+    const owed = message.trim() || !from ? undefined : await Promise.race([
+      readActiveContext(from).then((c) => unansweredPersonWords(c.messages)).catch(() => undefined),
+      new Promise<undefined>((r) => { setTimeout(r, OWED_READ_MS) }),
+    ]);
+    const first = owed ? await owedLine(owed, false) : message;
     const { startSessionForTask } = await import('./task-start.js');
     let started: Awaited<ReturnType<typeof startSessionForTask>>;
     try {
@@ -945,9 +952,9 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   }
   // No message: no turn now. The context waits for the session's next message (stashSwitchContext),
   // unless the user's last message there got no answer: the new session answers it at once.
-  const owed = state.message?.trim() ? undefined : await unansweredPersonWords(ctx.messages);
+  const owed = state.message?.trim() ? undefined : await unansweredPersonWords(ctx.messages, { turnCut });
   if (owed) log.session.info('engine switch: the user\'s last message got no answer; the new session answers it', { taskId: task.id, switchId: state.id });
-  const words = owed ? (await import('./send-frame.js')).frameAsWalnut(unansweredNote(owed), 'engine-switch') : await switchWords(state);
+  const words = owed ? await owedLine(owed, true) : await switchWords(state);
   // The session resumed may itself hold a context it never read (resumed idle earlier): it stays,
   // ahead of the turns it missed since (review round 5), under the same one budget.
   const targetUnread = resume ? (await tracker.getSessionByClaudeId(resume.prev.claudeSessionId).catch(() => undefined))?.switchContext?.text : undefined;
