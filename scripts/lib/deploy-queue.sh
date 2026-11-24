@@ -64,9 +64,9 @@ DQ_PREBUILD="${WALNUT_DEPLOY_PREBUILD_SECS:-420}"
 # the commits waiting go out together in one build.
 DQ_BUSY_GAP="${WALNUT_DEPLOY_BUSY_GAP_SECS:-1200}"
 [[ "$DQ_BUSY_GAP" =~ ^[0-9]+$ ]] || DQ_BUSY_GAP=1200
-# Tight memory alone waits less, up to WALNUT_DEPLOY_MEM_GAP_SECS (600) after the last restart
-# (2026-11-24: this Mac's swap stayed over 90% for hours, every deploy waited the whole 20 minutes
-# for it to ease and it never did; with the web/ type check off the Mac a deploy adds far less).
+# Tight memory alone (critical pressure, dq_busy_mem) waits less, up to WALNUT_DEPLOY_MEM_GAP_SECS
+# (600) after the last restart: with the web/ type check off the Mac a deploy adds far less. Why
+# warn and a full swap hold nothing: dq_busy_mem.
 DQ_MEM_GAP="${WALNUT_DEPLOY_MEM_GAP_SECS:-600}"
 [[ "$DQ_MEM_GAP" =~ ^[0-9]+$ ]] || DQ_MEM_GAP=600
 (( DQ_MEM_GAP <= DQ_BUSY_GAP )) || DQ_MEM_GAP=$DQ_BUSY_GAP
@@ -83,21 +83,22 @@ dq_busy_load() {
   awk -v l="$l" -v c="$c" -v m="$DQ_BUSY_LOAD" 'BEGIN { if (c < 1) c = 1; if (l != "" && l / c > m) print l }'
 }
 
-# Memory tight, in words, else nothing (2026-11-11: a deploy's web build adds about 1.4 GB, and the
-# Mac logged memory tight 150 to 190 times a day): macOS memory pressure at warn or worse, or swap
-# 90% used; on Linux under 5% of memory available. It waits like a busy load, bounded by the
-# shorter DQ_MEM_GAP. WALNUT_DEPLOY_MEM_TEST stands in for the reading in tests ("" = read the machine).
+# Memory tight, in words, else nothing (2026-11-11: a deploy's web build adds about 1.4 GB): macOS
+# memory pressure at critical (4); on Linux under 5% of memory available. It waits like a busy load,
+# bounded by the shorter DQ_MEM_GAP. Pressure at warn (2) and a swap over 90% used hold nothing
+# (2026-11-24: this Mac sat at warn with its swap 96% used for hours; all 7 deploys that waited
+# for it to ease waited their whole 10 minutes, then built at the same memory, so the wait only
+# made every land 5 minutes later). WALNUT_DEPLOY_MEM_TEST stands in for the reading in tests
+# ("" = read the machine).
 dq_busy_mem() {
-  local t="${WALNUT_DEPLOY_MEM_TEST-}" pl su st
+  local t="${WALNUT_DEPLOY_MEM_TEST-}" pl
   if [[ -n "$t" ]]; then [[ "$t" == ok ]] || echo "$t"; return 0; fi
   pl="$(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null)"
   if [[ "$pl" =~ ^[0-9]+$ ]]; then
-    (( pl >= 2 )) && { echo "memory pressure level $pl"; return 0; }
-    read -r st su < <(sysctl -n vm.swapusage 2>/dev/null | awk '{gsub("M","",$3); gsub("M","",$6); printf "%d %d\n", $3, $6}')
-    [[ "$st" =~ ^[0-9]+$ && "$su" =~ ^[0-9]+$ ]] && (( st > 0 && su * 100 >= st * 90 )) && echo "swap ${su}/${st} MB used"
+    (( pl >= 4 )) && echo "memory pressure level $pl"
     return 0
   fi
-  awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END { if (t > 0 && a * 100 < t * 5) printf "%d MB of memory available\n", a / 1024 }' /proc/meminfo 2>/dev/null
+  awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END { if (t > 0 && a * 100 < t * 5) printf "%d MB of memory available\n", a / 1024 }' /proc/meminfo 2>/dev/null || true
 }
 
 # A task move running on production holds the deploy too (2026-11-12: a move to a remote host

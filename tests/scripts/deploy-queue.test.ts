@@ -270,23 +270,50 @@ describe('the deploy queue', () => {
     const f = fixture()
     stampNow(f)
     const t0 = Math.floor(Date.now() / 1000)
-    const tight = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '12', WALNUT_DEPLOY_MEM_TEST: 'memory pressure level 2' }).done
+    const tight = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '12', WALNUT_DEPLOY_MEM_TEST: 'memory pressure level 4' }).done
     expect(tight.code, tight.stderr).toBe(0)
     expect(deploys(f).filter((d) => d.kind === 'start')[0].at).toBeGreaterThanOrEqual(t0 + 12)
-    expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/the Mac is busy \(memory pressure level 2\): the deploy waits/)
-    expect(tight.stdout).toMatch(/Deploy queued: this Mac is busy \(memory pressure level 2\); the next deploy goes once it eases/)
+    expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/the Mac is busy \(memory pressure level 4\): the deploy waits/)
+    expect(tight.stdout).toMatch(/Deploy queued: this Mac is busy \(memory pressure level 4\); the next deploy goes once it eases/)
     await runnerGone(f)
-    // Tight memory waits only up to its own, shorter gap (2026-11-24: swap stayed over 90% for hours).
+    // Tight memory waits only up to its own, shorter gap (2026-11-24: it never eased for hours).
     const g = fixture()
     stampNow(g)
     const t1 = Math.floor(Date.now() / 1000)
-    const short = await call(g, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '120', WALNUT_DEPLOY_MEM_GAP_SECS: '8', WALNUT_DEPLOY_MEM_TEST: 'swap 95/100 MB used' }).done
+    const short = await call(g, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '120', WALNUT_DEPLOY_MEM_GAP_SECS: '8', WALNUT_DEPLOY_MEM_TEST: '200 MB of memory available' }).done
     expect(short.code, short.stderr).toBe(0)
     const at = deploys(g).filter((d) => d.kind === 'start')[0].at
     expect(at).toBeGreaterThanOrEqual(t1 + 8)
     expect(at).toBeLessThan(t1 + 60)
     await runnerGone(g)
   }, 120_000)
+
+  it('only critical memory pressure holds a deploy; warn and a full swap hold nothing (2026-11-24)', () => {
+    // The Mac sat at warn with its swap 96% used for hours: every deploy that waited for it to
+    // ease waited its whole bound, then built at the same memory anyway.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dq-mem-'))
+    const read = (level: string, swap: string) => {
+      fs.writeFileSync(path.join(dir, 'sysctl'), `#!/bin/sh
+case "$2" in
+  kern.memorystatus_vm_pressure_level) echo ${level} ;;
+  vm.swapusage) echo "total = ${swap}" ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 })
+      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}` }
+      delete env.WALNUT_DEPLOY_MEM_TEST
+      const r = spawnSync('bash', ['-c', `. "${SCRIPTS}/lib/deploy-queue.sh"; dq_busy_mem`], { env, encoding: 'utf8', timeout: 10_000 })
+      expect(r.status, r.stderr).toBe(0)
+      return r.stdout.trim()
+    }
+    try {
+      expect(read('1', '23552.00M  used = 22602.19M  free = 949.81M')).toBe('')
+      expect(read('2', '23552.00M  used = 22602.19M  free = 949.81M')).toBe('')
+      expect(read('4', '23552.00M  used = 1000.00M  free = 22552.00M')).toBe('memory pressure level 4')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 
   it('a move production runs holds the deploy until it ends, at most the hold; a dead or old marker holds nothing (2026-11-12)', async () => {
     // A move to a remote host takes 10 to 15 minutes; a deploy every 10 to 20 cut each one.
