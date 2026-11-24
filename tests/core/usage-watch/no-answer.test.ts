@@ -14,7 +14,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeUsageWatchStore, readToolErrors, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
 import { _resetUsageRecorderForTesting, flushUsage, recordToolError, startUsageRecorder, stopUsageRecorder } from '../../../src/core/usage-watch/record.js'
 import { recordNoAnswers } from '../../../src/core/usage-watch/gateway-record.js'
@@ -163,15 +163,16 @@ describe('the Walnut MCP server tells its calls no Walnut answered with its next
     }
     expect(reports).toEqual([])
     await call(handle, 9, 'task_get')
-    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => expect(reports).toHaveLength(1))
     expect(reports).toEqual([{ no_answer: [
       { op: 'task_create', code: 'no_daemon', client: 'mcp', ms: expect.any(Number) },
       { op: 'host_exec', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number) },
       { op: 'subagent_send', code: 'hub_timeout', client: 'mcp', ms: expect.any(Number) },
     ] }])
-    // Told once: the next call that works sends nothing more.
+    // Told once: the next call that works sends nothing more (a report goes before the answer it rides
+    // returns, so the answer of a third call shows the second sent none).
     await call(handle, 10, 'task_get')
-    await new Promise((r) => setTimeout(r, 10))
+    await call(handle, 11, 'task_get')
     expect(reports).toHaveLength(1)
   })
 
@@ -190,10 +191,10 @@ describe('the Walnut MCP server tells its calls no Walnut answered with its next
     await call(handle, 1, 'bad')
     await call(handle, 2, 'gone')
     await call(handle, 3, 'task_get')
-    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => expect(reports).toHaveLength(1))
     up = true
     await call(handle, 4, 'task_get')
-    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => expect(reports).toHaveLength(2))
     const told = (r: unknown) => (r as { no_answer: Array<{ op: string; code: string }> }).no_answer.map((n) => `${n.op}:${n.code}`)
     expect(reports.map(told)).toEqual([['gone:no_daemon'], ['gone:no_daemon']])
   })

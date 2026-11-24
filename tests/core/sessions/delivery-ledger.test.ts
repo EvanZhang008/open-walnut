@@ -230,15 +230,18 @@ describe('every way into a session has its row, with its task', () => {
   it('a session whose task is not known yet is looked up again soon, not left with no task for 10 minutes', async () => {
     let known = false
     setDeliveryTaskResolver(async () => (known ? 'mtasknew-0001' : undefined))
+    // The clock moves by hand (only Date): the miss is kept 5 seconds.
+    const real = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(real)
     try {
       await recordDelivery({ step: 'queued', id: 'qm-new-1', sessionId: 's-new-task' })
       known = true
-      await new Promise((r) => setTimeout(r, 5_100))
+      now.mockReturnValue(real + 5_100)
       await recordDelivery({ step: 'written', id: 'qm-new-1', sessionId: 's-new-task' })
-    } finally { setDeliveryTaskResolver(null) }
+    } finally { now.mockRestore(); setDeliveryTaskResolver(null) }
     const lines = (await readDeliveryLines(1)).filter((l) => l.id === 'qm-new-1')
     expect(lines.map((l) => l.taskId)).toEqual([undefined, 'mtasknew-0001'])
-  }, 15_000)
+  })
 
   it('a Threads reply its task read there reads `read`, not queued for ever', () => {
     const by = Object.fromEntries(trailsOf([
