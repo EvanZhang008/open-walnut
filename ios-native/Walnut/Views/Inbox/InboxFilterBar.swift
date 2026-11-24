@@ -8,7 +8,7 @@ import SwiftUI
 /// pick, so a filter remembered from last launch is never hidden off the edge.
 ///
 /// Chips are the app's one chip (`WalnutChipStyle`): round, the picked one in the
-/// light blue with a hairline.
+/// the light accent with a hairline.
 struct InboxFilterBar: View {
     let selection: InboxFilter
     let count: (InboxFilter) -> Int?

@@ -463,7 +463,7 @@ struct PermissionRequestCard: View {
         }
     }
 
-    /// One of the family's buttons: the first Allow is the card's one main action (solid blue),
+    /// One of the family's buttons: the first Allow is the card's one main action (solid accent),
     /// any other Allow the grey secondary, Deny the destructive one (standard.md, iOS column).
     private func choiceButton(_ choice: PermissionChoice, main: Bool) -> some View {
         Button {
@@ -510,7 +510,7 @@ struct PermissionRequestCard: View {
             .multilineTextAlignment(.leading)
         }
         // A choice of the question: the family's option row (a long key: the field corner,
-        // hairline); armed once, a blue ring on the same corner says the next tap saves it.
+        // hairline); armed once, an accent ring on the same corner says the next tap saves it.
         .buttonStyle(.walnut(.option(recommended: false)))
         .overlay(
             WalnutButtonStyle.optionShape
@@ -794,7 +794,7 @@ struct AskUserQuestionCard: View {
             .multilineTextAlignment(.leading)
         }
         // The family's option row, as on the permission card and the thread card; a picked
-        // one wears the blue ring on the row's own corner.
+        // one wears the accent ring on the row's own corner.
         .buttonStyle(.walnut(.option(recommended: false)))
         .overlay {
             WalnutButtonStyle.optionShape

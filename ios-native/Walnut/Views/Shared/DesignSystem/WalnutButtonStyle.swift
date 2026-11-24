@@ -6,12 +6,12 @@ import SwiftUI
 /// corner around a button's words, and never uses the system's `.bordered` styles, whose shape the
 /// OS picks (a capsule on iOS 26).
 ///
-/// - `primary`: the one main action of a card or page: solid blue (`Theme.accent`), white words.
+/// - `primary`: the one main action of a card or page: solid accent (`Theme.accent`, Walnut's brown), `Theme.onTint` words.
 /// - `secondary`: any other action: quiet grey fill, primary words.
 /// - `tool`: Snooze, pin, a pager arrow, a "Group ▾" menu: no fill, quiet words, a fill when pressed.
 /// - `destructive`: Delete, Reject, Deny: the grey fill with red words (`Theme.dangerText`).
 /// - `option`: a choice of a question, a full-width row with a hairline; the recommended one is
-///   filled blue like `primary`.
+///   filled in the accent like `primary`.
 ///
 /// Shape (standard.md "Shapes"): a small key is round (a capsule); a long one, an option row or a
 /// full-width key, is a rounded rectangle at the field corner (`Theme.Radius.md`), as every long
@@ -23,7 +23,7 @@ import SwiftUI
 struct WalnutButtonStyle: ButtonStyle {
     enum Role: Equatable {
         case primary, secondary, tool, destructive
-        /// A question's choice; `recommended` fills it blue.
+        /// A question's choice; `recommended` fills it with the accent.
         case option(recommended: Bool)
     }
 
@@ -72,7 +72,7 @@ struct WalnutButtonStyle: ButtonStyle {
                     Self.optionShape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
                 }
             }
-            // A disabled main action turns grey with light grey words (a faded blue under faded
+            // A disabled main action turns grey with light grey words (a faded accent under faded
             // white read as a pale main action); a disabled quiet control fades.
             .opacity(enabled || isSolid ? (configuration.isPressed && isSolid ? 0.8 : 1) : 0.5)
             .contentShape(Rectangle().inset(by: -reach))
@@ -159,15 +159,15 @@ struct WalnutOptionLabel: View {
         }
     }
 
-    /// Second words: the readable grey on a plain row, white on the blue one (a dimmed white
+    /// Second words: the readable grey on a plain row, `onTint` on the filled one (a dimmed white
     /// read under 4.5:1 there).
     private var quiet: Color { recommended ? Theme.onTint : Theme.secondaryOnCard }
 }
 
 /// A chip: a filter, a view switch, a toggle among several (Inbox filters, the board's views, a
 /// folder to pick). Round (a capsule), 32 pt drawn and a 44 pt touch; selected
-/// is a light blue fill (`Theme.chipSelected`, a step stronger than `tintSoft` so it reads on a white
-/// rail) with a blue hairline and primary words, never a solid block.
+/// is a light accent fill (`Theme.chipSelected`, a step stronger than `tintSoft` so it reads on a white
+/// rail) with an accent hairline and primary words, never a solid block.
 struct WalnutChipStyle: ButtonStyle {
     var selected = false
 

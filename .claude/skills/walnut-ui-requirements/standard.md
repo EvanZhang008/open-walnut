@@ -587,13 +587,13 @@ or button shape.
 
 | Kind | Web | iOS |
 |---|---|---|
-| Accent | `--accent` blue | `Theme.tint` (#006BE0 / #0A84FF) for links, selection and quiet actions; `Theme.accent` (#006BE0 / #0A6CE0) for a solid fill behind white words (4.5:1 in both appearances). The walnut brown `Theme.brand` is the brand only (icon, logo), never a control |
-| Main action | `.btn-primary` | `.buttonStyle(.walnut(.primary))`: round, solid `Theme.accent`, white words, at most one per card or page |
+| Accent | `--accent` blue | Walnut's brown, not the web's blue (2026-11-24, the user: the earlier yellow-based look is nicer, "because it's Walnut"): `Theme.tint` (#8B5A2B / the golden #C99659) for links, selection and quiet actions; `Theme.accent` (the same colour) for a solid fill, with `Theme.onTint` words on it (white in light, #1C1207 in dark, where white on the golden reads only 2.2:1) |
+| Main action | `.btn-primary` | `.buttonStyle(.walnut(.primary))`: round, solid `Theme.accent`, `Theme.onTint` words, at most one per card or page |
 | Action | `.btn` | `.walnut(.secondary)`: `tertiarySystemFill`, primary words |
 | Tool | `.ask-card-tools .btn` | `.walnut(.tool)`: no fill, `Theme.secondaryOnCard`; a menu's label is `WalnutMenuLabel` ("Snooze ▾") |
 | Destructive | `.btn-danger` | `.walnut(.destructive)`: the grey fill, `Theme.dangerText` words |
-| Option | `AskOptions` row | `.walnut(.option(recommended:))` with `WalnutOptionLabel`: full width, hairline, a 12 pt corner (a long key: `WalnutButtonStyle.optionShape`, never a capsule), the recommended one solid blue with "Recommended" at its right |
-| Chip, filter | none | `.walnutChip(selected:)`: round, 32 pt drawn, 44 pt touch; selected is `Theme.chipSelected` (a step stronger than `tintSoft`) with a blue hairline and primary words. A chip row that can be wider than the screen scrolls sideways, and a filter that is on says so in the list |
+| Option | `AskOptions` row | `.walnut(.option(recommended:))` with `WalnutOptionLabel`: full width, hairline, a 12 pt corner (a long key: `WalnutButtonStyle.optionShape`, never a capsule), the recommended one solid `Theme.accent` with "Recommended" at its right |
+| Chip, filter | none | `.walnutChip(selected:)`: round, 32 pt drawn, 44 pt touch; selected is `Theme.chipSelected` (a step stronger than `tintSoft`) with an accent hairline and primary words. A chip row that can be wider than the screen scrolls sideways, and a filter that is on says so in the list |
 | Badge | `.badge` | `WalnutBadge` (round, `Theme.TextSize.xs` semibold, one tone); a state is `WalnutStatusLabel` (dot and word) |
 | Card | `AskCardFrame`, `NoticeCard` | `.walnutCard()` (grouped fill, `Theme.Radius.card` 16, hairline); `frosted: true` for a card that asks; a notice is the shared notice card (`Theme.Radius.notice` 14, as on the web and the Mac) |
 | Reply box | `AnswerBox`, `wn-input` | the one message box (`MessageBox` / `ReplyBox`): its own box corner, round keys |

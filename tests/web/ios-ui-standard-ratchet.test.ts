@@ -117,13 +117,26 @@ describe('iOS UI standard: one look per kind of control', () => {
     for (const t of ['case primary, secondary, tool, destructive', 'case option(recommended: Bool)', 'struct WalnutChipStyle']) expect(buttons).toContain(t)
   })
 
-  it('the main action is blue, and the brown is the brand only', () => {
+  it("the accent is Walnut's brown, a fill's words are onTint", () => {
+    // 2026-11-24, the user: the earlier yellow-based look is nicer, "because it's Walnut".
     const theme = fs.readFileSync(path.join(IOS_ROOT, 'Walnut/Core/Theme.swift'), 'utf8')
-    expect(theme).toMatch(/static let tintColor = UIColor\(light: 0x006BE0, dark: 0x0A84FF\)/)
-    expect(theme).toMatch(/static let accentColor = UIColor\(light: 0x006BE0, dark: 0x0A6CE0\)/)
-    expect(theme).toMatch(/static let brandColor = UIColor\(light: 0x8B5A2B, dark: 0xC99659\)/)
+    expect(theme).toMatch(/static let tintColor = UIColor\(light: 0x8B5A2B, dark: 0xC99659\)/)
+    expect(theme).toMatch(/static let accentColor = tintColor/)
+    expect(theme).toMatch(/static let onTintColor = UIColor\(light: 0xFFFFFF, dark: 0x1C1207\)/)
     const accent = JSON.parse(fs.readFileSync(path.join(IOS_ROOT, 'Walnut/Support/Assets.xcassets/AccentColor.colorset/Contents.json'), 'utf8'))
-    expect(accent.colors[0].color.components).toMatchObject({ red: '0x00', green: '0x6B', blue: '0xE0' })
+    expect(accent.colors[0].color.components).toMatchObject({ red: '0x8B', green: '0x5A', blue: '0x2B' })
+    // White on the golden dark fill reads 2.2:1: no view draws white words or glyphs on an accent fill.
+    const files = (fs.readdirSync(path.join(IOS_ROOT, 'Walnut'), { recursive: true }) as string[]).filter((f) => f.endsWith('.swift'))
+    const offenders: string[] = []
+    for (const f of files) {
+      const lines = fs.readFileSync(path.join(IOS_ROOT, 'Walnut', f), 'utf8').split('\n')
+      lines.forEach((line, i) => {
+        if (!/(?:background|fill)\([^)]*Theme\.accent\b/.test(line)) return
+        const near = lines.slice(Math.max(0, i - 4), i + 2)
+        if (near.some((l) => /foregroundStyle\(/.test(l) && /(?:Color\.white|\.white)\b/.test(l) && !/Theme\.onTint/.test(l))) offenders.push(`${f}:${i + 1}`)
+      })
+    }
+    expect(offenders).toEqual([])
   })
 
   it('the standard it enforces names this test', () => {

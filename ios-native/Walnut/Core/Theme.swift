@@ -1,35 +1,35 @@
 import SwiftUI
 import UIKit
 
-/// Walnut design system: the web's blue accent over standard iOS system layering, and the
+/// Walnut design system: Walnut's warm brown accent over standard iOS system layering, and the
 /// tokens and shared controls in `ThemeTokens.swift` and `Views/Shared/DesignSystem/`
 /// (.claude/skills/walnut-ui-requirements/standard.md, its iOS column). Colors adapt to
 /// light/dark automatically via dynamic providers.
 enum Theme {
-    /// The accent: links, selected things, icons that act, the text of a quiet action. The web's
-    /// blue (`--accent`, #007AFF / #0A84FF), one step deeper in light so its words read at 4.5:1
-    /// on white. A solid fill behind white words is `accent`, never this (in dark this reads on a
-    /// dark page, and white on it reaches only 3.7:1).
+    /// The accent: Walnut's brown (light #8B5A2B, dark the golden #C99659). Links, selected
+    /// things, icons that act, the text of a quiet action. The phone keeps it rather than the
+    /// web's blue (2026-11-24, the user: the earlier yellow-based look is nicer, "because it's
+    /// Walnut").
     static let tint = Color(dynamic: tintColor)
-    /// Words and glyphs drawn on a solid `accent` (or `tint`) fill.
-    static let onTint = Color(dynamic: UIColor(light: 0xFFFFFF, dark: 0xFFFFFF))
+    /// Words and glyphs drawn on a solid `accent` (or `tint`) fill: white on the brown, a dark
+    /// brown on the golden dark-mode fill (white on #C99659 reads only 2.2:1).
+    static let onTint = Color(dynamic: onTintColor)
+    static let onTintColor = UIColor(light: 0xFFFFFF, dark: 0x1C1207)
     /// Soft tinted fill for selected chips, tags and hero icons. Light enough that the tint's own
     /// words on it read at 4.5:1 (`ReadableTextContrastTests`).
     static let tintSoft = Color(dynamic: tintSoftColor)
     /// The two above as UIKit colours, so a test can resolve a scheme and measure
     /// the contrast of text drawn in one over the other.
-    static let tintColor = UIColor(light: 0x006BE0, dark: 0x0A84FF)
-    static let tintSoftColor = UIColor(light: 0xEEF4FE, dark: 0x0E1F38)
+    static let tintColor = UIColor(light: 0x8B5A2B, dark: 0xC99659)
+    static let tintSoftColor = UIColor(light: 0xF4ECE3, dark: 0x2E2418)
     /// A selected chip's fill (`WalnutChipStyle`): a step stronger than `tintSoft`, which on a
-    /// white rail read as an empty chip with a blue line. Primary words only on it.
+    /// white rail read as an empty chip with a tinted line. Primary words only on it.
     static let chipSelected = Color(dynamic: chipSelectedColor)
-    static let chipSelectedColor = UIColor(light: 0xD9E7FC, dark: 0x173A66)
+    static let chipSelectedColor = UIColor(light: 0xEADCCB, dark: 0x4A3920)
     /// The solid fill of the one main action (`WalnutButtonStyle.primary`, a recommended option, a
-    /// filled send key): the web's blue a shade deeper, so its white words read at 4.5:1 or more in
-    /// light and dark (2026-11-21, the user: "Ack button should be blue, or recommended option
-    /// should be blue also").
+    /// filled send key): the accent itself, with `onTint` words.
     static let accent = Color(dynamic: accentColor)
-    static let accentColor = UIColor(light: 0x006BE0, dark: 0x0A6CE0)
+    static let accentColor = tintColor
     /// The grey of a quiet control (a secondary button, an unselected chip, a disabled main
     /// action): OPAQUE, so a control drawn twice (a pinned bar and its inline copy) is the same
     /// pixels over any page, and a full step away from a white or grouped card in both
@@ -39,10 +39,6 @@ enum Theme {
     static let controlFillColor = UIColor(light: 0xE5E5EA, dark: 0x343436)
     static let controlFillPressed = Color(dynamic: controlFillPressedColor)
     static let controlFillPressedColor = UIColor(light: 0xD1D1D6, dark: 0x48484A)
-    /// Walnut's own brown, for the brand only (the icon, the logo, the About page): never a button,
-    /// a link or a selection.
-    static let brand = Color(dynamic: brandColor)
-    static let brandColor = UIColor(light: 0x8B5A2B, dark: 0xC99659)
 
     static let success = Color(dynamic: UIColor(light: 0x34C759, dark: 0x30D158))
     static let warning = Color(dynamic: UIColor(light: 0xFF9F0A, dark: 0xFFD60A))

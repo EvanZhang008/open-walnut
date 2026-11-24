@@ -117,10 +117,10 @@ final class FileSourceLinesViewTests: XCTestCase {
     /// Count pixels that are meaningfully NOT grey.
     ///
     /// Everything else this view draws is neutral (label text, a tertiary
-    /// gutter, a white background), so a tinted ("warm") pixel can only be
-    /// `Theme.tint.opacity(0.22)`. Light-mode tint is 0x006BE0, which over white
-    /// lands at roughly (199, 223, 250): a b−r of about 50.
-    private func warmPixelCount(_ image: CGImage, minBlueOverRed: Int = 8) -> Int {
+    /// gutter, a white background), so a warm pixel can only be
+    /// `Theme.tint.opacity(0.22)`. Light-mode tint is 0x8B5A2B, which over white
+    /// lands at roughly (230, 219, 208) — an r−b of about 21.
+    private func warmPixelCount(_ image: CGImage, minRedOverBlue: Int = 8) -> Int {
         let width = image.width, height = image.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         let context = CGContext(
@@ -132,7 +132,7 @@ final class FileSourceLinesViewTests: XCTestCase {
         var warm = 0
         for i in stride(from: 0, to: pixels.count, by: 4) {
             let r = Int(pixels[i]), b = Int(pixels[i + 2])
-            if b - r >= minBlueOverRed { warm += 1 }
+            if r - b >= minRedOverBlue { warm += 1 }
         }
         return warm
     }

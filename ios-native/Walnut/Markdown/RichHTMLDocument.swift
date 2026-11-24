@@ -26,9 +26,11 @@ struct RichHTMLPalette: Equatable {
         fg: "#1D1D1F", fgSecondary: "#424245", fgMuted: "#86868B",
         bg: "#FFFFFF", bgSecondary: "#F5F5F7", cardBg: "#FFFFFF",
         border: "rgba(60,60,67,0.12)", borderStrong: "rgba(60,60,67,0.18)",
-        // The app's accent (Theme.tintColor), the web's blue, so an accented border or
-        // heading inside a card matches the chrome around it.
-        accent: "#006BE0",
+        // DELIBERATE DIVERGENCE from the web, which uses iOS blue here: on the
+        // phone the accent is the app's walnut tint (Theme.tint), so an accented
+        // border or heading inside a card matches the chrome around it rather than
+        // introducing a second brand colour mid-conversation.
+        accent: "#8B5A2B",
         success: "#34C759", warning: "#FF9F0A", error: "#FF3B30"
     )
 
@@ -40,7 +42,7 @@ struct RichHTMLPalette: Equatable {
         fg: "#F5F5F7", fgSecondary: "#D1D1D6", fgMuted: "#8E8E93",
         bg: "#000000", bgSecondary: "#1C1C1E", cardBg: "#1C1C1E",
         border: "rgba(84,84,88,0.42)", borderStrong: "rgba(84,84,88,0.6)",
-        accent: "#0A84FF",
+        accent: "#C99659",
         success: "#30D158", warning: "#FFD60A", error: "#FF453A"
     )
 

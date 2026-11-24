@@ -125,7 +125,7 @@ struct LetterHTMLBody: View {
           -webkit-text-size-adjust: 100%;
         }
         table, pre, audio { max-width: none; }
-        a { color: #006BE0; }
+        a { color: #8B5A2B; }
         h1, h2, h3, h4 { line-height: 1.25; margin: 1em 0 0.4em; }
         h1 { font-size: 1.35em; } h2 { font-size: 1.2em; } h3 { font-size: 1.08em; }
         p, ul, ol, blockquote, table { margin: 0.55em 0; }
@@ -140,7 +140,7 @@ struct LetterHTMLBody: View {
         hr { border: none; border-top: 1px solid rgba(120,120,128,0.35); margin: 1em 0; }
         @media (prefers-color-scheme: dark) {
           body { color: #f2f2f7; }
-          a { color: #0A84FF; }
+          a { color: #C99659; }
           blockquote { color: #c7c7cc; }
         }
         </style>

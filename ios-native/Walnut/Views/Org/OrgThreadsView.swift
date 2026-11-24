@@ -950,7 +950,7 @@ struct OrgThreadCard: View {
     @ViewBuilder
     private var optionButtons: some View {
         if waitsOnHim, canFollowUp, !choices.isEmpty {
-            // Each a row of its own, full width; the recommended one blue (the family's option).
+            // Each a row of its own, full width; the recommended one filled in the accent (the family's option).
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 ForEach(choices) { o in
                     Button { pickedKey = choicesKey; onPick(o.label) } label: {
@@ -964,7 +964,7 @@ struct OrgThreadCard: View {
         }
     }
 
-    /// Its keys: Reopen on a closed card (grey), else Acknowledge, the card's one blue key, on a
+    /// Its keys: Reopen on a closed card (grey), else Acknowledge, the card's one accent key, on a
     /// card that asks no choice. From XXXL up a key takes the whole line, so no label is squeezed
     /// into its letters.
     @ViewBuilder

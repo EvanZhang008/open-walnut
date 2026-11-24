@@ -1007,7 +1007,7 @@ struct BoardBandBar: View {
             .frame(maxWidth: max(0, maxWidth - 2 * Self.rail.chipPaddingH), alignment: .leading)
         }
         // The family chip (`WalnutChipStyle`): one look for every filter and view switch,
-        // the lit one in the soft blue with its hairline. Its fills are fixed colours over
+        // the lit one in the soft accent with its hairline. Its fills are fixed colours over
         // the card's opaque base, never a material, so both copies of the bar draw the same
         // pixels at the pin flip.
         .buttonStyle(.walnutChip(selected: isSelected))

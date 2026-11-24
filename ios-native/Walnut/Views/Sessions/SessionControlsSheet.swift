@@ -185,7 +185,7 @@ struct SessionControlsSheet: View {
                             Text(level.capitalized)
                                 .frame(maxWidth: .infinity)
                         }
-                        // A choice among a few: the family's chip, selected in its soft blue.
+                        // A choice among a few: the family's chip, selected in its soft accent.
                         .buttonStyle(.walnutChip(selected: selected))
                         .disabled(applying)
                         .accessibilityIdentifier("session.effort.\(level)")

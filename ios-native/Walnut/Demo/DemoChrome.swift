@@ -64,7 +64,7 @@ struct DemoEntryButton: View {
 struct DemoBanner: View {
     /// The band reserved for it under the status bar.
     static let bandHeight: CGFloat = 24
-    /// The family's badge in its accent tone: blue words on the soft blue wash, which clear
+    /// The family's badge in its accent tone: accent words on the soft accent wash, which clear
     /// the 4.5:1 text bar in both schemes (`DemoPolishTests`). "Sample data" used to be
     /// `.secondary`, which measured 2.0 light and 2.5 dark on its fill.
     static let tone: WalnutBadge.Tone = .accent

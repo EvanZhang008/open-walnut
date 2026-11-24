@@ -55,12 +55,12 @@ final class DemoPolishTests: XCTestCase {
     }
 
     func testTheSampleDataLabelClearsTheTextBarInBothSchemes() throws {
-        // The label is the family's badge in its accent tone (WalnutBadge): workingText on the
+        // The label is the family's badge in its accent tone (WalnutBadge): the tint on the
         // tint at 12% over the page, on a plain page and a grouped one.
         XCTAssertEqual(DemoBanner.tone, .accent)
         for dark in [false, true] {
             for page in [UIColor.systemBackground, .systemGroupedBackground] {
-                let ink = luminance(Theme.workingTextColor, dark: dark)
+                let ink = luminance(Theme.tintColor, dark: dark)
                 let fill = luminance(wash(Theme.tintColor, 0.12, over: page, dark: dark), dark: dark)
                 let ratio = (max(ink, fill) + 0.05) / (min(ink, fill) + 0.05)
                 XCTAssertGreaterThanOrEqual(ratio, 4.5, "dark=\(dark): the label measured \(ratio)")

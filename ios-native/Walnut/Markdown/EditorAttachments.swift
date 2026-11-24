@@ -39,7 +39,7 @@ final class CheckboxAttachment: NSTextAttachment {
         let name = checked ? "checkmark.circle.fill" : "circle"
         // Fixed mid-tone colors legible in both light and dark mode: attachment images
         // are baked, so dynamic colors don't re-resolve on trait change. Checked is the
-        // tint's mid blue (its dark-mode value), unchecked the system grey (one value in both).
+        // tint's dark-mode value (the lighter one), unchecked the system grey (one value in both).
         let tint = checked
             ? Theme.tintColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
             : UIColor.systemGray

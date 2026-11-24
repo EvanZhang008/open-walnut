@@ -633,7 +633,7 @@ struct TaskBoardList: View {
     /// carries no meaning is worse than no colour.
     static func bandColor(_ bandId: String) -> Color {
         switch bandId {
-        // The desktop's focus blue is the web accent, which `Theme.tint` is; its satellite
+        // Focus takes the app's accent (`Theme.tint`, as the desktop takes its own); its satellite
         // colour (#5856D6) is the system indigo, which also adapts to dark mode.
         case "focus": return Theme.tint
         case "satellite": return Color(.systemIndigo) // ui-standard-ok: the desktop's satellite colour (#5856D6) is the system indigo

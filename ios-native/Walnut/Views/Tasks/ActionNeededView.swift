@@ -211,7 +211,7 @@ private struct SnoozeAnswer: Decodable { let task_id: String? }
 /// ask-card.css): the family's frosted card (`.walnutCard(frosted: true)`), a 7pt orange dot for
 /// "needs you". Its answer (2026-11-21, of ten whole-card designs: "2 is good"), drawn with the
 /// phone's one button family (`WalnutButtonStyle`): the options as a list of rows, the one main
-/// action blue, the box under them, "Snooze ▾" as a quiet tool at the right of the last line. One ask at a time ("max shoudl 1 decision, and can left and
+/// action in the accent, the box under them, "Snooze ▾" as a quiet tool at the right of the last line. One ask at a time ("max shoudl 1 decision, and can left and
 /// right"): each ask is its own page with its own words, options and box, "‹ 1/3 ›" beside Snooze
 /// pages through them, and an answered page stays, marked with what was said.
 struct ActionNeededView: View {
@@ -423,7 +423,7 @@ struct ActionNeededView: View {
     }
 
     /// Its answer: the options as rows, or one key. An approval's Review (where Approve is) is the
-    /// card's one blue key; Open stays grey.
+    /// card's one accent key; Open stays grey.
     @ViewBuilder
     private func answer(_ item: WalnutActionItem) -> some View {
         switch ActionNeededModel.answer(item) {
@@ -442,7 +442,7 @@ struct ActionNeededView: View {
         }
     }
 
-    /// Each option a row of its own, full width; the recommended one blue.
+    /// Each option a row of its own, full width; the recommended one filled in the accent.
     private func optionRows(_ options: [WalnutAskOption], pick: @escaping @MainActor (WalnutAskOption) async -> Void) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             ForEach(options) { o in

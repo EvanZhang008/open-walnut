@@ -30,7 +30,7 @@ struct WalnutBadge: View {
     private var ink: Color {
         switch tone {
         case .neutral: Theme.secondaryOnCard
-        case .accent: Theme.workingText
+        case .accent: Theme.tint
         case .danger: Theme.dangerText
         case .warning: Theme.needsText
         case .success: Theme.doneText

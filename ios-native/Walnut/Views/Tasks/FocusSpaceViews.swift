@@ -83,7 +83,7 @@ private struct FocusSpaceGlyph: View {
     var body: some View {
         Image(systemName: "scope")
             .font(.body.weight(on ? .semibold : .regular))
-            .foregroundStyle(on ? Color.white : Theme.tint)
+            .foregroundStyle(on ? Theme.onTint : Theme.tint)
             .frame(width: 28, height: 28)
             .background(Circle().fill(on ? Theme.accent : Color.clear))
     }
