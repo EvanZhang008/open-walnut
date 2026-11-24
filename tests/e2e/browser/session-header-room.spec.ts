@@ -7,16 +7,21 @@
  * Cause: the chips and the window buttons shared one strict priority queue, so
  * the first item that did not fit (a hidden Terminal, or a 90px Heavy pill)
  * kept every 24px button behind it out of the row. Now the chips keep their
- * order and the window buttons fill what is left; Watch, Locate, Lock, Expand and
- * Close always stay (Watch and Locate since 2026-11-19). The panel is drawn at its width from the first frame (the clamp is
+ * order and the window buttons fill what is left; Lock, Expand and Close always
+ * stay, and Watch and Locate (on the row since 2026-11-19) stay unless the row cannot
+ * hold them and the "..." key: then Locate, then Watch, go into the menu so "..." stays
+ * on the row (2026-11-24, 485fdc21e4). The panel is drawn at its width from the first frame (the clamp is
  * installed before the app loads), as a window opened narrow or a Mac app
  * launched zoomed draws it.
  *
  * Rules, at every width from 200px to 520px:
- *  - Watch, Locate, Lock, Expand and Close are on the row, as one line, inside the panel;
+ *  - Lock, Expand and Close are on the row and end it, as one line, inside the panel;
+ *  - Watch or Locate leaves the row only into the "..." menu, which is then on the row
+ *    and lists it, and Watch only after Locate;
  *  - the room left before the window buttons is smaller than every window
- *    button that was sent to the "..." menu, and than the first hidden chip;
- *  - the "..." menu never lists Watch, Locate, Lock, Expand or Close.
+ *    button that was sent to the "..." menu (Watch and Locate included), and than
+ *    the first hidden chip;
+ *  - the "..." menu never lists Lock, Expand or Close.
  * Runs in Chromium and, with PW_WEBKIT=1 --project webkit, in WebKit (the Mac app).
  */
 import fs from 'node:fs/promises'
@@ -32,8 +37,11 @@ const CHIP_ORDER = ['plan', 'fork', 'changed', 'files', 'terminal', 'board']
 // Minimize is the one movable window button since Open in new tab left the header (2026-11-19).
 const WINDOW_BUTTONS = ['minimize']
 const ALWAYS_ON_THE_ROW = ['lock', 'expand', 'close']
-/** Every window button that never folds: Watch and Locate lead the row (2026-11-19), Lock, Expand and Close end it. */
-const FIXED_ON_THE_ROW = ['watch', 'locate', ...ALWAYS_ON_THE_ROW]
+/** The fixed buttons that lead the row (2026-11-19) and yield to "..." only where the row cannot hold
+ *  them and it, first to leave first (lastResort in useSessionHeaderFit.ts, 2026-11-24). */
+const YIELDING = ['locate', 'watch']
+/** Every fixed window button: Watch and Locate lead the row, Lock, Expand and Close end it. */
+const FIXED_ON_THE_ROW = [...YIELDING, ...ALWAYS_ON_THE_ROW]
 
 /** A fresh page per call: the panel is drawn at `width` from its first frame. */
 async function openAtWidth(context: BrowserContext, width: number | null): Promise<{ page: Page; panel: Locator }> {
@@ -145,7 +153,13 @@ test('a panel drawn at any width keeps Lock on the row and never leaves room for
     const label = `${width}px`
     expect(row.lines, `${label}: the tool row wrapped`).toBeLessThanOrEqual(1)
     expect(row.overflowBy, `${label}: the tool row runs past the panel`).toBeLessThanOrEqual(0)
-    for (const id of FIXED_ON_THE_ROW) if (!row.visible.includes(id)) violations.push(`${label}: ${id} is not on the row (visible: ${row.visible.join(',')})`)
+    for (const id of ALWAYS_ON_THE_ROW) if (!row.visible.includes(id)) violations.push(`${label}: ${id} is not on the row (visible: ${row.visible.join(',')})`)
+    // Watch and Locate leave only into the menu, whose "..." key is then on the row, and in order.
+    const yielded = YIELDING.filter((id) => !row.visible.includes(id))
+    for (const id of yielded) {
+      if (!row.hidden.includes(id) || !row.moreVisible) violations.push(`${label}: ${id} left the row but is not in an on-row "..." menu (visible: ${row.visible.join(',')})`)
+    }
+    if (yielded.join() !== YIELDING.slice(0, yielded.length).join()) violations.push(`${label}: ${yielded.join(',')} left the row, not in the order ${YIELDING.join(',')}`)
     // The three that matter most end the row, in this order, whatever else comes and goes before them.
     if (row.visible.slice(-3).join() !== ALWAYS_ON_THE_ROW.join()) violations.push(`${label}: the row ends ${row.visible.slice(-3).join(',')}, not ${ALWAYS_ON_THE_ROW.join(',')}`)
     table.push(`${label}: visible [${row.visible.join(',')}] menu [${row.hidden.join(',')}] free ${Math.round(row.freeBeforeWindowButtons)}px`)
@@ -153,10 +167,10 @@ test('a panel drawn at any width keeps Lock on the row and never leaves room for
     // (chips keep their order) and than any hidden window button (they fill what the chips leave).
     // One px of fit slack plus one of sub-pixel rounding stay unspent on purpose.
     const nextChip = CHIP_ORDER.find((id) => row.hidden.includes(id))
-    const candidates = [...(nextChip ? [nextChip] : []), ...WINDOW_BUTTONS.filter((id) => row.hidden.includes(id))]
+    const candidates = [...(nextChip ? [nextChip] : []), ...[...WINDOW_BUTTONS, ...YIELDING].filter((id) => row.hidden.includes(id))]
     for (const id of candidates) {
       if (!natural[id]) continue
-      const gap = WINDOW_BUTTONS.includes(id) ? 3 : 6
+      const gap = CHIP_ORDER.includes(id) ? 6 : 3
       if (row.freeBeforeWindowButtons >= natural[id] + gap + 2) {
         violations.push(`${label}: ${Math.round(row.freeBeforeWindowButtons)}px free, yet ${id} (${Math.round(natural[id])}px) is in the menu`)
       }
@@ -174,7 +188,11 @@ test('Lock stays on a 200px row, works from there, and the "..." menu never list
   test.setTimeout(120_000)
   const { page, panel } = await openAtWidth(context, 200)
   const row = await settled(panel, page)
-  expect(row.visible).toEqual(expect.arrayContaining(FIXED_ON_THE_ROW))
+  expect(row.visible).toEqual(expect.arrayContaining(ALWAYS_ON_THE_ROW))
+  // Watch and Locate are each on the row or in its menu (Locate yields first, 2026-11-24).
+  const yielded = YIELDING.filter((id) => !row.visible.includes(id))
+  expect(yielded, 'Locate leaves the row before Watch').toEqual(YIELDING.slice(0, yielded.length))
+  expect(row.hidden).toEqual(expect.arrayContaining(yielded))
   expect(row.visible.slice(-3), 'Lock, Expand and Close end the row, in that order').toEqual(ALWAYS_ON_THE_ROW)
   expect(row.overflowBy).toBeLessThanOrEqual(0)
   expect(row.lines).toBeLessThanOrEqual(1)
@@ -191,6 +209,8 @@ test('Lock stays on a 200px row, works from there, and the "..." menu never list
   await panel.getByTestId('session-header-more-btn').click()
   const more = page.getByTestId('session-header-more-menu')
   await expect(more).toBeVisible()
-  for (const id of FIXED_ON_THE_ROW) await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveCount(0)
+  for (const id of ALWAYS_ON_THE_ROW) await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveCount(0)
+  // What left the row is in the menu, and only that: a fixed button on the row is not listed twice.
+  for (const id of YIELDING) await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveCount(yielded.includes(id) ? 1 : 0)
   await page.keyboard.press('Escape')
 })

@@ -119,7 +119,10 @@ async function openHome(page: Page): Promise<void> {
 
 async function openQuickStart(page: Page): Promise<void> {
   await openHome(page)
-  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  // Claude Code on purpose: every case here drives the mock Claude CLI (its permission card says
+  // Allow), and the shared folder otherwise starts on its last launch's engine (engine-matrix.spec.ts
+  // leaves DeepSeek Harness, whose card says Allow once).
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
 }
 
 /** Send a prompt through the draft's composer and return the created task id. */

@@ -91,8 +91,11 @@
     display: inline;
     font-size: var(--font-size-sm);
   }
-  .app-shell-navigation .todo-section-tabs-menu {
+  /* The options key is the family's .btn-icon.btn-sm (24 px, same specificity, loaded later):
+     the bar's class keeps the phone's 44 px ahead of it. */
+  .app-shell-navigation .todo-section-tabs .todo-section-tabs-menu {
     width: 44px;
+    min-width: 44px;
     height: 44px;
     margin-left: 0;
   }

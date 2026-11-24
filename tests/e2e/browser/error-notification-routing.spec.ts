@@ -40,7 +40,9 @@ async function startFailingQuickSession(page: Page): Promise<void> {
   await page.goto('/')
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
-  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  // Claude Code on purpose: the mock CLI's failure is the error under test, and the shared folder
+  // otherwise starts on whatever launched there last (engine-matrix.spec.ts leaves DeepSeek Harness).
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
 
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
