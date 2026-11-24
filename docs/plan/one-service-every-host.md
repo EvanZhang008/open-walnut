@@ -433,11 +433,19 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   and confirms each exited; flips its link (net: dials the set's endpoint); resumes them in its own
   service on their next message. Once a net move is confirmed it takes only itself off the machine's
   walnut-net list.
+  Before the flip it drops its triggers and jobs on the shared daemon, drains its offline journal there
+  (no flip while a record is left) and carries each trigger's memory to the set (`triggers.state.seed`),
+  so a long quiet watch does not report its old items again. A session started during the hold waits
+  for it and starts on the set.
   Each moved session reads its context once. A move that cannot finish (the wait runs out, the new
   service does not answer) is put back and reported; a running turn is never stopped. Sessions started
   after the flip go only to the new service. The shared daemon, its launcher and boot item are left as
   they are, for the other Walnut, which updates them by itself once the shared window passes.
-- **Leaving a machine** removes only that Walnut's set, boot item and network members.
+- **Leaving a machine** (Settings > Remove of a net machine, or removing an ssh host from config.yaml)
+  stops that Walnut's sessions and follower on its set, then removes only its set, boot item, network
+  members and relay registration. A host removed, turned off, or found and not yet allowed is never
+  dialled in the background (`src/core/hosts/link.ts` dialRefusal), so a removed host cannot keep the
+  shared window open by reconnecting to the other Walnut's daemon.
 - This separates running, not permissions: the same OS account reads both. Separate permissions need two
   accounts.
 
