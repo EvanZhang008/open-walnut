@@ -39,7 +39,11 @@ export const HOST_CALL_ALLOWLIST = {
     'reinitialize', 'recoverCancelledForSession', 'markExpectedTeardown', 'undoExpectedTeardown',
     'settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd', 'getOrAttachLiveSession', 'findOrAttachAcpSession',
   ],
-  lifecycle: ['terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart', 'sendFolderWaiting'],
+  lifecycle: [
+    'terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart', 'sendFolderWaiting',
+    // The rows the host keeps parked in its own queue: listed, retried and discarded from the leader's panel (host-queue-rows.ts).
+    'readParkedRows', 'sendQueuedRowNow', 'discardQueuedRow',
+  ],
   history: [
     'readSessionHistory', 'readSessionHistoryTail', 'readSessionHistoryTailWindow', 'readSessionHistoryRange',
     'readSessionRowToolResult', 'extractPlanContent', 'readSingleSubagentHistory', 'reconstructWorkflowProgress',

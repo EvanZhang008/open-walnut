@@ -66,6 +66,13 @@ export async function sendQueuedNow(input: {
   interrupt?: boolean;
 }): Promise<SendNowResult> {
   const row = await findQueuedMessage(input.messageId);
+  if (!row && input.sessionId) {
+    // Not here: a row the host that runs the session keeps (parked there) is sent there, its own
+    // row, never a copy here (host-queue-rows.ts). Null: no host has the session, so it is gone.
+    const { sendNowOnHost } = await import('./host-queue-rows.js');
+    const onHost = await sendNowOnHost(input.sessionId, input.messageId, input.source, input.unpark === true);
+    if (onHost) return onHost;
+  }
   if (!row || (input.sessionId && row.sessionId !== input.sessionId)) return { sent: false, why: 'gone' };
   // A row held for a cold session's next wake goes now, every held row of its session with it, in
   // one line, for anyone's Send now (cold-hold.ts).

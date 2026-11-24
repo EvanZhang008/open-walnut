@@ -572,7 +572,7 @@ export async function withoutWalnutRows<T extends { id: string; message: string 
   return rows.filter((m) => !(isQuietRowId(m.id) && !isKeptQuietRowId(m.id)) && !walnutCommandNotice(m.message));
 }
 
-export async function getSessionQueuePayload(sessionId: string): Promise<{ messages: unknown[] }> {
+export async function getSessionQueuePayload(sessionId: string): Promise<{ messages: unknown[]; partial?: true }> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   if (!(await getSessionByClaudeId(sessionId))) throw new SessionControlError('session not found', 404);
   const { getQueue } = await import('../session-message-queue.js');
@@ -584,11 +584,17 @@ export async function getSessionQueuePayload(sessionId: string): Promise<{ messa
   const { queueRowView, liveLineWordsOf } = await import('./queue-row-view.js');
   // Rows not in the queue yet (a move, a host hand, the spool) still read as waiting here (session-queue-transit.ts).
   const { rowsOnTheWay } = await import('../session-queue-transit.js');
-  const rows = [...await withoutWalnutRows(await getQueue(sessionId)), ...await withoutWalnutRows(await rowsOnTheWay(sessionId))];
+  // After this server's own rows, the ones the host that runs the session keeps parked there
+  // (host-queue-rows.ts); `partial` when that host did not answer in time.
+  const { withHostParkedRows } = await import('./host-queue-rows.js');
+  const { rows, partial } = await withHostParkedRows(sessionId, [...await withoutWalnutRows(await getQueue(sessionId)), ...await withoutWalnutRows(await rowsOnTheWay(sessionId))]);
   const live = await liveLineWordsOf(sessionId);
   // A row held for a cold session's next wake reads as queued, with why and until when (cold-hold.ts).
   const { presentColdHolds } = await import('./cold-hold.js');
-  return { messages: presentColdHolds(rows.map(presentAfterTurn)).map((row) => queueRowView(row, sessionId, live)) };
+  return {
+    messages: presentColdHolds(rows.map(presentAfterTurn)).map((row) => ({ ...queueRowView(row, sessionId, live), ...('onHost' in row ? { onHost: true } : {}) })),
+    ...(partial ? { partial: true as const } : {}),
+  };
 }
 
 /** Edit a still-pending queued message's text. */
@@ -608,8 +614,9 @@ export async function editSessionQueuedMessage(
 
 /** Delete a still-pending queued message. */
 export async function deleteSessionQueuedMessage(sessionId: string, messageId: string): Promise<{ ok: true }> {
-  const { deleteMessage } = await import('../session-message-queue.js');
-  const ok = await deleteMessage(sessionId, messageId, { discarded: true });
+  // A row the host that runs the session keeps is discarded there (host-queue-rows.ts).
+  const { discardQueued } = await import('./host-queue-rows.js');
+  const ok = await discardQueued(sessionId, messageId);
   if (!ok) throw new SessionControlError('Message not deletable (already processing or not found)', 409);
   return { ok: true };
 }

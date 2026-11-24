@@ -13,7 +13,7 @@ import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types
 import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
-import { sendMessageToSession, editMessage, deleteMessage, getQueue, settledLineUuid } from '../../core/session-message-queue.js'
+import { sendMessageToSession, editMessage, getQueue, settledLineUuid } from '../../core/session-message-queue.js'
 import { dictationEventFields, dictationOf } from '../../core/stt/dictation-ids.js'
 import { heldRows, PROMPT_HOLD_REASON } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
@@ -520,7 +520,9 @@ export function registerSessionChatRpc(): void {
     }
 
     const sid = data.sessionId, mid = data.messageId
-    const res = await queuedChange(mid, { change: () => deleteMessage(sid, mid, { discarded: true }), readQueue: queueOf(sid), isHeld: (id) => heldRows(sid)?.has(id) ?? false })
+    // A row the host that runs the session keeps is discarded there (core/sessions/host-queue-rows.ts).
+    const { discardQueued } = await import('../../core/sessions/host-queue-rows.js')
+    const res = await queuedChange(mid, { change: () => discardQueued(sid, mid), readQueue: queueOf(sid), isHeld: (id) => heldRows(sid)?.has(id) ?? false })
     if (!res.ok) log.web[res.outcome === 'unavailable' ? 'warn' : 'info']('queued message not deleted', { sessionId: sid, messageId: mid, outcome: res.outcome, ...(res.error ? { error: res.error } : {}) })
     return res
   })
@@ -562,7 +564,10 @@ export function registerSessionChatRpc(): void {
     const sid = data.sessionId
     // Rows not in the queue yet (a move, a host hand, the spool) still read as waiting here (session-queue-transit.ts).
     const { rowsOnTheWay } = await import('../../core/session-queue-transit.js')
-    const rows = [...await withoutWalnutRows(await getQueue(sid)), ...await withoutWalnutRows(await rowsOnTheWay(sid))]
+    // After this server's own rows, the ones the host that runs the session keeps parked there
+    // (core/sessions/host-queue-rows.ts): a short deadline, and without them when it does not answer.
+    const { withHostParkedRows } = await import('../../core/sessions/host-queue-rows.js')
+    const { rows } = await withHostParkedRows(sid, [...await withoutWalnutRows(await getQueue(sid)), ...await withoutWalnutRows(await rowsOnTheWay(sid))])
     // Read after the rows: a row taken and answered in between is still listed and
     // reads waiting for this one read (queue-row-view.ts liveLineWordsOf).
     const live = await liveLineWordsOf(sid)

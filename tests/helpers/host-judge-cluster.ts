@@ -398,7 +398,16 @@ await serveProbe({
     const rec = h.log.append(sid, 'row', { born: true, patch: { claudeSessionId: sid, taskId: '', project: 'Acme', host: ${JSON.stringify(HOST_KEY)}, judge: 'host', process_status: 'running', mode: 'default', title: 'Forged', startedAt: now, lastActiveAt: now, messageCount: 0 } })
     return { seq: rec.seq }
   },
-  '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
+  '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, folderWait: m.folderWait === true, message: m.message })),
+  // A line this host parked because the session's folder was gone (its refusal's park, the verdict's
+  // words and code); unmarked=1: as an older Walnut parked it, with no mark (sessions/folder-wait.ts).
+  '/park-gone': async (q) => {
+    const smq = await import(${url('src/core/session-message-queue.ts')})
+    const row = await smq.enqueueMessage(q.get('sid'), q.get('text'), { sentBy: 'person' })
+    await smq.parkMessages([row], { reason: 'Working directory no longer exists: ' + q.get('cwd'), code: 'cwd_missing' })
+    if (q.get('unmarked') === '1') await (await import(${url('src/core/session-queue-store.ts')})).mutateStore((st) => { delete st.queues[q.get('sid')].find((m) => m.id === row.id).folderWait })
+    return { id: row.id }
+  },
   // A start or resume a leader asks waits here until on=0: over the daemon link (the routes' handle,
   // its body read first, then answered through call) and over a host-dialed link (call).
   '/hold-start': (q) => {

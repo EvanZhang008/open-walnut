@@ -21,3 +21,27 @@ export async function cancelPendingStart(sid: string, runtimeId?: string): Promi
   const { cancelPendingStartOf } = await import('./cancel-pending-start.js')
   return cancelPendingStartOf({ sid: typeof runtimeId === 'string' && runtimeId ? runtimeId : sid, sessionId: sid, host: null })
 }
+
+/**
+ * The rows this host keeps parked for `sid` in its own queue, which its leader's panel lists beside
+ * its own (host-queue-rows.ts): a row parked on the host never reaches the leader's queue.
+ */
+export async function readParkedRows(sid: string): Promise<unknown[]> {
+  const { getQueue } = await import('../session-message-queue.js')
+  return (await getQueue(sid)).filter((m) => m.status === 'parked')
+}
+
+/**
+ * A Retry or Send now of a row this host keeps for `sid` (send-now.ts, as on the leader). `unpark`:
+ * a person's, which puts a parked row back in line; an agent's leaves it parked.
+ */
+export async function sendQueuedRowNow(sid: string, messageId: string, source?: string, unpark?: boolean): Promise<unknown> {
+  const { sendQueuedNow } = await import('./send-now.js')
+  return sendQueuedNow({ sessionId: sid, messageId: String(messageId), source: typeof source === 'string' && source ? source : 'leader-retry', unpark: unpark === true })
+}
+
+/** A person's Discard of a row this host keeps for `sid` (session-message-queue.ts deleteMessage). */
+export async function discardQueuedRow(sid: string, messageId: string): Promise<boolean> {
+  const { deleteMessage } = await import('../session-message-queue.js')
+  return deleteMessage(sid, String(messageId), { discarded: true })
+}

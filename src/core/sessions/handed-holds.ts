@@ -14,8 +14,8 @@
  *            when the session wakes or the hold reaches its max, whether the leader is there or not.
  *
  * Only these two reasons cross: any other held row (parked for a failure, held for a move) stays
- * where it is. The leader's panel no longer lists a row once it went to the host (known limit: an
- * edit or a withdraw of it needs the host's queue read through the leader, not built yet).
+ * where it is. The leader's panel lists the rows the host keeps parked or held, and their Retry and
+ * Discard go there (host-queue-rows.ts); an edit of one is not built yet.
  */
 import { AFTER_TURN_REASON, COLD_HOLD_REASON } from '../relay-fates.js'
 import type { QueuedMessage } from '../session-queue-store.js'

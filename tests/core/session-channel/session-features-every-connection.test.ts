@@ -103,6 +103,9 @@ const NOT_A_CONTROL: Record<string, string> = {
   'lifecycle.lineAlreadyRan': 'a resend\'s check of a line\'s fate, asked by the leader instead of the daemon',
   'lifecycle.cancelPendingStart': 'an unconfirmed start\'s cancel, the leader\'s own retry step',
   'lifecycle.sendFolderWaiting': 'the leader\'s ask, after it made a released workspace again, that the host send the lines it parked for the gone folder (folder-gone.ts)',
+  'lifecycle.readParkedRows': 'a read of the rows the host keeps parked, listed in the leader\'s queue view (host-queue-rows.ts)',
+  'lifecycle.sendQueuedRowNow': 'a queued row\'s Retry or Send now on the host that keeps it (host-queue-rows.ts), not a control of a running session',
+  'lifecycle.discardQueuedRow': 'a queued row\'s Discard on the host that keeps it (host-queue-rows.ts), as the route `drop` is for the leader\'s rows',
 }
 
 const testsOf = (file: string): string[] => {

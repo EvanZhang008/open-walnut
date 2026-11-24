@@ -267,6 +267,8 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/sessions/queued-change.ts': 1, // queueOf: was a refused Edit or Delete's row taken or gone
   'core/sessions/prompt-refresh-respawn.ts': 1, // a prompt respawn goes only with no row waiting or in flight
   'core/sessions/lane-turn.ts': 2, // a joined message: which rows wait, and whether its own row was taken
+  'core/sessions/host-lifecycle.ts': 1, // readParkedRows: a host's parked rows for its leader, which projects them (session-extras.ts, session-chat.ts)
+  'core/sessions/host-queue-rows.ts': 1, // discardQueued: is a refused Discard's row still here (else the host's)
 }
 const DISPLAY_QUEUE_READS: Record<string, number> = {
   'core/sessions/session-extras.ts': 1, // GET /api/v1/sessions/:id/queue and the Mac relay
