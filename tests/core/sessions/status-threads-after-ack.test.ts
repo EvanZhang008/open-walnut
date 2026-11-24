@@ -232,7 +232,7 @@ describe('the status question says which threads he acknowledged', () => {
     expect(listed.map((t) => !!t.acked)).toEqual([true, false])
     const { block } = threadQuestionBlock(listed)
     expect(block).toContain('(pending, he acknowledged its result: a line only closes it (done); news for him is your thread_update)')
-    expect(block).toContain(' (answered)')
+    expect(block).toContain(' (answered; card: ')
   })
 })
 

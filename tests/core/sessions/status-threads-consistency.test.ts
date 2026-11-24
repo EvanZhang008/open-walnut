@@ -148,7 +148,8 @@ describe('the write each line makes', () => {
   })
   it('an answer he has not read keeps the thread in his sight; once he has, a wait hides it', () => {
     const unread = { ...base, state: 'answered' as const, reply: 'The posts are in.', replyAt: '2026-11-20T11:00:00.000Z' }
-    expect(patchForLine(unread, { id: base.id, title: base.title, state: 'waiting', progress: 'The wire comes Friday.' })).toEqual({ state: 'answered', reply: 'The wire comes Friday.' })
+    // Its progress words are not written over the result he has not read (2026-11-23, the turn-end flash: status-thread-card.ts).
+    expect(patchForLine(unread, { id: base.id, title: base.title, state: 'waiting', progress: 'The wire comes Friday.' })).toBeNull()
     const read = { ...unread, reactedAt: '2026-11-20T12:00:00.000Z' }
     expect(patchForLine(read, { id: base.id, title: base.title, state: 'waiting', progress: 'The wire comes Friday.' })).toEqual({ state: 'pending', reply: 'The wire comes Friday.' })
   })

@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { OPTIONAL_VALUE_FLAGS, VALUE_FLAGS } from './mock-claude-flags.mjs';
-import { sideQuestionAnswer } from './mock-claude-side-answer.mjs';
+import { noteUserMessage, sideQuestionAnswer } from './mock-claude-side-answer.mjs';
 
 const args = process.argv.slice(2);
 let transcriptParent = null;
@@ -380,6 +380,7 @@ if (inputFormat === 'stream-json') {
         const parsed = JSON.parse(line);
         // The user line a snapshot-write-turn turn files under (its rewind point).
         if (parsed.type === 'user' && typeof parsed.uuid === 'string') writeTurnUuidNext = parsed.uuid;
+        if (parsed.type === 'user') noteUserMessage(parsed.message?.content);
         if (parsed.type === 'control_request' && parsed.request?.subtype === 'rewind_files') {
           process.stdout.write(JSON.stringify({
             type: 'control_response',
