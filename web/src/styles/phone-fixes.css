@@ -226,6 +226,11 @@
   html body .notification-panel.nfc-panel-wide :is(.nfc-count-badge, .nfc-rail-subcount, .notification-feed-item-time) {
     font-size: var(--font-size-sm);
   }
+  /* The meta line's labels (a folded error's count, its family) too: badge.css draws them as words
+     at --font-size-xs with a selector of five classes, which outranked the rule above. */
+  html body .notification-panel.nfc-panel-wide .wn-notice-meta .badge.badge {
+    font-size: var(--font-size-sm);
+  }
   html body .notification-panel.nfc-panel-wide .nfc-card-toggle {
     display: inline-flex;
     align-items: center;
