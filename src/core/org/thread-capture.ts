@@ -21,6 +21,7 @@ import {
 } from './threads-model.js';
 import { exchangesOf, snoozedNow, watchedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
 import { keepsThreads } from './keeps-threads.js';
+import { asksHimToDecide } from './thread-summary-content.js';
 import { threadsKeptNow } from './threads-kept.js';
 import { letterThreadId } from './letter-thread-model.js';
 import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
@@ -295,7 +296,7 @@ export function threadHintText(s: ThreadHintState): string {
 }
 
 /** A thread the node should look at again: why, in a few words. */
-export interface TidyItem { id: string; title: string; state: ThreadState; why: 'reacted' | 'untitled' | 'state' | 'summary' }
+export interface TidyItem { id: string; title: string; state: ThreadState; why: 'reacted' | 'untitled' | 'state' | 'summary' | 'decide' }
 
 export interface ThreadsTidyState {
   items: TidyItem[];
@@ -324,10 +325,15 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
     const reviewed = !!t.by?.startsWith('task:') && t.updatedAt > lastHis;
     let why: TidyItem['why'] | null = null;
     const untitled = !t.titled && nowMs - Date.parse(t.createdAt) > UNTITLED_MS;
+    // A card that asks him to decide but is no decision card: Done or hidden, it is not on his Needs
+    // you, and a lead's view lists a task's decision only from needs (2026-11-24, his VP: "where is it";
+    // eight such cards in his data that day, one in his Done saying the choices waited on another card).
+    const decides = t.state !== 'needs' && asksHimToDecide(t.reply);
     // A pending thread is the node's call that nothing on it is news: only a stand-in title is asked about.
-    if (t.state === 'pending') why = untitled ? 'untitled' : null;
+    if (t.state === 'pending') why = decides ? 'decide' : untitled ? 'untitled' : null;
     // A summary he wrote past comes first (2026-11-08, the user: "Walnut needs to make sure it doesn't happen").
     else if (summaryBehindHim(t)) why = 'summary';
+    else if (decides) why = 'decide';
     else if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!))) why = 'reacted';
     else if (untitled) why = 'untitled';
     else if (t.state === 'new' && xs.some((x) => x.answer)) why = 'state';
@@ -347,6 +353,7 @@ const TIDY_WHY: Record<TidyItem['why'], string> = {
   reacted: 'did he react to your answer?',
   untitled: 'needs a title',
   state: 'answered, still new',
+  decide: 'its card asks him to decide but is no decision card: thread_update state needs with its options, or say only its result',
 };
 
 /** What the `threads-tidy` reminder says: one line, the threads by why (the rules are in the prompt). */

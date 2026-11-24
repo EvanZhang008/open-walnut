@@ -28,6 +28,39 @@ const POINTERS: readonly RegExp[] = [
   /^(?:already\s+)?(?:answered|replied|sent|told)\.?$/i,
 ];
 
+/**
+ * Words that ask him to decide something (pick, choose, approve): "\u7b49\u4f60\u6311" (waiting for your
+ * pick), "\u8bf7\u4f60\u9009" (please choose), "your call". 2026-11-24, his VP's Done card: "the three new
+ * designs are on the 'pick a design' card ... waiting for your pick", and the card it named was out of
+ * his sight, so he could not find what to pick.
+ */
+const ASKS_HIM: readonly RegExp[] = [
+  /\u7b49(?:\u4f60|\u60a8)(?:\u6765)?(?:\u6311|\u9009|\u5b9a|\u62cd\u677f|\u51b3\u5b9a|\u6279|\u5ba1|\u786e\u8ba4|\u70b9\u5934|\u540c\u610f)/,
+  /(?:\u8bf7|\u8ba9|\u7531)(?:\u4f60|\u60a8)(?:\u6765)?(?:\u6311|\u9009|\u5b9a|\u62cd\u677f|\u51b3\u5b9a|\u786e\u8ba4)/,
+  /(?:\u4f60|\u60a8)(?:\u6765)?(?:\u6311|\u9009)(?:\u4e00\u4e2a|\u54ea\u4e2a|\u4e00\u4e0b)/,
+  /\b(?:your\s+(?:pick|call|choice|decision|approval)|for\s+you\s+to\s+(?:pick|choose|decide|approve)|(?:pick|choose)\s+one|waiting\s+(?:on|for)\s+you)\b/i,
+];
+/** The card asks him to decide something (ASKS_HIM). Pure. */
+export function asksHimToDecide(text: string | null | undefined): boolean {
+  const t = (text ?? '').replace(/\s+/g, ' ');
+  return ASKS_HIM.some((re) => re.test(t));
+}
+
+/**
+ * Words that put what the card is about on another card or thread: "\u653e\u5230\u2026\u5361\u4e0a" (put on
+ * the ... card), "\u53e6\u4e00\u5f20\u5361" (another card), a card named in quotes, "on the pick card", a thread id.
+ */
+const ON_ANOTHER_CARD: readonly RegExp[] = [
+  /(?:\u653e|\u6302|\u5199|\u8d34|\u79fb|\u642c|\u53d1|\u5217|\u5408)(?:\u5230|\u5728|\u8fdb)[^\uff0c\u3002\uff1b,;]{0,14}?(?:\u5361\u7247|\u5361|\u7ebf\u7a0b)/,
+  /(?:\u53e6\u4e00\u5f20|\u53e6\u5916\u4e00\u5f20|\u90a3\u5f20|\u65b0\u7684\u90a3\u5f20|\u65b0\u90a3\u5f20)(?:\u5361\u7247|\u5361)/,
+  /[\u201c"\u300c\u300e][^\u201d"\u300d\u300f]{1,16}[\u201d"\u300d\u300f]\s*(?:\u5361\u7247|\u5361|\u7ebf\u7a0b)/,
+  /\b(?:on|in)\s+(?:the|another|a\s+separate|that|its\s+own|a\s+new)\s+[\w"' -]{0,24}?(?:card|thread)\b/i,
+  // "\u5728 X \u4efb\u52a1\u91cc\u7b49\u4f60\u51b3\u5b9a" (waiting for your decision in task X), "\u5728\u2026\u90a3\u91cc\u7531\u4f60\u51b3\u5b9a"
+  /\u5728[^\uff0c\u3002\uff1b,;]{0,20}?(?:\u4efb\u52a1|\u7ebf\u7a0b|\u5361\u7247|\u5361)(?:\u91cc|\u90a3\u91cc|\u90a3\u8fb9|\u4e0a|\u4e2d)/,
+  /\b(?:in|on)\s+(?:the\s+)?[\w"' -]{0,24}?\btask\b/i,
+  /\bth-[0-9a-f]{6,}\b/,
+];
+
 /** A proof (a path or URL) is content by itself: a summary with one is never pointer-only. */
 const PROOF_RE = /(?:https?:\/\/\S+|(?:^|\s)\/[\w.\-/]+\.\w{2,5}\b|\blt-[a-z0-9]+\b)/i;
 
@@ -69,6 +102,12 @@ function pointsOnly(clause: string): boolean {
 export function summaryPointsElsewhere(summary: string | null | undefined): string | null {
   const text = (summary ?? '').replace(/\s+/g, ' ').trim();
   if (!text || PROOF_RE.test(text)) return null;
+  // He is asked to decide, and what to decide is on another card: his card must hold it.
+  if (asksHimToDecide(text) && ON_ANOTHER_CARD.some((re) => re.test(text))) {
+    return 'This summary asks him to decide but sends him to another card for the choices, and he may not find it: '
+      + 'put the choices and your pick on this card (thread_update: state needs, with options), or, when the other card '
+      + 'holds the decision, say only this card\'s own result here.';
+  }
   // A dot, colon or comma between digits is part of a number, a version or a time ("1.35", "10:30").
   const clauses = text.split(/(?:[\u3002\uff0e!\uff01?\uff1f;\uff1b\uff1a\uff0c\u3001\n]|(?<!\d)[.:,]|[.:,](?!\d))+/).map((c) => c.trim()).filter(Boolean);
   let pointed = false;
