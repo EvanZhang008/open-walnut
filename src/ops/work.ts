@@ -12,7 +12,7 @@ import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
-import { leftOutLine, shapeHistory, TASK_HISTORY_ANSWER, type HistoryShape, type ShapeResult } from './task-history-shape.js';
+import { earliestTime, leftOutLine, shapeHistory, TASK_HISTORY_ANSWER, type HistoryShape, type ShapeResult } from './task-history-shape.js';
 import { TASK_FOCUS_TIER_SET_ANSWER, TASK_PIN_SET_ANSWER, TASK_RECEIPT } from './task-answers.js';
 import { isInboxProject, SESSION_EFFORT_IDS, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
@@ -395,11 +395,10 @@ defineOp({
         messages.push(...rows);
       }
       if (shaped && shape.limit) {
+        // By time across the sessions, each kept session with its header (history-time-cut.ts).
         const cut = shapeHistory(messages, { limit: shape.limit });
         add(cut);
-        // The cut can land inside a session: its header still says whose rows these are.
-        const header = messages.slice(0, cut.cutOlder).reverse().find((m) => m.role === 'system' && m.kind === 'notification' && !m.timestamp);
-        messages = header && cut.messages[0] !== header ? [header, ...cut.messages] : cut.messages;
+        messages = cut.messages;
       }
       return {
         taskId: task.id, sessions, messages,
@@ -412,7 +411,7 @@ defineOp({
     const degradedNote = degraded ? { degraded_note: degradedLine([degraded]) } : {};
     if (!shaped) return { ...history, ...degradedNote, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}), ...olderPage(task.id, history) };
     const out = shapeHistory(history.messages as Record<string, unknown>[], shape);
-    const first = out.messages.find((r) => typeof r.timestamp === 'string')?.timestamp as string | undefined;
+    const first = out.before ?? earliestTime(out.messages);
     let older = out.cutOlder > 0;
     if (!older && history.truncated === true && first) {
       // The route's page reaches back to the first row at or after `since`, so a cut page that

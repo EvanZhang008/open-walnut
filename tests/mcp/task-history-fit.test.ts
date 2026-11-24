@@ -135,6 +135,104 @@ describe('task_history keeps the newest rows when its answer is held to the cap'
     }
   })
 
+  /**
+   * all:true joins the sessions by when each started. A task that switched back to its first engine
+   * resumes the FIRST session, so its newest rows sit ahead of the later session's (2026-11-24 review
+   * probe): the cut is by time, so they are the ones kept, and the pages before read the rest once each.
+   */
+  describe('all:true where the first session was resumed after a switch back', () => {
+    const hm = (h: number, m: number, s = 0) => new Date(Date.UTC(2026, 10, 24, h, m, s)).toISOString()
+    const turns = (label: string, h0: number, n: number): Row[] => Array.from({ length: n }, (_, i) => [
+      { role: 'user', sentBy: 'agent', text: `${label}-ask-${i} ${'x'.repeat(900)}`, timestamp: hm(h0, i) },
+      { role: 'assistant', kind: 'tool', text: 'Bash', detail: pad(`${label}-step-${i}`, 120), resultPreview: pad('{"result"', 1500), timestamp: hm(h0, i, 10) },
+      { role: 'assistant', text: `${label}-reply-${i} ${'y'.repeat(900)}`, timestamp: hm(h0, i, 30) },
+    ]).flat()
+    const A = [...turns('A-old', 9, 10), ...turns('A-resumed', 11, 10)]
+    const B = turns('B', 10, 10)
+    const call: Call = async (_method, path) => {
+      if (path.startsWith('/tasks/t-1/sessions')) return { sessions: [{ session_id: 's-A', engine: 'claude', active: true, started_at: hm(9, 0) }, { session_id: 's-B', engine: 'codex', active: false, started_at: hm(10, 0) }] }
+      if (path.startsWith('/tasks/')) return { task: { id: 't-1', session_id: 's-A' } }
+      const before = new URLSearchParams(path.split('?')[1] ?? '').get('before')
+      const src = path.split('/')[2] === 's-A' ? A : B
+      return { truncated: false, messages: before ? src.filter((r) => String(r.timestamp) < before) : src }
+    }
+    const label = (r: Row) => `${String(r.text)} ${String(r.detail ?? '')}`.match(/[AB][-a-z]*-(ask|step|reply)-\d+/)?.[0]
+    const ask = async (args: Record<string, unknown>, surface: (typeof ANSWER_SURFACE_NAMES)[number]) =>
+      agentAnswer(op(), { ...args }, await (op().handler as (i: Record<string, unknown>, c: Call) => Promise<unknown>)({ ...args }, call), false, surface) as Row
+    const byTime = [...A, ...B].sort((x, y) => String(x.timestamp).localeCompare(String(y.timestamp)))
+
+    for (const surface of ANSWER_SURFACE_NAMES) {
+      for (const args of [{ id: 't-1', all: true, compact: true }, { id: 't-1', all: true, limit: 6 }, { id: 't-1', all: true }]) {
+        it(`${JSON.stringify(args)} on the ${surface} surface: the resumed session's newest rows are shown, each with its header, and the pages before read every row once`, async () => {
+          const answer = await ask(args, surface)
+          expect(printedSize(answer, surface)).toBeLessThanOrEqual(answerFit(op(), surface).max)
+          const rows = answer.messages as Row[]
+          const shown = rows.filter((r) => r.timestamp)
+          expect(label(shown.at(-1)!)).toBe('A-resumed-reply-9')
+          // Every row older than the oldest shown was left out; none newer.
+          const oldest = Math.min(...shown.map((r) => Date.parse(String(r.timestamp))))
+          expect(shown.length).toBe(byTime.filter((r) => Date.parse(String(r.timestamp)) >= oldest).length)
+          // A shown row's session header is right above its session's rows.
+          for (const [i, r] of rows.entries()) if (!r.timestamp) expect(String(r.text)).toMatch(/^Session on /)
+          expect(String(rows[0].text)).toMatch(/^Session on claude/)
+          // Page back to the start: every row once, in each session's own order.
+          const seen: Row[] = [...shown]
+          let older = answer.older as { how: string } | undefined
+          for (let page = 0; older && page < 60; page++) {
+            const next = await ask(JSON.parse(older.how.match(/'(.*)'/)![1]) as Record<string, unknown>, surface)
+            seen.push(...(next.messages as Row[]).filter((r) => r.timestamp))
+            older = next.older as { how: string } | undefined
+          }
+          const labels = seen.map(label)
+          expect(new Set(labels).size).toBe(labels.length)
+          expect([...labels].sort()).toEqual(byTime.map(label).sort())
+        })
+      }
+    }
+  })
+
+  describe('the newest time alone over the cap', () => {
+    const t = '2026-11-24T08:22:09.000Z'
+    const page = (tools: number): Row[] => [
+      { role: 'user', sentBy: 'person', text: 'check every host', timestamp: '2026-11-24T08:21:00.000Z' },
+      ...Array.from({ length: tools }, (_, i) => ({ role: 'assistant', kind: 'tool', text: 'Bash', detail: pad(`host ${i}`, 120), resultPreview: pad('{"result"', 1500), timestamp: t })),
+      { role: 'assistant', text: pad('all hosts are fine', 800), timestamp: t },
+    ]
+    const read = async (rows: Row[], surface: (typeof ANSWER_SURFACE_NAMES)[number]) => {
+      const call: Call = async (_method, path) => {
+        if (path.startsWith('/tasks/t-1/sessions')) return { sessions: [{ session_id: 's-1', engine: 'claude', active: true }] }
+        if (path.startsWith('/tasks/')) return { task: { id: 't-1', session_id: 's-1' } }
+        return { truncated: false, messages: rows }
+      }
+      const args = { id: 't-1', limit: 1 }
+      return agentAnswer(op(), { ...args }, await (op().handler as (i: Record<string, unknown>, c: Call) => Promise<unknown>)({ ...args }, call), false, surface) as Row
+    }
+
+    it('its rows are folded to the compact form, never left out (the page before could not read them back)', async () => {
+      for (const surface of ANSWER_SURFACE_NAMES) {
+        const answer = await read(page(16), surface)
+        const rows = answer.messages as Row[]
+        expect(printedSize(answer, surface)).toBeLessThanOrEqual(answerFit(op(), surface).max)
+        expect(rows.filter((r) => r.timestamp === t)).toHaveLength(17)
+        expect(rows.filter((r) => r.kind === 'tool').every((r) => r.resultPreview === undefined)).toBe(true)
+        expect(String(rows.at(-1)!.text)).toMatch(/^all hosts are fine/)
+        expect(answer._cut).toBeUndefined()
+        // The older person message is left out, and the page before reads it.
+        expect((answer.older as { before: string }).before).toBe(t)
+        expect(String(answer.shown)).toMatch(/folded to the compact form/)
+      }
+    })
+
+    it('when even folded they do not fit, the answer says that "_full": true reads them whole', async () => {
+      for (const surface of ANSWER_SURFACE_NAMES) {
+        const answer = await read(page(80), surface)
+        expect(printedSize(answer, surface)).toBeLessThanOrEqual(answerFit(op(), surface).max)
+        expect(String((answer.messages as Row[]).at(-1)!.text)).toMatch(/^all hosts are fine/)
+        expect(String(answer.shown)).toMatch(/"_full": true reads them whole/)
+      }
+    })
+  })
+
   it('a window that already fits is answered as the op gave it', async () => {
     const answer = await read({ id: 't-1', limit: 1, compact: true }, 'mcp')
     expect(answer._cut).toBeUndefined()

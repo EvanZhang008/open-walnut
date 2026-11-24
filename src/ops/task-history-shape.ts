@@ -21,6 +21,7 @@ export interface HistoryShape {
 import { parseSessionEnvelopes, type SessionEnvelope } from '../lib/history-session-envelope.js'
 import type { OpAnswer } from './answer.js'
 import { cutText } from './answer-text.js'
+import { isSessionHeader, newestCounted, newestFitting } from './history-time-cut.js'
 
 type Row = Record<string, unknown>
 
@@ -112,6 +113,17 @@ export interface ShapeResult {
   clipped: number
   /** Characters of the JSON rows the shaping left out. */
   chars: number
+  /** The time `limit`'s cut reads back from (older.before): the oldest time it kept, when it left rows out. */
+  before?: string
+  /** The rows of `messages` as they were before the compact form, one for one. */
+  sources: Row[]
+}
+
+/** The earliest time of the rows (all:true joins sessions out of time order), as a row wrote it. */
+export function earliestTime(rows: Row[]): string | undefined {
+  let best: string | undefined
+  for (const r of rows) if (typeof r.timestamp === 'string' && (best === undefined || Date.parse(r.timestamp) < Date.parse(best))) best = r.timestamp
+  return best
 }
 
 /** Apply `since`, then `limit`, then `compact` to one conversation's rows. */
@@ -124,18 +136,16 @@ export function shapeHistory(rows: Row[], shape: HistoryShape): ShapeResult {
     cutSince = rows.length - kept.length
   }
   let cutOlder = 0
+  let before: string | undefined
   if (shape.limit !== undefined) {
-    let seen = 0
-    let start = kept.length
-    while (start > 0 && seen < shape.limit) if (isTextRow(kept[--start])) seen++
-    if (seen < shape.limit) start = 0
-    // Rows of one history message share its timestamp, and the next page's `before` excludes all
-    // of them, so the cut never splits such a run: what it left out stays readable.
-    const at = kept[start]?.timestamp
-    while (start > 0 && at !== undefined && kept[start - 1].timestamp === at) start--
-    cutOlder = start
-    kept = kept.slice(start)
+    // By time, never by position (history-time-cut.ts): every row at the oldest kept time stays,
+    // and the page before (older.before) reads exactly the rows left out.
+    const cut = newestCounted(kept, shape.limit, isTextRow)
+    cutOlder = cut.dropped.length
+    before = cut.before
+    kept = cut.kept
   }
+  const sources = kept
   const folded = { tool: 0, thinking: 0 }
   let clipped = 0
   const size = (list: Row[]) => list.reduce((n, r) => n + JSON.stringify(r).length, 0)
@@ -149,7 +159,7 @@ export function shapeHistory(rows: Row[], shape: HistoryShape): ShapeResult {
     })
   }
   const chars = whole - size(kept)
-  return { messages: kept, cutOlder, cutSince, folded, clipped, chars }
+  return { messages: kept, cutOlder, cutSince, folded, clipped, chars, ...(before !== undefined ? { before } : {}), sources }
 }
 
 /** The one-line total of what a shaped answer left out (`paged`: the answer carries `older`). */
@@ -171,20 +181,17 @@ const AGENT_HISTORY_ROOM = 1_500
 /** An older assistant reply in that default, when the messages do not fit: its gist. */
 const AGENT_OLDER_REPLY_MAX = 600
 
-const isSessionHeader = (m: Row): boolean => m.role === 'system' && m.kind === 'notification' && !m.timestamp
-
 /**
- * Every assistant reply but the newest held to AGENT_OLDER_REPLY_MAX, cut from its whole text (row
- * `cutOlder + i` of `rows`: no `since` here, so the shaped rows are the tail of the page one for one).
- * The newest is the result a reader came for.
+ * Every assistant reply but the newest held to AGENT_OLDER_REPLY_MAX, cut from its whole text (the
+ * row it was shaped from). The newest is the result a reader came for.
  */
-function clipOlderReplies(rows: Row[], out: ShapeResult): ShapeResult {
+function clipOlderReplies(out: ShapeResult): ShapeResult {
   const replies = out.messages.flatMap((m, i) => (m.role === 'assistant' && !m.kind && typeof m.text === 'string' ? [i] : []))
   const newest = replies.at(-1)
   let { clipped, chars } = out
   const messages = out.messages.map((m, i) => {
     if (i === newest || !replies.includes(i)) return m
-    const whole = rows[out.cutOlder + i]?.text
+    const whole = out.sources[i]?.text
     const c = clip(typeof whole === 'string' ? whole : String(m.text), AGENT_OLDER_REPLY_MAX)
     if (!c.clipped || c.text.length >= String(m.text).length) return m
     if (String(m.text) === whole) clipped++
@@ -214,7 +221,7 @@ export function agentHistory(result: unknown, args: Record<string, unknown>, max
   const chars = (list: Row[]) => list.reduce((n, m) => n + JSON.stringify(m).length + 1, 0)
   const shaped = (n: number): ShapeResult => {
     const one = shapeHistory(all, { limit: n, compact: true })
-    return chars(one.messages) > budget ? clipOlderReplies(all, one) : one
+    return chars(one.messages) > budget ? clipOlderReplies(one) : one
   }
   let limit = AGENT_HISTORY_LIMIT
   let out = shaped(limit)
@@ -222,13 +229,9 @@ export function agentHistory(result: unknown, args: Record<string, unknown>, max
     limit = Math.max(3, Math.floor(limit * 0.7))
     out = shaped(limit)
   }
-  let messages = out.messages
-  // all:true holds several sessions: a cut inside one keeps its header row, which says whose rows these are.
-  if (out.cutOlder > 0 && args.all === true) {
-    const header = all.slice(0, out.cutOlder).reverse().find(isSessionHeader)
-    if (header && messages[0] !== header) messages = [header, ...messages]
-  }
-  const first = messages.find((m) => typeof m.timestamp === 'string')?.timestamp as string | undefined
+  // The cut keeps each session's header with its rows (history-time-cut.ts).
+  const messages = out.messages
+  const first = out.before ?? earliestTime(messages)
   const before = r.truncated === true
   const paged = (out.cutOlder > 0 || before) && first !== undefined
   // The page before names no limit or form, so it gets this same default, fitted to its own messages.
@@ -255,52 +258,62 @@ const WINDOW_ROOM = 900
 
 /**
  * A window the caller named (limit, since, compact) held to the answer's cap by leaving out its
- * OLDEST rows, whole timestamp runs at a time, never its newest: `older.how` reads the rows left out
- * with the same window, so nothing between them and the newest is lost (2026-11-24: the generic
- * cutter dropped the newest rows of a `limit:14` read, and its `older.before` pointed past them).
- * A window that fits is answered as the op gave it.
+ * OLDEST rows, by time and whole times at a time, never its newest (history-time-cut.ts): `older.how`
+ * reads on from the rows left out with the same window, so nothing between them and the newest is
+ * lost (2026-11-24: the generic cutter dropped the newest rows of a `limit:14` read, and its
+ * `older.before` pointed past them). Rows of the newest time that alone are over the cap are folded
+ * to the compact form first (the person's own words stay whole); what still does not fit is cut by
+ * the answer's cutter, and `shown` says that `"_full": true` reads those rows whole. A window that
+ * fits is answered as the op gave it.
  */
 function fitWindow(r: Row, rows: Row[], args: Record<string, unknown>, max?: number): unknown {
   if (max === undefined) return r
   const json = (v: unknown): number => (JSON.stringify(v) ?? 'null').length
   if (json(r) <= max) return r
-  // Where a page may start: the first row of a timestamp run (the page before excludes the whole run).
-  const starts = rows.flatMap((m, i) => (i > 0 && typeof m.timestamp === 'string' && m.timestamp !== rows[i - 1].timestamp ? [i] : []))
-  if (starts.length === 0) return r
   const room = max - WINDOW_ROOM - json({ ...r, messages: [] })
-  let start = starts.at(-1)!
-  let used = rows.slice(start).reduce((n, m) => n + json(m) + 1, 0)
-  for (let k = starts.length - 2; k >= 0; k--) {
-    const more = rows.slice(starts[k], start).reduce((n, m) => n + json(m) + 1, 0)
-    if (used + more > room) break
-    used += more
-    start = starts[k]
-  }
-  let messages = rows.slice(start)
-  // all:true holds several sessions: the cut keeps the header row that says whose rows these are.
-  const header = args.all === true ? rows.slice(0, start).reverse().find(isSessionHeader) : undefined
-  if (header) messages = [header, ...messages]
-  const before = String(rows[start].timestamp)
-  const dropped = rows.slice(0, start).filter((m) => m !== header)
+  const cut = newestFitting(rows, room, (m) => json(m) + 1)
   const prior = (r.left_out && typeof r.left_out === 'object' ? r.left_out : {}) as Partial<ShapeResult>
-  const left = {
-    cutOlder: (prior.cutOlder ?? 0) + dropped.length,
-    cutSince: prior.cutSince ?? 0,
-    folded: prior.folded ?? { tool: 0, thinking: 0 },
-    clipped: prior.clipped ?? 0,
-    chars: (prior.chars ?? 0) + dropped.reduce((n, m) => n + json(m), 0),
+  const folded = { tool: prior.folded?.tool ?? 0, thinking: prior.folded?.thinking ?? 0 }
+  let clipped = prior.clipped ?? 0
+  let messages = cut.kept
+  let compacted = false
+  const fits = () => messages.reduce((n, m) => n + json(m) + 1, 0) <= room
+  if (!fits() && args.compact !== true) {
+    // The newest time alone is over the cap: its rows folded, never left out (they could not be paged back).
+    compacted = true
+    messages = messages.map((m) => {
+      if (isSessionHeader(m)) return m
+      const c = compactRow(m)
+      if (c.folded) folded[c.folded]++
+      if (c.clipped) clipped++
+      return c.row
+    })
   }
+  const overflow = !fits()
+  const left = {
+    cutOlder: (prior.cutOlder ?? 0) + cut.dropped.length,
+    cutSince: prior.cutSince ?? 0,
+    folded,
+    clipped,
+    chars: (prior.chars ?? 0) + json(rows) - json(messages),
+  }
+  const before = cut.before
   const page: Row = { id: r.taskId ?? args.id }
   for (const k of ['all', 'fresh', 'limit', 'since', 'compact'] as const) if (args[k] !== undefined) page[k] = args[k]
-  page.before = before
+  const shownRows = messages.filter((m) => !isSessionHeader(m)).length
+  const notes = [
+    `The newest ${shownRows} rows of this window fit the answer`,
+    ...(before ? [`${cut.dropped.length} older rows were left out, and older.how reads on from them${args.compact === true ? '' : ' (compact:true fits more in one answer)'}`] : []),
+    ...(compacted ? ['the newest rows were folded to the compact form to fit'] : []),
+    ...(overflow ? ['they still did not fit whole, so their longest texts are cut: "_full": true reads them whole'] : []),
+  ]
+  // The route's own `older` stays when nothing was left out here (only folded).
   return {
     ...r,
     messages,
-    truncated: true,
-    older: { before, how: `walnut tools call task_history '${JSON.stringify(page)}'` },
-    left_out: { ...left, note: leftOutLine(left, true) },
-    shown: `The newest ${messages.length - (header ? 1 : 0)} of the ${rows.length} rows this window holds fit the answer; `
-      + `older.how reads the ${dropped.length} before them${args.compact === true ? '' : ' (compact:true fits more in one answer)'}.`,
+    ...(before ? { truncated: true, older: { before, how: `walnut tools call task_history '${JSON.stringify({ ...page, before })}'` } } : {}),
+    left_out: { ...left, note: leftOutLine(left, before !== undefined || r.older !== undefined) },
+    shown: `${notes.join('; ')}.`,
   }
 }
 
