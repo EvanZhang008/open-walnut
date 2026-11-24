@@ -121,14 +121,13 @@ defineOp({
     'The output of a host_exec job, from `offset` (bytes into its log; `nextOffset` goes on) or, with no offset, its tail: the answer '
     + 'shows the first lines and the last 6,000 characters, and `outputShown` names the read for the rest. `running` false means it '
     + 'ended, with `exitCode`. Do not poll: `wait_ms` holds the answer until the job ends (60000 at most), and `wait_for` (as '
-    + 'host_exec\'s) until a line of the output matches (tested from offset, else from the start of the log), the port listens, the '
+    + 'host_exec\'s) until a line of the output matches (from offset, else from the start), the port listens, the '
     + 'file exists or the job ends (wait_ms up to 600000); through a host\'s gateway (a session on another host) about 10000, then call '
     + 'again (heldMs says so). A read that finds nothing new says so in a sentence. To go on after a match or a miss, pass the '
     + 'answer\'s waitedFor.scanned as offset; an offset inside a line tests that whole line, and only a match ending past the offset '
-    + 'counts. Only the task that started a job reads or stops it. After a revoke of the task\'s grant there, or the host closed, '
-    + 'reads of its jobs are refused (403 exec_grant_revoked) until the user grants it again; host_exec_list and host_exec_stop still work. '
-    + 'A grant Walnut no longer finds that nobody revoked is 403 exec_grant_missing (call again: a grant is made or asked for the usual way), '
-    + 'and a grants file Walnut cannot read whole is 503 exec_grants_unreadable (try again in a minute).',
+    + 'counts. Only the task that started a job reads or stops it. Refused: 403 exec_grant_revoked after a revoke of the task\'s grant '
+    + 'there or a closed host, until granted again (host_exec_list and host_exec_stop still work); 403 exec_grant_missing '
+    + 'for a grant gone that nobody revoked (call again); 503 exec_grants_unreadable (try again in a minute).',
   input: {
     host: z.string().min(1).describe('The host the job runs on'),
     job_id: z.string().min(1).describe('The jobId host_exec returned'),
