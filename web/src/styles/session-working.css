@@ -39,3 +39,38 @@
 .session-background-note:hover { color: var(--fg); }
 .session-background-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .session-background-note-sep { opacity: 0.6; }
+
+/* The live turn's working line (StreamingBlockView WorkingIndicator; the background-only and
+   after-turn lines are single buttons and keep their own look). A narrow column breaks it between
+   its parts, never inside one (2026-11-23, the user, of the line squeezed into three wrapped blocks:
+   "optimize for narrow view, multiple line please"). Each part's leading dot sits in the gap before
+   it, outside the part, so the dot of a part that starts a line falls past the clipped left edge and
+   no line starts with a dot. The 4px of padding inside the clip (taken back by the margin) keeps a
+   focused note's outline whole while still hiding that dot. */
+.session-working-indicator:not(.session-background-working) {
+  flex-wrap: wrap;
+  column-gap: 16px;
+  row-gap: 2px;
+  overflow-x: clip;
+  padding-left: 4px;
+  margin-left: -4px;
+}
+.session-working-indicator:not(.session-background-working) > .session-background-note {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: 0;
+}
+.session-working-indicator:not(.session-background-working) > .session-working-meta {
+  position: relative;
+  white-space: nowrap;
+}
+.session-working-indicator:not(.session-background-working) > .session-background-note > .session-background-note-sep,
+.session-working-indicator:not(.session-background-working) > .session-working-meta > .session-working-meta-sep {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  text-align: center;
+  white-space: nowrap;
+}
