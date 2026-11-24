@@ -123,7 +123,8 @@ describe('Walnut keeps a lead\'s Threads', () => {
     ].join('\n'))
     expect(await askStatus(taskId, SID, Date.now())).toBe(true)
     const q = fake.askSideQuestion.mock.calls[0][0] as string
-    expect(q).toContain('"Orchard fence" (answered, he wrote elsewhere since your answer here)')
+    // An answered card is quoted beside its state, so the node can tell whether it still holds (status-thread-card.ts cardPart).
+    expect(q).toContain('"Orchard fence" (answered, he wrote elsewhere since your answer here; card: "Two metres keeps the deer out.")')
     expect(q).toContain('His messages since, newest first:')
     expect(q).toContain('"ok, now order the seeds for spring" (new, untitled)')
     expect(q).not.toContain('FOR_USER_THREAD_NEW')
@@ -150,7 +151,7 @@ describe('Walnut keeps a lead\'s Threads', () => {
       `FOR_USER_THREAD_SEEN: ${refOf(q, 'Greenhouse vents')}`,
     ].join('\n'))
     expect(await askStatus(taskId, SID, Date.now())).toBe(true)
-    expect(fake.askSideQuestion.mock.calls[0][0] as string).toContain('"Greenhouse vents" (answered)')
+    expect(fake.askSideQuestion.mock.calls[0][0] as string).toContain('"Greenhouse vents" (answered; card: "The vents open at 26 degrees.")')
     const vents = (await readThreads(taskId)).threads.find((t) => t.id === OTHER)!
     expect(vents.closed).toBeUndefined()
     expect(vents.known).toBeUndefined()
