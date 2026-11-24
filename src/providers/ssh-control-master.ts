@@ -29,6 +29,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { runSshBounded, type SshRun } from './remote-sh.js'
+import { learnSshClient } from './ssh-client-options.js'
 
 export type SshRunner = (args: string[], opts: { timeoutMs: number }) => Promise<SshRun>
 
@@ -243,6 +244,8 @@ export async function startControlMaster(
   host: string,
   opts: { run?: SshRunner; persistSecs?: number } = {},
 ): Promise<{ previousLastWords: string }> {
+  // The options of every later link to this host (ssh-client-options.ts) are known before it opens.
+  if (!opts.run) await learnSshClient()
   const logFile = masterLogFile(socketPath)
   const previousLastWords = masterLastWords(socketPath)
   try { fs.writeFileSync(logFile, '', { mode: 0o600 }) } catch { /* ssh creates it */ }

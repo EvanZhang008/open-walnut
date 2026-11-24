@@ -25,6 +25,7 @@ import type { UploadPacer } from '../lib/upload-pacer.js'
 import { PACED_STREAM_PURPOSES } from './ssh-upload-budget.js'
 import { fixedPace, uploadPaceFor, type PaceSource } from './upload-pace.js'
 import { exitControlMaster, MASTER_CONTROL_TIMEOUT_MS, MAX_SOCKET_PATH, masterLogFile, ownedMuxClientArgs, startControlMaster, type SshRunner } from './ssh-control-master.js'
+import { learnSshClient, remoteCommandNone } from './ssh-client-options.js'
 
 /** What a forward that this side stopped says when it ends. */
 export const STOPPED = 'stopped'
@@ -459,6 +460,7 @@ export async function sshLaneForward(
   const deps = opts.deps ?? {}
   const port = await (deps.freePort ?? freePort)()
   const owned = opts.ownMaster ? await startLaneMaster(sshArgs, sshHost, opts.ownMaster.hostname, deps) : null
+  if (!deps.spawn) await learnSshClient()
   const args = owned
     ? [
       ...ownedMuxClientArgs(owned.socket),
@@ -470,7 +472,7 @@ export async function sshLaneForward(
     ]
     : [
       // A RemoteCommand in a config file would refuse the command below.
-      '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'RemoteCommand=none',
+      '-o', 'ControlMaster=no', '-o', 'ControlPath=none', ...remoteCommandNone(),
       ...sshArgs,
       '-T',
       '-L', `${port}:127.0.0.1:${remotePort}`,

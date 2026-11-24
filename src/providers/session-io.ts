@@ -18,6 +18,7 @@ import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 import { NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { streamJsonUserLine } from './stream-json-input.js'
+import { remoteCommandNone } from './ssh-client-options.js'
 
 // ── SessionIO interface ──
 
@@ -464,7 +465,7 @@ export function sshDestination(t: SshTarget): string {
 export function sshAliasOptions(t: SshTarget, opts: { tty?: boolean } = {}): string[] {
   if (!t.sshAlias) return []
   return [
-    '-o', `HostName=${t.hostname}`, '-o', 'CanonicalizeHostname=yes', '-o', 'RemoteCommand=none',
+    '-o', `HostName=${t.hostname}`, '-o', 'CanonicalizeHostname=yes', ...remoteCommandNone(),
     ...(opts.tty ? [] : ['-o', 'RequestTTY=no']),
     '-o', 'ClearAllForwardings=yes',
   ]
