@@ -11,7 +11,7 @@ vi.mock('../../../src/core/session-db.js', async (orig) => ({
   ...(await orig<object>()),
   sessionJudgeInStore: (sid: string) => (sid === 'own' ? { judgedByHost: true, host: 'devbox' } : null),
 }))
-import { createStandDownHeld, HELD_MAX_AGE_MS, isStandDownHeldEnd } from '../../../src/core/session-channel/stand-down-held.js'
+import { createStandDownHeld, HELD_MAX_AGE_MS, isStandDownHeldEnd, startStandDownSide } from '../../../src/core/session-channel/stand-down-held.js'
 import { __setTurnRetrierForTesting } from '../../../src/core/sessions/turn-run.js'
 import { turnEndStamp } from '../../../src/core/session-channel/host-resend.js'
 import { bus } from '../../../src/core/event-bus.js'
@@ -45,14 +45,35 @@ describe('the turn ends kept while standing down', () => {
 })
 
 describe('the emitter stamps no turn end as taken while standing down', () => {
-  it('hostTakenBy is null while standing down', async () => {
+  it('hostTakenBy is null while standing down; the held mark is the stand-down side\'s, only on an end it keeps', async () => {
     const stamp = await turnEndStamp()
     setHostStandsDown(true)
     const stamped = stamp('session:result', { sessionId: 's', isError: true, result: 'usage limit reached' })
-    expect(stamped).toMatchObject({ hostTakenBy: null, standDownHeld: true })
-    expect(isStandDownHeldEnd('session:result', stamped)).toBe(true)
+    expect(stamped).toMatchObject({ hostTakenBy: null })
+    expect(isStandDownHeldEnd('session:result', stamped)).toBe(false)
     setHostStandsDown(false)
     expect(isStandDownHeldEnd('session:result', stamp('session:result', { sessionId: 's', isError: false, result: 'done' }))).toBe(false)
+  })
+
+  it('round 1 S1: the side marks the very end its held list kept, never one it refused (not own yet) or a copy', async () => {
+    const stamp = await turnEndStamp()
+    const side = startStandDownSide({
+      bus, standingDown: () => true, setStandsDown: () => {}, owns: (sid) => sid === 'mine', stamp, replay: () => {},
+      leaderLinked: () => false, leaderReadsHeld: () => true, sayAgain: () => {}, heldOptions: { later: () => {} },
+    })
+    try {
+      setHostStandsDown(true)
+      const marks: boolean[] = []
+      bus.subscribe('test-emitter', (e) => { marks.push(isStandDownHeldEnd(e.name, side.stamp(e.name, e.data))) }, { global: true, interest: ['session:'] })
+      bus.emit('session:result', { sessionId: 'mine', isError: true }, ['*'], { source: 'session-runner' })
+      bus.emit('session:result', { sessionId: 'not-yet-own', isError: true }, ['*'], { source: 'session-runner' })
+      expect(marks).toEqual([true, false])
+      // A copy of the kept end's data is not the event the list kept.
+      expect(isStandDownHeldEnd('session:result', side.stamp('session:result', { sessionId: 'mine', isError: true }))).toBe(false)
+      expect(side.held.size()).toBe(1)
+    } finally {
+      side.stop()
+    }
   })
 })
 

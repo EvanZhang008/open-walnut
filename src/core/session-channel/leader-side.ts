@@ -79,6 +79,8 @@ export interface LeaderSideDeps {
   /** What `hostId`'s log held at the link's hello is applied: this leader's rows of that host are current (channel.ts onCaughtUp). */
   onCaughtUp?(hostId: string): void
   backoffMs?(attempt: number): number
+  /** How long a marked turn end waits for its host to say it again (stand-down-held.ts HELD_SAY_AGAIN_MS; tests: less). */
+  heldSayAgainMs?: number
   callTimeoutMs?: number
   startTimeoutMs?: number
   /** Records of sessions `hostId` does not own were not said (refused-sessions.ts noteRefusedSessions). */
@@ -177,7 +179,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     s.channel.resync(due)
   }
 
-  const { applyRecs, applyRows, onFlow } = createLeaderApply(deps, { askResync, refuseRevoked, isRevoked, taskOf })
+  const { applyRecs, applyRows, onFlow, stop: stopApply } = createLeaderApply(deps, { askResync, refuseRevoked, isRevoked, taskOf })
 
   function schedule(hostKey: string, s: HostState): void {
     if (!wanted(s) || s.timer || s.socket || s.dialing) return
@@ -461,6 +463,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     idle(hostKey: string): Promise<void> { return hosts.get(hostKey)?.channel?.idle() ?? Promise.resolve() },
     stop(): void {
       stopped = true
+      stopApply()
       for (const s of hosts.values()) closeLink(s, 'stopping')
       hosts.clear()
       linkWaiters.clear()

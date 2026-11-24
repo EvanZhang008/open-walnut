@@ -529,3 +529,20 @@ describe('the leader applies the facts frames that queued behind one apply in on
     await until(() => sent.some((f) => f.op === 'ack' && f.upTo === 7))
   })
 })
+
+describe('review round 1, N3: a log that holds no record up to its head still lets the leader catch up', () => {
+  it('the replay reads nothing past the leader\'s position: the leader is caught up and onLeaderLinked runs', async () => {
+    // A head past every record the file still reads back (a lost line): read() answers nothing.
+    const log = {
+      logId: 'L1', floor: 1, head: 4, permitPair: { permitNumber: 0, epoch: 0 },
+      read: async () => [] as FactRecord[], flush: async () => {}, notePermit: async () => {}, ack: async () => {}, onDurable: () => () => {},
+    } as unknown as FactLog
+    let linked = 0
+    const host = new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => [], onLeaderLinked: () => { linked++ } })
+    const sent: ChannelFrame[] = []
+    const h = host.attach({ send: (f) => { sent.push(f) }, close: () => {} })
+    h.onFrame({ ch: 'sf', op: 'resume', walnutId: 'w1', hostId: 'devbox', permitNumber: 0, epoch: 1, logId: 'L1', after: 2 })
+    await until(() => linked === 1)
+    expect(host.leaderLive()).toBe(true)
+  })
+})

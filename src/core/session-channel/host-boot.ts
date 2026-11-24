@@ -42,7 +42,7 @@ import { createHostSessionRoutes, type HostSessionRoutes } from './host-routes.j
 import { liveStateOf, type LiveRunnerLike } from './host-live.js'
 import { startHostResendFamily, turnEndStamp, turnOfOwnSession, type HostResendFamily } from './host-resend.js'
 import { LEADER_CHANNEL_CAP, startOldLeaderWatch, type OldLeaderWatch, type SessionSideState } from './old-leader-watch.js'
-import { createStandDownHeld } from './stand-down-held.js'
+import { startStandDownSide, type StandDownSide } from './stand-down-held.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { heldOnThisHost, startStrandedSweep, type StrandedSweep } from '../sessions/stranded-own-rows.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
@@ -64,13 +64,12 @@ export interface HostSessions {
   companion: CompanionDialer
   stranded: StrandedSweep
   oldLeader: OldLeaderWatch
+  standDown: StandDownSide
   /** The stop of the attach rule and the boot attach of the own rows (host-judged-lines.ts). */
   ownAttach: () => void
 }
 
 let current: HostSessions | null = null
-
-const STAND_DOWN_HELD_SUBSCRIBER = 'host-stand-down-held'
 
 /** The routes the leader door serves, or null when this host does not run its sessions. */
 export function hostSessionRoutes(): HostSessionRoutes | null {
@@ -150,14 +149,15 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   let emitterRef: HostEmitter | null = null
   // The old-leader watch, made below: a leader's link makes it look at once.
   let watchRef: OldLeaderWatch | null = null
-  let payOwedRef: (() => void) | null = null
+  // The stand-down side (stand-down-held.ts), made below before the emitter starts.
+  let standDownRef: StandDownSide | null = null
   const channel = new HostChannel({
     log, walnutId: o.walnutId, hostId: o.hostKey, ownRows: () => ownRows(o.hostKey), onLog: say,
     onResync: (sids) => { void emitterRef?.resync(sids).catch((err: unknown) => say('warn', 'host sessions: a resync failed', { error: err instanceof Error ? err.message : String(err) })) },
     goneRows: () => gone.list(),
     // A leader keeps the live state only in memory: each link gets it again.
     // The turn ends owed since a stand-up go to a leader that reads them (stand-down-held.ts).
-    onLeaderLinked: () => { emitterRef?.relive(); payOwedRef?.(); void watchRef?.tick() },
+    onLeaderLinked: () => { emitterRef?.relive(); standDownRef?.onLeaderLinked(); void watchRef?.tick() },
   })
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const runner = sessionRunner as unknown as LiveRunnerLike & { findSessionByClaudeId(sid: string): { consumedOffset?: number } | undefined }
@@ -167,7 +167,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     log, channel, hostKey: o.hostKey,
     ownRows: () => ownRows(o.hostKey),
     liveOf: (sid) => liveStateOf(runner, sid, turnOf),
-    stamp,
+    // The held mark only on an end the stand-down side keeps (stand-down-held.ts startStandDownSide).
+    stamp: (name, data) => (standDownRef ? standDownRef.stamp(name, data) : stamp(name, data)),
     // A fact of a moment the leader this host stood down for still answers: that leader judges its turn (old-leader-watch.ts).
     judgedByLeaderNow: () => watchRef?.oldLeaderJudgesNow() ?? false,
     // The line the runner has read up to: the fact log keeps the furthest one told (fact-log.ts toldLine),
@@ -205,8 +206,18 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   setLeaderDisownNotice(() => stranded.poke())
   // Before the emitter subscribes: at a turn end each retrier takes it first, then the emitter stamps it.
   const resend = await startHostResendFamily({ say })
-  await emitter.start()
   const [{ hostRunsSessionsAnyNow }, { bus }, { readMachineId }] = await Promise.all([import('./switch.js'), import('../event-bus.js'), import('../machine-id.js')])
+  const [{ leaderPresence }, { setHostStandsDown, hostStandsDown }, { getConfig }] = await Promise.all([import('../server-role.js'), import('../sessions/judge-of.js'), import('../config-manager.js')])
+  // The turn ends the family skipped while standing down, for its stand-up; on the bus before the
+  // emitter, so the emitter's stamp marks only an end it keeps (stand-down-held.ts).
+  const standDown = startStandDownSide({
+    bus, standingDown: hostStandsDown, setStandsDown: setHostStandsDown, owns: (sid) => emitter.owns(sid),
+    offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset, stamp, replay: (ends) => resend.replay(ends),
+    leaderLinked: () => channel.leaderLive(), leaderReadsHeld: () => channel.leaderReads(READS_HELD_TURN_ENDS),
+    sayAgain: (name, data, to) => { emitter.sayAgain(name, data, to) }, log: say,
+  })
+  standDownRef = standDown
+  await emitter.start()
   // Made just below; a credential the leader issues pokes it.
   let dialerRef: HostDialer | null = null
   const routes = createHostSessionRoutes({
@@ -270,15 +281,6 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     routes: () => current?.routes ?? null,
     log: say,
   })
-  const [{ leaderPresence }, { setHostStandsDown, hostStandsDown }, { getConfig }] = await Promise.all([import('../server-role.js'), import('../sessions/judge-of.js'), import('../config-manager.js')])
-  // The turn ends the family skipped while standing down, for its stand-up (stand-down-held.ts).
-  const held = createStandDownHeld({ standingDown: hostStandsDown, owns: (sid) => emitter.owns(sid), offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset, log: say })
-  bus.subscribe(STAND_DOWN_HELD_SUBSCRIBER, (event) => held.note(event), { global: true, interest: ['session:'] })
-  const payOwed = (): void => {
-    const said = held.payOwed({ leaderLinked: () => channel.leaderLive(), leaderReadsHeld: () => channel.leaderReads(READS_HELD_TURN_ENDS), say: (name, data) => { emitter.sayAgain(name, data) } })
-    if (said > 0) say('info', 'host sessions: the turn ends of the stand-down were said again to the leader, as judged here', { count: said })
-  }
-  payOwedRef = payOwed
   const oldLeader = startOldLeaderWatch({
     leaderAnswers: () => leaderPresence().answers,
     presenceSince: () => leaderPresence().since,
@@ -293,22 +295,12 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     }),
     // Every member of the resend family acts only on what judgedHere names (none, standing down); the
     // family stays subscribed in its order before the emitter. The CLIs, routes, log and emitter go on.
-    standDown: () => setHostStandsDown(true),
-    standUp: () => {
-      setHostStandsDown(false)
-      held.standUp({
-        replay: (ends) => {
-          say('info', 'host sessions: handing the turn ends of the stand-down to the resend family', { count: ends.length, sessionIds: ends.slice(0, 20).map((e) => (e.data as { sessionId?: string }).sessionId) })
-          resend.replay(ends)
-        },
-        stamp,
-      })
-      payOwed()
-    },
+    standDown: () => standDown.standDown(),
+    standUp: () => standDown.standUp(),
     log: say,
   })
   watchRef = oldLeader
-  const up: HostSessions = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded, oldLeader, ownAttach: () => {} }
+  const up: HostSessions = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded, oldLeader, standDown, ownAttach: () => {} }
   current = up
   // The session runner may reach the runtime in this process from now on (the own-sessions link).
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
@@ -406,7 +398,7 @@ export async function stopHostSessions(): Promise<void> {
   c.ownAttach()
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
   c.oldLeader.stop()
-  ;(await import('../event-bus.js')).bus.unsubscribe(STAND_DOWN_HELD_SUBSCRIBER)
+  c.standDown.stop()
   ;(await import('../sessions/judge-of.js')).setHostStandsDown(false)
   c.dialer.stop()
   c.companion.stop()

@@ -15,7 +15,9 @@
  * moves no phase (a retrier took it). After the leader's boot, once a host's link has applied what
  * that host's log held at its hello (channel.ts onCaughtUp: the host's rows here are current, so a
  * turn the host ran while this leader was down reads as it is), `reconcileHostTurnEnds` looks at each
- * of that host's marks made before this process started, once:
+ * of that host's marks made before this process started, and at each later catch-up at the marks
+ * standing well past the wait for a stand-down's turn end said again (leader-boot.ts; a marked end a
+ * host never said again, which leader-apply.ts said at its deadline unless the leader stopped first):
  *
  *   the session's row is gone, no longer this host's, has no task, or runs a turn again   nothing
  *   the task's phase moved at or after the mark (the handler did it, or anyone since)   nothing

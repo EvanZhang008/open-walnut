@@ -20,7 +20,7 @@ import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
 import type { HostTurnEnd } from './turn-ends.js'
 import { oneDaemonNow } from './revoked-hosts.js'
 import { LEADER_QUIET_MS } from '../../host-server/route.js'
-import { isStandDownHeldEnd } from './stand-down-held.js'
+import { HELD_SAY_AGAIN_MS, STAND_DOWN_HELD_KEY, isStandDownHeldEnd, supersedesTurnEnd } from './stand-down-held.js'
 
 /** The session:started of a session born on `hostId`, from its row (as the runner says one: handleStart); its task is the leader's row's. */
 function startedOf(hostId: string, sid: string, row: Record<string, unknown>, taskId: string | null | undefined): Record<string, unknown> {
@@ -96,6 +96,31 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
   const scopeOf = (hostId: string, sid: string): { scope?: FactScope } => deps.scopeIds
     ? { scope: (key, ids) => { try { return deps.scopeIds!(hostId, sid, key, ids) } catch { return [] } } }
     : {}
+
+  /**
+   * The marked turn ends skipped here (stand-down-held.ts), each waiting for its host to say it
+   * again: a later turn end or a went-on event of the session ends the wait (the host said it again,
+   * or the session went on); at the deadline the end is said as usual, so a real needs-you is never
+   * lost when the host's memory of it is (a restart of its service, a link that stays down).
+   */
+  const heldWaits = new Map<string, { hostId: string; timer: ReturnType<typeof setTimeout> }>()
+  const sayAgainMs = deps.heldSayAgainMs ?? HELD_SAY_AGAIN_MS
+  const endHeldWait = (sid: string): void => { const w = heldWaits.get(sid); if (w) { clearTimeout(w.timer); heldWaits.delete(sid) } }
+  function awaitHeld(hostId: string, r: AppliedFact): void {
+    endHeldWait(r.sid)
+    const timer = setTimeout(() => {
+      if (heldWaits.get(r.sid)?.timer !== timer) return
+      heldWaits.delete(r.sid)
+      if (isRevoked(hostId) || !hostsOwn(hostId, r.sid, new Set())) return
+      const { [STAND_DOWN_HELD_KEY]: _mark, ...data } = (r.data ?? {}) as Record<string, unknown>
+      const said = factAsLeaderSays(r.name, data, { sid: r.sid, hostId, taskId: taskOf(r.sid), ...scopeOf(hostId, r.sid) })
+      if (said === null) return
+      deps.log('info', 'session channel: a turn end of a host\'s stand-down was not said again in time; applied as it came', { hostId, sessionId: r.sid, waitedMs: sayAgainMs })
+      emitFact(hostId, { ...r, late: true }, r.name, said, r.to)
+    }, sayAgainMs)
+    timer.unref?.()
+    heldWaits.set(r.sid, { hostId, timer })
+  }
 
   /** One step after the commit: a throw is logged, never closes the link (the position is already past it). */
   function after(hostId: string, what: string, sid: string, fn: () => void): void {
@@ -185,10 +210,12 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
         continue
       }
       if (channelClassOf(r.name) !== 'fact') continue
-      // A turn end its host wrote while standing down: marked for the boot reconcile above, said by
-      // no one here; the host says it again once it stood up and judged it (stand-down-held.ts), so
-      // a turn it continues is never handed back and pushed first.
-      if (isStandDownHeldEnd(r.name, r.data)) continue
+      // A turn end its host wrote while standing down: marked for the reconcile above, said by no one
+      // here; the host says it again once it stood up and judged it (stand-down-held.ts), so a turn
+      // it continues is never handed back and pushed first. Said as usual if the host does not by
+      // the deadline (awaitHeld).
+      if (isStandDownHeldEnd(r.name, r.data)) { awaitHeld(hostId, r); continue }
+      if (supersedesTurnEnd(r.name)) endHeldWait(r.sid)
       // The event names the record's own session, or it is not said; it says the leader's task of it.
       const said = sessionIdOf(r.name, r.data) === r.sid ? factAsLeaderSays(r.name, r.data, { sid: r.sid, hostId, taskId: taskOf(r.sid), ...scopeOf(hostId, r.sid) }) : null
       if (said === null) { refused.add(r.sid); continue }
@@ -225,10 +252,14 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
   /** A text delta of a session this host owns, naming that session, or nothing (M1). */
   function onFlow(hostId: string, sid: string, name: string, data: unknown, to: string[] | undefined): void {
     if (isRevoked(hostId) || !hostsOwn(hostId, sid, new Set()) || sessionIdOf(name, data) !== sid) return
+    if (supersedesTurnEnd(name)) endHeldWait(sid)
     const said = factAsLeaderSays(name, data, { sid, hostId, taskId: taskOf(sid), ...scopeOf(hostId, sid) })
     if (said === null) return
     try { deps.emit(name, said, { late: false, ...(to ? { to } : {}) }) } catch { /* a flow event is never kept */ }
   }
 
-  return { applyRecs, applyRows, onFlow }
+  /** Stop every wait (the leader side stops). */
+  const stop = (): void => { for (const w of heldWaits.values()) clearTimeout(w.timer); heldWaits.clear() }
+
+  return { applyRecs, applyRows, onFlow, stop }
 }

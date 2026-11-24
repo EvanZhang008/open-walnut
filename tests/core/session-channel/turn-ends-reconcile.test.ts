@@ -282,11 +282,14 @@ describe('S1: the reconcile waits for the host\'s first catch-up after the boot'
 })
 
 describe('the leader boot wires the reconcile per host, after its catch-up', () => {
-  it('leader-boot.ts runs reconcileHostTurnEnds only from onCaughtUp, named by host and the boot time', async () => {
+  it('leader-boot.ts runs reconcileHostTurnEnds only from onCaughtUp, named by host: the marks before the boot, and at every catch-up those standing past the held wait', async () => {
     const src = await fsp.readFile(new URL('../../../src/core/session-channel/leader-boot.ts', import.meta.url), 'utf8')
     expect(src).toMatch(/onCaughtUp: reconcileTurnEnds/)
     const calls = src.match(/reconcileHostTurnEnds\(\{[^}]*/g) ?? []
     expect(calls.length).toBe(1)
-    expect(calls[0]).toMatch(/hostId, before: bootAt/)
+    expect(calls[0]).toMatch(/hostId, before,/)
+    // Review round 1, S1: not once per process, and never a mark a held end's wait may still say.
+    expect(src).toMatch(/const before = Math\.max\(bootAt, Date\.now\(\) - 2 \* HELD_SAY_AGAIN_MS\)/)
+    expect(src).not.toMatch(/reconciled\.has\(hostId\)/)
   })
 })

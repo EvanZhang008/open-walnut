@@ -23,6 +23,7 @@ import { forgetHostResumes, noteHostResumes, noteSwitchAnyHost, setHostSwitchPro
 import { NOT_OWN_SESSION } from './host-api.js'
 import type { PermitPair } from './channel.js'
 import { leaderPermitNumberForHosts, runningLeaderPermit } from './leader-permit.js'
+import { HELD_SAY_AGAIN_MS } from './stand-down-held.js'
 
 /** How often the ban is read again from the credential records (another process may write it). */
 const REVOKED_RECHECK_MS = 60_000
@@ -120,16 +121,19 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     }
   }
   // M3: the turn ends a stop of this leader's left unsaid (committed, the phase not written), per
-  // host, once its link applied what its log held (its rows current here), and only marks made
-  // before this start (turn-ends.ts).
+  // host, once its link applied what its log held (its rows current here): the marks made before this
+  // start, and at every later catch-up the marks still standing long past the wait for a host to say
+  // a stand-down's turn end again (stand-down-held.ts; leader-apply.ts says one at its deadline, so a
+  // mark that still stands then is one nothing will clear: turn-ends.ts).
   const bootAt = Date.now()
-  const reconciled = new Set<string>()
+  const reconciling = new Set<string>()
   const reconcileTurnEnds = (hostId: string): void => {
-    if (reconciled.has(hostId)) return
-    reconciled.add(hostId)
-    void import('./turn-ends.js').then((m) => m.reconcileHostTurnEnds({ hostId, before: bootAt, log: (level, msg, data) => log.session[level](msg, { host: hostId, ...data }) })).catch((err: unknown) => {
-      log.session.warn('session channel: the boot reconcile of host turn ends failed', { host: hostId, error: err instanceof Error ? err.message : String(err) })
-    })
+    if (reconciling.has(hostId)) return
+    reconciling.add(hostId)
+    const before = Math.max(bootAt, Date.now() - 2 * HELD_SAY_AGAIN_MS)
+    void import('./turn-ends.js').then((m) => m.reconcileHostTurnEnds({ hostId, before, log: (level, msg, data) => log.session[level](msg, { host: hostId, ...data }) })).catch((err: unknown) => {
+      log.session.warn('session channel: the reconcile of host turn ends failed', { host: hostId, error: err instanceof Error ? err.message : String(err) })
+    }).finally(() => { reconciling.delete(hostId) })
   }
   const side = createLeaderSide({
     walnutId: async () => getInstanceId(),

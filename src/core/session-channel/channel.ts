@@ -252,9 +252,13 @@ export class HostChannel {
     const log = this.o.log
     reader.caughtUp = false
     while (reader.alive && reader.sentUpTo < log.head) {
+      const head = log.head
       const recs = await log.read(reader.sentUpTo, REPLAY_BATCH)
       if (!reader.alive) return
-      if (recs.length === 0) break
+      // None kept up to the head read before it (a record the file lost): this reader holds all
+      // there is up to it. Never left short of caught up, so live() and onLeaderLinked's
+      // payOwed (stand-down-held.ts) still reach it.
+      if (recs.length === 0) { reader.sentUpTo = Math.max(reader.sentUpTo, head); continue }
       reader.link.send({ ch: 'sf', op: 'facts', recs, replay: true, sentAt: this.now() })
       reader.sentUpTo = recs[recs.length - 1].seq
     }

@@ -553,7 +553,11 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   (`stand-down-held.ts`), so a stand-down that misjudged a newer leader leaves no turn end to no one.
   Those turn ends are in the fact log marked `standDownHeld`; a leader that names the mark on its
   resume (`reads: [stand-down-held-v1]`) says nothing of them and the host says each again once it
-  judged it, so a misfire never hands back and pushes a turn the host then continues.
+  judged it, so a misfire never hands back and pushes a turn the host then continues. The host marks
+  only an end it keeps to say again (one whose row came after it goes unmarked), and the leader gives
+  each marked end two minutes: unsaid by then, with no later event of its session, it is applied as
+  it came; a mark still standing well after that is reconciled at the host's next catch-up. So a
+  host service restart or a link that stays down costs at most one needs-you too many, never one.
   A leader that speaks the channel says so in its config copy (`leader_capabilities:
   [session-channel-v1]`, while the switch is on), and a host whose leader says it never stands down
   on the timeout: it keeps judging and reports `waiting`; either state shows in the leader's Walnut
