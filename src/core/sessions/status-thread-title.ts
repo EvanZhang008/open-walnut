@@ -26,8 +26,12 @@ const TITLE_SHOWN_MAX = 60;
 export interface HeldTitle { title: string; like: string; likeTitle: string }
 /** A merge the answer may make: its thread and the one it goes into, with each one's newest message when asked. */
 export interface MergeMark { id: string; into: string; upTo?: string; intoUpTo?: string }
-/** A title an answer gives (status-threads.ts ThreadMark, or a split line's), and a thread it is not compared to. */
-interface TitleMark { id: string; title?: string; besides?: string }
+/**
+ * A title an answer gives (status-threads.ts ThreadMark, or a split line's). A split's is compared
+ * with its own source too (2026-11-24, his VP: a message split out under its source's very title
+ * left two cards with one title; the answer said another subject and named the same one).
+ */
+interface TitleMark { id: string; title?: string }
 
 const clean = (s: string): string => {
   const t = s.replace(/\s+/g, ' ').trim();
@@ -36,8 +40,8 @@ const clean = (s: string): string => {
 const newest = (t: Pick<OrgThread, 'messages'>): string => t.messages[t.messages.length - 1]?.id ?? '';
 
 /** The open thread of the node a title for `id` clearly repeats, if any. Pure. */
-export function repeatedBy(file: ThreadsFile, id: string, title: string, now: number, besides?: string): string | undefined {
-  const others = file.threads.filter((t) => t.id !== id && t.id !== besides && !t.closed);
+export function repeatedBy(file: ThreadsFile, id: string, title: string, now: number): string | undefined {
+  const others = file.threads.filter((t) => t.id !== id && !t.closed);
   return strongMatch(sameSubjectCandidates(title, [{ task: { id: file.taskId, title: '' }, threads: others }], now))?.id;
 }
 
@@ -59,7 +63,7 @@ export function holdRepeatTitles(file: ThreadsFile, titles: readonly TitleMark[]
   const threads = file.threads.map((t) => {
     const m = titles.find((x) => x.id === t.id);
     if (!m?.title || t.closed || t.titled || t.titleHeld) return t;
-    const like = repeatedBy(file, t.id, m.title, now, m.besides);
+    const like = repeatedBy(file, t.id, m.title, now);
     if (!like) return t;
     held.add(t.id);
     return { ...t, titleHeld: { title: m.title, like, at } };

@@ -90,12 +90,11 @@ describe('a title that repeats another open thread is held', () => {
   })
 
   it('a thread already titled, or already holding a title, is not held (each is asked once)', () => {
-    const { f, first, second } = twoCards()
+    const { f, second } = twoCards()
     const held = holdRepeatTitles(f, [{ id: second, title: REPEAT }], at(43)).file
     expect(holdRepeatTitles(held, [{ id: second, title: REPEAT }], at(44)).held.size).toBe(0)
     const titled = updateThread(f, second, { title: 'Oven rollout' }, NODE, at(43)).file
     expect(holdRepeatTitles(titled, [{ id: second, title: REPEAT }], at(44)).held.size).toBe(0)
-    expect(holdRepeatTitles(f, [{ id: second, title: REPEAT, besides: first }], at(43)).held.size).toBe(0)
   })
 
   it('the hold survives a read; one an older or newer build wrote badly is dropped; a title write clears it', () => {
@@ -294,6 +293,22 @@ describe('a split line\'s title goes through the same hold', () => {
     expect(out.titled).toBeFalsy()
     expect(out.titleHeld).toMatchObject({ title: REPEAT, like: first })
     expect(out).toMatchObject({ state: 'working', reply: 'Checking which ovens have it.' })
+  })
+
+  it('a message split out under its own source\'s title is held too, and asked next (2026-11-24, his VP: two cards with one title)', async () => {
+    const { f } = twoCards()
+    let r = fileMessage(f, { text: 'the garden gate sticks when it rains', via: 'chat', at: at(60), joinRecent: SAME_CONVERSATION_MS })
+    const gate = r.thread.id
+    const g = updateThread(r.file, gate, { title: 'Garden gate sticks in the rain', state: 'answered', reply: 'Oil the hinge.' }, 'task:lead-1', at(60)).file
+    r = fileMessage(g, { text: 'and it is worse than before', via: 'chat', at: at(61), joinRecent: SAME_CONVERSATION_MS })
+    expect(r.thread.id).toBe(gate)
+    await seed(r.file)
+    const q = ask(r.file)
+    await applyThreadLines(TASK, readThreadLines(`FOR_USER_THREAD_SPLIT: ${refOf(q.refs, gate)} | Garden gate sticks in the rain | working | Looking at the hinge again.`, q.refs))
+    const out = (await readThreads(TASK)).threads.find((t) => t.messages.some((m) => m.text.startsWith('and it is worse')))!
+    expect(out.id).not.toBe(gate)
+    expect(out.titled).toBeFalsy()
+    expect(out.titleHeld).toMatchObject({ title: 'Garden gate sticks in the rain', like: gate })
   })
 
   it('a split title of a new subject is written as before', async () => {

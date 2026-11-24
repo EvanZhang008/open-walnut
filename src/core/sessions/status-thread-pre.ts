@@ -30,7 +30,7 @@ export function answerSteps(report: Pick<StatusReport, 'joins_checked' | 'thread
   let split: JoinSplits | null = null;
   let merged: HeldMerge[] = [];
   let holding = new Set<string>();
-  let titles: Array<ThreadMark & { besides?: string }> = [...(marks.titles ?? [])];
+  let titles: ThreadMark[] = [...(marks.titles ?? [])];
   const merges = report.threads_merge?.length ? report.threads_merge : null;
   const pre = (cur: ThreadsFile) => {
     const at = new Date().toISOString();
@@ -44,8 +44,8 @@ export function answerSteps(report: Pick<StatusReport, 'joins_checked' | 'thread
       split = s;
       cur = s.file;
       out.push(...s.opened.map((o) => o.id));
-      // Not held for repeating the thread it was split from: the answer just said it is another subject.
-      titles = [...titles, ...s.opened.map((o) => ({ id: o.id, title: o.line.title, besides: o.line.id }))];
+      // Held like any title that repeats an open thread, its own source included (status-thread-title.ts TitleMark).
+      titles = [...titles, ...s.opened.map((o) => ({ id: o.id, title: o.line.title }))];
     }
     if (checks || merges) {
       const s = settleHeldTitles(cur, checks ?? [], merges ?? [], by, at);
