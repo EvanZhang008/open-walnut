@@ -21,11 +21,12 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { withFileLock } from '../../utils/file-lock.js'
 import { log } from '../../logging/index.js'
+import { keptDirs, removeStaleDirs, sameDirs } from './batch-dirs.js'
+import { saveDirectEdits, type JournalStep } from './target-edits.js'
 import { CHUNK_BYTES, hashFile, sha256 } from './chunks.js'
-import { DriftRecorder } from './drift.js'
 import { limiter } from './scan.js'
 import {
-  EXEC_MODE, FILE_MODE, OPEN_DIR_MODE, chunkPath, closeDirs, copyStatOf, currentFiles, fsyncPath, manifestPath, openDirs,
+  EXEC_MODE, FILE_MODE, OPEN_DIR_MODE, chunkPath, closeDirs, copyStatOf, currentBatch, currentFiles, fsyncPath, manifestPath, openDirs,
   pruneEmptyParents, readCopyStats, readJson, readState, removeEmptyDirs, removeTree, safeRel, targetPaths, writeCopyStats, writeDurable, writeState,
   type TargetPaths,
 } from './target-files.js'
@@ -33,13 +34,6 @@ import { chunkIds, type BatchFile, type BatchManifest, type CommitResult, type S
 
 /** A file of at least this many chunks is made from the last batch's copy, its changed chunks written. */
 const PATCH_MIN_CHUNKS = 2
-
-interface JournalStep {
-  p: string
-  op: 'put' | 'del'
-  /** The path held a file of the previous batch. */
-  existed: boolean
-}
 
 interface Journal {
   batch: number
@@ -190,14 +184,16 @@ export class StandbyTarget {
     const expected = (state.current?.batch ?? 0) + 1
     if (manifest.batch !== expected) throw new Error(`batch ${manifest.batch} is not the next one (${expected})`)
     for (const f of manifest.files) safeRel(f.p)
-    const before = new Map((await currentFiles(this.t, state)).map((f) => [f.p, f]))
+    for (const d of manifest.dirs ?? []) safeRel(d)
+    const was = await currentBatch(this.t, state)
+    const before = new Map(was.files.map((f) => [f.p, f]))
     const next = new Map(manifest.files.map((f) => [f.p, f]))
     const puts = manifest.files.filter((f) => { const b = before.get(f.p); return !b || b.h !== f.h || !!b.x !== !!f.x })
     const dels = [...before.keys()].filter((p) => !next.has(p))
     const bytes = manifest.files.reduce((n, f) => n + f.size, 0)
     const now = new Date().toISOString()
 
-    if (!puts.length && !dels.length && state.current) {
+    if (!puts.length && !dels.length && sameDirs(was.dirs, manifest.dirs) && state.current) {
       // Nothing changed: only the position moves (no chunk, no file, no manifest written).
       await writeState(this.t, { ...state, current: { ...state.current, batch: manifest.batch, takenAt: manifest.takenAt, committedAt: now } })
       return { batch: manifest.batch, written: 0, deleted: 0, unchanged: true }
@@ -246,7 +242,7 @@ export class StandbyTarget {
       steps: [...dels.map((p) => ({ p, op: 'del' as const, existed: true })), ...puts.map((f) => ({ p: f.p, op: 'put' as const, existed: before.has(f.p) }))],
     }
     try {
-      await this.saveDirectEdits(journal.steps, before, manifest.batch)
+      await saveDirectEdits(this.t, journal.steps, before, was.dirs, manifest.batch)
     } catch (err) {
       await removeTree(this.t.apply)
       throw err
@@ -262,6 +258,9 @@ export class StandbyTarget {
         await this.swapIn(step, opened, hooks)
         if (++i === Math.ceil(journal.steps.length / 2)) await hooks.point?.('mid-swap')
       }
+      // The batch's empty dirs, before the state write names it (a crash before leaves at most an
+      // empty dir more, which verify removes).
+      for (const d of manifest.dirs ?? []) await openDirs(this.t.copy, `${d}/.`, opened)
       for (const dir of opened) await fsyncPath(dir).catch(() => {})
       await hooks.point?.('swapped')
     } catch (err) {
@@ -287,56 +286,8 @@ export class StandbyTarget {
     }
     await hooks.point?.('state-written')
     // The batch is current: a cleanup that fails is finished by the next caller's recovery.
-    await this.finish(journal, before, next).catch((err) => log.session.warn('standby: cleanup after commit failed', { error: String(err) }))
+    await this.finish(journal, before, next, manifest.dirs ?? [], was.dirs).catch((err) => log.session.warn('standby: cleanup after commit failed', { error: String(err) }))
     return { batch: manifest.batch, written: puts.length, deleted: dels.length, unchanged: false, patched, patchFailed, bytesWritten }
-  }
-
-  /** Save what was changed directly at each path the swap is about to replace or remove. */
-  private async saveDirectEdits(steps: JournalStep[], before: Map<string, BatchFile>, batch: number): Promise<void> {
-    const stats = await readCopyStats(this.t)
-    const rec = new DriftRecorder(this.t, new Date(), '-commit')
-    const opened = new Set<string>()
-    const aside = async (rel: string, kind: 'added' | 'modified', detail: string) => {
-      await openDirs(this.t.copy, rel, opened)
-      rec.add({ p: rel, kind, detail, saved: await rec.save(rel, 'move') })
-    }
-    try {
-      for (const step of steps) {
-        const parts = step.p.split('/')
-        let blocked = false
-        for (let i = 1; i < parts.length && !blocked; i++) {
-          const rel = parts.slice(0, i).join('/')
-          const st = await fs.lstat(path.join(this.t.copy, rel)).catch(() => null)
-          if (!st) break
-          if (st.isDirectory()) continue
-          await aside(rel, 'added', 'not a dir, on the way to a file of the batch')
-          blocked = true
-        }
-        if (blocked) continue
-        const abs = path.join(this.t.copy, step.p)
-        const st = await fs.lstat(abs).catch(() => null)
-        const prev = before.get(step.p)
-        if (!st) continue
-        if (!st.isFile() || !prev) {
-          await aside(step.p, prev ? 'modified' : 'added', 'found in the copy where this batch writes')
-          continue
-        }
-        const was = stats[step.p]
-        const now = copyStatOf(st)
-        if (was && was.every((v, i) => v === now[i])) continue
-        const got = await hashFile(abs).catch(async () => {
-          await fs.chmod(abs, FILE_MODE).catch(() => {})
-          return hashFile(abs).catch(() => null)
-        })
-        if (got && got.h === prev.h && got.size === prev.size) continue
-        if (!got) { await aside(step.p, 'modified', 'unreadable in the copy; replaced by this batch'); continue }
-        await openDirs(this.t.copy, step.p, opened)
-        rec.add({ p: step.p, kind: 'modified', detail: 'changed in the copy; replaced by this batch', saved: await rec.save(step.p, 'copy') })
-      }
-    } finally {
-      await closeDirs(opened)
-    }
-    await rec.write(batch)
   }
 
   private async swapIn(step: JournalStep, opened: Set<string>, hooks: CommitHooks): Promise<void> {
@@ -379,7 +330,7 @@ export class StandbyTarget {
   }
 
   /** After the state write: record the new files' stats, drop what the batch replaced. */
-  private async finish(journal: Journal, before: Map<string, BatchFile>, next: Map<string, BatchFile>): Promise<void> {
+  private async finish(journal: Journal, before: Map<string, BatchFile>, next: Map<string, BatchFile>, dirs: string[], dirsBefore: string[]): Promise<void> {
     const stats = await readCopyStats(this.t)
     for (const step of journal.steps) {
       if (step.op === 'del') { delete stats[step.p]; continue }
@@ -388,7 +339,10 @@ export class StandbyTarget {
     }
     await writeCopyStats(this.t, stats)
     await removeTree(this.t.apply)
-    for (const step of journal.steps) if (step.op === 'del') await pruneEmptyParents(this.t.copy, step.p).catch(() => {})
+    // A delete leaves no empty dir the batch does not list; one it lists stays.
+    const kept = keptDirs(dirs)
+    for (const step of journal.steps) if (step.op === 'del') await pruneEmptyParents(this.t.copy, step.p, kept).catch(() => {})
+    await removeStaleDirs(this.t.copy, dirsBefore, kept, next.keys())
     // Only the current batch's manifest stays.
     for (const name of await fs.readdir(this.t.batches).catch(() => [] as string[])) {
       if (name !== `${journal.batch}.json`) await fs.rm(path.join(this.t.batches, name), { force: true })
@@ -486,8 +440,8 @@ export class StandbyTarget {
     }
     const state = await readState(this.t)
     if (state.current?.batch === journal.batch && state.current.manifest === journal.batch) {
-      const next = new Map((await currentFiles(this.t, state)).map((f) => [f.p, f]))
-      await this.finish(journal, new Map(), next)
+      const now = await currentBatch(this.t, state)
+      await this.finish(journal, new Map(), new Map(now.files.map((f) => [f.p, f])), now.dirs, [])
       return
     }
     await this.rollBack(journal)

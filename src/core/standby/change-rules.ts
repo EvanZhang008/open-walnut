@@ -22,6 +22,9 @@
  *                        read again after the moment, and one that also changed after the moment
  *                        waits for the batch's next round (batch-round.ts).
  *
+ * A dir has one answer whatever its kind: a leader dir that existed at the moment is in the copy,
+ * empty or not (batch-dirs.ts).
+ *
  * Every leader-data entry of the manifest has its answer here (manifestEntryRules), and
  * tests/core/standby/change-rules.test.ts fails for an entry or a dir that has none.
  */

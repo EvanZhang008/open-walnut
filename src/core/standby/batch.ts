@@ -121,6 +121,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
         batch: (state.current?.batch ?? 0) + 1,
         takenAt: new Date(placed.pinnedAt).toISOString(),
         files: [...placed.files.values()].sort(compareBatchPaths),
+        ...(placed.dirs.length ? { dirs: placed.dirs } : {}),
       }
       stats.files = manifest.files.length
       const commit = await opts.transport.commit(manifest)

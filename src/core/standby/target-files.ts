@@ -158,7 +158,14 @@ export async function readManifest(t: TargetPaths, batch: number): Promise<Batch
 }
 
 export async function currentFiles(t: TargetPaths, s: StandbyState): Promise<BatchFile[]> {
-  return s.current ? (await readManifest(t, s.current.manifest)).files : []
+  return (await currentBatch(t, s)).files
+}
+
+/** The current batch's files and dirs (none before the first batch). */
+export async function currentBatch(t: TargetPaths, s: StandbyState): Promise<{ files: BatchFile[]; dirs: string[] }> {
+  if (!s.current) return { files: [], dirs: [] }
+  const m = await readManifest(t, s.current.manifest)
+  return { files: m.files, dirs: m.dirs ?? [] }
 }
 
 /** [ino, size, mtimeMs, ctimeMs, mode] of a copied file as written. */
@@ -263,10 +270,10 @@ export async function removeEmptyDirs(p: string): Promise<void> {
   await fs.rmdir(p)
 }
 
-/** Remove the dirs above `rel` (inside the copy) that a delete left empty. */
-export async function pruneEmptyParents(copyRoot: string, rel: string): Promise<void> {
+/** Remove the dirs above `rel` (inside the copy) that a delete left empty, up to one in `keep` (a dir the batch lists, or one above it). */
+export async function pruneEmptyParents(copyRoot: string, rel: string, keep?: ReadonlySet<string>): Promise<void> {
   let dir = path.dirname(rel)
-  while (dir !== '.') {
+  while (dir !== '.' && !keep?.has(dir)) {
     const abs = path.join(copyRoot, dir)
     const parent = path.dirname(abs)
     const names = await fs.readdir(abs).catch(() => null)

@@ -51,9 +51,10 @@ batch **reads first and fixes its moment after**, when little is left to read (`
    its files, so a file made after the walk is known to have existed at the moment even if it
    is replaced or removed right after. A dir listed again that changed after the moment too
    fails the round (a name made and removed around the moment is in neither listing), except a
-   dir of git's object store (below). The listed files that changed since their copy, and the
-   git objects new since the walk, are read too. Every read in the hold goes smallest first, up
-   to 8 MB and 200 ms, into memory. Then writes go on.
+   dir of git's object store (below). The listed files that changed since their copy are read
+   too. Every read in the hold goes smallest first, up to 8 MB and 200 ms, into memory. Then
+   writes go on, and the git objects new since the walk are read at once, before a repack can
+   remove them.
 3. **Round: databases.** Copy each changed database as pinned (`sqlite3_serialize` inside its
    read transaction, in the worker's memory: page for page, so only the chunks whose pages
    changed are new); each pin ends once its database is copied.
@@ -89,8 +90,20 @@ pack, or once it is unreachable and older than the prune age (an hour in `git-ma
 A history rewrite (`git-compaction.ts`, `gc --prune=now`) during a batch only fails its rounds:
 an object the batch saw at the moment and holds no copy of is never left out silently. What the
 argument does not cover: a ref moved away and its objects pruned within the seconds between one
-round's moment and its second walk; the ref check catches it for the objects the refs name
-themselves, not for their trees and parents. Repositories nested inside the home (a clone under
+round's moment and its second walk. The ref check does not catch that case either: it reads a
+ref from disk only while the ref's bytes are still the batch's, and this one moved; and it looks
+up only the objects the refs name, not their trees and parents.
+
+**Dirs.** A batch lists every leader dir of the moment that no file of it lies under
+(`BatchManifest.dirs`, `batch-dirs.ts`; the dirs above a file are implied), and the copy keeps
+each, empty or not. Git needs it: once `git gc` packs every ref, `.git/refs` holds only empty
+dirs, and a copy without them is "not a git repository", so a leader started from it would have
+no history (the liveness test below met it, 2026-11-24; the copy never kept an empty dir before).
+A dir existed at the moment by its parent's names then, as a file does. A commit makes the
+batch's dirs before its state write and removes the ones the last batch listed once they hold
+nothing; verify makes again one the copy lost and reports it once. A receiver says which of a
+batch's fields it keeps beyond its files (`reads` in its `init` answer); an older one says
+none, and the leader sends it batches without dirs, as before. Repositories nested inside the home (a clone under
 `repositories/`) take the general rule: correct, only more rounds when git writes there.
 
 **The rule every read follows** (`stage.ts`): before the read, the file's ctime must be below
@@ -186,8 +199,8 @@ chunks arrive and while files are built. Each leaves one whole batch that verifi
 `verifyStandby` (`verify.ts`) works in an order that never writes through an entry someone put
 in the copy. First it moves to `drift/<time>/files/`, as they are, every entry that is neither
 a file nor a dir (a link is moved, never followed), every dir where a file of the batch
-belongs, every dir no file of the batch lies under, and every other file the batch does not
-have. Such a dir holding no file is removed quietly (nothing in it to save; a crash during a
+belongs, every dir no file of the batch lies under and the batch does not list, and every other
+file the batch does not have. Such a dir holding no file is removed quietly (nothing in it to save; a crash during a
 commit can leave one), as is a repair's temp file a crash left. Then it compares each file of the batch with what commit wrote:
 its stat first (an edit, a chmod, a replace moves the ctime or the inode), its sha256 when the
 stat moved or with `--deep`. A changed file is copied to drift, then built again from its

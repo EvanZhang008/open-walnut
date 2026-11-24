@@ -44,7 +44,16 @@ const EXPORT_STALE_MS = 2 * 60_000
 /** The current manifest file's identity: the leader keeps its parsed files while this holds. */
 export interface ManifestRef { n: number; size: number; mtimeMs: number; ino: number }
 
-export interface InitAnswer { state: StandbyState; manifest: ManifestRef | null; exported?: { path: string; size: number } }
+export interface InitAnswer {
+  state: StandbyState
+  manifest: ManifestRef | null
+  exported?: { path: string; size: number }
+  /** What of a batch this receiver reads beyond its files: 'dirs' (BatchManifest.dirs). An older one names none, and the leader leaves them out. */
+  reads?: string[]
+}
+
+/** BatchManifest fields this receiver keeps beyond its files (InitAnswer.reads). */
+export const RECEIVER_READS = ['dirs']
 export interface ApplyAnswer { commit: CommitResult; manifest: ManifestRef | null; verify?: VerifyResult & { driftTotal: number }; pending?: PendingDrift[] }
 export interface VerifyAnswer { verify: VerifyResult & { driftTotal: number }; pending: PendingDrift[] }
 export interface TargetExport { chunks?: string[]; files?: BatchFile[] }
@@ -121,7 +130,7 @@ export async function receiveInit(dir: string, opts: { exportTo?: string; chunks
   // Under the target's lock: an apply finishing meanwhile removes chunks only its replaced versions used.
   return target.locked(async () => {
     const state = await readState(t)
-    const answer: InitAnswer = { state, manifest: await manifestRef(t, state) }
+    const answer: InitAnswer = { state, manifest: await manifestRef(t, state), reads: RECEIVER_READS }
     if (opts.exportTo) {
       const file = incomingFile(t, opts.exportTo)
       const out: TargetExport = {}
@@ -144,8 +153,8 @@ export async function composeManifest(t: TargetPaths, upload: BatchUpload): Prom
   const files = new Map((upload.base === null ? [] : await currentFiles(t, state)).map((f) => [f.p, f]))
   for (const p of upload.dels) files.delete(p)
   for (const f of upload.puts) files.set(f.p, f)
-  const { format, version, batch, takenAt } = upload.head
-  const manifest: BatchManifest = { format, version, batch, takenAt, files: [...files.values()].sort(compareBatchPaths) }
+  const { format, version, batch, takenAt, dirs } = upload.head
+  const manifest: BatchManifest = { format, version, batch, takenAt, files: [...files.values()].sort(compareBatchPaths), ...(dirs ? { dirs } : {}) }
   if (sha256(Buffer.from(JSON.stringify(manifest))) !== upload.hash) throw new Error('the rebuilt manifest does not match the leader\'s')
   return manifest
 }

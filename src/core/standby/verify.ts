@@ -19,12 +19,13 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { keptDirs } from './batch-dirs.js'
 import { hashFile } from './chunks.js'
 import { DriftRecorder, reportPendingDrift as reportPending, type DriftItem, type DriftReport } from './drift.js'
 import { limiter } from './scan.js'
 import { StandbyTarget } from './target.js'
 import {
-  DIR_MODE, EXEC_MODE, FILE_MODE, chunkPath, closeDirs, copyStatOf, currentFiles, listTree, openDirs, readCopyStats,
+  DIR_MODE, EXEC_MODE, FILE_MODE, chunkPath, closeDirs, copyStatOf, currentBatch, listTree, openDirs, readCopyStats,
   readState, removeTree, targetPaths, writeCopyStats, writeState, type CopyStat,
 } from './target-files.js'
 import { chunkIds, type BatchFile } from './types.js'
@@ -51,7 +52,7 @@ export async function verifyStandby(dir: string, opts: { deep?: boolean; now?: (
     const t = target.t
     const state = await readState(t)
     const out: VerifyResult = { batch: state.current?.batch ?? null, checked: 0, hashed: 0, drift: [], ms: 0 }
-    const files = await currentFiles(t, state)
+    const { files, dirs } = await currentBatch(t, state)
     const stats = await readCopyStats(t)
     const rec = new DriftRecorder(t, (opts.now ?? (() => new Date()))())
     const opened = new Set<string>()
@@ -59,6 +60,7 @@ export async function verifyStandby(dir: string, opts: { deep?: boolean; now?: (
     // Dirs some file of the batch lies under.
     const needed = new Set<string>()
     for (const f of files) for (let d = path.posix.dirname(f.p); d !== '.'; d = path.posix.dirname(d)) needed.add(d)
+    for (const d of keptDirs(dirs)) needed.add(d)
 
     const moveAside = async (rel: string, item: Omit<DriftItem, 'saved'>): Promise<void> => {
       try {
@@ -95,6 +97,16 @@ export async function verifyStandby(dir: string, opts: { deep?: boolean; now?: (
         continue
       }
       await moveAside(rel, { p: rel, kind: 'added' })
+    }
+    // The batch's empty dirs: one gone from the copy is made again.
+    for (const d of dirs) {
+      if ((await fs.lstat(path.join(t.copy, d)).catch(() => null))?.isDirectory()) continue
+      try {
+        await openDirs(t.copy, `${d}/.`, opened)
+        rec.add({ p: `${d}/`, kind: 'deleted' })
+      } catch (err) {
+        rec.add({ p: `${d}/`, kind: 'unrepaired', detail: `deleted: ${errText(err)}` })
+      }
     }
     // A dir's mode is put back quietly: opening a dir is how anyone edits a file in it, and the
     // edit itself is what is reported.

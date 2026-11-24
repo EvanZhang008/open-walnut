@@ -132,6 +132,8 @@ export class RemoteStandbyTarget implements StandbyTransport {
   /** Chunk ids the target holds (null: not read yet, or dropped after a failure). */
   private held: Set<string> | null = null
   private viewed: { state: StandbyState; files: BatchFile[] } | null = null
+  /** Whether the receiver keeps a batch's dirs (InitAnswer.reads). */
+  private readsDirs = false
   /** Chunks waiting to go, on this machine's disk. */
   private readonly spool: ChunkSpool
   private closed = false
@@ -313,6 +315,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
     const args = ['--export', exportTo, '--files', ...(this.base ? ['--have-manifest', JSON.stringify(this.base.ref)] : []), ...(this.held ? [] : ['--chunks'])]
     const init = await this.receiveAgain<InitAnswer>('init', args)
     this.see(init.state)
+    this.readsDirs = !!init.reads?.includes('dirs')
     this.batchSpoolStart = this.spool.stats.spooledBytes
     const got = init.exported ? JSON.parse((await gunzip(await this.readFile(init.exported.path))).toString('utf8')) as TargetExport : {}
     if (got.chunks) this.held = new Set(got.chunks)
@@ -349,7 +352,10 @@ export class RemoteStandbyTarget implements StandbyTransport {
     if (err) { this.reset(); throw err }
   }
 
-  async commit(manifest: BatchManifest): Promise<CommitResult> {
+  async commit(batch: BatchManifest): Promise<CommitResult> {
+    // A receiver older than the batch's dirs rebuilds the manifest without them: send it so.
+    const { dirs, ...plain } = batch
+    const manifest: BatchManifest = this.readsDirs || !dirs ? batch : plain
     await this.flush()
     const viewed = this.viewed
     if (!viewed) throw new Error('the target was not read yet (current() first)')
@@ -409,7 +415,8 @@ export class RemoteStandbyTarget implements StandbyTransport {
       const changed = puts.filter((f) => { const b = before.get(f.p); return !b || b.h !== f.h || !!b.x !== !!f.x }).length
       this.lastApply = null
       this.seen = { batch: manifest.batch, takenAt: manifest.takenAt }
-      return { batch: manifest.batch, written: changed, deleted: dels.length, unchanged: !changed && !dels.length }
+      // The dirs the target held before are not known here: a batch that lists any counts as changed.
+      return { batch: manifest.batch, written: changed, deleted: dels.length, unchanged: !changed && !dels.length && !manifest.dirs?.length }
     }
     // A batch that changed no content writes no manifest: the target keeps the one it had.
     if (!answer.commit.unchanged && answer.manifest) this.base = { ref: answer.manifest, files: manifest.files }

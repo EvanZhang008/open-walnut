@@ -160,7 +160,9 @@ describe('git objects in a batch', () => {
     // Packed: found in the batch's pack.
     git('repack', '-adq')
     const packIdx = `.git/objects/pack/${fs.readdirSync(path.join(sb.home, '.git/objects/pack')).find((n) => n.endsWith('.idx'))!}`
-    expect(await missingRefTips(sb.home, files([packIdx]))).toEqual([])
+    expect(await missingRefTips(sb.home, files([packIdx, packIdx.replace(/\.idx$/, '.pack')]))).toEqual([])
+    // An index without its pack holds nothing: git could not read the object from it.
+    expect(await missingRefTips(sb.home, files([packIdx]))).toEqual([`.git/refs/heads/main names ${head}`])
     // A ref that moved since the batch read it is not checked (its content at the moment is the batch's).
     const moved = files([])
     write(sb.home, '.git/refs/heads/main', `${first}\n`)

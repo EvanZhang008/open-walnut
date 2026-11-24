@@ -52,6 +52,13 @@ export interface BatchManifest {
   /** The moment the batch is of (ISO). */
   takenAt: string
   files: BatchFile[]
+  /**
+   * The leader dirs of the moment that no file of the batch lies under (only the deepest; the
+   * dirs above them are implied), sorted: the copy keeps an empty dir too. Git counts a dir as
+   * a repository only while `.git/refs` exists, and once every ref is packed its dirs hold no
+   * file. Absent: none (a batch an older Walnut made reads the same).
+   */
+  dirs?: string[]
 }
 
 /** What the target holds now. */

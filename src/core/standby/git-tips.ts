@@ -21,6 +21,7 @@ const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const IDX_FILE = /^\.git\/objects\/pack\/pack-[0-9a-f]+\.idx$/
 const IDX_MAGIC = 0xff744f63
 const MAX_REF_FILE = 16 * 1024 * 1024
+const packOf = (idx: string): string => `${idx.slice(0, -'.idx'.length)}.pack`
 
 /** The ref file's text when its bytes on disk are still the batch's, else null. */
 async function refText(home: string, rel: string, f: BatchFile): Promise<string | null> {
@@ -81,13 +82,17 @@ export async function missingRefTips(home: string, files: ReadonlyMap<string, Ba
     }
   }
   if (!tips.size) return []
-  const batchIdx = [...files.keys()].filter((p) => IDX_FILE.test(p))
+  // A pack holds an object only with its .pack beside its .idx.
+  const batchIdx = [...files.keys()].filter((p) => IDX_FILE.test(p) && files.has(packOf(p)))
   let homeIdx: string[] | null = null
   const missing: string[] = []
   for (const [id, ref] of tips) {
     if (await holds(home, id, (rel) => files.has(rel), batchIdx)) continue
-    homeIdx ??= (await fs.readdir(path.join(home, '.git/objects/pack')).catch(() => [] as string[]))
-      .map((n) => `.git/objects/pack/${n}`).filter((p) => IDX_FILE.test(p))
+    if (!homeIdx) {
+      const names = (await fs.readdir(path.join(home, '.git/objects/pack')).catch(() => [] as string[])).map((n) => `.git/objects/pack/${n}`)
+      const all = new Set(names)
+      homeIdx = names.filter((p) => IDX_FILE.test(p) && all.has(packOf(p)))
+    }
     const onDisk = (rel: string) => fs.access(path.join(home, rel)).then(() => true, () => false)
     if (!(await holds(home, id, onDisk, homeIdx))) continue
     missing.push(`${ref} names ${id}`)
