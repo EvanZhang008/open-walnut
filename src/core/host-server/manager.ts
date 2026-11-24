@@ -164,9 +164,13 @@ export function createHostServerManager(deps: ManagerDeps) {
   const quietMs = deps.updateQuietMs ?? DEFAULT_UPDATE_QUIET_MS
   const maxBehindMs = deps.updateMaxBehindMs ?? DEFAULT_UPDATE_MAX_BEHIND_MS
   const isReplica = (p: WorkingProgram) => p.args.includes('--replica')
-  /** The program the view shows: the daemon's own word wins (its fallback runs while the Mac sleeps too). */
+  /**
+   * The program the view shows: the daemon's own word wins (its fallback runs while the Mac sleeps too).
+   * A host's one service is the full follower by construction (service-entry.ts starts it only from a
+   * replica spec), also before this process configured it (a configure that timed out after a restart).
+   */
   const programOf = (hostKey: string, status: HostServerStatus | undefined): HostServerView['program'] =>
-    status?.program === 'fallback' ? 'fallback' : asked.get(hostKey)
+    status?.program === 'fallback' ? 'fallback' : asked.get(hostKey) ?? (oneServiceHere(hosts.get(hostKey)) ? 'replica' : undefined)
 
   function view(hostKey: string): HostServerView {
     let v = views.get(hostKey)
@@ -507,9 +511,18 @@ export function createHostServerManager(deps: ManagerDeps) {
     return { rec, working }
   }
 
+  /**
+   * The host runs as THIS Walnut's one service (one-service-mode.ts): its follower is the service
+   * itself. Nothing that fails here may take it down (takeDown), raise a gate on it (notEligible) or
+   * read it as "no follower": any of those switches the host back to two programs for good.
+   */
+  function oneServiceHere(host: HostServerHost | undefined): boolean {
+    return servesThisWalnut(host?.servesAs?.(), deps.home)
+  }
+
   /** The host runs as this Walnut's one service: the program last kept as working, sent as it is. */
   function serviceHolds(host: HostServerHost): { rec: HostRecord; working: WorkingProgram } | null {
-    if (!servesThisWalnut(host.servesAs?.(), deps.home)) return null
+    if (!oneServiceHere(host)) return null
     const rec = readState()[host.hostKey]
     if (!rec || !Number.isInteger(rec.publicPort) || !rec.working || !isReplica(rec.working)) return null
     heldUntil.delete(host.hostKey)
@@ -566,7 +579,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     const exposeSettings = settings?.enabled === true ? await exposeSettingsFor(settings) : null
     const enabled = settings?.enabled === true
     if (!enabled) {
-      if (!(await takeDown(hostKey, host))) return
+      if (!(await takeDown(hostKey, host, 'off'))) return
       set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined, lastReport: undefined, lastReportAt: undefined })
       return
     }
@@ -581,11 +594,12 @@ export function createHostServerManager(deps: ManagerDeps) {
     // A host row that is really this computer (its link reaches this computer's own daemon) runs
     // no second Walnut by default: this server is the one there. The person's switch still can.
     // Not known yet (this computer's own daemon is not linked yet, as at a start): nothing is
-    // installed on an unknown; it is looked at again soon.
-    if (settings!.byDefault && !settings!.carriesTunnel) {
+    // installed on an unknown; it is looked at again soon. A host whose one service is this Walnut's
+    // follower is not this computer (a leader runs no follower of itself): no probe answer stops it.
+    if (settings!.byDefault && !settings!.carriesTunnel && !oneServiceHere(host)) {
       const self = host.reachesThisComputer ? await host.reachesThisComputer().catch(() => null) : false
       if (self === true) {
-        if (!(await takeDown(hostKey, host))) return
+        if (!(await takeDown(hostKey, host, 'this-computer'))) return
         notEligible(hostKey, 'this-computer', 'No Walnut server runs on this host by default: it is this computer, which runs Walnut already.')
         return
       }
@@ -708,10 +722,14 @@ export function createHostServerManager(deps: ManagerDeps) {
       }
       const refused = err instanceof Error && err.name === 'SshLoginRefusedError'
       failedNow.set(hostKey, { message, triesAgain: !(err instanceof UntilRetry) })
+      // The host's one service is this Walnut's follower (2026-11-24: a first report a lossy link
+      // delayed past a minute took it down, and the host came back as two programs for good): a
+      // failure leaves it running, never reads as "no follower there", and is only checked again.
+      const service = oneServiceHere(hosts.get(hostKey) ?? host)
       if (err instanceof UntilRetry) {
         // The same file would fail the same way: it waits for Retry (or a newer build). On a host
         // that is on only by default, a file that does not run there means no follower there.
-        if (err.noBuild && settings!.byDefault) {
+        if (err.noBuild && settings!.byDefault && !service) {
           // A proof boot that failed may have met a passing problem (a full disk, a process ended
           // for memory): tried again at a slow pace. No build for the system waits for a connect.
           notEligible(hostKey, 'no-build', `No Walnut server runs on this host: ${message.replace(/\.? Press Retry to install it again\.$/, '').replace(/\.$/, '')}. Its sessions run as before; Retry tries again, and a newer build is tried by itself.`, { again: err.proofBoot ? 'proof' : null })
@@ -725,9 +743,11 @@ export function createHostServerManager(deps: ManagerDeps) {
       // too, later and later. Nothing else on the host waits for either.
       // A host on only by default does not keep a server restarting under its daemon between tries,
       // and stops trying by itself at the end of the ladder.
-      const byDefault = !refused && settings!.byDefault === true && !settings!.carriesTunnel
-      if (byDefault) await takeDown(hostKey, hosts.get(hostKey), { keepWait: true })
-      const later = retryingLater(hostKey, refused ? 'login' : 'failed', message, { stopAtEnd: byDefault })
+      const byDefault = !refused && settings!.byDefault === true && !settings!.carriesTunnel && !service
+      if (byDefault) await takeDown(hostKey, hosts.get(hostKey), 'failed', { keepWait: true })
+      // Its status is still read meanwhile: a report that comes late shows as running at once.
+      if (service) startPoll(hostKey)
+      const later = retryingLater(hostKey, refused ? 'login' : 'failed', service ? `${message.replace(/\.$/, '')}; the host's Walnut service is left running` : message, { stopAtEnd: byDefault })
       failedNow.set(hostKey, { message, triesAgain: later.at !== undefined })
       set(hostKey, { phase: 'error', message: later.message, retryAt: later.at })
     }
@@ -738,8 +758,18 @@ export function createHostServerManager(deps: ManagerDeps) {
    * before a restart here), and the link, the door hold and the copy target go. False: this server
    * began to stop meanwhile, and the host stays as it was. `keepWait`: a failed start keeps its place
    * on the ladder (try-later.ts).
+   *
+   * `why`: only 'off' (the settings turn this host's server off: the person's switch, the host
+   * removed or turned off) takes down a host whose one service is this Walnut's follower. Removing
+   * that spec restarts the service, which then finds no follower spec and starts as the plain daemon
+   * (host-server-core.ts configureSelf, service-entry.ts decideServiceEntry); only a daemon update
+   * switches it back. Any other reason leaves such a host as it is (false).
    */
-  async function takeDown(hostKey: string, host: HostServerHost | undefined, o: { keepWait?: boolean } = {}): Promise<boolean> {
+  async function takeDown(hostKey: string, host: HostServerHost | undefined, why: 'off' | 'this-computer' | 'failed', o: { keepWait?: boolean } = {}): Promise<boolean> {
+    if (why !== 'off' && oneServiceHere(host)) {
+      log.session.warn('host server: left running, the host runs this Walnut as its one service', { host: hostKey, why })
+      return false
+    }
     stopPoll(hostKey)
     if (!o.keepWait) tryLater.clear(hostKey)
     if (host?.connected && host.hasCapability('host-server-v1')) {
@@ -762,7 +792,8 @@ export function createHostServerManager(deps: ManagerDeps) {
 
   /** Whether this host is on only by default and nothing of this Walnut runs or ran there: the gates apply. */
   async function firstOnByDefault(host: HostServerHost, settings: HostServerSettings): Promise<boolean> {
-    if (!settings.byDefault || settings.carriesTunnel || readState()[host.hostKey]) return false
+    // The host's one service is this Walnut's follower: one runs there (its own memory is no lack of room).
+    if (!settings.byDefault || settings.carriesTunnel || readState()[host.hostKey] || oneServiceHere(host)) return false
     const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
     const state = (st?.status as HostServerStatus | undefined)?.state
     return !state || state === 'off'
