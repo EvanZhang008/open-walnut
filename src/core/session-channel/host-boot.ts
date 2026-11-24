@@ -214,7 +214,9 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     bus, standingDown: hostStandsDown, setStandsDown: setHostStandsDown, owns: (sid) => emitter.owns(sid),
     offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset, stamp, replay: (ends) => resend.replay(ends),
     leaderLinked: () => channel.leaderLive(), leaderReadsHeld: () => channel.leaderReads(READS_HELD_TURN_ENDS),
-    sayAgain: (name, data, to) => { emitter.sayAgain(name, data, to) }, log: say,
+    sayAgain: (name, data, as) => { emitter.sayAgain(name, data, as) }, log: say,
+    // As the emitter reads it in the same tick, so a said-again record carries the first one's mark.
+    judgedByLeaderNow: () => watchRef?.oldLeaderJudgesNow() ?? false,
   })
   standDownRef = standDown
   await emitter.start()

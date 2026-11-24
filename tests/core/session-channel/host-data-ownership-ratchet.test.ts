@@ -86,7 +86,7 @@ const APPLIES: Record<string, string> = {
 /** The other members: they read, link, or report, and apply nothing a host sent. */
 const OTHER = [
   'walnutId', 'permit', 'switchNow', 'openStream', 'dial', 'request', 'ownerOf', 'startsInFlight', 'leaderDrops', 'loadCursor',
-  'onLinkLost', 'liveUnknownMs', 'onLinked', 'onCaughtUp', 'backoffMs', 'callTimeoutMs', 'startTimeoutMs', 'refused', 'log',
+  'onLinkLost', 'liveUnknownMs', 'onLinked', 'onCaughtUp', 'backoffMs', 'heldSayAgainMs', 'callTimeoutMs', 'startTimeoutMs', 'refused', 'log',
   // Reads: the leader's own task of a session (a fact says it), and whether the host is revoked.
   'taskOf', 'revoked',
   // Reads: which of the ids a fact names the leader handed this session (fact-keys.ts, scoped keys).

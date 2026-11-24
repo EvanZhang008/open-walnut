@@ -51,8 +51,17 @@ const WENT_ON = new Set(['session:send', 'session:started', 'session:message-que
 /** Does `name`, of a session after its turn end, take that end's place (a later turn end, or the session went on)? */
 export function supersedesTurnEnd(name: string): boolean { return TURN_ENDS.has(name) || WENT_ON.has(name) }
 
-/** A turn end as the bus said it; `to`: its destinations, which the record said again names too. */
-export interface HeldTurnEnd { name: string; data: unknown; source?: string; timestamp?: number; to?: string[] }
+/**
+ * A turn end as the bus said it. The record said again keeps what the emitter kept of the event: its
+ * destinations (`to`), its time (`timestamp`) and whether the leader this host stood down for judged it
+ * (`judgedBy`, host-emitter.ts judgedByLeaderNow), so the leader decides on it as on the first record.
+ */
+export interface HeldTurnEnd { name: string; data: unknown; source?: string; timestamp?: number; to?: string[]; judgedBy?: 'leader' }
+
+/** How a said-again record is kept (host-emitter.ts sayAgain): as the event's first record was. */
+export interface SaidAgainAs { to?: string[]; at?: number; judgedBy?: 'leader' }
+
+const saidAgainAs = (e: HeldTurnEnd): SaidAgainAs => ({ ...(e.to ? { to: e.to } : {}), ...(typeof e.timestamp === 'number' ? { at: e.timestamp } : {}), ...(e.judgedBy ? { judgedBy: e.judgedBy } : {}) })
 
 /** The mark the emitter puts on a turn end it wrote while this host stood down (host-resend.ts turnEndStamp). */
 export const STAND_DOWN_HELD_KEY = 'standDownHeld'
@@ -93,11 +102,15 @@ export interface StandDownHeld {
    * Once a leader is linked: say every owed end (`say`) when it reads the held mark, else forget them
    * (it applied them as they came). Nothing while no leader is linked. Returns how many were said.
    */
-  payOwed(o: { leaderLinked(): boolean; leaderReadsHeld(): boolean; say(name: string, data: unknown, to?: string[]): void }): number
+  payOwed(o: { leaderLinked(): boolean; leaderReadsHeld(): boolean; say(name: string, data: unknown, as: SaidAgainAs): void }): number
   /** Is this very event (its data object) the end kept now for its session? The mark is put only on such an end. */
   holds(name: string, data: unknown): boolean
   size(): number
   owedSize(): number
+}
+
+function judgedBy(o: { judgedByLeaderNow?(): boolean }): boolean {
+  try { return o.judgedByLeaderNow?.() === true } catch { return false }
 }
 
 function sessionIdOf(data: unknown): string {
@@ -108,6 +121,8 @@ function sessionIdOf(data: unknown): string {
 export function createStandDownHeld(o: {
   standingDown(): boolean
   owns(sid: string): boolean
+  /** The emitter's judgedByLeaderNow, read in the event's tick as the emitter reads it. */
+  judgedByLeaderNow?(): boolean
   /** The runner's consumed offset of the session's transcript now (undefined: not known). */
   offsetOf?(sid: string): number | undefined
   now?(): number
@@ -145,7 +160,7 @@ export function createStandDownHeld(o: {
         if (!o.standingDown() || !o.owns(sid)) return
         held.delete(sid)
         const kept: Kept = {
-          end: { name: event.name, data: event.data, ...(event.source ? { source: event.source } : {}), ...(typeof event.timestamp === 'number' ? { timestamp: event.timestamp } : {}), ...(event.destinations ? { to: [...event.destinations] } : {}) },
+          end: { name: event.name, data: event.data, ...(event.source ? { source: event.source } : {}), ...(typeof event.timestamp === 'number' ? { timestamp: event.timestamp } : {}), ...(event.destinations ? { to: [...event.destinations] } : {}), ...(judgedBy(o) ? { judgedBy: 'leader' as const } : {}) },
           at: now(), offset: offsetOf(sid),
         }
         held.set(sid, kept)
@@ -171,7 +186,7 @@ export function createStandDownHeld(o: {
       if (!p.leaderReadsHeld()) return 0
       let said = 0
       for (const e of ends) {
-        try { p.say(e.name, e.data, e.to); said++ } catch (err) { o.log?.('warn', 'host sessions: a turn end of the stand-down was not said again', { sessionId: sessionIdOf(e.data), error: err instanceof Error ? err.message : String(err) }) }
+        try { p.say(e.name, e.data, saidAgainAs(e)); said++ } catch (err) { o.log?.('warn', 'host sessions: a turn end of the stand-down was not said again', { sessionId: sessionIdOf(e.data), error: err instanceof Error ? err.message : String(err) }) }
       }
       return said
     },
@@ -218,14 +233,16 @@ export function startStandDownSide(o: {
   /** A leader is linked and caught up now (HostChannel.leaderLive), and does it read the mark. */
   leaderLinked(): boolean
   leaderReadsHeld(): boolean
-  /** Say an owed end again to the leader, to its event's destinations (host-emitter.ts sayAgain). */
-  sayAgain(name: string, data: unknown, to?: string[]): void
+  /** Say an owed end again to the leader, kept as its first record was (host-emitter.ts sayAgain). */
+  sayAgain(name: string, data: unknown, as: SaidAgainAs): void
+  /** Does the leader this host stood down for still judge now (the emitter's judgedByLeaderNow)? */
+  judgedByLeaderNow?(): boolean
   /** Tests: the held clock. */
   heldOptions?: { now?(): number; later?(fn: () => void, ms: number): void; maxAgeMs?: number }
   log?(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
 }): StandDownSide {
   const say = o.log ?? (() => {})
-  const held = createStandDownHeld({ standingDown: o.standingDown, owns: o.owns, ...(o.offsetOf ? { offsetOf: o.offsetOf } : {}), ...(o.heldOptions ?? {}), log: say })
+  const held = createStandDownHeld({ standingDown: o.standingDown, owns: o.owns, ...(o.offsetOf ? { offsetOf: o.offsetOf } : {}), ...(o.judgedByLeaderNow ? { judgedByLeaderNow: o.judgedByLeaderNow } : {}), ...(o.heldOptions ?? {}), log: say })
   o.bus.subscribe(STAND_DOWN_HELD_SUBSCRIBER, (event) => held.note(event), { global: true, interest: ['session:'] })
   const payOwed = (): void => {
     const said = held.payOwed({ leaderLinked: o.leaderLinked, leaderReadsHeld: o.leaderReadsHeld, say: o.sayAgain })

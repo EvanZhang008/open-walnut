@@ -112,10 +112,10 @@ export interface HostEmitter {
   owns(sid: string): boolean
   /**
    * A fact said again, its data as given (already stamped: stand-down-held.ts, the turn ends owed
-   * after a stand-down), to the destinations its event named (`to`). Only for an own session; false
-   * when `sid` is not one.
+   * after a stand-down), kept as the event's first record was (its destinations, its time, its
+   * judgedBy). Only for an own session; false when `sid` is not one.
    */
-  sayAgain(name: string, data: unknown, to?: string[]): boolean
+  sayAgain(name: string, data: unknown, as?: { to?: string[]; at?: number; judgedBy?: 'leader' }): boolean
   /** These rows are the leader's again (stranded-own-rows.ts): no longer own, and no record for them (the leader has its row). */
   disown(sids: Iterable<string>): void
   /** This host's own session of `taskId` (the newest row seen), or null. */
@@ -395,10 +395,10 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       }
     },
     owns: (sid) => own.has(sid),
-    sayAgain(name, data, to) {
+    sayAgain(name, data, as = {}) {
       const sid = sessionIdOf(name, data)
       if (!sid || !own.has(sid) || channelClassOf(name) !== 'fact') return false
-      append(sid, name, data, to ? { to } : {})
+      append(sid, name, data, as)
       scheduleLive(sid)
       return true
     },

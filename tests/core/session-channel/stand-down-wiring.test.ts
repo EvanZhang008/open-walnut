@@ -100,7 +100,7 @@ async function startHost(dir: string, o: { own: string[]; armed: Set<string> }) 
     bus, standingDown: hostStandsDown, setStandsDown: setHostStandsDown, owns: (sid) => emitter!.owns(sid), stamp,
     replay: (ends) => { for (const e of ends) bus.deliverTo([FAMILY], e.name, e.data, { ...(e.source ? { source: e.source } : {}) }) },
     leaderLinked: () => channel.leaderLive(), leaderReadsHeld: () => channel.leaderReads(READS_HELD_TURN_ENDS),
-    sayAgain: (name, data, to) => { emitter!.sayAgain(name, data, to) },
+    sayAgain: (name, data, as) => { emitter!.sayAgain(name, data, as) },
     heldOptions: { later: () => {} },
   })
   await emitter.start()
@@ -201,9 +201,11 @@ describe('a misfired stand-down, host and leader wired as host-boot.ts and leade
     expect(leader.store.ends).toHaveLength(1)
     expect(leader.store.ends[0]).toMatchObject({ name: 'session:error', data: { sessionId: 'own-1', hostTakenBy: null } })
     expect(isStandDownHeldEnd(leader.store.ends[0].name, leader.store.ends[0].data)).toBe(false)
-    // Said again to the destinations its event named.
-    const again = (await heldRecords(host.log, 'own-1')).at(-1)!
+    // Said again as the first record was kept: its destinations, its time (never later), no leader's mark.
+    const [first, again] = await heldRecords(host.log, 'own-1')
     expect(again.to).toEqual(['main-ai', 'session-runner'])
+    expect(again.at).toBeLessThanOrEqual(first.at)
+    expect(again.judgedBy).toBeUndefined()
   })
 
   it('W2: the host stands up before any leader links: the link says the owed end, once', async () => {

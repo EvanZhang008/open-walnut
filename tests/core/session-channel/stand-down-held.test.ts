@@ -204,6 +204,21 @@ describe('land 6 N5: a turn end of the stand-down is said again to the leader on
     }
   })
 
+  it('an end said again keeps its destinations, its time and the older leader\'s judgedBy, so the leader decides on it as on the first record', () => {
+    let judging = true
+    const held = createStandDownHeld({ standingDown: () => true, owns: () => true, later: () => {}, judgedByLeaderNow: () => judging })
+    held.note({ name: 'session:result', data: { sessionId: 'old-judged' }, timestamp: 1234, destinations: ['main-ai'] })
+    judging = false
+    held.note({ name: 'session:result', data: { sessionId: 'misfire' }, timestamp: 5678 })
+    held.standUp({ replay: () => {}, stamp: (_n, d) => d })
+    const said: Array<{ sid: string; as: unknown }> = []
+    held.payOwed({ leaderLinked: () => true, leaderReadsHeld: () => true, say: (_n, d, as) => { said.push({ sid: (d as { sessionId: string }).sessionId, as }) } })
+    expect(said).toEqual([
+      { sid: 'old-judged', as: { to: ['main-ai'], at: 1234, judgedBy: 'leader' } },
+      { sid: 'misfire', as: { at: 5678 } },
+    ])
+  })
+
   it('waits while no leader is linked; a leader that does not read the mark applied the ends as they came, so they are forgotten', () => {
     const held = createStandDownHeld({ standingDown: () => true, owns: () => true, later: () => {} })
     held.note({ name: 'session:result', data: { sessionId: 'a' } })

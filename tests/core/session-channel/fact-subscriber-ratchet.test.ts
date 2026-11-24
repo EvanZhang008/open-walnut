@@ -53,6 +53,7 @@ const LEADER_DATA_ONLY: Record<string, string> = {
   'src/core/sessions/thread-takeaway.ts': "thread takeaways: the leader's",
   'src/core/sessions/thread-title.ts': "thread titles: the leader's",
   'src/core/stt/learn-from-sends.ts': "the correction list: learns from the user's sends on the leader",
+  'src/core/session-channel/stand-down-held.ts': "a host's own bus only (host-boot.ts starts it, never a leader): it keeps the turn ends of a stand-down for the resend family, whose members gate the replay themselves (judgedHereOnly)",
   'src/core/session-channel/leader-boot.ts': "the leader's channel: it re-emits a host's facts (the Background panel's with the leader's subagent rows) and subscribes only to the leader's own deletes",
 }
 
@@ -139,6 +140,8 @@ type LateRule = 'merges' | 'skips' | 'own time' | 'gathers' | 'unreached'
 const LATE_RULES: Record<string, LateRule> = {
   'src/core/session-hooks/dispatcher.ts': 'skips',
   // Keeps the marks of the leader's own deletes and re-emits a host's facts with their `late` mark.
+  // Runs on a host's own bus only: no forwarded fact ever reaches it.
+  'src/core/session-channel/stand-down-held.ts': 'unreached',
   'src/core/session-channel/leader-boot.ts': 'merges',
   'src/core/user-status-sync.ts': 'gathers',
   'src/core/push-notification.ts': 'unreached',
