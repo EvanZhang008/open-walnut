@@ -62,7 +62,9 @@ const deps: ChangeWatchDeps = {
     if (!p) return
     writes++
     const next = { ...cur, ...p }
-    if (p.change_status === undefined && 'change_status' in p) delete next.change_status
+    // As updateTaskRaw: null clears the field, an undefined one is not in the patch.
+    if ((p.change_status as unknown) === null) delete next.change_status
+    else if (p.change_status === undefined) next.change_status = cur.change_status
     tasks.set(id, next)
   },
   deliveryTarget: async () => ({ sessionId: 'sess-1', running: false }),
@@ -527,6 +529,69 @@ describe('review fixes', () => {
       expect(reads.length).toBe(20)
     } finally {
       watch.stop()
+    }
+  })
+
+  it('a restart starts from the next reads the last run planned, not from the stored ones', async () => {
+    // A quiet read writes no task, so the snapshot's nextAt is the last changed read's, long past:
+    // without the file every restart re-read every change (75 restarts on 2026-11-23).
+    const { changeDueFile } = await import('../../../src/core/changes/due-file.js')
+    const dueFile = changeDueFile(path.join(WALNUT_HOME, 'cache', 'change-watch-due.json'))
+    const withFile: ChangeWatchDeps = { ...deps, dueFile }
+    const urls = Array.from({ length: 5 }, (_, i) => `https://review.acme.dev/r/${3000 + i}`)
+    for (const [i, url] of urls.entries()) {
+      // Stored as a read of the same answer leaves it, so the read below is quiet (no task write).
+      task(`t${i}`, [`cr:${url}`], { change_status: { [url]: { provider: 'acme:reviews', url, label: 'CR-1001', review: { state: 'open' }, checkedAt: '2026-11-17T08:00:00.000Z', followedSince: '2026-11-17T08:00:00.000Z', nextAt: '2026-11-17T09:00:00.000Z' } } })
+      answers.set(url, open())
+    }
+    let watch = await startChangeWatch(withFile)
+    clock = T0 + 2 * MIN
+    await changeWatchTick(withFile)
+    expect(reads.flat().sort()).toEqual([...urls].sort()) // read once, quietly: next in 10 minutes
+    expect(writes).toBe(0)
+    // stop() resolves once the times are on disk (the server's shutdown awaits it).
+    await watch.stop()
+    const saved = JSON.parse(await fs.readFile(path.join(WALNUT_HOME, 'cache', 'change-watch-due.json'), 'utf8'))
+    expect(Object.keys(saved.due).sort()).toEqual([...urls].sort())
+
+    // The process restarts three minutes later: memory is gone, the file is not.
+    _resetChangeWatchForTesting()
+    reads = []
+    clock = T0 + 5 * MIN
+    watch = await startChangeWatch(withFile)
+    try {
+      await changeWatchTick(withFile)
+      clock = T0 + 8 * MIN
+      await changeWatchTick(withFile)
+      expect(reads).toEqual([])
+      clock = T0 + 12 * MIN + 1
+      await changeWatchTick(withFile)
+      expect(reads.flat().sort()).toEqual([...urls].sort())
+    } finally {
+      watch.stop()
+    }
+  })
+
+  it('a next read in the file further out than any read is planned waits no longer than that', async () => {
+    // A clock that ran ahead when the file was written must not hold a change back for days.
+    const { changeDueFile } = await import('../../../src/core/changes/due-file.js')
+    const file = path.join(WALNUT_HOME, 'cache', 'change-watch-due.json')
+    const url = 'https://review.acme.dev/r/4000'
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({ v: 1, due: { [url]: T0 + 30 * 24 * 60 * MIN } }))
+    task('t1', [`cr:${url}`], { change_status: { [url]: { provider: 'acme:reviews', url, label: 'CR-1001', review: { state: 'open' }, checkedAt: '2026-11-17T08:00:00.000Z', followedSince: '2026-11-17T08:00:00.000Z', nextAt: '2026-11-17T09:00:00.000Z' } } })
+    answers.set(url, open())
+    const withFile: ChangeWatchDeps = { ...deps, dueFile: changeDueFile(file) }
+    const watch = await startChangeWatch(withFile)
+    try {
+      clock = T0 + 23 * 60 * MIN
+      await changeWatchTick(withFile)
+      expect(reads).toEqual([])
+      clock = T0 + 24 * 60 * MIN + 1
+      await changeWatchTick(withFile)
+      expect(reads).toEqual([[url]])
+    } finally {
+      await watch.stop()
     }
   })
 

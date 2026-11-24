@@ -138,6 +138,43 @@ describe('event-loop blocking ratchet', () => {
     expect(calls, `withFileLockSync on the server's event loop:\n${calls.join('\n')}\nUse withFileLock.`).toEqual([]);
   });
 
+  // On macOS, starting an fs.watch holds the loop until the file-event stream is up: about half a
+  // second per call on a loaded Mac (2026-11-24: 8.2 s of `watch (native)` in 8 kept boot stall
+  // profiles, split between the notes watcher and the ~/.claude watch, which now polls). A file
+  // Walnut only needs to notice changing polls its stat with fs.watchFile (config-file-watch.ts,
+  // claude-settings-watcher.ts). The count per file may only fall.
+  it('fs.watch call sites in server-reachable code do not grow (poll with fs.watchFile)', () => {
+    const FS_WATCH_BASELINE: Record<string, number> = {
+      'src/core/notes-watcher.ts': 2, // the vault and memory, recursive: nothing polls those
+      'src/core/jsonl-tailer.ts': 1, // also polls every second
+      'src/providers/acp-survive.ts': 1, // also polls
+      'src/integrations/mail/sort-rules-file.ts': 1,
+    };
+    let out = '';
+    try {
+      out = execFileSync('git', ['grep', '-nE', 'fs\\.watch ?\\(', '--', 'src/'], { cwd: repoRoot, encoding: 'utf8' });
+    } catch {
+      // git grep exits 1 on no matches.
+    }
+    const counts = new Map<string, number>();
+    for (const line of out.split('\n').filter(Boolean)) {
+      const file = line.slice(0, line.indexOf(':'));
+      if (EXEMPT_PATHS.some((p) => file.startsWith(p))) continue;
+      if (/^\S+:\d+:\s*(\*|\/\/)/.test(line)) continue; // a comment naming it
+      counts.set(file, (counts.get(file) ?? 0) + 1);
+    }
+    const problems: string[] = [];
+    for (const [file, n] of counts) {
+      const allowed = FS_WATCH_BASELINE[file] ?? 0;
+      if (n > allowed) problems.push(`${file}: ${n} fs.watch call(s), baseline ${allowed}. Poll the file with fs.watchFile instead (config-file-watch.ts).`);
+    }
+    for (const [file, allowed] of Object.entries(FS_WATCH_BASELINE)) {
+      const n = counts.get(file) ?? 0;
+      if (n < allowed) problems.push(`${file}: baseline says ${allowed} fs.watch call(s) but ${n} remain: lower it to ${n}.`);
+    }
+    expect(problems, problems.join('\n')).toEqual([]);
+  });
+
   it('native ScreenCaptureKit calls stay off the request path (child-process only)', () => {
     // The addon may only be touched inside audio-capture.ts, and its two
     // event-loop-hazard methods (getAudioApps / verifyPermissions) may only

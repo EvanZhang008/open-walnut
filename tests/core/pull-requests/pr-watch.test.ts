@@ -86,7 +86,9 @@ const deps: PrWatchDeps = {
     const p = patch(t)
     if (!p) return
     const next = { ...t, ...p } as Task
-    if ('pr_status' in p && p.pr_status === undefined) delete next.pr_status
+    // As updateTaskRaw: null clears the field, an undefined one is not in the patch.
+    if ((p.pr_status as unknown) === null) delete next.pr_status
+    else if (p.pr_status === undefined) next.pr_status = t.pr_status
     tasks.set(id, next)
   },
   deliveryTarget: async () => session,

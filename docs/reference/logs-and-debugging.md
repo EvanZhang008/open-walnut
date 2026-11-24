@@ -110,6 +110,16 @@ machine (CPU load, memory) rather than a Walnut code path. The recorder costs th
 4.8 ms of CPU a second when idle, 3 to 10.6 ms in a loop of 1 ms timers, 7.7 to 19.6 ms in a loop
 reading a socket (measured 2026-10-07 against no recorder).
 
+The shorter stalls (250 ms and up, no profile) are the `event-loop stall detected (histogram)`
+lines, one per 5 s window (`src/core/event-loop-monitor.ts`). `suspectSection` is the longest-open
+critical section, or `boot` when none is open in the first two minutes after start (`sinceStartS`);
+an open section only means the stall fell while it ran, so read `openSections` (wall vs the loop
+thread's CPU; `sectionAwaiting` when it mostly waited) and `closedSections` (those that ended inside
+the window). `loopCpuMs` is the loop thread's CPU in the window: `offCpu: true` (under half the
+stall) means no Walnut code can have held it that long, so it is the machine (`invCtxSwitches`) or a
+blocking call (`blocking`: the synchronous SQLite and child-process calls of 20 ms or more, with
+their call sites). `stalls` counts the `offCpu` windows.
+
 **"Who overwrote my file?" starts with `file <path-substring>`.** Every read logs `file read`
 (status 200/304, the hash the client now holds, the token it quoted, `track`, size, ms), every
 write logs `file write` (writer user/live/merge, origin, hash before/after, the token presented,

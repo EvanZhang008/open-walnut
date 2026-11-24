@@ -843,6 +843,7 @@ let autoRecoverHandle: { stop: () => void } | null = null
 /** Primary box only: daily retirement of completed pins (core/task-pin-retirement.ts). */
 let pinRetirementHandle: import('../core/periodic-task.js').PeriodicHandle | null = null
 let budgetLettersHandle: import('../core/periodic-task.js').PeriodicHandle | null = null
+let changeWatchStarted = false
 let claudeSettingsWatcherStop: (() => void) | null = null
 /** Unhooks the host-connected → publishRecovery listener (daemon-connection's
  *  listener set is module-global, so an in-process restart must not stack them). */
@@ -3959,6 +3960,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       try {
         const { startChangeWatch } = await import('../core/changes/watch.js')
         await startChangeWatch()
+        changeWatchStarted = true
       } catch (err) {
         log.web.warn('change watch wiring failed; change links show no live status', {
           error: err instanceof Error ? err.message : String(err),
@@ -8323,6 +8325,11 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (budgetLettersHandle) {
     budgetLettersHandle.stop()
     budgetLettersHandle = null
+  }
+  if (changeWatchStarted) {
+    changeWatchStarted = false
+    // Its next-read times go to disk, so the next boot does not read every change again.
+    await shutdownStep('change watch', async () => (await import('../core/changes/watch.js')).stopChangeWatch(), { budgetMs: 1_000 })
   }
   if (pinRetirementHandle) {
     pinRetirementHandle.stop()

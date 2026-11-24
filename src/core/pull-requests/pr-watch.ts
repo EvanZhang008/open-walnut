@@ -29,7 +29,7 @@
 
 import { createHash } from 'node:crypto'
 import { log } from '../../logging/index.js'
-import type { Task } from '../types.js'
+import type { Task, TaskRawPatch } from '../types.js'
 import { linkUrlOfTag } from '../link-tags.js'
 import { followTaskLinks, sendTaskNews, taskNewsTarget } from '../task-news.js'
 import type { PrSnapshot, PrWatchState } from './model.js'
@@ -52,7 +52,7 @@ export interface PrWatchDeps {
   openTasks(): Promise<ReadonlyArray<Readonly<Task>>>
   getTask(id: string): Promise<Task | null>
   /** Read-modify-write of one task's PR fields; null from the function writes nothing. */
-  writeTask(id: string, patch: (current: Readonly<Task>) => Partial<Task> | null): Promise<void>
+  writeTask(id: string, patch: (current: Readonly<Task>) => TaskRawPatch | null): Promise<void>
   /** The session that should hear about news, or null. `running` is a turn in progress. */
   deliveryTarget(taskId: string): Promise<{ sessionId: string; running: boolean } | null>
   /** `newsKey` is the same for the same news: one still queued is not queued twice (task-news.ts sendTaskNews). */
@@ -316,7 +316,9 @@ async function settleTask(
       const keep: Record<string, PrSnapshot> = {}
       const tagged = new Set(linkedPrRefs(current).map((r) => r.ref.url))
       for (const [url, snap] of Object.entries(nextStatus)) if (tagged.has(url) && urls.has(url)) keep[url] = snap
-      return Object.keys(keep).length ? { pr_status: keep } : { pr_status: undefined }
+      // null is updateTaskRaw's clear: an undefined field is "not in the patch", which left the
+      // snapshot on the task and wrote again every pass (stale-snapshot-clear.test.ts).
+      return Object.keys(keep).length ? { pr_status: keep } : { pr_status: null }
     })
     report.written++
   }

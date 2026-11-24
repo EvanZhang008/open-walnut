@@ -30,6 +30,12 @@ import { observe } from './observability/metrics.js'
 import { noteSleepSinceLastLook } from '../lib/sleep-ledger.js'
 import { HISTOGRAM_STALL_MESSAGE, PROBE_LATE_MESSAGE, stallMetricOf } from './stall-cause.js'
 import { blockingCallsWithin } from './blocking-calls.js'
+import { readLoopCpuUs } from './stall-recorder-hold.js'
+import {
+  clearSectionsForSleep, closedSectionsSince, describeOpenSections, resetSections, setSectionClock, sinceStartS,
+} from './event-loop-sections.js'
+
+export { markCriticalSection } from './event-loop-sections.js'
 
 /** Loop delay above this (ms) in a window is reported as a stall. */
 const STALL_THRESHOLD_MS = 250
@@ -124,99 +130,54 @@ let lastProbeMonoAt = 0
 let lastWindowWallAt = 0
 let lastWindowMonoAt = 0
 
-/**
- * Every synchronous/awaited section currently executing. Periodic tasks that are
- * known event-loop hazards (health monitor, reconciler, git sync) wrap themselves
- * with markCriticalSection() so that when the probe detects a stall we can
- * attribute it instead of guessing.
- *
- * Tracks ALL open sections, not just one. This was a single slot, which caused
- * two concrete misreads:
- *   1. Concurrent sections — only the first was recorded, so a stall during an
- *      overlapping section was blamed on whichever started first. The health
- *      monitor and git sync both run on ~30 s cadences, so they overlap often.
- *   2. Await-heavy sections — the label persists across `await`, so a tick that
- *      merely WAITED (e.g. a 30 s daemon RPC to a dead host) was reported as a
- *      stall even though the loop was free the whole time. That is how an 11 s
- *      "stall" was attributed to health-monitor.check when nothing was blocked.
- *
- * Fix: track every open section, and record CPU time alongside wall time so a
- * reader can tell "burning the loop" from "waiting on I/O".
- */
-interface OpenSection {
-  name: string
-  startedAt: number
-  startCpuMs: number
-}
-const openSections = new Map<number, OpenSection>()
-// Monotonic key per section. A stale end() from a sleep-cleared section simply
-// deletes a key that's already gone, so it can no longer clobber a NEW section
-// (which is what the old shared-slot + token dance had to guard against).
-let sectionSeq = 0
+/** The loop thread's CPU and the process's context switches when the current window began. */
+let windowLoopCpuUs = 0
+let windowInvCsw = 0
+let windowVolCsw = 0
 
-function cpuMsNow(): number {
-  const u = process.cpuUsage()
-  return (u.user + u.system) / 1000
+function readWindowCounters(): { cpuUs: number; inv: number; vol: number } {
+  const r = process.resourceUsage()
+  return { cpuUs: readLoopCpuUs(), inv: r.involuntaryContextSwitches, vol: r.voluntaryContextSwitches }
 }
 
 /**
- * Mark a synchronous/awaited section so a concurrent stall can be attributed
- * to it. Returns a function to call when the section ends (use try/finally).
- *
- *   const end = markCriticalSection('health-monitor.check')
- *   try { ...heavy work... } finally { end() }
+ * What the loop thread did in the window that held a stall, so a stall with no section open still
+ * says what it was (2026-11-23: 650 of 1,207 histogram stalls named nothing):
+ *   loopCpuMs   the loop thread's own CPU in the window. `offCpu` when that is under half the
+ *               stall's length: its code cannot have held the loop that long by itself, so the
+ *               machine did not run the thread (`invCtxSwitches` high) or it waited in a
+ *               blocking call (`blocking`). The reverse proves nothing: a busy loop's normal
+ *               turns add up too.
+ *   blocking    the synchronous SQLite and child-process calls of 20 ms or more in the window,
+ *               with their call sites (blocking-calls.ts), as the probe-late line has had;
+ *   closedSections  sections that ended inside the window (event-loop-sections.ts).
  */
-export function markCriticalSection(name: string): () => void {
-  const token = ++sectionSeq
-  openSections.set(token, { name, startedAt: clocks.now(), startCpuMs: cpuMsNow() })
-  return () => { openSections.delete(token) }
-}
-
-/**
- * Sections open right now, longest-running first, each with the share of its wall
- * time that actually consumed CPU.
- *
- * `section` keeps the existing contract (the longest-running open section is the
- * suspect) so a real block is still attributed. `openSections` is the new part:
- * it exposes wall vs cpu per section, which is what distinguishes "burned the
- * loop" from "waited on a dead host for 30 s" — the two used to be
- * indistinguishable in the logs, and every await-bound tick read as a stall.
- * `awaiting` flags the whole set as wait-dominated so a reader (or
- * scripts/walnut-logs.sh) can discount it without doing the arithmetic.
- */
-function describeOpenSections(): {
-  section: string | null
-  detail: string[]
-  awaiting: boolean
-} {
-  if (openSections.size === 0) return { section: null, detail: [], awaiting: false }
-  const now = clocks.now()
-  const cpuNow = cpuMsNow()
-  const rows = [...openSections.values()]
-    .map(s => ({
-      name: s.name,
-      wallMs: now - s.startedAt,
-      cpuMs: Math.max(0, Math.round(cpuNow - s.startCpuMs)),
-    }))
-    .sort((a, b) => b.wallMs - a.wallMs)
-  const top = rows[0]
+function windowEvidence(maxMs: number, windowStartWall: number): Record<string, unknown> {
+  const now = readWindowCounters()
+  const loopCpuMs = Math.round((now.cpuUs - windowLoopCpuUs) / 1000)
+  let blocking: ReturnType<typeof blockingCallsWithin> = null
+  if (clocks === defaultClocks) {
+    try {
+      const perfNow = performance.now()
+      blocking = blockingCallsWithin(perfNow - WINDOW_MS, perfNow)
+    } catch { blocking = null }
+  }
+  const closedSections = closedSectionsSince(windowStartWall)
   return {
-    section: top.name,
-    detail: rows.map(r => `${r.name} wall=${r.wallMs}ms cpu=${r.cpuMs}ms`),
-    // Wall ≫ cpu ⇒ the section was waiting, not holding the loop.
-    awaiting: top.wallMs > 0 && top.cpuMs / top.wallMs < 0.5,
+    loopCpuMs,
+    offCpu: loopCpuMs * 2 < maxMs,
+    invCtxSwitches: now.inv - windowInvCsw,
+    volCtxSwitches: now.vol - windowVolCsw,
+    ...(blocking ? { blocking } : {}),
+    ...(closedSections.length ? { closedSections } : {}),
   }
 }
 
-/**
- * System sleep spans whatever periodic tick happened to be in flight (e.g. a
- * health-monitor check awaiting I/O when the lid closed). Clearing the
- * attribution prevents falsely blaming that section for the "stall".
- */
-function clearSectionForSleep(): void {
-  // Drop all open sections; their end() closures become no-ops (delete of a
-  // missing key), so a tick that spanned the sleep can't be blamed afterwards.
-  openSections.clear()
+function resetWindowCounters(): void {
+  const c = readWindowCounters()
+  windowLoopCpuUs = c.cpuUs
+  windowInvCsw = c.inv
+  windowVolCsw = c.vol
 }
 
 export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
@@ -229,6 +190,8 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
   lastProbeMonoAt = clocks.monoNow()
   lastWindowWallAt = lastProbeWallAt
   lastWindowMonoAt = lastProbeMonoAt
+  setSectionClock(clocks.now, lastProbeWallAt)
+  resetWindowCounters()
 
   // Signal 1: windowed histogram — reports the worst delay seen per window.
   windowTimer = setInterval(() => {
@@ -236,12 +199,14 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
     const wallNow = clocks.now()
     const monoNow = clocks.monoNow()
     const sleptMs = (wallNow - lastWindowWallAt) - (monoNow - lastWindowMonoAt)
+    const windowStartWall = lastWindowWallAt
     lastWindowWallAt = wallNow
     lastWindowMonoAt = monoNow
     if (sleptMs > SLEEP_GAP_MS) {
       // Window spans a system sleep — the histogram accumulated a giant fake
       // "delay" for the suspended time. Drop the window entirely.
       histogram.reset()
+      resetWindowCounters()
       return
     }
     const maxMs = histogram.max / 1e6 // ns → ms
@@ -256,13 +221,15 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
         maxMs: Math.round(maxMs),
         p99Ms: Math.round(histogram.percentile(99) / 1e6),
         meanMs: Math.round(histogram.mean / 1e6),
-        // suspectSection names only a section whose CPU time dominates its wall
-        // time — i.e. one that really held the loop. openSections lists them all
-        // (with wall vs cpu) so an await-bound tick isn't mistaken for a stall.
+        sinceStartS: sinceStartS(),
+        // suspectSection is the longest-running open section (`boot` with none open
+        // right after start); openSections lists them all with wall vs loop CPU, so
+        // an await-bound tick is not mistaken for the one that held the loop.
         ...(() => {
           const { section, detail, awaiting } = describeOpenSections()
           return { suspectSection: section, openSections: detail, sectionAwaiting: awaiting }
         })(),
+        ...windowEvidence(maxMs, windowStartWall),
       }
       // Giant "stalls" (minutes) are almost always sleep artifacts the
       // wall-vs-mono gap can't see on Apple Silicon (see wakeTimeChangedSince).
@@ -282,6 +249,7 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
       }
     }
     histogram.reset()
+    resetWindowCounters()
   }, WINDOW_MS)
   if (typeof windowTimer === 'object' && 'unref' in windowTimer) windowTimer.unref()
 
@@ -307,7 +275,8 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
       histogram?.reset() // drop the fake delay the histogram saw across sleep
       lastWindowWallAt = wallNow // re-baseline the window sampler too
       lastWindowMonoAt = monoNow
-      clearSectionForSleep()
+      resetWindowCounters()
+      clearSectionsForSleep()
     } else {
       const lateBy = monoDelta - PROBE_INTERVAL_MS
       // Metric: probe lateness every tick (usually ~0ms). The p99 of this series
@@ -331,6 +300,7 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
         }
         const payload = {
           lateByMs: Math.round(lateBy),
+          sinceStartS: sinceStartS(),
           suspectSection: section,
           openSections: detail,
           sectionAwaiting: awaiting,
@@ -362,7 +332,7 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
           wakeTimeChangedSince((slept) => {
             if (slept) {
               log.web.info('system sleep detected via kern.waketime (probe lateness dropped)', { lateByMs: payload.lateByMs })
-              clearSectionForSleep()
+              clearSectionsForSleep()
             } else {
               report()
             }
@@ -396,6 +366,6 @@ export function stopEventLoopMonitor(): void {
   if (probeTimer) { clearTimeout(probeTimer); probeTimer = null }
   if (histogram) { histogram.disable(); histogram = null }
   lastWindowP99Ms = null
-  openSections.clear()
+  resetSections()
   clocks = defaultClocks
 }

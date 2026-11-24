@@ -9,50 +9,53 @@
  * from a live local CLI, which pushes the fresh catalog to all clients.
  * (Remote hosts refresh on next spawn or via the picker's manual ⟳.)
  *
- * Watches the parent directory, not the file: editors and the CLI itself write
- * settings.json via rename (atomic replace), which breaks a file-level watch.
+ * Polls the file's stat (fs.watchFile), as config-file-watch.ts does for
+ * config.yaml: it goes by path, so the atomic rename-replace that editors and the
+ * CLI itself use is seen, and it costs the event loop nothing to start. It used
+ * to be an fs.watch of ~/.claude: on macOS that call blocked the loop while the
+ * file-event stream started, about half a second at every boot of a loaded Mac
+ * (2026-11-24: 4.3 s of `watch (native)` under watchClaudeSettings in 8 kept boot
+ * stall profiles), for a file that changes a few times a month.
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import { CLAUDE_SETTINGS_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 
 const DEBOUNCE_MS = 2_000;
+const POLL_MS = 5_000;
 
-export function watchClaudeSettings(onChange: () => void): () => void {
-  const dir = path.dirname(CLAUDE_SETTINGS_FILE);
-  const file = path.basename(CLAUDE_SETTINGS_FILE);
+export interface ClaudeSettingsWatchOptions { file?: string; pollMs?: number; debounceMs?: number }
+
+export function watchClaudeSettings(onChange: () => void, opts: ClaudeSettingsWatchOptions = {}): () => void {
+  const file = opts.file ?? CLAUDE_SETTINGS_FILE;
+  const debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let watcher: fs.FSWatcher;
+  let stopped = false;
+  const listener = (cur: fs.Stats, prev: fs.Stats): void => {
+    // A file that is missing reads as all-zero stats on both sides: nothing to tell.
+    if (cur.mtimeMs === prev.mtimeMs && cur.size === prev.size && cur.ino === prev.ino) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      if (stopped) return;
+      log.session.info('claude settings.json changed — refreshing model catalogs');
+      try { onChange(); } catch (err) {
+        log.session.warn('settings-change catalog refresh failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }, debounceMs);
+    timer.unref?.();
+  };
   try {
-    watcher = fs.watch(dir, (_event, filename) => {
-      if (filename !== file) return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        log.session.info('claude settings.json changed — refreshing model catalogs');
-        try { onChange(); } catch (err) {
-          log.session.warn('settings-change catalog refresh failed', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }, DEBOUNCE_MS);
-    });
-    // An unheard 'error' on a watcher is an uncaught exception (the server exits).
-    watcher.on('error', (err) => {
-      log.session.warn('claude settings watch error', { error: err.message });
-    });
+    fs.watchFile(file, { interval: opts.pollMs ?? POLL_MS, persistent: false }, listener);
   } catch (err) {
-    // Missing ~/.claude or unsupported fs — degrade to no watching. No ~/.claude is
-    // a machine without Claude Code (local models): nothing to say at warn level.
-    const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
-    log.session[missing ? 'info' : 'warn']('cannot watch claude settings', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    log.session.warn('cannot watch claude settings', { error: err instanceof Error ? err.message : String(err) });
     return () => {};
   }
   return () => {
+    stopped = true;
     if (timer) clearTimeout(timer);
-    watcher.close();
+    fs.unwatchFile(file, listener);
   };
 }

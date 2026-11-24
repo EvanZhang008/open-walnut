@@ -166,11 +166,19 @@ describe('event-loop monitor multi-section attribution', () => {
     expect((warns[0].openSections as string[])[0]).toMatch(/wall=\d+ms cpu=\d+ms/)
   })
 
-  it('reports no section when none is open', () => {
+  it('reports no section when none is open (past the boot window)', () => {
+    for (let i = 0; i < 121; i++) fireProbe(1_000, 1_000) // on time, past the boot window
     fireProbe(3_000, 3_000)
     const warns = warnCalls('event-loop blocked (probe late)')
     expect(warns[0].suspectSection).toBeNull()
     expect(warns[0].sectionAwaiting).toBe(false)
+  })
+
+  it('blames the boot when no section is open in the first two minutes', () => {
+    fireProbe(3_000, 3_000)
+    const warns = warnCalls('event-loop blocked (probe late)')
+    expect(warns[0].suspectSection).toBe('boot')
+    expect(warns[0].sinceStartS).toBe(3)
   })
 
   it('an end() for an already-cleared section cannot remove a live one', () => {

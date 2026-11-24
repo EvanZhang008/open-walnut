@@ -16,7 +16,7 @@ import { dependsOnThrough } from '../lib/dependency-loop.js';
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, keepPluginRunMarker, withPluginRunMarker, PLUGIN_RUN_TAG, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, keepPluginRunMarker, withPluginRunMarker, PLUGIN_RUN_TAG, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold, type TaskRawPatch } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES, withCompletion } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
 import { applyDirector, directorRefusal, type DirectorInput } from './task-director.js';
@@ -8813,7 +8813,7 @@ function isDayPrecisionEcho(existing: string | undefined, incoming: unknown): bo
  */
 function prepareRawUpdate(
   task: Task,
-  updates: Partial<Task>,
+  updates: TaskRawPatch,
   opts?: { reopenTerminal?: boolean; leaveHeld?: boolean; pulledTags?: boolean; pluginRunMarker?: boolean },
 ): Partial<Task> | null {
   const { id: _ignoreId, ...safeUpdates } = updates as Record<string, unknown>;
@@ -8993,7 +8993,7 @@ export async function updateTaskRaw(
   /** The patch, or a function of the CURRENT row for a read-modify-write of one
    *  row under the lock (a merge into `ext`, a clear conditioned on the stored
    *  value). Returning null writes nothing. */
-  updates: Partial<Task> | ((current: Readonly<Task>) => Partial<Task> | null),
+  updates: TaskRawPatch | ((current: Readonly<Task>) => TaskRawPatch | null),
   opts?: {
     emitEvent?: boolean;
     push?: boolean;

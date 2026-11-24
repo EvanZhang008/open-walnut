@@ -727,7 +727,7 @@ PY
     cat $logs | grep -aF 'event-loop stall detected (histogram)' | jq -rs --arg since "$since" '
       map(select(.time >= $since)) |
       if length == 0 then "stalls (histogram): none" else
-      "stalls (histogram): n=\(length) maxMs=\(map(.maxMs) | max) sections=\(map(.suspectSection // "unattributed") | group_by(.) | map("\(.[0])=\(length)") | join(" "))" end'
+      "stalls (histogram): n=\(length) maxMs=\(map(.maxMs) | max) offCpu=\(map(select(.offCpu == true)) | length) sections=\(map(.suspectSection // "unattributed") | group_by(.) | map("\(.[0])=\(length)") | join(" "))" end'
     echo "── slow routes (request logger, >= 500ms) ──"
     # shellcheck disable=SC2086
     cat $logs | grep -aE '"subsystem":"web".*→ [0-9]{3} \(' | jq -r --arg since "$since" '

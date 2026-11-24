@@ -193,6 +193,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/cache/host-replica/` | rebuildable | no | Manifests hosts took of their copies |
 | `~/.open-walnut/cache/history/` | rebuildable | no | Session history cache, rebuilt from transcripts |
 | `~/.open-walnut/cache/history-archive-due.json` | rebuildable | no | When the transcript archive sweep is next due |
+| `~/.open-walnut/cache/change-watch-due.json` | rebuildable | no | When the change watcher reads each change next; lost, it reads them all once |
 | `~/.open-walnut/cache/projections/` | rebuildable | no | Session and task list snapshots |
 | `~/.open-walnut/cache/transcripts/` | rebuildable | no | Transcript tails |
 | `~/.open-walnut/cache/session-changes/` | rebuildable | no | File change snapshots per session |

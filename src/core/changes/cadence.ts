@@ -24,7 +24,8 @@ const UNTIL_CAP_MS = 6 * 60 * MIN
 export const CHANGE_FOLLOW_MAX_MS = 21 * 24 * 60 * MIN
 /** Never sooner than the watcher's own look. */
 const MIN_NEXT_MS = 30_000
-const MAX_PROVIDER_NEXT_MS = 24 * 60 * MIN
+/** The furthest out any read is planned. */
+export const CHANGE_MAX_NEXT_MS = 24 * 60 * MIN
 
 /** When to read a change next (ms), or undefined when it is read no more. */
 export function nextReadAt(
@@ -37,7 +38,7 @@ export function nextReadAt(
   if (Number.isFinite(since) && now - since > CHANGE_FOLLOW_MAX_MS) return undefined
   if (snap.error) return now + CHANGE_ERROR_EVERY_MS
   if (typeof providerNextInMs === 'number' && Number.isFinite(providerNextInMs) && providerNextInMs > 0) {
-    return now + Math.min(Math.max(providerNextInMs, MIN_NEXT_MS), MAX_PROVIDER_NEXT_MS)
+    return now + Math.min(Math.max(providerNextInMs, MIN_NEXT_MS), CHANGE_MAX_NEXT_MS)
   }
   const deploy = snap.deploy
   if (deploy) {

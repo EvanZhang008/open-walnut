@@ -10,7 +10,8 @@
  *           within seconds (task-news.ts); the card's Refresh reads one task's now.
  *   store   written only when the snapshot changed (its read time and next read aside), so a quiet
  *           change costs no task write and no event; the last answer and next read are kept in memory
- *           and answered by GET /api/tasks/:id/changes. A link the task no longer holds loses its snapshot.
+ *           and answered by GET /api/tasks/:id/changes, the next reads also in a file a restart
+ *           starts from (due-file.ts). A link the task no longer holds loses its snapshot.
  *   wake    news (cadence.ts) goes to the task's session (task-news.ts). Never Main or a lead, never
  *           with `pr_wake: false` on the task or `pull_requests.wake_agent: false`; a pull request the
  *           pull request watch already follows leaves its review news to that watch.
@@ -19,17 +20,20 @@
  */
 
 import { createHash } from 'node:crypto'
+import path from 'node:path'
+import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import type { Task } from '../types.js'
+import type { Task, TaskRawPatch } from '../types.js'
 import { linkLabel } from '../link-tags.js'
 import { watchablePrUrls } from '../pull-requests/model.js'
 import { followTaskLinks, sendTaskNews, taskNewsTarget } from '../task-news.js'
 import { changeSettled, taskChangeLinks, type ChangeLink, type ChangeSnapshot } from './model.js'
 import { changeProviderFor, type ChangeReadResult, type RegisteredChangeProvider } from './registry.js'
-import { CHANGE_ERROR_EVERY_MS, changeNews, changeWakeLines, nextReadAt, type ChangeNews } from './cadence.js'
+import { CHANGE_ERROR_EVERY_MS, CHANGE_MAX_NEXT_MS, changeNews, changeWakeLines, nextReadAt, type ChangeNews } from './cadence.js'
 import { toldAfter, untoldNews } from './told.js'
 import { ensureCoreChangeProviders } from './github.js'
 import { abortableDeadline, DEADLINE_MESSAGE } from './deadline.js'
+import { changeDueFile, type ChangeDueFile } from './due-file.js'
 
 export const CHANGE_WATCH_SOURCE = 'change-watch'
 export const CHANGE_WATCH_TICK_MS = 30_000
@@ -60,7 +64,7 @@ const deadlines = { readMs: 90_000 }
 export interface ChangeWatchDeps {
   openTasks(): Promise<ReadonlyArray<Readonly<Task>>>
   /** Read-modify-write of one task's change_status; null from the function writes nothing. */
-  writeTask(id: string, patch: (current: Readonly<Task>) => Partial<Task> | null): Promise<void>
+  writeTask(id: string, patch: (current: Readonly<Task>) => TaskRawPatch | null): Promise<void>
   deliveryTarget(taskId: string): Promise<{ sessionId: string; running: boolean } | null>
   /** `newsKey` is the same for the same news: one still queued is not queued twice (task-news.ts sendTaskNews). */
   send(sessionId: string, text: string, taskId: string, newsKey: string): Promise<void>
@@ -69,6 +73,8 @@ export interface ChangeWatchDeps {
   /** The pull request settings: `wake_agent: false` silences this watcher's wakes too. */
   config(): Promise<{ wake_agent?: boolean } | undefined>
   now(): number
+  /** Where the next reads outlive a restart (the server's own wiring; tests leave it out). */
+  dueFile?: ChangeDueFile
 }
 
 /** Per URL: the last good answer (ms) and the next read (ms, null = never). */
@@ -78,6 +84,8 @@ const nextDue = new Map<string, number | null>()
 const retryAt = new Map<string, number>()
 /** When the watcher started: a stored read already due waits a share of STAGGER_MS after it. */
 let startedAt: number | null = null
+/** nextDue moved since the last save. */
+let dueMoved = false
 
 function placeholder(link: ChangeLink, provider: string): ChangeSnapshot {
   return { provider, url: link.url, label: linkLabel(link.url), checkedAt: '' }
@@ -235,8 +243,9 @@ async function tickOnce(deps: ChangeWatchDeps, opts: ChangeTickOptions): Promise
   if (!wanted) {
     // Forget what no followed task links any more.
     const held = new Set(tasks.flatMap((t) => taskChangeLinks(t.tags).map((l) => l.url)))
-    for (const map of [lastGood, nextDue, retryAt]) for (const url of map.keys()) if (!held.has(url)) map.delete(url)
+    for (const map of [lastGood, nextDue, retryAt]) for (const url of map.keys()) if (!held.has(url)) { map.delete(url); if (map === nextDue) dueMoved = true }
   }
+  if (dueMoved && deps.dueFile) { dueMoved = false; deps.dueFile.save(() => nextDue) }
   if (report.read || report.written || report.woken) log.task.info('change-watch tick', { ...report })
   return report
 }
@@ -262,6 +271,7 @@ async function settleTask(
     if (result) {
       if (result.ok) lastGood.set(link.url, now)
       nextDue.set(link.url, next.nextAt ? Date.parse(next.nextAt) : null)
+      dueMoved = true
     }
     // Only what the session was not told yet; what it was told and still stands rides the snapshot.
     const news = result ? untoldNews(prev, next, changeNews(prev, next, { skipReview: !!task.pr_status?.[link.url] })) : []
@@ -294,6 +304,7 @@ async function settleTask(
           const prev = prevStatus[p.url]
           if (prev) p.next = prev
           nextDue.set(p.url, now + RETELL_MS)
+          dueMoved = true
         }
       }
     }
@@ -308,7 +319,9 @@ async function settleTask(
     const held = new Set(taskChangeLinks(current.tags).map((l) => l.url))
     const keep: Record<string, ChangeSnapshot> = {}
     for (const [url, snap] of Object.entries(nextStatus)) if (held.has(url)) keep[url] = snap
-    return Object.keys(keep).length ? { change_status: keep } : { change_status: undefined }
+    // null is updateTaskRaw's clear: an undefined field is "not in the patch", which left the
+    // snapshot on the task and wrote again every pass (stale-snapshot-clear.test.ts).
+    return Object.keys(keep).length ? { change_status: keep } : { change_status: null }
   })
   report.written++
 }
@@ -342,6 +355,7 @@ export function _resetChangeWatchForTesting(): void {
   retryAt.clear()
   queuedRefresh.clear()
   startedAt = null
+  dueMoved = false
   chain = Promise.resolve()
   deadlines.readMs = 90_000
 }
@@ -382,10 +396,11 @@ export function defaultChangeWatchDeps(): ChangeWatchDeps {
       return (await getConfig()).pull_requests
     },
     now: () => Date.now(),
+    dueFile: changeDueFile(path.join(WALNUT_HOME, 'cache', 'change-watch-due.json')),
   }
 }
 
-let started: { stop(): void; kick(opts: ChangeTickOptions): Promise<ChangeTickReport> } | null = null
+let started: { stop(): Promise<void>; kick(opts: ChangeTickOptions): Promise<ChangeTickReport> } | null = null
 /** A Refresh's forced read per task, while it has not started: a second Refresh joins it. */
 const queuedRefresh = new Map<string, Promise<ChangeTickReport>>()
 
@@ -394,6 +409,13 @@ export async function startChangeWatch(deps: ChangeWatchDeps = defaultChangeWatc
   if (started) return started
   ensureCoreChangeProviders()
   startedAt = deps.now()
+  // The next reads the last run had planned: a read already due still waits its share of the
+  // stagger, and none waits longer than any read is ever planned (a file written by a clock that ran
+  // ahead must not hold a change back for days).
+  for (const [url, at] of (await deps.dueFile?.load()) ?? []) {
+    if (nextDue.has(url)) continue
+    nextDue.set(url, at === null ? null : Math.min(Math.max(at, startedAt + staggerOf(url)), startedAt + CHANGE_MAX_NEXT_MS))
+  }
   const { runPeriodic } = await import('../periodic-task.js')
   const { PR_WATCH_SOURCE } = await import('../pull-requests/pr-watch.js')
   const handle = runPeriodic('change-watch', CHANGE_WATCH_TICK_MS, 90_000, async () => {
@@ -411,10 +433,16 @@ export async function startChangeWatch(deps: ChangeWatchDeps = defaultChangeWatc
     return fresh.length || removed || prMoved.length ? [...fresh, ...prMoved] : null
   }, (taskIds, forceUrls) => { void changeWatchTick(deps, { taskIds, forceUrls }).catch(() => undefined) })
   started = {
-    stop() { handle.stop(); unfollow(); started = null; startedAt = null },
+    /** Resolves once the last next-read times are on disk. */
+    async stop() { handle.stop(); unfollow(); started = null; startedAt = null; await deps.dueFile?.flush() },
     kick: (opts) => changeWatchTick(deps, opts),
   }
   return started
+}
+
+/** Stop the watcher where it runs (server shutdown), with its next reads written. */
+export async function stopChangeWatch(): Promise<void> {
+  await started?.stop()
 }
 
 export function changeWatchRunning(): boolean {

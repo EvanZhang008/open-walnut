@@ -3505,6 +3505,10 @@ export interface SessionThreadMeta {
 
 type Nullable<T> = { [K in keyof T]?: T[K] | null };
 
+/** A raw write's patch (task-manager updateTaskRaw): listed fields overwrite, `null` clears the
+ *  field, an undefined or unlisted one stays as it is. */
+export type TaskRawPatch = Nullable<Task>;
+
 /** One upsert entry: listed fields overwrite, `null` clears, unlisted stay. */
 export type SessionThreadMetaPatch = { headId: string } & Nullable<Omit<SessionThreadMeta, 'headId'>>;
 
