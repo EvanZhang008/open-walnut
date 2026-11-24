@@ -1,4 +1,7 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { needsSummary } from '../../../src/core/approvals/summary.js'
 import { contextFromRows, contextSummary, cutTo, goalOf, ASKER_STEPS, WHY_MAX } from '../../../src/core/approvals/asker-context.js'
 
 const said = (text: string) => ({ role: 'assistant', text })
@@ -85,5 +88,50 @@ describe('the context an approval shows', () => {
     // Words beside a control line keep only the words; an asker's own why is cleaned the same way.
     expect(contextFromRows([said('Pushing now. <walnut-turn status="done"/>')]).why).toBe('Pushing now.')
     expect(contextFromRows([], '<walnut-turn status="agent-ack"/> Release check').why).toBe('Release check')
+  })
+
+  // 2026-11-24: an agent's `walnut approve --why` in English showed as it was in the dialog.
+  it('an asker\'s why in another language than his setting is not shown: Walnut writes the summary in his', () => {
+    const en = 'Publishes the new prompt so the site picks it up today.'
+    const zh = '把新的提示词发布到网站上，今天就能生效。'
+    const other = contextFromRows([], en, 'han')
+    expect(other).toEqual({ why: en, whyFrom: 'asker_other' })
+    expect(needsSummary({ status: 'pending', context: other })).toBe(true)
+    expect(contextSummary(other)).toContain(`Why (given): ${en}`)
+    expect(contextFromRows([], zh, 'han').whyFrom).toBe('asker')
+    // No setting (or the experiment off): the asker's words are shown as before.
+    expect(contextFromRows([], en, null).whyFrom).toBe('asker')
+    expect(needsSummary({ status: 'pending', context: contextFromRows([], zh, 'han') })).toBe(false)
+  })
+})
+
+/**
+ * Class guard: a reason marked anything but `asker` is never shown as the asker's own, on every
+ * surface (the web dialog, the phone, the push, the summary writer, the store). Each reads `whyFrom`
+ * only against 'asker', so a new value (asker_other) reads as "Walnut's summary"; a reading that
+ * names another value fails here.
+ */
+describe('every reader of whyFrom tells only asker apart (guard)', () => {
+  const ROOT = path.resolve(__dirname, '../../..')
+  const walk = (d: string, out: string[] = []): string[] => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) walk(p, out)
+      else if (/\.(ts|tsx|swift)$/.test(e.name)) out.push(p)
+    }
+    return out
+  }
+  it('compares whyFrom only with asker', () => {
+    const bad: string[] = []
+    for (const dir of ['src', 'web/src', 'ios-native/Walnut']) {
+      for (const f of walk(path.join(ROOT, dir))) {
+        const rel = path.relative(ROOT, f)
+        for (const m of fs.readFileSync(f, 'utf8').matchAll(/whyFrom\s*[!=]==?\s*['"]([a-z_]+)['"]/g)) {
+          if (m[1] !== 'asker' && !(rel === 'src/core/approvals/asker-context.ts' && m[1] === 'session')) bad.push(`${rel}: ${m[0]}`)
+        }
+      }
+    }
+    expect(bad).toEqual([])
   })
 })

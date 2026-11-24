@@ -56,11 +56,12 @@ describe('no reply-language reminder', () => {
     }
   })
 
-  it('only the send gate, its check, its route, the letters\' language and the reflection use the judge', () => {
+  it('only the send gate, its check, its setting, the approval reason, the letters\' language and the reflection use the judge', () => {
     const USERS: Record<string, string> = {
       'src/ops/reply-language-gate.ts': 'refuses a session\'s words for the user before they are sent',
       'src/ops/reply-language-check.ts': 'denies an AskUserQuestion before it is asked; checks a draft on request',
-      'src/web/routes/reply-language-v1.ts': 'says which script the gate holds words to',
+      'src/core/reply-language-gate-setting.ts': 'says which script the gate holds words to (its route and the approval dialog read it)',
+      'src/core/approvals/asker-context.ts': 'an approval reason in another language is not shown as his summary: Walnut writes one in his (display, never a note)',
       'src/core/human-inbox/walnut-letters/languages.ts': 'the language of Walnut\'s own letters (no judging)',
       'src/core/org/reflection/language.ts': 'the daily reflection\'s wrong_language finding',
     }

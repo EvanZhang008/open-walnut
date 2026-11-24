@@ -45,7 +45,7 @@ export interface Approval {
 
 export interface ApprovalContext {
   why?: string;
-  whyFrom?: 'asker' | 'session';
+  whyFrom?: 'asker' | 'asker_other' | 'session';
   goal?: string;
   project?: string;
   steps?: { kind: 'ran' | 'edited' | 'said' | 'tool'; text: string }[];

@@ -174,7 +174,7 @@ describe('no path sends a hint around the registry', () => {
       'core/sessions/reply-language-context.ts': 'the line of every session\'s system prompt',
       'core/human-inbox/walnut-letters/languages.ts': 'the language of Walnut\'s own letters to the user, not a hint',
       'core/org/reflection/pipeline.ts': 'the language a reflection writes its correction in, not a hint',
-      'web/routes/reply-language-v1.ts': 'what the send gate holds a session\'s words for the user to (a refusal, not a hint)',
+      'core/reply-language-gate-setting.ts': 'what the send gate holds a session\'s words for the user to (a refusal, not a hint), and which approval reasons he reads as given',
     };
     const users = all.filter((f) => /\breplyLanguageText\s*\(/.test(f.text)).map((f) => f.rel);
     expect(users.filter((f) => !READERS[f])).toEqual([]);

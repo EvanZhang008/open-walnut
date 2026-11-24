@@ -9,6 +9,7 @@
  * "if some is missing at least we know some info, it will still work, but will show xx is unknown").
  */
 import { withoutWalnutControl } from '../../lib/walnut-control-text.js'
+import { readsOffScript, type Script } from '../../lib/reply-language.js'
 
 export interface AskerStep {
   /** ran: a shell command; edited: a file it wrote; said: its own words; tool: any other tool. */
@@ -19,7 +20,12 @@ export interface AskerStep {
 export interface AskerContext {
   /** Why it asks: the asker's own --why, else the session's last words before it asked. */
   why?: string
-  whyFrom?: 'asker' | 'session'
+  /**
+   * asker: its own --why, which the dialog shows in place of Walnut's summary. asker_other: its own,
+   * but in another language than his Reply language setting, so Walnut writes the summary in his
+   * (summary.ts) from it and the dialog shows that; every client reads anything but `asker` so.
+   */
+  whyFrom?: 'asker' | 'asker_other' | 'session'
   /** The task's goal in a sentence, and its project. */
   goal?: string
   project?: string
@@ -84,10 +90,12 @@ function saidWords(r: Row): string {
 }
 
 /** Why and the last steps, from the transcript rows up to the request. Pure. */
-export function contextFromRows(rows: readonly Row[] | undefined, why?: string): Pick<AskerContext, 'why' | 'whyFrom' | 'steps'> {
+export function contextFromRows(rows: readonly Row[] | undefined, why?: string, script?: Script | null): Pick<AskerContext, 'why' | 'whyFrom' | 'steps'> {
   const out: Pick<AskerContext, 'why' | 'whyFrom' | 'steps'> = {}
   const given = why ? oneLine(withoutWalnutControl(why)) : ''
-  if (given) { out.why = cutTo(given, WHY_MAX); out.whyFrom = 'asker' }
+  // A reason in another language than the one he reads (2026-11-24: an agent's English --why showed
+  // as it was) is not shown as his summary: Walnut writes one in his language from it.
+  if (given) { out.why = cutTo(given, WHY_MAX); out.whyFrom = script && readsOffScript(given, script) ? 'asker_other' : 'asker' }
   if (!rows?.length) return out
   // The rows before the request: from the end, past the call that asked (it may still be running).
   let end = rows.length
@@ -122,6 +130,13 @@ export function goalOf(task: { description?: string; summary?: string } | null |
   return undefined
 }
 
+/** The script his setting asks for (reply-language-gate-setting.ts), or null when it is not read in a moment. */
+async function gateScriptSoon(): Promise<Script | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const read = import('../reply-language-gate-setting.js').then((m) => m.readReplyLanguageGate()).then((g) => g.script).catch(() => null)
+  return Promise.race([read, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 1_000); timer.unref?.() })]).finally(() => clearTimeout(timer))
+}
+
 /** How long reading the asking session's transcript may hold the request. */
 const READ_MS = 2_500
 
@@ -147,7 +162,7 @@ export async function readAskerContext(input: { sessionId?: string; taskId?: str
       new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), READ_MS); timer.unref?.() }),
     ]).finally(() => clearTimeout(timer))
   }
-  Object.assign(ctx, contextFromRows(rows, input.why))
+  Object.assign(ctx, contextFromRows(rows, input.why, input.why ? await gateScriptSoon() : null))
   if (input.taskId) {
     try {
       const { getTask } = await import('../task-manager.js')
@@ -163,7 +178,7 @@ export async function readAskerContext(input: { sessionId?: string; taskId?: str
 /** The context as plain lines, for a single-use envelope's context_summary and a notice. Pure. */
 export function contextSummary(ctx: AskerContext): string {
   const lines: string[] = []
-  if (ctx.why) lines.push(`Why (${ctx.whyFrom === 'asker' ? 'given' : 'its last words'}): ${ctx.why}`)
+  if (ctx.why) lines.push(`Why (${ctx.whyFrom === 'session' ? 'its last words' : 'given'}): ${ctx.why}`)
   if (ctx.goal) lines.push(`Goal: ${ctx.goal}`)
   if (ctx.project) lines.push(`Project: ${ctx.project}`)
   for (const s of ctx.steps ?? []) lines.push(`${s.kind === 'ran' ? 'Ran' : s.kind === 'edited' ? 'Edited' : s.kind === 'said' ? 'Said' : 'Used'}: ${s.text}`)
