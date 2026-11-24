@@ -165,7 +165,12 @@
 
 /* `relative` is kept for the pane's own overlays; the row answer is no longer one of them (see
    `.mail-row-strip`, which is a footer the list gives up rather than a card over a row). */
+/* The size container an open group's rows stack in (mail-groups.css, .mail-kid) is the pane, never its
+   scroller: WebKit drops the scroll of a scroller that is or holds a size container when an ancestor
+   goes `display: none`, and the narrow drill hides this pane while the reader is open (the list came
+   back at its top in the Mac app; tests/web/scroller-size-container.test.ts). */
 .mail-list-pane {
+  container: mail-list / inline-size;
   position: relative;
   background: var(--bg);
 }
@@ -512,9 +517,7 @@
   gap: 8px;
 }
 
-/* A size container: an open group's rows stack below a width (mail-groups.css, .mail-kid). */
 .mail-rows {
-  container: mail-rows / inline-size;
   flex: 1;
   min-height: 0;
   overflow-y: auto;

@@ -243,7 +243,7 @@
 /* A list too narrow for three columns (dragged to its 260px floor, the 2026-11-21 review: sender, subject
    and time each wrapped into three or four lines) stacks the row: the sender and the time on the first
    line, the subject under them across the row, the route line under that. */
-@container mail-rows (max-width: 420px) {
+@container mail-list (max-width: 420px) {
   .mail-row.mail-kid { grid-template-columns: 6px minmax(0, 1fr) auto; }
   .mail-row.mail-kid > .mail-kid-dot { grid-area: 1 / 1; }
   .mail-row.mail-kid > .mail-kid-from { grid-area: 1 / 2; }
