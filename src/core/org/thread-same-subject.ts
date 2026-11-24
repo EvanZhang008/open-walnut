@@ -32,18 +32,38 @@ const COMMON = new Set(['the', 'and', 'for', 'with', 'from', 'into', 'this', 'th
 /** CJK pairs that say nothing about a subject (need, problem, task, this, today ...). */
 const COMMON_PAIRS = new Set(['\u9700\u8981', '\u95ee\u9898', '\u4efb\u52a1', '\u4e00\u4e2a', '\u8fd9\u4e2a', '\u90a3\u4e2a', '\u6ca1\u6709', '\u5df2\u7ecf', '\u53ef\u4ee5', '\u4ec0\u4e48', '\u8fdb\u884c', '\u73b0\u5728', '\u4eca\u5929', '\u6628\u5929', '\u5b8c\u6210', '\u6211\u4eec', '\u4f60\u7684', '\u5904\u7406', '\u4e00\u4e0b', '\u8fd8\u662f', '\u662f\u5426', '\u8981\u4e0d', '\u4e0d\u8981']);
 
-/** The words a title is compared by: Latin words of 3+ letters (common ones out), numbers and ids, pairs of CJK characters. Pure. */
-export function subjectWords(text: string): Set<string> {
-  const out = new Set<string>();
+/**
+ * The telling words of a title, by the place they stand in: each Latin word of 3+ letters (common
+ * ones out), number or id is a place of its own, and a run of CJK characters is one place holding
+ * its pairs of characters. Pure.
+ */
+function subjectPlaces(text: string): string[][] {
+  const out: string[][] = [];
   const lower = text.toLowerCase();
   for (const w of lower.match(/[a-z0-9][a-z0-9_\-.]*[a-z0-9]|[0-9]{2,}/g) ?? []) {
-    if (/^[0-9.\-]+$/.test(w) ? w.replace(/\D/g, '').length >= 2 : w.length >= 3 && !COMMON.has(w)) out.add(w);
+    if (/^[0-9.\-]+$/.test(w) ? w.replace(/\D/g, '').length >= 2 : w.length >= 3 && !COMMON.has(w)) out.push([w]);
   }
   for (const run of lower.match(/[\u3400-\u9fff\uf900-\ufaff]+/g) ?? []) {
-    if (run.length === 1) continue;
-    for (let i = 0; i + 1 < run.length; i++) if (!COMMON_PAIRS.has(run.slice(i, i + 2))) out.add(run.slice(i, i + 2));
+    const pairs: string[] = [];
+    for (let i = 0; i + 1 < run.length; i++) if (!COMMON_PAIRS.has(run.slice(i, i + 2))) pairs.push(run.slice(i, i + 2));
+    if (pairs.length) out.push(pairs);
   }
   return out;
+}
+
+/** The words a title is compared by: Latin words of 3+ letters (common ones out), numbers and ids, pairs of CJK characters. Pure. */
+export function subjectWords(text: string): Set<string> {
+  return new Set(subjectPlaces(text).flat());
+}
+
+/**
+ * In how many places of `title` a telling word of `other` stands. A name of four CJK characters is
+ * three pairs in ONE place: two titles that share only their area's name ("the model proxy: ...")
+ * share one place, however many pairs that is (review 2026-11-24). Pure.
+ */
+export function sharedPlaces(title: string, other: string): number {
+  const theirs = subjectWords(other);
+  return subjectPlaces(title).filter((place) => place.some((w) => theirs.has(w))).length;
 }
 
 function sharedCount(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
@@ -176,6 +196,32 @@ export function copyRefusal(below: Pick<Task, 'id' | 'title'>, theirs: readonly 
 export function reasonCoversTask(reason: unknown, taskId: string): boolean {
   if (typeof reason !== 'string' || reason.trim().length < 10) return false;
   return reason.includes(taskId) || reason.includes(taskId.slice(0, 8));
+}
+
+/** Why handing him a thread was refused: a task around already asks its subject. Pure. */
+export function sameSubjectAskRefusal(c: SubjectCandidate): string {
+  return `Not handed to the user: "${c.taskTitle}" (${c.taskId}) already asks him this subject on its thread ${c.id} "${c.title}", and he sees `
+    + 'that card on every node above it. One decision is asked in one place: write your thread without asking (state answered or working, '
+    + `with your own result), or have that task take its ask off (task_send ${c.taskId}). If yours is another decision, send this again with `
+    + 'separate_reason saying how it differs.';
+}
+
+/**
+ * A node handing him a thread (thread_update to needs) while a task around it already asks him on a
+ * thread of its own that this one clearly repeats (strongMatch): 409 `same_subject`, unless
+ * `separate_reason` says how it differs. Two cards asking one decision are never hidden behind one
+ * another at the read (a pointer could hide an ask he never answered); the second ask is refused at
+ * the write, where its writer can say it is another one. The user's own writes are never asked.
+ */
+export async function refuseSameSubjectAsk(taskId: string, title: string, tasks: readonly string[], by: ThreadWriter, input: { separate_reason?: unknown }): Promise<void> {
+  if (by === 'human' || (typeof input.separate_reason === 'string' && input.separate_reason.trim().length >= 10)) return;
+  const asking = (await treeOpenThreads(taskId, tasks))
+    .filter((b) => b.task.id !== taskId)
+    .map((b) => ({ ...b, threads: b.threads.filter((t) => t.state === 'needs') }));
+  const hit = strongMatch(sameSubjectCandidates(title, asking, Date.now()));
+  if (!hit) return;
+  const { ThreadError } = await import('./threads-model.js');
+  throw new ThreadError('same_subject', 409, sameSubjectAskRefusal(hit));
 }
 
 /**

@@ -18,6 +18,14 @@
  *    its summary's first sentence; never its title, a topic and no decision) in the same words or
  *    reworded with detail added (sameThreadDecision). A linked task asking something else never
  *    hides the thread.
+ * A thread whose result waits to be read (answered) asks nothing, so holding it hides no ask
+ * (heldResults, `via: 'thread'`): 2026-11-24, the user: "why the fuck there are so many dupciated
+ * thread". His VP's card was his own request with the designs' result on it, beside the card of the
+ * task it was handed to, which asked him to pick; he answered on the VP's and the task's kept
+ * waiting. While a linked task asks him on a thread of its own Threads, the node's result nearest
+ * that thread's title waits behind it, and stays there once he answered it there, until the node
+ * writes it again. Two asks never hide one another this way: handing him one while a task around
+ * asks its subject is refused at the write (thread-same-subject.ts refuseSameSubjectAsk).
  * Either kind stays a quiet pointer (`answered`) once the decision was settled in that task and it
  * asks nothing now (settledThere: an answer given for him there, his withdrawal, or his own message
  * to the task after it last asked it), so the thread never asks again what he already answered
@@ -32,16 +40,22 @@ import { answerFor, answersOf, askWords, FOLDABLE_SOURCES, sameAskReworded, same
 import { memoryOf, statusDecision } from '../ask-decision.js';
 import { plainLine, type ThreadAskedIn } from './thread-view.js';
 import type { OrgThread, ThreadAskOwner } from './threads-model.js';
+import { sameSubjectCandidates, sharedPlaces } from './thread-same-subject.js';
 import { matchIdRef } from '../../lib/id-ref.js';
 
 type AskTask = Pick<Task, 'id' | 'title' | 'phase' | 'status' | 'user_status' | 'router_area_id'>
-  & Partial<Pick<Task, 'ask_answered' | 'asks_answered' | 'asks_withdrawn' | 'status_report'>>;
+  & Partial<Pick<Task, 'ask_answered' | 'asks_answered' | 'asks_withdrawn' | 'status_report' | 'parent_task_id'>>;
+
+/** A thread of a task's own Threads, as heldResults reads it. */
+type OwnThread = Pick<OrgThread, 'id' | 'title' | 'state' | 'messages'> & Partial<Pick<OrgThread, 'closed' | 'needsAt' | 'movedTo'>>;
 
 /** What a pointer reads beside the tasks: now, and when a person last wrote to a task's sessions
  *  (SessionRecord.humanInputAt / chatInputAt, read in one batch by threads-store.ts withTaskAsks). */
 export interface AskPointerFacts {
   nowMs?: number;
   personAt?: (taskId: string) => string | null | undefined;
+  /** A task's own Threads, closed ones too (threads-store.ts withTaskAsks reads them for ownThreadTaskIds). */
+  threadsOf?: (taskId: string) => readonly OwnThread[] | undefined;
 }
 
 /**
@@ -180,14 +194,133 @@ export function threadAskedIn(
   return null;
 }
 
+/** Up the parent chain this far: a subtask's subtask under a linked task (subtasks go 3 levels deep). */
+const BELOW_DEPTH = 4;
+
+/** The task's status says a thread of its own waits on him now (user-status.ts taskThreadNeeds). */
+const asksOnThread = (t: AskTask): boolean => t.phase !== 'COMPLETE' && t.status !== 'done' && t.user_status?.state === 'needs' && t.user_status.source === 'thread';
+
+/** A result a task's own thread may hold: open, waiting to be read, linked to tasks, written in the last week. */
+const RESULT_RECENT_MS = 7 * 24 * 3_600_000;
+export const heldCandidate = (t: Pick<OrgThread, 'closed' | 'state' | 'tasks' | 'updatedAt'>, now: number): boolean =>
+  !t.closed && t.state === 'answered' && !!t.tasks?.length && now - Date.parse(t.updatedAt) <= RESULT_RECENT_MS;
+
 /**
- * The node's threads as he reads them: one in needs whose decision a task already asks reads
- * `pending` with that task (`askedIn`); every other thread as stored. Pure.
+ * The tasks whose own Threads may hold this thread: the ones it lists, and a task under one of them
+ * whose status says a thread of its own waits on him (a subtask asking for the work its lead's
+ * thread names; no file is read for the rest). In the node's area, never the node. Pure.
+ */
+function ownThreadTasks(t: Pick<OrgThread, 'tasks'>, node: AreaScoped, byId: ReadonlyMap<string, AskTask>): AskTask[] {
+  const named = new Set((t.tasks ?? []).filter((id) => id !== node.id));
+  if (!named.size) return [];
+  const out: AskTask[] = [];
+  for (const task of byId.values()) {
+    if (task.id === node.id || !sameTaskArea(node, task)) continue;
+    if (named.has(task.id)) { out.push(task); continue; }
+    if (!asksOnThread(task)) continue;
+    let up = task.parent_task_id ? byId.get(task.parent_task_id) : undefined;
+    for (let i = 0; up && i < BELOW_DEPTH; i++) {
+      if (named.has(up.id)) { out.push(task); break; }
+      up = up.parent_task_id ? byId.get(up.parent_task_id) : undefined;
+    }
+  }
+  return out;
+}
+
+/** Files read for one node's held results at most: the tasks of its newest results first. */
+const OWN_THREAD_TASKS_MAX = 40;
+
+/** The tasks whose Threads heldResults reads for these threads (ownThreadTasks of each heldCandidate). Pure. */
+export function ownThreadTaskIds(node: AreaScoped, threads: readonly Pick<OrgThread, 'closed' | 'state' | 'tasks' | 'updatedAt'>[], tasks: readonly AskTask[], now: number = Date.now()): Set<string> {
+  const ids = new Set<string>();
+  const results = threads.filter((t) => heldCandidate(t, now)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (!results.length) return ids;
+  const byId = new Map(tasks.map((x) => [x.id, x] as const));
+  for (const t of results) {
+    for (const task of ownThreadTasks(t, node, byId)) if (ids.size < OWN_THREAD_TASKS_MAX) ids.add(task.id);
+  }
+  return ids;
+}
+
+/** When he last wrote on a thread. */
+const hisLastAt = (x: OwnThread): string => x.messages.reduce((last, m) => (m.at > last ? m.at : last), '');
+
+/** When the node last wrote a thread for him: handed it to him (`needsAt`) or wrote its summary (`replyAt`). */
+const lastWrittenAt = (t: Partial<Pick<OrgThread, 'needsAt' | 'replyAt' | 'createdAt'>>): string =>
+  [t.needsAt, t.replyAt].filter((x): x is string => !!x).sort().pop() ?? t.createdAt ?? '';
+
+/** The task's thread asked him and he wrote on it since: it asks nothing now. */
+const answeredThere = (x: OwnThread): boolean => x.state !== 'needs' && !!x.needsAt && hisLastAt(x) > x.needsAt;
+
+/** A result is held on this many shared telling words with the task's thread, standing in this many places of its title. */
+const RESULT_SHARED = 3;
+const RESULT_PLACES = 2;
+
+/**
+ * The node's results (answered threads) that a linked task's own thread holds, by thread id: for
+ * each thread of such a task that asks him now, or that he answered, the ONE thread of the node
+ * linked to that task whose title shares the most telling words with it (RESULT_SHARED at least,
+ * more than any other: a tie holds none), when that one is a result. The words are the same-subject
+ * rule's (thread-same-subject.ts sameSubjectCandidates): one in many of the node's titles ("live",
+ * the product's name) tells nothing. Two requests handed to one task share its area's name, so the
+ * nearest title tells which one the task's ask is about; the shared words stand in two places of
+ * the title at least (RESULT_PLACES: the area's name is one). Only a result the node wrote while that
+ * thread was already asking him: one written before it was in his view then and stays there.
+ * Answered there: held on while his words are newer than the result; the node writing it again is
+ * news, and after RESULT_RECENT_MS with nothing written it is back in his view. Pure.
+ */
+export function heldResults<T extends OrgThread>(node: AreaScoped, threads: readonly T[], byId: ReadonlyMap<string, AskTask>, facts: AskPointerFacts): Map<string, ThreadAskedIn> {
+  const out = new Map<string, ThreadAskedIn>();
+  const now = facts.nowMs ?? Date.now();
+  if (!facts.threadsOf || !threads.some((t) => heldCandidate(t, now))) return out;
+  // Per task a result is linked to: every open thread of the node linked to it. The nearest of them
+  // is the task's subject, a result or not.
+  const byTask = new Map<string, { task: AskTask; mine: Map<string, T> }>();
+  for (const t of threads) {
+    if (!heldCandidate(t, now)) continue;
+    for (const task of ownThreadTasks(t, node, byId)) {
+      const row = byTask.get(task.id) ?? { task, mine: new Map<string, T>() };
+      row.mine.set(t.id, t);
+      byTask.set(task.id, row);
+    }
+  }
+  for (const t of threads) {
+    if (t.closed) continue;
+    for (const id of t.tasks ?? []) byTask.get(id)?.mine.set(t.id, t);
+  }
+  const own = [{ task: { id: node.id, title: '' }, threads }];
+  for (const { task, mine } of byTask.values()) {
+    // Only his words newer than a result linked to this task can hold one: older threads are not scored.
+    const oldest = [...mine.values()].filter((t) => heldCandidate(t, now)).map(lastWrittenAt).sort()[0];
+    if (oldest === undefined) continue;
+    const open = task.phase !== 'COMPLETE' && task.status !== 'done';
+    for (const x of facts.threadsOf(task.id) ?? []) {
+      const asking = open && !x.closed && x.state === 'needs';
+      if (x.movedTo || !(asking || (answeredThere(x) && hisLastAt(x) > oldest))) continue;
+      // Most shared first (sameSubjectCandidates), among the node's threads linked to this task.
+      const [best, next] = sameSubjectCandidates(x.title, own, now).filter((c) => mine.has(c.id));
+      const t = best ? mine.get(best.id) : undefined;
+      if (!best || !t || best.shared < RESULT_SHARED || next?.shared === best.shared || !heldCandidate(t, now)) continue;
+      // The area's name alone is one place, and a result written before the task asked is not about its ask.
+      if (sharedPlaces(x.title, t.title) < RESULT_PLACES || !x.needsAt || lastWrittenAt(t) < x.needsAt) continue;
+      const p: ThreadAskedIn = { task: task.id, title: task.title, ask: x.title, via: 'thread', thread: x.id };
+      if (asking) out.set(t.id, p);
+      else if (!out.has(t.id) && hisLastAt(x) > lastWrittenAt(t)) out.set(t.id, { ...p, answered: true });
+    }
+  }
+  return out;
+}
+
+/**
+ * The node's threads as he reads them: one in needs whose decision a task already asks, and a
+ * result a linked task's own thread holds (heldResults), read `pending` with that task (`askedIn`);
+ * every other thread as stored. Pure.
  */
 export function withAskPointers<T extends OrgThread>(node: AreaScoped, threads: readonly T[], tasks: readonly AskTask[], facts: AskPointerFacts = {}): Array<T & { askedIn?: ThreadAskedIn }> {
   const byId = new Map(tasks.map((x) => [x.id, x] as const));
+  const held = heldResults(node, threads, byId, facts);
   return threads.map((t) => {
-    const p = threadAskedIn(t, node, byId, facts);
+    const p = threadAskedIn(t, node, byId, facts) ?? held.get(t.id);
     return (p ? { ...t, state: 'pending' as const, askedIn: p } : t) as T & { askedIn?: ThreadAskedIn };
   });
 }
@@ -210,15 +343,21 @@ export function pointerTaskIds(threads: readonly Pick<OrgThread, 'closed' | 'sta
  */
 export function askPointerSignature(threads: readonly OrgThread[], tasks: readonly AskTask[], facts: AskPointerFacts = {}): string {
   const ids = pointerTaskIds(threads);
+  // A result held by a task's own thread reads its linked tasks too (heldResults).
+  const now = facts.nowMs ?? Date.now();
+  const results = threads.filter((t) => heldCandidate(t, now));
+  for (const t of results) for (const id of t.tasks ?? []) ids.add(id);
   if (!ids.size) return '';
   const byId = new Map(tasks.map((x) => [x.id, x] as const));
+  // A task under a linked one that asks him on a thread of its own now may hold a result too (ownThreadTasks).
+  const below = results.length ? tasks.filter(asksOnThread).map((x) => `${x.id}:${x.parent_task_id ?? ''}/${x.user_status?.ask ?? ''}`).sort().join('\n+') : '';
   return [...ids].sort().map((id) => {
     const x = byId.get(id);
     const s = x?.user_status;
     const settled = answersOf(x).map((a) => `${a.key}@${a.at}${a.withdrawn ? '!' : ''}`).join(',') + `|${(x?.asks_withdrawn ?? []).map((w) => w.at).join(',')}`;
     const memory = x ? memoryOf(x.status_report) : null;
     return `${id}:${x ? `${x.phase ?? ''}/${x.status ?? ''}/${s?.state ?? ''}/${s?.source ?? ''}/${decisionOf(x) ?? ''}/${s?.ask ?? ''}/${x.router_area_id ?? ''}/${settled}/${memory?.id ?? ''}@${memory?.at ?? ''}/${facts.personAt?.(id) ?? ''}` : '-'}`;
-  }).join('\n');
+  }).join('\n') + (below ? `\n+${below}` : '');
 }
 
 /**

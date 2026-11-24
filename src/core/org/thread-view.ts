@@ -137,7 +137,9 @@ export interface ThreadAskedIn {
   task: string;
   title: string;
   ask: string;
-  via: 'owner' | 'words';
+  /** `thread`: this thread is a result that task's own thread (`thread`) holds: it asks him on its subject, or he answered it there. */
+  via: 'owner' | 'words' | 'thread';
+  thread?: string;
   decision?: string;
   /** That decision was answered there (by a lead, VP or Main for him) or withdrawn: nothing is asked, the thread stays quiet. */
   answered?: true;

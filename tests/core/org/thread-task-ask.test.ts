@@ -3,10 +3,13 @@
  * second ask (src/core/org/thread-task-ask.ts). Fails when a linked task asking ANOTHER decision
  * hides a thread, when an unlinked task or another area's task hides one, when the pointer outlives
  * the task's ask (completed, stopped asking, a new decision), or when the counts, the overdue clock
- * and the stored state disagree with the projection.
+ * and the stored state disagree with the projection. A result (answered) is held by the thread of
+ * the task it was handed to while that thread asks him; fails when an ask is ever hidden that way,
+ * when his answer there brings the result back, or when a task's ask holds the wrong one of two
+ * results. Chinese test data is written with \u escapes (the two titles of his 2026-11-24 report).
  */
 import { describe, it, expect } from 'vitest'
-import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerSignature, sameThreadDecision, threadAskedIn, withAskPointers } from '../../../src/core/org/thread-task-ask.js'
+import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerSignature, ownThreadTaskIds, sameThreadDecision, threadAskedIn, withAskPointers } from '../../../src/core/org/thread-task-ask.js'
 import { askKey } from '../../../src/core/same-ask.js'
 import { shownToHim, threadOverdue, watchingOf } from '../../../src/core/org/thread-view.js'
 import { threadCounts } from '../../../src/core/org/thread-groups.js'
@@ -337,6 +340,115 @@ describe('the read every surface shares', () => {
     expect(askPointerSignature([thread()], [task('t-owner', { phase: 'COMPLETE' })])).not.toBe(a)
     expect(askPointerSignature([thread()], [task('t-owner', { user_status: { state: 'needs', source: 'session', ask: REVIEW_ASK, decision: { id: 'ask-cccccc', key: 'k' } } } as Partial<Task>)])).not.toBe(a)
     expect(askPointerSignature([thread()], [task('t-owner'), task('t-unrelated', { phase: 'COMPLETE' })])).toBe(a)
-    expect(askPointerSignature([thread({ state: 'answered' })], [task('t-owner')])).toBe('')
+    // In progress: nothing of it is for him, so nothing is read. (A result reads its linked tasks: heldResults.)
+    expect(askPointerSignature([thread({ state: 'working' })], [task('t-owner')])).toBe('')
+  })
+})
+
+describe('a result waiting to be read, beside the card of the task it was handed to', () => {
+  // 2026-11-24 01:06Z: the VP's card was his own request with the designs' result on it (Done),
+  // and the task's card asked him to pick. He answered on the VP's; the task's kept waiting.
+  const HIS_ASK = '\u65b0\u4efb\u52a1\u9762\u677f\u592a\u5c0f\uff0c\u8981 10 \u4e2a\u8bbe\u8ba1\u9009'
+  const PICK_ONE = '\u65b0\u5efa\u4efb\u52a1\u9762\u677f\uff1a10 \u4e2a\u65b9\u6848\uff0c\u8bf7\u6311\u4e00\u4e2a'
+  /** A task that keeps Threads: its status says a thread of its own waits on him. */
+  const asker = (id: string, over: Partial<Task> = {}) => task(id, { user_status: { state: 'needs', source: 'thread', ask: 'Answer the thread' } as never, ...over })
+  const quiet = (id = 't-owner') => asker(id, { user_status: { state: 'working' } as never })
+  /** The lead's card: his request, its result written 4 hours ago (the task was asking by then), linked to the task. */
+  const result = (over: Partial<OrgThread> = {}) => thread({ id: 'th-000002', title: HIS_ASK, state: 'answered', reply: 'Ten designs are on one page.', replyAt: iso(4), updatedAt: iso(4), ...over })
+  /** The task's own card: handed to him 5 hours ago. */
+  const pick = (over: Partial<OrgThread> = {}): OrgThread => ({
+    id: 'th-0000aa', title: PICK_ONE, titled: true, state: 'needs', reply: 'Pick one of the ten; 9 is the widest.',
+    messages: [], createdAt: iso(6), updatedAt: iso(5), needsAt: iso(5), by: 'task:t-owner', ...over,
+  }) as OrgThread
+  const hisAnswer = (hoursAgo = 1) => [{ id: 'tm-0000aa01', at: iso(hoursAgo), text: '6 and 8 are fine', via: 'thread' }] as never
+  const read = (own: OrgThread[], tasks: Task[], ...files: OrgThread[]) =>
+    withAskPointers(NODE, own, tasks, { nowMs: NOW, threadsOf: (id: string) => (id === 't-owner' ? files : undefined) })
+
+  it('while the task asks him, the result waits behind the task\'s card', () => {
+    const [shown] = read([result()], [asker('t-owner')], pick())
+    expect(shown).toMatchObject({ state: 'pending', askedIn: { task: 't-owner', title: 'Task t-owner', ask: PICK_ONE, via: 'thread', thread: 'th-0000aa' } })
+    expect(shownToHim(shown, new Set(), NOW)).toBe(false)
+    expect(threadCounts([shown], NOW)).toMatchObject({ shown: 0, needs: 0 })
+  })
+
+  it('after his answer there it stays out of his sight, until the node writes it again', () => {
+    const answered = pick({ state: 'working', messages: hisAnswer() })
+    expect(read([result()], [quiet()], answered)[0].askedIn).toMatchObject({ thread: 'th-0000aa', answered: true })
+    // The task done, its thread closed: still read there.
+    const closed = { ...answered, state: 'answered', closed: { how: 'acked', at: iso(0.5), by: 'node' } } as OrgThread
+    expect(read([result()], [task('t-owner', { phase: 'COMPLETE', user_status: { state: 'done' } as never })], closed)[0].askedIn?.answered).toBe(true)
+    // The node writing its card again after his words is news: it shows.
+    expect(read([result({ replyAt: iso(0.5), updatedAt: iso(0.5) })], [quiet()], answered)[0].state).toBe('answered')
+    // The task's thread stopped asking with no word of his, or his words there are from before it asked or
+    // before the result was written: the result is back.
+    expect(read([result()], [quiet()], pick({ state: 'working' }))[0].state).toBe('answered')
+    expect(read([result()], [quiet()], pick({ state: 'working', messages: hisAnswer(5.5) }))[0].state).toBe('answered')
+    expect(read([result()], [quiet()], pick({ state: 'working', messages: hisAnswer(4.5) }))[0].state).toBe('answered')
+  })
+
+  it('an ask is never hidden this way: only a result is held', () => {
+    for (const state of ['needs', 'working', 'pending'] as const) {
+      const own = result({ state, needsAt: iso(4) })
+      expect(read([own], [asker('t-owner')], pick())[0], state).toMatchObject({ state })
+      expect(read([own], [quiet()], pick({ state: 'working', messages: hisAnswer() }))[0], state).toMatchObject({ state })
+    }
+    expect(threadAskedIn(result({ state: 'needs' }), NODE, byId(asker('t-owner')), { threadsOf: () => [pick()] })).toBeNull()
+  })
+
+  it('of two results handed to one task, only the one nearest the task\'s ask is held; a tie holds none', () => {
+    const table = result({ id: 'th-000003', title: 'Model proxy usage table, one row per account' })
+    const stats = result({ id: 'th-000004', title: 'Model proxy stats by model, time range adjustable' })
+    const asks = pick({ title: 'Model proxy stats by model with an adjustable time range: the design waits for your yes' })
+    expect(read([table, stats], [asker('t-owner')], asks).map((t) => t.state)).toEqual(['answered', 'pending'])
+    const twin = result({ id: 'th-000005', title: 'Model proxy stats by model, time range adjustable' })
+    expect(read([stats, twin], [asker('t-owner')], asks).map((t) => t.state)).toEqual(['answered', 'answered'])
+    // The area's name alone is not a subject: fewer than three shared words hold nothing.
+    expect(read([table], [asker('t-owner')], asks)[0].state).toBe('answered')
+    // Nearest is one of the node's own asks: the task's ask is about that one, and the result stays.
+    const myAsk = thread({ id: 'th-000006', title: 'Model proxy stats by model with an adjustable time range: pick the design', state: 'needs' })
+    expect(read([stats, myAsk], [asker('t-owner')], asks).find((t) => t.id === 'th-000004')?.state).toBe('answered')
+  })
+
+  it('a result written before the task asked, or sharing only the area\'s name with its ask, stays in his view', () => {
+    // It was in his view before the task asked: nothing takes it out, and nothing keeps it out after his answer.
+    const earlier = result({ replyAt: iso(6), updatedAt: iso(6) })
+    expect(read([earlier], [asker('t-owner')], pick())[0].state).toBe('answered')
+    expect(read([earlier], [quiet()], pick({ state: 'working', messages: hisAnswer() }))[0].state).toBe('answered')
+    // No record of when the task's thread was handed to him: nothing proves the result came after it.
+    expect(read([result()], [asker('t-owner')], pick({ needsAt: undefined }))[0].state).toBe('answered')
+    // Review 2026-11-24: a four-character area name is three pairs, in one place. "The model proxy's usage
+    // table is live, one row per account" is not "The model proxy: pay for one more machine?".
+    const live = result({ title: '\u6a21\u578b\u4ee3\u7406\u7528\u91cf\u8868\u5df2\u4e0a\u7ebf\uff0c\u6309\u8d26\u53f7\u4e00\u884c' })
+    const pay = pick({ title: '\u6a21\u578b\u4ee3\u7406\uff1a\u8981\u4e0d\u8981\u82b1\u94b1\u52a0\u4e00\u53f0\u673a\u5668' })
+    expect(read([live], [asker('t-owner')], pay)[0].state).toBe('answered')
+    expect(read([live], [quiet()], { ...pay, state: 'working', messages: hisAnswer() } as OrgThread)[0].state).toBe('answered')
+  })
+
+  it('not linked, the task complete, older than a week, or no file read: as stored', () => {
+    expect(read([result({ tasks: ['t-other'] })], [asker('t-owner')], pick())[0].state).toBe('answered')
+    expect(read([result()], [task('t-owner', { phase: 'COMPLETE', user_status: { state: 'done' } as never })], pick())[0].state).toBe('answered')
+    expect(read([result({ replyAt: iso(8 * 24), updatedAt: iso(8 * 24) })], [asker('t-owner')], pick({ needsAt: iso(9 * 24) }))[0].state).toBe('answered')
+    expect(withAskPointers(NODE, [result()], [asker('t-owner')])[0].state).toBe('answered')
+    // A thread that lists its own node reads no task under it for that.
+    expect(read([result({ tasks: [NODE.id] })], [asker('t-owner', { parent_task_id: NODE.id })], pick())[0].state).toBe('answered')
+  })
+
+  it('reads the linked tasks, and a task under one that asks him now; never for a thread that is no result', () => {
+    const tasks = [quiet(), asker('t-sub', { parent_task_id: 't-owner' }), asker('t-else'), quiet('t-idle-sub')]
+    tasks[3].parent_task_id = 't-owner'
+    expect([...ownThreadTaskIds(NODE, [result()], tasks, NOW)].sort()).toEqual(['t-owner', 't-sub'])
+    expect([...ownThreadTaskIds(NODE, [result({ state: 'needs' }), result({ state: 'working' }), result({ closed: { how: 'acked', at: iso(1), by: 'human' } as never })], tasks, NOW)]).toEqual([])
+    // The subtask's thread holds the lead's result too.
+    const out = withAskPointers(NODE, [result()], tasks, { nowMs: NOW, threadsOf: (id: string) => (id === 't-sub' ? [pick()] : undefined) })
+    expect(out[0].askedIn).toMatchObject({ task: 't-sub', via: 'thread' })
+  })
+
+  it('the count cache follows the tasks a result is linked to', () => {
+    const done = result()
+    expect(askPointerSignature([done], [asker('t-owner')], { nowMs: NOW })).not.toBe('')
+    expect(askPointerSignature([done], [asker('t-owner')], { nowMs: NOW })).not.toBe(askPointerSignature([done], [quiet()], { nowMs: NOW }))
+    // A task under the linked one starts asking.
+    const sub = (t: Task) => ({ ...t, parent_task_id: 't-owner' }) as Task
+    expect(askPointerSignature([done], [quiet(), sub(asker('t-sub'))], { nowMs: NOW })).not.toBe(askPointerSignature([done], [quiet(), sub(quiet('t-sub'))], { nowMs: NOW }))
   })
 })

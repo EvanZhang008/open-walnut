@@ -54,14 +54,22 @@ export function FollowUp({ threadId, title, owner, onSend }: {
   );
 }
 
-/** The task that already asks him this thread's decision: he answers it there (one click opens it). */
+/**
+ * The task that already asks him this thread's decision: he answers it there (one click opens it).
+ * `via: 'thread'`: this thread is a result, held by that task's own card on its subject while it
+ * asks him and after he answered it there (core/org/thread-task-ask.ts heldResults).
+ */
 export function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   const openTask = useOpenTask();
+  const held = a.via === 'thread';
+  const [lead, rest] = held
+    ? a.answered ? ['You answered', ' on this: it comes back here when there is news.'] : ['', ' asks you about this now: answer on its card. This one comes back when it stops asking.']
+    : a.answered ? ['Decided in', ': nothing more to decide here.'] : ['Asked in', ': answer it there. This thread comes back if that task stops asking it.'];
   return (
-    <p className="org-thread-follows org-thread-asked-in" data-testid="org-thread-asked-in" data-task-id={a.task} data-answered={a.answered ? 'true' : undefined} title={a.ask}>
-      {a.answered ? 'Decided in' : 'Asked in'}{' '}
+    <p className="org-thread-follows org-thread-asked-in" data-testid="org-thread-asked-in" data-task-id={a.task} data-answered={a.answered ? 'true' : undefined} data-via={a.via} title={a.ask}>
+      {lead}{lead ? ' ' : ''}
       <button type="button" className="btn btn-link" data-testid="org-thread-asked-in-task" onClick={() => openTask(a.task)}>{a.title}</button>
-      {a.answered ? ': nothing more to decide here.' : ': answer it there. This thread comes back if that task stops asking it.'}
+      {rest}
     </p>
   );
 }

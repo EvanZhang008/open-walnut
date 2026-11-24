@@ -22,7 +22,7 @@ import {
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
 import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
-import { askOwnerKept, askOwnerOf, askOwnerTask, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
+import { askOwnerKept, askOwnerOf, askOwnerTask, heldCandidate, ownThreadTaskIds, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
 import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
 import { placeAsk, withHeldAsk, type TaskAsk } from './thread-report-ask.js';
 import { stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
@@ -66,7 +66,10 @@ export async function readThreads(taskId: string): Promise<ThreadsFile> {
  * leaves the threads as they are: a miss shows an ask twice, never hides one.
  */
 export async function withTaskAsks<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>> {
-  const needs = threads.some((t) => !t.closed && t.state === 'needs');
+  const now = Date.now();
+  // A result a linked task's own thread may hold (thread-task-ask.ts heldResults) is read like a needs thread.
+  const results = threads.some((t) => heldCandidate(t, now));
+  const needs = threads.some((t) => !t.closed && t.state === 'needs') || results;
   if (!needs && !threads.some((t) => t.reportAsk && !t.closed)) return [...threads];
   try {
     const all = tasks ?? await (await import('../task-manager.js')).listTasks();
@@ -84,10 +87,30 @@ export async function withTaskAsks<T extends OrgThread>(taskId: string, threads:
     const ids = pointerTaskIds(threads);
     const quiet = around.filter((t) => ids.has(t.id) && t.user_status?.state !== 'needs');
     const personAt = quiet.length ? await personWroteAt(quiet) : new Map<string, string>();
-    return withHeldAsk(node, withAskPointers(node, threads, around, { personAt: (id) => personAt.get(id) }));
+    // The Threads of the few tasks a result here is linked to (and of one under them that asks now).
+    const own = new Map<string, readonly OrgThread[]>();
+    if (results) for (const id of ownThreadTaskIds(node, threads, around, now)) own.set(id, await threadsForPointers(id));
+    return withHeldAsk(node, withAskPointers(node, threads, around, { nowMs: now, personAt: (id) => personAt.get(id), threadsOf: (id) => own.get(id) }));
   } catch {
     return [...threads];
   }
+}
+
+/**
+ * Another task's threads, for a pointer of this node (withTaskAsks). Kept two seconds, and dropped
+ * by every write of that task's threads here (mutateThreads): one page load reads the same few
+ * files for every node it lists (the Board's thread states read up to 300 nodes). None on a failed read.
+ */
+const POINTER_THREADS_MS = 2_000;
+const pointerThreads = new Map<string, { at: number; threads: readonly OrgThread[] }>();
+async function threadsForPointers(taskId: string): Promise<readonly OrgThread[]> {
+  const now = Date.now();
+  const hit = pointerThreads.get(taskId);
+  if (hit && now - hit.at < POINTER_THREADS_MS) return hit.threads;
+  const threads = (await readThreads(taskId).catch(() => null))?.threads ?? [];
+  if (pointerThreads.size > 500) pointerThreads.clear();
+  pointerThreads.set(taskId, { at: now, threads });
+  return threads;
 }
 
 /** When a person last wrote to each task's sessions (SessionRecord.humanInputAt, chatInputAt); none on a failed read. */
@@ -117,6 +140,8 @@ export async function listThreadNodes(): Promise<string[]> {
  */
 async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { file: ThreadsFile; out: R }): Promise<R> {
   leaderOnly();
+  // Its threads are about to change: no pointer of another node reads the copy kept of them.
+  pointerThreads.delete(taskId);
   let out: R | undefined;
   let entered: OrgThread[] = [];
   const step = (read: ThreadsFile): ThreadsFile => {
@@ -302,6 +327,8 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
     const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
     if (cur && patchHandsToUser(cur, rest)) {
       await refuseSameAskThread(taskId, rest.ask?.trim() || cur.ask || rest.title?.trim() || cur.title, by, rest);
+      // A task around already asks him this subject on a thread of its own: one decision, one card.
+      await (await import('./thread-same-subject.js')).refuseSameSubjectAsk(taskId, rest.title?.trim() || cur.title, [...(cur.tasks ?? []), ...(rest.add_tasks ?? [])], by, rest);
       // Its own refusals first (a missing kind, a return with no word on his message): a dry run.
       updateThread(await readThreads(taskId), id, rest, by, new Date().toISOString(), source);
       replaced = await (await import('./thread-supersede.js')).refuseOtherOpenAsks(taskId, by, rest, id);

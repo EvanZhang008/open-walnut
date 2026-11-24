@@ -70,7 +70,7 @@ export interface OrgThread {
   askOwner?: { task: string; decision?: string; ask?: string; at: string; by: string };
   /** Projected by the server on every read, never stored: a task asks him this decision now, so the
    *  thread points there instead of asking twice (core/org/thread-task-ask.ts). */
-  askedIn?: { task: string; title: string; ask: string; via: 'owner' | 'words'; decision?: string; answered?: true };
+  askedIn?: { task: string; title: string; ask: string; via: 'owner' | 'words' | 'thread'; thread?: string; decision?: string; answered?: true };
   /** A thread of a task below this node, listed here while it waits on him (experiment threads_pop_up, src/core/org/thread-popup.ts). */
   owner?: { task_id: string; title: string };
   /** Its owner takes a reply now; false: the reply is kept and goes when the task is back. */
