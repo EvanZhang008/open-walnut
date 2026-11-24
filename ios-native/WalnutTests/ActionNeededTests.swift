@@ -27,6 +27,45 @@ final class ActionNeededTests: XCTestCase {
         XCTAssertEqual(ActionNeededModel.answer(s.actions![4]), .openSession)
     }
 
+    /// An ask shown whole, as the web shows it (2026-11-24: on the phone its question was cut to one
+    /// line and its why and Yes/No keys were missing): its why and its shape are read, a yes/no ask has
+    /// Yes and No, a one-pick ask its options, and its answer is the web's `Answer to "...": <label>`.
+    func testAnAskReadsWholeWithItsKeys() throws {
+        let json = #"""
+        {"state":"needs","source":"session","ask":"Push the second revision?","actions":[
+          {"kind":"ask","id":"ask-1","summary":"Push the second revision? I recommend it.","detail":"Review: https://example.com/r/1234 . Nobody approved the first.","sessionId":"s1","form":{"summary":"Push the second revision? I recommend it.","kind":"yes_no","more":"Review"}},
+          {"kind":"ask","id":"ask-2","summary":"Which build?","sessionId":"s1","options":[{"id":"a","label":"Staging","recommended":true},{"id":"b","label":"Local"}],"form":{"kind":"single","summary":"Which build?"}},
+          {"kind":"ask","id":"ask-3","summary":"Which ones?","sessionId":"s1","options":[{"id":"a","label":"A"}],"form":{"kind":"multi","summary":"Which ones?"}},
+          {"kind":"ask","id":"ask-4","summary":"Anything else?","sessionId":"s1","form":7}
+        ]}
+        """#
+        let a = try XCTUnwrap(JSONDecoder().decode(WalnutUserStatus.self, from: Data(json.utf8)).actions)
+        XCTAssertEqual(a[0].detail, "Review: https://example.com/r/1234 . Nobody approved the first.")
+        XCTAssertEqual(a[0].formKind, "yes_no")
+        XCTAssertEqual(ActionNeededModel.answer(a[0]), .askOptions)
+        XCTAssertEqual(ActionNeededModel.askOptions(a[0]).map(\.label), ["Yes", "No"])
+        XCTAssertEqual(ActionNeededModel.askOptions(a[1]).map(\.label), ["Staging", "Local"])
+        XCTAssertEqual(ActionNeededModel.askOptions(a[1]).first?.recommended, true)
+        // Several picks or words only: its box and its session answer it.
+        XCTAssertEqual(ActionNeededModel.answer(a[2]), .openSession)
+        XCTAssertNil(a[3].formKind, "an odd form reads as none, never a failed list")
+        XCTAssertEqual(ActionNeededModel.answer(a[3]), .openSession)
+        XCTAssertEqual(ActionNeededModel.answerMessage(summary: a[0].summary, words: "Yes"),
+                       #"Answer to "Push the second revision? I recommend it.": Yes"#)
+        // It goes back out the way it came in.
+        let again = try JSONDecoder().decode(WalnutActionItem.self, from: JSONEncoder().encode(a[0]))
+        XCTAssertEqual(again, a[0])
+    }
+
+    /// The why folds by its length (never a measured height), a CJK character counting two.
+    func testTheWhyFoldsByItsLength() {
+        XCTAssertNil(OrgThreadModel.preview("Short why.", budget: ActionNeededModel.detailBudget))
+        let long = String(repeating: "\u{8BC4}\u{5BA1}", count: 60) // 120 CJK characters, width 240
+        let fold = try? XCTUnwrap(OrgThreadModel.preview(long, budget: ActionNeededModel.detailBudget))
+        XCTAssertNotNil(fold)
+        XCTAssertLessThanOrEqual(OrgThreadModel.width(fold ?? ""), ActionNeededModel.detailBudget + 2)
+    }
+
     func testAnOlderServerSendsNoActions() throws {
         let s = try JSONDecoder().decode(WalnutUserStatus.self, from: Data(#"{"state":"working"}"#.utf8))
         XCTAssertNil(s.actions)
@@ -44,6 +83,7 @@ final class ActionNeededTests: XCTestCase {
         XCTAssertEqual(ActionNeededModel.answer(keyed), .promptOptions)
         keyed.multi = true
         XCTAssertEqual(ActionNeededModel.answer(keyed), .openSession)
+        // An ask with no one-click shape is answered in its box or its session.
         for kind in ["permission", "choice", "ask"] {
             XCTAssertEqual(ActionNeededModel.answer(.init(kind: kind, id: "i", summary: "x")), .openSession)
         }

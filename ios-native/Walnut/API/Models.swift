@@ -766,10 +766,14 @@ struct WalnutActionItem: Codable, Equatable, Identifiable {
     var kind: String = ""
     var id: String = ""
     var summary: String = ""
+    /// Its why under the question (a letter's preview, an ask's more, an approval's summary).
+    var detail: String? = nil
     var at: String? = nil
     var sessionId: String? = nil
     var blocking: Bool? = nil
     var options: [WalnutAskOption]? = nil
+    /// An ask's one-click shape: `yes_no` (Yes and No), `single` or `multi` (its options), `text`.
+    var formKind: String? = nil
     var multi: Bool? = nil
     /// A one-question prompt's question word for word: the key its answer goes under.
     var question: String? = nil
@@ -777,10 +781,30 @@ struct WalnutActionItem: Codable, Equatable, Identifiable {
     var snoozedUntil: String? = nil
 
     init(kind: String, id: String, summary: String, at: String? = nil, sessionId: String? = nil, blocking: Bool? = nil,
-         options: [WalnutAskOption]? = nil, multi: Bool? = nil, board: String? = nil, snoozedUntil: String? = nil) {
+         options: [WalnutAskOption]? = nil, multi: Bool? = nil, board: String? = nil, snoozedUntil: String? = nil,
+         detail: String? = nil, formKind: String? = nil) {
         self.kind = kind; self.id = id; self.summary = summary; self.at = at; self.sessionId = sessionId
         self.blocking = blocking; self.options = options; self.multi = multi; self.board = board
-        self.snoozedUntil = snoozedUntil
+        self.snoozedUntil = snoozedUntil; self.detail = detail; self.formKind = formKind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, id, summary, detail, at, sessionId, blocking, options, multi, question, board, snoozedUntil, form
+    }
+    private enum FormKeys: String, CodingKey { case kind }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind); try c.encode(id, forKey: .id); try c.encode(summary, forKey: .summary)
+        try c.encodeIfPresent(detail, forKey: .detail); try c.encodeIfPresent(at, forKey: .at)
+        try c.encodeIfPresent(sessionId, forKey: .sessionId); try c.encodeIfPresent(blocking, forKey: .blocking)
+        try c.encodeIfPresent(options, forKey: .options); try c.encodeIfPresent(multi, forKey: .multi)
+        try c.encodeIfPresent(question, forKey: .question); try c.encodeIfPresent(board, forKey: .board)
+        try c.encodeIfPresent(snoozedUntil, forKey: .snoozedUntil)
+        if let formKind {
+            var f = c.nestedContainer(keyedBy: FormKeys.self, forKey: .form)
+            try f.encode(formKind, forKey: .kind)
+        }
     }
 
     init(from decoder: Decoder) throws {
@@ -788,6 +812,7 @@ struct WalnutActionItem: Codable, Equatable, Identifiable {
         kind = (try? c?.decodeIfPresent(String.self, forKey: .kind)) ?? ""
         id = (try? c?.decodeIfPresent(String.self, forKey: .id)) ?? ""
         summary = (try? c?.decodeIfPresent(String.self, forKey: .summary)) ?? ""
+        detail = (try? c?.decodeIfPresent(String.self, forKey: .detail)) ?? nil
         at = (try? c?.decodeIfPresent(String.self, forKey: .at)) ?? nil
         sessionId = (try? c?.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
         blocking = (try? c?.decodeIfPresent(Bool.self, forKey: .blocking)) ?? nil
@@ -796,6 +821,8 @@ struct WalnutActionItem: Codable, Equatable, Identifiable {
         question = (try? c?.decodeIfPresent(String.self, forKey: .question)) ?? nil
         board = (try? c?.decodeIfPresent(String.self, forKey: .board)) ?? nil
         snoozedUntil = (try? c?.decodeIfPresent(String.self, forKey: .snoozedUntil)) ?? nil
+        let form = try? c?.nestedContainer(keyedBy: FormKeys.self, forKey: .form)
+        formKind = (try? form?.decodeIfPresent(String.self, forKey: .kind)) ?? nil
     }
 }
 

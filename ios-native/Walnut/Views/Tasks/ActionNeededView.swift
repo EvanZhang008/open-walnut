@@ -13,7 +13,7 @@ import SwiftUI
 /// go with the words. What the words do per kind is `ActionNeededModel.words`.
 /// tests/core/action-needed-ratchet.test.ts reads `ActionNeededModel.answer` for every kind.
 enum ActionNeededModel {
-    enum Answer: Equatable { case approvalSheet, letterOptions, promptOptions, openSession }
+    enum Answer: Equatable { case approvalSheet, letterOptions, promptOptions, askOptions, openSession }
 
     /// How a kind is answered on the phone's row.
     static func answer(_ item: WalnutActionItem) -> Answer {
@@ -21,7 +21,10 @@ enum ActionNeededModel {
         case "approval": return .approvalSheet
         case "letter": return (item.options ?? []).isEmpty ? .openSession : .letterOptions
         case "question": return (item.options ?? []).isEmpty || item.multi == true || item.question == nil ? .openSession : .promptOptions
-        case "permission", "choice", "ask": return .openSession
+        // An ask in its one-click shape gets its keys, as on the web (org-ask-form.ts formOptions);
+        // one of several picks or words only is answered in its box or its session.
+        case "ask": return askOptions(item).isEmpty ? .openSession : .askOptions
+        case "permission", "choice": return .openSession
         default: return .openSession
         }
     }
@@ -36,6 +39,15 @@ enum ActionNeededModel {
         ]
         guard let mine = kinds[source] else { return false }
         return (s.actions ?? []).contains { mine.contains($0.kind) }
+    }
+
+    /// An ask's keys: Yes and No for a yes/no ask, a one-pick ask's own options, else none.
+    static func askOptions(_ item: WalnutActionItem) -> [WalnutAskOption] {
+        switch item.formKind {
+        case "yes_no": return [.init(id: "yes", label: "Yes"), .init(id: "no", label: "No")]
+        case "single": return item.options ?? []
+        default: return []
+        }
     }
 
     static func label(_ kind: String) -> String {
@@ -75,6 +87,10 @@ enum ActionNeededModel {
         default: return hasSession ? .sessionAnswer : .none
         }
     }
+
+    /// The why's width before Expand (`OrgThreadModel.width`: a CJK character counts two): about
+    /// four lines on a phone's row, where the web's wider card shows two.
+    static let detailBudget = 140
 
     static func placeholder(_ words: Words) -> String {
         switch words {
@@ -215,6 +231,8 @@ struct ActionNeededView: View {
     @State private var notes: [String: String] = [:]
     /// One id per letter reply until it is taken, so a retry after a lost answer is the same reply.
     @State private var replyIDs: [String: String] = [:]
+    /// The asks whose why is opened whole (Expand).
+    @State private var wholeDetail: Set<String> = []
 
     /// The marks that still hold: the same id asked again with new words is a new, open ask.
     private var marks: [String: ActionNeededModel.Answered] { ActionNeededModel.liveMarks(items, answered: answered) }
@@ -292,11 +310,31 @@ struct ActionNeededView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     // The agent's own words: markdown and file links as everywhere else (LetterAgentTextTests).
+                    // Whole, never cut (2026-11-24, the user, on a title cut to one line: "it should show this whole").
+                    // Its own height in the list's cell, or the cell measures it one line high.
                     Text(MarkdownParser.inline(item.summary))
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(later == nil && done == nil ? .primary : .secondary)
-                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                         .handlingFilePathLinks(task: task, field: .needs)
+                        .accessibilityIdentifier("action.summary.\(item.id)")
+                    // Its why, as on the web's card: about four lines, then Expand opens it whole here.
+                    if let detail = item.detail, !detail.isEmpty, done == nil {
+                        let fold = OrgThreadModel.preview(detail, budget: ActionNeededModel.detailBudget)
+                        let whole = wholeDetail.contains(item.id)
+                        Text(MarkdownParser.inline(whole || fold == nil ? detail : fold!))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .handlingFilePathLinks(task: task, field: .needs)
+                            .accessibilityIdentifier("action.detail.\(item.id)")
+                            .padding(.top, 2)
+                        if fold != nil {
+                            FoldToggle(whole: Binding(get: { whole }, set: { on in
+                                if on { wholeDetail.insert(item.id) } else { wholeDetail.remove(item.id) }
+                            }), id: "action.detail.\(item.id)")
+                        }
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -396,6 +434,8 @@ struct ActionNeededView: View {
             optionRows(item.options ?? []) { o in await answerLetter(item, o) }
         case .promptOptions:
             optionRows(item.options ?? []) { o in await answerQuestion(item, o) }
+        case .askOptions:
+            optionRows(ActionNeededModel.askOptions(item)) { o in await answerAsk(item, o) }
         case .openSession:
             Button("Open") { onOpenSession() }
                 .buttonStyle(.walnut(.secondary, size: .small))
@@ -501,6 +541,19 @@ struct ActionNeededView: View {
         do {
             _ = try await WalnutAPI().answerLetter(id: item.id, actionId: o.id, freeText: nil)
             AppLog.info("action-needed", "letter answered", ["taskId": task.id, "letterId": item.id, "actionId": o.id])
+        } catch {
+            reopen(item)
+            self.error = "Not sent. Try again."
+        }
+    }
+
+    /// An ask's key: its session hears `Answer to "<summary>": <label>`, as from the web.
+    private func answerAsk(_ item: WalnutActionItem, _ o: WalnutAskOption) async {
+        guard let sid = sessionID(item) else { onOpenSession(); return }
+        markAnswered(item, said: o.label)
+        do {
+            _ = try await WalnutAPI().sendSessionMessage(id: sid, text: ActionNeededModel.answerMessage(summary: item.summary, words: o.label), images: [])
+            AppLog.info("action-needed", "ask answered", ["taskId": task.id, "itemId": item.id, "option": o.id])
         } catch {
             reopen(item)
             self.error = "Not sent. Try again."

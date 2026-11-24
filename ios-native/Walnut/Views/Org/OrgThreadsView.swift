@@ -1301,22 +1301,31 @@ struct OrgFoldedMarkdown: View {
                 .markdownBodyFont(.subheadline)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier(id)
-            if preview != nil {
-                Button {
-                    withAnimation(.snappy) { whole.toggle() }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: whole ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold))
-                        Text(whole ? "Collapse" : "Expand")
-                    }
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.tint)
-                    .frame(minHeight: 32)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("\(id).expand")
-            }
+            if preview != nil { FoldToggle(whole: $whole, id: id) }
         }
+    }
+}
+
+/// Expand / Collapse under text folded by its length (`OrgThreadModel.preview`): a thread's
+/// answer, an ask's why on a task row.
+struct FoldToggle: View {
+    @Binding var whole: Bool
+    let id: String
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy) { whole.toggle() }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: whole ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold))
+                Text(whole ? "Collapse" : "Expand")
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Theme.tint)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("\(id).expand")
     }
 }

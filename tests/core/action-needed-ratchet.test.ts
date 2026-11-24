@@ -11,6 +11,11 @@
  * 3. Every record that asks the user something and names its task (an approval's requester.taskId, a
  *    session's pendingPermission, a decision letter's sender.taskId) is read by the status pass.
  * 4. Both task rows (Home's status sections and the list rows) mount the block.
+ * 5. The phone shows an item whole, as the web does (2026-11-24, the user, on a phone ask card whose
+ *    question was cut to one line and whose why and Yes/No keys were missing: "it should show this
+ *    whole, why does it not show it whole"): it reads every field the server's ActionItem carries, gives an ask's
+ *    question and why their own height in the list's cell, and offers the keys of every ask shape the
+ *    web offers keys for.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -99,5 +104,38 @@ describe('Action needed covers every kind of ask', () => {
     expect(read('web/src/components/tasks/StatusSections.tsx')).toMatch(/<ActionNeeded task=\{task\} \/>/)
     expect(read('web/src/components/tasks/TodoPanel.tsx')).toMatch(/<ActionNeeded task=\{task\} \/>/)
     expect(read('ios-native/Walnut/Views/Tasks/TaskBoardRow.swift')).toMatch(/ActionNeededView\(task: task, items: actionItems/)
+  })
+
+  it('the phone shows an item whole: every field read, its words never cut, its keys offered', () => {
+    const core = read('src/core/action-needed.ts')
+    const iface = /export interface ActionItem \{([\s\S]*?)\n\}/.exec(core)?.[1] ?? ''
+    const fields = [...iface.matchAll(/^\s+(\w+)\??:/gm)].map((m) => m[1]!)
+    expect(fields).toEqual(expect.arrayContaining(['summary', 'detail', 'form']))
+    const models = read('ios-native/Walnut/API/Models.swift')
+    const item = /struct WalnutActionItem[\s\S]*?\n\}/.exec(models)?.[0] ?? ''
+    const keys = /enum CodingKeys: String, CodingKey \{\s*case ([^}]*)\}/.exec(item)?.[1] ?? ''
+    expect(keys, 'WalnutActionItem.CodingKeys').toBeTruthy()
+    const read_ = new Set(keys.split(/[\s,]+/).filter(Boolean))
+    for (const f of fields) expect(read_.has(f), `the phone's WalnutActionItem drops ActionItem.${f}: decode it and show it`).toBe(true)
+
+    // The question and its why: no line cap, and their own height (a List cell measures a Text
+    // without it one line high, cut with an ellipsis).
+    const view = read('ios-native/Walnut/Views/Tasks/ActionNeededView.swift')
+    for (const field of ['summary', 'detail']) {
+      const at = view.search(new RegExp(`Text\\(MarkdownParser\\.inline\\([^\\n]*\\b${field}\\b`))
+      expect(at, `ActionNeededView shows the item's ${field}`).toBeGreaterThan(-1)
+      const modifiers = view.slice(at, view.indexOf('accessibilityIdentifier', at))
+      expect(modifiers, `the ${field} Text is never capped`).not.toMatch(/\.lineLimit\(/)
+      expect(modifiers, `the ${field} Text takes its own height`).toContain('.fixedSize(horizontal: false, vertical: true)')
+    }
+
+    // Every ask shape the web gives keys (OrgInlineAnswer's SessionAnswer) has them on the phone too.
+    const web = read('web/src/components/org/OrgInlineAnswer.tsx')
+    const keyed = [...(/\{\(shape === '(\w+)'(?: \|\| shape === '(\w+)')*\) && options\.length > 0/.exec(web)?.[0] ?? '').matchAll(/'(\w+)'/g)].map((m) => m[1]!)
+    expect(keyed, 'the web\'s keyed ask shapes').toEqual(expect.arrayContaining(['yes_no', 'single']))
+    const kinds = [...(/export type AskKind = ([^;]*);/.exec(read('src/core/user-status.ts'))?.[1] ?? '').matchAll(/'(\w+)'/g)].map((m) => m[1]!)
+    for (const k of keyed) expect(kinds).toContain(k)
+    const phone = /static func askOptions\(_ item: WalnutActionItem\)[\s\S]*?\n {4}\}/.exec(view)?.[0] ?? ''
+    for (const k of keyed) expect(phone, `the phone's ask card has no keys for a '${k}' ask`).toContain(`case "${k}"`)
   })
 })
