@@ -8,9 +8,13 @@
  * (`/tmp/open-walnut/daemon-<instance>.log`, "machine id made") and `detached/adopts` in the default
  * runtime dir, the other Walnut's, before it ever read its words. The daemon dispatches the CLI before
  * any of that now. Here the default runtime dir is a temp stand-in (WALNUT_DAEMON_DIR) and HOME a
- * temp home; both must be exactly as they were after the CLI ran.
+ * temp home; both must be exactly as they were after the CLI ran. The leader's own lines too
+ * (`daemon status|install --walnut <id>`), with the default set taken by another Walnut so the
+ * line picks its own set: stand-in service tools on PATH record any call, and the install stops at
+ * its refusal of a home that is not the real account's, so nothing is installed.
  *
- * MACHINE SAFETY: every path is a temp one; the only processes are the CLIs this file starts.
+ * MACHINE SAFETY: every path is a temp one; the only processes are the CLIs this file starts and
+ * the stand-in tools; install refuses the temp home before it touches any service.
  */
 import { describe, it, expect } from 'vitest'
 import { spawn } from 'node:child_process'
@@ -39,12 +43,12 @@ function tree(dir: string): string[] {
   return out.sort()
 }
 
-function run(twin: Twin, root: string, words: string[]): Promise<{ code: number | null; out: string; err: string }> {
+function run(twin: Twin, root: string, words: string[], tools?: string): Promise<{ code: number | null; out: string; err: string }> {
   const [cmd, argv] = twin.command(...words)
   const home = path.join(root, 'home')
   const env: Record<string, string> = {
     SHELL: '/bin/sh',
-    PATH: guardedPath([], '/usr/bin:/bin'),
+    PATH: guardedPath([], `${tools ? `${tools}:` : ''}/usr/bin:/bin`),
     HOME: home,
     TMPDIR: path.join(root, 'tmp'),
     XDG_STATE_HOME: path.join(home, '.local', 'state'),
@@ -83,5 +87,46 @@ for (const twin of TWINS) {
         }
       }, 60_000)
     }
+  })
+}
+
+const WALNUT = '0123456789abcdef0123456789abcdef'
+/** Service tools that only record their call: nothing real runs. */
+function standInTools(dir: string): string {
+  fs.mkdirSync(dir)
+  for (const tool of ['systemctl', 'loginctl', 'crontab', 'launchctl']) {
+    fs.writeFileSync(path.join(dir, tool), `#!/bin/sh\necho "${tool} $*" >> "${dir}/calls.txt"\nexit 1\n`, { mode: 0o755 })
+  }
+  return dir
+}
+
+for (const twin of TWINS) {
+  describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')(`a leader's set line writes nothing of the daemon's, ${twin.name}`, () => {
+    it.each([
+      [['walnut', 'daemon', 'status', '--walnut', WALNUT], 0, /service set: 0123456789abcdef/],
+      [['walnut', 'daemon', 'install', '--yes', '--walnut', WALNUT], 1, /real host account/],
+    ])('`%s` leaves the default runtime dir and HOME as they were', async (words, code, said) => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcm-')))
+      try {
+        for (const d of ['home', 'tmp', 'default-rt']) fs.mkdirSync(path.join(root, d), { mode: 0o700 })
+        // The default set is another Walnut's (its claim), so the line acts on its own set.
+        const def = process.platform === 'darwin'
+          ? path.join(root, 'home', 'Library', 'Application Support', 'Open Walnut', 'Daemon')
+          : path.join(root, 'home', '.local', 'share', 'open-walnut', 'daemon')
+        fs.mkdirSync(def, { recursive: true })
+        fs.writeFileSync(path.join(def, 'set-owner.json'), '{"v":1,"walnutId":"fedcba9876543210fedcba9876543210"}\n')
+        const tools = standInTools(path.join(root, 'tools'))
+        const before = { home: tree(path.join(root, 'home')), rt: tree(path.join(root, 'default-rt')) }
+        const r = await run(twin, root, words, tools)
+        expect(r.code, r.err).toBe(code)
+        expect(`${r.out}\n${r.err}`).toMatch(said)
+        expect({ home: tree(path.join(root, 'home')), rt: tree(path.join(root, 'default-rt')) }).toEqual(before)
+        // Whatever it asked of the service tools, it only read: no enable, start or install.
+        const calls = fs.existsSync(path.join(tools, 'calls.txt')) ? fs.readFileSync(path.join(tools, 'calls.txt'), 'utf8') : ''
+        expect(calls).not.toMatch(/\b(enable|start|restart|load|bootstrap|daemon-reload)\b/)
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    }, 60_000)
   })
 }

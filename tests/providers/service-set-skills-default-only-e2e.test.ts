@@ -8,7 +8,9 @@
  * daemon writing them overwrites their skills (2026-11-24 decision). So, as with the user PATH
  * shim, only the default set writes them. A set's daemon answers the push and its probe with
  * `skipped: 'default-service'` (held, so the hub sends nothing again), never an error.
- * The control: the same daemon as the default set writes them.
+ * The control: the same daemon as the default set writes them. A set on an account with no
+ * default service at all (its config files gone) is the account's only Walnut and writes them
+ * too (2026-11-24 review, low).
  *
  * What's real: the daemon under bun, in `--service` mode. MACHINE SAFETY: every dir is under this file's temp dir, and the test signals
  * only its own children's process groups.
@@ -18,6 +20,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { guardedPath } from '../setup/exec-guard.js'
+import { daemonServiceConfigFiles } from '../../src/providers/daemon-service-config.js'
 import { TRIGGER_BUN as BUN, TriggerDaemon, killTriggerDaemons, type Twin } from '../helpers/trigger-daemon.js'
 
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-set-skills-')))
@@ -30,12 +33,18 @@ const TWINS: Twin[] = BUN ? ['standalone'] : []
 
 const run = (set: string, home: string, dir: (n: string) => string) => (set ? dir('run') : path.join(home, '.cache', 'open-walnut'))
 
-async function daemon(twin: Twin, set: string): Promise<{ d: TriggerDaemon; home: string }> {
+async function daemon(twin: Twin, set: string, o: { defaultService?: boolean } = {}): Promise<{ d: TriggerDaemon; home: string }> {
   const t = fs.mkdtempSync(path.join(base, `${twin}-${set || 'default'}-`))
   const dir = (name: string) => path.join(t, name)
   const home = dir('h')
   // Engines installed for this account: each engine dir would get its link.
   for (const d of ['.claude', '.codex', '.gemini']) fs.mkdirSync(path.join(home, d), { recursive: true })
+  // The default Walnut's service, as its install leaves it (a stand-in config file: nothing runs it).
+  if (o.defaultService ?? true) {
+    const config = daemonServiceConfigFiles(process.platform, home)[0]!
+    fs.mkdirSync(path.dirname(config), { recursive: true })
+    fs.writeFileSync(config, '# the default service (test stand-in)\n')
+  }
   fs.mkdirSync(dir('tmp'))
   const env: Record<string, string> = {
     HOME: home, PATH: guardedPath([], '/usr/bin:/bin'), TMPDIR: dir('tmp'), LANG: 'C',
@@ -68,6 +77,14 @@ describe.skipIf(!BUN)('a service set\'s daemon leaves the account\'s engine skil
     const probe = await d.rpc({ cmd: 'skills.sync', probe: true, hash: 'h1' })
     expect(probe).toMatchObject({ ok: true, held: true, skipped: 'default-service' })
     expect(skillPlaces(home)).toEqual([])
+  }, 120_000)
+
+  it.each(TWINS)('%s: a set on an account with no default service writes them: it is the only Walnut there', async (twin) => {
+    const { d, home } = await daemon(twin, SET, { defaultService: false })
+    const push = await d.rpc({ cmd: 'skills.sync', hash: 'h1', skill: SKILL, skills: [{ name: 'walnut', skill: SKILL }] })
+    expect(push).toMatchObject({ ok: true, applied: true, changed: true })
+    expect(push.skipped).toBeUndefined()
+    expect(skillPlaces(home)).toEqual(expect.arrayContaining([path.join(home, '.open-walnut', 'distributed-skills'), path.join(home, '.claude', 'skills')]))
   }, 120_000)
 
   it.each(TWINS)('%s: the default set\'s daemon writes them, as before', async (twin) => {

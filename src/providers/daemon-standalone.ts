@@ -79,6 +79,7 @@ import {
   type BudgetGate,
 } from './daemon-core.js'
 import { setRuntimeTreesDirOf } from './service-set.js'
+import { daemonServiceConfigFiles } from './daemon-service-config.js'
 import { applyCliLoginPath, installHomeBin, withInstallHomeBin } from './daemon-cli-path.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { buildClaudeArgv } from './claude-session-argv.js'
@@ -9905,12 +9906,18 @@ function persistHeldPushes(): void {
   }
 }
 
+/** The account has the default set's service: any of its config files is there (another user's system unit too). */
+function defaultServiceInstalled(): boolean {
+  return daemonServiceConfigFiles(process.platform, daemonEnv.HOME || HOME_DIR).some((file) => fs.existsSync(file))
+}
+
 function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   // A service set's daemon writes none of the account's engine skill places, as it writes no user
   // PATH shim: they are one per OS account, and on a shared machine the default service is another
   // person's Walnut (2026-11-24). Answered, never refused; a probe reads held, so the skills never
-  // cross again. Keep in sync with daemon-source.ts.
-  if (SET_ID) {
+  // cross again. With no default service on the account (its config files gone), the set is the
+  // only Walnut there and writes them.
+  if (SET_ID && defaultServiceInstalled()) {
     const kept = { skipped: 'default-service', why: "kept by the default service: the account's engine skill places (distributed-skills and the engines' skill links) are written only by the default set" }
     return sendOk(ws, id, cmd.probe === true ? { held: true, ...kept } : { applied: true, changed: false, ...kept })
   }
