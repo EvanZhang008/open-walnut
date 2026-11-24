@@ -48,6 +48,7 @@ import {
 } from './session-io.js'
 import type { SshTarget } from './session-io.js'
 import { spawnGateSentence } from '../core/hosts/host-readiness.js'
+import { isFollower } from '../core/server-role.js'
 import type {
   LineWriteOptions,
   OutputEvent,
@@ -95,6 +96,13 @@ const SEND_LOST_LINE_CAPABILITY = 'send-lost-line-v1'
 const LINE_ANSWER_CAPABILITY = 'line-answer-v1'
 /** A `send` or `start` carrying `bootWait` waits through the boot of the CLI it starts. */
 const SEND_BOOT_WAIT_CAPABILITY = 'send-boot-wait-v1'
+/**
+ * 'start-shell-setup-v1': a start carries the host's shell_setup (config.hosts.<key>.shell_setup),
+ * which the session runs after its rc files, and the daemon keeps it for the starts the host
+ * decides itself (session-shell.ts). Only the leader sends it: a replica's config copy has no
+ * shell_setup (it may carry tokens), and its '' would wipe the one the leader sent.
+ */
+const START_SHELL_SETUP_CAPABILITY = 'start-shell-setup-v1'
 /** Every write into a CLI still booting waits through its boot (daemon-capabilities.ts). */
 const WRITE_BOOT_WAIT_CAPABILITY = 'write-boot-wait-v1'
 
@@ -487,6 +495,8 @@ export class RemoteSessionManager implements SessionManager {
       // Which Walnut asked, for which task: recorded in the host's spawn journal
       // (daemon-standalone.ts). Older daemons ignore the key.
       origin: { home: WALNUT_HOME, ...(opts.taskId ? { task: opts.taskId } : {}) },
+      // '' when the host has none, so a setup the person removed stops running there too.
+      ...(this.conn!.hasCapability(START_SHELL_SETUP_CAPABILITY) && !isFollower() ? { shellSetup: this.sshTarget?.shell_setup ?? '' } : {}),
       // A test server runs on a copy of the real data: it may only resume a
       // session it started itself (strictStartRefusal in both daemon twins).
       ...(IS_EPHEMERAL ? { strict: true } : {}),

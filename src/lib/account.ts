@@ -109,10 +109,14 @@ function lookup(uid: number): Found {
   return next.value
 }
 
+/** The child-process function lookupAsync starts its child with (a daemon runtime hands its own). */
+type ExecFileUse = { execFile?: (file: string, args: string[], opts: { encoding: 'utf8'; timeout: number }, cb: (error: Error | null, stdout: string | Buffer) => void) => unknown }
+
 /** lookup() without a synchronous call: the same steps on fs.promises and an async child. */
-async function lookupAsync(uid: number): Promise<Found> {
+async function lookupAsync(uid: number, use?: ExecFileUse): Promise<Found> {
+  const exec = use?.execFile ?? execFile
   const run = (file: string, args: string[]) => new Promise<RunOutcome>((resolve) => {
-    execFile(file, args, { encoding: 'utf8', timeout: 5000 }, (error, stdout) => {
+    exec(file, args, { encoding: 'utf8', timeout: 5000 }, (error, stdout) => {
       const e = error as (NodeJS.ErrnoException & { code?: string | number }) | null
       resolve({ code: e ? (e.code ?? 'failed') : 0, stdout: String(stdout ?? '') })
     })
@@ -139,13 +143,14 @@ let priming: Promise<Account | null> | null = null
  * execFileSync at the first daemon connect, 35 to 60 ms of the server's thread in vfork). Called
  * once at load by the modules that ask on a request's path; resolves to the entry, or null when
  * there is none or the lookup could not run (accountInfo() then tries itself, as before).
+ * `use`: the execFile its child starts with (the daemon runtime's childUse: its env and umask).
  */
-export function primeAccount(): Promise<Account | null> {
+export function primeAccount(use?: ExecFileUse): Promise<Account | null> {
   if (typeof (process.versions as { bun?: string }).bun !== 'string') return Promise.resolve(knownAccount())
   if (cached !== null) return Promise.resolve(cached instanceof Error ? null : cached)
   if (!priming) {
     const uid = process.getuid?.() ?? os.userInfo().uid
-    priming = lookupAsync(uid).then((found) => {
+    priming = lookupAsync(uid, use).then((found) => {
       if ('failed' in found) { priming = null; return null }
       // A synchronous lookup that finished meanwhile keeps its answer.
       if (cached === null) cached = 'entry' in found ? found.entry : Object.assign(new Error(`no passwd entry for uid ${uid}`), { code: 'ENOENT' })

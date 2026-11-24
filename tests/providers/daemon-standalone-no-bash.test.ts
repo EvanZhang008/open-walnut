@@ -9,9 +9,9 @@
  * Three layers:
  *  - the real twin over its WebSocket: with $SHELL pointing at a shell that is
  *    gone, and with $SHELL unset, a start still gets a PID and the CLI runs;
- *  - sessionShell itself, compiled from the daemon's source text and run against a
- *    fake filesystem with no bash at all (the one case this machine cannot stage,
- *    since /bin/bash exists here);
+ *  - the shell choice itself (session-shell.ts pickSessionShell) against a set of
+ *    runnable files with no bash at all (the one case this machine cannot stage,
+ *    since /bin/bash exists here), and the passwd login shell under a plain sh;
  *  - no spawn site falls back to `process.env.SHELL ||` again.
  *
  * MACHINE SAFETY: isolated WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR and a fake HOME
@@ -25,7 +25,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { transformSync } from 'esbuild'
+import { pickSessionShell, runsAsShell } from '../../src/providers/session-shell.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
@@ -139,57 +139,59 @@ describe.runIf(!!BUN && process.platform !== 'win32')('standalone daemon: a sess
   }
 })
 
-/** sessionShell compiled from the daemon's source text, run against injected fs and env. */
-function loadSessionShell(): (fsImpl: unknown, env: Record<string, string | undefined>) => string {
-  const src = fs.readFileSync(STANDALONE, 'utf8')
-  const start = src.search(/\bfunction sessionShell\s*\(/)
-  expect(start, 'daemon-standalone.ts declares sessionShell()').toBeGreaterThanOrEqual(0)
-  let depth = 0
-  let end = -1
-  for (let i = src.indexOf('{', start); i < src.length; i++) {
-    if (src[i] === '{') depth++
-    else if (src[i] === '}' && --depth === 0) { end = i + 1; break }
-  }
-  const js = transformSync(src.slice(start, end), { loader: 'ts' }).code
-  // The runtime reads its env as daemonEnv (createDaemonRuntime's options.env).
-  const factory = new Function('fs', 'path', 'process', 'daemonEnv', `${js}\nreturn sessionShell`)
-  return (fsImpl, env) => factory(fsImpl, path, { env }, env)()
-}
-
-function fakeFs(runnable: string[], dirs: string[] = []) {
-  const exec = new Set([...runnable, ...dirs])
-  return {
-    constants: { X_OK: fs.constants.X_OK },
-    accessSync(file: string) { if (!exec.has(file)) throw Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' }) },
-    statSync(file: string) {
-      if (!exec.has(file)) throw Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' })
-      return { isFile: () => !dirs.includes(file) }
-    },
-  }
+/** The shell choice (session-shell.ts pickSessionShell), against a set of runnable files. */
+function sessionShellOf(runnable: string[], env: { SHELL?: string }, loginShell?: string | null): string {
+  const exec = new Set(runnable)
+  return pickSessionShell({ envShell: env.SHELL, loginShell, runs: (file) => exec.has(file) })
 }
 
 describe('sessionShell: the shell a session starts under', () => {
   it('a host with no bash and no $SHELL (Alpine, a container) gets /bin/sh', () => {
-    const sessionShell = loadSessionShell()
-    expect(sessionShell(fakeFs(['/bin/sh']), {})).toBe('/bin/sh')
-    expect(sessionShell(fakeFs(['/bin/sh']), { SHELL: '' })).toBe('/bin/sh')
+    expect(sessionShellOf(['/bin/sh'], {})).toBe('/bin/sh')
+    expect(sessionShellOf(['/bin/sh'], { SHELL: '' })).toBe('/bin/sh')
   })
 
-  it('a $SHELL that is gone, relative, or not a file falls back to bash, else sh', () => {
-    const sessionShell = loadSessionShell()
-    expect(sessionShell(fakeFs(['/bin/sh']), { SHELL: '/bin/bash' })).toBe('/bin/sh')
-    expect(sessionShell(fakeFs(['/bin/bash', '/bin/sh']), { SHELL: '/usr/local/bin/zsh' })).toBe('/bin/bash')
-    expect(sessionShell(fakeFs(['/bin/bash', '/bin/sh', 'zsh']), { SHELL: 'zsh' })).toBe('/bin/bash')
-    expect(sessionShell(fakeFs(['/bin/sh'], ['/opt/shells']), { SHELL: '/opt/shells' })).toBe('/bin/sh')
+  it('a $SHELL that is gone, relative, or not runnable falls back to bash, else sh', () => {
+    expect(sessionShellOf(['/bin/sh'], { SHELL: '/bin/bash' })).toBe('/bin/sh')
+    expect(sessionShellOf(['/bin/bash', '/bin/sh'], { SHELL: '/usr/local/bin/zsh' })).toBe('/bin/bash')
+    expect(sessionShellOf(['/bin/bash', '/bin/sh', 'zsh'], { SHELL: 'zsh' })).toBe('/bin/bash')
+  })
+
+  it('a $SHELL that is a directory (X_OK, but no file) is not run: bash, else sh', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-shell-dir-'))
+    try {
+      const runs = (file: string) => runsAsShell(fs, file)
+      expect(runs(dir)).toBe(false)
+      const fallback = ['/bin/bash', '/bin/sh'].find(runs) ?? '/bin/sh'
+      expect(pickSessionShell({ envShell: dir, loginShell: null, runs })).toBe(fallback)
+      expect(pickSessionShell({ envShell: '/bin/sh', loginShell: dir, runs })).toBe('/bin/sh')
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('a runnable $SHELL is kept, so the user\'s rc files run in their own shell', () => {
-    const sessionShell = loadSessionShell()
-    expect(sessionShell(fakeFs(['/usr/bin/zsh', '/bin/bash', '/bin/sh']), { SHELL: '/usr/bin/zsh' })).toBe('/usr/bin/zsh')
+    expect(sessionShellOf(['/usr/bin/zsh', '/bin/bash', '/bin/sh'], { SHELL: '/usr/bin/zsh' }, '/bin/bash')).toBe('/usr/bin/zsh')
   })
 
-  it('no spawn path falls back to `$SHELL || …` again', () => {
+  it('a plain sh $SHELL (a service the launcher started) or none gives way to the bash or zsh of passwd', () => {
+    const all = ['/bin/sh', '/bin/dash', '/bin/bash', '/bin/zsh', '/usr/bin/fish', '/usr/sbin/nologin']
+    expect(sessionShellOf(all, { SHELL: '/bin/sh' }, '/bin/zsh')).toBe('/bin/zsh')
+    expect(sessionShellOf(all, { SHELL: '/bin/dash' }, '/bin/bash')).toBe('/bin/bash')
+    expect(sessionShellOf(all, {}, '/bin/zsh')).toBe('/bin/zsh')
+    // A user whose own login shell is sh keeps it, and a shell the preamble cannot source never wins.
+    expect(sessionShellOf(all, { SHELL: '/bin/sh' }, '/bin/sh')).toBe('/bin/sh')
+    expect(sessionShellOf(all, { SHELL: '/bin/sh' }, '/usr/sbin/nologin')).toBe('/bin/sh')
+    expect(sessionShellOf(all, { SHELL: '/bin/sh' }, '/usr/bin/fish')).toBe('/bin/sh')
+    expect(sessionShellOf(all, { SHELL: '/bin/sh' }, null)).toBe('/bin/sh')
+    // A passwd shell that is gone: as before.
+    expect(sessionShellOf(['/bin/sh', '/bin/bash'], { SHELL: '/bin/sh' }, '/bin/zsh')).toBe('/bin/sh')
+    expect(sessionShellOf(['/bin/sh', '/bin/bash'], {}, '/bin/zsh')).toBe('/bin/bash')
+  })
+
+  it('the daemon asks pickSessionShell with its own env, and no spawn path falls back to `$SHELL || …` again', () => {
     const src = fs.readFileSync(STANDALONE, 'utf8')
+    expect(src).toMatch(/return pickSessionShell\(\{ envShell: daemonEnv\.SHELL, loginShell: loginShell\(\), runs \}\)/)
+    // Its `runs` is the file check above (an executable regular file).
+    expect(src).toMatch(/const runs = \(file: string\) => runsAsShell\(fs, file\)/)
     expect(src.match(/process\.env\.SHELL\s*\|\|/g) ?? []).toEqual([])
   })
 })

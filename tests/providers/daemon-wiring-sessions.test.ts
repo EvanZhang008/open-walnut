@@ -266,7 +266,7 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
     const ensureClaude = vi.fn(async () => ({ ok: true, path: 'fixture-cli', kind: 'native' }))
     const requireBudgetAllowance = vi.fn(async () => {})
     const isJournalSid = (sid: unknown) => typeof sid === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(sid)
-    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand', 'hostRuntime', 'isJournalSid', 'requireBudgetAllowance', 'cliArgvFiles', 'demoQuiesce',
+    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand', 'hostRuntime', 'isJournalSid', 'requireBudgetAllowance', 'cliArgvFiles', 'demoQuiesce', 'shellSetupOfStart', 'passwdReady',
       js + '\nreturn cmdStart')(
       sessions, { kill, env: {} }, { existsSync: () => true }, { handleSendCommand: send }, fifo,
       addSubscriber, sendOk, sendError, () => {}, Buffer,
@@ -274,6 +274,8 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
       { ensureClaude }, isJournalSid, requireBudgetAllowance,
       // The start's args go through the real inline step (hook-files-v1) first.
       createCliArgvFiles({ fs, path, crypto, dir: '/nonexistent/argv' }), { fenced: false },
+      // The host's shell_setup and the passwd read the replace path asks before its gate (session-shell.ts).
+      () => '', async () => {},
     )
     const command = { sid: 'sid', args: ['fixture-cli'], cwd: '/fixture', resume: true, message: '' }
     const result = await run({}, 1, { ...command, deferMessage: true })

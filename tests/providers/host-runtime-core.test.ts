@@ -22,6 +22,7 @@ import {
 import { claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { spawnGateSentence } from '../../src/core/hosts/host-readiness.js'
 import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
+import { shellSetupStep } from '../../src/providers/session-shell.js'
 import { daemonStatements, twinText } from '../helpers/standalone-twin-text.js'
 
 /** A plain Linux PATH for a fake host (fakeHost runs nothing for real). */
@@ -358,10 +359,13 @@ describe('preflight', () => {
       if (file === '/bin/sh') return { code: 0, stdout: 'noise\n__WALNUT_LOGIN_PATH__=/opt/newclaude/bin:/usr/bin\n' }
       return args[0] === '--version' ? { code: 0, stdout: '2.1.281 (Claude Code)\n' } : { code: 1 }
     }, usrBinEnv())
-    const out = await createHostRuntime(deps).preflight({ shellSetup: 'export PATH=/opt/newclaude/bin:$PATH' })
+    // The daemon's spawn preamble, with the setup in it (session-shell.ts buildSessionPreamble).
+    const spawnPreamble = (file?: string) => 'rc-files' + (file ? '; ' + shellSetupStep(file) : '')
+    const shellSetupFile = () => ({ file: '/state/scratch/setup', remove: () => {} })
+    const out = await createHostRuntime({ ...deps, spawnPreamble, shellSetupFile }).preflight({ shellSetup: 'export PATH=/opt/newclaude/bin:$PATH' })
     expect(out.claude).toMatchObject({ found: true, path: '/opt/newclaude/bin/claude', version: '2.1.281' })
     const sh = calls.find((c) => c.file === '/bin/sh')!
-    expect(sh.args[1]).toContain('{ export PATH=/opt/newclaude/bin:$PATH; } >/dev/null 2>&1 || true;')
+    expect(sh.args[1]).toContain(spawnPreamble('/state/scratch/setup') + '; printf ')
     // Without shell_setup nothing extra runs and the daemon PATH answers.
     const plain = fakeHost(files, () => ({ code: 1 }), usrBinEnv())
     expect((await createHostRuntime(plain.deps).preflight()).claude.found).toBe(false)
@@ -427,7 +431,7 @@ describe('host runtime in the daemon', () => {
     expect(src).toMatch(/hostRuntime\.preflight\(cmd\)/)
     // sha256Hex names the CLI's keychain items under a custom CLAUDE_CONFIG_DIR (claude-check-core.ts).
     expect(src).toMatch(/claudeCheck: (createClaudeCheck|\(__CREATE_CLAUDE_CHECK__\))\(\{ fs(: fs)?, execFile(: execFile)?, env: process\.env, platform: process\.platform, sha256Hex: [^\n]*createHash\('sha256'\)/)
-    expect(src).toMatch(/const launch = await gateClaudeLaunch\(args\)/)
+    expect(src).toMatch(/const launch = await gateClaudeLaunch\(args, shellSetupFile\)/)
     expect(src).toMatch(/code: 'CLAUDE_RUNTIME', errorKind: gate\.code/)
     // Inspect the actual cmdStart, not an earlier budget helper or a whole-file text match.
     const parsed = ts.createSourceFile('daemon.ts', src, ts.ScriptTarget.Latest, true)

@@ -16,7 +16,6 @@ import { execFileSync } from 'node:child_process'
 import { JsonlTailer } from '../core/jsonl-tailer.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
-import { NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { streamJsonUserLine } from './stream-json-input.js'
 import { remoteCommandNone } from './ssh-client-options.js'
 
@@ -476,116 +475,6 @@ export function sshAliasOptions(t: SshTarget, opts: { tty?: boolean } = {}): str
  */
 export function shellQuote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'"
-}
-
-/**
- * Base PATH setup + node auto-discovery for remote SSH commands.
- *
- * Non-interactive SSH doesn't load shell profiles, so node version managers
- * (nvm, fnm, volta, asdf) aren't activated. This preamble auto-detects them.
- *
- * Guard: if `node` is already in PATH, the entire if-block is skipped (zero overhead).
- * Order: nvm (most popular) > fnm > volta > asdf/mise.
- */
-export const REMOTE_BASE_PATH = [
-  // Source RC files FIRST, then add our paths — RC files may hard-reset PATH
-  // (e.g. zsh `export PATH=; path=(...)`) which would clobber earlier prepends.
-  //
-  // Source the user's shell RC file to get their full environment (nvm, pyenv,
-  // conda, rbenv, etc.) — just like their interactive terminal/tmux session.
-  //
-  // Why: `$SHELL -lc` only sources .zprofile/.profile, NOT .bashrc/.zshrc.
-  // Most tools (nvm, pyenv, conda) are configured in .bashrc/.zshrc.
-  // Explicitly sourcing the RC file fills this gap.
-  //
-  // Why not `-i` flag? Interactive mode causes plugins (oh-my-zsh, iTerm2,
-  // p10k) to write escape codes to STDOUT, corrupting our JSONL stream.
-  //
-  // Match RC file to $SHELL: zsh sources .zshrc, bash sources .bashrc.
-  // Redirect >/dev/null 2>&1: suppress all output from interactive plugins
-  // while preserving PATH/env changes (process-level, not stdout-level).
-  //
-  // Note: some RC files have interactive guards ([[ $- != *i* ]] && return)
-  // that skip setup in non-interactive mode. The fallback chain below handles
-  // that case. RC sourcing still helps for pyenv, conda, and other tools
-  // that don't guard on interactivity.
-  'case "$SHELL" in'
-    + ' */zsh) [ -f "$HOME/.zshrc" ] && . "$HOME/.zshrc" >/dev/null 2>&1 ;;'
-    + ' */bash) [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc" >/dev/null 2>&1 ;;'
-    + ' esac',
-  'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"',
-  // Fallback auto-discovery if the RC file didn't provide a WORKING node.
-  //
-  // IMPORTANT: use `node -v` (execute), NOT `command -v node` (exists on PATH).
-  // On old hosts (e.g. AL2 with glibc 2.26), the node binary may be present
-  // but link against newer glibc and crash on startup. An existence check would
-  // pass and skip the fallback loop; the caller then `nohup node ...` dies with
-  // "GLIBC_2.27 not found" — exactly what bricked clouddev on 2026-05-05.
-  //
-  // The nvm loop walks ALL installed node versions (newest first, then
-  // older — older nvm versions tend to be statically linked against older glibc
-  // so they work on old hosts). `nvm use` + `node -v` confirms both install
-  // correctness AND runtime compatibility before we accept that version.
-  //
-  // Tries nvm > fnm > volta > asdf. All stdout suppressed to avoid JSONL pollution.
-  // Use `||` instead of `if !` — zsh non-interactive mode has issues with `if ! cmd`.
-  // Ends with `true` to ensure exit code 0 for downstream `&&` chains.
-  // The snippet is shared with the binary daemon's spawn preamble
-  // (host-runtime-core.ts), so both walk the same managers in the same order.
-  NODE_DISCOVERY_SHELL,
-].join('; ')
-
-/**
- * Build the full remote preamble: base PATH + optional user shell_setup + env vars.
- *
- * Non-interactive SSH doesn't source .bashrc/.zshrc, so tools like nvm/fnm/volta
- * aren't in PATH. The `shell_setup` config field lets users add custom env setup:
- *
- *   hosts:
- *     mydev:
- *       hostname: dev.example.com
- *       shell_setup: 'source $HOME/.nvm/nvm.sh 2>/dev/null'
- *
- * @param shellSetup — optional shell snippet from config.hosts[].shell_setup
- */
-export function buildRemotePreamble(shellSetup?: string): string {
-  const parts = [REMOTE_BASE_PATH]
-  if (shellSetup) {
-    // User's shell_setup runs after base PATH; `|| true` ensures exit 0
-    // so downstream && chains are not short-circuited when setup fails.
-    // IMPORTANT: Use { ...; } (group command) NOT (...) (subshell).
-    // Tools like nvm/fnm modify PATH — subshell changes are lost on exit.
-    parts.push(`{ ${shellSetup}; } 2>/dev/null || true`)
-  }
-  return parts.join('; ')
-}
-
-/**
- * Wrap a remote command to run inside the user's login shell.
- *
- * Uses `$SHELL -lc` (login + command). This sources `.zprofile`/`.profile`
- * but NOT `.bashrc`/`.zshrc` (those require interactive mode).
- *
- * We intentionally do NOT use `-i` (interactive) because:
- *   - SSH stdout is our data channel (JSONL stream from remote claude)
- *   - Interactive plugins (iTerm2 shell integration, oh-my-zsh, p10k)
- *     emit escape codes to stdout, corrupting the JSONL stream
- *   - This is an architecture conflict, not a fixable side effect
- *
- * Instead, node/tools are found via:
- *   1. REMOTE_BASE_PATH auto-discovery (nvm > fnm > volta > asdf)
- *   2. User's `shell_setup` config for edge cases
- */
-export function wrapInLoginShell(cmd: string, shellSetup?: string): string {
-  const parts: string[] = []
-  if (shellSetup) {
-    // IMPORTANT: Use { ...; } (group command) NOT (...) (subshell).
-    // Tools like nvm/fnm modify PATH — subshell changes are lost on exit.
-    parts.push(`{ ${shellSetup}; } 2>/dev/null || true`)
-  }
-  parts.push(cmd)
-  const inner = parts.join('; ')
-  return `$SHELL -lc ${shellQuote(inner)}`
 }
 
 /**

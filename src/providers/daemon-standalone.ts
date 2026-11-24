@@ -143,6 +143,7 @@ import { createStreamFold, type StreamFoldResult } from './stream-fold-core.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { ACP_HOST_FILES, ACP_HOST_WORKER } from './acp-host-artifacts.js'
 import { singleFile } from '../lib/single-file.js'
+import { knownAccount, primeAccount } from '../lib/account.js'
 import { resolveAgentCommand } from './agent-command-map.js'
 import { createDaemonGit } from './daemon-git.js'
 import { createDaemonSkills } from './daemon-skills.js'
@@ -214,7 +215,8 @@ import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, gitRunnerWit
 import { ensurePwSilencePreloadAsync, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 import { createLogAppender, type LogAppender } from './log-appender-core.js'
 import { armFilePoolDeadline } from './file-pool-deadline.js'
-import { createHostExec, runWaitMatcher } from './host-exec-core.js'
+import { createHostExec, runWaitMatcher, shellQuote } from './host-exec-core.js'
+import { buildSessionPreamble, createShellSetupStore, pickSessionShell, runsAsShell } from './session-shell.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { machineIdOf } from './machine-id-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -943,12 +945,16 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // Node discovery is NOT done here: buildSpawnPreamble() handles it at spawn
 // time, and hostRuntime.ensureClaude() gates the spawn.
 // claudeCheck: host.preflight's sign-in and version-floor answer (claude-check-core.ts).
-// spawnPreamble: this daemon spawns through `$SHELL -c "<preamble>; exec claude"`, so
-// preflight asks that shell before calling claude missing, as gateClaudeLaunch does.
+// spawnPreamble and sessionShell: this daemon spawns through `<shell> -c "<preamble>; exec claude"`
+// with the host's shell_setup file in the preamble, so preflight runs shell_setup and asks that
+// shell before calling claude missing, as gateClaudeLaunch does: one builder for both.
+// shellSetupFile: preflight's setup goes to the shell as a private file (the store's scratch).
 const hostRuntime = createHostRuntime({
   fs, execFile, execFileSync, env: daemonEnv, platform: process.platform, arch: process.arch,
   claudeCheck: createClaudeCheck({ fs, execFile, env: daemonEnv, platform: process.platform, sha256Hex: (s) => crypto.createHash('sha256').update(s).digest('hex') }),
-  spawnPreamble: () => buildSpawnPreamble(),
+  spawnPreamble: (shellSetupFile) => buildSpawnPreamble({ shellSetupFile }),
+  shellSetupFile: (setup) => shellSetupStore.scratch(setup),
+  sessionShell: () => sessionShell(),
 })
 const bootPath = hostRuntime.computeDaemonPath()
 // A test server's isolated daemon installs Claude Code and dtach under its own HOME
@@ -1528,33 +1534,85 @@ async function reapAllSessionGroups(): Promise<void> {
 
 // ── Shell helpers ──
 
-/** Shell-quote a string for safe embedding in a sh command. */
-function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'"
+/**
+ * The user's login shell in passwd: a service a launcher starts has SHELL=/bin/sh, and the
+ * sessions should still get the user's own shell and its rc file (session-shell.ts). Read ahead
+ * at the runtime's start, without blocking the thread (lib/account.ts: bun's os.userInfo()
+ * answers $SHELL, not passwd); a start waits for that read at most PASSWD_WAIT_MS, then starts
+ * as before. A read that could not run (a slow moment at boot) is read again at a later start,
+ * at most once every PASSWD_RETRY_MS; an answer (an entry, or none) is kept for good.
+ */
+const PASSWD_WAIT_MS = 3000
+const PASSWD_RETRY_MS = 60_000
+let passwdSettled = false
+let passwdFailed = false
+let passwdReadAt = 0
+let passwdRead: Promise<unknown> = readPasswd()
+function readPasswd(): Promise<unknown> {
+  passwdReadAt = Date.now()
+  passwdSettled = false
+  const read: Promise<unknown> = primeAccount(childUse).catch(() => null).then((found) => {
+    // primeAccount answers null both for no entry and for a lookup that could not run; only
+    // the second leaves knownAccount() unknown and the cache open for another try.
+    if (read === passwdRead) { passwdSettled = true; passwdFailed = found === null && knownAccount() === null }
+    return found
+  })
+  return read
+}
+function loginShell(): string | null {
+  return knownAccount()?.shell || null
+}
+function passwdReady(): Promise<unknown> {
+  if (passwdSettled && passwdFailed && Date.now() - passwdReadAt >= PASSWD_RETRY_MS) passwdRead = readPasswd()
+  if (passwdSettled) return Promise.resolve()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([passwdRead, new Promise((resolve) => { timer = setTimeout(resolve, PASSWD_WAIT_MS) })]).finally(() => clearTimeout(timer))
 }
 
 /**
- * Build a shell preamble that activates the user's full dev environment.
- *
- * Mirrors the REMOTE_BASE_PATH approach from session-io.ts:
- *   1. Source shell RC files (.bashrc/.zshrc) to activate nvm/pyenv/volta
- *   2. Fallback: source nvm.sh directly and try each version (with GLIBC check)
- *
- * This ensures `node` is available for Claude CLI (#!/usr/bin/env node),
- * even on hosts where nvm binaries need newer GLIBC than the system provides.
+ * The shell sessions start under (session-shell.ts pickSessionShell): the daemon's $SHELL, the
+ * user's bash or zsh from passwd when that $SHELL is a plain sh or unset, else bash, else sh.
  */
-function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
-  return [
-    // Source RC files FIRST, then add our paths — RC files may hard-reset PATH
-    // (e.g. zsh `export PATH=; path=(...)`) which would clobber earlier prepends.
-    // Redirect >/dev/null suppresses stdout only — stderr flows to .jsonl.err
-    // for debugging. Stdout suppression is load-bearing: the spawned process's
-    // stdout IS the JSONL output file, so interactive plugins (oh-my-zsh, p10k)
-    // would corrupt the stream with escape codes.
-    'case "$SHELL" in'
-      + ' */zsh) [ -f "$HOME/.zshrc" ] && . "$HOME/.zshrc" >/dev/null ;;'
-      + ' */bash) [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc" >/dev/null ;;'
-      + ' esac',
+function sessionShell(): string {
+  const runs = (file: string) => runsAsShell(fs, file)
+  return pickSessionShell({ envShell: daemonEnv.SHELL, loginShell: loginShell(), runs })
+}
+
+/**
+ * The last shell_setup each Walnut's leader sent with a start ('start-shell-setup-v1'), for the
+ * starts this host decides itself. Only a trusted client's `start` carries the field (the bridge
+ * and a follower cannot send `start`); it is private to this user (session-shell.ts).
+ */
+const shellSetupStore = createShellSetupStore({
+  fs, path, crypto,
+  dir: path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'shell-setup'),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+/**
+ * The file of the shell_setup a start runs: the one its leader sent with it (kept first, so the
+ * preamble names the file and never holds the text), else the last one that Walnut's leader
+ * sent; '' runs none. An older leader sends none, and then none runs, as before.
+ */
+function shellSetupOfStart(cmd: Record<string, unknown>, sid: string): string {
+  const origin = cmd.origin && typeof cmd.origin === 'object' ? cmd.origin as { home?: unknown } : {}
+  const walnut = typeof origin.home === 'string' && origin.home ? walnutOfHome(origin.home) : sessionHomeOf(sid)
+  return typeof cmd.shellSetup === 'string' ? shellSetupStore.remember(walnut, cmd.shellSetup) : shellSetupStore.recall(walnut)
+}
+
+
+/**
+ * The preamble a session's CLI starts under: the rc file of its shell, the host's shell_setup,
+ * the fallback tool dirs and a node that runs (session-shell.ts buildSessionPreamble, the one
+ * builder; host.preflight asks through it too, as hostRuntime's spawnPreamble).
+ */
+function buildSpawnPreamble(o: { nodeDir?: string; gatewayFirst?: boolean; shellSetupFile?: string } = {}): string {
+  return buildSessionPreamble({ shimDir: GATEWAY_SHIM_DIR, installHomeBin: INSTALL_HOME_BIN, fallbackPathStep: spawnFallbackPath(), ...o })
+}
+
+/** The fallback tool dirs and the shim dir, read each time a preamble is built. */
+function spawnFallbackPath(): string {
+  return (
     // APPEND (not prepend) common tool dirs as a fallback. Prepending used to
     // shadow a user's RC-ordered `claude` (e.g. ~/.toolbox/bin/claude, which is
     // logged in) with ~/.local/bin/claude (a separate, NOT-logged-in install),
@@ -1565,20 +1623,8 @@ function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
     // template) so `walnut` — the peer-session CLI shim — is on every session's
     // PATH.
     'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin:'
-      + GATEWAY_SHIM_DIR + '"',
-    // A test server's isolated daemon installs its tools under its own HOME (remote-isolation.ts).
-    ...(INSTALL_HOME_BIN ? ['export PATH="$PATH":' + shellQuote(INSTALL_HOME_BIN)] : []),
-    // A node hostRuntime.ensureClaude() found outside PATH (e.g. an older nvm
-    // version on a host whose newest node needs a newer glibc) is only used when
-    // the rc PATH gives no working node.
-    ...(nodeDir ? ['node -v >/dev/null 2>&1 || export PATH=' + shellQuote(nodeDir) + ':"$PATH"'] : []),
-    // Shared with session-io REMOTE_BASE_PATH (host-runtime-core.ts). nvm's
-    // default may be compiled against a newer GLIBC than the host provides, so
-    // it tries each installed version until one actually executes.
-    NODE_DISCOVERY_SHELL,
-    // Last, so neither the node dir nor the node discovery above can put another `walnut` ahead.
-    ...(gatewayFirst ? ['export PATH=' + shellQuote(GATEWAY_SHIM_DIR) + ':"$PATH"'] : []),
-  ].join('; ')
+      + GATEWAY_SHIM_DIR + '"'
+  )
 }
 
 /**
@@ -7631,21 +7677,7 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
  * start. When a node dir is prepended, the RESOLVED claude path runs, so the
  * prepended dir cannot shadow the user's claude with another copy.
  */
-/**
- * The shell sessions start under: the user's $SHELL, else bash, else sh. A
- * minimal system (Alpine, a container) has no bash and may set no $SHELL, and
- * a $SHELL naming a shell that is gone would fail every spawn.
- */
-function sessionShell(): string {
-  const runs = (file: string) => {
-    try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile() } catch { return false }
-  }
-  const shell = daemonEnv.SHELL
-  if (shell && path.isAbsolute(shell) && runs(shell)) return shell
-  return ['/bin/bash', '/bin/sh'].find(runs) ?? '/bin/sh'
-}
-
-async function gateClaudeLaunch(args: string[]): Promise<{ args: string[]; nodeDir?: string }> {
+async function gateClaudeLaunch(args: string[], shellSetupFile: string): Promise<{ args: string[]; nodeDir?: string }> {
   const command = args[0] || 'claude'
   const gate = await hostRuntime.ensureClaude(command, daemonEnv.PATH || '')
   if (gate.ok) {
@@ -7653,7 +7685,7 @@ async function gateClaudeLaunch(args: string[]): Promise<{ args: string[]; nodeD
   }
   // An absolute node in the shebang cannot be supplied by the shell either.
   if (!gate.fixedInterpreter) {
-    const seen = await hostRuntime.shellCanRun(sessionShell(), buildSpawnPreamble(), command)
+    const seen = await hostRuntime.shellCanRun(sessionShell(), buildSpawnPreamble({ shellSetupFile }), command)
     if (gate.code === 'claude_missing' ? seen.hasCmd : seen.hasNode) return { args }
   }
   logMsg('warn', 'spawn gate: claude cannot run on this host', { code: gate.code, command })
@@ -7760,7 +7792,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // npm build with no working node) instead of an exit 127 after the spawn.
   // It runs BEFORE the replaced session is torn down: a refusal must leave a
   // live CLI exactly as it was, never killed and replaced by nothing.
-  const launch = await gateClaudeLaunch(args)
+  const shellSetupFile = shellSetupOfStart(cmd, sid)
+  // The login shell sessionShell() picks comes from passwd, read ahead at the runtime's start.
+  await passwdReady()
+  const launch = await gateClaudeLaunch(args, shellSetupFile)
   await requireBudgetAllowance(sid)
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
 
@@ -7896,11 +7931,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   }, { sid, pipePath, jsonlPath, stderrPath, resume: !!resume, checkCurrent: stopIfSuperseded })
   const cronStartedAt = Date.now()
 
-  // Spawn Claude via login shell to activate nvm/pyenv/volta shell functions.
-  // This matches the proven buildRemotePreamble() approach from session-io.ts —
-  // sourcing RC files ensures the full dev environment (including node) is available,
-  // even on hosts where nvm binaries need newer GLIBC than the system provides.
-  const preamble = buildSpawnPreamble(launch.nodeDir, walnutThroughGateway(settingsEnvOf(launch.args)))
+  // Spawn Claude through the user's shell, its rc file and the host's shell_setup, to activate
+  // nvm/pyenv/volta and the sign-in variables they set, even on hosts where nvm binaries need a
+  // newer GLIBC than the system provides.
+  const preamble = buildSpawnPreamble({ nodeDir: launch.nodeDir, gatewayFirst: walnutThroughGateway(settingsEnvOf(launch.args)), shellSetupFile })
   // Content arguments go to files: the shell's and the CLI's argv carry paths (cli-argv-files-core.ts).
   const escapedArgs = cliArgvFiles.toFiles(launch.args).map((a: string) => shellQuote(a)).join(' ')
   const shellCmd = `${preamble}; exec ${escapedArgs}`
@@ -7959,6 +7993,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // The secrets the user let this host's sessions have (secrets-core.ts), before
       // every Walnut variable so none of those can be replaced.
       ...secretsSessionEnv(),
+      // The shell it starts in (sessionShell), so the CLI's Bash tool runs the same one.
+      SHELL: userShell,
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       // line-answer-v1: Walnut sends a line Claude Code took and never answered once more

@@ -82,7 +82,12 @@ export function linkTarget(host: string, config: Pick<Config, 'hosts'>): SshTarg
   const hostname = def.hostname || (typeof def.ssh === 'string' && def.ssh ? def.ssh : host)
   // A machine on the host network: no SSH target at all, only its network id.
   if (def.transport === 'net') {
-    return { hostname, via: 'net', ...(typeof def.endpoint === 'string' ? { endpoint: def.endpoint.toLowerCase() } : {}) }
+    return {
+      hostname, via: 'net',
+      ...(typeof def.endpoint === 'string' ? { endpoint: def.endpoint.toLowerCase() } : {}),
+      // Its sessions run the host's shell_setup too (each start carries it: start-shell-setup-v1).
+      ...(def.shell_setup ? { shell_setup: def.shell_setup } : {}),
+    }
   }
   // A found host is keyed by its ~/.ssh/config alias; only a plain token, never read as an ssh option.
   const sshAlias = def.discovered === true && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(host) ? host : undefined

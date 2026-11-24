@@ -9,8 +9,8 @@ import type fsType from 'node:fs'
 import type { ClaudeCheck, ClaudeCheckResult } from './claude-check-core.js'
 
 /**
- * Shell twin of `findNode` for the spawn preambles (session-io REMOTE_BASE_PATH
- * and the binary daemon's buildSpawnPreamble). `node -v` EXECUTES node, because
+ * Shell twin of `findNode` for the spawn preamble (session-shell.ts
+ * buildSessionPreamble). `node -v` EXECUTES node, because
  * an existence check passes a node that crashes on an old glibc. Stdout is
  * suppressed (it can be a JSONL stream) and it always exits 0 so `&&` chains
  * downstream keep running.
@@ -46,12 +46,21 @@ export interface HostRuntimeDeps {
   /** Sign-in, version floor and install method (claude-check-core.ts). Absent = preflight omits them. */
   claudeCheck?: Pick<ClaudeCheck, 'check'>
   /**
-   * The preamble this twin's CLI spawns run under `$SHELL -c` (the binary
-   * twin's buildSpawnPreamble). Given, preflight asks that shell before it calls
-   * claude missing or node-less, as the spawn gate does. Absent (the source twin
-   * spawns claude directly on the daemon PATH) = the daemon PATH answers alone.
+   * The preamble the daemon's CLI spawns run under `<shell> -c`, with the host's shell_setup
+   * in it, named by its file (session-shell.ts buildSessionPreamble, the one builder of both).
+   * Given, preflight runs shell_setup through it and asks that shell before it calls claude
+   * missing or node-less, as the spawn gate does. Absent (an in-process check) = the daemon
+   * PATH answers alone and no shell_setup runs.
    */
-  spawnPreamble?: () => string
+  spawnPreamble?: (shellSetupFile?: string) => string
+  /**
+   * Writes preflight's shell_setup to a private file for spawnPreamble (the store's scratch);
+   * the shell's argv names the file, never the text, which may hold tokens. Null: not written,
+   * and preflight runs no shell_setup.
+   */
+  shellSetupFile?: (setup: string) => { file: string; remove: () => void } | null
+  /** The shell sessions start in (the daemon's sessionShell); absent: $SHELL, else /bin/sh. */
+  sessionShell?: () => string
 }
 
 export type ClaudeKind = 'native' | 'npm' | 'unknown'

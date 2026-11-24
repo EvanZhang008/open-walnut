@@ -185,10 +185,11 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     [/fs\.(readdirSync|mkdirSync)\(GATEWAY_SHIM_DIR[,)]/, 'its own upkeep'],
     [/templateShimDir: GATEWAY_SHIM_DIR,$/, 'trigger checks (trigger-check-core.ts puts it first)'],
     [/touchDirs: \[\{ dir: GATEWAY_SHIM_DIR, /, 'kept alive in a swept /tmp'],
-    // The one rule (sessionPathWithShim) and the preamble that applies it in the shell.
+    // The one rule (sessionPathWithShim) and the preamble that applies it in the shell
+    // (session-shell.ts buildSessionPreamble, checked below).
     [/^return throughGateway \? GATEWAY_SHIM_DIR \+ path\.delimiter \+ base : base \+ path\.delimiter \+ GATEWAY_SHIM_DIR;?$/, 'rule'],
-    [/^\+ GATEWAY_SHIM_DIR \+ '"',$/, 'preamble'],
-    [/^\.\.\.\(gatewayFirst \? \['export PATH\=' \+ shellQuote\(GATEWAY_SHIM_DIR\) \+ ':"\$PATH"'\] : \[\]\),$/, 'preamble'],
+    [/^return buildSessionPreamble\(\{ shimDir: GATEWAY_SHIM_DIR, installHomeBin: INSTALL_HOME_BIN, fallbackPathStep: spawnFallbackPath\(\), \.\.\.o \}\);?$/, 'preamble'],
+    [/^\+ GATEWAY_SHIM_DIR \+ '"'$/, 'the fallback dirs, then the shim dir (spawnFallbackPath)'],
     // A plugin job is no session: it carries no OPEN_WALNUT_API_URL to judge by.
     [/^env\.PATH = \(process\.env\.PATH \|\| ''\) \+ path\.delimiter \+ GATEWAY_SHIM_DIR;?$/, 'plugin job'],
   ]
@@ -200,12 +201,21 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     const kinds = lines.map((l) => KNOWN.find(([re]) => re.test(l))?.[1] ?? `unknown: ${l}`)
     expect(kinds.filter((k) => k.startsWith('unknown'))).toEqual([])
     expect(kinds.filter((k) => k === 'rule')).toHaveLength(1)
-    expect(kinds.filter((k) => k === 'preamble')).toHaveLength(2)
+    expect(kinds.filter((k) => k === 'preamble')).toHaveLength(1)
     expect(kinds.filter((k) => k === 'plugin job')).toHaveLength(1)
+  })
+  it('src/providers/session-shell.ts: the preamble takes the daemon\'s fallback step, or puts the shim dir first', () => {
+    const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/session-shell.ts'), 'utf8')
+    const lines = text.split('\n').map((l) => l.trim()).filter((l) => /\bo\.shimDir\b/.test(l) && !l.startsWith('//') && !l.startsWith('*'))
+    // Appended by the daemon's own fallback step (spawnFallbackPath, checked above); put first here.
+    expect(lines).toEqual([
+      `...(o.gatewayFirst ? ['export PATH=' + shellQuote(o.shimDir) + ':"$PATH"'] : []),`,
+    ])
+    expect(text).toMatch(/^\s+o\.fallbackPathStep,$/m)
   })
   it('both spawn paths of the daemon ask the rule', () => {
     const text = STANDALONE_TEXT
-    expect(text).toMatch(/buildSpawnPreamble\(launch\.nodeDir, walnutThroughGateway\(settingsEnvOf\(launch\.args\)\)\)/)
+    expect(text).toMatch(/buildSpawnPreamble\(\{ nodeDir: launch\.nodeDir, gatewayFirst: walnutThroughGateway\(settingsEnvOf\(launch\.args\)\), shellSetupFile \}\)/)
     expect(text).toMatch(/PATH: sessionPathWithShim\(process\.env\.PATH \|\| '', throughGateway\),/)
   })
   it('every session spawn of the daemon takes its OPEN_WALNUT_API_URL from what its Walnut named', () => {

@@ -272,6 +272,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // usage.sessionCost honours `byDay: { timeZone }` (buckets split by local day, for
   // the Usage page's Today / 7 days). An older daemon ignores it and answers undivided.
   'session-cost-day-v1',
+  // 'start-shell-setup-v1' (session-shell.ts): `start` takes `shellSetup`, the host's
+  // config.hosts.<key>.shell_setup, which the session's shell runs after its rc file (no stdin,
+  // no stdout, never failing the start); the daemon keeps the last one per Walnut (0600, its own
+  // dir) for the starts the host decides itself. Only the leader sends it. Optional: an older
+  // daemon ignores the field, and an older leader sends none (then none runs, as before).
+  'start-shell-setup-v1',
   // usage.codexOutside (codex-outside-core.ts): the Codex runs no Walnut session started, read
   // host-side from Codex's own rollout files, in time-budgeted pages.
   'codex-outside-v1',

@@ -5,7 +5,7 @@
  * nvm nodes that die with "GLIBC_2.27 not found", so presence is not enough).
  *
  * How each consumer gets it:
- *   - daemon-standalone.ts (bun binary) and session-io.ts import it normally.
+ *   - daemon-standalone.ts (bun binary) and session-shell.ts import it normally.
  *   - the factory body must reference NOTHING at module scope: every helper
  *     lives inside it and every capability (fs, exec, env) is passed in `deps`.
  *     Constructing it must stay side-effect free (the module-level exports below
@@ -389,18 +389,25 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     return out
   }
 
-  /** The user's own shell: sessions run shell_setup there, and it is often bash syntax that /bin/sh (dash) rejects. */
-  function userShell(): string { return deps.env.SHELL && isExecutable(deps.env.SHELL) ? deps.env.SHELL : '/bin/sh' }
+  /**
+   * The shell sessions start in (the daemon's sessionShell): shell_setup runs there, and it is
+   * often bash syntax that /bin/sh (dash) rejects. Without one: $SHELL, else /bin/sh.
+   */
+  function userShell(): string {
+    if (deps.sessionShell) return deps.sessionShell()
+    return deps.env.SHELL && isExecutable(deps.env.SHELL) ? deps.env.SHELL : '/bin/sh'
+  }
 
   /**
-   * The PATH a session sees after the host's `shell_setup` (config.hosts[].shell_setup),
-   * run the way session-io.ts buildRemotePreamble runs it: `{ setup; } || true`.
-   * Without it a claude that shell_setup puts on PATH reads as missing or old.
+   * The PATH a session sees after the host's `shell_setup` (config.hosts[].shell_setup), asked
+   * through the very preamble a session starts with (deps.spawnPreamble, which runs the setup
+   * file after the rc files). Without it a claude that shell_setup puts on PATH reads as missing
+   * or old. No setup file (an in-process check, or one that could not be written): none runs.
    */
-  async function shellSetupPath(setup: string, timeoutMs: number): Promise<{ path: string; timedOut: boolean }> {
+  async function shellSetupPath(setupFile: string, timeoutMs: number): Promise<{ path: string; timedOut: boolean }> {
     var basePath = deps.env.PATH || ''
-    if (!setup) return { path: basePath, timedOut: false }
-    var script = '{ ' + setup + '; } >/dev/null 2>&1 || true; printf "\\n' + LOGIN_MARK + '%s\\n" "$PATH"'
+    if (!setupFile || !deps.spawnPreamble) return { path: basePath, timedOut: false }
+    var script = deps.spawnPreamble(setupFile) + '; printf "\\n' + LOGIN_MARK + '%s\\n" "$PATH"'
     var r = await run(userShell(), ['-c', script], timeoutMs)
     return { path: parseLoginShellPath(r.stdout) || basePath, timedOut: r.timedOut }
   }
@@ -427,14 +434,25 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
 
   /** The claude block of host.preflight, asked the way this twin's spawn gate asks. */
   async function preflightClaude(setup: string, floor: string | undefined, deadline: number): Promise<{ claude: ClaudeProbe; pathStr: string }> {
-    var sp = await shellSetupPath(setup, 5000)
+    // The setup goes to the shell as a private file, never in its argv (it may hold tokens).
+    var held = setup && deps.spawnPreamble && deps.shellSetupFile ? deps.shellSetupFile(setup) : null
+    try { return await preflightClaudeWith(held ? held.file : '', floor, deadline) } finally { if (held) held.remove() }
+  }
+
+  async function preflightClaudeWith(setupFile: string, floor: string | undefined, deadline: number): Promise<{ claude: ClaudeProbe; pathStr: string }> {
+    var sp = await shellSetupPath(setupFile, 5000)
     var pathStr = sp.path
     var probe = await probeClaude('claude', pathStr, deadline - 5000)
     if (probe.found && isTestGuardStub(probe.path)) probe = { found: false }
-    // The spawn preamble plus shell_setup: the environment a session really starts in.
-    var viaShell = deps.spawnPreamble ? deps.spawnPreamble() + (setup ? '; { ' + setup + '; } >/dev/null 2>&1 || true' : '') : ''
+    // The spawn preamble with shell_setup in it: the environment a session really starts in.
+    var viaShell = deps.spawnPreamble ? deps.spawnPreamble(setupFile) : ''
     var shellRuns = false
     var nodeless = probe.found && probe.needsNode && !probe.nodeFound
+    if (!probe.found && sp.timedOut) {
+      // A slow shell_setup proves nothing about what it would have put on PATH, and the spawn
+      // shell would run the same setup again.
+      return { claude: { found: false, unknown: 'shell_setup did not finish in time' }, pathStr: pathStr }
+    }
     if (viaShell && (!probe.found || (nodeless && !probe.fixedInterpreter))) {
       // The spawn gate never refuses what its shell can run: neither may the readiness it feeds.
       var budget = Math.min(8000, deadline - now() - 4000)
@@ -448,9 +466,6 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
         shellRuns = probe.found
       }
       if (probe.found && probe.needsNode && !probe.nodeFound && seen.hasNode) { probe.nodeFound = true; shellRuns = true }
-    } else if (!probe.found && sp.timedOut) {
-      // A slow shell_setup proves nothing about what it would have put on PATH.
-      return { claude: { found: false, unknown: 'shell_setup did not finish in time' }, pathStr: pathStr }
     }
     if (!probe.found) return { claude: { found: false, error: messages.claudeMissing }, pathStr: pathStr }
     var claude: ClaudeProbe = { found: true, path: probe.path, kind: probe.kind, needsNode: probe.needsNode }

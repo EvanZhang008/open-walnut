@@ -91,6 +91,11 @@ const ALLOWED: Record<string, Entry> = {
     injection: 'const childUse = { spawn, execFile, execFileSync, execSync, env: daemonEnv }',
     checks: [{ file: S, re: /const childUse: ChildProcessUse = \{ spawn, execFile, execFileSync, execSync, env: daemonEnv \}/ }],
   },
+  ['src/lib/account.ts']: {
+    reason: 'the passwd entry on bun (id -P on macOS, getent for NSS users), read once ahead for the login shell sessions start in (session-shell.ts)',
+    injection: 'primeAccount(childUse)',
+    checks: [{ file: S, call: 'primeAccount', has: /^childUse$/ }],
+  },
   [`${P}spawn-pool.ts`]: {
     reason: 'the runtime\'s own start mechanism inside another program: its thread starts the children with the umask it is given, and their env and cwd come filled in by createDaemonChildSpawn',
     injection: 'createSpawnPool({ umask: CHILD_UMASK }) handed to createDaemonChildSpawn as `pool`',

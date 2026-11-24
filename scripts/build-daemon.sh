@@ -271,6 +271,7 @@ SOURCES=(
   src/providers/service-launcher-control.ts
   src/providers/service-launcher-beat.ts
   src/providers/host-runtime-core.ts
+  src/providers/session-shell.ts
   src/providers/host-fix-core.ts
   src/providers/claude-install-core.ts
   src/providers/claude-download-core.ts
