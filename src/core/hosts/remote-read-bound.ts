@@ -630,7 +630,11 @@ async function degraded(
     return new HostReconnectingError(host, name, `${name} did not answer in time`)
   }
   const link = linkFailureKind(err)
-  const unreachable = link !== null
+  // A reader's own error that says its host is not answering (RemoteReadError, a host-judged read's
+  // HistoryReadFailedError: `unreachable`) is the same outage, never the route's 502 (2026-11-24:
+  // a deploy's closed dial gate and a host-judged read with its host away both answered 502).
+  const saysAway = (err as { unreachable?: unknown } | null)?.unreachable === true
+  const unreachable = link !== null || saysAway
     || (before === 'connected' ? after !== 'connected' : after === 'fails-fast' || after === 'dialing')
   if (!unreachable) return err
   const name = await label()

@@ -326,7 +326,8 @@ function sessionJsonlHint(sessionId: string, host: string | undefined): SessionJ
 /** A history read that did not happen (as opposed to a conversation with no messages):
  *  callers answer degraded and keep what they had, never an empty history. */
 export class HistoryReadFailedError extends Error {
-  constructor(message: string) { super(message); this.name = 'HistoryReadFailedError'; }
+  /** `unreachable`: the read failed because its host is not answering now (a link failure), not for the read itself. */
+  constructor(message: string, public readonly unreachable = false) { super(message); this.name = 'HistoryReadFailedError'; }
 }
 
 /**

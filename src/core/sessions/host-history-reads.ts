@@ -39,6 +39,7 @@ import type { HostHistoryRead } from '../session-channel/host-calls.js'
 import type { HistoryReadFailedError, SessionHistoryMessage } from '../session-history.js'
 import type { HistoryAnswer, HistoryReadTag, HistoryWire } from './host-history-answer.js'
 import { thisHostKey } from './session-row-owner.js'
+import { linkFailureKind, markLinkFailure } from '../../providers/link-failure.js'
 
 export type { HostHistoryRead }
 export { HOST_HISTORY_ANSWERED, answerHistoryRead } from './host-history-answer.js'
@@ -163,7 +164,7 @@ async function viaHost<T>(sid: string, host: string, member: HostHistoryRead, ex
   const way = await wayOf(sid, host, extra)
   if (way === 'here') return inTranscriptReadOf(sid, here)
   const key = `${sid}\u0000${member}\u0000${JSON.stringify(extra)}`
-  if (way === 'stale') return await unavailable(key, member, `the host ${host} does not answer reads now`) as T
+  if (way === 'stale') return await unavailable(key, member, `the host ${host} does not answer reads now`, true) as T
   const shared = inflight.get(key)
   if (shared) return await shared as T
   const run = readOnHost(sid, host, member, extra, key)
@@ -194,7 +195,7 @@ async function readOnHost(sid: string, host: string, member: HostHistoryRead, ex
     if (READ_HERE.test(msg)) return READ_HERE_MARK
     // Gave up: the host drops what it still makes or holds of this read, and nothing late is parsed here.
     void caller?.(host, { sid, target: 'history', member: 'cancelRead', args: [id] }, 10_000).catch(() => {})
-    return unavailable(key, member, `the host ${host} did not answer the read of ${sid}: ${msg}`)
+    return unavailable(key, member, `the host ${host} did not answer the read of ${sid}: ${msg}`, linkFailureKind(err) !== null)
   }
   if (answer.k === 'same') {
     const entry = kept.get(key)!
@@ -253,7 +254,8 @@ export function shareHistoryBudget(read: () => { budget: number; other: number }
 /** The host's answer, or a rejection once the deadline passed (the call's own timer may be longer). */
 function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${ms} ms`)), ms) })
+  // No answer in time is the host's link failing this read (link-failure.ts 'no-answer'), never the read's own error.
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(markLinkFailure(new Error(`no answer in ${ms} ms`), 'no-answer')), ms) })
   return Promise.race([p, late]).finally(() => clearTimeout(timer))
 }
 
@@ -261,7 +263,7 @@ function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
  * The host cannot answer now: the last answer kept here, else the reader's failed read. The whole
  * history always throws, so its callers say "stale" over the copy they find (getCachedSessionHistory).
  */
-async function unavailable(key: string, member: HostHistoryRead, why: string): Promise<unknown> {
+async function unavailable(key: string, member: HostHistoryRead, why: string, unreachable = false): Promise<unknown> {
   const { log } = await import('../../logging/index.js')
   log.session.warn('host history read degraded', { member, why, kept: kept.has(key) })
   if (member !== 'readSessionHistory' && kept.has(key)) return kept.get(key)!.value
@@ -276,7 +278,7 @@ async function unavailable(key: string, member: HostHistoryRead, why: string): P
       return { error: 'The plan could not be read: its host did not answer.' }
     default: {
       const { HistoryReadFailedError: Failed } = await import('../session-history.js')
-      throw new Failed(why) as HistoryReadFailedError
+      throw new Failed(why, unreachable) as HistoryReadFailedError
     }
   }
 }

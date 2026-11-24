@@ -409,7 +409,8 @@ export async function readSessionJsonlContent(
         ]);
         const name = await hostDisplayNameFor(host);
         // Judged on the alias form, before the host's name replaces it.
-        const unreachable = causeKeyForError({ text: errMsg, host }) !== undefined;
+        // Or a failure the link layer marked as its own (the dial gate of a server shutting down, a lost link).
+        const unreachable = causeKeyForError({ text: errMsg, host }) !== undefined || linkFailureKind(err) !== null;
         throw new RemoteReadError(`Remote read failed (${name}): ${inHostTerms(errMsg, host, name)}`, host, errMsg, unreachable);
       }
       localReadError = errMsg;

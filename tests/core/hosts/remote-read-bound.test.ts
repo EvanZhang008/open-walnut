@@ -22,6 +22,8 @@ import { SessionControlError } from '../../../src/core/sessions/session-controls
 import { daemonConnectWouldWait } from '../../../src/providers/daemon-connection.js'
 import { markLinkFailure } from '../../../src/providers/link-failure.js'
 import { log } from '../../../src/logging/index.js'
+import { RemoteReadError } from '../../../src/core/hosts/remote-read-error.js'
+import { HistoryReadFailedError } from '../../../src/core/session-history.js'
 
 /** What a degraded answer must never carry: an errno, a URL, the dial's own words (gate links F1). */
 const RAW = /\bE[A-Z]{3,}\b|wss?:\/\/|https?:\/\/|url=|host=|\bssh[: ]|Command failed|WebSocket|tunnel failed|refused/
@@ -268,6 +270,30 @@ describe('boundHostRead', () => {
     const neverDialled = await boundHostRead('devbox', () => Promise.reject(new Error('Unknown host: devbox')), { wouldWait: () => state, label }).catch((e) => e)
     expect(neverDialled).not.toBeInstanceOf(HostReconnectingError)
     expect(neverDialled.message).toBe('Unknown host: devbox')
+  })
+
+  // 2026-11-24: a deploy's closed dial gate (RemoteReadError, unreachable) and a host-judged read whose
+  // host was away (HistoryReadFailedError, unreachable) answered the history route's 502, a server
+  // error of the route, while the link stayed up in the pool's eyes. Every reader error that says its
+  // host is away is the one degraded 503; the same errors without it keep their own words.
+  it('a reader\'s error that says its host is away answers reconnecting, whatever the pool thinks; the same kind without it keeps its error', async () => {
+    const away = [
+      new RemoteReadError('Remote read failed (devbox): Not connecting to devbox: this Walnut server is shutting down, and the next one connects', 'devbox', 'Not connecting', true),
+      new HistoryReadFailedError('the host devbox does not answer reads now', true),
+    ]
+    for (const err of away) {
+      const got = await boundHostRead('devbox', () => Promise.reject(err), { wouldWait: () => 'connected', label }).catch((e) => e)
+      expect(got, err.name).toBeInstanceOf(HostReconnectingError)
+      expect(got.extra).toMatchObject({ code: HOST_RECONNECTING })
+    }
+    const own = [
+      new RemoteReadError('Remote read failed (devbox): parse error', 'devbox', 'parse error', false),
+      new HistoryReadFailedError('the host devbox answered busy'),
+    ]
+    for (const err of own) {
+      const got = await boundHostRead('devbox', () => Promise.reject(err), { wouldWait: () => 'connected', label }).catch((e) => e)
+      expect(got, err.name).toBe(err)
+    }
   })
 
   it('a read that began disconnected answers a failed dial as reconnecting, whatever state the pool is in after it', async () => {

@@ -373,7 +373,10 @@ describe('a host that answered reads is never parsed here while its service is d
     noteHostReadsHistory(HOST, 'down')
     sent.length = 0
     expect(await extractPlanContent(SID, CWD, HOST)).toBe(plan)
-    await expect(readSessionHistory(SID, CWD, HOST, undefined, { skipSubagents: true })).rejects.toBeInstanceOf(HistoryReadFailedError)
+    const failed = await readSessionHistory(SID, CWD, HOST, undefined, { skipSubagents: true }).catch((e) => e)
+    expect(failed).toBeInstanceOf(HistoryReadFailedError)
+    // Its host is away, not the read wrong: the bound answers it as the 503 every host outage is (2026-11-24: a 502).
+    expect(failed.unreachable).toBe(true)
     // What the history route and the phone's rich history serve, marked stale, on a failed read.
     expect(getCachedSessionHistory(SID, HOST)).toBe(whole)
     expect(await readSessionHistoryTailWindow(SID, CWD, HOST, 1024)).toBeNull()
