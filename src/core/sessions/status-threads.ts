@@ -39,6 +39,7 @@ import { heldTitleOf, MERGE_UNTITLED_LINE, MERGES_ASKED_MAX, mergeQuestionPart, 
 import { answerSteps } from './status-thread-pre.js';
 import { CARD_KEEPS_LINE, cardPart, cardWords, keepsCardWords } from './status-thread-card.js';
 import { ASKED_MARK, askedRule, linesThatAsked, noteLineAsks } from './status-thread-asked.js';
+import { byNeed, lastListed, noteListed } from './status-thread-pick.js';
 
 /** The states a FOR_USER_THREAD line names (stateWord reads them). */
 export const THREAD_LINE_STATES = ['working', 'waiting', 'answered', 'done'] as const;
@@ -179,7 +180,7 @@ export function wroteSinceAnswer(file: ThreadsFile, t: OrgThread): boolean {
 }
 
 /** The threads as the question lists them, and his messages since the oldest answer he wrote after (newest first). Pure. */
-export function listForQuestion(file: ThreadsFile, open: readonly OrgThread[]): { listed: ListedThread[]; his: HisWords[] } {
+export function listForQuestion(file: ThreadsFile, open: readonly OrgThread[]): { listed: Array<OrgThread & ListedThread>; his: HisWords[] } {
   const upTo = (t: OrgThread) => t.messages[t.messages.length - 1]?.id ?? '';
   const hisAt = lastUserAt(file) ?? '';
   const hasOf = (t: OrgThread) => {
@@ -212,10 +213,12 @@ export async function threadQuestionFor(task: Pick<Task, 'id' | 'org_role' | 'th
     // it is not asked, so no line can take it out of his sight (review round 1).
     const file = await readThreads(task.id);
     const { listed, his } = listForQuestion(file, sortedThreads(file.threads).filter(openNotWaiting));
-    // A thread whose last line asked him is listed first, so the question names it (status-thread-asked.ts).
+    // Listed by need first, so the 12 the question names are the ones that need a line (status-thread-pick.ts).
     const ask = linesThatAsked(task.id);
     const marked = listed.map((t) => (ask.has(t.id) ? { ...t, asked: true } : t));
-    return threadQuestionBlock([...marked.filter((t) => t.asked), ...marked.filter((t) => !t.asked)], langName, { org: !!task.org_role, his });
+    const out = threadQuestionBlock(byNeed(marked, Date.now(), lastListed(task.id)), langName, { org: !!task.org_role, his });
+    noteListed(task.id, [...out.refs.values()].map((r) => r.id));
+    return out;
   } catch {
     return { block: '', refs: new Map() };
   }

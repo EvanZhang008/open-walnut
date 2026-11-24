@@ -3,7 +3,7 @@
  * 2026-11-20, the user: "if there are multiple thread please ask for multiple thread"). The threads
  * are enumerated from a threads file on disk, so a thread the question leaves out fails here: an
  * open one (whatever its state, watched, snoozed) is listed by its ref, a closed one is not, and the
- * list stops at THREAD_LIST_MAX, newest first. Main and the leads keep their own thread rules and
+ * list stops at THREAD_LIST_MAX, by need first (status-thread-pick.ts). Main and the leads keep their own thread rules and
  * get no block; a task that keeps no Threads gets none either.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -74,11 +74,24 @@ describe('the status question lists the task\'s threads', () => {
     expect(Buffer.byteLength(block)).toBeLessThan(1200)
   })
 
-  it('stops at THREAD_LIST_MAX, newest first', async () => {
+  it('stops at THREAD_LIST_MAX, by need first, newest within a need', async () => {
     const { block, refs } = await threadQuestionFor({ id: BIG, threads_on: true })
     expect(refs.size).toBe(THREAD_LIST_MAX)
     expect(refs.get('t1')?.title).toBe(`Orchard subject ${THREAD_LIST_MAX + 3}`)
     expect(block).not.toContain('"Orchard subject 1"')
+  })
+
+  it('an old thread with his words after its summary is listed past newer quiet ones, and quiet ones go round between questions', async () => {
+    const quiet = (n: number) => thread(n, { state: 'pending', reply: `Subject ${n} is handed on.`, replyAt: at(n + 1), updatedAt: at(n + 1) })
+    const old = thread(1, { state: 'pending', reply: 'Handed on.', replyAt: at(0) })
+    await writeThreads('orchard-task-3', [old, ...Array.from({ length: THREAD_LIST_MAX + 6 }, (_, i) => quiet(i + 10))])
+    const first = await threadQuestionFor({ id: 'orchard-task-3', threads_on: true })
+    const ids1 = [...first.refs.values()].map((r) => r.id)
+    expect(ids1[0]).toBe(old.id)
+    const second = await threadQuestionFor({ id: 'orchard-task-3', threads_on: true })
+    const ids2 = [...second.refs.values()].map((r) => r.id)
+    // The quiet ones not listed the first time are listed now.
+    expect(ids2.filter((id) => !ids1.includes(id)).length).toBeGreaterThanOrEqual(6)
   })
 
   it('a task with no open thread is offered only the new-thread line', async () => {
