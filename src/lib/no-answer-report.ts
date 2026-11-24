@@ -87,6 +87,19 @@ function ownRegularFile(fd: number): boolean {
   return st.isFile() && (uid < 0 || st.uid === uid) && st.size <= SPOOL_MAX_BYTES
 }
 
+/**
+ * The spool's folder is this user's own real folder that no one else can open (a shared /tmp: a link
+ * or a folder another user made there is never written into; 2026-11-24 review), as the demo
+ * gateway's folder is checked (gateway-core.ts demoGatewaySocketPath).
+ */
+function ownPrivateDir(dir: string): boolean {
+  try {
+    const st = fs.lstatSync(dir)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+    return !st.isSymbolicLink() && st.isDirectory() && (uid < 0 || st.uid === uid) && (st.mode & 0o077) === 0
+  } catch { return false }
+}
+
 /** Keep one failure in the session's spool. Never throws: counting never fails a call. */
 export function spoolNoAnswer(file: string | null, op: string, code: string, client: 'mcp' | 'cli' = 'cli', now = Date.now()): void {
   const k = keptOf({ at: now, op, code, client })
@@ -94,6 +107,7 @@ export function spoolNoAnswer(file: string | null, op: string, code: string, cli
   let fd: number | undefined
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    if (!ownPrivateDir(path.dirname(file))) return
     const c = fs.constants
     fd = fs.openSync(file, c.O_WRONLY | c.O_APPEND | c.O_CREAT | (c.O_NOFOLLOW ?? 0), 0o600)
     if (!ownRegularFile(fd)) return
@@ -109,7 +123,7 @@ export function spoolNoAnswer(file: string | null, op: string, code: string, cli
  */
 export function takeSpooledNoAnswers(file: string | null, now = Date.now()): { report: NoAnswer[]; putBack: () => void } {
   const none = { report: [] as NoAnswer[], putBack: () => {} }
-  if (!file) return none
+  if (!file || !ownPrivateDir(path.dirname(file))) return none
   const taking = `${file}.${process.pid}.taking`
   try { fs.renameSync(file, taking) } catch { return none }
   let fd: number | undefined

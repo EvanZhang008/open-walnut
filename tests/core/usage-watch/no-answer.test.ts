@@ -111,6 +111,14 @@ describe('the recorder and the hook', () => {
     expect(rows().map((r) => r.op)).toEqual(['task_create', 'task_create', 'task_send'])
   })
 
+  it('a report of a failure hours old never clears what waits for its match (2026-11-24 review)', async () => {
+    const now = Date.now()
+    recordToolError({ at: now - 10_000, sid: SID, host: 'local', op: 'task_get', client: 'mcp', code: 'no_daemon' })
+    expect(await recordNoAnswers(SID, 'local', { no_answer: [{ op: 'task_get', code: 'no_daemon', client: 'mcp', ms: 3 * 3600_000 }] }, taskOf, now)).toBe(1)
+    // The hook's own failure is still there to match the client's report of it.
+    expect(await recordNoAnswers(SID, 'local', { no_answer: [{ op: 'task_get', code: 'no_daemon', client: 'mcp', ms: 9_000 }] }, taskOf, now)).toBe(0)
+  })
+
   it('a report of a failure the hook recorded before this server started is not counted again', async () => {
     const at = Date.now() - 60_000
     recordToolError({ at, sid: SID, host: 'local', op: 'host_exec', client: 'mcp', code: 'hub_timeout' })
@@ -223,6 +231,24 @@ describe('the CLI keeps them beside the daemon socket, one file per session', ()
     fs.symlinkSync(target, file)
     spoolNoAnswer(file, 'task_get', 'no_daemon', 'cli')
     expect(fs.readFileSync(target, 'utf-8')).toBe('mine\n')
+  })
+
+  it('never writes into a spool folder that is a link, or that others can open', () => {
+    const sock = path.join(dir, 'agent-gateway.sock')
+    const file = noAnswerSpoolFile(sock, SID)!
+    const elsewhere = path.join(dir, 'elsewhere')
+    fs.mkdirSync(elsewhere, { mode: 0o700 })
+    fs.symlinkSync(elsewhere, path.dirname(file))
+    spoolNoAnswer(file, 'task_get', 'no_daemon', 'cli')
+    expect(fs.readdirSync(elsewhere)).toEqual([])
+    fs.rmSync(path.dirname(file))
+    fs.mkdirSync(path.dirname(file), { mode: 0o755 })
+    fs.chmodSync(path.dirname(file), 0o755)
+    spoolNoAnswer(file, 'task_get', 'no_daemon', 'cli')
+    expect(fs.existsSync(file)).toBe(false)
+    fs.chmodSync(path.dirname(file), 0o700)
+    spoolNoAnswer(file, 'task_get', 'no_daemon', 'cli')
+    expect(fs.existsSync(file)).toBe(true)
   })
 
   it('a long-lived client keeps at most its last 50', () => {

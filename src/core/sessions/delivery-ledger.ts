@@ -67,13 +67,18 @@ export const START_LINE_PREFIX = 'start-';
 let taskOfSession: ((sessionId: string) => Promise<string | undefined>) | null = null;
 const taskCache = new Map<string, { taskId: string | undefined; at: number }>();
 const TASK_CACHE_MS = 10 * 60_000;
+const TASK_MISS_MS = 5_000;
+/** A session's first line is read within this of its start, or its read is not known. */
+const START_READ_WINDOW_MS = 10 * 60_000;
 
 async function taskOf(sessionId: string): Promise<string | undefined> {
   const hit = taskCache.get(sessionId);
   if (hit && Date.now() - hit.at < TASK_CACHE_MS) return hit.taskId;
   const taskId = await taskOfSession!(sessionId).catch(() => undefined);
   if (taskCache.size >= 2_000) taskCache.delete(taskCache.keys().next().value!);
-  taskCache.set(sessionId, { taskId, at: Date.now() });
+  // A session not found yet is looked up again soon: a new session's first steps come before its record
+  // is written, and a miss kept 10 minutes left them with no task (2026-11-24 review).
+  taskCache.set(sessionId, { taskId, at: taskId ? Date.now() : Date.now() - TASK_CACHE_MS + TASK_MISS_MS });
   return taskId;
 }
 
@@ -222,7 +227,10 @@ export function trailsOf(lines: readonly DeliveryLine[], nowMs?: number): Delive
   const startOf = (l: DeliveryLine): string | undefined => {
     const byUuid = l.lineUuid ? startByUuid.get(l.lineUuid) : undefined;
     if (byUuid) return byUuid;
-    const open = (startsOf.get(l.sessionId ?? '') ?? []).filter((s) => !s.read && s.at <= l.at).sort((a, b) => a.at.localeCompare(b.at))[0];
+    // Only a read soon after the start: a later line with no queue row (typed in a terminal, a slash
+    // command) is not the first line read (2026-11-24 review).
+    const open = (startsOf.get(l.sessionId ?? '') ?? [])
+      .filter((s) => !s.read && s.at <= l.at && Date.parse(l.at) - Date.parse(s.at) <= START_READ_WINDOW_MS).sort((a, b) => a.at.localeCompare(b.at))[0];
     if (open) open.read = true;
     return open?.id;
   };
