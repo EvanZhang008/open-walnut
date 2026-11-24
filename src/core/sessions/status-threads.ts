@@ -54,12 +54,12 @@ export interface StatusThreadLine { id: string; title: string; state: ThreadLine
 export interface StatusThreadNew { title: string; state: 'working' | 'waiting'; progress?: string }
 /** The open threads the question listed, by ref: `untitled` still under Walnut's stand-in title, `wrote` he wrote since an answer it holds. */
 export type ThreadRefs = ReadonlyMap<string, ThreadRef>;
-export interface ThreadRef { id: string; title: string; untitled?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; joined?: string; mergeInto?: string }
+export interface ThreadRef { id: string; title: string; untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; joined?: string; mergeInto?: string }
 /**
  * One thread as the question lists it (threadsKeptNow marks `untitled` and `wrote`): `upTo` its
  * newest message then, `hisAt` his newest message in any thread then (a reaction is judged on it).
  */
-export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; acked?: boolean; joined?: JoinedMessage; held?: HeldTitle; card?: string; asked?: boolean; cardAsks?: boolean };
+export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; acked?: boolean; joined?: JoinedMessage; held?: HeldTitle; card?: string; asked?: boolean; cardAsks?: boolean };
 /** The report's fields the thread lines fill (readThreadLines), each written to the threads, never stored with the report. */
 export const THREAD_REPORT_KEYS = ['threads', 'threads_new', 'ask_thread', 'thread_titles', 'threads_seen', 'threads_split', 'joins_checked', 'threads_merge', 'merges_checked'] as const;
 export type ThreadReportKey = typeof THREAD_REPORT_KEYS[number];
@@ -98,6 +98,19 @@ export function asksThreads(task: Pick<Task, 'org_role' | 'threads_on'> | null |
   return !task.org_role || threadsKeptNow();
 }
 
+/** How the question marks a thread whose title still asks him (staleAskTitle). */
+export const RETITLE_WORDS = 'its title still asks him, though nothing on it waits on him now';
+
+/**
+ * Its title asks him to decide or pick, while it waits on him no more (2026-11-24, the threads
+ * inspection, item 8: "new task panel: three designs, please pick one" sat in his Done after the pick
+ * shipped; a title was asked for only while a thread was untitled). The status question asks such a
+ * thread for a title that names the subject as it stands. Pure.
+ */
+export function staleAskTitle(t: Pick<OrgThread, 'title' | 'titled' | 'state' | 'closed'>): boolean {
+  return !!t.titled && !t.closed && t.state !== 'needs' && asksHimNow(t.title);
+}
+
 /** A thread in needs is listed only for its join check: no line is asked for it. */
 export const NEEDS_JOIN_WORDS = 'waits on him: no line for it, only its message below';
 
@@ -126,12 +139,12 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
     if (held) merges.push({ ref, held, likeRef: likeRef! });
     // Asked again by its title when its other thread is not listed; not while it waits its turn.
     const untitled = t.untitled && !held && !(t.held && likeRef);
-    const marks = kept ? { ...(untitled ? { untitled: true } : {}), ...(t.wrote ? { wrote: true } : {}) } : {};
+    const marks = kept ? { ...(untitled ? { untitled: true } : {}), ...(t.retitle && !untitled ? { retitle: true } : {}), ...(t.wrote ? { wrote: true } : {}) } : {};
     const joined = t.joined && joins.length < JOINS_ASKED_MAX ? t.joined : undefined;
     if (joined) joins.push({ ref, joined });
     refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}), ...(t.hisAt !== undefined ? { hisAt: t.hisAt } : {}), ...(joined ? { joined: joined.messageId } : {}), ...(held ? { mergeInto: held.like } : {}) });
     const title = t.title.replace(/\s+/g, ' ').trim();
-    const said = [t.state, ...(t.state === 'needs' ? [NEEDS_JOIN_WORDS] : []), ...(t.acked ? [ACKED_WORDS] : []), ...(marks.untitled ? ['untitled'] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : []), ...(t.asked ? [ASKED_MARK] : t.cardAsks ? [CARD_ASKS_MARK] : [])].join(', ');
+    const said = [t.state, ...(t.state === 'needs' ? [NEEDS_JOIN_WORDS] : []), ...(t.acked ? [ACKED_WORDS] : []), ...(marks.untitled ? ['untitled'] : []), ...(marks.retitle ? [RETITLE_WORDS] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : []), ...(t.asked ? [ASKED_MARK] : t.cardAsks ? [CARD_ASKS_MARK] : [])].join(', ');
     return `${ref} "${title.slice(0, cutEnd(title, TITLE_SHOWN_MAX))}" (${said}${t.acked ? '' : cardPart(t.card)})`;
   });
   const words = langName ? ` (titles and progress in ${langName})` : '';
@@ -159,6 +172,7 @@ function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadR
       + ` working: you are on it now; waiting: a team or something outside has it (both hidden from him); answered: the result he asked for is in (shown to him); done: finished, or nothing left for him. ${CARD_KEEPS_LINE}`,
   ];
   if (refs.some((r) => r.untitled)) parts.push(`Each untitled thread gets a short title: FOR_USER_THREAD_TITLE: <ref> | <title>.${refs.length > 1 ? ` ${MERGE_UNTITLED_LINE}` : ''}`);
+  if (refs.some((r) => r.retitle)) parts.push(`Each thread whose title still asks him what no longer waits on him gets a title that names the subject as it stands now: FOR_USER_THREAD_TITLE: <ref> | <title>${words}.`);
   if (refs.some((r) => r.wrote)) {
     // His own words, so the reaction is judged against what he said, never against a label (review round 1).
     const refOfId = new Map([...byRef].map(([ref, r]) => [r.id, ref]));
@@ -198,7 +212,7 @@ export function listForQuestion(file: ThreadsFile, open: readonly OrgThread[]): 
   const listed = open.map((t) => {
     const after = answersHeWroteAfter(file, t);
     for (const at of after) if (!since || at < since) since = at;
-    return { ...t, ...hasOf(t), ...card(t), untitled: !t.titled, wrote: after.length > 0, upTo: upTo(t), hisAt };
+    return { ...t, ...hasOf(t), ...card(t), untitled: !t.titled, ...(staleAskTitle(t) ? { retitle: true } : {}), wrote: after.length > 0, upTo: upTo(t), hisAt };
   });
   const his = since
     ? file.threads.flatMap((t) => t.messages.filter((m) => m.at > since).map((m) => ({ threadId: t.id, text: m.text, at: m.at })))
@@ -276,7 +290,7 @@ export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusRe
     const [ref, ...rest] = m[1].split(/[|\uff5c]/);
     const target = refs.get(refOf(ref ?? ''));
     const title = oneLine(rest.join('|'), THREAD_TITLE_MAX);
-    if (target?.untitled && title && !titles.has(target.id)) titles.set(target.id, markOf(target, { title }));
+    if ((target?.untitled || target?.retitle) && title && !titles.has(target.id)) titles.set(target.id, markOf(target, { title, ...(target.retitle ? { retitle: true } : {}) }));
   }
   const seen = new Map<string, ThreadMark>();
   for (const ref of seenRefs(SEEN_RE.exec(answer)?.[1] ?? '')) {
@@ -292,8 +306,8 @@ export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusRe
 }
 
 /** A title or a reaction for one listed thread, with its newest message then. */
-export interface ThreadMark { id: string; upTo?: string; hisAt?: string; title?: string }
-const markOf = (r: ThreadRef, more: { title?: string } = {}): ThreadMark => ({ id: r.id, ...(r.upTo !== undefined ? { upTo: r.upTo } : {}), ...(r.hisAt !== undefined ? { hisAt: r.hisAt } : {}), ...more });
+export interface ThreadMark { id: string; upTo?: string; hisAt?: string; title?: string; retitle?: boolean }
+const markOf = (r: ThreadRef, more: { title?: string; retitle?: boolean } = {}): ThreadMark => ({ id: r.id, ...(r.upTo !== undefined ? { upTo: r.upTo } : {}), ...(r.hisAt !== undefined ? { hisAt: r.hisAt } : {}), ...more });
 
 /**
  * The refs of a FOR_USER_THREAD_SEEN line, only when the whole line is a list of refs (review round
@@ -447,7 +461,8 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
   };
   for (const m of marks.titles ?? []) {
     const t = open(m);
-    if (t && !t.titled && m.title) writes.push({ id: t.id, patch: { title: m.title } });
+    // A titled thread is retitled only when its title still asks him what waits on him no more (staleAskTitle).
+    if (t && m.title && (!t.titled || (m.retitle && staleAskTitle(t)))) writes.push({ id: t.id, patch: { title: m.title } });
   }
   const seen = new Set((marks.seen ?? []).filter((m) => !!open(m) && !wroteSinceQuestion(file, m.hisAt)).map((m) => m.id));
   for (const id of seen) writes.push({ id, patch: { known: 'all' } });

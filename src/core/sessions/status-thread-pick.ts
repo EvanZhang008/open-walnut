@@ -13,7 +13,7 @@ import { summaryBehindHim, summaryOwed, threadOverdue } from '../org/thread-view
 import { asksHimNow } from '../org/thread-summary-content.js';
 import type { OrgThread } from '../org/threads-model.js';
 
-type Pickable = OrgThread & { asked?: boolean; joined?: unknown; held?: { like: string }; wrote?: boolean; untitled?: boolean };
+type Pickable = OrgThread & { asked?: boolean; joined?: unknown; held?: { like: string }; wrote?: boolean; untitled?: boolean; retitle?: boolean };
 
 /** Ranks from here on are no need of a line: they go round by when they were listed last. */
 const ROUND = 6;
@@ -33,7 +33,7 @@ export function needRank(t: Pickable, now: number): number {
   if (summaryBehindHim(t)) return 2;
   if (threadOverdue(t, now)) return 3;
   if (summaryOwed(t)) return 4;
-  if (t.untitled) return 5;
+  if (t.untitled || t.retitle) return 5;
   if (t.wrote) return 6;
   return 7;
 }

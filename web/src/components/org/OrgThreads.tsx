@@ -445,7 +445,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now: nowGive
       open: orderedForHim(forHim, { needsFirst }),
       listedIds: new Set(listed.map((t) => t.id)),
       forHimIds: new Set(forHim.map((t) => t.id)),
-      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t)),
+      hidden: orderedForHim(list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t))),
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };
   }, [all, now, needsFirst]);

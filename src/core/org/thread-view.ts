@@ -739,9 +739,44 @@ export function listedForHim<T extends ViewThread & { id: string; state: string 
  * shows the same first thread. A watch changes no place here: Watching is its own list (watchingOf). Pure.
  */
 export function orderedForHim<T extends { state: string; updatedAt: string }>(threads: readonly T[], opts: { needsFirst?: boolean } = {}): T[] {
-  const byChange = [...threads].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const at = new Map(threads.map((t) => [t, changedForHimAt(t)] as const));
+  const byChange = [...threads].sort((a, b) => at.get(b)!.localeCompare(at.get(a)!));
   if (!opts.needsFirst) return byChange;
   return [...byChange.filter((t) => t.state === 'needs'), ...byChange.filter((t) => t.state !== 'needs')];
+}
+
+/** What of a thread his card shows, with its time: what moves it in his lists. */
+export interface ChangeFields {
+  updatedAt: string;
+  createdAt?: string;
+  reply?: string;
+  replyAt?: string;
+  needsAt?: string;
+  by?: string;
+  opener?: { at: string };
+  messages?: ReadonlyArray<{ at: string; answer?: { at: string }; joined?: string }>;
+  closed?: { at?: string; by?: string };
+}
+
+/**
+ * When something he reads on the thread last changed: its summary, its hand-over to him, a message
+ * of his on its card, an answer, its first post, its close. His lists order by it, never by `updatedAt`, which
+ * every write moves (2026-11-24, the threads inspection, item 11: a reworded title, a seen mark, a
+ * task link or a message split out re-sorted the list under him; the order hold lasts only while the
+ * pointer is over the list, so in the chat or on a phone it jumped). A row with none of these (an
+ * older shape) reads its `updatedAt`. Pure.
+ */
+export function changedForHimAt(t: ChangeFields): string {
+  let last = '';
+  const see = (v: string | undefined) => { if (v && v > last) last = v; };
+  see(t.createdAt);
+  see(summaryAt(t));
+  see(t.needsAt);
+  see(t.opener?.at);
+  see(t.closed?.at);
+  // A message of his joined only for its timing is off the card until checked (uncheckedJoin): not yet.
+  for (const m of t.messages ?? []) { if (!uncheckedJoin(m)) see(m.at); see(m.answer?.at); }
+  return last || t.updatedAt;
 }
 
 /** "1 thread", "3 threads": the words every surface counts them in. */

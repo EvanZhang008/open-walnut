@@ -8,7 +8,7 @@
  * number, badge and red line counts only the threads drawn in Needs you or Done (the result waits
  * on the card for him).
  */
-import { listedForHim, orderedForHim, snoozedNow, watchingOf, watchedNow, type ThreadCounts, type ViewThread } from './thread-view.js';
+import { changedForHimAt, listedForHim, orderedForHim, snoozedNow, watchingOf, watchedNow, type ThreadCounts, type ViewThread } from './thread-view.js';
 import { USER_STATE_LABELS } from '../user-status.js';
 import { inAcknowledged, isKnown, placedSinceAck } from './thread-known.js';
 
@@ -143,7 +143,7 @@ export function threadCounts<T extends Counted & { title: string }>(threads: rea
   const needs = shown.filter((t) => t.state === 'needs' && !t.heldAsk);
   // Newest watch first: the one he watched last names the row when nothing waits on him.
   const watched = watchingOf(shown).reverse();
-  const newest = (list: readonly T[]) => list.reduce<T | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
+  const newest = (list: readonly T[]) => list.reduce<T | undefined>((a, t) => (!a || changedForHimAt(t) > changedForHimAt(a) ? t : a), undefined);
   const top = newest(needs) ?? watched[0] ?? newest(shown) ?? newest(below);
   return {
     shown: lit.length, needs: needs.length, ...(watched.length ? { watched: watched.length } : {}),
