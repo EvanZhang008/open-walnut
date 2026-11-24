@@ -22,7 +22,7 @@
  *   stop       Terminate in the session menu: the row stopped, the pill
  * and the last test asserts the two walks saw the same, step by step (the table is written to
  * HOST_PARITY_OUT, default test-results/host-judged-parity). Each walk first proves which path it
- * took (the Mac's judgeOf: 'host' with the switch on, 'legacy' off).
+ * took (the Mac's judgeOf: 'host' with the switch on, 'here' off).
  *
  * PW_VIDEO=1: the host-judged walk is the proof video (a caption per step, a hold on each result).
  */
@@ -242,7 +242,7 @@ async function walk(page: Page, mode: Mode): Promise<Record<string, Step>> {
   const shownAfter = withReply ? 0 : await firstWords.first().waitFor({ state: 'visible', timeout: 30_000 }).then(() => Date.now() - replyAt, () => -1)
   const judge = await h!.mac(`/judge?sid=${sid}`)
   // The path this walk is about: the host's service judges it, or the Mac runs it as before.
-  expect(judge, JSON.stringify(judge)).toEqual(mode === 'host' ? { judge: 'host', host: HOST_KEY } : { judge: 'legacy', host: null })
+  expect(judge, JSON.stringify(judge)).toEqual(mode === 'host' ? { judge: 'host', host: HOST_KEY } : { judge: 'here', host: null })
   const taskId = String((await rowOf(sid)).taskId ?? '')
   steps.start = {
     panel: 'shown', answers: await answerCount(panel, 'echo: ROUND one'), bubbles: await timeline(panel),
