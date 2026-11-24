@@ -101,12 +101,14 @@ interface TreeIndex {
   byId: Map<string, Task>;
   childrenOf?: Map<string, Task[]>;
   teammates: Map<boolean, (task: Task) => Task[]>;
+  /** treeAround's answers for this list, by task id and allOpen (frozen rows). */
+  around: Map<string, ReadonlyArray<Readonly<{ task: Task; relation: TreeAsk['relation'] }>>>;
 }
 const treeIndexes = new WeakMap<readonly Task[], { size: number; index: TreeIndex }>();
 function treeIndexOf(everything: readonly Task[]): TreeIndex {
   const hit = treeIndexes.get(everything);
   if (hit && hit.size === everything.length) return hit.index;
-  const index: TreeIndex = { byId: new Map(everything.map((t) => [t.id, t] as const)), teammates: new Map() };
+  const index: TreeIndex = { byId: new Map(everything.map((t) => [t.id, t] as const)), teammates: new Map(), around: new Map() };
   treeIndexes.set(everything, { size: everything.length, index });
   return index;
 }
@@ -194,8 +196,18 @@ export function relativeAsksIndex(everything: readonly Task[]): (task: Task) => 
 }
 
 /** The tasks around `taskId`, each with where it stands to it. Never the task itself. Pure. */
-export function treeAround(taskId: string, everything: readonly Task[], opts: TreeOptions = {}): Array<{ task: Task; relation: TreeAsk['relation'] }> {
+export function treeAround(taskId: string, everything: readonly Task[], opts: TreeOptions = {}): Array<Readonly<{ task: Task; relation: TreeAsk['relation'] }>> {
+  // Pure in the list, the task and allOpen: one pass over the board asks the same trees again for
+  // every node it reads (2026-11-24: nodeView and treeAround were 10 to 20% of the server's CPU in
+  // the memory bursts after a restart, the whole org walked for Main on every call).
   const index = treeIndexOf(everything);
+  const key = `${taskId}\u0000${opts.allOpen ? 1 : 0}`;
+  let rows = index.around.get(key);
+  if (!rows) index.around.set(key, rows = Object.freeze(treeAroundNow(taskId, everything, index, opts).map((r) => Object.freeze(r))));
+  return rows.slice();
+}
+
+function treeAroundNow(taskId: string, everything: readonly Task[], index: TreeIndex, opts: TreeOptions): Array<{ task: Task; relation: TreeAsk['relation'] }> {
   const byId = index.byId;
   const self = byId.get(taskId);
   if (!self) return [];

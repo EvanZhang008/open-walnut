@@ -77,6 +77,27 @@ describe('one index per task list', () => {
   })
 })
 
+describe('one answer per tree on a list', () => {
+  // 2026-11-24: nodeView asked the same trees again for every node in a pass; the whole org for Main.
+  it('a second read of a tree hands back the same rows in a new array a caller may edit', () => {
+    const all = board()
+    const a = treeAround('main', all)
+    const b = treeAround('main', all)
+    expect(b).not.toBe(a)
+    expect(b).toEqual(a)
+    b.forEach((row, i) => expect(row).toBe(a[i]))
+    expect(Object.isFrozen(a[0])).toBe(true)
+    b.length = 0
+    expect(treeAround('main', all)).toEqual(a)
+  })
+
+  it('each task and each openness keeps its own answer', () => {
+    const all = board()
+    expect(shape(treeAround('node', all))).not.toEqual(shape(treeAround('node', all, { allOpen: true })))
+    expect(shape(treeAround('vp', all))).not.toEqual(shape(treeAround('node', all)))
+  })
+})
+
 describe('no tree read is handed a fresh copy of the board', () => {
   // A copy per call defeats the shared index and is the garbage this replaced. Every member of the
   // class: a call of treeAround or teammatesIndex whose task list argument is built in the call.
