@@ -40,7 +40,7 @@ export interface DaemonAcpSessionsDeps<W extends object> extends DaemonReplies<W
   /** Record whose worker this is (daemon-spawn-journal.ts): its journal stays that Walnut's to read. */
   recordAcpRuntime: (runtimeId: unknown, home: unknown) => void
   isJournalSid: (sid: unknown) => sid is string
-  walnutThroughGateway: (env: Record<string, unknown> | undefined) => boolean
+  walnutThroughGateway: (env: Record<string, unknown> | undefined, home: unknown) => boolean
   sessionPathWithShim: (base: string, throughGateway: boolean) => string
   sessionWalnutApiUrl: (env: Record<string, unknown> | undefined) => string | undefined
   /** The page silencer (pw-silence-core.ts). */
@@ -68,7 +68,7 @@ export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSession
     // appended in-shell like the native spawn) because ACP workers don't run
     // through the RC-sourcing shell wrapper.
     const taskDir = ensureTaskDir(TASK_DIR_ROOT, (cmd as { taskId?: unknown }).taskId, (cmd as { home?: unknown }).home)
-    const throughGateway = walnutThroughGateway(params.env)
+    const throughGateway = walnutThroughGateway(params.env, (cmd as { home?: unknown }).home)
     params.env = {
       ...secretsSessionEnv(),
       ...params.env,

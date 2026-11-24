@@ -9,8 +9,10 @@
  *
  * Pinned: with another `walnut` on the daemon's PATH, a session with no OPEN_WALNUT_API_URL
  * resolves `walnut` to this daemon's shim, and one with it still resolves the installed CLI
- * first (the Mac hub, unchanged). And a ratchet: every place the daemon puts the shim dir on
- * a session PATH goes through the one rule.
+ * first (the Mac hub, unchanged). A session its host assembles itself names the host server's
+ * root and still runs the shim (tests/integration/host-call-entry-twins.test.ts, which has a
+ * follower). And a ratchet: every place the daemon puts the shim dir on a session PATH goes
+ * through the one rule, given the start's Walnut.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, PATH is built with
  * guardedPath; the only processes signalled are the daemons and stand-in CLIs this file started.
@@ -221,10 +223,29 @@ describe('every use of the shim dir in the daemon is a known one', () => {
     expect(lines[0]).toMatch(/^\.\.\.\(o\.gatewayFirst \? \['export PATH\=' \+ shellQuote\(o\.shimDir\) \+ ':"\$PATH"'\] : \[\]\),$/)
     expect(text).toMatch(/^\s+o\.fallbackPathStep,$/m)
   })
-  it('both spawn paths of the daemon ask the rule', () => {
+  it('both spawn paths of the daemon ask the rule, with the Walnut the start is for', () => {
     const text = STANDALONE_TEXT
-    expect(text).toMatch(/buildSpawnPreamble\(\{ nodeDir: launch\.nodeDir, gatewayFirst: walnutThroughGateway\(settingsEnvOf\(launch\.args\)\), shellSetupFile \}\)/)
+    expect(text).toMatch(/buildSpawnPreamble\(\{ nodeDir: launch\.nodeDir, gatewayFirst: walnutThroughGateway\(settingsEnvOf\(launch\.args\), startWalnut\), shellSetupFile \}\)/)
+    expect(text).toMatch(/const startWalnut = walnutOfHome\(spawnInfo\.home \?\? resumeRec\?\.home \?\? ''\)\n/)
+    expect(text).toMatch(/const throughGateway = walnutThroughGateway\(params\.env, \(cmd as \{ home\?: unknown \}\)\.home\)/)
     expect(text).toMatch(/PATH: sessionPathWithShim\(process\.env\.PATH \|\| '', throughGateway\),/)
+  })
+  it('every session spawn of the daemon decides its `walnut` by the rule, and the rule asks whether its Walnut is followed here', () => {
+    // A session spawn is one that hands its CLI or worker the gateway socket. Each one must decide
+    // where the shim goes by walnutThroughGateway, given the start's Walnut: a spawn that decided by
+    // the address alone put an older `walnut` of the box ahead of the shim in a session its host
+    // assembled (2026-11-24, 401 not_paired from the replica's own root).
+    const lines = STANDALONE_TEXT.split('\n').map((l) => l.trim()).filter((l) => !l.startsWith('//') && !l.startsWith('*'))
+    expect(lines.filter((l) => /^WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,$/.test(l))).toHaveLength(2)
+    const asks = lines.filter((l) => /\bwalnutThroughGateway\(/.test(l) && !/function walnutThroughGateway\(/.test(l))
+    expect(asks).toHaveLength(2)
+    // Two arguments each: the session's env and its Walnut.
+    for (const ask of asks) expect(ask).toMatch(/walnutThroughGateway\((settingsEnvOf\(launch\.args\)|params\.env), [^)]/)
+    const shell = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-session-shell.ts'), 'utf8')
+    expect(shell).toMatch(/if \(sessionWalnutApiUrl\(env\) === undefined\) return true\n\s+return typeof home === 'string' && home !== '' && followsHere\(home\)/)
+    // The runtime answers it from its followers: the socket now, or what one said while it is gone.
+    expect(STANDALONE_TEXT).toMatch(/followsHere: \(home\) => followsHere\(home\),/)
+    expect(STANDALONE_TEXT).toMatch(/return followerOf\(home\) !== undefined \|\| followerSaidOnline\.has\(home\) \|\| followerSaidOnline\.has\(walnutOfHome\(home\)\)/)
   })
   it('every session spawn of the daemon takes its OPEN_WALNUT_API_URL from what its Walnut named', () => {
     // The native spawn reads it from the CLI's settings, an ACP worker from its env; a spawn that

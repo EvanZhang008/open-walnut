@@ -2,9 +2,9 @@
  * `walnut tools call` inside a session when the Walnut server cannot be reached.
  *
  * On the Mac, a session's `walnut` is this installed CLI, which talks to the
- * server over HTTP; the daemon's own `walnut` (the gateway shim) is only first on
- * PATH on hosts without an install. So while the server restarts, a Mac session
- * got "server not running" even though its host daemon answers offline
+ * server over HTTP; the daemon's own `walnut` (the gateway shim) is first on PATH
+ * for every other session (daemon-session-shell.ts walnutThroughGateway). So while
+ * the server restarts, a Mac session got "server not running" even though its host daemon answers offline
  * (docs/plan/daemon-first-hosts.md). The daemon injects WALNUT_AGENT_SOCKET and
  * WALNUT_SESSION_ID into every session it spawns: when both are there, the same
  * call goes through that socket, exactly as the shim would send it.

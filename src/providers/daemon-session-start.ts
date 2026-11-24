@@ -97,7 +97,7 @@ export interface DaemonSessionStartDeps<W extends object> extends DaemonReplies<
   hostCallTokens: ReturnType<typeof createHostCallTokens>
   walnutOfHome: (home: string) => string
   sessionWalnutApiUrl: (env: Record<string, unknown> | undefined) => string | undefined
-  walnutThroughGateway: (env: Record<string, unknown> | undefined) => boolean
+  walnutThroughGateway: (env: Record<string, unknown> | undefined, home: unknown) => boolean
   settingsEnvOf: (args: string[]) => Record<string, unknown> | undefined
   buildSpawnPreamble: (o?: { nodeDir?: string; gatewayFirst?: boolean; shellSetupFile?: string }) => string
   sessionShell: () => string
@@ -400,7 +400,9 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
     // Spawn Claude through the user's shell, its rc file and the host's shell_setup, to activate
     // nvm/pyenv/volta and the sign-in variables they set, even on hosts where nvm binaries need a
     // newer GLIBC than the system provides.
-    const preamble = buildSpawnPreamble({ nodeDir: launch.nodeDir, gatewayFirst: walnutThroughGateway(settingsEnvOf(launch.args)), shellSetupFile })
+    // The Walnut this start is for: its origin's home, or the one its resume record kept.
+    const startWalnut = walnutOfHome(spawnInfo.home ?? resumeRec?.home ?? '')
+    const preamble = buildSpawnPreamble({ nodeDir: launch.nodeDir, gatewayFirst: walnutThroughGateway(settingsEnvOf(launch.args), startWalnut), shellSetupFile })
     // Content arguments go to files: the shell's and the CLI's argv carry paths (cli-argv-files-core.ts).
     const escapedArgs = cliArgvFiles.toFiles(launch.args).map((a: string) => shellQuote(a)).join(' ')
     const shellCmd = `${preamble}; exec ${escapedArgs}`
@@ -485,7 +487,7 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
         // when its follower said a socket (hostCallTokens.envFor); unset otherwise, never inherited.
         WALNUT_CALL_SOCKET: undefined,
         WALNUT_CALL_TOKEN: undefined,
-        ...hostCallTokens.envFor(walnutOfHome(spawnInfo.home ?? resumeRec?.home ?? ''), sid),
+        ...hostCallTokens.envFor(startWalnut, sid),
         // Unset when the task has none, so a value this daemon inherited (it was
         // started from inside a session) never names another task's directory.
         WALNUT_TASK_DIR: taskDir ?? undefined,

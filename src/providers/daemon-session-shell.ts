@@ -34,6 +34,11 @@ export interface DaemonSessionShellDeps {
   /** The host's runtime checks (host-runtime-core.ts): can claude, or node, run here. */
   hostRuntime: Pick<ReturnType<typeof createHostRuntime>, 'ensureClaude' | 'shellCanRun'>
   walnutOfHome: (home: string) => string
+  /**
+   * Whether a Walnut service of the Walnut of `home` runs on this host as its follower (a host
+   * replica: its own HTTP root takes no call without a credential, and it said hello here).
+   */
+  followsHere: (home: string) => boolean
   sessionHomeOf: (sid: string) => string
   /** The fallback tool dirs and the shim dir, as a PATH step (the runtime's). */
   spawnFallbackPath: () => string
@@ -44,7 +49,7 @@ export interface DaemonSessionShellDeps {
 }
 
 export function createDaemonSessionShell(deps: DaemonSessionShellDeps) {
-  const { daemonEnv, SERVICE_MODE, DAEMON_STATE_DIR, DAEMON_DIR, GATEWAY_SHIM_DIR, INSTALL_HOME_BIN, childUse, hostRuntime, walnutOfHome, sessionHomeOf, spawnFallbackPath, setTimeout, clearTimeout, logMsg } = deps
+  const { daemonEnv, SERVICE_MODE, DAEMON_STATE_DIR, DAEMON_DIR, GATEWAY_SHIM_DIR, INSTALL_HOME_BIN, childUse, hostRuntime, walnutOfHome, followsHere, sessionHomeOf, spawnFallbackPath, setTimeout, clearTimeout, logMsg } = deps
 
   /**
    * The user's login shell in passwd: a service a launcher starts has SHELL=/bin/sh, and the
@@ -123,15 +128,30 @@ export function createDaemonSessionShell(deps: DaemonSessionShellDeps) {
   }
 
   /**
-   * Whether a session's `walnut` is this daemon's gateway shim, first on its PATH. A session its
-   * Walnut gave no OPEN_WALNUT_API_URL (the env of its `--settings`, or of an ACP worker) reaches
-   * that Walnut only through this daemon: every session on a host other than its server's
-   * (self-api-root.ts). A machine that joined with a Walnut of its own has that Walnut's `walnut`
-   * on PATH ahead of the appended shim, and it would send the session's calls to the other
-   * Walnut's server.
+   * Whether a session's `walnut` is this daemon's gateway shim, first on its PATH: the one rule
+   * every session spawn of this daemon asks (the native start and the ACP start).
+   *
+   * Shim first for every session but one whose Walnut named an address AND has no follower on
+   * this host: the Mac hub's own sessions, whose installed hub CLI talks to that same server over
+   * loopback and has the whole command surface (the shim answers tools, wait, approve, pass,
+   * browser and guide only), so it stays first there, as it always was.
+   *
+   *  - No address (every session its Walnut started on a host other than its server's,
+   *    self-api-root.ts): it reaches that Walnut only through this daemon. A machine that joined
+   *    with a Walnut of its own has that Walnut's `walnut` on PATH ahead of an appended shim, and
+   *    it would send the session's calls to the other Walnut's server.
+   *  - An address, on a host whose Walnut service follows that Walnut (a session this host
+   *    assembled itself, judge 'host'): the address is the replica's own root, which takes no call
+   *    without a credential (boot-policy.ts self-api-credential), so only Walnut's own CLI, the
+   *    shim (the gateway socket, or the host call entry with WALNUT_CALL_TOKEN), reaches it. An
+   *    older released `walnut` the box installed ahead on PATH answered 401 not_paired
+   *    (2026-11-24).
+   *
+   * `home`: the Walnut the start is for (its origin's home, or the one its resume record kept).
    */
-  function walnutThroughGateway(env: Record<string, unknown> | undefined): boolean {
-    return sessionWalnutApiUrl(env) === undefined
+  function walnutThroughGateway(env: Record<string, unknown> | undefined, home: unknown): boolean {
+    if (sessionWalnutApiUrl(env) === undefined) return true
+    return typeof home === 'string' && home !== '' && followsHere(home)
   }
 
   /**
@@ -146,7 +166,7 @@ export function createDaemonSessionShell(deps: DaemonSessionShellDeps) {
     return typeof url === 'string' && url.trim() ? url.trim() : undefined
   }
 
-  /** A session PATH with the shim dir first or, for a session that reaches its Walnut over HTTP, last. */
+  /** A session PATH with the shim dir first or, for the hub's own sessions (walnutThroughGateway false), last. */
   function sessionPathWithShim(base: string, throughGateway: boolean): string {
     return throughGateway ? GATEWAY_SHIM_DIR + path.delimiter + base : base + path.delimiter + GATEWAY_SHIM_DIR
   }

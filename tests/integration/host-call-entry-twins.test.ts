@@ -15,6 +15,10 @@
  * and runs nothing; a socket outside the daemon dir's entry dir (an old http address too) is never
  * given; once the follower's report says no socket (its experiment off), the next run gets none.
  * The daemon's own away answers are counted in follower.status and server.status.
+ * And a session this host assembles itself (its settings name the host server's own root, which takes
+ * no call without a credential) runs Walnut's shim for a bare `walnut`, ahead of an older released
+ * `walnut` the box put first on PATH, with or without the entry; the hub's own session keeps the
+ * installed CLI first (2026-11-24: that older CLI answered 401 not_paired from the root).
  *
  * Hygiene: every dir is a temp dir (short: socket paths); each daemon is stopped by the pid it
  * wrote into its own dir, the fake host server and the job runs by the pids they logged.
@@ -30,11 +34,35 @@ import path from 'node:path'
 import { createHostCallEntry, listenHostCallEntry, type HostCallListener } from '../../src/replica/host-call-entry.js'
 import { hostCallSocketPath } from '../../src/providers/host-call-token-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
 const WALNUT = 'wmarinahost02'
 const BUN: string | undefined = testBun()
+/** The host server's own port: the root a session this host assembles is named (127.0.0.1). */
+const HOST_SERVER_PORT = 41_238
+
+/**
+ * A session's CLI: says its pid, its env and what `walnut` resolves to, runs one bare
+ * `walnut tools call task_list`, says what it answered, then idles.
+ */
+const FAKE_CLI = `
+const fs = require('fs')
+const { spawnSync, execFile } = require('child_process')
+const out = process.argv[2]
+const say = (o) => fs.appendFileSync(out, JSON.stringify({ pid: process.pid, ...o }) + '\\n')
+const walnut = spawnSync('/bin/sh', ['-c', 'command -v walnut'], { env: process.env, encoding: 'utf8' }).stdout.trim()
+say({ walnut, path: process.env.PATH, apiUrl: process.env.OPEN_WALNUT_API_URL ?? null, callSocket: process.env.WALNUT_CALL_SOCKET ?? null })
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake' }) + '\\n')
+execFile('/bin/sh', ['-c', "walnut tools call task_list '{}'"], { env: process.env, encoding: 'utf8', timeout: 60000 }, (err, stdout, stderr) => {
+  say({ code: err ? (err.code ?? 1) : 0, stdout, stderr })
+})
+setTimeout(() => process.exit(0), 120000).unref()
+process.on('SIGTERM', () => process.exit(0))
+process.stdin.on('data', () => {})
+setInterval(() => {}, 1000)
+`
 
 const FAKE_SERVER = `
 const fs = require('fs')
@@ -86,7 +114,7 @@ let base = ''
 const started: number[] = []
 const listeners: HostCallListener[] = []
 
-async function spawnDaemon(name: string, jobOut: string): Promise<Daemon> {
+async function spawnDaemon(name: string, jobOut: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<Daemon> {
   const dir = path.join(base, name)
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
@@ -97,6 +125,7 @@ async function spawnDaemon(name: string, jobOut: string): Promise<Daemon> {
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_GATEWAY_TIMEOUT_MS: '20000',
     JOB_OUT: jobOut,
+    ...extraEnv,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
@@ -167,16 +196,16 @@ function socketCall(sock: string, sid: string, name: string): Promise<Record<str
 
 interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; entryLines: Array<Record<string, any>>; callSocket: string; jobOut: string; startJob: (job: string) => Promise<Record<string, any>>; stopJobs: () => Promise<void> }
 
-async function rig(name: string): Promise<Rig> {
+async function rig(name: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<Rig> {
   const jobOut = path.join(base, `${name}-job.jsonl`)
-  const d = await spawnDaemon(name, jobOut)
+  const d = await spawnDaemon(name, jobOut, extraEnv)
   const mac = await connectWs(d.port)
   const macAsked = answersAs(mac, 'mac')
   expect((await cmd(mac, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
   const fakeOut = path.join(base, `${name}-fake.jsonl`)
   const entryFile = path.join(base, `${name}-server.cjs`)
   fs.writeFileSync(entryFile, FAKE_SERVER)
-  const spec = { v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [entryFile], cwd: base, env: { FAKE_OUT: fakeOut }, log: path.join(base, `${name}-server.log`), port: 41_238, settings: { expose: { enabled: false } } }
+  const spec = { v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [entryFile], cwd: base, env: { FAKE_OUT: fakeOut }, log: path.join(base, `${name}-server.log`), port: HOST_SERVER_PORT, settings: { expose: { enabled: false } } }
   expect((await cmd(mac, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
   await waitFor(() => lines(fakeOut).length > 0, 30_000, 'the host server token')
   const follower = await connectWs(d.port)
@@ -315,4 +344,58 @@ describe.skipIf(!BUN)('standalone daemon: the host call entry', () => {
       r.mac.close(); r.follower.close()
     }
   }, 180_000)
+
+  it('a session this host assembles runs the shim ahead of an older walnut on PATH, with or without the entry; the hub\'s own keeps the installed CLI', async () => {
+    // An older released `walnut` the box installed itself, first on the daemon's PATH: it speaks plain
+    // HTTP to the address it is given, which a host server answers 401 without a credential.
+    const oldBin = path.join(base, 'old-walnut', 'bin')
+    fs.mkdirSync(oldBin, { recursive: true })
+    fs.writeFileSync(path.join(oldBin, 'walnut'), '#!/bin/sh\necho \'{"code":"not_paired"}\' >&2\nexit 1\n', { mode: 0o755 })
+    const fakeCli = path.join(base, 'fake-claude.cjs')
+    fs.writeFileSync(fakeCli, FAKE_CLI)
+    const home = path.join(base, 'stc-home')
+    fs.mkdirSync(home, { recursive: true })
+    const r = await rig('stc', { PATH: guardedPath([oldBin]), SHELL: '/bin/sh', HOME: home })
+    const shim = path.join(r.d.dir, 'bin', 'walnut')
+    try {
+      await waitFor(() => fs.existsSync(shim), 30_000, 'the shim')
+      const start = async (sid: string, origin: Record<string, unknown>, apiUrl: string) => {
+        const out = path.join(base, `stc-${sid.slice(0, 8)}.jsonl`)
+        const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCli)} ${JSON.stringify(out)} "$@"`
+        const args = ['/bin/sh', '-c', sh, 'sh', '--output-format', 'stream-json', '--settings', JSON.stringify({ env: { OPEN_WALNUT_API_URL: apiUrl } }),
+          '--input-format', 'stream-json', '--session-id', sid]
+        const reply = await cmd(r.mac, { cmd: 'start', sid, cwd: base, message: '', mode: 'default', args, origin })
+        expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true })
+        await waitFor(() => lines(out).some((l) => 'code' in l), 90_000, `the walnut call of ${sid}`)
+        return { ...lines(out).find((l) => 'walnut' in l)!, ...lines(out).find((l) => 'code' in l)! }
+      }
+      const hostRoot = `http://127.0.0.1:${HOST_SERVER_PORT}`
+
+      // Assembled by this host's service for its Walnut, the entry on: the shim, and its call goes in by the entry.
+      const viaEntry = await start('cccccccc-0000-4000-8000-00000000000c', { home: HOME }, hostRoot)
+      expect(viaEntry.walnut).toBe(shim)
+      expect(viaEntry.path.split(':')[0]).toBe(path.dirname(shim))
+      expect(viaEntry.callSocket).toBe(r.callSocket)
+      expect(viaEntry.code, viaEntry.stderr).toBe(0)
+      expect(JSON.parse(viaEntry.stdout)).toEqual({ who: 'mac', op: 'task_list' })
+      expect(r.entryLines.map((l) => [l.sid, l.args?.name])).toEqual([['cccccccc-0000-4000-8000-00000000000c', 'task_list']])
+
+      // The entry off (host_call_entry): still the shim, and its call goes over the gateway socket.
+      await report(r.follower, { callSocket: null })
+      const viaSocket = await start('dddddddd-0000-4000-8000-00000000000d', { home: HOME }, hostRoot)
+      expect(viaSocket.walnut).toBe(shim)
+      expect(viaSocket.callSocket).toBeNull()
+      expect(viaSocket.code, viaSocket.stderr).toBe(0)
+      expect(JSON.parse(viaSocket.stdout)).toEqual({ who: 'mac', op: 'task_list' })
+      expect(r.entryLines).toHaveLength(1)
+
+      // The hub's own session (a Walnut with no follower here names its own loopback address): the
+      // installed CLI stays first, as on the Mac.
+      const hub = await start('eeeeeeee-0000-4000-8000-00000000000e', { home: path.join(base, 'hub-home') }, 'http://127.0.0.1:1')
+      expect(hub.walnut).toBe(path.join(oldBin, 'walnut'))
+      expect(hub.path.split(':').at(-1)).toBe(path.dirname(shim))
+    } finally {
+      r.mac.close(); r.follower.close()
+    }
+  }, 300_000)
 })

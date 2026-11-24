@@ -1076,8 +1076,8 @@ async function reapAllSessionGroups(): Promise<void> {
 
 // ── Shell helpers: the session shell, shell_setup, the preamble, the launch gate (daemon-session-shell.ts) ──
 const sessionShellHelpers = createDaemonSessionShell({ daemonEnv, SERVICE_MODE, DAEMON_STATE_DIR, DAEMON_DIR, GATEWAY_SHIM_DIR, INSTALL_HOME_BIN, childUse, hostRuntime,
-  // Defined further down (the session owners), so asked on use.
-  walnutOfHome, sessionHomeOf: (sid) => sessionHomeOf(sid), spawnFallbackPath, setTimeout, clearTimeout, logMsg })
+  // Defined further down (the session owners, the followers), so asked on use.
+  walnutOfHome, followsHere: (home) => followsHere(home), sessionHomeOf: (sid) => sessionHomeOf(sid), spawnFallbackPath, setTimeout, clearTimeout, logMsg })
 const { passwdReady, sessionShell, shellSetupStore, shellSetupOfStart, buildSpawnPreamble, walnutThroughGateway, sessionWalnutApiUrl, sessionPathWithShim, settingsEnvOf, gateClaudeLaunch } = sessionShellHelpers
 
 /** The fallback tool dirs and the shim dir, read each time a preamble is built. */
@@ -2785,6 +2785,17 @@ const seatSockets = new WeakSet<ServerWebSocket<WsData>>()
  * kept while its socket is gone: a same-host send in a restart of one that takes them waits for it.
  */
 const followerSaidOnline = new Map<string, boolean>()
+/** The follower socket of the Walnut of `home` (a server's own data dir names its leader's Walnut: walnutOfHome). */
+function followerOf(home: string): ServerWebSocket<WsData> | undefined {
+  return followerSockets.get(home) ?? followerSockets.get(walnutOfHome(home))
+}
+/**
+ * Whether a Walnut service of the Walnut of `home` follows its leader on this host: its socket now,
+ * or what it said while it is gone (a restart). The session PATH rule asks it (walnutThroughGateway).
+ */
+function followsHere(home: string): boolean {
+  return followerOf(home) !== undefined || followerSaidOnline.has(home) || followerSaidOnline.has(walnutOfHome(home))
+}
 /**
  * When a call last waited its whole room for this host's follower and got no answer (waitForFollower):
  * a follower alive but never linking (a hung boot, a refused hello) or linked but not taking calls (the
@@ -2938,7 +2949,7 @@ const hostCallTokens = createHostCallTokens({
   fs, path, crypto, dir: DAEMON_DIR,
   uid: typeof process.getuid === 'function' ? process.getuid() : null,
   // A host server's own data dir names its leader's Walnut (walnutOfHome): its ACP and job starts name that dir.
-  socketFor: (home) => { const ws = followerSockets.get(home) ?? followerSockets.get(walnutOfHome(home)); return ws?.data?.answersLocal === true ? ws.data.callSocket : undefined },
+  socketFor: (home) => { const ws = followerOf(home); return ws?.data?.answersLocal === true ? ws.data.callSocket : undefined },
   log: (level, msg, data) => logMsg(level, msg, data),
 })
 
@@ -5160,10 +5171,9 @@ function writeWalnutShim() {
       ? [process.execPath, devScript]
       : [ensureShimCoreCopy() ?? process.execPath]
     // One name: `walnut`, and the shim passes the canonical `walnut` dispatch
-    // keyword. GATEWAY_SHIM_DIR is APPENDED to the PATH of a session that reaches
-    // its Walnut over HTTP, so on the hub the real npm walnut still wins, and put
-    // FIRST for every other session (walnutThroughGateway), where this shim IS the
-    // walnut command. The retired `wn` file is removed, not rewritten.
+    // keyword. GATEWAY_SHIM_DIR is APPENDED to the PATH of the hub's own sessions,
+    // so there the installed hub walnut still wins, and put FIRST for every other
+    // session (walnutThroughGateway), where this shim IS the walnut command. The retired `wn` file is removed, not rewritten.
     const shim = gatewayShimScript(argv)
     walnutCliArgv = argv
     const p = path.join(GATEWAY_SHIM_DIR, 'walnut')
