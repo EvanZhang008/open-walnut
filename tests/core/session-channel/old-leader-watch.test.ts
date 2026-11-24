@@ -14,11 +14,12 @@ import { oldLeaderMs, startOldLeaderWatch } from '../../../src/core/session-chan
 import { _resetJudgeOfForTesting, hostStandsDown, judgedHere, judgedHereRecords, setHostStandsDown } from '../../../src/core/sessions/judge-of.js'
 import { _resetServerRoleForTesting } from '../../../src/core/server-role.js'
 
-function harness(o: { answers: boolean; linked: boolean; says?: boolean }) {
+function harness(o: { answers: boolean; linked: boolean; says?: boolean; since?: number }) {
   let t = 1_000_000
   const calls: string[] = []
   const w = startOldLeaderWatch({
     leaderAnswers: () => o.answers,
+    ...(o.since !== undefined ? { presenceSince: () => o.since! } : {}),
     channelLinked: () => o.linked,
     ...(o.says !== undefined ? { leaderSaysChannel: async () => !!o.says } : {}),
     standDown: () => { calls.push('down') },
@@ -26,7 +27,7 @@ function harness(o: { answers: boolean; linked: boolean; says?: boolean }) {
     afterMs: 60_000,
     now: () => t,
   }, { timer: false })
-  return { w, calls, advance: async (ms: number, step = 10_000) => { for (let i = 0; i < ms; i += step) { t += step; await w.tick() } } }
+  return { w, calls, now: () => t, advance: async (ms: number, step = 10_000) => { for (let i = 0; i < ms; i += step) { t += step; await w.tick() } } }
 }
 
 describe('the old-leader watch', () => {
@@ -138,6 +139,73 @@ describe('the old-leader watch', () => {
     expect(oldLeaderMs({})).toBe(180_000)
     expect(oldLeaderMs({ WALNUT_HOST_OLD_LEADER_MS: '4000' })).toBe(4000)
     expect(oldLeaderMs({ WALNUT_HOST_OLD_LEADER_MS: 'x' })).toBe(180_000)
+  })
+})
+
+describe('B1: a fact is marked as judged by the older leader only while that leader still answers', () => {
+  it('through a whole downgrade and upgrade: before, during, the old leader stopped, a new leader before its channel, the channel', async () => {
+    // The older leader begins answering at the start: its presence began then.
+    const s: { answers: boolean; linked: boolean; says: boolean; since: number } = { answers: true, linked: false, says: false, since: 1_000_000 }
+    const { w, calls, now, advance } = harness(s)
+    await w.tick()
+    // The first afterMs: the host still judges (a known duplicate after the upgrade), nothing is marked.
+    await advance(50_000)
+    expect([w.standingDown(), w.oldLeaderJudgesNow()]).toEqual([false, false])
+    await advance(20_000)
+    expect(calls).toEqual(['down'])
+    // Stood down for it, it answers: its turns are its own.
+    expect(w.oldLeaderJudgesNow()).toBe(true)
+    await advance(600_000)
+    expect(w.oldLeaderJudgesNow()).toBe(true)
+    // Window A: the older leader stops for its update (or the computer sleeps): nobody judges.
+    s.answers = false
+    s.since = now()
+    await advance(30_000)
+    expect([w.standingDown(), w.oldLeaderJudgesNow()]).toEqual([true, false])
+    // Window B: the new leader answers, its channel not open yet, its copy not heard yet: not marked.
+    s.answers = true
+    s.since = now()
+    await advance(10_000)
+    expect([w.standingDown(), w.oldLeaderJudgesNow()]).toEqual([true, false])
+    // Its copy says it speaks the channel: the host judges again before the channel opens.
+    s.says = true
+    await advance(10_000)
+    expect(calls).toEqual(['down', 'up'])
+    expect([w.standingDown(), w.oldLeaderJudgesNow(), w.state().state]).toEqual([false, false, 'waiting'])
+    // The channel opens.
+    s.linked = true
+    await advance(10_000)
+    expect([w.standingDown(), w.oldLeaderJudgesNow(), w.state().state]).toEqual([false, false, 'judging'])
+  })
+
+  it('the same older leader back after a flap (a presence that began after the stand-down): not marked', async () => {
+    const s = { answers: true, linked: false, says: false, since: 1_000_000 }
+    const { w, now, advance } = harness(s)
+    await advance(70_000)
+    expect(w.oldLeaderJudgesNow()).toBe(true)
+    s.answers = false; s.since = now()
+    await advance(10_000)
+    s.answers = true; s.since = now()
+    await advance(10_000)
+    // When in doubt, not marked: a duplicate at worst, never a lost turn end.
+    expect([w.standingDown(), w.oldLeaderJudgesNow()]).toEqual([true, false])
+  })
+
+  it('S1: a misjudged stand-down (a leader that speaks the channel, its copy heard only later) ends at its copy', async () => {
+    const s = { answers: true, linked: false, says: false, since: 1_000_000 }
+    const { w, calls, advance } = harness(s)
+    await advance(70_000)
+    expect(calls).toEqual(['down'])
+    s.says = true
+    await advance(10_000)
+    expect(calls).toEqual(['down', 'up'])
+    expect(w.oldLeaderJudgesNow()).toBe(false)
+  })
+
+  it('with no presence time to read, never marked', async () => {
+    const { w, advance } = harness({ answers: true, linked: false })
+    await advance(70_000)
+    expect([w.standingDown(), w.oldLeaderJudgesNow()]).toEqual([true, false])
   })
 })
 

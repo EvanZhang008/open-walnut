@@ -559,7 +559,14 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   the point. What the user sees: for up to 3 minutes
   after the downgrade a turn end can be continued twice (both judges), then the sessions behave as
   legacy ones; the host's facts of that time reach no leader until a newer one comes back
-  (`tests/e2e/host-judge-old-leader-e2e.test.ts`). A refusal (the task store's schema gate, say) was
+  (`tests/e2e/host-judge-old-leader-e2e.test.ts`). When it does, it acts on none of the turns the older
+  leader judged: a fact kept while the leader the host stood down for still answered carries
+  `judgedBy: 'leader'`, and the newer leader applies it without saying it (`leader-apply.ts`
+  actedOnAlready). A turn that ends while no leader answers (the older one stopped for its update) or
+  while a newer one answers before its channel opens is not marked, and the newer leader acts on it
+  once; a host stood down that hears a leader say it speaks the channel judges again at once. Still
+  acted on twice: a turn that ends in those first 3 minutes, before the stand-down (both judged it, and
+  nothing on the host tells that apart then); the rehearsal counts it as a known duplicate. A refusal (the task store's schema gate, say) was
   not chosen: it would block the rollback exactly when the new release is the broken one. Not tested
   against a real older release (the older leader is the new code with its channel off).
 - **A leader that stops between a batch and its facts (M3).** The channel applies a host's records

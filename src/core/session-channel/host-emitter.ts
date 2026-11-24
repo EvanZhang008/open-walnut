@@ -70,6 +70,13 @@ export interface HostEmitterOptions {
    * the subscribers that subscribed before this one (the resend family) took it.
    */
   stamp?(name: string, data: unknown): unknown
+  /**
+   * Does the leader this host stood down for judge a turn that ends now (old-leader-watch.ts
+   * oldLeaderJudgesNow)? A fact of such a moment is kept with `judgedBy: 'leader'` (fact-log.ts): read
+   * in the event's own tick, so a fact held for a row that is not here yet keeps the answer of its time.
+   * Only bus facts take the mark; rows, renames, drops and `live` records never do (leader-apply.ts).
+   */
+  judgedByLeaderNow?(): boolean
   /** An own row was written (the host has `sid` again: gone-rows.ts forgets it). */
   onOwnRow?(sid: string): void
   /** The leader's hand of the start in flight for this row's task (host-port.ts StartBundles.handFor). */
@@ -113,7 +120,7 @@ export interface HostEmitter {
   resync(sids: Iterable<string>): Promise<void>
 }
 
-interface Pending { events: { name: string; data: unknown; at: number; to: string[] }[]; timer: ReturnType<typeof setTimeout> }
+interface Pending { events: { name: string; data: unknown; at: number; to: string[]; judgedBy?: 'leader' }[]; timer: ReturnType<typeof setTimeout> }
 
 export { sessionIdOf } from './event-classes.js'
 
@@ -157,7 +164,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
   const warn = (msg: string, data?: Record<string, unknown>): void => o.onLog?.('warn', msg, data)
 
   /** Keep one record; false when the log did not take it (the caller keeps what it would have sent). */
-  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string; to?: string[] } = {}): boolean {
+  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string; to?: string[]; judgedBy?: 'leader' } = {}): boolean {
     const v = name === 'row' || name === 'live' || name === 'rename' || name === 'drop' ? undefined : o.offsetOf?.(sid)
     const epoch = lastRows.get(sid)?.streamEpoch
     try {
@@ -166,6 +173,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
         ...(opts.at !== undefined ? { at: opts.at } : {}),
         ...(opts.continueFrom ? { continueFrom: opts.continueFrom } : {}),
         ...(opts.to ? { to: opts.to } : {}),
+        ...(opts.judgedBy ? { judgedBy: opts.judgedBy } : {}),
       })
       return true
     } catch (err) {
@@ -220,7 +228,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     if (!p) return
     clearTimeout(p.timer)
     pending.delete(sid)
-    for (const e of p.events) append(sid, e.name, e.data, { at: e.at, to: e.to })
+    for (const e of p.events) append(sid, e.name, e.data, { at: e.at, to: e.to, ...(e.judgedBy ? { judgedBy: e.judgedBy } : {}) })
   }
 
   function rename(from: string, to: string): void {
@@ -262,7 +270,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     scheduleLive(sid)
   }
 
-  function hold(sid: string, name: string, data: unknown, to: string[]): void {
+  function hold(sid: string, name: string, data: unknown, to: string[], judgedBy: 'leader' | undefined): void {
     let p = pending.get(sid)
     if (!p) {
       const timer = setTimeout(() => {
@@ -274,7 +282,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       p = { events: [], timer }
       pending.set(sid, p)
     }
-    if (p.events.length < PENDING_MAX) p.events.push({ name, data, at: now(), to })
+    if (p.events.length < PENDING_MAX) p.events.push({ name, data, at: now(), to, ...(judgedBy ? { judgedBy } : {}) })
   }
 
   const onEvent = (event: BusEvent): void => {
@@ -296,11 +304,12 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     if (o.stamp) {
       try { data = o.stamp(event.name, event.data) } catch (err) { warn('session channel: a fact was kept without its stamp', { sessionId: sid, name: event.name, error: err instanceof Error ? err.message : String(err) }) }
     }
+    const judgedBy = o.judgedByLeaderNow?.() ? 'leader' as const : undefined
     if (own.has(sid)) {
-      append(sid, event.name, data, { to: event.destinations })
+      append(sid, event.name, data, { to: event.destinations, ...(judgedBy ? { judgedBy } : {}) })
       scheduleLive(sid)
     } else {
-      hold(sid, event.name, data, event.destinations)
+      hold(sid, event.name, data, event.destinations, judgedBy)
     }
   }
 

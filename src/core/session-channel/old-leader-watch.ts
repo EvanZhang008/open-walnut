@@ -19,7 +19,16 @@
  * judgedHereOnly or lists its sessions with judgedHereRecords), so none of them continues, retries,
  * resumes or drains a turn of them; the family stays subscribed, in its order before the emitter.
  * The CLIs, the routes, the fact log and the emitter keep running, untouched; the emitter stamps no
- * turn end as taken while standing down (host-resend.ts turnEndStamp). It is undone the moment a
+ * turn end as taken while standing down (host-resend.ts turnEndStamp). A fact of a moment when the
+ * leader this host stood down for still answers (oldLeaderJudgesNow) is kept with `judgedBy: 'leader'`
+ * (fact-log.ts): that leader judges the turn from its transcript, so a newer leader that reads the
+ * fact back later applies it and acts on nothing of it (leader-apply.ts actedOnAlready). Never marked:
+ * a fact while no leader answers (the older one stopped for its update, the computer asleep) or while
+ * a leader answers whose presence began after the stand-down (a newer one whose channel is not open
+ * yet): nobody judged those turns, and a turn end nobody acts on is worse than one acted on twice.
+ * Not covered, a known duplicate: a turn that ends in the first afterMs of an older leader, before the
+ * stand-down, is judged by this host (its fact unmarked) and by that leader, so a newer leader acts on
+ * it again after the upgrade. Nothing on the host tells the two apart at that time. It is undone the moment a
  * leader opens the channel again: the watch looks at once on the channel's link (host-boot.ts
  * onLeaderLinked), and the turn ends skipped meanwhile go to the resend family (stand-down-held.ts).
  * Kept in memory: a restart of the host's service watches again from the start.
@@ -49,6 +58,8 @@ export interface OldLeaderWatchDeps {
   leaderAnswers(): boolean
   /** A leader has the session channel open now (HostChannel.leaderLive, or the host's door dial linked). */
   channelLinked(): boolean
+  /** When the leader's presence that answers now began (server-role.ts leaderPresence().since, the watch's clock). */
+  presenceSince?(): number
   /** The leader says it speaks the channel (its config copy names LEADER_CHANNEL_CAP); absent: it never says. */
   leaderSaysChannel?(): boolean | Promise<boolean>
   standDown(): void | Promise<void>
@@ -64,6 +75,13 @@ export interface OldLeaderWatch {
   tick(): Promise<void>
   /** Is this host standing down now? */
   standingDown(): boolean
+  /**
+   * Does the leader this host stood down for judge a turn that ends now? Only while it is still the
+   * one answering: standing down, a leader answers, and that presence began no later than the stand-
+   * down (`presenceSince`, server-role.ts leaderPresence: it restarts at every change). With no
+   * presenceSince to read, never (when in doubt, the fact is left for the leader to act on).
+   */
+  oldLeaderJudgesNow(): boolean
   /** What this host's status report says (see the header), and since when (this host's clock). */
   state(): { state: SessionSideState; since: number | null }
   stop(): void
@@ -100,7 +118,20 @@ export function startOldLeaderWatch(deps: OldLeaderWatchDeps, o: { timer?: boole
       // Away (or not heard yet): never counts, whatever this host does now stays.
       if (!deps.leaderAnswers()) { since = null; waiting = false; return }
       since ??= now()
-      if (!down && now() - since >= afterMs) {
+      if (down) {
+        // Stood down, and the leader that answers now says it speaks the channel (a copy heard since
+        // its presence began: a newer leader whose channel is not open yet, or a misfire on a link
+        // flap): it treats this host's rows as host-judged, so this host judges them again now.
+        if (await deps.leaderSaysChannel?.()) {
+          down = false
+          downAt = null
+          waiting = true
+          deps.log?.('info', 'host sessions: the leader that answers says it speaks the session channel; this host judges its sessions again while it waits for the channel')
+          await deps.standUp()
+        }
+        return
+      }
+      if (now() - since >= afterMs) {
         if (await deps.leaderSaysChannel?.()) {
           if (!waiting) deps.log?.('warn', 'host sessions: the leader answers and says it speaks the session channel, but has not opened it; this host keeps judging its sessions and reports it', { forMs: now() - since })
           waiting = true
@@ -128,6 +159,10 @@ export function startOldLeaderWatch(deps: OldLeaderWatchDeps, o: { timer?: boole
   return {
     tick,
     standingDown: () => down,
+    oldLeaderJudgesNow: () => {
+      if (!down || downAt === null || !deps.presenceSince || !deps.leaderAnswers()) return false
+      return deps.presenceSince() <= downAt
+    },
     state: () => down ? { state: 'stood-down', since: downAt } : waiting ? { state: 'waiting', since } : { state: 'judging', since: null },
     stop() { stopped = true; if (timer) clearInterval(timer); timer = null },
   }

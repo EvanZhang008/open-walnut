@@ -61,6 +61,13 @@ export interface FactRecord {
   refs?: Record<string, FactRef>
   /** The destinations the host's own emit named, so the leader says it to the same subscribers. */
   to?: string[]
+  /**
+   * 'leader': a fact this host kept while it stood down for an older leader (old-leader-watch.ts).
+   * That leader judged the turn itself, from the session's transcript, so the leader that applies
+   * the record later has nothing left to act on (leader-apply.ts actedOnAlready). An older leader
+   * does not read the field.
+   */
+  judgedBy?: 'leader'
 }
 
 export interface FactLogOptions {
@@ -206,7 +213,7 @@ export class FactLog {
    * the next flush. `continueFrom`: a session id that replaced another (a rename) continues the
    * old id's sseq instead of starting from 1.
    */
-  append(sid: string, name: string, data: unknown, opts: { line?: { epoch?: string; v: number }; at?: number; continueFrom?: string; to?: string[] } = {}): FactRecord {
+  append(sid: string, name: string, data: unknown, opts: { line?: { epoch?: string; v: number }; at?: number; continueFrom?: string; to?: string[]; judgedBy?: 'leader' } = {}): FactRecord {
     if (this.closed) throw new Error('fact log closed')
     if (!SAFE_ID.test(sid)) throw new Error(`fact log: bad session id ${JSON.stringify(sid)}`)
     if (opts.continueFrom && this.state.sseq[opts.continueFrom] && !this.state.sseq[sid]) this.state.sseq[sid] = this.state.sseq[opts.continueFrom]
@@ -217,6 +224,7 @@ export class FactLog {
       v: 2, seq, opId: `sf-${this.state.logId}-${seq}`, rev: 1, at: opts.at ?? this.o.now(), kind: 'session-fact', sid, sseq, name, data,
       ...(opts.line ? { line: opts.line } : {}),
       ...(opts.to ? { to: [...opts.to] } : {}),
+      ...(opts.judgedBy ? { judgedBy: opts.judgedBy } : {}),
     }
     const disk = capRecord(full, this.o.inlineCap)
     this.buffered.push({ full, line: JSON.stringify(disk) + '\n' })

@@ -19,11 +19,53 @@ import type { LeaderSideDeps } from './leader-side.js'
 import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
 import type { HostTurnEnd } from './turn-ends.js'
 import { oneDaemonNow } from './revoked-hosts.js'
+import { LEADER_QUIET_MS } from '../../host-server/route.js'
 
 /** The session:started of a session born on `hostId`, from its row (as the runner says one: handleStart); its task is the leader's row's. */
 function startedOf(hostId: string, sid: string, row: Record<string, unknown>, taskId: string | null | undefined): Record<string, unknown> {
   const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
   return { sessionId: sid, claudeSessionId: sid, taskId: taskId || undefined, project: str(row.project) ?? '', host: hostId }
+}
+
+/** This process's start on its own clock: a host fact that happened after it was never judged by another leader. */
+const PROCESS_STARTED_AT = Math.round(performance.timeOrigin)
+/**
+ * How long before that start a mark is still not honoured: the presence quiet window, plus a margin for
+ * the clock offset (the fact's time is the host's, moved onto this leader's clock). An older leader whose
+ * link did not close cleanly (a network cut, a sleep) still reads as answering on the host for up to
+ * LEADER_QUIET_MS after it went away, so a turn that ends then is marked though nobody judged it; within
+ * this slack the mark is ignored and the turn acted on here: at worst a duplicate, never a loss.
+ */
+export const STARTED_SLACK_MS = LEADER_QUIET_MS + 5_000
+
+/**
+ * The one rule for "this leader has nothing left to act on" in a host's record: it is applied (its
+ * rows, the position) and never said on this bus, so no turn-end consumer (usage, triage, notices,
+ * session:ended, the queue, the phase) runs for it a second time. Either
+ *   - a link before this one applied it and said it then (its seq at or below the position the
+ *     batch's transaction read, M2: `appliedBefore`), or
+ *   - a bus fact the leader that answered while the host stood down for it judged (`judgedBy:
+ *     'leader'`, fact-log.ts; old-leader-watch.ts says when a host marks one): that older leader acted
+ *     on the turn from the session's transcript itself. Never one that happened while this process
+ *     ran (`happenedAt` after its start, with slack): this leader speaks the channel and judged no host
+ *     row itself, so a mark of that time is a misjudged stand-down, and dropping it would lose the
+ *     turn end. Only bus facts carry the mark (host-emitter.ts); on another record it means nothing.
+ *     Not covered: a misjudged stand-down under an earlier process of this leader (a deploy restart
+ *     between the mark and its apply) is honoured, so its turn ends are lost; the host stands up as soon
+ *     as it hears the cap, so such a stand-down lasts about one copy round.
+ * A turn end of the second kind also leaves no phase mark (turn-ends.ts: it only supersedes an older
+ * one), so the boot reconcile does not move the phase for it either.
+ */
+export function actedOnAlready(r: MarkedRecord & { seq: number }, appliedBefore = 0, startedAt = PROCESS_STARTED_AT): boolean {
+  return r.seq <= appliedBefore || markOf(r, startedAt) === 'honoured'
+}
+
+interface MarkedRecord { name: string; judgedBy?: unknown; happenedAt?: number }
+
+/** A bus fact's `judgedBy: 'leader'` mark: none, honoured (before this process), or of this process's time (not honoured). */
+export function markOf(r: MarkedRecord, startedAt = PROCESS_STARTED_AT): 'none' | 'honoured' | 'this-leader' {
+  if (r.judgedBy !== 'leader' || channelClassOf(r.name) !== 'fact') return 'none'
+  return typeof r.happenedAt === 'number' && r.happenedAt < startedAt - STARTED_SLACK_MS ? 'honoured' : 'this-leader'
 }
 
 /** What a revoked host's link answers its records with: not applied, the link closes (channel.ts `apply_failed`). */
@@ -87,9 +129,13 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
       else {
         check.add(r.sid)
         // Every turn end of the session counts: one with no edge (a retrier took it, work goes on) still supersedes an older mark.
-        if (channelClassOf(r.name) === 'fact' && sessionIdOf(r.name, r.data) === r.sid && isTurnEndName(r.name)) turnEnds.push({ sid: r.sid, edge: turnEndEdgeOf(r.name, r.data), seq: r.seq })
+        if (channelClassOf(r.name) === 'fact' && sessionIdOf(r.name, r.data) === r.sid && isTurnEndName(r.name)) turnEnds.push({ sid: r.sid, edge: actedOnAlready(r) ? null : turnEndEdgeOf(r.name, r.data), seq: r.seq })
       }
     }
+    // A host that marked facts of this process's time stood down while this leader ran (a misjudged
+    // stand-down): its turn ends are acted on here, and its Walnut Health item says it stood down.
+    const misjudged = recs.filter((r) => markOf(r) === 'this-leader').length
+    if (misjudged > 0) deps.log('warn', 'session channel: a host marked turns of this leader\'s time as judged by an older leader; they are acted on here', { hostId, count: misjudged })
     const applied = await deps.applyBatch({ hostId, rows, renames, cursor: next, ...(drops.length ? { drops } : {}), ...(check.size ? { check: [...check] } : {}), ...(turnEnds.length ? { turnEnds } : {}) })
     const { written } = applied
     for (const sid of written) after(hostId, 'noteHostJudged', sid, () => deps.noteHostJudged(sid, hostId))
@@ -104,7 +150,7 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
     const refused = new Set<string>()
     // After the commit, in log order: the rows a fact's subscribers read are already there.
     for (const r of recs) {
-      if (r.seq <= appliedBefore || gone.has(r.sid)) continue
+      if (actedOnAlready(r, appliedBefore) || gone.has(r.sid)) continue
       if (r.name === 'row') {
         // A session born on the host, from a start this leader handed it (the batch wrote it only
         // then, handed-sessions.ts): said as started here, at its row's place, with the task of the

@@ -166,6 +166,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     ownRows: () => ownRows(o.hostKey),
     liveOf: (sid) => liveStateOf(runner, sid, turnOf),
     stamp,
+    // A fact of a moment the leader this host stood down for still answers: that leader judges its turn (old-leader-watch.ts).
+    judgedByLeaderNow: () => watchRef?.oldLeaderJudgesNow() ?? false,
     // The line the runner has read up to: the fact log keeps the furthest one told (fact-log.ts toldLine),
     // where an attach after a restart reads on from (host-judged-lines.ts).
     offsetOf: (sid) => { const at = (runner.findSessionByClaudeId(sid) as { readOffset?: number } | undefined)?.readOffset; return typeof at === 'number' && at >= 0 ? at : undefined },
@@ -272,6 +274,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   bus.subscribe(STAND_DOWN_HELD_SUBSCRIBER, (event) => held.note(event), { global: true, interest: ['session:'] })
   const oldLeader = startOldLeaderWatch({
     leaderAnswers: () => leaderPresence().answers,
+    presenceSince: () => leaderPresence().since,
     channelLinked: () => channel.leaderLive() || dialer.linked(),
     // The leader's own word in its config copy: one that speaks the channel never makes this host
     // stand down on the timeout. Only a copy heard since the leader that answers now began answering

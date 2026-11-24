@@ -46,7 +46,7 @@ async function records(from = startHead): Promise<FactRecord[]> {
   return log.read(from)
 }
 
-async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: number; handOf?: (row: SessionRecord) => string | undefined; realLiveHook?: boolean } = {}): Promise<void> {
+async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: number; handOf?: (row: SessionRecord) => string | undefined; realLiveHook?: boolean; judgedByLeaderNow?: () => boolean } = {}): Promise<void> {
   emitter = createHostEmitter({
     log, channel: { flow: (sid: string, name: string) => { flows.push([sid, name]) } } as never, hostKey: HOST,
     ownRows: async () => opts.own ?? [],
@@ -56,6 +56,7 @@ async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: 
     ...(opts.realLiveHook ? {} : { liveListener: (fn: ((sid: string) => void) | null) => { liveFn = fn } }),
     liveMs: opts.liveMs ?? 30, pendingMs: opts.pendingMs ?? 200,
     ...(opts.handOf ? { handOf: opts.handOf } : {}),
+    ...(opts.judgedByLeaderNow ? { judgedByLeaderNow: opts.judgedByLeaderNow } : {}),
   })
   await emitter.start()
   await log.flush()
@@ -293,5 +294,29 @@ describe('the emitter', () => {
     // A drop is appended at once: records() flushes it.
     expect((await records()).map((r) => [r.sid, r.name])).toEqual([[OWN, 'drop'], ['sid-never-here', 'drop']])
     expect(emitter.owns(OWN)).toBe(false)
+  })
+})
+
+describe('the facts of a stand-down', () => {
+  it('a fact kept while this host stands down for an older leader says that leader judged it; the rest say nothing', async () => {
+    let down = false
+    await make({ own: [row(OWN)], judgedByLeaderNow: () => down })
+    bus.emit('session:result', { sessionId: OWN, result: 'judged here' }, ['x'])
+    down = true
+    bus.emit('session:result', { sessionId: OWN, result: 'judged by the older leader' }, ['x'])
+    bus.emit('session:batch-completed', { sessionId: OWN }, ['x'])
+    // A fact held for a row that is not here yet keeps the answer of its own time.
+    bus.emit('session:result', { sessionId: LATE, result: 'held' }, ['x'])
+    down = false
+    rowFn!(row(LATE))
+    bus.emit('session:result', { sessionId: OWN, result: 'after the stand-up' }, ['x'])
+    const facts = (await records()).filter((r) => r.name.startsWith('session:'))
+    expect(facts.map((r) => [r.sid === OWN ? 'own' : 'late', r.name, r.judgedBy ?? null])).toEqual([
+      ['own', 'session:result', null],
+      ['own', 'session:result', 'leader'],
+      ['own', 'session:batch-completed', 'leader'],
+      ['late', 'session:result', 'leader'],
+      ['own', 'session:result', null],
+    ])
   })
 })
