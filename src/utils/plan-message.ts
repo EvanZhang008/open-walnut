@@ -27,9 +27,11 @@ export async function readPlanFromSession(planSessionId: string): Promise<{ cont
   if (!record) return { error: `Plan session not found: ${planSessionId}` };
   if (!record.planCompleted) return { error: `Session ${planSessionId} has not completed a plan (planCompleted is false). Wait for the session to finish and call ExitPlanMode.` };
   // A session its host judges: the host finds its plan in its own files and transcript.
-  if (!record.host) return readPlanFromRecord(planSessionId, record);
+  // Its files are read by the row's own name (session-row-owner.ts readHostOf).
+  const at = readHostOf(record);
+  if (!at) return readPlanFromRecord(planSessionId, record);
   const { viaJudgingHost } = await import('../core/sessions/host-history-reads.js');
-  return viaJudgingHost(planSessionId, record.host, 'readPlanFromSession', [], () => readPlanFromRecord(planSessionId, record));
+  return viaJudgingHost(planSessionId, at, 'readPlanFromSession', [], () => readPlanFromRecord(planSessionId, record));
 }
 
 async function readPlanFromRecord(planSessionId: string, record: SessionRecord): Promise<{ content: string; planFile: string } | { error: string }> {
