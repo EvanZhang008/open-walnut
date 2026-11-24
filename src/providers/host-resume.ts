@@ -17,6 +17,9 @@
  *              the host's runtime says no CLI of it runs (no answer is not at rest). The runner's
  *              own facts are read again right before the hand, with no await between. A live
  *              session is never handed over.
+ *   folder     before the hand its folder is made ready on this leader, as a spawn here makes it
+ *              (session-folder-prep.ts prepareFolderForHost: a released workspace made again); one
+ *              still gone stays legacy ('folder_gone'), whose spawn takes the folder-gone way.
  *   ACP        an ACP engine's session (Codex and the rest) is handed the same way to a host whose
  *              service names SESSION_RESUME_ACP_CAP (else 'acp_engine': legacy). Nothing moves: its
  *              worker, its journal and the engine's own thread are on the host already, in the daemon
@@ -58,12 +61,15 @@ import { startGoesToHost } from './host-judged-runner.js'
 import { armLostStartCheck, cliOnHost, handOverAnswered, handOverPending, handStartToHost, hostVerdict, rearmHandOvers, startLostHooks, takeStartBack, type LostHooks } from './host-handover.js'
 import { queuedLineOf } from './host-judged-send.js'
 import { startOnHostCatchingUp } from '../core/session-channel/switch-catch-up.js'
+import { prepareFolderForHost } from './session-folder-prep.js'
 
 /** Why a legacy session is not handed to its host now (each keeps today's legacy delivery). */
 export type NotAtRest =
   | 'no_row' | 'host_judged' | 'acp_engine' | 'host_takes_no_resume' | 'sdk_session' | 'live_process'
   | 'turn_in_flight' | 'restart_in_flight' | 'delivery_preparing' | 'start_in_flight' | 'stop_pending'
   | 'transfer_running' | 'line_out' | 'nothing_waiting' | 'cli_alive' | 'cli_unknown'
+  /** Its folder is gone and could not be made again (session-folder-prep.ts): the legacy spawn says so. */
+  | 'folder_gone'
 
 /** What the runner knows of a session now (sync: read again right before the hand). */
 interface RunnerFacts {
@@ -287,6 +293,9 @@ async function resumeNow(sid: string, host: string, r: RunnerRest, o: { attachin
   const facts: RestFacts = { ...read, attaching: o.attaching === true }
   let why = notAtRestReason(facts)
   if (!why) why = notAtRestReason({ ...facts, cli: await cliOnHost(host, sid) })
+  // Its folder made ready here first, as a spawn here would (a released workspace made again): the
+  // host's service cannot. Gone and not made again: the legacy delivery takes the folder-gone way.
+  if (!why && row && !(await prepareFolderForHost(sid, { taskId: row.taskId, cwd: row.cwd, host: row.host ?? host })).ok) why = 'folder_gone'
   if (!why) await r.unparkWaiting(sid).catch(() => {})
   // After every await above, and with none from here to the hand: a Restart or a transfer begun meanwhile keeps it legacy.
   if (!why) why = notAtRestReason({ ...facts, ...runnerFacts(sid, r), transferRunning: transferRunning(), cli: false })

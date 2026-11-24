@@ -7,6 +7,8 @@
  */
 export { terminateSession, changeSessionModeOf } from './session-lifecycle.js'
 export { readSessionSupervision } from './session-supervision.js'
+/** The folder is there again (its leader made the workspace again): what this host parked on it goes. */
+export { sendFolderWaiting } from './folder-gone.js'
 
 /** Did the line already run in this host's CLI of `sid` (resend-already-ran.ts)? */
 export async function lineAlreadyRan(sid: string, lineUuid?: string, messageIds?: string[]): Promise<boolean> {

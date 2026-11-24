@@ -400,6 +400,42 @@ export async function folderIsBack(sessionId: string, taskId: string, opts: { si
 }
 
 async function sendWaiting(sessionId: string, taskId: string, notice: string | null, since?: number): Promise<number> {
+  const here = await sendWaitingHere(sessionId, taskId, notice, since)
+  // A session its host runs: what its host parked on the folder waits there (its own queue).
+  return here + await sendWaitingOnHost(sessionId, here > 0 ? null : notice, since)
+}
+
+/**
+ * The host that runs `sessionId` sends what it parked on the gone folder (host-lifecycle.ts
+ * sendFolderWaiting). 0 for a session this server runs, or a host that could not be asked (an older
+ * one answers no_such_member): logged, its rows wait for the button there.
+ */
+async function sendWaitingOnHost(sessionId: string, notice: string | null, since?: number): Promise<number> {
+  const { judgingHostOf } = await import('./judge-of.js')
+  if (!judgingHostOf(sessionId)) return 0
+  try {
+    const { onJudgingHost } = await import('./host-judged-controls.js')
+    const sent = await onJudgingHost(sessionId, 'sendFolderWaiting', [notice, since ?? null])
+    return typeof sent === 'number' ? sent : 0
+  } catch (err) {
+    log.session.warn('folder gone: the host that runs the session was not asked to send what waited on the folder', { sessionId, error: err instanceof Error ? err.message : String(err) })
+    return 0
+  }
+}
+
+/**
+ * On the host that runs `sessionId` (its leader's sendWaiting asks it, host-lifecycle.ts): the
+ * folder is there again, so its mark goes and what this host parked on it goes out.
+ */
+export async function sendFolderWaiting(sessionId: string, notice?: string | null, since?: number | null): Promise<number> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js')
+  const record = await getSessionByClaudeId(sessionId)
+  if (!record) return 0
+  await clearFolderGone(sessionId)
+  return sendWaitingHere(sessionId, record.taskId ?? '', typeof notice === 'string' && notice ? notice : null, typeof since === 'number' ? since : undefined)
+}
+
+async function sendWaitingHere(sessionId: string, taskId: string, notice: string | null, since?: number): Promise<number> {
   const { getQueue, unparkMessage } = await import('../session-message-queue.js')
   const { mutateStore } = await import('../session-queue-store.js')
   const rows = (await getQueue(sessionId)).filter(waitsOnTheFolder)

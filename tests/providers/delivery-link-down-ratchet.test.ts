@@ -34,6 +34,7 @@ const HANDS_ON: Record<string, string> = {
 };
 /** Never a link failure. */
 const NOT_LINK: Record<string, string> = {
+  parkOnGoneFolder: 'the folder is gone (the host said so, or this leader checked it there): nothing to wait for; the folder-gone way records it',
   parkLineRows: 'the CLI read the line and dropped it: the host answered, nothing to wait for',
   parkIfRedeliveryLoop: 'a row taken too often in a short time: each take was answered, a loop bound, not a link failure',
   send: 'a fresh start the host refused because the agent is not installed there: the host answered, and the first line is parked to wait for the agent (parkUnstartedFirstLine)',

@@ -28,6 +28,8 @@ import { claimHostStarted, hostStartedSaid, noteHostSessionStarted } from '../co
 import { _resetHostJudgedSendForTesting, confirmHostDisowns, forwardSend, inOrder } from './host-judged-send.js'
 import { NOT_OWN_SESSION } from '../core/session-channel/host-api.js'
 import { startOnHostCatchingUp } from '../core/session-channel/switch-catch-up.js'
+import { CwdMissingError } from './cwd-check.js'
+import { prepareFolderForHost, prepareHostSessionFolder } from './session-folder-prep.js'
 import { _resetHostHandOverForTesting, armLostStartCheck, handOverAnswered, handOverPending, handStartToHost, startLostHooks, takeStartBack } from './host-handover.js'
 
 type AnyFn = (...args: any[]) => any
@@ -228,6 +230,10 @@ export async function startOnJudgingHost<T extends StartData>(
     log.session.info('host start: another name of this machine; it starts on the name its service goes by', { taskId: data.taskId, asked, host })
     data = { ...data, host }
   }
+  // Its folder made ready here first, as a spawn here would (a released workspace made again): the
+  // host's service cannot. Still gone: the start fails as the spawn's folder check fails it.
+  const folder = await prepareFolderForHost(null, { taskId: data.taskId, cwd: data.cwd, host: asked })
+  if (!folder.ok) throw new CwdMissingError(folder.error ?? 'Working directory not available')
   noteAttempt(host, (data as { transferAttemptId?: unknown }).transferAttemptId)
   const { largePromptFile, ...rest } = data
   const payload = { ...rest } as unknown as StartBody
@@ -358,6 +364,22 @@ const FORWARD_ASYNC = [
   'isBackgroundWorkActive', 'reconcilePendingBackgroundTasks', 'requestTurnCompleteSelfReport', 'changePermissionMode',
   'reinitialize', 'recoverCancelledForSession',
 ] as const
+/**
+ * Forwarded members that start the session's CLI again on its host (a Restart): its folder is made
+ * ready on this leader first (session-folder-prep.ts), as the runner's spawn does for its own.
+ */
+export const HOST_RESPAWNS: ReadonlySet<string> = new Set<(typeof FORWARD_ASYNC)[number]>(['reinitialize'])
+
+async function respawnOnHost(sid: string, host: string, member: string, args: unknown[]): Promise<unknown> {
+  const folder = await prepareHostSessionFolder(sid, host)
+  if (!folder.ok) {
+    const { noteFolderGone } = await sessionPort().recovery.loadFolderGone()
+    await noteFolderGone(sid, { ...(folder.folder ?? {}) }).catch(() => null)
+    throw new CwdMissingError(folder.error ?? 'Working directory not available')
+  }
+  return callRunner(sid, member, args)
+}
+
 /** Forwarded to the host's runner, not awaited (sync methods). */
 const FORWARD_SYNC = ['settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd'] as const
 /**
@@ -417,7 +439,9 @@ export function installHostJudgedRouting(proto: object): void {
   }
   for (const name of FORWARD_ASYNC) {
     wrap(name, (orig) => function (this: unknown, sid: string, ...rest: unknown[]) {
-      return judgingHostOf(sid) ? callRunner(sid, name, rest) : orig.call(this, sid, ...rest)
+      const host = judgingHostOf(sid)
+      if (!host) return orig.call(this, sid, ...rest)
+      return HOST_RESPAWNS.has(name) ? respawnOnHost(sid, host, name, rest) : callRunner(sid, name, rest)
     })
   }
   for (const name of FORWARD_SYNC) {

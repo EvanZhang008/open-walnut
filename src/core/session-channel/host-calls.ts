@@ -39,7 +39,7 @@ export const HOST_CALL_ALLOWLIST = {
     'reinitialize', 'recoverCancelledForSession', 'markExpectedTeardown', 'undoExpectedTeardown',
     'settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd', 'getOrAttachLiveSession', 'findOrAttachAcpSession',
   ],
-  lifecycle: ['terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart'],
+  lifecycle: ['terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart', 'sendFolderWaiting'],
   history: [
     'readSessionHistory', 'readSessionHistoryTail', 'readSessionHistoryTailWindow', 'readSessionHistoryRange',
     'readSessionRowToolResult', 'extractPlanContent', 'readSingleSubagentHistory', 'reconstructWorkflowProgress',

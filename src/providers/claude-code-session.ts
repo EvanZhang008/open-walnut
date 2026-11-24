@@ -117,7 +117,8 @@ import { linkTarget } from '../core/hosts/link.js'
 import { createSessionManager, getRegisteredSessionManager, registerSessionManager, unregisterSessionManager } from './session-manager.js'
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
-import { checkCwdExists, CwdMissingError } from './cwd-check.js'
+import { CwdMissingError } from './cwd-check.js'
+import { prepareSessionFolder } from './session-folder-prep.js'
 import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
 import { isSessionStopSuperseded } from '../core/sessions/session-stop.js'
 import { recordedSessionMode } from '../core/sessions/acp-recorded-mode.js'
@@ -3293,21 +3294,9 @@ export class ClaudeCodeSession {
       stepDone('fenceMs')
       // Never a Claude CLI under an ACP session's id, whichever path asked for it (acp-native-guard.ts).
       await refuseNativeSpawnOnAcpRecord(resumeSessionId ?? preassignedId)
-      if (this.taskId) {
-        const { restoreOwnTaskDir } = await sessionPort().launch.loadTaskDirPlace()
-        await restoreOwnTaskDir(this.taskId, resolvedCwd, host).catch(() => false)
-      }
-      stepDone('taskDirMs')
-      let cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
-      // A folder in the task's isolated workspace, which a cleanup removed after the task was
-      // completed: the workspace is made again at the same path and the spawn waits for it
-      // (core/workspaces/remake.ts), so a message to a woken task runs instead of parking.
-      if (!cwdCheck.ok && this.taskId && isFolderGoneReason(cwdCheck.error)) {
-        const { remakeForGoneFolder, SPAWN_WAIT_MS } = await import('../core/workspaces/remake.js')
-        const remade = await remakeForGoneFolder(this.taskId, resolvedCwd, host, { waitMs: SPAWN_WAIT_MS, resume: true }).catch(() => 'no' as const)
-        if (remade === 'present') cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
-      }
-      stepDone('cwdCheckMs')
+      // The task's own directory restored, the folder checked, a released workspace made again
+      // and waited for: the one preparation every start takes, a host's too (session-folder-prep.ts).
+      const cwdCheck = await prepareSessionFolder({ taskId: this.taskId, cwd: resolvedCwd, host, sshTarget, onStep: stepDone })
       if (requestedMode === 'auto' && !slim) {
         const { getHostReadiness } = await import('../core/hosts/host-readiness.js')
         const { getLocalClaude } = await import('../core/hosts/local-readiness.js')
@@ -12022,6 +12011,22 @@ async function acpFolderGone(session: AcpSession): Promise<string | null> {
   } catch { return null }
 }
 
+/**
+ * A delivery refused on a gone folder, the folder recorded the folder-gone way: its rows park with
+ * the reason, noteFolderGone (a released workspace made again, else the banner and its button),
+ * and the page hears the parked batch once. The ACP drain's refusal and a host-run session's whose
+ * folder this leader could not make ready (host-judged-send.ts) share it.
+ */
+export async function parkOnGoneFolder(sessionId: string, rows: QueuedMessage[], reason: string, folder?: { cwd: string; host?: string | null }): Promise<void> {
+  if (rows.length > 0) await parkMessages(rows, reason).catch(() => {})
+  await noteFolderGoneOnce(sessionId, folder?.cwd, folder?.host)
+  if (rows.length === 0) return
+  reportBatchFailed(sessionId, rows.map((m) => m.id), reason)
+  bus.emit(EventNames.SESSION_ERROR, {
+    sessionId, error: reason, errorKind: 'delivery_failed' as const, parked: true,
+  }, ['main-ai'], { source: 'session-runner' })
+}
+
 /** Record a gone folder for a refused start or resume (core/sessions/folder-gone.ts); never throws. */
 async function noteFolderGoneOnce(sessionId: string | null | undefined, cwd?: string | null, host?: string | null): Promise<void> {
   if (!sessionId) return
@@ -14347,13 +14352,7 @@ export class SessionRunner {
         await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
         reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason)
       } else if (goneCwd) {
-        const reason = `Working directory no longer exists: ${goneCwd}`
-        await parkMessages(rows, reason).catch(() => {})
-        await noteFolderGoneOnce(deliverySessionId, goneCwd)
-        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), reason)
-        bus.emit(EventNames.SESSION_ERROR, {
-          sessionId: deliverySessionId, error: reason, errorKind: 'delivery_failed' as const, parked: true,
-        }, ['main-ai'], { source: 'session-runner' })
+        await parkOnGoneFolder(deliverySessionId, rows, `Working directory no longer exists: ${goneCwd}`, { cwd: goneCwd })
       } else {
         await revertToPending(rows)
         if (err instanceof BudgetCheckingError) {

@@ -65,9 +65,12 @@ describe('isFallbackFolder', () => {
 
 describe('the spawn pre-flight', () => {
   it('gives a task its own directory back before it checks the folder exists', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../../../src/providers/claude-code-session.ts'), 'utf8')
+    // The one preparation every start takes, the spawn's and a host's (session-folder-prep.ts).
+    const src = fs.readFileSync(path.resolve(__dirname, '../../../src/providers/session-folder-prep.ts'), 'utf8')
     const restore = src.indexOf('restoreOwnTaskDir(')
     expect(restore).toBeGreaterThan(-1)
     expect(restore).toBeLessThan(src.indexOf('await checkCwdExists('))
+    const spawn = fs.readFileSync(path.resolve(__dirname, '../../../src/providers/claude-code-session.ts'), 'utf8')
+    expect(spawn).toMatch(/await prepareSessionFolder\(/)
   })
 })

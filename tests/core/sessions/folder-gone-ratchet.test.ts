@@ -37,6 +37,7 @@ const KNOWN: Record<string, { count: number; how: string; records: boolean }> = 
   'src/core/session-auto-recover.ts': { count: 1, how: 'restart recovery: deps.noteFolderGone on the cwd_missing verdict', records: true },
   'src/core/sessions/delivery-retry.ts': { count: 1, how: 'reads an old park\'s words as a verdict: a gone folder (cwd_missing) is left for a person, never tried again by the clock; recorded where the park was made', records: false },
   'src/core/sessions/undelivered-requests.ts': { count: 1, how: 'reads a gone-folder park as a message that never ran, so its asker is told it was not delivered', records: false },
+  'src/providers/host-judged-runner.ts': { count: 2, how: 'a start or a Restart of a host-run session whose folder the leader could not make ready (session-folder-prep.ts) fails as the spawn fails it; the Restart records it with noteFolderGone, the host-judged send parks and records it (claude-code-session.ts parkOnGoneFolder)', records: true },
   'src/core/session-hooks/builtins.ts': { count: 1, how: "the turn-end detector's notification names the way on (Open the session to continue it in a new folder)", records: false },
 }
 
@@ -85,8 +86,14 @@ describe('every gone-folder refusal is recorded', () => {
     const gone = read('src/core/sessions/folder-gone.ts')
     expect(gone).toMatch(/async function noteFolderGoneNow[\s\S]*?kickRemake\(/)
     expect(gone).toMatch(/async function continueNow[\s\S]*?remakeForGoneFolder\(/)
+    // One preparation for every start (session-folder-prep.ts): the runner's spawn and every hand to a host.
+    const prep = read('src/providers/session-folder-prep.ts')
+    expect(prep).toMatch(/export async function prepareSessionFolder[\s\S]*?checkCwdExists\([\s\S]{0,900}remakeForGoneFolder\(/)
     const spawn = read('src/providers/claude-code-session.ts')
-    expect(spawn).toMatch(/checkCwdExists\(resolvedCwd[\s\S]{0,900}remakeForGoneFolder\([\s\S]{0,2500}new CwdMissingError\(/)
+    expect(spawn).toMatch(/prepareSessionFolder\(\{ taskId: this\.taskId, cwd: resolvedCwd[\s\S]{0,2500}new CwdMissingError\(/)
+    // The host path's refusals take the same way: parked and recorded on the leader.
+    expect(read('src/providers/host-judged-send.ts')).toMatch(/async function parkWaitingOnGoneFolder[\s\S]*?parkOnGoneFolder\(/)
+    expect(spawn).toMatch(/export async function parkOnGoneFolder[\s\S]*?noteFolderGoneOnce\(/)
   })
 
   it('the server, the web copy, the classifier and the never-ran test read the same words', () => {

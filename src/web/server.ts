@@ -6507,6 +6507,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
 
       log.web.info('session error received', { sessionId, taskId, error: error?.slice(0, 200), errorKind })
+      // The host that runs this session refused it on a gone folder: this leader takes the runner's
+      // folder-gone way for it (a released workspace made again, then what waited sent).
+      if (event.source === 'host-channel' && sessionId) {
+        void import('../providers/session-folder-prep.js').then((m) => m.noteHostFolderGone(sessionId, error)).catch(() => {})
+      }
       // Walnut's own upkeep turn (an idle compaction, sessions/quiet-turn.ts) failed: no card, and the
       // task keeps its session; the next message resumes it as after any stop.
       {

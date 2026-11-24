@@ -20,6 +20,9 @@
  *              the row, it gave the row back): no refusal either. Asked once more (confirmHostDisowns),
  *              a second no takes the session back as the leader's, at rest, and its lines go by the
  *              leader's next delivery, which hands it over again with the claim (host-resume.ts)
+ *   folder     a send that wakes the CLI at rest on its host makes its folder ready here first
+ *              (session-folder-prep.ts: a released workspace made again); one still gone parks
+ *              what would run here, recorded the folder-gone way, and nothing goes
  *   hand-over  while a start or a resume of the session waits for its host's answer (host-handover.ts
  *              handOverPending), nothing goes and nothing counts: the lines wait here, and go once
  *              the host's answer or row ends the window (releaseLinesAfterHandOver), or are the
@@ -35,6 +38,7 @@ import type { QueuedLine } from '../core/session-channel/host-api.js'
 import type { QueuedMessage } from '../core/session-queue-store.js'
 import { NOT_OWN_SESSION } from '../core/session-channel/host-api.js'
 import { askHostOwns, handOverPending, takeSessionBack } from './host-handover.js'
+import { prepareHostSessionFolder } from './session-folder-prep.js'
 
 /** Waits before each retry of a session's waiting lines; the last one repeats for good. */
 export const REDELIVER_MS = [5_000, 30_000, 120_000, 600_000]
@@ -127,7 +131,15 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     scheduleRedeliver(sid)
     throw err
   }
-  const { takeLinesForHost, parkMessages } = await import('../core/session-message-queue.js')
+  const { takeLinesForHost, parkMessages, peekLinesForHost } = await import('../core/session-message-queue.js')
+  // A send that wakes its CLI at rest on the host (a kick, a line that runs): its folder is made
+  // ready here first, as a spawn here would (a released workspace made again); the host's service
+  // cannot. Still gone: the lines that would run park here the spawn's way, nothing goes.
+  const wakes = o.kick || (await peekLinesForHost(sid).catch(() => [])).some((m) => !heldOf(m))
+  if (wakes) {
+    const folder = await prepareHostSessionFolder(sid, host)
+    if (!folder.ok) { await parkWaitingOnGoneFolder(sid, folder.error ?? 'Working directory not available', folder.folder); settle(sid); return }
+  }
   let taken: Awaited<ReturnType<typeof takeLinesForHost>>
   try { taken = await takeLinesForHost(sid) } catch (err) {
     // Not taken (the queue file could not be written): the lines are still queued here.
@@ -194,6 +206,20 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     const { noteHostSessionSend } = await import('../core/session-channel/leader-tasks.js')
     void noteHostSessionSend(sid, told.source, told.endsWait)
   }
+}
+
+/**
+ * The folder of a host-run session is gone and was not made again: what would run parks here with
+ * the spawn's reason and the folder is recorded, the runner's way for its own (parkOnGoneFolder:
+ * noteFolderGone, its banner and button, the parked batch said once). The button's continue, or a
+ * remake that ends later, sends the rows again.
+ */
+async function parkWaitingOnGoneFolder(sid: string, reason: string, folder?: { cwd: string; host: string }): Promise<void> {
+  const { peekLinesForHost } = await import('../core/session-message-queue.js')
+  const runs = (await peekLinesForHost(sid).catch(() => [])).filter((m) => !heldOf(m))
+  const { parkOnGoneFolder } = await import('./claude-code-session.js')
+  await parkOnGoneFolder(sid, runs, reason, folder)
+  log.session.warn('host-run session: its folder is gone; its lines are parked here, not sent', { sessionId: sid, parked: runs.length, error: reason })
 }
 
 /** A send (or a redelivery) of a session whose hand-over is unanswered: it waits, its kick kept for the release. */
