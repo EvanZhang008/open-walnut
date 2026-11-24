@@ -155,6 +155,9 @@ describe('every source of choices keeps its buttons on a thread card', () => {
     // A card holding a Board choice (brief_off, ThreadChoiceAnswer) waits on him too.
     expect(threads.indexOf('{needs || choice ? null : ')).toBeGreaterThan(-1);
     expect(threads.indexOf('{needs || choice ? null : ')).toBeLessThan(threads.indexOf('data-testid="org-thread-ack"'));
-    expect(read('web/src/components/org/PoppedThreadCard.tsx')).not.toMatch(/org-thread-ack|Acknowledge/);
+    // A card from below offers it only on a result it carries for a thread here (core/org/thread-subject-pairs.ts), drawn in Done, never on a card in Needs you.
+    const popped = read('web/src/components/org/PoppedThreadCard.tsx');
+    expect(popped.match(/data-testid="org-thread-ack"/g) ?? []).toHaveLength(1);
+    expect(popped).toMatch(/\{t\.carries && group === 'read' && <button[^>]*data-testid="org-thread-ack"/);
   });
 });

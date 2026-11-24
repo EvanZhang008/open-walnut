@@ -42,7 +42,7 @@ const WRITERS: Record<string, string> = {
   updateReplyDeliveries: 'moves a reply\'s delivery on the owner\'s record',
   writeThreadsFor: 'a letter\'s one thread, under an id of the letter, written on the node that holds it (human-inbox/letter-threads.ts follows a move first)',
 }
-const READERS = ['threadTaskIds', 'readThreads', 'withTaskAsks', 'listThreadNodes', 'threadHolder', 'hasOpenDeliveries']
+const READERS = ['threadTaskIds', 'readThreads', 'withTaskAsks', 'nodeView', 'listThreadNodes', 'threadHolder', 'hasOpenDeliveries']
 
 describe('every export of the threads store is classified', () => {
   it('a new export fails until it says how it keeps one record', () => {

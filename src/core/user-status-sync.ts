@@ -47,6 +47,7 @@ import { allEndedAtMs, ownWorkInFlight, sessionWorkEndedAtMs, triggerWatchesOwnW
 import { keepsThreads, threadsForEveryTask } from './org/keeps-threads.js';
 import { heldLetterIds, holdsLettersNow, isLetterThread, lettersAsThreadsNow } from './human-inbox/letter-threads.js';
 import { briefOffNow, setBriefOff } from './org/brief-off.js';
+import { threadsPopUpNow as popUpNow } from './org/thread-popup-rules.js';
 import { isChoiceThread } from './boards/choice-threads.js';
 import { applyActions, type ActionItem } from './action-needed.js';
 import { taskLines } from './task-lines.js';
@@ -263,17 +264,18 @@ function threadsChanged(taskId?: string): void {
  *  the same rows point at tasks that read the same (askPointerSignature) and for at most
  *  JOINED_ASKS_MS, the time his word to one of those tasks may take to count (the join reads the
  *  session records; the minute sweep re-joined them as often before). */
-const joined = new Map<string, { rows: NodeThreadRows; sig: string; at: number; out: NodeThreadRows }>();
+type NodeView = Awaited<ReturnType<typeof import('./org/threads-store.js').nodeView<NodeThreadRows[number]>>>;
+const joined = new Map<string, { rows: NodeThreadRows; sig: string; at: number; out: NodeView }>();
 const JOINED_ASKS_MS = 60_000;
 
-async function joinedAsks(nodeId: string, rows: NodeThreadRows, all: readonly Task[], now: number): Promise<NodeThreadRows> {
-  const [{ withTaskAsks }, { askPointerSignature }] = await Promise.all([import('./org/threads-store.js'), import('./org/thread-task-ask.js')]);
-  const sig = askPointerSignature(rows, all as never);
+async function joinedAsks(nodeId: string, rows: NodeThreadRows, all: readonly Task[], now: number, carry: boolean): Promise<NodeView> {
+  const [{ nodeView }, { askPointerSignature }] = await Promise.all([import('./org/threads-store.js'), import('./org/thread-task-ask.js')]);
+  const sig = askPointerSignature(rows, all as never, { carry });
   // No thread waits on him: nothing to join.
-  if (!sig) { joined.delete(nodeId); return rows; }
+  if (!sig) { joined.delete(nodeId); return { threads: rows, carried: [] }; }
   const hit = joined.get(nodeId);
   if (hit && hit.rows === rows && hit.sig === sig && now - hit.at < JOINED_ASKS_MS) return hit.out;
-  const out = await withTaskAsks(nodeId, rows, all);
+  const out = await nodeView(nodeId, rows, all);
   joined.set(nodeId, { rows, sig, at: now, out });
   return out;
 }
@@ -284,7 +286,7 @@ async function readNodeThreads(tasks: readonly Task[], everything?: readonly Tas
   if (!nodes.length) return out;
   const { readThreads } = await import('./org/threads-store.js');
   const { threadCounts } = await import('./org/thread-groups.js');
-  const { poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
+  const { carriedRows, poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
   let below: ReturnType<typeof poppedIndex> | undefined;
   // A targeted status pass may contain only the lead. Its linked owners still belong in the read:
@@ -316,14 +318,17 @@ async function readNodeThreads(tasks: readonly Task[], everything?: readonly Tas
     const counts = await safely('threads', async () => {
       // The tasks as they are now: one read a pass, shared by every node.
       all ??= await (await import('./task-manager.js')).listTasks();
-      const own = await joinedAsks(t.id, threads, all, now);
-      if (!threadsPopUpNow()) return threadCounts(own, now);
-      // What waits on him below counts here too, never as this task's Needs you (thread-groups.ts threadCounts).
-      const listed = (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [];
+      const popUp = threadsPopUpNow();
+      const view = await joinedAsks(t.id, threads, all, now, popUp);
+      if (!popUp) return threadCounts(view.threads, now);
+      // What waits on him below counts here too, never as this task's Needs you (thread-groups.ts
+      // threadCounts), and a result below on the subject of one of its own threads (carriedRows).
+      const popped = (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [];
+      const listed = view.carried.length ? [...popped, ...await carriedRows(view.carried, popped)] : popped;
       const owners = threadOwners.get(t.id) ?? new Set<string>();
       for (const p of listed) owners.add(p.owner.task_id);
       threadOwners.set(t.id, owners);
-      return threadCounts([...own, ...listed], now);
+      return threadCounts([...view.threads, ...listed], now);
     }, null);
     if (counts && counts.shown > 0) out.set(t.id, counts);
   }
@@ -1591,6 +1596,8 @@ function onEvent(event: { name: string; data: unknown; source?: string; late?: t
       // Acted on by hand (the Org page, the phone, a node's own op): the fast lane, its dot moves now.
       // (threads_pop_up: the nodes above a task hear its change as their own: org/thread-reply.ts.)
       if (typeof d.taskId === 'string') { threadsChanged(d.taskId); markNow(d.taskId); } else { threadsChanged(); markAll(); }
+      // A node whose thread names that task may list its result (org/thread-subject-pairs.ts carried).
+      if (typeof d.taskId === 'string' && popUpNow()) ownerThreadsChanged(d.taskId, mark);
       // letters_as_threads: whether a thread still holds a letter decides whether the letter counts.
       if (lettersAsThreadsNow() && (typeof d.threadId !== 'string' || isLetterThread(d.threadId))) dropSlow('letters');
       // brief_off: whether a thread still holds a Board choice decides whether the choice counts.

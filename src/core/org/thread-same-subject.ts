@@ -80,6 +80,18 @@ const EVERYWHERE_MIN = 4;
  * newest. `of`: how many telling words the title has. Pure.
  */
 export function sameSubjectCandidates(title: string, tree: readonly TreeThreads[], now: number): SubjectCandidate[] {
+  return candidatesIn(subjectIndex(tree, now), title);
+}
+
+/** The open threads of a tree with their telling words, read once for many titles (candidatesIn). */
+export interface SubjectIndex {
+  rows: ReadonlyArray<{ t: OrgThread; task: TreeThreads['task']; words: Set<string>; theirs: number }>;
+  seenIn: ReadonlyMap<string, number>;
+  everywhere: number;
+}
+
+/** The index sameSubjectCandidates reads, built once (a node comparing many titles with its own threads). Pure. */
+export function subjectIndex(tree: readonly TreeThreads[], now: number): SubjectIndex {
   const rows: Array<{ t: OrgThread; task: TreeThreads['task']; words: Set<string> }> = [];
   for (const { task, threads } of tree) {
     for (const t of threads) {
@@ -89,12 +101,17 @@ export function sameSubjectCandidates(title: string, tree: readonly TreeThreads[
   const seenIn = new Map<string, number>();
   for (const r of rows) for (const w of r.words) seenIn.set(w, (seenIn.get(w) ?? 0) + 1);
   const everywhere = Math.max(EVERYWHERE_MIN, Math.ceil(rows.length / 6));
+  return { rows: rows.map((r) => ({ ...r, theirs: [...r.words].filter((w) => (seenIn.get(w) ?? 0) < everywhere).length })), seenIn, everywhere };
+}
+
+/** sameSubjectCandidates over an index. Pure. */
+export function candidatesIn(index: SubjectIndex, title: string): SubjectCandidate[] {
+  const { rows, seenIn, everywhere } = index;
   const mine = new Set([...subjectWords(title)].filter((w) => (seenIn.get(w) ?? 0) < everywhere));
   const out: SubjectCandidate[] = [];
   for (const r of rows) {
     const shared = sharedCount(mine, r.words);
-    const theirs = [...r.words].filter((w) => (seenIn.get(w) ?? 0) < everywhere).length;
-    if (shared) out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs, updatedAt: r.t.updatedAt });
+    if (shared) out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs: r.theirs, updatedAt: r.t.updatedAt });
   }
   return out.sort((a, b) => b.shared - a.shared || b.updatedAt.localeCompare(a.updatedAt));
 }

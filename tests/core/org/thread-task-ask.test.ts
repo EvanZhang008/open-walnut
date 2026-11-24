@@ -9,7 +9,8 @@
  * results. Chinese test data is written with \u escapes (the two titles of his 2026-11-24 report).
  */
 import { describe, it, expect } from 'vitest'
-import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerSignature, ownThreadTaskIds, sameThreadDecision, threadAskedIn, withAskPointers } from '../../../src/core/org/thread-task-ask.js'
+import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerSignature, sameThreadDecision, threadAskedIn, withAskPointers } from '../../../src/core/org/thread-task-ask.js'
+import { ownThreadTaskIds } from '../../../src/core/org/thread-subject-pairs.js'
 import { askKey } from '../../../src/core/same-ask.js'
 import { shownToHim, threadOverdue, watchingOf } from '../../../src/core/org/thread-view.js'
 import { threadCounts } from '../../../src/core/org/thread-groups.js'

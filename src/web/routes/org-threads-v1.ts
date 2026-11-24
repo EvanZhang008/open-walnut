@@ -49,7 +49,7 @@ import { resolveThreadCaller, type ThreadCaller } from '../../core/org/thread-ca
 import { movedAway, ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
 import { isLineThreadId, lineThreads } from '../../core/org/line-threads.js'
 import { threadsForEveryTask } from '../../core/org/keeps-threads.js'
-import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
+import { fileThreadMessage, mergeThread, nodeView, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
 import { cardView, sharedAnswers, shownToHim } from '../../core/org/thread-view.js'
 import { threadCounts, threadStateOf, threadsForHim } from '../../core/org/thread-groups.js'
@@ -58,7 +58,7 @@ import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { keepsThreads } from '../../core/org/keeps-threads.js'
-import { elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUpOn } from '../../core/org/thread-popup.js'
+import { carriedRows, elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUpOn } from '../../core/org/thread-popup.js'
 import { withKnownAwaits } from '../../core/org/thread-ack.js'
 
 export const orgThreadsV1Router = Router()
@@ -183,7 +183,9 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   await ownerReads(req, task.id, (await readThreads(task.id)).threads.filter((t) => !t.closed).map((t) => t.id))
   const file = await readThreads(task.id)
   // `awaits` on each thread he acknowledged (core/org/thread-ack.ts): what holds it, for its card.
-  const all = await withKnownAwaits(await withTaskAsks(task.id, sortedThreads(file.threads)))
+  // threads_pop_up: the results of tasks below on the subjects of its own threads come with it (nodeView `carried`).
+  const view = await nodeView(task.id, sortedThreads(file.threads))
+  const all = await withKnownAwaits(view.threads)
   const shared = sharedAnswers(all)
   const now = Date.now()
   const open = flag(req.query.open)
@@ -195,7 +197,9 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   // phone's read fits what the companion carries back from the Mac; an answer his card shows (not
   // reacted to yet) stays whole, and `GET .../threads/:thread` gives one thread whole.
   const answerMax = positive(req.query.answer_max)
-  const below = closedOnly || !(await threadsPopUpOn()) ? [] : await poppedThreadsFor(task.id, { answerable: true })
+  const popUp = !closedOnly && await threadsPopUpOn()
+  const popped = popUp ? await poppedThreadsFor(task.id, { answerable: true }) : []
+  const below = popUp && view.carried.length ? [...popped, ...await carriedRows(view.carried, popped, { answerable: true })] : popped
   // Judged over ALL the node's threads and the ones below (an answer shared with a closed thread
   // counts). `shown`: his list holds it (thread-view.ts listedForHim). `counted`: it waits on him
   // (thread-groups.ts threadsForHim), the rule `user_status.threads` and `shown_count` count by, so
@@ -275,13 +279,16 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   }
   const id = threadIdOf(req)
   await ownerReads(req, task.id, [id])
-  const all = await withKnownAwaits(await withTaskAsks(task.id, (await readThreads(task.id)).threads))
+  const view = await nodeView(task.id, (await readThreads(task.id)).threads)
+  const all = await withKnownAwaits(view.threads)
   const thread = all.find((t) => t.id === id)
   if (!thread || movedAway(thread)) {
-    // A task's thread below, or one that moved on (threads_pop_up): the one record, read where it lives.
+    // A task's thread below, or one that moved on (threads_pop_up): the one record, read where it lives,
+    // with the thread of this node whose subject it carries, as the list reads it.
     const there = await elsewhereThread(task.id, id)
     if (there) {
-      const one = await poppedOne(there)
+      const carries = view.carried.find((c) => c.thread.id === id)?.carries
+      const one = { ...await poppedOne(there), ...(carries ? { carries } : {}) }
       res.json({ task_id: task.id, thread: { ...one, shown: shownToHim(one, sharedAnswers([one]), Date.now()), counted: threadsForHim([one]).includes(one) } })
       return
     }

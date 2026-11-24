@@ -5,7 +5,8 @@
  * leaders above it, its VP and Main read it as a VIEW: while it waits on him (needs), or while his
  * reply on it is still on its way, it is listed after their own threads, the same record with the
  * same id, carrying `owner` and `can_answer_now`; once it is neither it leaves every list above at
- * once. His reply on it at any level is written into that one record and goes to the owner's
+ * once. A result of it for him is listed only on the one node whose own thread names it on that
+ * subject (`carries`, thread-subject-pairs.ts; carriedRows), never on every level. His reply on it at any level is written into that one record and goes to the owner's
  * session (thread-reply.ts).
  *
  * Who sees a task's thread (viewersOf): every task above it in its parent chain, and the Org
@@ -29,6 +30,8 @@ export { setThreadsPopUp, stampAskIds, threadsPopUpNow, threadsPopUpOn } from '.
 /** A thread as a node above its owner reads it. */
 export type PoppedThread = OrgThread & {
   owner: { task_id: string; title: string };
+  /** A result of its owner on the subject of the listing node's own thread of this id (thread-subject-pairs.ts). */
+  carries?: string;
   /** Its owner can take his reply now (a session, its host reachable); else it is kept and sent when it is back. */
   can_answer_now?: boolean;
   /** The decision it asks him (OrgThread.askId): a reply names it, so a reply to an older ask is marked. */
@@ -123,6 +126,24 @@ export async function poppedIndex(opts: { all?: readonly Task[]; onlyViewer?: st
   }
   for (const list of byViewer.values()) list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return { byViewer, owners: owners.map((o) => o.id) };
+}
+
+/**
+ * The results of tasks below that answer the subjects of a node's own threads (threads-store.ts
+ * nodeView `carried`), as that node lists them: each with its owner and the thread it `carries`,
+ * leaving out one `below` already lists. `answerable`: whether each owner takes a reply now.
+ */
+export async function carriedRows(carried: ReadonlyArray<{ thread: OrgThread; task: Task; carries: string }>, below: readonly PoppedThread[] = [], opts: { answerable?: boolean } = {}): Promise<PoppedThread[]> {
+  const listed = new Set(below.map((t) => t.id));
+  const out: PoppedThread[] = [];
+  const can = new Map<string, boolean>();
+  for (const c of carried) {
+    if (listed.has(c.thread.id)) continue;
+    listed.add(c.thread.id);
+    if (opts.answerable && !can.has(c.task.id)) can.set(c.task.id, await canAnswerNow(c.task));
+    out.push({ ...popped(c.thread, c.task, opts.answerable ? can.get(c.task.id) : undefined), carries: c.carries });
+  }
+  return out;
 }
 
 /** The threads listed above `viewerId` (the route's read). */

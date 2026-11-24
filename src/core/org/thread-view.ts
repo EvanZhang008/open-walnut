@@ -89,6 +89,11 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   askedIn?: ThreadAskedIn;
   /** Projected on read (thread-popup.ts): a thread of a task below, listed on this node's Threads. */
   owner?: { task_id: string; title: string };
+  /**
+   * Projected on read (thread-task-ask.ts carriedResults): with `owner`, this result of a task below
+   * answers the subject of the listing node's own thread `carries`, which waits behind it.
+   */
+  carries?: string;
   /** The decision letter it holds (letter-thread-model.ts): the letter keeps its own re-check clock. */
   letter?: { id: string; done?: true; off?: true };
   /** Projected on read (thread-report-ask.ts): it reads needs because it holds the task's own ask. */
@@ -143,6 +148,8 @@ export interface ThreadAskedIn {
   decision?: string;
   /** That decision was answered there (by a lead, VP or Main for him) or withdrawn: nothing is asked, the thread stays quiet. */
   answered?: true;
+  /** With `thread`: that thread holds the task's newer result on this subject (it is listed here with `carries`); with `answered`, he read it there. */
+  result?: true;
 }
 
 /** The nearest future deadline of this thread's open tasks, never stored on the thread. */
@@ -680,10 +687,18 @@ export function aboveForHim<M extends ViewMessage>(t: ViewThread<M> & { state: s
   return !t.closed && !t.heldAsk && t.state === 'needs' && shownToHim(t, shared, now);
 }
 
-/** A thread of a task below is listed above it (thread-popup.ts): his, or his reply on it on its way (aboveForHim). */
+/**
+ * A result of a task below that answers the subject of the listing node's own thread (`carries`,
+ * thread-task-ask.ts carriedResults), while it holds news for him: his to read here, as on its task.
+ */
+export function carriedAbove<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
+  return !!t.carries && !t.closed && t.state === 'answered' && shownToHim(t, shared, now);
+}
+
+/** A thread of a task below is listed above it (thread-popup.ts): his, a result for his thread here (carriedAbove), or his reply on it on its way (aboveForHim). */
 export function listedAbove<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
   if (t.closed) return false;
-  return aboveForHim(t, shared, now) || replyOnItsWay(t);
+  return aboveForHim(t, shared, now) || carriedAbove(t, shared, now) || replyOnItsWay(t);
 }
 
 /**
@@ -693,7 +708,7 @@ export function listedAbove<M extends ViewMessage>(t: ViewThread<M> & { state: s
  * task's Threads: "why this is working but still show in the up there"). Pure.
  */
 export function forHimInList<T extends ViewThread & { state: string }>(listed: readonly T[], now: number = Date.now()): T[] {
-  return listed.filter((t) => !t.owner || aboveForHim(t, NONE, now));
+  return listed.filter((t) => !t.owner || aboveForHim(t, NONE, now) || carriedAbove(t, NONE, now));
 }
 
 /**

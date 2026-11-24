@@ -1,6 +1,7 @@
 /**
- * A thread of a task below this node, listed here while it waits on him (experiment
- * threads_pop_up, src/core/org/thread-popup.ts): the one ask card (actions/AskCard.tsx) with the
+ * A thread of a task below this node, listed here while it waits on him, or while it holds that
+ * task's result on the subject of one of this node's own threads (`carries`, with Acknowledge as his
+ * own cards have; experiment threads_pop_up, src/core/org/thread-popup.ts): the one ask card (actions/AskCard.tsx) with the
  * chat's own reply box. His words go to the task that owns it (POST .../threads with `thread`,
  * src/core/org/thread-reply.ts), never to this node's chat; the card says when the task cannot
  * take them now, and that a reply sent is not read yet.
@@ -103,6 +104,8 @@ export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed }:
         // A thread holding a decision letter is answered by the letter (its buttons, its box).
         answer={answersLetter(t) ? <ThreadLetterAnswer t={t} /> : (<>
           <ThreadOptions thread={t} onAnswer={reply} />
+          {/* A result it holds for his thread here (core/org/thread-subject-pairs.ts): Acknowledge, as on his own cards, closes it on its task. */}
+          {t.carries && group === 'read' && <button type="button" className="btn btn-sm btn-primary" data-primary="" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
           <ReplyComposer
             placeholder={group === 'needs' ? `Answer ${owner.title}` : `Follow up with ${owner.title}`}
             draftKey={draftKey('thread-follow', t.id)}

@@ -22,7 +22,8 @@ import {
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
 import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
-import { askOwnerKept, askOwnerOf, askOwnerTask, heldCandidate, ownThreadTaskIds, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
+import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerView, pointerTaskIds } from './thread-task-ask.js';
+import { heldCandidate, ownThreadTaskIds } from './thread-subject-pairs.js';
 import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
 import { placeAsk, withHeldAsk, type TaskAsk } from './thread-report-ask.js';
 import { stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
@@ -66,19 +67,33 @@ export async function readThreads(taskId: string): Promise<ThreadsFile> {
  * leaves the threads as they are: a miss shows an ask twice, never hides one.
  */
 export async function withTaskAsks<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>> {
+  return (await nodeView(taskId, threads, tasks)).threads;
+}
+
+/** A result of a task below that answers the subject of one of the node's own threads (thread-subject-pairs.ts carriedResults). */
+export interface CarriedBelow { thread: OrgThread; task: import('../types.js').Task; carries: string }
+
+/**
+ * withTaskAsks, and with threads_pop_up the results of tasks below on the subjects of the node's own
+ * threads, which those threads wait behind (thread-subject-pairs.ts): the route and the status counts
+ * list them above the node (thread-popup.ts carriedRows).
+ */
+export async function nodeView<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<{ threads: Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>; carried: CarriedBelow[] }> {
   const now = Date.now();
-  // A result a linked task's own thread may hold (thread-task-ask.ts heldResults) is read like a needs thread.
-  const results = threads.some((t) => heldCandidate(t, now));
+  const plain = (list: readonly T[]) => ({ threads: [...list] as Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>, carried: [] as CarriedBelow[] });
+  const carry = threadsPopUpNow() && threads.some((t) => !t.closed && t.state !== 'needs' && !!t.tasks?.some((id) => id !== taskId));
+  // A result a linked task's own thread may hold (thread-subject-pairs.ts) is read like a needs thread.
+  const results = threads.some((t) => heldCandidate(t, now)) || carry;
   const needs = threads.some((t) => !t.closed && t.state === 'needs') || results;
-  if (!needs && !threads.some((t) => t.reportAsk && !t.closed)) return [...threads];
+  if (!needs && !threads.some((t) => t.reportAsk && !t.closed)) return plain(threads);
   try {
     // The store's own rows, read only: a copy of every task per threads read was garbage the size of the board.
     const all = tasks ?? await (await import('../task-manager.js')).taskStoreSnapshot();
     const node = all.find((t) => t.id === taskId);
-    if (!node) return [...threads];
+    if (!node) return plain(threads);
     // The task's own ask reads on the thread that holds it (thread-report-ask.ts); a stored needs
     // thread is never one of those, so the pointers below read the same threads either way.
-    if (!needs) return withHeldAsk(node, threads);
+    if (!needs) return { threads: withHeldAsk(node, threads), carried: [] };
     const { treeAround } = await import('../same-ask-tree.js');
     // Completed tasks can still hold an answered decision: membership counts every task open
     // (allOpen); the rows are the real ones, so a completion never revives the thread's old ask.
@@ -90,10 +105,16 @@ export async function withTaskAsks<T extends OrgThread>(taskId: string, threads:
     const personAt = quiet.length ? await personWroteAt(quiet) : new Map<string, string>();
     // The Threads of the few tasks a result here is linked to (and of one under them that asks now).
     const own = new Map<string, readonly OrgThread[]>();
-    if (results) for (const id of ownThreadTaskIds(node, threads, around, now)) own.set(id, await threadsForPointers(id));
-    return withHeldAsk(node, withAskPointers(node, threads, around, { nowMs: now, personAt: (id) => personAt.get(id), threadsOf: (id) => own.get(id) }));
+    if (results) for (const id of ownThreadTaskIds(node, threads, around, now, carry)) own.set(id, await threadsForPointers(id));
+    const view = askPointerView(node, threads, around, { nowMs: now, personAt: (id) => personAt.get(id), threadsOf: (id) => own.get(id), carry });
+    const byId = new Map(around.map((t) => [t.id, t] as const));
+    const carried = view.carried.flatMap((c) => {
+      const task = byId.get(c.task.id);
+      return task ? [{ thread: c.thread as OrgThread, task, carries: c.carries }] : [];
+    });
+    return { threads: withHeldAsk(node, view.threads), carried };
   } catch {
-    return [...threads];
+    return plain(threads);
   }
 }
 

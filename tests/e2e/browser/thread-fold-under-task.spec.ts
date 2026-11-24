@@ -14,12 +14,12 @@
  * The fixture is shared: this file makes its own project and tasks, and puts the flags back.
  * Chinese test data is written with \u escapes (his two titles).
  */
-import fs from 'node:fs'
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { card, openLead, popUpFlag, removeTask, send, shot, startSession } from './lead-threads-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -27,7 +27,6 @@ const PROJECT = `Fold ${STAMP}`
 const made: string[] = []
 let oneCardWas: boolean | null = null
 const ids = { lead: '', leadSid: '', owner: '', ownerSid: '', his: '', ask: '' }
-const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 const HIS_REQUEST = `\u65b0\u4efb\u52a1\u9762\u677f\u592a\u5c0f\uff0c\u8981 10 \u4e2a\u8bbe\u8ba1\u9009 ${STAMP}`
 const TASK_ASKS = `\u65b0\u5efa\u4efb\u52a1\u9762\u677f\uff1a10 \u4e2a\u65b9\u6848\uff0c\u8bf7\u6311\u4e00\u4e2a ${STAMP}`
 const KIND = { user_kind: 'user_own', user_kind_why: 'A look of his own screen that only he picks' }
@@ -36,56 +35,10 @@ test.describe.configure({ mode: 'serial' })
 test.setTimeout(180_000)
 test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
 
-const rowKey = (project: string) => `project:${project.trim().toLowerCase()}`
-
-async function send<T>(request: APIRequestContext, method: 'post' | 'patch', url: string, data: unknown, sid?: string): Promise<T> {
-  const res = await request[method](url, { data, ...(sid ? { headers: { 'x-walnut-caller-sid': sid } } : {}) })
-  expect(res.ok(), `${url}: ${await res.text()}`).toBe(true)
-  return (await res.json()) as T
-}
-
-async function flag(request: APIRequestContext, on: boolean): Promise<void> {
-  const res = await request.put('/api/config', { data: { experimental: { threads_pop_up: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
-}
-
-async function removeTask(request: APIRequestContext, id: string): Promise<void> {
-  const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
-  if (task?.session_id) await request.post(`/api/v1/sessions/${task.session_id}/terminate`, { data: { force: true } })
-  for (let i = 0; i < 10; i++) {
-    const res = await request.delete(`/api/tasks/${id}?force=true`)
-    if (res.ok() || res.status() === 404) return
-    await new Promise((r) => setTimeout(r, 500))
-  }
-}
-
-async function startSession(request: APIRequestContext, taskId: string, fixtureRoot: string): Promise<string> {
-  await send(request, 'post', '/api/sessions/quick-start', { cwd: `${fixtureRoot}/projects/walnut`, message: 'snapshot-clean-turn:Started.', taskId })
-  let sid = ''
-  await expect.poll(async () => (sid = (await (await request.get(`/api/tasks/${taskId}`)).json()).task?.session_id ?? ''), { timeout: 90_000 }).not.toBe('')
-  return sid
-}
-
-async function openLead(page: Page): Promise<void> {
-  await page.getByTestId('sidebar-org').click()
-  await expect(page.getByTestId('org-page')).toBeVisible()
-  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(PROJECT)}"]`).click()
-  const detail = page.getByTestId('org-detail')
-  await expect(detail).toHaveAttribute('data-key', rowKey(PROJECT))
-  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
-}
-
-const card = (page: Page, id: string) => page.getByTestId('org-rail').locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
-
-async function shot(page: Page, name: string): Promise<void> {
-  fs.mkdirSync(SHOTS, { recursive: true })
-  await page.getByTestId('org-rail').screenshot({ path: `${SHOTS}/thread-fold-under-task-${name}-${test.info().project.name}.png` })
-}
-
 test.beforeAll(async ({ request }) => {
   test.setTimeout(170_000)
   oneCardWas = await setOneCard(request, true)
-  await flag(request, true)
+  await popUpFlag(request, true)
   // A project with two or more teams gets a lead (org_contact).
   for (const title of [`Side work ${STAMP}`, `More work ${STAMP}`]) {
     made.push((await send<{ task: { id: string } }>(request, 'post', '/api/tasks', { title, project: PROJECT, source: 'local' })).task.id)
@@ -119,7 +72,7 @@ test.beforeAll(async ({ request }) => {
 
 test.afterAll(async ({ request }) => {
   await restoreOneCard(request, oneCardWas)
-  await flag(request, false)
+  await popUpFlag(request, false)
   for (const id of made) await removeTask(request, id)
 })
 
@@ -128,7 +81,7 @@ test('one subject, one card: the task\'s ask holds the lead\'s result, and his a
   page.on('pageerror', (err) => pageErrors.push(err.message))
   await isolateUiPrefs(page)
   await loadHome(page)
-  await openLead(page)
+  await openLead(page, PROJECT)
   const rail = page.getByTestId('org-rail')
   const forHim = rail.locator('[data-testid="org-thread"][data-group="needs"], [data-testid="org-thread"][data-group="read"]')
 
@@ -145,7 +98,7 @@ test('one subject, one card: the task\'s ask holds the lead\'s result, and his a
   await expect(own).toHaveAttribute('data-asked-in', ids.owner)
   await expect(own.getByTestId('org-thread-asked-in')).toContainText('asks you about this now: answer on its card')
   await page.waitForTimeout(1_500)
-  await shot(page, '1-one-card')
+  await shot(page, 'thread-fold-under-task', '1-one-card')
 
   // 2. He clicks a choice on the task's card: nothing is left for him, and the result stays behind it.
   await ask.getByRole('button', { name: /Design 9 \(recommended\)/ }).click()
@@ -155,7 +108,7 @@ test('one subject, one card: the task\'s ask holds the lead\'s result, and his a
   // It holds: nothing has come back for him a few seconds later.
   await page.waitForTimeout(3_000)
   await expect(forHim).toHaveCount(0)
-  await shot(page, '2-answered')
+  await shot(page, 'thread-fold-under-task', '2-answered')
   await page.waitForTimeout(1_500)
   expect(pageErrors).toEqual([])
 })

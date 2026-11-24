@@ -57,12 +57,15 @@ export function FollowUp({ threadId, title, owner, onSend }: {
 /**
  * The task that already asks him this thread's decision: he answers it there (one click opens it).
  * `via: 'thread'`: this thread is a result, held by that task's own card on its subject while it
- * asks him and after he answered it there (core/org/thread-task-ask.ts heldResults).
+ * asks him and after he answered it there, or (`result`) while that card holds the task's newer
+ * result and after he read it (core/org/thread-subject-pairs.ts).
  */
 export function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   const openTask = useOpenTask();
   const held = a.via === 'thread';
-  const [lead, rest] = held
+  const [lead, rest] = held && a.result
+    ? a.answered ? ['You read the result of', ' on this: it comes back here when there is news.'] : ['', ' has the result on this: read it on its card. This one comes back when there is news here.']
+    : held
     ? a.answered ? ['You answered', ' on this: it comes back here when there is news.'] : ['', ' asks you about this now: answer on its card. This one comes back when it stops asking.']
     : a.answered ? ['Decided in', ': nothing more to decide here.'] : ['Asked in', ': answer it there. This thread comes back if that task stops asking it.'];
   return (
