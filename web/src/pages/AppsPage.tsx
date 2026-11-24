@@ -12,7 +12,8 @@
  * `#<plugin>:<panel>`), which still forward here (settings-routing legacyPluginTarget).
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
+import { useSearchParamsNow } from '@/hooks/useSearchParamsNow'
 import { useAppActivity, useAppCatalog } from '@/apps/hooks'
 import { AppsIcon } from '@/apps/icons'
 import { useSettingsConfig } from '@/hooks/useSettingsConfig'
@@ -99,7 +100,7 @@ function AppsPageBody() {
     return subscribeOpenLinks(show)
   }, [])
   const navigate = useNavigate()
-  const [params, setParams] = useSearchParams()
+  const [params, setParams] = useSearchParamsNow()
   const pluginId = params.get('plugin')
   const appKey = params.get('app')
   const detailOpen = Boolean(pluginId || appKey)

@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
-import { useLocation, useNavigationType, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigationType } from 'react-router-dom';
+import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import { useNotesTree, isNotesTreeCacheCurrent } from '@/hooks/useNotesTree';
 import { useNoteContent } from '@/hooks/useNoteContent';
 import { prefetchNoteOnHover } from '@/stores/note-content-cache';
@@ -243,7 +244,7 @@ function findTextInDom(root: HTMLElement, needles: string[]): HTMLElement | null
 const JUMP_FLASH_CLASS = 'notes-jump-flash';
 
 export function NotesPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParamsNow();
   const navigationType = useNavigationType();
   const location = useLocation();
   // A link followed inside a note adds a history entry, so Back returns to the note it was in

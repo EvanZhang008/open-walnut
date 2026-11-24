@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import { fetchMemoryBrowse, fetchMemory, fetchGlobalMemory, fetchUserMemory } from '@/api/memory';
 import { useEvent } from '@/hooks/useWebSocket';
 import { memoryDocKey, wasSavedHere, isDocSaveInFlight } from '@/stores/file-save-signal';
@@ -46,7 +46,7 @@ function readWidth(): number {
 }
 
 export function MemoryPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParamsNow();
   const [tree, setTree] = useState<MemoryBrowseTree | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

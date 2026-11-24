@@ -7,7 +7,7 @@
  * stays local to the views.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import {
   DndContext,
   DragOverlay,
@@ -58,7 +58,7 @@ function parseDroppableId(id: string): { zone: 'day' | 'allday' | 'col'; day: st
 }
 
 export function CalendarPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParamsNow();
   const { tasks, create } = useTasksContext();
   const { setPhase, deleteTask } = useUndoableTaskActions();
 

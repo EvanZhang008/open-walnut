@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import { VAULT_RAW_IO } from '@/components/notes/vault-raw-io';
 import { useNoteContent } from '@/hooks/useNoteContent';
@@ -19,7 +19,7 @@ import { openPopout } from './openPopout';
  * Wiki-link clicks open the target note in ITS OWN pop-out.
  */
 export function PopoutNote() {
-  const [params, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParamsNow();
   const notePath = params.get('path') ?? params.get('id') ?? '';
   // Opened by following a link (`create=1`): a note not written yet opens empty to write, as
   // on the Notes page; any other missing note shows as not here.

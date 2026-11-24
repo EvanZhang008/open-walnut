@@ -26,7 +26,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ICON_LOCK } from '@/components/common/Icons';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import type { Task } from '@open-walnut/core';
 import { slotTask, slotTaskIds, taskRowKey } from '@/components/org/org-task-tabs';
 import { buildOrgTree } from '@open-walnut/org-tree';
@@ -137,7 +138,7 @@ export function OrgPage() {
   const phone = usePhoneLayout();
   const now = useMinuteNow();
   const epoch = useSessionStatusEpoch();
-  const [params, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParamsNow();
   const [query, setQuery] = useState('');
   const [chartOpen, setChartOpen] = useState(false);
   const [routerSetup, setRouterSetup] = useState(() => params.get('router_setup') === '1');

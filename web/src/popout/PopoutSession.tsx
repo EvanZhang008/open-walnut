@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ICON_CHAT } from '@/components/common/Icons';
@@ -31,7 +32,7 @@ export function PopoutSession() {
 }
 
 function PopoutSessionPanel() {
-  const [params, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParamsNow();
   const navigate = useNavigate();
   const id = params.get('id') ?? '';
   const [fork, setFork] = useState<DraftColumn | null>(null);
