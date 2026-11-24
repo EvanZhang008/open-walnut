@@ -263,7 +263,8 @@ export async function refreshRevokedHosts(): Promise<string[]> {
   }
   const retry = [...bridgeRetry].filter((k) => hostRevokedNow(k))
   bridgeRetry.clear()
-  if (retry.length) void revokeBridge(retry).catch(() => { retry.forEach((k) => bridgeRetry.add(k)) })
+  // Not awaited: a slow companion never holds a ban read up (its fetch waits up to 10 s).
+  if (retry.length) bridgeWork = revokeBridge(retry).then(() => undefined, () => { retry.forEach((k) => bridgeRetry.add(k)) })
   // A key judged an alias of a ban since it was made is written into the ban's record: a restart keeps it banned (S1).
   for (const r of revoked) {
     const more = stickyAliasesOf(r.hostKey).filter((k) => !(r.keys ?? []).includes(k))
@@ -347,8 +348,12 @@ type BridgeRevoke = { revoked: string[]; failed: string[] }
 const bridgeRetry = new Set<string>()
 /** The first ban read of this process tried every banned name's token (refreshRevokedHosts). */
 let bridgeSwept = false
+/** The last delete of tokens a ban read started (tests wait on it). */
+let bridgeWork: Promise<void> = Promise.resolve()
 /** Tests: as after a boot. */
-export function _resetBridgeSweepForTesting(): void { bridgeSwept = false; bridgeRetry.clear() }
+export function _resetBridgeSweepForTesting(): void { bridgeSwept = false; bridgeRetry.clear(); bridgeWork = Promise.resolve() }
+/** Tests: the token deletes the last ban read started, settled. */
+export function _bridgeWorkForTesting(): Promise<void> { return bridgeWork }
 
 /** Every name the ban on `hostKey` covers now: itself, its ban's key and the keys it named, its aliases. */
 async function bannedNamesOf(hostKey: string): Promise<string[]> {

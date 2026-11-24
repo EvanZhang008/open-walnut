@@ -36,7 +36,7 @@ import {
 } from '../../../src/core/session-channel/revoked-hosts.js'
 import { gateSessionCommand, REVOKED_PERSON_ONLY_COMMANDS, REVOKED_REFUSES_COMMANDS } from '../../../src/providers/ephemeral-session-gate.js'
 import { asPersonCall, inPersonCall, markPersonRequest, outsidePersonCall } from '../../../src/core/session-channel/person-call.js'
-import { _resetBridgeSweepForTesting, refreshRevokedHosts } from '../../../src/core/session-channel/leader-issue.js'
+import { _bridgeWorkForTesting, _resetBridgeSweepForTesting, refreshRevokedHosts } from '../../../src/core/session-channel/leader-issue.js'
 import { mintHostCredential, revokeHostDoor } from '../../../src/core/session-channel/host-credentials.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { EventEmitter } from 'node:events'
@@ -154,10 +154,11 @@ describe('S2: a revoked host is handed no credential and carries none of this Wa
     try {
       _resetBridgeSweepForTesting()
       await refreshRevokedHosts()
-      await vi.waitFor(() => expect(asked).toEqual(['https://companion.example.test/api/devices/bridge-devbox-w']))
-      // Done once a boot: the next read asks nothing.
+      await _bridgeWorkForTesting()
+      expect(asked).toEqual(['https://companion.example.test/api/devices/bridge-devbox-w'])
+      // Done once a boot: the next read starts no delete.
       await refreshRevokedHosts()
-      await new Promise((r) => setTimeout(r, 30))
+      await _bridgeWorkForTesting()
       expect(asked).toHaveLength(1)
     } finally { fetchMock.mockRestore(); companion.on = false; _resetBridgeSweepForTesting() }
   })

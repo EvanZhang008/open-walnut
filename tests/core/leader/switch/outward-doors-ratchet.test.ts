@@ -175,9 +175,10 @@ describe('every outward primitive is called only where a door guards it (source)
     expect(sites(/\bfetch\(/, (rel) => rel === 'core/cloud-ingest.ts'), NEW_SITE).toEqual({ 'core/cloud-ingest.ts': 5 })
     expect(sites(/\.send(?:\?\.)?\('mobile-event'/), NEW_SITE)
       .toEqual({ 'core/projection-cache.ts': 1, 'web/routes/events-v1.ts': 1 })
-    // The companion's devices (a machine token's create and revoke, the owner adoption).
+    // The companion's devices (a machine token's create and revoke, the owner adoption, and the
+    // tokens of a host the person revoked: revokeBridgeTokens).
     expect(sites(/\bfetch\(/, (rel) => rel === 'integrations/cloud-bridge-config.ts'), NEW_SITE)
-      .toEqual({ 'integrations/cloud-bridge-config.ts': 3 })
+      .toEqual({ 'integrations/cloud-bridge-config.ts': 4 })
     expect(callSites('mintMachineToken'), NEW_SITE).toEqual({ 'integrations/cloud-bridge-config.ts': 1 })
     expect(callSites('adoptOnce'), NEW_SITE).toEqual({ 'integrations/cloud-bridge-config.ts': 1 })
   })
@@ -344,6 +345,7 @@ const PRIMITIVE_OF: Record<string, RegExp | null> = {
   'web/routes/events-v1.ts#forwardMobileEventToBridge': /\.send\('mobile-event'/,
   'integrations/cloud-bridge-config.ts#mintMachineToken': /\bfetch\(/,
   'integrations/cloud-bridge-config.ts#adoptOnce': /\bfetch\(/,
+  'integrations/cloud-bridge-config.ts#revokeBridgeTokens': /\bfetch\(/,
   'core/session-channel/leader-issue.ts#issueOnce': /mintHostCredential\(/,
 }
 

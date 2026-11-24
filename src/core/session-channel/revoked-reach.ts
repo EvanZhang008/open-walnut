@@ -37,6 +37,8 @@ export type Reach =
 const refused = (what: string, file: string, fn: string): Reach => ({ verdict: 'refused', what, check: { file, fn } })
 const stays = (what: string, why: string): Reach => ({ verdict: 'stays', what, why })
 const rows = (r: Reach, names: readonly string[], prefix: string): Record<string, Reach> => Object.fromEntries(names.map((n) => [`${prefix}${n}`, r]))
+/** A list of names, written as words: never a quoted name, which other ratchets count as a call site of that command. */
+const words = (list: string): string[] => list.split(/\s+/).filter(Boolean)
 
 const DC = 'src/providers/daemon-connection.ts'
 const relay = (what: string, fn: string): Reach => refused(`${what}, relayed by its daemon`, DC, fn)
@@ -95,7 +97,7 @@ export const REVOKED_REACH: Readonly<Record<string, Reach>> = {
   'daemon-event:launcher-facts': stays('its launcher\'s facts', 'kept on the link only, to read its service\'s version'),
   'daemon-event:leader-lost': stays('its note that the companion led it', 'the leader takes the lead back: its own act (the journal it then drains is held)'),
   'daemon-event:oneshot.': stays('the output of one-shot runs this leader started there', 'answers to the leader\'s own calls (a new one is refused: cmd:oneshot.run)'),
-  'daemon-event:gateway-request': refused('its sessions\' `walnut` calls (every op, origin host:<key>)', 'src/core/peers/capability-router.ts', 'export async function handleGatewayCapability('),
+  'daemon-event:gateway-request': refused('its sessions\' `walnut` calls (every op, origin host:<key>)', 'src/core/peers/capability-router.ts', 'export async function handleGatewayCapability'),
   'daemon-event:offline-journal': HELD,
   'daemon-event:stt-request': relay('a voice input to transcribe', 'private async handleSttRequest('),
   'daemon-event:launch-request': relay('a new session from the phone', 'private async handleLaunchRequest('),
@@ -104,7 +106,7 @@ export const REVOKED_REACH: Readonly<Record<string, Reach>> = {
   'daemon-event:trigger.checked': relay('its triggers\' check reports', 'private dispatchTriggerEvent('),
   'daemon-event:trigger.fired': relay('its triggers\' fires (kept unacked on the host)', 'private dispatchTriggerEvent('),
   // The session handlers' own event names (consumer files below).
-  ...rows(SESSION_EVENT, ['jsonl', 'exit', 'session_state', 'attached', 'acp_state', 'bridge-offline', 'agent', 'snapshot', 'stderr_tail'], 'daemon-event:'),
+  ...rows(SESSION_EVENT, words(`jsonl exit session_state attached acp_state bridge-offline agent snapshot stderr_tail`), 'daemon-event:'),
 
   'consumer:src/providers/remote-session-manager.ts': SESSION_EVENT,
   'consumer:src/providers/acp-session.ts': SESSION_EVENT,
@@ -130,52 +132,63 @@ export const REVOKED_REACH: Readonly<Record<string, Reach>> = {
   'copy:pushDaemonHooks': stays('the compiled hook rules', 'guards on the sessions still running there; withholding them would loosen them'),
   'copy:pushCopiesAgain': stays('the copies again after an allow', 'each push above reads the ban itself'),
 
-  ...rows(SPAWN, ['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'bridgeResume', 'agent.start', 'agent.newSession'], 'cmd:'),
+  ...rows(SPAWN, words(`start acpStart acpNewSession oneshot.run oneshot.prewarm bridgeResume agent.start agent.newSession`), 'cmd:'),
   'cmd:host.slice': refused('its copy of tasks, notes and memory', DC, '  pushHostSlice(): void {'),
   'cmd:skills.sync': refused('this Walnut\'s skills', DC, '  pushSkillSync(): void {'),
   'cmd:triggers.configure': refused('this Walnut\'s triggers', DC, '  pushTriggersNow(): Promise<void> {'),
   'cmd:bridge.configure': refused('a machine token for the cloud bridge (the bridge is turned off there)', DC, '  pushBridgeConfig(): void {'),
-  ...rows(refused('its replica\'s files and pictures', DC, '  pushHostReplica(): void {'), ['replica.put', 'replica.sync', 'replica.drop', 'attachments.put', 'attachments.sync', 'attachments.drop', 'attachments.status'], 'cmd:'),
-  ...rows(refused('a secret of the person\'s (new or rotated)', 'src/core/secrets/fleet-secrets.ts', 'export function reconcileHost('), ['secrets.put', 'secrets.sync'], 'cmd:'),
+  ...rows(refused('its replica\'s files and pictures', DC, '  pushHostReplica(): void {'), words(`replica.put replica.sync replica.drop attachments.put attachments.sync attachments.drop attachments.status`), 'cmd:'),
+  ...rows(refused('a secret of the person\'s (new or rotated)', 'src/core/secrets/fleet-secrets.ts', 'export function reconcileHost('), words(`secrets.put secrets.sync`), 'cmd:'),
   'cmd:jobs.configure': refused('a plugin\'s jobs and their settings (its jobs are taken off it)', 'src/core/plugin-jobs/manager.ts', 'async function reconcileOnce('),
-  ...rows(PERSON, ['exec.run', 'exec.script', 'fs.write', 'fs.writePart', 'fs.copy', 'fs.mkdir', 'fs.rename', 'fs.rm', 'git.commitStart', 'http.request',
-    'mcp.call', 'mcp.tools', 'triggers.test', 'triggers.run', 'transfer.apply', 'transfer.fetch', 'workspace.create', 'workspace.runScript',
-    'turns.restore', 'vscode.ensure', 'stream.open', 'taskdir.ensure', 'service.update'], 'cmd:'),
-  ...rows(INPUT, ['send', 'sendRaw', 'appendUserMarker', 'setMode', 'acpSend', 'acpSteer', 'acpRespond', 'acpCancel', 'acpSetConfigOption', 'acpSubscribe', 'acpState', 'acpStop',
-    'agent.send', 'agent.steer', 'agent.respond', 'agent.cancel', 'agent.setOption', 'agent.subscribe', 'agent.state', 'agent.stop', 'subscribe-agent', 'unsubscribe-agent',
-    'attach', 'detach', 'getState', 'status', 'stop', 'kill', 'rename', 'cancelPendingStart', 'forceSettlePermissionRequests', 'line.fate', 'turns.guard', 'oneshot.cancel'], 'cmd:'),
-  ...rows(LINE_FILES, ['upload.part', 'image.save'], 'cmd:'),
-  ...rows(AIM, ['exec.list', 'exec.read', 'exec.kill', 'fs.find', 'fs.grep', 'fs.ls', 'fs.read', 'fs.readBounded', 'fs.readImage', 'fs.readRange',
-    'fs.resolvePath', 'fs.stat', 'git.commitJob', 'git.commitPlan', 'git.diff', 'git.ensureExcluded', 'git.fileLog',
-    'git.fileShow', 'git.refs', 'git.status', 'logs.tail', 'ports.list', 'ports.stop', 'taskdir.list', 'taskdir.prune', 'taskdir.pruneBuilds',
-    'taskdir.pruneCaches', 'taskdir.remove', 'taskdir.sizes', 'transcript.archive', 'transcript.restore', 'transcript.rewindProbe', 'usage.codexOutside', 'usage.costState', 'usage.scan',
-    'usage.sessionCost', 'usage.budget.get', 'usage.budget.list', 'history.readyKeys', 'history.readyView', 'read-history', 'markers.find', 'changes.compute', 'changes.file', 'cli.holder',
-    'caller.check', 'host.facts', 'host.fix', 'host.preflight', 'host.vitals', 'host.load', 'host.endpoint', 'hello', 'ping', 'list', 'net.status', 'net.identity', 'net.probe',
-    'hub.status', 'server.status', 'bridge.status', 'vscode.status', 'mcp.list', 'mcp.result', 'turns.list', 'turns.diff',
-    'transfer.pack', 'transfer.reach', 'transfer.realpath', 'transfer.scan', 'transfer.clear', 'transfer.recent',
-    'workspace.detect', 'workspace.job', 'workspace.status', 'workspace.repos', 'workspace.remove', 'workspace.scriptsFile', 'replica.status', 'triggers.state.snapshot',
-    'jobs.status', 'jobs.logs', 'jobs.http', 'sessions.describeExternal', 'sessions.discoverExternal', 'acpHostEngines', 'acpModelCatalog', 'invalidateModelCatalog',
-    'secrets.list', 'secrets.remove', 'offline.drain', 'offline.ack', 'offline.blob', 'cron.metadata', 'desktop.restart', 'desktop.updateStatus', 'demo.quiesce',
-    'adoptAppliedSettings', 'undoExpectedTeardown', 'write-inbox'], 'cmd:'),
-  ...rows(CONFIG, ['hooks.configure', 'server.configure', 'net.configure', 'net.forward', 'net.invites', 'net.join', 'workspace.configure', 'leader.configure', 'leader.claim',
-    'leader.spawnTemplate', 'turns.configure', 'usage.budget.configure', 'cron.supervision', 'service.handover'], 'cmd:'),
-  ...rows(ANSWER, ['control-result', 'launch-result', 'message-result', 'stt-result', 'gateway-result', 'feature.result'], 'cmd:'),
-  ...rows(LOCAL_ONLY, ['mobile-event', 'fill_login', 'fill_code', 'tabs', 'feature.request'], 'cmd:'),
-  ...rows(STREAM, ['stream.lane', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close', 'stream.resize', 'client.role'], 'cmd:'),
-  ...rows(NOT_THIS_LINK, ['follower.hello', 'follower.status', 'follower.report', 'follower.sessions', 'follower.send', 'follower.permission', 'follower.op', 'follower.peer',
-    'follower.pending', 'follower.triggers', 'follower.trigger.test', 'follower.gateway', 'follower.trigger.deliver', 'follower.start',
-    'session.launch', 'session.control', 'session.permission', 'session.message', 'stt', 'bridge.peer', 'leader.witness', 'leader.deliver', 'leader.settings', 'leader.control'], 'cmd:'),
-  ...rows(TRIGGER_ANSWER, ['triggers.ack', 'triggers.claim'], 'cmd:'),
+  ...rows(PERSON, words(`exec.run exec.script fs.write fs.writePart fs.copy fs.mkdir fs.rename fs.rm git.commitStart
+    http.request mcp.call mcp.tools triggers.test triggers.run transfer.apply transfer.fetch
+    workspace.create workspace.runScript turns.restore vscode.ensure stream.open taskdir.ensure
+    service.update`), 'cmd:'),
+  ...rows(INPUT, words(`send sendRaw appendUserMarker setMode acpSend acpSteer acpRespond acpCancel acpSetConfigOption
+    acpSubscribe acpState acpStop agent.send agent.steer agent.respond agent.cancel agent.setOption
+    agent.subscribe agent.state agent.stop subscribe-agent unsubscribe-agent attach detach getState
+    status stop kill rename cancelPendingStart forceSettlePermissionRequests line.fate turns.guard
+    oneshot.cancel`), 'cmd:'),
+  ...rows(LINE_FILES, words(`upload.part image.save`), 'cmd:'),
+  ...rows(AIM, words(`exec.list exec.read exec.kill fs.find fs.grep fs.ls fs.read fs.readBounded fs.readImage fs.readRange
+    fs.resolvePath fs.stat git.commitJob git.commitPlan git.diff git.ensureExcluded git.fileLog
+    git.fileShow git.refs git.status logs.tail ports.list ports.stop taskdir.list taskdir.prune
+    taskdir.pruneBuilds taskdir.pruneCaches taskdir.remove taskdir.sizes transcript.archive
+    transcript.restore transcript.rewindProbe usage.codexOutside usage.costState usage.scan
+    usage.sessionCost usage.budget.get usage.budget.list history.readyKeys history.readyView
+    read-history markers.find changes.compute changes.file cli.holder caller.check host.facts host.fix
+    host.preflight host.vitals host.load host.endpoint hello ping list net.status net.identity net.probe
+    hub.status server.status bridge.status vscode.status mcp.list mcp.result turns.list turns.diff
+    transfer.pack transfer.reach transfer.realpath transfer.scan transfer.clear transfer.recent
+    workspace.detect workspace.job workspace.status workspace.repos workspace.remove
+    workspace.scriptsFile replica.status triggers.state.snapshot jobs.status jobs.logs jobs.http
+    sessions.describeExternal sessions.discoverExternal acpHostEngines acpModelCatalog
+    invalidateModelCatalog secrets.list secrets.remove offline.drain offline.ack offline.blob
+    cron.metadata desktop.restart desktop.updateStatus demo.quiesce adoptAppliedSettings
+    undoExpectedTeardown write-inbox`), 'cmd:'),
+  ...rows(CONFIG, words(`hooks.configure server.configure net.configure net.forward net.invites net.join workspace.configure
+    leader.configure leader.claim leader.spawnTemplate turns.configure usage.budget.configure
+    cron.supervision service.handover`), 'cmd:'),
+  ...rows(ANSWER, words(`control-result launch-result message-result stt-result gateway-result feature.result`), 'cmd:'),
+  ...rows(LOCAL_ONLY, words(`mobile-event fill_login fill_code tabs feature.request`), 'cmd:'),
+  ...rows(STREAM, words(`stream.lane stream.accept stream.data stream.ack stream.end stream.close stream.resize client.role`), 'cmd:'),
+  ...rows(NOT_THIS_LINK, words(`follower.hello follower.status follower.report follower.sessions follower.send follower.permission
+    follower.op follower.peer follower.pending follower.triggers follower.trigger.test follower.gateway
+    follower.trigger.deliver follower.start session.launch session.control session.permission
+    session.message stt bridge.peer leader.witness leader.deliver leader.settings leader.control`), 'cmd:'),
+  ...rows(TRIGGER_ANSWER, words(`triggers.ack triggers.claim`), 'cmd:'),
 
   'op:subagent_run': refused('a subagent there, before any copy of the caller\'s work goes', 'src/core/subagents/registry.ts', 'export async function startLightSubagent('),
-  ...rows(TASK_START, ['task_start', 'task_create', 'session_start'], 'op:'),
+  ...rows(TASK_START, words(`task_start task_create session_start`), 'op:'),
   'op:task_move': refused('a task moved there, before its old session stops or its work is packed', 'src/core/sessions/engine-switch.ts', 'async function switchFrom('),
   'op:task_transfer': refused('a task\'s work moved there as a new task, before its workspace or conversation is packed', 'src/core/transfer/planner.ts', 'export function planTransfer('),
-  ...rows(PERSON, ['host_exec', 'host_exec_pinned', 'host_http', 'host_copy', 'host_mcp_tools', 'host_mcp_call', 'host_daemon_update', 'trigger_test'], 'op:'),
-  ...rows(AIM_OP, ['host_exec_read', 'host_exec_stop', 'host_exec_list', 'host_copy_result', 'host_mcp_list', 'host_mcp_result', 'host_load', 'secret_list', 'workspace_providers'], 'op:'),
-  ...rows(READ_HERE, ['host_list', 'host_get', 'host_profile_get'], 'op:'),
+  ...rows(PERSON, words(`host_exec host_exec_pinned host_http host_copy host_mcp_tools host_mcp_call host_daemon_update
+    trigger_test`), 'op:'),
+  ...rows(AIM_OP, words(`host_exec_read host_exec_stop host_exec_list host_copy_result host_mcp_list host_mcp_result
+    host_load secret_list workspace_providers`), 'op:'),
+  ...rows(READ_HERE, words(`host_list host_get host_profile_get`), 'op:'),
   'op:trigger_create': stays('a trigger aimed at it', 'kept here only: its push to the host is refused (copy:pushTriggers), so nothing is armed there'),
-  ...rows(NOT_A_MACHINE, ['topic_create', 'topic_members', 'router_create'], 'op:'),
+  ...rows(NOT_A_MACHINE, words(`topic_create topic_members router_create`), 'op:'),
 }
 
 /** The sentences of a table's rows of one verdict, each once, in table order. */

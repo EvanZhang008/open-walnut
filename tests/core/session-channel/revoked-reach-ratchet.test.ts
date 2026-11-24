@@ -63,12 +63,13 @@ function bodyOpen(src: string, from: number): number {
   return -1
 }
 
-/** The body of the function (or block) that starts at `signature`: ending in `(` (its parameters follow) or `{` (the body itself). */
+/** The body of the function (or block) that starts at `signature`: ending in `(` (its parameters follow), `{` (the body itself), or a bare name. */
 function bodyOf(src: string, signature: string): string {
   const start = src.indexOf(signature)
   expect(start, signature).toBeGreaterThan(-1)
   const end = start + signature.length
-  const open = signature.endsWith('{') ? end - 1 : signature.endsWith('(') ? bodyOpen(src, end) : src.indexOf('{', end)
+  // A bare function name (`export async function x`): its parameters follow.
+  const open = signature.endsWith('{') ? end - 1 : signature.endsWith('(') ? bodyOpen(src, end) : src[end] === '(' ? bodyOpen(src, end + 1) : src.indexOf('{', end)
   expect(src[open], signature).toBe('{')
   return src.slice(start, blockEnd(src, open) + 1)
 }
@@ -157,7 +158,7 @@ describe('every way a host reaches this leader is classified for a revoke', () =
       expect(first, `${k}: the ban is read before any work`).toBeLessThan(work === -1 ? Infinity : work)
     }
     // The gateway: before the switch over its capabilities. The drain: before it reads one record, and each round.
-    const gateway = bodyOf(read('src/core/peers/capability-router.ts'), 'export async function handleGatewayCapability(')
+    const gateway = bodyOf(read('src/core/peers/capability-router.ts'), 'export async function handleGatewayCapability')
     expect(gateway.indexOf('revokedAs(')).toBeGreaterThan(-1)
     expect(gateway.indexOf('revokedAs(')).toBeLessThan(gateway.indexOf('switch (capability)'))
     const handover = bodyOf(read('src/core/offline-handover.ts'), 'async function handover(')

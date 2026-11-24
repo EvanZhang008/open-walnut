@@ -36,6 +36,8 @@ const HOLDERS: Record<string, How> = {
   'src/core/sessions/held-notices-store.ts#quietWaitWhy': { 'no-text': 'why a quiet note past its max hold still waits, for op_result; the next lap after a restart says it again' },
   'src/core/sessions/held-notices-sweep.ts#quietRetryAt': { 'no-text': 'when a failed delivery of quiet notes is tried again; a restart only tries sooner' },
   'src/core/sessions/held-notices-sweep.ts#goneSince': { 'no-text': 'when a sweep lap first found a session gone; a restart only means one more lap before what waits for it is moved or dropped' },
+  // The queue itself: what it keeps beside its rows (the rows are in the queue file).
+  'src/core/session-message-queue.ts#sessionHostSeen': { 'no-text': 'which host each session runs on, read from its row once a minute while a ban stands (revokedHostOfSession); a restart reads it again' },
   // Status lines and turn notices of the tasks a node follows.
   'src/core/sessions/status-riding.ts#riding': { durable: 'status-riding.json' },
   'src/core/sessions/status-riding.ts#toldDecisions': { durable: 'status-riding.json' },
