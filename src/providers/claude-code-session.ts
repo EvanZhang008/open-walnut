@@ -41,7 +41,7 @@ import { handOverPending, setLeaderDelivery } from './host-handover.js'
 import { hostStandsDown, judgingHostOf } from '../core/sessions/judge-of.js'
 import { acpResumeHostOf, resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
 import { assertHostNotRevoked } from '../core/session-channel/revoked-hosts.js'
-import { execHostOf, rowOwnedHere, thisHostKey } from '../core/sessions/session-row-owner.js'
+import { cliHostOf, execHostOf, rowOwnedHere, thisHostKey } from '../core/sessions/session-row-owner.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
@@ -4088,7 +4088,7 @@ export class ClaudeCodeSession {
     let file: { fileSize: number; streamEpoch?: string } | null = null
     if (told && typeof streamEvidence === 'string' && streamEvidence !== EVIDENCE_TIMEOUT) {
       const { statStreamFile } = await import('../core/session-reconcile.js')
-      const st = await statStreamFile(record.claudeSessionId, record.host).catch(() => null)
+      const st = await statStreamFile(record.claudeSessionId, execHostOf(record)).catch(() => null)
       if (st && typeof st !== 'string') file = { fileSize: st.size, ...(st.epoch ? { streamEpoch: st.epoch } : {}) }
     }
     const replay = judgedReplayFloor(ownJudged, session._consumedOffset, streamEvidence, told, file, healed)
@@ -12352,7 +12352,7 @@ export class SessionRunner {
     const record = await getSessionByClaudeId(sessionId)
     if (!record || isAcpEngine(record.engine)) return !requireKnown
     const { getConnectedDaemonConnection, probeDaemonSession, readDaemonLineFate } = await import('./daemon-connection.js')
-    const connection = getConnectedDaemonConnection(record.host ?? '__local__')
+    const connection = getConnectedDaemonConnection(cliHostOf(record))
     const groups = new Map<string, QueuedMessage[]>()
     for (const row of rows) {
       if (!row.lineUuid) continue
@@ -12373,7 +12373,7 @@ export class SessionRunner {
         if (known.state === 'started' && known.answer === 'pending') {
           // Keep the backup until a live wrapper owns the answer. Restoring a row
           // alone would strand it here, or let the next boot send it again.
-          const probe = await probeDaemonSession(record.host ?? '__local__', sessionId)
+          const probe = await probeDaemonSession(cliHostOf(record), sessionId)
           if (!probe?.alive || !Number.isSafeInteger(probe.pid) || probe.pid! <= 1) {
             repaired = !requireKnown && repaired
             continue
@@ -16027,7 +16027,7 @@ export class SessionRunner {
       ])
       const config = await getConfig()
       // The same inputs a fresh start reads (handleStart).
-      const mountHost = record.host && record.host !== '__local__' ? record.host : '__local__'
+      const mountHost = cliHostOf(record)
       const next = mountOnResume(record, {
         setting: config.session?.premount_walnut_mcp,
         cloud: isCompanion(),
@@ -16129,7 +16129,7 @@ export class SessionRunner {
       let lastTreeUuid: string | undefined
       const { probeRewindViaDaemon } = await import('../core/sessions/session-rewind.js')
       const probe = await Promise.race([
-        probeRewindViaDaemon({ sessionId, cwd: record.cwd, host: record.host }, {}),
+        probeRewindViaDaemon({ sessionId, cwd: record.cwd, host: execHostOf(record) }, {}),
         deadline,
       ])
       if (probe === 'timeout') { timedOut(); return }
@@ -16138,7 +16138,7 @@ export class SessionRunner {
       } else {
         const { readSessionJsonlContent } = await import('../core/session-file-reader.js')
         const raw = await Promise.race([
-          readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined),
+          readSessionJsonlContent(sessionId, record.cwd, execHostOf(record)),
           deadline,
         ])
         if (raw === 'timeout') { timedOut(); return }
@@ -16170,7 +16170,7 @@ export class SessionRunner {
         ],
       })
       const { invalidateSessionHistoryCaches } = await import('../core/session-history.js')
-      await invalidateSessionHistoryCaches(sessionId, record.host ?? undefined)
+      await invalidateSessionHistoryCaches(sessionId, execHostOf(record))
       log.session.info('death-window cold resume recorded a rewind cut', {
         sessionId, rewindPoint: resumeSessionAt, lastUuidAtCommit: lastTreeUuid,
       })
@@ -16482,8 +16482,8 @@ export class SessionRunner {
   /**
    * Redeliver pending queue messages for sessions on a host that just
    * (re)connected. Called from the daemon pool's host-connected callback.
-   * Local sessions (host=null → '__local__') are included when the local
-   * daemon reconnects.
+   * This machine's sessions (cliHostOf: '__local__', a host replica's own
+   * rows included) are included when the local daemon reconnects.
    *
    * Parked rows are excluded (getAllSessionsWithPending ignores them) and the age
    * backstop runs first, so a permanently undeliverable message can't turn every
@@ -16500,7 +16500,7 @@ export class SessionRunner {
     const { getSessionByClaudeId: cancelledRecord } = await sessionPort().records.loadTracker()
     for (const sid of await cancelledSessionIds()) {
       const record = await cancelledRecord(sid)
-      if ((record?.host ?? '__local__') === hostKey) await this.recoverCancelledForSession(sid)
+      if (cliHostOf(record) === hostKey) await this.recoverCancelledForSession(sid)
     }
     await parkStalePending().catch(() => [])
     const pendingSessions = await getAllSessionsWithPending()
@@ -16525,8 +16525,7 @@ export class SessionRunner {
         // (plan executed / user closed); resuming it would spawn a CLI for a
         // session no UI entry point points at. Leave its messages pending.
         if (record.archived && !getAcpIdentityReplacementTarget(record)) return
-        const recordHost = record.host ?? '__local__'
-        if (recordHost !== hostKey) return
+        if (cliHostOf(record) !== hostKey) return
         log.session.info('daemon reconnected — redelivering pending messages', { sessionId, hostKey })
         await this.processNext(sessionId)
       } catch (err) {
@@ -17019,7 +17018,7 @@ export class SessionRunner {
     if (isPermanentDeliveryFailure(err)) return null
     daemonLinks ??= await import('./daemon-connection.js').catch(() => null)
     const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
-    const host = (await getSessionByClaudeId(sessionId).catch(() => null))?.host ?? '__local__'
+    const host = cliHostOf(await getSessionByClaudeId(sessionId).catch(() => null))
     if (!isHostLinkFailure(err) && !linkDown(host)) return null
     const { hostDisplayNameFor } = await import('../core/hosts/host-display-name.js')
     return { host, name: host === '__local__' ? host : await hostDisplayNameFor(host) }
@@ -17225,7 +17224,7 @@ export class SessionRunner {
         try {
           const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
           const rec = await getSessionByClaudeId(sessionId)
-          if (!rec?.host || rec.host === '__local__') {
+          if (cliHostOf(rec) === '__local__') {
             const { ensureLocalDaemon } = await import('./session-manager.js')
             await ensureLocalDaemon()
           }

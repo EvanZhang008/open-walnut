@@ -89,7 +89,7 @@ describe.skipIf(!RUN)('a host-run session\'s whole life, every piece a real proc
     const sent = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text: 'ROUND legacy two' })
     expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
     await waitFor(() => hostStream(h.c, sid).some((l) => l.type === 'result' && String(l.result).includes('ROUND legacy two')), 120_000, 'the legacy session\'s next answer, in the host daemon').catch((err) => { throw new Error(say(String(err))) })
-    expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'here', host: null })
     expect((await macRow(sid))?.judge).toBeUndefined()
     expect(await channelEvents(sid)).toEqual([])
     expect(await hostRow(sid).then((r) => r?.judge)).toBeUndefined()
@@ -212,7 +212,7 @@ describe.skipIf(!RUN)('a host-run session\'s whole life, every piece a real proc
     expect(await h.mac(`/judge?sid=${toSid}`)).toEqual({ judge: 'host', host: HOST_KEY })
     expect(await macRow(toSid)).toMatchObject({ judge: 'host', host: HOST_KEY })
     // The old session stays the Mac's, stopped by the transfer.
-    expect(await h.mac(`/judge?sid=${fromSid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${fromSid}`)).toEqual({ judge: 'here', host: null })
     await waitFor(async () => (await macRow(fromSid))?.process_status === 'stopped', 60_000, 'the old session to stop')
   }, 400_000)
 

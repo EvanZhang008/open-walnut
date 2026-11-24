@@ -201,9 +201,9 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
     // The Mac read past both records (its cursor at the host's head), and applied neither.
     await waitFor(async () => ((await h.mac(`/cursor?host=${HOST_KEY}`)).cursor?.seq ?? 0) >= at + 2, 60_000, 'the Mac to read the forged records').catch((err) => { throw new Error(say(String(err))) })
     expect((await h.mac(`/row?sid=${fresh}`)).row).toBeNull()
-    expect(await h.mac(`/judge?sid=${fresh}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${fresh}`)).toEqual({ judge: 'here', host: null })
     expect((await h.mac(`/row?sid=${mine}`)).row).toEqual(before)
-    expect(await h.mac(`/judge?sid=${mine}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${mine}`)).toEqual({ judge: 'here', host: null })
     expect(((await h.mac(`/events?sid=${fresh}`)) as ProbeEvent[]).filter((e) => e.source === 'host-channel')).toEqual([])
     // Counted in Walnut Health, never a popup (audience.ts).
     await waitFor(async () => ((await h.c.mac('GET', '/api/notifications')).json.feed as Array<Record<string, any>>).find((n) => n.dedupKey === `host-session-ownership:${HOST_KEY}`) ?? null, 30_000, 'the Walnut Health item')

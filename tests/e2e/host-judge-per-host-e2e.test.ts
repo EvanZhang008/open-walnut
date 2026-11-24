@@ -56,7 +56,7 @@ describe.skipIf(!RUN)('the switch per host: one host turned on by its own entry,
     expect(await judges()).toBe(false)
     const sid = await start('legacy zero')
     await waitFor(() => hostStream(h.c, sid).some((l) => l.type === 'result' && String(l.result).includes('ROUND legacy zero')), 120_000, 'the legacy answer').catch((err) => { throw new Error(say(String(err))) })
-    expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'here', host: null })
   }, 300_000)
 
   it('P1: runs_sessions true, no restart of either side: the copy names the host in its own row, the host starts its session side, and a new start is host-judged', async () => {
@@ -84,7 +84,7 @@ describe.skipIf(!RUN)('the switch per host: one host turned on by its own entry,
     await waitFor(async () => !(await judges()), 30_000, 'the Mac to stop handing starts to the host').catch((err) => { throw new Error(say(String(err))) })
     const legacy = await start('legacy two')
     await waitFor(() => hostStream(h.c, legacy).some((l) => l.type === 'result' && String(l.result).includes('ROUND legacy two')), 120_000, 'the legacy answer').catch((err) => { throw new Error(say(String(err))) })
-    expect(await h.mac(`/judge?sid=${legacy}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${legacy}`)).toEqual({ judge: 'here', host: null })
     const sent = await h.c.mac('POST', `/api/v1/sessions/${hostSid}/messages`, { text: 'AGAIN host one' })
     expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
     await waitFor(() => channelResult(hostSid, 'AGAIN host one'), 120_000, 'the host-judged session to answer after its host went off').catch((err) => { throw new Error(say(String(err))) })

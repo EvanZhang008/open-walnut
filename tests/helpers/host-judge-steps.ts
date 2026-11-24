@@ -57,7 +57,7 @@ export function hostJudgeSteps(get: () => HostJudgeCluster) {
     expect(st.status, JSON.stringify(st.json)).toBe(202)
     const sid = st.json.sessionId as string
     await waitFor(() => turnsWith(get().c, sid, message) > 0, 120_000, `the legacy session ${title} to answer`).catch(fail)
-    expect(await get().mac(`/judge?sid=${sid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await get().mac(`/judge?sid=${sid}`)).toEqual({ judge: 'here', host: null })
     return sid
   }
   /** No host refused a line of a session it judges, on any Mac leader so far. */

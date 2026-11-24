@@ -258,7 +258,7 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     const rec = (row.json.session ?? row.json) as Record<string, unknown>
     expect(rec).toMatchObject({ claudeSessionId: legacySid, host: HOST_KEY })
     expect(rec.judge).toBeUndefined()
-    expect(await h.mac(`/judge?sid=${legacySid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${legacySid}`)).toEqual({ judge: 'here', host: null })
     expect((await channelEvents(legacySid))).toEqual([])
     // The session the host already runs keeps going there.
     const again = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text: 'ROUND after off' })

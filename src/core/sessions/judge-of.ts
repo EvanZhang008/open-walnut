@@ -6,31 +6,43 @@
  *             own service assembles, runs and judges it. The leader keeps a copy (the channel
  *             applies it), forwards commands, and does none of the session's own work: no
  *             resend, respawn, recovery, snapshot repair or turn-end queue drain.
- *   'legacy'  everything else: today's path, the leader runs it.
+ *   'here'    this server runs and judges it, with the session classes and the session port on its
+ *             own data. On the leader that is (1) its own machine's sessions: the leader IS their
+ *             host, and they run the very code a host's service runs for its own sessions
+ *             (ClaudeCodeSession / SessionRunner / AcpSession, the same runtime link, the same
+ *             resend family), only with no channel between the judge and the leader, since they are
+ *             one process (tests/providers/session-classes-one-path.test.ts keeps the classes free
+ *             of a branch for them); and (2) the sessions of an ssh host whose service does not
+ *             judge them (not upgraded, or its switch off): the leader reads their lines over the
+ *             daemon link, the one path phase 4 removes.
+ *
+ * Until 2026-11-24 'here' was called 'legacy', which read as if the leader's own machine's
+ * sessions took an old path; the value is never stored (a row says only `judge: 'host'` or
+ * nothing), so the rename changes no data.
  *
  * For a start (no session yet): 'host' when the switch is on for that host (session-channel/switch.ts
  * hostRunsSessionsFor) and its service names SESSION_JUDGE_CAP; the leader side
  * (session-channel/leader-side.ts) installs that probe. With nothing installed, and on every server whose store never applied a
- * host's channel, every answer is 'legacy' at the cost of one small query once.
+ * host's channel, every answer is 'here' at the cost of one small query once.
  */
 import { anyChannelCursor, hostJudgedRuntimesInStore, sessionJudgeInStore, sessionTaskAndEngineInStore } from '../session-db.js'
 import { isAcpEngine } from '../agents/engine-registry.js'
 import { judgedByHost, rowOwnedHere, thisHostKey } from './session-row-owner.js'
 import type { SessionRecord } from '../types.js'
 
-export type Judge = 'host' | 'legacy'
+export type Judge = 'host' | 'here'
 
 /** Sessions known to be a host's (a start it answered, a row the channel applied): sid -> host. */
 const known = new Map<string, string>()
 /** Rows seen in the store that are not a host's; bounded, cleared when full. */
-const legacy = new Set<string>()
-const LEGACY_MEMO_MAX = 20_000
+const hereRows = new Set<string>()
+const HERE_MEMO_MAX = 20_000
 /** Sessions this host replica runs for its leader (taskSideOnLeader said so); bounded, cleared when full. */
 const ownHere = new Set<string>()
 /**
  * Sessions taken back from their host (forgetHostJudged): the store's row may still say the host's
  * for a moment (takeStartBack writes it back after its awaits), so a read in between learns nothing
- * from it. Cleared when the row reads legacy, or the host's start or row is noted again.
+ * from it. Cleared when the row reads as this server's, or the host's start or row is noted again.
  */
 const takenBack = new Set<string>()
 /**
@@ -48,7 +60,7 @@ let standsDown = false
 /**
  * The leader side's answer for a start on `host`: true (its own service runs it), the host key of
  * the service that runs it (another name of the same machine, whose service goes by that name),
- * or false / null (legacy).
+ * or false / null (this server judges it).
  */
 type StartProbe = (host: string) => boolean | string | null
 let startProbe: StartProbe | null = null
@@ -59,7 +71,7 @@ export function setHostJudgeProbe(probe: StartProbe | null): void {
 }
 
 /**
- * The host key whose service would run a new session started on `host`, or null (legacy): `host`
+ * The host key whose service would run a new session started on `host`, or null (this server would): `host`
  * itself, or the name its machine's one service goes by when `host` is another name of that
  * machine (an ssh row of a box that joined the host network: one daemon, one service).
  */
@@ -75,7 +87,7 @@ export function hostServiceKeyOf(host: string | undefined): string | null {
 export function noteHostJudged(sid: string, host: string): void {
   if (!sid || !host) return
   known.set(sid, host)
-  legacy.delete(sid)
+  hereRows.delete(sid)
   takenBack.delete(sid)
   anyCursor = true
   learnRuntime(sid)
@@ -87,7 +99,7 @@ export function noteHostJudged(sid: string, host: string): void {
  */
 export function forgetHostJudged(sid: string): void {
   known.delete(sid)
-  if (takenBack.size >= LEGACY_MEMO_MAX) takenBack.clear()
+  if (takenBack.size >= HERE_MEMO_MAX) takenBack.clear()
   takenBack.add(sid)
   const rt = runtimeOfSid.get(sid)
   if (rt) runtimeSessions.delete(rt)
@@ -101,12 +113,12 @@ function learnRuntime(sid: string): void {
   try { row = sessionTaskAndEngineInStore(sid) } catch { return }
   if (!row) return
   if (row.acpRuntimeId) {
-    if (runtimeSessions.size >= LEGACY_MEMO_MAX) runtimeSessions.clear()
+    if (runtimeSessions.size >= HERE_MEMO_MAX) runtimeSessions.clear()
     runtimeSessions.set(row.acpRuntimeId, sid)
     runtimeOfSid.set(sid, row.acpRuntimeId)
   } else if (!isAcpEngine((row.engine ?? undefined) as SessionRecord['engine'])) {
     // A native session has no worker, ever; an ACP one without its runtime yet is read again at its next row.
-    if (runtimeOfSid.size >= LEGACY_MEMO_MAX) runtimeOfSid.clear()
+    if (runtimeOfSid.size >= HERE_MEMO_MAX) runtimeOfSid.clear()
     runtimeOfSid.set(sid, null)
   }
 }
@@ -134,12 +146,12 @@ export function seedHostJudgedRuntimes(): number {
   return n
 }
 
-/** The host whose service judges `sid`, or null (a legacy session, or no such row). */
+/** The host whose service judges `sid`, or null (this server judges it, or no such row). */
 export function judgingHostOf(sid: string): string | null {
   if (!sid) return null
   const k = known.get(sid)
   if (k !== undefined) return k
-  if (legacy.has(sid)) return null
+  if (hereRows.has(sid)) return null
   if (anyCursor === null) {
     try { anyCursor = anyChannelCursor() } catch { return null }
   }
@@ -157,8 +169,8 @@ export function judgingHostOf(sid: string): string | null {
     return row.host
   }
   takenBack.delete(sid)
-  if (legacy.size >= LEGACY_MEMO_MAX) legacy.clear()
-  legacy.add(sid)
+  if (hereRows.size >= HERE_MEMO_MAX) hereRows.clear()
+  hereRows.add(sid)
   return null
 }
 
@@ -173,7 +185,7 @@ export function hostJudgedRowsMayExist(): boolean {
 
 /** Who judges this existing session. */
 export function judgeOf(sid: string): Judge {
-  return judgingHostOf(sid) !== null ? 'host' : 'legacy'
+  return judgingHostOf(sid) !== null ? 'host' : 'here'
 }
 
 /**
@@ -196,7 +208,7 @@ export function taskSideOnLeader(sid: string | null | undefined): boolean {
   const own = rowOwnedHere(row ? { judge: row.judgedByHost ? 'host' : undefined, host: row.host ?? undefined } : null, here)
   // A row this host made stays its own; asked on every event of its session (the hooks, a stream's phase).
   if (own) {
-    if (ownHere.size >= LEGACY_MEMO_MAX) ownHere.clear()
+    if (ownHere.size >= HERE_MEMO_MAX) ownHere.clear()
     ownHere.add(sid)
   }
   return own
@@ -204,24 +216,24 @@ export function taskSideOnLeader(sid: string | null | undefined): boolean {
 
 /** Who judges the session of a record the caller holds (a boot scan): the same rule, no lookup. */
 export function judgeOfRecord(rec: Pick<SessionRecord, 'judge' | 'host'> | null | undefined): Judge {
-  return judgedByHost(rec) && !rowOwnedHere(rec, thisHostKey()) ? 'host' : 'legacy'
+  return judgedByHost(rec) && !rowOwnedHere(rec, thisHostKey()) ? 'host' : 'here'
 }
 
 /**
  * Does this server run and judge `sid` itself? On the leader: every session but a host's (judgeOf
- * 'legacy'). On a host replica that runs its sessions: only its own rows (taskSideOnLeader); a
+ * 'here'). On a host replica that runs its sessions: only its own rows (taskSideOnLeader); a
  * copied row is its leader's (or another host's) to judge, never this one's. The resend, respawn
  * and recovery family asks this on both sides, so each session has exactly one of them acting.
  */
 export function judgedHere(sid: string): boolean {
-  return thisHostKey() ? !standsDown && taskSideOnLeader(sid) : judgeOf(sid) === 'legacy'
+  return thisHostKey() ? !standsDown && taskSideOnLeader(sid) : judgeOf(sid) === 'here'
 }
 
 /** The records this server runs and judges itself (a boot scan): judgedHere, from the record alone. */
 export function judgedHereRecords<R extends Pick<SessionRecord, 'judge' | 'host'>>(recs: readonly R[]): R[] {
   const here = thisHostKey()
   if (here) return standsDown ? [] : recs.filter((r) => rowOwnedHere(r, here))
-  return recs.filter((r) => judgeOfRecord(r) === 'legacy')
+  return recs.filter((r) => judgeOfRecord(r) === 'here')
 }
 
 /**
@@ -258,14 +270,17 @@ export function judgedHereOnly<E extends { data: unknown }, R>(handler: (event: 
   }
 }
 
-/** Who would judge a new session on `host`. A local start ('' or '__local__') is always the leader's. */
+/**
+ * Who would judge a new session on `host`. A start on this machine ('' or '__local__') is 'here':
+ * the leader is that machine's host and runs it on the one host-side path (see the header).
+ */
 export function judgeOfStart(host: string | undefined): Judge {
-  return hostServiceKeyOf(host) !== null ? 'host' : 'legacy'
+  return hostServiceKeyOf(host) !== null ? 'host' : 'here'
 }
 
 export function _resetJudgeOfForTesting(): void {
   known.clear()
-  legacy.clear()
+  hereRows.clear()
   ownHere.clear()
   takenBack.clear()
   runtimeSessions.clear()

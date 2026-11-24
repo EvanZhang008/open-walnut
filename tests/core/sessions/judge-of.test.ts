@@ -27,13 +27,13 @@ beforeEach(async () => {
 afterEach(() => { closeDb(); _resetSessionTrackerForTesting(); _resetJudgeOfForTesting() })
 
 describe('judgeOf', () => {
-  it('is legacy for every row while no host channel ever applied here', async () => {
+  it('is here for every row while no host channel ever applied here', async () => {
     await createSessionRecord('l1', '', 'p')
-    expect(judgeOf('l1')).toBe('legacy')
-    expect(judgeOf('missing')).toBe('legacy')
+    expect(judgeOf('l1')).toBe('here')
+    expect(judgeOf('missing')).toBe('here')
   })
 
-  it('is host for a row the channel wrote, legacy for the leader\'s own rows beside it', async () => {
+  it('is host for a row the channel wrote, here for the leader\'s own rows beside it', async () => {
     await createSessionRecord('l1', '', 'p')
     await applyHanded({
       hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 1 },
@@ -43,33 +43,33 @@ describe('judgeOf', () => {
     _resetJudgeOfForTesting()
     expect(judgeOf('h1')).toBe('host')
     expect(judgingHostOf('h1')).toBe('devbox')
-    expect(judgeOf('l1')).toBe('legacy')
+    expect(judgeOf('l1')).toBe('here')
   })
 
   it('knows a session its host just started before the row arrives', () => {
-    expect(judgeOf('new-sid')).toBe('legacy')
+    expect(judgeOf('new-sid')).toBe('here')
     noteHostJudged('new-sid', 'devbox')
     expect(judgeOf('new-sid')).toBe('host')
   })
 
   it('judges a record in hand by the same rule', () => {
     expect(judgeOfRecord({ judge: 'host', host: 'devbox' })).toBe('host')
-    expect(judgeOfRecord({ host: 'devbox' })).toBe('legacy')
-    expect(judgeOfRecord({ judge: 'host', host: '' })).toBe('legacy')
+    expect(judgeOfRecord({ host: 'devbox' })).toBe('here')
+    expect(judgeOfRecord({ judge: 'host', host: '' })).toBe('here')
     expect(judgedHereRecords([{ judge: 'host' as const, host: 'a' }, { host: 'b' }])).toEqual([{ host: 'b' }])
   })
 })
 
 describe('judgeOfStart', () => {
-  it('is legacy with no probe, for a local start, and when the probe says no', () => {
-    expect(judgeOfStart('devbox')).toBe('legacy')
+  it('is here with no probe, for a local start, and when the probe says no', () => {
+    expect(judgeOfStart('devbox')).toBe('here')
     setHostJudgeProbe((h) => h === 'devbox')
     expect(judgeOfStart('devbox')).toBe('host')
-    expect(judgeOfStart('other')).toBe('legacy')
-    expect(judgeOfStart(undefined)).toBe('legacy')
-    expect(judgeOfStart('__local__')).toBe('legacy')
+    expect(judgeOfStart('other')).toBe('here')
+    expect(judgeOfStart(undefined)).toBe('here')
+    expect(judgeOfStart('__local__')).toBe('here')
     setHostJudgeProbe(() => { throw new Error('boom') })
-    expect(judgeOfStart('devbox')).toBe('legacy')
+    expect(judgeOfStart('devbox')).toBe('here')
   })
 })
 

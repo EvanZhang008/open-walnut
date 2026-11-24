@@ -70,7 +70,7 @@ describe.skipIf(!RUN)('an older leader put in while the host runs sessions', () 
     expect(legacy.status, JSON.stringify(legacy.json)).toBe(202)
     const lsid = legacy.json.sessionId as string
     await waitFor(() => hostStream(h.c, lsid).some((l) => l.type === 'result' && String(l.result).includes('echo: ROUND old')), 120_000, 'the legacy answer').catch((err) => { throw new Error(say(h, String(err))) })
-    expect(await h.mac(`/judge?sid=${lsid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${lsid}`)).toEqual({ judge: 'here', host: null })
     expect((await h.mac(`/parses?sid=${lsid}`)).parses).toBeGreaterThan(0)
     // Still standing down: an older leader never opens the channel.
     expect((await h.host('/judging')).standsDown).toBe(true)

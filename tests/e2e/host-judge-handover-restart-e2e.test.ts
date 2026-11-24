@@ -136,7 +136,7 @@ describe.skipIf(!RUN)('a restart inside a hand-over\'s window', () => {
     await waitFor(async () => (await pendingOn(sidF)).length === 0, 60_000, 'no line of it left on the Mac').catch(fail)
     expect(since()).toContain('host resume: the host never took a resume whose answer was lost; delivered here as legacy')
     expect((await macRow(sidF))?.judge).toBeUndefined()
-    expect(await h.mac(`/judge?sid=${sidF}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${sidF}`)).toEqual({ judge: 'here', host: null })
     expect(await handover(sidF)).toEqual({ pending: false, onDisk: false })
     expect(cliArgs(sidF) ?? '').toContain(`--resume ${sidF}`)
     expect(turnsWith(h.c, sidF, 'ROUND f-lost')).toBe(1)

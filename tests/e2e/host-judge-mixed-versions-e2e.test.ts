@@ -60,7 +60,7 @@ async function legacyRun(h: HostJudgeCluster, hostCwd: string, word: string): Pr
   const rec = (row.json.session ?? row.json) as Record<string, unknown>
   expect(rec).toMatchObject({ claudeSessionId: sid, host: HOST_KEY })
   expect(rec.judge).toBeUndefined()
-  expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'legacy', host: null })
+  expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'here', host: null })
   expect((await h.mac(`/parses?sid=${sid}`)).parses).toBeGreaterThan(0)
   expect(((await h.mac(`/events?sid=${sid}`)) as ProbeEvent[]).filter((e) => e.source === 'host-channel')).toEqual([])
   return sid

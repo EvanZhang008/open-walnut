@@ -71,7 +71,7 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
     await send(sidA, 'ROUND a-off')
     await waitFor(() => turnsWith(h.c, sidA, 'ROUND a-off') > 0, 120_000, 'the legacy resume to answer').catch(fail)
     expect((await macRow(sidA))?.judge).toBeUndefined()
-    expect(await h.mac(`/judge?sid=${sidA}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${sidA}`)).toEqual({ judge: 'here', host: null })
     expect(await channelEvents(sidA)).toEqual([])
     // The Mac ran it: it parsed the resumed turn's lines.
     expect(await parses(sidA)).toBeGreaterThan(before)
@@ -112,7 +112,7 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
       await waitFor(() => turnsWith(h.c, sidB, 'ROUND b-refused') > 0, 120_000, 'the legacy resume after the refusal').catch(fail)
       expect(h.c.logs().mac).toMatch(/host resume: the host refused the resume; delivered here as legacy.*not at rest on this host/)
       expect((await macRow(sidB))?.judge).toBeUndefined()
-      expect(await h.mac(`/judge?sid=${sidB}`)).toEqual({ judge: 'legacy', host: null })
+      expect(await h.mac(`/judge?sid=${sidB}`)).toEqual({ judge: 'here', host: null })
       expect(cliArgs(sidB) ?? '').toContain(`--resume ${sidB}`)
       // Once: a moment later still one turn of it, and nothing of it on the channel.
       await new Promise((r) => setTimeout(r, 3_000))
@@ -159,7 +159,7 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
     await waitFor(() => turnsWith(h.c, sidD, 'ROUND d-window') > 0, 120_000, 'the legacy delivery after the lost check').catch(fail)
     expect(h.c.logs().mac).toContain('host resume: the host never took a resume whose answer was lost; delivered here as legacy')
     expect((await macRow(sidD))?.judge).toBeUndefined()
-    expect(await h.mac(`/judge?sid=${sidD}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${sidD}`)).toEqual({ judge: 'here', host: null })
     expect(await handover(sidD)).toEqual({ pending: false, onDisk: false })
     expect(cliArgs(sidD) ?? '').toContain(`--resume ${sidD}`)
     await new Promise((r) => setTimeout(r, 3_000))

@@ -82,7 +82,7 @@ describe.skipIf(!RUN)('rolling the switch back while a host runs a session, and 
     expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'host', host: HOST_KEY })
     legacySid = await startOn('Legacy after the switch', 'ROUND legacy')
     await waitFor(() => hostStream(h.c, legacySid).some((l) => l.type === 'result' && String(l.result).includes('ROUND legacy')), 120_000, 'the legacy session to answer').catch(fail)
-    expect(await h.mac(`/judge?sid=${legacySid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${legacySid}`)).toEqual({ judge: 'here', host: null })
     expect(await channelEvents(legacySid)).toEqual([])
   }, 400_000)
 

@@ -2,7 +2,7 @@
  * The leader's boot wiring of the hosts that run and judge their sessions (leader-side.ts): real
  * data, the host-server manager's views and links, this server's bus. Started by the web server on
  * every leader: it links only to hosts that name session-judge-v1, and with the switch off for a
- * host every new start there is 'legacy' (judge-of.ts), while the sessions it already runs keep
+ * host every new start there is 'here', run by the leader (judge-of.ts), while the sessions it already runs keep
  * reporting. The start decision is per host (switch.ts hostRunsSessionsFor).
  *
  * With the switch on for any host it also serves the door hosts dial into (host-door.ts, `/host-door`) and

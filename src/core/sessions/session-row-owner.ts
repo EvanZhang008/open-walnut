@@ -134,6 +134,17 @@ export function execHostOf(row: Pick<SessionRecord, 'judge' | 'host'>): string |
   return rowOwnedHere(row, thisHostKey()) ? undefined : row.host
 }
 
+/**
+ * The daemon link that reaches a session's CLI from this server: `'__local__'` for this machine
+ * (a row of this machine's own, '' and `'__local__'` included, and a row this host replica owns),
+ * else the row's host. The session classes ask this (or execHostOf), never the row's raw `host`:
+ * on a host that runs its sessions an own row names the host's key, and a raw read of it would take
+ * the remote branch for a session that runs right here (tests/providers/session-classes-one-path.test.ts).
+ */
+export function cliHostOf(row: Pick<SessionRecord, 'judge' | 'host'> | null | undefined): string {
+  return (row ? execHostOf(row) : undefined) ?? '__local__'
+}
+
 /** This server's own host key: a host replica's WALNUT_HOST_KEY, '' on the leader (and anywhere else). */
 export function thisHostKey(): string {
   return isHostReplica() ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''

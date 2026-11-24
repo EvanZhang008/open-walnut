@@ -76,7 +76,7 @@ describe.skipIf(!RUN)('a legacy ACP session at rest is resumed by its host\'s se
     expect(row?.judge).toBeUndefined()
     runtimeId = String(row?.acpRuntimeId ?? '')
     expect(runtimeId).toMatch(/^acp-/)
-    expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'legacy', host: null })
+    expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'here', host: null })
     expect(await channelEvents()).toEqual([])
     await stop()
   }, 400_000)
