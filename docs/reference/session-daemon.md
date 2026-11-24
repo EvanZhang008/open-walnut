@@ -657,13 +657,19 @@ config before going back, or revoke it again after going forward.
 
 What a revoke ends and what it keeps is one table, `src/core/session-channel/revoked-reach.ts`, and
 the revoke's answer reads it back (`refused`, `stillReaches`). In short: a ban is of the machine
-under every config key it had when it was made, and every key judged its alias since, whatever its
-daemon says later. It runs no new process there (`gateSessionCommand` refuses each start, cold
-`--resume`, ACP start and one-shot run), moves no work there (task start, move, transfer, subagent),
-pushes it none of this Walnut's copies, secrets, plugin jobs or a bridge token (the bridge goes to it
-turned off), and moves the tunnel back here. Only a person's own lines and a stop reach a session
-already running there; every automated row is parked with why. The leader's own commands there
-(exec, files, git) stay: the host cannot begin one.
+under every config key it had when it was made, and every key a link to the same daemon tied to it
+since, whatever its daemon says later; a key whose hello only claims the banned machine id is banned
+while it says so, never made part of the ban. Only the key the ban was made as lifts it (another
+name answers 409 `banned_as`). It runs no new process there (`gateSessionCommand` refuses each
+start, cold `--resume`, ACP start and one-shot run), moves no work there (task start, move,
+transfer, subagent), pushes it none of this Walnut's copies, secrets or plugin jobs, pushes the
+bridge turned off and deletes its machine tokens at the companion (`bridgeTokens` in the answer; one
+the companion did not answer for is tried again each minute), and moves the tunnel back here. A
+process there or this Walnut's data handed to it (exec, file writes, commits, HTTP, MCP, a trigger's
+run, a terminal, a service update) and a tool allowed in a session there go only for a person's own
+call (`core/session-channel/person-call.ts`), never a session's, a routine's, a trigger's or a
+peer's. Only a person's own lines and a stop reach a session already running there; every other row
+is parked with why. Reads that only bring an answer back stay.
 
 ## Keep the twins in sync, and auto-deploy
 

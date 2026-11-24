@@ -10,7 +10,8 @@
  *                           answer, `closed`, `refused` and `stillReaches` (both from one table:
  *                           revoked-reach.ts REVOKED_REACH). A ban is of the host's machine: under
  *                           any of its names (aliases of one daemon), the GET says `as` when the
- *                           ban was made under another name, and an allow under any name lifts it
+ *                           ban was made under another name; only an allow under that name lifts it
+ *                           (another name answers 409 `banned_as`, naming it)
  *   POST /:hostKey/allow    let it be issued a key again (at its next link check, at once when linked)
  *                           → the GET's answer and `allowedNow` (false: it was not revoked). What the
  *                           host kept while revoked comes in as it is: its journal drains, and the
@@ -104,6 +105,8 @@ hostDoorsRouter.post('/:hostKey/revoke', async (req: Request, res: Response, nex
     res.json({
       ...(await doorOf(hostKey)), closed: out.closed, refused: REVOKED_REFUSED, stillReaches: REVOKED_STILL_REACHES, standbySynced: out.standbySynced,
       ...(out.skipped.length ? { skipped: out.skipped } : {}), ...(out.tunnelBack ? { tunnel: 'the tunnel ran there; it runs here again' } : {}),
+      // Its cloud bridge tokens, deleted at the companion; one it did not answer for is tried again each minute.
+      ...(out.bridgeTokens.revoked.length || out.bridgeTokens.failed.length ? { bridgeTokens: out.bridgeTokens } : {}),
     })
   } catch (err) { next(err) }
 })
@@ -114,7 +117,12 @@ hostDoorsRouter.post('/:hostKey/allow', async (req: Request, res: Response, next
     if (!hostKey || await refusedCaller(req, res, hostKey)) return
     const by = await changedBy(req)
     const { allowHostDoorNow } = await import('../../core/session-channel/leader-issue.js')
-    const out = await allowHostDoorNow(hostKey, by)
+    const { HostBannedAs } = await import('../../core/session-channel/host-credentials.js')
+    const out = await allowHostDoorNow(hostKey, by).catch((err: unknown) => {
+      if (err instanceof HostBannedAs) { res.status(409).json({ error: err.message, code: 'banned_as', as: err.as }); return null }
+      throw err
+    })
+    if (!out) return
     if (out.allowed) log.web.info('host door: a revoked host was allowed again', { host: hostKey, by })
     res.json({ ...(await doorOf(hostKey)), allowedNow: out.allowed, standbySynced: out.standbySynced })
   } catch (err) { next(err) }

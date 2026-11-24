@@ -139,10 +139,12 @@ describe('a ban of one alias', () => {
     expect(() => assertHostNotRevoked('devbox-a-net', 'The session was not started')).toThrow(/devbox-a-net is revoked \(another name of the revoked host devbox-a\)/)
     expect(() => assertHostNotRevoked('devbox-b', 'x')).toThrow(HostRevokedError)
     // A resolver that cannot read its links names nothing more: the key itself still counts, and so
-    // does a key already judged its alias (S1: kept for the life of the ban).
+    // does a key already judged its alias by a link to the same daemon (S1: kept for the life of the
+    // ban); one judged only by the machine id its hello claims does not (R2-S1).
     setRevokedHostResolver({ machineOf: () => { throw new Error('gone') }, aliasesOf: () => { throw new Error('gone') } })
     expect(hostRevokedNow('devbox-c')).toBe(false)
-    expect(hostRevokedNow('devbox-b')).toBe(true)
+    expect(hostRevokedNow('devbox-a-net')).toBe(true)
+    expect(hostRevokedNow('devbox-b')).toBe(false)
     expect(hostRevokedNow('devbox-a')).toBe(true)
   })
 

@@ -376,6 +376,35 @@ export async function getPrimaryMachineToken(
 }
 
 /**
+ * Delete the companion's machine tokens of these host keys (a revoke: session-channel/leader-issue.ts,
+ * R2-S2 of the C7 review). A revoked host ignores the bridge pushed turned off; with its token gone
+ * at the companion it can no longer dial it under any of these names, whoever leads. The cached
+ * plaintext goes too, so an allow mints a fresh one at its next bridge push. `failed`: the companion
+ * did not answer for these (the leader retries them at its next ban read). No companion: nothing to do.
+ */
+export async function revokeBridgeTokens(hostAliases: readonly string[]): Promise<{ revoked: string[]; failed: string[] }> {
+  const keys = [...new Set(hostAliases.filter((k) => k && k !== '__local__'))]
+  if (keys.length === 0 || isFollower()) return { revoked: [], failed: [] }
+  const cloud = await getCloudRemoteCredentialsAsync({ strict: true }).catch(() => null)
+  if (!cloud) return { revoked: [], failed: [] }
+  if (leaderPermitActive() && outwardDoorRefusal('companion-upload', 'bridge-token:revoke')) return { revoked: [], failed: keys }
+  const cache = await readTokenCache()
+  const proof = cache[PRIMARY_DEVICE_NAME]
+  const headers: Record<string, string> = { Authorization: `Bearer ${cloud.token}`, ...(proof ? { [MACHINE_PROOF_HEADER]: proof } : {}) }
+  const base = `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`
+  const revoked: string[] = []
+  const failed: string[] = []
+  await Promise.all(keys.map(async (k) => {
+    const name = bridgeDeviceName(k)
+    const res = await fetch(`${base}/api/devices/${encodeURIComponent(name)}`, { method: 'DELETE', headers, signal: AbortSignal.timeout(10_000) }).catch(() => null)
+    if (res && (res.ok || res.status === 404)) { revoked.push(k); delete cache[name] } else failed.push(k)
+  }))
+  if (revoked.length) await writeTokenCache(cache)
+  log.session.info('bridge: machine tokens of a revoked host deleted at the companion', { revoked, failed })
+  return { revoked, failed }
+}
+
+/**
  * Build the bridge.configure payload for one host. Zero-config default: if
  * cloud sync is set up (a `cloud` remote with an embedded token exists), the
  * bridge is on; config.yaml `cloud_bridge.enabled: false` opts out,

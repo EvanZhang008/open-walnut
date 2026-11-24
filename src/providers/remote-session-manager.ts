@@ -33,7 +33,8 @@ import { log } from '../logging/index.js'
 import { getConnectedDaemonConnection, getDirectDaemonConnection, readDaemonLineFate, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, cliStoppedBeforeFirstLine, cliStoppedSentence, startFailureSentence, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
-import { HostRevokedError } from '../core/session-channel/revoked-hosts.js'
+import { HostRevokedError, revokedAs } from '../core/session-channel/revoked-hosts.js'
+import { asPersonCall } from '../core/session-channel/person-call.js'
 import { linkFailureKind, markLinkFailure } from './link-failure.js'
 import type { LineFate } from './line-fate-core.js'
 import { CloudSessionLink } from './cloud-session-link.js'
@@ -1544,6 +1545,13 @@ export class RemoteSessionManager implements SessionManager {
   async prepareOutbound(message: string): Promise<string> {
     // Local daemon: same filesystem — no path rewriting needed
     if (!this.isRemote) return message
+    // A line's pictures and files on a revoked host: the queue hands out only a person's lines there
+    // (session-message-queue.ts parkAutomatedOnRevoked), so they go as that person's (person-call.ts).
+    if (revokedAs(this.hostKey)) return asPersonCall(() => this.prepareOutboundNow(message))
+    return this.prepareOutboundNow(message)
+  }
+
+  private async prepareOutboundNow(message: string): Promise<string> {
     // No link: nothing can be copied, so every attachment the message lists is a failure, said to
     // the agent on its line and to the sender in the chat (never a bare local path passed on).
     if (!this.conn?.connected) return this.markUndelivered(message, LINK_DOWN_REASON)

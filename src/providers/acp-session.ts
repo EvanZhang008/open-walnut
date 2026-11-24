@@ -118,6 +118,8 @@ import type { UsageLimitFacts } from '../core/sessions/usage-limit-model.js'
 import type { OutlivingSource } from '../core/sessions/outliving-work.js'
 import { ACP_SURVIVE_CAPABILITY, workSurvives } from '../core/hosts/work-survives.js'
 import { askOnce, untilAdopted, WorkerAdoptingError } from './acp-ask-once.js'
+import { revokedAs } from '../core/session-channel/revoked-hosts.js'
+import { inPersonCall } from '../core/session-channel/person-call.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -2645,6 +2647,11 @@ export class AcpSession {
    *  `selectedOptionId` (from the UI's option buttons, e.g. codex's
    *  "Allow for Session") wins over the allow-boolean heuristic. */
   async resolvePermissionRequest(requestId: string, allow: boolean, selectedOptionId?: string): Promise<boolean> {
+    // On a revoked host only a person's own answer lets a tool run; a deny goes from anyone (revoked-reach.ts `person` rows).
+    if ((allow || selectedOptionId) && !inPersonCall() && revokedAs(this.host)) {
+      log.session.warn('acp: an allow not made by a person refused: the host is revoked', { sessionId: this.trackingId(), requestId, host: this.host })
+      return false
+    }
     const conn = await this.ensureConn()
     let optionId: string | null = null
     const options = this._pendingPermissions.get(requestId)?.options ?? []

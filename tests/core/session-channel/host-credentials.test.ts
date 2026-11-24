@@ -223,7 +223,7 @@ describe('revoke', () => {
     const rechecked: string[] = []
     const cut: Array<[string, boolean]> = []
     setDoorHostHooks({ machineIdOf: () => MACHINE, recheck: (k) => { rechecked.push(k) }, cut: (k) => { cut.push([k, hostRevokedNow(k)]) } })
-    expect(await revokeHostDoorNow('devbox', 'task:t-revoker')).toEqual({ revoked: true, closed: 1, standbySynced: true, skipped: [], tunnelBack: false })
+    expect(await revokeHostDoorNow('devbox', 'task:t-revoker')).toEqual({ revoked: true, closed: 1, standbySynced: true, skipped: [], tunnelBack: false, bridgeTokens: { revoked: [], failed: [] } })
     // The session channel is cut too, on every link (leader-side.ts noteRevoked reads hostRevokedNow).
     expect(cut).toEqual([['devbox', true]])
     expect(await c.closed).toBe(4003)
@@ -276,24 +276,24 @@ describe('revoke', () => {
     setRevokeStandbySync(async () => null)
     setDoorHostHooks({ machineIdOf: () => MACHINE, recheck: () => {} })
     process.env.WALNUT_HOST_RUNS_SESSIONS = '0'
-    expect(await revokeHostDoorNow('devbox', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true, skipped: [], tunnelBack: false })
+    expect(await revokeHostDoorNow('devbox', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true, skipped: [], tunnelBack: false, bridgeTokens: { revoked: [], failed: [] } })
     expect(await hostCredentialOf(MACHINE)).toBeNull()
     process.env.WALNUT_HOST_RUNS_SESSIONS = '1'
-    expect(await revokeHostDoorNow('devbox', 'human')).toEqual({ revoked: true, closed: 0, standbySynced: true, skipped: [], tunnelBack: false })
+    expect(await revokeHostDoorNow('devbox', 'human')).toEqual({ revoked: true, closed: 0, standbySynced: true, skipped: [], tunnelBack: false, bridgeTokens: { revoked: [], failed: [] } })
     expect(await hostCredentialOf(MACHINE)).toMatchObject({ hostKey: 'devbox', kind: 'machine', issuer: 'leader', tokenHash: '', revoked: { by: 'human' } })
     await expect(mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })).rejects.toBeInstanceOf(HostDoorRevoked)
     // A key whose hello only claims a machine kept under another key: that is the host's own word,
     // so the other key's record is never banned by it, and the answer says so (N1).
     await mintHostCredential({ machineId: 'b2'.repeat(16), walnutId: WALNUT, hostKey: 'keeper' })
     setDoorHostHooks({ machineIdOf: () => 'b2'.repeat(16), recheck: () => {} })
-    expect(await revokeHostDoorNow('stranger', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true, skipped: ['keeper'], tunnelBack: false })
+    expect(await revokeHostDoorNow('stranger', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true, skipped: ['keeper'], tunnelBack: false, bridgeTokens: { revoked: [], failed: [] } })
     expect(await hostDoorRevoked('keeper')).toBeNull()
     expect(await hostDoorRevoked('stranger')).toBeNull()
     // A record of another kind under the machine's name is never a host's to ban.
     await writeAuth([{ name: hostCredentialName('c3'.repeat(16)), id: 'd4444444444444444', tokenHash: sha('x'), createdAt: '2026-09-01T00:00:00.000Z' }])
     _resetDeviceAuthForTesting()
     setDoorHostHooks({ machineIdOf: () => 'c3'.repeat(16), recheck: () => {} })
-    expect(await revokeHostDoorNow('other', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true, skipped: [], tunnelBack: false })
+    expect(await revokeHostDoorNow('other', 'human')).toEqual({ revoked: false, closed: 0, standbySynced: true, skipped: [], tunnelBack: false, bridgeTokens: { revoked: [], failed: [] } })
   })
 
   it('a ban holds under every name of the machine: revoked as one alias, the other\'s door, mint and ban read refused; allowed under either', async () => {
@@ -307,7 +307,7 @@ describe('revoke', () => {
     setRevokedHostResolver({ machineOf: (k) => (twins[k] ? MACHINE : null), aliasesOf: (k) => twins[k] ?? [] })
     const cut: string[] = []
     setDoorHostHooks({ machineIdOf: (k) => (twins[k] ? MACHINE : null), recheck: () => {}, cut: (k) => { cut.push(k) } })
-    expect(await revokeHostDoorNow('devbox-net', 'human')).toEqual({ revoked: true, closed: 1, standbySynced: true, skipped: [], tunnelBack: false })
+    expect(await revokeHostDoorNow('devbox-net', 'human')).toEqual({ revoked: true, closed: 1, standbySynced: true, skipped: [], tunnelBack: false, bridgeTokens: { revoked: [], failed: [] } })
     // The machine's one record, issued to `devbox`, is the one marked; its socket closes at once.
     expect(await c.closed).toBe(4003)
     expect(await hostCredentialOf(MACHINE)).toMatchObject({ hostKey: 'devbox', revoked: { by: 'human', keys: ['devbox-net'] } })
@@ -316,11 +316,26 @@ describe('revoke', () => {
     expect(await hostDoorRevoked('devbox-net')).toMatchObject({ as: 'devbox' })
     await expect(mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })).rejects.toBeInstanceOf(HostDoorRevoked)
     expect((await doorHandshake(url, { walnutId: WALNUT, machineId: MACHINE, verifyKey })).code).toBe(4004)
-    // Allowed under the name it was not issued to: the machine's ban goes.
-    expect(await allowHostDoorNow('devbox-net', 'human')).toMatchObject({ allowed: true })
+    // Only the key the ban was made as lifts it (R2-S1): its other name is told which one.
+    await expect(allowHostDoorNow('devbox-net', 'human')).rejects.toThrow(/devbox-net is banned as the revoked host devbox: allow devbox/)
+    expect(hostRevokedNow('devbox')).toBe(true)
+    expect(await allowHostDoorNow('devbox', 'human')).toMatchObject({ allowed: true })
     expect(hostRevokedNow('devbox')).toBe(false)
     expect(hostRevokedNow('devbox-net')).toBe(false)
     expect(cut).toEqual(expect.arrayContaining(['devbox-net', 'devbox']))
     expect((await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })).verifyKey).not.toBe(verifyKey)
+  })
+
+  it('two boxes of one machine id (a copied data home): revoking one and allowing the other never lifts the first (R2-S1)', async () => {
+    setRevokeStandbySync(async () => null)
+    await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
+    setRevokedHostResolver({ machineOf: (k) => (k === 'devbox' || k === 'devbox-copy' ? MACHINE : null), aliasesOf: () => [] })
+    setDoorHostHooks({ machineIdOf: () => MACHINE, recheck: () => {} })
+    expect(await revokeHostDoorNow('devbox', 'human')).toMatchObject({ revoked: true })
+    expect(hostRevokedNow('devbox-copy')).toBe(true)
+    await expect(allowHostDoorNow('devbox-copy', 'human')).rejects.toThrow(/banned as the revoked host devbox/)
+    expect(await hostDoorRevoked('devbox')).toMatchObject({ by: 'human' })
+    // Never written into the ban: once its hello names its own machine, it is free.
+    expect((await hostCredentialOf(MACHINE))?.revoked?.keys ?? []).not.toContain('devbox-copy')
   })
 })

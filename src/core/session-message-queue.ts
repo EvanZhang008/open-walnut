@@ -648,9 +648,16 @@ export class SendNoLongerWantedError extends Error {
 async function revokedHostOfSession(sessionId: string): Promise<string | null> {
   const { anyHostRevoked, revokedAs } = await import('./session-channel/revoked-hosts.js');
   if (!anyHostRevoked()) return null;
-  const host = (await import('./session-db.js')).sessionJudgeInStore(sessionId)?.host ?? null;
+  // A session's host is read from its row once a minute at most, not on every hand-out (R2-N4).
+  const kept = sessionHostSeen.get(sessionId);
+  const fresh = !!kept && Date.now() - kept.at < SESSION_HOST_TTL_MS;
+  const host = fresh ? kept!.host : (await import('./session-db.js')).sessionJudgeInStore(sessionId)?.host ?? null;
+  if (!fresh) sessionHostSeen.set(sessionId, { host, at: Date.now() });
+  if (sessionHostSeen.size > 2_000) sessionHostSeen.clear();
   return host && revokedAs(host) ? host : null;
 }
+const SESSION_HOST_TTL_MS = 60_000;
+const sessionHostSeen = new Map<string, { host: string | null; at: number }>();
 
 /** Park every pending row of `queue` a person did not type, on revoked host `host` (revokedHostOfSession). */
 function parkAutomatedOnRevoked(queue: QueuedMessage[], host: string | null): void {

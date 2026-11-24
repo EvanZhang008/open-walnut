@@ -11,6 +11,7 @@ import { resolveAgentCommand } from './agent-command-map.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { ThisServer } from '../core/server-self-name.js'
 import { assertHostNotRevoked } from '../core/session-channel/revoked-hosts.js'
+import { inPersonCall } from '../core/session-channel/person-call.js'
 
 /**
  * Where a refused session came from, as far as this server knows: `outside` when its own store
@@ -77,6 +78,18 @@ const INPUT_COMMANDS = new Set([
 
 /** The commands that run a new process on a host: refused on a revoked one (revoked-reach.ts). */
 export const REVOKED_REFUSES_COMMANDS: ReadonlySet<string> = new Set(['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'bridgeResume'])
+/**
+ * The commands that run a process on a host or hand it this Walnut's data: on a revoked one only a
+ * person's own call sends them (core/session-channel/person-call.ts), never a session, a routine, a
+ * trigger or a peer (revoked-reach.ts `person` rows). So does a permission allowed by anyone else.
+ */
+export const REVOKED_PERSON_ONLY_COMMANDS: ReadonlySet<string> = new Set([
+  'exec.run', 'exec.script', 'fs.write', 'fs.writePart', 'fs.copy', 'fs.mkdir', 'fs.rename', 'fs.rm', 'git.commitStart', 'http.request',
+  'mcp.call', 'mcp.tools', 'triggers.test', 'triggers.run', 'transfer.apply', 'transfer.fetch', 'workspace.create', 'workspace.runScript',
+  'turns.restore', 'vscode.ensure', 'stream.open', 'taskdir.ensure', 'service.update',
+])
+/** A raw line that allows a tool call (a permission answer written as sendRaw). */
+const allowsTool = (cmd: string, params: Record<string, unknown>) => cmd === 'sendRaw' && typeof params.raw === 'string' && /"behavior"\s*:\s*"allow"/.test(params.raw)
 
 const k = (...parts: string[]) => parts.join('\u0000')
 /** A thread one of this server's own ACP runs answered with on `host`, under any adapter. */
@@ -158,6 +171,8 @@ export function gateSessionCommand(scope: GateScope, cmd: string, params: Record
   // one-shot run are refused here, every source and path alike (session-channel/revoked-reach.ts `cmd:` rows).
   const spawns = !!canonicalCommand && REVOKED_REFUSES_COMMANDS.has(canonicalCommand)
   if (spawns) assertHostNotRevoked(scope.host, `${canonicalCommand} refused, nothing ran`)
+  const personOnly = !!canonicalCommand && (REVOKED_PERSON_ONLY_COMMANDS.has(canonicalCommand) || allowsTool(canonicalCommand, params))
+  if (personOnly && !inPersonCall()) assertHostNotRevoked(scope.host, `${canonicalCommand} refused: there only a person's own call runs it, nothing ran`)
   if (canonicalCommand && (INPUT_COMMANDS.has(canonicalCommand)
     || ['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'exec.run', 'exec.script'].includes(canonicalCommand))) assertDemoAdmission()
   if (skipped(scope, enabled)) return undefined

@@ -249,10 +249,25 @@ export async function keepBannedAliases(hostKey: string, keys: readonly string[]
   })
 }
 
-/** Allow `hostKey` again after a revoke, under any name of its machine: its marks go (`allowed` says by whom), and its next link check issues it a fresh key. True when it was revoked. */
+/** An allow under a key that is banned as another host's name: only that host's own key lifts it (R2-S1). */
+export class HostBannedAs extends Error {
+  constructor(readonly hostKey: string, readonly as: string) {
+    super(`${hostKey} is banned as the revoked host ${as}: allow ${as} to lift it (POST /api/host-doors/${as}/allow)`)
+    this.name = 'HostBannedAs'
+  }
+}
+
+/**
+ * Allow `hostKey` again after a revoke: its machine's marks go (`allowed` says by whom), and its next
+ * link check issues it a fresh key. True when it was revoked. Only under the key the ban was made
+ * as: a key banned as another host's name (an alias, a claimed machine id) throws HostBannedAs, so
+ * allowing one box never lifts another's ban.
+ */
 export async function allowHostDoor(hostKey: string, o: { by: string; now?: number }): Promise<boolean> {
   const at = new Date(o.now ?? Date.now()).toISOString()
   return updateAuth((auth) => {
+    const as = revokedAsIn(revokedRecordsOf(auth.devices), hostKey)
+    if (as && as !== hostKey) throw new HostBannedAs(hostKey, as)
     const marked = hostRecordsIn(auth.devices, hostKey).filter((d) => d.revoked)
     for (const d of marked) { delete d.revoked; d.allowed = { at, by: o.by } }
     return { persist: marked.length > 0, result: marked.length > 0 }

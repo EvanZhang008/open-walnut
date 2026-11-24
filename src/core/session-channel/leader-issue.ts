@@ -36,7 +36,7 @@ import { requestOverStream, type HostCallAnswer } from './leader-links.js'
 import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js'
 import { foundHostUnadopted, type FoundFlags } from '../hosts/found-hosts.js'
 import { hostSwitchNow } from './switch.js'
-import { anyHostRevoked, hostAliasesNow, setRevokedHosts, stickyAliasesOf } from './revoked-hosts.js'
+import { anyHostRevoked, hostAliasesNow, hostRevokedNow, revokedAsIn, setRevokedHosts, stickyAliasesOf } from './revoked-hosts.js'
 import type { Duplex } from 'node:stream'
 import type { PermitPair } from './channel.js'
 
@@ -254,6 +254,10 @@ export async function refreshRevokedHosts(): Promise<string[]> {
   // A ban holds for every alias of the machine: the twin snapshot (core/hosts/daemon-twins.ts) is read before it is judged.
   if (revoked.length > 0) await import('../hosts/daemon-twins.js').then((m) => m.daemonTwinsReady()).catch(() => { /* its key and machine id still hold */ })
   const changed = setRevokedHosts(revoked)
+  // A machine token the companion did not delete at the revoke: again now, while its key is still banned.
+  const retry = [...bridgeRetry].filter((k) => hostRevokedNow(k))
+  bridgeRetry.clear()
+  if (retry.length) void revokeBridge(retry).catch(() => { retry.forEach((k) => bridgeRetry.add(k)) })
   // A key judged an alias of a ban since it was made is written into the ban's record: a restart keeps it banned (S1).
   for (const r of revoked) {
     const more = stickyAliasesOf(r.hostKey).filter((k) => !(r.keys ?? []).includes(k))
@@ -319,14 +323,37 @@ async function tunnelRanOn(hostKey: string): Promise<boolean> {
  * config, or turning it off, ends that. `standbySynced`: false when the standby batch did not end
  * in time (a leader switch right after could still hold the old record there).
  */
-export async function revokeHostDoorNow(hostKey: string, by: string): Promise<{ revoked: boolean; closed: number; standbySynced: boolean; skipped: string[]; tunnelBack: boolean }> {
+export async function revokeHostDoorNow(hostKey: string, by: string): Promise<{ revoked: boolean; closed: number; standbySynced: boolean; skipped: string[]; tunnelBack: boolean; bridgeTokens: BridgeRevoke }> {
   // With the switch off nothing is issued anyway: only the records there are get the mark (no new one).
   const on = (await hostSwitchNow())(hostKey)
+  // The aliases the ban names are read from the twin snapshot: read it first, even with no ban yet (R2-N1).
+  await import('../hosts/daemon-twins.js').then((m) => m.daemonTwinsReady()).catch(() => { /* its key and links still name them */ })
   const out = await revokeHostDoor(hostKey, { by, machineId: on ? hooks?.machineIdOf(hostKey) ?? null : null })
-  if (!out.revoked) return { revoked: false, closed: 0, standbySynced: true, skipped: out.skipped, tunnelBack: false }
+  if (!out.revoked) return { revoked: false, closed: 0, standbySynced: true, skipped: out.skipped, tunnelBack: false, bridgeTokens: { revoked: [], failed: [] } }
   const tunnelBack = await tunnelRanOn(hostKey)
   await noteDoorActed(hostKey)
-  return { revoked: true, closed: out.closed.length, standbySynced: await syncStandbyBounded(), skipped: out.skipped, tunnelBack }
+  const bridgeTokens = await revokeBridge(await bannedNamesOf(hostKey))
+  return { revoked: true, closed: out.closed.length, standbySynced: await syncStandbyBounded(), skipped: out.skipped, tunnelBack, bridgeTokens }
+}
+
+type BridgeRevoke = { revoked: string[]; failed: string[] }
+/** Keys whose companion machine token is still to be deleted (refreshRevokedHosts retries them). */
+const bridgeRetry = new Set<string>()
+
+/** Every name the ban on `hostKey` covers now: itself, its ban's key and the keys it named, its aliases. */
+async function bannedNamesOf(hostKey: string): Promise<string[]> {
+  const records = revokedRecordsOf(await hostCredentials())
+  const as = revokedAsIn(records, hostKey)
+  const named = records.filter((r) => r.hostKey === as).flatMap((r) => r.keys ?? [])
+  return [...new Set([hostKey, ...(as ? [as] : []), ...named, ...hostAliasesNow(hostKey).aliases])]
+}
+
+/** Delete the companion's machine tokens of these names (cloud-bridge-config.ts revokeBridgeTokens); a failure is retried. */
+async function revokeBridge(keys: readonly string[]): Promise<BridgeRevoke> {
+  const out = await (await import('../../integrations/cloud-bridge-config.js')).revokeBridgeTokens(keys)
+    .catch(() => ({ revoked: [] as string[], failed: [...keys] }))
+  for (const k of out.failed) bridgeRetry.add(k)
+  return out
 }
 
 /** Allow `hostKey` again after a revoke: it is checked now, so a host on its link is issued a fresh key at once. */

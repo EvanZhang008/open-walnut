@@ -32,7 +32,7 @@ const DAEMON = 'src/providers/daemon-connection.ts'
 /** The daemon's own twins: they run on the host and send nothing to it. */
 const DAEMON_TWINS = new Set(['src/providers/daemon-source.ts', 'src/providers/daemon-standalone.ts'])
 /** A function body reads the ban (revokedAs, or a wrapper that calls it). */
-const READS_BAN = /\b(revokedAs|revokedAsIn|hostRevokedNow|assertHostNotRevoked|machineRevokedNow|revokedHostIn|hostDoorRevoked|revokedReach|isRevoked|drainRevoked|revokedHostOfSession|revokedWhy)\(/
+const READS_BAN = /\b(revokedAs|revokedAsIn|hostRevokedNow|assertHostNotRevoked|machineRevokedNow|revokedHostIn|hostDoorRevoked|revokedReach|isRevoked|drainRevoked|revokedHostOfSession|revokedWhy|revokeBridgeTokens)\(/
 
 /** The block from `at` (a `{`) to the brace that closes it. */
 function blockEnd(src: string, at: number): number {
@@ -73,6 +73,14 @@ function bodyOf(src: string, signature: string): string {
   return src.slice(start, blockEnd(src, open) + 1)
 }
 
+/** The source without its comment lines (a doc comment's example is no member). */
+const noComments = (src: string) => src.replace(/^\s*(\/\/|\/?\*).*$/gm, '')
+/** The commands the daemon's own dispatch takes (daemon-standalone.ts dispatchCommand's switch). */
+function daemonCommands(): string[] {
+  const src = read('src/providers/daemon-standalone.ts')
+  return all(bodyOf(src.slice(src.indexOf('function dispatchCommand(')), 'switch (cmd.cmd) {'), /case '([^']+)':/g)
+}
+
 const all = (src: string, re: RegExp): string[] => [...new Set([...src.matchAll(re)].map((m) => m[1]!))].sort()
 
 function files(dir: string): string[] {
@@ -89,7 +97,9 @@ function members(): Record<string, string[]> {
     .concat([...src.matchAll(/switch \([\w.]*\bev\) \{/g)].flatMap((m) => all(bodyOf(src.slice(m.index), 'switch'), /case '([^']+)':/g)))
   const events = [...evNames(daemon), ...all(frame, /\bev\.startsWith\('([^']+)'\)/g), ...consumers.flatMap((f) => evNames(read(f)))]
   const applyRecord = bodyOf(read('src/core/offline-handover.ts'), 'async function applyRecord(')
-  const commands = SRC.filter((f) => !DAEMON_TWINS.has(f)).flatMap((f) => all(read(f), /\.send\('([a-zA-Z][\w.:-]*)'/g))
+  // Every command the daemon takes (its own switch, so a name sent through a variable is in too),
+  // and every literal one this leader sends, comment lines left out.
+  const commands = [...daemonCommands(), ...SRC.filter((f) => !DAEMON_TWINS.has(f)).flatMap((f) => all(noComments(read(f)), /\.send\('([a-zA-Z][\w.:-]*)'/g))]
   const ops = listOps({ includeDeprecated: true }).filter((op) => op.name.startsWith('host_') || Object.hasOwn((op.input ?? {}) as object, 'host')).map((op) => op.name)
   return {
     'daemon-event': [...new Set(events)],
@@ -103,7 +113,7 @@ function members(): Record<string, string[]> {
 }
 
 /** Rows that are not one member of an enumerated kind. */
-const FIXED = ['door', 'issue', 'channel', 'start', 'send', 'expose', 'daemon-hello', 'daemon-answer', 'daemon-event:*']
+const FIXED = ['door', 'issue', 'channel', 'start', 'send', 'expose', 'acp-allow', 'daemon-hello', 'daemon-answer', 'daemon-event:*']
 
 describe('every way a host reaches this leader is classified for a revoke', () => {
   it('finds the members it enumerates (the patterns still match the source)', () => {
@@ -157,6 +167,12 @@ describe('every way a host reaches this leader is classified for a revoke', () =
     // A start: the first line of the routing check every start path takes; a new process: the first lines of the command gate.
     expect(bodyOf(read('src/providers/claude-code-session.ts'), 'private async assertStartRouting(')).toMatch(/\{\s*\/\/[^\n]*\n\s*assertHostNotRevoked\(data\.host,/)
     expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function gateSessionCommand(')).toMatch(/const canonicalCommand = canonical\(cmd, params\)\n(\s*\/\/[^\n]*\n)*\s*const spawns = !!canonicalCommand && REVOKED_REFUSES_COMMANDS\.has\(canonicalCommand\)\n\s*if \(spawns\) assertHostNotRevoked\(scope\.host,/)
+    // A person-only command: right after, in the same gate; the server marks a person's request; an ACP allow before its link.
+    expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function gateSessionCommand(')).toMatch(/if \(spawns\)[^\n]*\n\s*const personOnly = [^\n]*\n\s*if \(personOnly && !inPersonCall\(\)\) assertHostNotRevoked\(scope\.host,/)
+    expect(read('src/web/server.ts')).toMatch(/app\.use\('\/api', \(req, _res, next\) => \{ if \(isPersonCaller\(req\)\) asPersonCall\(next\); else next\(\) \}\)/)
+    const acp = bodyOf(read('src/providers/acp-session.ts'), 'async resolvePermissionRequest(')
+    expect(acp.indexOf('revokedAs(this.host)')).toBeGreaterThan(-1)
+    expect(acp.indexOf('revokedAs(this.host)')).toBeLessThan(acp.indexOf('this.ensureConn()'))
     // A subagent: before its work copy; a task start: before its folder or workspace.
     const sub = bodyOf(read('src/core/subagents/registry.ts'), 'export async function startLightSubagent(')
     expect(sub.indexOf('revokedAs(host)')).toBeGreaterThan(-1)
@@ -172,8 +188,22 @@ describe('every way a host reaches this leader is classified for a revoke', () =
     expect(plan.indexOf('revokedWhy(host')).toBeGreaterThan(-1)
     const transfer = read('src/core/transfer/transfer.ts')
     expect(transfer.indexOf('planTransfer(task')).toBeLessThan(transfer.indexOf('moveWorkspace({'))
+    // A revoke reads the twin snapshot before the ban names the machine's other keys (R2-N1).
+    const revoke = bodyOf(read('src/core/session-channel/leader-issue.ts'), 'export async function revokeHostDoorNow(')
+    expect(revoke.indexOf('daemonTwinsReady()')).toBeGreaterThan(-1)
+    expect(revoke.indexOf('daemonTwinsReady()')).toBeLessThan(revoke.indexOf('revokeHostDoor(hostKey'))
     // The door: before its keys are offered; its recheck too.
     expect(bodyOf(read('src/core/session-channel/host-door.ts'), 'async function stillStands(')).toMatch(READS_BAN)
+  })
+
+  it('the command gate refuses exactly the table\'s rows: every spawn for everyone, the person rows unless a person\'s own call', async () => {
+    const { REVOKED_REFUSES_COMMANDS, REVOKED_PERSON_ONLY_COMMANDS } = await import('../../../src/providers/ephemeral-session-gate.js')
+    const GATE = 'src/providers/ephemeral-session-gate.ts'
+    const cmds = (pick: (r: (typeof REVOKED_REACH)[string]) => boolean) => Object.entries(REVOKED_REACH)
+      .filter(([k, r]) => k.startsWith('cmd:') && r.verdict === 'refused' && r.check.file === GATE && pick(r)).map(([k]) => k.slice(4)).sort()
+    // agent.* names are routed to their canonical command first (agent-command-map.ts), which the gate checks.
+    expect(cmds((r) => !/unless a person/.test(r.what)).filter((c) => !c.startsWith('agent.'))).toEqual([...REVOKED_REFUSES_COMMANDS].sort())
+    expect(cmds((r) => /unless a person/.test(r.what))).toEqual([...REVOKED_PERSON_ONLY_COMMANDS].sort())
   })
 
   it('the revoke\'s answer comes from the same table', () => {

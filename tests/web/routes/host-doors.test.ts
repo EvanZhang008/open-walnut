@@ -88,7 +88,12 @@ describe('/api/host-doors', () => {
     expect(rv.body).toMatchObject({ hostKey: 'devbox-a-net', revoked: true, as: 'devbox-a', by: 'human', closed: 1 })
     expect((await request(app).get('/api/host-doors/devbox-b')).body).toMatchObject({ revoked: true, as: 'devbox-a' })
     expect((await request(app).post('/api/host-doors/devbox-a-net/allow').set('x-walnut-origin', 'host:devbox-b').send({})).status).toBe(403)
-    expect((await request(app).post('/api/host-doors/devbox-b/allow').send({})).body).toMatchObject({ allowedNow: true, revoked: false })
+    // Only the name the ban was made as lifts it: another name is told which (R2-S1).
+    const other = await request(app).post('/api/host-doors/devbox-b/allow').send({})
+    expect(other.status).toBe(409)
+    expect(other.body).toMatchObject({ code: 'banned_as', as: 'devbox-a' })
+    expect((await hostCredentialOf(MACHINE))?.revoked).toBeDefined()
+    expect((await request(app).post('/api/host-doors/devbox-a/allow').send({})).body).toMatchObject({ allowedNow: true, revoked: false })
     expect((await hostCredentialOf(MACHINE))?.revoked).toBeUndefined()
   })
 

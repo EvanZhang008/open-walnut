@@ -10,9 +10,10 @@
  *   - it is a revoked record's key, or one of the keys the ban named when it was made (`keys`: the
  *     machine's other config keys known then). These are the person's facts: they hold whatever
  *     the host says about itself later (S1 of the C7 review);
- *   - it was once judged an alias of a banned key or machine while this ban stood (`sticky`): a
- *     machine id or daemon instance that changes afterwards cannot shake it off. leader-issue.ts
- *     writes these into the record too, so a restart keeps them;
+ *   - it was once judged an alias of a banned key while this ban stood, by a link to the same
+ *     daemon (`sticky`): a machine id or daemon instance that changes afterwards cannot shake it
+ *     off. leader-issue.ts writes these into the record too, so a restart keeps them. A match by
+ *     the machine id a hello claims is never kept: it bans only while the hello says it;
  *   - its daemon's hello names a revoked record's machine id, or the twin snapshot / a live link
  *     ties it to a revoked key (the host's own word: enough to ban, never to unban).
  * A machine id equal to this leader's own, and this Mac's `__local__`, are never banned (a copied
@@ -120,7 +121,9 @@ export function revokedAs(hostKey: string | undefined | null): string | null {
   const kept = sticky.get(hostKey)
   if (kept && bans.keys.has(kept)) return kept
   const ban = banOf(bans, hostKey)
-  if (ban && ban.via !== 'key') sticky.set(hostKey, ban.as)
+  // Only a link to the same daemon (the twin snapshot, a live link) makes a key part of the ban; a
+  // machine id its hello claims bans it only while it says so (R2-S1: a copied data home shares one).
+  if (ban && ban.via === 'alias') sticky.set(hostKey, ban.as)
   return ban?.as ?? null
 }
 
