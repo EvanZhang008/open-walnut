@@ -170,6 +170,21 @@ export function isServiceArgv(argv: readonly string[], execPath: string): boolea
   return argv[at] === '--service' || (argv[at] === '__daemon' && argv[at + 1] === '--service')
 }
 
+/**
+ * A probe of the file itself, `<file> __daemon --version` or `__daemon --service-roles` (the
+ * launcher's build check, service-launcher-control.ts daemonBuildOf; the role read, service-roles.ts):
+ * runtime-root.ts answers it from build constants before anything unpacks, so asking a new file
+ * what it is never unpacks it, nor prunes, in the asker's runtime place (2026-11-24 drill: a set's
+ * update asked its new file with no env and it unpacked into the other Walnut's runtime).
+ * Exactly those two words; anything after them is the daemon's own run.
+ */
+export function fileProbeOf(argv: readonly string[], execPath: string): '--version' | '--service-roles' | null {
+  const at = firstWordAt(argv, execPath)
+  if (argv.length !== at + 2 || argv[at] !== '__daemon') return null
+  const flag = argv[at + 1]
+  return flag === '--version' || flag === '--service-roles' ? flag : null
+}
+
 /** Where the file's own words start in process.argv: after the program, and its own path when bun repeats it. */
 function firstWordAt(argv: readonly string[], execPath: string): number {
   const at = 2

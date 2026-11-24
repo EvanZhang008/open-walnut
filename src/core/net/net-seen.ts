@@ -69,11 +69,12 @@ export async function runningChoice(local: Daemon): Promise<RelayChoice | null> 
 
 /** Every listed machine: how this Mac reaches it now, and where it says it listens. */
 export async function machineLinks(local: Daemon): Promise<MachineLink[]> {
-  const [{ getConfig }, { peekDaemonConnection }] = await Promise.all([import('../config-manager.js'), import('../../providers/daemon-connection.js')])
+  const [{ getConfig }, { peekDaemonConnection }, { netEndpointDialled }] = await Promise.all([import('../config-manager.js'), import('../../providers/daemon-connection.js'), import('../../providers/service-set-leader.js')])
   const mine = await local.send('net.status', {}, 10_000) as { node?: { peers?: Array<{ id: string; link?: { path?: string } }> } | null }
   const rows = netRows(((await getConfig()).hosts ?? {}) as HostRows)
   return Promise.all(rows.map(async ([alias, h]) => {
-    const link = mine.node?.peers?.find((p) => p.id === h.endpoint)?.link
+    const at = await netEndpointDialled(alias, h.endpoint)
+    const link = mine.node?.peers?.find((p) => p.id === at)?.link
     const conn = peekDaemonConnection(alias)
     let own: string[] = []
     if (conn?.connected) {

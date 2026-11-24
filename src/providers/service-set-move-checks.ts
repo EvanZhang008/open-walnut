@@ -292,10 +292,14 @@ export async function dropWalnutScope(link: MoveCheckLink): Promise<void> {
 /** One disarmed trigger's exact state on the shared daemon (a triggers.state.snapshot reply's state and digest). */
 export interface TriggerMemory { triggerId: string; state: Record<string, unknown>; digest: string }
 
-/** Refusals that pass with a short wait (the disarm just happened). */
-const SNAPSHOT_SOON = new Set(['check_running', 'host_delivery_in_flight', 'draining', 'armed'])
+/**
+ * Refusals that pass with a short wait: the disarm just happened (about 10 s), or a fire is not acked
+ * yet (`pending_fires`, about 30 s: its delivery may be on a retry, 2026-11-24 drill L2, where a give-up
+ * put the move off by its whole retry time). Past that the move gives up and nothing was stopped.
+ */
+export const SNAPSHOT_SOON: ReadonlyMap<string, number> = new Map([['check_running', 5], ['host_delivery_in_flight', 5], ['draining', 5], ['armed', 5], ['pending_fires', 15]])
 /** Refusals that mean there is nothing to carry. */
-const SNAPSHOT_NOTHING = new Set(['state_missing', 'state_stale'])
+export const SNAPSHOT_NOTHING: ReadonlySet<string> = new Set(['state_missing', 'state_stale'])
 
 /** Each of `ids`' memory on the shared daemon, after the drop. Throws when one cannot be taken (the move gives up). */
 export async function takeTriggerMemory(link: MoveCheckLink, ids: readonly string[], sleep: (ms: number) => Promise<void>): Promise<TriggerMemory[]> {
@@ -313,7 +317,7 @@ export async function takeTriggerMemory(link: MoveCheckLink, ids: readonly strin
       }
       const reason = String(r.reason ?? '')
       if (SNAPSHOT_NOTHING.has(reason)) break
-      if (!SNAPSHOT_SOON.has(reason) || i >= 4) throw new Error(`trigger ${triggerId}: its memory could not be taken (${reason || 'no answer'})`)
+      if (i + 1 >= (SNAPSHOT_SOON.get(reason) ?? 0)) throw new Error(`trigger ${triggerId}: its memory could not be taken (${reason || 'no answer'})`)
       await sleep(2_000)
     }
   }

@@ -21,7 +21,7 @@
  * gates only new moves.
  */
 import { log } from '../logging/index.js'
-import { clearServiceSetMoved, hostServiceSets, hostServiceSetsWanted, linkStanding, markServiceSetMoved, movedToSet, recordServiceSetFrom, setWordsDue, type HostSetRecord, type LinkStanding, type SetAsk } from './service-set-leader.js'
+import { clearServiceSetMoved, hostServiceSets, hostServiceSetsWanted, linkStanding, markServiceSetMoved, movedNetEndpoint, movedToSet, recordServiceSetFrom, setWordsDue, type HostSetRecord, type LinkStanding, type SetAsk } from './service-set-leader.js'
 import { moveOnce, moveReconnectMs, runMove, serviceSetMoves, settleMove, type MoveDeps, type MoveOutcome, type MoveSession, type StopResult } from './service-set-move.js'
 import { moveStoreFor } from './service-set-move-store.js'
 import { dropWalnutScope, moveBlocker, moveSessions, openWorkThere, stopFollowerThere, stopProven, takeTriggerMemory, type MoveCheckLink, type SeedOutcome, type TriggerMemory } from './service-set-move-checks.js'
@@ -227,8 +227,7 @@ export class ServiceSetLink {
   async netEndpoint(): Promise<string | null> {
     if (this.c.kind() !== 'net' || !(await this.ask())) return null
     if (this.netOverride) return this.netOverride
-    const record = await hostServiceSets.read(this.place).catch(() => null)
-    return movedToSet(record) && record.netEndpoint ? record.netEndpoint : null
+    return movedNetEndpoint(await hostServiceSets.read(this.place).catch(() => null))
   }
 
   /** This leader's host network side and the set's CLI line on this link: what pairing and its undo use. */

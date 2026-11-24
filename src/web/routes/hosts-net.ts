@@ -19,6 +19,7 @@ import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { NetError, netState, relayNow, removeMachine, setRelay, syncNet } from '../../core/net/net-mac.js'
 import { cancelInvite, inviteStatus, makeInvite } from '../../core/net/net-invites.js'
 import { joinedTwins } from '../../core/hosts/joined-twins.js'
+import { netEndpointDialled } from '../../providers/service-set-leader.js'
 
 export const hostsNetRouter = Router()
 
@@ -63,11 +64,14 @@ hostsNetRouter.get('/', async (req, res) => {
     ])
     const config = await getConfig()
     const hosts = config.hosts ?? {}
-    const machines = Object.entries(hosts)
-      .filter(([, h]) => h.transport === 'net' && typeof h.endpoint === 'string')
+    const netHosts = Object.entries(hosts).filter(([, h]) => h.transport === 'net' && typeof h.endpoint === 'string')
+    // A host this Walnut moved into its own service set there is reached at the set's walnut-net.
+    const dialled = new Map(await within(STATUS_DEADLINE_MS, Promise.all(netHosts.map(async ([name, h]) =>
+      [name, await netEndpointDialled(name, h.endpoint as string)] as const))).catch(() => []))
+    const machines = netHosts
       .map(([name, h]) => {
         const member = state.members.find((m) => m.id === h.endpoint)
-        const l = links.get(h.endpoint as string)
+        const l = links.get(dialled.get(name) ?? h.endpoint as string)
         return {
           host: name, endpoint: h.endpoint, enabled: h.enabled !== false,
           ...(member?.platform ? { platform: member.platform } : {}),

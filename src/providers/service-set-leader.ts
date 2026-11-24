@@ -112,6 +112,20 @@ export function movedToSet(r: HostSetRecord | null | undefined): r is HostSetRec
   return !!r?.set && typeof r.movedAt === 'number'
 }
 
+/** Host network: the set's own walnut-net endpoint once this Walnut moved there (the endpoint the link dials), else null. */
+export function movedNetEndpoint(r: HostSetRecord | null | undefined): string | null {
+  return movedToSet(r) && r.netEndpoint ? r.netEndpoint : null
+}
+
+/**
+ * The endpoint this leader's walnut-net reaches the net host `host` at now: its set's once this Walnut
+ * moved there, else the host row's. Every read of a net host's link state goes by it (Settings' path,
+ * the relay check): by the row's endpoint a moved host read `path: unknown` (2026-11-24 relay drill).
+ */
+export async function netEndpointDialled(host: string, rowEndpoint: string): Promise<string> {
+  return movedNetEndpoint(await hostServiceSets.read(`net:${host}`).catch(() => null)) ?? rowEndpoint
+}
+
 /** A set is the host's until the host says otherwise: a year, renewed at every line that names it; a moved one for good. */
 export const hostServiceSets = new KeyedUpdateStore<HostSetRecord>('daemon-service-set.json', 'WALNUT_SERVICE_SET_FILE', 365 * 24 * 3600_000, validHostSet, movedToSet)
 

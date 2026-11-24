@@ -21,7 +21,8 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ASSETS_ARCHIVE, ASSETS_ID, DAEMON_VERSION } from 'walnut-binary:assets'
 import { BUNDLED_MODULES } from './bundled-modules.js'
-import { ensureRuntime, isServiceArgv, isWalnutLineArgv } from './runtime-tree.js'
+import { ensureRuntime, fileProbeOf, isServiceArgv, isWalnutLineArgv } from './runtime-tree.js'
+import { SERVICE_ROLES } from './service-mode.js'
 import { fileIdentity, setSingleFile } from '../lib/single-file.js'
 import { demoRuntimeForArgv } from '../commands/demo-home.js'
 
@@ -33,6 +34,14 @@ try {
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
   process.exit(1)
+}
+
+// A probe of this file is answered before anything unpacks (runtime-tree.ts fileProbeOf); the
+// daemon program answers the same words the same way (daemon-standalone.ts runDaemonProcess).
+const probe = fileProbeOf(process.argv, process.execPath)
+if (probe) {
+  console.log(probe === '--version' ? DAEMON_VERSION : SERVICE_ROLES.join(' '))
+  process.exit(0)
 }
 
 export const runtimeRoot = ensureRuntime(ASSETS_ARCHIVE, ASSETS_ID, {

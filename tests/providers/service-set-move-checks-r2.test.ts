@@ -9,7 +9,9 @@
  *       and handed to the set's daemon, so its first check there does not report every item again.
  */
 import { describe, expect, it } from 'vitest'
-import { dropWalnutScope, moveBlocker, seedTriggerMemory, SeedRefusedForGood, takeTriggerMemory, type MoveCheckLink } from '../../src/providers/service-set-move-checks.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { dropWalnutScope, moveBlocker, seedTriggerMemory, SeedRefusedForGood, SNAPSHOT_NOTHING, SNAPSHOT_SOON, takeTriggerMemory, type MoveCheckLink } from '../../src/providers/service-set-move-checks.js'
 
 const HOME = '/home/u/.open-walnut'
 
@@ -63,6 +65,31 @@ describe('takeTriggerMemory and seedTriggerMemory (M2)', () => {
     expect(got).toEqual([{ triggerId: 't1', state, digest: 'd-t1' }, { triggerId: 'busy', state, digest: 'd-busy' }])
     expect(sent.every((s) => s.cmd === 'triggers.state.snapshot' && s.params.home === HOME)).toBe(true)
     expect(waits).toEqual([2_000, 2_000])
+  })
+
+  it('L2: a fire not acked yet is waited out (about 30 s), past that the move gives up', async () => {
+    let tries = 0
+    const { l } = link(['trigger-state-snapshot-v1'], (_cmd, p) => (tries++ < 8 ? { ok: true, supported: false, reason: 'pending_fires' } : ok(String(p.triggerId))))
+    const waits: number[] = []
+    expect(await takeTriggerMemory(l, ['t1'], async (ms) => { waits.push(ms) })).toEqual([{ triggerId: 't1', state, digest: 'd-t1' }])
+    expect(waits).toHaveLength(8)
+    const never = link(['trigger-state-snapshot-v1'], () => ({ ok: true, supported: false, reason: 'pending_fires' }))
+    const waited: number[] = []
+    await expect(takeTriggerMemory(never.l, ['t1'], async (ms) => { waited.push(ms) })).rejects.toThrow(/\(pending_fires\)/)
+    expect(waited.reduce((a, b) => a + b, 0)).toBe(28_000)
+  })
+
+  it('every refusal triggers.state.snapshot can give is classified: waited out, nothing to carry, or a give-up on purpose', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/providers/trigger-state-snapshot-core.ts'), 'utf8')
+    const union = src.slice(src.indexOf('export type TriggerStateSnapshotReason'), src.indexOf(';', src.indexOf('export type TriggerStateSnapshotReason')))
+    const reasons = [...union.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!)
+    expect(reasons.length).toBeGreaterThan(15)
+    // A refusal no short wait changes: the move gives up (nothing was stopped) and tries again later.
+    const GIVE_UP = new Set(['sidecar_missing', 'home_required', 'trigger_id_invalid', 'socket_not_owner', 'scope_unknown', 'still_configured', 'held_in_unnamed_scope',
+      'state_not_regular_file', 'state_too_large', 'state_unreadable', 'state_changed_during_read', 'state_corrupt', 'state_unknown_field',
+      'shared_copy_newer', 'mtime_in_future'])
+    const unclassified = reasons.filter((r) => !SNAPSHOT_SOON.has(r) && !SNAPSHOT_NOTHING.has(r) && !GIVE_UP.has(r))
+    expect(unclassified, 'a new snapshot refusal: add it to SNAPSHOT_SOON or SNAPSHOT_NOTHING (service-set-move-checks.ts), or to GIVE_UP here').toEqual([])
   })
 
   it('a memory that cannot be taken gives the move up', async () => {
