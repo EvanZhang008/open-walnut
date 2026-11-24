@@ -36,11 +36,14 @@ describe('the standby caught up before the handover', () => {
     expect(catchUpBudgetMs(WINDOW)).toBe(75_000)
   })
 
-  it('a batch within the budget is caught up at once; one that found nothing changed too', async () => {
+  it('a batch within the budget is caught up at once; one that found nothing changed only when it is within it too', async () => {
     const r1 = runner([batch(12_000, 40 << 20)])
     expect((await catchUpStandby({ runOnce: r1.runOnce, commitWindowMs: WINDOW, now: r1.now })).ok).toBe(true)
-    const r2 = runner([batch(90_000, 0, true)])
+    const r2 = runner([batch(5_000, 0, true)])
     expect((await catchUpStandby({ runOnce: r2.runOnce, commitWindowMs: WINDOW, now: r2.now })).ok).toBe(true)
+    // A walk of the home alone over the budget: the final batch ends on such a pass, so it would not fit either.
+    const r3 = runner([batch(200_000, 0, true)])
+    expect((await catchUpStandby({ runOnce: r3.runOnce, commitWindowMs: WINDOW, now: r3.now })).ok).toBe(false)
   })
 
   it('behind, it catches up while the leader serves: a long batch, then a short one that carried only what came meanwhile', async () => {
@@ -65,11 +68,23 @@ describe('the standby caught up before the handover', () => {
     expect(r.calls()).toBe(2)
   })
 
-  it('void batches only: refused once the catch-up\'s time is over, with the last reason', async () => {
-    const r = runner([voidBatch(100_000)])
+  it('void batches: refused after three rounds in a row, a second apart, with the last reason; one that stands in between resets the count', async () => {
+    const r = runner([voidBatch(2_000)])
+    const t0 = Date.now()
     const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now })
     expect(out.ok).toBe(false)
-    expect(!out.ok && out.why).toMatch(/within 300\.0 s; the last: void after 100\.0 s \(a write at the wrong instant\)/)
+    expect(!out.ok && out.why).toMatch(/3 standby batches in a row were void; the last: void after 2\.0 s \(a write at the wrong instant\)/)
+    expect(r.calls()).toBe(3)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_900)
+    const mixed = runner([voidBatch(1_000), voidBatch(1_000), batch(90_000, 1), voidBatch(1_000), batch(10_000, 1)])
+    expect((await catchUpStandby({ runOnce: mixed.runOnce, commitWindowMs: WINDOW, now: mixed.now })).ok).toBe(true)
+  })
+
+  it('void batches within the catch-up\'s time: refused once it is over', async () => {
+    const r = runner([voidBatch(150_000), batch(100_000, 1), voidBatch(150_000)])
+    const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now })
+    expect(out.ok).toBe(false)
+    expect(!out.ok && out.why).toMatch(/within 300\.0 s; the last: void after 150\.0 s/)
   })
 
   it('no standby batches on this leader: refused, never a pass', async () => {

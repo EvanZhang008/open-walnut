@@ -809,8 +809,8 @@ export interface SwitchStop { windowMs: number; run: (writers: import('../core/l
 
 /**
  * A leader switch's stop: this server's own writers of the home's leader data that outlive their ordinary stop()
- * (a git child: the auto-commit's tick, its large-file lane, a gc; the forked history rewrite; a standby batch under
- * way), stopped at the stop's start and waited for before the final batch, so the batch finds the home still
+ * (a git child: the auto-commit's tick, its large-file lane, a gc; the forked history rewrite), stopped at the stop's
+ * start (with the standby's periodic batches) and waited for before the final batch, so the batch finds the home still
  * (docs/reference/leader-switch.md, "The switch stop"). Every other stop of stopServer leaves at most one short write
  * in flight, which the final batch's next pass carries. The source ratchet
  * (tests/core/leader/switch/switch-stop-writers-ratchet.test.ts) classifies every stop of stopServer that is not
@@ -832,11 +832,13 @@ function stopWritersForSwitch(budgetMs: number): SwitchStopWriter[] {
   gitMaintenanceHandle = null
   out.push({ name: 'git', done: quietGitWriters(WALNUT_HOME, { budgetMs }).then((r) => { log.web.info('leader switch: this server\'s git in the home ended for the final batch', r) }) })
   if (autoCommit) out.push({ name: 'git auto-commit', done: autoCommit.settled() })
-  // The history rewrite runs in its own process: let it end within the budget, else end it (its next run starts over).
+  // The history rewrite runs in its own process with git children of its own (outside this server's quiet): never
+  // killed part way, it is waited for, and named when still at it past the budget. Rare: the catch-up refuses while
+  // one runs, and none starts once the handover stands (its door, compactionDoorRefusal) or the quiet is on.
   const rewrite = compactionChild
-  if (rewrite) out.push({ name: 'git history compaction', done: endChild(rewrite, budgetMs) })
-  // This server's own periodic standby batches: the final batch goes over the copy link instead, and waits out an
-  // apply of the last one on the other machine (final-stop.ts).
+  if (rewrite && rewrite.exitCode === null && rewrite.signalCode === null) out.push({ name: 'git history compaction', done: new Promise<void>((resolve) => rewrite.once('exit', () => resolve())) })
+  // This server's own periodic standby batches: stopped, not waited for. Its side here writes only tmp/ (rebuildable),
+  // and an apply of its last batch on the other machine is waited out by the final batch (final-stop.ts).
   standbyHandle?.stop()
   standbyHandle = null
   return out
@@ -852,16 +854,6 @@ async function settleWritersForSwitch(list: SwitchStopWriter[], budgetMs: number
   const r = { late, ms: Date.now() - t0 }
   log.web[late.length ? 'warn' : 'info']('leader switch: this server\'s writers of the home are stopped for the final batch', { writers: list.map((w) => w.name), ...r })
   return r
-}
-
-/** A child process ended within `ms`, else sent SIGTERM (SIGKILL 3 s later); resolves on its exit. */
-function endChild(child: import('node:child_process').ChildProcess, ms: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-  return new Promise<void>((resolve) => {
-    const term = setTimeout(() => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 3_000).unref?.() }, ms)
-    term.unref?.()
-    child.once('exit', () => { clearTimeout(term); resolve() })
-  })
 }
 let switchStop: SwitchStop | null = null
 let switchStopper: ((stop: SwitchStop) => boolean) | null = null
@@ -1403,6 +1395,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   localDaemonLane = null
   // The in-process daemon a previous stop in this process closed may start again (in-process-daemon.ts).
   reopenInProcessDaemon()
+  // Git in the home again, after a leader switch's stop of an earlier server in this process (tests): never in that
+  // stop's own process otherwise, which exits after its final batch.
+  endGitQuiet(WALNUT_HOME)
   bootCompleted = false // boot in progress → unhandled rejections are fatal again
   const bootStartedAt = Date.now()
   // Until the plugin walk below ends, a task push that finds no plugin waits for
@@ -7205,8 +7200,6 @@ function startGitAutoCommit(
   let lockContentionCount = 0
   // A fresh poll loop has observed nothing (tests start several servers in one process).
   gitRecoveryTracker.reset()
-  // A leader switch's stop of an earlier server in this process stopped git in the home (tests).
-  endGitQuiet(WALNUT_HOME)
 
   const emitStatus = () => {
     broadcastEvent('git-sync:status', { ...health, heldFiles: [] })

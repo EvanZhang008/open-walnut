@@ -9,14 +9,15 @@
  * leader, its refusal blaming "a writer outside Walnut".
  *
  * The class, from the source:
- *  - every stop of stopServer that is NOT awaited is listed below with what may still run after it: `settled` (it
- *    outlives its stop: a git child, a forked rewrite, a standby batch; stopWritersForSwitch stops it at the switch
- *    stop's start and the final batch waits for it), `short` (an in-process tick already past its check may land one
+ *  - every stop of stopServer that is NOT awaited is listed below with what may still run after it: `settled`
+ *    (stopWritersForSwitch stops it at the switch stop's start, and what outlives that, a git child or the forked
+ *    rewrite, is waited for before the final batch), `short` (an in-process tick already past its check may land one
  *    store write in leader data; the final batch's next pass carries it), `none` (nothing in flight writes leader
  *    data: timers only, memory, the network, machine or rebuildable places). A new stop fails here until it is
  *    classified; a `settled` one must be in stopWritersForSwitch;
- *  - every git child outside git-sync.ts is pinned with where it runs: a git under the home must go through
- *    git-sync.ts's spawners, which refuse a start in a quiet home and let quietGitWriters end the ones running;
+ *  - every git child outside git-sync.ts is pinned with where it runs, and so is every file that builds a git
+ *    child's environment (gitChildEnv: a git started through a variable): a git under the home must go through
+ *    the spawners of git-children.ts's rule, which refuse a start in a quiet home and let quietGitWriters end it;
  *  - every forked Node child of the server is pinned, and the history rewrite's is tracked for the stop.
  * The classes of the `short` and `none` entries come from a read of each stop and of the work it controls
  * (2026-11-24); where a write lands is the home manifest's (src/core/home-manifest/home-entries.ts).
@@ -34,7 +35,7 @@ const STOPS: Record<string, [Kind, string]> = {
   stopWritersForSwitch: ['settled', 'the switch stop\'s own: git quiet, the auto-commit and the standby stopped at the entry'],
   'gitAutoCommitHandle.stop': ['settled', 'its tick, boot commit, pulls and large-file lane (git children writing .git); no last commit in a switch stop'],
   'gitMaintenanceHandle.stop': ['settled', 'a gc or repack in flight (a git child writing .git)'],
-  'standbyHandle.stop': ['settled', 'its periodic batch: stopped at the entry, an apply of it on the other machine waited out by the final batch'],
+  'standbyHandle.stop': ['settled', 'its periodic batches: stopped at the entry, not waited for (its side here writes only tmp/, rebuildable); an apply of its last batch on the other machine is waited out by the final batch'],
   // ---- awaited later in stopServer ----
   'leaderPermitHandle.stop': ['none', 'its promise is awaited at the end (leader permit release); witness records, never the home'],
   stopInProcessDaemon: ['none', 'its promise is awaited at "in-process daemon"; the daemon dir is daemon state, not leader data'],
@@ -219,6 +220,19 @@ function code(file: string): string {
     .join('\n')
 }
 
+/** Files that build a git child's environment (src/lib/git-env.ts gitChildEnv), and what they run. */
+const GIT_ENV_USERS: Record<string, string> = {
+  'src/integrations/git-sync.ts': 'the data repo\'s git: its spawners refuse a start in a quiet home and track every child',
+  'src/integrations/git-bundle-client.ts': 'a bundle of the home\'s repo: refused in a quiet home and tracked (git-children.ts)',
+  'src/web/routes/git-bundle-push.ts': 'the companion\'s hub repo',
+  'src/web/routes/git-http.ts': 'the companion\'s hub repo',
+  'src/core/self-repair/walnut-source.ts': 'Walnut\'s own source checkout',
+  'src/core/session-git-diff.ts': 'a session\'s work dir (reads)',
+  'src/core/host-server/host-file-build.ts': 'a host server build in its own folder',
+  'src/core/tailscale-install.ts': 'brew, not git',
+  'src/providers/vscode-server-core.ts': 'the editor\'s work dir',
+}
+
 function sources(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name)
@@ -240,6 +254,12 @@ describe('the switch stop\'s writers, as child processes', () => {
     expect(found).toEqual(Object.fromEntries(Object.entries(GIT_CHILDREN).map(([k, [n]]) => [k, n])))
   })
 
+  it('every file that builds a git child\'s environment is pinned (a git started through a variable is not missed)', () => {
+    const users = sources(path.join(ROOT, 'src')).map((f) => path.relative(ROOT, f))
+      .filter((rel) => rel !== path.join('src', 'lib', 'git-env.ts') && /\bgitChildEnv\b/.test(code(path.join(ROOT, rel))))
+    expect(users.sort()).toEqual(Object.keys(GIT_ENV_USERS).sort())
+  })
+
   it('git-sync.ts\'s spawners refuse a start in a quiet home and track every child for the stop', () => {
     const sync = read('src/integrations/git-sync.ts')
     for (const sig of ['export async function execGitGroup(', 'export async function execGitArgsRaw(', 'export function git(']) {
@@ -255,7 +275,7 @@ describe('the switch stop\'s writers, as child processes', () => {
   it('the server forks only the history rewrite and the search embedder; the rewrite is tracked for the stop and starts none in a quiet home', () => {
     const forks: Record<string, number> = {}
     for (const file of sources(path.join(ROOT, 'src'))) {
-      const n = [...code(file).matchAll(/(?<![\w.])fork\(/g)].length
+      const n = [...code(file).matchAll(/(?<!\w)fork\(/g)].length
       if (n) forks[path.relative(ROOT, file)] = n
     }
     // The embedder writes the search index (rebuildable); daemon-child-spawn.ts forks the daemon (its own state).

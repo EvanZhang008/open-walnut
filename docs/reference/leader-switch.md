@@ -403,13 +403,14 @@ So the preflight's last step (`POST /api/leader/switch/catch-up`, `catch-up.ts`)
 take its own standby batches back to back (the standby runner's: one under way is joined) until one takes at
 most **a quarter of the commit window** (75 s of 300 s). That batch's time is about what the final batch will
 take: the runner keeps batching meanwhile, so the final batch carries the writes of about one batch and its
-interval. The rest of the window is for the stop's teardown and the writers' settle (up to 30 s), the final
+interval. A batch that found nothing changed counts by its time too: the final batch ends on such a pass. The rest of the window is for the stop's teardown and the writers' settle (up to 30 s), the final
 batch's verify and mark, the promotion and the trial start (about 20 s on a 20 GB home), and a final batch up
 to three times the steady one. Refused, with the batches' times and sizes, when:
 
 - no batch takes at most the budget within one commit window of catching up (a batch still running then is not
   waited for: it goes on in the background, the leader keeps serving);
 - two batches in a row are over the budget and the later one is not shorter (the writes outpace the link);
+- three rounds in a row are void (each the runner's batch with its own retries; a second apart);
 - the leader takes no standby batches, or a history rewrite or gc of the data repo runs (minutes; the stop
   would end it part way).
 
@@ -439,7 +440,10 @@ ordinary planned stop). In order (`server.ts` `stopServer`, `final-stop.ts`):
    (`git-children.ts`); a git child that holds no lock (the auto-commit's large-file lane, `hash-object
    -w`) ends at once, one that may (an add, a commit, a gc) gets 30 s (a tenth of the window at most)
    and is ended after it; the auto-commit makes no last commit (the next leader commits what is left at
-   its start); a forked history rewrite gets the same budget; the standby's periodic batches stop.
+   its start); a forked history rewrite is waited for the same budget, never ended part way (its own git
+   children are outside this server's quiet; none starts once the handover stands, its door refuses); the
+   standby's periodic batches stop (its side here writes only `tmp/`; an apply of its last batch on the
+   other machine is waited out by the final batch).
    Right before the final batch the server waits for them; one still at it past the budget is named in
    the refusal. Every other stop of `stopServer` leaves at most one short store write in flight (a tick
    already past its check), which the final batch's next pass carries:
@@ -1207,7 +1211,7 @@ any more, and on a leader-data store of the manifest that is in no rule and not 
 
 ## Rehearsal
 
-`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--keep]`
+`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N [--filler tracked|ignored]] [--kills] [--stops] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--keep]`
 runs on any Linux dev box (in a Walnut dev container: `walnut-dev run bun ...`). It builds two
 machines and three witnesses in `<work dir>`, starts A on a synthetic home with tasks, notes,
 a plugin's files and a routine, keeps a standby copy at B, drives writes through A's API, runs
@@ -1241,7 +1245,14 @@ than this checkout's: `bash scripts/build-daemon.sh`), every link a loopback pro
 the third witness. Beyond the checks above it asks: A acts only before it stopped and B only after the commit
 (`checkOneLeader`); once B leads, A opens no new connection to B's daemon or to H's; the routine fires on A before the switch
 and on B after it, each slot once in total; at each kill point the job died there (the source job's exit 4, or the target job
-found dead and resumed) and the resumed switch finishes with both jobs `done`, no roll back.
+found dead and resumed) and the resumed switch finishes with both jobs `done`, no roll back. `standby-behind` writes
+about 1.2 GB of new leader data just before a switch over a 20 Mbit/s copy link: the preflight's catch-up refuses
+it, and the old leader never stopped (its permission sampled every second, its mayAct and door lines, its server
+process, the witnesses' record). `measure` tries a switch the catch-up refuses again a minute later, prints each
+catch-up's batches, and checks the old leader's log: no git line writes the data repo once its switch stop began.
+`--gb N` puts the large filler under `artifacts/` (`--filler tracked`, the default: the leader's own git writes
+about as much again into `.git`, the pressure case) or under `voice-archive/` (`--filler ignored`: leader data git
+never takes, as a real home's recordings).
 
 ## Witnesses on other machines
 

@@ -24,12 +24,17 @@ export function catchUpBudgetMs(commitWindowMs: number): number {
   return Math.floor(commitWindowMs / CATCH_UP_SHARE)
 }
 
+/** Void rounds in a row (each the runner's batch with its own retries) after which the catch-up gives up. */
+export const CATCH_UP_VOIDS = 3
+/** Between a void round and the next: a host out of reach answers at once, and each round walks the home. */
+const VOID_PAUSE_MS = 1_000
+
 export interface CatchUpBatch {
   ok: boolean
   /** The batch's own time (its stats), or how long it was waited for when it says none. */
   ms: number
   sentBytes: number
-  /** Nothing changed since the last batch. */
+  /** Nothing changed since the last batch (its time is still a whole walk of the home: the final batch ends on one). */
   unchanged?: boolean
   reason?: string
 }
@@ -78,7 +83,15 @@ export async function catchUpStandby(o: {
       ...(!out.ok ? { reason: out.reason } : {}),
     }
     batches.push(b)
-    if (b.ok && (b.unchanged || b.ms <= budgetMs)) return { ok: true, batches, ms: now() - start, budgetMs }
+    // The time counts even for a batch that found nothing: the final batch ends on such a pass, often after a changed one.
+    if (b.ok && b.ms <= budgetMs) return { ok: true, batches, ms: now() - start, budgetMs }
+    if (!b.ok) {
+      let voids = 0
+      while (voids < batches.length && !batches[batches.length - 1 - voids]!.ok) voids++
+      if (voids >= CATCH_UP_VOIDS) return refuse(`${voids} standby batches in a row were void; the last: ${said(b)}`)
+      await new Promise((r) => setTimeout(r, VOID_PAUSE_MS))
+      continue
+    }
     // Two batches over the budget in a row, the later not shorter: what is written meanwhile is more than the link carries.
     const prev = batches.at(-2)
     if (b.ok && prev?.ok && prev.ms > budgetMs && b.ms >= prev.ms) {
