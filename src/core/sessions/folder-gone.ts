@@ -141,7 +141,16 @@ async function noteFolderGoneNow(sessionId: string, opts: { cwd?: string | null;
     if (!cwd) return null
     const host = opts.host !== undefined ? opts.host : record.host
     const state = await folderState(cwd, host)
-    if (state === 'present') await clearFolderGone(sessionId)
+    // Back already. A remake of the task's workspace that ended while these lines were being parked
+    // (its own send found nothing yet): what waits on it goes out now, as the button does, so no
+    // line stays parked behind a folder that is there. Any other present folder only loses its mark:
+    // a refusal this check contradicts is never sent again by itself (no loop on a stale refusal).
+    if (state === 'present') {
+      const remake = await import('../workspaces/remake.js')
+      if (record.taskId && await remake.remadeHolds(record.taskId, cwd, host).catch(() => false)) await folderIsBack(sessionId, record.taskId)
+      else await clearFolderGone(sessionId)
+      return null
+    }
     if (state !== 'gone') return null
     // A folder in the task's own workspace, which a cleanup removed: it is made again and what
     // waited goes out then, so nothing is offered (workspaces/remake.ts).

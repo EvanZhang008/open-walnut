@@ -119,6 +119,15 @@ export async function remakeForGoneFolder(taskId: string, cwd: string, host: str
   }
 }
 
+/**
+ * The task's workspace was made again and is ready, and holds `cwd` on `host`: a refusal that
+ * finds that folder present raced the remake's end (noteFolderGone sends what it parked).
+ */
+export async function remadeHolds(taskId: string, cwd: string, host: string | null | undefined): Promise<boolean> {
+  const ws = (await managerDeps().getTask(taskId))?.workspace
+  return !!ws?.remade && isLaunchReady(ws) && covers(ws, cwd, host)
+}
+
 /** Remakes followed after a refusal, one per task and folder, with every session that waits on it. */
 const kicked = new Map<string, Set<string>>()
 
