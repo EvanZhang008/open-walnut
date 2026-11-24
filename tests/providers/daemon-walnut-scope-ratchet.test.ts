@@ -49,6 +49,7 @@ function pushCommands(src: string): string[] {
 
 /** Where a persisted constant's state belongs. */
 const FILES: Record<string, string> = {
+  SESSION_RUNTIME_DIR: 'host: a service set\'s own runtime-tree dir, kept in its sessions\' env (service-set.ts); the daemon writes nothing there',
   // Per Walnut, keyed by the home a push names (walnutScope.dirFor) or by a core's keyOf(home).
   HOOKS_DIR: 'walnut: hooks.json per scope (walnutScope.dirFor)',
   HOOKS_FILE: 'walnut: the unnamed scope\'s hooks.json',

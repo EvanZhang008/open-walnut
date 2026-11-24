@@ -450,8 +450,6 @@ const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON
 // stay the default set's: a set keeps its own under its install root.
 const SET_ID = SERVICE_MODE && !!DAEMON_STATE_DIR && /^[0-9a-f]{16}$/.test(daemonEnv.WALNUT_SERVICE_SET ?? '') ? daemonEnv.WALNUT_SERVICE_SET! : ''
 const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR || SET_ID !== ''
-// The walnut file's runtime place a session keeps: a set's own (service-set.ts), never a deploy stage's.
-const SESSION_RUNTIME_DIR = SET_ID && isServiceSetRuntimeTreesDir(daemonEnv.WALNUT_RUNTIME_DIR, daemonEnv, fs.realpathSync) ? daemonEnv.WALNUT_RUNTIME_DIR : undefined
 const STREAMS_DIR = daemonEnv.WALNUT_STREAMS_DIR
   || (SET_ID ? path.join(DAEMON_STATE_DIR!, 'streams') : IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
 // demo.quiesce (demo-daemon-quiesce-core.ts): a Demo's own daemon closes for good before
@@ -515,6 +513,8 @@ const SPAWN_JOURNAL = daemonEnv.WALNUT_SPAWN_JOURNAL
   || path.join(daemonEnv.HOME || HOME_DIR, '.open-walnut', 'local', 'spawn-journal.jsonl')
 // Before the journal: one empty file per session id (2026-09-23 to 09-26).
 const LEGACY_SPAWN_LEDGER_DIR = path.join(daemonEnv.HOME || HOME_DIR, '.open-walnut', 'tmp', 'spawned-sessions')
+// The walnut file's runtime place a session keeps: a set's own (service-set.ts), never a deploy stage's.
+const SESSION_RUNTIME_DIR = SET_ID && isServiceSetRuntimeTreesDir(daemonEnv.WALNUT_RUNTIME_DIR, daemonEnv, fs.realpathSync) ? daemonEnv.WALNUT_RUNTIME_DIR : undefined
 const SPAWN_JOURNAL_LINE_MAX = 4096
 interface SpawnInfo { kind: 'new' | 'fork' | 'resume'; parent?: string; cwd?: string; home?: string; task?: string; walnut?: string }
 let journaledSids: Set<string> | null = null
