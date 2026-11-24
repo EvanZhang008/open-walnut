@@ -86,44 +86,31 @@ export function targetProblem(t: string): string | null {
 
 /**
  * Whether a recorded name is covered by a watch target: what its verdict judges, whose alarm comes
- * to it, what its report shows. A page target never covers a request that never reached the server
- * or was never sent (normalize.ts pageKindIsPagesOwn); a timed-out one it covers, and its verdict
- * gives it to the route in an hour the route read slowly (judgeTarget).
+ * to it, what its report shows. A page target covers only the page's own errors (normalize.ts
+ * pageKindIsPagesOwn); a request that went wrong on its way is named in its verdict, not judged, and
+ * a timed-out one rings the watch on its route.
  */
 export function targetCovers(target: string, kind: UsageKind, name: string): boolean {
   if (target.startsWith('op:')) return kind === 'op' && name === target.slice(3)
   if (target.startsWith('route:')) {
-    if (kind !== 'http') return false
+    // A page's timed-out read of the route rings the route's watch (record.ts rings one only while
+    // the route itself read in time); its verdict stays its server's numbers (mergedFor reads http).
+    const timedOut = kind === 'page' ? pageRequestOf(name) : null
+    const route = kind === 'http' ? name : timedOut?.how === 'timed out' ? timedOut.route : null
+    if (route === null) return false
     const want = target.slice(6)
-    return want.includes(' ') ? name === want : name.endsWith(` ${want}`)
+    return want.includes(' ') ? route === want : route.endsWith(` ${want}`)
   }
   return kind === 'page' && name.includes(target.slice(5)) && pageKindIsPagesOwn(name)
 }
 
-/**
- * A route's hour that explains its page timeouts: it read slowly, failed on the server, or could not
- * reach its host. The live alarm skips by the same clock hour (record.ts routeTroubledInHourOf).
- */
-const troubledHour = (a: Agg): boolean => a.slow > 0 || a.serverErrors > 0 || a.unreachable > 0
-
-/**
- * A page target's errors over [since, until): the page's own, and those that were its routes'
- * (a request that never reached the server or was never sent, or one that timed out in an hour
- * its route's server read slowly or failed).
- */
-function pageErrorsOf(word: string, since: number, until: number): { own: number; theirs: number } {
-  const from = Math.floor(since / HOUR_MS) * HOUR_MS
-  const troubled = new Set(readHours(from, { kind: 'http' }).filter((r) => r.hour < until && troubledHour(r.agg)).map((r) => `${r.hour}\t${r.name}`))
-  let own = 0
-  let theirs = 0
-  for (const r of readHours(from, { kind: 'page' })) {
-    if (r.hour >= until || !r.name.includes(word)) continue
-    const req = pageRequestOf(r.name)
-    if (!req) own += r.agg.calls
-    else if (req.how === 'timed out' && !troubled.has(`${r.hour}\t${req.route}`)) own += r.agg.calls
-    else theirs += r.agg.calls
+/** The page requests named like a page target that went wrong on their way, over [since, until). */
+function pageRequestsOf(word: string, since: number, until: number): number {
+  let n = 0
+  for (const r of readHours(Math.floor(since / HOUR_MS) * HOUR_MS, { kind: 'page' })) {
+    if (r.hour < until && r.name.includes(word) && pageRequestOf(r.name) !== null) n += r.agg.calls
   }
-  return { own, theirs }
+  return n
 }
 
 function row(r: Record<string, unknown>): Watch {
@@ -196,12 +183,12 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
   const agg = mergedFor(target, since, until)
   const notes: string[] = []
   if (target.startsWith('page:')) {
-    // Only the page's own failures fail it; its routes' are named, not judged (pageErrorsOf).
-    const { own, theirs } = pageErrorsOf(target.slice(5), since, until)
-    if (own > 0) notes.push(`${own} page error${own === 1 ? '' : 's'}`)
+    // Only the page's own errors fail it (targetCovers); its requests that went wrong on the way are named.
+    const theirs = pageRequestsOf(target.slice(5), since, until)
+    if (agg.calls > 0) notes.push(`${agg.calls} page error${agg.calls === 1 ? '' : 's'}`)
     const ok = notes.length === 0
-    if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} its routes' (never reached the server, never sent, or timed out while the route read slowly; not counted)`)
-    return { target, uses: own + theirs, ok, notes }
+    if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} that went wrong on the way (never reached the server, never sent, or timed out on its route or server; not counted)`)
+    return { target, uses: agg.calls + theirs, ok, notes }
   }
   const fails = agg.errors + agg.timeouts + agg.badArgs
   const failPct = agg.calls ? Math.round((fails / agg.calls) * 1000) / 10 : 0

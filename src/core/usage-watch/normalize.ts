@@ -135,17 +135,16 @@ export function pageRequestOf(kind: string): { route: string; how: 'failed' | 'r
 }
 
 /**
- * Whether a page kind can be the page's own failure. A request that failed for the network never
- * reached the server (a deploy restart, sleep, the network), and one the page's connection queue
- * rejected was never sent: never the page's (2026-11-24: two deploy restarts made 253 page kinds on
- * the session page, and a watch on it read 253 errors). A timed-out one is the page's only while its
- * route answered in time (the page's own connections held the pool); while the route read slowly or
- * failed, it is the route's (watches.ts judgeTarget decides it per hour: 2026-11-24, 15 supervision
- * timeouts fell in the minutes its server read slowly, and failed three tasks' page:session watches).
+ * Whether a page kind is the page's own failure: an error thrown in the page, or a request the
+ * browser itself refused to send. A request that went wrong on its way never is: one that failed for
+ * the network never reached the server (a deploy restart, sleep, the network), one the page's queue
+ * rejected was never sent, and one that timed out waited on its route or its server (2026-11-24:
+ * 253 restart failures on the session page; then supervision timeouts in the minutes its server read
+ * slowly, and four servers timeouts on a server being replaced for a deploy, which never recorded
+ * them, failed the page:session watches of tasks that changed only how controls look).
  */
 export function pageKindIsPagesOwn(kind: string): boolean {
-  const r = pageRequestOf(kind)
-  return r === null || r.how === 'timed out'
+  return pageRequestOf(kind) === null
 }
 
 /**
