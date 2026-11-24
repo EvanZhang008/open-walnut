@@ -840,7 +840,8 @@ permission to this machine, the runtime asks for a grant, which each witness tak
 record it holds ran out there (`splitOwnRecords`, `src/core/leader/switch/runtime.ts`). An answer
 leaves it to this machine when it is:
 
-- a record this machine leads on (a renew or grant it holds, its cancel of its own handover), or its release;
+- a record this machine leads on (a renew or grant it holds, its cancel of its own handover, its witness list
+  change: a members record is its writer's permission record as a grant is), or its release;
 - a handover from this machine (had the switch committed, the new machine's renews would show, below);
 - a handover to this machine with a record of its own above it (it committed that switch);
 - a record of another machine that never stood: more witnesses than a minority hold a lower number, or a
@@ -853,14 +854,22 @@ grant instead of sending the cancel again, since a cancel that lands on one witn
 held.
 
 `tests/core/leader/switch/split-records-model.test.ts` walks every history of two machines and
-three witnesses up to 7 steps (about 120,000 states; `SPLIT_MODEL_DEPTH=8` about 236,000): any record
-to any set of witnesses under the witnesses' own rules (`judge`), the leader's renews and one
-handover, the handover's cancel, the target's commit, the runtime's own decisions, and time passing.
-It checks that two machines never hold a live lease at once, and that from every state where nobody
-leads and no record has a majority, the runtime's decisions on full links make the last lease's
-holder lead again, or the target of a handover a majority took after it (the switch finishing: two
-histories can leave the witnesses alike, one where that commit stood and one where it did not). Its
-red control, the rule before the cancel case, finds states where nobody can lead again. The remote
+three witnesses up to 6 steps (about 117,000 states; `SPLIT_MODEL_DEPTH` sets it): any record to any set
+of witnesses under the witnesses' own rules (`judge`), the leader's renews, one handover and one release
+(its next process a new incarnation), the handover's cancel, the target's commit, the runtime's own
+decisions on a read of all three witnesses or of any two, and time passing. A second walk, a step
+shallower (about 309,000 states; `SPLIT_MODEL_DEPTH_LIST`), adds a witness list change (w3 out, a w4 that
+waits to join comes in: the joint step, then the final one) with each machine judging by the
+configuration it follows (`client.ts learnFromRead`). Both check that two machines never hold a live lease
+at once; that no lease is a takeover (every lease goes to the machine of the last one, or to the target of
+a handover that stood after it); and that from every state where nobody leads and no record has a majority,
+the runtime's decisions on full links make the last lease's holder lead again, or the target of a handover
+a majority took after it (the switch finishing: two histories can leave the witnesses alike, one where that
+commit stood and one where it did not). A list change left half done is not repaired by the runtime: the
+model runs it again (`permit-ops.ts changeWitnesses`, an operator's step) before the holder leads again. Its
+red controls: the rule before the cancel case finds states where nobody can lead again, the rule without
+the list change case finds them in the second walk, and a grant whenever no record has a majority takes
+over. The remote
 rehearsal meets the cases too: `two-down` and `cut-after-commit` (after the switch back, w-k still
 held the handover to A), and `trial-fails` (after the rollback, w-a still held A's handover to B,
 the others two grants of A).

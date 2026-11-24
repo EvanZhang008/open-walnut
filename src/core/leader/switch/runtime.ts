@@ -179,7 +179,9 @@ function splitOwnRecords(h: PermitHandle, read: { standing: PermitRecord | null 
   const list = h.client.witnessList()
   const answers = read.replies.filter((r) => list.includes(r.witness) && r.list)
   if (answers.length < majorityOf(list)) return null
-  const leadsOn = (r: PermitRecord | null | undefined) => !!r && (r.kind === 'renew' || r.kind === 'grant' || r.kind === 'cancel') && r.holder === me
+  // A record this machine leads on: its grant or renew, its cancel of its own handover, and its witness list change (a
+  // members record is its writer's permission record as a grant is: rules.ts mayRewrite, ownLive).
+  const leadsOn = (r: PermitRecord | null | undefined) => !!r && (r.kind === 'renew' || r.kind === 'grant' || r.kind === 'cancel' || r.kind === 'members') && r.holder === me
   const mineAbove = (n: number) => answers.some((a) => leadsOn(a.held) && a.held!.number > n)
   // More than a minority of the witnesses never held record `n` of another machine while it stood: those that hold a
   // lower number, and those that hold a record of this machine above it (this machine never lands a record on another

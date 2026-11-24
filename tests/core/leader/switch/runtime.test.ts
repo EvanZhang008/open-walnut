@@ -209,6 +209,12 @@ describe('boot decisions', () => {
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', away(73)), reply('w2', cancel(74)), reply('w3', rec(75, 'machine-a'))] as never }, 'machine-a')?.want).toBe('grant')
     // Another machine's cancel that may have stood (two witnesses at or above it) is not this machine's.
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', cancel(74, 'machine-b')), reply('w2', rec(75, 'machine-b')), reply('w3', rec(70, 'machine-a'))] as never }, 'machine-a')).toBeNull()
+    // A witness list change of this machine is its permission record, as a grant is (the list-change model's split:
+    // w1 on its cancel, w2 on its final step that stood, the third not answering).
+    const members = (n: number, who = 'machine-a') => ({ ...rec(n, who), kind: 'members', stage: 'final', newList: ['w1', 'w2', 'w3'] })
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', cancel(5)), reply('w2', members(3))] as never }, 'machine-a')?.want).toBe('grant')
+    // Another machine's list change is not this machine's.
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', cancel(5)), reply('w2', members(3, 'machine-b'))] as never }, 'machine-a')).toBeNull()
   })
 
   it('a handover to this machine that the switch did not commit: refuses', async () => {
