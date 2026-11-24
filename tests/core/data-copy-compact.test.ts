@@ -13,8 +13,9 @@ import zlib from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WALNUT_HOME } from '../../src/constants.js'
 import {
-  compactDataCopies, compressCopy, findCompactableCopies, isCompactableCopyName, KEPT_COPY_PATHS,
+  compactDataCopies, compressCopy, findCompactableCopies, isCompactableCopyName,
 } from '../../src/core/data-copy-compact.js'
+import { GITIGNORE_CONTENT } from '../../src/integrations/git-sync.js'
 
 const OLD = new Date('2026-10-01T00:00:00Z')
 const roomy = async () => ({ bavail: 1e9, bsize: 4096 })
@@ -41,7 +42,15 @@ describe('isCompactableCopyName', () => {
     ['usage.sqlite.backup-2026-11-20-before-host-dedupe', true],
     ['sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup', true],
     ['tasks.sqlite.pre-repair-0805.backup', true],
-    ['tasks.sqlite.pre-repair-0805.backup-wal', true],
+    ['tasks.sqlite.pre-repair-0805.backup-wal', false],
+    ['tasks.sqlite.pre-repair-0805.backup-shm', false],
+    ['tasks.sqlite.pre-v5.backup', false],
+    ['cron-jobs.backup.json', false],
+    ['tasks.backup.sqlite', false],
+    ['index.json.corrupt', false],
+    ['library.unreadable.json', false],
+    ['2026-11-01.bak.md', false],
+    ['.usage.sqlite.123.1795546720563.backup', false],
     ['cron-jobs.json.corrupt-2026-11-24T07-16-00-469Z', true],
     ['x.json.unreadable-1', true],
     ['x.json.conflicted-1', false],
@@ -89,6 +98,8 @@ describe('compactDataCopies', () => {
       put('config.yaml.bak'),
       put('memory/MEMORY.md.bak.1'),
       put('tasks/tasks.sqlite.pre-v5.backup'),
+      put('cron-jobs.backup.json'),
+      put('tasks/tasks.backup.sqlite'),
       put('done.sqlite.backup-1.gz'),
       put('notes/vault.sqlite.backup-1'),
       put('tmp/scratch.sqlite.backup-1'),
@@ -119,12 +130,50 @@ describe('compactDataCopies', () => {
     expect(fs.existsSync(path.join(home, 'unignored.sqlite.corrupt-1'))).toBe(true)
   })
 
-  it('one pass at a time: a second caller joins the pass in flight', async () => {
+  it('with the real data-repo .gitignore, a copy whose .gz git would sync stays as it is', async () => {
+    const git = (...args: string[]) => execFileSync('git', ['-C', home, ...args], { stdio: 'pipe' })
+    git('init', '-q')
+    fs.writeFileSync(path.join(home, '.gitignore'), GITIGNORE_CONTENT)
+    put('usage.sqlite.backup-2026-11-20-before-host-dedupe')
+    put('sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup') // `/*.backup` misses its .gz
+    put('tasks/tasks.sqlite.pre-repair-0805.backup')
+    const rows = await compactDataCopies({ home, ...opts })
+    expect(rows.map((r) => path.relative(home, r.file)).sort()).toEqual(['tasks/tasks.sqlite.pre-repair-0805.backup', 'usage.sqlite.backup-2026-11-20-before-host-dedupe'])
+    expect(fs.existsSync(path.join(home, 'sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup'))).toBe(true)
+    // What it wrote, git still ignores: nothing new for git-sync's add -A.
+    expect(execFileSync('git', ['-C', home, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }).split('\n').filter((l) => l.includes('.gz'))).toEqual([])
+  })
+
+  it('every compactable copy kind: the original and its .gz are both ignored by the real template, or it is skipped', async () => {
+    const git = (...args: string[]) => execFileSync('git', ['-C', home, ...args], { stdio: 'pipe' })
+    git('init', '-q')
+    fs.writeFileSync(path.join(home, '.gitignore'), GITIGNORE_CONTENT)
+    const samples = ['x.sqlite.backup-1', 'x.json.corrupt-1', 'x.json.unreadable-1', 'x.sqlite.bak-20261101', 'x.sqlite.fix-20261101.backup', 'cron-jobs.json.backup-1']
+    for (const n of samples) { put(n); put(`tasks/${n}`) }
+    await compactDataCopies({ home, ...opts })
+    const untracked = execFileSync('git', ['-C', home, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' })
+    expect(untracked.split('\n').filter((l) => l.endsWith('.gz'))).toEqual([])
+  })
+
+  it('a SQLite copy with its -wal beside it stays whole, uncompressed', async () => {
+    put('tasks.sqlite.pre-repair-0805.backup')
+    put('tasks.sqlite.pre-repair-0805.backup-wal')
+    expect(await compactDataCopies({ home, ...opts })).toEqual([])
+    expect(names()).toEqual(['tasks.sqlite.pre-repair-0805.backup', 'tasks.sqlite.pre-repair-0805.backup-wal'])
+  })
+
+  it('one pass at a time per home: a second caller joins the pass in flight, another home runs its own', async () => {
     put('a.sqlite.backup-1')
-    const a = compactDataCopies({ home, ...opts })
-    const b = compactDataCopies({ home, ...opts })
-    expect(b).toBe(a)
-    expect(await a).toHaveLength(1)
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'copy-compact-other-'))
+    try {
+      const a = compactDataCopies({ home, ...opts })
+      const b = compactDataCopies({ home, ...opts })
+      const c = compactDataCopies({ home: other, ...opts })
+      expect(b).toBe(a)
+      expect(c).not.toBe(a)
+      expect(await a).toHaveLength(1)
+      expect(await c).toEqual([])
+    } finally { fs.rmSync(other, { recursive: true, force: true }) }
   })
 })
 
@@ -156,6 +205,17 @@ describe('compressCopy failures leave the original as it was and no temp', () =>
     expect(names()).toEqual(['usage.sqlite.backup-1'])
   })
 
+  it('a copy that compresses worse than guessed stops before it eats the margin', async () => {
+    // Random bytes do not compress: the .gz would grow past the room left above the margin.
+    const file = path.join(home, 'usage.sqlite.backup-1')
+    fs.writeFileSync(file, Buffer.from(Array.from({ length: 1024 * 1024 }, () => Math.floor(Math.random() * 256))))
+    const bytes = fs.readFileSync(file)
+    const tight = async () => ({ bavail: (256 * 1024 * 1024 + 400 * 1024) / 4096, bsize: 4096 })
+    await expect(compressCopy(file, { statfs: tight })).rejects.toThrow(/outgrew its room/)
+    expect(fs.readFileSync(file).equals(bytes)).toBe(true)
+    expect(names()).toEqual(['usage.sqlite.backup-1'])
+  })
+
   it('a .gz already there: both left', async () => {
     const file = put('usage.sqlite.backup-1')
     fs.writeFileSync(`${file}.gz`, 'other')
@@ -172,31 +232,39 @@ describe('compressCopy failures leave the original as it was and no temp', () =>
   })
 })
 
-describe('every backup Walnut reads by name is kept (class guard)', () => {
-  // A new `*_BACKUP_PATH` / `*_BACKUP_FILE` constant names a copy code opens by name: it must
-  // join KEPT_COPY_PATHS, or a compaction would hide it from its reader.
+describe('no copy Walnut writes again or reads back by name is compressed (class guard)', () => {
+  // Code that opens a copy by name uses a fixed name: an exported `*_BACKUP_PATH/FILE`
+  // constant, or a literal ending in a copy kind (`.replace(/\.json$/, '.backup.json')`,
+  // `${INDEX_FILE}.corrupt`). Every such name must read as not compactable; a new one that
+  // does fails here. Tagged copies (`.backup-${Date.now()}`) are written once and set aside.
   const root = path.resolve(__dirname, '../..')
-  const found: Array<{ file: string; name: string }> = []
+  const constants: Array<{ file: string; name: string }> = []
+  const literals: Array<{ file: string; tail: string }> = []
   const walk = (dir: string): void => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name)
       if (e.isDirectory()) walk(p)
       else if (e.name.endsWith('.ts')) {
-        for (const m of fs.readFileSync(p, 'utf8').matchAll(/export const (\w+_BACKUP_(?:PATH|FILE))\b/g)) found.push({ file: p, name: m[1] })
+        const text = fs.readFileSync(p, 'utf8')
+        for (const m of text.matchAll(/export const (\w+_BACKUP_(?:PATH|FILE))\b/g)) constants.push({ file: p, name: m[1] })
+        for (const m of text.matchAll(/[^'"`}\s/]*\.(?:backup|bak|corrupt|unreadable)(?:\.[A-Za-z0-9]+)*(?=['"`])/g)) literals.push({ file: p, tail: m[0] })
       }
     }
   }
   walk(path.join(root, 'src'))
 
   it('finds the known ones', () => {
-    expect(found.map((f) => f.name)).toEqual(expect.arrayContaining(['TASK_DB_PRE_V5_BACKUP_PATH', 'CONFIG_BACKUP_FILE']))
+    expect(constants.map((f) => f.name)).toEqual(expect.arrayContaining(['TASK_DB_PRE_V5_BACKUP_PATH', 'CONFIG_BACKUP_FILE']))
+    expect(literals.map((l) => l.tail)).toEqual(expect.arrayContaining(['.backup.json', '.backup.sqlite', '.corrupt', 'library.unreadable.json']))
   })
 
-  it.each(found.map((f) => [f.name, f.file]))('%s is in KEPT_COPY_PATHS', async (name, file) => {
+  it.each(constants.map((f) => [f.name, f.file]))('%s is not compactable', async (name, file) => {
     const mod = await import(file) as Record<string, unknown>
-    const value = String(mod[name])
-    const rel = (path.isAbsolute(value) ? path.relative(WALNUT_HOME, value) : value).split(path.sep).join('/')
-    expect(KEPT_COPY_PATHS).toContain(rel)
+    expect(isCompactableCopyName(path.basename(String(mod[name])))).toBe(false)
+  })
+
+  it.each(literals.map((l) => [l.tail, path.relative(root, l.file)]))('literal %s (%s) is not compactable', (tail) => {
+    expect(isCompactableCopyName(tail.startsWith('.') ? `x${tail}` : tail)).toBe(false)
   })
 })
 

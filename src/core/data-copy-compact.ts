@@ -7,8 +7,10 @@
  *
  * This keeps every one of them, losslessly: a copy over a size limit that nobody wrote
  * for a day becomes `<copy>.gz`, verified byte for byte before the original goes. Nothing
- * is ever deleted without its compressed twin in place, and nothing Walnut's own code
- * reads by name is touched (KEPT_COPY_PATHS). Deleting a copy stays the user's call.
+ * is ever deleted without its compressed twin in place, and only a copy whose name is its
+ * own (stamped: `.backup-<x>`, `.corrupt-<ts>`, `<stem>-<stamp>.backup`) is touched: a
+ * fixed name (`cron-jobs.backup.json`, `config.yaml.bak`, `tasks.sqlite.pre-v5.backup`) is a
+ * copy code writes again or reads back by name, and stays. Deleting a copy stays the user's call.
  *
  * Runs with every task-dir sweep round and the disk alarm's auto-fix, on this server's
  * own WALNUT_HOME only (a test or ephemeral server's home is its own). All I/O is
@@ -24,16 +26,14 @@ import { pipeline } from 'node:stream/promises'
 import zlib from 'node:zlib'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
-import { CONFIG_BACKUP_FILE } from './config-store.js'
 import { COPY_SUFFIX } from './home-manifest/index.js'
-import { TASK_DB_PRE_V5_BACKUP_PATH } from './task-db.js'
 
 const MiB = 1024 ** 2
 /** A copy under this size is left as it is: compressing it saves too little to matter. */
 export const COMPACT_MIN_BYTES = 50 * MiB
 /** A copy written within this time may still be in use (a repair that just ran). */
 export const COMPACT_MIN_AGE_MS = 24 * 60 * 60_000
-/** Room the volume keeps beyond the compressed copy (a quarter of the original). */
+/** Room the volume always keeps for live data: the compressed write stops before it takes this. */
 const FREE_MARGIN_BYTES = 256 * MiB
 const GIT_TIMEOUT_MS = 10_000
 
@@ -43,30 +43,26 @@ const SKIP_DIRS = new Set(['.git', 'notes', 'tmp', 'cache', 'artifacts', 'images
 /** Copy kinds (COPY_SUFFIX's word) that are kept copies; `.tmp` is a write in flight, `.migrated` a journal's own, `.conflicted-*` is read back by name (git-sync-private-data.ts sets secrets aside as `*.conflicted-secret-*`). */
 const KEPT_KINDS = new Set(['backup', 'bak', 'corrupt', 'unreadable'])
 
-/**
- * Copies Walnut's own code reads by name (paths relative to the data home). Each stays as
- * it is. tests/core/data-copy-compact.test.ts holds every exported `*_BACKUP_PATH` and
- * `*_BACKUP_FILE` constant in src/ to this list.
- */
-export const KEPT_COPY_PATHS: readonly string[] = [
-  path.relative(WALNUT_HOME, TASK_DB_PRE_V5_BACKUP_PATH), // pre-ledger-owners.ts reads it
-  path.relative(WALNUT_HOME, CONFIG_BACKUP_FILE), // config-store.ts restores from it
-].map((p) => p.split(path.sep).join('/')).concat('auth.json.bak') // device-store.ts authBackupPath
-
 const GZ_TEMP = /\.gz\.tmp-\d+$/
+/** SQLite's sidecars: a copy taken with its -wal/-shm stays whole, as a set, uncompressed. */
+const SIDECAR = /-(wal|shm|journal)$/
 
 /**
- * Whether a file name is an ad-hoc copy this module compresses: a kept copy kind, never a
- * plain `<file>.bak` or a rolling `.bak.<n>` (live fallbacks code restores from:
- * config-store.ts, device-store.ts, bounded-memory-backup.ts), never a `.gz` or its temp.
+ * Whether a file name is an ad-hoc copy this module compresses: a kept copy kind whose name
+ * is its own, either tagged after the kind word (`.backup-<x>`, `.corrupt-<ts>`) or stamped
+ * just before a bare `.backup` (`.orphan-repair-<stamp>.backup`). Never a fixed name code
+ * writes again or reads back (`.backup.json`, `.corrupt`, `.bak`, `.bak.<n>`, `.pre-v5.backup`),
+ * a hidden file (a copy being written), a SQLite sidecar, a `.gz` or its temp.
  */
 export function isCompactableCopyName(name: string): boolean {
-  if (name.endsWith('.gz') || GZ_TEMP.test(name)) return false
+  if (name.startsWith('.') || name.endsWith('.gz') || GZ_TEMP.test(name) || SIDECAR.test(name)) return false
   const m = COPY_SUFFIX.exec(name)
   if (!m || !KEPT_KINDS.has(m[1])) return false
   const rest = m[2] ?? ''
-  if (m[1] === 'bak') return rest !== '' && !/^\.\d+$/.test(rest)
-  return true
+  if (rest.startsWith('-')) return true
+  if (rest !== '') return false
+  const stem = name.slice(0, m.index)
+  return /\d{4}/.test(stem.slice(stem.lastIndexOf('.') + 1))
 }
 
 export interface CompactOptions {
@@ -95,14 +91,15 @@ function gitIgnores(home: string, rel: string): Promise<boolean> {
 
 /**
  * The copies to compress under `home`, largest first: the top level and one level of
- * folders (never a skipped folder or a symlink), old and big enough, not kept by name, and
- * outside what the data repo tracks (when the home is a git repo, only what it ignores).
+ * folders (never a skipped folder or a symlink), old and big enough, and outside what the
+ * data repo syncs: when the home is a git repo, only a copy git ignores both as it is and as
+ * its `.gz` (the template's `/*.backup` does not cover `x.backup.gz`, and git-sync would
+ * commit a new untracked .gz of hundreds of MB).
  */
 export async function findCompactableCopies(home: string, opts: CompactOptions = {}): Promise<Array<{ file: string; rel: string; size: number }>> {
   const minBytes = opts.minBytes ?? COMPACT_MIN_BYTES
   const minAgeMs = opts.minAgeMs ?? COMPACT_MIN_AGE_MS
   const now = opts.now ?? Date.now()
-  const kept = new Set(KEPT_COPY_PATHS)
   const found: Array<{ file: string; rel: string; size: number }> = []
   const visit = async (relDir: string, depth: number): Promise<void> => {
     const entries = await fsp.readdir(path.join(home, relDir), { withFileTypes: true }).catch(() => [])
@@ -113,7 +110,8 @@ export async function findCompactableCopies(home: string, opts: CompactOptions =
         if (depth < 2 && !SKIP_DIRS.has(rel)) await visit(rel, depth + 1)
         continue
       }
-      if (!e.isFile() || !isCompactableCopyName(e.name) || kept.has(rel)) continue
+      if (!e.isFile() || !isCompactableCopyName(e.name)) continue
+      if (await exists(path.join(home, `${rel}-wal`))) continue
       const st = await fsp.lstat(path.join(home, rel)).catch(() => null)
       if (!st?.isFile() || st.size < minBytes || now - st.mtimeMs < minAgeMs) continue
       found.push({ file: path.join(home, rel), rel, size: st.size })
@@ -121,7 +119,7 @@ export async function findCompactableCopies(home: string, opts: CompactOptions =
   }
   await visit('', 1)
   if (found.length > 0 && await exists(path.join(home, '.git'))) {
-    const ignored = await Promise.all(found.map((f) => gitIgnores(home, f.rel)))
+    const ignored = await Promise.all(found.map(async (f) => await gitIgnores(home, f.rel) && await gitIgnores(home, `${f.rel}.gz`)))
     for (let i = found.length - 1; i >= 0; i--) if (!ignored[i]) found.splice(i, 1)
   }
   return found.sort((a, b) => b.size - a.size)
@@ -155,7 +153,10 @@ export async function compressCopy(file: string, opts: CompactOptions = {}): Pro
   }
   const vol = await (opts.statfs ?? fsp.statfs)(path.dirname(file))
   const free = Number(vol.bavail) * Number(vol.bsize)
-  if (free < st.size / 4 + FREE_MARGIN_BYTES) {
+  // Skip a copy unlikely to fit; past that guess, the write itself stops at the budget, so a
+  // copy that compresses worse than expected never takes the room live data needs.
+  const budget = Math.min(free - FREE_MARGIN_BYTES, st.size)
+  if (budget < st.size / 4) {
     log.session.warn('data copy compaction: too little free space to compress safely', { file, size: st.size, free })
     return null
   }
@@ -169,8 +170,16 @@ export async function compressCopy(file: string, opts: CompactOptions = {}): Pro
   try {
     const hash = crypto.createHash('sha256')
     const tap = new Transform({ transform(chunk, _e, cb) { hash.update(chunk); cb(null, chunk) } })
+    let written = 0
+    const cap = new Transform({
+      transform(chunk: Buffer, _e, cb) {
+        written += chunk.length
+        if (written > budget) cb(new Error(`the compressed copy outgrew its room (${budget} bytes); stopped`))
+        else cb(null, chunk)
+      },
+    })
     const out = opts.createWriteStream ? opts.createWriteStream(tmp) : createWriteStream(tmp, { flags: 'wx' })
-    await pipeline(createReadStream(file), tap, zlib.createGzip({ level: 6 }), out)
+    await pipeline(createReadStream(file), tap, zlib.createGzip({ level: 6 }), cap, out)
     const want = hash.digest('hex')
     const got = await sha256Of(createReadStream(tmp).pipe(zlib.createGunzip()))
     if (got !== want) throw new Error('the compressed copy does not read back as the original')
@@ -189,15 +198,16 @@ export async function compressCopy(file: string, opts: CompactOptions = {}): Pro
   return { file, before: st.size, after }
 }
 
-let inFlight: Promise<CompactRow[]> | null = null
+const inFlight = new Map<string, Promise<CompactRow[]>>()
 
 /**
  * One pass over the data home (default this server's WALNUT_HOME), largest copy first.
- * One pass at a time per process: a caller while one runs gets that pass's rows.
+ * One pass at a time per home: a caller while one runs gets that pass's rows.
  */
 export function compactDataCopies(opts: CompactOptions = {}): Promise<CompactRow[]> {
-  if (inFlight) return inFlight
   const home = opts.home ?? WALNUT_HOME
+  const running = inFlight.get(home)
+  if (running) return running
   const run = (async () => {
     const rows: CompactRow[] = []
     for (const c of await findCompactableCopies(home, opts)) {
@@ -212,7 +222,7 @@ export function compactDataCopies(opts: CompactOptions = {}): Promise<CompactRow
     }
     return rows
   })()
-  const pass = run.finally(() => { if (inFlight === pass) inFlight = null })
-  inFlight = pass
+  const pass = run.finally(() => { if (inFlight.get(home) === pass) inFlight.delete(home) })
+  inFlight.set(home, pass)
   return pass
 }

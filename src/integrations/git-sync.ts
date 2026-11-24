@@ -1028,7 +1028,7 @@ sessions.json.*
 /*.backup
 /*.backup-*
 `;
-const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
+export const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
 
 /**
  * Ignore entries that MUST be present even in pre-existing repos whose
