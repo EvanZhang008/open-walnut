@@ -210,6 +210,26 @@ describe('transcript paging', () => {
     }
   })
 
+  it('ids=1 gives each row its message id, and beforeId pages back from that row\'s place', async () => {
+    const sid = 'sess-paging-before-id'
+    await seedBusySession(sid, 3, 60)
+    const plain = await getTranscript(sid, '?fresh=1')
+    expect(plain.body.messages.some((m) => 'msgId' in m)).toBe(false)
+    const tail = await getTranscript(sid, '?fresh=1&ids=1')
+    const first = tail.body.messages[0] as Row & { msgId?: string }
+    expect(typeof first.msgId).toBe('string')
+    const older = await getTranscript(sid, `?ids=1&before=${encodeURIComponent(first.timestamp)}&beforeId=${encodeURIComponent(first.msgId!)}`)
+    expect(older.status).toBe(200)
+    const byTime = await getTranscript(sid, `?ids=1&before=${encodeURIComponent(first.timestamp)}`)
+    // In time order the place and the time name the same page.
+    expect(older.body.messages).toEqual(byTime.body.messages)
+    for (const bad of [`?beforeId=${encodeURIComponent(first.msgId!)}`, `?before=${encodeURIComponent(first.timestamp)}&beforeId=a%20b`]) {
+      const r = await getTranscript(sid, bad)
+      expect(r.status, bad).toBe(400)
+      expect(r.body.error?.code, bad).toBe('invalid_before_id')
+    }
+  })
+
   it('since reaches back to the newest row the client holds; a malformed one is a 400', async () => {
     const sid = 'sess-paging-since'
     await seedBusySession(sid, 2, 150)

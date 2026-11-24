@@ -93,7 +93,9 @@ async function fileExists(filePath: string): Promise<boolean> {
  */
 export function extractCwdFromJsonlContent(content: string): string | undefined {
   for (const line of content.split('\n')) {
-    if (!line) continue;
+    // Only a line that names a cwd can answer: the others are not parsed (2026-11-24: a transcript
+    // whose user lines carry none was JSON-parsed whole here, on the loop, on every full read).
+    if (!line || !line.includes('"cwd"')) continue;
     try {
       const entry = JSON.parse(line);
       if ((entry.type === 'user' || entry.type === 'human') && entry.cwd) {

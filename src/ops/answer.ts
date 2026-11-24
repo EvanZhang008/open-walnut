@@ -46,6 +46,11 @@ export interface OpAnswer {
    * harness reads as it is (the read-back after a compaction). The guard test lists the ops that may.
    */
   whole_for?: (args: Record<string, unknown>) => boolean
+  /**
+   * The result as every caller reads it, applied last (executor.ts), shaped or not: what the
+   * result carries only for the op's own shape to read (task_history's row ids) comes off here.
+   */
+  clean?: (result: unknown) => unknown
 }
 
 /**

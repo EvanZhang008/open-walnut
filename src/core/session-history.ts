@@ -47,7 +47,7 @@ import { keptHostHistoryOf, keptHostHistoryState, shareHistoryBudget, shedKeptHo
 export * from './history-parse.js';
 import {
   aboutChildRows, chainFilterMarks, getChainFilterMark, logSkippedRewindCuts, markMessageAbout,
-  getOrphanFinishedAgentIds, markOrphanFinishedAgentIds, NO_QUEUE_DEAD_KEYS, parseSessionMessages, rewindCutsKey, setHistoryParseHooks,
+  getOrphanFinishedAgentIds, markOrphanFinishedAgentIds, NO_QUEUE_DEAD_KEYS, parseSessionMessages, parseSessionMessagesYielding, rewindCutsKey, setHistoryParseHooks,
   type PaginationMeta, type ParseSessionMessagesOptions, type RawJsonlLine, type SessionHistoryMessage,
 } from './history-parse.js';
 setHistoryParseHooks({
@@ -956,7 +956,7 @@ async function rollIncrementalTail(
   const tailParse = parseSessionMessages(content, { chainFilter: { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys } });
   chainFilterMarks.set(tailParse, { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys, droppedCount: inc.deadUuids?.size ?? 0 });
   const why: { reason?: string } = {};
-  const st = seedIncrementalStateAt(sessionId, inc.tailStartByte, content, tailText.length, tailParse, inc.filePath, why);
+  const st = await seedIncrementalStateAt(sessionId, inc.tailStartByte, content, tailText.length, tailParse, inc.filePath, why);
   if (!st) {
     log.session.debug('incremental tail roll found no boundary — full read', { sessionId, reason: why.reason });
     return undefined;
@@ -983,7 +983,7 @@ async function rollIncrementalTail(
  * (it starts at the old boundary), and so is a tail window read (it starts at its
  * first whole line).
  */
-function seedIncrementalStateAt(
+async function seedIncrementalStateAt(
   sessionId: string,
   base: number,
   content: string,
@@ -993,8 +993,8 @@ function seedIncrementalStateAt(
   why?: { reason?: string },
   /** `content` is a window: it starts at the window's first line (parseHistoryWindow). */
   window = false,
-): HistoryIncrementalState | undefined {
-  const st = seedIncrementalState(sessionId, { content, source: 'local', canonicalChars, resolvedRemotePath: filePath }, messages, filePath, why, window);
+): Promise<HistoryIncrementalState | undefined> {
+  const st = await seedIncrementalState(sessionId, { content, source: 'local', canonicalChars, resolvedRemotePath: filePath }, messages, filePath, why, window);
   return st && {
     ...st,
     tailStartByte: base + st.tailStartByte,
@@ -1010,7 +1010,7 @@ function seedIncrementalStateAt(
  * pass spanned the boundary, so seeding is skipped (correctness first; a later
  * full read retries with a different boundary).
  */
-function seedIncrementalState(
+async function seedIncrementalState(
   sessionId: string,
   result: ReadSessionResult,
   fullMessages: SessionHistoryMessage[],
@@ -1018,7 +1018,7 @@ function seedIncrementalState(
   why?: { reason?: string },
   /** The content starts at a window's first line: its prefix segment parses as the window did. */
   startsMidFile = false,
-): HistoryIncrementalState | undefined {
+): Promise<HistoryIncrementalState | undefined> {
   const skip = (reason: string): undefined => { if (why) why.reason = reason; return undefined; };
   const filePath = result.resolvedRemotePath ?? statPath;
   if (!filePath) return skip('no-path');
@@ -1055,13 +1055,18 @@ function seedIncrementalState(
     ? result.content.slice(result.canonicalChars)
     : '';
   // One boundary tried: the two segment parses, or why they are not the full parse.
-  const tryBoundary = (at: number): { prefixMessages: SessionHistoryMessage[]; tailMessages: SessionHistoryMessage[] } | { reason: string } => {
+  // Each parse gets a turn of the loop to itself: the prefix is most of the transcript, so one
+  // read used to hold the loop for the full parse and two to four more in a row (2026-11-24: 343 ms
+  // for a 16 MB transcript whose first boundary split a call from its result, 718 ms at 31 MB).
+  const tryBoundary = async (at: number): Promise<{ prefixMessages: SessionHistoryMessage[]; tailMessages: SessionHistoryMessage[] } | { reason: string }> => {
     let prefixMessages: SessionHistoryMessage[];
     let tailMessages: SessionHistoryMessage[];
     try {
+      await yieldToLoop();
       // A window's prefix starts where the window does, as its full parse did (parseHistoryWindow).
-      prefixMessages = at > 0 ? parseSessionMessages(canonical.slice(0, at), startsMidFile ? { ...segFilter, startsMidFile } : segFilter) : [];
-      tailMessages = parseSessionMessages(canonical.slice(at) + syntheticSuffix, segFilter);
+      prefixMessages = at > 0 ? await parseSessionMessagesYielding(canonical.slice(0, at), startsMidFile ? { ...segFilter, startsMidFile } : segFilter) : [];
+      await yieldToLoop();
+      tailMessages = await parseSessionMessagesYielding(canonical.slice(at) + syntheticSuffix, segFilter);
     } catch {
       return { reason: 'parse-error' };
     }
@@ -1094,14 +1099,12 @@ function seedIncrementalState(
   // A boundary that splits a tool call from its result, or freezes a queued row,
   // fails; the next try moves it before what it split (2026-11-03: one 28 MB
   // transcript failed every seed this way and was read whole 54 times a day).
-  let tried = tryBoundary(boundaryChar);
-  // Each try parses the whole transcript on the loop: a very large one gets one.
-  const attempts = canonical.length > SEED_RETRY_MAX_CHARS ? 1 : SEED_ATTEMPTS;
-  for (let attempt = 1; 'reason' in tried && attempt < attempts; attempt++) {
+  let tried = await tryBoundary(boundaryChar);
+  for (let attempt = 1; 'reason' in tried && attempt < SEED_ATTEMPTS; attempt++) {
     const earlier = earlierSeedBoundary(canonical, boundaryChar, tried.reason);
     if (earlier === null) break;
     boundaryChar = earlier;
-    tried = tryBoundary(boundaryChar);
+    tried = await tryBoundary(boundaryChar);
   }
   if ('reason' in tried) {
     if (tried.reason === 'parse-error' || tried.reason === 'queued-in-prefix') return skip(tried.reason);
@@ -1148,10 +1151,13 @@ function seedIncrementalState(
   };
 }
 
-/** Seed boundaries tried in all (each costs a parse of the transcript). */
+/** Seed boundaries tried in all (each costs a parse of the transcript, in turns of its own). */
 const SEED_ATTEMPTS = 3;
-/** Past this a transcript gets one seed try: a parse of it holds the loop too long to repeat. */
-const SEED_RETRY_MAX_CHARS = 64 * 1024 * 1024;
+
+/** Give the loop back between two parses of one transcript (each can hold it a hundred ms or more). */
+function yieldToLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 /** A boundary is never moved so far back that the tail re-parsed on every read passes this. */
 const SEED_MAX_TAIL_CHARS = 3 * 1024 * 1024;
 
@@ -1488,9 +1494,9 @@ async function readHistoryWindow(
  * gate declines (a trailing partial line, a boundary that splits a pair): the entry then
  * stays a plain window, and the next change reads a fresh one.
  */
-function seedWindowIncrementalState(sessionId: string, win: HistoryWindowRead, windowBytes: number): HistoryIncrementalState | undefined {
+async function seedWindowIncrementalState(sessionId: string, win: HistoryWindowRead, windowBytes: number): Promise<HistoryIncrementalState | undefined> {
   if (!win.text || !win.text.endsWith('\n')) return undefined;
-  const st = seedIncrementalStateAt(sessionId, win.startByte, win.merged, win.text.length, win.messages, win.path, undefined, win.startByte > 0);
+  const st = await seedIncrementalStateAt(sessionId, win.startByte, win.merged, win.text.length, win.messages, win.path, undefined, win.startByte > 0);
   if (!st) return undefined;
   // A window read never filters rewinds (a session with in-place rewinds skips it).
   st.cutsKey = rewindCutsKey(undefined);
@@ -1534,7 +1540,10 @@ async function cacheWindowRead(
     if (extra.overCeiling && current.windowed && !current.overCeiling) current.overCeiling = true;
     return;
   }
-  const inc = extra.windowCutsKey ? undefined : seedWindowIncrementalState(sessionId, read, windowBytes);
+  const inc = extra.windowCutsKey ? undefined : await seedWindowIncrementalState(sessionId, read, windowBytes);
+  // The seed gave the loop back between its parses: a fresher entry may have landed meanwhile.
+  const landed = cacheGet(sessionId, host);
+  if (landed && landed !== current && (landed.mtimeMs > mtimeMs || (landed.mtimeMs === mtimeMs && !landed.windowed))) return;
   const orphans = getOrphanFinishedAgentIds(read.messages);
   cacheSet(sessionId, {
     mtimeMs, size: statSize, messages: read.messages, windowed: true, ...extra,
@@ -2106,7 +2115,8 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
       // skippedCuts entry and warned about by logSkippedRewindCuts below —
       // computeRewindDeadSet itself stays log-free so it can run in the daemon
       // bundle. Named degrade, serve-all.)
-      messages = parseSessionMessages(result.content, {
+      // A whole transcript, up to the read ceiling: its lines are parsed in slices (history-parse.ts).
+      messages = await parseSessionMessagesYielding(result.content, {
         chainFilter: 'auto',
         ...(rewindCuts ? { rewindCuts } : {}),
       });
@@ -2224,7 +2234,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // Only canonical daemon reads qualify — stream/outputFile fallbacks have no
     // stable byte-offset mapping to the canonical file.
     const inc = (result && (result.source === 'local' || result.source === 'remote'))
-      ? seedIncrementalState(sessionId, result, messages, statPath)
+      ? await seedIncrementalState(sessionId, result, messages, statPath)
       : undefined;
     if (inc) inc.cutsKey = rewindCutsKey(rewindCuts);
     seeded = inc;
@@ -2235,7 +2245,11 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // The rewind dead set is retained with the entry (via inc and the parse
     // mark) — charge it to the byte budget: ~40 chars per uuid.
     const deadSetChars = (getChainFilterMark(messages)?.deadUuids?.size ?? 0) * 40;
-    cacheSet(sessionId, {
+    // The seed gave the loop back between its parses: a full parse of a newer file may have landed.
+    const landed = cacheGet(sessionId, host);
+    const newer = !!landed && !landed.windowed && (landed.mtimeMs > mtimeMs
+      || (landed.mtimeMs === mtimeMs && landed.size !== undefined && statSize !== undefined && landed.size > statSize));
+    if (!newer) cacheSet(sessionId, {
       mtimeMs, ...(statSize !== undefined ? { size: statSize } : {}), messages, approxChars: sourceChars + deadSetChars,
       ...(inc ? { inc } : {}),
       ...(orphanIds && orphanIds.size > 0 ? { orphanFinishedIds: [...orphanIds] } : {}),

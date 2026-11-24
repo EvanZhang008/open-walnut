@@ -21,7 +21,7 @@ export interface HistoryShape {
 import { parseSessionEnvelopes, type SessionEnvelope } from '../lib/history-session-envelope.js'
 import type { OpAnswer } from './answer.js'
 import { cutText } from './answer-text.js'
-import { isSessionHeader, newestCounted, newestFitting } from './history-time-cut.js'
+import { isSessionHeader, newestCounted, newestFitting, pageStart } from './history-time-cut.js'
 
 type Row = Record<string, unknown>
 
@@ -79,7 +79,8 @@ function noticeText(text: string): string {
 const fromPerson = (r: Row) => r.role === 'user' && (r.sentBy === undefined || r.sentBy === 'person')
 
 function compactRow(r: Row): { row: Row; folded?: 'tool' | 'thinking'; clipped: boolean } {
-  const base: Row = { role: r.role, ...(r.timestamp !== undefined ? { timestamp: r.timestamp } : {}) }
+  // msgId rides until the answer is final (withoutRowIds): the cuts after this one page by place with it.
+  const base: Row = { role: r.role, ...(r.timestamp !== undefined ? { timestamp: r.timestamp } : {}), ...(r.msgId !== undefined ? { msgId: r.msgId } : {}) }
   const text = typeof r.text === 'string' ? r.text : ''
   if (r.kind === 'tool') {
     const detail = typeof r.detail === 'string' && r.detail ? `: ${r.detail}` : ''
@@ -115,15 +116,38 @@ export interface ShapeResult {
   chars: number
   /** The time `limit`'s cut reads back from (older.before): the oldest time it kept, when it left rows out. */
   before?: string
+  /** With `before`, when the cut was by place: the first kept row's id (older.before_id). */
+  beforeId?: string
   /** The rows of `messages` as they were before the compact form, one for one. */
   sources: Row[]
 }
 
-/** The earliest time of the rows (all:true joins sessions out of time order), as a row wrote it. */
-export function earliestTime(rows: Row[]): string | undefined {
-  let best: string | undefined
-  for (const r of rows) if (typeof r.timestamp === 'string' && (best === undefined || Date.parse(r.timestamp) < Date.parse(best))) best = r.timestamp
-  return best
+/** Where the page before a shaped answer starts: its cut, else its first row's place (history-time-cut.ts pageStart). */
+export function olderCursor(out: Pick<ShapeResult, 'before' | 'beforeId' | 'messages'>): { before: string; beforeId?: string } | undefined {
+  if (out.before !== undefined) return { before: out.before, ...(out.beforeId !== undefined ? { beforeId: out.beforeId } : {}) }
+  return pageStart(out.messages)
+}
+
+/** The task_history arguments that read the page before `cursor`. */
+export function cursorArgs(cursor: { before: string; beforeId?: string }): { before: string; before_id?: string } {
+  return { before: cursor.before, ...(cursor.beforeId !== undefined ? { before_id: cursor.beforeId } : {}) }
+}
+
+/** A row's or an answer's JSON as the reader gets it: without the ids the cuts page by (withoutRowIds). */
+function answerJson(v: unknown): string {
+  return JSON.stringify(v, (k, x) => (k === 'msgId' ? undefined : x))
+}
+
+/** An answer's rows without the ids the cuts paged by (the route's `ids=1`): they are not for the reader. */
+export function withoutRowIds<T>(answer: T): T {
+  if (!answer || typeof answer !== 'object' || Array.isArray(answer)) return answer
+  const a = answer as Row
+  if (!Array.isArray(a.messages) || !a.messages.some((m) => m && typeof m === 'object' && 'msgId' in m)) return answer
+  return { ...a, messages: a.messages.map((m) => {
+    if (!m || typeof m !== 'object' || !('msgId' in m)) return m
+    const { msgId: _id, ...rest } = m as Row
+    return rest
+  }) } as T
 }
 
 /** Apply `since`, then `limit`, then `compact` to one conversation's rows. */
@@ -137,18 +161,20 @@ export function shapeHistory(rows: Row[], shape: HistoryShape): ShapeResult {
   }
   let cutOlder = 0
   let before: string | undefined
+  let beforeId: string | undefined
   if (shape.limit !== undefined) {
     // By time, never by position (history-time-cut.ts): every row at the oldest kept time stays,
     // and the page before (older.before) reads exactly the rows left out.
     const cut = newestCounted(kept, shape.limit, isTextRow)
     cutOlder = cut.dropped.length
     before = cut.before
+    beforeId = cut.beforeId
     kept = cut.kept
   }
   const sources = kept
   const folded = { tool: 0, thinking: 0 }
   let clipped = 0
-  const size = (list: Row[]) => list.reduce((n, r) => n + JSON.stringify(r).length, 0)
+  const size = (list: Row[]) => list.reduce((n, r) => n + answerJson(r).length, 0)
   const whole = size(rows)
   if (shape.compact) {
     kept = kept.map((r) => {
@@ -159,7 +185,7 @@ export function shapeHistory(rows: Row[], shape: HistoryShape): ShapeResult {
     })
   }
   const chars = whole - size(kept)
-  return { messages: kept, cutOlder, cutSince, folded, clipped, chars, ...(before !== undefined ? { before } : {}), sources }
+  return { messages: kept, cutOlder, cutSince, folded, clipped, chars, ...(before !== undefined ? { before } : {}), ...(beforeId !== undefined ? { beforeId } : {}), sources }
 }
 
 /** The one-line total of what a shaped answer left out (`paged`: the answer carries `older`). */
@@ -218,7 +244,7 @@ export function agentHistory(result: unknown, args: Record<string, unknown>, max
   if (typeof r.shown === 'string') return result
   const all = rows as Row[]
   const budget = max === undefined ? AGENT_HISTORY_BUDGET : Math.max(1_500, Math.min(AGENT_HISTORY_BUDGET, max - AGENT_HISTORY_ROOM))
-  const chars = (list: Row[]) => list.reduce((n, m) => n + JSON.stringify(m).length + 1, 0)
+  const chars = (list: Row[]) => list.reduce((n, m) => n + answerJson(m).length + 1, 0)
   const shaped = (n: number): ShapeResult => {
     const one = shapeHistory(all, { limit: n, compact: true })
     return chars(one.messages) > budget ? clipOlderReplies(one) : one
@@ -231,11 +257,11 @@ export function agentHistory(result: unknown, args: Record<string, unknown>, max
   }
   // The cut keeps each session's header with its rows (history-time-cut.ts).
   const messages = out.messages
-  const first = out.before ?? earliestTime(messages)
+  const first = olderCursor(out)
   const before = r.truncated === true
   const paged = (out.cutOlder > 0 || before) && first !== undefined
   // The page before names no limit or form, so it gets this same default, fitted to its own messages.
-  const page = { id: r.taskId ?? args.id, ...(args.all === true ? { all: true } : {}), before: first }
+  const page = { id: r.taskId ?? args.id, ...(args.all === true ? { all: true } : {}), ...(first ? cursorArgs(first) : {}) }
   const more = [
     out.cutOlder > 0 ? `${out.cutOlder} older rows of this page` : '',
     before ? 'older pages before it' : '',
@@ -246,7 +272,7 @@ export function agentHistory(result: unknown, args: Record<string, unknown>, max
     ...rest,
     messages,
     truncated: paged,
-    ...(paged ? { older: { before: first, how: `walnut tools call task_history '${JSON.stringify(page)}'` } } : {}),
+    ...(paged ? { older: { ...cursorArgs(first), how: `walnut tools call task_history '${JSON.stringify(page)}'` } } : {}),
     left_out: { cutOlder: out.cutOlder, cutSince: 0, folded: out.folded, clipped: out.clipped, chars: out.chars, note: leftOutLine(out, paged) },
     shown: `The newest ${limit} messages, compact (an agent's default)${more ? `; not shown: ${more} (older.how reads the page before)` : ''}. `
       + 'Pass limit (up to 200), since, compact:false, or "_full": true for the whole answer.',
@@ -268,7 +294,7 @@ const WINDOW_ROOM = 900
  */
 function fitWindow(r: Row, rows: Row[], args: Record<string, unknown>, max?: number): unknown {
   if (max === undefined) return r
-  const json = (v: unknown): number => (JSON.stringify(v) ?? 'null').length
+  const json = (v: unknown): number => (answerJson(v) ?? 'null').length
   if (json(r) <= max) return r
   const room = max - WINDOW_ROOM - json({ ...r, messages: [] })
   const cut = newestFitting(rows, room, (m) => json(m) + 1)
@@ -298,6 +324,7 @@ function fitWindow(r: Row, rows: Row[], args: Record<string, unknown>, max?: num
     chars: (prior.chars ?? 0) + json(rows) - json(messages),
   }
   const before = cut.before
+  const at = before !== undefined ? cursorArgs({ before, ...(cut.beforeId !== undefined ? { beforeId: cut.beforeId } : {}) }) : undefined
   const page: Row = { id: r.taskId ?? args.id }
   for (const k of ['all', 'fresh', 'limit', 'since', 'compact'] as const) if (args[k] !== undefined) page[k] = args[k]
   const shownRows = messages.filter((m) => !isSessionHeader(m)).length
@@ -311,7 +338,7 @@ function fitWindow(r: Row, rows: Row[], args: Record<string, unknown>, max?: num
   return {
     ...r,
     messages,
-    ...(before ? { truncated: true, older: { before, how: `walnut tools call task_history '${JSON.stringify({ ...page, before })}'` } } : {}),
+    ...(at ? { truncated: true, older: { ...at, how: `walnut tools call task_history '${JSON.stringify({ ...page, ...at })}'` } } : {}),
     left_out: { ...left, note: leftOutLine(left, before !== undefined || r.older !== undefined) },
     shown: `${notes.join('; ')}.`,
   }
@@ -321,5 +348,7 @@ function fitWindow(r: Row, rows: Row[], args: Record<string, unknown>, max?: num
 export const TASK_HISTORY_ANSWER: OpAnswer = {
   kind: 'content',
   whole: 'task_history {"id":"<id>","limit":200}',
-  shape: ({ result, args, max }) => agentHistory(result, args, max),
+  shape: ({ result, args, max }) => withoutRowIds(agentHistory(result, args, max)),
+  // Every caller, also one that reads the whole answer (`_full`, a person, a plugin) or one a shape failed.
+  clean: withoutRowIds,
 }

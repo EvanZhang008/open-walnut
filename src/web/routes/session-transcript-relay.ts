@@ -15,12 +15,17 @@
  * tail or the synced file as before (that answer does not say `pageable`), and
  * an older page is a 503 the phone shows as "try again".
  */
+import { isTranscriptRowId } from '../../core/transcript-row-place.js'
 import { log } from '../../logging/index.js'
 
 /** One page request, as both boxes read it. */
 export interface TranscriptPageParams {
   rich: boolean
+  /** Rows carry their message id (BuildTranscriptOptions.ids). */
+  ids?: boolean
   before?: string
+  /** The id of the row stamped `before` the page ends before (BuildTranscriptOptions.beforeId). */
+  beforeId?: string
   since?: string
   visible?: number
 }
@@ -32,6 +37,8 @@ export interface TranscriptPageParams {
 export function isTranscriptCursor(v: string): boolean {
   return v.length <= 40 && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v) && !Number.isNaN(Date.parse(v))
 }
+
+export { isTranscriptRowId }
 
 /** Same safe-id alphabet readSessionTranscript enforces (ids land in filenames). */
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/
@@ -70,7 +77,8 @@ export function capRelayedPage<T extends { truncated: boolean; messages: PageRow
     k = rows.length - 1
     while (k > 0 && rows[k - 1].timestamp === rows[k].timestamp) k--
   }
-  return { ...page, truncated: true, messages: rows.slice(k) }
+  // The rows cut off are the page's oldest, after `since` when it was asked: not reached any more.
+  return { ...page, truncated: true, ...('sinceReached' in page ? { sinceReached: false } : {}), messages: rows.slice(k) }
 }
 
 /**
@@ -91,6 +99,7 @@ export async function handlePrimaryTranscriptRelay(
   }
   const before = cursor('before')
   const since = cursor('since')
+  const beforeId = typeof raw.beforeId === 'string' && before && isTranscriptRowId(raw.beforeId) ? raw.beforeId : undefined
   const { buildSessionTranscript, TRANSCRIPT_VISIBLE_MAX } = await import('../../core/session-projection.js')
   const visible = typeof raw.visible === 'number' && Number.isInteger(raw.visible) && raw.visible > 0
     ? Math.min(raw.visible, TRANSCRIPT_VISIBLE_MAX)
@@ -99,7 +108,9 @@ export async function handlePrimaryTranscriptRelay(
     rich: raw.rich === true,
     // A relayed page answers the phone right now, like the route's own builds.
     live: true,
+    ...(raw.ids === true ? { ids: true } : {}),
     ...(before ? { before } : {}),
+    ...(beforeId ? { beforeId } : {}),
     ...(since ? { since } : {}),
     ...(visible ? { visible } : {}),
   })
@@ -136,7 +147,7 @@ class RelayMiss extends Error {}
  */
 export async function relayTranscriptToPrimary(sessionId: string, params: TranscriptPageParams): Promise<RelayedTranscript> {
   const { coalescedSessionRead } = await import('../ws/bridge-read-history.js')
-  const key = `${sessionId}|transcript|${params.rich ? 1 : 0}|${params.before ?? ''}|${params.since ?? ''}|${params.visible ?? ''}`
+  const key = `${sessionId}|transcript|${params.rich ? 1 : 0}|${params.ids ? 1 : 0}|${params.before ?? ''}|${params.beforeId ?? ''}|${params.since ?? ''}|${params.visible ?? ''}`
   try {
     const body = await coalescedSessionRead(PRIMARY_HOST, sessionId, () => readFromPrimary(sessionId, params), key)
     return { ok: true, body }
@@ -154,7 +165,9 @@ async function readFromPrimary(sessionId: string, params: TranscriptPageParams):
     sessionId,
     {
       rich: params.rich,
+      ...(params.ids ? { ids: true } : {}),
       ...(params.before ? { before: params.before } : {}),
+      ...(params.beforeId ? { beforeId: params.beforeId } : {}),
       ...(params.since ? { since: params.since } : {}),
       ...(params.visible ? { visible: params.visible } : {}),
     },

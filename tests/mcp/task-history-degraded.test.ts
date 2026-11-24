@@ -59,7 +59,7 @@ describe('task_history fresh:false', () => {
     await run({ id: 't-1', fresh: true }, fakeCall(paths, () => ({ truncated: false, messages: rows })))
     await run({ id: 't-1' }, fakeCall(paths, () => ({ truncated: false, messages: rows })))
     const reads = paths.filter((p) => p.startsWith('/sessions/'))
-    expect(reads).toEqual(['/sessions/s-1/transcript?fresh=1&visible=5', '/sessions/s-1/transcript?fresh=1', '/sessions/s-1/transcript'])
+    expect(reads).toEqual(['/sessions/s-1/transcript?fresh=1&ids=1&visible=5', '/sessions/s-1/transcript?fresh=1&ids=1', '/sessions/s-1/transcript?ids=1'])
   })
 })
 

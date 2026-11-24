@@ -11,6 +11,7 @@
  * window it needs.
  */
 import { readSessionHistoryRange, type HistoryWindowStart, type SessionHistoryMessage } from './session-history.js';
+import { rowPlace } from './transcript-row-place.js';
 
 const WINDOW_BYTES = 4 * 1024 * 1024;
 /** Most windows one page reads, so a tap costs at most this many bounded reads. */
@@ -188,6 +189,16 @@ export async function readSessionHistoryBefore(
     if (ts === null || ts < before || (want.beforeId !== undefined && ts === before)) lo = mid;
     else hi = mid - 1;
   }
+  // The held row may be stamped out of time order: older than the first row of its own window,
+  // the search by stamp lands before that window and the rows between would be lost. Read on
+  // toward the newer windows until one holds it (none: the file lost it, the stamp decides).
+  if (want.beforeId !== undefined && cutAt === undefined) {
+    for (let j = lo; j * WINDOW_BYTES < stopAt; j++) {
+      const messages = await read(j);
+      if (!messages) return null;
+      if (rowPlace(messages, want.beforeId, before) >= 0) { lo = j; break; }
+    }
+  }
   let k = lo;
   let collected: SessionHistoryMessage[] = [];
   let windows = 0;
@@ -198,7 +209,7 @@ export async function readSessionHistoryBefore(
   let placed = cutAt !== undefined;
   const older = (messages: SessionHistoryMessage[]): SessionHistoryMessage[] => {
     if (placed) return messages;
-    const at = want.beforeId ? messages.findIndex((m) => m.msgId === want.beforeId && m.timestamp === before) : -1;
+    const at = want.beforeId ? rowPlace(messages, want.beforeId, before) : -1;
     if (at < 0) return messages.filter((m) => m.timestamp < before);
     placed = true;
     collected = [];

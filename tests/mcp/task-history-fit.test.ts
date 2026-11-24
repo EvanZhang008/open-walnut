@@ -278,3 +278,27 @@ describe('the answer cutter keeps a conversation\'s newest rows', () => {
     expect((cutToFit({ messages: newestFirst }, 4_000) as { messages: Row[] }).messages[0].text).toBe(rows.at(-1)!.text)
   })
 })
+
+describe('the row ids task_history pages by cost the reader nothing', () => {
+  // The route's ids=1 gives every row its msgId (about 45 characters) for the cuts to name a place
+  // with; the answer leaves them out, so it must not be fitted as if it carried them.
+  // Both carry ids, so both are cut by place; only their length differs.
+  const short = ROWS.map((r, i) => ({ ...r, msgId: `m${i}` }))
+  // Real ids are about 45 characters; these are near the longest a cursor takes, so a fit that
+  // counted them would keep visibly fewer rows.
+  const withIds = ROWS.map((r, i) => ({ ...r, msgId: `msg_01${String(i).padStart(4, '0')}${'Q'.repeat(180)}` }))
+  const answerOf = (rows: Row[], args: Record<string, unknown>, full = false) =>
+    agentAnswer(op(), { ...args }, { version: 1, sessionId: 's-1', truncated: true, messages: rows.slice(-120), taskId: 't-1' }, full, 'cli') as Row
+  it.each([{}, { limit: 40 }, { limit: 200, compact: true }])('%j holds as many rows as without them, and none carries one', (args) => {
+    const plain = answerOf(short, args)
+    const ided = answerOf(withIds, args)
+    expect((ided.messages as Row[]).length).toBe((plain.messages as Row[]).length)
+    expect((ided.messages as Row[]).some((m) => 'msgId' in m)).toBe(false)
+  })
+  it('every caller reads them off: the op cleans its answer last, shaped or whole', () => {
+    const clean = op().answer!.clean!
+    const whole = clean(answerOf(withIds, { _full: true }, true)) as Row
+    expect((whole.messages as Row[]).length).toBe(120)
+    expect((whole.messages as Row[]).some((m) => 'msgId' in m)).toBe(false)
+  })
+})

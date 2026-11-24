@@ -2899,7 +2899,17 @@ directory on that host.
     plain tail, and keeping "the rows older than the new tail" then leaves that
     turn's head as a hole. If the answer still does not reach back to your
     newest row, replace what you hold instead of stitching. A malformed value
-    answers `400 invalid_since`.
+    answers `400 invalid_since`. A page built with it says whether it got there
+    (additive, 2026-11-24): `sinceReached: true` when no entry before the page is
+    after `since`, `false` when the 600-entry bound stopped it first; absent when
+    the server cannot tell (a bounded window that starts at the page, the saved
+    copy), and then the page before answers it.
+  - `ids=1` (additive, 2026-11-24) gives each row of a built page its `msgId`, and
+    `beforeId=<msgId>` (with `before`, the `msgId` of the row stamped `before`) ends the
+    page just before that row by its place in the file rather than by time: a row stamped
+    out of time order next to the cut cannot move it. A row no longer in the file leaves
+    the cut to `before` alone; a malformed `beforeId`, or one without `before`, answers
+    `400 invalid_before_id`.
   - A rich answer built live on the primary carries **`pageable: true`**, beside
     `rich`. That is the signal a client may ask for older pages; without it (an
     older server, a rich answer served from the exported file or from a cloud

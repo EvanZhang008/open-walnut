@@ -665,9 +665,11 @@ export async function executeOp(
   if (!human && !pluginId) notes.push(...await handedTextNotes(op.name, args, outcome, origin, explicitSid))
   // An agent reads a receipt for a write and capped content for a read (answer.ts). The notes go on
   // after it: an op's own shape builds a new answer and would leave them out.
-  const answered = human || pluginId || !surface || outcome.result === undefined
+  const shaped = human || pluginId || !surface || outcome.result === undefined
     ? outcome
     : { ...outcome, result: agentAnswer(op, args, outcome.result, full, surface) }
+  const clean = op.answer?.clean
+  const answered = clean && shaped.ok && shaped.result !== undefined ? { ...shaped, result: clean(shaped.result) } : shaped
   return notes.length ? withNote(answered, notes.join(' ')) : answered
 }
 

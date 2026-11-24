@@ -104,7 +104,7 @@ describe('task_history short reads', () => {
     const paths: string[] = []
     const page = { truncated: false, messages: bigPage(3) }
     const out = await run({ id: 't-1', limit: 2, compact: true }, fakeCall(paths, { 's-1': page }))
-    expect(paths).toContain('/sessions/s-1/transcript?fresh=1&visible=2')
+    expect(paths).toContain('/sessions/s-1/transcript?fresh=1&ids=1&visible=2')
     const rows = out.messages as Row[]
     // A Walnut notice is a message too: the newest two are the last turn's second notice and reply.
     expect(rows.filter((r) => !r.kind).map((r) => String(r.text).split(' ')[0])).toEqual(['[notification', 'reply'])
@@ -136,7 +136,7 @@ describe('task_history short reads', () => {
     // The route reaches back to the first row at or after `since`; one at exactly that time shows it got there.
     const page = { truncated: true, messages: bigPage(3).filter((r) => Date.parse(String(r.timestamp)) >= Date.parse(since)) }
     const out = await run({ id: 't-1', since }, fakeCall(paths, { 's-1': page }))
-    expect(paths).toContain(`/sessions/s-1/transcript?fresh=1&since=${encodeURIComponent(since)}`)
+    expect(paths).toContain(`/sessions/s-1/transcript?fresh=1&ids=1&since=${encodeURIComponent(since)}`)
     const rows = out.messages as Row[]
     expect(rows.length).toBeGreaterThan(0)
     expect(rows.every((r) => Date.parse(String(r.timestamp)) > Date.parse(since))).toBe(true)
@@ -156,7 +156,7 @@ describe('task_history short reads', () => {
     // Reached: the page before holds nothing after since.
     const paths: string[] = []
     const reached = await run({ id: 't-1', since }, fakeCall(paths, { 's-1': page, 's-1:before': { truncated: true, messages: all.filter((r) => String(r.timestamp) < first) } }))
-    expect(paths).toContain(`/sessions/s-1/transcript?before=${encodeURIComponent(first)}`)
+    expect(paths).toContain(`/sessions/s-1/transcript?ids=1&before=${encodeURIComponent(first)}`)
     expect(reached.older).toBeUndefined()
     expect(reached.truncated).toBe(false)
     // Not reached: the route stopped at its own ceiling, rows after since are still unread.
@@ -169,11 +169,28 @@ describe('task_history short reads', () => {
     expect(out.truncated).toBe(true)
   })
 
+  it('a page that says whether it reached since needs no read of the page before it', async () => {
+    const all = bigPage(6)
+    const since = at(25)
+    const page = { truncated: true, messages: all.filter((r) => Date.parse(String(r.timestamp)) > Date.parse(since)) }
+    const paths: string[] = []
+    const reached = await run({ id: 't-1', since }, fakeCall(paths, { 's-1': { ...page, sinceReached: true } }))
+    expect(paths.some((p) => p.includes('before='))).toBe(false)
+    expect(reached.older).toBeUndefined()
+    expect(reached.truncated).toBe(false)
+    expect(reached).not.toHaveProperty('sinceReached')
+    const capped = { truncated: true, sinceReached: false, messages: page.messages.slice(20) }
+    const out = await run({ id: 't-1', since }, fakeCall(paths, { 's-1': capped }))
+    expect(paths.some((p) => p.includes('before='))).toBe(false)
+    expect((out.older as { before: string }).before).toBe(String(capped.messages[0].timestamp))
+    expect(out.truncated).toBe(true)
+  })
+
   it('the default read is the route answer unchanged', async () => {
     const page = { version: 1, sessionId: 's-1', truncated: false, messages: bigPage(1) }
     const paths: string[] = []
     const out = await run({ id: 't-1' }, fakeCall(paths, { 's-1': page }))
-    expect(paths).toContain('/sessions/s-1/transcript')
+    expect(paths).toContain('/sessions/s-1/transcript?ids=1')
     expect(out).toEqual({ ...page, taskId: 't-1' })
     expect(out.left_out).toBeUndefined()
   })

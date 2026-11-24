@@ -4072,7 +4072,7 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
 apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { readSessionTranscript, exportSessionTranscripts, buildSessionTranscript, TRANSCRIPT_VISIBLE_MAX } = await import('../../core/session-projection.js')
-    const { isTranscriptCursor: isTime } = await import('./session-transcript-relay.js')
+    const { isTranscriptCursor: isTime, isTranscriptRowId } = await import('./session-transcript-relay.js')
     const sessionId = paramStr(req.params.id)
     const wantFresh = req.query.fresh === '1'
     const wantRich = req.query.rich === '1'
@@ -4090,6 +4090,13 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     const visible = rawVisible !== undefined && Number.isInteger(rawVisible) && rawVisible > 0
       ? Math.min(rawVisible, TRANSCRIPT_VISIBLE_MAX)
       : undefined
+    // The place of the row the page ends before (BuildTranscriptOptions.beforeId), with `before` only.
+    const rawBeforeId = typeof req.query.beforeId === 'string' ? req.query.beforeId : undefined
+    if (rawBeforeId !== undefined && (rawBefore === undefined || !isTranscriptRowId(rawBeforeId))) {
+      sendError(res, 400, 'invalid_before_id', 'beforeId is a row id (msgId) and goes with before')
+      return
+    }
+    const wantIds = req.query.ids === '1'
     // Passed to BOTH inline builds below, so a tail is never rich on one path and
     // slim on the other. `{ rich: false }` is the bare buildSessionTranscript
     // (sessionId) both sites called before, except that `live` clips text at the
@@ -4109,7 +4116,9 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     const buildOpts = {
       rich: wantRich,
       live: true,
+      ...(wantIds ? { ids: true } : {}),
       ...(rawBefore ? { before: rawBefore } : {}),
+      ...(rawBeforeId ? { beforeId: rawBeforeId } : {}),
       ...(visible ? { visible } : {}),
       ...(rawSince ? { since: rawSince } : {}),
     }
@@ -4156,7 +4165,9 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       const { relayTranscriptToPrimary } = await import('./session-transcript-relay.js')
       const relayed = await relayTranscriptToPrimary(sessionId, {
         rich: wantRich,
+        ...(wantIds ? { ids: true } : {}),
         ...(rawBefore ? { before: rawBefore } : {}),
+        ...(rawBeforeId ? { beforeId: rawBeforeId } : {}),
         ...(rawSince ? { since: rawSince } : {}),
         ...(visible ? { visible } : {}),
       })

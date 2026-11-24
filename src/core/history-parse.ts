@@ -601,8 +601,54 @@ export function floatQueuedRows(rows: SessionHistoryMessage[], parentIds: (strin
  * canonicalChars slicing in seedIncrementalState depends on the original).
  */
 export function parseSessionMessages(content: string, opts?: ParseSessionMessagesOptions): SessionHistoryMessage[] {
-  if (opts?.legacyHintCutoffMs === undefined) return parseSessionMessagesWith(content, opts);
-  return withLegacyHintCutoff(opts.legacyHintCutoffMs, () => parseSessionMessagesWith(content, opts));
+  const raw = parseLines(content.split('\n').filter(Boolean));
+  return withLegacyHintCutoff(opts?.legacyHintCutoffMs, () => messagesFromLines(raw, opts));
+}
+
+/** Characters of lines one slice of parseSessionMessagesYielding parses before it gives the loop back. */
+export const PARSE_SLICE_CHARS = 1024 * 1024;
+
+/**
+ * parseSessionMessages, the same rows, for a whole transcript read on the server's loop. Its
+ * JSON.parse of every line (about two thirds of a parse) runs in slices of PARSE_SLICE_CHARS that
+ * give the loop back between them (a few ms each); the passes over the parsed lines run in one go
+ * after. 2026-11-24: a cold read of a 31 MB transcript held the loop 370 ms in one stretch.
+ */
+export async function parseSessionMessagesYielding(content: string, opts?: ParseSessionMessagesOptions): Promise<SessionHistoryMessage[]> {
+  const lines = content.split('\n').filter(Boolean);
+  const raw: RawJsonlLine[] = [];
+  let from = 0;
+  while (from < lines.length) {
+    let to = from;
+    for (let chars = 0; to < lines.length && chars < PARSE_SLICE_CHARS; to++) chars += lines[to]!.length;
+    parseLinesInto(lines, from, to, raw);
+    from = to;
+    if (from < lines.length) await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  parseHooks.noteLinesParsed(lines.length);
+  return withLegacyHintCutoff(opts?.legacyHintCutoffMs, () => messagesFromLines(raw, opts));
+}
+
+/** Every line JSON-parsed (a request copy as its stub), counted as parsed. */
+function parseLines(lines: string[]): RawJsonlLine[] {
+  const raw: RawJsonlLine[] = [];
+  parseLinesInto(lines, 0, lines.length, raw);
+  parseHooks.noteLinesParsed(lines.length);
+  return raw;
+}
+
+function parseLinesInto(lines: string[], from: number, to: number, into: RawJsonlLine[]): void {
+  for (let i = from; i < to; i++) {
+    const line = lines[i]!;
+    if (isRequestCopyLine(line)) { into.push({ type: 'api-request-blob' }); continue; }
+    try {
+      into.push(JSON.parse(line));
+    } catch (err) {
+      parseHooks.debug('failed to parse JSONL entry', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 /**
@@ -621,22 +667,9 @@ export function isRequestCopyLine(line: string): boolean {
   return line.startsWith('{"type":"api-request-blob"');
 }
 
-function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOptions): SessionHistoryMessage[] {
-  const lines = content.split('\n').filter(Boolean);
-  parseHooks.noteLinesParsed(lines.length);
-
-  // Parse all lines
-  let rawMessages: RawJsonlLine[] = [];
-  for (const line of lines) {
-    if (isRequestCopyLine(line)) { rawMessages.push({ type: 'api-request-blob' }); continue; }
-    try {
-      rawMessages.push(JSON.parse(line));
-    } catch (err) {
-      parseHooks.debug('failed to parse JSONL entry', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+/** The rows of a transcript's parsed lines (parseSessionMessages after its JSON.parse of each line). */
+function messagesFromLines(parsedLines: RawJsonlLine[], opts?: ParseSessionMessagesOptions): SessionHistoryMessage[] {
+  let rawMessages = parsedLines;
   // Format canary (transcript-line-types.ts): warn once per process about a
   // line kind this parser does not know. Output is unaffected. The CLI version
   // comes from any line that carries one (api-request-blob lines carry none).

@@ -43,6 +43,14 @@ describe('capRelayedPage', () => {
     expect(cut.messages.length).toBeGreaterThan(200)
   })
 
+  it('a page that reached since and was cut no longer reaches it', () => {
+    const rows = toolRows(600, 2_000)
+    expect(capRelayedPage({ ...page(rows), sinceReached: true }).sinceReached).toBe(false)
+    expect(capRelayedPage(page(rows))).not.toHaveProperty('sinceReached')
+    const small = { ...page(toolRows(5, 10)), sinceReached: true }
+    expect(capRelayedPage(small).sinceReached).toBe(true)
+  })
+
   it('never splits rows that share a timestamp', () => {
     // Groups of three rows per history message (thinking, prose, tool call).
     const rows: Row[] = []

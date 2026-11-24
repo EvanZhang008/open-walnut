@@ -11,7 +11,17 @@
  * A session header (a system notification row with no time, all:true) is kept when any row of
  * its session is; a row with no time of its own takes the time of the row before it in its session
  * (else the one after it), and a session with no times at all is never cut.
+ *
+ * One session's rows that carry their message ids (the route's `ids=1`) are cut BY PLACE instead,
+ * and the page before is named by the first kept row's time and id (`before`, `beforeId`), which the
+ * route cuts at exactly (session-projection.ts BuildTranscriptOptions.beforeId). A time alone cannot
+ * name a place when a row is stamped out of time order: 2026-11-24, a reply written with a clock
+ * behind made the time cut drop it and point `before` past rows already shown, and every later
+ * page asked for the same page again. Real transcripts hold such rows (a resumed session's copied
+ * lines, a compaction summary stamped before its boundary).
  */
+
+import { isTranscriptRowId } from '../core/transcript-row-place.js'
 
 type Row = Record<string, unknown>
 
@@ -38,6 +48,43 @@ export interface TimeCut {
   dropped: Row[]
   /** The time the page before reads up to (exclusive); undefined when nothing was left out. */
   before?: string
+  /** With `before`, on a cut by place: the id of the first kept row, which the page before ends at. */
+  beforeId?: string
+}
+
+/** The rows' message ids when the rows are one session's and every one carries its id, else null. */
+function placeIds(rows: Row[]): string[] | null {
+  const ids: string[] = []
+  for (const r of rows) {
+    // An id the route could not take back as a cursor is no id: the rows page by time.
+    if (isSessionHeader(r) || !isTranscriptRowId(r.msgId) || typeof r.timestamp !== 'string') return null
+    ids.push(r.msgId)
+  }
+  return ids.length ? ids : null
+}
+
+/** Where the message the row at `i` belongs to starts: its rows stay together. */
+function messageStart(ids: string[], i: number): number {
+  while (i > 0 && ids[i - 1] === ids[i]) i--
+  return i
+}
+
+/** The rows from `from` on, the page before named by the row there. */
+function keepAt(rows: Row[], ids: string[], from: number): TimeCut {
+  if (from <= 0) return { kept: rows, dropped: [] }
+  return { kept: rows.slice(from), dropped: rows.slice(0, from), before: rows[from].timestamp as string, beforeId: ids[from] }
+}
+
+/**
+ * The cursor of the page before a page of rows, `before` (and `beforeId` for one session's rows that
+ * carry ids): the first row's place, else (all:true joins sessions out of time order) the earliest time.
+ */
+export function pageStart(rows: Row[]): { before: string; beforeId?: string } | undefined {
+  const ids = placeIds(rows)
+  if (ids) return { before: rows[0].timestamp as string, beforeId: ids[0] }
+  let best: string | undefined
+  for (const r of rows) if (typeof r.timestamp === 'string' && (best === undefined || Date.parse(r.timestamp) < Date.parse(best))) best = r.timestamp
+  return best === undefined ? undefined : { before: best }
 }
 
 /** Which rows are at or after `from`, with the headers of their sessions. */
@@ -66,6 +113,14 @@ const timesNewestFirst = (t: number[]): number[] => [...new Set(t.filter((x) => 
 
 /** The newest `limit` rows `counts` (the messages a reader sees as text) and every row at or after the oldest of them. */
 export function newestCounted(rows: Row[], limit: number, counts: (r: Row) => boolean): TimeCut {
+  const ids = placeIds(rows)
+  if (ids) {
+    let seen = 0
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (counts(rows[i]) && ++seen === limit) return keepAt(rows, ids, messageStart(ids, i))
+    }
+    return { kept: rows, dropped: [] }
+  }
   const t = rowTimes(rows)
   const counted = rows.flatMap((r, i) => (counts(r) && !Number.isNaN(t[i]) ? [t[i]] : [])).sort((a, b) => b - a)
   if (counted.length < limit) return { kept: rows, dropped: [] }
@@ -77,6 +132,20 @@ export function newestCounted(rows: Row[], limit: number, counts: (r: Row) => bo
  * time; at least the newest time's rows, even when they alone are over.
  */
 export function newestFitting(rows: Row[], room: number, size: (r: Row) => number): TimeCut {
+  const ids = placeIds(rows)
+  if (ids) {
+    // Whole messages from the newest back while they fit; the newest message always.
+    let from = messageStart(ids, rows.length - 1)
+    let used = rows.slice(from).reduce((n, r) => n + size(r), 0)
+    while (from > 0) {
+      const next = messageStart(ids, from - 1)
+      const more = rows.slice(next, from).reduce((n, r) => n + size(r), 0)
+      if (used + more > room) break
+      used += more
+      from = next
+    }
+    return keepAt(rows, ids, from)
+  }
   const t = rowTimes(rows)
   const times = timesNewestFirst(t)
   if (times.length === 0) return { kept: rows, dropped: [] }

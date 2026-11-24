@@ -67,6 +67,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { writeJsonFile } from '../utils/fs.js'
+import { rowPlace } from './transcript-row-place.js'
 import { bus } from './event-bus.js'
 import { log } from '../logging/index.js'
 import {
@@ -86,7 +87,7 @@ import { engineCaps, normalizeEngine } from './agents/engine-registry.js'
 // the cut is made where it cannot leave half a tag behind.
 import { clipTranscriptText } from './sessions/transcript-clip.js'
 import { transcriptSentBy, personTextOf, type TranscriptSentBy } from './sessions/transcript-sent-by.js'
-import { walnutAddedOf, type CliAddedItem, type WalnutAddedItem } from '../lib/walnut-added.js'
+import { cliAddedOf, walnutAddedOf, type CliAddedItem, type WalnutAddedItem } from '../lib/walnut-added.js'
 import { InjectedLines } from './sessions/transcript-injected.js'
 import { sendTargetRefs } from '../lib/send-targets.js'
 import { cutEnd } from './text-cut.js'
@@ -557,6 +558,9 @@ export interface ProjectedTranscriptMessage {
    *  at a sent user row, so a session its background agents wake reads as one short turn
    *  per wake-up, never one long turn. Absent otherwise. */
   opensTurn?: true
+  /** Any row, only on a read that asked for `ids`: the id of the history message the row is
+   *  drawn from, which a reader passes back as `beforeId` to page back from this row's place. */
+  msgId?: string
   /** Any row (additive, 2026-10-30): the lines the CLI put in right after it, a
    *  loaded skill's text or a hook's added context (transcript-injected.ts). */
   injectedAfter?: CliAddedItem[]
@@ -583,6 +587,12 @@ export interface SessionTranscript {
   exportedAt: string
   /** True when the tail was truncated to TRANSCRIPT_TAIL rows. */
   truncated: boolean
+  /**
+   * Only on a page built with `since`, when the builder can tell: true when no row before
+   * the page is after `since` (the page reached it), false when the page stopped at its own
+   * ceiling with rows after `since` still before it (sinceReachedBy).
+   */
+  sinceReached?: boolean
   messages: ProjectedTranscriptMessage[]
 }
 
@@ -664,6 +674,16 @@ export interface BuildTranscriptOptions {
    */
   before?: string
   /**
+   * With `before`: the id (`msgId`) of the history message stamped `before` that the page
+   * ends just before. A page cut by its place, not by time: the time alone cannot name a
+   * place when a row stamped out of time order sits near it (2026-11-24: a reply written
+   * with its clock 16 minutes behind made task_history ask the same page again and again).
+   * A row that is gone (the file was rewritten) leaves the cut to `before` alone.
+   */
+  beforeId?: string
+  /** Each row carries the `msgId` of its history message: a reader's place to page back from (`beforeId`). */
+  ids?: boolean
+  /**
    * Extend the slice back until it holds at least this many messages a reader
    * sees as text (the human's, or the assistant's prose), never fewer than
    * TRANSCRIPT_TAIL and never more than TRANSCRIPT_PAGE_MAX history messages.
@@ -695,11 +715,13 @@ function isVisibleHistoryMessage(m: import('./session-history.js').SessionHistor
  */
 export function transcriptSliceBounds(
   history: readonly import('./session-history.js').SessionHistoryMessage[],
-  opts: { before?: string; visible?: number; since?: string },
+  opts: { before?: string; beforeId?: string; visible?: number; since?: string },
 ): { start: number; end: number } {
   let end = history.length
   if (opts.before) {
-    while (end > 0 && history[end - 1].timestamp >= opts.before) end--
+    const at = opts.beforeId === undefined ? -1 : rowPlace(history, opts.beforeId, opts.before)
+    if (at >= 0) end = at
+    else while (end > 0 && history[end - 1].timestamp >= opts.before) end--
   }
   let start = Math.max(0, end - TRANSCRIPT_TAIL)
   const want = Math.min(opts.visible ?? 0, TRANSCRIPT_VISIBLE_MAX)
@@ -724,6 +746,60 @@ export function transcriptSliceBounds(
   for (let back = 0; start > 0 && start < end && back < TIMESTAMP_RUN_MAX
     && history[start - 1].timestamp === history[start].timestamp; back++) start--
   return { start, end }
+}
+
+/**
+ * transcriptSliceBounds for a read that may be a bounded window: a `beforeId` the window does not
+ * hold is older than all of it, so the page is before the window (empty here, the caller reads on),
+ * never a cut by the stamp inside it.
+ */
+function pageBounds(
+  history: readonly import('./session-history.js').SessionHistoryMessage[],
+  windowed: boolean,
+  opts: BuildTranscriptOptions,
+): { start: number; end: number } {
+  if (windowed && opts.before && opts.beforeId !== undefined && rowPlace(history, opts.beforeId, opts.before) < 0) return { start: 0, end: 0 }
+  return transcriptSliceBounds(history, opts)
+}
+
+/**
+ * Whether the builder below draws this history message as rows of its own (its loop's skips): a
+ * system line only as Claude Code's error reply, a CLI-injected user line only when it is a Walnut
+ * message (the rest ride the row before them).
+ */
+function drawsOwnRow(m: import('./session-history.js').SessionHistoryMessage): boolean {
+  if (m.role === 'system') return m.cliError === true
+  if (m.role === 'user' && m.injected) return cliAddedOf(m.text || '') === 'message'
+  return true
+}
+
+/**
+ * Whether a page starting at `start` reached `since`: no row before it is after `since`.
+ *
+ * task_history used to learn this by reading the page before (2026-11-24: an audit script
+ * paging 24 h of many tasks' history sent that second read on every page, 251 of 1,472
+ * transcript reads in an hour, each a windows read over the tunnel for a whale on another
+ * host). The builder holds those rows already. It looks back as far as that read would
+ * (TRANSCRIPT_TAIL rows); with fewer rows in hand, a bounded window that starts at the page
+ * is the one case it cannot tell (undefined), and the reader asks the page before as before.
+ * Only messages the page before would draw count, as that read saw only its rows: a system
+ * line or a CLI-injected one stamped after `since` must not send the reader to a page that
+ * shows nothing new.
+ */
+export function sinceReachedBy(
+  history: readonly import('./session-history.js').SessionHistoryMessage[],
+  start: number,
+  since: string,
+  windowed: boolean,
+): boolean | undefined {
+  const after = Date.parse(since)
+  if (!Number.isFinite(after)) return undefined
+  const floor = Math.max(0, start - TRANSCRIPT_TAIL)
+  for (let i = start - 1; i >= floor; i--) {
+    if (drawsOwnRow(history[i]) && Date.parse(history[i].timestamp) > after) return false
+  }
+  // Nothing in hand before the page of a window that does not begin the file: unknown.
+  return start === 0 && windowed ? undefined : true
 }
 
 /**
@@ -788,6 +864,7 @@ async function buildSessionTranscriptNow(
     minMessages: TRANSCRIPT_TAIL,
     minText: Math.min(opts?.visible ?? 0, TRANSCRIPT_VISIBLE_MAX),
     isText: isVisibleHistoryMessage,
+    ...(opts?.beforeId !== undefined ? { beforeId: opts.beforeId } : {}),
   })
   const how = pages ? await pages.olderPageRead(sessionId, record?.cwd, record?.host) : 'full'
   // Such a page goes straight to its windows: the newest tail it would read first
@@ -805,22 +882,24 @@ async function buildSessionTranscriptNow(
       // full-read every alive session — dominant share of 167 GB/day of reads).
       history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile, undefined, { poll: true }) ?? []
     }
-    bounds = paging ? transcriptSliceBounds(history, opts!) : null
     // A whale's tail read is a bounded window: a page that reaches its start may
     // still have older messages before it, which only the full read holds.
     windowed = isWindowedHistory(history)
+    bounds = paging ? pageBounds(history, windowed, opts!) : null
     // Windows cannot read every session (in-place rewinds): the full read can, under its ceiling.
     if (pages && bounds && bounds.start === 0 && windowed && how !== 'windows-only') {
       history = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
       windowed = isWindowedHistory(history)
-      bounds = transcriptSliceBounds(history, opts!)
+      bounds = pageBounds(history, windowed, opts!)
       if (bounds.start === 0 && windowed && how === 'full') older = await readWindows()
     }
   }
   if (older) {
     history = older.messages
     windowed = !older.reachedStart
-    bounds = transcriptSliceBounds(history, opts!)
+    // Every row the windows answered is already older than the cut (by its place when they found
+    // `beforeId`): the stamp is not applied again, which would drop a row stamped out of order.
+    bounds = transcriptSliceBounds(history, { ...opts!, before: undefined, beforeId: undefined })
   }
   const window = opts?.full
     ? history
@@ -971,9 +1050,11 @@ async function buildSessionTranscriptNow(
       messages[firstRow].opensTurn = true
       opensTurn = false
     }
+    if (opts?.ids && m.msgId) for (let i = firstRow; i < messages.length; i++) messages[i].msgId = m.msgId
   }
   injected.finish(messages)
   await nameSendTargets(messages)
+  const sinceReached = opts?.since && bounds && !opts.full ? sinceReachedBy(history, bounds.start, opts.since, windowed) : undefined
   return {
     version: 1,
     sessionId,
@@ -981,6 +1062,7 @@ async function buildSessionTranscriptNow(
     // A whale's bounded window holds older messages before it even when it is
     // shorter than the tail, so `windowed` alone already means "there is more".
     truncated: !opts?.full && ((bounds ? bounds.start > 0 : history.length > TRANSCRIPT_TAIL) || windowed),
+    ...(sinceReached !== undefined ? { sinceReached } : {}),
     messages,
   }
 }

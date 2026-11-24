@@ -29,7 +29,7 @@ describe('task_history pages back', () => {
     const out = await run({ id: 't-1', fresh: true }, fakeCall(paths, {
       truncated: true, messages: [{ role: 'assistant', text: 'x', timestamp: '2026-11-03T08:51:17.309Z' }],
     }))
-    expect(paths).toContain('/sessions/s-1/transcript?fresh=1')
+    expect(paths).toContain('/sessions/s-1/transcript?fresh=1&ids=1')
     expect(out.older).toEqual({
       before: '2026-11-03T08:51:17.309Z',
       how: `walnut tools call task_history '{"id":"t-1","before":"2026-11-03T08:51:17.309Z"}'`,
@@ -41,7 +41,7 @@ describe('task_history pages back', () => {
     const out = await run({ id: 't-1', before: '2026-11-03T08:51:17.309Z' }, fakeCall(paths, {
       truncated: false, messages: [{ role: 'user', text: 'the night before', timestamp: '2026-11-02T20:04:06.418Z' }],
     }))
-    expect(paths).toContain(`/sessions/s-1/transcript?before=${encodeURIComponent('2026-11-03T08:51:17.309Z')}&wait=15000`)
+    expect(paths).toContain(`/sessions/s-1/transcript?ids=1&before=${encodeURIComponent('2026-11-03T08:51:17.309Z')}&wait=15000`)
     expect(out.older).toBeUndefined()
     expect(olderPage('t-1', { truncated: true, messages: [] })).toEqual({})
   })
