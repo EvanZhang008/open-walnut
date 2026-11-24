@@ -53,6 +53,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- homeOf reads a module cache
   })), [pathMode, where.dirs, hostKey, where.hostName, where.rows, query, where.autoCurrent, draft.cwd]);
 
+  const shownCount = typed ? typed.children.length : sections.reduce((n, s) => n + s.rows.length, 0);
   useEffect(() => { setActive(0); }, [query]);
   useEffect(() => {
     const el = inputRef.current;
@@ -229,7 +230,8 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
         {!pathMode && query.trim() && !sections.length && <EmptyState size="row" title="No folder matches" hint="Type a path: / or ~" />}
       </div>
       <KeyHints className="draft-v6-wm-foot" hints={[['↑↓', 'move'], ['Enter', 'pick'], ['→', 'open a level']]}>
-        <span className="draft-v6-wm-count">{where.dirs.length} {where.dirs.length === 1 ? 'folder' : 'folders'}</span>
+        {/* The folders the list shows now (never a count of something else beside a list that disagrees). */}
+        <span className="draft-v6-wm-count">{shownCount} {shownCount === 1 ? 'folder' : 'folders'}</span>
       </KeyHints>
     </div>
   );

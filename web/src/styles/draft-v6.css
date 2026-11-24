@@ -71,6 +71,18 @@
 @container draft-v6 (max-width: 560px) {
   .draft-v6-col { padding-left: 16px; padding-right: 16px; }
 }
+/* A very narrow draft (two drafts side by side, about 300 px): Project and Where share the row
+   evenly, Where shows the host by its dot only (its name is in the field's title and the menu) so
+   the folder keeps the room; the send arrow keeps its place without its words (its title still
+   says what it starts). */
+@container draft-v6 (max-width: 480px) {
+  .draft-v6-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .draft-v6-field { overflow: hidden; }
+  .draft-v6-crumbs .draft-v6-host-name,
+  .draft-v6-crumbs > .draft-v6-sep { display: none; }
+  .draft-v6-crumbs .draft-v6-host-static { padding: 2px 8px; }
+  .draft-v6-send-label { display: none; }
+}
 
 /* The row and its line: one slot of 82 px (48 + 6 + 28), Quick chat's block in the same box. */
 .draft-v6-row-slot,
@@ -273,6 +285,8 @@
   font-size: var(--font-size-sm);
   box-shadow: var(--shadow-md);
   z-index: 1;
+  /* A long path breaks inside the bubble, never past its edge. */
+  overflow-wrap: anywhere;
 }
 
 /* The lower row: 40 px. */
