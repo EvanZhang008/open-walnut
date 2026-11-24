@@ -118,7 +118,6 @@ import { PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
 import { pacedForward } from './paced-forward.js'
 import { uploadPaceFor } from './upload-pace.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
-import { count as metricsCount } from '../core/observability/metrics.js'
 import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
   buildLiveDaemonScanScript, liveDaemonScanFoundNone, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
@@ -150,6 +149,7 @@ import { FLAP_WINDOW_MS } from '../core/hosts/host-problem.js'
 import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_HOST_LABEL, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
 import { linkFailureKind, markLinkFailure } from './link-failure.js'
+import { countLinkLost } from './link-lost-metric.js'
 import { DRAIN_SWAP_WINDOW_MS, daemonSwapExpected, resendThroughSwap, waitHostLink, wakeHostLink } from './daemon-drain-resend.js'
 import { parseServes, thisWalnutSharedVerdict, walnutKeyOf, REPLACE_BREAKER_MS, SERVES_FILE, type DaemonServes } from './daemon-shared.js'
 import { selfHostConnection } from '../replica/self-host.js'
@@ -8962,12 +8962,13 @@ export class DaemonConnection {
     // Torn down on purpose: the loss is recorded above, and nothing re-dials it.
     if (this._destroyed) return
 
+    // The health monitor's "host link keeps dropping" alarm: a close of this server's own stop is not counted.
+    const notCounted = countLinkLost(this.hostKey)
     log.session.info('DaemonConnection: connection lost, scheduling reconnect', {
       host: this.hostKey, delayMs: DaemonConnection.RECONNECT_DELAY_MS,
       ...mainUploadSummary(this.mainSentByCmd, this.linkUpAt, Date.now()),
+      ...(notCounted ? { notCounted } : {}),
     })
-    // The health monitor's "host link keeps dropping" alarm (core/health-monitor/alarms.ts).
-    metricsCount('host.link.lost', 1, { host: this.hostKey })
 
     // Schedule reconnect with exponential backoff (2s → 4s → 8s → … → 60s max), forever
     this.scheduleReconnect(DaemonConnection.RECONNECT_DELAY_MS)
