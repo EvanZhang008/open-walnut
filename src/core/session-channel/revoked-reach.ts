@@ -64,7 +64,8 @@ const AIM = stays('the reads this leader runs there and the answers it brings ba
 const PERSON = refused('a process there or this Walnut\'s data handed to it (exec, a file written or moved, a commit, an HTTP call, MCP, a trigger\'s run, a terminal, a service update), and a tool allowed there, unless a person\'s own call: never a session\'s, a routine\'s, a trigger\'s or a peer\'s',
   'src/providers/ephemeral-session-gate.ts', 'export function gateSessionCommand(')
 const LINE_FILES = stays('the pictures and files of a line handed out to a session there', 'the queue hands out only a person\'s lines there (send), so they go as that person\'s')
-const STREAM = stays('the frames of a stream already open there', 'its opening (stream.open) goes only for a person\'s own call')
+const STREAM = stays('the frames of a stream already open there',
+  'its opening (stream.open) goes only for a person\'s own call: the in-app terminal a person opens over /ws is one (ws/handler.ts personMethods); a port forward or stream lane, shared by later callers, opens outside any mark, so none opens there for anyone')
 const NOT_THIS_LINK = stays('commands a host\'s own server, the companion\'s bridge or a backup leader sends a daemon (follower, phone relay, lead-host calls)',
   'this leader never sends them on a host\'s link; the companion\'s own token for it is deleted at the revoke (leader-issue.ts revokeBridge)')
 const CONFIG = stays('the leader\'s own settings of the machine (its hooks, server, network, workspace and turn settings, its leader)',

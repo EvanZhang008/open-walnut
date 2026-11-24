@@ -21,6 +21,8 @@ import { upgradeCredential } from './upgrade-credential.js'
 import { leanShaper, newLeanState, wantsLean, type LeanState } from './lean-frames.js'
 import { SocketTraffic } from './traffic.js'
 import { automatedClientIsAgent, automatedClientOf, withAutomatedClient, type AutomatedClientKind } from '../../core/sessions/automated-client.js'
+import { asPersonCall } from '../../core/session-channel/person-call.js'
+import { isPersonCaller } from '../routes/person-caller.js'
 import { authenticateFeatureNode, upgradeFeatureNode, startFeatureNodes, closeFeatureNodes } from './feature-node-runtime.js'
 import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
@@ -52,6 +54,8 @@ interface Client {
   socketId: string
   /** Set when a browser under automation opened the socket (core/sessions/automated-client.ts). */
   automated?: AutomatedClientKind
+  /** The upgrade was a person's own (routes/person-caller.ts isPersonCaller), as an HTTP request is read. */
+  person?: boolean
 }
 
 /** Close code of a socket whose device was signed out (revoked) while it was open. */
@@ -69,6 +73,13 @@ type DeviceUpgrade = IncomingMessage & { walnutDevice?: string; walnutAccessUnti
 let wss: WebSocketServer | null = null
 const clients = new Set<Client>()
 const rpcMethods = new OwnedRegistry<RpcHandler>()
+/**
+ * Methods whose call from a person's own socket runs as a person's own call (person-call.ts
+ * asPersonCall), as a person's `/api` request does (server.ts markPersonRequest): the in-app
+ * terminal, which a revoked host still opens for its person (revoked-reach.ts). Only while the call
+ * runs; a browser under automation's socket is never a person's.
+ */
+const personMethods = new Set<string>()
 
 const PING_INTERVAL_MS = 30_000
 
@@ -103,9 +114,12 @@ export function onClientDisconnect(listener: (ws: WebSocket) => void): Disposabl
  * Register an RPC method handler.
  * When a client sends `{ type: "req", method: name, ... }`, the handler is called.
  */
-export function registerMethod(name: string, handler: RpcHandler): void {
+export function registerMethod(name: string, handler: RpcHandler, opts: { personCall?: boolean } = {}): void {
   rpcMethods.replace('core', name, handler)
+  if (opts.personCall) personMethods.add(name)
+  else personMethods.delete(name)
 }
+
 
 export function registerOwnedMethod(owner: string, name: string, handler: RpcHandler): Disposable {
   return rpcMethods.register(owner, name, handler)
@@ -113,6 +127,11 @@ export function registerOwnedMethod(owner: string, name: string, handler: RpcHan
 
 export function removeOwnedMethods(owner: string): number {
   return rpcMethods.removeOwner(owner)
+}
+
+/** Does a person's own socket's call of `name` run as a person's own call (registerMethod `personCall`)? */
+export function rpcRunsAsPerson(name: string): boolean {
+  return personMethods.has(name)
 }
 
 export function _getRpcMethodForTesting(name: string): RpcHandler | undefined {
@@ -328,7 +347,9 @@ async function handleMessage(client: Client, raw: string): Promise<void> {
   const automated = client.automated && await automatedClientIsAgent() ? client.automated : undefined
   let open = true
   try {
-    const result = await withAutomatedClient(automated, () => handler(frame.payload, client.ws), () => open)
+    const run = () => handler(frame.payload, client.ws)
+    const asPerson = client.person === true && !client.automated && personMethods.has(frame.method)
+    const result = await withAutomatedClient(automated, asPerson ? () => asPersonCall(run) : run, () => open)
     sendResponse(client.ws, frame.id, true, result ?? undefined)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -689,7 +710,8 @@ export function attachWss(server: HttpServer): WebSocketServer {
     try { lean = wantsLean(new URL(request?.url ?? '/', 'http://ws.local')) } catch { /* a bad URL asks for nothing */ }
     const socketId = `${process.pid}-${++socketCounter}`
     const automated = automatedClientOf(request?.headers, request?.url)
-    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), socketId, traffic: new SocketTraffic(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}), ...(automated ? { automated } : {}) }
+    const person = !!request && isPersonCaller(request)
+    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), socketId, traffic: new SocketTraffic(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}), ...(automated ? { automated } : {}), ...(person ? { person } : {}) }
     clients.add(client)
     log.ws.info('client connected', { clientCount: clients.size, lean, socketId, ...(automated ? { automated } : {}) })
     // A browser's socket ends with its access token: the page renews and comes back (WS_RENEW_SIGN_IN).

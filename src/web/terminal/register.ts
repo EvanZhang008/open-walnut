@@ -102,7 +102,8 @@ export async function registerTerminalRpc(): Promise<boolean> {
     }
 
     return openPayload(await terminalManager.open(sessionId, client, cols, rows, decision.mode, slot))
-  })
+    // A person's own terminal: on a revoked host only a person's call opens one (revoked-reach.ts).
+  }, { personCall: true })
 
   // A slot for a new terminal (the "+" and the splits): handed out by this
   // server, so two windows of one session never open the same new shell.

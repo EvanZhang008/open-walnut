@@ -12,20 +12,24 @@
  * install (core/sessions/automated-client.ts; the middleware scopes it only there, so a throwaway
  * server's fixtures still stand in for the person).
  */
+import type { IncomingHttpHeaders } from 'node:http'
 import type { Request } from 'express'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientAutomatedClient } from '../../core/sessions/automated-client.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 
-function header(req: Request, name: string): string | undefined {
+/** What the rule reads of a request: its headers and its socket (an HTTP request, or a WebSocket upgrade). */
+type CallerRequest = { headers: IncomingHttpHeaders; socket?: { remoteAddress?: string; localPort?: number } }
+
+function header(req: CallerRequest, name: string): string | undefined {
   const raw = req.headers[name]
   const v = Array.isArray(raw) ? raw[0] : raw
   return typeof v === 'string' && v.trim() ? v.trim() : undefined
 }
 
-/** A person's own request (see the file comment). */
-export function isPersonCaller(req: Request): boolean {
+/** A person's own request (see the file comment); a `/ws` upgrade reads the same (ws/handler.ts). */
+export function isPersonCaller(req: CallerRequest): boolean {
   const origin = requestOrigin(req)
   return !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER)
     && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)

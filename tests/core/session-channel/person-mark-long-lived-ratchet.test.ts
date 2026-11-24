@@ -143,6 +143,8 @@ const CLASSIFIED: Record<string, Record<string, Class>> = {
   },
   'src/web/terminal/host-shell.ts': { 'runProgram process': 'call' },
   'src/web/v1-forward/stream-door.ts': { 'createCompanionDoor timer': 'call' },
+  // The /ws server (it marks a person's terminal open): made at boot and per connection, never inside a call.
+  'src/web/ws/handler.ts': { 'attachWss timer': 'no-send', 'attachWss interval': 'no-send' },
 }
 
 const KINDS: Array<[string, RegExp]> = [
