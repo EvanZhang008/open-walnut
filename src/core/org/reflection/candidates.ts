@@ -262,28 +262,34 @@ export function cardText(head: string, words: string, options: readonly CardOpti
  * knows from it what he decides, what is recommended, where the plan is, and can answer with one
  * click (2026-11-21, the user: "what the fucking is the plan"; the card showed one line and no buttons).
  */
+/** A thread card as it is judged now, or null when it is not (closed, not waiting, too old, too new). */
+function cardJudgedNow(th: ReflectionThread, p: Pass): { key: string; at: string; evidence: Array<{ id: string; at: string; text: string }> } | null {
+  if (th.state !== 'needs' || th.closed) return null;
+  const at = th.replyAt ?? th.updatedAt ?? th.messages[th.messages.length - 1]?.at;
+  if (!at || at <= p.floor || p.now - Date.parse(at) < ANSWER_GRACE_MS) return null;
+  // From before the card: a card judged days later still shows what he had said by then.
+  const since = new Date(Math.min(p.now, Date.parse(at)) - EVIDENCE_MS).toISOString();
+  const evidence = th.messages.filter((m) => m.at > since).slice(-EVIDENCE_MAX)
+    .map((m) => ({ id: m.id, at: m.at, text: m.text.length > EVIDENCE_TEXT_MAX ? `${m.text.slice(0, EVIDENCE_TEXT_MAX)} [...]` : m.text }));
+  // Once per decision: a summary rewritten for the same ask is not judged again (each rewrite would spend a call).
+  // With no ask id, once per message of his it follows: a card rewritten five times after one complaint of his
+  // was judged five times on the same words (2026-11-24 audit); with none of his, once per wording.
+  const newest = evidence[evidence.length - 1]?.id;
+  const key = `card:${th.id}:${th.askId ?? (newest ? `after:${newest}` : sha12(cardText('', th.reply ?? '', th.options)))}`;
+  return { key, at, evidence };
+}
+
 async function threadCardCandidates(owner: Task, p: Pass): Promise<void> {
   for (const th of await p.threadsOf(owner.id)) {
     // A task's own ask is judged as that ask (needsAskCandidate); a letter or a choice is not the thread's words.
-    if (th.state !== 'needs' || th.closed || th.cardOfOther) continue;
-    const at = th.replyAt ?? th.updatedAt ?? th.messages[th.messages.length - 1]?.at;
-    if (!at || at <= p.floor || p.now - Date.parse(at) < ANSWER_GRACE_MS) continue;
-    const text = cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options);
-    // From before the card: a card judged days later still shows what he had said by then.
-    const since = new Date(Math.min(p.now, Date.parse(at)) - EVIDENCE_MS).toISOString();
-    const evidence = th.messages.filter((m) => m.at > since).slice(-EVIDENCE_MAX)
-      .map((m) => ({ id: m.id, at: m.at, text: m.text.length > EVIDENCE_TEXT_MAX ? `${m.text.slice(0, EVIDENCE_TEXT_MAX)} [...]` : m.text }));
-    // Once per decision: a summary rewritten for the same ask is not judged again (each rewrite would spend a call).
-    // With no ask id, once per message of his it follows: a card rewritten five times after one complaint of his
-    // was judged five times on the same words (2026-11-24 audit); with none of his, once per wording.
-    const newest = evidence[evidence.length - 1]?.id;
-    const key = `card:${th.id}:${th.askId ?? (newest ? `after:${newest}` : sha12(cardText('', th.reply ?? '', th.options)))}`;
-    if (has(p, key)) continue;
+    if (th.cardOfOther) continue;
+    const j = cardJudgedNow(th, p);
+    if (!j || has(p, j.key)) continue;
     const sessionId = th.replySid ?? '';
     p.out.push({
-      key, signal: 'needs_ask', task: owner, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' as const }), messages: [], from: at, to: at,
+      key: j.key, signal: 'needs_ask', task: owner, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' as const }), messages: [], from: j.at, to: j.at,
       thread: { id: th.id, title: th.title }, context: threadTurns([...th.messages].sort((a, b) => a.at.localeCompare(b.at)), th.messages.length - 1, 4),
-      ask: { text }, evidence, why: 'needs_ask (a thread card waiting on him)',
+      ask: { text: cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options) }, evidence: j.evidence, why: 'needs_ask (a thread card waiting on him)',
     });
   }
 }
@@ -315,6 +321,9 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   // the ask is judged as that card shows it. A card about several tasks is not this ask's.
   const card = (await Promise.all(holders.map((id) => p.threadsOf(id)))).flat()
     .find((th) => th.state === 'needs' && !th.closed && th.tasks?.length === 1 && th.tasks[0] === task.id);
+  // A card of its own judged now is the one judgment of this ask: the same words twice would spend two calls
+  // and send two corrections (2026-11-24 review). Judged already, or not judged now, the ask borrows its words.
+  if (card && !card.cardOfOther) { const j = cardJudgedNow(card, p); if (j && !p.seen.has(j.key)) return null; }
   const inThreads = (await Promise.all(holders.map(async (id) => (await p.threadsOf(id))
     .filter((th) => th.tasks?.includes(task.id))
     .flatMap((th) => th.messages.filter((m) => m.at > since).map((m) => ({ id: m.id, at: m.at, text: `[in the thread "${th.title}"] ${m.text}` })))))).flat();

@@ -7,14 +7,16 @@
  * HELD_PER_TASK_MAX for its task, is dropped; the day's record says which went and which were dropped.
  *
  * At most once: a task's held ones are taken out of the state before their send and put back only
- * when the send fails, so a restart between the send and the write never sends them twice.
+ * when the send fails, so a restart between the send and the write never sends them twice. A restart
+ * between taking them out and the send loses them, unmarked in the record: one correction too few
+ * is the lesser harm than the same one twice in a lead's chat.
  */
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import type { Finding } from './judge.js';
 import { appendDayNote, markHeld, nearlySame } from './records.js';
 import { sessionNowOf } from './candidates.js';
-import { giveBackChatSend, localDate, takeChatSend, updateReflectionState, type HeldCorrection } from './state.js';
+import { giveBackChatSend, localDate, readReflectionState, takeChatSend, updateReflectionState, type HeldCorrection } from './state.js';
 
 export const HELD_MAX_AGE_MS = 24 * 3600_000;
 /** Held per task: past it the oldest go (said in the day's record). */
@@ -103,7 +105,7 @@ export async function sendHeld(
   for (const id of new Set(old.map((h) => h.taskId))) {
     await settle(node, nodeName, id, old.filter((h) => h.taskId === id), 'heldDropped', (n) => `Held corrections dropped: ${n} for ${titleOf(id)} (${id}) waited over ${HELD_MAX_AGE_MS / 3600_000} hours for a send and were not sent (the session has moved on).`, nowMs);
   }
-  const waiting = (await updateReflectionState(node.id, (s) => (s.held ?? []).map((h) => h.taskId), nowMs));
+  const waiting = ((await readReflectionState(node.id, nowMs)).held ?? []).map((h) => h.taskId);
   let sent = 0;
   for (const taskId of new Set(waiting)) {
     if (sentThisPass.has(taskId)) continue;

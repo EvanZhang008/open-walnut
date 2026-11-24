@@ -248,15 +248,14 @@ describe('an ask is judged where he reads it', () => {
     currentSession: currentSessionOfTask, sessionAt: (t, at) => sessionOfTaskAt(t.id, at), nowMs: () => NOW, replyLanguage: async () => null,
   } as never)).candidates.filter((c) => c.key.startsWith('card:') || c.key.startsWith('ask:'))
 
-  it('the status-line ask is judged as its card shows it, buttons included, and the card as itself', async () => {
-    for (const th of [thread(), thread({ cardOfOther: true })]) {
-      const ask = (await collect([th])).find((c) => c.key.startsWith('ask:'))!
-      expect(ask.ask!.text).toContain('Thread card: Pick the dock layout')
-      expect(ask.ask!.text).not.toContain('Buttons: none')
+  it('an ask with a card of its own is judged once, as the card; a card that shows the ask, or one judged already, lends it its buttons', async () => {
+    expect((await collect([thread()])).map((c) => c.key)).toEqual(['card:th-1:after:tm-1'])
+    for (const [th, seen] of [[thread({ cardOfOther: true }), []], [thread(), ['card:th-1:after:tm-1']]] as const) {
+      const cs = await collect([th], [...seen])
+      expect(cs.map((c) => c.key.split(':')[0])).toEqual(['ask'])
+      expect(cs[0].ask!.text).toContain('Thread card: Pick the dock layout')
+      expect(cs[0].ask!.text).not.toContain('Buttons: none')
     }
-    const keys = (await collect([thread()])).map((c) => c.key)
-    expect(keys).toContain('card:th-1:after:tm-1')
-    expect(keys.filter((k) => k.startsWith('ask:w-1:'))).toHaveLength(1)
   })
 
   it('a card about several tasks lends no task its buttons: each ask is still judged', async () => {
