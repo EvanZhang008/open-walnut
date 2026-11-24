@@ -22,7 +22,14 @@ export type Fault = (cmd: string, params: Record<string, unknown>) => 'lost-befo
 export function fakeStandbyHost(root: string) {
   const core = createTransferCore({ fs, path, crypto, spawn: spawn as unknown as TransferCoreDeps['spawn'], env: {}, home: root })
   const log: Array<{ cmd: string; bytes: number; path?: string }> = []
-  const state = { down: false, fault: null as Fault | null, applyPoint: null as CommitHooks['point'] | null, applyRuns: 0 }
+  const state = {
+    down: false,
+    fault: null as Fault | null,
+    /** Awaited before each command reaches the host (a test holding one until something else ended). */
+    before: null as ((cmd: string, params: Record<string, unknown>) => Promise<void>) | null,
+    applyPoint: null as CommitHooks['point'] | null,
+    applyRuns: 0,
+  }
   const hostHome = path.join(root, 'standby-host-home')
   /** `walnut standby receive <op> <dir> ...` as the CLI runs it: its exit code and output. */
   const receive = async (args: string[]): Promise<{ code: number; stdout: string; stderr: string }> => {
@@ -78,6 +85,7 @@ export function fakeStandbyHost(root: string) {
     async send(cmd, params = {}) {
       log.push({ cmd: cmd === 'exec.script' ? `receive ${(params.args as string[])[3]}` : cmd === 'exec.run' ? `receive ${(params.argv as string[])[3]}` : cmd, bytes: typeof params.data === 'string' ? Buffer.from(params.data, 'base64').length : 0, ...(typeof params.path === 'string' ? { path: params.path } : {}) })
       if (state.down) throw markLinkFailure(new Error('link down'), 'no-link')
+      await state.before?.(cmd, params)
       const f = state.fault?.(cmd, params)
       if (f === 'lost-before') throw markLinkFailure(new Error('link lost'), 'lost')
       if (f && f !== 'lost-after') return f

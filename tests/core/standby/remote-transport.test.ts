@@ -19,7 +19,7 @@ import { fakeStandbyHost } from './fake-standby-host.js'
 const sha256Hex = (d: Buffer) => crypto.createHash('sha256').update(d).digest('hex')
 import { standbyStatus, takeBatch, verifyStandby } from '../../../src/core/standby/index.js'
 import { ORPHAN_CHUNK_KEEP_MS } from '../../../src/core/standby/verify.js'
-import { targetPaths } from '../../../src/core/standby/target-files.js'
+import { readState, targetPaths } from '../../../src/core/standby/target-files.js'
 import { leaderPlainFiles, sandbox, seedHome, sha, write, type Sandbox } from './helpers.js'
 
 let sb: Sandbox
@@ -171,10 +171,45 @@ describe('a standby target on another host', () => {
     await settle()
     const l = fakeStandbyHost(sb.root)
     l.state.fault = (cmd, params) => (cmd === 'fs.readRange' && String(params.path).endsWith('.status.json') ? 'lost-before' : undefined)
+    // The apply ends before the target is asked what it holds (else it answers "busy": the next test).
+    l.state.before = async (cmd, params) => {
+      if (cmd !== 'exec.script' || (params.args as string[])[3] !== 'init') return
+      await vi.waitFor(() => { if ([...l.jobs.values()].some((j) => j.running)) throw new Error('the apply still runs') }, { timeout: 30_000, interval: 10 })
+    }
     const out = await batch(remote(l, { linkWaitMs: 300 }))
     expect(out.ok, out.ok ? '' : out.reason).toBe(true)
     expect(l.state.applyRuns).toBe(1)
     expect((await standbyStatus(sb.target)).batch).toBe(1)
+  })
+
+  it('an apply still running when its status cannot be read fails the batch; the target only ever holds whole batches, and the next batch goes on from it', async () => {
+    sb = await sandbox('remote-lost-status-busy')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    l.state.fault = (cmd, params) => (cmd === 'fs.readRange' && String(params.path).endsWith('.status.json') ? 'lost-before' : undefined)
+    // The apply stops after its journal, mid-commit, until the batch has given up on it.
+    let release!: () => void
+    const held = new Promise<void>((r) => { release = r })
+    let reached = false
+    l.state.applyPoint = async (point) => { if (point === 'journal-written') { reached = true; await held } }
+    const out = await batch(remote(l, { linkWaitMs: 300 }))
+    expect(out.ok).toBe(false)
+    expect(!out.ok && out.reason).toMatch(/link lost/)
+    // Meanwhile the target holds no batch at all, not part of one.
+    expect(reached).toBe(true)
+    expect((await readState(targetPaths(sb.target))).current).toBe(null)
+    release()
+    await vi.waitFor(() => { if ([...l.jobs.values()].some((j) => j.running)) throw new Error('the apply still runs') }, { timeout: 30_000, interval: 10 })
+    // The apply finished there on its own: batch 1, whole.
+    expect((await standbyStatus(sb.target)).batch).toBe(1)
+    await expectCopyIsHome()
+    l.state.fault = null
+    l.state.applyPoint = null
+    const next = await batch(remote(l))
+    expect(next.ok, next.ok ? '' : next.reason).toBe(true)
+    expect(next.ok && next.commit).toMatchObject({ batch: 2, unchanged: true })
+    await expectCopyIsHome()
   })
 
   for (const [how, left, said] of [
