@@ -479,7 +479,7 @@ defineOp({
   input: SPLIT_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)
-    let body: { thread: ThreadView; from?: ThreadView; from_closed?: boolean; merged_into?: string }
+    let body: { thread: ThreadView; from?: ThreadView; from_closed?: boolean; merged_into?: string; already_split?: boolean }
     try {
       body = await call('POST', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(args.id))}/split`, {
         message: args.message,
@@ -487,6 +487,10 @@ defineOp({
         ...(args.keep_open === true ? { keep_open: true } : {}),
       }) as typeof body
     } catch (err) { withCorrectedCall('thread_split', args as Record<string, unknown>, keysOf(SPLIT_INPUT), err) }
+    // Walnut took it out when it was filed (its subject check), before this call: done, nothing moved twice.
+    if (body.already_split && !body.merged_into) {
+      return withOutcome(body, `Already done: Walnut split ${String(args.message)} out when it was filed; it is its own thread ${body.thread.id}.`, `Give it a title with thread_update {"id":"${body.thread.id}","title":"..."} if it has none.`)
+    }
     const source = splitSourceWords(body.from, body.from_closed === true)
     const ignored = notAppliedWords(args as Record<string, unknown>, body)
     if (ignored.keys.length) {

@@ -448,10 +448,12 @@ orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, re
   const out = await splitThread(task.id, id, message, by, { keepOpen: b.keep_open === true, ...(mergeInto ? { mergeInto } : {}) })
   log.task.info('org thread split', { taskId: task.id, threadId: id, newThreadId: mergeInto ? undefined : out.thread.id, mergeInto, closedFrom: out.closedFrom, by })
   // Additive: `from_closed` when the source closed with it (nothing was left open on it), `merged_into`
-  // when the message went straight into that thread (`thread` is then that thread, not a new one).
-  res.status(mergeInto ? 200 : 201).json({
+  // when the message went straight into that thread (`thread` is then that thread, not a new one),
+  // `already_split` when Walnut had taken it out before this call (thread-join-check.ts splitWhereItIs).
+  res.status(mergeInto || out.already ? 200 : 201).json({
     task_id: task.id, thread: out.thread, from: out.from,
     ...(out.closedFrom ? { from_closed: true } : {}), ...(mergeInto ? { merged_into: mergeInto } : {}),
+    ...(out.already ? { already_split: true } : {}),
   })
 }))
 

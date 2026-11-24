@@ -21,7 +21,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { log } from '../../logging/index.js';
-import { splitMessageInto, splitThreadMessage, ThreadError, type OrgThread, type ThreadMessage, type ThreadsFile, type ThreadWriter } from './threads-model.js';
+import { mergeThreads, splitMessageInto, splitThreadMessage, ThreadError, type OrgThread, type ThreadMessage, type ThreadsFile, type ThreadWriter } from './threads-model.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 
 export type JoinVerdict = 'same' | 'new' | 'unsure';
@@ -154,6 +154,35 @@ export function splitJoined(file: ThreadsFile, threadId: string, messageId: stri
     if (err instanceof ThreadError) return { file, out: null };
     throw err;
   }
+}
+
+/**
+ * A node's split of a message the check already took out (2026-11-24, real use: thread_split refused
+ * no_message 4 s after the check moved his message, as the node acted on the filing hint "thread_split
+ * it out"): the split it asked for is done. Null when the message is still in `threadId` (or nowhere:
+ * the usual refusal). Already alone at the head of an open thread of its own: that thread, unchanged.
+ * With `intoId`: it goes there from where it is now (its thread merged in when it holds it alone).
+ * Anywhere else (a merge put it inside another thread): refused, naming where it is. Pure.
+ */
+export function splitWhereItIs(file: ThreadsFile, threadId: string, messageId: string, intoId: string | undefined, by: ThreadWriter, at: string, lang?: LetterLang):
+  { file: ThreadsFile; thread: OrgThread; from: OrgThread; closedFrom: boolean; already: true } | null {
+  const source = file.threads.find((t) => t.id === threadId);
+  if (!source || source.messages.some((m) => m.id === messageId)) return null;
+  const holder = file.threads.find((t) => t.id !== threadId && !t.closed && !t.movedTo && t.messages.some((m) => m.id === messageId));
+  if (!holder) return null;
+  const head = holder.messages[0].id === messageId;
+  if (!intoId) {
+    if (head) return { file, thread: holder, from: source, closedFrom: false, already: true };
+  } else if (holder.id === intoId) {
+    return { file, thread: holder, from: source, closedFrom: false, already: true };
+  } else if (head && holder.messages.length === 1) {
+    const r = mergeThreads(file, holder.id, intoId, by, at);
+    return { file: r.file, thread: r.thread, from: source, closedFrom: false, already: true };
+  } else if (head) {
+    const r = splitMessageInto(file, holder.id, messageId, intoId, by, at, lang, { keepOpen: true });
+    return { file: r.file, thread: r.thread, from: source, closedFrom: false, already: true };
+  }
+  throw new ThreadError('no_message', 404, `No message ${messageId} in thread ${threadId}: it is in thread ${holder.id} now. Split it from there.`);
 }
 
 /** Check one message just joined by timing on node `taskId` (fileThreadMessage). Never throws. */

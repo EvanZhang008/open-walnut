@@ -17,7 +17,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-thread-jo
 import { WALNUT_HOME } from '../../../src/constants.js'
 import * as store from '../../../src/core/org/threads-store.js'
 import { emptyThreads, fileMessage, SAME_CONVERSATION_MS, type ThreadsFile } from '../../../src/core/org/threads-model.js'
-import { checkJoinedMessage, joinJudgeInput, readVerdict, setJoinJudgeOverride, splitJoined, type JoinVerdict } from '../../../src/core/org/thread-join-check.js'
+import { checkJoinedMessage, joinJudgeInput, readVerdict, setJoinJudgeOverride, splitJoined, splitWhereItIs, type JoinVerdict } from '../../../src/core/org/thread-join-check.js'
+import { mergeThreads } from '../../../src/core/org/threads-model.js'
 
 const NODE = 'orchard-join-node'
 const T0 = Date.now() - 30 * 60_000
@@ -177,5 +178,52 @@ describe('only a join by timing is judged, as it is filed', () => {
     expect(own.messages[1].joined).toBe('recent')
     expect(after.threads.find((t) => t.id === a.thread.id)!.messages.map((m) => m.id)).toEqual([a.message.id])
     expect(after.threads.filter((t) => !t.closed).length).toBe(2)
+  })
+})
+
+describe('a node splits a message the check already took out (real use, 2026-11-24: thread_split no_message 4 s after the check)', () => {
+  it('the split it asked for is done: the message is its own thread, nothing moves twice', async () => {
+    const { f, joined, thread } = pair()
+    const moved = splitJoined(f, thread, joined, at(50))
+    await store.writeThreadsFor(NODE, () => ({ file: moved.file, out: null }))
+    const out = await store.splitThread(NODE, thread, joined, 'agent')
+    expect(out.already).toBe(true)
+    expect(out.thread.id).toBe(moved.out)
+    const after = await store.readThreads(NODE)
+    expect(after.threads.length).toBe(2)
+    expect(after.threads.find((t) => t.id === thread)!.messages.length).toBe(1)
+  })
+
+  it('with merge_into it goes there from where it is now, its own thread merged in', () => {
+    const { f, joined, thread } = pair()
+    const other = fileMessage(f, { text: 'the gate hinge squeaks', via: 'chat', at: at(5) }).file
+    const target = other.threads[other.threads.length - 1].id
+    const moved = splitJoined(other, thread, joined, at(50))
+    const r = splitWhereItIs(moved.file, thread, joined, target, 'agent', at(60))!
+    expect(r.already).toBe(true)
+    expect(r.thread.id).toBe(target)
+    expect(r.thread.messages.some((m) => m.id === joined)).toBe(true)
+    // Its own thread is merged away: gone, or closed pointing at the target.
+    const left = r.file.threads.find((t) => t.id === moved.out)
+    expect(!left || !!left.closed || !!left.movedTo).toBe(true)
+    // Into the thread that holds it already: nothing to do.
+    expect(splitWhereItIs(moved.file, thread, joined, moved.out!, 'agent', at(60))!.file).toBe(moved.file)
+  })
+
+  it('a message still in the thread takes the usual split; one merged inside another thread is refused, naming where it is', () => {
+    const { f, first, joined, thread } = pair()
+    expect(splitWhereItIs(f, thread, joined, undefined, 'agent', at(60))).toBeNull()
+    expect(splitWhereItIs(f, thread, 'tm-nowhere', undefined, 'agent', at(60))).toBeNull()
+    const moved = splitJoined(f, thread, joined, at(50))
+    // Its own thread merged back into the first: the message now sits second in the source.
+    const back = mergeThreads(moved.file, moved.out!, thread, 'agent', at(55)).file
+    expect(splitWhereItIs(back, thread, joined, undefined, 'agent', at(60))).toBeNull()
+    // Merged into another thread behind its first message: no split from here, the refusal says where.
+    const other = fileMessage(f, { text: 'the gate hinge squeaks', via: 'chat', at: at(5) }).file
+    const target = other.threads[other.threads.length - 1].id
+    const out = splitJoined(other, thread, joined, at(50))
+    const inside = mergeThreads(out.file, out.out!, target, 'agent', at(55)).file
+    expect(() => splitWhereItIs(inside, thread, joined, undefined, 'agent', at(60))).toThrow(new RegExp(`it is in thread ${target} now`))
+    expect(first).toBeTruthy()
   })
 })

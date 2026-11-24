@@ -431,12 +431,16 @@ export interface SplitThreadOptions {
  * One message out of a thread: into a new thread of its own, or with `mergeInto` straight into
  * another open thread, in one locked write. `closedFrom`: the source closed with it.
  */
-export async function splitThread(taskId: string, threadId: string, messageId: string, by: ThreadWriter, opts: SplitThreadOptions = {}): Promise<{ thread: OrgThread; from: OrgThread; closedFrom: boolean; mergedInto?: string }> {
+export async function splitThread(taskId: string, threadId: string, messageId: string, by: ThreadWriter, opts: SplitThreadOptions = {}): Promise<{ thread: OrgThread; from: OrgThread; closedFrom: boolean; mergedInto?: string; already?: boolean }> {
   const at = new Date().toISOString();
   const lang = await letterLang();
   const keep = { keepOpen: opts.keepOpen === true };
   const into = opts.mergeInto;
+  const { splitWhereItIs } = await import('./thread-join-check.js');
   const res = await mutateThreads(taskId, (cur) => {
+    // The subject check at filing may have taken it out already (thread-join-check.ts).
+    const moved = splitWhereItIs(cur, threadId, messageId, into, by, at, lang);
+    if (moved) return { file: moved.file, out: { thread: moved.thread, from: moved.from, closedFrom: false, already: true as const, ...(into ? { mergedInto: into } : {}) } };
     const r = into
       ? splitMessageInto(cur, threadId, messageId, into, by, at, lang, keep)
       : splitThreadMessage(cur, threadId, messageId, by, at, undefined, lang, keep);
