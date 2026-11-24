@@ -74,8 +74,8 @@ describe('R4-2: a start the move holds is not a restart loss', () => {
 
     x._setHold.set(true)
     const start = conn.send('start', { sid: HELD, args: [] })
-    await new Promise((r) => setTimeout(r, 20))
-    // Held: nothing left for the daemon.
+    // Held: the start waits in the hold, and nothing left for the daemon.
+    await vi.waitFor(() => expect(x._setHold.holdsStart(HELD)).toBe(true))
     expect(wire).toEqual([])
 
     // The flip's reconnect, while the hold is still on.
