@@ -305,7 +305,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   up.ownAttach = await (await import('./host-judged-lines.js')).installOwnAttach({
     runner: sessionRunner, holds: runnerHolds, ownRows: () => ownRows(o.hostKey), runnerReady: sessionRunner.initialized,
     engineOf: async (sid) => (await getSessionByClaudeId(sid).catch(() => null))?.engine ?? undefined,
-    liveCli: (sid) => runtimeLiveCli(sid), toldLine: (sid) => log.toldLine(sid),
+    liveCli: (sid) => runtimeLiveCli(sid), liveSids: () => runtimeLiveSids(), toldLine: (sid) => log.toldLine(sid),
     readsReady: () => selfHostConnection(o.hostKey)?.connected === true,
     // Tests: the boot passes wait this much longer, so only the attach before a write can take a session.
     ...(delayMs > 0 ? { delayMs } : {}), log: say,
@@ -456,6 +456,16 @@ export async function runtimeHoldsCli(
   }
   const reply = await within(conn.send('status', { sid }, 3_000), 3_500)
   return reply ? statusReplyAlive(reply as { ok?: unknown; exists?: unknown; alive?: unknown }) : null
+}
+
+/** The sessions whose CLI the runtime lists alive now (its `list`, one answer), or null when the link or the answer did not come. */
+export async function runtimeLiveSids(given?: RuntimeConn | null): Promise<Set<string> | null> {
+  const { within } = await import('./host-judged-lines.js')
+  const conn = await runtimeConn(given)
+  if (!conn) return null
+  const reply = (await within(conn.send('list', {}, 10_000), 10_500)) as { sessions?: unknown } | undefined
+  if (!reply || !Array.isArray(reply.sessions)) return null
+  return new Set((reply.sessions as Array<{ sid?: unknown; alive?: unknown }>).filter((r) => r.alive === true && typeof r.sid === 'string').map((r) => r.sid as string))
 }
 
 /** A native session's CLI as the runtime holds it now (its registry, whatever the row says): alive with its pid, or null. */

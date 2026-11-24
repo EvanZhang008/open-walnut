@@ -6,6 +6,10 @@
  *
  * 2026-11-23: after a restart of a host's service, a same-host send's turn ended before the host's
  * runner attached again; the future-only attach skipped it and nobody judged it.
+ *
+ * Every case runs once per phase of the host's copy of the task: what the replay says must not hang
+ * on it (review of 3279a329e4: at IN_PROGRESS a replay from a result's end made up an empty turn end
+ * on that result's companion idle, and the real one was not said).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
@@ -74,10 +78,13 @@ function seed(sid: string, pid: number, secondTurn: boolean): { watermark: numbe
   return { watermark }
 }
 
-async function attach(sid: string, pid: number, watermark: number): Promise<ClaudeCodeSession> {
+const PHASES = ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] as const
+type Phase = typeof PHASES[number]
+
+async function attach(sid: string, pid: number, watermark: number, phase: Phase): Promise<ClaudeCodeSession> {
   const { task } = await addTask({ title: `Judged replay ${sid}` })
-  // The first turn was handled: the task waits on the person (the phase proxy would say "handled").
-  await updateTaskRaw(task.id, { phase: 'NEED_ACTION' })
+  // The host's copy of the task, whatever it says (a copy behind the leader's, a task that stays in progress).
+  await updateTaskRaw(task.id, { phase })
   await createSessionRecord(sid, task.id, 'proj', '/tmp', { pid, outputFile: `remote://__local__/${sid}`, messageCount: 1 })
   const record = { ...(await getSessionByClaudeId(sid))!, judge: 'host', host: '__local__', consumedOffset: watermark } as SessionRecord
   return ClaudeCodeSession.attachToExisting(record, MOCK_CLI, `ws://127.0.0.1:${daemon.port}`)
@@ -111,18 +118,33 @@ function seedMidTurn(sid: string, pid: number): { watermark: number; told: numbe
   return { watermark: ends[1]!, told: ends[4]!, end: ends[5]! }
 }
 
+/** A turn whose own result (an error) was withheld while its agent ran: the told line stayed below that result (claude-code-session.ts readOffset). */
+function seedHeld(sid: string, pid: number): { watermark: number; told: number } {
+  const started = JSON.stringify({ type: 'system', subtype: 'task_started', session_id: sid, task_id: 'agent-a', task_type: 'local_agent', description: 'agent-a' })
+  const failed = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, num_turns: 1, result: 'held: rate limit', session_id: sid, total_cost_usd: 0.02 })
+  const done = JSON.stringify({ type: 'system', subtype: 'task_notification', session_id: sid, task_id: 'agent-a', status: 'completed' })
+  const lines = [user('ROUND one'), result(sid, 'echo: ROUND one'), idle(), user('ROUND held'), started, failed, done, idle()]
+  const ends: number[] = []
+  let at = 0
+  for (const l of lines) { at += Buffer.byteLength(l) + 1; ends.push(at) }
+  fs.writeFileSync(path.join(streams, `${sid}.jsonl`), lines.map((l) => l + '\n').join(''))
+  daemon.seedSession(sid, { pid, alive: true })
+  return { watermark: ends[1]!, told: ends[4]! }
+}
+
 const lastAttach = (sid: string) => daemon.getAttachHistory().filter((a) => a.sid === sid).at(-1)?.fromOffset
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-describe('attaching a session this host judges', () => {
+describe.each(PHASES)('attaching a session this host judges (its task copy at %s)', (phase) => {
+  const id = (s: string) => `${s}-${phase.toLowerCase()}`
   it('a turn running at the restart is read on from the line the leader was told: its end is said once, its told part not again', async () => {
     own.hostKey = '__local__'
-    const sid = 'jr-mid-turn'
+    const sid = id('jr-mid-turn')
     const { watermark, told } = seedMidTurn(sid, 6111)
     setToldLines((s) => (s === sid ? { v: told } : undefined))
     const results = resultsOf(sid)
     const tools = eventsOf(sid, EventNames.SESSION_TOOL_USE)
-    const session = await attach(sid, 6111, watermark)
+    const session = await attach(sid, 6111, watermark, phase)
     expect(lastAttach(sid)).toBe(told)
     await vi.waitFor(() => expect(results).toEqual(['echo: ROUND two']), { timeout: 5_000 })
     await settle(300)
@@ -131,22 +153,40 @@ describe('attaching a session this host judges', () => {
     session.detach()
 
     // The control: with no told line (a log from before it) the same stream is read from the judged turn end, tool call included.
-    const sid2 = 'jr-mid-turn-untold'
+    const sid2 = id('jr-mid-turn-untold')
     const m2 = seedMidTurn(sid2, 6115)
     const tools2 = eventsOf(sid2, EventNames.SESSION_TOOL_USE)
-    const again = await attach(sid2, 6115, m2.watermark)
+    const again = await attach(sid2, 6115, m2.watermark, phase)
     expect(lastAttach(sid2)).toBe(m2.watermark)
     await vi.waitFor(() => expect(tools2.length).toBe(1), { timeout: 5_000 })
     again.detach()
   })
 
+  it('a result withheld for an agent at the restart is read again from below it: the turn ends once, with its own outcome', async () => {
+    own.hostKey = '__local__'
+    const sid = id('jr-held')
+    const { watermark, told } = seedHeld(sid, 6116)
+    setToldLines((s) => (s === sid ? { v: told } : undefined))
+    const outcomes: Array<{ result: string; isError: unknown }> = []
+    bus.subscribe(`judged-replay-held-${sid}`, (e) => {
+      const d = e.data as { sessionId?: string; result?: unknown; isError?: unknown }
+      if (e.name === EventNames.SESSION_RESULT && d.sessionId === sid) outcomes.push({ result: String(d.result), isError: d.isError })
+    }, { global: true })
+    const session = await attach(sid, 6116, watermark, phase)
+    expect(lastAttach(sid)).toBe(told)
+    await vi.waitFor(() => expect(outcomes.length).toBeGreaterThan(0), { timeout: 5_000 })
+    await settle(300)
+    expect(outcomes).toEqual([{ result: 'held: rate limit', isError: true }])
+    session.detach()
+  })
+
   it('the result\'s fact was told but the record\'s watermark was not written (a crash between): the turn is not said twice', async () => {
     own.hostKey = '__local__'
-    const sid = 'jr-crash-window'
+    const sid = id('jr-crash-window')
     const { watermark, end } = seedMidTurn(sid, 6112)
-    setToldLines((s) => (s === sid ? { v: end } : undefined))
+    setToldLines((s) => (s === sid ? { v: end, end: true } : undefined))
     const results = resultsOf(sid)
-    const session = await attach(sid, 6112, watermark)
+    const session = await attach(sid, 6112, watermark, phase)
     expect(lastAttach(sid)).toBe(end)
     await settle(500)
     expect(results).toEqual([])
@@ -155,11 +195,11 @@ describe('attaching a session this host judges', () => {
 
   it('the record\'s watermark was written but the result\'s fact was not: the turn is read again and said once', async () => {
     own.hostKey = '__local__'
-    const sid = 'jr-reverse-window'
+    const sid = id('jr-reverse-window')
     const { watermark, end } = seedMidTurn(sid, 6113)
-    setToldLines((s) => (s === sid ? { v: watermark } : undefined))
+    setToldLines((s) => (s === sid ? { v: watermark, end: true } : undefined))
     const results = resultsOf(sid)
-    const session = await attach(sid, 6113, end)
+    const session = await attach(sid, 6113, end, phase)
     expect(lastAttach(sid)).toBe(watermark)
     await vi.waitFor(() => expect(results).toEqual(['echo: ROUND two']), { timeout: 5_000 })
     session.detach()
@@ -167,10 +207,10 @@ describe('attaching a session this host judges', () => {
 
   it('a CLI the daemon resumed itself while the service was down (its row stopped, a stale pid) is attached with the runtime\'s pid, and its turn judged', async () => {
     own.hostKey = '__local__'
-    const sid = 'jr-resumed'
+    const sid = id('jr-resumed')
     const { watermark } = seedMidTurn(sid, 6114)
     const { task } = await addTask({ title: 'Resumed by the daemon' })
-    await updateTaskRaw(task.id, { phase: 'NEED_ACTION' })
+    await updateTaskRaw(task.id, { phase })
     await createSessionRecord(sid, task.id, 'proj', '/tmp', { pid: 1, outputFile: `remote://__local__/${sid}`, messageCount: 1 })
     await updateSessionRecord(sid, { judge: 'host', host: '__local__', process_status: 'stopped', consumedOffset: watermark } as Partial<SessionRecord>)
     expect(await getSessionByClaudeId(sid)).toMatchObject({ judge: 'host', host: '__local__', process_status: 'stopped' })
@@ -186,10 +226,10 @@ describe('attaching a session this host judges', () => {
 
   it('a turn that ended while no runner read it is replayed from the last judged turn end and judged once', async () => {
     own.hostKey = '__local__'
-    const sid = 'jr-own-gap'
+    const sid = id('jr-own-gap')
     const { watermark } = seed(sid, 6101, true)
     const results = resultsOf(sid)
-    const session = await attach(sid, 6101, watermark)
+    const session = await attach(sid, 6101, watermark, phase)
     expect(lastAttach(sid), 'the attach reads from the judged position').toBe(watermark)
     await vi.waitFor(() => expect(results).toEqual(['echo: ROUND two']), { timeout: 5_000 })
     await settle(300)
@@ -200,10 +240,10 @@ describe('attaching a session this host judges', () => {
 
   it('no unjudged result past the watermark: the attach takes what comes next, as before', async () => {
     own.hostKey = '__local__'
-    const sid = 'jr-own-quiet'
+    const sid = id('jr-own-quiet')
     const { watermark } = seed(sid, 6102, false)
     const results = resultsOf(sid)
-    const session = await attach(sid, 6102, watermark)
+    const session = await attach(sid, 6102, watermark, phase)
     expect(lastAttach(sid)).toBe(Number.MAX_SAFE_INTEGER)
     await settle(300)
     expect(results).toEqual([])
@@ -212,10 +252,10 @@ describe('attaching a session this host judges', () => {
 
   it('a session this server does not judge as its host keeps the future-only attach (the switch off: today\'s behaviour)', async () => {
     own.hostKey = ''
-    const sid = 'jr-leader'
+    const sid = id('jr-leader')
     const { watermark } = seed(sid, 6103, true)
     const results = resultsOf(sid)
-    const session = await attach(sid, 6103, watermark)
+    const session = await attach(sid, 6103, watermark, phase)
     expect(lastAttach(sid)).toBe(Number.MAX_SAFE_INTEGER)
     await settle(300)
     expect(results).toEqual([])

@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { projectOrInbox } from '../core/inbox-project.js'
 import { bashCommandParts, bashRuleCovers, claudeChoiceResponse, cliDenyMessage, MESSAGE_DENIES_PROMPT, pendingPermissionRecordFields, ruleAllowedLine, scopeOfDestination, settingsBashRules, settingsFilesOf, PermissionSaveError, type BashRuleScope, permissionDecisionLine, withPermissionDecision, UnknownPermissionOptionError, permissionEventFields, requestFromPendingRecord, type ClaudeCanUseToolRequest, type ClaudePermissionUpdate } from './claude-permission-options.js'
@@ -58,6 +59,8 @@ import { log } from '../logging/index.js'
 import { callThrough, sessionPort, type SessionQueuePort } from '../core/sessions/session-port.js'
 
 // The message queue's functions, through the session port (core/sessions/session-port.ts).
+/** The stream line a session is handling, kept across what its handling awaits or schedules (ClaudeCodeSession.readOffset). */
+const lineScope = new AsyncLocalStorage<{ session: object; v: number }>()
 const queueFn = <K extends keyof SessionQueuePort>(name: K) => callThrough(() => sessionPort().messages.queue, name)
 const enqueueMessage = queueFn('enqueueMessage')
 const markNextProcessing = queueFn('markNextProcessing')
@@ -1126,6 +1129,11 @@ export class ClaudeCodeSession {
   private _consumedOffset = -1
   /** The furthest stream line (its daemon `v`) this instance has handled, -1 before the first. */
   private _readOffset = -1
+  /** Where the line being handled starts (the furthest line before it), -1 when unknown. */
+  private _lineStart = -1
+  /** Where the result line a withheld turn end (`_deferredOutcome`) came from starts: the host's told
+   *  line stays below it until the turn ends, so a restart reads that result again (its outcome is in memory only). */
+  private _heldFrom: number | undefined
 
   /** The prompt cache facts of the main loop's last live request, with where this session compacts by
    *  itself (the idle compaction's threshold is a share of it); undefined until one reported usage. */
@@ -2624,9 +2632,16 @@ export class ClaudeCodeSession {
     return this._consumedOffset
   }
 
-  /** The furthest stream line this instance handled (-1 before the first): the host's facts carry it (host-emitter.ts). */
+  /**
+   * The stream line a fact emitted now came from, which the host's facts carry (host-emitter.ts, the
+   * fact log's told line): the line being handled, also for what its handling emits later (a promise,
+   * a timer: lineScope), else the furthest line handled; never past the start of a withheld result's
+   * line while that turn is open. -1 when unknown.
+   */
   get readOffset(): number {
-    return this._readOffset
+    const scope = lineScope.getStore()
+    const at = scope && scope.session === this ? scope.v : this._readOffset
+    return this._deferredOutcome && this._heldFrom !== undefined ? Math.min(at, this._heldFrom) : at
   }
 
   /** Current turn generation — see `_turnGen`. Read by core/phase.ts's stale-result
@@ -4103,7 +4118,9 @@ export class ClaudeCodeSession {
     }
 
     // ── Stale-watermark heal (incident inc-1786428350008, healStaleWatermark) ──
+    const watermarkBeforeHeal = session._consumedOffset
     if (typeof streamEvidence !== 'string') await ClaudeCodeSession.healStaleWatermark(session, record, streamEvidence)
+    const healed = watermarkBeforeHeal >= 0 && session._consumedOffset < 0
     // A session this host judges itself: what its CLI wrote while no runner read it is read on from
     // where the leader was last told (attach-evidence.ts judgedReplayFloor), which is also the replay
     // watermark from here. The replay itself ends a turn that ended in the gap, so the downgrade
@@ -4117,12 +4134,22 @@ export class ClaudeCodeSession {
       const st = await statStreamFile(record.claudeSessionId, record.host).catch(() => null)
       if (st && typeof st !== 'string') file = { fileSize: st.size, ...(st.epoch ? { streamEpoch: st.epoch } : {}) }
     }
-    const replay = judgedReplayFloor(ownJudged, session._consumedOffset, streamEvidence, told, file)
+    const replay = judgedReplayFloor(ownJudged, session._consumedOffset, streamEvidence, told, file, healed)
     const judgedFloor = replay?.floor ?? null
     if (replay) {
       session._consumedOffset = replay.floor
+      session._readOffset = replay.floor
+      // The turn the floor closes, or the last one when the floor is past it with no turn started since,
+      // was handled (the downgrade's convergence, which a floor skips): never a turn end again, whatever
+      // the host's copy of the task's phase says. A floor on a result's own line owes its companion
+      // idle, the first line replayed: that idle is the closed turn's, never a turn-over of its own.
+      const last = typeof streamEvidence === 'string' ? undefined : streamEvidence.fold.lastResult?.endOffset
+      if (replay.atTurnEnd || (typeof streamEvidence !== 'string' && streamEvidence.fold.turnEnded && typeof last === 'number' && last <= replay.floor)) {
+        session.resultEmitted = true
+      }
+      if (replay.atTurnEnd) session._idleDebt = 1
       log.session.info('attachToExisting: an own session reads on from where the leader was told', {
-        sessionId: record.claudeSessionId, floor: replay.floor, from: replay.from, recordWatermark: record.consumedOffset ?? null,
+        sessionId: record.claudeSessionId, floor: replay.floor, from: replay.from, atTurnEnd: replay.atTurnEnd, resultEmitted: session.resultEmitted, recordWatermark: record.consumedOffset ?? null,
         fileSize: typeof streamEvidence === 'string' ? file?.fileSize ?? null : streamEvidence.fileSize,
       })
     }
@@ -7376,12 +7403,21 @@ export class ClaudeCodeSession {
 
   /** `parsed`: the line already parsed on its way here (RemoteSessionManager); a line is parsed once. */
   private handleStreamLine(line: string, v?: number, parsed?: Record<string, unknown>): void {
+    // What the line's handling emits, now or after an await, carries the line's own position (readOffset).
+    if (typeof v === 'number' && v >= 0 && v < Number.MAX_SAFE_INTEGER) lineScope.run({ session: this, v }, () => this._handleStreamLine(line, v, parsed))
+    else this._handleStreamLine(line, v, parsed)
+  }
+
+  private _handleStreamLine(line: string, v?: number, parsed?: Record<string, unknown>): void {
     // L1 versioned-event position of THIS line (byte offset at end-of-line in the
     // daemon stream file). Held for the duration of this synchronous call so the
     // result/idle handlers can compare it against the consumed watermark and
     // advance it on turn completion. Undefined on old daemons without `v`.
     this._currentEventV = v
-    if (typeof v === 'number' && v > this._readOffset && v < Number.MAX_SAFE_INTEGER) this._readOffset = v
+    if (typeof v === 'number' && v < Number.MAX_SAFE_INTEGER) {
+      this._lineStart = v > this._readOffset ? this._readOffset : -1
+      if (v > this._readOffset) this._readOffset = v
+    }
     // Clear stall diagnostic timer — we're receiving output, session is responsive
     this._lastJsonlEventTs = Date.now()
     // Lane-turn liveness (core/sessions/session-progress.ts): EVERY stream line
@@ -9121,6 +9157,7 @@ export class ClaudeCodeSession {
           // A stop after the failed command's own result ends only the work after it (daemon-fold keepsFailure).
           const keepsFailure = this._commandFailureHeld && this._failedLocalCommandThisTurn
           this._commandFailureHeld = this._failedLocalCommandThisTurn
+          if (!this._deferredOutcome) this._heldFrom = this._lineStart
           this._deferredOutcome = {
             isError: keepsFailure || ((result.is_error === true || this._failedLocalCommandThisTurn) && !stoppedByUser
               && !['aborted_streaming', 'aborted_tools'].includes(String(result.terminal_reason))),

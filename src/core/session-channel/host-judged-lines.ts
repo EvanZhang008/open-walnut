@@ -91,6 +91,8 @@ export interface OwnAttachDeps {
   holds(sid: string): boolean
   /** The runtime's word on `sid`'s CLI (its registry): the row may say stopped while the CLI runs. */
   liveCli(sid: string): Promise<LiveCli>
+  /** The sessions whose CLI the runtime lists alive, in one answer (null: no answer): only those are asked one by one. */
+  liveSids?(): Promise<ReadonlySet<string> | null>
   /** Attach `sid` again with the runtime's pid: attached or not. */
   attach(sid: string, pid: number | undefined): Promise<boolean>
   /** ACP engines are not attached here (their worker re-attaches on use). */
@@ -136,9 +138,12 @@ export function startOwnAttach(d: OwnAttachDeps): { pass(): Promise<string[]>; d
       d.log?.('warn', 'host sessions: the own rows could not be read for the boot attach', { error: err instanceof Error ? err.message : String(err) })
       return attached
     }
+    // One list per pass: an own row the runtime does not list alive (most of them, long ended) is not asked.
+    const listed = rows.length ? await (d.liveSids?.() ?? Promise.resolve(null)).catch(() => null) : null
     let live = 0
     for (const row of rows) {
       if (stopped) break
+      if (listed && !listed.has(row.claudeSessionId)) continue
       const cli = await d.liveCli(row.claudeSessionId).catch(() => null)
       if (!cli) continue
       live++
@@ -176,6 +181,7 @@ export interface OwnAttachWiring {
   /** The engine of `sid`'s row (undefined: none, or Claude Code). */
   engineOf(sid: string): Promise<string | undefined>
   liveCli(sid: string): Promise<LiveCli>
+  liveSids?: OwnAttachDeps['liveSids']
   /** The fact log's furthest told line of a session (fact-log.ts toldLine). */
   toldLine(sid: string): ToldLine | undefined
   /** Settles once the runner's own startup (its queue read, its recovery) is done: the boot passes wait for it. */
@@ -226,6 +232,7 @@ export async function installOwnAttach(w: OwnAttachWiring): Promise<() => void> 
     if (stopped) return
     boot = startOwnAttach({
       ownRows: w.ownRows, holds: w.holds, isAcp: isAcpEngine, liveCli: w.liveCli, standsDown: hostStandsDown,
+      ...(w.liveSids ? { liveSids: w.liveSids } : {}),
       attach: async (sid, pid) => (await w.runner.attachOwnLive(sid, pid)) != null,
       ...(w.passesMs ? { passesMs: w.passesMs } : {}),
       ...(w.log ? { log: w.log } : {}),

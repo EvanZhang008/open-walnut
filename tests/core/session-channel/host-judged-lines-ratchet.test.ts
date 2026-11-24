@@ -149,6 +149,6 @@ describe('every host path that writes into a session\'s CLI past its runner lets
     expect(attached).toEqual([['alone', 777]])
     // Its attach reads on from the last line the leader was told, past which the daemon's turn sits.
     const evidence = { fileSize: 9000, fold: { lastResult: { isError: false, endOffset: 8800 } } } as unknown as StreamEvidence
-    expect(judgedReplayFloor(true, -1, evidence, { v: 4000 })).toEqual({ floor: 4000, from: 'told' })
+    expect(judgedReplayFloor(true, -1, evidence, { v: 4000 })).toEqual({ floor: 4000, from: 'told', atTurnEnd: false })
   })
 })

@@ -157,10 +157,15 @@ export async function readAttachEvidence(
  *   told     the furthest line a durable fact of the session came from (fact-log.ts toldLine): every
  *            line up to it was handled and told, every line past it was not, so the attach reads on
  *            from exactly there, a turn that was running at the restart included. Used when it is a
- *            position in this file (its epoch, when both know one, and within its size).
+ *            position in this file: within its size, and of its epoch when both know one (a told line
+ *            with no epoch is not trusted once the stale-watermark heal found the file recreated).
  *   judged   with no told line (a log from before it, a session that never said a fact here): the
  *            last turn end its runner judged (the record's consumedOffset), when the stream proves a
  *            result was written past it.
+ *
+ * `atTurnEnd`: the floor is a result's own line (a judged floor always; a told one when its fact was the
+ * turn end), so the next line replayed is that result's companion idle: the attach owes it, and the
+ * turn it closes was handled (claude-code-session.ts: one idle of debt, resultEmitted).
  *
  * Null otherwise: the attach subscribes to what comes next, as before. The floor is also the attach's
  * replay watermark: a result past it is new, a line at or below it was handled. `watermark` is the
@@ -168,16 +173,18 @@ export async function readAttachEvidence(
  * file), so the judged floor is never a position in another file.
  */
 export function judgedReplayFloor(
-  ownHostJudged: boolean, watermark: number, evidence: StreamEvidence, told?: { epoch?: string; v: number } | null,
+  ownHostJudged: boolean, watermark: number, evidence: StreamEvidence, told?: { epoch?: string; v: number; end?: true } | null,
   /** The stream file's size and epoch when the evidence has none (a fold with no verdict): enough for the told line. */
   file?: { fileSize: number; streamEpoch?: string } | null,
-): { floor: number; from: 'told' | 'judged' } | null {
+  /** The stale-watermark heal found the record's watermark past this file (a new file). */
+  healed = false,
+): { floor: number; from: 'told' | 'judged'; atTurnEnd: boolean } | null {
   if (!ownHostJudged) return null
   const at = typeof evidence === 'string' ? file ?? null : evidence
-  if (told && at && Number.isSafeInteger(told.v) && told.v >= 0 && told.v <= at.fileSize
-    && !(told.epoch && at.streamEpoch && told.epoch !== at.streamEpoch)) return { floor: told.v, from: 'told' }
+  const sameFile = !!told && !!at && (told.epoch && at.streamEpoch ? told.epoch === at.streamEpoch : !healed)
+  if (told && at && sameFile && Number.isSafeInteger(told.v) && told.v >= 0 && told.v <= at.fileSize) return { floor: told.v, from: 'told', atTurnEnd: told.end === true }
   if (typeof evidence === 'string') return null
   if (!Number.isInteger(watermark) || watermark < 0 || watermark >= evidence.fileSize) return null
   const end = evidence.fold.lastResult?.endOffset
-  return typeof end === 'number' && end > watermark ? { floor: watermark, from: 'judged' } : null
+  return typeof end === 'number' && end > watermark ? { floor: watermark, from: 'judged', atTurnEnd: true } : null
 }

@@ -117,6 +117,26 @@ describe('startOwnAttach: the boot passes over the own rows', () => {
     expect(asked).toEqual(['a', 'b', 'resumed', 'b'])
   })
 
+  it('asks the runtime one list per pass, and only the rows it lists alive one by one', async () => {
+    const asked: string[] = []
+    const attached: string[] = []
+    let lists = 0
+    const own = startOwnAttach({
+      ownRows: async () => [row('old-1'), row('old-2'), row('live'), row('old-3')],
+      holds: () => false,
+      liveSids: async () => { lists++; return new Set(['live', 'not-own']) },
+      liveCli: async (sid) => { asked.push(sid); return { pid: 9 } },
+      attach: async (sid) => { attached.push(sid); return true },
+      isAcp, passesMs: [0],
+    })
+    await own.done
+    expect({ lists, asked, attached }).toEqual({ lists: 1, asked: ['live'], attached: ['live'] })
+    // No list answer (an older runtime, a slow link): every row is asked, as before.
+    const asked2: string[] = []
+    await startOwnAttach({ ownRows: async () => [row('a'), row('b')], holds: () => false, liveSids: async () => null, liveCli: async (sid) => { asked2.push(sid); return null }, attach: async () => true, isAcp, passesMs: [0] }).done
+    expect(asked2).toEqual(['a', 'b'])
+  })
+
   it('a host standing down attaches nothing; a stop ends the passes at once', async () => {
     const attached: string[] = []
     const down = startOwnAttach({ ownRows: async () => [row('a')], holds: () => false, liveCli: async () => ({ pid: 1 }), attach: async (sid) => { attached.push(sid); return true }, isAcp, standsDown: () => true, passesMs: [0] })
@@ -145,13 +165,13 @@ describe('the fact log\'s told line', () => {
       log.append('s2', 'row', {})
       expect(log.toldLine('s1'), 'not durable yet: not told').toBeUndefined()
       await log.flush()
-      expect(log.toldLine('s1')).toEqual({ epoch: 'e1', v: 250 })
+      expect(log.toldLine('s1')).toEqual({ epoch: 'e1', v: 250, end: true })
       expect(log.toldLine('s2')).toBeUndefined()
       await log.ack(log.head)
       await log.compact()
       await log.close()
       const again = await FactLog.open({ dir, walnutId: 'w1', durable: false, flushMs: 5 })
-      expect(again.toldLine('s1'), 'after a compaction dropped its records').toEqual({ epoch: 'e1', v: 250 })
+      expect(again.toldLine('s1'), 'after a compaction dropped its records').toEqual({ epoch: 'e1', v: 250, end: true })
       again.append('s1', 'session:text-delta', { delta: 'b' }, { line: { epoch: 'e2', v: 40 } })
       await again.flush()
       expect(again.toldLine('s1'), 'a new stream file').toEqual({ epoch: 'e2', v: 40 })
@@ -161,10 +181,14 @@ describe('the fact log\'s told line', () => {
     }
   })
 
-  it('foldTold keeps the furthest line of one file', () => {
+  it('foldTold keeps the furthest line of one file, and whether a turn end came from it', () => {
     expect(foldTold({ v: 10 }, { v: 5 })).toEqual({ v: 10 })
     expect(foldTold({ v: 10 }, { v: 15 })).toEqual({ v: 15 })
     expect(foldTold(undefined, undefined)).toBeUndefined()
+    expect(foldTold({ v: 10 }, { v: 15 }, 'session:result')).toEqual({ v: 15, end: true })
+    expect(foldTold({ v: 15, end: true }, { v: 15 }, 'session:status-changed'), 'another fact of the result line').toEqual({ v: 15, end: true })
+    expect(foldTold({ v: 15 }, { v: 15 }, 'session:result')).toEqual({ v: 15, end: true })
+    expect(foldTold({ v: 15, end: true }, { v: 20 }, 'session:text-delta'), 'a later line').toEqual({ v: 20 })
   })
 })
 
@@ -176,26 +200,34 @@ describe('judgedReplayFloor', () => {
 
   it('reads on from the told line: a turn running at the restart is not said again, a result told is not said twice', () => {
     // Mid-turn: the leader heard up to 3000; the turn's end (4800) came while no runner read.
-    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 3000 })).toEqual({ floor: 3000, from: 'told' })
-    // The result's fact went out, the record's watermark did not (a crash between): nothing is read again.
-    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 5000 })).toEqual({ floor: 5000, from: 'told' })
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 3000 })).toEqual({ floor: 3000, from: 'told', atTurnEnd: false })
+    // The result's fact went out, the record's watermark did not (a crash between): nothing is read again,
+    // and the floor is the result's own line (its companion idle is owed).
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 4800, end: true })).toEqual({ floor: 4800, from: 'told', atTurnEnd: true })
     // The record's watermark went out, the result's fact did not: it is read again and told.
-    expect(judgedReplayFloor(true, 4800, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 1000 })).toEqual({ floor: 1000, from: 'told' })
+    expect(judgedReplayFloor(true, 4800, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 1000, end: true })).toEqual({ floor: 1000, from: 'told', atTurnEnd: true })
   })
 
   it('a fold with no verdict (no turn anchor) still places the told line by the file\'s size and epoch', () => {
-    expect(judgedReplayFloor(true, -1, 'no-turn-anchor', { epoch: 'e1', v: 3000 }, { fileSize: 5000, streamEpoch: 'e1' })).toEqual({ floor: 3000, from: 'told' })
+    expect(judgedReplayFloor(true, -1, 'no-turn-anchor', { epoch: 'e1', v: 3000 }, { fileSize: 5000, streamEpoch: 'e1' })).toEqual({ floor: 3000, from: 'told', atTurnEnd: false })
     expect(judgedReplayFloor(true, -1, 'no-turn-anchor', { epoch: 'e1', v: 3000 }, { fileSize: 5000, streamEpoch: 'e2' })).toBeNull()
     expect(judgedReplayFloor(true, -1, 'no-turn-anchor', { v: 3000 })).toBeNull()
   })
 
+  it('a told line with no epoch is not trusted in a file the stale-watermark heal found recreated', () => {
+    expect(judgedReplayFloor(true, -1, ev(5000, 4800), { v: 3000 }, null, true)).toBeNull()
+    expect(judgedReplayFloor(true, -1, ev(5000, 4800, 'e2'), { v: 3000 }, null, true)).toBeNull()
+    expect(judgedReplayFloor(true, -1, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 3000 }, null, true)).toEqual({ floor: 3000, from: 'told', atTurnEnd: false })
+    expect(judgedReplayFloor(true, -1, ev(5000, 4800), { v: 3000 })).toEqual({ floor: 3000, from: 'told', atTurnEnd: false })
+  })
+
   it('a told line of another file, or past this one, is not used', () => {
-    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e2'), { epoch: 'e1', v: 3000 })).toEqual({ floor: 1000, from: 'judged' })
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e2'), { epoch: 'e1', v: 3000 })).toEqual({ floor: 1000, from: 'judged', atTurnEnd: true })
     expect(judgedReplayFloor(true, -1, ev(5000, 4800), { v: 6000 })).toBeNull()
   })
 
   it('with no told line: the judged watermark, when a result was written past it', () => {
-    expect(judgedReplayFloor(true, 1000, ev(5000, 4800))).toEqual({ floor: 1000, from: 'judged' })
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800))).toEqual({ floor: 1000, from: 'judged', atTurnEnd: true })
     expect(judgedReplayFloor(true, 4800, ev(5000, 4800)), 'the result at the watermark was judged').toBeNull()
     expect(judgedReplayFloor(true, 1000, ev(5000)), 'no result in the tail: a turn still running comes live').toBeNull()
     expect(judgedReplayFloor(true, -1, ev(5000, 4800)), 'no watermark').toBeNull()

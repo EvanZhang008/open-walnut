@@ -30,7 +30,9 @@
  *   - a torn last line (a crash in a write) is cut at open;
  *   - `toldLine(sid)`: the furthest CLI output line a durable fact of the session came from, so the
  *     host's runner, attaching again after a restart, reads on from exactly where the leader was told
- *     (host-judged-lines.ts): rebuilt from the records at open and kept in the state (compaction
+ *     (host-judged-lines.ts), and whether a turn end (a `session:result`) came from that very line.
+ *     It is derived from the durable records, not written with them: folded in after each batch's
+ *     fsync, rebuilt from the records at open, and saved in the state before every compaction (which
  *     drops records, never it), so it is never ahead of what a crash could lose, nor behind it.
  */
 import fsp from 'node:fs/promises'
@@ -79,13 +81,20 @@ export interface FactLogOptions {
  */
 interface LogState { v: 1; logId: string; acked: number; permit: number; permitNumber?: number; sseq: Record<string, number>; told?: Record<string, ToldLine> }
 
-/** A CLI output line a fact came from: its stream file's epoch (when known) and its end offset. */
-export interface ToldLine { epoch?: string; v: number }
+/** A CLI output line a fact came from: its stream file's epoch (when known) and its end offset; `end`: a turn end came from it. */
+export interface ToldLine { epoch?: string; v: number; end?: true }
 
-/** `seen` with a durable fact's line folded in: a later line of the same file, or the first line of a new file. */
-export function foldTold(seen: ToldLine | undefined, line: ToldLine | undefined): ToldLine | undefined {
+/** The fact that says a turn ended. */
+const TURN_END = 'session:result'
+
+/** `seen` with a durable fact's line folded in: a later line of the same file, or the first line of a new file. `name`: the fact's. */
+export function foldTold(seen: ToldLine | undefined, line: ToldLine | undefined, name?: string): ToldLine | undefined {
   if (!line || !Number.isSafeInteger(line.v) || line.v < 0) return seen
-  if (!seen || (line.epoch && seen.epoch && line.epoch !== seen.epoch) || line.v > seen.v) return line.epoch ? { epoch: line.epoch, v: line.v } : { v: line.v }
+  const end = name === TURN_END
+  const make = (e: boolean): ToldLine => ({ ...(line.epoch ? { epoch: line.epoch } : {}), v: line.v, ...(e ? { end: true as const } : {}) })
+  if (!seen || (line.epoch && seen.epoch && line.epoch !== seen.epoch) || line.v > seen.v) return make(end)
+  // Another fact of the same line: a turn end from it stays one.
+  if (line.v === seen.v && end && !seen.end) return { ...seen, end: true }
   return seen
 }
 
@@ -94,7 +103,7 @@ function toldOf(raw: unknown): Record<string, ToldLine> {
   if (!raw || typeof raw !== 'object') return out
   for (const [sid, t] of Object.entries(raw as Record<string, unknown>)) {
     const l = t as Partial<ToldLine> | null
-    if (l && Number.isSafeInteger(l.v) && (l.v as number) >= 0) out[sid] = typeof l.epoch === 'string' ? { epoch: l.epoch, v: l.v as number } : { v: l.v as number }
+    if (l && Number.isSafeInteger(l.v) && (l.v as number) >= 0) out[sid] = { ...(typeof l.epoch === 'string' ? { epoch: l.epoch } : {}), v: l.v as number, ...(l.end === true ? { end: true as const } : {}) }
   }
   return out
 }
@@ -155,7 +164,7 @@ export class FactLog {
     for (const r of records) {
       head = Math.max(head, r.seq)
       state.sseq[r.sid] = Math.max(state.sseq[r.sid] ?? 0, r.sseq)
-      const t = foldTold(told[r.sid], r.line)
+      const t = foldTold(told[r.sid], r.line, r.name)
       if (t) told[r.sid] = t
     }
     const log = new FactLog(o, state, head, records[0]?.seq ?? head + 1, validBytes)
@@ -300,7 +309,7 @@ export class FactLog {
     const recs = batch.map((b) => b.full)
     const told = this.state.told ??= {}
     for (const r of recs) {
-      const t = foldTold(told[r.sid], r.line)
+      const t = foldTold(told[r.sid], r.line, r.name)
       if (t) told[r.sid] = t
     }
     for (const cb of this.listeners) {
