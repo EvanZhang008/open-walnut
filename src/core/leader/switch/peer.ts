@@ -22,7 +22,7 @@ import { spawn } from 'node:child_process'
 import type { BatchOutcome } from '../../standby/index.js'
 import type { DaemonLink } from '../../standby/remote-transport.js'
 import type { MachinePlace } from './settings.js'
-import { readSwitchFile, switchFolder, writeSwitchFile } from './ticket.js'
+import { readSwitchFile, switchFolder, targetStateName, writeSwitchFile } from './ticket.js'
 import { serverCommand } from '../../trial-start/process.js'
 
 export type PeerKind = 'local' | 'daemon' | 'door'
@@ -290,15 +290,27 @@ export class DaemonPeer implements SwitchPeer {
     // made: the promotion renames the copy to it). exec.run has no env field: `env` in front, as `standby receive` runs.
     const env = Object.entries({ ...(this.machine.env ?? {}), OPEN_WALNUT_HOME: this.machine.home }).map(([k, v]) => `${k}=${v}`)
     const argv = ['env', ...env, ...(this.o.walnut ?? ['walnut']), ...targetJobArgs(switchId, this.standbyDir, opts.check)]
-    try {
-      const r = await this.call('exec.run', {
-        jobId: targetJobId(switchId, opts.check), argv, background: true, endGroup: true, detach: true, timeoutMs: JOB_MAX_MS, caller: CALLER,
-      })
+    const run = async (jobId: string): Promise<StartJobResult> => {
+      const r = await this.call('exec.run', { jobId, argv, background: true, endGroup: true, detach: true, timeoutMs: JOB_MAX_MS, caller: CALLER })
       return { ok: true, ...(typeof r.pid === 'number' ? { pid: r.pid } : {}) }
+    }
+    const jobId = targetJobId(switchId, opts.check)
+    try {
+      return await run(jobId)
     } catch (err) {
-      // Started already (a start sent again after its answer was lost, or a resumed source job asking again).
-      if ((err as { code?: string }).code === 'job_exists') return { ok: true }
-      return { ok: false, why: err instanceof Error ? err.message : String(err) }
+      if ((err as { code?: string }).code !== 'job_exists') return { ok: false, why: err instanceof Error ? err.message : String(err) }
+    }
+    // Started already: a start sent again after its answer was lost, or a resumed source job asking again. Still
+    // running, or ended at done or rolled-back, it is the job asked for. Ended anywhere else (killed there, the
+    // machine restarted), the same command again under a fresh id: the target job resumes from its state file.
+    try {
+      const job = await this.call('exec.read', { jobId, maxBytes: 1 })
+      if (job.running !== false) return { ok: true }
+      const st = await this.readFile<{ step?: string }>(targetStateName(switchId))
+      if (st?.step === 'done' || st?.step === 'rolled-back') return { ok: true }
+      return await run(`${jobId}-r${randomBytes(3).toString('hex')}`)
+    } catch (err) {
+      return { ok: false, why: `the target job ${jobId} exists on ${this.o.host} but could not be read or started again: ${err instanceof Error ? err.message : String(err)}` }
     }
   }
 

@@ -17,7 +17,7 @@ import { DAEMON_PEER_CAPABILITIES, DaemonPeer, peerFor, targetJobId } from '../.
 import { RemoteStandbyTarget, type DaemonLink } from '../../../../src/core/standby/remote-transport.js'
 import { markLinkFailure } from '../../../../src/providers/link-failure.js'
 import { DaemonConnection, disconnectAllDaemons, isPooledConnection, setPooledConnectionForTest } from '../../../../src/providers/daemon-connection.js'
-import { finalMarkName, readSwitchFile, ticketName } from '../../../../src/core/leader/switch/ticket.js'
+import { finalMarkName, readSwitchFile, targetStateName, ticketName, writeSwitchFile } from '../../../../src/core/leader/switch/ticket.js'
 import { standbyStatus } from '../../../../src/core/standby/index.js'
 import { testBun } from '../../../helpers/bun-runtime.js'
 import { bootStandbyTwin, type StandbyTwin } from '../../standby/twin-link.js'
@@ -66,6 +66,8 @@ describe('the copy link over a daemon, against a fake link', () => {
   it('a switch stop\'s teardown of every host link leaves the held copy link open; closing the peer closes it', async () => {
     const root = dir()
     const held = new DaemonConnection('dev-b', { hostname: 'dev-b' })
+    // Up, as a held link is (the test dials nothing): a held link found down fails at once instead.
+    Object.defineProperty(held, 'connected', { get: () => true })
     const other = new DaemonConnection('dev-c', { hostname: 'dev-c' })
     setPooledConnectionForTest('dev-b', held)
     setPooledConnectionForTest('dev-c', other)
@@ -85,7 +87,10 @@ describe('the copy link over a daemon, against a fake link', () => {
       expect(isPooledConnection(held)).toBe(false)
       expect([...disconnected]).toEqual(['dev-c'])
       // The batches and the files go over the held link, not a new dial.
-      expect(await peer.via()).toBe(held)
+      const sends: string[] = []
+      held.send = (async (cmd: string) => { sends.push(cmd); return { ok: true } }) as never
+      await (await peer.via()).send('fs.stat', {})
+      expect(sends).toEqual(['fs.stat'])
       peer.close()
       expect([...disconnected].sort()).toEqual(['dev-b', 'dev-c'])
     } finally {
@@ -156,6 +161,29 @@ describe('the copy link over a daemon, against a fake link', () => {
     expect(targetJobId('S', true)).not.toBe(targetJobId('S', true))
     const refused = fakeLink(DAEMON_PEER_CAPABILITIES, () => ({ ok: false, code: 'bad_cwd', error: 'no such dir' }))
     expect(await peerOver(async () => refused, root).startTargetJob('S2', { check: true })).toEqual({ ok: false, why: expect.stringMatching(/exec.run on dev-b: no such dir/) })
+  })
+
+  it('a start that finds its job ended short of done runs it again under a fresh id; one ended at done is taken', async () => {
+    const root = dir()
+    const answerFor = (step: string) => {
+      const link = fakeLink(DAEMON_PEER_CAPABILITIES, (cmd, p) => {
+        if (cmd === 'exec.run') return p.jobId === 'hx-leader-switch-S3' ? { ok: false, code: 'job_exists', error: 'job exists' } : { ok: true, pid: 42 }
+        if (cmd === 'exec.read') return { ok: true, jobId: p.jobId, running: false, exitCode: 137 }
+        if (cmd === 'fs.read') return { ok: true, data: JSON.stringify({ id: 'S3', step }) }
+        return { ok: true }
+      })
+      return link
+    }
+    const killed = answerFor('trial')
+    expect(await peerOver(async () => killed, root).startTargetJob('S3', { check: false })).toEqual({ ok: true, pid: 42 })
+    const runs = killed.sent.filter((x) => x.cmd === 'exec.run').map((x) => String(x.p.jobId))
+    expect(runs).toEqual(['hx-leader-switch-S3', expect.stringMatching(/^hx-leader-switch-S3-r[0-9a-f]{6}$/)])
+    expect(killed.sent.find((x) => x.cmd === 'fs.read')!.p.path).toMatch(/S3\.state\.json$/)
+    for (const step of ['done', 'rolled-back']) {
+      const ended = answerFor(step)
+      expect(await peerOver(async () => ended, root).startTargetJob('S3', { check: false })).toEqual({ ok: true })
+      expect(ended.sent.filter((x) => x.cmd === 'exec.run')).toHaveLength(1)
+    }
   })
 
   it('dials again when the link drops under a command, and stops once closed', async () => {
@@ -264,17 +292,35 @@ describe.skipIf(!BUN)('the copy link over a REAL daemon (the standalone twin)', 
     peer.close()
     // The job: a stand-in program that records what it was run with (the real one is the rehearsal's).
     const out = path.join(root, 'job.out')
-    const job = await peerFor({ to: m, standby: { dir: m.standbyDir, host: 'dev-b', walnut: ['/bin/sh', '-c', `printf '%s|%s' "$OPEN_WALNUT_HOME" "$*" > ${out}`, 'walnut'] }, home, connect: async () => t.connect() })
+    // What the daemon answered each exec.run (a start sent again must be its own refusal, job_exists, not a run).
+    const runs: Array<{ ok: unknown; code: unknown }> = []
+    const recorded = async (): Promise<DaemonLink> => {
+      const c = await t.connect()
+      return {
+        hasCapability: (x: string) => c.hasCapability?.(x) ?? false,
+        send: async (cmd, p, ms) => { const r = await c.send(cmd, p, ms); if (cmd === 'exec.run') runs.push({ ok: r.ok, code: r.code }); return r },
+      }
+    }
+    const job = await peerFor({ to: m, standby: { dir: m.standbyDir, host: 'dev-b', walnut: ['/bin/sh', '-c', `printf '%s|%s' "$OPEN_WALNUT_HOME" "$*" > ${out}`, 'walnut'] }, home, connect: recorded })
     if ('refused' in job) throw new Error(job.refused)
     expect(await job.startTargetJob('S9', { check: false })).toMatchObject({ ok: true })
     const deadline = Date.now() + 30_000
     while (!fs.existsSync(out) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200))
     expect(fs.readFileSync(out, 'utf8')).toBe(`${m.home}|leader switch --job target --switch S9 --standby-dir ${m.standbyDir}`)
-    // Asked again (a resumed source job): the daemon knows the id, nothing runs twice.
+    // Asked again (a resumed source job) once the job ended at done: the daemon knows the id, nothing runs twice.
     fs.rmSync(out)
+    writeSwitchFile(m.standbyDir, targetStateName('S9'), { id: 'S9', step: 'done' })
     expect(await job.startTargetJob('S9', { check: false })).toEqual({ ok: true })
-    await new Promise((r) => setTimeout(r, 1_500))
+    // The daemon refused that start itself (the job id it knows): nothing was run, at any speed of this machine.
+    expect(runs).toEqual([{ ok: true, code: undefined }, { ok: false, code: 'job_exists' }])
     expect(fs.existsSync(out)).toBe(false)
+    // Asked again with the job ended short of done (its state at the trial): the same command again, under a fresh id.
+    writeSwitchFile(m.standbyDir, targetStateName('S9'), { id: 'S9', step: 'trial' })
+    expect(await job.startTargetJob('S9', { check: false })).toMatchObject({ ok: true })
+    expect(runs.slice(2)).toEqual([{ ok: false, code: 'job_exists' }, { ok: true, code: undefined }])
+    const again = Date.now() + 30_000
+    while (!fs.existsSync(out) && Date.now() < again) await new Promise((r) => setTimeout(r, 200))
+    expect(fs.readFileSync(out, 'utf8')).toBe(`${m.home}|leader switch --job target --switch S9 --standby-dir ${m.standbyDir}`)
     job.close()
   }, 180_000)
 })
