@@ -395,15 +395,16 @@ test('C39: the leader needing the user shows in the rollup, the count and its ow
   if (!(await row.getByTestId('kanban-prompt-allow').isVisible())) await row.getByTestId('kanban-leader-row-toggle').click()
   await row.getByTestId('kanban-prompt-allow').click()
   await expect(row.getByTestId('kanban-prompt-allow')).toHaveCount(0, { timeout: 30_000 })
-  // The turn the allow finished ended asking nothing while the leader's own subtasks are at work:
-  // it waits on them (860e65e69, awaitedTask in src/core/user-status.ts), since their news wakes
-  // it, so it is no one's to look at now. Read the server's settled status first: it is stored a
-  // debounce after the answer (src/core/user-status-sync.ts) and a hand back HANDBACK_SETTLE_MS
-  // after the turn's end, and until then the board still reads the answered prompt's stored Needs
-  // you (CI run 41483544703).
-  await pollUntil('leader status settled', async () => (await call<{ task: { user_status?: { state?: string; kind?: string } } }>(
-    api, 'GET', `/api/tasks/${team.leader}`)).task.user_status ?? {}, (s) => s.state === 'waiting' && s.kind === 'task', 90_000)
-  // Waiting is not Needs you: the leader leaves the rollup and the count.
+  // The turn the allow finished ended asking nothing, and the mock CLI's status answer reports it
+  // done (ae5ca601e6, tests/providers/mock-claude-side-answer.mjs): its own report of done reads To
+  // read, a result (doneStatus in src/core/user-status.ts, ahead of the wait on its subtasks). Read
+  // the server's settled status first: it is stored a debounce after the answer
+  // (src/core/user-status-sync.ts) and a hand back HANDBACK_SETTLE_MS after the turn's end, and
+  // until then the board still reads the answered prompt's stored Needs you (CI run 41483544703).
+  await pollUntil('leader status settled', async () => (await call<{ task: { user_status?: { state?: string; toRead?: string } } }>(
+    api, 'GET', `/api/tasks/${team.leader}`)).task.user_status ?? {}, (s) => s.state === 'read' && s.toRead === 'result', 90_000)
+  // To read is not Needs you (kanban-model.ts: a to-read line is no ask): the leader leaves the
+  // rollup and the count.
   await expect(lead).toHaveCount(0, { timeout: 30_000 })
   await expect.poll(() => chipCount(chip(pane, 'needs')), { timeout: 30_000 }).toBe(before)
 })

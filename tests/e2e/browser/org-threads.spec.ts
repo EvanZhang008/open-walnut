@@ -50,7 +50,7 @@ test.setTimeout(180_000)
 
 const rowKey = (project: string) => `project:${project.trim().toLowerCase()}`
 
-interface Thread { id: string; title: string; state: string; messages: Array<{ id: string; text: string; via: string; answer?: { text: string } }>; closed?: { how: string; by: string } }
+interface Thread { id: string; title: string; state: string; messages: Array<{ id: string; text: string; via: string; joined?: string; answer?: { text: string } }>; closed?: { how: string; by: string } }
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown): Promise<T> {
   const res = await request.post(url, { data })
@@ -166,15 +166,19 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] i`)).toHaveCount(1)
 
   // A second ask right after the first is the same conversation: it joins the first thread at once
-  // (core/org/threads-model.ts SAME_CONVERSATION_MS), never a card of its own.
+  // (core/org/threads-model.ts SAME_CONVERSATION_MS), never a card of its own. Joined only for its
+  // timing, it is marked for the node to check and stays off the card's count until then
+  // (a8e1e721d5, thread-view.ts uncheckedJoin); the conversation lists it.
   const second = `and group my asks about one subject ${STAMP}`
   await sendToLead(page, second)
-  await expect(c1.getByTestId('org-thread-count')).toHaveText(/^2 messages/, { timeout: 30_000 })
+  await expect.poll(async () => (await threads(request)).find((t) => t.id === t1.id)?.messages.map((m) => [m.text, m.joined ?? '']), { timeout: 30_000 })
+    .toEqual([[first, ''], [second, 'recent']])
   expect((await threads(request)).length).toBe(before + 1)
   // The whole conversation opens from the toggle in the card body.
   await c1.getByTestId('org-thread-history').click()
   await expect(c1.getByTestId('org-thread-history')).toHaveAttribute('aria-expanded', 'true')
   await expect(c1.getByTestId('org-thread-message')).toHaveCount(2)
+  await expect(c1.getByTestId('org-thread-count')).toHaveText(/^1 message/)
   await expect(c1.getByTestId('org-thread-message').nth(0)).toContainText(first)
   await expect(c1.getByTestId('org-thread-message').nth(1)).toContainText(second)
   await shot(page, 'merged')
@@ -189,6 +193,8 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await leadUpdates(request, split.id, { merge_into: t1.id })
   await expect(card(page, split.id)).toHaveCount(0)
   await expect(c1.getByTestId('org-thread-message')).toHaveCount(2)
+  // Placed by the user and the lead, it is no timing join any more: the card counts it.
+  await expect(c1.getByTestId('org-thread-count')).toHaveText(/^2 messages/)
 })
 
 test('Follow up files under the thread; Acknowledge closes it, Reopen preserves the reaction; a reload keeps them', async ({ page, request }) => {

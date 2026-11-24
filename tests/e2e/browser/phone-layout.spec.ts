@@ -486,7 +486,10 @@ test.describe('desktop', () => {
     const panel = await box(board(page))
     expect(panel.x).toBeGreaterThanOrEqual(rail.width - 1)
     expect(panel.y).toBe(0)
-    expect(panel.width).toBeLessThan(640)
+    // Alone on Home's row the panel grows to a readable list and leaves the empty pane its room
+    // (d670f86000, columnSizing.ts todoPanelAloneWidth: up to 880 px, the window less 400 px).
+    expect(panel.width).toBeLessThanOrEqual(880)
+    expect(1280 - (panel.x + panel.width)).toBeGreaterThanOrEqual(400 - 1)
     await expect(page.locator('.todo-panel-hide')).toBeVisible()
     await shot(page, info, 'desktop-home')
     expect(errors).toEqual([])

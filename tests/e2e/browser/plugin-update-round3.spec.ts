@@ -350,11 +350,13 @@ test('(N3-4)(N3-5)(N3-8)(N3-11)(N3-12)(N3-16) the Update button: shared-checkout
   await expect(update).toBeFocused()
   const ring = await update.evaluate((el) => {
     const s = getComputedStyle(el)
-    return { style: s.outlineStyle, width: s.outlineWidth, shadow: s.boxShadow }
+    return { style: s.outlineStyle, width: s.outlineWidth, offset: s.outlineOffset }
   })
   expect(ring.style).toBe('solid')
   expect(ring.width).toBe('2px')
-  expect(ring.shadow).not.toBe('none')
+  // The ring stands 2px off the blue fill (buttons.css .btn:focus-visible, the button family of
+  // 8c22324753): the page shows between them, where the plugin's own card-coloured shadow was.
+  expect(ring.offset).toBe('2px')
   // While Check now runs, the button stays in place but is disabled (N3-12). Check now is on
   // the card grid, so the refresh GET is held for 4 s: long enough to come back to the
   // plugin's page and look at it.

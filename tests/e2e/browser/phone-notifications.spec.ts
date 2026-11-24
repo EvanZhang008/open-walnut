@@ -268,7 +268,9 @@ test('N9: a card title has its own line, and the section the center opens on is 
     const cs = getComputedStyle(rail)
     return { a: el.getBoundingClientRect().toJSON(), r: rail.getBoundingClientRect().toJSON(), sl: rail.scrollLeft, sw: rail.scrollWidth, cw: rail.clientWidth, ox: cs.overflowX, disp: cs.display, text: el.textContent }
   })) }).toBe(true)
-  const card = page.locator('.notification-panel .notification-feed-item').first()
+  // A long title's card: since every row is the one notice card (acff5ee74f) a title is only as
+  // wide as its words (notice-card.css .wn-notice-who), so a short one is no measure of its line.
+  const card = page.locator('.notification-panel .notification-feed-item').filter({ hasText: failure(1).title }).first()
   await expect(card).toBeVisible()
   const geo = await card.evaluate((el) => {
     const title = el.querySelector('.notification-feed-item-title')!.getBoundingClientRect()
