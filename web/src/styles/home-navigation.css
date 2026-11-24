@@ -285,6 +285,22 @@
     max-width: 100%;
     min-width: 0;
   }
+  /* A usage limit's pill (FocusSatelliteCards.tsx) is the card's meta line: a line of its own above
+     the title, from the title's column, and the title wraps under it as it does anywhere. Before, the
+     card's flex-end packing left the pill alone at the right edge above the title (2026-11-24). */
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line) > .todo-item-limit-pill {
+    flex: 0 0 100%;
+    justify-content: flex-start;
+  }
+  /* As the Flat card's meta line: 2 px above the title, and the circle and the card's tools sit on
+     the title's first line, 20 px down (the pill's 18 px line and that gap), never beside the pill. */
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) { --meta-shift: 20px; row-gap: 2px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .todo-pinned-title { margin-top: 0; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > :is(.pinned-phase-picker, .todo-item-select-checkbox, .task-kebab-wrapper, .task-start-btn, .worker-fold-row-back) {
+    top: calc(var(--card-pad-top) + var(--meta-shift));
+  }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .task-unread-dot { top: calc(var(--row-band) / 2 + 2px + var(--meta-shift)); }
+  .home-navigation-scroll .todo-pinned-card-session-open:not(.status-card-two-line):has(> .todo-item-limit-pill)::after { top: calc(var(--row-band) / 2 + 2px + var(--meta-shift)); }
   /* The filter's reasons line starts on the title's column already (filter-bar-row.css indents it
      past a circle in the flow). */
   .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line) > .todo-pinned-card-override { padding-left: 0; }

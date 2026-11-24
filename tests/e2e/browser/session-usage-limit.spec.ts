@@ -426,10 +426,16 @@ test('a Focus card wears the Limited tag and its reset ahead of its title, which
   const pill = card.getByTestId('task-row-limit')
   await expect(pill.locator('.status-card-limit-tag')).toHaveText('Limited', { timeout: 30_000 })
   await expect(pill).toContainText(`resets ${bannerReset}`)
-  // Whole, on the title's line, before the title.
+  // Whole, the card's meta line: a line of its own just above the title, starting on the title's
+  // column. A title wraps in full since 9b60109d6c, so the pill no longer shares its line
+  // (2026-11-24: beside it the title read as a column of single words).
   expect(await pill.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
-  const [p, t] = [await pill.boundingBox(), await card.locator('.todo-pinned-title').boundingBox()]
-  expect(p && t && p.x + p.width <= t.x + 1 && Math.abs((p.y + p.height / 2) - (t.y + t.height / 2)) < 6, `pill ${JSON.stringify(p)} title ${JSON.stringify(t)}`).toBe(true)
+  const tag = pill.locator('.status-card-limit-tag')
+  const [p, t, g] = [await pill.boundingBox(), await card.locator('.todo-pinned-title').boundingBox(), await tag.boundingBox()]
+  expect(p && t && g && Math.abs(g.x - t.x) <= 1 && p.y + p.height <= t.y + 1 && t.y - (p.y + p.height) < 8, `pill ${JSON.stringify(p)} tag ${JSON.stringify(g)} title ${JSON.stringify(t)}`).toBe(true)
+  // The circle sits on the title's first line, as on every card, never beside the meta line.
+  const circle = await card.locator('.pinned-phase-picker').boundingBox()
+  expect(circle && t && circle.y >= t.y - 3 && circle.y + circle.height / 2 <= t.y + 17, `circle ${JSON.stringify(circle)} title ${JSON.stringify(t)}`).toBe(true)
   await shot(page, card, '8-focus-card', 8)
 
   await banner.getByRole('button', { name: "Don't auto-continue" }).click()
