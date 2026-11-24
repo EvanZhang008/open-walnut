@@ -75,6 +75,49 @@ function windowOf(out: string, budget: number, surface: AnswerSurface): string {
   return out.slice(0, onCharStart(out, end))
 }
 
+/**
+ * Bytes of `s` as the log on the host holds them: utf8Bytes, but a U+FFFD the host's decoding put
+ * for a byte that was not UTF-8 (a Latin-1 byte, a binary blob) counts the one byte it stands for.
+ */
+export function logBytes(s: string): number {
+  let n = utf8Bytes(s)
+  for (let i = s.indexOf('\ufffd'); i >= 0; i = s.indexOf('\ufffd', i + 1)) n -= 2
+  return n
+}
+
+/** The index in `s` where its first `bytes` log bytes end (logBytes), on a character's start. */
+function charAtLogBytes(s: string, bytes: number): number {
+  let n = 0
+  let i = 0
+  while (i < s.length && n < bytes) {
+    const c = s.charCodeAt(i)
+    n += c === 0xfffd ? 1 : c < 0x80 ? 1 : c < 0x800 ? 2 : c >= 0xd800 && c <= 0xdbff && i + 1 < s.length ? 4 : 3
+    i += c >= 0xd800 && c <= 0xdbff && i + 1 < s.length ? 2 : 1
+  }
+  return i
+}
+
+/**
+ * What a read from the caller's own offset shows, and where it goes on. The host starts a read at
+ * the start of the line the offset falls in (host-exec-line.ts readLogLines), so a window that ended
+ * inside a line, read on from its own end, comes back from that line's start: the part before the
+ * offset asked was shown already and is left out here, so each read goes on where the last one
+ * stopped, inside a long line too. The offset that goes on is at least one byte on (when the host has
+ * more) and never past the host's own end of its window: hidden credential lines and bytes that were
+ * not UTF-8 make the text's length differ from the log's. 2026-11-24: a 256 KB xcodebuild command
+ * line gave the same offset 7,700 times to an iOS fleet script, two reads a second for an hour.
+ */
+export function fromAskedOffset(out: string, asked: number, hostFrom: number, hostNext: unknown, budget: number, surface: AnswerSurface): { start: number; body: string; shown: string; nextOffset: number } {
+  const back = asked > hostFrom ? charAtLogBytes(out, asked - hostFrom) : 0
+  const body = out.slice(back)
+  const start = back ? asked : hostFrom
+  const shown = windowOf(body, budget, surface)
+  const end = typeof hostNext === 'number' ? hostNext : Infinity
+  let nextOffset = Math.min(start + logBytes(shown), end)
+  if (nextOffset <= asked && end > asked && end !== Infinity) nextOffset = end
+  return { start, body, shown, nextOffset }
+}
+
 const readCall = (b: Record<string, unknown>, offset: unknown, more: Record<string, unknown> = {}): string =>
   `host_exec_read ${JSON.stringify({ host: b.host, job_id: b.jobId, ...(typeof offset === 'number' ? { offset } : {}), ...more })}`
 
@@ -126,12 +169,12 @@ export function shownRun({ result, args, max = RUN_ANSWER_MAX_CHARS, surface = '
   const log = typeof b.logFile === 'string' && b.logFile ? `${b.logFile} on ${String(b.host)}` : `its log on ${String(b.host)}`
   if (typeof args.offset === 'number') {
     // A read from an offset the caller chose: what follows it, and the offset that goes on.
-    const shown = windowOf(out, shownMax - 60, surface)
-    const nextOffset = at + utf8Bytes(shown)
+    const { start, body, shown, nextOffset } = fromAskedOffset(out, args.offset, at, b.nextOffset, shownMax - 60, surface)
     const { outcome: _o, next: _n, ...raw } = b
+    const more = nextOffset < (typeof b.nextOffset === 'number' ? b.nextOffset : at + logBytes(out)) || b.more === true
     return {
-      ...(runOutcome({ ...raw, output: `${shown}… ${cutMark(out.length - shown.length)}`, nextOffset, more: true }, args) as Record<string, unknown>),
-      outputShown: `${shown.length} of the ${out.length} characters from offset ${at}; ${about}offset ${nextOffset} of ${log} goes on: ${readCall(b, nextOffset)}.`,
+      ...(runOutcome({ ...raw, output: `${shown}… ${cutMark(body.length - shown.length)}`, offset: start, nextOffset, more }, args) as Record<string, unknown>),
+      outputShown: `${shown.length} of the ${body.length} characters from offset ${start}; ${about}offset ${nextOffset} of ${log} goes on: ${readCall(b, nextOffset)}.`,
     }
   }
   // The head of the log, when this output starts there; then the tail.

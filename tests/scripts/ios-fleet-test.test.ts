@@ -36,6 +36,8 @@ interface Mac {
   logNoResult?: boolean
   /** Walnut shortens the last read, gluing the result line to the line before it. */
   readCut?: boolean
+  /** After its first read the ended job's reads stop moving: each gives back the offset it was asked (2026-11-24, a 256 KB line). */
+  stuck?: boolean
   /** Its load at each host_load call in turn (the last one repeats): a Mac that frees up. */
   loadSeq?: (number | null)[]
   /** The background start fails this many times first, with this error (default: Walnut never took it). */
@@ -114,6 +116,7 @@ if (op === 'host_exec_read') {
   // The run ends while 2 more chunks of its log are still unread.
   if (args.offset === 0) out({ output: 'remote-run: simulator X\\n', nextOffset: 24, outputBytes: 24, running: true })
   if (m.jobGone) { process.stderr.write('walnut: unknown_job: no job ' + args.job_id + ' on this host (finished jobs are kept for an hour; the log file stays)'); process.exit(1) }
+  if (m.stuck && args.offset === 24) out({ output: 'app log noise\\n', nextOffset: 24, outputBytes: 38 + tail.length, running: false, more: true })
   if (args.offset === 24) out({ output: 'app log noise\\n', nextOffset: 38, outputBytes: 38 + tail.length, running: false })
   out({ output: m.readCut ? tail.replace('\\nFLEET_RESULT', '\\n\u2026 [Walnut cut: 403 more characters]FLEET_RESULT') : tail, nextOffset: 38 + tail.length, outputBytes: 38 + tail.length, running: false })
 }
@@ -506,6 +509,21 @@ describe('ios-fleet-test.sh', () => {
     expect(log.match(/remote-run: simulator X/g)).toHaveLength(1)
     expect(log).toContain('FLEET_RESULT ')
     expect(r.calls.some((c) => c.op === 'host_copy' && String(c.args.from).endsWith('/out.tgz'))).toBe(true)
+  })
+
+  it('reads of an ended job that stop moving end, and the rest is read from the job\'s log file there', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3, stuck: true }], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('reads of job hx-mac-mini stopped moving at offset 24')
+    const reads = r.calls.filter((c) => c.op === 'host_exec_read')
+    // The whole answer each time, and three reads that do not move before it stops.
+    expect(reads.every((c) => c.args._full === true)).toBe(true)
+    expect(reads.map((c) => c.args.offset)).toEqual([0, 24, 24, 24])
+    expect(r.calls.some((c) => c.op === 'host_copy' && String(c.args.from).endsWith('hx-mac-mini.log'))).toBe(true)
+    // What the reads that did not move showed is kept once, never once per read.
+    const runDir = path.join(taskDir, 'ios-fleet', fs.readdirSync(path.join(taskDir, 'ios-fleet'))[0]!)
+    expect(fs.readFileSync(path.join(runDir, 'run.log'), 'utf8').match(/app log noise/g)?.length ?? 0).toBeLessThanOrEqual(1)
   })
 
   it('a read Walnut shortened that glues the result line to another: the whole log is read from its file there', () => {

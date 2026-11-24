@@ -406,12 +406,14 @@ while IFS=$'\t' read -r H NOTE; do
   say "running on $H as job $JOB (host_exec_stop stops it)"
   # Ctrl-C or a stop here stops the run there too.
   trap 'op host_exec_stop "{\"host\":\"$H\",\"job_id\":\"$JOB\"}" >/dev/null 2>&1; say "stopped job $JOB on $H"; exit 130' INT TERM HUP
-  OFF=0; FAILS=0; LOG="$LOCAL/run.log"; : > "$LOG"
+  OFF=0; FAILS=0; SAME=0; LOG="$LOCAL/run.log"; : > "$LOG"
   # Every byte of the log, to its end after the run stops: the result line is the last one.
   # The terminal gets the lines that matter (a test run prints megabytes of app logs);
   # --verbose prints everything. The whole log is run.log either way.
   while :; do
-    if ! got=$(op host_exec_read "{\"host\":\"$H\",\"job_id\":\"$JOB\",\"offset\":$OFF,\"wait_ms\":15000}" 2>"$LOCAL/.read-err"); then
+    # The answer whole (`_full`): this loop reads it as data, and an agent's shortened answer
+    # leaves a long line out (2026-11-24: a 256 KB xcodebuild line read the same 4 KB 7,700 times).
+    if ! got=$(op host_exec_read "{\"host\":\"$H\",\"job_id\":\"$JOB\",\"offset\":$OFF,\"wait_ms\":15000,\"_full\":true}" 2>"$LOCAL/.read-err"); then
       if grep -q 'unknown_job' "$LOCAL/.read-err"; then
         # The Mac no longer holds the job (its daemon was replaced, or the run ended over an
         # hour ago), but the job's log stays in this task's folder there: read the rest from it.
@@ -426,11 +428,24 @@ while IFS=$'\t' read -r H NOTE; do
       sleep 5; continue
     fi
     FAILS=0
-    printf '%s' "$got" | js 'sys.stdout.write(d.get("output") or "")' >> "$LOG.part"
-    if [ "$VERBOSE" = 1 ]; then cat "$LOG.part"; else grep -E "$KEY_LINES" "$LOG.part" || true; fi
-    cat "$LOG.part" >> "$LOG"; rm -f "$LOG.part"
-    OFF=$(printf '%s' "$got" | js 'print(d.get("nextOffset", 0))')
+    NEXT=$(printf '%s' "$got" | js 'print(d.get("nextOffset", 0))')
+    # A read that did not move shows what an earlier one showed: kept once.
+    if [ "$NEXT" != "$OFF" ]; then
+      printf '%s' "$got" | js 'sys.stdout.write(d.get("output") or "")' >> "$LOG.part"
+      if [ "$VERBOSE" = 1 ]; then cat "$LOG.part"; else grep -E "$KEY_LINES" "$LOG.part" || true; fi
+      cat "$LOG.part" >> "$LOG"; rm -f "$LOG.part"
+    fi
     printf '%s' "$got" | js 'sys.exit(0 if d.get("running") or d.get("nextOffset", 0) < d.get("outputBytes", 0) else 1)' || break
+    # An ended job whose reads stop moving: read the rest from its log file there, never spin.
+    if [ "$NEXT" = "$OFF" ] && printf '%s' "$got" | js 'sys.exit(1 if d.get("running") else 0)'; then
+      SAME=$((SAME + 1))
+      if [ "$SAME" -ge 3 ]; then
+        say "reads of job $JOB stopped moving at offset $OFF; reading the rest of its log file there"
+        job_log_rest "$H" "$JOB" "$OFF" "$LOG" || die "job $JOB on $H left no result line in its log; it is $JOB_LOG_REMOTE there"
+        break
+      fi
+    else SAME=0; fi
+    OFF=$NEXT
   done
   trap - INT TERM HUP
   RES=$(grep '^FLEET_RESULT ' "$LOG" | tail -1 | cut -d' ' -f2-)
