@@ -4,6 +4,7 @@
  * copy and whose config writes answer needs_leader. Real config.yaml on disk, real
  * route, real follower, real round; the acceptance grep walks the replica's data.
  */
+import { COPY_ONLY_CONFIG_KEYS } from '../../../../src/core/replication/copy-only-keys.js'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -235,10 +236,14 @@ describe('the half rule (floor 0) and the confirm', () => {
     expect(Object.keys((await readConfigCopy())!).length).toBe(all)
     const st = peekKindState(h.target.id, 'config')!
     expect(st.refusals).toBe(3)
-    // Three rows left: ui, version and the engines row every copy carries.
-    expect(confirmKindRemoval(h.target, 'config', { entries: 3 })).toBe(true)
-    expect(await round()).toMatchObject({ action: 'synced', removed: all - 3 })
-    expect(Object.keys((await readConfigCopy())!).sort()).toEqual(['engines', 'ui', 'version'])
+    // Left: ui, version, the engines row every copy carries, and the rows the leader adds of its own
+    // (copy-only-keys.ts: what it speaks, which hosts run sessions), whatever config.yaml says.
+    const left = (st.lastRefusal as { entries: number }).entries
+    expect(left).toBeGreaterThanOrEqual(3)
+    expect(left).toBeLessThanOrEqual(3 + COPY_ONLY_CONFIG_KEYS.length)
+    expect(confirmKindRemoval(h.target, 'config', { entries: left })).toBe(true)
+    expect(await round()).toMatchObject({ action: 'synced', removed: all - left })
+    expect(Object.keys((await readConfigCopy())!).filter((k) => !COPY_ONLY_CONFIG_KEYS.includes(k)).sort()).toEqual(['engines', 'ui', 'version'])
   })
 })
 
