@@ -664,6 +664,7 @@ describe('every free-form map in the Config type is accounted for', () => {
     providers: 'keyed by provider name; each value is a typed ProviderConfig',
     engines: 'keyed by engine id; each value is a typed EngineConfigEntry',
     hosts: 'keyed by host name; each value is a typed host record',
+    host_engines: 'a replica copy only: keyed by host name; each value is a typed EngineProviderEntry (env_key names a variable, never a key; a provider that held a credential is copied as withheld)',
     session_limits: 'numbers',
     placement_weights: 'a placement weight (0 to 100) per host alias (src/core/hosts/placement.ts)',
     plugin_ai: 'keyed by plugin id; each value is an on/off switch and a monthly budget',
