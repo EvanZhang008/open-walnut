@@ -19,6 +19,7 @@
 
 import { expect, type Locator, type Page } from '@playwright/test'
 import { addFilter, chooseDisplayOption, closeDisplayMenu, closeFilterMenu, displayMenu, filterChip, filterValue, openDisplayMenu, openFilterPage, removeFilterChip } from './filter-bar-helpers'
+import { waitForBoardList } from './home-navigation-helpers'
 
 /**
  * Open a Projects-list project the way a user does, with a click on its name, unless
@@ -264,8 +265,13 @@ export async function showEverything(page: Page): Promise<void> {
  * that only cleared the filters found no `.todo-panel-item` at all (2026-10-31:
  * every app.spec.ts and phase.spec.ts test that looks for a seeded row). One click
  * per header took most of a 30 s test on a fixture with dozens of projects.
+ * "Nothing folded" is read only once the list is in: a list still loading holds no project,
+ * so it read as nothing to open, and its projects drew folded right after (2026-11-24:
+ * task-move-to-project after pr-status-pill and task-filters, where the panel mounted 10 s
+ * after network idle and was still loading when showEverything ended).
  */
 export async function openAllListProjects(page: Page): Promise<void> {
+  await waitForBoardList(page)
   const folded = page.locator('.todo-group-project-header').filter({ has: page.locator('.collapse-chevron[aria-expanded="false"]') })
   if ((await folded.count()) === 0) return
   // What a fold writes is a synced layout pref: keep it in this tab, never on the
@@ -299,6 +305,8 @@ export async function openAllListProjects(page: Page): Promise<void> {
  * Walnut project held 66 rows, and app.spec.ts never found "Playwright test task").
  */
 export async function drawAllListRows(page: Page): Promise<void> {
+  // No "Show more" row is read as "all drawn" only once the list is in (openAllListProjects).
+  await waitForBoardList(page)
   const more = page.locator('.todo-panel .todo-list-show-more')
   // Each row's title names how many it still hides ("36 more tasks").
   const hiddenRows = async () => (await more.evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? '')))

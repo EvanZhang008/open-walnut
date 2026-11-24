@@ -32,10 +32,14 @@ export async function openHome(page: Page, baseURL: string, timeout = 45_000): P
  * Display menu draws its Collapse row only once the list holds projects, so a spec that read
  * page one right after the toolbar showed found no Collapse row (display-menu, most CI runs).
  * A spec that acts on the list or reads what it decides starts once it is in.
- * The list's loading spinner goes in the same commit that brings the rows.
+ * The list's loading spinner goes in the same commit that brings the rows. The panel is waited
+ * for first: right after a load it may not be mounted yet, and a panel not there holds no
+ * spinner either (2026-11-24: it mounted 10 s after network idle in a full run). The Flat
+ * layout draws its spinner outside the list, so it is looked for in the whole panel.
  */
 export async function waitForBoardList(page: Page): Promise<void> {
-  await expect(page.locator('.todo-panel-list').getByTestId('todo-loading')).toHaveCount(0, { timeout: 30_000 })
+  await expect(page.locator('.todo-panel').first()).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('.todo-panel').getByTestId('todo-loading')).toHaveCount(0, { timeout: 30_000 })
 }
 
 /** Opens the Display menu (filters, sort, group, view, layout) on its first page. */
