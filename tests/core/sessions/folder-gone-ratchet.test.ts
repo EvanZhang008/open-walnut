@@ -38,6 +38,7 @@ const KNOWN: Record<string, { count: number; how: string; records: boolean }> = 
   'src/core/sessions/delivery-retry.ts': { count: 1, how: 'reads an old park\'s words as a verdict: a gone folder (cwd_missing) is left for a person, never tried again by the clock; recorded where the park was made', records: false },
   'src/core/sessions/undelivered-requests.ts': { count: 1, how: 'reads a gone-folder park as a message that never ran, so its asker is told it was not delivered', records: false },
   'src/providers/host-judged-runner.ts': { count: 2, how: 'a start or a Restart of a host-run session whose folder the leader could not make ready (session-folder-prep.ts) fails as the spawn fails it; the Restart records it with noteFolderGone, the host-judged send parks and records it (claude-code-session.ts parkOnGoneFolder)', records: true },
+  'src/core/sessions/task-start.ts': { count: 1, how: 'reads a failed start only for engine_config (a setting refuses it: 422, retry after the setting changes); a gone folder there was recorded by the spawn catch (claude-code-session.ts noteFolderGoneOnce)', records: false },
   'src/core/session-hooks/builtins.ts': { count: 1, how: "the turn-end detector's notification names the way on (Open the session to continue it in a new folder)", records: false },
 }
 
