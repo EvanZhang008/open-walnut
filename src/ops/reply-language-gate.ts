@@ -1,8 +1,11 @@
 /**
  * The send gate: a session's words the user reads (lib/user-text-ops.ts) that are not in the language
  * his Reply language setting names are not sent; the op answers with a refusal saying so, and the
- * session writes them again (lib/reply-language.ts judges). Only a session's own call (the executor
- * passes its id), never a person's, a plugin's or a script's; only while the setting names a language
+ * session writes them again (lib/reply-language.ts judges). Only a session agent's own tool call (the
+ * executor's `forAgent`: its MCP tool or `walnut tools call`, on its machine or through a host's
+ * gateway), never a person's, a plugin's or a program's (`walnut approve`, a check script, wn-cli's
+ * loops, a replayed write), whose words are fixed text (tests/ops/reply-language-agent-callers.test.ts);
+ * only while the setting names a language
  * and the `reply_language_gate` experiment is on, which the server says (GET /me/reply-language).
  * A send that went out is never noted and a chat reply is never judged: the user removed those on
  * 2026-11-20 (tests/core/hints/no-reply-language-reminder.test.ts).

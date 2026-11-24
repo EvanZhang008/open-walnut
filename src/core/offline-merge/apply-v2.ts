@@ -379,7 +379,7 @@ async function applyBoard(ctx: V2Context, record: V2Record): Promise<void> {
   if (typeof args.task === 'string' && args.task) args.task = resolveTaskId(ctx.hostKey, args.task, ctx.remap);
   // A try after one whose answer was lost meets that try's writes (src/lib/op-call-id.ts).
   const callId = record.opId ? journalCallId(ctx.hostKey, record.opId, record.rev ?? 1) : undefined;
-  const r = await executeOp(op, args, { ...(await actorOptions(ctx.hostKey, record.actor)), replayed: true, ...(callId ? { callId } : {}) });
+  const r = await executeOp(op, args, { ...(await actorOptions(ctx.hostKey, record.actor)), ...(callId ? { callId } : {}) });
   if (!r.ok) throw replayFailure(r);
   ctx.result.replayed++;
   log.session.info('offline handover: board write applied', { host: ctx.hostKey, op, boardTaskId: args.task, seq: record.seq, opId: record.opId });

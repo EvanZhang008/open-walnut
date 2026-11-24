@@ -22,6 +22,8 @@ import { updateConfig } from '../../../src/core/config-manager.js'
 import { executeOp } from '../../../src/ops/executor.js'
 import { LOCAL_ORIGIN } from '../../../src/lib/caller-origin.js'
 import { _resetGateSettingCache } from '../../../src/ops/reply-language-gate.js'
+import { handleGatewayCapability } from '../../../src/core/peers/capability-router.js'
+import { PeerThrottle } from '../../../src/core/peers/peer-throttle.js'
 import { REPLY_LANGUAGE_HOOK_COMMAND, replyLanguageHooks } from '../../../src/providers/reply-language-hook.js'
 import { sessionSettingsHooks } from '../../../src/providers/session-settings-hooks.js'
 import '../../../src/ops/index.js'
@@ -50,7 +52,9 @@ beforeEach(() => _resetGateSettingCache())
 async function setting(rule: string | null, on: boolean): Promise<void> {
   await updateConfig({ session: { reply_language: rule ?? '' }, experimental: { reply_language_gate: on } } as never)
 }
-const send = (text: string, opts: Record<string, unknown> = { callerSid: SID }) =>
+/** A session agent's own tool call (its MCP tool): the only call the gate judges. */
+const AGENT = { callerSid: SID, forAgent: 'mcp' } as const
+const send = (text: string, opts: Record<string, unknown> = AGENT) =>
   executeOp('task_send', { to: 'no-such-task-0000', title: 'x', text }, { origin: LOCAL_ORIGIN, apiBase: base, ...opts })
 const refused = (r: { ok: boolean; message?: string }) => !r.ok && /was not sent: the user reads it/.test(r.message ?? '')
 
@@ -77,7 +81,7 @@ describe('the executor', () => {
 
   it('refuses the same words sent through the api passthrough', async () => {
     await setting(RULE, true)
-    const r = await executeOp('api', { method: 'POST', path: '/api/v1/messages', body: { to: 'no-such-task-0000', text: EN } }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: SID })
+    const r = await executeOp('api', { method: 'POST', path: '/api/v1/messages', body: { to: 'no-such-task-0000', text: EN } }, { origin: LOCAL_ORIGIN, apiBase: base, ...AGENT })
     expect(refused(r), JSON.stringify(r)).toBe(true)
   })
 
@@ -92,26 +96,49 @@ describe('the executor', () => {
     expect(refused(await send(EN))).toBe(false)
   })
 
-  it('never judges a held write replayed after its host came back', async () => {
+  // 2026-11-24: the git push gate's `walnut approve "Push commit <sha> to <remote> <branch> in <repo>"`
+  // ran inside a session's shell, carried its id, and was refused, so no push could be approved.
+  it('never judges a program\'s fixed text: `walnut approve`, a check script, a replayed write', async () => {
     await setting(RULE, true)
-    expect(refused(await send(EN, { callerSid: SID, replayed: true }))).toBe(false)
+    const ask = { what: 'Push commit 1a2b3c4 to origin main in walnut', why: 'the push gate asks before every push', timeout_ms: 60_000, request_only: true }
+    // `walnut approve` on the Mac (commands/approve.ts) and a held write replayed later
+    // (offline-handover.ts) name the session but no agent surface.
+    const program = await executeOp('approval_request', ask, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: SID })
+    expect(refused(program), JSON.stringify(program)).toBe(false)
+    expect(refused(await send(EN, { callerSid: SID }))).toBe(false)
+    // The same words from the agent's own tool call are its words, and are held.
+    expect(refused(await executeOp('approval_request', ask, { origin: LOCAL_ORIGIN, apiBase: base, ...AGENT }))).toBe(true)
+  })
+
+  it('through a host\'s gateway, judges the agent\'s tool call and never wn-cli\'s own loop (`walnut approve` on a host)', async () => {
+    await setting(RULE, true)
+    const saved = process.env.OPEN_WALNUT_API_URL
+    process.env.OPEN_WALNUT_API_URL = base.replace(/\/api\/v1$/, '')
+    try {
+      const call = (client: string) => handleGatewayCapability('tools.call', SID, { name: 'task_send', args: { to: 'no-such-task-0000', text: EN }, client }, '__local__', { throttle: new PeerThrottle(), cloudMode: false })
+      const viaGateway = (r: unknown) => /was not sent: the user reads it/.test(JSON.stringify(r))
+      expect(viaGateway(await call('cli'))).toBe(true)
+      expect(viaGateway(await call('program'))).toBe(false)
+    } finally {
+      if (saved === undefined) delete process.env.OPEN_WALNUT_API_URL; else process.env.OPEN_WALNUT_API_URL = saved
+    }
   })
 
   it('answers a retry of a call that went out from the ledger, never judging it again', async () => {
     await setting(RULE, false)
     _resetGateSettingCache()
     const callId = 'oc-0000000000000000000000000000000a'
-    const first = await send(EN, { callerSid: SID, callId })
+    const first = await send(EN, { ...AGENT, callId })
     expect(refused(first)).toBe(false)
     await setting(RULE, true)
     _resetGateSettingCache()
-    const again = await send(EN, { callerSid: SID, callId })
+    const again = await send(EN, { ...AGENT, callId })
     expect(refused(again), JSON.stringify(again)).toBe(false)
-    expect(refused(await send(EN, { callerSid: SID, callId: 'oc-0000000000000000000000000000000b' }))).toBe(true)
+    expect(refused(await send(EN, { ...AGENT, callId: 'oc-0000000000000000000000000000000b' }))).toBe(true)
   })
 
   it('lets the send go when no server answers the setting', async () => {
-    const r = await executeOp('task_send', { to: 'x', text: EN }, { origin: LOCAL_ORIGIN, apiBase: 'http://127.0.0.1:9/api/v1', callerSid: SID })
+    const r = await executeOp('task_send', { to: 'x', text: EN }, { origin: LOCAL_ORIGIN, apiBase: 'http://127.0.0.1:9/api/v1', ...AGENT })
     expect(refused(r)).toBe(false)
   })
 })
