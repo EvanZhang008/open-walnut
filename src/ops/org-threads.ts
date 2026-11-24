@@ -310,7 +310,8 @@ const UPDATE_INPUT = {
   title: z.string().min(1).max(120).optional().describe('A few words, in the language you write to him'),
   ask: z.string().max(400).optional().describe('One line: what he wants ("" clears it)'),
   // `waiting` is the status question's word for pending (2026-11-23: agents told the line states sent it here and were refused).
-  state: z.union([z.enum(THREAD_STATES), z.literal('waiting')]).optional().describe('working (you are on it), needs (waits on him), answered (your answer is in; he may close it) or pending (handed off: hidden; waiting reads as pending); a new reply with no state sets answered'),
+  // One enum, not a union: a union's schema costs every load (tests/core/org/thread-op-size.test.ts).
+  state: z.enum([...THREAD_STATES, 'waiting']).optional().describe('working (you are on it), needs (waits on him), answered (your answer is in; he may close it) or pending, also called waiting (handed off: hidden); a new reply with no state sets answered'),
   ...ASK_INPUT,
   ask_owner: z.string().max(128).optional().describe('The id of a team task whose Needs you already asks him this decision: the thread reads pending with askedIn and waits on him again once that task stops asking it. Refused (409) when it asks him nothing now; "" takes it off'),
   reply: z.string().max(2000).optional().describe('The summary his card shows, latest first: what he must decide, then one or two sentences of background; Markdown ("" clears it)'),
