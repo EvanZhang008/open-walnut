@@ -83,6 +83,13 @@ describe('compactDataCopies', () => {
     expect(names()).toEqual(['usage.sqlite.backup-2026-11-20-before-host-dedupe.gz'])
   })
 
+  it('the .gz keeps the original\'s permissions (a 0600 copy stays owner-only)', async () => {
+    const file = put('usage.sqlite.backup-1')
+    fs.chmodSync(file, 0o600)
+    expect(await compressCopy(file, { statfs: roomy })).not.toBeNull()
+    expect(fs.statSync(`${file}.gz`).mode & 0o777).toBe(0o600)
+  })
+
   it('goes one folder deep and takes the largest first', async () => {
     put('a.json.corrupt-1', 8 * 1024)
     put('tasks/tasks.sqlite.pre-repair-0805.backup', 32 * 1024)

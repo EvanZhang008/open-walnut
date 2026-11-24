@@ -200,6 +200,7 @@ export async function compressCopy(file: string, opts: CompactOptions = {}): Pro
     const again = await fsp.stat(file)
     if (again.size !== st.size || again.mtimeMs !== st.mtimeMs) throw new Error('the copy changed while it was compressed')
     await syncPath(tmp)
+    await fsp.chmod(tmp, st.mode & 0o7777) // a 0600 copy (usage, tasks) stays readable by its owner only
     await fsp.utimes(tmp, st.atime, st.mtime)
     await fsp.rename(tmp, gz)
   } catch (err) {
