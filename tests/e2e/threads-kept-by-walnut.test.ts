@@ -126,7 +126,8 @@ describe('Walnut keeps a lead\'s Threads', () => {
     // An answered card is quoted beside its state, so the node can tell whether it still holds (status-thread-card.ts cardPart).
     expect(q).toContain('"Orchard fence" (answered, he wrote elsewhere since your answer here; card: "Two metres keeps the deer out.")')
     expect(q).toContain('His messages since, newest first:')
-    expect(q).toContain('"ok, now order the seeds for spring" (new, untitled)')
+    // The thread he wrote in just before it is named beside it, to merge back if it was that subject (status-thread-title.ts nearThreads).
+    expect(q).toContain(`"ok, now order the seeds for spring" (new, he wrote in ${refOf(q, 'Orchard fence')} just before it: merge it into one only if it is that subject, untitled)`)
     expect(q).not.toContain('FOR_USER_THREAD_NEW')
     const byId = new Map((await readThreads(taskId)).threads.map((t) => [t.id, t]))
     const fence = byId.get(FENCE)!
