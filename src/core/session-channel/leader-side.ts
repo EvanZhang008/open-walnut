@@ -30,7 +30,7 @@ import { SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from '.
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import { noteFrameParsed } from '../../providers/line-parse-count.js'
-import { sameMachine } from './revoked-hosts.js'
+import { oneDaemonNow } from './revoked-hosts.js'
 
 export { HostRequestNotSent, requestNotSent, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 export { HostRevoked } from './leader-apply.js'
@@ -340,18 +340,20 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     /**
      * judge-of.ts's start probe: the host key whose service runs a new start on `hostKey`, or null
      * (legacy). `hostKey` itself when its own service judges; else another name of the same machine
-     * (revoked-hosts.ts sameMachine) whose service judges and whose channel is linked now: one
-     * daemon runs one service, under the one name it goes by (daemon-twins.ts daemonKeeperAlias),
-     * so an ssh row of a box that joined the host network starts there too. The switch must be on
-     * for both names: either one turned off keeps the machine's starts on that name legacy.
+     * whose service judges and whose channel is linked now, when this leader's own daemon links of
+     * both names reach one live daemon process (revoked-hosts.ts oneDaemonNow; never a machine id a
+     * hello claims): one daemon runs one service, under the one name it goes by (daemon-twins.ts
+     * daemonKeeperAlias), so only that name's channel is linked, and an ssh row of a box that joined
+     * the host network starts there too. The switch must be on for both names: either one turned off
+     * keeps the machine's starts on that name legacy. Several such names (none today): the first by key.
      */
     startKeyOf(hostKey: string): string | null {
       if (judgesItself(hostKey)) return hostKey
       if (stopped || !hostKey || !onFor(hostKey) || isRevoked(hostKey)) return null
-      for (const s of hosts.values()) {
-        if (s.key !== hostKey && !!s.socket && wanted(s) && onFor(s.key) && sameMachine(hostKey, s.key)) return s.key
-      }
-      return null
+      const service = [...hosts.values()]
+        .filter((s) => s.key !== hostKey && !!s.socket && wanted(s) && onFor(s.key) && oneDaemonNow(hostKey, s.key))
+        .map((s) => s.key).sort()
+      return service[0] ?? null
     },
     /** Is the channel to `hostKey` linked now? */
     linked(hostKey: string): boolean { return !!hosts.get(hostKey)?.socket },

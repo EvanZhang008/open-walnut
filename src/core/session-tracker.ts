@@ -51,7 +51,7 @@ import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-cha
 import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
 import { clearHandOverMarkIn } from './session-channel/handover-marks.js';
 import { handForNewSession, handedTo, hostOwns, mayRenameInto, settleHandsOf, useHand } from './session-channel/handed-sessions.js';
-import { sameMachine } from './session-channel/revoked-hosts.js';
+import { oneDaemonNow } from './session-channel/revoked-hosts.js';
 import { noteRefusedSessions } from './session-channel/refused-sessions.js';
 import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSnapshot, snapshotIsStale } from './session-channel/rows-snapshot.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
@@ -3774,22 +3774,26 @@ export { loadChannelCursor } from './session-db.js';
  * runs and judges it (a task start seeds its row under the id it answers with): marked the host's
  * now, so the channel's `born` row of that session fills it in (applyHostChannelBatch takes only a
  * host's rows) and keeps the leader's own fields. A row under another name of the same machine
- * (revoked-hosts.ts sameMachine: an ssh row of a box whose one service goes by its host-network
+ * (revoked-hosts.ts oneDaemonNow: an ssh row of a box whose one service goes by its host-network
  * name) is moved to `host`, the name that service knows itself by: it claims only a row of its own
  * name (session-db.ts claimable). False: no such seed (nothing to do).
  */
 export async function handSeedToHost(sid: string, host: string): Promise<boolean> {
   const rec = await getSessionByClaudeId(sid);
-  if (!rec || !rec.host || judgedByHost(rec) || !sameMachine(rec.host, host)) return false;
+  if (!rec || !rec.host || judgedByHost(rec) || !oneDaemonNow(rec.host, host)) return false;
   await updateSessionRecord(sid, rec.host === host ? { judge: 'host' } : { judge: 'host', host });
   return true;
 }
 
-/** The start handSeedToHost prepared did not go: the seed is the leader's again (its failure is written on it). */
-export async function takeSeedBack(sid: string, host: string): Promise<void> {
+/**
+ * The start handSeedToHost prepared did not go: the seed is the leader's again (its failure is
+ * written on it). `from`: the name it had before the hand-over moved it to `host` (another name of
+ * the same machine): it goes back to that name.
+ */
+export async function takeSeedBack(sid: string, host: string, from?: string): Promise<void> {
   const rec = await getSessionByClaudeId(sid);
   if (!rec || rec.host !== host || !judgedByHost(rec)) return;
-  await writingAsHost(() => updateSessionRecord(sid, { judge: undefined }));
+  await writingAsHost(() => updateSessionRecord(sid, from && from !== host ? { judge: undefined, host: from } : { judge: undefined }));
 }
 
 export async function sweepOrphanedCancelledSnapshots(): Promise<void> {

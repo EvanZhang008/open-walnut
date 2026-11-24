@@ -2,9 +2,11 @@
  * One machine under two host keys (an ssh row and the row the same box joined the host network
  * as, one daemon, one service): what the leader records of a host-run session is the machine's,
  * not one name's (handed-sessions.ts, handover-marks.ts, session-tracker.ts applyHostChannelBatch
- * and handSeedToHost, leader-side.ts startKeyOf), with "one machine" read the one way the ban reads
- * it (revoked-hosts.ts sameMachine). Hands, rows and hand-over marks written under one name are
- * taken from a channel under the other name, both ways; a different machine is refused as before.
+ * and handSeedToHost, leader-side.ts startKeyOf), when the leader proved the two names one daemon
+ * with its own links (revoked-hosts.ts oneDaemonNow). Hands, rows and hand-over marks written under
+ * one name are taken from a channel under the other name, both ways; a different machine is refused
+ * as before, and so is one whose hello claims this machine's id (a liar, or a data home moved to
+ * another box): a claimed id may ban, it never grants.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fsp from 'node:fs/promises'
@@ -24,12 +26,18 @@ import type { ChannelSocket } from '../../../src/core/session-channel/leader-lin
 import { WALNUT_HOME } from '../../../src/constants.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
-/** The box's service goes by NET; SSH reaches the same daemon; FAR is another machine. */
+/**
+ * The box's service goes by NET; SSH reaches the same daemon (the leader's own links to both answer
+ * as one live process); FAR is another machine; LIAR is another machine whose hello claims NET's
+ * machine id (or one whose data home was copied from NET's box: the same id, another daemon).
+ */
 const NET = 'devbox'
 const SSH = 'devbox-ssh'
 const FAR = 'farbox'
-const MACHINE: Record<string, string> = { [NET]: 'machine-1', [SSH]: 'machine-1', [FAR]: 'machine-2' }
+const LIAR = 'liarbox'
+const MACHINE: Record<string, string> = { [NET]: 'machine-1', [SSH]: 'machine-1', [FAR]: 'machine-2', [LIAR]: 'machine-1' }
 const ALIASES: Record<string, string[]> = { [NET]: [SSH], [SSH]: [NET] }
+const SAME_DAEMON: Record<string, string[]> = { [NET]: [SSH], [SSH]: [NET] }
 
 const whole = (sid: string, host: string, extra: Partial<SessionRecord> = {}): Record<string, unknown> => ({
   claudeSessionId: sid, taskId: '', project: 'p', process_status: 'running', mode: 'default', host, judge: 'host',
@@ -49,7 +57,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
   seq = 0
-  setRevokedHostResolver({ machineOf: (k) => MACHINE[k] ?? null, aliasesOf: (k) => ALIASES[k] ?? [] })
+  setRevokedHostResolver({ machineOf: (k) => MACHINE[k] ?? null, aliasesOf: (k) => ALIASES[k] ?? [], sameDaemonNow: (k) => SAME_DAEMON[k] ?? [] })
 })
 afterEach(() => {
   setRevokedHostResolver(null)
@@ -114,6 +122,27 @@ describe('a session handed under one name of a machine, reported under another',
   })
 })
 
+describe('a host whose hello claims this machine\'s id (B1 of the round 1 review)', () => {
+  it('is judged another host: its born row of a hand to NET is refused, its patches skipped, its answer refused', async () => {
+    await handStart(NET, 'v-seed')
+    expect((await born('v-seed', LIAR)).refused).toEqual(['v-seed'])
+    expect(await getSessionByClaudeId('v-seed')).toBeNull()
+    expect((await born('v-seed', NET)).written).toEqual(['v-seed'])
+    expect((await patch('v-seed', { process_status: 'stopped' }, LIAR)).skipped).toEqual(['v-seed'])
+    expect((await getSessionByClaudeId('v-seed'))?.process_status).toBe('running')
+    const hand = await handStart(NET, null)
+    expect(await settleAnswer(LIAR, 'v-open', hand)).toEqual({ ok: true, row: false })
+    // The answer named a new id under LIAR's own hand, never NET's open hand.
+    expect(handsNow()).toContainEqual({ host: NET, sid: null })
+  })
+
+  it('a seed of the honest name is never moved to it', async () => {
+    await createSessionRecord('v-seed-2', 't3', 'p', '/w', { host: NET, title: 'Honest', initialProcessStatus: 'idle' })
+    expect(await handSeedToHost('v-seed-2', LIAR)).toBe(false)
+    expect(await getSessionByClaudeId('v-seed-2')).toMatchObject({ host: NET })
+  })
+})
+
 describe('handSeedToHost: the seed of a start on the ssh name goes to the name the machine\'s service knows itself by', () => {
   it('moves a seed under another name of the same machine; leaves another machine\'s seed alone', async () => {
     await createSessionRecord('seed-move', 't', 'p', '/w', { host: SSH, title: 'Seeded', initialProcessStatus: 'idle' })
@@ -172,6 +201,16 @@ describe('leader-side startKeyOf: where a start on a name goes', () => {
     await side.refreshFlag()
     expect(side.startKeyOf(SSH)).toBeNull()
     expect(side.startKeyOf(NET)).toBe(NET)
+  })
+
+  it('a host claiming this machine\'s id never takes its starts, even while the honest service is not judging', async () => {
+    side = makeSide()
+    await side.noteHost(NET, { connected: true, judges: false })
+    await side.noteHost(LIAR, { connected: true, judges: true })
+    expect(await side.whenLinked(LIAR, 2_000)).toBe(true)
+    expect(side.startKeyOf(NET)).toBeNull()
+    expect(side.startKeyOf(SSH)).toBeNull()
+    expect(side.startKeyOf(LIAR)).toBe(LIAR)
   })
 
   it('whenLinked: false past its deadline for a host that never links', async () => {

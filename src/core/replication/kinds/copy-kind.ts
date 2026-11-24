@@ -152,6 +152,8 @@ export interface CopyKindsDeps {
   now?: () => number
   /** What hosts never hold this round (host-private.ts hostPrivacyNow). */
   privacy?: () => Promise<HostPrivacy>
+  /** Each target's result of a kind as soon as it is in (the scheduler answers copyKindNow with it). */
+  onResult?: (r: CopyRoundResult) => void
 }
 
 /** The kind is on in `choice` (a kind with no choice of its own always is). */
@@ -181,6 +183,10 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
   const ready: Array<{ target: CopyTarget; choice: CopyChoice }> = []
   for (const target of all) if (await target.available()) ready.push({ target, choice: await copyChoiceOf(target) })
   const results: CopyRoundResult[] = []
+  const push = (r: CopyRoundResult): void => {
+    results.push(r)
+    try { deps.onResult?.(r) } catch { /* a listener never stops the round */ }
+  }
   if (ready.length === 0) return results
   const asOf = now()
   const manifests = new Map<string, KindManifest<unknown>>()
@@ -218,7 +224,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
         }
         Object.assign(st, { action: 'off', manifest: null })
         forgetTaken(st)
-        results.push({ target: target.id, kind: kind.kind, action: 'unsupported', error: 'kind_not_copied', ...(removed !== undefined ? { removed } : {}) })
+        push({ target: target.id, kind: kind.kind, action: 'unsupported', error: 'kind_not_copied', ...(removed !== undefined ? { removed } : {}) })
         continue
       }
       purged.delete(st)
@@ -232,26 +238,26 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
         // Never the whole manifest instead: a host that cannot be told what to leave out gets nothing this round.
         const error = err instanceof Error ? err.message : String(err)
         log.session.warn('copies: could not work out what a host leaves out, the kind waits', { target: target.id, kind: kind.kind, error })
-        results.push({ target: target.id, kind: kind.kind, action: 'failed', error })
+        push({ target: target.id, kind: kind.kind, action: 'failed', error })
         continue
       }
       if (away !== null && st.manifest !== taken.hash) {
         // The same as a failed step: the kind's copy is not held now, and its manifest goes again.
         Object.assign(st, { manifest: null, action: 'failed', error: away })
-        results.push({ target: target.id, kind: kind.kind, action: 'failed', error: away })
+        push({ target: target.id, kind: kind.kind, action: 'failed', error: away })
         continue
       }
       const startedAt = now()
       try {
         const r = await runCopyRound(kind, taken, target, { asOf, now })
-        results.push({ target: target.id, ...r })
+        push({ target: target.id, ...r })
         // `unchanged` here is always a manifest the target holds (the memo, or equal digests).
         if (r.action === 'synced' || r.action === 'unchanged') noteRefusalEnded(log.session, 'copies', target.id, kind.kind)
         if (r.action === 'synced') log.session.info('copies: round', { target: target.id, ...r, ms: now() - startedAt })
       } catch (err) {
         const outcome = err instanceof StepFailed ? err.outcome : 'failed'
         const error = err instanceof Error ? err.message : String(err)
-        results.push({ target: target.id, kind: kind.kind, action: outcome, error })
+        push({ target: target.id, kind: kind.kind, action: outcome, error })
         if (outcome === 'failed' && noteRoundFailure(log.session, 'copies', target.id, error, { kind: kind.kind })) away = error
       }
     }
@@ -292,17 +298,20 @@ let schedulers = 0
 /** Every running scheduler's "round soon", for a confirm the user gave: a scheduler that stops takes only its own. */
 const copySoons = new Set<(kind?: string) => void>()
 const copySoon = (kind?: string): void => { for (const soon of copySoons) soon(kind) }
-/** Every running scheduler's "a round of this kind now", answered with that round's results. */
-const copyNows = new Set<(kind: string) => Promise<CopyRoundResult[]>>()
+/** Every running scheduler's "this kind to this target now", answered with that target's result. */
+const copyNows = new Set<(kind: string, targetId: string) => Promise<CopyRoundResult[]>>()
 
 /**
- * A round of `kind` now rather than after the debounce, on the running scheduler (one round at a
- * time: a round already running ends first, then this one goes): that round's results for the
- * kind, one per target; [] where no scheduler runs (a follower, a test without one). The caller
- * bounds its wait (session-channel/switch-catch-up.ts: a host whose copy of the switch lags).
+ * `kind` to target `targetId` now rather than after the debounce (session-channel/switch-catch-up.ts:
+ * a host whose copy of the switch lags), answered with that target's result as soon as it is in:
+ * a round of that kind running now answers it when it reaches that target; else a round of that
+ * kind and that target alone goes at once, beside a round of other kinds (another kind's state is
+ * not this one's), never beside one of the same kind. Other targets get the kind with the
+ * scheduler's own round as before. [] where no scheduler runs (a follower, a test without one), for
+ * a kind it does not copy, a target that is not up, or a round that failed. The caller bounds its wait.
  */
-export async function copyKindNow(kind: string): Promise<CopyRoundResult[]> {
-  return (await Promise.all([...copyNows].map((now) => now(kind)))).flat()
+export async function copyKindNow(kind: string, targetId: string): Promise<CopyRoundResult[]> {
+  return (await Promise.all([...copyNows].map((now) => now(kind, targetId)))).flat()
 }
 
 /** Tests (the cluster's probe): store writes of this kind bring no round while set (a copy that lags its write). */
@@ -377,18 +386,29 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
   /** Kinds a follower held rows of, in any round since the retry was set: all go again with it. */
   const pendingHeld = new Set<string>()
   let running = false
-  /** Callers of copyKindNow: each is answered by the first round that starts after it asked. */
-  const askedNow: Array<{ kind: string; done: (results: CopyRoundResult[]) => void }> = []
+  /** The scheduler's round running now: its kinds, and copyKindNow callers waiting on one target's result (null: it ended). */
+  let iteration: { kinds: ReadonlySet<string>; results: CopyRoundResult[]; listeners: Set<(r: CopyRoundResult | null) => void> } | null = null
+  /** copyKindNow's own rounds (one kind, one target) in flight, by `kind\ntarget`: a round of the scheduler waits for them. */
+  const oneTarget = new Map<string, Promise<CopyRoundResult[]>>()
   const round = async (): Promise<void> => {
     if (stopped || running || dirty.size === 0) return
     running = true
     try {
       while (!stopped && dirty.size > 0) {
+        // Never two rounds of one kind to one target at once.
+        await Promise.all([...oneTarget.values()])
         const want = kinds.filter((k) => dirty.has(k.kind))
         dirty.clear()
-        const served = askedNow.splice(0)
-        const results = await syncCopyKinds(want, deps)
-        for (const a of served) a.done(results.filter((r) => r.kind === a.kind))
+        const it = { kinds: new Set(want.map((k) => k.kind)), results: [] as CopyRoundResult[], listeners: new Set<(r: CopyRoundResult | null) => void>() }
+        iteration = it
+        let results: CopyRoundResult[]
+        try {
+          results = await syncCopyKinds(want, { ...deps, onResult: (r) => { it.results.push(r); for (const l of [...it.listeners]) l(r) } })
+        } finally {
+          // A round that ended, or threw: whoever still waits on it is answered now.
+          iteration = null
+          for (const l of [...it.listeners]) l(null)
+        }
         for (const r of results) if ((r.held ?? 0) > 0) pendingHeld.add(r.kind)
         if (pendingHeld.size > 0 && !retry && !stopped) {
           retry = setTimeout(() => {
@@ -415,8 +435,6 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
       log.session.warn('copies: scheduler round failed', { scheduler: id, error: err instanceof Error ? err.message : String(err) })
     } finally {
       running = false
-      // A round that failed, or a stop: nobody waits on a round that will not come.
-      if (stopped) for (const a of askedNow.splice(0)) a.done([])
     }
   }
   const soon = (kind?: string): void => {
@@ -427,15 +445,36 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
     timer.unref?.()
   }
   copySoons.add(soon)
-  const now = (kind: string): Promise<CopyRoundResult[]> => {
-    if (stopped || !kinds.some((k) => k.kind === kind)) return Promise.resolve([])
-    return new Promise((done) => {
-      askedNow.push({ kind, done })
-      dirty.add(kind)
-      // The debounced round goes now with it (whatever else was dirty rides along).
-      if (timer) { clearTimeout(timer); timer = null }
-      void round()
-    })
+  const now = (kind: string, targetId: string): Promise<CopyRoundResult[]> => {
+    const k = kinds.find((x) => x.kind === kind)
+    if (stopped || !k) return Promise.resolve([])
+    const it = iteration
+    if (it?.kinds.has(kind)) {
+      // That target took this round's manifest already: its answer stands.
+      const had = it.results.find((r) => r.kind === kind && r.target === targetId)
+      if (had) return Promise.resolve([had])
+      return new Promise((done) => {
+        const listen = (r: CopyRoundResult | null): void => {
+          if (r !== null && (r.kind !== kind || r.target !== targetId)) return
+          it.listeners.delete(listen)
+          done(r ? [r] : [])
+        }
+        it.listeners.add(listen)
+      })
+    }
+    const key = `${kind}\n${targetId}`
+    let p = oneTarget.get(key)
+    if (!p) {
+      p = (async () => {
+        const all = deps.targets ?? await defaultTargets()
+        return syncCopyKinds([k], { ...deps, targets: () => all().filter((t) => t.id === targetId) })
+      })().catch((err: unknown) => {
+        log.session.warn('copies: scheduler round failed', { scheduler: id, kind, target: targetId, error: err instanceof Error ? err.message : String(err) })
+        return []
+      }).finally(() => { oneTarget.delete(key) })
+      oneTarget.set(key, p)
+    }
+    return p
   }
   copyNows.add(now)
   const unwatch = kinds.map((k) => k.watch(() => { if (heldWritesForTesting !== k.kind) soon(k.kind) }))
@@ -470,7 +509,6 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
       stopped = true
       copySoons.delete(soon)
       copyNows.delete(now)
-      if (!running) for (const a of askedNow.splice(0)) a.done([])
       for (const u of unwatch) { try { u() } catch { /* best effort */ } }
       unlistenTargets?.()
       void import('../../event-bus.js').then(({ bus }) => bus.unsubscribe(choiceSub)).catch(() => {})

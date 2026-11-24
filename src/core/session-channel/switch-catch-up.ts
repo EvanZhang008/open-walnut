@@ -7,8 +7,8 @@
  * was refused so, and went legacy). So the moment a host is switched on, its first start can be
  * refused for a lag, not for a decision.
  *
- * Then, once: the config copy goes to the hosts now (replication/kinds/copy-kind.ts copyKindNow)
- * and the leader waits for the host's answer to it; a host whose session side was not up yet (its
+ * Then, once: the config copy goes to that host now, to it alone (replication/kinds/copy-kind.ts
+ * copyKindNow) and the leader waits for the host's answer to it; a host whose session side was not up yet (its
  * routes come up with the copy, host-boot.ts followHostSwitch) is waited for until its channel
  * links. Then the same start is asked once more. The refusal is the host's first step of a start
  * (host-routes.ts), so nothing of the first ask ran there and the second is the only one. Never a
@@ -53,11 +53,12 @@ function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   })
 }
 
-/** The config copy kind's round now, and whether `hostKey`'s copy target took it. */
+/** The config copy to `hostKey`'s copy target alone, now, and whether it took it. */
 async function copyConfigToHostNow(hostKey: string, ms: number): Promise<boolean> {
   const { copyKindNow } = await import('../replication/kinds/copy-kind.js')
-  const results = await within(copyKindNow('config'), ms, [])
-  return results.some((r) => r.target === `host:${hostKey}` && (r.action === 'synced' || r.action === 'unchanged'))
+  const target = `host:${hostKey}`
+  const results = await within(copyKindNow('config', target), ms, [])
+  return results.some((r) => r.target === target && (r.action === 'synced' || r.action === 'unchanged'))
 }
 
 /**
@@ -79,6 +80,8 @@ export async function startOnHostCatchingUp(side: SwitchCatchUpSide, hostKey: st
     log.session.warn('host start: the host took the config copy but its session side did not link in time; its refusal stands', { host: hostKey })
     return first
   }
+  // Turned off meanwhile: the first refusal stands, no start goes.
+  if (!side.switchOn(hostKey)) return first
   const second = await side.startOnHost(hostKey, payload)
   log.session.info('host start: asked once more after the host caught up with the switch', { host: hostKey, ok: second.ok === true, ...(second.ok === true ? {} : { error: second.error }) })
   return second

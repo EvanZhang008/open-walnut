@@ -32,6 +32,12 @@ export interface RevokedHostResolver {
   aliasesOf(hostKey: string): readonly string[]
   /** This leader's own machine id: never a banned machine. */
   ownMachine?(): string | null
+  /**
+   * The other host keys whose daemon link THIS leader opened reaches, right now, the same daemon
+   * process as `hostKey`'s link it opened (both hellos name one live instance: daemon-connection.ts
+   * liveSameDaemonHosts). The grant side's one tie (oneDaemonNow).
+   */
+  sameDaemonNow?(hostKey: string): readonly string[]
 }
 let resolver: RevokedHostResolver | null = null
 
@@ -67,6 +73,25 @@ export function sameMachine(a: string, b: string): boolean {
   const x = of(a)
   const y = of(b)
   return x.names.some((n) => y.names.includes(n)) || [...x.machines].some((m) => y.machines.has(m))
+}
+
+/**
+ * Are host keys `a` and `b` one machine for what one name's records GRANT the other (a hand, a row,
+ * a fact, a start routed to the other name's service: handed-sessions.ts hostOwns, leader-side.ts
+ * startKeyOf)? Only a tie this leader proved with its own links: the same key, or both keys' daemon
+ * links it opened answer, now, as one live daemon process. Never sameMachine's other grounds: a
+ * machine id a hello claims (a host could name another's, and a data home moved to a new box keeps
+ * its old id), a pair recorded earlier, or keys a ban named. Those may ban (a liar bans only
+ * itself); they never grant.
+ */
+export function oneDaemonNow(a: string, b: string): boolean {
+  if (a === b) return !!a
+  if (!a || !b || a === LOCAL || b === LOCAL) return false
+  try {
+    return (resolver?.sameDaemonNow?.(a) ?? []).includes(b) || (resolver?.sameDaemonNow?.(b) ?? []).includes(a)
+  } catch {
+    return false // a link that cannot be read proves nothing
+  }
 }
 
 /** One revoked credential record: the key it was issued to, its machine, and the other keys the ban named. */

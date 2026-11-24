@@ -15,7 +15,7 @@
 import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { getDb } from '../session-db.js'
 import { prepared } from '../../lib/sqlite-prepared.js'
-import { sameMachine } from './revoked-hosts.js'
+import { oneDaemonNow } from './revoked-hosts.js'
 
 export type HandOverKind = 'start' | 'resume'
 
@@ -38,11 +38,12 @@ export function clearHandOverMark(sid: string): void {
 
 /**
  * Inside the channel's apply transaction: `hostId` wrote its row of `sid`. True when a mark of it
- * went: a mark under any name of that host's machine (revoked-hosts.ts sameMachine).
+ * went: a mark under any name of that host's machine (revoked-hosts.ts oneDaemonNow). One mark per
+ * session (claude_session_id is the table's key), so the delete by sid takes only that mark.
  */
 export function clearHandOverMarkIn(handle: DatabaseType, sid: string, hostId: string): boolean {
   const on = prepared(handle, 'SELECT host_id FROM session_host_handovers WHERE claude_session_id = ?', 'pluck').get(sid) as string | undefined
-  if (on === undefined || !sameMachine(on, hostId)) return false
+  if (on === undefined || !oneDaemonNow(on, hostId)) return false
   return prepared(handle, 'DELETE FROM session_host_handovers WHERE claude_session_id = ?').run(sid).changes > 0
 }
 

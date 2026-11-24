@@ -245,10 +245,10 @@ describe('a ban is read only through the one alias-aware function', () => {
       'src/providers/delivery-failure.ts': 'a refusal is a permanent delivery failure (parked with why)',
       'src/providers/remote-session-manager.ts': 'a refusal is an answer: nothing was written',
       'src/integrations/cloud-bridge-config.ts': 'never mints a machine token for a revoked host (copy:pushBridgeConfig)',
-      // One machine under several host keys: what a host's records may claim is that machine's (sameMachine), never the ban.
-      'src/core/session-channel/handed-sessions.ts': 'a hand under any name of the machine is the machine\'s (sameMachine)',
-      'src/core/session-channel/handover-marks.ts': 'a hand-over mark under any name of the machine ends with its row (sameMachine)',
-      'src/core/session-tracker.ts': 'a seed of another name of the machine moves to its service\'s name (handSeedToHost, sameMachine)',
+      // One machine under several host keys: what one name's records grant another (oneDaemonNow), never the ban.
+      'src/core/session-channel/handed-sessions.ts': 'a hand under another name of one daemon is that daemon\'s (oneDaemonNow)',
+      'src/core/session-channel/handover-marks.ts': 'a hand-over mark under another name of one daemon ends with its row (oneDaemonNow)',
+      'src/core/session-tracker.ts': 'a seed of another name of one daemon moves to its service\'s name (handSeedToHost, oneDaemonNow)',
     }
     const checks = new Set(Object.values(REVOKED_REACH).flatMap((r) => (r.verdict === 'refused' ? [r.check.file] : [])))
     const readers = SRC.filter((f) => READS_BAN.test(read(f).replace(/^\s*(\/\/|\*).*$/gm, '')) || /revoked-hosts\.js/.test(read(f)))

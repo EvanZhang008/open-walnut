@@ -34,14 +34,14 @@
  * A host is a machine, not one of its names: one machine can be in the config under several host
  * keys (an ssh row and the row it joined the host network as, reaching one daemon). A hand written
  * under one of them is that machine's, whichever of its names the channel that brings the session
- * comes in under (revoked-hosts.ts sameMachine, the one notion of "one machine" the ban uses too).
- * A genuinely different machine is still another host.
+ * comes in under, when this leader proved the two names one daemon with its own links
+ * (revoked-hosts.ts oneDaemonNow; never a machine id a hello claims). Any other host is another host.
  */
 import crypto from 'node:crypto'
 import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { getDb, sessionJudgeInStore, transactionWhenFree } from '../session-db.js'
 import { prepared } from '../../lib/sqlite-prepared.js'
-import { sameMachine } from './revoked-hosts.js'
+import { oneDaemonNow } from './revoked-hosts.js'
 
 /** How long a hand stands with no born row (a start in flight, one whose answer a restart lost). */
 export const HAND_MS = 24 * 60 * 60_000
@@ -56,7 +56,7 @@ function handOf(handle: DatabaseType, sid: string, now: number): HandRow | undef
 
 /** Is a hand or row written under host key `owner` this host's (`hostId`, any name of its machine)? */
 export function hostOwns(owner: string | null | undefined, hostId: string): boolean {
-  return !!owner && sameMachine(owner, hostId)
+  return !!owner && oneDaemonNow(owner, hostId)
 }
 
 function openHand(handle: DatabaseType, hostId: string, id: string, now: number): HandRow | undefined {

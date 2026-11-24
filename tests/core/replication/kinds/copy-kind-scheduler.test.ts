@@ -9,7 +9,7 @@
  * in-memory store (kind-follower.ts createRowSetFollower), so the steps are
  * answered as a replica answers them.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createMockConstants } from '../../../helpers/mock-constants.js'
 
 vi.mock('../../../../src/constants.js', () => createMockConstants('walnut-copy-scheduler', { CLOUD_MODE: false }))
@@ -299,45 +299,93 @@ describe('startCopyKindsSync', () => {
     s.stop()
   })
 
-  it('copyKindNow: a round of that kind goes at once (not after the debounce), answered with its results; none runs without a scheduler', async () => {
-    expect(await copyKindNow('beta')).toEqual([])
-    const s = startCopyKindsSync(kinds, { targets: () => [target('host:devbox', 'host')] })
+  it('copyKindNow: that kind to that target at once (not after the debounce), with its result; none without a scheduler', async () => {
+    expect(await copyKindNow('beta', 'host:devbox')).toEqual([])
+    const s = startCopyKindsSync(kinds, { targets: () => [target('host:devbox', 'host'), target('host:other', 'host')] })
+    onTestFinished(() => s.stop())
     await tick(COPY_FIRST_ROUND_MS + COPY_DEBOUNCE_MS + 10)
     steps = []
     leader.beta = [{ id: 'b1', v: 3 }]
     watchers.beta()
-    // Asked during the debounce: the round goes now, the clock is not moved.
-    const results = await copyKindNow('beta')
-    expect(results).toEqual([expect.objectContaining({ kind: 'beta', target: 'host:devbox', action: 'synced' })])
+    // Asked during the debounce: it goes now, to that target alone.
+    expect(await copyKindNow('beta', 'host:devbox')).toEqual([expect.objectContaining({ kind: 'beta', target: 'host:devbox', action: 'synced' })])
     expect(followers.beta.store.get('b1')?.v).toBe(3)
     expect(steps).toEqual(['host:devbox put:beta'])
-    // The debounced round it replaced does not go again.
+    // The other target gets it with the scheduler's own round; the asked one holds it already.
     steps = []
     await tick(COPY_DEBOUNCE_MS + 10)
-    expect(steps).toEqual([])
-    // Nothing changed: the round says the host holds it already.
-    expect(await copyKindNow('beta')).toEqual([expect.objectContaining({ kind: 'beta', target: 'host:devbox', action: 'unchanged' })])
-    // A kind this scheduler does not copy: no round.
-    expect(await copyKindNow('gamma')).toEqual([])
+    expect(steps).toEqual(['host:other put:beta'])
+    expect(await copyKindNow('beta', 'host:devbox')).toEqual([expect.objectContaining({ kind: 'beta', target: 'host:devbox', action: 'unchanged' })])
+    // A kind this scheduler does not copy, a target it does not know: nothing.
+    expect(await copyKindNow('gamma', 'host:devbox')).toEqual([])
+    expect(await copyKindNow('beta', 'host:nowhere')).toEqual([])
     s.stop()
-    expect(await copyKindNow('beta')).toEqual([])
+    expect(await copyKindNow('beta', 'host:devbox')).toEqual([])
   })
 
-  it('copyKindNow while a round runs: answered by the round after it, which carries its kind', async () => {
+  it('S1: a slow other target never holds the ask: a round of another kind to it runs, and the ask goes beside it', async () => {
     let release: (() => void) | null = null
-    const slow: CopyTarget = { ...target('host:devbox', 'host'), post: async (payload) => {
+    const real = target('host:slow', 'host')
+    const slow: CopyTarget = { ...real, post: async (payload) => {
       if ((payload as { op?: string }).op === 'put' && release === null) await new Promise<void>((r) => { release = r })
-      return target('host:devbox', 'host').post(payload)
+      return real.post(payload)
     } }
-    const s = startCopyKindsSync(kinds, { targets: () => [slow] })
-    const first = copyKindNow('alpha')
-    await vi.waitFor(() => expect(release).not.toBeNull())
-    leader.beta = [{ id: 'b1', v: 9 }]
-    const second = copyKindNow('beta')
-    release!()
-    expect((await first).map((r) => r.kind)).toEqual(['alpha'])
-    expect(await second).toEqual([expect.objectContaining({ kind: 'beta', action: 'synced' })])
-    expect(followers.beta.store.get('b1')?.v).toBe(9)
-    s.stop()
+    const s = startCopyKindsSync(kinds, { targets: () => [slow, target('host:devbox', 'host')] })
+    try {
+      // The scheduler's round of alpha is stuck on the slow target.
+      watchers.alpha()
+      await tick(COPY_DEBOUNCE_MS + 10)
+      await vi.waitFor(() => expect(release).not.toBeNull())
+      leader.beta = [{ id: 'b1', v: 9 }]
+      expect(await copyKindNow('beta', 'host:devbox')).toEqual([expect.objectContaining({ kind: 'beta', target: 'host:devbox', action: 'synced' })])
+      expect(steps.filter((x) => x.includes('beta'))).toEqual(['host:devbox status:beta', 'host:devbox sync:beta', 'host:devbox put:beta'])
+      release!()
+    } finally { s.stop() }
+  })
+
+  it('S1: a round of the same kind running now answers the ask when it reaches that target (or did already), not when it ends', async () => {
+    const gates: Record<string, (() => void) | null> = { 'host:slow': null, 'host:last': null }
+    const gated = (id: string): CopyTarget => {
+      const real = target(id, 'host')
+      return { ...real, post: async (payload) => {
+        if ((payload as { op?: string }).op === 'status' && gates[id] === null) await new Promise<void>((r) => { gates[id] = r })
+        return real.post(payload)
+      } }
+    }
+    const s = startCopyKindsSync([kindOf('alpha')], { targets: () => [target('host:devbox', 'host'), gated('host:slow'), gated('host:last')] })
+    try {
+      watchers.alpha()
+      await tick(COPY_DEBOUNCE_MS + 10)
+      await vi.waitFor(() => expect(gates['host:slow']).not.toBeNull())
+      // host:devbox took it already in this round: answered at once.
+      expect(await copyKindNow('alpha', 'host:devbox')).toEqual([expect.objectContaining({ kind: 'alpha', target: 'host:devbox' })])
+      const asked = copyKindNow('alpha', 'host:slow')
+      let answered = false
+      void asked.then(() => { answered = true })
+      await tick(10)
+      expect(answered).toBe(false)
+      gates['host:slow']!()
+      // Answered while the round still waits on host:last.
+      expect(await asked).toEqual([expect.objectContaining({ kind: 'alpha', target: 'host:slow' })])
+      await vi.waitFor(() => expect(gates['host:last']).not.toBeNull())
+      gates['host:last']!()
+    } finally { s.stop() }
+  })
+
+  it('S2: a round that fails answers its waiters at once', async () => {
+    let fail: (() => void) | null = null
+    const broken: CopyTarget = { ...target('host:devbox', 'host'), available: async () => { await new Promise<void>((r) => { fail = r }); throw new Error('probe broke') } }
+    const s = startCopyKindsSync([kindOf('alpha')], { targets: () => [broken] })
+    try {
+      watchers.alpha()
+      await tick(COPY_DEBOUNCE_MS + 10)
+      await vi.waitFor(() => expect(fail).not.toBeNull())
+      const asked = copyKindNow('alpha', 'host:devbox')
+      fail!()
+      expect(await asked).toEqual([])
+    } finally { s.stop() }
+    // A one-target round that throws answers at once too.
+    const s2 = startCopyKindsSync([kindOf('beta')], { targets: () => { throw new Error('no targets') } })
+    try { expect(await copyKindNow('beta', 'host:devbox')).toEqual([]) } finally { s2.stop() }
   })
 })

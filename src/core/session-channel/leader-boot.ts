@@ -195,7 +195,11 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const [{ setRevokedHostResolver }, { daemonTwinsOfNow }] = await Promise.all([import('./revoked-hosts.js'), import('../hosts/daemon-twins.js')])
   const machineIdOf = (hostKey: string): string | null => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey)
   // This leader's own machine id is never a banned machine (a home copied to another box shares it: N1).
-  setRevokedHostResolver({ machineOf: machineIdOf, aliasesOf: (hostKey) => [...daemonTwinsOfNow(hostKey), ...liveSameDaemonHosts(hostKey)], ownMachine: () => ownMachine || null })
+  setRevokedHostResolver({
+    machineOf: machineIdOf, aliasesOf: (hostKey) => [...daemonTwinsOfNow(hostKey), ...liveSameDaemonHosts(hostKey)], ownMachine: () => ownMachine || null,
+    // What one name's records may grant another: only this leader's own links to one live daemon (oneDaemonNow).
+    sameDaemonNow: liveSameDaemonHosts,
+  })
   // The ban read again at boot, at a revoke event here, at a config write and every minute (a ban
   // another process wrote): a host whose standing changed is cut, or may link again (noteRevoked).
   const revokedWatch = await issue.watchRevokedHosts((changed) => { for (const k of changed.length > 0 ? changed : ['']) side.noteRevoked(k) }, REVOKED_RECHECK_MS, (err) => {

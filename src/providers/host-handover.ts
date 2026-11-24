@@ -28,7 +28,7 @@
  *             it over again with the claim.
  */
 import { log } from '../logging/index.js'
-import { sessionTaskAndEngineInStore } from '../core/session-db.js'
+import { sessionJudgeInStore, sessionTaskAndEngineInStore } from '../core/session-db.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { forgetHostJudged, noteHostJudged } from '../core/sessions/judge-of.js'
 import {
@@ -84,6 +84,14 @@ function loadMarks(): void {
   } catch { /* no database yet: asked again next time */ }
 }
 
+/**
+ * Seeds the hand-over moved from another name of the same machine to the name its service goes by
+ * (session-tracker.ts handSeedToHost), with the name they had: a take-back puts it back. Only for
+ * the window: once the host has it, the move stands. A leader that restarts inside the window
+ * forgets it, and a seed taken back after that keeps the service's name (the same machine).
+ */
+const movedFrom = new Map<string, string>()
+
 function dropMark(sid: string): boolean {
   loadMarks()
   // Written through: a mark on disk is in memory too, so a session with none costs no write.
@@ -126,14 +134,19 @@ export async function handStartToHost(sid: string, host: string, kind: HandOverK
     log.session.warn('host hand-over: its hand was not kept; the host\'s row of it applies only once the leader\'s is the host\'s', { sessionId: sid, host, error: errText(err) })
   })
   const tracker = await import('../core/session-tracker.js')
-  return tracker.handSeedToHost(sid, host).catch((err: unknown) => {
+  const before = (() => { try { return sessionJudgeInStore(sid)?.host ?? null } catch { return null } })()
+  const handed = await tracker.handSeedToHost(sid, host).catch((err: unknown) => {
     log.session.warn('host start: the seeded row was not handed to its host', { sessionId: sid, host, error: errText(err) })
     return false
   })
+  if (handed && before && before !== host) movedFrom.set(sid, before)
+  else movedFrom.delete(sid)
+  return handed
 }
 
 /** The host said yes: the window ends, and what waited goes to the host now (it is in flight until its born row). */
 export function handOverAnswered(sid: string): void {
+  movedFrom.delete(sid)
   if (dropMark(sid)) releaseLinesAfterHandOver(sid)
 }
 
@@ -145,6 +158,8 @@ export async function takeStartBack(sid: string, host: string, handed: boolean):
   if (lost) lostStarts.delete(sid)
   waitingLink.delete(sid)
   dropMark(sid)
+  const from = movedFrom.get(sid)
+  movedFrom.delete(sid)
   forgetHostJudged(sid)
   // What waited for the host is the leader's to deliver now (its runner's own queue).
   forgetWaitingLines(sid)
@@ -154,7 +169,8 @@ export async function takeStartBack(sid: string, host: string, handed: boolean):
   })
   if (!handed) return
   const tracker = await import('../core/session-tracker.js')
-  await tracker.takeSeedBack(sid, host).catch(() => {})
+  // A seed moved to the service's name goes back to the name it had (handStartToHost).
+  await tracker.takeSeedBack(sid, host, from).catch(() => {})
 }
 
 /** How long a hand-over whose answer was lost waits for the host's row (tests shorten it). */
@@ -387,6 +403,7 @@ export function _resetHostHandOverForTesting(opts: { keepDisk?: boolean } = {}):
   if (backstop) { clearTimeout(backstop); backstop = null }
   unanswered.reset()
   inFlight.clear()
+  movedFrom.clear()
   if (!opts.keepDisk) for (const sid of marks.keys()) { try { clearHandOverMark(sid) } catch { /* no database */ } }
   marks.clear()
   marksLoaded = false

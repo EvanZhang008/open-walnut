@@ -72,6 +72,19 @@ describe('startOnHostCatchingUp', () => {
     }
   })
 
+  it('the switch turned off during the wait: no second ask', async () => {
+    const answers = [OFF, OK]
+    let on = true
+    const asked: string[] = []
+    const side: SwitchCatchUpSide = {
+      startOnHost: async (host) => { asked.push(host); return answers.shift() ?? OFF },
+      switchOn: () => on,
+      whenLinked: async () => { on = false; return true },
+    }
+    expect(await startOnHostCatchingUp(side, 'devbox', {}, { copyConfigNow: async () => true })).toEqual(OFF)
+    expect(asked).toHaveLength(1)
+  })
+
   it('one budget for the copy and the link: the link waits only what the copy left', async () => {
     let t = 1_000
     const { side, waited } = sideOf([OFF, OK])

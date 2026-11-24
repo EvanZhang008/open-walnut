@@ -585,14 +585,18 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   host network as, one daemon), and its one service goes by one of them (`daemonKeeperAlias`). A start or a
   resume on the other name goes to that service under the name it goes by (`leader-side.ts startKeyOf`:
   that name's channel is linked and the switch is on for both names); its row moves to that name with the
-  hand-over (`handSeedToHost`), since the host claims only a row of its own name. What the leader records of a
-  host's session (hands, hand-over marks, row and fact ownership) is the machine's, read the one way the ban
-  reads it (`revoked-hosts.ts sameMachine`): a channel under either name brings it, another machine's never
+  hand-over (`handSeedToHost`), since the host claims only a row of its own name, and back to its own name if
+  the host refuses. What the leader records of a host's session (hands, hand-over marks, row and fact
+  ownership) is the machine's: a channel under either name brings it, another machine's never. Granting
+  needs a tie the leader proved with its own links: both names' daemon links it dialed answer now as one
+  live daemon process (`revoked-hosts.ts oneDaemonNow`). The machine id a hello claims never grants (a host
+  could name another's, and a data home moved to a new box keeps its old id); it still bans (`sameMachine`)
   (`tests/core/session-channel/one-machine-hosts.test.ts`, `tests/e2e/host-judged-alias-cluster-e2e.test.ts`).
 - **The switch's copy lags its write.** A host reads the switch from its config copy, a few seconds behind a
   write, so its first start after the switch went on can be refused `host_runs_sessions_off`. The leader,
-  whose switch says on, then sends the config copy now (`copyKindNow`), waits for the host's answer and its
-  link, and asks once more, within 15 s; never a third time (`session-channel/switch-catch-up.ts`). A start
+  whose switch says on, then sends the config copy to that host alone now (`copyKindNow`), waits for its
+  answer and its link, and asks once more (if the switch is still on), within 15 s; never a third time
+  (`session-channel/switch-catch-up.ts`). A start
   still refused fails as before; a resume is delivered here as before.
 
 ## Phases

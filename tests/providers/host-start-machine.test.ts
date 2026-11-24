@@ -54,13 +54,14 @@ const NET = 'devbox'
 const SSH = 'devbox-ssh'
 const FAR = 'farbox'
 
-function fakeSide(o: { offFirst?: number; on?: boolean } = {}) {
+function fakeSide(o: { offFirst?: number; on?: boolean; refuse?: boolean } = {}) {
   const sent: Array<{ op: string; host: string; body: Record<string, any> }> = []
   let off = o.offFirst ?? 0
   const side = {
     startOnHost: async (host: string, body: Record<string, unknown>) => {
       sent.push({ op: 'start', host, body })
       if (off > 0) { off--; return { ok: false, error: HOST_SESSIONS_OFF } }
+      if (o.refuse) return { ok: false, error: 'no claude here' }
       return { ok: true, sessionId: (body.resumeSessionId ?? body.preassignedSessionId ?? 'started-on-host') as string, title: '' }
     },
     sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return { ok: true } },
@@ -86,7 +87,7 @@ beforeEach(async () => {
   copies.took = true
   // NET's service judges; a start on SSH goes to it (leader-side.ts startKeyOf); FAR stays legacy.
   setHostJudgeProbe((host) => (host === NET ? true : host === SSH ? NET : false))
-  setRevokedHostResolver({ machineOf: (k) => ({ [NET]: 'm-1', [SSH]: 'm-1', [FAR]: 'm-2' } as Record<string, string>)[k] ?? null, aliasesOf: (k) => (k === NET ? [SSH] : k === SSH ? [NET] : []) })
+  setRevokedHostResolver({ machineOf: (k) => ({ [NET]: 'm-1', [SSH]: 'm-1', [FAR]: 'm-2' } as Record<string, string>)[k] ?? null, aliasesOf: (k) => (k === NET ? [SSH] : k === SSH ? [NET] : []), sameDaemonNow: (k) => (k === NET ? [SSH] : k === SSH ? [NET] : []) })
   _setHostSwitchForTesting((host) => host === NET || host === SSH)
   _setHostResumesForTesting(NET, true)
 })
@@ -125,6 +126,17 @@ describe('one machine, two names: a start on the ssh name', () => {
     })
     expect(applied).toMatchObject({ written: [SEED], skipped: [] })
     expect(applied.refused).toBeUndefined()
+    expect(handsNow()).toEqual([])
+  })
+
+  it('a refused start gives the seed back under the name it had (S3 of the round 1 review)', async () => {
+    const h = harness()
+    await seeded(SSH)
+    fakeSide({ refuse: true })
+    await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: SSH, preassignedSessionId: SEED } as never, 'test')).rejects.toThrow(/no claude here/)
+    const row = await getSessionByClaudeId(SEED)
+    expect(row?.host).toBe(SSH)
+    expect(row?.judge).toBeUndefined()
     expect(handsNow()).toEqual([])
   })
 
