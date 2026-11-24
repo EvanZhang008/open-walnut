@@ -156,27 +156,45 @@ export function wantFor(standing: PermitRecord | null | undefined, me: string, n
 const tick = (ms: number) => new Promise((r) => { setTimeout(r, ms).unref?.() })
 
 /**
- * A majority answered but holds no one record: each witness kept a different one of THIS machine's records (a
- * renew that reached some of them while the others were cut off). Nobody else can end that, and waiting does
- * not either: no new record comes while no record has a majority. A grant ends it, and is safe: each witness
- * takes it only once the record it holds ran out there. A handover this machine is a side of (to it, or from it)
- * counts as its own only when another answer holds a renew or grant of this machine above it: that witness took
- * this machine's record after the handover, so the switch is settled (committed to this machine, or rolled back
- * and taken back by it). Any other record of another machine, or a handover nothing of this machine's is above,
- * among the answers: null, as before (that is a switch's to settle, never a takeover).
+ * A majority answered but holds no one record, and nobody can end that by waiting: no new record stands while
+ * none has a majority (a renew cut off part way leaves the witnesses on different records; a switch's handover or
+ * its commit reached only some of them before a cut that outlasted every lease). A grant ends it, and asking for one
+ * is safe: each witness takes it only once the record it holds ran out there. It is asked only by the machine every
+ * answer leaves the permission to, so it is never a takeover:
+ *
+ *   - a record this machine leads on (a renew or grant it holds, its cancel of its own handover), its release;
+ *   - a handover FROM this machine: had the switch committed, the new machine's renews would show (below);
+ *   - a handover TO this machine with one of its own records above it (it committed that switch);
+ *   - a record of another machine that never stood: more witnesses than a minority hold a lower number (numbers only
+ *     grow at a witness, and a witness drops another machine's record only for that machine's own later one, or once
+ *     it ran out for a grant this rule allowed), so no majority ever held it and that machine never led on it.
+ *
+ * Any record of another machine that may have stood (a committed switch, its renews), or a handover to this machine
+ * it never led on: null, as before (a switch's to settle). A witness that answered with its list and holds nothing
+ * holds nothing for anyone, as after a release. tests/core/leader/switch/split-records-model.test.ts walks every short
+ * history of two machines and three witnesses with the witnesses' own rules.
  */
 function splitOwnRecords(h: PermitHandle, read: { standing: PermitRecord | null | undefined; replies: PermitReply[] }, me: string): ReturnType<typeof wantFor> | null {
   if (read.standing !== undefined) return null
   const list = h.client.witnessList()
   const answers = read.replies.filter((r) => list.includes(r.witness) && r.list)
   if (answers.length < majorityOf(list)) return null
-  const mineAbove = (n: number) => answers.some((a) => (a.held?.kind === 'renew' || a.held?.kind === 'grant') && a.held.holder === me && a.held.number > n)
-  const own = (r: PermitReply) => !r.held || (r.held.kind === 'release' ? r.held.by === me
-    : r.held.kind === 'handover' ? (r.held.holder === me || r.held.from === me) && mineAbove(r.held.number)
-      : (r.held.kind === 'renew' || r.held.kind === 'grant') && r.held.holder === me)
+  const leadsOn = (r: PermitRecord | null | undefined) => !!r && (r.kind === 'renew' || r.kind === 'grant' || r.kind === 'cancel') && r.holder === me
+  const mineAbove = (n: number) => answers.some((a) => leadsOn(a.held) && a.held!.number > n)
+  // More than a minority of the witnesses never held record `n` of another machine while it stood: those that hold a
+  // lower number, and those that hold a record of this machine above it (this machine never lands a record on another
+  // machine's record that stood: a grant only through this rule, everything else only on its own records).
+  const neverStood = (n: number) => answers.filter((a) => (a.held?.number ?? 0) < n || (a.held!.number > n && a.held!.by === me && a.held!.kind !== 'handover')).length > list.length - majorityOf(list)
+  const own = (r: PermitReply) => {
+    const x = r.held
+    if (!x) return true
+    if (leadsOn(x) || (x.kind === 'release' && x.by === me) || (x.kind === 'handover' && x.from === me)) return true
+    if (x.kind === 'handover' && x.to === me) return mineAbove(x.number)
+    return neverStood(x.number)
+  }
   if (!answers.every(own)) return null
   const numbers = answers.map((r) => r.held?.number ?? 0)
-  return { want: 'grant', why: `the witnesses hold different records of this machine (${numbers.join(', ')}): asking for a grant, which stands where each ran out` }
+  return { want: 'grant', why: `the witnesses hold different records (${numbers.join(', ')}), every one this machine's or one that never stood: asking for a grant, which stands where each ran out` }
 }
 
 type Acquired = { ok: boolean; record?: PermitRecord; why?: string; refused?: boolean; leader?: string; standing?: PermitRecord }
@@ -467,7 +485,14 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       return
     }
     if (state === 'lost' && cancelOwed) {
-      // Our handover stood nowhere and its cancel did not either: once the witnesses answer, the cancel stands.
+      // Our handover did not stand and its cancel did not either. A cancel stands only on the handover or on this
+      // machine's live record: once its records ran out at the others it never can, and a cancel that lands on some
+      // witnesses only hides what they held. So a full read decides first: where every answer leaves the permission to
+      // this machine (splitOwnRecords: the handover from here, and what never stood), a grant takes it back where
+      // each record ran out; otherwise the cancel is sent again.
+      const got = await acquire(h, me)
+      if (stopped || state !== 'lost') return
+      if (got.ok) { cancelOwed = false; lead(got.record!, 'leader permit: the handover did not stand; this server took the permission again'); schedule(settings.params.renewEveryMs); return }
       const c = await proposeAndWait(h, (cl) => cl.cancelHandover(), 8_000)
       if (stopped) return
       if (c?.outcome === 'chosen') { cancelOwed = false; lead(c.record, 'leader permit: the handover is cancelled; this server leads again'); schedule(settings.params.renewEveryMs); return }
@@ -533,6 +558,19 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
         ? s.by !== me && (to === undefined || s.by === to)
         : s.holder !== me && s.kind !== 'handover' && (to === undefined || s.holder === to))
       if (committed) return { ok: false, why: 'committed before the cancel', standing: summarize(s) }
+      // No record stands and every answer leaves the permission here (splitOwnRecords: the cancel can no longer stand
+      // where this machine's records ran out): a grant takes it back instead.
+      if (s === undefined && splitOwnRecords(h, read, me)) {
+        const got = await acquire(h, me)
+        if (got.ok) {
+          handoverRecord = null
+          closing = false
+          cancelOwed = false
+          lead(got.record!, 'leader permit: the switch was taken back by a grant; this server leads again')
+          schedule(settings.params.renewEveryMs)
+          return { ok: true }
+        }
+      }
     }
     return { ok: false, why: 'the cancel record did not reach a majority of the witnesses' }
   }, 'cancel')

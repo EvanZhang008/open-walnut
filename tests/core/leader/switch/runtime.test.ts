@@ -171,13 +171,16 @@ describe('boot decisions', () => {
     await until('the leader to act again', () => r.mayAct() && r.status().state === 'leading', 20_000)
   }, 60_000)
 
-  it('different records of which one is another machine\'s: no grant (that is a switch\'s to settle)', async () => {
+  it('different records of which one is another machine\'s: a grant only when that record never stood (else a switch\'s to settle)', async () => {
     const reply = (witness: string, held: Record<string, unknown> | null) => ({ witness, re: 'read', ok: true, held, list: ['w1', 'w2', 'w3'], joint: null, cfg: 'c', epoch: 0, progress: null, ops: [] })
     const rec = (n: number, holder: string) => ({ kind: 'renew', holder, number: n, by: holder, nonce: 'x', validMs: 1, list: ['w1', 'w2', 'w3'], cfg: 'c', epoch: 0, clock: 'boottime' })
     const h = { client: { witnessList: () => ['w1', 'w2', 'w3'] } }
     const { splitOwnRecordsForTest } = await import('../../../../src/core/leader/switch/runtime.js')
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a')), reply('w2', rec(2, 'machine-a')), reply('w3', rec(1, 'machine-a'))] as never }, 'machine-a')?.want).toBe('grant')
-    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a')), reply('w2', rec(2, 'machine-b')), reply('w3', rec(1, 'machine-a'))] as never }, 'machine-a')).toBeNull()
+    // Another machine's record that may have stood (w3 holds that machine's later record, so it may have held 2 too): no grant.
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a')), reply('w2', rec(2, 'machine-b')), reply('w3', rec(4, 'machine-b'))] as never }, 'machine-a')).toBeNull()
+    // One that never stood: w3 holds a lower number and w1 this machine's renew above it (taken on its own live record, so never on 2).
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a')), reply('w2', rec(2, 'machine-b')), reply('w3', rec(1, 'machine-a'))] as never }, 'machine-a')?.want).toBe('grant')
     // Only one answer: not a majority, nothing is known.
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a'))] as never }, 'machine-a')).toBeNull()
     // The handover of a switch back to this machine, left on one witness: its own once a renew of this machine above it
@@ -185,16 +188,27 @@ describe('boot decisions', () => {
     const handover = (n: number) => ({ ...rec(n, 'machine-a'), kind: 'handover', from: 'machine-b', to: 'machine-a', by: 'machine-b' })
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(63, 'machine-a')), reply('w2', rec(58, 'machine-a')), reply('w3', handover(56))] as never }, 'machine-a')?.want).toBe('grant')
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', handover(56)), reply('w2', rec(55, 'machine-a')), reply('w3', null)] as never }, 'machine-a')).toBeNull()
-    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', handover(56)), reply('w2', rec(58, 'machine-a')), reply('w3', null)] as never }, 'machine-b')).toBeNull()
+    // The handover's writer (machine-b) is left the permission when the new machine's renew above it never stood
+    // (w3 holds nothing, w1 the lower handover); not when it may have (two witnesses at or above it).
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', handover(56)), reply('w2', rec(58, 'machine-a')), reply('w3', null)] as never }, 'machine-b')?.want).toBe('grant')
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', handover(56)), reply('w2', rec(58, 'machine-a')), reply('w3', rec(57, 'machine-a'))] as never }, 'machine-b')).toBeNull()
     // A switch from this machine that rolled back, its handover left on one witness and two grants of this machine above
     // it on the others (the remote rehearsal's failed trial: w-a 73 handover a -> b, w-b grant 78, w-k grant 74).
     const away = (n: number) => ({ ...rec(n, 'machine-b'), kind: 'handover', from: 'machine-a', to: 'machine-b', by: 'machine-a' })
     const grant = (n: number) => ({ ...rec(n, 'machine-a'), kind: 'grant' })
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', away(73)), reply('w2', grant(78)), reply('w3', grant(74))] as never }, 'machine-a')?.want).toBe('grant')
-    // Nothing of this machine's above that handover: it is the switch's (machine-b may commit it).
-    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', away(73)), reply('w2', grant(72)), reply('w3', null)] as never }, 'machine-a')).toBeNull()
+    // That handover never stood (w2 lower, w3 empty): machine-b never could commit on it, the permission is machine-a's.
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', away(73)), reply('w2', grant(72)), reply('w3', null)] as never }, 'machine-a')?.want).toBe('grant')
+    // Machine-b's renews above it, one of which may have stood (its commit): the switch's, never machine-a's.
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', away(73)), reply('w2', rec(75, 'machine-b')), reply('w3', rec(74, 'machine-b'))] as never }, 'machine-a')).toBeNull()
     // Machine-b, the handover's other side, never takes it over from machine-a's grants.
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', away(73)), reply('w2', grant(78)), reply('w3', grant(74))] as never }, 'machine-b')).toBeNull()
+    // A cancel of this machine is a record it leads on (it leads on it at once): the rehearsal's rollback left
+    // w1 on the handover (cut during the cancel), w2 on the cancel, w3 on the first renew after it.
+    const cancel = (n: number, who = 'machine-a') => ({ ...rec(n, who), kind: 'cancel', from: who })
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', away(73)), reply('w2', cancel(74)), reply('w3', rec(75, 'machine-a'))] as never }, 'machine-a')?.want).toBe('grant')
+    // Another machine's cancel that may have stood (two witnesses at or above it) is not this machine's.
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', cancel(74, 'machine-b')), reply('w2', rec(75, 'machine-b')), reply('w3', rec(70, 'machine-a'))] as never }, 'machine-a')).toBeNull()
   })
 
   it('a handover to this machine that the switch did not commit: refuses', async () => {

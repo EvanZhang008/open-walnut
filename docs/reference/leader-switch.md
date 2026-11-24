@@ -811,18 +811,38 @@ witnessMarginMs`, 62 s) and grants itself then. Another machine never takes a re
 between is lost or repeated: routine slots stay due and run once, trigger fires are replayed,
 an approved mail is sent once by the reconcile.
 
-**A leader cut from a majority past its lease** can come back to witnesses that each kept a
-different record of its own (a renew that reached some of them while the others were cut off):
-no record has a majority, so no renew can stand and nothing ends that by waiting. When a
-majority answered and every answer is this machine's (a renew or grant it holds, its own
-release, or the handover of a switch it is a side of, to it or from it, with a renew or grant of its own
-above it, which shows that switch settled),
-the runtime asks for a grant, which each witness takes once the record it holds ran out there
-(`splitOwnRecords`, `src/core/leader/switch/runtime.ts`). A record of another machine, or a
-handover with nothing of this machine's above it, among the answers: it waits, as before (a
-switch's to settle). The remote rehearsal meets each case: `two-down` and `cut-after-commit` (after
-the switch back, w-k still held the handover to A), and `trial-fails` (after the rollback, w-a still
-held A's handover to B, the others two grants of A).
+**Witnesses left on different records.** A cut that outlasts every lease can leave the three witnesses
+on three different records: a renew that reached some of them, a switch's handover or its commit that
+reached only some, a cancel that landed on one. No record has a majority, so no renew or cancel can
+stand, and nothing ends that by waiting. When a majority answered and every answer leaves the
+permission to this machine, the runtime asks for a grant, which each witness takes only once the
+record it holds ran out there (`splitOwnRecords`, `src/core/leader/switch/runtime.ts`). An answer
+leaves it to this machine when it is:
+
+- a record this machine leads on (a renew or grant it holds, its cancel of its own handover), or its release;
+- a handover from this machine (had the switch committed, the new machine's renews would show, below);
+- a handover to this machine with a record of its own above it (it committed that switch);
+- a record of another machine that never stood: more witnesses than a minority hold a lower number, or a
+  record of this machine above it (taken on this machine's own records, so never on that one).
+
+Anything else (another machine's record that may have stood: a committed switch, its renews) waits,
+as before: a switch's to settle, never a takeover. The same read runs where a cancel cannot stand any
+more: a take-back (`cancel`) and a handover that did not stand (`lost`, its cancel owed) ask for that
+grant instead of sending the cancel again, since a cancel that lands on one witness only hides what it
+held.
+
+`tests/core/leader/switch/split-records-model.test.ts` walks every history of two machines and
+three witnesses up to 7 steps (about 120,000 states; `SPLIT_MODEL_DEPTH=8` about 236,000): any record
+to any set of witnesses under the witnesses' own rules (`judge`), the leader's renews and one
+handover, the handover's cancel, the target's commit, the runtime's own decisions, and time passing.
+It checks that two machines never hold a live lease at once, and that from every state where nobody
+leads and no record has a majority, the runtime's decisions on full links make the last lease's
+holder lead again, or the target of a handover a majority took after it (the switch finishing: two
+histories can leave the witnesses alike, one where that commit stood and one where it did not). Its
+red control, the rule before the cancel case, finds states where nobody can lead again. The remote
+rehearsal meets the cases too: `two-down` and `cut-after-commit` (after the switch back, w-k still
+held the handover to A), and `trial-fails` (after the rollback, w-a still held A's handover to B,
+the others two grants of A).
 
 ## Outward doors
 
