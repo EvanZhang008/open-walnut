@@ -15,7 +15,7 @@
  * of his in it since the question keeps it as it is, and the next question asks again.
  */
 import { mergeThreads, ThreadError, type OrgThread, type ThreadsFile, type ThreadWriter } from '../org/threads-model.js';
-import { sameSubjectCandidates, strongMatch } from '../org/thread-same-subject.js';
+import { candidatesIn, sameSubjectCandidates, strongMatch, subjectIndex, type SubjectIndex } from '../org/thread-same-subject.js';
 import { markerRe } from './status-marker.js';
 
 /** Held threads one question asks about at most. */
@@ -71,8 +71,56 @@ export function holdRepeatTitles(file: ThreadsFile, titles: readonly TitleMark[]
   return { file: held.size ? { ...file, threads } : file, held };
 }
 
+/** Threads he wrote in last before an untitled one opened, listed beside it, and how far back. */
+export const NEAR_RECENT = 2;
+const NEAR_WINDOW_MS = 24 * 3600_000;
+/** Telling title words a thread shares with an untitled one's first message to be listed beside it. */
+const NEAR_WORDS = 2;
+
+/**
+ * The open threads an untitled thread of his may be the subject of, listed beside it so the answer
+ * can merge it there (2026-11-24, the threads inspection, item 5: a message of his more than three
+ * minutes after his last opens a thread, and only a listed thread could take it, so on his VP about
+ * nine subjects had two or three threads each). Title words found 1 of 11 such repeats: his short
+ * follow-ups share none. The threads he wrote in last before it found 6 (2 of them): the
+ * NEAR_RECENT he wrote in last within NEAR_WINDOW_MS, then the one his first words read most like.
+ * Only a thread his message opened, not one the node opened. Pure.
+ */
+export function nearThreads(file: ThreadsFile, t: OrgThread, now: number, index?: SubjectIndex): string[] {
+  const first = t.messages[0];
+  if (t.titled || t.closed || t.movedTo || t.opener || !first) return [];
+  const inPool = (x: OrgThread) => x.id !== t.id && !x.closed && !x.movedTo && x.createdAt <= first.at;
+  const pool = file.threads.filter(inPool);
+  const lastBefore = (x: OrgThread) => x.messages.reduce((a, m) => (m.at < first.at && m.at > a ? m.at : a), '');
+  const recent = pool.map((x) => ({ id: x.id, at: lastBefore(x) }))
+    .filter((r) => r.at && Date.parse(first.at) - Date.parse(r.at) <= NEAR_WINDOW_MS)
+    .sort((a, b) => b.at.localeCompare(a.at)).slice(0, NEAR_RECENT).map((r) => r.id);
+  const ids = new Set(pool.map((x) => x.id));
+  const like = candidatesIn(index ?? openIndex(file, now), first.text)
+    .find((c) => c.shared >= NEAR_WORDS && ids.has(c.id) && !recent.includes(c.id))?.id;
+  return like ? [...recent, like] : recent;
+}
+
+/** The node's open threads with their telling words, read once for every untitled thread (nearAll). Pure. */
+function openIndex(file: ThreadsFile, now: number): SubjectIndex {
+  return subjectIndex([{ task: { id: file.taskId, title: '' }, threads: file.threads.filter((x) => !x.closed && !x.movedTo) }], now);
+}
+
+/** nearThreads of each untitled thread of `threads` that has any, the index built once. Pure. */
+export function nearAll(file: ThreadsFile, threads: readonly OrgThread[], now: number): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const todo = threads.filter((t) => !t.titled && !t.opener);
+  if (!todo.length) return out;
+  const index = openIndex(file, now);
+  for (const t of todo) {
+    const near = nearThreads(file, t, now, index);
+    if (near.length) out.set(t.id, near);
+  }
+  return out;
+}
+
 /** The line the question adds beside its title line: an untitled thread that is another listed one's subject. */
-export const MERGE_UNTITLED_LINE = 'One that is the subject of another listed thread instead: FOR_USER_THREAD_MERGE: <ref> | <that ref> (Walnut puts it under that one before your lines, so that one\'s line speaks for both).';
+export const MERGE_UNTITLED_LINE = 'One that is the subject of another listed thread instead: FOR_USER_THREAD_MERGE: <ref> | <that ref> (Walnut puts it under that one before your lines, so that one\'s line speaks for both; one waiting on him takes no line: answer his words there with thread_update). Unsure: keep it apart.';
 
 /** The question's part for the held threads it asks about (each with the listed ref it reads like), '' for none. Pure. */
 export function mergeQuestionPart(asked: ReadonlyArray<{ ref: string; held: HeldTitle; likeRef: string }>): string {

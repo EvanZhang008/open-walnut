@@ -6,14 +6,15 @@
  * need first (needRank), newest within a need. Below the needs (a reaction to ask about, the rest)
  * the ones listed longest ago come first, never listed first of all, so the places left go round:
  * a line that changes nothing writes nothing, so newest first would list the same ones again. A
- * thread with a held title brings the thread it reads like right after it, so their merge is asked.
+ * thread with a held title brings the thread it reads like right after it, and an untitled one the
+ * threads it may be the subject of (status-thread-title.ts nearThreads), so their merge is asked.
  * Pure, but for the record of when each thread was last listed (in memory, per task).
  */
 import { summaryBehindHim, summaryOwed, threadOverdue } from '../org/thread-view.js';
 import { asksHimNow } from '../org/thread-summary-content.js';
 import type { OrgThread } from '../org/threads-model.js';
 
-type Pickable = OrgThread & { asked?: boolean; joined?: unknown; held?: { like: string }; wrote?: boolean; untitled?: boolean; retitle?: boolean };
+type Pickable = OrgThread & { asked?: boolean; joined?: unknown; held?: { like: string }; wrote?: boolean; untitled?: boolean; retitle?: boolean; near?: readonly string[]; besideOnly?: boolean };
 
 /** Ranks from here on are no need of a line: they go round by when they were listed last. */
 const ROUND = 6;
@@ -61,11 +62,15 @@ export function byNeed<T extends Pickable>(listed: readonly T[], now: number = D
   const placed = new Set<string>();
   const byId = new Map(sorted.map((t) => [t.id, t] as const));
   for (const t of sorted) {
-    if (placed.has(t.id)) continue;
+    // Listed only beside the untitled thread that brought it, never for a rank of its own.
+    if (placed.has(t.id) || t.besideOnly) continue;
     out.push(t);
     placed.add(t.id);
-    const like = t.held ? byId.get(t.held.like) : undefined;
-    if (like && !placed.has(like.id)) { out.push(like); placed.add(like.id); }
+    // And an untitled one's possible subjects (status-thread-title.ts nearThreads), so their merge can be asked.
+    for (const id of [...(t.held ? [t.held.like] : []), ...(t.untitled ? t.near ?? [] : [])]) {
+      const like = byId.get(id);
+      if (like && !placed.has(like.id)) { out.push(like); placed.add(like.id); }
+    }
   }
   return out;
 }
