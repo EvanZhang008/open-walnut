@@ -41,6 +41,7 @@ const ALLOWED: Record<string, string> = {
   '.session-panel-chat-resize::after': 'a splitter grip, shown only while hovered or dragged',
   '.side-bar-pane-resize::after': 'a splitter grip, shown only while hovered or dragged',
   '.mail-pane-splitter::after': 'a splitter grip, shown only while hovered or dragged',
+  '.sheet-width-edge::after': 'the drag grip on a full-screen sheet\'s side, shown only while hovered or dragged',
   '.session-browser-replay-tick::before': 'a tick mark on the replay timeline, not an edge of a box',
   '.session-browser-replay-tick.is-on::before': 'a tick mark on the replay timeline, not an edge of a box',
 };

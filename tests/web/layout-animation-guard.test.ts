@@ -159,6 +159,7 @@ const ROOT_WRITES: Record<string, string> = {
 const FULLSCREEN_LEFT_READERS: Record<string, string[]> = {
   'styles/fullscreen-tab.css': ['hooks/useFullscreen.tsx', 'components/common/FileContentView.tsx'],
   'components/drawing/drawing-workspace.css': ['components/drawing/DrawingWorkspace.tsx'],
+  'styles/sheet-width.css': ['hooks/useFullscreen.tsx'], // the full-screen session's side edges, shown only while its sheet is
 };
 
 /** `x.style.setProperty(` where x is the root element or the body, by file. */

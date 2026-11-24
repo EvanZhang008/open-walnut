@@ -1,0 +1,51 @@
+/* The side edges of a full-screen session sheet (components/sessions/SheetWidthEdges.tsx).
+   Each is an invisible 8px strip just OUTSIDE the sheet's edge, in the backdrop's gutter
+   (at least 12px), so it never covers the chat's scrollbar inside the sheet. It is fixed to
+   the viewport and placed by the sheet's own insets, which it inherits (fullscreen-tab.css):
+   the sheet animates only its opacity and sets no transform, so a fixed child is placed by the
+   viewport and the sheet's overflow does not clip it. The pointer turns into a sideways arrow
+   on it, and a thin line along the sheet's edge shows it while pointed at, focused or dragged.
+   Drawn only inside a full-screen sheet (SessionPanel renders them only then). */
+.sheet-width-edge {
+  position: fixed;
+  top: var(--fullscreen-gutter, 12px);
+  bottom: var(--fullscreen-gutter, 12px);
+  width: 8px;
+  z-index: 1;
+  cursor: ew-resize;
+  touch-action: none;
+  outline: none;
+}
+.sheet-width-edge--left { left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-side) - 8px); }
+.sheet-width-edge--right { right: calc(var(--fullscreen-side) - 8px); }
+.sheet-width-edge::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sheet-width-edge--left::after { right: 1px; }
+.sheet-width-edge--right::after { left: 1px; }
+.sheet-width-edge:hover::after,
+.sheet-width-edge:focus-visible::after,
+.sheet-width-edge.is-dragging::after { opacity: 0.7; }
+/* The Changed view's sheet is its own wide one: no edges there. */
+.is-changed-open > .sheet-width-edge { display: none; }
+/* A dragged width (data-sheet-width) places the sheet; the Changed view keeps its own. The
+   extra class outweighs the review column's rule in fullscreen-tab.css, whose grow the drag
+   inset already counts. */
+html .open-walnut-fullscreen.session-panel[data-sheet-width]:not(.is-changed-open) {
+  --fullscreen-side: var(--sheet-drag-side);
+}
+/* The chat's margin at a dragged width is the one it had at the default width (the user:
+   "this margin stays the same"), read when the drag began (--sheet-chat-margin); a history
+   that names more room on its left (--history-left) keeps it. At the default width nothing
+   here applies, so the sheet is exactly as before. */
+html .open-walnut-fullscreen[data-sheet-width]:not(.is-changed-open) .session-panel-body .session-history:not([data-review-sidebar]) {
+  padding-left: var(--history-left, var(--sheet-chat-margin, 40px));
+  padding-right: var(--sheet-chat-margin, 40px);
+}

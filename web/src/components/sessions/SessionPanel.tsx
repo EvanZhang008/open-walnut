@@ -160,6 +160,7 @@ import { phoneSessionLabel } from '@/utils/phone-session-label';
 import { usePendingCardTool } from '@/hooks/usePendingCardTool';
 import '@/styles/phone-session.css';
 import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
+import { SheetWidthEdges } from './SheetWidthEdges';
 import { fullscreenPlace } from '@/hooks/fullscreen-owner';
 import { usePanelView, TERMINAL_DOCK_VIEWS, withPanelApp, withPanelAppDoc } from './panel-view';
 import { SessionPluginAppPane, useSessionPaneApps } from './SessionPluginAppPane';
@@ -4509,6 +4510,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           />
         )}
         <ThreadToastBridge apiRef={threads.toastRef} />
+        {/* Full screen on a desktop window: its side edges drag it wider or narrower (a split view, the reading split, Tree Mode's panes and a phone-width window keep their own width). */}
+        {shownFullscreen && !splitOpen && !reader.shown && !treeGrid && !phoneWidth && !(phoneLayer || phoneHostSlot) && <SheetWidthEdges panelRef={panelRef} />}
       </div>
       </ThreadToastProvider>
     </SessionPanelErrorBoundary>

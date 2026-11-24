@@ -249,7 +249,11 @@ export function useDragGesture(opts: DragGestureOptions): UseDragGestureReturn {
   // (Cmd+Tab mid-drag), Escape, and unmount while dragging.
   useEffect(() => {
     const onBlur = () => release(true);
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') release(true); };
+    // An Escape that cancels a running drag is used up by it (defaultPrevented), so the
+    // layer under the handle (a full-screen sheet, a dialog) does not also close on it.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && stateRef.current) { e.preventDefault(); release(true); }
+    };
     // Last-resort net: the primary pointerup listener lives on the capture
     // element, so a handle that is conditionally unrendered MID-drag could take
     // it down with it and leave the gesture armed — the exact failure class this
