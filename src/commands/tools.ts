@@ -330,7 +330,7 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     if (name === 'task_send' || name === 'session_send') {
       const { callHostDaemonTool, formatErrorLines, errorToExitCode, recordCardedCallViaDaemon } = await import('../providers/wn-cli.js')
       const resp = await callHostDaemonTool(name, parsed, process.env, callId)
-      if (resp && !(resp.ok === false && (resp.error.code === 'hub_unreachable' || resp.error.code === 'unknown_caller'))) {
+      if (resp && daemonSendAnswerStands(resp)) {
         // The record takes the daemon's way too: a session's call never goes over HTTP.
         await recordCardedCallViaDaemon(name, parsed, argForm, argPath, resp)
         if (resp.ok) {
@@ -421,4 +421,17 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
 
   console.error(`unknown tools subcommand: ${sub} (expected list | help | call)`)
   process.exitCode = 1
+}
+
+/**
+ * Whether the host daemon's answer to a session's task_send or session_send is the call's answer.
+ * Not when the daemon could not route it at all (`hub_unreachable`, `unknown_caller`): the HTTP path
+ * sends it then. A plugin job's call the Walnut server could not yet tell from its job (it has just
+ * started: `detail.jobsNotKnownYet`) stands, since over HTTP it would go as an unidentified outside
+ * caller's.
+ */
+export function daemonSendAnswerStands(resp: { ok: boolean; error?: { code?: string; detail?: unknown } }): boolean {
+  if (resp.ok !== false) return true
+  if ((resp.error?.detail as { jobsNotKnownYet?: unknown } | undefined)?.jobsNotKnownYet === true) return true
+  return !(resp.error?.code === 'hub_unreachable' || resp.error?.code === 'unknown_caller')
 }

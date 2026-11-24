@@ -129,6 +129,10 @@ interface HostRecord {
   waiters: Array<() => void>
   /** `plugin/job` of every spec the daemon last took from this computer: the jobs it gives that host. */
   assigned?: ReadonlySet<string>
+  /** Another name of this host's daemon: the name its jobs are set up under (daemonKeeperAlias). */
+  keeper?: string
+  /** When this record was made (its host's first connect since this server started). */
+  since: number
   /** Something this pass could not finish (a failure, an upload, a refused job): tried again after `retryMs`. */
   retryWanted: boolean
   retryMs: number
@@ -153,8 +157,12 @@ export interface PluginJobsView {
   hosts: PluginJobsHostView[]
 }
 
+/** How long a host's job set may stay unknown before calls stop waiting for it (jobSetState). */
+export const JOB_SET_PENDING_MS = 60_000
+
 export function createPluginJobsManager(deps: ManagerDeps) {
   const hosts = new Map<string, HostRecord>()
+  const createdAt = deps.now()
   const RETRY_LOADING_MS = 15_000
   const RETRY_FIRST_MS = 30_000
   const RETRY_MAX_MS = 5 * 60_000
@@ -265,10 +273,12 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     const names = handle.daemonNames ? await handle.daemonNames().catch(() => null) : null
     if (names && names.keeper !== hostKey) {
       rec.assigned = undefined
+      rec.keeper = names.keeper
       rec.phase = 'unsupported'
       rec.message = 'another name of a host whose jobs are set up under its own name'
       return
     }
+    rec.keeper = undefined
     if (!handle.hasCapability(PLUGIN_JOBS_CAPABILITY)) {
       rec.assigned = undefined
       rec.phase = 'unsupported'
@@ -371,7 +381,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
       prev.phase = 'checking'
       prev.message = undefined
     } else {
-      hosts.set(handle.hostKey, { handle, phase: 'checking', jobs: [], bundleErrors: {}, limitErrors: {}, running: false, again: false, waiters: [], retryWanted: false, retryMs: 0, retryArmed: false })
+      hosts.set(handle.hostKey, { handle, since: deps.now(), phase: 'checking', jobs: [], bundleErrors: {}, limitErrors: {}, running: false, again: false, waiters: [], retryWanted: false, retryMs: 0, retryArmed: false })
     }
     return reconcile(handle.hostKey)
   }
@@ -493,6 +503,28 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     /** The hosts this computer gives job `job` of `plugin` now (the set each daemon last took; a turned-off plugin's is none). */
     assignedHosts: (plugin: string, job: string): string[] =>
       [...hosts.entries()].filter(([, r]) => r.assigned?.has(`${plugin}/${job}`)).map(([key]) => key),
+    /**
+     * Whether this computer knows the jobs it gives `hostKey` now. `known`: a pass there finished
+     * (its set taken), or that host runs none for a known reason (an older daemon, a failed pass).
+     * `pending`: not yet, and soon: its first pass runs or waits for the plugin catalogue (right
+     * after this server starts: about 14 s on 2026-11-24, in which a host's job calls read as
+     * anonymous), or the host has not connected yet in this server's first minute. Past
+     * JOB_SET_PENDING_MS of either it reads `known` again (with the set it has: none), so a host
+     * whose pass never ends is not waited for on every call. For another name of a daemon, the name
+     * its jobs are set up under decides.
+     */
+    jobSetState: (hostKey: string): 'known' | 'pending' => {
+      const now = deps.now()
+      const stateOf = (key: string): 'known' | 'pending' => {
+        const r = hosts.get(key)
+        if (!r) return now - createdAt < JOB_SET_PENDING_MS ? 'pending' : 'known'
+        if (r.assigned !== undefined || r.phase !== 'checking') return 'known'
+        return now - r.since < JOB_SET_PENDING_MS ? 'pending' : 'known'
+      }
+      const own = stateOf(hostKey)
+      const keeper = hosts.get(hostKey)?.keeper
+      return own === 'known' && keeper ? stateOf(keeper) : own
+    },
     /** Per host: its phase and its jobs (tests, diagnostics). */
     views: () => [...hosts.entries()].map(([key, r]) => ({ key, phase: r.phase, message: r.message, jobs: r.jobs, bundleErrors: r.bundleErrors })),
   }

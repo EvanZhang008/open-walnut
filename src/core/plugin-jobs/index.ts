@@ -244,6 +244,34 @@ let assignmentsForTest: ((plugin: string, job: string) => string[]) | null = nul
 export function _setJobAssignmentsForTesting(fn: ((plugin: string, job: string) => string[]) | null): void {
   assignmentsForTest = fn
 }
+let jobSetStateForTest: ((hostKey: string) => 'known' | 'pending') | null = null
+/** Tests: whether this computer knows the jobs it gives a host yet, in place of the manager's record. */
+export function _setJobSetStateForTesting(fn: ((hostKey: string) => 'known' | 'pending') | null): void {
+  jobSetStateForTest = fn
+}
+
+/**
+ * A relayed call names a plugin job of a host whose job set this server does not know yet (its
+ * first pass there has not ended: right after a restart), and it did not come to be known in the
+ * call's time. Nothing ran: the call is refused as one to ask again, never answered as anonymous.
+ */
+export class JobsNotKnownYetError extends Error {
+  constructor(readonly hostKey: string, job: { plugin: string; job: string }) {
+    super(`This Walnut server is still setting up the plugin jobs of ${hostKey} (it has just started or reconnected), so it cannot yet tell this call comes from job ${job.plugin}/${job.job}. Nothing ran; run it again in a few seconds.`)
+    this.name = 'JobsNotKnownYetError'
+  }
+}
+
+/** How often a call that waits for a host's job set looks again. */
+const JOBS_KNOWN_POLL_MS = 200
+
+function jobSetStateNow(hostKey: string): 'known' | 'pending' {
+  if (jobSetStateForTest) return jobSetStateForTest(hostKey)
+  if (assignmentsForTest) return 'known'
+  // getPluginJobsManager, not `manager`: on a leader it is made lazily, and a host's call may come
+  // before it is; null only where plugin jobs never run (a replica, a test server), with nothing to wait for.
+  return getPluginJobsManager()?.jobSetState(hostKey) ?? 'known'
+}
 
 /**
  * The plugin job a host's daemon names on a call it relays to this server (the `gateway-request`
@@ -256,9 +284,18 @@ export function _setJobAssignmentsForTesting(fn: ((plugin: string, job: string) 
  * The daemon names the job from its own record of the run it started (plugin-jobs-core.ts
  * callerOfRun), never from the caller's words, which ride in the payload and are never read as it.
  * `hostKey` is the host whose link carried the frame (daemon-connection.ts), never one the frame names.
+ *
+ * Until this server knows the jobs it gives that host (manager.ts jobSetState `pending`: its first
+ * pass there, right after a restart), a named job that matches nothing yet is neither kept nor
+ * dropped: the call looks again until `knownBy` (epoch ms; absent: it does not wait, and the name
+ * stays anonymous as before), then throws
+ * JobsNotKnownYetError, so a job's call is never read as an outside caller's for want of the set
+ * (2026-11-24: a vouched job's start check was refused as `external` for 14 s after the Mac's
+ * Walnut restarted). A match is kept at once whatever the state: only a finished pass's set counts.
  */
 export async function relayedJobOf(
   call: { callerSid: string; pluginJob?: { plugin: string; job: string; vouched?: boolean } }, hostKey: string,
+  knownBy?: number,
 ): Promise<{ plugin: string; job: string; vouched?: true } | undefined> {
   const job = call.pluginJob
   if (!job || call.callerSid !== EXTERNAL_CALLER_SID || !hostKey) return undefined
@@ -267,13 +304,23 @@ export async function relayedJobOf(
     return undefined
   }
   const kept = { plugin: job.plugin, job: job.job, ...(job.vouched === true ? { vouched: true as const } : {}) }
-  const given = assignmentsForTest ? assignmentsForTest(job.plugin, job.job) : manager?.assignedHosts(job.plugin, job.job) ?? []
-  if (given.includes(hostKey)) return kept
   const { oneHost } = await import('../hosts/session-host-origin.js')
-  let late = false
-  for (const h of given) if (await oneHost(hostKey, h, () => { late = true })) return kept
-  noteDroppedJob(hostKey, job, late ? 'host-names-check-timed-out' : 'not-given-to-host', { givenTo: given.slice(0, 8) })
-  return undefined
+  for (;;) {
+    const given = assignmentsForTest ? assignmentsForTest(job.plugin, job.job) : manager?.assignedHosts(job.plugin, job.job) ?? []
+    if (given.includes(hostKey)) return kept
+    let late = false
+    for (const h of given) if (await oneHost(hostKey, h, () => { late = true })) return kept
+    // Not waiting (`knownBy` absent: an op that does not read who calls it): as before, a name not
+    // matched now stays anonymous.
+    if (knownBy === undefined || jobSetStateNow(hostKey) === 'known') {
+      noteDroppedJob(hostKey, job, late ? 'host-names-check-timed-out' : 'not-given-to-host', { givenTo: given.slice(0, 8) })
+      return undefined
+    }
+    const left = knownBy - Date.now()
+    // The refusal's line is written where the call is refused (gateway-answer.ts serveRelayedCall).
+    if (left <= 0) throw new JobsNotKnownYetError(hostKey, job)
+    await new Promise<void>((r) => { const t = setTimeout(r, Math.min(JOBS_KNOWN_POLL_MS, left)); t.unref?.() })
+  }
 }
 
 export function pluginJobsDisconnected(hostKey: string): void {
@@ -281,6 +328,7 @@ export function pluginJobsDisconnected(hostKey: string): void {
 }
 
 export function _resetPluginJobsManagerForTesting(): void {
+  jobSetStateForTest = null
   unsubscribe?.()
   unsubscribe = null
   manager = null

@@ -427,6 +427,44 @@ export const REAL_DIR_BACKOFF_MS = BUILD_BACKOFF_MS
 
 /** A liveness probe whose timer fired late (this loop was held) watches the wire that much more, at most this. */
 const PROBE_EXTRA_MS = 1_000
+/**
+ * A relayed plugin-job call waits at most this long for this server to know the jobs it gives the
+ * host (plugin-jobs relayedJobOf), leaving JOB_SET_SPARE_MS of the relay's time to the op itself;
+ * refused then, it says to ask again after JOB_SET_RETRY_MS.
+ */
+const JOB_SET_WAIT_MAX_MS = 15_000
+const JOB_SET_SPARE_MS = 5_000
+const JOB_SET_RETRY_MS = 5_000
+/** How long a relay's job verdict is kept for a resend of the same relay (well past a relay's time). */
+const JOB_VERDICT_KEEP_MS = 120_000
+const jobVerdicts = new Map<string, Promise<unknown>>()
+
+/**
+ * One verdict per relay of one host (`host:instanceId:relayId`): a resend of it on another socket
+ * of the same host shares the first one's. The host is part of the key, so a verdict that kept a
+ * job for one host is never handed to a frame another host's link carried.
+ */
+function sharedJobVerdict<T>(hostKey: string, instanceId: string | undefined, relayId: number, decide: () => Promise<T>): Promise<T> {
+  if (!instanceId) return decide()
+  const key = `${hostKey}:${instanceId.slice(0, 80)}:${relayId}`
+  const held = jobVerdicts.get(key)
+  if (held) return held as Promise<T>
+  const p = decide()
+  jobVerdicts.set(key, p)
+  const t = setTimeout(() => { if (jobVerdicts.get(key) === p) jobVerdicts.delete(key) }, JOB_VERDICT_KEEP_MS)
+  t.unref?.()
+  return p
+}
+
+/** Whether the op a relayed tools.call names reads the vouched job (plugin-jobs/job-caller.ts opReadsVouchedJob). */
+async function opReadsJobNamed(name: unknown): Promise<boolean> {
+  if (typeof name !== 'string') return false
+  const { getOp } = await import('../ops/index.js')
+  const op = getOp(name)
+  if (!op) return false
+  const { opReadsVouchedJob } = await import('../core/plugin-jobs/job-caller.js')
+  return opReadsVouchedJob(op)
+}
 
 /** One liveness probe (DaemonConnection.probeLiveness, recheckQuiet): the socket it pinged and what came back. */
 interface LivenessProbe {
@@ -3901,12 +3939,22 @@ export class DaemonConnection {
     // of the run it started; a caller's words ride in the payload and never become it. Kept only for an
     // anonymous call naming a job this server gives this very host now (relayedJobOf), so a host names
     // its own jobs alone; else the call is plain `external`, as from an older daemon. Its `vouched`
-    // (the daemon saw the call's process inside the run) is kept exactly as sent.
-    const { relayedJobOf } = await import('../core/plugin-jobs/index.js')
-    const job = await relayedJobOf(call, this.hostKey).catch(() => undefined)
+    // (the daemon saw the call's process inside the run) is kept exactly as sent. Right after this
+    // server starts it may not know yet which jobs it gives this host (relayedJobOf): a vouched job's
+    // call to an op that reads who it is (a start, the start check, a message: opReadsVouchedJob)
+    // waits for that within its time, leaving JOB_SET_SPARE_MS of it to the op, and is refused as
+    // one to ask again when it still does not know, never run as an outside caller's. The verdict is
+    // one per relay: a resend of it (a new socket) shares it, so a call told "nothing ran" never runs.
+    const { relayedJobOf, JobsNotKnownYetError } = await import('../core/plugin-jobs/index.js')
+    const { gatewayHubTimeoutMs } = await import('./gateway-core.js')
+    const waits = call.pluginJob?.vouched === true && call.capability === 'tools.call' && await opReadsJobNamed((call.payload as { name?: unknown } | null)?.name)
+    const budget = call.answerInMs ?? gatewayHubTimeoutMs()
+    const knownBy = waits ? receivedAt + Math.min(JOB_SET_WAIT_MAX_MS, budget - JOB_SET_SPARE_MS) : undefined
+    const decide = () => relayedJobOf(call, this.hostKey, knownBy)
+      .then((job) => ({ job, notKnown: undefined as string | undefined }), (err) => ({ job: undefined, notKnown: err instanceof JobsNotKnownYetError ? err.message : undefined }))
+    const { job, notKnown } = call.pluginJob ? await sharedJobVerdict(this.hostKey, call.instanceId, call.relayId, decide) : await decide()
     if (job) call.pluginJob = job
     else delete call.pluginJob
-    const { gatewayHubTimeoutMs } = await import('./gateway-core.js')
     await serveRelayedCall(call, {
       hostKey: this.hostKey,
       hasCapability: (c) => this.hasCapability(c),
@@ -3920,6 +3968,8 @@ export class DaemonConnection {
       // The refusal's line is written by serveRelayedCall, behind the shared refusal log.
       refuse: (c) => this.isReadOnlyRemote
         ? { relayId: c.relayId, error: 'this relay reached a test server, not the Walnut that owns this host (attached read only); run it again', errorCode: 'hub_unreachable' }
+        // Nothing ran: `hub_unreachable` is the code every client reads as "ask again".
+        : notKnown ? { relayId: c.relayId, error: notKnown, errorCode: 'hub_unreachable', detail: { retryAfterMs: JOB_SET_RETRY_MS, jobsNotKnownYet: true } }
         : null,
       // The host delivers messages between its own sessions itself and journals
       // them; its nudge reaches us before this request (one socket, in order).

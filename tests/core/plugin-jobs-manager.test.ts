@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createPluginJobsManager,
+  JOB_SET_PENDING_MS,
   jobsVerdict,
   withoutSecrets,
   LOCAL_HOST,
@@ -342,6 +343,60 @@ describe('plugin jobs manager: what each daemon is told', () => {
     h.update({ state: 'disabled' })
     await mgr.reconcileAll()
     expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual([])
+  })
+
+  it('jobSetState: pending until the first pass on a host ends, then known whatever it gave (2026-11-24)', async () => {
+    // Right after a restart the catalogue is still loading: the set a host is given is not known
+    // yet, so a job's relayed call must not be read as an outside caller's (plugin-jobs relayedJobOf).
+    const h = harness({ plugins: null })
+    const devbox = fakeDaemon('devbox')
+    const mgr = h.manager()
+    // Not connected yet, in this server's first minute: pending too.
+    expect(mgr.jobSetState('devbox')).toBe('pending')
+    await mgr.connected(devbox.link)
+    expect(mgr.jobSetState('devbox')).toBe('pending')
+    h.state.plugins = [acmePlugin({ runOn: 'devbox' })]
+    h.timers[0]!.fn()
+    await ticks(5)
+    expect(mgr.jobSetState('devbox')).toBe('known')
+    expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual(['devbox'])
+    // A reconnect keeps the set it knew while its new pass runs.
+    await mgr.connected(devbox.handle())
+    expect(mgr.jobSetState('devbox')).toBe('known')
+    // A host given nothing is known too (its calls read as anonymous at once), and so is an older daemon.
+    const other = fakeDaemon('otherbox')
+    await mgr.connected(other.link)
+    expect(mgr.jobSetState('otherbox')).toBe('known')
+    const old = fakeDaemon('oldbox', { caps: ['snapshot-v1'] })
+    await mgr.connected(old.link)
+    expect(mgr.jobSetState('oldbox')).toBe('known')
+  })
+
+  it('jobSetState: a pass that never ends, or a host that never connects, stops being waited for after a minute', async () => {
+    const h = harness({ plugins: null })
+    const devbox = fakeDaemon('devbox')
+    const mgr = h.manager()
+    await mgr.connected(devbox.link)
+    h.state.clock += JOB_SET_PENDING_MS - 1
+    expect(mgr.jobSetState('devbox')).toBe('pending')
+    expect(mgr.jobSetState('neverbox')).toBe('pending')
+    h.state.clock += 1
+    expect(mgr.jobSetState('devbox')).toBe('known')
+    expect(mgr.jobSetState('neverbox')).toBe('known')
+    expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual([])
+  })
+
+  it('jobSetState: another name of a daemon is known once the name its jobs are set up under is', async () => {
+    const h = harness({ plugins: [acmePlugin({ runOn: 'devbox' })] })
+    const devbox = fakeDaemon('devbox')
+    const alias = fakeDaemon('newdev')
+    const names = async () => ({ keeper: 'devbox', aliases: ['devbox', 'newdev'] })
+    const mgr = h.manager()
+    await mgr.connected({ ...alias.link, hostKey: 'newdev', daemonNames: names })
+    expect(mgr.views().find((v) => v.key === 'newdev')!.phase).toBe('unsupported')
+    expect(mgr.jobSetState('newdev')).toBe('pending')
+    await mgr.connected({ ...devbox.link, hostKey: 'devbox', daemonNames: names })
+    expect(mgr.jobSetState('newdev')).toBe('known')
   })
 
   it('assignedHosts: a daemon older than plugin jobs is given none', async () => {

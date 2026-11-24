@@ -44,7 +44,7 @@ vi.mock('../../src/ops/index.js', async (importOriginal) => ({
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import * as router from '../../src/core/peers/capability-router.js'
 import { relayedCallOf, resetRelayedCallsForTest, serveRelayedCall } from '../../src/core/peers/gateway-answer.js'
-import { _setJobAssignmentsForTesting, relayedJobOf } from '../../src/core/plugin-jobs/index.js'
+import { _setJobAssignmentsForTesting, _setJobSetStateForTesting, relayedJobOf } from '../../src/core/plugin-jobs/index.js'
 import { log } from '../../src/logging/index.js'
 
 type Internals = { handleGatewayRequest: (e: unknown) => Promise<void> }
@@ -82,6 +82,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   _setJobAssignmentsForTesting(null)
+  _setJobSetStateForTesting(null)
+  delete process.env.WALNUT_GATEWAY_TIMEOUT_MS
   vi.restoreAllMocks()
   DaemonConnection.resetGatewayRelaysForTest()
 })
@@ -224,5 +226,104 @@ describe('an older leader', () => {
     expect(seen[0]![1]).toBe('external')
     expect(seen[0]![5]).toEqual({})
     expect(sent).toEqual([{ relayId: relayN, result: { done: 1 } }])
+  })
+})
+
+describe('right after this server starts: a job named before it knows the host\'s job set (2026-11-24)', () => {
+  // Real use: the Mac's Walnut restarted, and for 14 s, until its first pass on clouddev ended, a
+  // vouched job's task_start_check was read as `external` and refused bypass. Unknown is neither
+  // kept nor dropped: the call waits within its time, and is refused as one to ask again.
+  let known = false
+  beforeEach(() => { known = false; _setJobSetStateForTesting(() => known ? 'known' : 'pending') })
+
+  const VOUCHED = { ...JOB, vouched: true }
+  const check = (over: Record<string, unknown> = {}) => frame({ caller: VOUCHED, payload: { name: 'task_start_check', args: { mode: 'bypass' } }, ...over })
+
+  async function served(host: string, ev: Record<string, unknown>, conn = new DaemonConnection(host, null)) {
+    const results: Array<Record<string, unknown>> = []
+    vi.spyOn(conn, 'send').mockImplementation((async (cmd: string, params: Record<string, unknown>) => { if (cmd === 'gateway-result') results.push(params); return { ok: true } }) as never)
+    const seen: unknown[][] = []
+    vi.spyOn(router, 'handleGatewayCapability').mockImplementation(async (...args: unknown[]) => { seen.push(args); return { ok: true, result: { done: 1 } } })
+    const at = Date.now()
+    await (conn as unknown as Internals).handleGatewayRequest(ev)
+    return { seen, results, ms: Date.now() - at }
+  }
+
+  it('the set becomes known within the call\'s time: the call waited and carries the job', async () => {
+    given = {}
+    setTimeout(() => { known = true; given = { 'acme-sync/worker': ['devbox'] } }, 400)
+    const r = await served('devbox', check())
+    expect(r.ms).toBeGreaterThanOrEqual(300)
+    expect(r.seen).toHaveLength(1)
+    expect(r.seen[0]![5]).toEqual({ pluginJob: { plugin: 'acme-sync', job: 'worker', vouched: true } })
+    expect(r.results).toEqual([{ relayId: relayN, result: { done: 1 } }])
+  })
+
+  it('known, but not given to that host: plain external, as before', async () => {
+    setTimeout(() => { known = true }, 200)
+    const r = await served('otherbox', check())
+    expect(r.seen).toHaveLength(1)
+    expect(r.seen[0]![5]).toEqual({})
+  })
+
+  it('a match is kept at once while the set is still pending (another name of the same daemon too)', async () => {
+    aliases.pairs = [['newdev', 'devbox']]
+    for (const host of ['devbox', 'newdev']) {
+      const r = await served(host, check())
+      expect(r.ms).toBeLessThan(200)
+      expect(r.seen[0]![5]).toEqual({ pluginJob: { plugin: 'acme-sync', job: 'worker', vouched: true } })
+    }
+  })
+
+  it('still unknown when its time is spent: refused as one to ask again, and nothing ran', async () => {
+    given = {}
+    // The relay's own time (answerInMs) of 5.6 s leaves 0.6 s to wait (5 s are kept for the op).
+    const r = await served('devbox', check({ answerInMs: 5600 }))
+    expect(r.ms).toBeGreaterThanOrEqual(500)
+    expect(r.ms).toBeLessThan(2000)
+    expect(r.seen).toEqual([])
+    expect(r.results).toHaveLength(1)
+    expect(r.results[0]).toMatchObject({ relayId: relayN, errorCode: 'hub_unreachable', detail: { retryAfterMs: 5000, jobsNotKnownYet: true } })
+    expect(String(r.results[0]!.error)).toMatch(/still setting up the plugin jobs of devbox.*acme-sync\/worker.*Nothing ran/)
+  })
+
+  it('a resend of the same relay shares the first verdict: told "nothing ran", it never runs', async () => {
+    given = {}
+    const ev = check({ answerInMs: 5600 })
+    const first = await served('devbox', ev)
+    expect(first.results[0]).toMatchObject({ errorCode: 'hub_unreachable' })
+    // Now known and given: the same relay again (its daemon resent it on a new socket) is still refused.
+    known = true
+    given = { 'acme-sync/worker': ['devbox'] }
+    const again = await served('devbox', { ...ev })
+    expect(again.seen).toEqual([])
+    expect(again.results[0]).toMatchObject({ errorCode: 'hub_unreachable' })
+    // The same relay ids on another host's link never take devbox's verdict.
+    const elsewhere = await served('otherbox', { ...ev })
+    expect(elsewhere.seen).toHaveLength(1)
+    expect(elsewhere.seen[0]![5]).toEqual({})
+    // A new relay runs with the job.
+    const fresh = await served('devbox', check())
+    expect(fresh.seen[0]![5]).toEqual({ pluginJob: { plugin: 'acme-sync', job: 'worker', vouched: true } })
+  })
+
+  it('never waits: a call that names no job, a session\'s call, an unvouched job, or an op that does not read the job', async () => {
+    given = {}
+    for (const ev of [
+      frame(), frame({ callerSid: 'sess-1', caller: VOUCHED }), check({ caller: JOB }),
+      frame({ caller: VOUCHED, payload: { name: 'task_list', args: {} } }),
+    ]) {
+      const r = await served('devbox', ev)
+      expect(r.ms).toBeLessThan(200)
+      expect(r.seen).toHaveLength(1)
+      expect(r.seen[0]![5]).toEqual({})
+    }
+  })
+
+  it('relayedJobOf: with a time to wait an unknown set throws once it is spent; without one it reads anonymous at once', async () => {
+    given = {}
+    const call = { callerSid: 'external', pluginJob: { plugin: 'acme-sync', job: 'worker', vouched: true } }
+    await expect(relayedJobOf(call, 'devbox', Date.now() + 50)).rejects.toThrow(/still setting up/)
+    expect(await relayedJobOf(call, 'devbox')).toBeUndefined()
   })
 })
