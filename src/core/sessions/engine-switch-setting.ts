@@ -34,11 +34,11 @@ function settingWords(err: unknown): string | null {
  * What a refusal by a setting says: `words` for the task's failed switch (the panel's line puts
  * "The switch to X did not start:" before it and a full stop after), `as` the caller's answer.
  */
-function refusalOf(words: string, to: { engine: SessionEngine; host: string }, from: { engine?: SessionEngine; move: boolean }, make: MakeError): { words: Error; as: Error } {
+function refusalOf(words: string, to: { engine: SessionEngine; host: string }, from: { engine?: SessionEngine; move: boolean; stays?: string }, make: MakeError): { words: Error; as: Error } {
   const bare = words.trim().replace(/[.\s]+$/, '');
   const where = to.host === LOCAL_HOST ? 'this Mac' : to.host;
   const answer = from.move
-    ? `The move to ${where} did not happen: ${bare}. The task stays where it was; move it again once that setting is changed.`
+    ? `The move to ${where} did not happen: ${bare}. ${from.stays ? `${from.stays} Move` : 'The task stays where it was; move'} it again once that setting is changed.`
     : `The switch to ${engineCaps(to.engine).displayName} did not start: ${bare}. The task stays on ${engineCaps(resolveEngine(from.engine)).displayName}; pick ${engineCaps(to.engine).displayName} again once that setting is changed.`;
   return { words: new Error(bare), as: make(answer, 422, ENGINE_CONFIG_CODE) };
 }
@@ -54,9 +54,13 @@ export async function settingPreflight(
   return refused ? refusalOf(refused.message, { ...to, host }, from, make) : null;
 }
 
-/** A start that a setting refused (`err` from task-start.ts), said as that setting; null for any other failure. */
+/**
+ * A start that a setting refused (`err` from task-start.ts), said as that setting; null for any
+ * other failure. `from.stays`: where a move's task and its copied work are now (the work was
+ * copied before the start refused).
+ */
 export function settingRefusal(
-  err: unknown, to: { engine: SessionEngine; host: string }, from: { engine?: SessionEngine; move: boolean }, make: MakeError,
+  err: unknown, to: { engine: SessionEngine; host: string }, from: { engine?: SessionEngine; move: boolean; stays?: string }, make: MakeError,
 ): { words: Error; as: Error } | null {
   const words = settingWords(err);
   return words ? refusalOf(words, { ...to, host: normalizeHost(to.host) }, from, make) : null;

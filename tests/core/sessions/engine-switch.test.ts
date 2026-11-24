@@ -1290,4 +1290,25 @@ describe('a switch a setting refuses (engines.codex: no provider reaches the hos
     expect(old?.archived).toBeFalsy();
     expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
   });
+
+  it('a pick queued behind another switch and refused by the setting keeps its message for "Send here"', async () => {
+    // Review C8-37 S1: the queued pick's refusal was recorded twice, the second time with no message.
+    const { taskId } = await taskOn('claude');
+    let release!: () => void;
+    edges.gate = new Promise<void>((r) => { release = r; });
+    const first = requestEngineSwitch({ taskId, engine: 'pi', source: 'ui' });
+    await vi.waitFor(() => expect(edges.starts).toHaveLength(1), { timeout: 10_000 });
+    const behind = requestEngineSwitch({ taskId, engine: 'codex', message: 'Then carry on in Codex.', source: 'ui', when: 'turn_end' }).catch((e: unknown) => e);
+    const { CodexEngineConfigError } = await import('../../../src/providers/codex-engine-config.js');
+    edges.codexRefusal = new CodexEngineConfigError(words.replace(/^engines\.codex: /, ''));
+    edges.gate = undefined;
+    release();
+    await first;
+    expect(await behind).toMatchObject({ status: 422, code: 'engine_config' });
+    const sw = (await getTask(taskId)).engine_switch;
+    expect(sw).toMatchObject({ state: 'failed', message: expect.stringContaining('Then carry on in Codex.') });
+    // The setting's words alone: the panel's line says "The switch to Codex did not start:" itself.
+    expect(sw?.error).toMatch(/^engines\.codex: provider "local-proxy"/);
+    expect(edges.starts).toHaveLength(1);
+  });
 });

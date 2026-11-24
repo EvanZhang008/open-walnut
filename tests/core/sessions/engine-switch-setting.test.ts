@@ -35,6 +35,12 @@ describe('settingRefusal', () => {
     expect(r.as.message).toContain('The task stays where it was')
   })
 
+  it('a move refused after its work was copied says where that work is kept', () => {
+    const stays = 'The task stays on this Mac; the copied work is kept at /work/t1.'
+    const r = settingRefusal(setting, { engine: 'codex', host: 'devbox' }, { engine: 'claude', move: true, stays }, make)!
+    expect(r.as.message).toMatch(/did not happen: engines\.codex: .*\. The task stays on this Mac; the copied work is kept at \/work\/t1\. Move it again once that setting is changed\.$/)
+  })
+
   it('a start answered engine_config with no cause still reads as the setting', () => {
     const bare = new QuickStartError('Task t1 could not start: engines.codex: provider.base_url is required.', 422, { code: 'engine_config' })
     expect(settingRefusal(bare, { engine: 'codex', host: '__local__' }, { engine: 'claude', move: false }, make)?.as).toMatchObject({ status: 422, code: 'engine_config' })

@@ -38,7 +38,7 @@ import { updateConfig } from '../../src/core/config-manager.js'
 import { configCopyRows, configRowAdmissible } from '../../src/core/replication/config-allowlist.js'
 import { AcpSession } from '../../src/providers/acp-session.js'
 import { CodexEngineConfigError, resolveCodexEngine } from '../../src/providers/codex-engine-config.js'
-import { _resetCodexSourceNotesForTesting, codexWalnutConfig, withCopiedEngines } from '../../src/providers/codex-engine-source.js'
+import { _resetCodexSourceNotesForTesting, codexStartRefusal, codexWalnutConfig, withCopiedEngines } from '../../src/providers/codex-engine-source.js'
 import { setRevokedHostResolver } from '../../src/core/session-channel/revoked-hosts.js'
 
 const PROVIDER = { base_url: 'http://llm.example.test:9000/v1', name: 'my-proxy', model_prefix: 'vendor.', env_key: 'MY_PROXY_KEY' }
@@ -291,5 +291,38 @@ describe('a Codex start off the Mac', () => {
     const { error, env } = await establish()
     expect(error).toBeNull()
     expect(JSON.parse(env!.CODEX_CONFIG)).toMatchObject({ model_provider: 'my-proxy' })
+  })
+})
+
+describe('codexStartRefusal: what an engine switch asks before it changes anything', () => {
+  it('a setting the start would refuse comes back as the start\'s own error', async () => {
+    place = 'host'
+    const saved = process.env.WALNUT_HOST_KEY
+    process.env.WALNUT_HOST_KEY = 'devbox'
+    try {
+      copy = { engines: { codex: { provider: LOOPBACK } } }
+      const refused = await codexStartRefusal({})
+      expect(refused).toBeInstanceOf(CodexEngineConfigError)
+      expect(refused?.transient).toBe(false)
+      expect(refused?.message).toContain('host "devbox"')
+    } finally {
+      if (saved === undefined) delete process.env.WALNUT_HOST_KEY
+      else process.env.WALNUT_HOST_KEY = saved
+    }
+  })
+
+  it('null where the start judges better itself: no copy of the leader\'s settings yet, a host whose link is not up', async () => {
+    place = 'cloud'
+    expect(await codexStartRefusal({})).toBeNull()
+    place = 'mac'
+    await updateConfig({ engines: { codex: { provider: LOOPBACK } } } as never)
+    // No link to devbox in this test: only its live link tells it apart from this machine.
+    expect(await codexStartRefusal({ host: 'devbox' })).toBeNull()
+  })
+
+  it('null when the start may go: this machine with its own loopback provider', async () => {
+    await updateConfig({ engines: { codex: { provider: LOOPBACK } } } as never)
+    expect(await codexStartRefusal({})).toBeNull()
+    expect(await codexStartRefusal({ host: '__local__' })).toBeNull()
   })
 })

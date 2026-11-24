@@ -275,6 +275,8 @@ const personPicks = new Map<string, { tail: Promise<unknown>; latest: number; op
 
 /** A refusal of a pick that waited for another switch, as a failed switch from the task's current session. */
 async function noteRefusedAfterWait(req: EngineSwitchRequest, err: unknown): Promise<void> {
+  // The pick's own run already recorded it, with its message: never over that a second time.
+  if (typeof err === 'object' && err !== null && recordedFailures.has(err)) return;
   try {
     const { taskConversation } = await import('./task-session-claim.js');
     const current = await taskConversation(req.taskId);
@@ -653,7 +655,8 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   if (!claimed) throw new EngineSwitchError('This switch was cancelled or replaced', 409, 'switch_cancelled');
   // A start a setting refuses (a Codex provider that reaches nothing on the host): refused before
   // the old session's turn, process or rows are touched, so the task stays exactly as it was.
-  const setting = await settingPreflight({ engine, host }, { engine: old.engine, move: !!state.move }, switchError);
+  // A check that breaks judges nothing: the start below still refuses what the setting refuses.
+  const setting = await settingPreflight({ engine, host }, { engine: old.engine, move: !!state.move }, switchError).catch(() => null);
   if (setting) throw await fail(taskId, state, setting.words, setting.as);
   log.session.info('engine switch: starting', { taskId, switchId: state.id, from: old.claudeSessionId, fromEngine: resolveEngine(old.engine), to: engine, host });
   // Walnut's status question to the old session: none starts now, one in flight finishes first.
@@ -791,7 +794,7 @@ async function handOver(
     const signIn = signInRefusal(err, state.move ? stays : undefined);
     if (signIn) throw await fail(taskId, state, signIn.words, signIn.as, progress);
     // A setting refused the start after the check above (it changed meanwhile): said as that setting.
-    const setting = settingRefusal(err, { engine, host }, { engine: old.engine, move: !!state.move }, switchError);
+    const setting = settingRefusal(err, { engine, host }, { engine: old.engine, move: !!state.move, stays }, switchError);
     if (setting) throw await fail(taskId, state, setting.words, setting.as, progress);
     throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
       ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. ${stays}`
@@ -1155,7 +1158,7 @@ function mayRun(cur: EngineSwitchState | undefined, state: EngineSwitchState): b
  */
 async function fail(taskId: string, state: EngineSwitchState, err: unknown, as?: unknown, progress?: SwitchProgress): Promise<unknown> {
   const paused = await pauseForRestart(taskId, state, err, progress);
-  if (paused) return new EngineSwitchError(paused, 503, 'server_restarting');
+  if (paused) return recorded(new EngineSwitchError(paused, 503, 'server_restarting'));
   const message = err instanceof Error ? err.message : String(err);
   log.session.warn('engine switch failed; the task stays on its session', { taskId, switchId: state.id, error: message });
   const tm = await import('../task-manager.js');
@@ -1165,5 +1168,12 @@ async function fail(taskId: string, state: EngineSwitchState, err: unknown, as?:
     // A cut run's note is over: this run ended on its own.
     return { engine_switch: { ...state, state: 'failed', error: message, held_rows: undefined, interrupted: undefined } };
   }, { source: 'engine-switch', emitEvent: true }).catch(() => {});
-  return as ?? err;
+  return recorded(as ?? err);
+}
+
+/** Answers fail() gave: the switch's outcome is on the task already (noteRefusedAfterWait). */
+const recordedFailures = new WeakSet<object>();
+function recorded<T>(answer: T): T {
+  if (typeof answer === 'object' && answer !== null) recordedFailures.add(answer);
+  return answer;
 }
