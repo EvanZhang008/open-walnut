@@ -8,7 +8,8 @@
  * link that arrives after it is ended on the host at once, and a code refused after it starts
  * nothing new.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { NoticeStatus } from '@/components/common/NoticeCard';
@@ -50,7 +51,7 @@ export function EngineSignInRow({ engine, status, onStatus, onUseKey, request }:
   const gen = useRef(0);
   const ctx = { engine, host };
 
-  const run = useCallback(async <T,>(what: Exclude<Busy, null>, work: () => Promise<T>): Promise<T | undefined> => {
+  const run = useLeanCallback(async <T,>(what: Exclude<Busy, null>, work: () => Promise<T>): Promise<T | undefined> => {
     setBusy(what);
     setError(null);
     try {
@@ -70,7 +71,7 @@ export function EngineSignInRow({ engine, status, onStatus, onUseKey, request }:
     void cancelEngineSignIn(engine, host, late.id).catch((err: unknown) => log.warn('settings', 'engine sign-in cancel failed', { ...ctx, id: late.id, error: String(err) }));
   };
 
-  const startGoogle = useCallback(async (restart = false) => {
+  const startGoogle = useLeanCallback(async (restart = false) => {
     const g = gen.current;
     const started = await run('start', () => startEngineSignIn(engine, host, restart));
     if (!started) return;
@@ -80,7 +81,7 @@ export function EngineSignInRow({ engine, status, onStatus, onUseKey, request }:
     setOpen(true);
   }, [run, engine, host]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const check = useCallback(async () => {
+  const check = useLeanCallback(async () => {
     const s = await run('check', () => engineSignInStatus(engine, host, true));
     if (s && alive.current) onStatus(s);
     return s;

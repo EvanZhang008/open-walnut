@@ -6,7 +6,8 @@
  * an older session there still needs it. Opening it dials no host (the server lists the open links
  * only); a host not connected reads so until its row is checked.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { log } from '@/utils/log';
@@ -23,7 +24,7 @@ export function EngineSignInGroup({ engine }: { engine: SignInEngine }) {
   const request = useSignInRequest();
   const [keyFocus, setKeyFocus] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useLeanCallback(async () => {
     setLoading(true);
     try {
       const r = await engineSignInHosts(engine);
@@ -40,7 +41,7 @@ export function EngineSignInGroup({ engine }: { engine: SignInEngine }) {
   }, [engine]);
   useEffect(() => { void load(); }, [load]);
 
-  const onStatus = useCallback((s: EngineSignInStatus) => {
+  const onStatus = useLeanCallback((s: EngineSignInStatus) => {
     setHosts((prev) => prev?.map((h) => (h.host === s.host ? s : h)) ?? prev);
   }, []);
 
