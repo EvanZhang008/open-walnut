@@ -1815,6 +1815,10 @@ export class AcpSession {
     const providerExecutable = !this.cfg.artifacts && !this.remote && engineCaps(this.engineId).acpAdapter?.source === 'bundled'
       ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd, env: mergeAcpSpawnEnv(process.env, overlay) })
       : undefined
+    // Walnut's pi extension on the host is brought up to this Walnut's before pi loads it (pi-extension-refresh.ts).
+    if (this.engineId === 'pi' && !this.cfg.artifacts) {
+      await (await import('../core/agents/pi-extension-refresh.js')).refreshPiExtensionBeforeStart(this.host)
+    }
     // pi's adapter runs on the Node that runs pi, not on a second boot of this file (pi-adapter-node.ts).
     if (this.engineId === 'pi' && providerExecutable && 'adapterCmd' in artifacts) {
       const node = await piNodeFor(providerExecutable, mergeAcpSpawnEnv(process.env, overlay))

@@ -477,7 +477,7 @@ export class ClaudeCodeImportError extends Error {
   constructor(message: string, readonly status: number) { super(message) }
 }
 
-async function guardedWrite(transport: ImportTransport, p: string, edit: (current: string | null) => string | null): Promise<boolean> {
+export async function guardedWrite(transport: ImportTransport, p: string, edit: (current: string | null) => string | null): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const bytes = await transport.readBytes(p, MAX_FILE_BYTES)
     const current = bytes === null ? null : utf8(bytes)

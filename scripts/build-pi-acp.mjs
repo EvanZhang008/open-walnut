@@ -78,8 +78,10 @@ export function patchPiAcp(source) {
           if (this.cancelRequested || reason === "aborted") {
             this.pendingTurn?.resolve("cancelled");
           } else if (reason === "error") {
+            // pi's own words go in data.details: the worker logs them, redacted, on the daemon's
+            // log and never in the journal (providerErrorDetail).
             this.pendingTurn?.reject(maybeAuthRequiredError(this.lastAssistant.errorMessage)
-              ?? RequestError.internalError(undefined, "Pi model request failed"));
+              ?? RequestError.internalError(typeof this.lastAssistant.errorMessage === "string" ? { details: this.lastAssistant.errorMessage } : undefined, "Pi model request failed"));
           } else {
             this.pendingTurn?.resolve(reason === "length" ? "max_tokens" : "end_turn");
           }`);

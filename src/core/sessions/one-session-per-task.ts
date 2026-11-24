@@ -135,6 +135,8 @@ export function ensureOneSessionPerTaskGuard(handle: DatabaseType): boolean {
 
 const LOST_CONVERSATION_REASONS = new Set(['conversation_never_persisted', 'remote_conversation_lost']);
 const FAILED_START_REASONS = new Set(['awaiting_spawn', 'api_error']);
+/** What an engine switch writes on the session it makes or resumes (engine-switch.ts). */
+export const ENGINE_SWITCH_MARKS = ['engineSwitch', 'resumedBySwitch', 'switchContext'] as const satisfies ReadonlyArray<keyof SessionRecord>;
 
 /**
  * True only when the session never held a conversation worth continuing: its
@@ -146,6 +148,12 @@ const FAILED_START_REASONS = new Set(['awaiting_spawn', 'api_error']);
  */
 export function sessionHasNoConversation(record: SessionRecord): boolean {
   if (record.archive_reason && LOST_CONVERSATION_REASONS.has(record.archive_reason)) return true;
+  // An engine switch made it (or resumed it) with the task's conversation in its first message:
+  // it holds that conversation even when its first turn failed (2026-11-24: a failed Pi session
+  // counted as empty, so the next switch started a bare session and the carried context was lost).
+  // So a start continues it, never replaces it; an engine that keeps failing is left by switching
+  // engines, which carries that conversation on.
+  if (ENGINE_SWITCH_MARKS.some((mark) => record[mark])) return false;
   if (!record.status_reason || !FAILED_START_REASONS.has(record.status_reason)) return false;
   if (record.process_status === 'running' || record.process_status === 'idle') {
     return record.status_reason === 'awaiting_spawn' && !record.pid;

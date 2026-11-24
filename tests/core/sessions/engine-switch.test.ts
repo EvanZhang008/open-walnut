@@ -15,6 +15,7 @@ const edges = vi.hoisted(() => ({
   stops: [] as string[],
   writes: [] as Array<{ host: string; path: string; content: string }>,
   failStart: false,
+  failBeforeRow: false,
   /** The old session's history cannot be read (a remote host dropped). */
   failHistory: false,
   nextSid: 0,
@@ -78,6 +79,7 @@ vi.mock('../../../src/core/sessions/task-start.js', () => ({
   startSessionForTask: async (params: Record<string, unknown>) => {
     edges.starts.push(params);
     if (edges.gate) await edges.gate;
+    if (edges.failBeforeRow) throw new Error('engine would not start');
     const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js');
     const sid = `new-sid-${++edges.nextSid}`;
     // A start that fails after its row exists: the restore must clear it.
@@ -126,7 +128,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
+  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failBeforeRow = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
   owner.clear();
@@ -1005,6 +1007,100 @@ describe('engine switch inside a task', () => {
     expect(disk.transit).toBeUndefined();
     expect(disk.queues[sid]).toBeUndefined();
     expect(disk.queues[res.sessionId!]?.map((r) => r.message)).toEqual(['stranded on the old session']);
+  });
+
+  // 2026-11-24: Claude Code to Pi, Pi failed its first turn, and every switch after it started a
+  // bare session (the failed Pi session read as "no conversation"), detached the Pi session the
+  // panel showed, and the panel's engine picker stayed locked on it.
+  it('a switched-to session whose first turn failed still holds the conversation: the way back resumes Claude Code', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    const pi = (await requestEngineSwitch({ taskId, engine: 'pi', message: 'On Pi.', source: 'ui' })).sessionId!;
+    edges.history[pi] = [{ role: 'user', text: 'On Pi.', timestamp: '2026-10-20T11:00:00Z', hints: [{ kind: 'engine-switch', text: 'carried: the magic word is PELICAN' }] }];
+    await updateSessionRecord(pi, { process_status: 'error', status_reason: 'api_error', messageCount: 1, errorMessage: 'protocol: ACP provider protocol operation failed' } as never);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(pi);
+
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', message: 'continue', source: 'ui' });
+    expect(back).toMatchObject({ state: 'done', fromSessionId: pi, sessionId: sid, resumed: true });
+    expect(edges.starts).toHaveLength(1);
+    expect(await getSessionByClaudeId(pi)).toMatchObject({ taskId, archive_reason: 'engine_switched:claude', supersededBy: sid });
+  });
+
+  it('a failed switched-to session handed to a third engine carries the task\'s context there', async () => {
+    const { taskId } = await taskOn('claude');
+    const pi = (await requestEngineSwitch({ taskId, engine: 'pi', message: 'On Pi.', source: 'ui' })).sessionId!;
+    // What Pi's journal holds after its first turn failed (read from the real session): the first
+    // message with the context it carried, then the error line.
+    edges.history[pi] = [
+      { role: 'user', text: 'On Pi.', timestamp: '2026-10-20T11:00:00Z', hints: [{ kind: 'engine-switch', text: 'carried: the magic word is PELICAN' }] },
+      { role: 'system', text: 'protocol: ACP provider protocol operation failed', timestamp: '2026-10-20T11:00:05Z' },
+    ];
+    await updateSessionRecord(pi, { process_status: 'error', status_reason: 'api_error', messageCount: 1 } as never);
+    const res = await requestEngineSwitch({ taskId, engine: 'opencode', message: 'continue', source: 'ui' });
+    expect(res).toMatchObject({ state: 'done', fromSessionId: pi });
+    expect(String(edges.starts.at(-1)?.message)).toContain('the magic word is PELICAN');
+    expect(await getSessionByClaudeId(pi)).toMatchObject({ taskId, archive_reason: 'engine_switched:opencode', supersededBy: res.sessionId });
+  });
+
+  it('a task an older Walnut left on a bare start (its failed switched-to session taken off it) still resumes Claude Code', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    const pi = (await requestEngineSwitch({ taskId, engine: 'pi', message: 'On Pi.', source: 'ui' })).sessionId!;
+    edges.history[pi] = [{ role: 'user', text: 'On Pi.', timestamp: '2026-10-20T11:00:00Z', hints: [{ kind: 'engine-switch', text: 'carried: the magic word is PELICAN' }] }];
+    await updateSessionRecord(pi, { process_status: 'error', status_reason: 'api_error', messageCount: 1 } as never);
+    // What the old rule did on the next switch (to OpenCode): Pi's row taken off the task, a bare start in its place.
+    const { detachTaskSession } = await import('../../../src/core/sessions/task-session-claim.js');
+    await detachTaskSession(taskId, pi, 'no conversation, replaced by a new start');
+    await new Promise((r) => setTimeout(r, 5));
+    // It ran in the task's own directory, not where the work was.
+    await createSessionRecord('bare-opencode', taskId, 'Marina', '/state/tasks/t1');
+    await updateSessionRecord('bare-opencode', { engine: 'opencode', process_status: 'idle', status_reason: 'turn_completed', messageCount: 1, acpCapabilities: { loadSession: true } } as never);
+    await linkSession(taskId, 'bare-opencode').catch(() => {});
+    edges.history['bare-opencode'] = [{ role: 'user', text: 'continue', timestamp: '2026-10-20T11:10:00Z' }];
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe('bare-opencode');
+
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', message: 'Back to Claude Code.', source: 'ui' });
+    expect(back).toMatchObject({ state: 'done', fromSessionId: 'bare-opencode', sessionId: sid, resumed: true });
+    const row = (await getStore()).queues[sid]?.at(-1)?.message ?? '';
+    expect(row).toContain('On Pi.');
+    expect(row).toContain('continue');
+    expect(row).not.toContain('PELICAN'); // Claude Code already holds it
+  });
+
+  it('a task whose only session failed its start: the switch replaces it as a switch does, still the task\'s', async () => {
+    const { taskId, sid } = await taskOn('pi');
+    await updateSessionRecord(sid, { process_status: 'error', status_reason: 'api_error', messageCount: 1 } as never);
+    expect(await taskConversation(taskId)).toBeUndefined();
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', message: 'continue', source: 'ui' });
+    expect(res.state).toBe('done');
+    // Kept on its task and marked replaced: a panel open on it follows the task to the new session.
+    expect(await getSessionByClaudeId(sid)).toMatchObject({ taskId, archived: true, archive_reason: 'engine_switched:claude', supersededBy: res.sessionId });
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done', from_session_id: sid, session_id: res.sessionId, to: { engine: 'claude' } });
+    expect((await getTask(taskId)).legacy_session_ids ?? []).not.toContain(sid);
+    // The new session runs where the replaced one was set to run, on its host.
+    expect(edges.starts.at(-1)).toMatchObject({ cwd: '/work/repo', host: '__local__' });
+  });
+
+  it('a failed start of the replacing session: its failed row is the task\'s, the empty row points at it (one-session guard armed)', async () => {
+    const { getDb } = await import('../../../src/core/session-db.js');
+    const { ensureOneSessionPerTaskGuard } = await import('../../../src/core/sessions/one-session-per-task.js');
+    const { taskId, sid } = await taskOn('pi');
+    await updateSessionRecord(sid, { process_status: 'error', status_reason: 'api_error', messageCount: 1 } as never);
+    expect(ensureOneSessionPerTaskGuard(getDb())).toBe(true);
+    edges.failStart = true; // the start makes its row, then fails
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', message: 'continue', source: 'ui' })).rejects.toThrow();
+    const made = `new-sid-${edges.nextSid}`;
+    expect(await getSessionByClaudeId(sid)).toMatchObject({ taskId, archive_reason: 'engine_switched:claude', supersededBy: made });
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(made);
+  });
+
+  it('a failed start that made no row gives the empty row back to its task, unmarked', async () => {
+    const { taskId, sid } = await taskOn('pi');
+    await updateSessionRecord(sid, { process_status: 'error', status_reason: 'api_error', messageCount: 1 } as never);
+    edges.failBeforeRow = true;
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', message: 'continue', source: 'ui' })).rejects.toThrow();
+    const row = await getSessionByClaudeId(sid);
+    expect(row?.archive_reason).toBeUndefined();
+    expect(row?.archived).toBeFalsy();
+    expect(row?.taskId).toBe(taskId);
   });
 
   it('a task with no conversation yet just starts on the engine', async () => {

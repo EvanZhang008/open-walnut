@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('one-session-per-task'));
@@ -27,6 +29,7 @@ import Database from '../../../src/lib/sqlite.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
   dropFileGuardTriggers,
+  ENGINE_SWITCH_MARKS,
   ensureOneSessionPerTaskGuard,
   ONE_SESSION_PER_TASK_TRIGGERS,
   sessionHasNoConversation,
@@ -212,6 +215,35 @@ describe('which session may be replaced', () => {
     expect(sessionHasNoConversation({ ...base, status_reason: 'normal_completion' })).toBe(false);
     expect(sessionHasNoConversation({ ...base, process_status: 'idle', status_reason: 'awaiting_spawn', pid: 9 })).toBe(false);
     expect(sessionHasNoConversation({ ...base, archived: true, archive_reason: 'retry' })).toBe(false);
+  });
+
+  // The class: a session an engine switch made or resumed carries the task's conversation in its
+  // first message, so no failed start makes it empty (2026-11-24, a failed Pi session read as
+  // empty and the next switch dropped the context). A new switch field on SessionRecord must
+  // join ENGINE_SWITCH_MARKS, or be named here as not an engine switch's.
+  it('a session an engine switch made or resumed always holds a conversation', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/core/types.ts'), 'utf8');
+    const body = src.slice(src.indexOf('export interface SessionRecord {'));
+    const fields = [...body.slice(0, body.indexOf('\n}\n')).matchAll(/^  ([A-Za-z_]*[sS]witch[A-Za-z_]*)\??:/gm)].map((m) => m[1]);
+    const NOT_AN_ENGINE_SWITCH = ['safeguardSwitch'];
+    expect(fields.length).toBeGreaterThan(2);
+    expect(fields.filter((f) => !NOT_AN_ENGINE_SWITCH.includes(f)).sort()).toEqual([...ENGINE_SWITCH_MARKS].sort());
+    const failed = [
+      { ...base, status_reason: 'api_error' },
+      { ...base, process_status: 'error', status_reason: 'api_error', messageCount: 1 },
+      { ...base, process_status: 'idle', status_reason: 'awaiting_spawn' },
+    ];
+    const marks: Record<(typeof ENGINE_SWITCH_MARKS)[number], unknown> = {
+      engineSwitch: { fromSessionId: 'old', at: 'now', carriedTurns: 1, trimmedTurns: 0, compacted: false },
+      resumedBySwitch: { fromSessionId: 'old', at: 'now', carriedTurns: 1 },
+      switchContext: { text: 'carried', switchId: 'es-1', at: 'now' },
+    };
+    for (const rec of failed) {
+      expect(sessionHasNoConversation(rec as never)).toBe(true);
+      for (const mark of ENGINE_SWITCH_MARKS) expect(sessionHasNoConversation({ ...rec, [mark]: marks[mark] } as never)).toBe(false);
+    }
+    // A transcript known lost stays lost, whoever made the session.
+    expect(sessionHasNoConversation({ ...base, archived: true, archive_reason: 'remote_conversation_lost', engineSwitch: marks.engineSwitch } as never)).toBe(true);
   });
 });
 

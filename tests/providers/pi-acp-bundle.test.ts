@@ -125,7 +125,8 @@ describe.each([
     const wrongPathMarker = path.join(home, 'wrong-path')
     await fs.writeFile(path.join(home, 'pi'), `#!${process.execPath}\nimport fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(wrongPathMarker)}, 'called');\n`, { mode: 0o755 })
     const journal = path.join(home, 'journal.jsonl')
-    const worker = new AcpWorker(journal)
+    const reports: string[] = []
+    const worker = new AcpWorker(journal, undefined, undefined, undefined, (r) => reports.push(r.detail))
     let id = 0
     const op = (name: WorkerOp, params?: Record<string, unknown>) => worker.handle({ id: ++id, op: name, params })
     const events = () => readJournal(journal).records.flatMap(({ record }) => record.kind === 'meta' ? [record.event] : [])
@@ -146,6 +147,9 @@ describe.each([
         expect(events().some((e) => e.type === 'error')).toBe(false)
       }
       expect(await fs.readFile(journal, 'utf8')).not.toContain('SECRET_SENTINEL')
+      // pi's own words for a failed model request reach the daemon's log (2026-11-24: a relay's
+      // "not converse-stream" refusal read only "Pi model request failed" there).
+      if (prompt === 'error') expect(reports.join('\n')).toContain('Internal failure')
       await expect(fs.stat(wrongPathMarker)).rejects.toMatchObject({ code: 'ENOENT' })
       if (prompt === 'tools') {
         const history = projectAcpJournalHistory('pi-tools', readJournal(journal).records.map(({ record }) => record))

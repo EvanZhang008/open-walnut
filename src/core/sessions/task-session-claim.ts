@@ -29,17 +29,22 @@ function stillSpawning(r: SessionRecord, now: number): boolean {
  * conversation" is sometimes only a path mismatch on the host.
  */
 export async function taskConversation(taskId: string, opts: { retire?: boolean } = {}): Promise<SessionRecord | undefined> {
-  const { getSessionsForTask } = await import('../session-tracker.js');
-  const now = Date.now();
-  const rows = (await getSessionsForTask(taskId))
-    .filter((r) => !r.archive_reason?.startsWith(ACP_REDIRECT_PREFIX) && !isSupersededSession(r));
-  const empty = rows.filter((r) => sessionHasNoConversation(r) && !stillSpawning(r, now));
+  const { rows, empty } = await taskSessionRows(taskId);
   if (opts.retire) {
     for (const r of empty) await detachTaskSession(taskId, r.claudeSessionId, 'no conversation, replaced by a new start');
   }
   return rows
     .filter((r) => !empty.includes(r))
     .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))[0];
+}
+
+/** The task's own session rows, and those of them that never held a conversation. */
+export async function taskSessionRows(taskId: string): Promise<{ rows: SessionRecord[]; empty: SessionRecord[] }> {
+  const { getSessionsForTask } = await import('../session-tracker.js');
+  const now = Date.now();
+  const rows = (await getSessionsForTask(taskId))
+    .filter((r) => !r.archive_reason?.startsWith(ACP_REDIRECT_PREFIX) && !isSupersededSession(r));
+  return { rows, empty: rows.filter((r) => sessionHasNoConversation(r) && !stillSpawning(r, now)) };
 }
 
 /**

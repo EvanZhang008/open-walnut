@@ -89,6 +89,30 @@ async function contextTokens(messages: readonly SessionHistoryMessage[]): Promis
   return n;
 }
 
+/**
+ * A session an engine switch started that an older Walnut took off its task: its first turn failed,
+ * so it read as holding no conversation, and the next switch started a bare session in its place
+ * (2026-11-24, fixed in sessionHasNoConversation). Its row keeps the task in `legacyTaskId`; the
+ * chain of switches goes on through it to the bare start that replaced it.
+ */
+function detachedBySwitch(rec: SessionRecord, taskId: string | undefined): boolean {
+  return !!taskId && !rec.taskId && rec.legacyTaskId === taskId && !!rec.engineSwitch;
+}
+
+async function detachedLink(sessionId: string, taskId: string | undefined): Promise<SessionRecord | undefined> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const rec = await getSessionByClaudeId(sessionId).catch(() => undefined);
+  return rec && detachedBySwitch(rec, taskId) ? rec : undefined;
+}
+
+/** The task's session started first after `lost`: the bare start that replaced it. */
+function bareStartAfter(lost: SessionRecord, rows: readonly SessionRecord[]): SessionRecord | undefined {
+  const since = lost.startedAt ?? '';
+  return rows
+    .filter((r) => r.claudeSessionId !== lost.claudeSessionId && (r.startedAt ?? '') > since)
+    .sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''))[0];
+}
+
 export async function planResume(args: {
   active: SessionRecord;
   activeCtx: ActiveContext;
@@ -107,7 +131,6 @@ export async function planResume(args: {
     .sort((a, b) => (b.leftContext?.at ?? b.lastActiveAt ?? '').localeCompare(a.leftContext?.at ?? a.lastActiveAt ?? ''))[0];
   if (!prev) return { reason: 'the task never ran on this engine' };
   if (normalizeHost(prev.host) !== host) return { reason: 'its earlier session ran on another host' };
-  if ((prev.cwd ?? '') !== (args.cwd ?? '')) return { reason: 'its earlier session ran in another directory' };
   const prevModel = prev.cliModel || prev.model || prev.acpModel;
   if (args.model && args.model !== 'default' && prevModel && args.model !== prevModel) return { reason: 'another model was picked' };
   if (!prev.leftContext) return { reason: 'no record of the context it was left with' };
@@ -121,9 +144,12 @@ export async function planResume(args: {
   const links: Array<{ rec: SessionRecord; resumed: boolean }> = [];
   let at = prev;
   for (let i = 0; i < MAX_LINKS && at.claudeSessionId !== active.claudeSessionId; i++) {
-    const next = at.supersededBy ? byId.get(at.supersededBy) : undefined;
+    const lost = detachedBySwitch(at, active.taskId);
+    const next = at.supersededBy
+      ? byId.get(at.supersededBy) ?? await detachedLink(at.supersededBy, active.taskId)
+      : lost ? bareStartAfter(at, rows) : undefined;
     if (!next) return { reason: 'the chain of sessions after it is incomplete' };
-    const started = next.engineSwitch?.fromSessionId === at.claudeSessionId;
+    const started = next.engineSwitch?.fromSessionId === at.claudeSessionId || (lost && !next.engineSwitch && !next.resumedBySwitch);
     const resumed = next.resumedBySwitch?.fromSessionId === at.claudeSessionId;
     if (!started && !resumed) return { reason: 'a later session did not take over from it' };
     if (!resumed && (next.engineSwitch?.trimmedTurns ?? 0) > 0) return { reason: 'a later switch left older turns out' };
@@ -131,6 +157,10 @@ export async function planResume(args: {
     at = next;
   }
   if (at.claudeSessionId !== active.claudeSessionId) return { reason: 'the chain of sessions after it is too long' };
+  // A bare start that replaced a lost link ran wherever the start put it, not where the task's
+  // work was: the earlier session goes on in its own directory.
+  const bare = links.some((l, i) => i > 0 && detachedBySwitch(links[i - 1].rec, active.taskId) && !l.rec.engineSwitch);
+  if (!bare && (prev.cwd ?? '') !== (args.cwd ?? '')) return { reason: 'its earlier session ran in another directory' };
 
   const prevCtx = await readActiveContext(prev);
   if ((await contextFingerprint(prevCtx.messages)).fingerprint !== prev.leftContext.fingerprint) {

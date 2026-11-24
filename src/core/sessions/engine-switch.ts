@@ -290,14 +290,52 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
   const switchId = `es-${randomUUID()}`;
   if (!old) {
     await refuseUnofferedModel(engine, req.model, normalizeHost(req.host), task.cwd ?? undefined);
+    // The task's rows that never held a conversation (a start that failed) are replaced by this
+    // switch, marked as any switch marks the session it leaves: they keep their task link, so a
+    // panel still open on one follows the task to the new session. Detached instead, the panel
+    // stayed on a session of no task, whose engine picker is locked (2026-11-24).
+    const { taskSessionRows } = await import('./task-session-claim.js');
+    const { updateSessionRecord } = await import('../session-tracker.js');
+    // A row already archived as lost keeps that reason (the start's claim takes it off the task).
+    const empty = (await taskSessionRows(task.id)).empty.filter((r) => !r.archive_reason);
+    const replaced = (rows: SessionRecord[], fields: Partial<SessionRecord>) =>
+      Promise.all(rows.map((r) => updateSessionRecord(r.claudeSessionId, fields).catch(() => {})));
+    await replaced(empty, { archived: true, archive_reason: engineSwitchedReason(engine) });
+    const from = empty[0];
+    // The folder the replaced session was given, with its host, so the path is never handed to
+    // another host (a bare start fell back to the task's own directory, 2026-11-24).
+    const fromHost = from ? normalizeHost(from.host) : undefined;
+    const keepPlace = !!from?.cwd && (req.host === undefined || normalizeHost(req.host) === fromHost);
     const { startSessionForTask } = await import('./task-start.js');
-    const started = await startSessionForTask({
-      taskIdPrefix: task.id, message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
-      callerSid: req.callerSid, callerUnproven: req.callerUnproven, expectReply: false, source: req.source, ownMove: true,
-      ...(req.host !== undefined ? { host: normalizeHost(req.host) } : {}),
-      // Nothing to say: the task's description is not run as if it were (the same as a switch).
-      ...(message.trim() ? {} : { idle: true }),
-    });
+    let started: Awaited<ReturnType<typeof startSessionForTask>>;
+    try {
+      started = await startSessionForTask({
+        taskIdPrefix: task.id, message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
+        callerSid: req.callerSid, callerUnproven: req.callerUnproven, expectReply: false, source: req.source, ownMove: true,
+        ...(keepPlace ? { host: fromHost, cwd: from!.cwd } : req.host !== undefined ? { host: normalizeHost(req.host) } : {}),
+        // Nothing to say: the task's description is not run as if it were (the same as a switch).
+        ...(message.trim() ? {} : { idle: true }),
+      });
+    } catch (err) {
+      // A start that failed after its row was made leaves that row as the task's session: the
+      // replaced rows point at it (the one-session guard refuses them back beside it). With no row
+      // made, they are the task's again, as they were.
+      const now = await taskSessionRows(task.id).then((r) => r.rows[0]).catch(() => undefined);
+      if (now) await replaced(empty, { supersededBy: now.claudeSessionId });
+      else for (const r of empty) await updateSessionRecord(r.claudeSessionId, { archived: r.archived ?? false, archive_reason: undefined }).catch(() => {});
+      throw err;
+    }
+    if (started.sessionId) await replaced(empty, { supersededBy: started.sessionId });
+    if (from && started.sessionId) {
+      await tm.updateTaskRaw(task.id, {
+        engine_switch: {
+          id: switchId, state: 'done', at: new Date().toISOString(), from_session_id: from.claudeSessionId,
+          ...(from.engine ? { from_engine: from.engine } : {}),
+          to: { engine, ...(req.model ? { model: req.model } : {}), ...(keepPlace ? { host: fromHost } : req.host !== undefined ? { host: normalizeHost(req.host) } : {}) },
+          session_id: started.sessionId, by: by(req.callerSid, undefined, req.source),
+        },
+      }, { source: 'engine-switch', emitEvent: true }).catch(() => {});
+    }
     return { state: 'done', taskId: task.id, switchId, sessionId: started.sessionId, engine, host: normalizeHost(req.host) };
   }
   const oldHost = normalizeHost(old.host);

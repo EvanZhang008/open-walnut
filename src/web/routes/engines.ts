@@ -316,15 +316,6 @@ enginesRouter.patch('/:id/settings', async (req: Request, res: Response) => {
 /** A preview reads a few dozen small files in parallel rounds; the deadline covers a slow remote. */
 const CLAUDE_IMPORT_DEADLINE_MS = 30_000
 
-function importTransport(host: string): import('../../core/agents/claude-code-import.js').ImportTransport {
-  const reader = new DaemonFileReader(host)
-  return {
-    readBytes: (p, maxBytes) => reader.readFileBytes(p, maxBytes),
-    listDir: (p) => reader.listDirStrict(p),
-    writeAtomic: (p, text, expectSha256) => reader.writeFileAtomic(p, text, expectSha256),
-    ...(host === LOCAL_HOST ? { env: process.env } : {}),
-  }
-}
 
 async function claudeImportTarget(req: Request, res: Response): Promise<{ engine: string; host: string } | null> {
   const engine = String(req.params.id)
@@ -374,7 +365,7 @@ enginesRouter.get('/:id/claude-code-import', async (req: Request, res: Response)
   const mod = await import('../../core/agents/claude-code-import.js')
   try {
     const pi = await piInstallOn(target.host)
-    const preview = await withDeadline(mod.previewClaudeCodeImport(target.host, importTransport(target.host), pi), CLAUDE_IMPORT_DEADLINE_MS, `the daemon on ${target.host}`)
+    const preview = await withDeadline(mod.previewClaudeCodeImport(target.host, (await import('../../core/agents/pi-extension-refresh.js')).hostImportTransport(target.host), pi), CLAUDE_IMPORT_DEADLINE_MS, `the daemon on ${target.host}`)
     res.json(preview)
   } catch (err) {
     answerImportError(res, err, { ...target, op: 'preview' }, mod.ClaudeCodeImportError)
@@ -387,7 +378,7 @@ enginesRouter.post('/:id/claude-code-import', async (req: Request, res: Response
   const mod = await import('../../core/agents/claude-code-import.js')
   try {
     const pi = await piInstallOn(target.host)
-    const result = await withDeadline(mod.applyClaudeCodeImport(target.host, importTransport(target.host), pi), CLAUDE_IMPORT_DEADLINE_MS, `the daemon on ${target.host}`)
+    const result = await withDeadline(mod.applyClaudeCodeImport(target.host, (await import('../../core/agents/pi-extension-refresh.js')).hostImportTransport(target.host), pi), CLAUDE_IMPORT_DEADLINE_MS, `the daemon on ${target.host}`)
     log.web.info('claude code import applied', { ...target, written: result.written })
     res.json(result)
   } catch (err) {
