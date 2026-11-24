@@ -111,8 +111,9 @@ describe('every outward primitive is called only where a door guards it (source)
   })
 
   it('a daemon is armed with triggers and plugin jobs only from the guarded passes', () => {
-    expect(sites(/\.send(?:\?\.)?\('triggers\.configure'/), NEW_SITE).toEqual({ 'providers/daemon-connection.ts': 3 })
-    expect(sites(/\.send(?:\?\.)?\('jobs\.configure'/), NEW_SITE).toEqual({ 'core/plugin-jobs/manager.ts': 1 })
+    // service-set-move-checks.ts dropWalnutScope: a service set move empties this Walnut's sets on the shared daemon.
+    expect(sites(/\.send(?:\?\.)?\('triggers\.configure'/), NEW_SITE).toEqual({ 'providers/daemon-connection.ts': 3, 'providers/service-set-move-checks.ts': 1 })
+    expect(sites(/\.send(?:\?\.)?\('jobs\.configure'/), NEW_SITE).toEqual({ 'core/plugin-jobs/manager.ts': 1, 'providers/service-set-move-checks.ts': 1 })
   })
 
   it('a routine runs only through executeJob, from the guarded entries', () => {
@@ -322,6 +323,7 @@ const PRIMITIVE_OF: Record<string, RegExp | null> = {
   'core/routines/trigger-events.ts#sweepOwedFires': /applyTriggerFired\(/,
   'providers/daemon-connection.ts#pushTriggersOnce': /\.send\('triggers\.configure'/,
   'core/plugin-jobs/manager.ts#reconcileOnce': /handle\.send\(|uploadFile\(/,
+  'providers/service-set-move-checks.ts#dropWalnutScope': /\.send\('(triggers|jobs)\.configure'/,
   'integrations/calendar/service.ts#updateEvent': /source\.updateEvent\(/,
   'integrations/calendar/service.ts#createEvent': /source\.createEvent\(/,
   'integrations/calendar/service.ts#deleteEvent': /source\.deleteEvent\(/,

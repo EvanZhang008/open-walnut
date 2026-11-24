@@ -160,6 +160,9 @@ const WRITERS: Record<string, Record<string, string>> = {
   'src/core/session-channel/leader-links.ts': {
     'send: (text) => ws.send(text),': 'a WebSocket over openStream: link-stream.ts cuts its bytes into 48 KB pieces',
   },
+  'src/providers/service-set-net.ts': {
+    'socket.send(JSON.stringify({ ...cmds[answers.length], id: answers.length + 1 }))': 'the set\'s own loopback door: its hello, and net.configure of the leader\'s member list, which came as one command line argument (argv-sized)',
+  },
   'src/providers/daemon-service-ready.ts': {
     "socket.on('open', () => socket.send(JSON.stringify({ id: 1, cmd: 'hello' })))": 'a fixed frame (the probe that a daemon serves)',
   },

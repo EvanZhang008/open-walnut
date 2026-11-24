@@ -35,6 +35,7 @@ import type { SessionRecord } from '../core/types.js'
 import type { TerminateResult } from '../core/sessions/session-lifecycle.js'
 import { hostWorkFrom, HOST_WORK_TIMEOUT_MS, type HostWork } from '../core/sessions/host-work.js'
 import { OUTLIVING_SOURCES, type OutlivingSource } from '../core/sessions/outliving-work.js'
+import { assertOutwardDoor, leaderPermitActive } from '../core/leader/switch/doors.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { CliHolderAnswer } from './remote-session-manager.js'
 import type { MoveSession, StopResult } from './service-set-move.js'
@@ -262,6 +263,12 @@ export async function moveBlocker(link: Pick<MoveCheckLink, 'hasCapability'>, tr
 /** Empty this Walnut's triggers and plugin jobs on the shared daemon (for its home only). Throws when not done. */
 export async function dropWalnutScope(link: MoveCheckLink): Promise<void> {
   const home = link.home
+  // The outward doors (leader/switch/doors.ts): only the machine holding the write permission changes
+  // what a daemon runs for this Walnut. A refusal throws before the shared daemon is told anything.
+  if (leaderPermitActive()) {
+    assertOutwardDoor('trigger-arm', link.hostKey)
+    assertOutwardDoor('plugin-jobs', link.hostKey)
+  }
   if (!link.hasCapability(WALNUT_SCOPE_CAPABILITY)) throw new Error(`the shared daemon has no ${WALNUT_SCOPE_CAPABILITY}`)
   const t = await link.send('triggers.configure', { config: { version: 1, triggers: [] }, home }, 30_000)
   if (t.ok !== true) throw new Error(`the shared daemon did not drop this Walnut's triggers (${String(t.error ?? 'no answer')})`)

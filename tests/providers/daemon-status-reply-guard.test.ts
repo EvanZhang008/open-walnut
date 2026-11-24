@@ -83,6 +83,7 @@ const READERS: Record<string, string> = {
   'src/core/sessions/host-work.ts': 'hostWorkFrom: ok checked, an error reply is null (no answer): the silent-target notice waits, never told on it',
   'src/core/sessions/direct-host-send.ts': 'the phone\'s direct send: an error reply (ok false) sends nothing and is a transport failure the phone retries, never session_dead',
   'src/web/routes/session-lifecycle-v1.ts': 'exists === true checked: an error reply leaves the projection as it is',
+  'src/providers/service-set-move-checks.ts': 'the service set move\'s quiet check (judge): hostWorkFrom checks ok, so an error reply is null and the session reads busy (the move waits); only ok with exists false is no CLI there',
 }
 
 describe('every reader of a daemon status is listed', () => {

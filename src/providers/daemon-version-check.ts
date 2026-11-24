@@ -336,7 +336,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-uninstall-tail.ts',
   // The walnut-net identity of a service set, for its leader (walnut daemon net-id and net-forget, daemon-service-cli.cjs).
   'src/providers/service-set-net.ts',
-  'src/providers/daemon-shared.ts',
+  'src/providers/daemon-serves.ts',
   // The account lookup daemon-service-cli.ts refuses a faked home with, bundled into its .cjs.
   'src/lib/account.ts',
   // The runtime dir rule `walnut daemon install` pins (~/.cache/open-walnut for a second user).

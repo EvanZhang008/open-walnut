@@ -25,7 +25,7 @@ import { serviceSet, serviceSetIdOf, type ServicePlatform, type ServiceSet } fro
 import { DAEMON_BOOT_SCRIPT_NAME } from './daemon-service-config.js'
 import { DAEMON_OWNERSHIP_NAME } from './daemon-service-files.js'
 import { LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
-import { parseServes, SERVES_FILE, SHARED_WINDOW_MS, walnutKeyOf } from './daemon-shared.js'
+import { parseServes, SERVES_FILE, SHARED_WINDOW_MS, walnutKeyOf } from './daemon-serves.js'
 import { SERVICE_MODE_FILE, serviceModeOwner } from '../binary/service-mode.js'
 import { withServiceModeLockWait } from '../binary/service-mode-lock.js'
 
