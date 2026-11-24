@@ -22,7 +22,7 @@ import { applyHanded } from '../../helpers/handed-rows.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import * as taskDb from '../../../src/core/task-db.js'
 import * as tm from '../../../src/core/task-manager.js'
-import { reconcileHostTurnEnds, turnEndMarks } from '../../../src/core/session-channel/turn-ends.js'
+import { catchUpReconciler, reconcileHostTurnEnds, turnEndMarks } from '../../../src/core/session-channel/turn-ends.js'
 import { turnEndEdgeOf } from '../../../src/core/sessions/turn-end-edge.js'
 import { createLeaderSide, type ChannelSocket, type LeaderSide } from '../../../src/core/session-channel/leader-side.js'
 import { HostChannel, isChannelFrame } from '../../../src/core/session-channel/channel.js'
@@ -282,14 +282,51 @@ describe('S1: the reconcile waits for the host\'s first catch-up after the boot'
 })
 
 describe('the leader boot wires the reconcile per host, after its catch-up', () => {
-  it('leader-boot.ts runs reconcileHostTurnEnds only from onCaughtUp, named by host: the marks before the boot, and at every catch-up those standing past the held wait', async () => {
+  it('leader-boot.ts runs the catch-up reconciler from onCaughtUp: the marks before the boot, and at every catch-up those standing past twice the held wait', async () => {
     const src = await fsp.readFile(new URL('../../../src/core/session-channel/leader-boot.ts', import.meta.url), 'utf8')
     expect(src).toMatch(/onCaughtUp: reconcileTurnEnds/)
-    const calls = src.match(/reconcileHostTurnEnds\(\{[^}]*/g) ?? []
-    expect(calls.length).toBe(1)
-    expect(calls[0]).toMatch(/hostId, before,/)
-    // Review round 1, S1: not once per process, and never a mark a held end's wait may still say.
-    expect(src).toMatch(/const before = Math\.max\(bootAt, Date\.now\(\) - 2 \* HELD_SAY_AGAIN_MS\)/)
-    expect(src).not.toMatch(/reconciled\.has\(hostId\)/)
+    expect(src).toMatch(/catchUpReconciler\(\{ bootAt: Date\.now\(\), staleMs: 2 \* HELD_SAY_AGAIN_MS,/)
+    expect(src).not.toMatch(/reconcileHostTurnEnds\(/)
+    // No guard of its own around it: the reconciler is the one that decides when a host is looked at again.
+    expect(src.slice(src.indexOf('const reconcileTurnEnds'), src.indexOf('const side = createLeaderSide'))).not.toMatch(/\.has\(hostId\)/)
+  })
+})
+
+describe('review round 2, S1: every catch-up of a host reconciles its marks left standing, not only the first', () => {
+  it('the first catch-up looks only at marks before the boot; a later one reconciles a mark older than the stale bound and leaves a newer one', async () => {
+    const oldTask = await inProgressTask('Marked long ago, never said')
+    const newTask = await inProgressTask('Marked just now')
+    const bootAt = Date.now() - 1
+    await applyHanded({
+      hostId: HOST, rows: [{ sid: 'c1', born: true, patch: born('c1', oldTask), seq: 1 }], renames: [],
+      cursor: { logId: 'L1', seq: 2 }, turnEnds: [{ sid: 'c1', edge: 'session:error', seq: 2 }],
+    })
+    await applyHanded({
+      hostId: HOST, rows: [{ sid: 'c2', born: true, patch: born('c2', newTask), seq: 3 }], renames: [],
+      cursor: { logId: 'L1', seq: 4 }, turnEnds: [{ sid: 'c2', edge: 'session:error', seq: 4 }],
+    })
+    const at = Object.fromEntries(turnEndMarks().map((m) => [m.sid, m.at]))
+    expect(at.c1).toBeLessThan(at.c2)
+    const staleMs = 240_000
+    let now = at.c2
+    const catchUp = catchUpReconciler({ bootAt, staleMs, now: () => now })
+    // The first catch-up: both marks were made in this process, neither is stale yet.
+    expect(await catchUp(HOST)).toEqual({ looked: 0, applied: [] })
+    expect(await phaseOf(oldTask)).toBe('IN_PROGRESS')
+    // A later catch-up, the stale bound past c1 and not past c2.
+    now = at.c2 + staleMs
+    expect(await catchUp(HOST)).toEqual({ looked: 1, applied: ['c1'] })
+    expect(await phaseOf(oldTask)).not.toBe('IN_PROGRESS')
+    expect(await phaseOf(newTask)).toBe('IN_PROGRESS')
+    expect(turnEndMarks().map((m) => m.sid)).toEqual(['c2'])
+  })
+
+  it('a catch-up while the host\'s pass still runs is covered by that pass', async () => {
+    const catchUp = catchUpReconciler({ bootAt: Date.now(), staleMs: 240_000 })
+    const [a, b] = await Promise.all([catchUp(HOST), catchUp(HOST)])
+    expect(a).toEqual({ looked: 0, applied: [] })
+    expect(b).toBeNull()
+    // Done: the next one runs again.
+    expect(await catchUp(HOST)).toEqual({ looked: 0, applied: [] })
   })
 })

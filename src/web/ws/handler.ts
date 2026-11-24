@@ -120,7 +120,6 @@ export function registerMethod(name: string, handler: RpcHandler, opts: { person
   else personMethods.delete(name)
 }
 
-
 export function registerOwnedMethod(owner: string, name: string, handler: RpcHandler): Disposable {
   return rpcMethods.register(owner, name, handler)
 }

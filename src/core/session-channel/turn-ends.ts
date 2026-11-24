@@ -109,6 +109,29 @@ function clearMark(m: TurnEndMark): void {
 
 export interface ReconcileResult { looked: number; applied: string[] }
 
+/**
+ * The leader's catch-up pass (leader-boot.ts onCaughtUp): at each of a host's catch-ups, the reconcile
+ * of that host's marks made before this process started (`bootAt`) or standing longer than `staleMs`
+ * (twice the wait for a stand-down's turn end said again: leader-apply.ts says one at its deadline, so
+ * a mark still standing then is one nothing will clear). One pass per host at a time; a catch-up while
+ * one runs is covered by it. A mark of a slow handler (one still waiting on its git pull) may be
+ * looked at too: both go through applySessionPhase, so a phase already reached moves nothing and
+ * notifies no one again, at worst the same decision made twice.
+ */
+export function catchUpReconciler(o: { bootAt: number; staleMs: number; now?: () => number; log?: Log }): (hostId: string) => Promise<ReconcileResult | null> {
+  const now = o.now ?? Date.now
+  const running = new Set<string>()
+  return async (hostId) => {
+    if (running.has(hostId)) return null
+    running.add(hostId)
+    try {
+      return await reconcileHostTurnEnds({ hostId, before: Math.max(o.bootAt, now() - o.staleMs), ...(o.log ? { log: (level, msg, data) => o.log!(level, msg, { host: hostId, ...data }) } : {}) })
+    } finally {
+      running.delete(hostId)
+    }
+  }
+}
+
 type Log = (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 
 /**
