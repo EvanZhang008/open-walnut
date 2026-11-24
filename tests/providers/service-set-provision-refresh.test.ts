@@ -67,6 +67,13 @@ describe('provisionServiceSet with refresh', () => {
     expect(updates).toEqual([])
   })
 
+  it('a build that failed on the host is not tried again for a day; a refresh that ran says so', async () => {
+    updateFails = Object.assign(new Error('Managed daemon update failed: the new daemon did not stay'), { buildFailed: true })
+    expect(await provisionServiceSet(source, 'walnut-daemon-aaaaaaaaaaaa', io() as never, ask, { refresh: true })).toMatchObject({ ok: false, retryLook: true, retryInMs: 24 * 3600_000 })
+    updateFails = null
+    expect(await provisionServiceSet(source, 'walnut-daemon-aaaaaaaaaaaa', io() as never, ask, { refresh: true })).toMatchObject({ ok: true, refreshed: true })
+  })
+
   it('an update that failed, or named another set, asks for another look and never says ok', async () => {
     updateFails = new Error('Managed daemon update failed: probation failed')
     expect(await provisionServiceSet(source, 'walnut-daemon-aaaaaaaaaaaa', io() as never, ask, { refresh: true })).toMatchObject({ ok: false, retryLook: true, message: expect.stringMatching(/could not take this build: .*probation failed/) })

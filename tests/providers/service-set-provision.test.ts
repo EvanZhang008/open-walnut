@@ -368,6 +368,27 @@ describe('ServiceSetLink', () => {
     expect(hset.refreshes).not.toContain(true)
   })
 
+  it('net, the real case: a set that gave up for no_build and took this build now moves at once, the notice cleared', async () => {
+    // The production shape (11-24): paired set, move gave_up (failures 1, next try 2 h ahead), the hello the shared daemon's.
+    await hostServiceSets.write('net:h', { at: 1, set: SET, netEndpoint: SET_EP, netAddrs: ['10.0.0.5:41641'], netShared: SHARED })
+    await serviceSetMoves.write('net:h', { v: 1, at: Date.now(), set: SET, link: 'net', phase: 'gave_up', startedAt: 1, stopped: [], failures: 1, nextTryAt: Date.now() + 2 * 3600_000, why: 'no_build' })
+    const t = conn('net', { set: SET, installed: true, ok: true, refreshed: true })
+    await t.link.check()
+    expect(t.refreshes).toEqual([true])
+    expect(t.calls.slice(0, 3)).toEqual(['provision', 'notice-clear', 'net-id'])
+    expect(t.calls).toContain('relink')
+    expect((await serviceSetMoves.read('net:h'))?.phase).toBe('done')
+  })
+
+  it('net: without a refresh, the same give-up waits for its next try', async () => {
+    await hostServiceSets.write('net:h', { at: 1, set: SET, netEndpoint: SET_EP, netAddrs: ['10.0.0.5:41641'], netShared: SHARED })
+    await serviceSetMoves.write('net:h', { v: 1, at: Date.now(), set: SET, link: 'net', phase: 'gave_up', startedAt: 1, stopped: [], failures: 1, nextTryAt: Date.now() + 2 * 3600_000, why: 'no_build' })
+    const t = conn('net', { set: SET, installed: true, ok: true })
+    await t.link.check()
+    expect(t.calls).toEqual(['provision'])
+    expect((await serviceSetMoves.read('net:h'))?.phase).toBe('gave_up')
+  })
+
   it('a refresh that did not happen is no move: the look runs again', async () => {
     await hostServiceSets.write('ssh:h', { at: 1, set: SET, runtimeDir: `/home/u/.open-walnut-host/walnuts/${SET}/rt` })
     const t = conn('ssh', { set: SET, installed: true, ok: false, retryLook: true, message: 'the update failed' })

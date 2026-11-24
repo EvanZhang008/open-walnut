@@ -32,7 +32,14 @@ export interface SetProvision {
   buildMissing?: { scope?: string }
   /** The look found nothing it can act on now (the set's builds did not read, or its update failed): looked at again soon. */
   retryLook?: boolean
+  /** With retryLook: not before this long (the build itself failed on the host: a day, as the regular update holds it). */
+  retryInMs?: number
+  /** The set took this build now: the move it waited for may run at once. */
+  refreshed?: true
 }
+
+/** A build that stopped the set's daemon and did not come to serve is not tried again for a day (daemon-update-readback.ts buildFailed). */
+const BUILD_FAILED_RETRY_MS = 24 * 3600_000
 
 /** `printf` of the host's home and uid: what a set's runtime dir is computed from (service-set.ts). */
 const WHERE = `printf '%s\\n%s\\n' "$HOME" "$(id -u)"`
@@ -103,10 +110,14 @@ export async function provisionServiceSet(source: ServiceDaemonSource, expectedV
   try {
     await updateRemoteDaemonService(source, expectedVersion, io, scope, { walnut: ask, set: p.set, onServiceSet: (s) => { named = s } })
   } catch (err) {
-    return { ...at, ok: false, retryLook: true, message: `this Walnut's own service there could not take this build: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}` }
+    const buildFailed = (err as { buildFailed?: unknown } | null)?.buildFailed === true
+    return {
+      ...at, ok: false, retryLook: true, ...(buildFailed ? { retryInMs: BUILD_FAILED_RETRY_MS } : {}),
+      message: `this Walnut's own service there could not take this build: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`,
+    }
   }
   if (named !== p.set) return { ...at, ok: false, retryLook: true, message: `the update named ${named === null ? 'no set' : `set ${named || 'default'}`}, not this Walnut's own (${p.set})` }
-  return { ...at, ok: true }
+  return { ...at, ok: true, refreshed: true }
 }
 
 /** The shell that sets `x` to this build's copy in the set's install root (versions/<sha>/, the first that names `expected`), or ''. */

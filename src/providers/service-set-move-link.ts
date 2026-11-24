@@ -383,12 +383,15 @@ export class ServiceSetLink {
         // The set's build is not this build yet and its update did not happen now: no move (it would
         // answer no_build), the look again soon, then less often.
         this.lookRetryMs = Math.min(Math.max(LOOK_RETRY_FIRST_MS, this.lookRetryMs * 2), PROVISION_EVERY_MS)
+        const inMs = Math.max(this.lookRetryMs, p.retryInMs ?? 0)
         this.provisionedAt = 0
-        log.session.warn('service set: this Walnut\'s own service there has no copy of this build yet; it looks again', { host: this.c.hostKey, why: (p.message ?? '').slice(0, 300), inMs: this.lookRetryMs })
+        log.session.warn('service set: this Walnut\'s own service there has no copy of this build yet; it looks again', { host: this.c.hostKey, why: (p.message ?? '').slice(0, 300), inMs })
         this.c.notice(this.noticeKey, `This Walnut's own service on ${this.c.hostKey} could not take this Walnut's build yet (${(p.message ?? '').slice(0, 300)}); its sessions stay on the service another Walnut runs there, and Walnut tries again.`)
-        this.schedule(this.lookRetryMs)
+        this.schedule(inMs)
         return
       }
+      // The set took this build: the cause of an earlier give-up (no_build) is gone, so the move runs now.
+      if (p.refreshed) { this.c.notice(this.noticeKey, null); force = true }
       this.lookRetryMs = 0
       if (!p.ok) {
         this.c.notice(this.noticeKey, `This Walnut's own service on ${this.c.hostKey} could not be installed (${(p.message ?? '').slice(0, 300)}); its sessions stay on the service another Walnut runs there.`)
