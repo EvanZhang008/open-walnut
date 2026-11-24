@@ -322,11 +322,17 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
       expect(await layout(), `the conversation did not move for the Comment box at ${at}`).toEqual(before)
       // The passage keeps its mark while the box is open.
       await expect.poll(() => painted(page, 'walnut-held-quote')).toBe(1)
-      // One ring: the field's border in the accent color, never a glow on the field.
+      // One ring: the field's border in the focus edge colour, never a glow on the field. A focused field
+      // only darkens its edge to --input-focus-edge since 6f4a477964 (no accent edge any more).
       expect(await input.evaluate((el) => getComputedStyle(el).boxShadow)).toBe('none')
-      expect(await page.getByTestId('quote-comment-box').locator('.answer-box').evaluate((el) => getComputedStyle(el).borderTopColor))
-        .toBe(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
-          .replace(/^#(..)(..)(..)$/, (_, r, g, b) => `rgb(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)})`)))
+      expect(await page.getByTestId('quote-comment-box').locator('.answer-box').evaluate((el) => {
+        const probe = document.createElement('span')
+        probe.style.borderTop = '1px solid var(--input-focus-edge)'
+        el.appendChild(probe)
+        const edge = getComputedStyle(probe).borderTopColor
+        probe.remove()
+        return getComputedStyle(el).borderTopColor === edge
+      })).toBe(true)
       // Add is off until there are words; the hint and Discard sit under the field.
       await expect(page.getByTestId('quote-comment-add')).toBeDisabled()
       const field = (await page.getByTestId('quote-comment-box').locator('.answer-box').boundingBox())!

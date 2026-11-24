@@ -245,10 +245,13 @@ function readLiveSelection(
   return { captured, anchor, range, backward: selectionIsBackward(selection) };
 }
 
-/** A text field has the keyboard: its Escape (the composer's @, / and recall lists) is its own. */
-function fieldHasFocus(): boolean {
+/** A text field outside the bar has the keyboard: its Escape (the composer's @, / and recall lists) is
+ *  its own. The bar's own field (the Comment box, in `own`) is not one: its Esc closes the bar and keeps
+ *  the words as the passage's draft, as its hint says. */
+function outsideFieldHasFocus(own: Array<HTMLElement | null>): boolean {
   const el = typeof document !== 'undefined' ? document.activeElement : null;
-  return el instanceof HTMLElement && el.matches('textarea, input, select, [contenteditable=""], [contenteditable="true"]');
+  if (!(el instanceof HTMLElement) || !el.matches('textarea, input, select, [contenteditable=""], [contenteditable="true"]')) return false;
+  return !own.some((root) => root?.contains(el));
 }
 
 export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, askMode = 'inline', onQuoteInChat }: QuotePinSelectionBarProps) {
@@ -766,7 +769,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     passive: true,
     // Read when the key is pressed: in a field (the composer, with its @, / and recall lists, which
     // answer Escape in their own onKeyDown), Escape is the field's, as it was before the bar was a layer.
-    closeOnEscape: () => !fieldHasFocus(),
+    // The Comment box in the bar's own menu is the bar's field: its Escape closes the bar.
+    closeOnEscape: () => !outsideFieldHasFocus([pillRef.current, menuRef.current]),
     passOutsideClick: true,
     onEscape: () => {
       escTaken.current = true;

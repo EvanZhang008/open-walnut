@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { openChatOnLoad } from './draft-helpers'
 import { mockControlsSession } from './composer-controls-overflow-helpers'
+import { pressHeaderTool } from './header-tool-helpers'
 
 const SHOTS = process.env.QUICK_QUESTION_SHOT_DIR ?? '/tmp/quick-question-names'
 const STAMP = Date.now().toString(36)
@@ -337,7 +338,10 @@ test('header fitting preserves a live plan composer through repeated column resi
   await loadHome(page);
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${id}"]`);
   await expect(panel).toBeVisible();
-  await panel.getByTitle('Plan & Execute', { exact: true }).click();
+  // Plan where the header offers it: the keys are the button family's width since b9516f627d, so at
+  // this width Plan sits in the row's "..." menu (header-tool-helpers.ts).
+  await expect(panel.locator('[data-header-id="plan"]')).toHaveAttribute('title', 'Plan & Execute');
+  await pressHeaderTool(page, panel, 'plan');
   const composer = panel.locator('.plan-popup-input .chat-input-textarea');
   await expect(composer).toBeVisible();
   await composer.click();

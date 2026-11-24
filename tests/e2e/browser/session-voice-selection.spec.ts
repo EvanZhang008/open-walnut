@@ -556,8 +556,9 @@ test.describe('Voice input keeps the selected passage', () => {
       const pagePill = page.locator('[data-testid="quote-pin-pill"]')
       await expect(pagePill).toBeVisible()
       // Dictated where the user is: the question's own composer (Tree Mode puts the main
-      // conversation's beside it, 0a1147bbf).
-      const pageComposer = panel.locator('.chat-input-row').filter({ has: page.getByRole('textbox', { name: /^Reply in/ }) })
+      // conversation's beside it, 0a1147bbf). Its box is named "Send a message to this session" since
+      // 6f4a477964 (the name moved to aria-label); the page it replies in is its placeholder.
+      const pageComposer = panel.locator('.chat-input-row').filter({ has: page.locator('textarea[placeholder^="Reply in “"]') })
       await dictate(page, pageComposer)
       await expect(pageComposer.locator('.chat-input-textarea')).toHaveValue(ANY_WORDS, { timeout: 30_000 })
       await expect(questionPage(panel), 'the page keeps aiming where the user pointed it').toHaveAttribute('data-thread-depth', '1')

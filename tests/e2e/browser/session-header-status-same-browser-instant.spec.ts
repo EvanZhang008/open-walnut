@@ -38,11 +38,14 @@ test.beforeAll(async ({ request }) => {
   sid = ((await started.json()) as { sessionId: string }).sessionId
   // Its turn is over: nothing running holds the status at Working.
   await expect.poll(async () => ((await (await request.get(`/api/sessions/${sid}`)).json()).session?.process_status ?? ''), { timeout: 90_000 }).not.toBe('running')
-  // Back to Not started by hand, so Needs you is a move (a turn's end may have left it there).
-  // The mock CLI's turn-end triage writes the summary (and may move the phase): after it.
-  await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.summary ?? ''), { timeout: 20_000 }).not.toBe('').catch(() => {})
-  expect((await request.patch(`/api/tasks/${id}`, { data: { phase: 'TODO' } })).ok()).toBe(true)
-  await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state ?? ''), { timeout: 30_000 }).toBe('waiting')
+  // The mock CLI answers the turn-end status question "done" (ae5ca601e6), so the turn hands the task
+  // back To read, which every status control draws as Needs you, and a TODO with a session reads so
+  // too once that report is in. So the old status is Completed, set by hand after the report landed
+  // (a late report would move it again), and Needs you is a move from it.
+  const userState = async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state ?? '')
+  await expect.poll(userState, { timeout: 30_000 }).toBe('read')
+  expect((await request.patch(`/api/tasks/${id}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true)
+  await expect.poll(userState, { timeout: 30_000 }).toBe('done')
 })
 
 test.afterAll(async ({ request }) => {
@@ -79,8 +82,7 @@ test('Needs you set from the header reads Needs you there and never the old stat
   const value = page.locator(valueSel).first()
   await kebab.click()
   await expect(value).toBeVisible({ timeout: 15_000 })
-  const before = (await value.textContent()) ?? ''
-  expect(before).not.toBe('Needs you')
+  await expect(value).toHaveText('Completed')
 
   let sent = 0
   let answered = 0

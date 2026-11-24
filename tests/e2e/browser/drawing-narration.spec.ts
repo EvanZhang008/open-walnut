@@ -160,13 +160,15 @@ test('a walkthrough: Record, point at a table while saying it is the core table,
   await shot(page, '05-saved')
   await expect(record).toBeVisible({ timeout: 10_000 })
 
-  // What the host's speech to text was asked: WAV pieces from this plugin.
+  // What the host's speech to text was asked: WAV pieces from this plugin. A clip goes up as its raw
+  // bytes, its format and surface in the query, since 826a28596f (no more base64 JSON).
   expect(sttRequests.length).toBeGreaterThanOrEqual(2)
   for (const r of sttRequests) {
-    const body = r.postDataJSON() as { audio: string; format: string; surface: string }
-    expect(body.format).toBe('wav')
-    expect(body.surface).toBe('plugin:walnut-drawing')
-    expect(body.audio.startsWith('UklGR')).toBe(true)
+    const query = new URL(r.url()).searchParams
+    expect(query.get('format')).toBe('wav')
+    expect(query.get('surface')).toBe('plugin:walnut-drawing')
+    expect(r.headers()['content-type']).toBe('application/octet-stream')
+    expect(r.postDataBuffer()?.subarray(0, 4).toString('latin1')).toBe('RIFF')
   }
 
   // The AI's read of the drawing carries the overview: which element each part was about.

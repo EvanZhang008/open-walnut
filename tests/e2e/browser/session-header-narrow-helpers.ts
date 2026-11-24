@@ -313,14 +313,16 @@ export function headerNarrowTests(): void {
       await shootHeader(panel, String(width))
     }
     // Minimize, the one movable window button, is the first to go; Watch, Locate, Lock, Expand and Close stay at
-    // every width. 400px holds every chip but Board, the first to leave. No Scripts chip and no
-    // Open in new tab button any more (2026-11-19).
-    expect(['changed', 'files', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
+    // every width. The keys are the button family's width since b9516f627d (header-tool-helpers.ts), so
+    // 400px holds Fork and Changed, and Files, Terminal and Board wait in the row's "..." menu. No Scripts
+    // chip and no Open in new tab button any more (2026-11-19).
+    expect(states[400].toolRow.visible.filter((id) => id === 'fork' || VIEW_CHIPS.includes(id)), `400px: ${states[400].toolRow.visible}`).toEqual(['fork', 'changed'])
+    expect(states[400].toolRow.visible, `400px: ${states[400].toolRow.visible}`).toContain('minimize')
     for (const state of [wide, ...Object.values(states)]) {
       expect(state.toolRow.visible, 'no Scripts chip').not.toContain('scripts')
       expect([...state.toolRow.visible, ...state.toolRow.hidden], 'no Open in new tab button').not.toContain('popout')
     }
-    expect(states[400].toolRow.hidden.filter((id) => VIEW_CHIPS.includes(id) && id !== 'board'), `400px hidden: ${states[400].toolRow.hidden}`).toEqual([])
+    expect(states[400].toolRow.hidden.filter((id) => VIEW_CHIPS.includes(id)), `400px hidden: ${states[400].toolRow.hidden}`).toEqual(['files', 'terminal', 'board'])
     // 240px cannot hold five chips (Board, the first to leave, is gone); 180px holds Fork and little else.
     expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['board']))
     expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal']))

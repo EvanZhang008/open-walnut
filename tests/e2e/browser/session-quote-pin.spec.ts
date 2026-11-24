@@ -289,7 +289,8 @@ test.describe('Quote pins', () => {
     // 6. A pinned PASSAGE does not make the row's pin button read as pinned — that
     //    button owns the whole message, and pressing it must not unpin a passage.
     await paragraph.hover()
-    await expect(paragraph.locator('.msg-pin-btn')).not.toHaveClass(/is-pinned/)
+    // The button family's aria-pressed replaced the .is-pinned class (8c22324753).
+    await expect(paragraph.locator('.msg-pin-btn')).toHaveAttribute('aria-pressed', 'false')
 
     // 7. Jumping from the outline flashes the PASSAGE, not the row. A quote row that
     //    fell back to the whole-message flash would look like it worked while
@@ -376,7 +377,8 @@ test.describe('Quote pins', () => {
     await row.hover()
     const button = row.locator('.msg-pin-btn')
     await button.click()
-    await expect(button).toHaveClass(/is-pinned/)
+    // Pinned reads on the button family's own state (.btn[aria-pressed='true'], buttons.css), which
+    // replaced the .is-pinned class (8c22324753).
     await expect(button).toHaveAttribute('aria-pressed', 'true')
 
     const toc = panel.locator('.session-toc')
@@ -392,7 +394,7 @@ test.describe('Quote pins', () => {
 
     await row.hover()
     await button.click()
-    await expect(button).not.toHaveClass(/is-pinned/)
+    await expect(button).toHaveAttribute('aria-pressed', 'false')
     await expect(panel.locator('.session-toc')).toHaveCount(0)
   })
 

@@ -19,8 +19,13 @@ export function MicPopover({ anchor, owner, className, role, aboveField, onClose
   // count as inside, as ownsMicControl reads them, and so does a dialog opened from the dropdown
   // (the A/B diff). The error bubble lets that outside click through (it only hides a notice,
   // and must never hold a menu under it open). Focus stays in the field.
+  // A bubble drawn above its field (`aboveField`: the error with its Retry) belongs to that whole
+  // field, the text box included: the user who clicks in to type on after the partial words keeps
+  // its Retry (2026-11-24: the mic's own row was the scope, so that click hid the bubble).
+  const field = useRef<HTMLElement | null>(null);
+  field.current = aboveField ? anchor.current?.closest<HTMLElement>('[data-mic-bubble-anchor]') ?? null : null;
   const scope = useRef<HTMLElement | null>(null);
-  scope.current = anchor.current?.parentElement ?? null;
+  scope.current = field.current ?? anchor.current?.parentElement ?? null;
   useOverlayLayer({
     open: !!onClose,
     onClose: () => onClose?.(),
@@ -29,8 +34,6 @@ export function MicPopover({ anchor, owner, className, role, aboveField, onClose
     passOutsideClick: role !== undefined,
     trapFocus: false,
   });
-  const field = useRef<HTMLElement | null>(null);
-  field.current = aboveField ? anchor.current?.closest<HTMLElement>('[data-mic-bubble-anchor]') ?? null : null;
   const placement = useMenuPlacement(true, anchor, popup, { preferSide: 'up', gap: 6, minHeight: 40, verticalAnchorRef: field });
   return createPortal(<div
     ref={popup}

@@ -32,9 +32,12 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${dir}/reader-${name}-${test.info().project.name}.png` })
 }
 
-async function openSession(page: Page): Promise<Locator> {
+/** The session's column, opened from its task row; `restored`: after a reload, the column the page
+ *  kept comes back by itself (reading `count()` at once raced its mount: the row click then landed
+ *  under the full-screen panel that was coming back). */
+async function openSession(page: Page, { restored = false } = {}): Promise<Locator> {
   const panel = sessionPanel(page, SESSION_ID)
-  if (await panel.count() === 0) {
+  if (!restored && await panel.count() === 0) {
     const search = page.locator('.todo-search-input')
     const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
     await expect(async () => {
@@ -203,7 +206,7 @@ test.describe('Reading split', () => {
     expect(kept.fromBottom, 'the pane is mid-history before the reload').toBeGreaterThan(100)
     await page.reload()
     await page.waitForLoadState('networkidle')
-    panel = await openSession(page)
+    panel = await openSession(page, { restored: true })
     await expect(readerPane(panel)).toBeVisible()
     await expect(readerPane(panel)).toHaveClass(/is-side/)
     expect((await settled(page, readerBody(panel))).id, 'a reload lands the pane where it was left').toBe(kept.id)
@@ -215,7 +218,7 @@ test.describe('Reading split', () => {
     await expect(readerPane(panel)).toHaveCount(0)
     await page.reload()
     await page.waitForLoadState('networkidle')
-    panel = await openSession(page)
+    panel = await openSession(page, { restored: true })
     await expect(readerPane(panel)).toHaveCount(0)
 
     // 7. Send in split from the Send menu: what the reader saw stays on top.

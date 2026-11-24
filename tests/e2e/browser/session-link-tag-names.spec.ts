@@ -10,7 +10,7 @@
  *     removed please don't show the tag");
  *   - the header folds the link tags into ONE control beside the title (2026-11-02,
  *     SessionHeaderLabels.tsx; the state pills stay on the row): its flyout lists every link
- *     whole, 20px, uncut (2026-10-25, "it somehow get cropped out"), and the title keeps its
+ *     whole, at the one label height (18px, badge.css; 20px before f92b85044d), uncut (2026-10-25, "it somehow get cropped out"), and the title keeps its
  *     room, in a wide and a narrow column (narrow: the control goes to a line under the title).
  *
  * The fixture task `pw-task-links` (test-server.ts) holds the tags; its two existing files are
@@ -92,10 +92,11 @@ test('each link pill reads a name after its icon, and the labels flyout shows ea
   await expect(labels.locator('svg.tag-chip-icon[data-kind-group="review"]')).toHaveCount(1)
   await expect(labels.locator('[data-testid="tag-pills-more"]')).toHaveCount(0)
   await expect(page.getByText('Fix plan r5c')).toHaveCount(0)
-  // 20px, whole: no ancestor up to the flyout cuts any pill.
+  // The one label height, whole: no ancestor up to the flyout cuts any pill. Every tag is the shared
+  // .badge since f92b85044d ("one 18px soft rectangle"), so a link pill is 18px, no longer 20px.
   for (const pill of await links.all()) {
     const box = await pill.boundingBox()
-    expect(Math.round(box!.height)).toBe(20)
+    expect(Math.round(box!.height)).toBe(18)
     expect(await clippedBy(pill)).toEqual([])
   }
   await labels.screenshot({ path: `${SHOT_DIR}/${browserName}-labels.png` })
