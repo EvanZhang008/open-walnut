@@ -80,11 +80,20 @@ describe('the session hook counts every failed Walnut call it reads', () => {
     // A shell line whose walnut call worked and whose pipe failed after it is not Walnut's failure.
     await use('Bash', 'u6', { command: 'walnut tools call task_get \'{"id":"x"}\' | python3 -c "import json,sys; json.load(sys.stdin)[\'nope\']"' })
     await result('u6', 'Exit code 1\nTraceback (most recent call last):\nKeyError: \'nope\'', { isError: true })
+    // A failed CLI call piped into head exits 0: its failure JSON opening the output still counts
+    // (2026-11-24), while one further down the output (a log the command printed) does not.
+    await use('Bash', 'u7', { command: 'walnut tools call usage_watch \'{"action":"errors","since":"2h"}\' 2>&1 | head -c 4000' })
+    await result('u7', '{"ok":false,"error":{"code":"invalid_arguments","message":"Unrecognized key"}}')
+    await use('Bash', 'u8', { command: 'walnut tools call task_get \'{"id":"x"}\' | head' })
+    await result('u8', '{"task":{"id":"x","note":"{\\"ok\\":false,\\"error\\":{\\"code\\":\\"bad_request\\"}}"}}')
+    await use('Bash', 'u9', { command: 'walnut tools call search \'{"q":"x"}\' | head' })
+    await result('u9', 'line one\n{"ok":false,"error":{"code":"bad_request"}}')
     flushUsage(Date.now() + 60_000)
     const rows = readToolErrors({ since: 0 }).sort((a, b) => a.op.localeCompare(b.op))
     expect(rows.map(({ at: _at, ...r }) => r)).toEqual([
       { sid: 'sess-cloud', taskId: 'task-1', host: 'clouddev', op: 'task_get', client: 'mcp', code: 'no_such_tool' },
       { sid: 'sess-cloud', taskId: 'task-1', host: 'clouddev', op: 'task_history', client: 'cli', code: 'hub_unreachable' },
+      { sid: 'sess-cloud', taskId: 'task-1', host: 'clouddev', op: 'usage_watch', client: 'cli', code: 'invalid_arguments' },
     ].sort((a, b) => a.op.localeCompare(b.op)))
   })
 

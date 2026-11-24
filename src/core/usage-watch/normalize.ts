@@ -236,6 +236,18 @@ export function failureClass(r: { invalidArgs?: boolean; unreachable?: boolean; 
 }
 
 /**
+ * The code of a Walnut CLI failure that opens a shell line's output the shell itself did not fail
+ * (session-hook.ts): `walnut tools call ... | head` exits with head's status, so its failure JSON
+ * reaches the agent as a success (2026-11-24: the bad_args alarm on usage_watch named calls the
+ * error read could not show). Only output that starts with that JSON counts, never one that holds
+ * it further down (a log line, a file the command printed).
+ */
+export function cliFailureCode(result: string): string | null {
+  const m = /^\s*\{\s*"ok"\s*:\s*false\s*,\s*"error"\s*:\s*\{\s*"code"\s*:\s*"([a-z][a-z0-9_]{1,40})"/.exec(String(result ?? '').slice(0, 400))
+  return safeCode(m?.[1]) ?? null
+}
+
+/**
  * The error code of a session's failed Walnut tool call, from the result its agent read
  * (session-hook.ts): the code the CLI's failure JSON names, the `walnut: <code>:` line of the MCP
  * server (with the API's own code in parentheses when it gave one), or what Claude Code itself

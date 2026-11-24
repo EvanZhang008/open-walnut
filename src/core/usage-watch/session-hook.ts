@@ -10,7 +10,7 @@
  */
 import { log } from '../../logging/index.js'
 import type { OnToolResultPayload, OnToolUsePayload, SessionHookDefinition } from '../session-hooks/types.js'
-import { agentCutChars, toolErrorCode, walnutToolCall } from './normalize.js'
+import { agentCutChars, cliFailureCode, toolErrorCode, walnutToolCall } from './normalize.js'
 import { recordConfirmedCut, recordToolError } from './record.js'
 import { recordShip, setShipState, shipFailed, shipOfCommand } from './ships.js'
 
@@ -64,8 +64,8 @@ export const realUseHook: SessionHookDefinition = {
       const cut = agentCutChars(text)
       if (cut !== null) { if (run.answered !== false) recordConfirmedCut(run.op, cut, run.client ?? 'unknown') }
       // Every failed Walnut call the agent read, by session, host, op and code (never its words).
-      else if (res.isError && !res.replayed) {
-        const code = toolErrorCode(text)
+      else if (!res.replayed && (res.isError || (run.client === 'cli' && cliFailureCode(text) !== null))) {
+        const code = res.isError ? toolErrorCode(text) : cliFailureCode(text)!
         // A shell line that failed after the walnut call in it (a pipe into python, a grep) says
         // nothing of Walnut's: only a failure Walnut or the CLI wrote counts for a command.
         if (run.client !== 'cli' || code !== 'other') {
