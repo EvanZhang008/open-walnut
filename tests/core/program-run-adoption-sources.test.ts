@@ -44,6 +44,10 @@ const SIDE: Record<string, Side> = {
   // The leader's label for the task side of a send its host ran (leader-tasks.ts); the send's own
   // source rides `sendSource`, which is what adoption reads, as for handleSend's label.
   'host-judged:send': 'not',
+  // A Retry or Send now of a row its host keeps, asked from the leader's panel (host-lifecycle.ts): the
+  // asker's own source when it names one, else this fallback; and a row an engine setting held, sent
+  // again once the config changed or its copy arrived (sessions/engine-config-resend.ts).
+  'leader-retry': 'not', 'config-changed': 'not', 'config-copy': 'not',
 }
 
 /** `const NAME = '...'` constants of src whose name says SOURCE, so a send naming one is read too. */

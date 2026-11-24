@@ -39,7 +39,8 @@ export async function readParkedRows(sid: string): Promise<unknown[]> {
  */
 export async function sendQueuedRowNow(sid: string, messageId: string, source?: string, unpark?: boolean): Promise<unknown> {
   const { sendQueuedNow } = await import('./send-now.js')
-  return sendQueuedNow({ sessionId: sid, messageId: String(messageId), source: typeof source === 'string' && source ? source : 'leader-retry', unpark: unpark === true })
+  const asked = typeof source === 'string' ? source : ''
+  return sendQueuedNow({ sessionId: sid, messageId: String(messageId), source: asked || 'leader-retry', unpark: unpark === true })
 }
 
 /** A person's Discard of a row this host keeps for `sid` (session-message-queue.ts deleteMessage). */

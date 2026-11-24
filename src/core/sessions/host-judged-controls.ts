@@ -45,7 +45,8 @@ async function proxyOf(sessionId: string) {
 export async function onJudgingHost(sessionId: string, member: HostLifecycleMember, args: unknown[] = [], opts: { timeoutMs?: number } = {}): Promise<unknown> {
   const p = await proxyOf(sessionId)
   if (CHECKS.has(member) && !hostTakesChecks(p.host)) throw new HostNeedsUpdateError(p.host, member)
-  return p.call(member, args, 'lifecycle', opts.timeoutMs)
+  // No deadline named: the proxy's own default (the call keeps its three-argument shape).
+  return opts.timeoutMs === undefined ? p.call(member, args, 'lifecycle') : p.call(member, args, 'lifecycle', opts.timeoutMs)
 }
 
 /**
