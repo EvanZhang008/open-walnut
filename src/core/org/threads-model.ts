@@ -69,6 +69,7 @@ import { normalizeThreadLetter, type ThreadLetter } from './letter-thread-model.
 import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.js';
 import { ASKS_OUTSIDE_NEEDS, asksHimNow, summaryPointsElsewhere, summaryRepeatsHim } from './thread-summary-content.js';
 import { ackHoldsResult, lineMay, NO_LINE_REPLY } from './thread-known.js';
+import { repeatsAcknowledged } from './thread-ack-repeat.js';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
@@ -1157,6 +1158,11 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   // A status line never shows him again what he already has (thread-known.ts lineMay): every line path goes through here.
   if (opts.line && !lineMay(cur, patch)) {
     throw new ThreadError('he_has_it', 409, `Thread ${id}: he acknowledged its result. A status line only closes it (done); something new for him is your thread_update.`);
+  }
+  // Nor a node's own words that say again what he acknowledged (a close carrying them, a reopen on news).
+  if (by !== 'human' && !opts.line && !patch.close && isStr(patch.reply) && patch.state !== 'needs') {
+    const again = repeatsAcknowledged(cur, patch.reply);
+    if (again) throw new ThreadError('he_has_it', 409, `Thread ${id}: ${again}`);
   }
   // A thread that moved lives on at the other node: it is changed there, never opened again here.
   if (movedAway(cur) && (patch.reopen || patch.watch)) {

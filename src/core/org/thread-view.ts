@@ -251,7 +251,10 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
     const read = messages.some((m) => !!answer && !!m.readAt && m.readAt >= answer.at);
     const marked = !t.reactedAt && !t.messages.some((m) => m.readAt) && knownThrough >= i
       && (!t.known?.at || !answer || t.known.at >= answer.at);
-    out.push({ n, messages, ...(answer ? { answer } : {}), known: !!answer && (later || read || ackedByHim || marked) });
+    // His Acknowledge covers every answer given before it, one Walnut attached from the chat later too
+    // (2026-11-24, the threads inspection, item 10: such an answer reopened a card closed for his Acknowledge).
+    const beforeAck = !!answer && !!t.ackedAt && t.ackedAt >= answer.at;
+    out.push({ n, messages, ...(answer ? { answer } : {}), known: !!answer && (later || read || ackedByHim || marked || beforeAck) });
     n += messages.length;
     i = j;
   }
