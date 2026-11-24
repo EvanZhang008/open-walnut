@@ -90,7 +90,7 @@ describe('an executor refusal is read by its code everywhere', () => {
     // A thrown Error whose words say it is a refusal (opens as an API refusal, says nothing was done,
     // or that a read was shortened) is counted as a thrown error by the hub: it throws OwnRefusalError.
     const dir = new URL('../../../src/ops/', import.meta.url)
-    const says = /Walnut API error \(|nothing (?:was|is) (?:written|sent|run|changed|stored|saved)|nothing ran|refused|shortened|part of a longer document/i
+    const says = /Walnut API error \(|nothing (?:was|is) (?:written|sent|run|changed|stored|saved)|nothing ran|refused|shortened|part of a longer document|conflict:|changed since you read it/i
     const bare = fs.readdirSync(dir).filter((f) => f.endsWith('.ts')).flatMap((f) => {
       const src = fs.readFileSync(new URL(f, dir), 'utf8')
       return [...src.matchAll(/throw new Error\(/g)].flatMap((m) => {

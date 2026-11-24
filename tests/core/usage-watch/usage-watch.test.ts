@@ -382,7 +382,9 @@ describe('a watch', () => {
       const slowHour = judgeWatch(watch, T0 + 5 * H)
       expect(slowHour.state).toBe('passed')
       expect(slowHour.summary).toContain("2 requests its routes'")
-      // Hour 3: the route answers in time and the page still times out: the page's own (its pool).
+      // Hour 3: the route answers in time and the page still times out: the page's own (its pool). A slow
+      // read near the end of hour 2 does not take it: the alarm and the verdict judge by the same clock hour.
+      recordHttp({ method: 'GET', template: '/api/sessions/:sessionId/supervision', status: 200, ms: 5_002, waits: false, now: T0 + 3 * H - 600_000 })
       recordHttp({ method: 'GET', template: '/api/sessions/:sessionId/supervision', status: 200, ms: 40, waits: false, now: T0 + 3 * H })
       recordPageError(slowKind, T0 + 3 * H + 1_000)
       flushUsage(T0 + 3 * H + 120_000)

@@ -100,8 +100,11 @@ export function targetCovers(target: string, kind: UsageKind, name: string): boo
   return kind === 'page' && name.includes(target.slice(5)) && pageKindIsPagesOwn(name)
 }
 
-/** A route's hour that explains its page timeouts: it read slowly, timed out or failed on the server. */
-const troubledHour = (a: Agg): boolean => a.slow > 0 || a.timeouts > 0 || a.serverErrors > 0
+/**
+ * A route's hour that explains its page timeouts: it read slowly, failed on the server, or could not
+ * reach its host. The live alarm skips by the same clock hour (record.ts routeTroubledInHourOf).
+ */
+const troubledHour = (a: Agg): boolean => a.slow > 0 || a.serverErrors > 0 || a.unreachable > 0
 
 /**
  * A page target's errors over [since, until): the page's own, and those that were its routes'

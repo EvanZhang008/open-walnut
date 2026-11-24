@@ -598,10 +598,8 @@ defineOp({
     const replaceAll = args.replace_all === true
     const note = await readNote(args, call)
     if (typeof args.expectedHash === 'string' && args.expectedHash && args.expectedHash !== note.contentHash) {
-      throw new Error(
-        `conflict: ${note.path} changed since you read it (expectedHash ${args.expectedHash}, `
-        + `current ${note.contentHash}) — note_read it again and redo the edit on the current text`,
-      )
+      throw new OwnRefusalError('conflict', `${note.path} changed since you read it (expectedHash ${args.expectedHash}, `
+        + `current ${note.contentHash}), so nothing was written: note_read it again and redo the edit on the current text`, { status: 409 })
     }
     const occurrences = note.content.split(oldStr).length - 1
     if (occurrences === 0) {
