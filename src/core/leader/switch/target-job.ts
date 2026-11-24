@@ -175,8 +175,8 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
   const note = (step: string, why?: string) => notes ? writeSwitchNote(notes, { switchId: s.id, machine: s.to, step, ...(why ? { why } : {}) }).catch(() => 0) : Promise.resolve(0)
   // The service's start hook finds this switch's record through it (service-role.ts).
   writeSwitchPointer({ switchId: s.id, side: 'target', stateFile: path.join(switchFolder(o.standbyDir), targetStateName(s.id)) }, env)
-  // Its own ways (a and b, and while the old leader runs its host link, which reachedHolding and commitReach never
-  // count): this machine has no leader link, and the old leader may be gone.
+  // Its own ways (a and b, and while the old leader runs its host link): this machine has no leader link, and the
+  // old leader may be gone. The check made sure a majority stands without the host link (commitReach).
   const read = o.readWitnesses ?? makeWitnessReader(`${s.to}-target-job`, settings, () => (side.runningServer() ? [{ api: (m: string, p: string) => side.api(m, p) }] : []), async () => {
     const r = await side.reachWitnesses(configHome(o.standbyDir, s.targetHome)).catch(() => null)
     return r?.majority ? { standing: r.standing, answered: r.answered } : null

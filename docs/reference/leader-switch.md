@@ -182,7 +182,8 @@ Source job:
 Target job:
 
 1. **wait-mark**: the handover stands at a majority this machine reaches (within 10 s, else it gives
-   up; counted as the commit will count them, so not over its host link to the old leader), then it waits for the final mark. Every 2 s it reads the witnesses: a record of the old
+   up; an answer over its host link to the old leader counts: it says what the witness holds, and the check
+   made sure a majority answers without that link), then it waits for the final mark. Every 2 s it reads the witnesses: a record of the old
    leader above the handover (its cancel) means it took the lead back, and the job rolls back.
    It never promotes without the mark, and starts no commit after the deadline.
 2. **promote**: the switch claim goes beside this machine's id ([A launcher during a switch](#a-launcher-during-a-switch)),

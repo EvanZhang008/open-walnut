@@ -119,13 +119,16 @@ export function commitReach(r: WitnessReachReport): number {
 }
 
 /**
- * How many of the witnesses reached hold a record that passes `test`, counted as commitReach counts (no
- * `host-link` answer: the new leader's wait for the handover asks what it will still see at its commit).
- * Not the standing: a witness that was out of reach for a while holds an older renew of the same holder,
- * which is no disagreement about who holds the permission.
+ * How many of the witnesses reached hold a record that passes `test`. Not the standing: a witness
+ * that was out of reach for a while holds an older renew of the same holder, which is no
+ * disagreement about who holds the permission. Every way counts, `host-link` too: the answer says what
+ * the witness HOLDS, and a witness that answered over the host link is often reached by its direct door
+ * as well, which the commit then takes (counting it out refused a switch that commits: the remote
+ * rehearsal's split after the stop). Whether the commit has a majority without the host link is the
+ * check's question (commitReach).
  */
 export function reachedHolding(r: WitnessReachReport, test: (held: PermitRecord) => boolean): number {
-  return r.witnesses.filter((w) => w.answered && w.way !== 'host-link' && w.held && test(w.held)).length
+  return r.witnesses.filter((w) => w.answered && w.held && test(w.held)).length
 }
 
 /** One line for a person: which witnesses the machine reaches, and why each other one is missing. */
