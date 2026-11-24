@@ -125,6 +125,8 @@ export class RemoteJudgedSession {
   setForegroundFromSnapshot(): void {}
   resetConsumedOffsetFromSnapshot(): void {}
   setCronArmedFromSnapshot(): void {}
+  /** The palette's backfill (slash-commands.ts): the host's own runner keeps the CLI's list; this one reads it from `live`. */
+  seedCliSlashCommands(): void {}
 
   // ── forwarded, answered by the host ──
   private target(): HostCallTarget { return this.kind === 'acp' ? 'acp' : 'session' }
