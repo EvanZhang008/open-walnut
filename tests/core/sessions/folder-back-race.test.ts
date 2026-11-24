@@ -2,8 +2,10 @@
  * A remake of a task's released workspace that ends while a refusal parks its lines
  * (src/core/sessions/folder-gone.ts noteFolderGone): the remake's own send ran before the
  * lines were parked and found nothing, so the recorder, finding the folder there again,
- * sends them, once. Any other folder found present only loses its mark: a refusal that check
- * contradicts is never sent again by itself.
+ * sends them, once. Any other folder found present only loses its mark here: the recorder does not
+ * send on a refusal that check contradicts. The delivery clock does, on its growing wait (1, 2, 5,
+ * 10, 30 minutes, then every hour), as for every message not confirmed delivered
+ * (src/core/sessions/folder-wait.ts, tests/core/sessions/folder-wait.test.ts).
  *
  * Real: the session store, the queue and its park, folder-gone.ts, the folder check (a local
  * directory). Faked: the task store the workspace code reads (one task's workspace record).
@@ -79,7 +81,7 @@ describe('a refusal recorded after the remake of its folder ended', () => {
     expect((await getQueue(SID)).map((m) => m.id)).toEqual(['qm-race-1'])
   })
 
-  it('a present folder that is no remade workspace keeps its line parked (only the mark goes)', async () => {
+  it('a present folder that is no remade workspace keeps its line parked here (only the mark goes; the clock sends it later)', async () => {
     taskWith(workspace({ remade: undefined }))
     await parkedLine('qm-race-2')
     expect(await noteFolderGone(SID, { cwd: root, host: null })).toBeNull()

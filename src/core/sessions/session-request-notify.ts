@@ -481,6 +481,16 @@ async function gateRequest(
         });
         return 'skip';
       }
+    } else if (row?.status === 'parked' && context.phase !== 'COMPLETE' && await (await import('./folder-wait.js')).waitsForFolderNow(row)) {
+      // Waiting on its session's gone folder, and sent by itself once the folder is back
+      // (folder-wait.ts): an edge of an earlier turn says nothing of it, as of a row still queued;
+      // its deadline says it is on its way, never "not delivered".
+      if (outcome !== 'timeout') {
+        log.session.info('request fallback: the message waits on its folder, edge ignored', { requestId: request.id, toSessionId: request.toSessionId, outcome, messageId: row.id });
+        return 'skip';
+      }
+      const { FOLDER_WAIT_WORDS } = await import('./folder-wait.js');
+      undelivered = { why: FOLDER_WAIT_WORDS, stillQueued: true };
     } else if (row?.status === 'parked' && context.phase !== 'COMPLETE' && await (await import('./delivery-retry.js')).parkRetriedByClock(row)) {
       // Parked for now, and Walnut tries it again by itself (delivery-retry.ts): the asker hears it
       // has not been delivered YET and goes out by itself, never "not delivered, send it again"

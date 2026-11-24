@@ -648,10 +648,13 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   await timedRead(took, 'undelivered', () => safely('undelivered', async () => {
     const { getQueue } = await import('./session-message-queue.js');
     const { parkMeansNeverRan } = await import('./sessions/undelivered-requests.js');
+    const { waitsForFolderNow } = await import('./sessions/folder-wait.js');
     for (const sid of new Set([...sessionIds, ...sessions.keys()])) {
       for (const m of await getQueue(sid)) {
-        // Only a park that proves the message never ran: a Stop's park is the user's choice.
+        // Only a park that proves the message never ran: a Stop's park is the user's choice. One that
+        // waits on its gone folder goes by itself once the folder is back (folder-wait.ts): no failure.
         if (m.status !== 'parked' || !m.parkedAt || !parkMeansNeverRan(m.parkedReason)) continue;
+        if (await waitsForFolderNow(m)) continue;
         const prev = undelivered.get(sid);
         if (!prev || prev.at < m.parkedAt) undelivered.set(sid, { reason: m.parkedReason || 'it could not be delivered', at: m.parkedAt });
       }

@@ -112,3 +112,21 @@ export async function folderIsBackFor(sessionId: string, now: number, o: { delay
 export function _resetFolderLooksForTesting(): void {
   folderLooks.clear()
 }
+
+/**
+ * What an asker reads of its message while it waits on the folder (session-request-notify.ts): it is
+ * on its way, never "not delivered" (2026-11-24: a message waiting 21 s for its workspace to be made
+ * again was reported to its sender as not delivered, and the sender set out to send it again).
+ */
+export const FOLDER_WAIT_WORDS = "its session's working folder is not there yet (its workspace is being made again, or the folder is gone for now); Walnut sends the message by itself once the folder is back"
+
+/**
+ * Whether `row` waits on its session's gone folder and goes by itself (waitsForFolder, against the
+ * session's stop fence now). Every reader that tells an asker or a person "not delivered" asks it
+ * first (tests/core/sessions/folder-wait-ratchet.test.ts).
+ */
+export async function waitsForFolderNow(row: WaitRow & { sessionId: string }, now: number = Date.now()): Promise<boolean> {
+  if (row.status !== 'parked' || row.folderWait !== true) return false
+  const fence = await stopFenceOf(row.sessionId)
+  return fence !== undefined && waitsForFolder(row, fence, now)
+}

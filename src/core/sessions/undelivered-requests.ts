@@ -125,9 +125,12 @@ export async function recentNeverRanPark(sessionId: string | undefined, sinceMs:
   if (!sessionId) return undefined;
   const { getQueue } = await import('../session-message-queue.js');
   const queue = await getQueue(sessionId).catch(() => [] as QueuedMessage[]);
-  return queue
-    .filter((m) => m.status === 'parked' && parkMeansNeverRan(m.parkedReason) && Date.parse(m.parkedAt ?? '') >= sinceMs)
-    .sort((a, b) => (b.parkedAt ?? '').localeCompare(a.parkedAt ?? ''))[0];
+  // A row waiting on its gone folder goes by itself once the folder is back: no failure (folder-wait.ts).
+  const { waitsForFolderNow } = await import('./folder-wait.js');
+  const parked = queue.filter((m) => m.status === 'parked' && parkMeansNeverRan(m.parkedReason) && Date.parse(m.parkedAt ?? '') >= sinceMs);
+  const failed: QueuedMessage[] = [];
+  for (const m of parked) if (!await waitsForFolderNow(m)) failed.push(m);
+  return failed.sort((a, b) => (b.parkedAt ?? '').localeCompare(a.parkedAt ?? ''))[0];
 }
 
 /** Tell each asker whose message was just parked for good. Never throws. */
@@ -137,6 +140,14 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
     const id = requestIdOf(row);
     if (!id) continue;
     try {
+      // Waiting on its session's gone folder (a workspace being made again): it goes by itself once
+      // the folder is back, so its asker hears nothing now; its delivery, or its deadline, speaks
+      // (folder-wait.ts). 2026-11-24: one waited 21 s and its sender was told "not delivered".
+      const { waitsForFolderNow } = await import('./folder-wait.js');
+      if (await waitsForFolderNow(row)) {
+        log.session.info('parked request: its message waits on the folder and goes by itself; the asker is not told it failed', { requestId: id, sessionId: row.sessionId, messageId: row.id });
+        continue;
+      }
       // A park the clock tries again (delivery-retry.ts) is not for good: the asker hears it has not
       // been delivered yet and goes out by itself (session-request-notify.ts reads the row).
       const { parkRetriedByClock } = await import('./delivery-retry.js');

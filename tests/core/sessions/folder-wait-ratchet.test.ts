@@ -12,7 +12,8 @@
  *     calls it or is listed with why it needs none;
  *  2. every way a folder comes back (or a session moves to another one) is listed with the release
  *     that covers it. A new caller of one of those fails here until it is listed;
- *  3. only a person's press releases rows Walnut did not mark: `pick: 'all'` comes from one place.
+ *  3. only a person's press releases rows Walnut did not mark: `pick: 'all'` comes from one place;
+ *  4. no reader tells an asker or a person "not delivered" of a row that waits on its folder.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -93,6 +94,15 @@ describe('a message that waited on a gone folder goes once the folder is back, w
     expect(found, 'a new way a folder comes back (or a session moves) must be listed here with what sends the rows that waited').toEqual(
       Object.fromEntries(Object.entries(RETURNS).map(([f, k]) => [f, k.count])),
     )
+  })
+
+  it('every reader that calls a park "never ran" first asks whether it waits on the folder', () => {
+    // 2026-11-24: a row waiting 21 s for its workspace was reported to its sender as not delivered.
+    const found = callsOf(/\bparkMeansNeverRan\(/, /function parkMeansNeverRan\b/)
+    expect(Object.keys(found).sort(), 'a new reader of parkMeansNeverRan must ask waitsForFolderNow (folder-wait.ts) before it says "not delivered"').toEqual([
+      'src/core/sessions/session-request-notify.ts', 'src/core/sessions/undelivered-requests.ts', 'src/core/user-status-sync.ts',
+    ])
+    for (const file of Object.keys(found)) expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(/waitsForFolderNow\(/)
   })
 
   it("only a person's press sends rows Walnut did not mark", () => {

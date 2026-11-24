@@ -1660,6 +1660,37 @@ describe('notifyRequesterFallback — a message that has not reached its target'
     expect((await getSessionRequest(request.id))).toMatchObject({ status: 'notified', outcome: 'error' });
   });
 
+  it('a message waiting on its session\'s gone folder is never reported not delivered: an edge ignores it, the deadline says it is on its way', async () => {
+    // 2026-11-24: a message waited 21 s for its workspace to be made again and its sender was told
+    // "not delivered" (core/sessions/folder-wait.ts).
+    const request = await arm();
+    const waiting = rowFor(request.id, { status: 'parked', parkedReason: 'Working directory no longer exists on devbox: /work/ws', parkedCode: 'cwd_missing', folderWait: true });
+    getQueue.mockResolvedValue([waiting]);
+    expect(await notifyRequesterFallback(request, 'error', { phase: 'NEED_ACTION' })).toBe(false);
+    expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(false);
+    expect((await getSessionRequest(request.id))?.status).toBe('pending');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // Told at park time: nothing either.
+    const { notifyParkedRequests } = await import('../../src/core/sessions/undelivered-requests.js');
+    await notifyParkedRequests([waiting as never]);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // Its deadline: on its way, sent by itself, never "send it again".
+    expect(await notifyRequesterFallback(request, 'timeout', { phase: 'NEED_ACTION' })).toBe(true);
+    const envelope = parseWalnutMessage(deliveredText())!;
+    expect(envelope.body).toContain('Your message has NOT BEEN DELIVERED yet');
+    expect(envelope.body).toContain('Walnut sends the message by itself once the folder is back');
+    expect(envelope.body).not.toContain('Your message was NOT DELIVERED');
+  });
+
+  it('the same park by an older Walnut (no mark) is reported not delivered at park time', async () => {
+    const request = await arm();
+    const old = rowFor(request.id, { status: 'parked', parkedReason: 'Working directory no longer exists on devbox: /work/ws', parkedCode: 'cwd_missing' });
+    getQueue.mockResolvedValue([old]);
+    const { notifyParkedRequests } = await import('../../src/core/sessions/undelivered-requests.js');
+    await notifyParkedRequests([old as never]);
+    expect(parseWalnutMessage(deliveredText())!.body).toContain('Your message was NOT DELIVERED');
+  });
+
   it('a park Walnut tries again by itself is reported as NOT DELIVERED YET, going out by itself, never "send it again"', async () => {
     // 2026-11-23, the user: no message is ever lost, an error is retried (core/sessions/delivery-retry.ts).
     const request = await arm();
