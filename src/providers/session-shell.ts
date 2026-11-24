@@ -71,16 +71,21 @@ export function pickSessionShell(opts: { envShell?: string; loginShell?: string 
  *    top of zsh's `-c` it ended the shell), and with `exit` aliased to `return` while it is
  *    parsed, so an `exit` ends the setup too and keeps what it exported so far. An explicit
  *    `builtin exit`, `\exit` or an `exec` still ends the shell: that is the setup's own choice.
+ *  - No errexit: a setup's `set -e` never ends the start, nor stays on for the rest of the preamble
+ *    (`set +e` after it). Under bash 4.2 (AL2, CentOS 7) an errexit inside eval ends the shell even
+ *    in a `||` list, so there `set` is shadowed while the setup runs by one that turns -e off again (defined
+ *    through eval: a POSIX-mode bash parses the whole line before `set +o posix` runs, and refuses a
+ *    function named like a special builtin).
  *  - No stdin: the CLI's stdin is the session's FIFO, and a setup that reads would take the first
  *    message. No stdout (the session's JSONL). Its stderr goes to the session's .err log, as the
  *    rc files' does.
  */
 export function shellSetupStep(file: string): string {
-  return '[ -z "${BASH_VERSION-}" ] || { set +o posix; shopt -s expand_aliases; }; '
+  return '[ -z "${BASH_VERSION-}" ] || { set +o posix; shopt -s expand_aliases; eval \'set() { builtin set "$@"; builtin set +e; }\'; }; '
     + '__walnut_eval=command; [ -z "${ZSH_VERSION-}" ] || __walnut_eval=builtin; alias exit=return; '
     + '__walnut_setup() { $__walnut_eval eval "$(cat -- ' + shellQuote(file) + ')"; }; '
     + '__walnut_setup </dev/null >/dev/null || true; '
-    + 'unalias exit 2>/dev/null; unset -f __walnut_setup; unset __walnut_eval'
+    + 'unalias exit 2>/dev/null; unset -f __walnut_setup; [ -z "${BASH_VERSION-}" ] || unset -f set; unset __walnut_eval; set +e'
 }
 
 export interface SessionPreambleOptions {

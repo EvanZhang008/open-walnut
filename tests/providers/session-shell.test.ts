@@ -60,6 +60,13 @@ describe.each(SHELLS)('the preamble in %s', (shell) => {
     expect(run(shell, 'export A=1', 'alias exit >/dev/null 2>&1 && echo still || echo gone')).toBe('gone\n')
   })
 
+  it('a setup that turns errexit on never ends the start, and errexit is off after it', () => {
+    // bash 4.2 (AL2, CentOS 7) ended the shell here inside eval, `|| true` or not (2026-11-24 review).
+    expect(run(shell, 'set -e; false; export B=1', 'false; echo "after ${B-none}"')).toBe('after 1\n')
+    expect(run(shell, 'set -o errexit; false', 'false; echo after')).toBe('after\n')
+    expect(run(shell, 'set -eu; export B=1', 'false; echo "after $B"')).toBe('after 1\n')
+  })
+
   it('no setup: nothing of it runs', () => {
     expect(buildSessionPreamble({ shimDir: '/x', fallbackPathStep: 'export PATH="$PATH:/x"' })).not.toContain('__walnut_eval')
     expect(run(shell, '', 'echo "${__walnut_eval-none}"')).toBe('none\n')
@@ -70,6 +77,7 @@ describe.runIf(!!BASH)('bash in POSIX mode (bash --posix)', () => {
   it('a setup that does not parse or exits never stops what follows', () => {
     expect(run(BASH!, 'if then (', 'echo after', { args: ['--posix'] })).toBe('after\n')
     expect(run(BASH!, 'export A=1; exit 3', 'echo "after $A"', { args: ['--posix'] })).toBe('after 1\n')
+    expect(run(BASH!, 'set -e; false; export B=1', 'false; echo "after ${B-none}"', { args: ['--posix'] })).toBe('after 1\n')
   })
 })
 
