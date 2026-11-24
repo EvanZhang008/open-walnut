@@ -26,6 +26,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { MailFixtureServer, PANE, clipboardReader, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
+import { dragAcross, rightPressOnSelection } from './mail-context-fixes-core'
 
 const SHOT_DIR = '/tmp/mail-context-row/chromium'
 
@@ -147,22 +148,6 @@ async function smartBadge(page: Page): Promise<number> {
   const badge = page.locator(`${PANE} .mail-mailbox.smart[data-smart="inbox"]`).getByTestId('mail-smart-unread')
   if (await badge.count() === 0) return 0
   return Number.parseInt((await badge.innerText()).replace(/[^\d]/g, ''), 10)
-}
-
-/** Drag across an element's text the way a person does, and report what got selected. */
-async function dragAcross(page: Page, target: Locator): Promise<string> {
-  const box = (await target.boundingBox())!
-  const y = box.y + box.height / 2
-  await page.mouse.move(box.x + 2, y)
-  await page.mouse.down()
-  for (let at = 4; at <= Math.min(box.width - 2, 160); at += 12) {
-    await page.mouse.move(box.x + at, y)
-  }
-  await page.mouse.up()
-  return page.evaluate(() => {
-    const selection = window.getSelection()
-    return selection && !selection.isCollapsed ? selection.toString() : ''
-  })
 }
 
 test('C6, C7, C8, C9, C10, C12, C23: a right-click opens the menu and does nothing else', async ({ page }) => {
@@ -598,15 +583,7 @@ test('C26, C74, C75: a real selection keeps the browser menu and does not open t
   // selectable element a right-press on text OUTSIDE the selection collapses it before any handler
   // runs. With no selection left there is nothing for the browser's menu to act on, so Walnut's is
   // the right answer there.
-  // The middle of the selected words themselves: since the list grew (9b60109d6c) the snippet's own
-  // middle is past the drag's 160 px, where the press would collapse the selection first.
-  const words = await page.evaluate(() => {
-    const r = window.getSelection()!.getRangeAt(0).getClientRects()[0]!
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
-  })
-  const snippetBox = (await row(page, WRITER, LUNCH).locator('.mail-row-snippet').boundingBox())!
-  expect(words.x, 'the press is inside the snippet').toBeGreaterThan(snippetBox.x)
-  await page.mouse.click(words.x, words.y, { button: 'right' })
+  await rightPressOnSelection(page, row(page, WRITER, LUNCH).locator('.mail-row-snippet'))
   await page.waitForTimeout(500)
   expect(await page.evaluate(() => window.getSelection()?.toString() ?? ''), 'the selection survived the press').toBe(snippet)
   expect(await page.locator('.wn-context-menu').count(), 'the native menu was left alone').toBe(0)

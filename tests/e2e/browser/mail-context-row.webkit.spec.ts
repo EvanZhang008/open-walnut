@@ -18,12 +18,13 @@
  * gesture to the browser and the row's menu was unreachable in the Mac app.
  *
  * A `test.use` browser pin only applies at the top level of its own spec file, so this is a file rather
- * than a project, and its two helpers are inline: importing the Chromium spec would run all fifteen of
- * its cases in this engine as well.
+ * than a project. Its gesture helpers come from mail-context-fixes-core.ts, a helper module with no
+ * tests: importing the Chromium spec would run all fifteen of its cases in this engine as well.
  */
 import fs from 'node:fs/promises'
 import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { MailFixtureServer, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
+import { dragAcross, rightPressOnSelection } from './mail-context-fixes-core'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
@@ -51,22 +52,6 @@ test.afterAll(async () => { await server.stop() })
 
 function row(page: Page, messageId: string): Locator {
   return page.locator(`.mail-row[data-account-id="${WRITER}"][data-message-id="${messageId}"]`)
-}
-
-/** Drag across an element's text the way a person does, and report what got selected. */
-async function dragAcross(page: Page, target: Locator): Promise<string> {
-  const box = (await target.boundingBox())!
-  const y = box.y + box.height / 2
-  await page.mouse.move(box.x + 2, y)
-  await page.mouse.down()
-  for (let at = 4; at <= Math.min(box.width - 2, 160); at += 12) {
-    await page.mouse.move(box.x + at, y)
-  }
-  await page.mouse.up()
-  return page.evaluate(() => {
-    const selection = window.getSelection()
-    return selection && !selection.isCollapsed ? selection.toString() : ''
-  })
 }
 
 /**
@@ -108,8 +93,9 @@ test('C75, C26, C74: a row\'s text can be selected, and selecting it opens nothi
   // SELECTED WORDS: now that a row's text really is selectable, a right-press on text OUTSIDE the
   // selection collapses it before any handler runs, and with no selection left Walnut's menu is the
   // right answer there. The selection above ended in the snippet, so that is where the press goes.
-  await row(page, KEEPER).locator('.mail-row-snippet').click({ button: 'right' })
+  await rightPressOnSelection(page, row(page, KEEPER).locator('.mail-row-snippet'))
   await page.waitForTimeout(300)
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? ''), 'the selection survived the press').toBe(snippet)
   expect(await page.locator('.wn-context-menu').count(), 'the browser keeps this one').toBe(0)
 })
 

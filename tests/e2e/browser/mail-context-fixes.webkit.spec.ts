@@ -27,7 +27,7 @@ import { MailFixtureServer, shoot, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LUNCH, WRITER,
   dragAcross, engineOf, headingLines, intoWriterInbox, item, menu, menuOverflow, openRowMenu,
-  probeKeyboard, row, rowTops, rowToast,
+  probeKeyboard, rightPressOnSelection, row, rowTops, rowToast,
 } from './mail-context-fixes-core'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
@@ -81,8 +81,9 @@ test('C26, C74: a real selection keeps the browser menu, and selecting opens not
 
   // Rule 6, now reachable in this engine: inside a live selection the browser's own menu is the better
   // one, so Walnut's must not appear.
-  await row(page, WRITER, LUNCH).locator('.mail-row-snippet').click({ button: 'right' })
+  await rightPressOnSelection(page, row(page, WRITER, LUNCH).locator('.mail-row-snippet'))
   await page.waitForTimeout(400)
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? ''), 'the selection survived the press').toBe(picked)
   expect(await page.locator('.wn-context-menu').count(), 'the browser keeps this one').toBe(0)
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'c26-native-kept')}`)
 })

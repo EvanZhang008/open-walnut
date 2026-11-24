@@ -14,6 +14,8 @@
  *    that is a provider write against the wrong message.
  *  · `rowTops`        (N2): an answer to a row action must not move the rows it is about.
  *  · `dragAcross`     (N3, C75): a row's own words have to be selectable in BOTH engines.
+ *  · `rightPressOnSelection` (C26): the browser's own menu is graded where a person opens it, on
+ *    the selected words.
  *  · `menuOverflow`   (N11): a capped menu has to show that there is more below the fold.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
@@ -127,6 +129,24 @@ export async function dragAcross(page: Page, target: Locator): Promise<string> {
     const selection = window.getSelection()
     return selection && !selection.isCollapsed ? selection.toString() : ''
   })
+}
+
+/**
+ * Right-press the middle of the live selection, where a person right-clicks to copy or look a word up.
+ *
+ * Not the middle of `inside`: since the mail list grew (9b60109d6c) a snippet's own middle is past
+ * `dragAcross`'s 160 px, and a right-press on text OUTSIDE the selection collapses it (WebKit selects
+ * the pressed word instead) before any handler runs, which leaves Walnut's menu the right answer there.
+ */
+export async function rightPressOnSelection(page: Page, inside: Locator): Promise<void> {
+  const words = await page.evaluate(() => {
+    const r = window.getSelection()!.getRangeAt(0).getClientRects()[0]!
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  const box = (await inside.boundingBox())!
+  expect(words.x, 'the press is inside the selected element').toBeGreaterThan(box.x)
+  expect(words.x, 'the press is inside the selected element').toBeLessThan(box.x + box.width)
+  await page.mouse.click(words.x, words.y, { button: 'right' })
 }
 
 /** Is the menu taller than its capped box, and does it say so? */
