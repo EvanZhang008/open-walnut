@@ -160,3 +160,83 @@ describe('a host that runs as this Walnut\'s one service', () => {
     expect(m.view('devbox').phase).toBe('running')
   })
 })
+
+describe('another name of a daemon kept under another name', () => {
+  function alias(keeper: string): ServiceHost {
+    const h = host()
+    h.hostKey = 'newbox'
+    h.daemonKeeper = async () => keeper
+    return h
+  }
+
+  it('reads its keeper\'s follower, never its own "another name" view, and hears when the keeper settles', async () => {
+    const m = createHostServerManager(deps())
+    // The name is linked first: the keeper has not settled, so the machine's mode is not known.
+    const other = alias('devbox')
+    await m.connected(other)
+    expect(m.view('newbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'another-name' } })
+    expect(m.followerFact('newbox')).toEqual({ kind: 'unknown' })
+    const keeper = host()
+    await m.connected(keeper)
+    expect(m.followerFact('devbox')).toEqual({ kind: 'replica' })
+    expect(m.followerFact('newbox')).toEqual({ kind: 'replica' })
+    expect(other.modeChecks).toBeGreaterThan(0)
+    // The keeper's server goes off: the name reads that too.
+    settings = { ...settings, enabled: false }
+    await m.reconcile('devbox')
+    expect(m.followerFact('newbox')).toMatchObject({ kind: 'none', why: expect.stringMatching(/no Walnut server/) })
+  })
+
+  it('reads its own follower again once it is no longer another name', async () => {
+    const m = createHostServerManager(deps())
+    const keeper = host()
+    await m.connected(keeper)
+    const other = alias('devbox')
+    await m.connected(other)
+    expect(m.followerFact('newbox')).toEqual({ kind: 'replica' })
+    other.daemonKeeper = async () => 'newbox'
+    settings = { ...settings, enabled: false }
+    await m.reconcile('newbox')
+    expect(m.followerFact('newbox')).toMatchObject({ kind: 'none', why: expect.stringMatching(/no Walnut server/) })
+  })
+
+  it('keeps its keeper while its link is down or the daemon\'s answer fails', async () => {
+    const m = createHostServerManager(deps())
+    const keeper = host()
+    await m.connected(keeper)
+    const other = alias('devbox')
+    await m.connected(other)
+    expect(m.followerFact('newbox')).toEqual({ kind: 'replica' })
+    // The ask fails: the last keeper holds.
+    other.daemonKeeper = async () => { throw new Error('link lost') }
+    await m.reconcile('newbox')
+    expect(m.followerFact('newbox')).toEqual({ kind: 'replica' })
+    // The link drops and a config change reconciles every host (this name off by default).
+    other.daemonKeeper = async () => 'devbox'
+    other.connected = false
+    settings = { ...settings, enabled: false }
+    await m.reconcile('newbox')
+    expect(m.followerFact('newbox')).toEqual({ kind: 'replica' })
+  })
+
+  it('every gate reason is classified: of the machine (its own view) or of a name (the keeper\'s follower)', () => {
+    // A new reason fails here until it is placed: one that is about the name, not the machine, must
+    // read the keeper's follower in followerFact, or the machine's one service is switched back.
+    const src = fs.readFileSync(path.join(__dirname, '../../src/core/host-server/eligibility.ts'), 'utf8')
+    const union = /export type FollowerGateReason = ([^\n]+)/.exec(src)![1]!
+    const reasons = [...union.matchAll(/'([^']+)'/g)].map((x) => x[1]).sort()
+    const classified: Record<string, 'machine' | 'name'> = {
+      'no-build': 'machine', memory: 'machine', disk: 'machine', 'this-computer': 'machine', 'another-name': 'name',
+    }
+    expect(reasons).toEqual(Object.keys(classified).sort())
+    const manager = fs.readFileSync(path.join(__dirname, '../../src/core/host-server/manager.ts'), 'utf8')
+    for (const [reason, kind] of Object.entries(classified)) {
+      if (kind !== 'name') continue
+      // The branch that raises a name's gate records the keeper first.
+      const at = manager.indexOf(`notEligible(hostKey, '${reason}'`)
+      expect(at, reason).toBeGreaterThan(0)
+      const block = manager.slice(manager.lastIndexOf('if (', at), at)
+      expect(block, reason).toContain('keeperOf.set(hostKey')
+    }
+  })
+})

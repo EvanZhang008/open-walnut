@@ -123,6 +123,8 @@ export function createHostServerManager(deps: ManagerDeps) {
   const hard = new Set<string>()
   /** The settings each host's last reconcile read, so a config change elsewhere does not redo a setup that waits. */
   const lastSettings = new Map<string, string>()
+  /** A host row that is another name of a daemon kept under another name: that keeper (followerFact reads its follower). */
+  const keeperOf = new Map<string, string>()
   /** The host's setup failed in this pass: why, and whether it tries again by itself (Walnut Health is told once per pass). */
   const failedNow = new Map<string, { message: string; triesAgain: boolean }>()
   /** A setup that runs again by itself, later and later (try-later.ts: a refused login, a failed start, a gate). */
@@ -522,8 +524,10 @@ export function createHostServerManager(deps: ManagerDeps) {
     // (daemonKeeperAlias) sets it up or takes it down. 2026-11-20: the found twin `newdev`, off by
     // default, took down the server `clouddev` runs on that same machine.
     // This computer's own daemon under another row keeps the this-computer branch below.
-    const keeper = host?.connected && host.daemonKeeper ? await host.daemonKeeper().catch(() => hostKey) : hostKey
+    const answered = host?.connected && host.daemonKeeper ? await host.daemonKeeper().then((k) => k, () => null) : null
+    const keeper = answered ?? hostKey
     if (keeper !== hostKey && keeper !== '__local__') {
+      keeperOf.set(hostKey, keeper)
       // Nothing is set up or taken down from here, even while the keeper's own link is down:
       // the server it set up keeps running, and a change reaches it when that link is back.
       const up = hosts.get(keeper)?.connected === true
@@ -532,6 +536,9 @@ export function createHostServerManager(deps: ManagerDeps) {
         : `This host is another name of ${keeper}: its Walnut server is set up there, and a change reaches it once Walnut connects to ${keeper} again.`)
       return
     }
+    // Only the daemon's own word ends being another name: a link that is down or an ask that failed
+    // keeps the last keeper, so a reconnect never decides the machine's mode from this row's own view.
+    if (answered) keeperOf.delete(hostKey)
     const settings = await deps.settingsOf(hostKey)
     // Read while this server began to stop (its plugins going): what they say is not the person's.
     if (await deps.frozen?.()) return
@@ -869,6 +876,15 @@ export function createHostServerManager(deps: ManagerDeps) {
    * full follower program running (the spec the service starts from), none (why), or not settled.
    */
   function followerFact(hostKey: string): FollowerFact {
+    // Another name of a daemon reaches the same machine, whose follower its keeper sets up: the
+    // machine's mode is one decision, read from the keeper's follower, never from this row's own
+    // "another name" view (2026-11-24: newdev, a name of clouddev, read "none" and asked the machine
+    // clouddev runs as one service to go back to two programs, and Walnut Health counted it).
+    const keeper = keeperOf.get(hostKey)
+    return ownFollowerFact(keeper && keeper !== hostKey ? keeper : hostKey)
+  }
+
+  function ownFollowerFact(hostKey: string): FollowerFact {
     const v = views.get(hostKey)
     if (!v || !lastSettings.has(hostKey)) return { kind: 'unknown' }
     if (v.phase === 'running') {
@@ -905,7 +921,11 @@ export function createHostServerManager(deps: ManagerDeps) {
         if (phase === 'error' && failed && tryLater.pending(hostKey) !== 'login') deps.health?.failed(hostKey, failed.message, failed.triesAgain)
         else if (phase === 'running' || phase === 'off' || phase === 'not-eligible') deps.health?.settled(hostKey)
         // This Walnut's follower there is known now: the host's mode may be due a switch (one-service-mode.ts).
-        if (followerFact(hostKey).kind !== 'unknown') hosts.get(hostKey)?.serviceModeChanged?.()
+        // Its other names read this host's follower (followerFact): they are told too.
+        if (followerFact(hostKey).kind !== 'unknown') {
+          hosts.get(hostKey)?.serviceModeChanged?.()
+          for (const [alias, keeper] of keeperOf) if (keeper === hostKey && alias !== hostKey) hosts.get(alias)?.serviceModeChanged?.()
+        }
       } while (rerun.has(hostKey))
     })().finally(() => {
       running.delete(hostKey)
