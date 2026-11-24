@@ -193,6 +193,9 @@ export interface StatusReport {
    * waiting_on), and a task with no lead above it reads as finished, to read and close.
    */
   kindless_ask?: true;
+  /** The ask is the session's own write (task_report_set), kept over its turn-end summaries while it
+   *  asks the same decision (sessions/own-ask-write.ts). */
+  ask_by_self?: true;
   /** The status rules it was asked under (STATUS_RULE_VERSION); absent = before 2026-11-02, when a
    *  task's own build read as a wait (status-reconcile.ts asks such a wait again once). */
   rule?: number;

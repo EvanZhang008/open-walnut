@@ -106,6 +106,8 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
     ...(next ? { next } : {}),
     ...shape,
     ...(c.state === 'needs' ? saidDecisionOf(c) : {}),
+    // The session's own ask outlives its turn-end summaries while it asks that decision (own-ask-write.ts).
+    ...(c.state === 'needs' && by === 'self' ? { ask_by_self: true as const } : {}),
     at, turn_ended_at: at,
     ...(by !== 'self' ? { by, ...(byName ? { by_name: byName.slice(0, 120) } : {}) } : {}),
     // `by` comes from the route's own caller resolution (setTaskReport: human only with no caller

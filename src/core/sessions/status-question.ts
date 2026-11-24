@@ -92,7 +92,11 @@ export function storedIsNewer(stored: Pick<StatusReport, 'at' | 'turn_ended_at'>
 export async function applyStatusAnswer(
   taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean; askedAtMs?: number } = {},
 ): Promise<boolean> {
-  if (report.same_as) {
+  // A pointer binds under the decision-owner lock (report-set.ts), also one the session's own ask
+  // brings back over this answer (own-ask-write.ts).
+  const { getTask } = await import('../task-manager.js');
+  const stored = report.same_as ? null : (await getTask(taskId).catch(() => null))?.status_report;
+  if (report.same_as || (stored?.ask_by_self && stored.same_as)) {
     const { WALNUT_HOME } = await import('../../constants.js');
     return withFileLock(`${WALNUT_HOME}/cache/decision-owner.json`, () => saveStatusAnswer(taskId, sessionId, report, turnEndedMs, opts));
   }
@@ -131,6 +135,9 @@ async function saveStatusAnswer(
   const { lines: threadFields, rest: settled } = takeThreadFields(taskLike ? settleStateFromThreads(report) : report);
   if (!taskLike) delete threadFields.threads_new;
   report = settled;
+  // The ask the session wrote itself this turn (task_report_set) stays its ask (own-ask-write.ts).
+  const { keepOwnAskWrite } = await import('./own-ask-write.js');
+  report = keepOwnAskWrite(report, prev, sessionId);
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
   // The writer is the session asked, recorded here; a session_id the parsed answer carried is dropped.
   report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}), session_id: sessionId };
