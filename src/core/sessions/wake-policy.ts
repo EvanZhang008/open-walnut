@@ -49,8 +49,9 @@ export const NOTICE_RIDES: readonly string[] = [
   // comes back with its completion, its error, or its reply. The parent's own wait note (task-wait-resume.ts).
   'stopped', 'waiting', 'blocked',
   // Notes that asked for no reply (quiet-notes.ts), and the notice to a sender that one of its such
-  // notes was dropped before it reached its target (held-notices-sweep.ts): nobody waited on it.
-  'quiet-notes', 'note-dropped',
+  // notes was dropped before it reached its target, or still waits past its max hold
+  // (held-notices-sweep.ts TELL_OUTCOME): nobody waited on it.
+  'quiet-notes', 'note-dropped', 'note-held',
   // A topic's lines that did not wake the member (topics/topic-text.ts): it reads them next time.
   'topic-news',
   // A write made while the server was away applied, or had nothing to do (offline-handover.ts).

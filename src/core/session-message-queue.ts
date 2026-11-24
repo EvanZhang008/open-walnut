@@ -52,7 +52,7 @@ import { frameAsWalnut, frameForSource, frameLooseText } from './sessions/send-f
 import { ambientTestRun } from './test-run.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
-import { endQuietTurn, isKeptQuietRowId, isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
+import { endQuietTurn, isKeptQuietRowId, isQuietRowId, isRidingQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
 import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly, withoutAiOnly } from '../lib/ai-only-envelope.js';
 import { forgetBriefsTold } from './sessions/app-brief.js';
 import { keepLeadingFrame } from './sessions/queue-edit-frame.js';
@@ -687,7 +687,9 @@ function parkAutomatedOnRevoked(queue: QueuedMessage[], host: string | null): vo
  * A quiet turn's row (sessions/quiet-turn.ts, Walnut's idle compaction) goes out
  * only as the live quiet turn's own row, to a CLI between turns (`midTurn` false),
  * with nothing else waiting. Otherwise it is dropped here, in the same write: a
- * stale `/compact` never runs in front of, beside or inside anyone's turn.
+ * stale `/compact` never runs in front of, beside or inside anyone's turn. A kept quiet row of
+ * Walnut's tells only (isRidingQuietRowId) past its quiet turn is never taken alone: it waits for
+ * the next row and goes in line with it.
  */
 export async function markProcessing(
   sessionId: string,
@@ -725,6 +727,9 @@ export async function markProcessing(
       }
     }
     const pendingRows = queue.filter((m) => m.status === 'pending');
+    // Walnut's tells to the session past their quiet turn (quiet-turn.ts RIDING_QUIET_ROW_PREFIX)
+    // never go alone: they wait, kept, and ride the next row (a restart's drain included).
+    if (pendingRows.length && pendingRows.every((m) => isRidingQuietRowId(m.id) && m.id !== liveQuietRow && isFreshRow(m))) return [];
     const head = pendingRows[0];
     if (!head) return [];
     const run: QueuedMessage[] = [];

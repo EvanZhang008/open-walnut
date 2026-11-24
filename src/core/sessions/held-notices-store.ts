@@ -8,7 +8,7 @@
  *   { version: 1,
  *     sessions: { <session id>: { <key>: { text, at, whileOpen?, parts?, dropped? } } },
  *     fates:    { <message id>: { state: 'delivered' | 'dropped', at, sid, why?, row? } },
- *     tells?:   [ { callerSid, op, taskId, reason, at, tries, mid?, fromTask? } ] }   (senders still to be told)
+ *     tells?:   [ { callerSid, op, taskId, reason, at, tries, mid?, fromTask?, kind? } ] }   (senders still to be told)
  * Only the server opens it (openStore, at boot on the leader): a process that never opened it
  * keeps its notices in memory as before and never writes the file. A missing file, or one in a
  * shape this version does not read (an older or a newer release's, set aside first), reads as empty.
@@ -89,17 +89,35 @@ export interface PartMeta {
   whole?: boolean;
   /** The sending session's task: told there when that session is gone (held-notices-sweep.ts). */
   fromTask?: string;
-  /** A drop tell (held-notices-sweep.ts flushDropTells): the dropped notes it tells of. */
+  /** A sender's tell (held-notices-sweep.ts flushDropTells): the notes it tells of. */
   told?: Array<Pick<DropTell, 'callerSid' | 'mid' | 'reason'> & Partial<DropTell>>;
+  /**
+   * A quiet note whose sender was told it still waits past its max hold (held-notices.ts
+   * tellStillWaiting): when. Stored with the part, so no lap and no restart tells it twice.
+   */
+  waitTold?: number;
+  /**
+   * Its sender could not be told it still waits: when and why. Tried again a max hold later (no live
+   * session took the tell), or never (`final`: the sender's task is complete).
+   */
+  waitUntold?: { at: number; why: string; final?: boolean };
   /** A topic's fold (topics/topic-text.ts FoldPart): its posts go back unread when it is dropped. */
   topic?: string;
   /** A quiet note's sender kind (quiet-notes.ts QuietNoteBy): see goesAlone. */
   by?: string;
 }
 
-/** A dropped note whose sender is a session: told by held-notices-sweep.ts flushDropTells. */
+/**
+ * What a sender is told about a note of its: it was `dropped` unread, or it is still `waiting` past
+ * its max hold for a reason that does not clear by itself (held-notices-sweep.ts QUIET_WAITS).
+ */
+export type TellKind = 'dropped' | 'waiting';
+
+/** A note whose sender is a session, to tell it about: told by held-notices-sweep.ts flushDropTells. */
 export interface DropTell {
   callerSid: string; op: string; taskId: string; reason: string;
+  /** Absent: `dropped` (every tell before kinds were kept). */
+  kind?: TellKind;
   /** When it was queued, and how many tries failed since (TELL_KEEP_MS bounds the tries). */
   at: number; tries: number;
   /** The dropped note's message id: its fate says so when no session can be told. */
@@ -113,15 +131,23 @@ export interface DropTell {
  * COLD_HOLD_MAX_MS (held-notices-sweep.ts deliverDueQuietNotes); Walnut's own notices only ride.
  */
 export const QUIET_NOTE_KEY = 'quiet-note:';
+/**
+ * The key a sender's tells wait under (held-notices-sweep.ts flushDropTells): their parts are
+ * `whole`, so no age limit or cap drops them, and they go on their own past the max hold like a
+ * session's quiet note (goesAlone): a sender that gets no other message still hears.
+ */
+export const DROP_TELL_KEY = 'note-dropped';
 /** The key Walnut's own wake=false notices wait under (session-send-core.ts: `Walnut (<source>)@<host>`). */
 const WALNUT_QUIET_KEY = `${QUIET_NOTE_KEY}Walnut (`;
 
 /**
  * Does this held part go out on its own once it waited the max hold: a quiet note a session or a
- * script sent, never Walnut's own (they ride and wake nothing). A part from before `by` was kept
- * reads Walnut's by its key.
+ * script sent, or a sender's tell about such a note (2026-11-24: a tell that only rode the sender's
+ * next message never reached a sender that got none), never Walnut's own notices (they ride and
+ * wake nothing). A part from before `by` was kept reads Walnut's by its key.
  */
 export function goesAlone(key: string, part: unknown): boolean {
+  if (key === DROP_TELL_KEY) return true;
   if (!key.startsWith(QUIET_NOTE_KEY)) return false;
   const by = metaOf(part).by;
   return by === undefined ? !key.startsWith(WALNUT_QUIET_KEY) : by !== 'walnut';
@@ -269,18 +295,21 @@ export function pruneFates(now = Date.now()): boolean {
 
 /**
  * When the oldest quiet note held for `sid` that goes out on its own (goesAlone) was sent (its part's
- * own `at`, kept on disk), or null.
+ * own `at`, kept on disk), or null. A sender's tell (DROP_TELL_KEY) counts only when nothing else
+ * that goes alone is held: an old tell never makes a new note due at once.
  */
 export function oldestQuietAt(sid: string): number | null {
   let oldest: number | null = null;
+  let oldestTell: number | null = null;
   for (const [key, v] of held.get(sid) ?? []) {
     for (const p of v.parts ?? []) {
       if (!goesAlone(key, p)) continue;
       const at = metaOf(p).at ?? v.at;
-      if (typeof at === 'number' && Number.isFinite(at) && (oldest === null || at < oldest)) oldest = at;
+      if (typeof at !== 'number' || !Number.isFinite(at)) continue;
+      if (key === DROP_TELL_KEY) { if (oldestTell === null || at < oldestTell) oldestTell = at; } else if (oldest === null || at < oldest) oldest = at;
     }
   }
-  return oldest;
+  return oldest ?? oldestTell;
 }
 
 /**
@@ -295,6 +324,30 @@ export function setQuietWaitWhy(sid: string, why: string | null): void {
 export function quietWaitWhyOf(sid: string): string | undefined {
   const w = quietWaitWhy.get(sid);
   return w && w.oldest === oldestQuietAt(sid) ? w.why : undefined;
+}
+
+/**
+ * The session a tell about this note waits for (held under DROP_TELL_KEY), and its kind, or null.
+ * A tell that it was dropped wins over one that it still waits (the newer news).
+ */
+export function heldTellOf(mid: string): { sid: string; kind: TellKind } | null {
+  let waiting: { sid: string; kind: TellKind } | null = null;
+  const look = (sid: string, entries: Iterable<[string, Held]>) => {
+    for (const [key, v] of entries) {
+      if (key !== DROP_TELL_KEY) continue;
+      for (const p of v.parts ?? []) {
+        for (const t of metaOf(p).told ?? []) {
+          if (!t || t.mid !== mid) continue;
+          if ((t.kind ?? 'dropped') === 'dropped') return { sid, kind: 'dropped' as const };
+          waiting ??= { sid, kind: 'waiting' };
+        }
+      }
+    }
+    return null;
+  };
+  for (const [sid, slot] of held) { const hit = look(sid, slot); if (hit) return hit; }
+  for (const t of taken.values()) { const hit = look(t.sid, t.entries); if (hit) return hit; }
+  return waiting;
 }
 
 /** Where a note with this message id waits now, or null. */
@@ -346,6 +399,7 @@ function validTell(v: unknown): DropTell | null {
     tries: typeof t.tries === 'number' && Number.isFinite(t.tries) ? t.tries : 0,
     ...(typeof t.mid === 'string' ? { mid: t.mid } : {}),
     ...(typeof t.fromTask === 'string' ? { fromTask: t.fromTask } : {}),
+    ...(t.kind === 'waiting' || t.kind === 'dropped' ? { kind: t.kind } : {}),
   };
 }
 

@@ -492,12 +492,13 @@ defineOp({
 
 /** Where a note held by the call (task_send wake=false) stands now (op-calls-v1.ts `held_note`). */
 function heldNoteLine(raw: unknown): string {
-  const n = (raw && typeof raw === 'object' ? raw : null) as { state?: unknown; at?: unknown; why?: unknown; message_id?: unknown; row?: unknown } | null;
+  const n = (raw && typeof raw === 'object' ? raw : null) as { state?: unknown; at?: unknown; why?: unknown; message_id?: unknown; row?: unknown; sender_told?: unknown } | null;
   if (!n) return '';
   const at = typeof n.at === 'string' ? ` (${n.at})` : '';
-  if (n.state === 'waiting') return `Its note waits to ride its target's next message${at}: it starts no turn, and no reply comes.`;
+  const told = typeof n.sender_told === 'string' ? ` Its sender: ${n.sender_told}.` : '';
+  if (n.state === 'waiting') return `Its note waits to ride its target's next message${at}: it starts no turn, and no reply comes${typeof n.why === 'string' ? ` (${n.why})` : ''}.${told}`;
   if (n.state === 'delivered') return `Its note rode its target's next message${typeof n.row === 'string' ? `, queued message ${n.row}` : ''}${at}.`;
-  if (n.state === 'dropped') return `Its note was dropped before reaching its target${at}: ${String(n.why ?? 'no reason recorded')}. Send it again if it still matters.`;
+  if (n.state === 'dropped') return `Its note was dropped before reaching its target${at}: ${String(n.why ?? 'no reason recorded')}. Send it again if it still matters.${told}`;
   return `This server holds no record of where its note (${String(n.message_id ?? '')}) went: it was held more than 7 days ago, or by an older Walnut that kept such notes in memory only.`;
 }
 

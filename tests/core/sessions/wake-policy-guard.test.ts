@@ -68,6 +68,8 @@ const DYNAMIC_OUTCOMES: Record<string, string[]> = {
   // session-requests.ts: a request past its deadline, still queued or not.
   "stillQueued ? 'timeout' : 'error'": ['timeout', 'error'],
   QUIET_NOTES_OUTCOME: ['quiet-notes'],
+  // held-notices.ts renderTell: a sender's tell, by its kind (checked against TELL_OUTCOME below).
+  'TELL_OUTCOME[kind]': ['note-dropped', 'note-held'],
   // topics/topic-text.ts: a topic's lines that did not wake the member.
   TOPIC_NEWS_OUTCOME: ['topic-news'],
   // adopt-notice.ts AdoptNoticeKind.
@@ -153,6 +155,8 @@ describe('every notice kind is classified', () => {
     const routing = /const OUTCOME = '([^']+)'/.exec(read('src/core/sessions/instruction-notice.ts'))?.[1];
     expect(routing && known.has(routing)).toBe(true);
     expect(known.has(/HANDED_OVER = '([^']+)'/.exec(read('src/core/org/retired-lead.ts'))?.[1] ?? '')).toBe(true);
+    const tells = /export const TELL_OUTCOME[^=]*= \{([^}]+)\}/.exec(read('src/core/sessions/held-notices.ts'))![1].match(/'([^']+)'/g)!.map((k) => k.slice(1, -1));
+    expect(tells.sort()).toEqual([...DYNAMIC_OUTCOMES['TELL_OUTCOME[kind]']].sort());
     for (const v of Object.values(DYNAMIC_OUTCOMES).flat()) expect(known.has(v), v).toBe(true);
   });
 

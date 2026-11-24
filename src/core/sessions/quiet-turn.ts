@@ -116,6 +116,17 @@ export function isKeptQuietRowId(id: string): boolean {
   return id.startsWith(KEPT_QUIET_ROW_PREFIX);
 }
 
+/**
+ * A kept quiet row that carries only Walnut's tells to a sender about its own notes
+ * (held-notices-sweep.ts): past its quiet turn it never goes on its own as a normal row (that
+ * would start a full turn, moving the task's phase and board, for Walnut's own notice). It stays
+ * queued, never dropped, and rides the session's next row (session-message-queue.ts markProcessing).
+ */
+export const RIDING_QUIET_ROW_PREFIX = `${KEPT_QUIET_ROW_PREFIX}held-tells-`;
+export function isRidingQuietRowId(id: string): boolean {
+  return id.startsWith(RIDING_QUIET_ROW_PREFIX);
+}
+
 /** The row of the session's quiet turn, while one runs. */
 export function quietTurnRow(sessionId: string): string | undefined {
   return turns.get(sessionId)?.rowId;

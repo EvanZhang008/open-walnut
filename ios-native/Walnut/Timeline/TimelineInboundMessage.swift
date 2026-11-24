@@ -150,8 +150,9 @@ enum TimelineInboundMessage {
         // The status push carries the notices of followed tasks too (status-riding.ts on the server).
         "completed", "error", "stopped", "blocked",
         // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts), and the
-        // notice to their sender that one was dropped unread (sessions/held-notices-sweep.ts).
-        "quiet-notes", "note-dropped",
+        // notice to their sender that one was dropped unread, or still waits past its max hold
+        // (sessions/held-notices-sweep.ts TELL_OUTCOME).
+        "quiet-notes", "note-dropped", "note-held",
         // A topic's lines that did not wake the member (topics/topic-text.ts on the server).
         "topic-news",
     ]

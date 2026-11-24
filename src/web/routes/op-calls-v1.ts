@@ -20,9 +20,11 @@
  * never kept (`not_kept`): a re-run under the same id gets it again through the route's checks.
  *
  * A task_send held as a note that asks nothing (`delivery: "held"`) also says where that note
- * stands now, `held_note: { message_id, state, at?, why? }` (core/sessions/held-notices.ts):
- * waiting to ride its target's next message, delivered (it rode one), dropped (and why), or
- * unknown (this server holds no record of it: held over 7 days ago, or by an older version).
+ * stands now, `held_note: { message_id, state, at?, why?, row?, sender_told? }`
+ * (core/sessions/held-notices.ts): waiting to ride its target's next message, delivered (it rode
+ * one), dropped (and why), or unknown (this server holds no record of it: held over 7 days ago, or
+ * by an older version). `sender_told`: whether its sender was told it still waits or was dropped
+ * (when, or why not yet: that notice still waits for the sender, or no live session took it).
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { WALNUT_HOME } from '../../constants.js'

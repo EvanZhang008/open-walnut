@@ -35,6 +35,7 @@ const HOLDERS: Record<string, How> = {
   'src/core/sessions/held-notices-store.ts#tellsOut': { durable: 'held-notices.json' },
   'src/core/sessions/held-notices-store.ts#quietWaitWhy': { 'no-text': 'why a quiet note past its max hold still waits, for op_result; the next lap after a restart says it again' },
   'src/core/sessions/held-notices-sweep.ts#quietRetryAt': { 'no-text': 'when a failed delivery of quiet notes is tried again; a restart only tries sooner' },
+  'src/core/sessions/held-notices-sweep.ts#failingSince': { 'no-text': 'when a target\'s quiet delivery first failed in a row; a restart only starts that clock again, so its senders are told a max hold later' },
   'src/core/sessions/held-notices-sweep.ts#goneSince': { 'no-text': 'when a sweep lap first found a session gone; a restart only means one more lap before what waits for it is moved or dropped' },
   // The queue itself: what it keeps beside its rows (the rows are in the queue file).
   'src/core/session-message-queue.ts#sessionHostSeen': { 'no-text': 'which host each session runs on, read from its row once a minute while a ban stands (revokedHostOfSession); a restart reads it again' },
