@@ -6208,7 +6208,10 @@ export class DaemonConnection {
     if (sinceTry < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) {
       // A try of this build that did not finish (its daemon never answered as the new build) is
       // asked again when its cooldown ends, not left until the link next drops.
-      // Own path: this name's own cooldown (a swap still running there is the record's check above).
+      // This name swapped the shared daemon within the cooldown (the attempt is stamped at the swap), so it is
+      // the host's recent event, not only this name's state. Still 'own-path': the daemon that swap restarted
+      // holds every name for the 20 min min gap (daemon-update-gap.ts), longer than this cooldown, and an
+      // overdue name passes a 'held' claim anyway; a swap still running there is the record's check above.
       this.postponeUpgrade(`an update to this build was tried ${Math.round(sinceTry / 60_000)} min ago; asked again when its cooldown ends`, expected, remoteVersion,
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS - sinceTry + 5_000 })
       return 'own-path'

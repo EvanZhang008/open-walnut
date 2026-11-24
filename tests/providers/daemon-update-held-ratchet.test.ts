@@ -8,7 +8,9 @@
  *
  * Every such end in every file that takes an update claim is listed here with its class, found by
  * the nearest reason above it. A new end, a moved reason or a new file taking claims fails here
- * until it is classified.
+ * until it is classified, and so does an end that is not a literal (a `return r`, a helper's answer
+ * other than stageFailed's) or, on the host network path, a return in the claim's scope that sets
+ * no class (the claim would end as a failure and free the other name unseen).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -18,7 +20,15 @@ const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 type Class = 'held' | 'own-path'
-interface Site { file: string; symbol: string; ends: RegExp; reasons: Record<string, Class> }
+interface Site {
+  file: string; symbol: string; ends: RegExp; reasons: Record<string, Class>
+  /** Every `return` in the scope it may be without being a classified end (a reason it is safe). */
+  plainReturns: RegExp[]
+  /** The part of the method the claim is held in (from, to: substrings of its first and last line); the whole method when absent. */
+  scope?: { from: string; to: string }
+  /** A return in the scope that must have a classified end on its line or up to 10 lines above (the host network catch). */
+  endsBefore?: RegExp
+}
 
 const SITES: Site[] = [
   {
@@ -26,6 +36,8 @@ const SITES: Site[] = [
     symbol: 'private async updateManagedDaemon(',
     // `return 'held'`, `return 'own-path'` and the helper's own return.
     ends: /\breturn '(held|own-path)'/,
+    // Went through, nothing to update from here (false), or the stage helper, whose end is classified itself.
+    plainReturns: [/^return (true|false)\b/, /^return stageFailed\(/],
     reasons: {
       // Own path: this link's reads of the service config failed.
       'the service config could not be read': 'own-path',
@@ -55,6 +67,10 @@ const SITES: Site[] = [
     file: 'src/providers/daemon-net-update.ts',
     symbol: 'private async attempt(',
     ends: /\bclaimKept = '(held|own-path)'/,
+    scope: { from: 'const claim = await claimDaemonUpdate(', to: 'claim.release(claimKept)' },
+    // The claim another name holds (none taken), and the failure (claimKept false frees it, as it should).
+    plainReturns: [/^return this\.postpone\(peerUpdatingWhy\(claim\.heldBy\)\)/, /^return this\.set\('failed'/],
+    endsBefore: /^return this\.postpone\(/,
     reasons: {
       // Host: another runner there, a probation, the install lock.
       'err instanceof NetUpdateHeldError': 'held',
@@ -70,12 +86,35 @@ const SITES: Site[] = [
   },
 ]
 
-/** The method's body: from its signature to the first line closing it at two spaces. */
-function body(text: string, symbol: string): string[] {
+/** The method's body: from its signature to the first line closing it at two spaces (or the scope inside it). */
+function body(text: string, symbol: string, scope?: Site['scope']): string[] {
   const at = text.indexOf(symbol)
   expect(at, `${symbol} not found`).toBeGreaterThanOrEqual(0)
-  const end = text.indexOf('\n  }\n', at)
-  return text.slice(at, end).split('\n')
+  const lines = text.slice(at, text.indexOf('\n  }\n', at)).split('\n')
+  if (!scope) return lines
+  const from = lines.findIndex((l) => l.includes(scope.from))
+  const to = lines.findIndex((l, i) => i > from && l.includes(scope.to))
+  expect(from, `${scope.from} not found in ${symbol}`).toBeGreaterThanOrEqual(0)
+  expect(to, `${scope.to} not found in ${symbol}`).toBeGreaterThan(from)
+  return lines.slice(from, to + 1)
+}
+
+/** Every return in `lines` that is neither a classified literal end nor a known plain one, nor one with its end set above. */
+function unclassifiedReturns(site: Site, lines: string[]): string[] {
+  const out: string[] = []
+  lines.forEach((line, i) => {
+    // Comments may say "return"; only code ends a try.
+    const code = line.replace(/\/\/.*$/, '')
+    if (/^\s*\*/.test(code)) return
+    for (const m of code.matchAll(/\breturn\b[^;}]*/g)) {
+      const ret = m[0].trim()
+      if (/^return '(held|own-path)'/.test(ret) && site.ends.test(line)) continue
+      if (site.plainReturns.some((r) => r.test(ret))) continue
+      if (site.endsBefore?.test(ret) && lines.slice(Math.max(0, i - 10), i + 1).some((l) => site.ends.test(l))) continue
+      out.push(`line ${i + 1} of the scope: ${line.trim()}`)
+    }
+  })
+  return out
 }
 
 describe('every update try that changed nothing says whose side refused it', () => {
@@ -94,8 +133,12 @@ describe('every update try that changed nothing says whose side refused it', () 
   })
 
   for (const site of SITES) {
+    it(`${site.file}: every return in the claim's scope is a classified end or a known plain one`, () => {
+      expect(unclassifiedReturns(site, body(read(site.file), site.symbol, site.scope))).toEqual([])
+    })
+
     it(`${site.file}: each end is classified by the reason above it`, () => {
-      const lines = body(read(site.file), site.symbol)
+      const lines = body(read(site.file), site.symbol, site.scope)
       const used = new Map<string, number>()
       const wrong: string[] = []
       lines.forEach((line, i) => {
