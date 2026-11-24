@@ -278,7 +278,7 @@ async function joinedAsks(nodeId: string, rows: NodeThreadRows, all: readonly Ta
   return out;
 }
 
-async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, ThreadCounts>> {
+async function readNodeThreads(tasks: readonly Task[], everything?: readonly Task[]): Promise<Map<string, ThreadCounts>> {
   const out = new Map<string, ThreadCounts>();
   const nodes = tasks.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE');
   if (!nodes.length) return out;
@@ -287,8 +287,10 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
   const { poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
   let below: ReturnType<typeof poppedIndex> | undefined;
-  // A targeted status pass may contain only the lead. Its linked owners still belong in the read.
-  let all: readonly Task[] | undefined;
+  // A targeted status pass may contain only the lead. Its linked owners still belong in the read:
+  // the pass's own list of every task when it has one (a copy of the board each pass otherwise,
+  // about one a second, 2026-11-24 taskCopiesBy).
+  let all: readonly Task[] | undefined = everything;
   const now = Date.now();
   for (const t of nodes) {
     let rows = nodeThreads.get(t.id);
@@ -585,8 +587,9 @@ export function wakingTriggers(
 }
 
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be
- *  read contributes nothing. `allIds` resolves a Board choice's task prefix. */
-export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id), followWorkersChoice?: boolean): Promise<StatusFacts> {
+ *  read contributes nothing. `allIds` resolves a Board choice's task prefix; `everything`, the
+ *  pass's list of every task, read as it is. */
+export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id), followWorkersChoice?: boolean, everything?: readonly Task[]): Promise<StatusFacts> {
   const took: Record<string, number> = {};
   const taskIds = new Set(tasks.map((t) => t.id));
   const sessionIds = new Set<string>();
@@ -683,7 +686,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     for (const sid of t.session_ids ?? []) link(t.id, sid);
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
-  const threads = await timedRead(took, 'threads', () => readNodeThreads(tasks));
+  const threads = await timedRead(took, 'threads', () => readNodeThreads(tasks, everything));
   const { getConfig } = await import('./config-manager.js');
   const followWorkers = followWorkersChoice ?? experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
   return { readMs: took, followWorkers, sessions, letters, letterItems, approvals, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
@@ -1230,7 +1233,7 @@ async function readPass(ids: ReadonlySet<string> | null): Promise<PassInputs | n
   const targets = everything.filter((t) => (wanted ? wanted.has(t.id) : true) && openLeader(t));
   if (!targets.length) return null;
   const t1 = Date.now();
-  const facts = await readStatusFacts(targets, everything.map((t) => t.id), followWorkers);
+  const facts = await readStatusFacts(targets, everything.map((t) => t.id), followWorkers, everything);
   const t2 = Date.now();
   completeStatusFacts(facts, everything);
   const t2b = Date.now();

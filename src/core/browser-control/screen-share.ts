@@ -10,8 +10,11 @@
  * the one the system's "while sharing the screen" behavior reads. It is set by any app that
  * captures the screen, a window or an app (meeting apps, a browser's screen share, a recorder),
  * and needs no permission. Read by one long-running `osascript -l JavaScript` (present on every
- * Mac, no compiler), which prints one line on each change and one a minute; a broken pipe ends it
- * with the server. Off the Mac, without the experiment, or while Walnut runs its tests, nothing
+ * Mac, no compiler), which prints one line on each change and one a minute. It ends with the server:
+ * each check it compares its parent pid with the server's (its argument), and leaves when the
+ * server that spawned it is gone (2026-11-24: a closed pipe did not end it, JXA's console.log ignores the
+ * failed write, and 67 readers of servers long gone held about 0.8 GB). The server also stops it
+ * when it exits. Off the Mac, without the experiment, or while Walnut runs its tests, nothing
  * starts and nothing is ever shared.
  *
  * Only the extension in a browser on this machine hears it (the poll route, browser-v1.ts): a
@@ -26,17 +29,24 @@ import { log } from '../../logging/index.js'
 export const SHARE_EXPERIMENT = 'agent_window_hides_while_sharing' as const
 /** How often the flag is read, in seconds (osascript's delay). */
 export const SHARE_CHECK_S = 2
-/** A heartbeat line every this many checks, so a closed pipe ends the reader. */
+/** A heartbeat line every this many checks, so the server sees a reader that still runs. */
 const BEAT_EVERY = 30
 
-/** The reader: CoreGraphics' screen-watcher flag, one line per change (JXA's console.log goes to stderr). */
+/**
+ * The reader: CoreGraphics' screen-watcher flag, one line per change (JXA's console.log goes to
+ * stderr). Its argument is the server's pid: it leaves when its parent is no longer that server
+ * (the server ended and launchd took the reader), and never starts for a server already gone.
+ */
 export const SHARE_SCRIPT = `ObjC.import('CoreGraphics')
 ObjC.bindFunction('CGSIsScreenWatcherPresent', ['bool', []])
-var last = null, beat = 0
-while (true) {
-  var s = !!$.CGSIsScreenWatcherPresent()
-  if (s !== last || ++beat >= ${BEAT_EVERY}) { console.log(s ? 'shared' : 'clear'); last = s; beat = 0 }
-  delay(${SHARE_CHECK_S})
+ObjC.bindFunction('getppid', ['int', []])
+function run(argv) {
+  var parent = Number(argv[0]), last = null, beat = 0
+  while ($.getppid() === parent) {
+    var s = !!$.CGSIsScreenWatcherPresent()
+    if (s !== last || ++beat >= ${BEAT_EVERY}) { console.log(s ? 'shared' : 'clear'); last = s; beat = 0 }
+    delay(${SHARE_CHECK_S})
+  }
 }`
 
 const state = { shared: false, child: undefined as ChildProcess | undefined, restartAt: 0, wakers: new Set<() => void>() }
@@ -82,7 +92,7 @@ function ensureReader(): void {
   state.restartAt = Date.now() + 60_000
   let child: ChildProcess
   try {
-    child = spawn('/usr/bin/osascript', ['-l', 'JavaScript', '-e', SHARE_SCRIPT], { stdio: ['ignore', 'ignore', 'pipe'] })
+    child = spawn('/usr/bin/osascript', ['-l', 'JavaScript', '-e', SHARE_SCRIPT, String(process.pid)], { stdio: ['ignore', 'ignore', 'pipe'] })
   } catch { return }
   state.child = child
   let buf = ''
@@ -107,6 +117,15 @@ function ensureReader(): void {
   child.on('error', () => done(-1))
   child.on('exit', (code) => done(code))
   child.unref()
+  stopOnServerExit()
+}
+
+let exitHooked = false
+/** The server stops its reader when it exits (the reader's own parent check covers a kill). */
+function stopOnServerExit(): void {
+  if (exitHooked) return
+  exitHooked = true
+  process.once('exit', () => { try { state.child?.kill() } catch { /* already gone */ } })
 }
 
 /**

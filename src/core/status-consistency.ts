@@ -111,7 +111,7 @@ export async function checkStatuses(nowMs = Date.now(), opts: { settleMs?: numbe
   const { listTasks } = await import('./task-manager.js');
   const { readStatusFacts, readFoldEvidence, statusOf, childrenByParent, completeStatusFacts } = await import('./user-status-sync.js');
   const all = await listTasks();
-  const facts = await readStatusFacts(all.filter(open), all.map((t) => t.id));
+  const facts = await readStatusFacts(all.filter(open), all.map((t) => t.id), undefined, all);
   completeStatusFacts(facts, all);
   await readFoldEvidence(facts, all.filter(open));
   // The status the sync stores (its subtasks' asks carried up, a same ask folded: same-ask.ts).
