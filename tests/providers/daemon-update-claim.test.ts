@@ -4,7 +4,11 @@
  * one daemon, each updated it on its own; 4.66 GB went up in a day for updates that failed on
  * the other's lock.
  */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { acpUpgradeHoldFlushedForTest, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import {
   UPDATE_CLAIM_MAX_MS, UPDATE_CLAIM_SETTLE_MS, UPDATE_CLAIM_TURN_MS, claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, resetDaemonUpdateClaims,
 } from '../../src/providers/daemon-update-claim.js'
@@ -112,5 +116,57 @@ describe('turns: a refused try never holds the other names for good (2026-11-24)
       expect(clouddevClaimedAt).not.toBeNull()
       expect(clouddevClaimedAt! - start).toBeLessThanOrEqual(UPDATE_CLAIM_TURN_MS + UPDATE_CLAIM_MAX_MS)
     } finally { vi.useRealTimers() }
+  })
+})
+
+describe('whose side said no: only a refusal by the host holds the other names (2026-11-24)', () => {
+  const both = names('clouddev', 'newdev')
+
+  it("a try that failed on this name's own way there ('own-path') frees the claim at once, as a failure does", async () => {
+    const t0 = Date.now()
+    const a = await claimDaemonUpdate('newdev', both, t0)
+    if ('heldBy' in a) throw new Error('unexpected')
+    a.release('own-path')
+    expect(await daemonUpdateHeldBy('clouddev', both, t0 + 1_000)).toBeNull()
+    expect(await claimDaemonUpdate('clouddev', both, t0 + 1_000)).not.toHaveProperty('heldBy')
+  })
+
+  it('the turn count survives a leader restart: a name past its turn goes, though the claims were forgotten', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claim-turns-'))
+    const file = path.join(dir, 'holds.json')
+    setAcpUpgradeHoldFileForTest(file)
+    vi.useFakeTimers()
+    try {
+      const t0 = Date.now()
+      const refusedTry = async (now: number) => {
+        vi.setSystemTime(now)
+        const c = await claimDaemonUpdate('newdev', both, now)
+        if ('heldBy' in c) throw new Error('unexpected')
+        c.release('held')
+      }
+      await refusedTry(t0)
+      expect(await daemonUpdateHeldBy('clouddev', both, t0 + 1_000)).toBe('newdev')
+      // A restart: the claims are gone, the turn row is read back from disk.
+      await acpUpgradeHoldFlushedForTest()
+      resetDaemonUpdateClaims({ restart: true })
+      setAcpUpgradeHoldFileForTest(file)
+      await refusedTry(t0 + UPDATE_CLAIM_TURN_MS - 60_000)
+      expect(await daemonUpdateHeldBy('clouddev', both, t0 + UPDATE_CLAIM_TURN_MS - 30_000)).toBe('newdev')
+      await acpUpgradeHoldFlushedForTest()
+      resetDaemonUpdateClaims({ restart: true })
+      setAcpUpgradeHoldFileForTest(file)
+      await refusedTry(t0 + UPDATE_CLAIM_TURN_MS + 60_000)
+      // Deferred since t0 across both restarts: its turn came.
+      expect(await daemonUpdateHeldBy('clouddev', both, t0 + UPDATE_CLAIM_TURN_MS + 61_000)).toBeNull()
+      // A full reset (tests) drops the turns too: a fresh row holds again.
+      resetDaemonUpdateClaims()
+      await refusedTry(t0 + UPDATE_CLAIM_TURN_MS + 120_000)
+      expect(await daemonUpdateHeldBy('clouddev', both, t0 + UPDATE_CLAIM_TURN_MS + 121_000)).toBe('newdev')
+    } finally {
+      vi.useRealTimers()
+      await acpUpgradeHoldFlushedForTest()
+      setAcpUpgradeHoldFileForTest(null)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

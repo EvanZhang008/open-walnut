@@ -590,8 +590,10 @@ export class NetDaemonUpdater {
     const claim = await claimDaemonUpdate(c.host, () => this.sameDaemonNames(), Date.now(), { overdue: behind.overdue })
     if ('heldBy' in claim) return this.postpone(peerUpdatingWhy(claim.heldBy))
     // Kept for the settle window once the update went through or may still run on the host (its answer
-    // lost); 'held' when refused there before it changed anything (this name asks again, its file
-    // already on the host: the others wait for it within their turn); only a failure frees them at once.
+    // lost); 'held' when the host refused it before it changed anything (this name asks again, its file
+    // already on the host: the others wait for it within their turn); a failure, or 'own-path' (this
+    // link's own way there failed: a cut upload, a file that did not reach the host), frees them at once.
+    // Every end is classified in tests/providers/daemon-update-held-ratchet.test.ts.
     let claimKept: ClaimEnd = false
     try {
       log.session.info('DaemonConnection: updating a host network machine\'s daemon over its link', {
@@ -649,6 +651,7 @@ export class NetDaemonUpdater {
         const cuts = this.linkCuts?.from === from ? this.linkCuts.count + 1 : 1
         this.linkCuts = { from, count: cuts }
         if (cuts < LINK_CUTS_BEFORE_FAILURE) {
+          claimKept = 'own-path'
           this.launched.outcome(expected, null)
           return this.postpone(`the link dropped while the new daemon was put on the host, so nothing changed there (${msg.split('\n')[0].slice(0, 200)})`, this.d.cooldownMs)
         }
@@ -660,6 +663,7 @@ export class NetDaemonUpdater {
       if (staging && serve?.on) {
         const tries = this.stageFails?.expected === expected ? this.stageFails.count + 1 : 1
         this.stageFails = { expected, count: tries }
+        claimKept = 'own-path'
         this.lastAttempt = null
         this.launched.outcome(expected, null)
         const first = msg.split('\n')[0].slice(0, 200)

@@ -29,11 +29,19 @@
  * and never a name whose update is overdue (daemon-update-behind.ts): then that name takes its turn.
  * So a name waits at most UPDATE_CLAIM_TURN_MS plus one try under way.
  *
- * Claims and turns live in this process's memory only: a leader restart (every deploy) forgets
- * them, so the names start their turns over and may both try once right after it. That is the
- * known limit; the bound that holds across restarts is the overdue clock on disk
- * (daemon-update-behind.ts), after which a refused try of another name no longer holds anyone.
+ * Whose side said no (2026-11-24): a try that changed nothing ends 'held' only when the HOST refused
+ * it (its daemon busy, a probation still watching, another runner there, launchd deferring): any
+ * other name would meet the same refusal. A try that failed on this name's own way there (its SSH
+ * login refused, its upload or staging failed, its artifact missing, its own cooldown) ends
+ * 'own-path' and frees the claim at once, so another name of the daemon goes at its next try:
+ * newdev's SSH login was refused at every try for hours, and each try held clouddev as "just refused".
+ *
+ * Claims live in this process's memory: a leader restart (every deploy) forgets them, and both
+ * names may try once right after it. The turn count does not: it is a hold clock on disk
+ * (acp-upgrade-hold.ts, as the overdue clock of daemon-update-behind.ts), so restarts every few
+ * minutes no longer start a name's turn over and the turn bound holds across them.
  */
+import { upgradeHoldClock, dropHoldClocks } from './acp-upgrade-hold.js'
 
 /** A claim no path released (a server stopped in the middle) lets go after this long. */
 export const UPDATE_CLAIM_MAX_MS = 15 * 60_000
@@ -42,26 +50,42 @@ export const UPDATE_CLAIM_SETTLE_MS = 3 * 60_000
 /** A name that deferred this long in a row to tries that were refused takes its own turn. */
 export const UPDATE_CLAIM_TURN_MS = 15 * 60_000
 
-/** 'running': under way; 'settled': went through (or may still run there); 'held': refused before it changed anything. */
+/** 'running': under way; 'settled': went through (or may still run there); 'held': refused by the host before it changed anything. */
 type ClaimState = 'running' | 'settled' | 'held'
 interface Claim { by: string; until: number; state: ClaimState }
 
 const claims = new Map<string, Claim>()
-/** Since when each name has deferred to another name's claim, in a row, and its last defer (a row ends when it claims, or after a quiet UPDATE_CLAIM_MAX_MS). */
-const deferring = new Map<string, { since: number; last: number }>()
 
-/** How a claim ends: true went through (or may still run), 'held' refused before it changed anything (this name asks again), false failed. */
-export type ClaimEnd = boolean | 'held'
+/**
+ * Since when each name has deferred to another name's claim, in a row (a row ends when it claims,
+ * or after a quiet UPDATE_CLAIM_MAX_MS): a hold clock on disk, so it survives a leader restart.
+ */
+const TURN_PREFIX = 'update-turn:'
+const turnKey = (host: string) => `${TURN_PREFIX}${host}`
+/** Touch `host`'s row; true while it has deferred less than UPDATE_CLAIM_TURN_MS. */
+const turnHolds = (host: string, now: number) => upgradeHoldClock(turnKey(host), true, UPDATE_CLAIM_TURN_MS, now, UPDATE_CLAIM_MAX_MS).holds
+/** End `host`'s row (no write when it has none). */
+const endTurn = (host: string, now: number) => { upgradeHoldClock(turnKey(host), false, UPDATE_CLAIM_TURN_MS, now) }
+
+/**
+ * A try that changed nothing on the host, and this name asks again later, by whose side said no
+ * (module doc): 'held' the host refused it, so the claim holds the other names within their turn;
+ * 'own-path' this name's own way there failed, so the claim is freed at once.
+ */
+export type NothingChanged = 'held' | 'own-path'
+
+/** How a claim ends: true went through (or may still run), a NothingChanged, or false failed (frees it, as 'own-path'). */
+export type ClaimEnd = boolean | NothingChanged
 
 /** Options of the ask: `overdue`, this name's update is past its bound and a refused try of another name no longer holds it. */
 export interface ClaimAsk { overdue?: boolean }
 
 export interface UpdateClaim {
   /**
-   * `kept`: the update went through, or was refused on the host before it changed anything and this
+   * true: the update went through; 'held': the host refused it before it changed anything and this
    * name asks again (2026-11-23: newdev's update refused for a busy daemon freed the claim, and
    * clouddev started a second upload of the same build); the settle window holds the others. A
-   * failure frees them at once.
+   * failure, or a try that failed on this name's own way there ('own-path'), frees them at once.
    */
   release(end: ClaimEnd): void
 }
@@ -83,10 +107,8 @@ function holder(host: string, names: readonly string[], ask: ClaimAsk, now: numb
   for (const name of names) {
     const c = name === host ? undefined : claims.get(name)
     if (!c) continue
-    let row = deferring.get(host)
-    if (!row || now - row.last > UPDATE_CLAIM_MAX_MS) row = { since: now, last: now }
-    if (c.state === 'held' && (ask.overdue || now - row.since >= UPDATE_CLAIM_TURN_MS)) continue
-    deferring.set(host, { since: row.since, last: now })
+    const within = turnHolds(host, now)
+    if (c.state === 'held' && (ask.overdue || !within)) continue
     return c.by
   }
   return null
@@ -95,7 +117,7 @@ function holder(host: string, names: readonly string[], ask: ClaimAsk, now: numb
 /** The other name holding the update of the daemon `host` reaches, or null. */
 export async function daemonUpdateHeldBy(host: string, names: DaemonNames, now = Date.now(), ask: ClaimAsk = {}): Promise<string | null> {
   prune(now)
-  if (!othersClaimed(host)) { deferring.delete(host); return null }
+  if (!othersClaimed(host)) { endTurn(host, now); return null }
   // A name whose turn came keeps its count until it claims: the claim right after asks the same.
   return holder(host, await names().catch(() => [host]), ask, now)
 }
@@ -112,7 +134,7 @@ export async function claimDaemonUpdate(host: string, names: DaemonNames, now = 
     const heldBy = holder(host, all, ask, at)
     if (heldBy) return { heldBy }
   }
-  deferring.delete(host)
+  endTurn(host, now)
   const claim: Claim = { by: host, until: now + UPDATE_CLAIM_MAX_MS, state: 'running' }
   claims.set(host, claim)
   let done = false
@@ -121,7 +143,7 @@ export async function claimDaemonUpdate(host: string, names: DaemonNames, now = 
       if (done) return
       done = true
       if (claims.get(host) !== claim) return
-      if (!end) { claims.delete(host); return }
+      if (!end || end === 'own-path') { claims.delete(host); return }
       claim.state = end === 'held' ? 'held' : 'settled'
       claim.until = Math.min(claim.until, Date.now() + UPDATE_CLAIM_SETTLE_MS)
     },
@@ -136,8 +158,8 @@ export function peerUpdatingWhy(heldBy: string): string {
   return `${heldBy} reaches the same daemon and is updating it, or just did`
 }
 
-/** Tests only. */
-export function resetDaemonUpdateClaims(): void {
+/** Tests only. `restart`: forget the claims as a leader restart does, and keep the turns on disk. */
+export function resetDaemonUpdateClaims(opts: { restart?: boolean } = {}): void {
   claims.clear()
-  deferring.clear()
+  if (!opts.restart) dropHoldClocks(TURN_PREFIX, '')
 }

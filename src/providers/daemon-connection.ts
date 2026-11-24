@@ -70,7 +70,7 @@ import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type Unrea
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
-import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type UpdateClaim } from './daemon-update-claim.js'
+import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type NothingChanged, type UpdateClaim } from './daemon-update-claim.js'
 import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-set-leader.js'
 import { ServiceSetLink } from './service-set-move-link.js'
 import { pastSetHold, SetHold } from './service-set-hold.js'
@@ -5462,10 +5462,11 @@ export class DaemonConnection {
           if (await this.execRunsOpen(expected, remoteVersion)) return false
           if (await this.claimOrHold(expected, remoteVersion, held)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
-          // Held (busy, deferred, another runner there): nothing changed on the host and this name asks
-          // again, so the other names keep off for the settle window rather than paying an upload of their own.
-          // Refused before it changed anything: the other names wait for it only within their turn (daemon-update-claim.ts).
-          if (updated === 'held') { held.claim?.release('held'); return false }
+          // Nothing changed on the host and this name asks again. Refused BY the host ('held': busy, deferred,
+          // another runner there): the other names keep off, within their turn, rather than paying an upload for
+          // the same refusal. Failed on this name's own way there ('own-path': its SSH login or upload, its file,
+          // its cooldown): the claim is freed, so another name of the daemon goes now (daemon-update-claim.ts).
+          if (updated === 'held' || updated === 'own-path') { held.claim?.release(updated); return false }
           if (updated) { this.noteDaemonReplaced(); held.claim?.release(true); return true }
           // No safe user-level service is known. Keep serving without publishing a retry as an error.
           log.session.info(
@@ -6156,13 +6157,15 @@ export class DaemonConnection {
 
   /**
    * Update a service-managed daemon: the new executable onto the host while the
-   * old daemon serves, then the service swap. 'held': nothing changed and the
-   * update is asked again later (the upload failed, with its own backoff, or
-   * work that started during the upload holds the swap).
+   * old daemon serves, then the service swap. A NothingChanged: nothing changed and the
+   * update is asked again later, 'held' when the host refused it (busy, probation, work
+   * that started during the upload), 'own-path' when this link's own way failed (the
+   * upload or its SSH login, with its own backoff; the artifact; this name's cooldown).
+   * Every such return is classified in tests/providers/daemon-update-held-ratchet.test.ts.
    */
   private async updateManagedDaemon(
     takeover: ServiceTakeover, expected: string, gate?: () => UpgradeHold, remoteVersion = '',
-  ): Promise<boolean | 'held'> {
+  ): Promise<boolean | NothingChanged> {
     // An ephemeral server never updates a box's service daemon, a lifted host's included.
     if (this.isReadOnlyRemote || IS_EPHEMERAL) return false
     // Service sets (the experiment host_service_sets): the daemon this link reaches is another Walnut's
@@ -6185,9 +6188,10 @@ export class DaemonConnection {
       return false
     }
     if (takeover.unknown.length) {
+      // Own path: this link's reads of the config failed; another name of the daemon looks for itself.
       this.postponeUpgrade('the service config could not be read; the running daemon keeps serving', expected, remoteVersion,
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
-      return 'held'
+      return 'own-path'
     }
     const scope = managedUpdateScope(takeover.present, set)
     if (!scope) {
@@ -6204,9 +6208,10 @@ export class DaemonConnection {
     if (sinceTry < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) {
       // A try of this build that did not finish (its daemon never answered as the new build) is
       // asked again when its cooldown ends, not left until the link next drops.
+      // Own path: this name's own cooldown (a swap still running there is the record's check above).
       this.postponeUpgrade(`an update to this build was tried ${Math.round(sinceTry / 60_000)} min ago; asked again when its cooldown ends`, expected, remoteVersion,
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS - sinceTry + 5_000 })
-      return 'held'
+      return 'own-path'
     }
     // A build that answered ok and then did not stay serving there: a day, not the 10 min cooldown
     // (2026-11-04 review: each try stopped the daemon and put the previous one back).
@@ -6217,9 +6222,10 @@ export class DaemonConnection {
       return 'held'
     }
     if (!(await this.hasDaemonBinary())) {
+      // Own path: the file this server would send is missing here, not refused there.
       this.postponeUpgrade('the daemon artifact is not available; the running daemon keeps serving', expected, remoteVersion,
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
-      return 'held'
+      return 'own-path'
     }
     // The last update's probation still watches the new daemon there (daemon-update-probation.ts):
     // its copies are the way back from a build that fails late, and this update's snapshot would
@@ -6231,12 +6237,14 @@ export class DaemonConnection {
         probing > 0 ? { delayMs: probing * 1000 + 5_000 } : { steady: true })
       return 'held'
     }
-    const stageFailed = (error: unknown): 'held' => {
+    // Own path: the file could not be made here or put there over this link (2026-11-24: newdev's SSH
+    // login refused at every try held clouddev, the same daemon over the host network, for hours).
+    const stageFailed = (error: unknown): 'own-path' => {
       const attempt = this._stageFail?.expected === expected ? this._stageFail.attempt : 0
       this._stageFail = { expected, attempt: attempt + 1 }
       const said = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 200)
       this.postponeUpgrade(`the new daemon could not be put on the host, so the running one keeps serving (${said})`, expected, remoteVersion, { attempt })
-      return 'held'
+      return 'own-path'
     }
     // The mode's words (one-service-mode.ts): the service needs the walnut file in the slot, not the daemon-only binary.
     let serve = (await this.serviceModeNow()).serve

@@ -157,9 +157,11 @@ describe('the background update of a service-managed daemon', () => {
   })
 
   it.each([
-    ['refused for a busy daemon (nothing changed there, this name asks again)', 'Managed daemon update failed: Error: service.handover: active ACP workers or relay requests must finish first', true],
-    ['failed', 'the new daemon did not answer its trial run', false],
-  ])('an update %s: the other host names of the daemon keep off = %s', async (_what, message, keptOff) => {
+    ['refused for a busy daemon (nothing changed there, this name asks again)', 'Managed daemon update failed: Error: service.handover: active ACP workers or relay requests must finish first', true, ''],
+    ['failed', 'the new daemon did not answer its trial run', false, ''],
+    // 2026-11-24: newdev's SSH login was refused at every try and each held clouddev for the settle window.
+    ['failed on its own link (an SSH login refused, this name asks again)', 'a new SSH login to devbox was refused (auth), the upload waits until a new login works', false, 'DaemonUpdateStageError'],
+  ])('an update %s: the other host names of the daemon keep off = %s', async (_what, message, keptOff, name) => {
     // 2026-11-23: newdev's update was refused for a busy daemon and freed the claim; clouddev, the same
     // daemon over the host network, then sent the same 35 MB build up again for the same refusal.
     resetDaemonUpdateClaims()
@@ -169,10 +171,12 @@ describe('the background update of a service-managed daemon', () => {
     vi.spyOn(log.session, 'info').mockImplementation(() => {})
     vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
     vi.spyOn(priv(c), 'sameDaemonHosts').mockResolvedValue(['devbox', 'devbox-net'])
-    managedUpdate.mockRejectedValue(new Error(message))
+    managedUpdate.mockRejectedValue(Object.assign(new Error(message), name ? { name } : {}))
     live(c)
     await priv(c).recheckPostponedUpgrade()
     expect(managedUpdate).toHaveBeenCalledTimes(1)
+    // This name asks again later, whether the host refused it or its own link failed.
+    if (name || keptOff) expect(state(c).upgradeRecheckTimer).not.toBeNull()
     const other = await claimDaemonUpdate('devbox-net', async () => ['devbox', 'devbox-net'])
     expect('heldBy' in other ? other.heldBy : null).toBe(keptOff ? 'devbox' : null)
     priv(c).clearUpgradeRecheck()
