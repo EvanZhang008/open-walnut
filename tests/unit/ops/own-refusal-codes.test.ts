@@ -81,17 +81,32 @@ describe('an executor refusal is read by its code everywhere', () => {
     // A known kind: a bad argument (Invalid arguments, Unknown op), no answer (Walnut request ...,
     // the server not running), the API's own answer, or a message the op itself gave (its result's,
     // its throw's): each already names what it is. Anything else is a refusal of the executor's own.
-    const known = /message: `Invalid arguments for|message: `Unknown op:|notRunningMessage\(|message: `Walnut request|API_ERROR_OPENING|^ok: false, message, result|message: err instanceof Error|\$\{outcome\.message\}/
+    const known = /message: `Invalid arguments for|message: `Unknown op:|notRunningMessage\(|message: `Walnut request|API_ERROR_OPENING|^ok: false, message, result|message: err instanceof Error|message: err\.message, code: err\.code|\$\{outcome\.message\}/
     expect(literals.length).toBeGreaterThan(10)
     expect(literals.filter((l) => !known.test(l))).toEqual([])
   })
 
-  it('ratchet: a handler op refuses a shortened read under its code, never with a bare Error', () => {
+  it('ratchet: a handler op refuses under its code (OwnRefusalError), never with a bare Error', () => {
+    // A thrown Error whose words say it is a refusal (opens as an API refusal, says nothing was done,
+    // or that a read was shortened) is counted as a thrown error by the hub: it throws OwnRefusalError.
     const dir = new URL('../../../src/ops/', import.meta.url)
-    const bare = fs.readdirSync(dir).filter((f) => f.endsWith('.ts')).flatMap((f) =>
-      fs.readFileSync(new URL(f, dir), 'utf8').split('\n').map((line, i) => ({ at: `${f}:${i + 1}`, line })))
-      .filter(({ line }) => /throw new Error\(/.test(line) && /refused|shortened|part of a longer document/i.test(line))
-      .map(({ at }) => at)
+    const says = /Walnut API error \(|nothing (?:was|is) (?:written|sent|run|changed|stored|saved)|nothing ran|refused|shortened|part of a longer document/i
+    const bare = fs.readdirSync(dir).filter((f) => f.endsWith('.ts')).flatMap((f) => {
+      const src = fs.readFileSync(new URL(f, dir), 'utf8')
+      return [...src.matchAll(/throw new Error\(/g)].flatMap((m) => {
+        const after = src.slice(m.index! + m[0].length, m.index! + m[0].length + 400)
+        const statement = after.slice(0, Math.max(0, after.indexOf(')\n')) || after.length)
+        return says.test(statement) ? [`${f}:${src.slice(0, m.index!).split('\n').length}`] : []
+      })
+    })
     expect(bare).toEqual([])
+  })
+
+  it('own_session and a memory write conflict: a 409 under its code, never a thrown error', async () => {
+    const { failureClass } = await import('../../../src/core/usage-watch/normalize.js')
+    const { OwnRefusalError } = await import('../../../src/ops/own-refusal.js')
+    const e = new OwnRefusalError('own_session', 'A session cannot stop itself', { status: 409 })
+    expect(opFailureCode(e.message)).toBe('own_session')
+    expect(failureClass({ ok: false, message: e.message, code: e.code, ...e.extra } as never)).toEqual({ cls: 'refused', code: 'own_session' })
   })
 })

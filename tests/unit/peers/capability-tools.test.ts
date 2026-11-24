@@ -286,7 +286,9 @@ describe('gateway tools.call — policy gates', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.code).toBe('bad_request');
-    expect(r.error.message).toBe('task_delete is local-only because it is destructive. Run it from a session on the Walnut host with `walnut tools call`.');
+    expect(r.error.message).toBe('Walnut API error (local_only): task_delete is local-only because it is destructive. Run it from a session on the Walnut host with `walnut tools call`.');
+    // The op's own refusal, named by its code on every client (ops/own-refusal.ts).
+    expect(r.error.api).toEqual({ status: 403, code: 'local_only' });
     expect(r.error.message).not.toMatch(/[\u2013\u2014]/);
   });
 

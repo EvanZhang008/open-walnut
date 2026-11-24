@@ -378,7 +378,10 @@ async function handleToolsCall(
     // The op's own refusal (403 local_only), counted by real use as one; the code older CLIs read stays.
     const { LOCAL_ONLY_CODE, ownRefusal } = await import('../../ops/own-refusal.js');
     const refused = ownRefusal(LOCAL_ONLY_CODE, refusal, { status: 403 });
-    if (payload.testRun === undefined) {
+    // A test run's calls stay out of real use, as below.
+    const { parseTestRunLabel, testRunMarkingEnabled } = await import('../test-run.js');
+    const label = parseTestRunLabel(payload.testRun);
+    if (!(label && await testRunMarkingEnabled())) {
       const { recordGatewayCall } = await import('../usage-watch/gateway-record.js');
       recordGatewayCall(name, payload.client, refused, 0);
     }

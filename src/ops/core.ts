@@ -383,8 +383,8 @@ defineOp({
       const current = (await call('GET', `/memory/${doc}`)) as { memory?: { contentHash?: unknown } } | undefined
       const hash = current?.memory?.contentHash
       if (hash !== expectedHash) {
-        throw new Error(`conflict: ${memoryFileName(args)} changed since you read it (expectedHash ${expectedHash}, `
-          + `current ${String(hash)}), so nothing was written: memory_read it again and redo the change`)
+        throw new OwnRefusalError('conflict', `${memoryFileName(args)} changed since you read it (expectedHash ${expectedHash}, `
+          + `current ${String(hash)}), so nothing was written: memory_read it again and redo the change`, { status: 409 })
       }
     }
     const body = await call('PUT', `/memory/${doc}`, {

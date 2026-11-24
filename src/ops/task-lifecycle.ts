@@ -12,6 +12,7 @@
 
 import { z } from 'zod'
 import { defineOp } from './registry.js'
+import { OwnRefusalError } from './own-refusal.js'
 import { withOutcome } from './outcome.js'
 import { TASK_RECEIPT } from './task-answers.js'
 import { SESSION_EFFORT_IDS, SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS, type SessionEffort, type SessionOutputMode } from '../core/types.js'
@@ -41,12 +42,15 @@ async function sessionOfTask(id: string, call: Call, opts: { queued?: boolean } 
  * The same refusal the server makes (409 own_session), asked here too so a
  * server older than that check never stops the very session calling it.
  */
+/** The server's code for a session acting on itself (409). */
+const OWN_SESSION_CODE = 'own_session'
+
 async function refuseOwnSession(sessionId: string, call: Call, action: 'stop' | 'restart'): Promise<void> {
   const me = await call('GET', '/me').catch(() => undefined) as { session?: { id?: unknown } } | undefined
   if (me?.session?.id !== sessionId) return
-  throw new Error(action === 'stop'
-    ? 'Walnut API error (own_session): A session cannot stop itself: complete your task (task_complete) or end your turn instead'
-    : 'Walnut API error (own_session): A session cannot restart itself: ask your lead or the user to restart it')
+  throw new OwnRefusalError(OWN_SESSION_CODE, action === 'stop'
+    ? 'A session cannot stop itself: complete your task (task_complete) or end your turn instead'
+    : 'A session cannot restart itself: ask your lead or the user to restart it', { status: 409 })
 }
 
 defineOp({
@@ -230,7 +234,7 @@ defineOp({
       // A session raising its own permission mode would grant itself what the user did not.
       const me = await call('GET', '/me').catch(() => undefined) as { session?: { id?: unknown } } | undefined
       if (me?.session?.id === target.sessionId) {
-        throw new Error('Walnut API error (own_session): your own permission mode is the user\'s to change; ask them')
+        throw new OwnRefusalError(OWN_SESSION_CODE, 'your own permission mode is the user\'s to change; ask them', { status: 409 })
       }
     }
     const base = `/sessions/${encodeURIComponent(target.sessionId)}`

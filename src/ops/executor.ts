@@ -766,7 +766,7 @@ async function runOp(
       return message ? { ok: false, message, result, ...(reachedNoServer(prov) ? { unreachable: true as const } : {}) } : { ok: true, result }
     } catch (err) {
       // The handler's own refusal under a code (an `api` write of a shortened read): nothing ran.
-      if (err instanceof OwnRefusalError) return ownRefusal(err.code, err.message, err.extra)
+      if (err instanceof OwnRefusalError) return { ok: false, message: err.message, code: err.code, ...err.extra }
       // A write of this call whose answer was lost (also inside a handler) may have applied.
       const lost = err instanceof SelfCallError && err.lost
       const status = err instanceof SelfCallError ? err.status : undefined
