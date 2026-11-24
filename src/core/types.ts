@@ -1808,8 +1808,8 @@ export interface Config {
     /** A Walnut server this Mac keeps running on the host, following it
      *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). */
     server?: {
-      /** The person's own switch: written only when they flip it. Unset: off, or on with the
-       *  experiment `follower_on_every_host` (core/host-server/follower-default.ts). */
+      /** The person's own switch: written only when they flip it. Unset: on for a host Walnut
+       *  manages (core/host-server/follower-default.ts), when it has the room (eligibility.ts). */
       enabled?: boolean;
       // `build_env` is retired (a host server is the compiled walnut file, nothing is
       // built on the host). Older configs carry it; its secrets stay masked (config-redact.ts).

@@ -1,11 +1,10 @@
 /**
- * GET /api/host-servers with the experiment follower_on_every_host never set, so at its registry
- * default, on (src/core/experimental.ts, src/core/host-server/follower-default.ts): what a user who
- * upgrades without touching it gets, on a real server: `settings.enabled` reads true
- * for a host the person never set, `settings.chosenBy` says whose the value is, the person's
- * off is stored as theirs and stays off, the experiment off turns every unset host off,
- * and the shape older clients read (`view.phase`, `knownAs`, `settings.carriesTunnel`) keeps
- * its meaning. No host here is reachable: none dials anything.
+ * GET /api/host-servers: every host gets a follower by default (src/core/host-server/follower-default.ts),
+ * on a real server: `settings.enabled` reads true for a host the person never set,
+ * `settings.chosenBy` says whose the value is, the person's off is stored as theirs and stays off,
+ * a stored choice of the ended experiment `follower_on_every_host` stays in the file and changes
+ * nothing, and the shape older clients read (`view.phase`, `knownAs`, `settings.carriesTunnel`)
+ * keeps its meaning. No host here is reachable: none dials anything.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -29,10 +28,10 @@ function api(pathname: string, init?: RequestInit) {
   return fetch(`http://localhost:${port}${pathname}`, init)
 }
 
-async function list(): Promise<{ hosts: Entry[]; followerByDefault: boolean }> {
+async function list(): Promise<{ hosts: Entry[] }> {
   const res = await api('/api/host-servers')
   expect(res.status).toBe(200)
-  return await res.json() as { hosts: Entry[]; followerByDefault: boolean }
+  return await res.json() as { hosts: Entry[] }
 }
 
 const entry = async (key: string) => (await list()).hosts.find((h) => h.hostKey === key)!
@@ -42,7 +41,7 @@ beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as net.AddressInfo).port
-  // The experiment never set (its default is on), in this test run's own config (its own WALNUT_HOME).
+  // This test run's own config (its own WALNUT_HOME).
   await updateConfig({
     hosts: {
       // Never set: on by default.
@@ -65,13 +64,12 @@ afterAll(async () => {
 describe('a host\'s follower, on by default', () => {
   it('reads on for a host never set, off for the person\'s off, and says whose each value is', async () => {
     const body = await list()
-    expect(body.followerByDefault).toBe(true)
     const byKey = Object.fromEntries(body.hosts.map((h) => [h.hostKey, h.settings]))
     expect(byKey.devbox).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
     expect(byKey.quietbox).toMatchObject({ enabled: false, chosenBy: 'user' })
     expect(byKey.oldbox).toMatchObject({ enabled: true, chosenBy: 'user' })
     expect(byKey.offbox).toMatchObject({ enabled: false, chosenBy: 'default' })
-    // Only a host on by the experiment's default says so (the label "On (default)" reads it).
+    // Only a host on by the default says so (the label "On (default)" reads it).
     for (const k of ['quietbox', 'oldbox', 'offbox']) expect(byKey[k].byDefault).toBeUndefined()
     // The fields older clients read keep their meaning: no tunnel placed, no second alias.
     for (const h of body.hosts) {
@@ -81,7 +79,6 @@ describe('a host\'s follower, on by default', () => {
     }
     // Nothing is written for the default: the stored rows are as the person left them.
     const stored = (await getConfig()).hosts!
-    expect((await getConfig()).experimental?.follower_on_every_host).toBeUndefined()
     expect(stored.devbox!.server).toBeUndefined()
     expect(stored.quietbox!.server).toEqual({ enabled: false })
   })
@@ -101,19 +98,17 @@ describe('a host\'s follower, on by default', () => {
     expect(((await on.json()) as { host: Entry }).host.settings).toMatchObject({ enabled: true, chosenBy: 'user' })
   })
 
-  it('the experiment turned off (a stored false) turns every host never set off, and keeps the person\'s own on', async () => {
+  it('a stored false of the ended experiment stays in the file and is ignored: a host never set still runs one', async () => {
+    // An older Walnut wrote it; this one keeps it for that release and reads past it.
     await updateConfig({ experimental: { follower_on_every_host: false } })
     // A new host, never set.
     const hosts = { ...(await getConfig()).hosts, newbox: { hostname: 'newbox.invalid' } }
     await updateConfig({ hosts })
-    const body = await list()
-    expect(body.followerByDefault).toBe(false)
-    const byKey = Object.fromEntries(body.hosts.map((h) => [h.hostKey, h.settings]))
-    expect(byKey.newbox).toMatchObject({ enabled: false, chosenBy: 'default' })
-    expect(byKey.newbox.byDefault).toBeUndefined()
+    const byKey = Object.fromEntries((await list()).hosts.map((h) => [h.hostKey, h.settings]))
+    expect(byKey.newbox).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
     expect(byKey.devbox).toMatchObject({ enabled: true, chosenBy: 'user' })
     expect(byKey.oldbox).toMatchObject({ enabled: true, chosenBy: 'user' })
-    await updateConfig({ experimental: { follower_on_every_host: true } })
-    expect(((await entry('newbox')).settings)).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
+    expect(byKey.quietbox).toMatchObject({ enabled: false, chosenBy: 'user' })
+    expect((await getConfig()).experimental?.follower_on_every_host).toBe(false)
   })
 })

@@ -1,7 +1,7 @@
 /**
  * Every host gets a follower by default (src/core/host-server/follower-default.ts), and the
  * gates that keep one off a host that cannot run it well (eligibility.ts): the default and the
- * opt-out as the config stores them, the global default, each gate saying why, the recheck once
+ * opt-out as the config stores them, each gate saying why, the recheck once
  * the condition clears, and a failed start that backs off without touching the host's sessions.
  * The manager runs against the fake host of the other manager tests.
  */
@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostServerManager } from '../../src/core/host-server/manager.js'
-import { followerChosenBy, followerOnByDefault, followerOnEveryHost } from '../../src/core/host-server/follower-default.js'
+import { followerChosenBy, followerOnByDefault } from '../../src/core/host-server/follower-default.js'
 import { FOLLOWER_FLOORS, judgeFollowerRoom, parseHostRoom, roomProbeScript } from '../../src/core/host-server/eligibility.js'
 import { hostServerSettingsFrom, withThisWalnutTunnel } from '../../src/core/host-server/index.js'
 import { NoHostFile } from '../../src/core/host-server/host-file.js'
@@ -22,11 +22,8 @@ import { defaultFollowerBench, LINUX, ROOMY } from '../helpers/host-server-defau
 
 
 describe('follower by default: what the stored switch means', () => {
-  // The experiment on (src/core/experimental.ts follower_on_every_host).
-  const config = { experimental: { follower_on_every_host: true } }
   it('a host Walnut manages, with no switch of its own, is on by default', () => {
-    const host = { hostname: 'devbox.example.test' }
-    expect(followerOnByDefault(host, config)).toBe(true)
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' })).toBe(true)
     expect(hostServerSettingsFrom(undefined, undefined, true)).toMatchObject({ enabled: true, byDefault: true })
     expect(followerChosenBy(undefined)).toBe('default')
     expect(followerChosenBy({ copies: { inbox: false } })).toBe('default')
@@ -43,29 +40,13 @@ describe('follower by default: what the stored switch means', () => {
     expect(followerChosenBy({ enabled: true })).toBe('user')
   })
 
-  it('the experiment is on by default: a config that never set it runs a follower on a managed host', () => {
-    expect(followerOnEveryHost({})).toBe(true)
-    expect(followerOnEveryHost({ experimental: {} })).toBe(true)
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, {})).toBe(true)
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { other_flag: true } })).toBe(true)
-  })
-
-  it('the experiment turned off (a stored false) keeps the switch opt-in, in one place', () => {
-    const off = { experimental: { follower_on_every_host: false } }
-    expect(followerOnEveryHost(off)).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, off)).toBe(false)
-    // "Every experiment on" cannot override the person's own false either.
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { every_experiment: true, follower_on_every_host: false } })).toBe(false)
-    expect(hostServerSettingsFrom(undefined, undefined, false).enabled).toBe(false)
-  })
-
   it('is off for the cloud box, a host turned off, and a found host still waiting for a yes', () => {
-    expect(followerOnByDefault({ hostname: 'box', cloud_box: true }, config)).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox', enabled: false }, config)).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox', discovered: true, connect: 'ask' }, config)).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox', discovered: true, connect: 'yes', connect_by: 'walnut' }, config)).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox', discovered: true, connect: 'yes' }, config)).toBe(true)
-    expect(followerOnByDefault(undefined, config)).toBe(false)
+    expect(followerOnByDefault({ hostname: 'box', cloud_box: true })).toBe(false)
+    expect(followerOnByDefault({ hostname: 'devbox', enabled: false })).toBe(false)
+    expect(followerOnByDefault({ hostname: 'devbox', discovered: true, connect: 'ask' })).toBe(false)
+    expect(followerOnByDefault({ hostname: 'devbox', discovered: true, connect: 'yes', connect_by: 'walnut' })).toBe(false)
+    expect(followerOnByDefault({ hostname: 'devbox', discovered: true, connect: 'yes' })).toBe(true)
+    expect(followerOnByDefault(undefined)).toBe(false)
   })
 })
 
@@ -135,26 +116,6 @@ describe('host server manager: a host on by default', () => {
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ enabled: true, phase: 'running' })
     expect(h.calls.filter((c) => c === 'room' || c === 'probe')).toEqual(['room'])
-    expect(b.health).toEqual(['settled devbox'])
-    m.stop()
-  })
-
-  it('with the experiment off a host the person turned on runs as before: no probe, no retry by itself, no Walnut Health failure', async () => {
-    b.settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
-    const m = createHostServerManager(b.deps({ everyHost: () => false, firstReportMs: 30, tryLaterMs: { failed: [20] } }))
-    const h = b.host()
-    h.reports = false
-    await m.connected(h)
-    expect(m.view('devbox')).toMatchObject({ phase: 'error' })
-    expect(m.view('devbox').message).toMatch(/did not answer within a minute; its log is .*on the host$/)
-    // No wait is set (the only way to one also sets retryAt), so nothing runs again by itself.
-    expect(m.view('devbox').retryAt).toBeUndefined()
-    expect(h.calls).not.toContain('room')
-    expect(b.health).toEqual([])
-    h.reports = true
-    await m.reconcile('devbox', { retry: true })
-    expect(m.view('devbox').phase).toBe('running')
-    // No failure is raised; one raised while it was on would clear now.
     expect(b.health).toEqual(['settled devbox'])
     m.stop()
   })

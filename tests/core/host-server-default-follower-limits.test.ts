@@ -1,6 +1,6 @@
 /**
  * The limits of a follower on every host by default (src/core/host-server/manager.ts with
- * try-later.ts and eligibility.ts): the experiment turned off again, installs one host at a time,
+ * try-later.ts and eligibility.ts): installs one host at a time,
  * a start before this computer's own daemon is linked, the proof boot looked at again, a failed
  * start that stops its server and its tries, total memory and a container's limit, and the Walnut
  * Health item's audience. The manager runs against the fake host of the other manager tests.
@@ -20,62 +20,8 @@ const b = defaultFollowerBench()
 const isGz = (u: { path: string }) => u.path.endsWith('.gz')
 const OFF = { ...TURNED_ON, enabled: false }
 
-describe('the experiment turned off again', () => {
-  it('stops a follower that ran only by default, and Walnut Health hears it settled', async () => {
-    let every = true
-    const m = createHostServerManager(b.deps({ everyHost: () => every }))
-    const h = b.host()
-    await m.connected(h)
-    expect(m.view('devbox').phase).toBe('running')
-    b.health = []
-    // Off: a host with nothing stored reads off (hostServerSettingsFrom), on the config sweep.
-    every = false
-    b.settings = OFF
-    await m.reconcile('devbox', { soft: true })
-    expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
-    expect(h.specs.at(-1)).toBeNull()
-    expect(b.health).toEqual(['settled devbox'])
-    m.stop()
-  })
-
-  it('a default host that waits to try again: its wait ends and its Health item clears', async () => {
-    let every = true
-    const m = createHostServerManager(b.deps({ everyHost: () => every, firstReportMs: 30, tryLaterMs: { failed: [60_000] } }))
-    const h = b.host()
-    h.reports = false
-    await m.connected(h)
-    expect(m.view('devbox')).toMatchObject({ phase: 'error', retryAt: expect.any(Number) })
-    every = false
-    b.settings = OFF
-    await m.reconcile('devbox', { soft: true })
-    expect(m.view('devbox').phase).toBe('off')
-    expect(m.view('devbox').retryAt).toBeUndefined()
-    expect(b.health.at(-1)).toBe('settled devbox')
-    m.stop()
-  })
-
-  it('a host the person turned on, waiting to try again, is not skipped by the config sweep: it waits for Retry as before', async () => {
-    b.settings = TURNED_ON
-    let every = true
-    const m = createHostServerManager(b.deps({ everyHost: () => every, firstReportMs: 30, tryLaterMs: { failed: [60_000] } }))
-    const h = b.host()
-    h.reports = false
-    await m.connected(h)
-    expect(m.view('devbox').retryAt).toEqual(expect.any(Number))
-    const configures = h.specs.length
-    every = false
-    await m.reconcile('devbox', { soft: true })
-    // It ran again (its settings are the same, the experiment is not) and now waits for Retry.
-    expect(h.specs.length).toBeGreaterThan(configures)
-    expect(m.view('devbox').phase).toBe('error')
-    expect(m.view('devbox').retryAt).toBeUndefined()
-    expect(m.view('devbox').message).not.toMatch(/tries again in/)
-    m.stop()
-  })
-})
-
 describe('the person\'s own choice over the default', () => {
-  it('a follower running by default stops when the person turns it off, and stays off with the experiment still on', async () => {
+  it('a follower running by default stops when the person turns it off, and stays off', async () => {
     const m = createHostServerManager(b.deps())
     const h = b.host()
     await m.connected(h)
@@ -85,7 +31,7 @@ describe('the person\'s own choice over the default', () => {
     await m.reconcile('devbox')
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
     expect(h.specs.at(-1)).toBeNull()
-    // A reconnect with the experiment on does not bring it back.
+    // A reconnect does not bring it back.
     const calls = h.calls.length
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })

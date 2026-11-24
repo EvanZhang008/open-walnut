@@ -136,7 +136,7 @@ export interface HostServerView {
   program?: 'replica' | 'host-server' | 'fallback'
   /** While it runs: why it runs an older build than this Mac's (that one did not answer; Retry tries it again). */
   notice?: string
-  /** The host runs one only because of the default (the experiment), not by its person's switch or the tunnel. */
+  /** The host runs one only because of the default (follower-default.ts), not by its person's switch or the tunnel. */
   byDefault?: true
   /** Phase `not-eligible`: the condition the host did not meet, when it was looked at, and when it is looked at again (none: at its next connect or Retry). */
   gate?: { reason: FollowerGateReason; checkedAt: number; recheckAt?: number }
@@ -209,12 +209,7 @@ export interface ManagerDeps {
   /** The floors a host on by default must meet (eligibility.ts FOLLOWER_FLOORS). */
   floors?: FollowerFloors
   /**
-   * The experiment `follower_on_every_host` (follower-default.ts): a failed start then tries again
-   * by itself and Walnut Health hears of it. Off (or unset): a failed start waits for Retry, as before.
-   */
-  everyHost?(): boolean | Promise<boolean>
-  /**
-   * Walnut Health (health-item.ts), with the experiment on: a start that failed, and one that
+   * Walnut Health (health-item.ts): a start that failed (it tries again by itself), and one that
    * settled (it runs, or none is meant to run). Never awaited.
    */
   health?: { failed(hostKey: string, message: string, retries: boolean): void; settled(hostKey: string): void }

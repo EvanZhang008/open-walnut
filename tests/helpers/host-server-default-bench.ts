@@ -1,7 +1,7 @@
 /**
  * The bench of the follower-by-default manager tests (src/core/host-server/manager.ts with
  * follower-default.ts and eligibility.ts): a follower the stream reaches, the manager's deps with
- * the experiment on and a Walnut Health that writes down what it hears, and a roomy fake host.
+ * a Walnut Health that writes down what it hears, and a roomy fake host.
  * Call it once per test file, at the top level: it registers its own beforeEach and afterEach.
  */
 import { afterEach, beforeEach } from 'vitest'
@@ -58,7 +58,6 @@ export function defaultFollowerBench(): DefaultBench {
       installPollMs: 1,
       pollMs: 60_000,
       servingSince: 0,
-      everyHost: () => true,
       health: {
         failed: (host, message, retries) => bench.health.push(`failed ${host}: ${message}${retries ? ' (tries again)' : ''}`),
         settled: (host) => bench.health.push(`settled ${host}`),

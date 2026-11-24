@@ -160,18 +160,15 @@ The security rules every capability keeps:
 ## Every host runs a follower server by default
 
 The leader runs a follower Walnut server (`walnut web --replica`) on a host through that host's daemon
-(`src/core/host-server/`). The host's switch (`hosts.<key>.server.enabled`) turns it on. With the experiment
-`follower_on_every_host` on (`src/core/experimental.ts`, Settings, Experimental; on by default since
-2026-11-22, a stored `false` keeps it off, and an older release reads it unset as off), it is on by
-default on each host the leader manages, and the switch is the opt-out (`follower-default.ts`). With the
-experiment off, nothing below the first rule applies: the switch is opt-in, nothing is probed, a failed start
-waits for Retry, and nothing goes to Walnut Health (a Health item raised before is still cleared). Turning
-the experiment off stops the followers that ran only by default, cancels their waits, and leaves their files
-on the host.
+(`src/core/host-server/`). It is on by default on each host the leader manages, and the host's switch
+(`hosts.<key>.server.enabled`) is the opt-out (`follower-default.ts`). This was the experiment
+`follower_on_every_host` (on by default from 2026-11-22, ended 2026-11-24); a stored
+`experimental.follower_on_every_host` stays in the config for older releases and is ignored. A failed start
+tries again by itself, later and later, and goes to Walnut Health.
 
 - **A stored value is the person's.** Only PUT `/api/host-servers/:hostKey` writes the switch, so a stored
   `false` stays off across upgrades and a stored `true` stays on. A host with nothing stored follows the
-  experiment; nothing is written for it, so an older release reads an unset switch as off, as it always did.
+  default; nothing is written for it, so a release from before 2026-11-22 reads an unset switch as off.
   The cloud box, a host turned off and a found host waiting for a yes never get one by default. GET
   `/api/host-servers` says whose each value is (`settings.chosenBy`, and `byDefault` on the view).
 - **Conditions decide, never a host name** (`eligibility.ts`). A host on only by default, where this Walnut

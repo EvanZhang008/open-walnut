@@ -116,13 +116,6 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
-    id: 'follower_on_every_host',
-    name: 'Walnut on every host',
-    description: 'Every host you connect runs its own copy of Walnut, which keeps working there while this computer is away, unless you turn it off for that host. Walnut skips a host without enough memory or disk, or one its program cannot run on, and says why in that host\'s settings.',
-    default: true,
-    summary: 'Every host you connect runs its own copy of Walnut, so work there goes on while this computer is away.',
-  },
-  {
     id: 'host_call_entry',
     name: 'A host\'s calls go through its own Walnut, also while this computer answers',
     description: 'On a host that runs its own copy of Walnut, a session or plugin job started there from now on sends its Walnut calls straight to that copy, whether or not this computer is there, instead of through the host\'s daemon socket; and a message between two sessions on that host is delivered by that copy while this computer answers too, in place of the daemon. Sessions already running keep the socket, and a call falls back to it (and a message to this computer) whenever the host\'s copy cannot take it. The answers are the same either way.',
@@ -355,9 +348,11 @@ export const EXPERIMENTAL_FEATURES = [
 /**
  * Experiments that ended on (their behavior is now everyone's): a client built while one was a
  * switch (an older phone app) still asks for it by id, so clients are told it is on.
- * camera_capture: the chat box's Camera, 2026-11-21.
+ * camera_capture: the chat box's Camera, 2026-11-21. follower_on_every_host: a follower Walnut on
+ * every host the person did not turn it off for (core/host-server/follower-default.ts), 2026-11-24;
+ * a stored choice of it stays in the config for older releases and is ignored here.
  */
-export const GRADUATED_EXPERIMENTS: readonly string[] = ['camera_capture'];
+export const GRADUATED_EXPERIMENTS: readonly string[] = ['camera_capture', 'follower_on_every_host'];
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];
 /** Unknown boolean flags stay on disk for newer versions, but have no effect here. */

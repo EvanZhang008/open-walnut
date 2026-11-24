@@ -1,7 +1,7 @@
 /**
- * "Walnut on this host" says when its switch only follows the default (the experiment
- * follower_on_every_host turns a never-set host on: GET /api/host-servers answers
- * `settings.byDefault: true`, never for the host carrying this Walnut's tunnel). The words come from hostServerSwitchWords
+ * "Walnut on this host" says when its switch only follows the default (a never-set host is on:
+ * GET /api/host-servers answers `settings.byDefault: true`, never for the host carrying this
+ * Walnut's tunnel). The words come from hostServerSwitchWords
  * (host-servers-status.ts) and sit beside the switch in HostServerPart (HostServersGroup.tsx);
  * a host the person set, a host that is off and an older server's answer show none.
  */
@@ -15,7 +15,7 @@ const ctx = vi.hoisted(() => ({ hosts: [] as unknown[] }))
 vi.mock('../../web/src/components/settings/sections/host-settings-data', () => ({
   useHostSettings: () => ({
     servers: {
-      data: { hosts: ctx.hosts, providers: [], followerByDefault: true },
+      data: { hosts: ctx.hosts, providers: [] },
       busy: null, errors: {}, optionErrors: {}, setOptionError: () => {},
       call: async () => true, write: async () => true, drafts: {}, setDrafts: () => {},
     },
@@ -33,7 +33,7 @@ const entry = (hostKey: string, settings: Partial<HostServerEntry['settings']>):
 })
 
 describe('hostServerSwitchWords', () => {
-  it('a host on only by the experiment\'s default says so', () => {
+  it('a host on only by the default says so', () => {
     expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'default', byDefault: true }))).toBe('On (default)')
   })
   it('the person\'s own on says nothing', () => {
@@ -42,7 +42,7 @@ describe('hostServerSwitchWords', () => {
   it('an off host says nothing', () => {
     expect(hostServerSwitchWords(entry('devbox', { enabled: false, chosenBy: 'default' }))).toBeNull()
   })
-  it('the host on for carrying this Walnut\'s tunnel, the experiment off, says nothing', () => {
+  it('the host on for carrying this Walnut\'s tunnel says nothing', () => {
     // Never set (chosenBy default), on only because the tunnel runs there: the server sends no byDefault.
     expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'default', carriesTunnel: true }))).toBeNull()
   })

@@ -311,11 +311,9 @@ beforeAll(async () => {
   await new Promise<void>((r) => hostPublic.listen(0, '127.0.0.1', () => r()))
   hostPublicPort = (hostPublic.address() as net.AddressInfo).port
   process.env.WALNUT_HOST_SERVER_APP_DIR = '/work/walnut-tree'
-  // No server set up there yet: following the provider turns one on.
-  // The follower-on-every-host default (on) turned off: this file is about the tunnel turning the
-  // host's opt-in switch on (host-servers-default-e2e.test.ts covers the default).
+  // No switch set there: the tunnel placed on it turns its server on (host-servers-default-e2e.test.ts
+  // covers the default every such host also has).
   await updateConfig({
-    experimental: { follower_on_every_host: false },
     hosts: { devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone' } } as never,
   })
   await boot()
@@ -335,9 +333,12 @@ afterAll(async () => {
 })
 
 describe('moving the tunnel to a host without a fight', () => {
-  it('turned on, placed on a host with no server yet: it runs here meanwhile, and the host\'s server is turned on', async () => {
+  it('turned on, placed on a host with no switch set: it runs here meanwhile, and the host\'s server carries it', async () => {
     // The host servers' manager exists from the first host connect on a real Mac; here, from this read.
-    expect((await hostEntry('devbox'))?.settings.enabled).toBe(false)
+    // Before the tunnel: on by default only.
+    const before = (await hostEntry('devbox'))?.settings
+    expect(before).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
+    expect(before?.carriesTunnel).toBeUndefined()
     expect((await put({ enabled: true, provider: 'acme-tunnel' })).status).toBe(200)
     const here = await connectedHere(urlOf('acme-demo'))
     expect(here.movingTo).toMatchObject({ hostKey: 'devbox', label: 'Dev box' })
@@ -473,8 +474,12 @@ describe('moving the tunnel to a host without a fight', () => {
     expect(here.movingTo).toBeUndefined()
     expect(await record()).toBeNull()
     expect(alive((await waitFor(tunnelPid))!)).toBe(true)
-    // Its own server was never turned on: it stops, its tunnel with it.
-    await waitFor(() => there.spec === null)
+    // Its own switch was never set: its server stays on by default, and the tunnel there stops.
+    await waitFor(() => there.spec !== null && there.spec.settings.expose?.enabled === false)
+    await waitFor(() => there.proc?.expose.status().state === 'off')
+    const left = (await hostEntry('devbox'))?.settings
+    expect(left).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
+    expect(left?.carriesTunnel).toBeUndefined()
     await waitFor(() => routedTo('acme-other') === 'mac')
   })
 

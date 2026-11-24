@@ -103,7 +103,7 @@ export interface HostServerEntry {
     enabled: boolean;
     /** Whose `enabled` is: the person's, or the default's (an older server sends none). */
     chosenBy?: 'user' | 'default';
-    /** On only because the experiment follower_on_every_host runs one on every host (never for the host carrying this Walnut's tunnel). */
+    /** On only because every host runs one by default (never for the host carrying this Walnut's tunnel). */
     byDefault?: boolean;
     /** Why the host's own tunnel does not run although it is on (it would take this computer's address). */
     expose: { enabled: boolean; provider: string | null; options: Record<string, string>; blocked?: string };
@@ -121,8 +121,6 @@ export interface HostServerEntry {
 export interface HostServersResponse {
   hosts: HostServerEntry[];
   providers: ExposeProviderInfo[];
-  /** A host whose switch was never set runs a Walnut (the experiment follower_on_every_host); an older server sends none. */
-  followerByDefault?: boolean;
 }
 
 export interface HostServerLine {
@@ -154,13 +152,12 @@ export function lastReportText(v: HostServerView, now = Date.now()): string {
 }
 
 /** The tooltip of hostServerSwitchWords' words. */
-export const HOST_SERVER_BY_DEFAULT_TITLE = 'Every host runs one by default (an experiment); turning it off keeps it off.';
+export const HOST_SERVER_BY_DEFAULT_TITLE = 'Every host runs one by default; turning it off keeps it off.';
 
 /**
  * The words beside the host's switch when it is on only because every host runs one by default
- * (the experiment follower_on_every_host: the server sends `settings.byDefault`); null when the
- * person set it, it is off, the experiment is off, it carries this Walnut's tunnel (on for that,
- * its switch greyed), or an older server says nothing.
+ * (the server sends `settings.byDefault`); null when the person set it, it is off, it carries this
+ * Walnut's tunnel (on for that, its switch greyed), or an older server says nothing.
  */
 export function hostServerSwitchWords(entry: HostServerEntry): string | null {
   const s = entry.settings;

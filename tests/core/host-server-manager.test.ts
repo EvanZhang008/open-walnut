@@ -461,16 +461,19 @@ describe('host server manager', () => {
     m.stop()
   })
 
-  it('any other setup failure still waits for Retry (with the experiment off)', async () => {
-    const m = createHostServerManager(deps({ tryLaterMs: { login: [10], failed: [10] } }))
+  it('any other setup failure tries again by itself, later and later', async () => {
+    const m = createHostServerManager(deps({ tryLaterMs: { login: [10], failed: [10, 60_000] } }))
     const host = fakeHost()
     let uploads = 0
     host.uploadFile = async () => { uploads += 1; throw new Error('disk full') }
     await m.connected(host)
+    expect(m.view('devbox')).toMatchObject({ phase: 'error', retryAt: expect.any(Number) })
+    expect(m.view('devbox').message).toMatch(/^disk full/)
+    // No connect, no Retry: the first wait runs it again, the next one is far off.
+    await expect.poll(() => uploads, { timeout: 5_000 }).toBe(2)
     await new Promise((r) => setTimeout(r, 80))
-    expect(uploads).toBe(1)
-    expect(m.view('devbox').message).toBe('disk full')
-    expect(m.view('devbox').retryAt).toBeUndefined()
+    expect(uploads).toBe(2)
+    m.stop()
   })
 
   it('a new build that does not answer gives the host back the one that did, until Retry', async () => {

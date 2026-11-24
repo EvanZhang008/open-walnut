@@ -117,9 +117,9 @@ test.describe('Walnut on this host, in the host\'s Details', () => {
   })
 
   test('a host on only by default says so beside its switch, and one the person turned on does not', async ({ page }) => {
-    // The server sends settings.byDefault only with the experiment follower_on_every_host on (its
-    // default) and a host it manages with no switch stored (src/web/routes/host-servers.ts); the
-    // page gets each answer for this host here while everything else stays the fixture's own.
+    // The server sends settings.byDefault only for a host it manages with no switch stored
+    // (src/web/routes/host-servers.ts); the page gets each answer for this host here while
+    // everything else stays the fixture's own.
     let byDefault = true
     await page.route('**/api/host-servers', async (route) => {
       const res = await route.fetch()
@@ -132,7 +132,7 @@ test.describe('Walnut on this host, in the host\'s Details', () => {
     const part = await thisHost(page)
     const words = part.getByTestId(`host-server-by-default-${KEY}`)
     await expect(words).toHaveText('On (default)')
-    await expect(words).toHaveAttribute('title', 'Every host runs one by default (an experiment); turning it off keeps it off.')
+    await expect(words).toHaveAttribute('title', 'Every host runs one by default; turning it off keeps it off.')
     await expect(part.getByTestId(`host-server-enabled-${KEY}`)).toHaveAttribute('aria-checked', 'true')
     await part.scrollIntoViewIfNeeded()
     await shot(page, '5-on-by-default', part)

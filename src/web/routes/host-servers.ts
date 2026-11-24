@@ -2,7 +2,7 @@
  * /api/host-servers: the servers this Mac keeps on its hosts
  * (docs/plan/walnut-servers-everywhere.md, "A server on a host").
  *
- *   GET  /                    → { hosts: [{ hostKey, label, settings, view, knownAs? }], providers, followerByDefault }
+ *   GET  /                    → { hosts: [{ hostKey, label, settings, view, knownAs? }], providers }
  *   PUT  /:hostKey            { enabled?, expose?: { enabled?, provider?, options? } } → { host }
  *
  * `settings.enabled` is what runs: the person's switch, or the default for a host they never set
@@ -27,7 +27,7 @@ import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { getHostServerManager, hostServerSettingsFrom, withThisWalnutTunnel } from '../../core/host-server/index.js'
-import { followerChosenBy, followerOnByDefault, followerOnEveryHost } from '../../core/host-server/follower-default.js'
+import { followerChosenBy, followerOnByDefault } from '../../core/host-server/follower-default.js'
 import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
@@ -64,7 +64,7 @@ async function hostEntry(hostKey: string) {
   const config = await getConfig()
   const host = config.hosts?.[hostKey]
   if (!host || host.cloud_box) return null
-  const own = hostServerSettingsFrom(host.server, undefined, followerOnByDefault(host, config))
+  const own = hostServerSettingsFrom(host.server, undefined, followerOnByDefault(host))
   // This Walnut's tunnel placed (Open from a browser): the host that carries it runs a server.
   const settings = withThisWalnutTunnel(hostKey, own, config)
   // The host's own tunnel as set (the carried one is this computer's, set in Open from a browser),
@@ -131,8 +131,6 @@ hostServersRouter.get('/', async (_req: Request, res: Response, next: NextFuncti
     res.json({
       hosts,
       providers: listExposeProviders().filter((p) => p.id !== 'command'),
-      // What a host the person never set the switch on does (the experiment follower_on_every_host).
-      followerByDefault: followerOnEveryHost(config),
     })
   } catch (err) {
     next(err)

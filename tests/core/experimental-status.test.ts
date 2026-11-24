@@ -24,8 +24,8 @@ function facts(tasks: Task[], enabled: boolean): StatusFacts {
 
 describe('experimental choices', () => {
   it('every registered experiment starts as its registry default and only a boolean overrides it', () => {
-    // An experiment that graduated by its default keeps its switch: a stored false still turns it off.
-    expect(EXPERIMENTAL_FEATURES.filter((f) => f.default).map((f) => f.id)).toEqual(['follower_on_every_host']);
+    // No experiment is on by default now (follower_on_every_host ended on, into GRADUATED_EXPERIMENTS).
+    expect(EXPERIMENTAL_FEATURES.filter((f) => f.default).map((f) => f.id)).toEqual([]);
     for (const feature of EXPERIMENTAL_FEATURES) {
       expect(experimentalEnabled(undefined, feature.id)).toBe(feature.default);
       expect(experimentalEnabled({}, feature.id)).toBe(feature.default);
@@ -81,6 +81,8 @@ describe('experimental choices', () => {
     const none = effectiveExperimentalFlags(undefined);
     for (const feature of EXPERIMENTAL_FEATURES) expect(none[feature.id]).toBe(feature.default);
     for (const id of GRADUATED_EXPERIMENTS) expect(none[id]).toBe(true);
+    // An ended experiment's old stored false stays in the file but reads on.
+    expect(effectiveExperimentalFlags({ follower_on_every_host: false }).follower_on_every_host).toBe(true);
   });
 });
 

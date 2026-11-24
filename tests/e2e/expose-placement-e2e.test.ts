@@ -75,15 +75,16 @@ beforeAll(async () => {
   pidFile = path.join(WALNUT_HOME, 'fake-tunnel.pid')
   await fs.writeFile(fakeTunnel, FAKE_TUNNEL)
   await updateConfig({
-    // The follower-on-every-host default (on) turned off: this file is about the tunnel turning a
-    // host's opt-in switch on (host-servers-default-e2e.test.ts covers the default).
-    experimental: { follower_on_every_host: false },
+    // Every host runs a follower by default (host-servers-default-e2e.test.ts covers it); this file
+    // is about where the tunnel goes and the host it turns on.
     hosts: {
       // Its server already on.
       devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone', server: { enabled: true } },
-      // An always-on host with no server yet: second by key, so picked only once devbox is turned off.
+      // An always-on host whose switch was never set (on by default, so a placement may pick it; one
+      // turned off by hand is passed over): second by key, so picked only once devbox is turned off.
       spare: { label: 'Spare box', hostname: 'always-on-spare.invalid', user: 'someone' },
-      laptop: { hostname: 'laptop.invalid', user: 'someone' },
+      // Its server turned off by the person: the tunnel never turns it on.
+      laptop: { hostname: 'laptop.invalid', user: 'someone', server: { enabled: false } },
     } as never,
   })
   server = await startServer({ port: 0, dev: true })
@@ -118,7 +119,10 @@ describe('the tunnel on an always-on host by default', () => {
     const devbox = await waitFor(async () => { const h = await hostEntry('devbox'); return h?.view?.phase === 'waiting-for-host' ? h : null })
     expect(devbox.settings).toMatchObject({ enabled: true })
     expect(devbox.settings.carriesTunnel).toBeUndefined()
-    expect((await hostEntry('spare'))?.view.phase).toBe('off')
+    // Never set: on by default, not for the tunnel, and waiting for the host like devbox.
+    const spare = await waitFor(async () => { const h = await hostEntry('spare'); return h?.view?.phase === 'waiting-for-host' ? h : null })
+    expect(spare.settings).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
+    expect(spare.settings.carriesTunnel).toBeUndefined()
     const body = await expose()
     expect(body.places).toEqual([
       { id: 'devbox', label: 'Dev box', alwaysOn: true },
@@ -142,7 +146,9 @@ describe('the tunnel on an always-on host by default', () => {
     expect(host.settings).toMatchObject({ enabled: true, carriesTunnel: true })
     expect((await expose()).status.movingTo.note).toBe('Waiting to connect to Dev box.')
     expect((await hostEntry('laptop'))?.settings.enabled).toBe(false)
-    expect((await hostEntry('spare'))?.settings.enabled).toBe(false)
+    // The tunnel went to devbox only: spare stays as its default made it.
+    expect((await hostEntry('spare'))?.settings).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
+    expect((await hostEntry('spare'))?.settings.carriesTunnel).toBeUndefined()
     // Its address is this computer's until the host holds it.
     const code = await (await api('/api/devices/browser-code', { method: 'POST' })).json()
     expect(code.addresses.map((a: { where: string }) => a.where)).toEqual(['this-computer'])

@@ -18,7 +18,7 @@ import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, minutesFromEnv }
 import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig } from '../expose/registry.js'
 import { exposePlacement, tunnelKey, type PlacementHost } from '../expose/placement.js'
 import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition } from '../expose/types.js'
-import { followerOnByDefault, followerOnEveryHost } from './follower-default.js'
+import { followerOnByDefault } from './follower-default.js'
 import { onPluginsKeepingTasksChanged } from '../plugins/plugin-task-visibility.js'
 
 let manager: HostServerManager | null = null
@@ -233,7 +233,7 @@ export function getHostServerManager(): HostServerManager | null {
       const { getConfig } = await import('../config-manager.js')
       const config = await getConfig()
       const host = config.hosts?.[hostKey]
-      return host ? withThisWalnutTunnel(hostKey, hostServerSettingsFrom(host.server, host.server_program, followerOnByDefault(host, config)), config) : null
+      return host ? withThisWalnutTunnel(hostKey, hostServerSettingsFrom(host.server, host.server_program, followerOnByDefault(host)), config) : null
     },
     label: async (hostKey) => {
       const { getConfig } = await import('../config-manager.js')
@@ -271,9 +271,6 @@ export function getHostServerManager(): HostServerManager | null {
     updateQuietMs: minutesFromEnv(process.env.WALNUT_HOST_SERVER_UPDATE_QUIET_MIN, DEFAULT_UPDATE_QUIET_MS),
     updateMaxBehindMs: minutesFromEnv(process.env.WALNUT_HOST_SERVER_UPDATE_MAX_BEHIND_MIN, DEFAULT_UPDATE_MAX_BEHIND_MS),
     copiesNeedNewer: async (hostKey) => (await import('../replication/replica-status.js')).restedAsOlder(`host:${hostKey}`),
-    // The experiment follower_on_every_host: a failed start tries again by itself, and goes to
-    // Walnut Health, never to the person (health-item.ts).
-    everyHost: async () => followerOnEveryHost(await (await import('../config-manager.js')).getConfig()),
     health: {
       failed: (hostKey, message, retries) => {
         void quietly(import('./health-item.js').then((m) => m.noteHostServerFailed(hostKey, message, retries)), 'raising the Walnut Health item', hostKey)

@@ -535,20 +535,16 @@ export function createHostServerManager(deps: ManagerDeps) {
     const settings = await deps.settingsOf(hostKey)
     // Read while this server began to stop (its plugins going): what they say is not the person's.
     if (await deps.frozen?.()) return
-    const everyHost = (await deps.everyHost?.()) === true
-    // Without the experiment only a refused login waits to run again by itself (as before it):
-    // a wait the experiment set is cancelled when it goes off.
     const waits = tryLater.pending(hostKey)
     const lastWait = tryLater.lastKind(hostKey)
-    if (!everyHost && lastWait && lastWait !== 'login') tryLater.clear(hostKey)
     // A reconnect or Retry after a ladder that stopped (no timer left) starts it from its first step.
-    else if (!soft && !waits && lastWait === 'failed') tryLater.clear(hostKey)
+    if (!soft && !waits && lastWait === 'failed') tryLater.clear(hostKey)
     // A config change elsewhere (favorites, ordering) does not redo a setup that waits to try again
     // (try-later.ts), nor one that stopped trying by itself or is not eligible, while this host's own
-    // settings and the experiment are the same: the wait keeps its pace, a stop waits for a connect or Retry.
-    const print = JSON.stringify({ settings, everyHost })
+    // settings are the same: the wait keeps its pace, a stop waits for a connect or Retry.
+    const print = JSON.stringify(settings)
     const resting = (waits && waits !== 'login') || lastWait === 'failed' || view(hostKey).phase === 'not-eligible'
-    if (soft && everyHost && resting && lastSettings.get(hostKey) === print) return
+    if (soft && resting && lastSettings.get(hostKey) === print) return
     lastSettings.set(hostKey, print)
     // Whether the host follows the default only (fleet and replica lists read it: such a host waiting or not eligible is no problem).
     const v0 = view(hostKey)
@@ -704,7 +700,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         log.session.info('host server: the follower\'s port was taken on the host; the next try picks another', { host: hostKey })
       }
       const refused = err instanceof Error && err.name === 'SshLoginRefusedError'
-      if (everyHost) failedNow.set(hostKey, { message, triesAgain: !(err instanceof UntilRetry) })
+      failedNow.set(hostKey, { message, triesAgain: !(err instanceof UntilRetry) })
       if (err instanceof UntilRetry) {
         // The same file would fail the same way: it waits for Retry (or a newer build). On a host
         // that is on only by default, a file that does not run there means no follower there.
@@ -718,20 +714,14 @@ export function createHostServerManager(deps: ManagerDeps) {
         set(hostKey, { phase: 'error', message })
         return
       }
-      // A refused login is no verdict on the host: it runs again by itself, soon. With the experiment,
-      // anything else does too, later and later; without it, it waits for Retry as it always did.
-      // Nothing else on the host waits for either.
-      if (!refused && !everyHost) {
-        tryLater.clear(hostKey)
-        set(hostKey, { phase: 'error', message })
-        return
-      }
+      // A refused login is no verdict on the host: it runs again by itself, soon; anything else does
+      // too, later and later. Nothing else on the host waits for either.
       // A host on only by default does not keep a server restarting under its daemon between tries,
       // and stops trying by itself at the end of the ladder.
       const byDefault = !refused && settings!.byDefault === true && !settings!.carriesTunnel
       if (byDefault) await takeDown(hostKey, hosts.get(hostKey), { keepWait: true })
       const later = retryingLater(hostKey, refused ? 'login' : 'failed', message, { stopAtEnd: byDefault })
-      if (everyHost) failedNow.set(hostKey, { message, triesAgain: later.at !== undefined })
+      failedNow.set(hostKey, { message, triesAgain: later.at !== undefined })
       set(hostKey, { phase: 'error', message: later.message, retryAt: later.at })
     }
   }
@@ -913,7 +903,6 @@ export function createHostServerManager(deps: ManagerDeps) {
         const failed = failedNow.get(hostKey)
         failedNow.delete(hostKey)
         if (phase === 'error' && failed && tryLater.pending(hostKey) !== 'login') deps.health?.failed(hostKey, failed.message, failed.triesAgain)
-        // Also with the experiment off: an item raised while it was on clears once nothing fails.
         else if (phase === 'running' || phase === 'off' || phase === 'not-eligible') deps.health?.settled(hostKey)
         // This Walnut's follower there is known now: the host's mode may be due a switch (one-service-mode.ts).
         if (followerFact(hostKey).kind !== 'unknown') hosts.get(hostKey)?.serviceModeChanged?.()
