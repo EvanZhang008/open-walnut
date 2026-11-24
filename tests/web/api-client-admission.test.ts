@@ -833,3 +833,53 @@ describe('a read that waits while the page is in the background', () => {
     expect(await rejectedCause('never')).toBe('pool saturated');
   });
 });
+
+describe('a request out on the network while the page is in the background', () => {
+  // 2026-11-24, live: the Mac app's /org page while hidden: GET /api/notes-v2/list answered in 24 ms
+  // on the server and timed out in the page 15 s later, beside other answers 15 to 17 s late. Its
+  // timeout is named for the hidden window, logged as a warning, and the real-use monitor leaves
+  // it out (usage-watch/normalize.ts).
+  let doc: EventTarget & { visibilityState: string };
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    doc = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal('document', doc);
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    })));
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  async function timeoutLine(hide: 'before' | 'during' | 'never'): Promise<{ level: 'error' | 'warn'; line: string } | null> {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const client = await import('../../web/src/api/client');
+    const hideNow = () => { doc.visibilityState = 'hidden'; doc.dispatchEvent(new Event('visibilitychange')); };
+    const showNow = () => { doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange')); };
+    if (hide === 'before') { hideNow(); await vi.advanceTimersByTimeAsync(1_000); showNow(); }
+    const out = client.apiGet('/api/notes-v2/list', undefined, { timeoutMs: 15_000 }).catch(() => {});
+    await vi.advanceTimersByTimeAsync(2_000);
+    if (hide === 'during') { hideNow(); await vi.advanceTimersByTimeAsync(1_000); showNow(); }
+    await vi.advanceTimersByTimeAsync(20_000);
+    await out;
+    const find = (spy: typeof errorSpy) => spy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('/api/notes-v2/list FAILED'));
+    const e = find(errorSpy); const w = find(warnSpy);
+    return e ? { level: 'error', line: e } : w ? { level: 'warn', line: w } : null;
+  }
+
+  it('hidden while it was out: a warning that names the hidden page', async () => {
+    const got = await timeoutLine('during');
+    expect(got?.level).toBe('warn');
+    expect(got?.line).toMatch(/\(timeout 15000ms, page hidden\)$/);
+  });
+  it('hidden only before it was sent, or never: an error, as before', async () => {
+    for (const hide of ['before', 'never'] as const) {
+      vi.resetModules();
+      const got = await timeoutLine(hide);
+      expect(got?.level, hide).toBe('error');
+      expect(got?.line, hide).toMatch(/\(timeout 15000ms\)$/);
+    }
+  });
+});

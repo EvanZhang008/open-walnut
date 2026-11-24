@@ -100,6 +100,8 @@ describe('what is kept', () => {
     // Held in the page's queue while the page was in the background: no problem at all.
     expect(pageErrorKind('[api] GET /api/sessions/search rejected after 15000ms in the connection queue (page suspended)', '', t)).toBeNull()
     expect(pageErrorKind('[api] GET /api/sessions/search rejected after 20000ms in the connection queue (page hidden)', '', t)).toBeNull()
+    // Out on the network while the window was hidden: its answer came late (2026-11-24, /org).
+    expect(pageErrorKind('[api] GET /api/sessions/search FAILED after 15411ms (timeout 15000ms, page hidden)', '', t)).toBeNull()
     expect(pageErrorKind('[api] GET /api/sessions/search rejected after 15000ms in the connection queue (pool saturated)', '', t)?.kind).toBe('GET /api/sessions/search rejected in the page')
     const thrown = pageErrorKind('[uncaught] Uncaught TypeError: cannot read secret-word of undefined', 'https://h/assets/ThreadCard-AbC123xy.js:1:2', t)
     expect(thrown).toEqual({ kind: 'TypeError in the ThreadCard chunk', request: false })

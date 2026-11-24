@@ -525,6 +525,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   }
   if (extra?.keepalive && fitsKeepalive(opts.body)) opts.keepalive = true;
   const t0 = performance.now();
+  const sentAt = Date.now();
   let res: Response;
   try {
     res = await fetchOnce(path, opts);
@@ -541,6 +542,15 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     const isTimeout = err instanceof DOMException && err.name === 'TimeoutError';
     const isAbort = err instanceof DOMException && err.name === 'AbortError';
     if ((isAbort && !isTimeout) || cutByPageExit(err)) {
+      throw err;
+    }
+    // Out while the page was in the background: the engine delivers a hidden window's answers
+    // late and in bursts, so the deadline says nothing about the route or the server (2026-11-24,
+    // the Mac app's /org page while hidden: GET /api/notes-v2/list answered in 24 ms on the server
+    // and timed out in the page 15 s later, beside other answers 15 to 17 s late). Named for it, and
+    // the real-use monitor leaves it out, as it does a wait in the queue (usage-watch/normalize.ts).
+    if (isTimeout && pageHiddenSince(sentAt)) {
+      console.warn(`[api] ${method} ${path} FAILED after ${elapsed}ms (timeout ${timeoutMs}ms, page hidden)`, err);
       throw err;
     }
     console.error(`[api] ${method} ${path} FAILED after ${elapsed}ms${isTimeout ? ` (timeout ${timeoutMs}ms)` : ''}`, err);
