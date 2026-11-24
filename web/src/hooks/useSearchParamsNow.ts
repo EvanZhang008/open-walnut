@@ -20,7 +20,8 @@
  *
  * Every page that writes search params uses this (tests/web/search-params-now-guard.test.ts).
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useLeanCallback } from './useLeanCallback';
 import { createSearchParams, useSearchParams, type SetURLSearchParams } from 'react-router-dom';
 
 /** The page's last write, as search text. */
@@ -72,7 +73,7 @@ export function useSearchParamsNow(): [URLSearchParams, SetURLSearchParams] {
   }, [shown, routedText, routed]);
   const latest = useRef(shown);
   latest.current = shown;
-  const set = useCallback<SetURLSearchParams>((init, opts) => {
+  const set = useLeanCallback<SetURLSearchParams>((init, opts) => {
     const next = createSearchParams(typeof init === 'function' ? init(new URLSearchParams(latest.current)) : init);
     setRouted(next, opts);
     // After the write: the address bar holds it now, and the pick shows while the router catches up.
