@@ -115,7 +115,7 @@ export interface Changed { line: string; heading?: string; was?: string }
 export interface Block { id: string; heading?: string; head: string; form: string; version: string; words: string[]; tagged: string[] }
 
 /** The version of a block a session holds: told to it, or in its prompt (`form`: formOf its head; none from before it was kept). */
-export interface BlockView { version: string; words: string[]; form?: string }
+export interface BlockView { version: string; words: string[]; form?: string; /** Told it is gone. */ gone?: true }
 
 export interface Parsed {
   /** Every trimmed line of the text, block lines included. */
@@ -188,7 +188,11 @@ export function parseInstructions(text: string): Parsed {
 export interface Line { word: string; author?: string; section?: string; reworded?: true; was?: string }
 
 /** One block's change for a session: whole (it never had it, or it changed form), or the new and removed lines. */
-export interface BlockChange { block: Block; whole: boolean; from?: string; added: Line[]; removed: Line[] }
+export interface BlockChange {
+  block: Block; whole: boolean; from?: string; added: Line[]; removed: Line[];
+  /** Told whole after the session was told it is gone: what it says applies (again). */
+  restored?: { same: boolean };
+}
 
 /** A block the session holds that the current instructions no longer have at all. */
 export interface BlockGone { id: string; heading?: string; from: string; removed: Line[] }
@@ -226,11 +230,18 @@ export function dueChanges(
   const blocks: BlockChange[] = [];
   for (const block of current.blocks.values()) {
     const view = held(block.id);
-    if (view?.version === block.version) continue;
+    // Told it is gone (a view with no words) yet here again, even at that version: the session
+    // holds none of it until told (2026-11-24: sessions falsely told their user's profile was gone
+    // were never told it still applied, since its version had not changed).
+    // Only a told record says so (a prompt's block with no lines is a block, not a gone one); one
+    // from before `gone` was kept says so when the version is the one it was told is gone.
+    const told = views[block.id];
+    const toldGone = !!told && !told.words.length && block.words.length > 0 && (!!told.gone || told.version === block.version);
+    if (view?.version === block.version && !toldGone) continue;
     // Whole: never had it, was told it is gone, or it changed form (Walnut's default
     // became the user's own words): a list of changes would read against the wrong head.
     if (!view || !view.words.length || (view.form && view.form !== block.form)) {
-      blocks.push({ block, whole: true, added: block.words.map((word) => ({ word })), removed: [] });
+      blocks.push({ block, whole: true, added: block.words.map((word) => ({ word })), removed: [], ...(toldGone ? { restored: { same: view!.version === block.version } } : {}) });
       continue;
     }
     const changes = wordChanges(view.words, block.words);
@@ -512,7 +523,7 @@ export function rewordedLines(had: string[], now: string[]): string[] {
 export function viewsAfter(views: Record<string, BlockView>, due: Due): Record<string, BlockView> {
   const out = { ...views };
   for (const c of due.blocks) out[c.block.id] = { version: c.block.version, words: c.block.words, form: c.block.form };
-  for (const g of due.gone) out[g.id] = { version: g.from, words: [] };
+  for (const g of due.gone) out[g.id] = { version: g.from, words: [], gone: true };
   return out;
 }
 
@@ -583,6 +594,13 @@ function withParts(added: Line[]): string {
   return lines.join('\n');
 }
 
+/** The line in front of a block told whole after the session was told it is gone. */
+export function restoredLine(c: Pick<BlockChange, 'restored' | 'block'>): string {
+  return c.restored?.same
+    ? `An earlier notice said this part of your instructions (${c.block.version}) was gone. It was not: it still applies, every line of it, as below.`
+    : 'An earlier notice said this part of your instructions was gone. It applies again, in this version:';
+}
+
 /** The labels a block told as changes puts above its lists (instruction-hook-parts.ts repeats them across a cut). */
 export const CHANGE_LABELS = ['New:', 'Reworded:', 'Removed, no longer in force:'] as const;
 
@@ -591,7 +609,7 @@ export const CHANGE_LABELS = ['New:', 'Reworded:', 'Removed, no longer in force:
  * lines and the removed ones. No blank line inside: one ends the block.
  */
 function blockText(c: BlockChange): string {
-  if (c.whole) return `${c.block.head}\n${c.block.words.join('\n')}`;
+  if (c.whole) return `${c.restored ? `${restoredLine(c)}\n` : ''}${c.block.head}\n${c.block.words.join('\n')}`;
   const [NEW, REWORDED, REMOVED] = CHANGE_LABELS;
   const out = [deltaHead(c)];
   const fresh = c.added.filter((l) => !l.reworded);

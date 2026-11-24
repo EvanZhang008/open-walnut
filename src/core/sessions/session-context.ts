@@ -98,7 +98,7 @@
 import { ownReadbackEnabled } from './own-readback-mark.js'
 import { keepsThreads } from '../org/keeps-threads.js'
 import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREAD_ONE_PLACE_KEPT_RULE, THREADS_KEPT_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
-import { threadsKeptNow, threadsKeptOn } from '../org/threads-kept.js'
+import { threadsKeptNow } from '../org/threads-kept.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
@@ -110,13 +110,14 @@ import { versionedBlock } from './instruction-diff.js'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
-import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-profile-context.js'
-import { approvalsLine, currentApprovalsAsk, currentRealUseWatch, currentReplyLanguage, realUseLine, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
+import { currentUserProfile, userProfileLine } from './user-profile-context.js'
+import { refreshPromptInputs } from './prompt-inputs.js'
+import { approvalsLine, currentApprovalsAsk, currentRealUseWatch, currentReplyLanguage, realUseLine, replyLanguageLine } from './reply-language-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import { PromptComposer, promptRollback, type PromptBlockId } from './prompt-blocks.js'
 import { IS_DEMO } from '../../constants.js'
-import { briefOffNow, briefOffOn } from '../org/brief-off.js'
+import { briefOffNow } from '../org/brief-off.js'
 
 /**
  * What a session does when Claude Code answers "API Error: <model>'s safeguards flagged this message":
@@ -494,10 +495,7 @@ export async function buildSessionContext(
   /** The task as the caller holds it (a host replica's ask made while the Mac is away, WP12: not in its copy yet). */
   opts?: { task?: import('../types.js').Task },
 ): Promise<SessionContext> {
-  // The Brief's switch as the config says now (org/brief-off.ts): ORG_MANUALS reads it synchronously.
-  await briefOffOn()
-  // ...and Walnut keeping the Threads (org/threads-kept.ts), which ORG_MANUALS and the task block read too.
-  await threadsKeptOn()
+  // Every switch and copy the prompt reads synchronously, as now: composeSessionContext reads them (prompt-inputs.ts).
   const { composed, task } = await composeSessionContext(taskId, host, opts)
   // What a cap moved goes to the task's memory folder before the session can read the pointer to it.
   const { writeOverflows } = await import('./memory-folder.js')
@@ -597,7 +595,7 @@ export async function composeSessionContext(
     found ? import('./memory-folder.js').then(async (m) => m.ownNotesIndexLine(await m.listMemoryFiles(found!.id))).catch(() => '') : Promise.resolve(''),
   ])
   // The copy composePrompt reads: as on disk now, not as at the last read.
-  await Promise.all([refreshUserProfile(), refreshReplyLanguage()])
+  await refreshPromptInputs()
   const composed = composeInstructions(found, { taskLine, taskDir, fleet, ownNotes })
   // The shared Demo only (its own block, last): how its API is reached across a reset.
   composed.add('demo', IS_DEMO ? DEMO_CONTEXT_LINE : '')

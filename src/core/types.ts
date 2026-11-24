@@ -411,7 +411,7 @@ export interface SessionPlaceNoted {
 export interface SessionInstructionsNoted {
   version: string; promptHash: string; compactUuid?: string; byHookAt?: string; lines?: string[];
   /** The version of each versioned block (the user's profile, core instructions) the session holds, by block id (instruction-diff.ts). */
-  blocks?: Record<string, { version: string; words: string[]; form?: string }>;
+  blocks?: Record<string, { version: string; words: string[]; form?: string; gone?: true }>;
   /** When the last notice reached it: the next waits for NOTICE_GAP_MS, so changes close together go out as one. */
   toldAt?: string;
   /** The plain lines it was told, in full words, newest first (up to 30K characters): the base when one of them is reworded again (instruction-diff.ts). */
@@ -3990,6 +3990,11 @@ export interface SessionRecord {
    * `lines` and is told again once.
    */
   taskRoutingNoted?: SessionInstructionsNoted;
+  /** The leader's own copies of the told records above and of outputModeHookAt, on a host's row (sessions/told-copies.ts). */
+  taskRoutingNotedByLeader?: SessionInstructionsNoted;
+  placeNotedByLeader?: SessionPlaceNoted;
+  outputModeHookAtByLeader?: string;
+  workspaceToldByLeader?: string;
   /**
    * The uuid of the last compaction boundary Walnut saw in this session's
    * stream. A place note given before it may be gone from the context, so it

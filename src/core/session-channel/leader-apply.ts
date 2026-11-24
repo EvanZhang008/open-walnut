@@ -19,6 +19,7 @@ import type { LeaderSideDeps } from './leader-side.js'
 import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
 import type { HostTurnEnd } from './turn-ends.js'
 import { oneDaemonNow } from './revoked-hosts.js'
+import { cutRowFields } from './fact-log.js'
 import { LEADER_QUIET_MS } from '../../host-server/route.js'
 import { HELD_SAY_AGAIN_MS, STAND_DOWN_HELD_KEY, isStandDownHeldEnd, supersedesTurnEnd } from './stand-down-held.js'
 
@@ -149,7 +150,11 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
       const d = (r.data ?? {}) as Record<string, unknown>
       // A `resync` row is the host's whole row again: applied as a born one (its omitted fields cleared, made when missing).
       // A born row's echo of its start's hand (handed-sessions.ts): only that start's open hand takes it.
-      if (r.name === 'row') rows.push({ sid: r.sid, born: d.born === true || d.resync === true, patch: (d.patch ?? {}) as Record<string, unknown>, seq: r.seq, ...(typeof d.hand === 'string' ? { hand: d.hand } : {}) })
+      // A field an older host's log cut on disk keeps the leader's own value (fact-log.ts cutRowFields).
+      if (r.name === 'row') {
+        const keep = cutRowFields(r)
+        rows.push({ sid: r.sid, born: d.born === true || d.resync === true, patch: (d.patch ?? {}) as Record<string, unknown>, seq: r.seq, ...(typeof d.hand === 'string' ? { hand: d.hand } : {}), ...(keep.length ? { keep } : {}) })
+      }
       else if (r.name === 'rename' && typeof d.from === 'string' && typeof d.to === 'string') { renames.push({ from: d.from, to: d.to, seq: r.seq }); renamedTo.add(d.to) }
       else if (r.name === 'drop') drops.push(r.sid)
       else {

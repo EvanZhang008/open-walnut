@@ -52,6 +52,8 @@ export const SESSION_FIELD_OWNER = {
   // The leader's: set by a person (any screen) or by the leader's own hooks.
   // The hints a send carries are planned where the send is made, on the leader (hints/hint-send.ts).
   output_mode_injected: L, hintState: L,
+  // The leader's own copies of a host's told records (told-copies.ts): what the leader told that session.
+  taskRoutingNotedByLeader: L, placeNotedByLeader: L, outputModeHookAtByLeader: L, workspaceToldByLeader: L,
   // An engine switch is the leader's (sessions/engine-switch*.ts write these on the leader, and the
   // host only reads them, from its copy): the switch's marks on the old and the new session.
   engineSwitch: L, 'supersededBy': L /* quoted, so the replaced-session guard does not read this key as a write of the mark */, leftContext: L,
@@ -107,13 +109,17 @@ export function mergeLeaderCopy(own: SessionRecord, fromLeader: SessionRecord): 
  * row (born, or a rows frame), so a host field it leaves out is cleared too. With no row here yet
  * the change is the row, its leader fields included (the host set them when it made the session).
  */
-export function mergeHostFacts(leaderRow: SessionRecord | null, change: Readonly<Record<string, unknown>>, whole: boolean): SessionRecord {
+export function mergeHostFacts(
+  leaderRow: SessionRecord | null, change: Readonly<Record<string, unknown>>, whole: boolean,
+  // Fields the change holds only cut (session-channel/fact-log.ts cutRowFields): the row's own value of each stays.
+  cut: readonly string[] = [],
+): SessionRecord {
   const out: Record<string, unknown> = leaderRow ? { ...leaderRow } : {}
   // A record from before a stop the host already answered here as done (host-judged-controls.ts
   // terminateOnHost): the same stop still pending in it. Neither that stop nor the process fields
   // it ends read as they were then; the host's record of the stop's end writes them.
   const stale = stopWentBack(leaderRow?.stopRequest, change.stopRequest)
-  const keep = (k: string): boolean => stale && STOP_ENDS.has(k)
+  const keep = (k: string): boolean => (stale && STOP_ENDS.has(k)) || cut.includes(k)
   if (leaderRow && whole) {
     for (const k of Object.keys(out)) if (sessionFieldOwner(k) === 'host' && !(k in change) && !keep(k)) delete out[k]
   }

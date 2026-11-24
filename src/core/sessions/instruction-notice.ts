@@ -29,7 +29,8 @@
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions, type InstructionTask } from './session-context.js';
-import { currentUserProfile, refreshUserProfile } from './user-profile-context.js';
+import { currentUserProfile } from './user-profile-context.js';
+import { refreshPromptInputs } from './prompt-inputs.js';
 import { dueChanges, hash, parseInstructions, renderDue, sameRule, viewsAfter, type BlockView, type Due, type Parsed } from './instruction-diff.js';
 import {
   NOTICE_OPENING, bumpNoticeTold, clearNoticeDelivering, leadsWithNotice, noticeDelivering, noticeInFlight,
@@ -37,11 +38,13 @@ import {
 } from './instruction-notice-flight.js';
 import { log } from '../../logging/index.js';
 import { restatementKey, splitAtLines } from './instruction-hook-parts.js';
-import { isFollower } from '../server-role.js';
+import { goneKnownHere } from './block-sources.js';
+import { FACT_INLINE_CAP } from '../session-channel/fact-log.js';
 import { heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
 import { parseHinted } from '../hints/hint-format.js';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '../../lib/history-session-envelope.js';
 import type { SessionInstructionsNoted, SessionRecord } from '../types.js';
+import { instructionsToldCopies } from './told-copies.js';
 
 const kit = createEnvelopeKit();
 /**
@@ -53,7 +56,8 @@ const kit = createEnvelopeKit();
 const OUTCOME = 'task-routing-policy';
 const NOTICE_ATTRS = { from: 'Walnut', outcome: OUTCOME, note: 'current default instructions, not a work request' };
 
-type NoticeRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine' | 'lastCompactUuid' | 'lastCompactAt' | 'taskRoutingNoted'>;
+type NoticeRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine' | 'lastCompactUuid' | 'lastCompactAt' | 'taskRoutingNoted'>
+  & Partial<Pick<SessionRecord, 'taskRoutingNotedByLeader' | 'judge'>>;
 type Noted = Omit<SessionInstructionsNoted, 'prior'>;
 
 /**
@@ -74,16 +78,38 @@ function sameBase(noted: Noted | undefined, record: NoticeRecord): noted is Note
     && !hookStatementVoid(noted.byHookAt, record);
 }
 
-/** What was told that counts for this conversation: a fork's hook statement gives way to what it replaced. */
+const toldTime = (n: Noted) => Date.parse(n.toldAt ?? n.byHookAt ?? '') || 0;
+/** The row's told records `ok` accepts, newest first (told-copies.ts: the host's own and the leader's copy). */
+function toldNewestFirst(record: NoticeRecord, ok: (n: Noted) => boolean): Noted[] {
+  return instructionsToldCopies(record).map((c) => heldStatement(c, record)).filter((n): n is Noted => !!n && ok(n))
+    .sort((a, b) => toldTime(b) - toldTime(a));
+}
+
+/**
+ * What was told that counts for this conversation: a fork's hook statement gives way to what it
+ * replaced. Both servers of a host's row tell it, each into its own record, and either may not have
+ * seen the other's yet: what either told on this prompt and boundary counts, the newer one's block
+ * versions and full wordings first.
+ */
 function heldNoted(record: NoticeRecord): Noted | undefined {
-  const noted = heldStatement(record.taskRoutingNoted, record);
-  return sameBase(noted, record) ? noted : undefined;
+  const [top, ...rest] = toldNewestFirst(record, (n) => sameBase(n, record));
+  if (!top || !rest.length) return top;
+  const lines = [...new Set([...(top.lines ?? []), ...rest.flatMap((n) => n.lines ?? [])])];
+  const blocks = Object.assign({}, ...rest.reverse().map((n) => n.blocks ?? {}), top.blocks ?? {}) as Noted['blocks'];
+  // The wordings held in full stay the newer one's: an older copy may still hold one it replaced.
+  return { ...top, lines, blocks };
 }
 
 /** What the session holds beyond its prompt: told plain lines and block versions (none when `ignoreTold`). */
 function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed, ignoreTold?: boolean) {
   const noted = heldNoted(record);
-  if (ignoreTold || !noted) return { told: new Set<string>(), views: {} as Record<string, BlockView>, texts: [] as string[] };
+  if (ignoreTold || !noted) {
+    // A restatement still says a part it was told is gone is there after all (instruction-diff.ts
+    // dueChanges `restored`): the summary may carry "gone" on, and the prompt's copy reads as held.
+    const toldGone = ignoreTold && noted?.blocks
+      ? Object.fromEntries(Object.entries(noted.blocks).filter(([id, v]) => !v.words.length && current.blocks.has(id))) : {};
+    return { told: new Set<string>(), views: toldGone as Record<string, BlockView>, texts: [] as string[] };
+  }
   const told = new Set(noted.lines ?? []);
   const views: Record<string, BlockView> = { ...(noted.blocks ?? {}) };
   const texts = noted.texts ?? [];
@@ -118,7 +144,7 @@ type HeldAndDue = { views: Record<string, BlockView>; texts: string[]; found: Du
 const dueMemo = new WeakMap<Parsed, WeakMap<Parsed, Map<string, HeldAndDue>>>();
 const DUE_MEMO_PER_PAIR = 8;
 function heldAndDue(record: NoticeRecord, current: Parsed, prompt: Parsed, ignoreTold: boolean | undefined, cut: readonly string[] | undefined): HeldAndDue {
-  const key = JSON.stringify([record.taskRoutingNoted ?? null, record.lastCompactUuid ?? null, record.lastCompactAt ?? null, !!ignoreTold, cut ?? null]);
+  const key = JSON.stringify([record.taskRoutingNoted ?? null, record.taskRoutingNotedByLeader ?? null, record.lastCompactUuid ?? null, record.lastCompactAt ?? null, !!ignoreTold, cut ?? null]);
   let byPrompt = dueMemo.get(current);
   if (!byPrompt) dueMemo.set(current, byPrompt = new WeakMap());
   let byKey = byPrompt.get(prompt);
@@ -145,7 +171,7 @@ function heldAndDue(record: NoticeRecord, current: Parsed, prompt: Parsed, ignor
 function gapClock(record: NoticeRecord, current: Parsed, prompt: Parsed): string | undefined {
   const held = heldNoted(record);
   if (held) return held.toldAt;
-  const noted = heldStatement(record.taskRoutingNoted, record);
+  const [noted] = toldNewestFirst(record, () => true);
   if (!noted?.toldAt || noted.promptHash === hash(record.appliedAppendSystemPrompt ?? '')) return undefined;
   // What it was told that the instructions still say (a wording reworded or a rule dropped since is
   // in no rebuilt prompt), and the block versions it was told that are still current.
@@ -166,14 +192,18 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   if (prompt === undefined || prompt === null) return null;
   // A slim profile runs on its caller's prompt alone, with no Walnut instructions to update.
   if (!prompt.includes(WALNUT_PROMPT_MARK)) return null;
+  // A host's row replayed from an older host's log holds its prompt cut at the log's inline cap
+  // (session-channel/fact-log.ts): unknown, like one never stored, and never read as rules dropped
+  // past the cut (2026-11-24: "Taken out: \"A compa\"", and the rest of the rules told again and again).
+  if (record.judge === 'host' && prompt.length === FACT_INLINE_CAP) return null;
   const current = parseInstructions(defaultInstructions(task));
   const parsedPrompt = parseInstructions(prompt);
   // Lines of USER.md past its budget are still the user's rules: never told as removed.
   const cut = currentUserProfile().cut;
   const { views, texts, found } = heldAndDue(record, current, parsedPrompt, ignoreTold, cut);
-  // A replica's copy of the config has no Reply language (config-allowlist.ts): there it is
-  // unknown, not gone, so a session it leads is never told the language rule stopped applying.
-  const due = found && isFollower() ? { ...found, gone: found.gone.filter((g) => g.id !== 'reply-language') } : found;
+  // A block whose source this server has not read (or does not hold) is unknown here, not gone
+  // (block-sources.ts): a session is never told the user's profile or its Threads rules stopped applying.
+  const due = found && found.gone.some((g) => !goneKnownHere(g.id)) ? { ...found, gone: found.gone.filter((g) => goneKnownHere(g.id)) } : found;
   if (!due || (!due.plain.length && !due.blocks.length && !due.gone.length)) return null;
   // Every change waits out the gap after the last notice (gapClock).
   const lastAt = gapClock(record, current, parsedPrompt);
@@ -409,8 +439,8 @@ async function recordTold(sessionId: string, told: Told, opts?: { base?: boolean
   return written && !!patch.taskRoutingNoted;
 }
 
-/** The user's profile and Reply language ride the default instructions: compare against them as on disk now. */
-const readInputs = () => Promise.all([refreshUserProfile(), import('./reply-language-context.js').then((m) => m.refreshReplyLanguage())]);
+/** The user's profile, Reply language and Threads switch ride the default instructions: compare against them as they are now. */
+const readInputs = () => refreshPromptInputs();
 
 async function lookup(sessionId: string, now = Date.now()): Promise<{ record: SessionRecord; text: string; told: Told } | null> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
@@ -516,7 +546,7 @@ export async function noteInstructionNoticeDelivered(sessionId: string, messages
  */
 export async function noteInstructionNoticeStatedByHook(record: SessionRecord, task: InstructionTask): Promise<void> {
   try {
-    const fresh = { ...record, taskRoutingNoted: undefined };
+    const fresh = { ...record, taskRoutingNoted: undefined, taskRoutingNotedByLeader: undefined };
     const found = dueFor(fresh, task, true);
     const empty: Found = { due: { plain: [], blocks: [], gone: [] }, views: {}, texts: [] };
     await recordTold(record.claudeSessionId, { noted: notedOf(fresh, found ?? empty, { byHookAt: new Date().toISOString() }), changed: [] }, { base: true });

@@ -163,8 +163,22 @@ export function refreshUserProfile(): Promise<UserProfile> {
   return read
 }
 
+/**
+ * Whether this server has read the user's profile from where it lives (USER.md on disk, or the
+ * companion's copy): before that its prompt shows none, which says nothing about the user's file.
+ */
+export function userProfileRead(): boolean {
+  return cached.key !== ''
+}
+
 /** The last copy read, for the sync prompt builders; an old copy starts a refresh for the next caller. */
 export function currentUserProfile(): UserProfile {
   if (Date.now() - checkedAt > SYNC_STALE_MS) void refreshUserProfile()
   return cached.profile
+}
+
+/** Tests: as in a server that has not read the profile yet. */
+export function _resetUserProfileForTesting(): void {
+  cached = { key: '', profile: NONE }
+  checkedAt = Date.now()
 }

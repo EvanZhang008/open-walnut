@@ -103,6 +103,46 @@ describe('on the leader, a host\'s row', () => {
     expect(after?.taskCompleteStop).toBeUndefined()
   })
 
+  it('2026-11-24: what the leader told the session is kept in its own copies, and the host\'s next row keeps them', async () => {
+    const told = { version: 'v1', promptHash: 'p', lines: ['h1'], toldAt: '2026-11-24T13:00:00.000Z' }
+    const place = { promptHash: 'p', project: 'Marina' }
+    await tracker.updateSessionRecord('sid-host-1', { taskRoutingNoted: told, placeNoted: place, outputModeHookAt: '2026-11-24T13:00:01.000Z' })
+    const row = (await tracker.getSessionByClaudeId('sid-host-1'))!
+    expect(row).toMatchObject({ taskRoutingNotedByLeader: told, placeNotedByLeader: place, outputModeHookAtByLeader: '2026-11-24T13:00:01.000Z' })
+    expect(row.taskRoutingNoted).toBeUndefined()
+    expect(row.placeNoted).toBeUndefined()
+    // The host's whole row names only its own told records: the leader's stay.
+    const { taskRoutingNotedByLeader: _a, placeNotedByLeader: _b, outputModeHookAtByLeader: _c, title: _t, ...hostPart } = row as unknown as Record<string, unknown>
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', born: true, patch: { ...hostPart, taskRoutingNoted: { ...told, version: 'host' } } }], renames: [], cursor: { logId: 'L-told', seq: 1 } })
+    expect(await tracker.getSessionByClaudeId('sid-host-1')).toMatchObject({ taskRoutingNotedByLeader: told, taskRoutingNoted: { version: 'host' } })
+    // A leader's own session keeps them where they always were.
+    await tracker.updateSessionRecord('sid-lead-1', { taskRoutingNoted: told })
+    expect(await tracker.getSessionByClaudeId('sid-lead-1')).toMatchObject({ taskRoutingNoted: told })
+  })
+
+  it('2026-11-24: a field an older host log cut keeps the leader\'s value, even in a whole row', async () => {
+    const full = 'P'.repeat(500)
+    await writingAsHost(() => tracker.updateSessionRecord('sid-host-1', { appliedAppendSystemPrompt: full }))
+    const row = (await tracker.getSessionByClaudeId('sid-host-1'))!
+    const { title: _t, ...hostPart } = row as unknown as Record<string, unknown>
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', patch: { appliedAppendSystemPrompt: 'P'.repeat(100), messageCount: 7 }, keep: ['appliedAppendSystemPrompt'] }], renames: [], cursor: { logId: 'L-cut', seq: 1 } })
+    expect(await tracker.getSessionByClaudeId('sid-host-1')).toMatchObject({ appliedAppendSystemPrompt: full, messageCount: 7 })
+    const { appliedAppendSystemPrompt: _p, ...noPrompt } = hostPart
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', born: true, patch: noPrompt, keep: ['appliedAppendSystemPrompt'] }], renames: [], cursor: { logId: 'L-cut', seq: 2 } })
+    expect((await tracker.getSessionByClaudeId('sid-host-1'))?.appliedAppendSystemPrompt).toBe(full)
+  })
+
+  it('2026-11-24: a boundary the host read makes the leader\'s rich-output instruction due again, unless the hook restated it', async () => {
+    await tracker.updateSessionRecord('sid-host-1', { output_mode_injected: 'rich' })
+    const prevAt = new Date(Date.now() - 3_600_000).toISOString()
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', patch: { lastCompactUuid: 'b1', lastCompactAt: prevAt } }], renames: [], cursor: { logId: 'L-b', seq: 1 } })
+    expect((await tracker.getSessionByClaudeId('sid-host-1'))?.output_mode_injected).toBeUndefined()
+    // The leader's hook restated it a moment before the host read the next boundary: it stays told.
+    await tracker.updateSessionRecord('sid-host-1', { output_mode_injected: 'rich', outputModeHookAt: new Date(Date.now() - 30_000).toISOString() })
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', patch: { lastCompactUuid: 'b2', lastCompactAt: new Date().toISOString() } }], renames: [], cursor: { logId: 'L-b', seq: 2 } })
+    expect((await tracker.getSessionByClaudeId('sid-host-1'))?.output_mode_injected).toBe('rich')
+  })
+
   it('the host channel\'s writer writes its host fields', async () => {
     await writingAsHost(() => tracker.updateSessionRecord('sid-host-1', { messageCount: 6 }))
     expect((await tracker.getSessionByClaudeId('sid-host-1'))?.messageCount).toBe(6)

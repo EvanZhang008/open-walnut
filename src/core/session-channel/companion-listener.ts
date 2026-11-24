@@ -35,6 +35,7 @@ import { isListenerFrame, LISTEN_CLOSE, type ListenerFrame } from './listener-wi
 import { judgedByHost, mergeHostFacts } from '../sessions/session-row-owner.js'
 import type { LiveState } from './host-api.js'
 import type { SessionRecord } from '../types.js'
+import { cutRowFields, type FactRecord } from './fact-log.js'
 
 /** What the listener door hands this module: the welcomed socket. */
 export interface ListenerSocket {
@@ -152,7 +153,7 @@ async function sayOnStream(v: HostView, sid: string, name: string, data: unknown
   if (name === 'session:result' || name === 'session:error') v.turns.delete(sid)
 }
 
-async function applyRecord(v: HostView, rec: { sid?: unknown; name?: unknown; data?: unknown }): Promise<void> {
+async function applyRecord(v: HostView, rec: { sid?: unknown; name?: unknown; data?: unknown; refs?: FactRecord['refs'] }): Promise<void> {
   const sid = typeof rec.sid === 'string' ? rec.sid : ''
   const name = typeof rec.name === 'string' ? rec.name : ''
   if (!SID_RE.test(sid) || !name) return
@@ -164,7 +165,7 @@ async function applyRecord(v: HostView, rec: { sid?: unknown; name?: unknown; da
     const whole = data?.born === true || data?.resync === true
     // A patch of a row this companion was never told whole: not one it can stand for.
     if (!before && !whole) return
-    const row = mergeHostFacts(before ?? null, patch as Record<string, unknown>, whole)
+    const row = mergeHostFacts(before ?? null, patch as Record<string, unknown>, whole, cutRowFields({ name, data, refs: rec.refs }))
     if (!ownShape(v.alias, row) || row.claudeSessionId !== sid) return
     if (!before && (await admit(v, [row])).length === 0) return
     v.rows.set(sid, row)

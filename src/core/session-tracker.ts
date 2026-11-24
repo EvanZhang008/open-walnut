@@ -19,7 +19,7 @@ import type {
 } from './types.js';
 import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, sessionRowWrites } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
-import { isHostReplica } from './server-role.js';
+import { isFollower, isHostReplica } from './server-role.js';
 import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
 import type { SessionStatusChangedEvent } from './event-types.js';
@@ -47,7 +47,9 @@ import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
-import { cliHostOf, execHostOf, judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
+import { cliHostOf, execHostOf, isWritingAsHost, judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
+import { FACT_INLINE_CAP } from './session-channel/fact-log.js';
+import { leaderToldAtBoundary, toldIntoLeaderCopies } from './sessions/told-copies.js';
 import { judgedHereRecords } from './sessions/judge-of.js';
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
@@ -2344,6 +2346,10 @@ function applyUpdateToSession(
   updates = withoutStatusVersionOverrides(updates);
   // A host's row is written by its host (sessions/session-row-owner.ts): the leader writes only
   // the leader's fields of it, the owning host only its own.
+  // What the leader told a host's session is kept in the leader's own copies (sessions/told-copies.ts).
+  if (!isFollower() && judgedByHost(session) && !rowOwnedHere(session, thisHostKey()) && !isWritingAsHost()) {
+    updates = toldIntoLeaderCopies(updates as Record<string, unknown>) as SessionRecordUpdates;
+  }
   const owned = ownedPartOf(session, updates as Record<string, unknown>);
   if (owned.dropped.length > 0) {
     log.session.warn('session write left out fields another server owns', {
@@ -3567,6 +3573,8 @@ export interface HostRowChange {
   seq?: number;
   /** A born row's echo of its start's hand (handed-sessions.ts): the open hand it may take. */
   hand?: string;
+  /** Fields the host's log cut on disk (fact-log.ts cutRowFields): the leader's own value of each stays. */
+  keep?: readonly string[];
 }
 
 export interface HostRename { from: string; to: string; seq?: number }
@@ -3636,6 +3644,9 @@ export interface HostChannelBatchResult {
  * and logged: a host writes only its own rows. After the commit, the status and content events a
  * normal write announces are emitted for the rows whose status or searchable text moved.
  */
+/** Host rows whose cut spawn prompt was asked for again in this process (applyHostChannelBatch). */
+const cutPromptResynced = new Set<string>();
+
 export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<HostChannelBatchResult> {
   await ensureSessionInit();
   const hostId = batch.hostId;
@@ -3706,8 +3717,10 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         // A patch of a row the leader lacks: its whole row is asked for only when it was handed this
         // host (a refused session's patches are not asked about again and again).
         if (!before && !change.born) { skipped.push(change.sid); if (handedTo(handle, hostId, change.sid)) resync.add(change.sid); continue; }
-        const next = mergeHostFacts(before, change.patch, change.born === true);
+        const next = mergeHostFacts(before, change.patch, change.born === true, change.keep);
         next.claudeSessionId = change.sid;
+        // A boundary the host read: the leader's own told state of the row follows it (told-copies.ts).
+        if (before) leaderToldAtBoundary(before, next);
         if (!hostOwns(next.host, hostId) || !judgedByHost(next)) { skipped.push(change.sid); continue; }
         // The task a session is for is set at its birth here and never moved by its host.
         if (before && (next.taskId ?? '') !== (before.taskId ?? '')) { next.taskId = before.taskId; taskKept.push(change.sid); }
@@ -3724,6 +3737,11 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
           continue;
         }
         written.push(change.sid);
+        // A field an older host's log cut (session-channel/fact-log.ts), the spawn prompt above all: its whole row is asked for once.
+        if ((change.keep?.length || next.appliedAppendSystemPrompt?.length === FACT_INLINE_CAP) && !cutPromptResynced.has(change.sid)) {
+          cutPromptResynced.add(change.sid);
+          resync.add(change.sid);
+        }
         // The host wrote its row of a session this leader handed it: the hand-over's answer, on disk
         // with the row (a lost answer, a leader that stopped before it, change nothing of it).
         if (clearHandOverMarkIn(handle, change.sid, hostId)) handOversEnded.push(change.sid);

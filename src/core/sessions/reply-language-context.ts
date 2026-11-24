@@ -22,6 +22,8 @@ let askMe = true
 /** The real-use watch experiment (core/usage-watch/gate.ts), read with them: its rule is in the prompt only while on. */
 let realUse = false
 let checkedAt = 0
+/** A read of the config succeeded at least once (block-sources.ts: before that the language is unknown, not gone). */
+let readOnce = false
 let inflight: Promise<string | null> | null = null
 
 /** Read the setting again; what a session's prompt says now. Never throws. */
@@ -38,12 +40,20 @@ export function refreshReplyLanguage(): Promise<string | null> {
       askMe = askMeOf(config)
       const { experimentalEnabled } = await import('../experimental.js')
       realUse = experimentalEnabled(config.experimental, 'real_use_watch')
+      // A fallback config (the file unreadable) says nothing of the user's setting.
+      const { isFallbackConfig } = await import('../config-manager.js')
+      if (!isFallbackConfig(config)) readOnce = true
     } catch { /* keep the last copy */ }
     checkedAt = Date.now()
     return cached
   })().finally(() => { inflight = null })
   inflight = read
   return read
+}
+
+/** Whether this server has read the setting yet (before that the prompt shows no Reply language). */
+export function replyLanguageRead(): boolean {
+  return readOnce
 }
 
 /** The last copy read, for the sync prompt builders; an old copy starts a refresh for the next caller. */
@@ -115,5 +125,6 @@ export function _resetReplyLanguageForTesting(value: string | null = null): void
   askMe = true
   realUse = false
   checkedAt = value === null ? 0 : Date.now()
+  if (value !== null) readOnce = true
   inflight = null
 }

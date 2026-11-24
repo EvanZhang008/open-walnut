@@ -66,7 +66,7 @@ const EMPTY: OpenItems = { subtasks: [], moreSubtasks: 0, waitingOn: [], askedOf
  * to the next message, which carries it whole (instruction-hook-parts.ts).
  */
 async function instructionPart(record: SessionRecord, task: Task, sid: string, part: number, of: number): Promise<OpenItems> {
-  await Promise.all([(await import('./user-profile-context.js')).refreshUserProfile(), (await import('./reply-language-context.js')).refreshReplyLanguage()]);
+  await (await import('./prompt-inputs.js')).refreshPromptInputs();
   const { instructionRestatementParts, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
   const split = instructionRestatementParts(record, task, HOOK_CONTEXT_MAX);
   const count = split?.parts.length ?? 0;
@@ -252,7 +252,7 @@ export async function collectOpenItems(
       if (memory) items.text = [items.text, memory].filter(Boolean).join('\n\n');
       // Every default-instruction line that changed since spawn: the summary may have dropped the notices.
       const { instructionNoticeFor, instructionRestatementParts, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
-      await Promise.all([(await import('./user-profile-context.js')).refreshUserProfile(), (await import('./reply-language-context.js')).refreshReplyLanguage()]);
+      await (await import('./prompt-inputs.js')).refreshPromptInputs();
       const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });
       // Only whole and within what the hook may add: a cut notice would leave rules unsaid. Left out,
       // it is not told, so the next message carries it (the compaction made everything due again).

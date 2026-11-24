@@ -32,7 +32,8 @@ import { log } from '../../logging/index.js';
 import type { SessionPlaceNoted, SessionRecord, Task } from '../types.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAskPlacement, projectPlaceName, sameProject } from './caller-placement.js';
-import { HOOK_BOUNDARY_MS, heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
+import { answersBoundary, heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
+import { outputModeHookAtOf, placeToldCopies } from './told-copies.js';
 
 const kit = createEnvelopeKit();
 
@@ -145,17 +146,27 @@ export async function livePlaceOf(task: Task): Promise<SessionPlace> {
   };
 }
 
-export function toldPlaceOf(
-  record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'project' | 'placeNoted' | 'lastCompactUuid' | 'lastCompactAt'>, taskId: string,
-): ToldPlace {
+type PlaceRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'project' | 'placeNoted' | 'lastCompactUuid' | 'lastCompactAt'>
+  & Partial<Pick<SessionRecord, 'placeNotedByLeader' | 'judge'>>;
+
+/**
+ * The place record that counts for this conversation: on its prompt and boundary, the leader's copy
+ * first (told-copies.ts). A fork's hook statement (a side question compacted) never reached this
+ * conversation, and gives way to what was told before it (hook-statement.ts).
+ */
+function heldPlace(record: PlaceRecord): Omit<SessionPlaceNoted, 'prior'> | undefined {
   const hash = promptHash(record.appliedAppendSystemPrompt);
-  // A fork's hook statement (a side question compacted) never reached this conversation, and
-  // gives way to what was told before it (hook-statement.ts).
-  const noted = heldStatement(record.placeNoted, record);
-  if (noted && noted.promptHash === hash && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '')
-    && !hookStatementVoid(noted.byHookAt, record)) {
-    return { project: noted.project, folderId: noted.folderId ?? '', folder: noted.folder ?? null, leaderId: noted.leaderId ?? null };
+  for (const copy of placeToldCopies(record)) {
+    const noted = heldStatement(copy, record);
+    if (noted && noted.promptHash === hash && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '')
+      && !hookStatementVoid(noted.byHookAt, record)) return noted;
   }
+  return undefined;
+}
+
+export function toldPlaceOf(record: PlaceRecord, taskId: string): ToldPlace {
+  const noted = heldPlace(record);
+  if (noted) return { project: noted.project, folderId: noted.folderId ?? '', folder: noted.folder ?? null, leaderId: noted.leaderId ?? null };
   return placeFromPrompt(record.appliedAppendSystemPrompt, taskId) ?? { project: record.project ?? '' };
 }
 
@@ -173,7 +184,7 @@ async function recordTold(sessionId: string, noted: PlaceNoted): Promise<void> {
     // A hook statement: on the boundary the record holds now, keeping what was told before it.
     if (noted.byHookAt) {
       const { compactUuid: _read, ...stated } = noted;
-      const prior = heldStatement(current.placeNoted, current);
+      const prior = heldPlace(current);
       patch.placeNoted = { ...stated, ...statementBoundary(current), ...(prior ? { prior } : {}) };
     }
     return true;
@@ -200,10 +211,10 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
     // boundary Walnut read answered THIS one. One made before it answered that one.
     const noted = record.placeNoted;
     const hookAt = noted?.byHookAt ? Date.parse(noted.byHookAt) : NaN;
-    const answered = (at: number) => Number.isFinite(at) && now - at < HOOK_BOUNDARY_MS
-      && (!record.lastCompactAt || at > Date.parse(record.lastCompactAt));
+    const answered = (at: number) => answersBoundary(at, record.lastCompactAt, now);
     const hookAnswered = answered(hookAt);
-    const modeHookAnswered = answered(record.outputModeHookAt ? Date.parse(record.outputModeHookAt) : NaN);
+    const modeHookAt = outputModeHookAtOf(record);
+    const modeHookAnswered = answered(modeHookAt ? Date.parse(modeHookAt) : NaN);
     // The changed instructions the hook restated (instruction-notice.ts) answer this boundary too.
     const routing = record.taskRoutingNoted;
     const routingHookAnswered = !!routing?.byHookAt && answered(Date.parse(routing.byHookAt));

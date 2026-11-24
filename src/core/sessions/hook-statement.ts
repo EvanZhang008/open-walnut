@@ -17,6 +17,7 @@
  * HOOK_BOUNDARY_MS of it, either side (the boundary is read after the hook almost always, before
  * it in a race). One no boundary came near is void: the next message tells those lines again.
  */
+import type { SessionHintState } from '../types.js'
 
 /** A hook statement and the boundary it answers are read this close together. */
 export const HOOK_BOUNDARY_MS = 5 * 60_000
@@ -53,4 +54,36 @@ export function heldStatement<T extends { byHookAt?: string; prior?: Omit<T, 'pr
  */
 export function statementBoundary(current: { lastCompactUuid?: string }): { compactUuid?: string } {
   return current.lastCompactUuid ? { compactUuid: current.lastCompactUuid } : {}
+}
+
+/**
+ * Whether a hook statement made at `atMs` answered a boundary read at `nowMs`: made after the
+ * boundary read before it (`prevCompactAt`) and within HOOK_BOUNDARY_MS of now.
+ */
+export function answersBoundary(atMs: number, prevCompactAt: string | undefined, nowMs: number): boolean {
+  return Number.isFinite(atMs) && nowMs - atMs < HOOK_BOUNDARY_MS && (!prevCompactAt || atMs > Date.parse(prevCompactAt))
+}
+
+/**
+ * A compaction boundary the server just read: a hint the post-compaction hook
+ * stated after the previous boundary and within `answeredMs` answered THIS one, so
+ * it is moved onto the new boundary instead of being sent again (pure; called from
+ * place-notice.ts notePlaceCompaction, in the same guarded write, and for a host's row where the
+ * leader applies its boundary, told-copies.ts leaderToldAtBoundary).
+ */
+export function hintStateAtBoundary(
+  state: SessionHintState | undefined,
+  boundaryUuid: string,
+  answered: (atMs: number) => boolean,
+): SessionHintState | undefined {
+  if (!state) return undefined;
+  let changed = false;
+  const told: SessionHintState['told'] = {};
+  for (const [kind, t] of Object.entries(state.told)) {
+    if (t.byHookAt && answered(Date.parse(t.byHookAt))) {
+      told[kind] = { ...t, compact: boundaryUuid };
+      changed = true;
+    } else told[kind] = t;
+  }
+  return changed ? { ...state, told } : undefined;
 }

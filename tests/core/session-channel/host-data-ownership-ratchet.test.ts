@@ -112,6 +112,7 @@ const ROW_CHANGE: Record<string, string> = {
   patch: 'the host\'s fields; a held row keeps its task (taskKept), the leader\'s fields are never taken (mergeHostFacts)',
   seq: 'order only',
   hand: 'the echo of an open hand: only that start\'s hand, of this host, takes it',
+  keep: 'fields the host\'s log cut on disk: the leader keeps its own value of each (mergeHostFacts), never a host\'s cut one',
 }
 
 /** Callers of noteHostJudged, by file: how many, and why each is the host's session for sure. */

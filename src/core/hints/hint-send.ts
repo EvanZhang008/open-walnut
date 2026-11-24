@@ -642,28 +642,8 @@ export async function stateHintsAfterCompaction(
   }
 }
 
-/**
- * A compaction boundary the server just read: a hint the post-compaction hook
- * stated after the previous boundary and within `answeredMs` answered THIS one, so
- * it is moved onto the new boundary instead of being sent again (pure; called from
- * place-notice.ts notePlaceCompaction, in the same guarded write).
- */
-export function hintStateAtBoundary(
-  state: SessionHintState | undefined,
-  boundaryUuid: string,
-  answered: (atMs: number) => boolean,
-): SessionHintState | undefined {
-  if (!state) return undefined;
-  let changed = false;
-  const told: SessionHintState['told'] = {};
-  for (const [kind, t] of Object.entries(state.told)) {
-    if (t.byHookAt && answered(Date.parse(t.byHookAt))) {
-      told[kind] = { ...t, compact: boundaryUuid };
-      changed = true;
-    } else told[kind] = t;
-  }
-  return changed ? { ...state, told } : undefined;
-}
+/** A hook-stated hint carried onto the boundary it answered (pure; it lives in hook-statement.ts). */
+export { hintStateAtBoundary } from '../sessions/hook-statement.js';
 
 /** The triggers a host can honour: they need no message count and no request. */
 const HOST_TRIGGERS: ReadonlySet<string> = new Set(['every_turn', 'session_start', 'after_compaction', 'on_change']);

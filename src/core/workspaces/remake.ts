@@ -30,6 +30,7 @@ import { WorkspaceError } from './daemon-client.js'
 import { madeHere, managerDeps, requestWorkspace, stamp, errText } from './manager.js'
 import { createEnvelopeKit } from '../peers/envelope-kit.js'
 import { log } from '../../logging/index.js'
+import { workspaceToldOf } from '../sessions/told-copies.js'
 
 /** How long a spawn waits for the workspace (a git worktree and its setup take seconds). */
 export const SPAWN_WAIT_MS = 3 * 60_000
@@ -288,7 +289,8 @@ export async function workspaceRemakeNotice(sessionId: string): Promise<{ text: 
   const task = await deps.getTask(record.taskId)
   if (!task || !covers(task.workspace, record.cwd, record.host) || !(await madeHere(task.workspace))) return null
   const key = removalKey(task, record.startedAt)
-  if (!key || record.workspaceTold === key) return null
+  // Told by either server of a host's row (sessions/told-copies.ts).
+  if (!key || workspaceToldOf(record, key)) return null
   return {
     text: workspaceRemadeText(task.workspace, record.cwd),
     markTold: async () => {

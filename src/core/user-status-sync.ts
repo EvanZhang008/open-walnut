@@ -1458,6 +1458,7 @@ function markAll(): void {
 /** The experiment's value as of the last config change seen (undefined: none seen yet). */
 let followWorkersSeen: boolean | undefined;
 let popUpSeen: boolean | undefined;
+let threadsSeen: boolean | undefined;
 let lettersAsThreadsSeen: boolean | undefined;
 let oneCardSeen: boolean | undefined;
 let briefOffSeen: boolean | undefined;
@@ -1469,9 +1470,11 @@ async function experimentSwitched(): Promise<boolean> {
   const moved = followWorkersSeen !== undefined && followWorkersSeen !== now;
   followWorkersSeen = now;
   // Threads for every task (keeps-threads.ts): a switch moves which tasks read their threads here.
-  const { setThreadsForEveryTask, threadsForEveryTask } = await import('./org/keeps-threads.js');
+  const { setThreadsForEveryTask } = await import('./org/keeps-threads.js');
   const every = experimentalEnabled(flags, 'task_threads');
-  const threadsMoved = threadsForEveryTask() !== every;
+  // Its own record of the value (from off at boot): a prompt build may have read the switch first (prompt-inputs.ts).
+  const threadsMoved = (threadsSeen ?? false) !== every;
+  threadsSeen = every;
   setThreadsForEveryTask(every);
   // Threads pop up (org/thread-popup.ts): a switch moves every node's counts. Its own record of
   // the value, since a route's read of the config sets the shared one too.

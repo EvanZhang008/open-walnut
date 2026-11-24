@@ -20,9 +20,12 @@
  * Rules this file owns:
  *   - a record is durable (fsynced) before anyone hears of it (`onDurable`), so a leader never
  *     confirms what a crash could lose;
- *   - the CLI's output file already holds every line in full: a string field longer than
- *     `inlineCap` is cut on disk and named in `refs` with the line it came from; the record the
- *     live channel sends (`onDurable`) is the whole one, from memory;
+ *   - the CLI's output file already holds every line in full: a string field of a fact longer
+ *     than `inlineCap` is cut on disk and named in `refs` with the line it came from; the record
+ *     the live channel sends (`onDurable`) is the whole one, from memory. A `row` record is never
+ *     cut: its fields are the row itself, which no output file holds (2026-11-24: a spawn prompt
+ *     replayed from disk reached the leader cut at 16 KB, and its sessions were told the rest of
+ *     their instructions again and again, a rule cut mid-word as "Taken out");
  *   - compaction (when the file passes `compactBytes`) drops what the leader confirmed, and in
  *     what it has not, stands one `turn-summary` record for the tool facts of each finished turn
  *     and one merged `row` record for its row patches; facts of a turn still running are kept;
@@ -146,7 +149,7 @@ export class FactLog {
   static async open(opts: FactLogOptions): Promise<FactLog> {
     if (!SAFE_ID.test(opts.walnutId)) throw new Error(`fact log: bad walnut id ${JSON.stringify(opts.walnutId)}`)
     const o = {
-      now: Date.now, flushMs: FACT_FLUSH_MS, durable: true, inlineCap: 16 * 1024, compactBytes: 8 * 1024 * 1024, ...opts,
+      now: Date.now, flushMs: FACT_FLUSH_MS, durable: true, inlineCap: FACT_INLINE_CAP, compactBytes: 8 * 1024 * 1024, ...opts,
     }
     await fsp.mkdir(o.dir, { recursive: true, mode: 0o700 })
     const file = path.join(o.dir, `facts-${o.walnutId}.ndjson`)
@@ -382,8 +385,12 @@ async function readRecords(file: string): Promise<{ records: FactRecord[]; valid
   return { records, validBytes: valid, totalBytes: buf.length }
 }
 
-/** The record as kept on disk: every string over `cap` bytes cut, and named in `refs`. */
+/** The inline cap of a fact log's records on disk, unless its options name another. */
+export const FACT_INLINE_CAP = 16 * 1024
+
+/** The record as kept on disk: every string over `cap` bytes cut, and named in `refs`; a `row` record whole. */
 export function capRecord(rec: FactRecord, cap: number): FactRecord {
+  if (rec.name === 'row') return rec
   const refs: Record<string, FactRef> = {}
   const walk = (v: unknown, at: string, depth: number): unknown => {
     if (typeof v === 'string') {
@@ -399,6 +406,23 @@ export function capRecord(rec: FactRecord, cap: number): FactRecord {
   }
   const data = walk(rec.data, '', 0)
   return Object.keys(refs).length ? { ...rec, data, refs } : rec
+}
+
+/** The row field a ref path names ('patch.title.0' names title), or null. */
+const rowFieldOf = (path: string): string | null => (path.startsWith('patch.') ? path.slice(6).split('.')[0] || null : null)
+
+/**
+ * The fields of a `row` record's patch an older log cut on disk (its `refs`; a row that log's
+ * compaction merged lost them, and a field cut there is exactly `cap` characters long): the
+ * leader keeps its own value of each, never the cut one.
+ */
+export function cutRowFields(rec: Pick<FactRecord, 'name' | 'data' | 'refs'>, cap = FACT_INLINE_CAP): string[] {
+  if (rec.name !== 'row') return []
+  const out = new Set<string>()
+  for (const path of Object.keys(rec.refs ?? {})) { const f = rowFieldOf(path); if (f) out.add(f) }
+  const patch = (rec.data as { patch?: Record<string, unknown> } | null)?.patch ?? {}
+  for (const [k, v] of Object.entries(patch)) if (typeof v === 'string' && v.length === cap) out.add(k)
+  return [...out]
 }
 
 /**
@@ -443,12 +467,19 @@ export function compactRecords(records: readonly FactRecord[]): FactRecord[] {
       const rows = turn.filter((x) => x.name === 'row')
       if (rows.length > 1) {
         const merged: Record<string, unknown> = {}
-        for (const x of rows) Object.assign(merged, (x.data as { patch?: Record<string, unknown> })?.patch ?? {})
+        // A field an older log cut stays named as cut, until a later patch of the turn sets it again.
+        const refs: Record<string, FactRef> = {}
+        for (const x of rows) {
+          const patch = (x.data as { patch?: Record<string, unknown> })?.patch ?? {}
+          Object.assign(merged, patch)
+          for (const path of Object.keys(refs)) if (rowFieldOf(path)! in patch) delete refs[path]
+          for (const [path, ref] of Object.entries(x.refs ?? {})) if (rowFieldOf(path)) refs[path] = ref
+        }
         const last = rows[rows.length - 1]
         const born = rows.some((x) => (x.data as { born?: boolean })?.born)
         // A born row's echo of its start's hand (host-emitter.ts) stays with the merged row.
         const hand = rows.map((x) => (x.data as { hand?: unknown })?.hand).find((h): h is string => typeof h === 'string')
-        replace.set(last.seq, { ...last, refs: undefined, data: { ...(born ? { born: true } : {}), ...(hand ? { hand } : {}), patch: merged } })
+        replace.set(last.seq, { ...last, refs: Object.keys(refs).length ? refs : undefined, data: { ...(born ? { born: true } : {}), ...(hand ? { hand } : {}), patch: merged } })
         for (const x of rows.slice(0, -1)) replace.set(x.seq, null)
       }
       turn = []

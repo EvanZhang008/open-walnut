@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { FACT_FLUSH_MS, FactLog, compactRecords, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
+import { FACT_FLUSH_MS, FACT_INLINE_CAP, FactLog, compactRecords, cutRowFields, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
 
 let dir = ''
 beforeEach(async () => { dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fact-log-')) })
@@ -129,6 +129,34 @@ describe('appending', () => {
 
 const rec = (seq: number, sid: string, name: string, data: unknown = {}, v?: number): FactRecord =>
   ({ v: 2, seq, opId: `o${seq}`, rev: 1, at: seq, kind: 'session-fact', sid, sseq: seq, name, data, ...(v ? { line: { v } } : {}) })
+
+describe('a row record is never cut (2026-11-24: a spawn prompt replayed cut at 16 KB)', () => {
+  it('keeps every field of a row whole on disk, however long', async () => {
+    const log = await open({ inlineCap: 100 })
+    const prompt = 'p'.repeat(5000)
+    log.append('s1', 'row', { patch: { appliedAppendSystemPrompt: prompt } })
+    await log.flush()
+    const [disk] = await log.read(0)
+    expect((disk.data as { patch: { appliedAppendSystemPrompt: string } }).patch.appliedAppendSystemPrompt).toBe(prompt)
+    expect(disk.refs).toBeUndefined()
+    await log.close()
+  })
+
+  it('names the fields an older log cut, by its refs or, merged by its compaction, by their cut length', () => {
+    const cutByRefs = { name: 'row', data: { patch: { appliedAppendSystemPrompt: 'x'.repeat(10), title: 't' } }, refs: { 'patch.appliedAppendSystemPrompt': { bytes: 99 } } }
+    expect(cutRowFields(cutByRefs)).toEqual(['appliedAppendSystemPrompt'])
+    expect(cutRowFields({ name: 'row', data: { patch: { appliedAppendSystemPrompt: 'y'.repeat(FACT_INLINE_CAP), model: 'm' } } })).toEqual(['appliedAppendSystemPrompt'])
+    expect(cutRowFields({ name: 'session:tool-result', data: {}, refs: { 'content.0.text': { bytes: 5 } } })).toEqual([])
+  })
+
+  it('compaction carries what an older log cut onto the merged row, until a later patch sets the field again', () => {
+    const cut: FactRecord = { ...rec(1, 's1', 'row', { patch: { appliedAppendSystemPrompt: 'cut', placeNoted: 'a' } }), refs: { 'patch.appliedAppendSystemPrompt': { bytes: 99 }, 'patch.placeNoted': { bytes: 99 } } }
+    const out = compactRecords([cut, rec(2, 's1', 'row', { patch: { placeNoted: 'whole' } }), rec(3, 's1', 'session:result', {}, 5)])
+    const row = out.find((r) => r.name === 'row')!
+    expect(Object.keys(row.refs ?? {})).toEqual(['patch.appliedAppendSystemPrompt'])
+    expect(cutRowFields(row)).toEqual(['appliedAppendSystemPrompt'])
+  })
+})
 
 describe('compaction', () => {
   it('a finished turn keeps its result, one summary for its tool facts and one merged row patch; a running turn stays whole', () => {

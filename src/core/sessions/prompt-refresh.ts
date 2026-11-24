@@ -172,9 +172,8 @@ export async function freshResumePrompt(
   const { listTasksByIds } = await import('../task-manager.js');
   const [task] = await listTasksByIds([record.taskId]) as Task[];
   if (!task) return null;
-  // The default instructions read the user's profile and Reply language from their copies: read them now.
-  const [{ refreshUserProfile }, { refreshReplyLanguage }] = await Promise.all([import('./user-profile-context.js'), import('./reply-language-context.js')]);
-  await Promise.all([refreshUserProfile(), refreshReplyLanguage()]);
+  // The default instructions read the user's profile, Reply language and Threads switch from their copies: read them now.
+  await (await import('./prompt-inputs.js')).refreshPromptInputs();
   if (!opts.decided && !refreshOnResume(record, task, now, facts)) return null;
   const { buildSessionContext } = await import('./session-context.js');
   const ctx = await buildSessionContext(record.taskId, record.cwd ?? undefined, record.host ?? undefined);

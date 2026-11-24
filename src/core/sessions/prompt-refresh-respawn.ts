@@ -116,12 +116,7 @@ function defaultDeps(runner: RunnerView, idleArmed: (id: string) => boolean): Pr
         ['main-ai'], { source: 'prompt-refresh' });
     },
     debtBytes: (rec, task) => promptDebtBytes(rec, task),
-    refreshInputs: async () => {
-      const [{ refreshUserProfile }, { refreshReplyLanguage }] = await Promise.all([
-        import('./user-profile-context.js'), import('./reply-language-context.js'),
-      ]);
-      await Promise.all([refreshUserProfile(), refreshReplyLanguage()]);
-    },
+    refreshInputs: async () => (await import('./prompt-inputs.js')).refreshPromptInputs(),
   };
 }
 
