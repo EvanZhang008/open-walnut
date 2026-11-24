@@ -139,7 +139,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
             {!where.project ? (
               <div className="draft-v6-wm-row is-disabled draft-v6-auto-row" role="option" aria-disabled="true" aria-selected={false} data-testid="draft-v6-auto-row" data-state="no-project">
                 <span className="draft-v6-wm-ico"><WhereIcon kind="auto" size={15} /></span>
-                <span className="draft-v6-wm-text"><span className="draft-v6-wm-name is-dim"><Title>Auto</Title></span><span className="draft-v6-wm-line">{autoGone ? `This folder is gone on ${hostName}` : autoLine}</span></span>
+                <span className="draft-v6-wm-text"><span className="draft-v6-wm-name is-dim"><Title>Auto</Title></span><span className="draft-v6-wm-line">{autoLine}</span></span>
               </div>
             ) : !v.ok ? (
               <div className="draft-v6-wm-row is-disabled draft-v6-auto-row is-cannot" role="option" aria-disabled="true" aria-selected={false} data-testid="draft-v6-auto-row" data-state="cannot"
@@ -162,7 +162,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
                 <span className="draft-v6-wm-ico"><WhereIcon kind="auto" size={15} /></span>
                 <span className="draft-v6-wm-text">
                   <span className="draft-v6-wm-name wn-pick-name"><Title>Auto · {where.what.words} on {hostName}</Title>{recommended && <span className={`${badge('accent')} draft-v6-tag is-rec`}><span>recommended</span></span>}</span>
-                  <span className="draft-v6-wm-line">{autoLine}</span>
+                  <span className="draft-v6-wm-line">{autoGone ? `This folder is gone on ${hostName}` : autoLine}</span>
                 </span>
                 <span className="draft-v6-wm-right" />
               </div>

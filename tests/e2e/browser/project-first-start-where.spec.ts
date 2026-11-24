@@ -336,6 +336,8 @@ test('a folder that is gone is said before Start, and a start into one is refuse
   // Its way out opens the folder menu.
   await line(panel).getByTestId('draft-v6-line-pick').click()
   await expect(whereMenu(page)).toBeVisible()
+  // The menu's Auto row says the same, never "Works in" a folder that is not there (review of the video).
+  await expect(whereMenu(page).getByTestId('draft-v6-auto-row')).toContainText(`This folder is gone on ${LOCAL_NAME}`)
   await page.keyboard.press('Escape')
 
   // A folder there when picked and gone by Start (deleted meanwhile): the server refuses it before
