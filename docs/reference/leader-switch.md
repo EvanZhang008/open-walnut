@@ -132,7 +132,10 @@ Source job:
    **candidate's own check** runs as a target job with `--check` over the copy link: the new
    leader's machine reaches a majority of the witnesses with no leader link and they name the old
    leader ([The preflight from the candidate's side](#the-preflight-from-the-candidates-side)), its disk has room,
-   its program is not older than the old one's, no server runs on the new home. Any failure refuses with
+   its program is not older than the old one's, no server runs on the new home. The copy link's verify waits out
+   an apply of the leader's own periodic batch there (the target refuses a verify while one runs), within the
+   check's deadline. Last, closest to the handover, **the standby caught up**
+   ([The standby caught up first](#the-standby-caught-up-first)). Any failure refuses with
    the reasons; nothing changed (a refused switch writes no switch state, no marker, nothing in either home).
 2. **handover**: the marker `handed-over.json` (state `switching`) goes into the old home
    first, then the old leader's server writes its `handover` record to a majority of the
@@ -388,6 +391,31 @@ offline and online checks compare the promoted home with those. Neither job read
 machine's files by path. The promoted home's `standby` points back at the old machine
 (`standby.host` its `host_key`), so its batches go the other way over the new leader's link.
 
+### The standby caught up first
+
+The final batch runs with the old leader stopped, inside the commit window (`commit_window_s`, 300 s), and carries
+what changed since the standby's last batch. A standby that is behind would make it run past the window: the
+switch rolls back after minutes without a leader (a 20 GB rehearsal on 2026-11-24: the batch before the
+handover had sent 1.35 GB in 45 s, the copy link was then 20 Mbit/s, so about 540 s for as much; the
+preflight passed, the final batch was cut at the deadline, and nobody led for 6 min 9 s).
+
+So the preflight's last step (`POST /api/leader/switch/catch-up`, `catch-up.ts`) has the leader, still serving,
+take its own standby batches back to back (the standby runner's: one under way is joined) until one takes at
+most **a quarter of the commit window** (75 s of 300 s). That batch's time is about what the final batch will
+take: the runner keeps batching meanwhile, so the final batch carries the writes of about one batch and its
+interval. The rest of the window is for the stop's teardown and the writers' settle (up to 30 s), the final
+batch's verify and mark, the promotion and the trial start (about 20 s on a 20 GB home), and a final batch up
+to three times the steady one. Refused, with the batches' times and sizes, when:
+
+- no batch takes at most the budget within one commit window of catching up (a batch still running then is not
+  waited for: it goes on in the background, the leader keeps serving);
+- two batches in a row are over the budget and the later one is not shorter (the writes outpace the link);
+- the leader takes no standby batches, or a history rewrite or gc of the data repo runs (minutes; the stop
+  would end it part way).
+
+A refusal here stops nothing: no handover record, the doors stay open; run the switch again once the copy is
+current (the periodic batches keep sending).
+
 ### The switch stop
 
 The old leader's server ends itself for the switch: an API call, never a signal (a signal is the
@@ -405,11 +433,25 @@ ordinary planned stop). In order (`server.ts` `stopServer`, `final-stop.ts`):
    Held, a command over it fails at once when the link is down and is cut at the commit deadline (none starts
    after it), so no wait of the stop outlives the deadline.
 2. Its doors close and its stores close, as in a planned stop. A switch stop writes no
-   release record: the handover is the last record of this process.
+   release record: the handover is the last record of this process. At the stop's start (before its
+   first await) this server's own writers of the home that outlive an ordinary `stop()` are stopped
+   (`server.ts` `stopWritersForSwitch`): no git of this server starts under the home any more
+   (`git-children.ts`); a git child that holds no lock (the auto-commit's large-file lane, `hash-object
+   -w`) ends at once, one that may (an add, a commit, a gc) gets 30 s (a tenth of the window at most)
+   and is ended after it; the auto-commit makes no last commit (the next leader commits what is left at
+   its start); a forked history rewrite gets the same budget; the standby's periodic batches stop.
+   Right before the final batch the server waits for them; one still at it past the budget is named in
+   the refusal. Every other stop of `stopServer` leaves at most one short store write in flight (a tick
+   already past its check), which the final batch's next pass carries:
+   `tests/core/leader/switch/switch-stop-writers-ratchet.test.ts` classifies each stop of `stopServer`
+   that is not awaited and pins every git child and fork outside `git-sync.ts`, and fails on a new one.
 3. **The final batch**: standby batches of the stopped home until one finds nothing changed (a
-   batch voided by an outside writer is tried again), bounded by the commit deadline, then a
-   verify pass. A writer that lands after one batch is in the next: the mark names only a batch
-   that found nothing changed.
+   void batch is tried again after 250 ms; one the target refuses while it applies this server's last
+   periodic batch, after 1 s), bounded by the commit deadline, then a verify pass. A writer that lands
+   after one batch is in the next: the mark names only a batch that found nothing changed. Out of time,
+   its reason says which: the final batch did not finish within the window (what it had to carry was too
+   much for the link), or the home still changed at the deadline, by this server's own writer named
+   (past its budget) or else by a writer this server does not run.
 4. **The final mark** goes over the copy link into the target's `standby_dir/switch/` (the
    batch number, `stoppedAt`); the result also goes beside the old home's switch state
    (`local/leader-switch/final-stop.json`, machine data, never batched), for the source job.
