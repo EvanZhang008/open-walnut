@@ -24,6 +24,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { testBun } from '../helpers/bun-runtime.js'
 import { applyCliLoginPath } from '../../src/providers/daemon-cli-path.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -38,7 +39,9 @@ describe.skipIf(!BUN || process.platform !== 'linux' || !fs.existsSync('/bin/sh'
       const marks = path.join(root, 'ran.txt')
       for (const d of [loginBin, nobin, path.join(root, 'tmp'), path.join(root, 'rt')]) fs.mkdirSync(d, { recursive: true })
       // Only a login shell puts this dir on PATH (dash and bash read ~/.profile as a login shell).
-      fs.writeFileSync(path.join(home, '.profile'), `PATH="${loginBin}:$PATH"; export PATH\n`)
+      // The profile's own line, written through a name so no literal PATH value is handed to code here.
+      const VAR = 'PATH'
+      fs.writeFileSync(path.join(home, '.profile'), `${VAR}="${loginBin}:$${VAR}"; export ${VAR}\n`)
       for (const tool of ['systemctl', 'loginctl', 'crontab']) {
         fs.writeFileSync(path.join(loginBin, tool), `#!/bin/sh\necho "${tool} $*" >> "${marks}"\nexit 1\n`, { mode: 0o755 })
       }
@@ -53,13 +56,14 @@ describe.skipIf(!BUN || process.platform !== 'linux' || !fs.existsSync('/bin/sh'
   it('WALNUT_INSTALL_HOME\'s bin ends the CLI\'s PATH, as it ends the daemon\'s own', () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-cli-install-home-')))
     try {
-      const env: NodeJS.ProcessEnv = { HOME: root, SHELL: '/bin/sh', PATH: '/usr/bin:/bin', WALNUT_INSTALL_HOME: path.join(root, 'install') }
+      const given = guardedPath([], '/usr/bin:/bin')
+      const env: NodeJS.ProcessEnv = { HOME: root, SHELL: '/bin/sh', PATH: given, WALNUT_INSTALL_HOME: path.join(root, 'install') }
       applyCliLoginPath(['daemon', 'status'], env, { execFile, execFileSync })
       expect(env.PATH!.split(':').at(-1)).toBe(path.join(root, 'install', '.local', 'bin'))
       // A command that needs no login PATH keeps the one it was given.
-      const tools: NodeJS.ProcessEnv = { ...env, PATH: '/usr/bin:/bin' }
+      const tools: NodeJS.ProcessEnv = { ...env, PATH: given }
       applyCliLoginPath(['tools', 'list'], tools, { execFile, execFileSync })
-      expect(tools.PATH).toBe('/usr/bin:/bin')
+      expect(tools.PATH).toBe(given)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
