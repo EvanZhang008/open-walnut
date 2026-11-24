@@ -39,8 +39,10 @@ thin accent line along its top. Keys pressed faster than the caret moves stack u
 
 Completing a task from its column's header, or with mod+Shift+D, closes that column and goes on
 to the next task in the Needs you list, in the order the list had when you completed it (the
-task after it, wrapping to the top). Its column opens in the place of the one that closed, in
-the same frame, or takes the caret if it is open already. With the going-on off, or nothing
+task after it, wrapping to the top). Going on moves only the caret: to that task's column when
+it is already open, else to its row in the task list. A completion never opens a column, in the
+closed one's place or anywhere: the completed column goes and the strip is one narrower. With the
+going-on off, or nothing
 left that needs you, the caret goes to the column that takes the closed one's place.
 With no column at hand, mod+Shift+D completes the task selected in the task list. Turn the
 going-on off in Settings > Tasks ("Go to the next task after completing one").
@@ -51,8 +53,8 @@ Complete, reopen, snooze (the start date), pin, unpin, a pin's group, and delete
 toast with Undo for 5 seconds, with a bar that shows the time left. The toasts stack at the bottom
 left, over no session column. mod+Z takes back the newest one from anywhere (only its toast
 shows the key; an older one keeps its button), except in a text box with text in it, where it
-undoes your typing as usual. In an empty composer (where mod+Shift+D leaves the caret) it is the
-task undo. A change the server refuses takes its toast down at once, with the error.
+undoes your typing as usual. In an empty composer, or on a task row (where mod+Shift+D may leave the
+caret), it is the task undo. A change the server refuses takes its toast down at once, with the error.
 
 The lists sort by latest activity, and an Undo is activity too: a task you take back sits at the
 top of its section.

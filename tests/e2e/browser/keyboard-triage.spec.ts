@@ -2,7 +2,9 @@
  * Working through many sessions from the keyboard (web/src/pages/useHomeKeyboard.ts and
  * web/src/undo/): mod+1..9 and mod+shift+[ / ] move the caret between the columns, mod+i puts
  * it in the current one, holding the modifier shows each column's number, mod+shift+D
- * completes the current task and goes on to the next one that needs the person, and every
+ * completes the current task and moves the caret on to the next one that needs the person (its
+ * column when it is already on the strip, else its row in the list: a completion never opens a
+ * column, advance-after-complete.ts), and every
  * complete, snooze, pin and delete has an Undo for 5 seconds on mod+z, and on a toast when it takes
  * its task out of sight (a complete, a snooze, a delete; a pin shows where it was made, so no toast).
  *
@@ -88,6 +90,16 @@ async function caretColumn(page: Page): Promise<string | null> {
     const el = document.activeElement as HTMLElement | null
     if (!el || el.tagName !== 'TEXTAREA') return null
     return el.closest('.main-page-session-column')?.getAttribute('data-column-id') ?? null
+  })
+}
+/** The strip's column ids, left to right. */
+const stripIds = (page: Page) => homeColumns(page).evaluateAll((els) => els.map((el) => el.getAttribute('data-column-id')))
+/** The task row in the list that holds the caret (a row, not a box in a column), if any. */
+async function caretRow(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null
+    if (!el || el.closest('.main-page-session-column')) return null
+    return el.closest('[data-task-id]')?.getAttribute('data-task-id') ?? null
   })
 }
 async function openColumns(page: Page, keys: Key[], opts: { undoWindow?: 'real' } = {}) {
@@ -275,22 +287,26 @@ test('? and Cmd+/ open the shortcuts sheet; ? typed in a text box is just a char
   await composer(page, 'a').fill('')
 })
 
-test('Cmd+Shift+D completes the task, opens the next one that needs you, and Cmd+Z takes it all back', async ({ page }) => {
+test('Cmd+Shift+D completes the task and closes its column, opens no other, puts the caret on the next task\'s row, and Cmd+Z takes it back', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
-  // Queue, newest first: A, B, C (D, E stay in progress). C has no column yet.
+  // Queue, newest first: A, B, C (D, E stay in progress). C has no column.
   await setPhases(page, { c: 'NEED_ACTION', b: 'NEED_ACTION', a: 'NEED_ACTION' }, ['c', 'b', 'a'])
   await openColumns(page, ['a', 'b'])
+  await showEverything(page)
 
   await page.keyboard.press('Meta+2')
   await expect.poll(() => caretColumn(page)).toBe(SID('b'))
   await page.keyboard.press('Meta+Shift+D')
 
   await expect(col(page, 'b')).toHaveCount(0, { timeout: 15_000 })
-  await expect(col(page, 'c')).toHaveCount(1, { timeout: 15_000 })
-  await expect.poll(() => caretColumn(page), { timeout: 10_000 }).toBe(SID('c'))
-  // C opens where B was, so the eye stays put.
-  await expect.poll(() => homeColumns(page).evaluateAll((els) => els.map((el) => el.getAttribute('data-column-id')))).toEqual([SID('a'), SID('c')])
+  // B is gone and nothing takes its place (the user, 2026-11-24: "it shoud be gone rigth why
+  // another task in middel appear"): C's column does not open, the strip is one shorter.
+  await expect.poll(() => stripIds(page)).toEqual([SID('a')])
+  // The keys go on from C's row in the list, which the list selects.
+  await expect.poll(() => caretRow(page), { timeout: 10_000 }).toBe(TID('c'))
+  await expect(page.locator('.task-focused')).toContainText(TITLE('c'))
+  await expect(col(page, 'c')).toHaveCount(0)
   const done = toast(page, 'Task completed')
   await expect(done).toContainText(TITLE('b'))
   await expect(done).toContainText(`Next: ${TITLE('c')}`)
@@ -309,16 +325,16 @@ test('Cmd+Shift+D completes the task, opens the next one that needs you, and Cmd
   await page.screenshot({ path: `${SHOTS}/complete-next.png` })
   // A completed column was closed, not minimized: it never becomes a taskbar chip.
   await expect(chip(page, 'b')).toHaveCount(0)
+  expect(await stripIds(page)).toEqual([SID('a')])
 
-  // The caret sits in C's empty composer: Cmd+Z is the task undo there.
+  // The caret sits on C's row, in no text box: Cmd+Z is the task undo there.
   await page.keyboard.press('Meta+z')
   await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
-  await expect(col(page, 'c')).toHaveCount(0, { timeout: 15_000 })
   await expect(done).toHaveCount(0)
   await expect.poll(() => phase(page, 'b')).toBe('NEED_ACTION')
-  // The column is back where it was.
-  await expect.poll(() => homeColumns(page).evaluateAll((els) => els.map((el) => el.getAttribute('data-column-id')))).toEqual([SID('a'), SID('b')])
-  // The column the Undo takes back is closed too, not minimized onto a chip.
+  // The column is back where it was, and nothing else came or went with it.
+  await expect.poll(() => stripIds(page)).toEqual([SID('a'), SID('b')])
+  await expect(col(page, 'c')).toHaveCount(0)
   await expect(chip(page, 'c')).toHaveCount(0)
   await expect(chip(page, 'b')).toHaveCount(0)
 })
@@ -333,7 +349,7 @@ test('completing from the column header goes on too, and the Undo is gone after 
   await expect(col(page, 'a')).toHaveCount(0, { timeout: 15_000 })
   // B was open already: it keeps its place and takes the caret.
   await expect.poll(() => caretColumn(page), { timeout: 10_000 }).toBe(SID('b'))
-  await expect(homeColumns(page)).toHaveCount(1)
+  await expect.poll(() => stripIds(page)).toEqual([SID('b')])
   const done = toast(page, 'Task completed')
   await expect(done).toContainText(`Next: ${TITLE('b')}`)
   await expect(done.locator('.notification-toast-timer-bar')).toHaveCount(1)
@@ -348,8 +364,8 @@ test('completing from the column header goes on too, and the Undo is gone after 
 test('completing a task that was not under Needs you closes its column, and the toast Undo brings it back', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
-  // D is in progress, not under Needs you; whatever the fixture has under Needs you may open
-  // next, and the Undo takes that back too.
+  // D is in progress, not under Needs you; whatever the fixture has under Needs you is next,
+  // and none of it opens: the caret goes to its row, the strip is left empty.
   await openColumns(page, ['d'])
   await page.keyboard.press('Meta+1')
   await page.keyboard.press('Meta+Shift+D')
@@ -357,11 +373,13 @@ test('completing a task that was not under Needs you closes its column, and the 
   const done = toast(page, 'Task completed')
   await expect(done).toContainText(TITLE('d'))
   await expect.poll(() => phase(page, 'd')).toBe('COMPLETE')
+  await page.waitForTimeout(1_000)
+  await expect(homeColumns(page)).toHaveCount(0)
   await done.locator('.notification-toast-action', { hasText: 'Undo' }).click()
   await expect(col(page, 'd')).toHaveCount(1, { timeout: 15_000 })
   await expect.poll(() => phase(page, 'd')).toBe('IN_PROGRESS')
-  // Whatever the advance opened is closed again: the strip is as it was.
-  await expect(homeColumns(page)).toHaveCount(1, { timeout: 15_000 })
+  // The strip is as it was: D alone.
+  await expect.poll(() => stripIds(page)).toEqual([SID('d')])
 })
 
 test('Cmd+Shift+D in a column with no task says so and changes nothing', async ({ page }) => {
@@ -470,10 +488,11 @@ test('pin to a group takes one Undo on Cmd+Z with no toast; a snooze has its Und
   await expect.poll(async () => (await taskRow(page, 'd')).start_date ?? '').toBe('')
 })
 
-/** The task list's own row for a title (not the project group around it). */
+/** The task list's own row for a title (not the project group around it). A row under Needs
+ *  you is named with its status first ("Needs your action Mark complete ..."). */
 const taskListRow = (page: Page, title: string) =>
   // Titles here are letters, digits, spaces and dashes: safe in a pattern as they are.
-  page.getByRole('button', { name: new RegExp(`^Mark complete ${title}`) })
+  page.getByRole('button', { name: new RegExp(`^(?:Needs your action )?Mark complete ${title}`) })
 
 test('complete and delete from the task details popup each get an Undo, and the delete asks no confirm', async ({ page }) => {
   await asMacApp(page)
@@ -782,12 +801,117 @@ test('with going on off, the caret moves to the neighbour column; two Undos, the
 /** The task's row in the task list (the row is a button named for its complete control and title). */
 const listRow = (page: Page, k: Key) => taskListRow(page, TITLE(k)).first()
 const listRowTitle = (page: Page, k: Key) => listRow(page, k).getByText(TITLE(k), { exact: true })
-const stripIds = (page: Page) => homeColumns(page).evaluateAll((els) => els.map((el) => el.getAttribute('data-column-id')))
 
-test('a column still fading out when the next one swaps in is gone, not left drawn over the strip', async ({ page }) => {
+/**
+ * Record every column id the strip shows from now on, at every change of the DOM (a column that
+ * came for one frame included), so a test can tell that no column it did not have ever appeared.
+ * A new call starts a new record (one per completion).
+ */
+async function watchSeenColumns(page: Page): Promise<() => Promise<string[]>> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __seenCols?: Set<string>; __seenObs?: MutationObserver }
+    w.__seenObs?.disconnect()
+    const seen = new Set<string>()
+    const read = () => document.querySelectorAll('.main-page-sessions-area > .main-page-session-column[data-column-id]')
+      .forEach((el) => seen.add(el.getAttribute('data-column-id') ?? ''))
+    read()
+    const obs = new MutationObserver(read)
+    obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-column-id'] })
+    w.__seenCols = seen
+    w.__seenObs = obs
+  })
+  return () => page.evaluate(() => [...((window as unknown as { __seenCols?: Set<string> }).__seenCols ?? [])])
+}
+
+/** After a completion of `done`'s column: the strip settles to `before` without it, and for
+ *  3 s after no column comes that was not there before (none ever did, by watchSeenColumns). */
+async function expectStripOnlyLoses(page: Page, before: string[], done: Key, seen: () => Promise<string[]>) {
+  const left = before.filter((id) => id !== SID(done))
+  await expect.poll(() => stripIds(page), { timeout: 15_000 }).toEqual(left)
+  for (const until = Date.now() + 3_000; Date.now() < until;) {
+    expect(await stripIds(page)).toEqual(left)
+    await page.waitForTimeout(150)
+  }
+  expect((await seen()).filter((id) => !before.includes(id)), 'a column that was not on the strip appeared').toEqual([])
+}
+
+test('a completion never opens a column: header ring, kebab menu, Cmd+Shift+D in a column and on a list row', async ({ page }) => {
+  // The class of the bug (2026-11-24): every way to complete a column's task once opened the
+  // next task's session in its place. Each road in turn here, with the next task's column off
+  // the strip (E) or on it (C, D): the strip only ever loses the completed column.
   await asMacApp(page)
   await resetTasks(page)
-  // Needs you, newest first: C, B, A, E. C's next (B) is open; A's next (E) is not.
+  // Needs you, newest first: A, E, B, C, D. E's session is not on the strip.
+  await setPhases(page, { d: 'NEED_ACTION', c: 'NEED_ACTION', b: 'NEED_ACTION', e: 'NEED_ACTION', a: 'NEED_ACTION' }, ['d', 'c', 'b', 'e', 'a'])
+  await presetPanelMode(page, '4')
+  await stretchUndoWindow(page)
+  await seedColumns(page, ['a', 'b', 'c', 'd'].map((k) => SID(k as Key)))
+  await loadHome(page)
+  await expect(homeColumns(page)).toHaveCount(4, { timeout: 30_000 })
+  for (const k of ['a', 'b', 'c', 'd'] as const) await expect(col(page, k).getByText(`kbd ${k} answer 45`)).toBeVisible({ timeout: 30_000 })
+  await showEverything(page)
+
+  // 1. The header's Complete ring on A: next is E, whose column does not open; its row has the caret.
+  let before = await stripIds(page) as string[]
+  let seen = await watchSeenColumns(page)
+  await col(page, 'a').locator('.task-quick-phase-btn').click()
+  await expect.poll(() => phase(page, 'a')).toBe('COMPLETE')
+  await expectStripOnlyLoses(page, before, 'a', seen)
+  await expect(col(page, 'e')).toHaveCount(0)
+  await expect.poll(() => caretRow(page), { timeout: 10_000 }).toBe(TID('e'))
+  await expect(toast(page, 'Task completed').filter({ hasText: TITLE('a') })).toContainText(`Next: ${TITLE('e')}`)
+
+  // 2. The kebab's status menu on B: next is C, already on the strip, which takes the caret.
+  before = await stripIds(page) as string[]
+  seen = await watchSeenColumns(page)
+  await col(page, 'b').locator('.session-panel-header .task-kebab-btn').click()
+  await page.locator('[data-testid="task-status-toggle"]').click()
+  await page.locator('.task-status-pill[data-phase="COMPLETE"]').click()
+  await expect.poll(() => phase(page, 'b'), { timeout: 15_000 }).toBe('COMPLETE')
+  await expectStripOnlyLoses(page, before, 'b', seen)
+  await expect.poll(() => caretColumn(page), { timeout: 10_000 }).toBe(SID('c'))
+  await expect(col(page, 'e')).toHaveCount(0)
+
+  // 3. Cmd+Shift+D in C's column: next is D, on the strip too.
+  before = await stripIds(page) as string[]
+  seen = await watchSeenColumns(page)
+  await page.keyboard.press('Meta+1')
+  await expect.poll(() => caretColumn(page)).toBe(SID('c'))
+  // The person has seen C before completing it (the key rests until then).
+  await page.waitForTimeout(1_200)
+  await page.keyboard.press('Meta+Shift+D')
+  await expect.poll(() => phase(page, 'c')).toBe('COMPLETE')
+  await expectStripOnlyLoses(page, before, 'c', seen)
+  await expect.poll(() => caretColumn(page), { timeout: 10_000 }).toBe(SID('d'))
+  await expect(col(page, 'e')).toHaveCount(0)
+
+  // 4. Cmd+Shift+D on D's row picked in the list (its column is open): next wraps to E (or a
+  // task of the fixture's own under Needs you); no column opens for it.
+  before = await stripIds(page) as string[]
+  seen = await watchSeenColumns(page)
+  // The list already selects D (it followed the caret into D's column), and a click on a
+  // selected row's title renames it: the row is picked by its status mark instead.
+  const markD = listRow(page, 'd').getByRole('img', { name: 'Needs your action' })
+  await expect(markD).toBeVisible({ timeout: 15_000 })
+  await markD.click()
+  await expect(page.locator('.main-page-session-column.is-current')).toHaveCount(0)
+  await expect(page.locator('.todo-item-title.editing')).toHaveCount(0)
+  await page.waitForTimeout(1_200)
+  await page.keyboard.press('Meta+Shift+D')
+  await expect.poll(() => phase(page, 'd')).toBe('COMPLETE')
+  await expectStripOnlyLoses(page, before, 'd', seen)
+  expect(await stripIds(page)).toEqual([])
+  await expect(col(page, 'e')).toHaveCount(0)
+  await page.screenshot({ path: `${SHOTS}/complete-never-opens.png` })
+})
+
+test('two completions in a row leave no column drawn over the strip and open none', async ({ page }) => {
+  // Was: a column still fading out when the next one swapped in was left drawn over the strip.
+  // Nothing swaps in now; what stays to guard is two closes back to back, one whose next task's
+  // column is open (C's next, B) and one whose is not (A's next, E).
+  await asMacApp(page)
+  await resetTasks(page)
+  // Needs you, newest first: C, B, A, E.
   await setPhases(page, { e: 'NEED_ACTION', a: 'NEED_ACTION', b: 'NEED_ACTION', c: 'NEED_ACTION' }, ['e', 'a', 'b', 'c'])
   await presetPanelMode(page, '4')
   await seedColumns(page, ['a', 'b', 'c', 'd'].map((k) => SID(k as Key)))
@@ -805,16 +929,16 @@ test('a column still fading out when the next one swaps in is gone, not left dra
   await page.keyboard.press('Meta+1')
   await expect.poll(() => caretColumn(page)).toBe(SID('a'))
   await page.keyboard.press('Meta+Shift+D')
-  // E takes A's place in one frame; nothing of C or A is left drawn over the strip.
-  await expect(col(page, 'e')).toHaveCount(1, { timeout: 15_000 })
-  await expect(col(page, 'c')).toHaveCount(0, { timeout: 2_000 })
-  await expect(col(page, 'a')).toHaveCount(0)
+  // A goes too, E does not open; nothing of C or A is left drawn over the strip.
+  await expect(col(page, 'a')).toHaveCount(0, { timeout: 15_000 })
+  await expect(col(page, 'c')).toHaveCount(0)
   await page.waitForTimeout(1_500)
   expect(await ghosts()).toBe(0)
-  await expect.poll(() => stripIds(page)).toEqual([SID('e'), SID('b'), SID('d')])
+  await expect(col(page, 'e')).toHaveCount(0)
+  await expect.poll(() => stripIds(page)).toEqual([SID('b'), SID('d')])
 })
 
-test('a jump during the tick keeps the caret where the person went; the next task still opens', async ({ page }) => {
+test('a jump during the tick keeps the caret where the person went, and the next task opens nothing', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
   await setPhases(page, { d: 'NEED_ACTION', c: 'NEED_ACTION' }, ['d', 'c'])
@@ -824,17 +948,18 @@ test('a jump during the tick keeps the caret where the person went; the next tas
   await expect.poll(() => caretColumn(page)).toBe(SID('c'))
   await page.keyboard.press('Meta+Shift+D')
   await page.keyboard.press('Meta+1')
-  await expect(col(page, 'd')).toHaveCount(1, { timeout: 15_000 })
-  await expect.poll(() => stripIds(page)).toEqual([SID('a'), SID('b'), SID('d')])
-  // D opened in C's place without taking the caret: it stays in A, and so does the mark.
+  await expect(col(page, 'c')).toHaveCount(0, { timeout: 15_000 })
+  await expect.poll(() => stripIds(page)).toEqual([SID('a'), SID('b')])
+  // D (next) neither opens nor takes the caret: it stays in A, and so does the mark.
   for (let i = 0; i < 6; i++) {
     expect(await caretColumn(page)).toBe(SID('a'))
     await page.waitForTimeout(250)
   }
+  await expect(col(page, 'd')).toHaveCount(0)
   await expect(col(page, 'a')).toHaveClass(/\bis-current\b/)
 })
 
-test('Cmd+Shift+D on a task picked in the list whose column is open completes it the column way', async ({ page }) => {
+test('Cmd+Shift+D on a task picked in the list whose column is open completes it the column way, and nothing opens in its place', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
   // A is in progress (its row sits in its project's list).
@@ -848,14 +973,15 @@ test('Cmd+Shift+D on a task picked in the list whose column is open completes it
   await listRowTitle(page, 'a').click()
   await expect(page.locator('.main-page-session-column.is-current')).toHaveCount(0)
   await page.keyboard.press('Meta+Shift+D')
-  // A's own column closes and the next task that needs the person opens in its place (the
-  // first of the queue: A was not in it). Nothing else is pushed out.
+  // A's own column closes, with its Undo; the next task that needs the person (D, the newest of
+  // the queue: A was not in it) does not open in its place.
   await expect(col(page, 'a')).toHaveCount(0, { timeout: 15_000 })
-  await expect.poll(async () => {
-    const ids = await stripIds(page)
-    return ids.length === 3 && ids[0] !== SID('a') && ids[1] === SID('b') && ids[2] === SID('c')
-  }, { timeout: 15_000 }).toBe(true)
+  await expect.poll(() => stripIds(page), { timeout: 15_000 }).toEqual([SID('b'), SID('c')])
+  await expect(toast(page, 'Task completed').filter({ hasText: TITLE('a') })).toBeVisible()
   await expect.poll(() => phase(page, 'a')).toBe('COMPLETE')
+  await page.waitForTimeout(1_000)
+  await expect(col(page, 'd')).toHaveCount(0)
+  expect(await stripIds(page)).toEqual([SID('b'), SID('c')])
   expect(await phase(page, 'b')).toBe('IN_PROGRESS')
 })
 
@@ -889,7 +1015,7 @@ test('Undo of a completion puts back what the session said, not "set to need you
   await expect.poll(() => new URL(page.url()).searchParams.get('task')).toBe(TID('a'))
 })
 
-test('a refusal after the column went takes the advance back: its column goes and the caret returns', async ({ page }) => {
+test('a refusal after the column went takes the advance back: the column returns in its place, with the caret', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
   await setPhases(page, { c: 'NEED_ACTION', b: 'NEED_ACTION' }, ['c', 'b'])
@@ -906,12 +1032,13 @@ test('a refusal after the column went takes the advance back: its column goes an
     await page.keyboard.press('Meta+2')
     await expect.poll(() => caretColumn(page)).toBe(SID('b'))
     await page.keyboard.press('Meta+Shift+D')
-    await expect(col(page, 'c')).toHaveCount(1, { timeout: 15_000 })
-    await expect(col(page, 'b')).toHaveCount(0)
+    // B goes; C (next, not on the strip) does not open in its place.
+    await expect(col(page, 'b')).toHaveCount(0, { timeout: 15_000 })
+    await expect.poll(() => stripIds(page)).toEqual([SID('a')])
 
     await expect(col(page, 'b')).toHaveCount(1, { timeout: 30_000 })
-    await expect(col(page, 'c')).toHaveCount(0, { timeout: 10_000 })
     await expect.poll(() => stripIds(page)).toEqual([SID('a'), SID('b')])
+    await expect(col(page, 'c')).toHaveCount(0)
     await expect.poll(() => caretColumn(page), { timeout: 10_000 }).toBe(SID('b'))
     await expect(toast(page, 'Task completed')).toHaveCount(0)
     expect(await phase(page, 'b')).toBe('NEED_ACTION')
@@ -930,9 +1057,9 @@ test('a reload inside the window keeps the Undo: Cmd+Z after it brings the task 
   await expect.poll(() => caretColumn(page)).toBe(SID('b'))
   await page.keyboard.press('Meta+Shift+D')
   await expect(col(page, 'b')).toHaveCount(0, { timeout: 15_000 })
-  await expect(col(page, 'c')).toHaveCount(1, { timeout: 15_000 })
-  // The address already has C in B's place: the reload brings back the strip as it is now.
-  await expect.poll(() => new URL(page.url()).searchParams.get('s2')).toBe(SID('c'))
+  // Nothing took B's place, and the address says so: the reload brings back the strip as it is now.
+  await expect.poll(() => new URL(page.url()).searchParams.get('s2')).toBe(null)
+  await expect(col(page, 'c')).toHaveCount(0)
   await page.reload()
   // The Undo is back as soon as the page is, for the time it had left; the columns load after it.
   // Waiting for them first outlasted that time: at one CPU the Undo showed 1 s after the reload
@@ -1002,7 +1129,8 @@ test('a refusal that lands while the person types in the next task leaves that t
   await asMacApp(page)
   await resetTasks(page)
   await setPhases(page, { c: 'NEED_ACTION', b: 'NEED_ACTION' }, ['c', 'b'])
-  await openColumns(page, ['a', 'b'])
+  // C's column is open, so the caret goes on into its box.
+  await openColumns(page, ['a', 'b', 'c'])
   await page.route(`**/api/tasks/${TID('b')}`, async (route) => {
     if (route.request().method() === 'PATCH') {
       await new Promise((resolve) => setTimeout(resolve, 3_000))
@@ -1042,7 +1170,9 @@ test('a double click on the ring takes the completion back to Needs you, with no
   await expect(toast(page, 'Task completed')).toHaveCount(0)
 })
 
-test('a next task with no session is passed over for the one after it with a session', async ({ page }) => {
+test('a next task with no session is landed on, not passed over: its row takes the caret and the toast says it has none yet', async ({ page }) => {
+  // It used to be skipped for the next one with a session, which then opened in the closed
+  // column's place. Nothing opens now, so nothing is skipped: the next in line is the next.
   await asMacApp(page)
   await resetTasks(page)
   const title = `No session next ${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -1054,41 +1184,51 @@ test('a next task with no session is passed over for the one after it with a ses
   await setPhases(page, { b: 'NEED_ACTION' }, ['b'])
   try {
     await openColumns(page, ['a', 'b'])
+    await showEverything(page)
     await page.keyboard.press('Meta+2')
     await expect.poll(() => caretColumn(page)).toBe(SID('b'))
     await page.keyboard.press('Meta+Shift+D')
-    await expect(col(page, 'c')).toHaveCount(1, { timeout: 15_000 })
-    await expect.poll(() => caretColumn(page), { timeout: 10_000 }).toBe(SID('c'))
-    await expect(toast(page, 'Task completed')).toContainText(`Next: ${TITLE('c')}, skipped 1 with no session`)
+    await expect(col(page, 'b')).toHaveCount(0, { timeout: 15_000 })
+    await expect.poll(() => caretRow(page), { timeout: 10_000 }).toBe(id)
+    const done = toast(page, 'Task completed')
+    await expect(done).toContainText(`Next: ${title} (no session yet)`)
+    await expect(done).not.toContainText('skipped')
     // Read to its end, not cut by an ellipsis.
-    const body = toast(page, 'Task completed').locator('.notification-toast-body')
+    const body = done.locator('.notification-toast-body')
     expect(await body.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+    // C, the one after it, is not opened either.
+    await page.waitForTimeout(1_000)
+    await expect(col(page, 'c')).toHaveCount(0)
+    expect(await stripIds(page)).toEqual([SID('a')])
     expect(((await (await page.request.get(`/api/tasks/${id}`)).json()) as { task: { phase: string } }).task.phase).toBe('NEED_ACTION')
   } finally {
     await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
   }
 })
 
-test('what is typed right after Cmd+Shift+D lands in the next task box, none of it in the one that goes', async ({ page }) => {
+test('what is typed right after Cmd+Shift+D, with the next task\'s column not open, lands in no box', async ({ page }) => {
+  // The next task (C) gets its row, not a box: the keys kept during the close are dropped, none
+  // of them in the box that goes (B's, back with its Undo) or in another column's (A's).
   await asMacApp(page)
   await resetTasks(page)
   await setPhases(page, { c: 'NEED_ACTION', b: 'NEED_ACTION' }, ['c', 'b'])
   await openColumns(page, ['a', 'b'])
+  await showEverything(page)
   await page.keyboard.press('Meta+2')
   await expect.poll(() => caretColumn(page)).toBe(SID('b'))
   await page.keyboard.press('Meta+Shift+D')
   await page.waitForTimeout(150)
-  await page.keyboard.type('quick reply')
-  await expect(col(page, 'c')).toHaveCount(1, { timeout: 15_000 })
-  await expect(composer(page, 'c')).toHaveValue('quick reply', { timeout: 10_000 })
-  await expect.poll(() => caretColumn(page)).toBe(SID('c'))
-  await page.keyboard.type('!')
-  await expect(composer(page, 'c')).toHaveValue('quick reply!')
-  await composer(page, 'c').fill('')
-  // The draft of B, back with its Undo, holds none of it.
+  // No space or Enter: on the row the caret goes to, those would press it.
+  await page.keyboard.type('quickreply')
+  await expect(col(page, 'b')).toHaveCount(0, { timeout: 15_000 })
+  await expect.poll(() => caretRow(page), { timeout: 10_000 }).toBe(TID('c'))
+  await expect(col(page, 'c')).toHaveCount(0)
+  await expect(composer(page, 'a')).toHaveValue('')
+  // B's draft, back with its Undo, holds none of it.
   await page.keyboard.press('Meta+z')
   await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
   await expect(composer(page, 'b')).toHaveValue('')
+  await expect(composer(page, 'a')).toHaveValue('')
 })
 
 test('Cmd+Shift+D on a column whose task is already complete says so', async ({ page }) => {
@@ -1121,7 +1261,7 @@ test('one column is still marked as the one the keys act on', async ({ page }) =
 test('a completed column fades where it stands: its neighbours keep their width until it is gone', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
-  // Going on off: no next column swaps in where C stood, so C's own fade is what is seen.
+  // Going on off: the caret moves to no other task, so C's own fade is all that moves.
   await setPanelMode(page, '3')
   await setGoingOn(page, false)
   try {
@@ -1173,7 +1313,8 @@ test('Cmd+Shift+D pressed again while the strip moves on completes nothing the p
   await asMacApp(page)
   await resetTasks(page)
   await setPhases(page, { c: 'NEED_ACTION', b: 'NEED_ACTION' }, ['c', 'b'])
-  await openColumns(page, ['a', 'b'])
+  // C's column is open: it takes the caret, and the presses that follow land on it.
+  await openColumns(page, ['a', 'b', 'c'])
   await page.keyboard.press('Meta+2')
   await expect.poll(() => caretColumn(page)).toBe(SID('b'))
   await page.keyboard.press('Meta+Shift+D')
@@ -1181,12 +1322,13 @@ test('Cmd+Shift+D pressed again while the strip moves on completes nothing the p
   await page.keyboard.press('Meta+Shift+D')
   await page.waitForTimeout(60)
   await page.keyboard.press('Meta+Shift+D')
-  await expect(col(page, 'c')).toHaveCount(1, { timeout: 15_000 })
+  await expect(col(page, 'b')).toHaveCount(0, { timeout: 15_000 })
   await expect.poll(() => caretColumn(page), { timeout: 10_000, intervals: [50] }).toBe(SID('c'))
-  // C has only just come: a press now is still the double tap, not a look at C.
+  // The caret has only just come to C: a press now is still the double tap, not a look at C.
   await page.keyboard.press('Meta+Shift+D')
   await page.waitForTimeout(1_000)
   await expect(col(page, 'c')).toHaveCount(1)
+  expect(await stripIds(page)).toEqual([SID('a'), SID('c')])
   // The corner shows the completion and its Undo, naming where it went; no hint over it.
   const done = toast(page, 'Task completed')
   await expect(done).toBeVisible()
@@ -1274,12 +1416,13 @@ test('a completion refused at once gives what was typed after the key back to it
   }
 })
 
-test('a completion refused after its column went takes the next task back, and the typed text with it', async ({ page }) => {
+test('a completion refused after its column went takes the caret back from the next task, and the typed text with it', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
   await setPhases(page, { c: 'NEED_ACTION', b: 'NEED_ACTION' }, ['c', 'b'])
-  await openColumns(page, ['a', 'b'])
-  // The refusal comes back after the close tick: B has gone and C has opened in its place.
+  // C's column is open, so what is typed after the key goes into its box.
+  await openColumns(page, ['a', 'b', 'c'])
+  // The refusal comes back after the close tick: B has gone and C's box has the caret.
   await page.route(`**/api/tasks/${TID('b')}`, async (route) => {
     if (route.request().method() !== 'PATCH') return route.fallback()
     await new Promise((r) => setTimeout(r, 900))
@@ -1291,16 +1434,15 @@ test('a completion refused after its column went takes the next task back, and t
     await page.keyboard.press('Meta+Shift+D')
     await page.keyboard.type('still mine')
     await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
-    await expect(col(page, 'c')).toHaveCount(0, { timeout: 15_000 })
     await expect(composer(page, 'b')).toHaveValue('still mine', { timeout: 10_000 })
     await expect.poll(() => caretColumn(page)).toBe(SID('b'))
     expect(await phase(page, 'b')).toBe('NEED_ACTION')
+    // B is back in its place, C stays where it was, and C's box keeps nothing of B's text.
+    await expect.poll(() => stripIds(page)).toEqual([SID('a'), SID('b'), SID('c')])
+    await expect(composer(page, 'c')).toHaveValue('')
   } finally {
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   }
-  // C's box keeps nothing of B's text.
-  await openColumns(page, ['a', 'c'])
-  await expect(composer(page, 'c')).toHaveValue('')
 })
 
 test('with no next task and no other column, the keys work again as soon as the column goes', async ({ page }) => {

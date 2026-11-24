@@ -111,10 +111,10 @@ show inline after the open ones, other completed hits that show the query fold i
   phase back by then) the ordinary `handleCloseSession` runs, so the close is the same fade the ×
   gives (the sessions area's own removal, the neighbours take the width) and an Undo toast (the
   app's undo stack, 5s, also on mod+z: next item) says "Task completed" + the task title + Undo, then
-  the next task that needs the person opens (`advance`, MainPage; Settings > Tasks turns it off).
-  When that task's session was not open, it takes the closed column's place in the SAME render
-  with the strip's auto-animate held for that commit (`openSessionInPlaceOf`): no fade over the
-  neighbours and no second reflow. With nothing to go on to, the caret goes to the column that
+  the caret goes on to the next task that needs the person (`advance-after-complete.ts`; Settings >
+  Tasks turns it off): its column when it is already open, else its row in the list. A completion
+  NEVER opens a column, in the closed one's place or anywhere (2026-11-24, the user: "it shoud be
+  gone"; the advance's deps hold no way to open one). With nothing to go on to, the caret goes to the column that
   takes the closed one's place, never back to the row that opened it. There is deliberately NO custom close animation:
   a clip-path roll-up into the header strip shipped first (2026-10-04) and the person asked for the
   ordinary fade back. A locked column closes too (2026-10-05 user call: completing it from its own

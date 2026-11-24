@@ -1,13 +1,14 @@
 // Completing a task from its session column's header (or with mod+shift+D) closes that
 // column, the ordinary way (the sessions area's own removal fades it and the neighbours take
-// the width), and moves on to the next task that needs the person (`advance`, MainPage). A
+// the width), and the caret moves on to the next task that needs the person (`advance`,
+// advance-after-complete.ts). Nothing opens in the column's place: the column is gone. A
 // person who shut it and wanted to look again (or who clicked by mistake) has an Undo, on the
 // toast or mod+z, for the undo window (undo/undo-stack.ts): it puts the task's phase and the
-// column back where they were, and closes again the column the advance opened.
+// column back where they were.
 //
 // A person who moved on during the tick (a jump to another column, a press elsewhere) keeps
-// the caret where they went: the next task still opens, it does not take the caret. A completion
-// the server refuses after the column went takes the advance back too. The Undo outlives a
+// the caret where they went. A completion the server refuses after the column went takes the
+// caret's move back too. The Undo outlives a
 // reload inside its window (`column-done`, undo/undo-persist.ts).
 //
 // Only a completion made IN the column counts. Completing from the board, or an agent
@@ -22,6 +23,7 @@ import { needsYouQueue } from '@/components/tasks/next-needs-you';
 import { afterStrip } from './after-strip';
 import { endCarry, lastTextBox, takeBackCarried } from './useHomeKeyboard';
 import { CLOSE_TICK_MS } from './hold-strip-animation';
+import type { AdvanceInfo, AdvanceResult } from './advance-after-complete';
 import { UNDO_WINDOW_MS } from '@/undo/undo-stack';
 
 /** How long a close is still answerable by the server's refusal. A write that fails is
@@ -46,8 +48,7 @@ interface Entry {
   /** When it was completed and when its column went (performance.now()). */
   at: number;
   closedAt?: number;
-  /** Take the advance back: the column it opened goes again (one it only focused stays) and
-   *  this one comes back; `withCaret`: it takes the caret, and the list selects its task. */
+  /** Take the advance back: this column comes back; `withCaret`: it takes the caret, and the list selects its task. */
   takeBack?: (withCaret: boolean) => void;
   timer?: ReturnType<typeof setTimeout>;
 }
@@ -59,25 +60,11 @@ interface SavedColumnDone {
   before: PhaseSnapshot;
   slot: SessionSlot;
   index: number;
-  opened?: string;
 }
 
-/** What the advance did: the task it went to, and the column it opened for it (if any). */
 /** The toast's word on where the keys went on to. */
 export function nextLine(a: AdvanceResult): string {
-  const passed = a.passedOver ? `, skipped ${a.passedOver} with no session` : '';
-  return `Next: ${a.task.title}${a.noSession ? ' (no session yet)' : ''}${passed}`;
-}
-
-export interface AdvanceResult {
-  task: Task;
-  openedSessionId?: string;
-  /** It has no session: its row in the list has the caret, and nothing opened. */
-  noSession?: boolean;
-  /** Tasks with no session passed over on the way to it (the keys go on through sessions). */
-  passedOver?: number;
-  /** Stop an open that has not happened yet (an Undo pressed at once). */
-  cancel: () => void;
+  return `Next: ${a.task.title}${a.noSession ? ' (no session yet)' : ''}`;
 }
 
 interface Deps {
@@ -94,8 +81,8 @@ interface Deps {
   /** Put the caret back in a column (an Undo returns the person to where they were). */
   focusColumn?: (sessionId: string) => void;
   /** Go to the next task that needs the person; null when there is none. `quiet`: the person
-   *  moved on meanwhile, so the next task opens without taking the caret. */
-  advance?: (info: { taskId: string; sessionId: string; queueBefore: string[]; quiet?: boolean }) => AdvanceResult | null;
+   *  moved on meanwhile, so the list follows and the caret stays with them. */
+  advance?: (info: AdvanceInfo) => AdvanceResult | null;
   /** Whether the person moved the caret or pressed somewhere since `at` (performance.now()). */
   movedSince?: (at: number) => boolean;
   /** Select a task in the list (an Undo selects the task it brought back). */
@@ -158,13 +145,10 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
     void latest.current.undo?.restorePhase(taskId, before);
   }, []);
 
-  /** Close a column the advance opened (an unpinned one), then bring the completed column back
-   *  and give it the caret once the strip has rendered without both. */
-  const bringBack = useCallback((sessionId: string, slot: SessionSlot, index: number, opened: string | undefined, then?: () => void, withCaret = true) => {
-    const u = latest.current;
-    if (opened && u.sessionColumns.some((c) => c.id === opened && !c.locked)) u.closeColumn(opened, { keepFocus: true });
-    const gone = (id: string) => !latest.current.sessionColumns.some((c) => c.id === id);
-    afterStrip(() => gone(sessionId) && (!opened || gone(opened) || latest.current.sessionColumns.some((c) => c.id === opened && c.locked)), () => {
+  /** Bring the completed column back and give it the caret once the strip has rendered
+   *  without it. */
+  const bringBack = useCallback((sessionId: string, slot: SessionSlot, index: number, then?: () => void, withCaret = true) => {
+    afterStrip(() => !latest.current.sessionColumns.some((c) => c.id === sessionId), () => {
       restoreColumn({ slot, index } as Entry);
       if (withCaret) latest.current.focusColumn?.(sessionId);
       then?.();
@@ -200,11 +184,11 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
       const watch = closed.current.get(sessionId);
       if (watch?.entry === entry) { clearTimeout(watch.timer); closed.current.delete(sessionId); }
       if (!reopened(entry.taskId)) restorePhase(entry.taskId, entry.before);
-      // The column the advance opened goes again, then the completed one comes back and takes
-      // the caret (an Undo pressed at once can come before the close itself has rendered).
+      // The completed column comes back and takes the caret (an Undo pressed at once can come
+      // before the close itself has rendered).
       advanced?.cancel();
       const went = !!advanced;
-      bringBack(sessionId, entry.slot, entry.index, advanced?.openedSessionId, () => {
+      bringBack(sessionId, entry.slot, entry.index, () => {
         // The advance selected the next task: the list follows the task that came back.
         if (went) latest.current.locateTask?.(entry.taskId);
       });
@@ -256,20 +240,19 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
         if (document.activeElement !== typing) typing!.focus({ preventScroll: true });
       } else if (!advanced && neighbour && !quiet && !(caretCol && caretCol !== sessionId)) {
         afterStrip(() => !latest.current.sessionColumns.some((c) => c.id === sessionId), () => latest.current.focusColumn?.(neighbour));
-      } else if (!advanced || advanced.noSession) {
+      } else if (!advanced || !advanced.inColumn) {
         // No box takes the caret next: the keys are the person's again at once.
         endCarry(false);
       }
-      const opened = advanced?.openedSessionId;
       entry.takeBack = (withCaret) => {
         advanced?.cancel();
-        bringBack(sessionId, entry.slot, entry.index, opened, () => {
+        bringBack(sessionId, entry.slot, entry.index, () => {
           if (withCaret && advanced) latest.current.locateTask?.(entry.taskId);
         }, withCaret);
       };
       const next = advanced ? nextLine(advanced) : '';
       const body = [title, next].filter(Boolean).join('  \u00b7  ');
-      const saved: SavedColumnDone = { taskId: entry.taskId, from: entry.from, before: entry.before, slot: entry.slot, index: entry.index, ...(opened ? { opened } : {}) };
+      const saved: SavedColumnDone = { taskId: entry.taskId, from: entry.from, before: entry.before, slot: entry.slot, index: entry.index };
       latest.current.undo?.push({
         key: entry.undoKey,
         result: 'hidden',
@@ -344,7 +327,7 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
             latest.current.locateTask?.(saved.taskId);
             return;
           }
-          bringBack(sessionId, saved.slot, saved.index, saved.opened, () => latest.current.locateTask?.(saved.taskId));
+          bringBack(sessionId, saved.slot, saved.index, () => latest.current.locateTask?.(saved.taskId));
         },
       };
     });

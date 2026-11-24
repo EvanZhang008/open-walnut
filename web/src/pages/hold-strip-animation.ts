@@ -1,6 +1,6 @@
 /**
- * Hold the session strip's auto-animate for two frames (a column swapped in place of one that
- * closes, MainPage `openSessionInPlaceOf`), then turn it back on.
+ * Hold the session strip's auto-animate for two frames (a completed column closing after its
+ * fade, MainPage `handleCloseSession`), then turn it back on.
  *
  * auto-animate's disable() cancels every animation in flight, and an element it is fading out
  * leaves the document only when that fade finishes: a cancelled fade never does. A column still
