@@ -73,7 +73,9 @@ export function choiceLabels(raw: unknown): string[] {
 export interface ChoiceShape { label: string; detail?: string; recommended?: boolean }
 
 /** The choices a caller passed, whatever their shape: strings, {label, detail | description, recommended}. */
-export function choiceShapes(raw: unknown): ChoiceShape[] {
+export function choiceShapes(raw: unknown, kind?: unknown): ChoiceShape[] {
+  // A yes/no ask's card shows these two keys (user-status.ts askAnswerText, org-ask-form.ts formOptions).
+  if (kind === 'yes_no') return [{ label: 'Yes' }, { label: 'No' }];
   if (!Array.isArray(raw)) return [];
   const out: ChoiceShape[] = [];
   for (const o of raw.slice(0, 12)) {
@@ -88,7 +90,19 @@ export function choiceShapes(raw: unknown): ChoiceShape[] {
 }
 
 /** A label that names its pick in its words ("Delete them (recommended)"), for a door with no flag. */
-const RECOMMENDED_WORD = /\((?:recommended|\u63a8\u8350)\)|\u3010\u63a8\u8350\u3011/i;
+const RECOMMENDED_WORD = /[(\uff08](?:recommended|\u63a8\u8350)[)\uff09]|\u3010\u63a8\u8350\u3011/i;
+
+/** A yes-or-no answer word: "Yes", "No", "Confirm", "Cancel", and the same in Chinese (\u662f, \u5426,
+ *  \u4e0d\u8981, \u786e\u5b9a, \u53d6\u6d88, \u540c\u610f, ...). With VAGUE_LABEL ("OK", "Go") it makes a bare key. */
+const YES_NO_WORD = /^(?:yes|no|y|n|yep|yeah|nope|confirm|cancel|\u662f|\u662f\u7684|\u5426|\u4e0d|\u4e0d\u8981|\u4e0d\u7528|\u8981|\u5bf9|\u786e\u5b9a|\u786e\u8ba4|\u53d6\u6d88|\u540c\u610f|\u4e0d\u540c\u610f|\u597d\u5427|\u6ca1\u95ee\u9898)$/i;
+
+/** A key that says nothing of what a click does: its label is a yes-or-no or vague word once its
+ *  pick mark, emoji and punctuation are off, and no line of its own says what it does. */
+function bareKey(c: ChoiceShape): boolean {
+  if (c.detail?.trim()) return false;
+  const w = clean(c.label.replace(RECOMMENDED_WORD, ' '));
+  return YES_NO_WORD.test(w) || VAGUE_LABEL.test(w);
+}
 
 /** A count of things a decision is about ("about 7 clusters", "\u7ea6 7 \u4e2a\u96c6\u7fa4"), which then needs their names. */
 const COUNTED = /(?<![\p{L}\p{N}])(?:(?:about|around|roughly|nearly|over|some|~) ?)?(?:\d{1,3}\+?|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|several) (?:[\p{L}\p{N}-]{1,30} ){0,3}(?:clusters?|tickets?|CRs?|PRs?|pull requests?|accounts?|instances?|resources?|buckets?|hosts?|machines?|repos?|repositories|branches|stacks?|nodes|servers?|databases?|volumes?|keys?|secrets?|domains?|alarms?|pipelines?|deployments?)(?![\p{L}\p{N}])|(?:\u7ea6|\u5927\u7ea6|\u5927\u6982|\u8fd1|\u5171)?\s?\d{1,3}\s?(?:\u4e2a|\u6761|\u53f0|\u4efd|\u5957)\s?[\p{L}\p{N}-]{0,12}\s?(?:\u96c6\u7fa4|\u5de5\u5355|\u8d26\u53f7|\u5b9e\u4f8b|\u8d44\u6e90|\u673a\u5668|\u8282\u70b9|\u4ed3\u5e93|\u5206\u652f|\u6570\u636e\u5e93|\u5bc6\u94a5|\u57df\u540d|\u544a\u8b66|\u6d41\u6c34\u7ebf)/iu;
@@ -113,10 +127,10 @@ function weight(text: string): number {
  * "about 7 clusters" with no names or links, an approval with no body):
  *   - the asker's pick is not the first choice;
  *   - (a card he reads on its own: `standalone`) too little text to say what it is and why it is his;
- *   - (`standalone`) it counts the things it is about ("7 clusters") without naming or linking them.
- * Yes and No as the only choices are not refused by themselves: a yes or no question is the ask kind the
- * workers are told to prefer (FOR_USER_ASK_KIND), and its card shows the same two keys; what made the
- * reported cards bare was the missing background, the pick second, the unnamed things.
+ *   - (`standalone`) it counts the things it is about ("7 clusters") without naming or linking them;
+ *   - (`standalone`) its pick, or every key, says nothing of what a click does ([Yes] [No], [OK]) and has
+ *     no line of its own that does (2026-11-24, the CEO's reflection on 11-23: "its buttons are only [Yes]
+ *     [No] and do not say what a click does", a sign-in card; a yes/no ask counts as those two keys, `choiceShapes(raw, 'yes_no')`).
  * `text`: everything the user reads on the card. Pure.
  */
 export function bareCardRefusal(text: string, choices: readonly ChoiceShape[], opts: { standalone?: boolean } = {}): string | null {
@@ -140,6 +154,12 @@ export function bareCardRefusal(text: string, choices: readonly ChoiceShape[], o
   if (counted && !toMake && !NAMED.test(t) && names.length < 2) {
     return `Not sent to the user: it counts "${counted[0].trim()}" without naming them. Name each one (or link the list) so the `
       + 'user can see what they are deciding about.';
+  }
+  // The pick a bare key, or every key bare: a "Cancel" beside "Push revision 2 now" reads fine.
+  const bare = pick === 0 && bareKey(choices[0]!) ? choices[0] : choices.length && choices.every(bareKey) ? choices[0] : undefined;
+  if (bare) {
+    return `Not sent to the user: its button "${bare.label}" does not say what happens on a click. Make each choice name its `
+      + 'result ("Push revision 2 now", "Keep it unpushed"; a single-choice ask, never yes-no), your pick first and marked recommended.';
   }
   return null;
 }
@@ -268,9 +288,9 @@ export function longTextHint(text: string | undefined): string | null {
  *   - a new Board choice (refused 409, its title and option labels: the page around it is its picture).
  * A review of a picture is named in the text itself ("Reviewed: sol, function 8/10, ...").
  */
-export function turnEndAskRefusal(r: { state?: string; ask?: string; ask_more?: string; ask_options?: ReadonlyArray<{ label: string; detail?: string; recommended?: boolean }> }): string | null {
+export function turnEndAskRefusal(r: { state?: string; ask?: string; ask_more?: string; ask_kind?: string; ask_options?: ReadonlyArray<{ label: string; detail?: string; recommended?: boolean }> }): string | null {
   if (r.state !== 'needs' || !r.ask?.trim()) return null;
-  return askClarityRefusal(r.ask, r.ask_more ?? '', (r.ask_options ?? []).map((o) => o.label), '', { reviewInText: true, choices: choiceShapes(r.ask_options), standalone: true });
+  return askClarityRefusal(r.ask, r.ask_more ?? '', (r.ask_options ?? []).map((o) => o.label), '', { reviewInText: true, choices: choiceShapes(r.ask_options, r.ask_kind), standalone: true });
 }
 
 /** One AskUserQuestion question as the tool takes it. */

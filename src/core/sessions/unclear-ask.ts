@@ -92,7 +92,7 @@ export async function turnEndAskProblem(report: StatusReport, prevAsk?: string |
 /** The status question asked again after an ask the user could not read on its own. */
 export function unclearAskRetry(prompt: string, reason: string, firstLines = ''): string {
   const lines = firstLines.split('\n').filter((l) => /^\s*FOR_USER_[A-Z_]+:/.test(l)).join('\n').slice(0, 4_000);
-  return `${prompt}\n\nYour FOR_USER_ASK was not shown to the user. ${reason} Answer every line again, the same as before except the ask rewritten (FOR_USER_ASK, FOR_USER_ASK_MORE, FOR_USER_ASK_OPTIONS).${lines ? `\nYour answer was:\n${lines}` : ''}`;
+  return `${prompt}\n\nYour FOR_USER_ASK was not shown to the user. ${reason} Answer every line again, the same as before except the ask rewritten (FOR_USER_ASK, FOR_USER_ASK_KIND, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE).${lines ? `\nYour answer was:\n${lines}` : ''}`;
 }
 
 /**

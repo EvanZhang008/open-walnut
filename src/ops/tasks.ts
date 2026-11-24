@@ -851,8 +851,8 @@ const REPORT_CHANGE = z.object({
   waiting_kind: z.enum(['task', 'time', 'machine', 'outside', 'own', 'you', 'lead', 'other']).optional().describe('With waiting: what kind of thing it waits on (own: its own build, test run or deploy, which reads Working)'),
   next: z.string().max(300).optional().describe('Who does what next, one sentence'),
   ask_kind: z.enum(['yes_no', 'single', 'multi', 'text']).optional()
-    .describe('With needs: how the user answers. Prefer yes_no, then single (pick one) or multi (pick several), over text'),
-  ask_options: z.array(z.union([z.string().max(80), z.object({ id: z.string().max(40).optional(), label: z.string().max(80), recommended: z.boolean().optional() })]))
+    .describe('With needs: how the user answers: single (pick one) or multi (pick several) over text; never yes_no, whose [Yes] [No] keys say nothing of what a click does (refused)'),
+  ask_options: z.array(z.union([z.string().max(80), z.object({ id: z.string().max(40).optional(), label: z.string().max(80), detail: z.string().max(200).optional(), recommended: z.boolean().optional() })]))
     .max(5).optional().describe('With single or multi: 2 to 5 options worth choosing, a few words each; mark the one you recommend. No filler such as "Other"'),
   ask_more: z.string().max(2000).optional().describe('With needs: the detail behind the ask, shown under More'),
   ask_id: z.string().max(40).optional()

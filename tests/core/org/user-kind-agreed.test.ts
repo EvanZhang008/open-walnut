@@ -130,9 +130,9 @@ describe('a question reads on its own (2026-11-21: "what is here?")', () => {
     // A clear yes or no question keeps Yes and No, each with a line saying what it does.
     const yesNo = [{ label: 'Yes', detail: 'Buy the $96 yearly plan today', recommended: true }, { label: 'No', detail: 'Stay on the free tier' }]
     expect(userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', detail: 'The free tier stops syncing past two devices; the yearly plan covers five.', labels: ['Yes', 'No'], choices: yesNo }).ok).toBe(true)
-    // Yes and No with the background are a yes or no question (the ask kind workers prefer); its pick
-    // second, or no background at all, is refused (ask-clarity.ts bareCardRefusal).
-    expect(userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', detail: 'The free tier stops syncing past two devices; the yearly plan covers five.', labels: ['Yes', 'No'] }).ok).toBe(true)
+    // Bare Yes and No say nothing of what a click does, background or not (2026-11-24); its pick
+    // second, or no background at all, is refused too (ask-clarity.ts bareCardRefusal).
+    expect(userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', detail: 'The free tier stops syncing past two devices; the yearly plan covers five.', labels: ['Yes', 'No'] }).ok).toBe(false)
     const second = userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', detail: 'The free tier stops syncing past two devices; the yearly plan covers five.', choices: [{ label: 'No' }, { label: 'Yes', recommended: true }] })
     expect(second.ok).toBe(false)
     if (!second.ok) expect(second.message).toMatch(/not the first choice/)

@@ -20,8 +20,9 @@ describe('the cards as they were', () => {
     const v = userKindVerdict({ ...KIND, subject: 'Delete the idle test clusters?', detail: WHY, choices: [{ label: 'No' }, { label: 'Yes', recommended: true }] })
     expect(v.ok).toBe(false)
     expect(!v.ok && v.message).toMatch(/your pick "Yes" is not the first choice/)
-    // Its pick first and its background given, Yes and No are a plain yes or no question.
-    expect(userKindVerdict({ ...KIND, subject: 'Delete the idle test clusters?', detail: WHY, choices: [{ label: 'Yes', recommended: true }, { label: 'No' }] }).ok).toBe(true)
+    // Its pick first and its background given, bare [Yes] [No] still say nothing of what a click does.
+    const keys = userKindVerdict({ ...KIND, subject: 'Delete the idle test clusters?', detail: WHY, choices: [{ label: 'Yes', recommended: true }, { label: 'No' }] })
+    expect(!keys.ok && keys.message).toMatch(/its button "Yes" does not say what happens on a click/)
     // With no background it is refused, Yes and No or not.
     const bare = userKindVerdict({ ...KIND, subject: 'Delete them?', choices: [{ label: 'Yes', recommended: true }, { label: 'No' }] })
     expect(!bare.ok && bare.message).toMatch(/says too little/)
@@ -30,6 +31,25 @@ describe('the cards as they were', () => {
   it('an ops review that counts clusters without naming them', () => {
     const v = userKindVerdict({ ...KIND, subject: 'Run the ops review on about 7 edge clusters this week?', detail: 'The review needs a colleague to approve each change.', choices: [{ label: 'Run the review this week', recommended: true }, { label: 'Wait for next week' }] })
     expect(!v.ok && v.message).toMatch(/counts "about 7 edge clusters" without naming them/)
+  })
+
+  it('a sign-in card with only [Yes] [No] (11-23), as a yes/no ask or as its keys, in either language', () => {
+    const ask = 'Please sign in again on the dev box to renew its certificate, or the change that lets the AI approve read-only requests cannot be pushed.'
+    const signIn = { ...KIND, user_kind: 'user_own', subject: ask }
+    expect(userKindVerdict({ ...signIn, choices: [{ label: 'Yes' }, { label: 'No' }] }).ok).toBe(false)
+    expect(turnEndAskRefusal({ state: 'needs', ask, ask_kind: 'yes_no' })).toMatch(/does not say what happens on a click/)
+    // "OK" and "Cancel" (in Chinese) too, marked recommended or not.
+    expect(bareCardRefusal(ask, [{ label: '\u786e\u5b9a (recommended)' }, { label: '\u53d6\u6d88' }], { standalone: true })).toMatch(/does not say what happens/)
+    // Keys that name their result pass; a bare key with its own line of what it does passes too.
+    expect(turnEndAskRefusal({ state: 'needs', ask, ask_kind: 'single', ask_options: [{ label: 'I signed in again, push it now', recommended: true }, { label: 'Not today' }] })).toBeNull()
+    expect(bareCardRefusal(ask, [{ label: 'Yes', detail: 'I push the change right after', recommended: true }, { label: 'No', detail: 'It waits until Monday' }], { standalone: true })).toBeNull()
+    // A bare key beside a pick that names its result reads fine; a bare pick does not, whatever its marks.
+    expect(bareCardRefusal(ask, [{ label: 'Push revision 2 now', recommended: true }, { label: 'Cancel' }], { standalone: true })).toBeNull()
+    expect(bareCardRefusal(ask, [{ label: 'Yes, push it', recommended: true }, { label: 'No' }], { standalone: true })).toBeNull()
+    expect(bareCardRefusal(ask, [{ label: '\u662f\uff08\u63a8\u8350\uff09' }, { label: 'Keep it unpushed' }], { standalone: true })).toMatch(/does not say what happens/)
+    expect(bareCardRefusal(ask, [{ label: '\u2705 Yes' }, { label: '\u274c No' }], { standalone: true })).toMatch(/does not say what happens/)
+    // In the chat, beside the work, a short yes or no stays fine.
+    expect(bareCardRefusal(ask, [{ label: 'Yes' }, { label: 'No' }])).toBeNull()
   })
 
   it('a card with no body', () => {
@@ -123,6 +143,12 @@ describe('class guard: a door that hands the user a decision passes its choices'
     const found = calls('userKindVerdict').filter((c) => /\bsubject\b/.test(c.call.split(');')[0]!))
     expect(found.length).toBeGreaterThanOrEqual(3)
     for (const c of found) expect(c.call.split(');')[0], c.file).toMatch(/choices:/)
+  })
+
+  it('every door that reads an ask\'s options passes its kind, so a yes/no ask is judged by its two keys', () => {
+    const found = calls('choiceShapes').filter((c) => /ask_options/.test(c.call.split(')')[0]!))
+    expect(found.length).toBeGreaterThanOrEqual(2)
+    for (const c of found) expect(c.call.split(')')[0], c.file).toMatch(/ask_options,\s*[\w.]*ask_kind/)
   })
 
   it('every askClarityRefusal call outside its own file passes choices', () => {

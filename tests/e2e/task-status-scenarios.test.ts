@@ -433,7 +433,7 @@ describe('every surface shows the same state after every step', () => {
     await expectEverywhere(worker.id, lead.id, 'needs', 'its own one-click ask')
     const { tasks: phoneRows } = await v1<{ tasks: { id: string; user_status?: { askForm?: unknown } }[] }>('/tasks')
     expect(phoneRows.find((r) => r.id === worker.id)?.user_status?.askForm).toEqual(form)
-    // Its lead rewrites it as a yes / no; a bad shape is refused and changes nothing.
+    // Its lead rewrites it; a bad shape is refused and changes nothing.
     const put = (body: unknown) => fetch(`http://localhost:${port}/api/v1/tasks/${worker.id}/report`, {
       method: 'PUT', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': leadSid }, body: JSON.stringify(body),
     })
@@ -443,10 +443,15 @@ describe('every surface shows the same state after every step', () => {
     // A Needs you its lead puts on the user names which of their kinds it is, or changes nothing.
     expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'yes_no' })).status).toBe(409)
     expect((await stored())?.askForm).toEqual(form)
-    expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'yes_no', ask_more: 'The sync bug loses edits; the fix passed its tests on the staging server.', user_kind: 'outward', user_kind_why: 'It deploys a fix to the live server' })).status).toBe(200)
-    expect(await stored()).toMatchObject({ askForm: { summary: 'Ship the sync fix today?', kind: 'yes_no' }, line: { by: `task:${lead.id}` } })
+    const why = { ask_more: 'The sync bug loses edits; the fix passed its tests on the staging server.', user_kind: 'outward', user_kind_why: 'It deploys a fix to the live server' }
+    // Bare [Yes] [No] keys say nothing of what a click does: refused, nothing changed (ask-clarity.ts bareCardRefusal).
+    expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'yes_no', ...why })).status).toBe(409)
+    expect((await stored())?.askForm).toEqual(form)
+    expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'single', ask_options: ['Ship the sync fix today', 'Wait until tomorrow'], ...why })).status).toBe(200)
+    expect(await stored()).toMatchObject({ askForm: { summary: 'Ship the sync fix today?', kind: 'single' }, line: { by: `task:${lead.id}` } })
     // The answer goes in as one message and its turn runs; the next report has no ask.
-    expect(askAnswerText((await stored())!.askForm!, { picked: ['yes'] })).toBe('Answer to "Ship the sync fix today?": Yes')
+    const shipped = (await stored())!.askForm!
+    expect(askAnswerText(shipped, { picked: [shipped.options![0]!.id] })).toBe('Answer to "Ship the sync fix today?": Ship the sync fix today')
     await turnStarts(worker, sid, 'web')
     await turnEnds(worker, sid, { state: 'working', next: 'Deploy the sync fix' })
     expect((await stored())?.askForm).toBeUndefined()

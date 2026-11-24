@@ -84,12 +84,14 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
   if (c.state === 'needs' && (!ask || ask.length < 3)) throw new ReportChangeError('report.state needs takes the concrete ask: what the user must decide or do');
   if (c.state === 'waiting' && !waitingOn) throw new ReportChangeError('report.state waiting takes waiting_on: on whom or what it waits');
   const shape = c.state === 'needs' ? askShapeOf(c) : {};
+  // The options as checked (ask-options.ts), the card's keys: one reader of them.
+  const shown: Pick<StatusReport, 'ask_kind' | 'ask_options'> = shape;
   // A Needs you a task or lead puts on the user names which of their kinds it is, as a letter does
   // (org/user-kind.ts); a person's own line is never asked. The task's own turn-end report is judged
   // in readStatusReport (an ask with no kind reads as a report to its lead).
   let own: { kind: string; why: string } | undefined;
   if (c.state === 'needs' && by !== 'human') {
-    const verdict = userKindVerdict({ ...c, subject: ask, detail: typeof c.ask_more === 'string' ? c.ask_more : '', labels: choiceLabels(c.ask_options), choices: choiceShapes(c.ask_options) });
+    const verdict = userKindVerdict({ ...c, subject: ask, detail: typeof c.ask_more === 'string' ? c.ask_more : '', labels: choiceLabels(shown.ask_options), choices: choiceShapes(shown.ask_options, shown.ask_kind) });
     if (!verdict.ok) throw new ReportChangeError(verdict.message.replace(/^Not sent to the user:/, 'Not put on the user:'), 'user_kind', 409);
     own = { kind: verdict.kind, why: verdict.why };
   }

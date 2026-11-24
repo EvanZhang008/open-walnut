@@ -112,6 +112,9 @@ describe('the self-report lines', () => {
       .toEqual({ state: 'needs', ask: 'Approve?', ask_own: { kind: 'user_own', why: 'it is their own matter' }, ask_kind: 'yes_no', at: new Date(NOW).toISOString() })
     expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Approve?\nFOR_USER_ASK_OWN: user_own: it is their own matter', new Date(NOW)))
       .toEqual({ state: 'needs', ask: 'Approve?', ask_own: { kind: 'user_own', why: 'it is their own matter' }, at: new Date(NOW).toISOString() })
+    // A yes-no ask rewritten with options that name their result (asked again after bare [Yes] [No]) is a single choice.
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Push revision 2?\nFOR_USER_ASK_OWN: user_own: it is their own matter\nFOR_USER_ASK_KIND: yes-no\nFOR_USER_ASK_OPTIONS: Push it now (recommended) | Keep it unpushed', new Date(NOW)))
+      .toMatchObject({ ask_kind: 'single', ask_options: [{ id: 'o1', label: 'Push it now', recommended: true }, { id: 'o2', label: 'Keep it unpushed' }] })
   })
 
   it('the ask lines are kept only for needs-you, and FOR_USER_ASK does not swallow them', () => {
@@ -123,7 +126,9 @@ describe('the self-report lines', () => {
 
   it('the prompt asks for a one-click answer over text, a few options, no filler, a summary and More', () => {
     expect(FOR_USER_PROMPT).toContain('FOR_USER_ASK_KIND: needs-you only')
-    expect(FOR_USER_PROMPT).toMatch(/Prefer yes-no, then a choice/)
+    expect(FOR_USER_PROMPT).toMatch(/Prefer a choice/)
+    // Bare [Yes] [No] keys are refused at the card (ask-clarity.ts bareCardRefusal): the prompt never steers to them.
+    expect(FOR_USER_PROMPT).toMatch(/Never yes-no/)
     expect(FOR_USER_PROMPT).toMatch(/2 to 5 options/)
     expect(FOR_USER_PROMPT).toMatch(/No filler options/)
     expect(FOR_USER_PROMPT).toContain('FOR_USER_ASK_MORE')
