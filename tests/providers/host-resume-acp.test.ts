@@ -37,6 +37,9 @@ import { getSessionByClaudeId, updateSessionRecord } from '../../src/core/sessio
 import { enqueueMessage, getQueue } from '../../src/core/session-message-queue.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 
+/** The hand waits on the work before it (the folder made ready on its host first: session-folder-prep.ts), longer under load. */
+const HAND = { timeout: 5_000 }
+
 const RUNTIME = 'acp-0011223344556677'
 
 describe('the at-rest decision of an ACP session', () => {
@@ -154,7 +157,7 @@ describe('a send to a legacy ACP session at rest', () => {
     const h = await acpAtRest()
     const { sent } = fakeSide()
     kick()
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     expect(sent[0].body).toMatchObject({ resumeSessionId: SID, resumeRow: { claudeSessionId: SID, host: 'devbox', judge: 'host', engine: 'codex', acpRuntimeId: RUNTIME } })
     expect(sent[0].body.queued).toEqual([{ id: 'qm-acp-1', message: 'hello codex', sentBy: 'person' }])
     expect(probe.acpCalls).toContain(RUNTIME)
@@ -171,7 +174,7 @@ describe('a send to a legacy ACP session at rest', () => {
     const h = await acpAtRest({ object })
     const { sent } = fakeSide()
     kick()
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     await vi.waitFor(() => expect(acpMap(h).size).toBe(0))
     expect(object.detach).toHaveBeenCalled()
   })
@@ -235,7 +238,7 @@ describe('a send to a legacy ACP session at rest', () => {
     const { sent } = fakeSide()
     kick()
     kick()
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     await settle(300)
     expect(sent.filter((s) => s.op === 'start')).toHaveLength(1)
     expect(acpMap(h).size).toBe(0)
@@ -317,7 +320,7 @@ describe('a processNext and a send asking at once', () => {
     const { sent } = fakeSide()
     kick()
     void (h.internals.processNext(SID) as Promise<void>).catch(() => {})
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     await settle(300)
     expect(sent.filter((s) => s.op === 'start')).toHaveLength(1)
     expect(object.send).not.toHaveBeenCalled()
@@ -330,7 +333,7 @@ describe('a processNext and a send asking at once', () => {
     const { sent } = fakeSide({ refuse: true })
     kick()
     void (h.internals.processNext(SID) as Promise<void>).catch(() => {})
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     await settle(400)
     expect(sent.filter((s) => s.op === 'start')).toHaveLength(1)
   })

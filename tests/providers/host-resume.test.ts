@@ -42,6 +42,9 @@ import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '
 import { enqueueMessage, getQueue } from '../../src/core/session-message-queue.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 
+/** The hand waits on the work before it (the folder made ready on its host first: session-folder-prep.ts), longer under load. */
+const HAND = { timeout: 5_000 }
+
 describe('the at-rest decision', () => {
   const rest: RestFacts = {
     row: { host: 'devbox' }, hostResumes: true, sdk: false, wrapperLive: false, turnInFlight: false,
@@ -137,7 +140,7 @@ describe('a send to a legacy session at rest on a host that judges', () => {
     const h = await legacyAtRest()
     const { sent } = fakeSide()
     kick()
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     const body = sent[0].body
     expect(body).toMatchObject({ resumeSessionId: SID, message: '', resumeRow: { claudeSessionId: SID, host: 'devbox', judge: 'host' } })
     expect(body.queued).toEqual([{ id: 'qm-rest-1', message: 'hello again', sentBy: 'person' }])
@@ -147,8 +150,9 @@ describe('a send to a legacy session at rest on a host that judges', () => {
     await settle(50)
     expect(h.resumes).toEqual([])
     expect(h.writes).toEqual([])
-    // The runner's dead object of it is gone: its lookups answer the host's proxy.
-    expect(found(h)).toBe(0)
+    // The runner's dead object of it is gone: its lookups answer the host's proxy. Waited on: the
+    // hand-over drops it right after the lines leave this queue, and a loaded run can be read between.
+    await vi.waitFor(() => expect(found(h)).toBe(0))
     // Host-judged now: the next send is a plain send to the host.
     await enqueueMessage(SID, 'and more', { id: 'qm-rest-2', sentBy: 'person' })
     bus.emit(EventNames.SESSION_SEND, { sessionId: SID, message: 'and more' }, ['*'], { source: 'ui' })
@@ -183,7 +187,7 @@ describe('a send to a legacy session at rest on a host that judges', () => {
     const h = await legacyAtRest()
     const { sent } = fakeSide({ lost: true, sendAnswer: { ok: false, error: 'not_own_session' } })
     kick()
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     await vi.waitFor(async () => expect((await getQueue(SID)).map((m) => `${m.id}:${m.status}`)).toEqual(['qm-rest-1:pending']))
     expect(judgingHostOf(SID)).toBe('devbox')
     await settle(40)
@@ -199,7 +203,7 @@ describe('a send to a legacy session at rest on a host that judges', () => {
     const h = await legacyAtRest()
     const { sent } = fakeSide({ lost: true })
     kick()
-    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1))
+    await vi.waitFor(() => expect(sent.filter((s) => s.op === 'start')).toHaveLength(1), HAND)
     await settle(20)
     noteHostStartBorn(SID)
     await vi.waitFor(() => expect(sent.filter((s) => s.op === 'send')).toHaveLength(1))
