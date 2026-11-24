@@ -30,11 +30,18 @@
  * disowns it), and in any case after HAND_MS. A resume (host-resume.ts) hands its session the same
  * way, through the same hand-over: the leader's row is the host's from then on (handSeedToHost),
  * and the hand covers the host's row should the leader's be gone meanwhile.
+ *
+ * A host is a machine, not one of its names: one machine can be in the config under several host
+ * keys (an ssh row and the row it joined the host network as, reaching one daemon). A hand written
+ * under one of them is that machine's, whichever of its names the channel that brings the session
+ * comes in under (revoked-hosts.ts sameMachine, the one notion of "one machine" the ban uses too).
+ * A genuinely different machine is still another host.
  */
 import crypto from 'node:crypto'
 import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { getDb, sessionJudgeInStore, transactionWhenFree } from '../session-db.js'
 import { prepared } from '../../lib/sqlite-prepared.js'
+import { sameMachine } from './revoked-hosts.js'
 
 /** How long a hand stands with no born row (a start in flight, one whose answer a restart lost). */
 export const HAND_MS = 24 * 60 * 60_000
@@ -47,8 +54,20 @@ function handOf(handle: DatabaseType, sid: string, now: number): HandRow | undef
   return prepared(handle, `SELECT ${COLS} FROM session_host_hands WHERE sid = ? AND until > ? ORDER BY at LIMIT 1`).get(sid, now) as HandRow | undefined
 }
 
+/** Is a hand or row written under host key `owner` this host's (`hostId`, any name of its machine)? */
+export function hostOwns(owner: string | null | undefined, hostId: string): boolean {
+  return !!owner && sameMachine(owner, hostId)
+}
+
 function openHand(handle: DatabaseType, hostId: string, id: string, now: number): HandRow | undefined {
-  return prepared(handle, `SELECT ${COLS} FROM session_host_hands WHERE id = ? AND host_id = ? AND sid IS NULL AND until > ?`).get(id, hostId, now) as HandRow | undefined
+  const h = prepared(handle, `SELECT ${COLS} FROM session_host_hands WHERE id = ? AND sid IS NULL AND until > ?`).get(id, now) as HandRow | undefined
+  return h && hostOwns(h.host_id, hostId) ? h : undefined
+}
+
+/** The hands naming `sid` that are `hostId`'s machine's, oldest first. */
+function handsOfFor(handle: DatabaseType, hostId: string, sid: string, now: number): HandRow[] {
+  return (prepared(handle, `SELECT ${COLS} FROM session_host_hands WHERE sid = ? AND until > ? ORDER BY at`).all(sid, now) as HandRow[])
+    .filter((h) => hostOwns(h.host_id, hostId))
 }
 
 function dropById(handle: DatabaseType, id: string): void {
@@ -102,7 +121,7 @@ export type HandRefusal = 'other' | 'none' | 'task'
 export function handForNewSession(handle: DatabaseType, hostId: string, sid: string, o: { echo?: string; taskId?: string } = {}, now = Date.now()): { hand: string } | { refused: HandRefusal } {
   const h = handOf(handle, sid, now) ?? (o.echo ? openHand(handle, hostId, o.echo, now) : undefined)
   if (!h) return { refused: 'none' }
-  if (h.host_id !== hostId) return { refused: 'other' }
+  if (!hostOwns(h.host_id, hostId)) return { refused: 'other' }
   // Exactly its start's task: a hand with none admits a row with none, never one that names a task.
   if (h.task_id !== (o.taskId ?? '')) return { refused: 'task' }
   return { hand: h.id }
@@ -110,7 +129,7 @@ export function handForNewSession(handle: DatabaseType, hostId: string, sid: str
 
 /** Inside the apply transaction: does a hand of `hostId` name `sid` (its row is expected, worth a resync)? */
 export function handedTo(handle: DatabaseType, hostId: string, sid: string, now = Date.now()): boolean {
-  return handOf(handle, sid, now)?.host_id === hostId
+  return hostOwns(handOf(handle, sid, now)?.host_id, hostId)
 }
 
 /** Inside the apply transaction: the row a hand let in is written; the hand is used up. */
@@ -122,14 +141,14 @@ export function useHand(handle: DatabaseType, id: string): void {
 export function mayRenameInto(handle: DatabaseType, hostId: string, to: string, now = Date.now()): boolean {
   const h = handOf(handle, to, now)
   if (!h) return true
-  if (h.host_id !== hostId) return false
+  if (!hostOwns(h.host_id, hostId)) return false
   dropById(handle, h.id)
   return true
 }
 
 /** Inside the apply transaction: `hostId`'s row of `sid` was written; a hand naming it is done. */
 export function settleHandsOf(handle: DatabaseType, hostId: string, sid: string): void {
-  prepared(handle, 'DELETE FROM session_host_hands WHERE sid = ? AND host_id = ?').run(sid, hostId)
+  for (const h of handsOfFor(handle, hostId, sid, 0)) dropById(handle, h.id)
 }
 
 /**
@@ -144,14 +163,15 @@ export async function settleAnswer(hostId: string, sid: string, handId: string, 
   const out = await inStore((handle) => {
     const row = sessionJudgeInStore(sid, handle)
     if (row) {
-      if (!row.judgedByHost || row.host !== hostId) return { ok: false, row: true }
+      if (!row.judgedByHost || !hostOwns(row.host, hostId)) return { ok: false, row: true }
       if (handId) dropById(handle, handId)
       return { ok: true, row: true }
     }
     const h = handOf(handle, sid, now)
-    if (h && h.host_id !== hostId) return { ok: false, row: false }
+    if (h && !hostOwns(h.host_id, hostId)) return { ok: false, row: false }
     if (h) { if (handId && handId !== h.id) dropById(handle, handId); return { ok: true, row: false } }
-    const named = handId ? prepared(handle, 'UPDATE session_host_hands SET sid = ? WHERE id = ? AND host_id = ?').run(sid, handId, hostId).changes : 0
+    const mine = handId ? prepared(handle, `SELECT ${COLS} FROM session_host_hands WHERE id = ?`).get(handId) as HandRow | undefined : undefined
+    const named = mine && hostOwns(mine.host_id, hostId) ? prepared(handle, 'UPDATE session_host_hands SET sid = ? WHERE id = ?').run(sid, mine.id).changes : 0
     if (named === 0) insertHand(handle, newId(), hostId, sid, o.taskId ?? '', now)
     return { ok: true, row: false }
   })
@@ -197,13 +217,12 @@ export function linesNotOthers(sid: string, ids: readonly string[], now = Date.n
 export function handIdOf(hostId: string, sid: string, now = Date.now()): string {
   const handle = getDb()
   if (!handle) return ''
-  const h = prepared(handle, 'SELECT id FROM session_host_hands WHERE sid = ? AND host_id = ? AND until > ? ORDER BY at LIMIT 1').get(sid, hostId, now) as { id: string } | undefined
-  return h?.id ?? ''
+  return handsOfFor(handle, hostId, sid, now)[0]?.id ?? ''
 }
 
 /** A hand-over of `sid` to `hostId` was taken back (host-handover.ts takeStartBack): no hand of it stands for that host. */
 export async function dropHandsOf(hostId: string, sid: string): Promise<void> {
-  await inStore((handle) => { prepared(handle, 'DELETE FROM session_host_hands WHERE sid = ? AND host_id = ?').run(sid, hostId) })
+  await inStore((handle) => { for (const h of handsOfFor(handle, hostId, sid, 0)) dropById(handle, h.id) })
 }
 
 /** Tests: the next note prunes again. */

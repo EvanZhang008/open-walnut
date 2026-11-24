@@ -31,12 +31,30 @@ let anyCursor: boolean | null = null
 /** A host replica whose leader is an older Walnut without the session channel judges none of its own rows (session-channel/old-leader-watch.ts). */
 let standsDown = false
 
-type StartProbe = (host: string) => boolean
+/**
+ * The leader side's answer for a start on `host`: true (its own service runs it), the host key of
+ * the service that runs it (another name of the same machine, whose service goes by that name),
+ * or false / null (legacy).
+ */
+type StartProbe = (host: string) => boolean | string | null
 let startProbe: StartProbe | null = null
 
 /** Installed by the leader side: does `host`'s service run and judge sessions now (switch on, capability named, linked)? */
 export function setHostJudgeProbe(probe: StartProbe | null): void {
   startProbe = probe
+}
+
+/**
+ * The host key whose service would run a new session started on `host`, or null (legacy): `host`
+ * itself, or the name its machine's one service goes by when `host` is another name of that
+ * machine (an ssh row of a box that joined the host network: one daemon, one service).
+ */
+export function hostServiceKeyOf(host: string | undefined): string | null {
+  if (!host || host === '__local__' || !startProbe) return null
+  try {
+    const a = startProbe(host)
+    return a === true ? host : typeof a === 'string' && a !== '' && a !== '__local__' ? a : null
+  } catch { return null }
 }
 
 /** The leader learned that `sid` is `host`'s (its start answered, the channel wrote its row, a rename). */
@@ -165,8 +183,7 @@ export function judgedHereOnly<E extends { data: unknown }, R>(handler: (event: 
 
 /** Who would judge a new session on `host`. A local start ('' or '__local__') is always the leader's. */
 export function judgeOfStart(host: string | undefined): Judge {
-  if (!host || host === '__local__' || !startProbe) return 'legacy'
-  try { return startProbe(host) ? 'host' : 'legacy' } catch { return 'legacy' }
+  return hostServiceKeyOf(host) !== null ? 'host' : 'legacy'
 }
 
 export function _resetJudgeOfForTesting(): void {

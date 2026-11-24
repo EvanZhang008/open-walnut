@@ -12,7 +12,7 @@
  *                the runtime through the own-sessions link, the production path; and a probe in its
  *                process (the module the entry imports once its server answers)
  *
- * The probes only read, but for the Mac's /delete and /legacy and the host's /slow-start, /hold-sid
+ * The probes only read, but for the Mac's /delete, /legacy and /hand and the host's /slow-start, /hold-sid
  * and /forge (and the host's door port is the leader door itself, for a send made on the host while
  * the Mac is away).
  *
@@ -31,6 +31,9 @@
  *         GET /row?sid=      the Mac's row of a session (null: none)
  *         GET /legacy?sid=   makes a row of the Mac's own (a legacy session) under that id: a probe write
  *         GET /hands         the starts the Mac handed its hosts, still standing (handed-sessions.ts)
+ *         GET /hand?host=&sid=   hands `sid` to `host` (handStart) with no start: a probe write, for a host's forged row to meet
+ *         GET /hold-copy?kind=&on=1|0   while on, a store write of that copy kind brings no round (the host's
+ *                            copy of it lags its write; the sweep and copyKindNow still send it)
  *         GET /acp?sid=      what the Mac's runner answers for an ACP session (findAcpSession)
  *         GET /parses?sid=   how many CLI lines of it this process parsed (line-parse-count.ts)
  *         GET /frames        how many daemon frames and session-channel frames this process parsed
@@ -44,7 +47,8 @@
  *                            never reaches the host (and is no "not sent" either): the one seam of a
  *                            hand-over whose outcome is unknown here
  *         GET /handover?sid= is a hand-over of it unanswered here (host-handover.ts), and its mark on disk
- *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts
+ *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts,
+ *                            and the host key whose service a start on it goes to (startKeyOf)
  *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
  *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit (its pair too) and records
@@ -210,7 +214,7 @@ await serveProbe({
     return { armed: mode }
   },
   '/handover': (q) => ({ pending: hho.handOverPending(q.get('sid')), onDisk: hom.handOverMarkStands(q.get('sid')) }),
-  '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')) } },
+  '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')), startKey: s && typeof s.startKeyOf === 'function' ? s.startKeyOf(q.get('host')) : null } },
   '/link': async (q) => ({ connected: (await import(${url('src/core/host-server/index.ts')})).hostServerLink(q.get('host')) !== null }),
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),
   '/delete': async (q) => ({ removed: await trk.deleteSessionRecords(new Set([q.get('sid')]), 'cluster-probe') }),
@@ -218,6 +222,8 @@ await serveProbe({
   '/row': async (q) => ({ row: await trk.getSessionByClaudeId(q.get('sid')) }),
   '/legacy': async (q) => { await trk.createSessionRecord(q.get('sid'), '', 'Acme', undefined, { title: 'Leader own' }); return { row: await trk.getSessionByClaudeId(q.get('sid')) } },
   '/hands': async () => ({ hands: (await import(${url('src/core/session-channel/handed-sessions.ts')})).handsNow() }),
+  '/hold-copy': async (q) => { (await import(${url('src/core/replication/kinds/copy-kind.ts')}))._holdCopyWritesForTesting(q.get('on') === '1' ? q.get('kind') : null); return { held: q.get('on') === '1' ? q.get('kind') : null } },
+  '/hand': async (q) => ({ id: await (await import(${url('src/core/session-channel/handed-sessions.ts')})).handStart(q.get('host'), q.get('sid')) }),
   '/acp': (q) => {
     const a = ccs.sessionRunner.findAcpSession(q.get('sid'))
     return { found: !!a, hostJudged: a?.hostJudged === true, kind: a?.kind ?? null, processStatus: a?.processStatus ?? null, workerLive: a?.workerLive ?? null, engineId: a?.engineId ?? null, controls: Array.isArray(a?.sessionControls) ? a.sessionControls.length : null }

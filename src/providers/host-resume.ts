@@ -46,7 +46,7 @@
  */
 import { log } from '../logging/index.js'
 import { sessionJudgeInStore, sessionTaskAndEngineInStore } from '../core/session-db.js'
-import { judgingHostOf } from '../core/sessions/judge-of.js'
+import { hostServiceKeyOf, judgingHostOf } from '../core/sessions/judge-of.js'
 import type { QueuedMessage } from '../core/session-queue-store.js'
 import type { SessionRecord } from '../core/types.js'
 import type { StartBody } from '../core/session-channel/host-api.js'
@@ -57,6 +57,7 @@ import { isHandedHold } from '../core/sessions/handed-holds.js'
 import { startGoesToHost } from './host-judged-runner.js'
 import { armLostStartCheck, cliOnHost, handOverAnswered, handOverPending, handStartToHost, hostVerdict, rearmHandOvers, startLostHooks, takeStartBack, type LostHooks } from './host-handover.js'
 import { queuedLineOf } from './host-judged-send.js'
+import { startOnHostCatchingUp } from '../core/session-channel/switch-catch-up.js'
 
 /** Why a legacy session is not handed to its host now (each keeps today's legacy delivery). */
 export type NotAtRest =
@@ -173,12 +174,15 @@ export function resumeHostOf(sid: string): string | null {
   try { row = sessionJudgeInStore(sid) } catch { return null }
   // Not a legacy session of a host (a host-judged one goes to its host by its own route), or the switch off for it: quiet.
   if (!row || row.judgedByHost || !row.host || row.host === '__local__' || !hostSwitchOnFor(row.host)) return null
-  const why = noResumeHostReason(sid, row.host)
+  // A row under another name of a machine whose one service goes by its own name resumes there,
+  // under that name (judge-of.ts hostServiceKeyOf; the hand-over moves the row: handSeedToHost).
+  const host = hostServiceKeyOf(row.host) ?? row.host
+  const why = noResumeHostReason(sid, host)
   if (why) {
-    log.session.info('host resume: the session stays legacy, its host is not asked', { sessionId: sid, host: row.host, why })
+    log.session.info('host resume: the session stays legacy, its host is not asked', { sessionId: sid, host, ...(host !== row.host ? { rowHost: row.host } : {}), why })
     return null
   }
-  return row.host
+  return host
 }
 
 /**
@@ -203,7 +207,8 @@ function runnerFacts(sid: string, r: RunnerRest): RunnerFacts {
   return { sdk: r.sdk(sid), wrapperLive: r.wrapperLive(sid), turnInFlight: r.turnInFlight(sid), restartInFlight: r.restartInFlight(sid), preparing: r.preparing(sid) }
 }
 
-async function restFacts(sid: string, r: RunnerRest): Promise<{ facts: RestFacts; row: SessionRecord | null; transferRunning: () => boolean }> {
+/** `host`: the host the resume would go to (the row's, or the name its machine's service goes by: resumeHostOf). */
+async function restFacts(sid: string, r: RunnerRest, host: string): Promise<{ facts: RestFacts; row: SessionRecord | null; transferRunning: () => boolean }> {
   const [{ getSessionByClaudeId }, { getQueue }, { runningTransferFor }] = await Promise.all([
     import('../core/session-tracker.js'), import('../core/session-message-queue.js'), import('../core/transfer/transfer-jobs.js'),
   ])
@@ -215,8 +220,8 @@ async function restFacts(sid: string, r: RunnerRest): Promise<{ facts: RestFacts
     transferRunning,
     facts: {
       row,
-      hostResumes: !!row?.host && hostResumesSessions(row.host),
-      hostResumesAcp: !!row?.host && hostResumesSessions(row.host, 'acp'),
+      hostResumes: !!row?.host && hostResumesSessions(host),
+      hostResumesAcp: !!row?.host && hostResumesSessions(host, 'acp'),
       ...runnerFacts(sid, r),
       transferRunning: transferRunning(),
       lineOut: queue.some((m) => m.status === 'processing'),
@@ -278,7 +283,7 @@ function askedHostNow(sid: string): string | null {
 }
 
 async function resumeNow(sid: string, host: string, r: RunnerRest, o: { attaching?: boolean }): Promise<boolean> {
-  const { facts: read, row, transferRunning } = await restFacts(sid, r)
+  const { facts: read, row, transferRunning } = await restFacts(sid, r, host)
   const facts: RestFacts = { ...read, attaching: o.attaching === true }
   let why = notAtRestReason(facts)
   if (!why) why = notAtRestReason({ ...facts, cli: await cliOnHost(host, sid) })
@@ -324,7 +329,8 @@ async function resumeNow(sid: string, host: string, r: RunnerRest, o: { attachin
   log.session.info('session routing', { taskId: marked.taskId, type: 'host-resume', host, sessionId: sid, lines: lines.length })
   let a: Awaited<ReturnType<typeof side.startOnHost>>
   try {
-    a = await side.startOnHost(host, body)
+    // A host whose copy of the switch still says off is caught up once and asked again (switch-catch-up.ts).
+    a = await startOnHostCatchingUp(side, host, body)
   } catch (err) {
     if (requestNotSent(err)) return fallBack('the host did not get the resume', errText(err))
     // No answer: the host may have it. Its lines wait here, unsent, until the host's row ends the

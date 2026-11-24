@@ -18,6 +18,7 @@ import type { SessionRecord } from '../types.js'
 import type { LeaderSideDeps } from './leader-side.js'
 import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
 import type { HostTurnEnd } from './turn-ends.js'
+import { sameMachine } from './revoked-hosts.js'
 
 /** The session:started of a session born on `hostId`, from its row (as the runner says one: handleStart); its task is the leader's row's. */
 function startedOf(hostId: string, sid: string, row: Record<string, unknown>, taskId: string | null | undefined): Record<string, unknown> {
@@ -60,10 +61,10 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
     }
   }
 
-  /** Does this record of `hostId` name a session that host owns here (M1)? */
+  /** Does this record of `hostId` name a session that host owns here (M1), under any name of its machine? */
   function hostsOwn(hostId: string, sid: string, wrote: ReadonlySet<string>): boolean {
     if (wrote.has(sid)) return true
-    try { return deps.ownerOf(sid) === hostId } catch { return false }
+    try { const owner = deps.ownerOf(sid); return !!owner && sameMachine(owner, hostId) } catch { return false }
   }
 
   async function applyRecs(hostId: string, recs: AppliedFact[], next: ChannelCursor): Promise<void> {

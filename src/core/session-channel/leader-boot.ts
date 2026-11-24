@@ -258,7 +258,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     const { told, failed } = await issuer.pushDoors(clean, new Set(dialed))
     return { dialed, routed: told, failed }
   }
-  setHostJudgeProbe((host) => side.hostJudges(host))
+  // A start on another name of a machine whose service goes by one name goes to that service (leader-side.ts startKeyOf).
+  setHostJudgeProbe((host) => side.startKeyOf(host))
   setHostSwitchProbe((host) => side.switchOn(host))
   // The per-host switch is read now, not only at a host's first view or a config write.
   await side.refreshFlag()

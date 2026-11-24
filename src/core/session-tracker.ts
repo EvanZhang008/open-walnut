@@ -50,7 +50,8 @@ import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, w
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
 import { clearHandOverMarkIn } from './session-channel/handover-marks.js';
-import { handForNewSession, handedTo, mayRenameInto, settleHandsOf, useHand } from './session-channel/handed-sessions.js';
+import { handForNewSession, handedTo, hostOwns, mayRenameInto, settleHandsOf, useHand } from './session-channel/handed-sessions.js';
+import { sameMachine } from './session-channel/revoked-hosts.js';
 import { noteRefusedSessions } from './session-channel/refused-sessions.js';
 import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSnapshot, snapshotIsStale } from './session-channel/rows-snapshot.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
@@ -3654,7 +3655,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
           const { from, to } = step.rename;
           if (gone.has(to)) continue;
           const old = read(from);
-          if (!old || old.host !== hostId || !judgedByHost(old)) {
+          if (!old || !hostOwns(old.host, hostId) || !judgedByHost(old)) {
             skipped.push(from);
             // The host has `to` now: its whole row repairs what the rename could not, when it was handed `to`.
             if (!old && handedTo(handle, hostId, to)) resync.add(to);
@@ -3662,7 +3663,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
           }
           // Into a row that is not this host's, or an id handed to another host: refused, both rows stay.
           const into = read(to);
-          if (into ? into.host !== hostId || !judgedByHost(into) : !mayRenameInto(handle, hostId, to)) { refused.push(to); continue; }
+          if (into ? !hostOwns(into.host, hostId) || !judgedByHost(into) : !mayRenameInto(handle, hostId, to)) { refused.push(to); continue; }
           const historyBefore = storedHistoryFields(handle, from);
           deleteSessionRowSqlite(handle, from);
           if (!into) writeSessionRowSqlite(handle, { ...old, claudeSessionId: to }, { before: historyBefore! });
@@ -3673,13 +3674,14 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         const change = step.row!;
         if (gone.has(change.sid)) continue;
         const before = read(change.sid);
-        if (before && (before.host !== hostId || !judgedByHost(before))) { skipped.push(change.sid); continue; }
+        // A row of this host's machine under another of its names is its own too (handed-sessions.ts hostOwns).
+        if (before && (!hostOwns(before.host, hostId) || !judgedByHost(before))) { skipped.push(change.sid); continue; }
         // A patch of a row the leader lacks: its whole row is asked for only when it was handed this
         // host (a refused session's patches are not asked about again and again).
         if (!before && !change.born) { skipped.push(change.sid); if (handedTo(handle, hostId, change.sid)) resync.add(change.sid); continue; }
         const next = mergeHostFacts(before, change.patch, change.born === true);
         next.claudeSessionId = change.sid;
-        if (next.host !== hostId || !judgedByHost(next)) { skipped.push(change.sid); continue; }
+        if (!hostOwns(next.host, hostId) || !judgedByHost(next)) { skipped.push(change.sid); continue; }
         // The task a session is for is set at its birth here and never moved by its host.
         if (before && (next.taskId ?? '') !== (before.taskId ?? '')) { next.taskId = before.taskId; taskKept.push(change.sid); }
         // A session the leader has no row of: only one it handed this host, for that task (handed-sessions.ts).
@@ -3735,7 +3737,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         for (const te of batch.turnEnds) {
           if (te.seq <= after || gone.has(te.sid)) continue;
           const row = read(te.sid);
-          if (row && row.host === hostId && judgedByHost(row)) noteTurnEndIn(handle, hostId, te.sid, te.edge, at);
+          if (row && hostOwns(row.host, hostId) && judgedByHost(row)) noteTurnEndIn(handle, hostId, te.sid, te.edge, at);
         }
       }
       // Never back: a batch an earlier link already passed keeps the position where it is.
@@ -3771,12 +3773,15 @@ export { loadChannelCursor } from './session-db.js';
  * A row this leader made for a start before the runner handed it to `host`, whose own service
  * runs and judges it (a task start seeds its row under the id it answers with): marked the host's
  * now, so the channel's `born` row of that session fills it in (applyHostChannelBatch takes only a
- * host's rows) and keeps the leader's own fields. False: no such seed (nothing to do).
+ * host's rows) and keeps the leader's own fields. A row under another name of the same machine
+ * (revoked-hosts.ts sameMachine: an ssh row of a box whose one service goes by its host-network
+ * name) is moved to `host`, the name that service knows itself by: it claims only a row of its own
+ * name (session-db.ts claimable). False: no such seed (nothing to do).
  */
 export async function handSeedToHost(sid: string, host: string): Promise<boolean> {
   const rec = await getSessionByClaudeId(sid);
-  if (!rec || rec.host !== host || judgedByHost(rec)) return false;
-  await updateSessionRecord(sid, { judge: 'host' });
+  if (!rec || !rec.host || judgedByHost(rec) || !sameMachine(rec.host, host)) return false;
+  await updateSessionRecord(sid, rec.host === host ? { judge: 'host' } : { judge: 'host', host });
   return true;
 }
 

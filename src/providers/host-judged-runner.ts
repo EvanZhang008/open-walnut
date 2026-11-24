@@ -17,7 +17,7 @@
 import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
 import { EventNames, type BusEvent } from '../core/event-bus.js'
-import { judgeOfStart, judgingHostOf, noteHostJudged } from '../core/sessions/judge-of.js'
+import { hostServiceKeyOf, judgeOfStart, judgingHostOf, noteHostJudged } from '../core/sessions/judge-of.js'
 import { sessionPort } from '../core/sessions/session-port.js'
 import { sessionTaskAndEngineInStore } from '../core/session-db.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
@@ -27,6 +27,7 @@ import type { StartBody, StartBundle } from '../core/session-channel/host-api.js
 import { claimHostStarted, hostStartedSaid, noteHostSessionStarted } from '../core/session-channel/leader-tasks.js'
 import { _resetHostJudgedSendForTesting, confirmHostDisowns, forwardSend, inOrder } from './host-judged-send.js'
 import { NOT_OWN_SESSION } from '../core/session-channel/host-api.js'
+import { startOnHostCatchingUp } from '../core/session-channel/switch-catch-up.js'
 import { _resetHostHandOverForTesting, armLostStartCheck, handOverAnswered, handOverPending, handStartToHost, startLostHooks, takeStartBack } from './host-handover.js'
 
 type AnyFn = (...args: any[]) => any
@@ -218,7 +219,15 @@ export async function startOnJudgingHost<T extends StartData>(
   /** A start whose answer was lost and whose born row never came: fail it as a start that never ran. */
   onLost?: (err: Error) => Promise<void>,
 ): Promise<{ claudeSessionId: string; title: string }> {
-  const host = data.host!
+  // Another name of a machine whose one service goes by its own name starts there, under that
+  // name (judge-of.ts hostServiceKeyOf): its seeded row moves to it with the hand-over
+  // (session-tracker.ts handSeedToHost), so the start, its hand and the host's rows name one key.
+  const asked = data.host!
+  const host = hostServiceKeyOf(asked) ?? asked
+  if (host !== asked) {
+    log.session.info('host start: another name of this machine; it starts on the name its service goes by', { taskId: data.taskId, asked, host })
+    data = { ...data, host }
+  }
   noteAttempt(host, (data as { transferAttemptId?: unknown }).transferAttemptId)
   const { largePromptFile, ...rest } = data
   const payload = { ...rest } as unknown as StartBody
@@ -251,7 +260,8 @@ export async function startOnJudgingHost<T extends StartData>(
   log.session.info('session routing', { taskId: data.taskId, type: 'host', host })
   let a: Awaited<ReturnType<typeof side.startOnHost>>
   try {
-    a = await side.startOnHost(host, payload)
+    // A host whose copy of the switch still says off is caught up once and asked again (switch-catch-up.ts).
+    a = await startOnHostCatchingUp(side, host, payload)
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
     // Never sent (no stream to the host): the host cannot have it, so it is a refusal: the seed is

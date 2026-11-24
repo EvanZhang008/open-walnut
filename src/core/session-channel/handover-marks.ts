@@ -15,6 +15,7 @@
 import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { getDb } from '../session-db.js'
 import { prepared } from '../../lib/sqlite-prepared.js'
+import { sameMachine } from './revoked-hosts.js'
 
 export type HandOverKind = 'start' | 'resume'
 
@@ -35,9 +36,14 @@ export function clearHandOverMark(sid: string): void {
   prepared(handle, 'DELETE FROM session_host_handovers WHERE claude_session_id = ?').run(sid)
 }
 
-/** Inside the channel's apply transaction: `hostId` wrote its row of `sid`. True when a mark of it went. */
+/**
+ * Inside the channel's apply transaction: `hostId` wrote its row of `sid`. True when a mark of it
+ * went: a mark under any name of that host's machine (revoked-hosts.ts sameMachine).
+ */
 export function clearHandOverMarkIn(handle: DatabaseType, sid: string, hostId: string): boolean {
-  return prepared(handle, 'DELETE FROM session_host_handovers WHERE claude_session_id = ? AND host_id = ?').run(sid, hostId).changes > 0
+  const on = prepared(handle, 'SELECT host_id FROM session_host_handovers WHERE claude_session_id = ?', 'pluck').get(sid) as string | undefined
+  if (on === undefined || !sameMachine(on, hostId)) return false
+  return prepared(handle, 'DELETE FROM session_host_handovers WHERE claude_session_id = ?').run(sid).changes > 0
 }
 
 /** Is the mark of `sid` still on disk? (Null: no database to ask.) */

@@ -292,6 +292,24 @@ let schedulers = 0
 /** Every running scheduler's "round soon", for a confirm the user gave: a scheduler that stops takes only its own. */
 const copySoons = new Set<(kind?: string) => void>()
 const copySoon = (kind?: string): void => { for (const soon of copySoons) soon(kind) }
+/** Every running scheduler's "a round of this kind now", answered with that round's results. */
+const copyNows = new Set<(kind: string) => Promise<CopyRoundResult[]>>()
+
+/**
+ * A round of `kind` now rather than after the debounce, on the running scheduler (one round at a
+ * time: a round already running ends first, then this one goes): that round's results for the
+ * kind, one per target; [] where no scheduler runs (a follower, a test without one). The caller
+ * bounds its wait (session-channel/switch-catch-up.ts: a host whose copy of the switch lags).
+ */
+export async function copyKindNow(kind: string): Promise<CopyRoundResult[]> {
+  return (await Promise.all([...copyNows].map((now) => now(kind)))).flat()
+}
+
+/** Tests (the cluster's probe): store writes of this kind bring no round while set (a copy that lags its write). */
+let heldWritesForTesting: string | null = null
+export function _holdCopyWritesForTesting(kind: string | null): void {
+  heldWritesForTesting = kind
+}
 
 /** Every copy kind's name (web/routes/replicas-status.ts accepts a confirm for these). */
 export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications', 'local-tasks'] as const
@@ -359,6 +377,8 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
   /** Kinds a follower held rows of, in any round since the retry was set: all go again with it. */
   const pendingHeld = new Set<string>()
   let running = false
+  /** Callers of copyKindNow: each is answered by the first round that starts after it asked. */
+  const askedNow: Array<{ kind: string; done: (results: CopyRoundResult[]) => void }> = []
   const round = async (): Promise<void> => {
     if (stopped || running || dirty.size === 0) return
     running = true
@@ -366,7 +386,9 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
       while (!stopped && dirty.size > 0) {
         const want = kinds.filter((k) => dirty.has(k.kind))
         dirty.clear()
+        const served = askedNow.splice(0)
         const results = await syncCopyKinds(want, deps)
+        for (const a of served) a.done(results.filter((r) => r.kind === a.kind))
         for (const r of results) if ((r.held ?? 0) > 0) pendingHeld.add(r.kind)
         if (pendingHeld.size > 0 && !retry && !stopped) {
           retry = setTimeout(() => {
@@ -393,6 +415,8 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
       log.session.warn('copies: scheduler round failed', { scheduler: id, error: err instanceof Error ? err.message : String(err) })
     } finally {
       running = false
+      // A round that failed, or a stop: nobody waits on a round that will not come.
+      if (stopped) for (const a of askedNow.splice(0)) a.done([])
     }
   }
   const soon = (kind?: string): void => {
@@ -403,7 +427,18 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
     timer.unref?.()
   }
   copySoons.add(soon)
-  const unwatch = kinds.map((k) => k.watch(() => soon(k.kind)))
+  const now = (kind: string): Promise<CopyRoundResult[]> => {
+    if (stopped || !kinds.some((k) => k.kind === kind)) return Promise.resolve([])
+    return new Promise((done) => {
+      askedNow.push({ kind, done })
+      dirty.add(kind)
+      // The debounced round goes now with it (whatever else was dirty rides along).
+      if (timer) { clearTimeout(timer); timer = null }
+      void round()
+    })
+  }
+  copyNows.add(now)
+  const unwatch = kinds.map((k) => k.watch(() => { if (heldWritesForTesting !== k.kind) soon(k.kind) }))
   // A task kept or no longer kept: the kinds of owned rows go now, not at the sweep (host-private.ts).
   const owned = kinds.filter((k) => k.owners && !isTaskFree(k.owners)).map((k) => k.kind)
   if (owned.length > 0 && !deps.privacy) unwatch.push(onHostPrivacyChange(() => { for (const k of owned) soon(k) }))
@@ -434,6 +469,8 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
     stop: () => {
       stopped = true
       copySoons.delete(soon)
+      copyNows.delete(now)
+      if (!running) for (const a of askedNow.splice(0)) a.done([])
       for (const u of unwatch) { try { u() } catch { /* best effort */ } }
       unlistenTargets?.()
       void import('../../event-bus.js').then(({ bus }) => bus.unsubscribe(choiceSub)).catch(() => {})

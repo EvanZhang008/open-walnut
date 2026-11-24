@@ -30,6 +30,7 @@ import { SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from '.
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import { noteFrameParsed } from '../../providers/line-parse-count.js'
+import { sameMachine } from './revoked-hosts.js'
 
 export { HostRequestNotSent, requestNotSent, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 export { HostRevoked } from './leader-apply.js'
@@ -123,6 +124,9 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     if (!stopped) onFor = next
   }
 
+  /** Waits for a host's channel to link (whenLinked), by host key; each is settled by its link or its own deadline. */
+  const linkWaiters = new Map<string, Set<() => void>>()
+
   const stateOf = (hostKey: string): HostState => {
     let s = hosts.get(hostKey)
     if (!s) {
@@ -138,6 +142,11 @@ export function createLeaderSide(deps: LeaderSideDeps) {
    * whatever the daemon link says: the host proved itself at the door (host-door.ts).
    */
   const wanted = (s: HostState): boolean => !stopped && !isRevoked(s.key) && ((s.dialedIn && !!s.socket) || (s.connected && s.judges))
+  /** Would a start on `hostKey` go to its own service now (linked or linkable, judging, switch on)? */
+  const judgesItself = (hostKey: string): boolean => {
+    const s = hosts.get(hostKey)
+    return !!s && wanted(s) && onFor(hostKey)
+  }
   function isRevoked(hostKey: string): boolean {
     try { return deps.revoked?.(hostKey) === true } catch { return true }
   }
@@ -228,6 +237,9 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   function bind(hostKey: string, s: HostState, sock: ChannelSocket): void {
     s.socket = sock
     s.dialedIn = sock.kind === 'host-dialed'
+    // Whoever waits for this host's link (whenLinked): its session routes answer now.
+    const waiting = linkWaiters.get(hostKey)
+    if (waiting) { linkWaiters.delete(hostKey); for (const w of waiting) w() }
     if (s.lostTimer) { clearTimeout(s.lostTimer); s.lostTimer = null }
     const link: ChannelLink = {
       send: (frame: ChannelFrame) => sock.send(JSON.stringify(frame)),
@@ -323,11 +335,51 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     },
     /** judge-of.ts's start probe: would a start on `hostKey` go to its service now? */
     hostJudges(hostKey: string): boolean {
-      const s = hosts.get(hostKey)
-      return !!s && wanted(s) && onFor(hostKey)
+      return judgesItself(hostKey)
+    },
+    /**
+     * judge-of.ts's start probe: the host key whose service runs a new start on `hostKey`, or null
+     * (legacy). `hostKey` itself when its own service judges; else another name of the same machine
+     * (revoked-hosts.ts sameMachine) whose service judges and whose channel is linked now: one
+     * daemon runs one service, under the one name it goes by (daemon-twins.ts daemonKeeperAlias),
+     * so an ssh row of a box that joined the host network starts there too. The switch must be on
+     * for both names: either one turned off keeps the machine's starts on that name legacy.
+     */
+    startKeyOf(hostKey: string): string | null {
+      if (judgesItself(hostKey)) return hostKey
+      if (stopped || !hostKey || !onFor(hostKey) || isRevoked(hostKey)) return null
+      for (const s of hosts.values()) {
+        if (s.key !== hostKey && !!s.socket && wanted(s) && onFor(s.key) && sameMachine(hostKey, s.key)) return s.key
+      }
+      return null
     },
     /** Is the channel to `hostKey` linked now? */
     linked(hostKey: string): boolean { return !!hosts.get(hostKey)?.socket },
+    /**
+     * True once the channel to `hostKey` is linked (at once when it is now), false after `ms` or
+     * when this side stops. A link that waits out its dial backoff is dialed now: a host whose
+     * session side just came up is asked again at once, not after the backoff.
+     */
+    whenLinked(hostKey: string, ms: number): Promise<boolean> {
+      if (stopped) return Promise.resolve(false)
+      if (hosts.get(hostKey)?.socket) return Promise.resolve(true)
+      return new Promise<boolean>((resolve) => {
+        let set = linkWaiters.get(hostKey)
+        if (!set) { set = new Set(); linkWaiters.set(hostKey, set) }
+        const settle = (linked: boolean): void => {
+          clearTimeout(deadline)
+          set!.delete(onLink)
+          if (set!.size === 0 && linkWaiters.get(hostKey) === set) linkWaiters.delete(hostKey)
+          resolve(linked)
+        }
+        const onLink = (): void => settle(true)
+        const deadline = setTimeout(() => settle(false), ms)
+        deadline.unref?.()
+        set.add(onLink)
+        const s = hosts.get(hostKey)
+        if (s && s.timer && !s.socket && !s.dialing) { clearTimeout(s.timer); s.timer = null; s.attempt = 0; ensure(hostKey) }
+      })
+    },
     /** Which side opened the link to `hostKey` now, or null when none is up. */
     linkKind(hostKey: string): 'leader-dialed' | 'host-dialed' | null {
       const sock = hosts.get(hostKey)?.socket
@@ -407,6 +459,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       stopped = true
       for (const s of hosts.values()) closeLink(s, 'stopping')
       hosts.clear()
+      linkWaiters.clear()
     },
   }
 }
