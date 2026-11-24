@@ -27,14 +27,21 @@ const STALE_PARTIAL_MS = 60 * 60_000
 /** The env keys that decide where a build's tree goes (runtimeRootsFor). */
 export const RUNTIME_PLACE_ENV = ['WALNUT_RUNTIME_DIR', 'OPEN_WALNUT_HOME'] as const
 
+/** The temp dir a leader's `walnut ... --walnut <id>` lines unpack into (isWalnutLineArgv): theirs alone. */
+export function walnutLineRuntimeDir(): string {
+  return path.join(os.tmpdir(), `open-walnut-line-runtime-${os.userInfo().uid}`)
+}
+
 /**
  * Where a run of the file with this env looks for build `id`'s tree, in order:
- * WALNUT_RUNTIME_DIR's tree alone when set, else the data home's, then the temp
- * dir's (a data home that is not writable). Reads only RUNTIME_PLACE_ENV.
+ * WALNUT_RUNTIME_DIR's tree alone when set, else for a leader's `--walnut` line the temp dir
+ * those lines share, else the data home's, then the temp dir's (a data home that is not
+ * writable). Reads only RUNTIME_PLACE_ENV.
  */
-export function runtimeRootsFor(env: NodeJS.ProcessEnv, id: string): string[] {
+export function runtimeRootsFor(env: NodeJS.ProcessEnv, id: string, o: { walnutLine?: boolean } = {}): string[] {
   const override = env.WALNUT_RUNTIME_DIR
   if (override) return [path.join(path.resolve(override), id)]
+  if (o.walnutLine) return [path.join(walnutLineRuntimeDir(), id)]
   const home = env.OPEN_WALNUT_HOME || path.join(os.homedir(), '.open-walnut')
   return [path.join(home, 'local', 'runtime', id), path.join(os.tmpdir(), `open-walnut-runtime-${os.userInfo().uid}`, id)]
 }
@@ -130,16 +137,17 @@ export function prunesRuntimePlace(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * A run whose tree may be one Walnut's in another Walnut's data home: the on-host CLI (`<file> walnut
- * ...`, `wn` the old alias) on a line that names a Walnut (`--walnut <id>`, the experiment
- * host_service_sets: a leader's `walnut daemon ...` line for its own service set). Which set the line
- * acts on the host decides later; until then this run unpacks where it always did but prunes nothing
- * there, so a set's update never deletes a tree the default Walnut runs from. `argv` is process.argv.
+ * A run that may be another Walnut's than this data home's: the on-host CLI (`<file> walnut ...`,
+ * `wn` the old alias) on a line that names a Walnut (`--walnut <id>`, the experiment
+ * host_service_sets: a leader's `walnut daemon ...` line for its own service set). Which set the
+ * line acts on the host decides later, so it keeps out of the data home: its tree goes to the temp
+ * dir only such lines use (walnutLineRuntimeDir), never beside the default Walnut's trees, whose
+ * prune it would otherwise push them out of by mtime. `argv` is process.argv.
  */
-export function mayPruneForArgv(argv: readonly string[], execPath: string): boolean {
+export function isWalnutLineArgv(argv: readonly string[], execPath: string): boolean {
   let at = 2
   if (argv[at] !== undefined && (argv[at] === argv[1] || argv[at] === execPath)) at++
-  return !((argv[at] === 'walnut' || argv[at] === 'wn') && argv.includes('--walnut'))
+  return (argv[at] === 'walnut' || argv[at] === 'wn') && argv.includes('--walnut')
 }
 
 /**
@@ -151,12 +159,12 @@ export function mayPruneForArgv(argv: readonly string[], execPath: string): bool
  * started from one of those children (another compiled file run from a session)
  * then unpacks beside it, instead of replacing the tree a running server serves
  * its web app from. Nothing is pruned there: the dir's owner removes it whole.
- * A service set's own dir is the exception (prunesRuntimePlace), and `prune: false`
- * (a run that may be another Walnut's in this data home: runtime-root.ts) prunes nowhere.
+ * A service set's own dir is the exception (prunesRuntimePlace). A leader's `--walnut` line
+ * (`walnutLine`, runtime-root.ts) unpacks into, and prunes, the temp dir only such lines use.
  */
-export function ensureRuntime(archivePath: string, id: string, o: { prune?: boolean } = {}): string {
-  const prune = o.prune !== false && prunesRuntimePlace(process.env)
-  const roots = runtimeRootsFor(process.env, id)
+export function ensureRuntime(archivePath: string, id: string, o: { walnutLine?: boolean } = {}): string {
+  const prune = prunesRuntimePlace(process.env)
+  const roots = runtimeRootsFor(process.env, id, o)
   let lastError: unknown = null
   for (const root of roots) {
     if (isComplete(root, id)) return root

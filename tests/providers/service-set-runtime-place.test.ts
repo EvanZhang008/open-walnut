@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { packArchive } from '../../src/binary/asset-archive.js'
-import { RUNTIME_MARKER, ensureRuntime, mayPruneForArgv } from '../../src/binary/runtime-tree.js'
+import { RUNTIME_MARKER, ensureRuntime, isWalnutLineArgv } from '../../src/binary/runtime-tree.js'
 import { renderDaemonBootScript } from '../../src/providers/daemon-service-boot-script.js'
 import { renderDaemonLaunchAgent, renderDaemonSystemdUnit, type DaemonServiceConfig } from '../../src/providers/daemon-service-config.js'
 import { createLauncherControl } from '../../src/providers/service-launcher-control.js'
@@ -147,23 +147,31 @@ describe('a set\'s own dir is known by its real path or its set id, not by HOME\
   })
 })
 
-describe('a leader\'s `walnut daemon ... --walnut <id>` line run by the walnut file prunes nothing', () => {
-  it('only the on-host CLI line naming a Walnut is kept from pruning', () => {
+describe('a leader\'s `walnut daemon ... --walnut <id>` line run by the walnut file keeps out of the data home', () => {
+  // Review of the 2026-11-24 drill fixes (S3): such a line unpacked into the default Walnut's
+  // ~/.open-walnut/local/runtime (only its prune was skipped), where its newer tree pushed the
+  // default's own trees out at the default's next start.
+  it('only the on-host CLI line naming a Walnut is one', () => {
     const exe = '/x/walnut'
-    expect(mayPruneForArgv([exe, '/$bunfs/root/walnut', 'walnut', 'daemon', 'install', '--yes', '--walnut', 'a'.repeat(32)], exe)).toBe(false)
-    expect(mayPruneForArgv([exe, '/$bunfs/root/walnut', exe, 'wn', 'daemon', 'status', '--walnut', 'a'.repeat(32)], exe)).toBe(false)
-    expect(mayPruneForArgv([exe, '/$bunfs/root/walnut', 'walnut', 'daemon', 'status'], exe)).toBe(true)
-    expect(mayPruneForArgv([exe, '/$bunfs/root/walnut', '--service'], exe)).toBe(true)
-    expect(mayPruneForArgv([exe, '/$bunfs/root/walnut', 'web'], exe)).toBe(true)
+    expect(isWalnutLineArgv([exe, '/$bunfs/root/walnut', 'walnut', 'daemon', 'install', '--yes', '--walnut', 'a'.repeat(32)], exe)).toBe(true)
+    expect(isWalnutLineArgv([exe, '/$bunfs/root/walnut', exe, 'wn', 'daemon', 'status', '--walnut', 'a'.repeat(32)], exe)).toBe(true)
+    expect(isWalnutLineArgv([exe, '/$bunfs/root/walnut', 'walnut', 'daemon', 'status'], exe)).toBe(false)
+    expect(isWalnutLineArgv([exe, '/$bunfs/root/walnut', '--service'], exe)).toBe(false)
+    expect(isWalnutLineArgv([exe, '/$bunfs/root/walnut', 'web'], exe)).toBe(false)
   })
 
-  it('with prune off the file unpacks where it always did and leaves the other trees there', () => {
+  it('it unpacks into the temp dir its lines share, prunes only there, and leaves the default home untouched', () => {
     const defaultTrees = path.join(home, '.open-walnut', 'local', 'runtime')
+    const tmp = path.join(home, 'tmp')
+    const lines = path.join(tmp, `open-walnut-line-runtime-${os.userInfo().uid}`)
     plantOld(defaultTrees)
+    plantOld(lines)
     delete process.env.OPEN_WALNUT_HOME
     delete process.env.WALNUT_RUNTIME_DIR
     process.env.HOME = home
-    expect(ensureRuntime(archiveFile(), BUILD, { prune: false })).toBe(path.join(defaultTrees, BUILD))
-    expect(ls(defaultTrees)).toEqual([...OLD, BUILD].sort())
+    process.env.TMPDIR = tmp
+    expect(ensureRuntime(archiveFile(), BUILD, { walnutLine: true })).toBe(path.join(lines, BUILD))
+    expect(ls(defaultTrees)).toEqual([...OLD].sort())
+    expect(ls(lines)).toEqual([OLD[1]!, OLD[2]!, BUILD].sort())
   })
 })
