@@ -13810,8 +13810,11 @@ export class SessionRunner {
         return this.hostProxyOf(sessionId)
       }
       if (handed === 'late') {
-        log.session.info('acp: a read did not wait out its hand-over decision; it answers what is here', { sessionId })
-        return found
+        // Not the idle object here: a mode or model change on it would establish a worker the ask still
+        // running cannot see, and that ask may still hand the session over (two judges). Nothing answers
+        // for now; the panel reads again on the controls-changed the hand-over brings.
+        log.session.info('acp: a read did not wait out its hand-over decision; nothing answers for it yet', { sessionId })
+        return undefined
       }
     }
     return found ?? await this.maybeAttachAcpSession(sessionId) ?? this.hostProxyOf(sessionId)

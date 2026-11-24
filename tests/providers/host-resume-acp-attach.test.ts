@@ -154,6 +154,25 @@ describe('a read that attaches a legacy ACP session at rest (the panel\'s contro
   })
 })
 
+describe('a read whose hand-over decision is late', () => {
+  it('answers nothing rather than the idle object here, so no worker starts beside the hand-over', async () => {
+    const h = await stoppedAcp()
+    fakeSide()
+    // The host's runtime answers slowly, so the ask has marked nothing when the read's wait runs out.
+    const dc = await import('../../src/providers/daemon-connection.js')
+    vi.mocked(dc.probeAcpWorker).mockImplementationOnce(() => new Promise((r) => setTimeout(() => r(false), 600)))
+    // The leader's idle object of the session: stopped, holding nothing.
+    const { AcpSession } = await import('../../src/providers/acp-session.js')
+    const idle = new (AcpSession as unknown as new (cfg: Record<string, unknown>) => { establish: () => Promise<string> })({ runtimeId: RUNTIME, engine: 'codex', providerSessionId: 'thread-1' })
+    const establish = vi.spyOn(idle, 'establish')
+    attach(h).acpSessions.set(SID, idle)
+    const got = await h.runner.findOrAttachAcpSession(SID)
+    expect(got).toBeUndefined()
+    expect(establish).not.toHaveBeenCalled()
+    await settle(700)
+  })
+})
+
 describe('an attach the hand-over overtakes', () => {
   it('before it is marked in flight (while it reads the row): it goes, building nothing', async () => {
     const h = await stoppedAcp()
