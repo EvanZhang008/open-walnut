@@ -125,11 +125,12 @@ async function sessionTurn(w: RemoteWorld, m: Machine, o: { taskId: string; sid?
   return { sid: o.sid, ok: r.status < 300, ...(r.status < 300 ? {} : { why: `send ${r.status} ${JSON.stringify(r.json)?.slice(0, 200)}` }) }
 }
 
-/** How many times the mock CLI started session `sid` on machine `m` (its run log in the machine's HOME). */
-function cliStarts(m: Machine, sid: string): number {
-  try {
-    return fs.readFileSync(path.join(m.dir, 'mock-cli-runs.log'), 'utf8').split('\n').filter((l) => l.includes(sid) && l.includes('"what":"start"')).length
-  } catch { return 0 }
+/** Does the CLI transcript of session `sid` on machine `m` (under its HOME's .claude/projects) hold `text`? */
+function transcriptHas(m: Machine, sid: string, text: string): boolean {
+  const projects = path.join(m.dir, '.claude', 'projects')
+  let dirs: string[] = []
+  try { dirs = fs.readdirSync(projects) } catch { return false }
+  return dirs.some((d) => { try { return fs.readFileSync(path.join(projects, d, `${sid}.jsonl`), 'utf8').includes(text) } catch { return false } })
 }
 
 /** How many times each answer of the mock CLI ("echo: <message>") shows in the session's history on `m`. */
@@ -261,15 +262,14 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   }, 120_000, 1_000).then(() => true).catch(() => false)
   const ownOnB = await answersOn(w, B, own.sid)
   c.add('main: the session on A\'s own daemon is B\'s now, on host machine-a, its turn there once', adopted && ownOnB.get('echo: ROUND own on A') === 1, JSON.stringify([...ownOnB]))
-  const startsBefore = { a: cliStarts(A, own.sid), b: cliStarts(B, own.sid) }
   const ownSecond = await sessionTurn(w, B, { taskId: localTask.json?.task?.id, sid: own.sid, message: 'ROUND own two on B' })
   const ownAnswered = ownSecond.ok ? await waitFor('the own-daemon answer through B', async () => ((await answersOn(w, B, own.sid)).get('echo: ROUND own two on B') ?? 0) > 0, 120_000).then(() => true).catch(() => false) : false
   await sleep(5_000)
   const ownAfter = await answersOn(w, B, own.sid)
-  // Where it ran: the mock CLI notes each start in its machine's HOME (A's for A's daemon, B's for B's).
-  const ran = { a: cliStarts(A, own.sid) - startsBefore.a, b: cliStarts(B, own.sid) - startsBefore.b }
-  c.add('main: a message to it through B runs on the old machine and arrives once', ownAnswered && ownAfter.get('echo: ROUND own two on B') === 1 && ownAfter.get('echo: ROUND own on A') === 1 && ran.a >= 1 && ran.b === 0,
-    `${ownSecond.why ?? ''} ${JSON.stringify([...ownAfter])}; CLI starts since the switch: ${ran.a} on machine-a, ${ran.b} on machine-b`)
+  // Where it ran: the CLI writes the turn into its transcript under its machine's HOME (A's for A's daemon, B's for B's).
+  const ran = { a: transcriptHas(A, own.sid, 'ROUND own two on B'), b: transcriptHas(B, own.sid, 'ROUND own two on B') }
+  c.add('main: a message to it through B runs on the old machine and arrives once', ownAnswered && ownAfter.get('echo: ROUND own two on B') === 1 && ownAfter.get('echo: ROUND own on A') === 1 && ran.a && !ran.b,
+    `${ownSecond.why ?? ''} ${JSON.stringify([...ownAfter])}; the turn in the CLI transcript on machine-a: ${ran.a}, on machine-b: ${ran.b}`)
   // Triggers once: every routine slot through a door on one machine, once.
   await sleep(17_000)
   const slotsA = cronDoorCalls(A.home).filter((l) => l.mayAct).map((l) => l.opId)

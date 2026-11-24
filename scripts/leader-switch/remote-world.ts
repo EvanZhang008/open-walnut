@@ -60,6 +60,24 @@ export interface RemoteWorld extends World {
   stop(): Promise<void>
 }
 
+/** Stop every process of this user whose HOME is under `dir` (Linux: read from /proc; elsewhere nothing). */
+async function stopLeftovers(dir: string): Promise<void> {
+  if (process.platform !== 'linux') return
+  const mine: number[] = []
+  for (const e of fs.readdirSync('/proc')) {
+    const pid = Number(e)
+    if (!Number.isInteger(pid) || pid === process.pid) continue
+    try {
+      const home = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((l) => l.startsWith('HOME='))?.slice(5)
+      if (home && (home === dir || home.startsWith(`${dir}${path.sep}`))) mine.push(pid)
+    } catch { /* gone, or not this user's */ }
+  }
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+  for (const pid of mine) try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+  for (let i = 0; i < 50 && mine.some(alive); i++) await new Promise((r) => setTimeout(r, 100))
+  for (const pid of mine.filter(alive)) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+}
+
 /** A third machine: a folder (its HOME) and a machine id, no server. */
 function hostMachine(root: string, name: string): Machine {
   const dir = path.join(root, name)
@@ -180,6 +198,8 @@ export async function makeRemoteWorld(root: string, opts: { portA: number; portB
         if (alive()) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
       }
       await companion.stop().catch(() => {})
+      // What the daemons started outlives them (a host service the handover configured, a CLI): every process left whose HOME is a machine here.
+      await stopLeftovers(path.join(root, 'machines'))
     },
   }
   return world

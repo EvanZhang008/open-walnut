@@ -180,6 +180,12 @@ describe('boot decisions', () => {
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a')), reply('w2', rec(2, 'machine-b')), reply('w3', rec(1, 'machine-a'))] as never }, 'machine-a')).toBeNull()
     // Only one answer: not a majority, nothing is known.
     expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a'))] as never }, 'machine-a')).toBeNull()
+    // The handover of a switch back to this machine, left on one witness: its own once a renew of this machine above it
+    // shows it committed (the remote rehearsal's two-down left w-k on 56, w-b on 58, w-a on 63), never before.
+    const handover = (n: number) => ({ ...rec(n, 'machine-a'), kind: 'handover', from: 'machine-b', to: 'machine-a', by: 'machine-b' })
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(63, 'machine-a')), reply('w2', rec(58, 'machine-a')), reply('w3', handover(56))] as never }, 'machine-a')?.want).toBe('grant')
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', handover(56)), reply('w2', rec(55, 'machine-a')), reply('w3', null)] as never }, 'machine-a')).toBeNull()
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', handover(56)), reply('w2', rec(58, 'machine-a')), reply('w3', null)] as never }, 'machine-b')).toBeNull()
   })
 
   it('a handover to this machine that the switch did not commit: refuses', async () => {

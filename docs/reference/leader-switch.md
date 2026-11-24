@@ -811,6 +811,17 @@ witnessMarginMs`, 62 s) and grants itself then. Another machine never takes a re
 between is lost or repeated: routine slots stay due and run once, trigger fires are replayed,
 an approved mail is sent once by the reconcile.
 
+**A leader cut from a majority past its lease** can come back to witnesses that each kept a
+different record of its own (a renew that reached some of them while the others were cut off):
+no record has a majority, so no renew can stand and nothing ends that by waiting. When a
+majority answered and every answer is this machine's (a renew or grant it holds, its own
+release, or the handover of a switch to it that a renew of its own above it shows committed),
+the runtime asks for a grant, which each witness takes once the record it holds ran out there
+(`splitOwnRecords`, `src/core/leader/switch/runtime.ts`). A record of another machine, or a
+handover to this machine not yet committed, among the answers: it waits, as before (a switch's
+to settle). The remote rehearsal's `two-down` and `cut-after-commit` meet both cases (after the
+switch back, w-k still held the handover).
+
 ## Outward doors
 
 The few functions every outward send and every timer or trigger fire passes call
@@ -938,8 +949,8 @@ the new leader's own. A row its host's own service judges (`judge: 'host'`) keep
 do. The swap runs once per switch (the switch id is marked in `sessions.sqlite` in the same transaction, so a promotion
 resumed after a kill does not swap back). The trial's offline check does not compare that store's size and rows with the
 copy's (`offlineCheck` `changed`); its integrity check still runs. The rehearsal's `main` starts a session on A's own daemon,
-switches, and checks that B lists it on host `machine-a` with its turn once, and that a message through B starts the CLI on
-A (A's run log) and never on B. Without a `host_key` for the old machine nothing moves, and such a session would run on the
+switches, and checks that B lists it on host `machine-a` with its turn once, and that a message through B runs on A (the turn is in
+the CLI transcript under A's home, none under B's). Without a `host_key` for the old machine nothing moves, and such a session would run on the
 new leader's own daemon, where its transcript is not.
 
 Anything else (a store no rule decides) fails the trial with the file, the key or row and the path, and the switch rolls back.
