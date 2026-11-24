@@ -37,8 +37,9 @@ final class ChatRichnessRowTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// Every run opened (see `openingAllRuns`): these gates are about the member
-    /// rows a run opens to, and predate the fold.
+    /// Every run and every lone thought opened (see `openingAllRuns` and
+    /// `openingAllThoughts`): these gates are about the member rows a run opens to
+    /// and the thinking row a thought's "Thinking" line opens to, and predate both folds.
     private func input(_ messages: [ChatMessage], expanded: Set<String> = [],
                        scope: String = TimelineScope.unscoped,
                        liveThinking: String = "", streaming: Bool = false,
@@ -48,7 +49,7 @@ final class ChatRichnessRowTests: XCTestCase {
                       liveTextTruncated: false, liveThinking: liveThinking,
                       liveTools: liveTools,
                       activity: activity, showLoadEarlier: false, width: pageWidth,
-                      expandedRowIDs: expanded, scope: scope).openingAllRuns()
+                      expandedRowIDs: expanded, scope: scope).openingAllRuns().openingAllThoughts()
     }
 
     private func rows(_ messages: [ChatMessage], expanded: Set<String> = [],
@@ -168,9 +169,10 @@ final class ChatRichnessRowTests: XCTestCase {
             + "reconcile pass already took over"
         let built = await rows([thinking("m0", line: "checking the pgid files",
                                         excerpt: excerpt)])
-        XCTAssertEqual(built.map(\.content.reuseKind), ["thinking"],
+        // A lone thought is its "Thinking" fold line, its reasoning row inside (70422e7ebd).
+        XCTAssertEqual(built.map(\.content.reuseKind), ["toolRun", "thinking"],
                        "a kind:\"thinking\" message must build the reasoning row")
-        let payload = try thinkingPayload(built.first)
+        let payload = try thinkingPayload(thinkingRow(built))
         XCTAssertNil(payload.preview, "a history row shows no inline excerpt")
         XCTAssertEqual(payload.fullText, excerpt,
                        "the whole excerpt must reach the row, for the drawer")
@@ -239,7 +241,9 @@ final class ChatRichnessRowTests: XCTestCase {
         let built = await rows(lines.enumerated().map { index, line in
             thinking("m\(index)", line: line, excerpt: "\(line) — and the rest of it")
         })
-        let rendered = try built.map { try thinkingPayload($0).line }
+        // Each thought's fold line stands above its row (70422e7ebd): read the rows.
+        let rendered = try built.filter { $0.content.reuseKind == "thinking" }
+            .map { try thinkingPayload($0).line }
         XCTAssertEqual(rendered, lines,
                        "each row must print the line the server sent for it")
         XCTAssertEqual(Set(rendered.compactMap { $0 }).count, lines.count,
@@ -298,7 +302,10 @@ final class ChatRichnessRowTests: XCTestCase {
     func testThinkingRowJoinsScopingAndContentKey() async {
         let scoped = await rows([thinking("m0", line: "same words here", excerpt: "a fuller take")],
                                 scope: "conv-p")
-        XCTAssertEqual(scoped.first?.id, "conv-p|m0#0",
+        // The thought's fold line comes first now (70422e7ebd); both carry the conversation.
+        XCTAssertEqual(scoped.first?.id, "conv-p|m0#thought",
+                       "the thought's line must carry its conversation")
+        XCTAssertEqual(thinkingRow(scoped)?.id, "conv-p|m0#0",
                        "the reasoning row must carry its conversation")
 
         func reasoning(line: String? = "the collapsed line", preview: String? = "a fuller take",
@@ -790,7 +797,8 @@ final class ChatRichnessRowTests: XCTestCase {
     func testLiveReasoningSurvivesTurnEndUntilTheStoreClearsIt() async {
         let settled = await rows([], liveThinking: "the last thing it considered",
                                  streaming: false)
-        XCTAssertEqual(settled.map(\.content.reuseKind), ["thinking"],
+        // The live thought's fold line stays above it (70422e7ebd).
+        XCTAssertEqual(settled.map(\.content.reuseKind), ["toolRun", "thinking"],
                        "a finished turn keeps its reasoning row and nothing else")
         let cleared = await rows([], liveThinking: "", streaming: false)
         XCTAssertTrue(cleared.isEmpty, "clearing the accumulation must remove the row")

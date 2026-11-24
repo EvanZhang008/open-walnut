@@ -424,9 +424,7 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                     activity: activity, showLoadEarlier: true,
                     width: pageWidth, expandedRowIDs: [])
                 if opened {
-                    liveInput = liveInput.openingAllRuns()
-                    liveInput.expandedRowIDs.insert(
-                        TimelineScope.namespace(liveInput.scope, TimelineRowBuilder.liveThoughtFoldID))
+                    liveInput = liveInput.openingAllRuns().openingAllThoughts()
                 }
                 let snapshot = await actor.buildSnapshot(liveInput)
                 let kinds = snapshot.rows.map(\.content.reuseKind)

@@ -686,7 +686,8 @@ final class LetterAgentTextTests: XCTestCase {
         }
         // The Org task row and the team row: the binding, the shared renderer, then its link routing.
         let rows = [
-            ("Views/Org/OrgNodeTasksView.swift", "if let line = OrgNodeTasksModel.line(task) {", "Text(MarkdownParser.inline(line))"),
+            // Only a Needs you row keeps its line (607010f727: a row is otherwise its name).
+            ("Views/Org/OrgNodeTasksView.swift", "if state == .needs, let line = OrgNodeTasksModel.line(task) {", "Text(MarkdownParser.inline(line))"),
             ("Views/Tasks/TeamStatusViews.swift", "} else if let detail, !detail.isEmpty {", "Text(MarkdownParser.inline(detail))"),
             ("Views/Tasks/TeamStatusViews.swift", "} else if let line = OrgNodeTasksModel.line(row.task) {", "Text(MarkdownParser.inline(line))"),
         ]

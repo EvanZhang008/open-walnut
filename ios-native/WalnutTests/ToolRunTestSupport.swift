@@ -17,4 +17,18 @@ extension TimelineInput {
         copy.expandedRowIDs.insert(TimelineScope.namespace(scope, TimelineRowBuilder.liveRunID))
         return copy
     }
+
+    /// The same input with every thought that stands on its own OPENED: each saved
+    /// thought's "Thinking" fold line and the live turn's (2026-11-20, a lone thought
+    /// is a fold line with its thinking row inside), so a test about the thinking row
+    /// itself (its excerpt, its height, its id) sees it under its opened line. The
+    /// line itself is pinned by `LoneThoughtFoldTests`.
+    func openingAllThoughts() -> TimelineInput {
+        var copy = self
+        for message in messages where message.kind == .thinking {
+            copy.expandedRowIDs.insert(TimelineRowBuilder.thoughtFoldID(scope: scope, messageID: message.id))
+        }
+        copy.expandedRowIDs.insert(TimelineScope.namespace(scope, TimelineRowBuilder.liveThoughtFoldID))
+        return copy
+    }
 }

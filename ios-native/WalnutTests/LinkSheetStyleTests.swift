@@ -36,7 +36,10 @@ final class LinkSheetStyleTests: XCTestCase {
     func testTheTintedLinesPutTheHandlerLast() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let org = try String(contentsOf: root.appendingPathComponent("Walnut/Views/Org/OrgNodeTasksView.swift"), encoding: .utf8)
-        let tint = try XCTUnwrap(org.range(of: ".foregroundStyle(state == .needs ? Theme.needsText : .secondary)"))
+        // Only a Needs you row draws its line now, so its tint is the needs colour alone (607010f727);
+        // read from the line's own binding, past the page's error text in the same colour.
+        let line = try XCTUnwrap(org.range(of: "if state == .needs, let line = OrgNodeTasksModel.line(task) {"))
+        let tint = try XCTUnwrap(org.range(of: ".foregroundStyle(Theme.needsText)", range: line.upperBound..<org.endIndex))
         let handler = try XCTUnwrap(org.range(of: ".handlingFilePathLinks(source: OrgNodeTasksModel.lineSource(task))"))
         XCTAssertLessThan(tint.lowerBound, handler.lowerBound)
     }
