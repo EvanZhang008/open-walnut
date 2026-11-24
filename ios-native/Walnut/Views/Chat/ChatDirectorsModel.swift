@@ -5,14 +5,14 @@ import Foundation
 /// in the tree's order, and how the two layouts the user picks from draw them.
 ///
 ///   fold      under a VP row with Directors, one "N directors" row (folded by default); opened,
-///             its Directors, a nested one an indent deeper, under small project headings (the
-///             VP's projects in order) when the user shows project names
+///             its Directors, all at one level, each with its Org avatar, under small project
+///             headings (the VP's projects in order) when the user shows project names
 ///   sections  after the VPs, a "Directors" heading and every Director as a first-level row
-///             wearing its VP's initial and colour, "<VP> · <state>" under its title
+///             wearing its Org avatar, "<VP> · <state>" under its title
 ///
-/// A task that is no Director is transparent: the Directors under it count as the nearest
-/// Director's above (or as top level). One task is listed once, even when a VP reaches it
-/// through two projects.
+/// Only the first Director on each path is listed (2026-11-24, the user: only the first layer of
+/// leaders): a task that is no Director is transparent, and a Director's own team is never listed.
+/// One task is listed once, even when a VP reaches it through two projects.
 enum ChatDirectorsModel {
     struct Director: Identifiable, Equatable {
         let id: String
@@ -21,8 +21,6 @@ enum ChatDirectorsModel {
         let state: UserState
         /// Its state in words; a task never started reads "Not started" (web org-leaders.ts stateTextOf).
         var stateText: String = ""
-        /// 0 = a top Director under its VP; 1 = under another Director; and so on.
-        let depth: Int
         /// The VP row it reports to (`ChatOrgModel.Row.id`) and that VP's name.
         let vpRowId: String
         let vpName: String
@@ -63,13 +61,17 @@ enum ChatDirectorsModel {
         var seen = Set<String>()
         return projects(of: row, in: tree).map { p in
             var out: [Director] = []
-            walk(p.teams ?? [], depth: 0, project: p.project, row: row, tasks: tasks, seen: &seen, into: &out)
+            walk(p.teams ?? [], project: p.project, row: row, tasks: tasks, seen: &seen, into: &out)
             return (p.project, out)
         }
     }
 
+    /// The first Director on each path down, one level only (2026-11-24, the user: only the first
+    /// layer of leaders, never a leader of a leader; the server's `directorsOf` reads the same rule).
+    /// A task that is no Director is transparent; everything under a Director is its own team, marked
+    /// seen so another project's list does not show it either.
     private static func walk(
-        _ nodes: [OrgTeamNodeWire], depth: Int, project: String, row: ChatOrgModel.Row,
+        _ nodes: [OrgTeamNodeWire], project: String, row: ChatOrgModel.Row,
         tasks: [String: WalnutTask], seen: inout Set<String>, into out: inout [Director]
     ) {
         for n in nodes {
@@ -78,13 +80,17 @@ enum ChatDirectorsModel {
                 out.append(Director(
                     id: n.id, title: title(n, tasks: tasks), project: n.project ?? project,
                     state: state(n, tasks: tasks), stateText: stateText(n, tasks: tasks),
-                    depth: depth, vpRowId: row.id, vpName: row.name
+                    vpRowId: row.id, vpName: row.name
                 ))
-                walk(n.workers ?? [], depth: depth + 1, project: project, row: row, tasks: tasks, seen: &seen, into: &out)
+                markSeen(n.workers ?? [], &seen)
             } else {
-                walk(n.workers ?? [], depth: depth, project: project, row: row, tasks: tasks, seen: &seen, into: &out)
+                walk(n.workers ?? [], project: project, row: row, tasks: tasks, seen: &seen, into: &out)
             }
         }
+    }
+
+    private static func markSeen(_ nodes: [OrgTeamNodeWire], _ seen: inout Set<String>) {
+        for n in nodes where seen.insert(n.id).inserted { markSeen(n.workers ?? [], &seen) }
     }
 
     /// The fold of every VP row that has Directors, by row id.

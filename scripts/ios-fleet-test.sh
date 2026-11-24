@@ -434,6 +434,15 @@ while IFS=$'\t' read -r H NOTE; do
   done
   trap - INT TERM HUP
   RES=$(grep '^FLEET_RESULT ' "$LOG" | tail -1 | cut -d' ' -f2-)
+  if [ -z "$RES" ]; then
+    # A read Walnut shortened ("... [Walnut cut: N more characters]") can glue the result line to the
+    # line before it (2026-11-24: a passed UI run came back with no result and no screenshots): read the
+    # job's whole log from its file there instead of the stream.
+    say "the streamed log has no whole result line; reading job $JOB's log file on $H"
+    : > "$LOG.file"
+    if job_log_rest "$H" "$JOB" 0 "$LOG.file"; then mv "$LOG.file" "$LOG"; RES=$(grep '^FLEET_RESULT ' "$LOG" | tail -1 | cut -d' ' -f2-); fi
+    rm -f "$LOG.file"
+  fi
   [ -n "$RES" ] || die "the run on $H ended without a result line; its log: $LOG"
   STATUS=$(printf '%s' "$RES" | js 'print(d["exit"])')
   STATE=$(printf '%s' "$RES" | js 'print(d["state"])')

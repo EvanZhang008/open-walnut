@@ -34,6 +34,8 @@ interface Mac {
   jobGone?: boolean
   /** The job's log file there never gets a result line. */
   logNoResult?: boolean
+  /** Walnut shortens the last read, gluing the result line to the line before it. */
+  readCut?: boolean
   /** Its load at each host_load call in turn (the last one repeats): a Mac that frees up. */
   loadSeq?: (number | null)[]
   /** The background start fails this many times first, with this error (default: Walnut never took it). */
@@ -113,7 +115,7 @@ if (op === 'host_exec_read') {
   if (args.offset === 0) out({ output: 'remote-run: simulator X\\n', nextOffset: 24, outputBytes: 24, running: true })
   if (m.jobGone) { process.stderr.write('walnut: unknown_job: no job ' + args.job_id + ' on this host (finished jobs are kept for an hour; the log file stays)'); process.exit(1) }
   if (args.offset === 24) out({ output: 'app log noise\\n', nextOffset: 38, outputBytes: 38 + tail.length, running: false })
-  out({ output: tail, nextOffset: 38 + tail.length, outputBytes: 38 + tail.length, running: false })
+  out({ output: m.readCut ? tail.replace('\\nFLEET_RESULT', '\\n\u2026 [Walnut cut: 403 more characters]FLEET_RESULT') : tail, nextOffset: 38 + tail.length, outputBytes: 38 + tail.length, running: false })
 }
 process.stderr.write('walnut: unknown op ' + op); process.exit(2)
 `, { mode: 0o755 })
@@ -503,6 +505,16 @@ describe('ios-fleet-test.sh', () => {
     const log = fs.readFileSync(path.join(String(fs.readdirSync(path.join(taskDir, 'ios-fleet')).map((d) => path.join(taskDir, 'ios-fleet', d))[0]), 'run.log'), 'utf8')
     expect(log.match(/remote-run: simulator X/g)).toHaveLength(1)
     expect(log).toContain('FLEET_RESULT ')
+    expect(r.calls.some((c) => c.op === 'host_copy' && String(c.args.from).endsWith('/out.tgz'))).toBe(true)
+  })
+
+  it('a read Walnut shortened that glues the result line to another: the whole log is read from its file there', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3, readCut: true }], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('reading job hx-mac-mini\'s log file on mac-mini')
+    expect(r.calls.some((c) => c.op === 'host_copy' && String(c.args.from).endsWith('/host-exec/hx-mac-mini.log'))).toBe(true)
+    // The results still come back.
     expect(r.calls.some((c) => c.op === 'host_copy' && String(c.args.from).endsWith('/out.tgz'))).toBe(true)
   })
 

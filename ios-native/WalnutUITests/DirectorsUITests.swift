@@ -52,7 +52,9 @@ final class DirectorsUITests: XCTestCase {
     }
 
     private func openOrgDrawer(_ app: XCUIApplication) {
-        let menu = app.buttons["chat.menu"]
+        // The chat shows its drawer button as chat.menu, or as chat.session.menu while a session is open
+        // (ChatView.swift): either opens the same drawer.
+        let menu = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["chat.menu", "chat.session.menu"])).firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 60), "the chat never appeared")
         menu.tap()
         let picker = app.segmentedControls["chat.drawer.viewSwitch"]
@@ -66,7 +68,7 @@ final class DirectorsUITests: XCTestCase {
         openOrgDrawer(app)
         let fold = element(app, "chat.drawer.directors.fold.project:walnut")
         XCTAssertTrue(fold.waitForExistence(timeout: 20), "no Directors fold under the Walnut VP")
-        XCTAssertTrue(fold.label.hasPrefix("4 directors"), "the fold reads \(fold.label)")
+        XCTAssertTrue(fold.label.hasPrefix("3 directors"), "the fold reads \(fold.label)")
         // Folded by default; a VP with none has no fold row.
         XCTAssertFalse(element(app, "chat.drawer.director.d1").exists, "the fold opened by itself")
         XCTAssertFalse(element(app, "chat.drawer.directors.fold.project:atlas").exists)
@@ -74,10 +76,13 @@ final class DirectorsUITests: XCTestCase {
         attach(app, "ios-directors-fold-closed")
 
         fold.tap()
-        let nested = element(app, "chat.drawer.director.d2")
-        XCTAssertTrue(nested.waitForExistence(timeout: 5), "the fold did not open")
         let top = element(app, "chat.drawer.director.d1")
-        XCTAssertGreaterThan(nested.frame.minX, top.frame.minX - 1, "a nested Director is not indented")
+        XCTAssertTrue(top.waitForExistence(timeout: 5), "the fold did not open")
+        // One level only (2026-11-24, the user): d2 sits in d1's team and is not listed; the Director
+        // under a non-Director stands at the same inset as the first.
+        XCTAssertFalse(element(app, "chat.drawer.director.d2").exists, "a Director inside a Director's team is listed")
+        let underPlatform = element(app, "chat.drawer.director.d3")
+        XCTAssertEqual(underPlatform.frame.minX, top.frame.minX, accuracy: 1, "the Directors are not at one level")
         XCTAssertTrue(app.staticTexts["Garden"].exists, "no project heading for the led project")
         Thread.sleep(forTimeInterval: 0.6)
         attach(app, "ios-directors-fold-open")
@@ -136,7 +141,8 @@ final class DirectorsUITests: XCTestCase {
         XCTAssertTrue(header.waitForExistence(timeout: 10), "no Directors section")
         let vp = app.buttons["chat.drawer.org.project:walnut"]
         XCTAssertGreaterThan(header.frame.minY, vp.frame.maxY, "the Directors section is not after the VPs")
-        XCTAssertTrue(element(app, "chat.drawer.director.d2").exists, "a nested Director is missing from the section")
+        XCTAssertTrue(element(app, "chat.drawer.director.d3").exists, "a Director under a non-Director is missing from the section")
+        XCTAssertFalse(element(app, "chat.drawer.director.d2").exists, "a Director inside a Director's team is listed")
         XCTAssertFalse(element(app, "chat.drawer.directors.fold.project:walnut").exists, "the fold row shows in the sections layout")
         Thread.sleep(forTimeInterval: 0.6)
         attach(app, "ios-directors-sections")

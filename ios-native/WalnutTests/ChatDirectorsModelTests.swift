@@ -2,8 +2,9 @@ import XCTest
 @testable import Walnut
 
 /// Directors in the Chat drawer (ChatDirectorsModel), the twin of the server's `directorsOf`
-/// (src/core/org/org-directors.ts): which tasks under a VP are Directors, nested ones a level
-/// deeper, a non-Director in between transparent, each task once; and the two layouts.
+/// (src/core/org/org-directors.ts): which tasks under a VP are Directors, the first on each path
+/// only (a Director inside a Director's team is not listed), a non-Director in between transparent,
+/// each task once; and the two layouts.
 final class ChatDirectorsModelTests: XCTestCase {
     /// `GET /api/v1/org` with Directors: Walnut's VP also leads Garden; under "Platform" (no
     /// Director) sits a Director, and a Director nests another. Ops has none.
@@ -36,19 +37,19 @@ final class ChatDirectorsModelTests: XCTestCase {
 
     private func rows(_ t: OrgTreeWire) -> [ChatOrgModel.Row] { ChatOrgModel.rows(tree: t, tasks: []) }
 
-    func testFoldListsAVPsDirectorsNestedAndGroupedByItsProjects() throws {
+    func testFoldListsAVPsFirstLevelDirectorsGroupedByItsProjects() throws {
         let t = try tree()
         let folds = ChatDirectorsModel.folds(rows: rows(t), tree: t, tasks: [], showProjects: true)
         let walnut = try XCTUnwrap(folds["project:walnut"])
-        // d1, d2 (nested), d3 (under a non-Director), g1; d1 once though Garden lists it too.
-        XCTAssertEqual(walnut.count, 4)
+        // d1, d3 (under a non-Director), g1; d2 sits in d1's team, so it is not listed (2026-11-24,
+        // the user: only the first layer of leaders); d1 once though Garden lists it too.
+        XCTAssertEqual(walnut.count, 3)
         XCTAssertEqual(walnut.groups.map(\.project), ["Walnut", "Garden"])
-        XCTAssertEqual(walnut.groups[0].directors.map(\.id), ["d1", "d2", "d3"])
-        XCTAssertEqual(walnut.groups[0].directors.map(\.depth), [0, 1, 0])
+        XCTAssertEqual(walnut.groups[0].directors.map(\.id), ["d1", "d3"])
         XCTAssertEqual(walnut.groups[1].directors.map(\.id), ["g1"])
         // A VP with no Director has no fold row.
         XCTAssertNil(folds["project:operations"])
-        XCTAssertEqual(ChatDirectorsModel.countLabel(walnut.count), "4 directors")
+        XCTAssertEqual(ChatDirectorsModel.countLabel(walnut.count), "3 directors")
         XCTAssertEqual(ChatDirectorsModel.countLabel(1), "1 director")
     }
 
@@ -57,19 +58,18 @@ final class ChatDirectorsModelTests: XCTestCase {
         let walnut = try XCTUnwrap(ChatDirectorsModel.folds(rows: rows(t), tree: t, tasks: [], showProjects: false)["project:walnut"])
         XCTAssertEqual(walnut.groups.count, 1)
         XCTAssertNil(walnut.groups[0].project)
-        XCTAssertEqual(walnut.groups[0].directors.map(\.id), ["d1", "d2", "d3", "g1"])
+        XCTAssertEqual(walnut.groups[0].directors.map(\.id), ["d1", "d3", "g1"])
     }
 
     func testSectionsListEveryDirectorFlatWithItsVP() throws {
         let t = try tree()
         let list = ChatDirectorsModel.sections(rows: rows(t), tree: t, tasks: [])
-        XCTAssertEqual(list.map(\.id), ["d1", "d2", "d3", "g1"])
+        XCTAssertEqual(list.map(\.id), ["d1", "d3", "g1"])
         XCTAssertEqual(ChatDirectorsModel.sectionLine(list[0]), "Walnut · Working")
-        // A Director never started reads "Not started", as on the web; one that asks still says so.
-        XCTAssertEqual(ChatDirectorsModel.sectionLine(list[2]), "Walnut · Not started")
-        XCTAssertEqual(list[1].stateText, UserState.needs.label)
+        // A Director never started reads "Not started", as on the web.
+        XCTAssertEqual(ChatDirectorsModel.sectionLine(list[1]), "Walnut · Not started")
         // To read is drawn as Needs you, on every surface.
-        XCTAssertEqual(list[3].state, .needs)
+        XCTAssertEqual(list[2].state, .needs)
         XCTAssertEqual(ChatDirectorsModel.vpInitial(list[0].vpName), "W")
         XCTAssertEqual(ChatDirectorsModel.vpInitial("  ops"), "O")
     }
@@ -101,11 +101,14 @@ final class ChatDirectorsModelTests: XCTestCase {
         XCTAssertTrue(ChatDirectorsModel.folds(rows: rows(old), tree: old, tasks: [], showProjects: true).isEmpty)
     }
 
+    /// Taking d1 off lists the Director in its team at once, in d1's place; one that asks says so,
+    /// though it never started.
     func testMarkingTakesOneTaskOffAtOnce() throws {
         let t = try tree()
-        let after = ChatDirectorsModel.marking(t, id: "d2", director: false)
+        let after = ChatDirectorsModel.marking(t, id: "d1", director: false)
         let list = ChatDirectorsModel.sections(rows: rows(after), tree: after, tasks: [])
-        XCTAssertEqual(list.map(\.id), ["d1", "d3", "g1"])
+        XCTAssertEqual(list.map(\.id), ["d2", "d3", "g1"])
+        XCTAssertEqual(list[0].stateText, UserState.needs.label)
     }
 
     func testOpenRowOpensTheDirectorsOwnTask() throws {

@@ -13,8 +13,8 @@ struct ChatDirectorActions {
 }
 
 /// The fold layout: under a VP row, "▸ N directors", folded until he opens it, kept per VP
-/// across launches (`ViewMemory`). Opened: its Directors, nested ones an indent deeper, under small
-/// project headings when he shows project names, then "New Director".
+/// across launches (`ViewMemory`). Opened: its Directors (one level: the first leaders under the VP),
+/// under small project headings when he shows project names, then "New Director".
 struct ChatDirectorFold: View {
     let row: ChatOrgModel.Row
     let fold: ChatDirectorsModel.Fold
@@ -99,7 +99,8 @@ struct ChatDirectorFold: View {
     }
 }
 
-/// One Director in an opened fold: its state's dot and its title.
+/// One Director in an opened fold: its state's dot, its Org avatar and its title, as the web's fold
+/// row draws it (OrgLeaders.tsx: dot, NodeAvatar, title).
 struct ChatDirectorFoldRow: View {
     let director: ChatDirectorsModel.Director
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -107,20 +108,21 @@ struct ChatDirectorFoldRow: View {
     var body: some View {
         HStack(spacing: 8) {
             ChatDirectorDot(state: director.state)
+            ChatDirectorAvatar(director: director, side: 22)
             Text(verbatim: director.title)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
                 .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
         }
         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-        .padding(.leading, ChatDirectorFold.nameInset + 6 + CGFloat(min(director.depth, 4)) * 14)
+        .padding(.leading, ChatDirectorFold.nameInset + 6)
         .padding(.trailing, 16)
         .contentShape(Rectangle())
     }
 }
 
-/// The sections layout: one Director as a first-level row the size of a VP's, a smaller round
-/// avatar with its VP's initial and colour, "<VP> · <state>" under its title.
+/// The sections layout: one Director as a first-level row the size of a VP's, its Org avatar a
+/// little smaller than a VP's, "<VP> · <state>" under its title.
 struct ChatDirectorSectionRow: View {
     let director: ChatDirectorsModel.Director
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -129,11 +131,7 @@ struct ChatDirectorSectionRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(verbatim: ChatDirectorsModel.vpInitial(director.vpName))
-                .font(Theme.Glyph.sm.font(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(ChatOrgRowView.color(ChatOrgModel.avatarColor(director.vpName)).opacity(0.85), in: Circle())
+            ChatDirectorAvatar(director: director, side: 28)
                 // Centred where a VP's 34pt avatar is.
                 .frame(width: 34)
             VStack(alignment: .leading, spacing: 2) {
@@ -156,6 +154,25 @@ struct ChatDirectorSectionRow: View {
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
+    }
+}
+
+/// A Director's Org avatar: the picture the server gives it (every Director wears one, as the CEO and
+/// the VPs do: src/core/org/avatars/avatar-assign.ts), drawn by the same `OrgAvatar` as a VP row; until
+/// it loads, a round mark in its VP's colour with its VP's initial.
+struct ChatDirectorAvatar: View {
+    let director: ChatDirectorsModel.Director
+    let side: CGFloat
+
+    var body: some View {
+        OrgAvatar(taskId: director.id, side: side) {
+            Text(verbatim: ChatDirectorsModel.vpInitial(director.vpName))
+                .font(Theme.Glyph.sm.font(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: side, height: side)
+                .background(ChatOrgRowView.color(ChatOrgModel.avatarColor(director.vpName)).opacity(0.85), in: Circle())
+        }
+        .accessibilityHidden(true)
     }
 }
 
