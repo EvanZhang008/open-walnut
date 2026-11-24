@@ -1294,11 +1294,22 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     if (p.task.phase !== 'COMPLETE') await armStatusQuestion(p.taskId, p.sessionId).catch(() => false);
 
     // This turn is the session's last: its task completed, and it stops now
-    // (sessions/self-complete-stop.ts), so the summary cannot wait.
-    if (isAwaitingTurnEnd(p.sessionId)) {
+    // (sessions/self-complete-stop.ts), so the summary cannot wait. A session its host runs is
+    // stopped by that host, which waits for this summary's end (sessions/host-judged-complete.ts).
+    const hostStops = !isAwaitingTurnEnd(p.sessionId)
+      && await (await import('../sessions/host-judged-complete.js')).hostAwaitsCompletionStop(p.sessionId).catch(() => false);
+    if (isAwaitingTurnEnd(p.sessionId) || hostStops) {
       cancelPendingTriage(p.sessionId);
       const gen = await liveTurnGen(p.sessionId);
-      finalSummaries.set(p.sessionId, { run: startTriage(p, { gen }), at: Date.now(), gen });
+      const run = startTriage(p, { gen });
+      if (hostStops) {
+        void run.catch(() => {}).then(async () => {
+          finalSummaries.delete(p.sessionId);
+          await (await import('../sessions/host-judged-complete.js')).tellHostSummaryDone(p.sessionId, gen);
+        });
+      } else {
+        finalSummaries.set(p.sessionId, { run, at: Date.now(), gen });
+      }
       finalSummaryWaiters.get(p.sessionId)?.();
       log.session.info('turn-complete-summary: final turn before the session stops — summarizing now', {
         sessionId: p.sessionId, taskId: p.taskId,

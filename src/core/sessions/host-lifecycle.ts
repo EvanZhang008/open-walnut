@@ -9,8 +9,8 @@ export { terminateSession, changeSessionModeOf } from './session-lifecycle.js'
 export { readSessionSupervision } from './session-supervision.js'
 /** The folder is there again (its leader made the workspace again): what this host parked on it goes. */
 export { sendFolderWaiting } from './folder-gone.js'
-/** Its task is complete: stop it now, or when its turn ends (host-judged-complete.ts; only asked of a host naming SESSION_COMPLETE_STOP_CAP). */
-export { takeCompletionStop } from './host-judged-complete.js'
+/** Its task is complete: stop it now, or when its turn ends, or no more (a reopen); and the leader's word that its last turn is summarized (host-judged-complete.ts; only asked of a host naming SESSION_COMPLETE_STOP_CAP). */
+export { takeCompletionStop, completionSummaryDone } from './host-judged-complete.js'
 
 /** Did the line already run in this host's CLI of `sid` (resend-already-ran.ts)? */
 export async function lineAlreadyRan(sid: string, lineUuid?: string, messageIds?: string[]): Promise<boolean> {

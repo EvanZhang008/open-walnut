@@ -13,8 +13,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import fsp from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
-const { stops, taskCopy } = vi.hoisted(() => ({
+const { stops, taskCopy, refuse } = vi.hoisted(() => ({
   stops: [] as Array<{ sid: string; force?: boolean; by?: string }>,
+  /** A stop that fails, with this status (404: the session is not there). */
+  refuse: { status: 0 },
   taskCopy: new Map<string, { id: string; phase: string; reopens?: number }>(),
 }))
 
@@ -23,6 +25,7 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', async (orig) => ({
   ...(await orig<typeof import('../../../src/core/sessions/session-lifecycle.js')>()),
   terminateSession: async (sid: string, opts: { force?: boolean; by?: string }) => {
     stops.push({ sid, ...opts })
+    if (refuse.status) throw Object.assign(new Error('refused'), { status: refuse.status })
     const { updateSessionRecord } = await import('../../../src/core/session-tracker.js')
     await updateSessionRecord(sid, { process_status: 'stopped', pid: undefined })
     return { status: 'terminated', sessionId: sid }
@@ -37,7 +40,10 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { _resetServerRoleForTesting } from '../../../src/core/server-role.js'
 import * as sessionDb from '../../../src/core/session-db.js'
 import * as tracker from '../../../src/core/session-tracker.js'
-import { takeCompletionStop } from '../../../src/core/sessions/host-judged-complete.js'
+import {
+  __setHostSummaryWaitMs, _awaitingLeaderSummaryForTest, _stopRetriesArmedForTest, _resetHostJudgedCompleteForTesting,
+  completionSummaryDone, takeCompletionStop,
+} from '../../../src/core/sessions/host-judged-complete.js'
 import {
   __setSelfCompleteSettleMs, _pendingSelfCompleteStopsForTest, _resetSelfCompleteStopsForTest,
 } from '../../../src/core/sessions/self-complete-stop.js'
@@ -87,6 +93,8 @@ beforeAll(async () => {
   _resetServerRoleForTesting()
   sessionDb.allowOwnRowWrites(KEY)
   __setSelfCompleteSettleMs(0)
+  // The leader's summary of the last turn is told at once in these cases (the summary cases set their own wait).
+  __setHostSummaryWaitMs(0)
   // The retry rows load at a server's start; loaded here so a wait's first look is quick.
   await loadTurnRetriers()
 })
@@ -104,8 +112,42 @@ afterAll(async () => {
 
 beforeEach(() => {
   _resetSelfCompleteStopsForTest()
+  _resetHostJudgedCompleteForTesting()
   stops.length = 0
+  refuse.status = 0
   taskCopy.clear()
+})
+
+describe('the host waits for its leader\'s summary of the last turn before it stops', () => {
+  afterAll(() => { __setHostSummaryWaitMs(0) })
+
+  it('the stop waits for the leader\'s word that the summary is done', async () => {
+    __setHostSummaryWaitMs(60_000)
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, ask('turn_end'))
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(_awaitingLeaderSummaryForTest()).toEqual([sid]), { timeout: 5_000 })
+    expect(stops, 'the CLI must still answer the leader\'s self-report').toEqual([])
+    expect(await completionSummaryDone(sid, {})).toEqual({ ok: true })
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
+    expect(_awaitingLeaderSummaryForTest()).toEqual([])
+  })
+
+  it('a word that came before the turn\'s end counts; no word stops it after the wait\'s limit', async () => {
+    __setHostSummaryWaitMs(60_000)
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, ask('turn_end'))
+    await completionSummaryDone(sid, {})
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
+
+    stops.length = 0
+    __setHostSummaryWaitMs(300)
+    const quiet = await ownRow('running')
+    await takeCompletionStop(quiet, ask('turn_end'))
+    await turnEnds(quiet)
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([quiet]), { timeout: 5_000 })
+  })
 })
 
 describe('a host stops its own completed session', () => {
@@ -180,6 +222,45 @@ describe('a host stops its own completed session', () => {
     expect(await resumeTaskCompleteStops()).toBe(1)
     await vi.waitFor(async () => expect((await tracker.getSessionByClaudeId(sid))?.taskCompleteStop).toBeUndefined(), { timeout: 5_000 })
     expect(stops).toEqual([])
+  })
+
+  it('a cancel (its task reopened on the leader) drops the wait and the marker; the turn\'s end stops nothing', async () => {
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, ask('turn_end'))
+    expect(await takeCompletionStop(sid, ask('cancel'))).toEqual({ state: 'cancelled' })
+    expect(_pendingSelfCompleteStopsForTest()).toEqual([])
+    expect((await tracker.getSessionByClaudeId(sid))?.taskCompleteStop).toBeUndefined()
+    await turnEnds(sid)
+    // Completed again later: taken again, and stopped at that turn's end.
+    expect(await takeCompletionStop(sid, ask('turn_end'))).toEqual({ state: 'turn_end' })
+    expect(stops).toEqual([])
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
+  })
+
+  it('an ask whose reopen count the leader did not know is never vetoed by the task copy', async () => {
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, { at: new Date().toISOString(), when: 'turn_end' })
+    taskCopy.set(TASK, { id: TASK, phase: 'IN_PROGRESS', reopens: 2 })
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
+  })
+
+  it('a stop refused as final (the session is not there) is not tried again', async () => {
+    sid = await ownRow('running')
+    await takeCompletionStop(sid, ask('turn_end'))
+    refuse.status = 404
+    await turnEnds(sid)
+    await vi.waitFor(() => expect(stops.map((s) => s.sid)).toEqual([sid]), { timeout: 5_000 })
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual([]))
+    expect(_stopRetriesArmedForTest()).toEqual([])
+
+    // One that may pass later is tried again after a poll.
+    stops.length = 0
+    refuse.status = 500
+    const again = await ownRow('running')
+    await takeCompletionStop(again, ask('turn_end'))
+    await turnEnds(again)
+    await vi.waitFor(() => expect(_stopRetriesArmedForTest()).toEqual([again]), { timeout: 5_000 })
   })
 
   it('a row this host does not own is not taken', async () => {

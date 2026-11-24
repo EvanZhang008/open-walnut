@@ -40,7 +40,7 @@ import {
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
 import { SELF_COMPLETE_STOP_MAX_MS, stopWhenTurnEnds } from './sessions/self-complete-stop.js';
-import { completionAskPending, stopHostRunForCompletion, type HostCompletionStop } from './sessions/host-judged-complete.js';
+import { completionAskPending, hostCompleteStopState, stopHostRunForCompletion, type HostCompletionStop } from './sessions/host-judged-complete.js';
 import { liveAcpSessionIds, noteStopUndelivered, recheckUndeliveredHosts, undeliveredHolds, unreachableOwnerHosts } from './sessions/task-complete-stop.js';
 import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-session-per-task.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
@@ -3248,6 +3248,8 @@ export async function completeTaskSessions(
   // (sessions/self-complete-stop.ts).
   // `gentle`: a pass that did not just decide the completion (the boot pass, a later write to the
   // complete task): a session its host judges is asked to stop at its turn's end, never mid-turn.
+  // That holds an idle session with background work too, up to the turn-end wait's limit (24 h,
+  // SELF_COMPLETE_STOP_MAX_MS), where such a pass used to stop it at once.
   opts?: { actorSid?: string; gentle?: boolean },
 ): Promise<number> {
   if (!sessionIds.length) return 0;
@@ -3316,8 +3318,12 @@ export async function completeTaskSessions(
         const session = rowToSession(row);
         if (judgedByHost(session) && !rowOwnedHere(session, hereKey)) {
           if (isTerminalSession(session) || (session.process_status === 'stopped' && session.pid == null)) continue;
-          // Its host keeps the stop on its own row already, or an ask is on its way (host-judged-complete.ts).
-          if (session.taskCompleteStop || completionAskPending(sid)) continue;
+          // An ask is on its way; or its host, which takes the stop itself, keeps it on its own row
+          // already and this pass decided nothing new (host-judged-complete.ts). A new decision asks
+          // again (the host takes it once: its marker may be one it dropped since), and the marker
+          // of a host that went back to an older Walnut is not read: that host is handed the stop.
+          if (completionAskPending(sid)) continue;
+          if (opts?.gentle && session.taskCompleteStop?.state === 'turn_end' && hostCompleteStopState(session.host!) === 'takes') continue;
           // It completed its own task mid-turn: it stops when that turn ends, as does any session a
           // pass that did not just decide the completion finds live.
           const midTurnActor = !!opts?.actorSid && (sid === opts.actorSid || session.acpRuntimeId === opts.actorSid) && session.process_status === 'running';
@@ -3403,7 +3409,10 @@ export async function completeTaskSessions(
     if (lockWait instanceof Promise) await lockWait;
     for (const session of stoppedRows) emitSessionStatusChanged(session, {}, ['*'], { source: 'session-tracker' });
     if (hostStops.length > 0) {
-      log.session.info('completing task sessions: their hosts stop the sessions they run', { sessionIds: hostStops.map((h) => `${h.sid}:${h.when}`).join(','), count: hostStops.length });
+      const atTurnEnd = hostStops.filter((h) => h.when === 'turn_end').length;
+      log.session.info('completing task sessions: their hosts stop the sessions they run', {
+        sessionIds: hostStops.map((h) => `${h.sid}:${h.when}`).join(','), now: hostStops.length - atTurnEnd, atTurnEnd,
+      });
       stopHostRunForCompletion(hostStops);
     }
     // Still under the lock every record write takes: the status write that

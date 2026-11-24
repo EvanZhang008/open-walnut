@@ -1658,6 +1658,10 @@ function emitProjectCreated(name: string, source: TaskSource): void {
  */
 function emitPhaseChanged(task: Task, oldPhase: TaskPhase, source: string, actorSid?: string): void {
   if (task.phase === oldPhase) return;
+  // Reopened: a host that waits to stop the task's session at its turn's end is told to keep it.
+  if (oldPhase === 'COMPLETE') {
+    void import('./sessions/host-judged-complete.js').then((m) => m.cancelHostCompletionStops(task)).catch(() => {});
+  }
   bus.emit(EventNames.TASK_PHASE_CHANGED, {
     task,
     oldPhase,

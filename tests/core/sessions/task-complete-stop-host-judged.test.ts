@@ -43,7 +43,7 @@ vi.mock('../../../src/core/sessions/host-judged-controls.js', () => ({
     if (member !== 'takeCompletionStop') throw new Error(`unexpected member ${member}`)
     const a = args[0] as { when: string; reopens?: number }
     asked.push({ sid, when: a.when, ...(a.reopens !== undefined ? { reopens: a.reopens } : {}) })
-    return { state: a.when === 'now' ? 'stopped' : 'turn_end' }
+    return { state: a.when === 'now' ? 'stopped' : a.when === 'cancel' ? 'cancelled' : 'turn_end' }
   },
 }))
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
@@ -196,6 +196,30 @@ describe('a host that takes the stop itself (session-complete-stop-v1)', () => {
     expect(await getSessionByClaudeId('self'), 'never written stopped by the leader').toMatchObject({ process_status: 'running', pid: PID })
   })
 
+  it('a reopen tells the host to drop the stop it waits to make', async () => {
+    const task = await hostTask('self')
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(asked).toHaveLength(1))
+    await hostWrites('self', { taskCompleteStop: { at: new Date().toISOString(), state: 'turn_end', actor: true, reopens: 0 } })
+    await updateTask(task.id, { phase: 'IN_PROGRESS' }, { source: 'api' })
+    await vi.waitFor(() => expect(asked.map((a) => a.when)).toEqual(['turn_end', 'cancel']))
+  })
+
+  it('a new completion asks again even while the copy still shows a marker the host dropped; a later write does not', async () => {
+    const task = await hostTask('self')
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(asked).toHaveLength(1))
+    // The host vetoed and dropped its marker; this copy has not heard yet.
+    await hostWrites('self', { taskCompleteStop: { at: new Date().toISOString(), state: 'turn_end', actor: true, reopens: 0 } })
+    await updateTask(task.id, { phase: 'IN_PROGRESS' }, { source: 'api' })
+    await vi.waitFor(() => expect(asked).toHaveLength(2))
+    await completeTask(task.id)
+    await vi.waitFor(() => expect(asked.map((a) => a.when)).toEqual(['turn_end', 'cancel', 'now']))
+    await updateTask(task.id, { title: 'Ship the fix, refined' })
+    await settle()
+    expect(asked).toHaveLength(3)
+  })
+
   it('a completion decided from the board asks now', async () => {
     const task = await hostTask('board')
     await completeTask(task.id)
@@ -225,6 +249,21 @@ describe('an older host (no session-complete-stop-v1): the old way', () => {
     retryCompletionStopsFor(HOST)
     await vi.waitFor(() => expect(handed).toEqual([{ sid: 'self', force: true, by: 'task_completed' }]))
     expect(_completionStopsWaitingForTesting(HOST)).toEqual([])
+  })
+
+  it('a host that went back to an older Walnut: the marker it left is not read, the old way stops it', async () => {
+    const task = await hostTask('self')
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual(['self']))
+    // The marker a newer service of this host wrote before it went back.
+    await hostWrites('self', { taskCompleteStop: { at: new Date().toISOString(), state: 'turn_end', actor: true, reopens: 0 } })
+    restart()
+    noteHostCompleteStop(HOST, 'old')
+    await migrateCompletedTaskSessions()
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest(), 'this leader waits for the turn itself').toEqual(['self']))
+    expect(asked).toEqual([])
+    await turnEnds('self')
+    await vi.waitFor(() => expect(handed.map((h) => h.sid)).toEqual(['self']), { timeout: 10_000 })
   })
 
   it('the boot pass after a leader restart waits for the turn\'s end too, instead of a stop mid-turn', async () => {

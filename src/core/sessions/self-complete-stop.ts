@@ -92,6 +92,11 @@ export function stopWhenTurnEnds(sessionId: string, since: number = Date.now()):
   waiter.watch(sessionId, { since });
 }
 
+/** Its task was reopened (a host told so by its leader): the wait for its turn's end is dropped. */
+export function cancelStopAtTurnEnd(sessionId: string): void {
+  waiter.cancel(sessionId);
+}
+
 /** A session that stops at this turn's end: the task's other writes leave it
  *  alone, and its summary of the turn runs at once. Stays true until it stopped. */
 export function isAwaitingTurnEnd(sessionId: string): boolean {
@@ -118,17 +123,23 @@ async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void>
       await (await taskCompleteStop()).clearTaskCompleteStop(sessionId, 'turn_end');
       return;
     }
+    const { completeTaskSessions, getSessionByClaudeId } = await import('../session-tracker.js');
+    const host = await import('./host-judged-complete.js');
+    // One of this host's own rows: its leader summarizes the last turn (its hooks run there) and
+    // says when that is done; the CLI must still answer the self-report until then.
+    if (await host.ownRowHere(await getSessionByClaudeId(sessionId))) {
+      await host.awaitLeaderSummary(sessionId);
+      if (!await stillComplete(sessionId)) return;
+      // Another turn started meanwhile (a background command's follow-up): its end stops it.
+      if ((await getSessionByClaudeId(sessionId))?.process_status === 'running') { stopWhenTurnEnds(sessionId, wait.since); return; }
+      await host.stopOwnCompleted(sessionId);
+      return;
+    }
     const { awaitFinalSummary } = await import('../session-hooks/builtins.js');
     const summary = await awaitFinalSummary(sessionId, wait.since);
     const taskId = await stillComplete(sessionId);
     if (!taskId) {
       await (await taskCompleteStop()).clearTaskCompleteStop(sessionId, 'turn_end');
-      return;
-    }
-    const { completeTaskSessions, getSessionByClaudeId } = await import('../session-tracker.js');
-    const host = await import('./host-judged-complete.js');
-    if (await host.ownRowHere(await getSessionByClaudeId(sessionId))) {
-      await host.stopOwnCompleted(sessionId);
       return;
     }
     // Still the actor: when a new turn has started since, it waits for that one.

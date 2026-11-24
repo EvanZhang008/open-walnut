@@ -60,6 +60,10 @@ import {
   _resetSelfCompleteStopsForTest,
 } from '../../../src/core/sessions/self-complete-stop.js'
 import { loadTurnRetriers } from '../../../src/core/sessions/turn-run.js'
+// Loaded up front as well: the stop path imports them on its first look (a cold import under a
+// loaded host took longer than a waitFor's second, 2026-11-24).
+import '../../../src/core/sessions/host-judged-complete.js'
+import '../../../src/core/session-hooks/builtins.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 
 const BASE = 2 ** 22
@@ -138,14 +142,14 @@ describe('a session completing its own task', () => {
 
     await completeTask(task.id, { actorSid: 'self' })
 
-    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual(['self']))
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual(['self']), { timeout: 5_000 })
     await settle()
     expect(ownerStops).toEqual([])
     expect(await getSessionByClaudeId('self')).toMatchObject({ process_status: 'running', pid: BASE + 1 })
 
     await turnEnds('self')
 
-    await vi.waitFor(() => expect(stoppedSids()).toEqual(['self']))
+    await vi.waitFor(() => expect(stoppedSids()).toEqual(['self']), { timeout: 5_000 })
     expect(ownerStops.find((s) => s.sid === 'self')).toEqual({ sid: 'self', host: 'devbox', reason: 'maintenance', why: 'task_completed' })
     expect(marks.find((m) => m.sid === 'self')).toEqual({ sid: 'self', reason: 'task_completed' })
     const rec = await getSessionByClaudeId('self')
