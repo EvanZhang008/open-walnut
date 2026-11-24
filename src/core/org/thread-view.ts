@@ -203,22 +203,29 @@ export interface ThreadExchange<M extends ViewMessage = ViewMessage> {
  * read as known and leave his view: "我随便一聊，它就直接就消失"). Pure.
  */
 export function readsAsReaction(m: Pick<ViewMessage, 'joined'>): boolean {
-  return !uncheckedJoin(m);
+  // Its mark on, however old: never read as his reaction unchecked (the threads inspection, item 6:
+  // a mark swept after a day read as his reaction, which could take an unread result out of his sight).
+  return m.joined !== 'recent';
 }
+
+/** A join is checked within this time by the node's status answers; past it, his words show on the card unchecked (never as a reaction). */
+export const JOIN_CHECK_MS = 24 * 3600_000;
 
 /**
  * Joined only for coming right after his last message, and not checked by the node yet: not his word
  * on this card (no reaction, not shown on it, review 2026-11-23), though the node is woken for it
- * (threadOverdue). The node's next status answer takes the mark off, and one too old to be asked is
- * swept then (status-thread-split.ts clearStaleJoins). Pure.
+ * (threadOverdue). The node's next status answer takes the mark off (a needs thread's too:
+ * status-threads.ts lists it for the check); one not checked within JOIN_CHECK_MS shows on the card
+ * as his words, still never his reaction (readsAsReaction). Pure.
  */
-export function uncheckedJoin(m: Pick<ViewMessage, 'joined'>): boolean {
-  return m.joined === 'recent';
+export function uncheckedJoin(m: Pick<ViewMessage, 'joined' | 'at'>, now: number = Date.now()): boolean {
+  return m.joined === 'recent' && !(now - Date.parse(m.at) > JOIN_CHECK_MS);
 }
 
 /** The messages his card shows: those not waiting on the node's check of their join (uncheckedJoin). Pure. */
-export function cardMessages<M extends ViewMessage>(t: Pick<ViewThread<M>, 'messages'>): M[] {
-  return t.messages.some(uncheckedJoin) ? t.messages.filter((m) => !uncheckedJoin(m)) : t.messages;
+export function cardMessages<M extends ViewMessage>(t: Pick<ViewThread<M>, 'messages'>, now: number = Date.now()): M[] {
+  const waits = (m: M) => uncheckedJoin(m, now);
+  return t.messages.some(waits) ? t.messages.filter((m) => !waits(m)) : t.messages;
 }
 
 /** Group the messages by the answer that covers them, in order. Messages after the last answer wait together. */
@@ -574,7 +581,7 @@ export function threadOverdue(t: ViewThread & { state: string }, now: number = D
   if (t.closed || snoozedNow(t, now) || t.heldAsk) return null;
   // His message joined only for its timing keeps the card's state, so its clock is the reply one (review 2026-11-23).
   const tail = t.messages[t.messages.length - 1];
-  const joinedWaits = !!tail && uncheckedJoin(tail) && !tail.answer && (t.state === 'answered' || t.state === 'pending');
+  const joinedWaits = !!tail && uncheckedJoin(tail, now) && !tail.answer && (t.state === 'answered' || t.state === 'pending');
   const why = t.state === 'new' || t.state === 'working' || joinedWaits ? 'reply' : t.state === 'needs' ? 'needs' : null;
   // A thread waiting on him for a decision letter: the letter's own 4-hour check asks its task (sessions/letter-recheck.ts).
   if (!why || (why === 'needs' && t.letter && !t.letter.done && !t.letter.off)) return null;

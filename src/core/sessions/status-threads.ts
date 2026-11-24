@@ -98,6 +98,9 @@ export function asksThreads(task: Pick<Task, 'org_role' | 'threads_on'> | null |
   return !task.org_role || threadsKeptNow();
 }
 
+/** A thread in needs is listed only for its join check: no line is asked for it. */
+export const NEEDS_JOIN_WORDS = 'waits on him: no line for it, only its message below';
+
 /** Whether its status answer's ask lives on one of its threads (org/thread-report-ask.ts): Main and the leads ask him with thread_update into needs. */
 export function placesAskOnThread(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined): boolean {
   return !!task && !task.org_role && keepsThreads(task);
@@ -128,7 +131,7 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
     if (joined) joins.push({ ref, joined });
     refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}), ...(t.hisAt !== undefined ? { hisAt: t.hisAt } : {}), ...(joined ? { joined: joined.messageId } : {}), ...(held ? { mergeInto: held.like } : {}) });
     const title = t.title.replace(/\s+/g, ' ').trim();
-    const said = [t.state, ...(t.acked ? [ACKED_WORDS] : []), ...(marks.untitled ? ['untitled'] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : []), ...(t.asked ? [ASKED_MARK] : t.cardAsks ? [CARD_ASKS_MARK] : [])].join(', ');
+    const said = [t.state, ...(t.state === 'needs' ? [NEEDS_JOIN_WORDS] : []), ...(t.acked ? [ACKED_WORDS] : []), ...(marks.untitled ? ['untitled'] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : []), ...(t.asked ? [ASKED_MARK] : t.cardAsks ? [CARD_ASKS_MARK] : [])].join(', ');
     return `${ref} "${title.slice(0, cutEnd(title, TITLE_SHOWN_MAX))}" (${said}${t.acked ? '' : cardPart(t.card)})`;
   });
   const words = langName ? ` (titles and progress in ${langName})` : '';
@@ -210,9 +213,13 @@ export async function threadQuestionFor(task: Pick<Task, 'id' | 'org_role' | 'th
   try {
     const { readThreads } = await import('../org/threads-store.js');
     // A thread waiting on him (needs) is his to move, by his answer or the task's own thread_update:
-    // it is not asked, so no line can take it out of his sight (review round 1).
+    // no line is asked for it, so none can take it out of his sight (review round 1). It is listed
+    // only for a message of his joined there by timing, which only this check shows on his card
+    // (the threads inspection, item 6: five of his words on a decision card were off it for 13 hours);
+    // a line for it writes nothing (patchForLine).
     const file = await readThreads(task.id);
-    const { listed, his } = listForQuestion(file, sortedThreads(file.threads).filter(openNotWaiting));
+    const asked = (t: OrgThread) => openNotWaiting(t) || (t.state === 'needs' && !t.closed && !t.movedTo && !!joinedToAsk(t));
+    const { listed, his } = listForQuestion(file, sortedThreads(file.threads).filter(asked));
     // Listed by need first, so the 12 the question names are the ones that need a line (status-thread-pick.ts).
     const marked = markAsks(listed, linesThatAsked(task.id));
     const out = threadQuestionBlock(byNeed(marked, Date.now(), lastListed(task.id)), langName, { org: !!task.org_role, his });

@@ -1,7 +1,7 @@
 /**
  * What a status answer does to its threads before its lines, in the same locked write
  * (status-threads.ts applyThreadLines, threads-store.ts writeOwnThreads `pre`):
- *   0. join marks too old to be asked come off (status-thread-split.ts clearStaleJoins)
+ *   (a join mark too old to be asked stays on: its words show on the card, never as his reaction, thread-view.ts JOIN_CHECK_MS)
  *   1. its joins: a message it says is another subject is split out (status-thread-split.ts)
  *   2. its merges, and the held titles the question asked about: merged or titled (status-thread-title.ts)
  *   3. the titles it gives (its title lines and its splits'): one that repeats another open thread is held
@@ -11,7 +11,7 @@
 import type { ThreadsFile, ThreadWriter } from '../org/threads-model.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import type { StatusReport } from '../user-status.js';
-import { clearStaleJoins, linesAfterSplits, splitJoins, type JoinSplits } from './status-thread-split.js';
+import { linesAfterSplits, splitJoins, type JoinSplits } from './status-thread-split.js';
 import { holdRepeatTitles, settleHeldTitles, throughMerges, type HeldMerge } from './status-thread-title.js';
 import type { StatusThreadLine, ThreadMark, ThreadMarks } from './status-threads.js';
 
@@ -35,7 +35,6 @@ export function answerSteps(report: Pick<StatusReport, 'joins_checked' | 'thread
   const pre = (cur: ThreadsFile) => {
     const at = new Date().toISOString();
     const out: string[] = [];
-    cur = clearStaleJoins(cur, at);
     titles = [...(marks.titles ?? [])];
     split = null;
     merged = [];

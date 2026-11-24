@@ -17,14 +17,15 @@
  */
 import type { OrgThread, ThreadsFile, ThreadWriter } from '../org/threads-model.js';
 import { splitMessageInto, splitThreadMessage, ThreadError } from '../org/threads-model.js';
+import { JOIN_CHECK_MS } from '../org/thread-view.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { markerRe } from './status-marker.js';
 import type { StatusThreadLine, ThreadLineState } from './status-threads.js';
 
 /** Messages one question asks about at most (one per thread, its first unchecked join). */
 export const JOINS_ASKED_MAX = 3;
-/** A mark older than this is not asked: a thread he reopens days later is not carved up by an old join. */
-export const JOIN_ASK_MAX_AGE_MS = 24 * 3600_000;
+/** A mark older than this is not asked: a thread he reopens days later is not carved up by an old join (its words show on the card then, thread-view.ts JOIN_CHECK_MS). */
+export const JOIN_ASK_MAX_AGE_MS = JOIN_CHECK_MS;
 const TEXT_SHOWN_MAX = 80;
 const BEFORE_SHOWN_MAX = 60;
 
@@ -113,21 +114,6 @@ export function clearJoin(file: ThreadsFile, messageId: string): ThreadsFile {
     }) };
   });
   return hit ? { ...file, threads } : file;
-}
-
-/**
- * The file with every join mark too old to be asked taken off (pure, run in each status answer's
- * write): its message then reads as his word on its thread again (thread-view.ts uncheckedJoin), so
- * no mark hides a message from its card for good (review 2026-11-23: a turn that never answered, a
- * thread past the list's twelve).
- */
-export function clearStaleJoins(file: ThreadsFile, at: string): ThreadsFile {
-  const now = Date.parse(at);
-  let out = file;
-  for (const t of file.threads) for (const m of t.messages) {
-    if (m.joined === 'recent' && now - Date.parse(m.at) > JOIN_ASK_MAX_AGE_MS) out = clearJoin(out, m.id);
-  }
-  return out;
 }
 
 /** What the splits did: the threads opened with their lines, and for each source the messages moved and the newest one the question saw that is left. */

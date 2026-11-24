@@ -13,8 +13,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { emptyThreads, fileMessage, SAME_CONVERSATION_MS, setAnswers, splitThreadMessage, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
-import { clearJoin, clearStaleJoins, JOIN_ASK_MAX_AGE_MS } from '../../../src/core/sessions/status-thread-split.js'
-import { cardView, readsAsReaction, REPLY_DUE_MS, shownToHim, threadOverdue } from '../../../src/core/org/thread-view.js'
+import { clearJoin, JOIN_ASK_MAX_AGE_MS } from '../../../src/core/sessions/status-thread-split.js'
+import { cardMessages, cardView, readsAsReaction, REPLY_DUE_MS, shownToHim, threadOverdue } from '../../../src/core/org/thread-view.js'
 import { ackKnown } from '../../../src/core/org/thread-ack.js'
 import { ackHoldsResult } from '../../../src/core/org/thread-known.js'
 
@@ -96,14 +96,15 @@ describe('a join by timing alone keeps the card he sees', () => {
     expect(ackHoldsResult(r.file.threads[0])).toBe(true)
   })
 
-  it('a mark too old to be asked comes off in the node\'s next status answer (review L2)', () => {
+  it('a mark too old to be asked shows his words on the card, never as his reaction (review L2; the threads inspection, item 6)', () => {
     const { f } = readCard('answered')
     const r = fileMessage(f, { text: 'unrelated: what is a subscription exception?', via: 'chat', at: at(2), joinRecent: SAME_CONVERSATION_MS })
-    expect(clearStaleJoins(r.file, at(60)).threads[0].messages.at(-1)!.joined).toBe('recent')
-    const later = new Date(Date.parse(at(2)) + JOIN_ASK_MAX_AGE_MS + 60_000).toISOString()
-    const swept = clearStaleJoins(r.file, later).threads[0]
-    expect(swept.messages.at(-1)!.joined).toBeUndefined()
-    expect(readsAsReaction(swept.messages.at(-1)!)).toBe(true)
+    const m = r.file.threads[0].messages.at(-1)!
+    expect(cardMessages(r.file.threads[0], Date.parse(at(60))).some((x) => x.id === m.id)).toBe(false)
+    const later = Date.parse(at(2)) + JOIN_ASK_MAX_AGE_MS + 60_000
+    expect(cardMessages(r.file.threads[0], later).some((x) => x.id === m.id)).toBe(true)
+    expect(m.joined).toBe('recent')
+    expect(readsAsReaction(m)).toBe(false)
   })
 
   it('every way fileMessage files into an open thread is classified here', () => {
