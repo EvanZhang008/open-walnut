@@ -111,9 +111,11 @@ export interface TaskWorkspace {
    * removed (remake.ts). `from`: the removed one's created_at (the session hears about it
    * once per removal); `root`: the folder it is made at again; `ready_at`: when it was
    * ready, which holds the completion cleanup off a little while the session starts;
-   * `resume`: sessions wait in the queue for it, and its end sends what waited.
+   * `resume`: sessions wait in the queue for it, and its end sends what waited. `pressed`: the
+   * sessions whose Continue a person pressed while it was on its way: its end sends everything
+   * that waited on their folder, as the press does (folder-gone.ts, folder-wait.ts 'all').
    */
-  remade?: { from: string; root: string; at: string; ready_at?: string; resume?: boolean }
+  remade?: { from: string; root: string; at: string; ready_at?: string; resume?: boolean; pressed?: string[] }
   /**
    * Walnut made it because the task is a code task (default-isolation.ts), not because
    * someone asked: a creation that fails then starts the waiting session in the anchor

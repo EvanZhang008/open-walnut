@@ -52,7 +52,12 @@ export async function deliveryWaitOf(messageId: string): Promise<DeliveryWait | 
     : { state: 'queued', messageId, sessionId };
 }
 
-export type SendNowResult = { sent: true; sessionId: string } | { sent: false; why: 'gone' | 'parked'; reason?: string };
+/**
+ * `unavailable`: the row is kept by the host that runs the session, and that host could not be asked
+ * (its link is down, or it did not answer in time, when it may still have sent it). Nothing was done
+ * here: a caller never queues the words again on this server for it (host-queue-rows.ts).
+ */
+export type SendNowResult = { sent: true; sessionId: string } | { sent: false; why: 'gone' | 'parked' | 'unavailable'; reason?: string };
 
 /**
  * Re-drain the queue the row sits in, now. Never a second copy: a row no longer queued
@@ -68,7 +73,8 @@ export async function sendQueuedNow(input: {
   const row = await findQueuedMessage(input.messageId);
   if (!row && input.sessionId) {
     // Not here: a row the host that runs the session keeps (parked there) is sent there, its own
-    // row, never a copy here (host-queue-rows.ts). Null: no host has the session, so it is gone.
+    // row, never a copy here, also when the host cannot be asked (host-queue-rows.ts). Null: no host
+    // has the session (or an older one), so it is gone.
     const { sendNowOnHost } = await import('./host-queue-rows.js');
     const onHost = await sendNowOnHost(input.sessionId, input.messageId, input.source, input.unpark === true);
     if (onHost) return onHost;

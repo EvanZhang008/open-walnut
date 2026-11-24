@@ -43,6 +43,12 @@ export interface ReconcileContext {
   now: number;
   /** The bubble a reload shows for a row (useSessionSend queueRowBubble). */
   toBubble: (row: QueueRowWire) => OptimisticMessage | null;
+  /**
+   * The read may lack rows: the host that runs the session did not answer it (the server's
+   * `partial`, core/sessions/host-queue-rows.ts). Nothing is judged gone from it: a row the host
+   * still holds would read delivered, a parked one would vanish and come back.
+   */
+  partial?: boolean;
 }
 
 /** A bubble whose send has not answered: its id is the client's own, the server has none yet. */
@@ -148,7 +154,7 @@ export function reconcileWithQueue(prev: OptimisticMessage[], rows: readonly Que
       continue;
     }
     // The queue no longer has it.
-    if (!ctx.known.has(m.queueId) || ctx.touched.has(m.queueId)) { next.push(m); continue; }
+    if (ctx.partial || !ctx.known.has(m.queueId) || ctx.touched.has(m.queueId)) { next.push(m); continue; }
     if (m.status === 'pending' || m.status === 'received') {
       changed = true;
       next.push({ ...withoutWaitFacts(m), status: 'delivered', leftQueueAt: ctx.now });

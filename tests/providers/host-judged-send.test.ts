@@ -142,6 +142,25 @@ describe('a line that did not reach its host', () => {
   })
 })
 
+describe('a row parked here on the gone folder', () => {
+  it('rides ahead of the next line to the host, in one hand, older first', async () => {
+    // Review N2 (2026-11-24): the row that waited must never go after the line sent later.
+    const h = harness()
+    h.runner.init()
+    await settle(100)
+    await hostRow()
+    const { enqueueMessage, parkMessages, getQueue } = await import('../../src/core/session-message-queue.js')
+    const waited = await enqueueMessage(HOST_SID, 'waited on the folder', { id: 'qm-h2-waited' })
+    await parkMessages([waited], { reason: 'Working directory no longer exists: /work/ws', code: 'cwd_missing' })
+    expect((await getQueue(HOST_SID))[0]).toMatchObject({ status: 'parked', folderWait: true })
+    await enqueueMessage(HOST_SID, 'sent after', { id: 'qm-h2-after', sentBy: 'person' })
+    const side = fakeSide('ok')
+    bus.emit(EventNames.SESSION_SEND, { sessionId: HOST_SID, message: 'sent after' }, ['*'], { source: 'mobile' })
+    await vi.waitFor(() => expect(side.sent).toHaveLength(1))
+    expect((side.sent[0].body.queued as Array<{ id: string }>).map((q) => q.id)).toEqual(['qm-h2-waited', 'qm-h2-after'])
+  })
+})
+
 describe('the host takes a leader row once', () => {
   it('a resend of a row the host already took (its answer lost) queues nothing again', async () => {
     const { enqueueMessage, getQueue, takeLinesForHost } = await import('../../src/core/session-message-queue.js')

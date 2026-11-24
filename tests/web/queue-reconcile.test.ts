@@ -60,6 +60,12 @@ describe('reconcileWithQueue', () => {
     expect(reconcileWithQueue([bubble('temp-1', { status: 'pending' })], [], ctx({ known: new Set(['temp-1']) }))[0].status).toBe('pending')
   })
 
+  it('a read the host did not answer (partial) judges nothing gone: no false Delivered, no parked bubble dropped', () => {
+    const prev = [bubble('qm-held'), bubble('qm-parked', { status: 'failed', parked: true })]
+    const next = reconcileWithQueue(prev, [], ctx({ known: new Set(['qm-held', 'qm-parked']), partial: true }))
+    expect(next).toBe(prev)
+  })
+
   it('a Delivered bubble whose row waits again reads Queued again (the event that said so was lost), unless an event moved it since the read began', () => {
     const prev = [bubble('qm-a', { status: 'delivered' })]
     expect(reconcileWithQueue(prev, [row('qm-a')], ctx({ known: new Set(['qm-a']) }))[0].status).toBe('received')

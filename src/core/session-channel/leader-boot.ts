@@ -273,7 +273,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     if (err instanceof Error && err.message.endsWith(`: ${NOT_OWN_SESSION}`)) void import('../../providers/host-judged-send.js').then((m) => m.confirmHostDisowns(sid, host)).catch(() => {})
     throw err
   }
-  remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body).catch(disowned(host, body.sid)))
+  remote.setRemoteJudgedCaller((host, body, timeoutMs) => side.callHost(host, body, timeoutMs).catch(disowned(host, body.sid)))
   // A host-judged session's transcript is read and parsed on its host (sessions/host-history-reads.ts).
   setHostHistoryCaller((host, body, timeoutMs) => side.callHost(host, body, timeoutMs).catch(disowned(host, body.sid)))
   const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown; sessionSide?: { state?: unknown } | null } | null }) => {

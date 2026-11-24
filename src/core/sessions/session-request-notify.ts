@@ -500,6 +500,8 @@ async function gateRequest(
       // A park that cannot say whether the line ran (the CLI never acknowledged it) is no proof.
       if (parkMeansNeverRan(row.parkedReason) || parkByStop(row.parkedReason)) {
         undelivered = { why: row.parkedReason || 'the message could not be delivered', stillQueued: false };
+        // Told it was not delivered: a row that waited on its folder is never sent by itself after.
+        if (row.folderWait === true) await (await import('./folder-wait.js')).dropFolderWait(row.sessionId, [row.id]).catch(() => []);
       }
     } else if (row) {
       // Its task was completed with the message still queued: no turn will run on it
@@ -591,6 +593,15 @@ export async function notifyRequesterGroup(
     }
   }
   return delivered;
+}
+
+/**
+ * A request whose asker was told at its deadline that its message was on its way (FOLDER_WAIT_WORDS,
+ * or still queued) and whose message then stopped waiting on its folder (folder-wait.ts
+ * endFolderWaits): the asker hears once that it was not delivered after all.
+ */
+export async function notifyFolderWaitEnded(request: SessionRequest, why: string): Promise<boolean> {
+  return deliverSettled(request, [], { why, stillQueued: false }, 'error', {});
 }
 
 /** The notice of requests already settled: `request` is its subject, `also` the others of the same asker and edge. */

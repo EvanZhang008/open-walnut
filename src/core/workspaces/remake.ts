@@ -120,6 +120,22 @@ export async function remakeForGoneFolder(taskId: string, cwd: string, host: str
 }
 
 /**
+ * A person pressed Continue for `sessionId` while its workspace is still being made again (the
+ * button's 409 workspace_remaking): the remake's end sends everything that waited, as the press
+ * would have (resumeAfterRemake). Kept on the workspace row, so a restart in between keeps it.
+ */
+export async function notePressedDuringRemake(taskId: string, sessionId: string): Promise<boolean> {
+  let kept = false
+  await managerDeps().write(taskId, (cur) => {
+    if (!cur?.remade || cur.remade.ready_at) return null
+    kept = true
+    return cur.remade.pressed?.includes(sessionId) ? null : stamp(cur, { remade: { ...cur.remade, pressed: [...(cur.remade.pressed ?? []), sessionId] } })
+  })
+  if (!kept) log.web.info('workspace remake: a press of Continue found no remake on its way to keep it on', { taskId, sessionId })
+  return kept
+}
+
+/**
  * The task's workspace was made again and is ready, and holds `cwd` on `host`: a refusal that
  * finds that folder present raced the remake's end (noteFolderGone sends what it parked).
  */
@@ -156,7 +172,12 @@ export async function kickRemake(taskId: string, sessionId: string, cwd: string,
     // Not made (or not in time): each waiting session gets the folder-gone way on (its banner and button).
     kicked.delete(key)
     const { noteFolderGone } = await import('../sessions/folder-gone.js')
-    for (const sid of sessions) await noteFolderGone(sid, { cwd, host: host ?? null, remake: false })
+    const { endFolderWaits, FOLDER_WAIT_ENDED } = await import('../sessions/folder-wait.js')
+    for (const sid of sessions) {
+      await noteFolderGone(sid, { cwd, host: host ?? null, remake: false })
+      // What waited on the remake goes by itself no more: each asker hears it was not delivered.
+      await endFolderWaits(sid, FOLDER_WAIT_ENDED.notMade).catch(() => 0)
+    }
   })().catch((err) => log.web.warn('workspace remake failed', { taskId, cwd, error: errText(err) }))
     .finally(() => kicked.delete(key))
   return true
@@ -169,11 +190,13 @@ export async function resumeAfterRemake(taskId: string): Promise<void> {
   if (!ws || !isLaunchReady(ws)) return
   const { getSessionsForTask } = await import('../session-tracker.js')
   const { continueInNewFolder } = await import('../sessions/folder-gone.js')
+  const pressed = new Set(ws.remade?.pressed ?? [])
   let sent = 0
   for (const s of await getSessionsForTask(taskId)) {
     if (s.archived || !covers(ws, s.cwd, s.host) || await folderState(s.cwd!, s.host) !== 'present') continue
-    // The folder is there: this clears its banner and sends the messages that waited on it.
-    const r = await continueInNewFolder(s.claudeSessionId, { by: 'walnut:workspace-remade' }).catch(() => null)
+    // The folder is there: this clears its banner and sends the messages that waited on it; all of
+    // them where a person pressed Continue meanwhile (the 409 told him they go when it is ready).
+    const r = await continueInNewFolder(s.claudeSessionId, { by: 'walnut:workspace-remade', ...(pressed.has(s.claudeSessionId) ? { pick: 'all' as const } : {}) }).catch(() => null)
     if (r?.status === 'continued') sent += r.sent
   }
   await settleRemakeResume(taskId)
@@ -189,7 +212,7 @@ export async function settleRemakeResume(taskId: string): Promise<void> {
   const now = new Date(deps.now()).toISOString()
   const task = await deps.write(taskId, (cur) => {
     if (!cur?.remade?.resume) return null
-    const { resume: _done, ...rest } = cur.remade
+    const { resume: _done, pressed: _sent, ...rest } = cur.remade
     return stamp(cur, { remade: { ...rest, ready_at: now } })
   }) ?? await deps.getTask(taskId)
   if (task?.phase === 'COMPLETE') {
@@ -238,6 +261,21 @@ export function workspaceRemadeText(ws: Pick<TaskWorkspace, 'root' | 'anchor' | 
       + `Walnut makes it again at the same path from ${ws.anchor} before this conversation goes on, and runs its setup script again. `
       + `Commits are kept on their branch; files that were never committed (installed packages, build output, anything git ignores) are not there until the setup script or you make them again.`,
   })
+}
+
+/**
+ * Whether Walnut makes `sessionId`'s gone folder again, or is making it: the folder is in its task's
+ * workspace, which this Walnut made, and no remake of it failed. A message waiting on such a folder is
+ * on its way, never "not delivered" (sessions/folder-wait.ts waitsForFolderNow).
+ */
+export async function remakeBringsBack(sessionId: string): Promise<boolean> {
+  const deps = managerDeps()
+  if (deps.cloudMode()) return false
+  const { getSessionByClaudeId } = await import('../session-tracker.js')
+  const record = await getSessionByClaudeId(sessionId)
+  if (!record?.taskId || record.archived || !record.cwd) return false
+  const ws = (await deps.getTask(record.taskId))?.workspace
+  return covers(ws, record.cwd, record.host) && ws.state !== 'failed' && await madeHere(ws)
 }
 
 /** The notice a session whose workspace was removed hears once, on its next message (session-message-queue.ts). */

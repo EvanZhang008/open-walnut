@@ -41,7 +41,6 @@ export type FolderState = 'present' | 'gone' | 'unknown'
 export const isLocal = (host?: string | null) => !host || host === '__local__'
 const PROBE_MS = 5_000
 
-import { isFolderGoneReason } from './folder-gone-words.js'
 import { frameAsWalnut } from './send-frame.js'
 import { readHostOf } from './session-row-owner.js'
 import { goesOnFolder, stopFenceOf, type FolderWaitPick } from './folder-wait.js'
@@ -227,7 +226,7 @@ export type ContinueResult =
  * Refuses (SessionControlError) a folder that is still there, a host that cannot be asked,
  * and a session whose process still runs.
  */
-export function continueInNewFolder(sessionId: string, opts: { by?: string } = {}): Promise<ContinueResult> {
+export function continueInNewFolder(sessionId: string, opts: { by?: string; pick?: FolderWaitPick } = {}): Promise<ContinueResult> {
   // The banner and the message row offer the same button: a second press while the
   // first moves the files gets the first one's answer, never a half-moved second try.
   const running = continuing.get(sessionId)
@@ -238,11 +237,12 @@ export function continueInNewFolder(sessionId: string, opts: { by?: string } = {
 }
 const continuing = new Map<string, Promise<ContinueResult>>()
 
-async function continueNow(sessionId: string, opts: { by?: string }): Promise<ContinueResult> {
+async function continueNow(sessionId: string, opts: { by?: string; pick?: FolderWaitPick }): Promise<ContinueResult> {
   const by = opts.by ?? 'human'
   // A person's press sends every row that waited on the folder; Walnut's own (a remake's end) only
-  // the rows that wait by the rule (folder-wait.ts), never an old one a person may have sent again.
-  const pick: FolderWaitPick = by.startsWith('walnut:') ? 'waited' : 'all'
+  // the rows that wait by the rule (folder-wait.ts), never an old one a person may have sent again,
+  // unless a person pressed while that remake was on its way (`pick`, remake.ts resumeAfterRemake).
+  const pick: FolderWaitPick = opts.pick ?? (by.startsWith('walnut:') ? 'waited' : 'all')
   const { getSessionByClaudeId, updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js')
   const record = await getSessionByClaudeId(sessionId)
   if (!record) throw new SessionControlError('Session not found', 404)
@@ -258,6 +258,8 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
     // A short wait: a route answers, it never hangs (the remake's end sends what waits).
     const remade = await remake.remakeForGoneFolder(record.taskId, from, record.host, { waitMs: remake.BUTTON_WAIT_MS, resume: true })
     if (remade === 'present') state = 'present'
+    // The press is kept on the remake, so its end sends all that waited, as this answer promises.
+    if (remade === 'pending' && pick === 'all') await remake.notePressedDuringRemake(record.taskId, sessionId)
     if (remade === 'pending') throw new SessionControlError(`Walnut is making this task's workspace again at ${from}; the waiting messages go out when it is ready`, 409, { code: 'workspace_remaking' })
   }
   if (state === 'present') {
@@ -469,10 +471,13 @@ async function sendWaitingHere(sessionId: string, taskId: string, notice: string
       if (row && !(outcome && row.message.includes(`outcome="${outcome}"`))) row.message = `${notice}\n\n${row.message}`
     })
   }
-  for (const row of rows) if (row.status === 'parked') await unparkMessage(sessionId, row.id)
+  // Counted as they really go: a row another path took or removed meanwhile is not one of them.
+  let sent = rows.filter((m) => m.status === 'pending').length
+  for (const row of rows) if (row.status === 'parked' && await unparkMessage(sessionId, row.id)) sent++
+  if (sent === 0) return 0
   const { bus, EventNames } = await import('../event-bus.js')
   bus.emit(EventNames.SESSION_SEND, { sessionId, taskId, message: '' }, ['session-runner'], { source: 'folder-moved' })
-  return rows.length
+  return sent
 }
 
 /** History gone too: a new conversation for the task in the new folder, carrying what waited. */
@@ -543,12 +548,6 @@ async function relinkTaskSession(taskId: string, sid: string): Promise<void> {
     log.session.warn('folder gone: relinking the old session failed', { sessionId: sid, taskId, error: err instanceof Error ? err.message : String(err) })
   }
 }
-
-/** A row that waits because the folder was gone (or a plain pending one), never one a Stop parked. */
-function waitsOnTheFolder(m: { status: string; parkedReason?: string }): boolean {
-  return m.status === 'pending' || (m.status === 'parked' && isFolderGoneReason(m.parkedReason))
-}
-
 
 /**
  * A move no waiting message carried the notice for: the next message into the session

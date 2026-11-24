@@ -147,8 +147,9 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     }
   }
   // Rows parked here on the gone folder (or on the agent) ride ahead of the lines that go now, in
-  // their own order (core/sessions/folder-wait.ts); the host's runner does the same with its own.
-  if (wakes) await unparkRowsAhead(sid).catch(() => [])
+  // their own order (core/sessions/folder-wait.ts), also into a CLI already running there (it is in
+  // the folder); with no line going now it moves nothing. The host's runner does the same with its own.
+  await unparkRowsAhead(sid).catch(() => [])
   let taken: Awaited<ReturnType<typeof takeLinesForHost>>
   try { taken = await takeLinesForHost(sid) } catch (err) {
     // Not taken (the queue file could not be written): the lines are still queued here.

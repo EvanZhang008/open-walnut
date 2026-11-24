@@ -96,10 +96,14 @@ async function makeRepo(name: string): Promise<string> {
   return dir
 }
 
-/** The state a refusal leaves: the message parked on the gone folder. */
-async function parkOnGoneFolder(sid: string, cwd: string, message: string): Promise<void> {
+/**
+ * The state a refusal leaves: the message parked on the gone folder, marked as waiting on it
+ * (sessions/folder-wait.ts); `older`: as a Walnut before the mark parked it, which only a person's
+ * press sends.
+ */
+async function parkOnGoneFolder(sid: string, cwd: string, message: string, o: { older?: true } = {}): Promise<void> {
   await mutateStore((s) => {
-    s.queues[sid] = [{ id: `qm-${randomUUID()}`, sessionId: sid, message, status: 'parked', enqueuedAt: new Date().toISOString(), parkedAt: new Date().toISOString(), parkedReason: `Working directory no longer exists: ${cwd}` }]
+    s.queues[sid] = [{ id: `qm-${randomUUID()}`, sessionId: sid, message, status: 'parked', enqueuedAt: new Date().toISOString(), parkedAt: new Date().toISOString(), parkedReason: `Working directory no longer exists: ${cwd}`, ...(o.older ? {} : { folderWait: true as const }) }]
   })
   resetCache()
 }
@@ -167,7 +171,7 @@ describe('a woken task whose workspace a cleanup removed', () => {
     const { taskId, sid, cwd } = await taskInWorkspace('Stuck before the fix')
     await completeAndClean(taskId, cwd)
     // The state the incident left on disk: a parked row and the gone folder recorded.
-    await parkOnGoneFolder(sid, cwd, 'The deep test failed on your land: fix it forward')
+    await parkOnGoneFolder(sid, cwd, 'The deep test failed on your land: fix it forward', { older: true })
     await updateSessionRecord(sid, { cwdGone: { cwd, at: new Date().toISOString(), history: 'found' } })
 
     const before = mark()
@@ -219,6 +223,33 @@ describe('a woken task whose workspace a cleanup removed', () => {
     }, { timeout: 60_000 })
     await vi.waitFor(async () => { resetCache(); expect(await getQueue(sid)).toEqual([]) }, { timeout: 15_000 })
     await vi.waitFor(async () => expect((await getTask(taskId)).workspace?.remade?.resume).toBeUndefined(), { timeout: 15_000 })
+  }, 150_000)
+
+  it('"Continue" pressed while the remake is still on its way: its end sends every row that waited, as the press promised', async () => {
+    // Review S1 (2026-11-24): the 409 said "the waiting messages go out when it is ready", and the
+    // remake's end sent only the rows Walnut marked; a row an older Walnut parked stayed.
+    const { taskId, sid, cwd, createdAt } = await taskInWorkspace('Pressed during the remake')
+    await completeAndClean(taskId, cwd)
+    await parkOnGoneFolder(sid, cwd, 'Parked before the fix, sent by the press', { older: true })
+    await updateSessionRecord(sid, { cwdGone: { cwd, at: new Date().toISOString(), history: 'found' } })
+    // A remake on its way that the press waits for in vain (its making never ends here).
+    const removed = (await getTask(taskId)).workspace!
+    await updateTaskRaw(taskId, { workspace: { ...removed, state: 'creating', remade: { from: createdAt, root: removed.root!, at: new Date().toISOString() } } } as never, { source: 'test' })
+    const res = await post(`/api/sessions/${sid}/continue-in-new-folder`)
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('workspace_remaking')
+    expect((await getTask(taskId)).workspace?.remade).toMatchObject({ resume: true, pressed: [sid] })
+    // The making failed once and is tried again (the press stays on the remake), then succeeds.
+    await updateTaskRaw(taskId, { workspace: { ...(await getTask(taskId)).workspace!, state: 'failed' } } as never, { source: 'test' })
+    const before = mark()
+    expect(await remakeForGoneFolder(taskId, cwd, '__local__', { waitMs: 0, resume: true })).toBe('pending')
+    await vi.waitFor(() => {
+      const start = daemon.getCommandHistoryFor('start').slice(before.start).find((c) => c.payload.sid === sid)
+      expect(start?.payload.cwd).toBe(cwd)
+      expect(linesTo(sid, before).some((l) => l.message.includes('Parked before the fix, sent by the press'))).toBe(true)
+    }, { timeout: 60_000 })
+    await vi.waitFor(async () => { resetCache(); expect(await getQueue(sid)).toEqual([]) }, { timeout: 15_000 })
+    await vi.waitFor(async () => expect((await getTask(taskId)).workspace?.remade).not.toHaveProperty('pressed'), { timeout: 15_000 })
   }, 150_000)
 
   it('a remake that fails leaves the folder-gone way on, and the move says so', async () => {

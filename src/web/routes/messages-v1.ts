@@ -24,6 +24,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js'
+import { markHandledFailure } from '../middleware/handled-failure.js'
 
 export const messagesV1Router = Router()
 
@@ -170,11 +171,21 @@ messagesV1Router.post('/messages/:id/send-now', async (req: Request, res: Respon
     }
     const id = String(req.params.id ?? '')
     let messageId: string | undefined = id
+    // The session the row is queued for. Only needed for a row its host keeps (a host-run session's
+    // parked row, which this server's queue does not have): the body may name it, a request names
+    // its target, and a row the queue view listed from its host is known (host-queue-rows.ts).
+    const bodySid = (req.body ?? {}).sessionId
+    if (bodySid !== undefined && (typeof bodySid !== 'string' || !bodySid)) {
+      sendError(res, 400, 'bad_request', 'sessionId must be a non-empty string')
+      return
+    }
+    let sessionId: string | undefined = bodySid
     if (/^rq-[a-f0-9]{6,}$/.test(id)) {
       const { getSessionRequest } = await import('../../core/session-requests.js')
       const request = await getSessionRequest(id)
       if (!request) { sendError(res, 404, 'not_found', `No such request: ${id}`); return }
       messageId = request.messageId
+      sessionId ??= request.toSessionId
       if (!messageId) {
         sendError(res, 409, 'not_queued', `${id} has no queued message to send (it was sent by an older Walnut, or started its task): read it with request_get.`)
         return
@@ -194,12 +205,25 @@ messagesV1Router.post('/messages/:id/send-now', async (req: Request, res: Respon
       return
     }
     const { sendQueuedNow } = await import('../../core/sessions/send-now.js')
+    // A row this server has is sent wherever it is queued now (a move keeps its id), as before.
+    const { findQueuedMessage } = await import('../../core/session-message-queue.js')
+    if (await findQueuedMessage(messageId)) sessionId = undefined
+    else if (!sessionId) {
+      const { sessionOfHostRow } = await import('../../core/sessions/host-queue-rows.js')
+      sessionId = sessionOfHostRow(messageId) ?? undefined
+    }
     const out = await sendQueuedNow({
       messageId, source: callerSid ? 'peer' : 'web-ui-retry', unpark: !callerSid,
+      ...(sessionId ? { sessionId } : {}),
       ...(rawInterrupt === true ? { interrupt: true } : {}),
     })
     if (!out.sent) {
-      if (out.why === 'parked') {
+      if (out.why === 'unavailable') {
+        // Kept by the host that runs the session, which could not be asked: nothing was sent from
+        // here, and nothing should be (it may have gone already if the host answered late).
+        markHandledFailure(res)
+        sendError(res, 503, 'host_reconnecting', out.reason ?? 'The host that runs this session cannot be reached right now; try again in a moment.')
+      } else if (out.why === 'parked') {
         sendError(res, 409, 'parked', `That message was set aside${out.reason ? ` (${out.reason})` : ''}, so it is not sent again from here: the user's Retry on it decides.`, { parkedReason: out.reason })
       } else {
         sendError(res, 409, 'not_queued', 'That message is no longer queued: it went in, or was deleted. Nothing was sent again.')

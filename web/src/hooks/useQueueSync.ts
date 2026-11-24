@@ -56,7 +56,7 @@ export interface QueueSync {
   retiredIds: () => ReadonlySet<string>;
 }
 
-type Rows = { messages?: QueueRowWire[] };
+type Rows = { messages?: QueueRowWire[]; partial?: boolean };
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -101,6 +101,7 @@ export function useQueueSync(
       for (const [id, at] of touched.current) if (at >= startedAt) touchedNow.add(id);
       setMsgs((prev) => reconcileWithQueue(prev, res?.messages ?? [], {
         known, touched: touchedNow, retired: retired.current, now: Date.now(), toBubble,
+        ...(res?.partial ? { partial: true } : {}),
       }));
       setState((s) => (s.error === undefined ? s : {}));
     } catch (e) {

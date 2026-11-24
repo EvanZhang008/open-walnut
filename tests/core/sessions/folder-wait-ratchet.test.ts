@@ -12,8 +12,10 @@
  *     calls it or is listed with why it needs none;
  *  2. every way a folder comes back (or a session moves to another one) is listed with the release
  *     that covers it. A new caller of one of those fails here until it is listed;
- *  3. only a person's press releases rows Walnut did not mark: `pick: 'all'` comes from one place;
- *  4. no reader tells an asker or a person "not delivered" of a row that waits on its folder.
+ *  3. only a person's press releases rows Walnut did not mark: `pick: 'all'` comes from the press (and
+ *     from a remake's end only for a press it recorded while on its way);
+ *  4. no reader tells an asker or a person "not delivered" of a row that waits on its folder, and a
+ *     reader that tells an asker drops the row's mark, so a row told it failed never goes by itself.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -103,6 +105,10 @@ describe('a message that waited on a gone folder goes once the folder is back, w
       'src/core/sessions/session-request-notify.ts', 'src/core/sessions/undelivered-requests.ts', 'src/core/user-status-sync.ts',
     ])
     for (const file of Object.keys(found)) expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(/waitsForFolderNow\(/)
+    // The two that tell an asker (the user status tells no one) drop the mark when they do.
+    for (const file of ['src/core/sessions/session-request-notify.ts', 'src/core/sessions/undelivered-requests.ts']) {
+      expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(/dropFolderWait\(/)
+    }
   })
 
   it("only a person's press sends rows Walnut did not mark", () => {
@@ -112,9 +118,12 @@ describe('a message that waited on a gone folder goes once the folder is back, w
       codeLines(fs.readFileSync(file, 'utf8')).forEach((l) => { if (/'all'/.test(l) && /pick|FolderWaitPick/.test(l)) all.push(rel) })
     }
     // folder-gone.ts derives it from who pressed (and passes a host's own 'all' on); folder-wait.ts
-    // defines the type and reads it.
-    expect([...new Set(all)].sort()).toEqual(['src/core/sessions/folder-gone.ts', 'src/core/sessions/folder-wait.ts'])
+    // defines the type and reads it; remake.ts passes it for a press it recorded (notePressedDuringRemake).
+    expect([...new Set(all)].sort()).toEqual(['src/core/sessions/folder-gone.ts', 'src/core/sessions/folder-wait.ts', 'src/core/workspaces/remake.ts'])
     const gone = fs.readFileSync(path.join(ROOT, 'src/core/sessions/folder-gone.ts'), 'utf8')
-    expect(gone).toMatch(/const pick: FolderWaitPick = by\.startsWith\('walnut:'\) \? 'waited' : 'all'/)
+    expect(gone).toMatch(/const pick: FolderWaitPick = opts\.pick \?\? \(by\.startsWith\('walnut:'\) \? 'waited' : 'all'\)/)
+    const remake = codeLines(fs.readFileSync(path.join(ROOT, 'src/core/workspaces/remake.ts'), 'utf8')).filter((l) => /'all'/.test(l))
+    expect(remake).toHaveLength(1)
+    expect(remake[0]).toMatch(/pressed\.has\(/)
   })
 })

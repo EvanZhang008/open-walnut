@@ -292,12 +292,14 @@ export function registerSessionChatRpc(): void {
       // delivery only, never a second enqueue: the bubble already exists under
       // this very id (core/sessions/send-now.ts, shared with message_send_now).
       const { sendQueuedNow } = await import('../../core/sessions/send-now.js')
-      if ((await sendQueuedNow({
+      const again = await sendQueuedNow({
         sessionId: data.sessionId, messageId: data.retryOf, taskId: record?.taskId,
         message: data.message as string, source: 'web-ui-retry', unpark: data.autoResend !== true,
-      })).sent) {
-        return { messageId: data.retryOf }
-      }
+      })
+      if (again.sent) return { messageId: data.retryOf }
+      // The row is the host's and the host could not be asked: it may even have sent it. Said as
+      // an error (the bubble stays failed, its Retry asks again), never a second copy queued here.
+      if (again.why === 'unavailable') throw new Error(again.reason ?? 'The host that runs this session cannot be reached right now; try again in a moment.')
       // The first send reached the queue but its answer was lost (the socket dropped after the
       // server took it), or its line already ran: the same send again is that send, never a second
       // copy (core/sessions/send-once.ts; the client resends by itself, hooks/send-auto-retry.ts).
@@ -565,9 +567,10 @@ export function registerSessionChatRpc(): void {
     // Rows not in the queue yet (a move, a host hand, the spool) still read as waiting here (session-queue-transit.ts).
     const { rowsOnTheWay } = await import('../../core/session-queue-transit.js')
     // After this server's own rows, the ones the host that runs the session keeps parked there
-    // (core/sessions/host-queue-rows.ts): a short deadline, and without them when it does not answer.
+    // (core/sessions/host-queue-rows.ts): a short deadline, its last answer when it does not answer,
+    // and `partial` then, so the panel judges nothing gone from this read (hooks/queue-reconcile.ts).
     const { withHostParkedRows } = await import('../../core/sessions/host-queue-rows.js')
-    const { rows } = await withHostParkedRows(sid, [...await withoutWalnutRows(await getQueue(sid)), ...await withoutWalnutRows(await rowsOnTheWay(sid))])
+    const { rows, partial } = await withHostParkedRows(sid, [...await withoutWalnutRows(await getQueue(sid)), ...await withoutWalnutRows(await rowsOnTheWay(sid))])
     // Read after the rows: a row taken and answered in between is still listed and
     // reads waiting for this one read (queue-row-view.ts liveLineWordsOf).
     const live = await liveLineWordsOf(sid)
@@ -582,7 +585,7 @@ export function registerSessionChatRpc(): void {
     })
     // Each row's thread, as its line under the bubble shows it (experiment reply_thread_line).
     const { withQueueThreads } = await import('../../core/org/reply-thread-index.js')
-    return { messages: await withQueueThreads(messages, sid), ...(launchPrompt ? { launchPrompt } : {}) }
+    return { messages: await withQueueThreads(messages, sid), ...(launchPrompt ? { launchPrompt } : {}), ...(partial ? { partial: true } : {}) }
   })
 
   registerMethod('session:stream-subscribe', async (payload: unknown, _ws) => {

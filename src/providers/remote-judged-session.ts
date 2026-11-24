@@ -23,7 +23,8 @@ import { judgingHostOf } from '../core/sessions/judge-of.js'
 import { isNotPendingRefusal } from '../core/session-channel/host-permission.js'
 
 export interface HostCallBody { sid: string; target: HostCallTarget; member: string; args: unknown[] }
-export type CallHost = (host: string, body: HostCallBody) => Promise<unknown>
+/** `timeoutMs`: how long the link waits for the answer (leader-side.ts callHost; its own default otherwise). */
+export type CallHost = (host: string, body: HostCallBody, timeoutMs?: number) => Promise<unknown>
 
 let caller: CallHost | null = null
 
@@ -132,10 +133,10 @@ export class RemoteJudgedSession {
   private target(): HostCallTarget { return this.kind === 'acp' ? 'acp' : 'session' }
 
   /** One call to the host; the value it answered. */
-  call(member: string, args: unknown[] = [], target: HostCallTarget = this.target()): Promise<unknown> {
+  call(member: string, args: unknown[] = [], target: HostCallTarget = this.target(), timeoutMs?: number): Promise<unknown> {
     if (!caller) return Promise.reject(new Error(`session ${this.sid} runs on ${this.host}, and this server has no link to it`))
     // Encoded for the wire where it is sent (leader-side.ts callHost: host-calls.ts callArgsOut).
-    return caller(this.host, { sid: this.sid, target, member, args })
+    return timeoutMs === undefined ? caller(this.host, { sid: this.sid, target, member, args }) : caller(this.host, { sid: this.sid, target, member, args }, timeoutMs)
   }
 
   /** A call whose answer nobody waits for: a failure is logged, never thrown. */

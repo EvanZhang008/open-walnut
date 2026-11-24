@@ -66,6 +66,13 @@ vi.mock('../../src/core/session-projection.js', () => ({
   readSessionTranscript: (...args: unknown[]) => readSessionTranscript(...args),
 }));
 
+// Whether Walnut makes a session's gone folder again (its task's workspace): yes unless a test says no.
+const { remakeBack } = vi.hoisted(() => ({ remakeBack: { value: true } }));
+vi.mock('../../src/core/workspaces/remake.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  remakeBringsBack: async () => remakeBack.value,
+}));
+
 /** Observes the hook → notifier call without replacing the real behavior. */
 const notifySpy = vi.fn();
 vi.mock('../../src/core/sessions/session-request-notify.js', async (importOriginal) => {
@@ -1680,6 +1687,49 @@ describe('notifyRequesterFallback — a message that has not reached its target'
     expect(envelope.body).toContain('Your message has NOT BEEN DELIVERED yet');
     expect(envelope.body).toContain('Walnut sends the message by itself once the folder is back');
     expect(envelope.body).not.toContain('Your message was NOT DELIVERED');
+  });
+
+  it('a gone folder Walnut does not make again (the user\'s own) is reported not delivered at park time, and its row then never goes by itself', async () => {
+    // Review S2 (2026-11-24): only a folder a remake brings back holds the notice.
+    remakeBack.value = false;
+    try {
+      const request = await arm();
+      const own = rowFor(request.id, { id: 'qm-own-folder', status: 'parked', parkedReason: 'Working directory no longer exists: /home/me/notes', parkedCode: 'cwd_missing', folderWait: true });
+      const { mutateStore } = await import('../../src/core/session-queue-store.js');
+      await mutateStore((s) => { s.queues[TARGET] = [own as never]; });
+      getQueue.mockResolvedValue([own]);
+      const { notifyParkedRequests } = await import('../../src/core/sessions/undelivered-requests.js');
+      await notifyParkedRequests([own as never]);
+      expect(parseWalnutMessage(deliveredText())!.body).toContain('Your message was NOT DELIVERED');
+      const { getStore } = await import('../../src/core/session-queue-store.js');
+      expect((await getStore()).queues[TARGET]?.[0]?.folderWait).toBeUndefined();
+    } finally {
+      remakeBack.value = true;
+    }
+  });
+
+  it('a message that stops waiting on its folder (24 hours, or the remake failed) tells its asker once, also one told at its deadline it was on its way', async () => {
+    const { mutateStore, getStore } = await import('../../src/core/session-queue-store.js');
+    const { endFolderWaits, FOLDER_WAIT_ENDED } = await import('../../src/core/sessions/folder-wait.js');
+    // Still pending: the ordinary not-delivered notice.
+    const open = await arm();
+    const parked = { status: 'parked', parkedReason: 'Working directory no longer exists: /work/ws', parkedCode: 'cwd_missing', folderWait: true };
+    await mutateStore((s) => { s.queues[TARGET] = [rowFor(open.id, { id: 'qm-open', ...parked }) as never]; });
+    expect(await endFolderWaits(TARGET, FOLDER_WAIT_ENDED.tooOld)).toBe(1);
+    expect(parseWalnutMessage(deliveredText(0))!.body).toContain('Your message was NOT DELIVERED');
+    expect(deliveredText(0)).toContain('not back within 24 hours');
+    // Its deadline already told it "on its way": told now that it did not go.
+    const told = await arm();
+    await settleNotified(told.id, 'timeout');
+    await mutateStore((s) => { s.queues[TARGET] = [rowFor(told.id, { id: 'qm-told', ...parked }) as never]; });
+    expect(await endFolderWaits(TARGET, FOLDER_WAIT_ENDED.notMade)).toBe(1);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    expect(parseWalnutMessage(deliveredText(1))!.body).toContain('Your message was NOT DELIVERED');
+    expect(deliveredText(1)).toContain('could not be made again');
+    // Once: the mark is gone, so a second end finds nothing.
+    expect((await getStore()).queues[TARGET]?.[0]?.folderWait).toBeUndefined();
+    expect(await endFolderWaits(TARGET, FOLDER_WAIT_ENDED.notMade)).toBe(0);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
   });
 
   it('the same park by an older Walnut (no mark) is reported not delivered at park time', async () => {

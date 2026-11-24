@@ -9,7 +9,8 @@
  *  - a row going out takes the marked rows with it, ahead of it, in their order; never an unmarked
  *    one (parked by an older Walnut), one queued over a day ago, or one a Stop came after;
  *  - with nothing going out, the delivery clock sends a marked row once the session's folder is
- *    there (on its growing wait), and leaves it while the folder is still gone;
+ *    there (on its growing wait), and leaves it while the folder is still gone; past its day it drops
+ *    the mark;
  *  - Walnut's own release of the folder (the host's sendFolderWaiting) sends only marked rows; a
  *    person's press ('all') sends every row parked on the folder.
  *
@@ -140,6 +141,15 @@ describe('with nothing going out, the clock sends them once the folder is there'
   it('never a row an older Walnut parked on the folder', async () => {
     await parkedByOlderWalnut('older walnut')
     expect(await sweepDeliveryRetries(Date.now() + 10 * 60 * 60_000)).toEqual([])
+    expect(sends).toEqual([])
+  })
+
+  it('a row past the day it may wait goes by itself no more: the clock drops its mark (its asker is told, session-request-notify.test.ts)', async () => {
+    const row = await parkedOnFolder('waited too long')
+    const later = Date.parse(row.enqueuedAt) + FOLDER_WAIT_MAX_AGE_MS + 1000
+    expect(await sweepDeliveryRetries(later)).toEqual([])
+    resetCache()
+    expect((await getQueue(SID)).map((m) => [m.status, m.folderWait])).toEqual([['parked', undefined]])
     expect(sends).toEqual([])
   })
 })

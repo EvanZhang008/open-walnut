@@ -195,6 +195,31 @@ describe('session:send retryOf — retry after a failed delivery', () => {
     expect(sends).toHaveLength(1)
   })
 
+  it('a Retry of a row the session\'s host keeps, while that host cannot be asked, errors and queues nothing here', async () => {
+    // Review B1 (2026-11-24): the host's link was down (or its answer late, while it did send the
+    // row), the Retry read the row as gone and queued the words again here, and both went.
+    const { createSessionRecord } = await import('../../../src/core/session-tracker.js')
+    const { noteHostJudged, _resetJudgeOfForTesting } = await import('../../../src/core/sessions/judge-of.js')
+    const { setRemoteJudgedCaller, _resetRemoteJudgedSessionsForTesting } = await import('../../../src/providers/remote-judged-session.js')
+    await createSessionRecord(SID, 't-host-retry', 'Acme', '/work/ws', { initialProcessStatus: 'idle' })
+    noteHostJudged(SID, 'devbox')
+    const asked: string[] = []
+    setRemoteJudgedCaller(async (_host, body) => {
+      asked.push(body.member)
+      throw new Error(`${body.member} on devbox: no answer within 10000 ms`)
+    })
+    try {
+      await expect(callSend({ sessionId: SID, message: TEXT, retryOf: 'qm-parked-on-the-host' })).rejects.toThrow(/cannot be reached right now/)
+      expect(asked).toEqual(['sendQueuedRowNow'])
+      expect(await getQueue(SID)).toEqual([])
+      expect(queued).toHaveLength(0)
+    } finally {
+      setRemoteJudgedCaller(null)
+      _resetJudgeOfForTesting()
+      _resetRemoteJudgedSessionsForTesting()
+    }
+  })
+
   it('a retry of a row that is still mid-flight (processing) adds nothing', async () => {
     // Racy Retry click while the batch is being delivered. The row is 'processing',
     // not 'pending' — but it is still QUEUED, so delivery hasn't settled and the

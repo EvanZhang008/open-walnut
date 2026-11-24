@@ -36,7 +36,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { AFTER_TURN_REASON, COLD_HOLD_REASON, MOVE_HELD_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from '../relay-fates.js';
 import { leaveParked } from '../queue-held-spans.js';
-import { _resetFolderLooksForTesting, folderIsBackFor, waitsForFolder } from './folder-wait.js';
+import { _resetFolderLooksForTesting, endFolderWaits, FOLDER_WAIT_ENDED, FOLDER_WAIT_MAX_AGE_MS, folderIsBackFor, waitsForFolder } from './folder-wait.js';
 import { mutateStore, readQueueFileFresh, type QueuedMessage } from '../session-queue-store.js';
 
 /** The wait before each automatic try, by how many came before it; then RETRY_EVERY_MS for good. */
@@ -145,6 +145,10 @@ async function retrySession(sessionId: string, rows: QueuedMessage[], now: numbe
   let fence: string | null;
   try { fence = (await sessionStops.fence(sessionId)) ?? null; } catch { return null; }
   const codeOf = await reasonCode();
+  // A row that waited on its folder longer than the rule allows goes by itself no more: its mark is
+  // dropped and its asker hears once that it was not delivered (it was promised it goes by itself).
+  const lapsed = rows.filter((r) => r.status === 'parked' && r.folderWait === true && now - (Date.parse(r.enqueuedAt) || now) >= FOLDER_WAIT_MAX_AGE_MS)
+  if (lapsed.length > 0) await endFolderWaits(sessionId, FOLDER_WAIT_ENDED.tooOld, lapsed.map((r) => r.id)).catch(() => 0);
   // A row parked on a gone folder is due by the same clock, once its folder is there again however it
   // came back (folder-wait.ts); the clock's growing wait keeps a refusal the folder check contradicts
   // from looping.

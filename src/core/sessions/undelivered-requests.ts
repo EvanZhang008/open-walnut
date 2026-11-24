@@ -143,7 +143,7 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
       // Waiting on its session's gone folder (a workspace being made again): it goes by itself once
       // the folder is back, so its asker hears nothing now; its delivery, or its deadline, speaks
       // (folder-wait.ts). 2026-11-24: one waited 21 s and its sender was told "not delivered".
-      const { waitsForFolderNow } = await import('./folder-wait.js');
+      const { waitsForFolderNow, dropFolderWait } = await import('./folder-wait.js');
       if (await waitsForFolderNow(row)) {
         log.session.info('parked request: its message waits on the folder and goes by itself; the asker is not told it failed', { requestId: id, sessionId: row.sessionId, messageId: row.id });
         continue;
@@ -155,6 +155,8 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
       const { getSessionRequest } = await import('../session-requests.js');
       const request = await getSessionRequest(id);
       if (!request || request.status !== 'pending') continue;
+      // Told it was not delivered (a folder of the user's own that went): never sent by itself after.
+      if (!retried && row.folderWait === true) await dropFolderWait(row.sessionId, [row.id]);
       const { notifyRequesterFallback } = await import('./session-request-notify.js');
       await notifyRequesterFallback(request, 'error', retried ? {} : { notDelivered: row.parkedReason });
     } catch (err) {

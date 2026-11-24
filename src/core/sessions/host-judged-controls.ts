@@ -38,11 +38,14 @@ async function proxyOf(sessionId: string) {
   return p
 }
 
-/** One `lifecycle` member (host-calls.ts) carried out by the host that runs `sessionId`: its answer, or a throw. */
-export async function onJudgingHost(sessionId: string, member: HostLifecycleMember, args: unknown[] = []): Promise<unknown> {
+/**
+ * One `lifecycle` member (host-calls.ts) carried out by the host that runs `sessionId`: its answer, or a
+ * throw. `timeoutMs`: how long the link waits for the answer (its own default otherwise).
+ */
+export async function onJudgingHost(sessionId: string, member: HostLifecycleMember, args: unknown[] = [], opts: { timeoutMs?: number } = {}): Promise<unknown> {
   const p = await proxyOf(sessionId)
   if (CHECKS.has(member) && !hostTakesChecks(p.host)) throw new HostNeedsUpdateError(p.host, member)
-  return p.call(member, args, 'lifecycle')
+  return p.call(member, args, 'lifecycle', opts.timeoutMs)
 }
 
 /**

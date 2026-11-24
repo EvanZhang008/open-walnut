@@ -615,8 +615,12 @@ export async function editSessionQueuedMessage(
 /** Delete a still-pending queued message. */
 export async function deleteSessionQueuedMessage(sessionId: string, messageId: string): Promise<{ ok: true }> {
   // A row the host that runs the session keeps is discarded there (host-queue-rows.ts).
-  const { discardQueued } = await import('./host-queue-rows.js');
-  const ok = await discardQueued(sessionId, messageId);
+  const { discardQueued, HostUnreachableError } = await import('./host-queue-rows.js');
+  const ok = await discardQueued(sessionId, messageId).catch((err: unknown) => {
+    // The row is the host's and the host could not be asked: it stays (api-v1.md host_reconnecting).
+    if (err instanceof HostUnreachableError) throw new SessionControlError(err.message, 503, { code: 'host_reconnecting' });
+    throw err;
+  });
   if (!ok) throw new SessionControlError('Message not deletable (already processing or not found)', 409);
   return { ok: true };
 }
