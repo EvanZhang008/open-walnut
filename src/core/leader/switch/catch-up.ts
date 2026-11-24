@@ -56,6 +56,8 @@ export async function catchUpStandby(o: {
   commitWindowMs: number
   maxMs?: number
   now?: () => number
+  /** Between a void round and the next (default VOID_PAUSE_MS; tests shorten it). */
+  voidPauseMs?: number
 }): Promise<CatchUpOutcome> {
   const now = o.now ?? Date.now
   const budgetMs = catchUpBudgetMs(o.commitWindowMs)
@@ -89,12 +91,14 @@ export async function catchUpStandby(o: {
       let voids = 0
       while (voids < batches.length && !batches[batches.length - 1 - voids]!.ok) voids++
       if (voids >= CATCH_UP_VOIDS) return refuse(`${voids} standby batches in a row were void; the last: ${said(b)}`)
-      await new Promise((r) => setTimeout(r, VOID_PAUSE_MS))
+      await new Promise((r) => setTimeout(r, o.voidPauseMs ?? VOID_PAUSE_MS))
       continue
     }
     // Two batches over the budget in a row, the later not shorter: what is written meanwhile is more than the link carries.
     const prev = batches.at(-2)
     if (b.ok && prev?.ok && prev.ms > budgetMs && b.ms >= prev.ms) {
+      // Nothing to send in either: the walk of the home alone is over the budget.
+      if (b.unchanged && prev.unchanged) return refuse(`a walk of the home alone takes ${s(b.ms)} (then ${s(prev.ms)} before it), over the budget of ${s(budgetMs)}: the final batch ends on such a walk`)
       return refuse(`the standby falls further behind: batches over the budget of ${s(budgetMs)} took ${said(prev)}, then ${said(b)} (the writes outpace the copy link)`)
     }
   }

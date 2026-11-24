@@ -66,23 +66,27 @@ describe('the standby caught up before the handover', () => {
     expect(out.ok).toBe(false)
     expect(!out.ok && out.why).toMatch(/falls further behind/)
     expect(r.calls()).toBe(2)
+    // Nothing to send, and still too slow: the walk itself is named.
+    const walk = runner([batch(80_000, 0, true), batch(90_000, 0, true)])
+    const slow = await catchUpStandby({ runOnce: walk.runOnce, commitWindowMs: WINDOW, now: walk.now })
+    expect(!slow.ok && slow.why).toMatch(/a walk of the home alone takes 90\.0 s/)
   })
 
   it('void batches: refused after three rounds in a row, a second apart, with the last reason; one that stands in between resets the count', async () => {
     const r = runner([voidBatch(2_000)])
     const t0 = Date.now()
-    const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now })
+    const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now, voidPauseMs: 100 })
     expect(out.ok).toBe(false)
     expect(!out.ok && out.why).toMatch(/3 standby batches in a row were void; the last: void after 2\.0 s \(a write at the wrong instant\)/)
     expect(r.calls()).toBe(3)
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_900)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(190)
     const mixed = runner([voidBatch(1_000), voidBatch(1_000), batch(90_000, 1), voidBatch(1_000), batch(10_000, 1)])
-    expect((await catchUpStandby({ runOnce: mixed.runOnce, commitWindowMs: WINDOW, now: mixed.now })).ok).toBe(true)
+    expect((await catchUpStandby({ runOnce: mixed.runOnce, commitWindowMs: WINDOW, now: mixed.now, voidPauseMs: 1 })).ok).toBe(true)
   })
 
   it('void batches within the catch-up\'s time: refused once it is over', async () => {
     const r = runner([voidBatch(150_000), batch(100_000, 1), voidBatch(150_000)])
-    const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now })
+    const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now, voidPauseMs: 1 })
     expect(out.ok).toBe(false)
     expect(!out.ok && out.why).toMatch(/within 300\.0 s; the last: void after 150\.0 s/)
   })

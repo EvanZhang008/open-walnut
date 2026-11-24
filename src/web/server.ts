@@ -836,7 +836,7 @@ function stopWritersForSwitch(budgetMs: number): SwitchStopWriter[] {
   // killed part way, it is waited for, and named when still at it past the budget. Rare: the catch-up refuses while
   // one runs, and none starts once the handover stands (its door, compactionDoorRefusal) or the quiet is on.
   const rewrite = compactionChild
-  if (rewrite && rewrite.exitCode === null && rewrite.signalCode === null) out.push({ name: 'git history compaction', done: new Promise<void>((resolve) => rewrite.once('exit', () => resolve())) })
+  if (rewrite && rewrite.exitCode === null && rewrite.signalCode === null) out.push({ name: 'git history compaction', done: new Promise<void>((resolve) => { rewrite.once('exit', () => resolve()); rewrite.once('error', () => resolve()) }) })
   // This server's own periodic standby batches: stopped, not waited for. Its side here writes only tmp/ (rebuildable),
   // and an apply of its last batch on the other machine is waited out by the final batch (final-stop.ts).
   standbyHandle?.stop()
