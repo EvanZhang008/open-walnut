@@ -17,7 +17,7 @@ import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/s
 import { readSwitchState, readTargetState, type SwitchState, type TargetState } from '../../src/core/leader/switch/flow.js'
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
 import { instanceIdAt } from '../../src/core/device-store.js'
-import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, startLoad, status, waitFor, waitForBatch, writeFiller, type Check, type Seeded } from './rehearsal.js'
+import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, startLoad, status, waitFor, waitForBatch, writeFiller, type Check, type FillerPlace, type Seeded } from './rehearsal.js'
 import { makeRemoteWorld, type RemoteWorld } from './remote-world.js'
 import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
@@ -166,7 +166,7 @@ function builtDaemon(): { ok: boolean; why: string } {
   return { ok: !!built && built === source, why: `built ${built ?? 'none'}, source ${source ?? 'unknown'}${built !== source ? ' (bash scripts/build-daemon.sh)' : ''}` }
 }
 
-export async function rehearseRemote(root: string, print: (c: Check) => void, opts: { portA: number; portB: number; fillerGb?: number; log?: (s: string) => void; only?: string[] }): Promise<RemoteResult> {
+export async function rehearseRemote(root: string, print: (c: Check) => void, opts: { portA: number; portB: number; fillerGb?: number; filler?: FillerPlace; log?: (s: string) => void; only?: string[] }): Promise<RemoteResult> {
   const log = opts.log ?? (() => {})
   const c = new Checks(print)
   const times: Record<string, string> = {}
@@ -191,7 +191,7 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     const allThree = await waitFor('the three witnesses to hold A', async () => (['w-a', 'w-b', 'w-k'] as const).every((id) => recordAt(w.witnessRoot[id], walnutId, id)?.holder === w.a.id), 120_000).then(() => true).catch(() => false)
     if (!c.add('boot: init sets up w-a and w-k from nothing, A leads, init again adds w-b over A\'s link to B\'s service; all three hold A', leads === true && init2.code === 0 && allThree,
       `init 1 exit ${init1.code}, init 2 exit ${init2.code}: ${last(init2.out, 4)}`)) return { checks: c, times }
-    if (opts.fillerGb) await writeFiller(w.a.home, opts.fillerGb, log)
+    if (opts.fillerGb) await writeFiller(w.a.home, opts.fillerGb, log, opts.filler)
     const s = await seed(w, w.a, 8)
     c.add('boot: seed on A (tasks, notes, a plugin file, a routine)', s.tasks.length === 8 && !!s.cronId)
     const t0 = Date.now()
@@ -853,6 +853,50 @@ async function trialFails(x: Ctx): Promise<void> {
   await checkCarried(c, w, L, L, x.carried, 'failed trial')
 }
 
+/** The old leader's log: every line of `m`'s server (its daemon dir's open-walnut-<day>.log), parsed. */
+function serverLog(m: Machine): Array<{ time: string; subsystem?: string; message?: string; switchId?: string; [k: string]: unknown }> {
+  const dir = path.join(m.dir, 'daemon')
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => /^open-walnut-.*\.log$/.test(n)).sort() : []
+  return files.flatMap((n) => fs.readFileSync(path.join(dir, n), 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l)] } catch { return [] } }))
+}
+
+/**
+ * The 2026-11-24 bug: after "the switch stop begins" the old leader's own git still committed (a tick, its large-file
+ * lane), so its final batch found the home changing. Its log from that line to the final batch's end has no git line
+ * that writes the data repo.
+ */
+function checkNoOwnWritesInStop(c: Checks, label: string, m: Machine, switchId: string | undefined): void {
+  const lines = serverLog(m)
+  const from = lines.findIndex((l) => l.switchId === switchId && /the switch stop begins/.test(String(l.message)))
+  const to = lines.findIndex((l, i) => i > from && l.switchId === switchId && /final batch sent and marked|no final mark/.test(String(l.message)))
+  const inStop = from >= 0 ? lines.slice(from, to >= 0 ? to + 1 : undefined) : []
+  const writes = inStop.filter((l) => l.subsystem === 'git' && /commit|large files|lane|gc|repack|compaction/i.test(String(l.message)) && !/ended for the final batch/.test(String(l.message)))
+  const settled = inStop.find((l) => /writers of the home are stopped for the final batch/.test(String(l.message)))
+  c.add(`${label}: no git of the old leader writes the data repo once its switch stop began; its writers are stopped before the final batch`, from >= 0 && writes.length === 0 && !!settled,
+    from < 0 ? 'no switch stop line' : `${writes.length} git line(s) in the stop${writes.length ? `: ${writes.slice(0, 2).map((l) => `${l.time} ${l.message}`).join('; ')}` : ''}; settle: ${settled ? JSON.stringify({ late: settled.late, ms: settled.ms }) : 'none'}`)
+}
+
+/** The leader's catch-up lines (routes/leader-switch.ts /switch/catch-up) since `since`: each attempt's batches. */
+function catchUps(m: Machine, since: number): string[] {
+  return serverLog(m).filter((l) => Date.parse(l.time) >= since && /leader switch: the standby (caught up|did not catch up)/.test(String(l.message)))
+    .map((l) => `${String(l.message).replace('leader switch: the standby ', '')} in ${((Number(l.ms) || 0) / 1000).toFixed(1)} s (${(l.batches as Array<{ ok: boolean; ms: number; sentBytes: number }> | undefined)?.map((b) => `${(b.ms / 1000).toFixed(1)} s/${(b.sentBytes / 1_048_576).toFixed(1)} MB${b.ok ? '' : ' void'}`).join(', ') ?? ''})`)
+}
+
+/**
+ * A switch the catch-up refuses (the standby not caught up yet: a large home's leader still writes its git objects,
+ * or the copy link is slow) is a refusal with nothing stopped: tried again a minute later, up to `tries` times.
+ */
+async function switchWhenCaughtUp(x: Ctx, label: string, tries = 10): Promise<{ r: Awaited<ReturnType<typeof runSwitch>>; refused: number }> {
+  let refused = 0
+  for (;;) {
+    const r = await runSwitch(x, label)
+    if (r.code !== 1 || !/not caught up/.test(r.out) || refused + 1 >= tries) return { r, refused }
+    refused++
+    x.log(`${label}: refused (not caught up), trying again in 60 s`)
+    await sleep(60_000)
+  }
+}
+
 /** The downtime over the copy link unslowed and at 20 Mbit/s (`slow {bytesPerSec: 2_500_000}`), and the time until every host is connected. */
 async function measure(x: Ctx): Promise<void> {
   const { c, w, roles, times } = x
@@ -862,21 +906,77 @@ async function measure(x: Ctx): Promise<void> {
     const from = roles.leader
     const copy = from === w.a ? w.links.copy : w.links.bToA
     if (slow) copy.setMode('slow', { delayMs: 0, bytesPerSec: 2_500_000 })
+    const began = Date.now()
     let r: Awaited<ReturnType<typeof runSwitch>>
+    let refused = 0
     try {
-      r = await runSwitch(x, slow ? 'measure at 20 Mbit/s' : 'measure unslowed')
+      ({ r, refused } = await switchWhenCaughtUp(x, slow ? 'measure at 20 Mbit/s' : 'measure unslowed'))
     } finally {
       copy.setMode('pass')
     }
     const label = `${from.id} -> ${r.state?.to}, copy link ${slow ? 'at 20 Mbit/s' : 'unslowed'}`
-    c.add(`measure: switch ${label} completes`, r.state?.step === 'done' && r.target?.step === 'done', `source ${r.state?.step}; target ${r.target?.step}`)
+    c.add(`measure: switch ${label} completes`, r.state?.step === 'done' && r.target?.step === 'done', `source ${r.state?.step}; target ${r.target?.step}; ${refused} refusal(s) before (not caught up); ${(r.state?.rollbackWhy ?? '').slice(0, 300)}`)
     times[`downtime ${label}`] = `${((r.target?.downtimeMs ?? NaN) / 1000).toFixed(1)} s`
+    times[`catch-up before ${label}`] = catchUps(from, began).join(' | ') || 'none logged'
+    checkNoOwnWritesInStop(c, `measure ${label}`, from, r.state?.id)
     const N = roles.leader
     const t0 = Date.now()
     const followed = await waitFor('every host connected', async () => hostsConnected(w, N, [w.h.id, roles.other.id]), 180_000, 500).then(() => true).catch(() => false)
     const since = r.target?.readyAt ? Date.now() - Date.parse(r.target.readyAt) : NaN
     times[`every host connected to the new leader after done (${label})`] = followed ? `${(since / 1000).toFixed(1)} s` : `not within ${((Date.now() - t0) / 1000).toFixed(0)} s`
   }
+}
+
+/**
+ * A standby behind (the 2026-11-24 rehearsal: 1.35 GB in the batch before a handover over a 20 Mbit/s link): about
+ * 1.2 GB of new leader data just before the switch, the copy link at 20 Mbit/s (about 2.5 MB/s, so about 8 min for
+ * it). The catch-up refuses at the preflight, before any handover: the old leader never stops (its permission sampled
+ * every second, its mayAct log, its doors, its server process, the witnesses' record).
+ */
+async function standbyBehind(x: Ctx): Promise<void> {
+  const { c, w, roles, times } = x
+  await writeAndBatch(x, 'standby-behind')
+  const L = roles.leader
+  const O = roles.other
+  const copy = L === w.a ? w.links.copy : w.links.bToA
+  const dir = path.join(L.home, 'voice-archive', 'rehearsal-behind')
+  fs.mkdirSync(dir, { recursive: true })
+  copy.setMode('slow', { delayMs: 0, bytesPerSec: 2_500_000 })
+  const pid = w.side(L).runningServer()?.pid
+  const t0 = Date.now()
+  const samples: boolean[] = []
+  let sampling = true
+  const sampler = (async () => { while (sampling) { samples.push(!!(await status(w, L).catch(() => null))?.mayAct); await sleep(1_000) } })()
+  let r: Awaited<ReturnType<typeof switchCmd>>
+  try {
+    // Leader data git does not take (no commit of it adds to the backlog), every MiB different.
+    for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(dir, `recording-${i}.bin`), randomBytes(100 * 1_048_576))
+    // The standby's periodic batch takes it on at once (every 5 s here): the catch-up finds it under way.
+    await sleep(8_000)
+    r = await switchCmd(w, L, ['--to', O.id])
+  } finally {
+    sampling = false
+    await sampler
+    copy.setMode('pass')
+  }
+  const t1 = Date.now()
+  x.log(`standby behind:\n${r.out}`)
+  times['standby behind: the refusal came after'] = `${((t1 - t0) / 1000).toFixed(1)} s (${catchUps(L, t0).join(' | ') || 'no catch-up logged'})`
+  c.add('standby behind: refused at its preflight because the standby is not caught up (the final batch would not fit in the commit window)', r.code === 1 && /not caught up/.test(r.out), `exit ${r.code}; ${last(r.out, 2).slice(0, 400)}`)
+  const lines = readMayAct(L.home).filter((l) => l.t >= t0 && l.t <= t1)
+  const off = lines.filter((l) => !l.mayAct)
+  const doors = lines.filter((l) => l.event === 'door')
+  c.add(`standby behind: ${L.id} never stopped acting (its permission true at each of ${samples.length} samples a second apart, no "may not act" line, its server the same process)`,
+    samples.length >= 30 && samples.every(Boolean) && off.length === 0 && w.side(L).runningServer()?.pid === pid,
+    `${samples.filter((s) => !s).length} false sample(s); ${off.length} false line(s); pid ${pid} -> ${w.side(L).runningServer()?.pid}`)
+  c.add(`standby behind: ${L.id}'s doors stayed open through it (every door line allowed, its routine fired)`, doors.length > 0 && doors.every((l) => l.mayAct), `${doors.length} door line(s), ${doors.filter((l) => !l.mayAct).length} refused`)
+  const walnutId = (await instanceIdAt(L.home))!
+  const held = (['w-a', 'w-b', 'w-k'] as const).map((id) => recordAt(w.witnessRoot[id], walnutId, id))
+  c.add(`standby behind: no handover record: every witness still holds ${L.id}`, held.every((h) => h?.holder === L.id && h.kind !== 'handover'), JSON.stringify(held))
+  // The backlog goes once the link is fast again; then it is removed, and the standby holds the home as it is.
+  await waitForBatch(O.standbyDir, Date.now(), 600_000).catch(() => 0)
+  fs.rmSync(dir, { recursive: true, force: true })
+  await waitForBatch(O.standbyDir, Date.now(), 600_000).catch(() => 0)
 }
 
 const SCENARIOS: Array<[string, (x: Ctx) => Promise<void>]> = [
@@ -890,5 +990,6 @@ const SCENARIOS: Array<[string, (x: Ctx) => Promise<void>]> = [
   ['cut-after-commit', cutAfterCommit],
   ['trial-fails', trialFails],
   ['kills', kills],
+  ['standby-behind', standbyBehind],
   ['measure', measure],
 ]

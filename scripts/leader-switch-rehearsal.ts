@@ -4,7 +4,7 @@
  * `walnut leader switch` command. Prints one line per check; exits 1 when one fails.
  *
  *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--paths] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
- *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N] [--keep]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N [--filler tracked|ignored]] [--keep]
  *
  * Without a scenario flag it runs the main one: A leads, a standby copy to B, load through
  * A's API, the switch to B, every check, A started again by hand (online and offline), writes
@@ -32,12 +32,16 @@ import { KILL_POINTS, TRIAL_FAILURES, rehearseCancel, rehearseCancelAfterCommit,
 const args = process.argv.slice(2)
 const root = args[0]
 if (!root || root.startsWith('--')) {
-  console.error('usage: bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--no-back] [--port-base N] [--keep]')
+  console.error('usage: bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N [--filler tracked|ignored]] [--kills] [--stops] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--no-back] [--port-base N] [--keep]')
   process.exit(2)
 }
 const has = (f: string) => args.includes(f)
 const gbAt = args.indexOf('--gb')
 const gb = gbAt >= 0 ? Number(args[gbAt + 1]) : 0
+// The large filler under artifacts/ (git tracks it: the pressure case) or voice-archive/ (git ignores it).
+const fillerAt = args.indexOf('--filler')
+const filler = fillerAt >= 0 ? args[fillerAt + 1] : 'tracked'
+if (filler !== 'tracked' && filler !== 'ignored') { console.error('--filler is tracked or ignored'); process.exit(2) }
 const all = has('--all')
 // What ran, first in the log: its commit and whether the tree had changes beside it (an evidence log names its code).
 {
@@ -63,7 +67,7 @@ const ports = () => { port += 2; return { portA: port, portB: port + 1 } }
 if (has('--remote')) {
   const { rehearseRemote } = await import('./leader-switch/remote-rehearsal.js')
   const onlyAt = args.indexOf('--only')
-  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, log, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}) })
+  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, filler, log, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}) })
   for (const [k, v] of Object.entries(r.times)) console.log(`TIME  ${k}: ${v}`)
   finish()
 }
@@ -71,8 +75,8 @@ if (has('--remote')) {
 const main = !has('--kills') && !has('--stops') && !has('--trials') && !has('--flag-off') && !has('--restarts') && !has('--paths') && !has('--console')
 if (main || all) {
   await rehearseLedgerControl(path.join(work, 'ledger-control'), print, ports())
-  const r = await rehearseSwitchAndBack(path.join(work, 'main'), print, { ...ports(), fillerGb: gb, noBack: has('--no-back'), log })
-  console.log(`DOWNTIME  switch ${r.downtimeMs !== undefined ? (r.downtimeMs / 1000).toFixed(1) : '?'} s, back ${r.backDowntimeMs !== undefined ? (r.backDowntimeMs / 1000).toFixed(1) : '?'} s${gb ? ` (home with ${gb} GB filler)` : ''}`)
+  const r = await rehearseSwitchAndBack(path.join(work, 'main'), print, { ...ports(), fillerGb: gb, filler, noBack: has('--no-back'), log })
+  console.log(`DOWNTIME  switch ${r.downtimeMs !== undefined ? (r.downtimeMs / 1000).toFixed(1) : '?'} s, back ${r.backDowntimeMs !== undefined ? (r.backDowntimeMs / 1000).toFixed(1) : '?'} s${gb ? ` (home with ${gb} GB filler, ${filler})` : ''}`)
 }
 if (main || all || has('--paths')) await rehearseHomePrefix(path.join(work, 'home-prefix'), print, ports())
 if (has('--kills') || all) {

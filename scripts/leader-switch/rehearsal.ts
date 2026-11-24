@@ -232,11 +232,11 @@ export async function checkStandby(c: Checks, w: World, m: Machine, leader: stri
 }
 
 /** The main scenario: switch under load, every check, the classic mistake, switch back. */
-export async function rehearseSwitchAndBack(root: string, print: (c: Check) => void, opts: { portA?: number; portB?: number; fillerGb?: number; noBack?: boolean; log?: (s: string) => void } = {}): Promise<{ checks: Checks; downtimeMs?: number; backDowntimeMs?: number }> {
+export async function rehearseSwitchAndBack(root: string, print: (c: Check) => void, opts: { portA?: number; portB?: number; fillerGb?: number; filler?: FillerPlace; noBack?: boolean; log?: (s: string) => void } = {}): Promise<{ checks: Checks; downtimeMs?: number; backDowntimeMs?: number }> {
   const log = opts.log ?? (() => {})
   const c = new Checks(print)
   const w = makeWorld(root, { portA: opts.portA ?? 4731, portB: opts.portB ?? 4732 })
-  if (opts.fillerGb) await writeFiller(w.a.home, opts.fillerGb, log)
+  if (opts.fillerGb) await writeFiller(w.a.home, opts.fillerGb, log, opts.filler)
   const a = w.side(w.a)
   const b = w.side(w.b)
   try {
@@ -699,9 +699,17 @@ export async function rehearseFlagOff(root: string, print: (c: Check) => void, p
   }
 }
 
+/**
+ * Where the large filler goes: `tracked`, under artifacts/ (the data repo tracks it, so the leader's own git
+ * auto-commit writes about as much again into .git, the pressure case); `ignored`, under voice-archive/ (leader
+ * data git never takes, the shape of a real home's large recordings). The small files are tracked in both.
+ */
+export type FillerPlace = 'tracked' | 'ignored'
+export const FILLER_DIRS: Record<FillerPlace, string> = { tracked: path.join('artifacts', 'rehearsal-filler'), ignored: path.join('voice-archive', 'rehearsal-filler') }
+
 /** Incompressible filler in a leader-data folder, so the home has a real size. */
-export async function writeFiller(home: string, gb: number, log: (s: string) => void): Promise<void> {
-  const dir = path.join(home, 'artifacts', 'rehearsal-filler')
+export async function writeFiller(home: string, gb: number, log: (s: string) => void, place: FillerPlace = 'tracked'): Promise<void> {
+  const dir = path.join(home, FILLER_DIRS[place])
   fs.mkdirSync(dir, { recursive: true })
   const fileMb = 256
   const files = Math.ceil((gb * 1024) / fileMb)
