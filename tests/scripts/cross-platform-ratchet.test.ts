@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
 import fs from 'node:fs'
 import path from 'node:path'
+import { daemonAreaModules } from '../helpers/daemon-runtime-text.js'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 
@@ -34,6 +35,8 @@ const CROSS_PLATFORM_FILES = [
   'src/constants.ts',
   'src/providers/local-daemon.ts',
   'src/providers/daemon-standalone.ts',
+  // The runtime's area modules (daemon-git.ts, daemon-fs-read.ts, ...): its code, run where it runs.
+  ...daemonAreaModules(),
   'src/providers/daemon-core.ts',
 ]
 

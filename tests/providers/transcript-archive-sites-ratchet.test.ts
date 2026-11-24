@@ -9,6 +9,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
@@ -110,9 +111,11 @@ describe('transcript archive: every transcript site is listed', () => {
       'src/core/session-jsonl-migration.ts': /restoreArchivedAt\(/,
       'src/core/stream-retention.ts': /transcriptSessionId\(/,
     }
-    for (const [file, re] of Object.entries(calls)) expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(re)
+    // The daemon reads as its whole runtime: daemon-standalone.ts and its area modules (the fs commands are daemon-fs-read.ts).
+    const textOf = (file: string) => (file === 'src/providers/daemon-standalone.ts' ? daemonRuntimeText() : fs.readFileSync(path.join(ROOT, file), 'utf8'))
+    for (const [file, re] of Object.entries(calls)) expect(textOf(file), file).toMatch(re)
     // The daemon restores in each file command.
-    const sa = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+    const sa = daemonRuntimeText()
     for (const fn of ['cmdFsRead', 'cmdFsStat', 'cmdFsReadRange', 'cmdFsLs', 'cmdFsReadBounded']) {
       const body = sa.slice(sa.indexOf(`async function ${fn}(`), sa.indexOf('\n}\n', sa.indexOf(`async function ${fn}(`)))
       expect(body, fn).toMatch(/await restoreForRead\(/)

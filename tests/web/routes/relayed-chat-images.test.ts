@@ -177,8 +177,11 @@ describe('the staging directory is the SAME dir on both sides of the bridge', ()
     expect(MOBILE_STAGED_IMAGES_DIR).toBe(path.join(IMAGES_DIR, 'mobile'))
 
     const root = path.resolve(import.meta.dirname, '../../..')
-    const src = await fs.readFile(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    // The daemon's image.save lives in its fs write module, under the runtime's own DAEMON_DIR.
+    const src = await fs.readFile(path.join(root, 'src/providers/daemon-fs-write.ts'), 'utf-8')
     expect(src).toMatch(/IMAGE_SAVE_DIR = path\.join\(DAEMON_DIR, 'images', 'mobile'\)/)
+    const runtime = await fs.readFile(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    expect(runtime).toMatch(/createDaemonFsWrite\(\{[^}]*\bDAEMON_DIR\b/)
   })
 })
 

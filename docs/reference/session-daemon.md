@@ -722,6 +722,16 @@ is parked with why. Reads that only bring an answer back stay.
 
 **One daemon source:** `daemon-standalone.ts` and the modules it imports. It is compiled into the daemon binaries and into the walnut file (`walnut __daemon`), and a checkout with no built daemon runs it directly under bun. Build: `bash scripts/build-daemon.sh`. (Until 2026-11 a second, hand-synced copy, `daemon-source.ts`, ran on hosts under bun or node; it is gone, and so is the `ws` install and the bun probe.)
 
+**The runtime is split by area:** `createDaemonRuntime` (`daemon-standalone.ts`) keeps the state it
+shares, the dispatcher and its name tables, and creates one area module per area
+(`daemon-git.ts`, `daemon-skills.ts`, `daemon-fs-read.ts`, `daemon-fs-write.ts`, `daemon-changes.ts`,
+`daemon-transcripts.ts`, `daemon-process-groups.ts`): `create<Area>(deps)`, where deps carry only the
+runtime names the area uses, under the same names (`daemon-module-deps.ts`), and the dispatcher calls
+`area.cmdX(ws, id, cmd)`. A module reads no env and starts children only through the
+`childUse` it is handed. Each new module goes in both version lists (`scripts/build-daemon.sh`,
+`daemon-version-check.ts`). A check that scans the whole runtime reads `daemonRuntimeText()`
+(`tests/helpers/daemon-runtime-text.ts`), never `daemon-standalone.ts` alone.
+
 **Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, it puts the new daemon on the host while the old one still serves: this build's `daemon-linux-<arch>` binary (gzipped, one stream, else 256 KB chunks each over its own SSH connection, which bypasses proxies that kill large transfers), else the walnut file in the same slot (the host downloads it from the release itself, else a delta, else an upload that resumes). The new daemon's fold checkpoints are prepared from that staged file (`--prewarm-folds`) before the swap, and the staged daemon runs in a trial first. A host where neither file can be had gets an error that says why (a Walnut that runs from an uncommitted checkout, a host that is not Linux, no room); a host needs no bun, node or `ws`. Just `bun run build && bash scripts/build-daemon.sh && bun run dev:prod`: the next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
 
 ## Every hold on that update has an end

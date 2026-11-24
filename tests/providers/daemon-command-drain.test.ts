@@ -18,6 +18,7 @@ import {
   turnRetryGiveUpText, turnRetryMarkerText, turnRetryMessage, TURN_RETRY_DEFAULTS,
 } from '../../src/providers/daemon-core.js'
 import { missingNames } from '../helpers/extracted-free-names.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void
@@ -111,7 +112,8 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
   return compile(`${text}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, env)
 }
 
-const standalone = fs.readFileSync(path.resolve('src/providers/daemon-standalone.ts'), 'utf8')
+// The whole runtime: daemon-standalone.ts and its area modules (the process-group helpers are daemon-process-groups.ts).
+const standalone = daemonRuntimeText()
 /** A daemon's host_exec side with no run: stopDaemon ends the resumable ones (none) and waits for them (no wait). */
 const idleHostExec = () => ({ stuck: () => false, endForUpdate: vi.fn(), untilEnded: async () => {} })
 
@@ -572,7 +574,8 @@ describe('daemon command drain', () => {
     const cmdVscodeEnsure = vi.fn(() => download.promise)
     const sendError = vi.fn()
     const handle = compileHandle(source, {
-      daemonCommands, cmdVscodeEnsure, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(),
+      // vscode.ensure is the fs write module's (daemon-fs-write.ts).
+      daemonCommands, fsWrite: { cmdVscodeEnsure }, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(),
     })
     handle({}, JSON.stringify({ id: 1, cmd: 'vscode.ensure' }))
     await daemonCommands.close()

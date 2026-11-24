@@ -9,14 +9,15 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DAEMON_TWIN_STATE } from '../../src/providers/daemon-twin-state.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 /** The command names the daemon's switch takes that set what it keeps per Walnut. */
-function stateCommands(rel: string): string[] {
+function stateCommands(text: string): string[] {
   const out = new Set<string>()
-  for (const m of read(rel).matchAll(/case '([a-zA-Z.]+)'/g)) {
+  for (const m of text.matchAll(/case '([a-zA-Z.]+)'/g)) {
     const cmd = m[1]
     if (/\.(configure|sync)$/.test(cmd) || cmd === 'host.slice' || cmd === 'leader.spawnTemplate') out.add(cmd)
   }
@@ -25,7 +26,8 @@ function stateCommands(rel: string): string[] {
 
 describe('daemon state kept once per Walnut', () => {
   it('names a rule for every such command the daemon takes', () => {
-    const cmds = stateCommands('src/providers/daemon-standalone.ts')
+    // The whole runtime: a command's inner switch may sit in an area module (daemon-transcripts.ts).
+    const cmds = stateCommands(daemonRuntimeText())
     expect(cmds.length).toBeGreaterThan(10)
     const missing = cmds.filter((c) => !DAEMON_TWIN_STATE[c])
     expect(missing, `say how two names of one daemon share these (daemon-twin-state.ts): ${missing.join(', ')}`).toEqual([])

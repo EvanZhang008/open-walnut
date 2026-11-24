@@ -6,12 +6,14 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { areaModuleText } from '../helpers/daemon-runtime-text.js'
 
 /** Execute the daemon's actual guarded handler, without booting a daemon. */
 function handler(home: string, fsImpl = fs) {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  // The daemon's fs read module (daemon-fs-read.ts), its factory body at column 0.
+  const source = areaModuleText('src/providers/daemon-fs-read.ts')
   const start = source.indexOf('const FS_READ_BOUNDED_MAX_BYTES')
-  const end = source.indexOf('// Bridge-safe image save:', start)
+  const end = source.indexOf('// The listing itself', start)
   expect(start).toBeGreaterThan(0)
   expect(end).toBeGreaterThan(start)
   const js = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText

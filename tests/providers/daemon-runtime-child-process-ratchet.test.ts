@@ -81,6 +81,8 @@ const S = STANDALONE
 const P = 'src/providers/'
 const createHostExec: Check = { file: S, call: 'createHostExec', has: /childProcess: childUse/ }
 const createAcpDaemon: Check = { file: S, call: 'createAcpDaemon', has: /childProcess: childUse/ }
+/** The fs read module (daemon-fs-read.ts) starts its searches with the childUse it is handed. */
+const createDaemonFsRead: Check = { file: S, call: 'createDaemonFsRead', has: /\bchildUse\b/ }
 
 /** The modules of the runtime's graph that start children themselves, each with where the runtime injects its own. */
 const ALLOWED: Record<string, Entry> = {
@@ -161,18 +163,21 @@ const ALLOWED: Record<string, Entry> = {
   },
   [`${P}session-changes-core.ts`]: {
     reason: 'git for a session\'s changed files',
-    injection: 'computeHostLocalChanges({ childProcess: childUse })',
-    checks: [{ file: S, call: 'computeHostLocalChanges', has: /childProcess: childUse/ }],
+    injection: 'createDaemonChanges({ childUse }) -> computeHostLocalChanges({ childProcess: childUse })',
+    checks: [
+      { file: S, call: 'createDaemonChanges', has: /\bchildUse\b/ },
+      { file: `${P}daemon-changes.ts`, call: 'computeHostLocalChanges', has: /childProcess: childUse/ },
+    ],
   },
   [`${P}path-resolve-core.ts`]: {
     reason: 'git ls-files and find for a path a session named',
-    injection: 'resolvePathHostLocal({ childProcess: childUse })',
-    checks: [{ file: S, call: 'resolvePathHostLocal', has: /childProcess: childUse/ }],
+    injection: 'createDaemonFsRead({ childUse }) -> resolvePathHostLocal({ childProcess: childUse })',
+    checks: [createDaemonFsRead, { file: `${P}daemon-fs-read.ts`, call: 'resolvePathHostLocal', has: /childProcess: childUse/ }],
   },
   [`${P}search-grep-core.ts`]: {
     reason: 'git grep and grep for a symbol\'s references',
-    injection: 'grepReferencesHostLocal({ childProcess: childUse })',
-    checks: [{ file: S, call: 'grepReferencesHostLocal', has: /childProcess: childUse/ }],
+    injection: 'createDaemonFsRead({ childUse }) -> grepReferencesHostLocal({ childProcess: childUse })',
+    checks: [createDaemonFsRead, { file: `${P}daemon-fs-read.ts`, call: 'grepReferencesHostLocal', has: /childProcess: childUse/ }],
   },
   [`${P}port-scan-core.ts`]: {
     reason: 'lsof, ps and ss for the servers a session started',

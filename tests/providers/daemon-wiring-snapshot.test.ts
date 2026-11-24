@@ -8,11 +8,12 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { twinText } from '../helpers/standalone-twin-text.js'
+import { readTwinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
-function readFile(p: string) { return twinText(p, fs.readFileSync(p, 'utf-8')) }
+// daemon-standalone.ts reads as the whole runtime, its area modules included (readTwinText).
+const readFile = readTwinText
 // The live tailer, a module of its own (ensureWatcher runs it).
 const tailerSrc = fs.readFileSync(path.join(ROOT, 'src/providers/session-tailer.ts'), 'utf-8')
 
@@ -276,9 +277,11 @@ describe('C1 session-snapshot', () => {
     // non-construction uses must be a session-construction site. (Exhaustive
     // literal allowlist on purpose: a mutated construction site can't hide in
     // it.) 1) the SessionData interface field, 2) the assembleSessionSnapshot
-    // argument.
+    // argument, 3) the read-only sessions type the transcript module takes
+    // (daemon-transcripts.ts deps).
     const NON_CONSTRUCTION = [
       'foldState: FoldState', 'foldState: session.foldState',
+      'foldState: { turnActive?: boolean } } | undefined }',
     ]
     const sites = (src.match(/foldState:[^,\n]*/g) ?? []).filter((s) => !NON_CONSTRUCTION.includes(s))
     expect(sites.length, 'daemon must initialize foldState at all 4 construction sites').toBeGreaterThanOrEqual(4)
@@ -472,12 +475,11 @@ describe('one CLI per session id (cli-owner-v1)', () => {
 })
 
 describe('skills.sync multi-skill', () => {
-  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
-
   it('daemon: accept a skills array, fall back to the legacy single skill, and validate the name', () => {
-    const start = standaloneSrc.indexOf('function cmdSkillsSync(')
+    const skillsSrc = readFile(path.join(ROOT, 'src/providers/daemon-skills.ts'))
+    const start = skillsSrc.indexOf('function cmdSkillsSync(')
     expect(start).toBeGreaterThan(-1)
-    const body = standaloneSrc.slice(start, standaloneSrc.indexOf('\n}', start))
+    const body = skillsSrc.slice(start, skillsSrc.indexOf('\n  }\n', start))
     expect(body).toMatch(/Array\.isArray\(cmd\.skills\)/)
     expect(body).toMatch(/\{ name: 'walnut', skill: cmd\.skill \}/)
     expect(body).toMatch(/\^\[a-z0-9\]\[a-z0-9-\]\{0,63\}\$/)

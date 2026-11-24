@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import { daemonRuntimeText } from './daemon-runtime-text.js'
+
 /**
  * daemon-standalone.ts as text checks read it.
  *
@@ -9,6 +12,16 @@
  */
 export function twinText(rel: string, text: string): string {
   return rel.endsWith('daemon-standalone.ts') ? text.replace(/\bdaemonEnv\b/g, 'process.env') : text
+}
+
+/**
+ * A file as the text checks read it. daemon-standalone.ts reads as the whole runtime: the file,
+ * then the area modules its code moved to (daemon-git.ts, daemon-fs-read.ts, ..., each factory
+ * body at column 0: daemon-runtime-text.ts), so a check of the daemon's code finds it wherever
+ * it lives now. Any other file is read as it is.
+ */
+export function readTwinText(file: string): string {
+  return twinText(file, file.endsWith('daemon-standalone.ts') ? daemonRuntimeText() : fs.readFileSync(file, 'utf-8'))
 }
 
 /**

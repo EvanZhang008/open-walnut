@@ -18,6 +18,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { areaModuleText, daemonAreaModules } from '../helpers/daemon-runtime-text.js'
 
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 const FIXTURE = path.resolve(__dirname, 'fixtures/daemon-two-runtimes.ts')
@@ -84,14 +85,19 @@ describe.skipIf(!BUN)('two daemon runtimes in one process', () => {
   }, 90_000)
 })
 
-/** The runtime's body: from the factory's head to the process entry, comments removed. */
+/**
+ * The runtime's body: from the factory's head to the process entry, then the factory body of
+ * each area module it was split into (daemon-git.ts, ...), comments removed.
+ */
 function runtimeBody(): string[] {
   const text = fs.readFileSync(STANDALONE, 'utf8')
   const start = text.indexOf('export async function createDaemonRuntime(')
   const end = text.indexOf('// ── The daemon as a program of its own')
   expect(start).toBeGreaterThan(0)
   expect(end).toBeGreaterThan(start)
-  return text.slice(start, end).split('\n')
+  const modules = daemonAreaModules()
+  expect(modules).toContain('src/providers/daemon-git.ts')
+  return [text.slice(start, end), ...modules.map(areaModuleText)].join('\n').split('\n')
     .map((line, i) => ({ line, n: i }))
     .filter(({ line }) => { const s = line.trim(); return !(s.startsWith('//') || s.startsWith('*') || s.startsWith('/*')) })
     .map(({ line }) => line.replace(/\s\/\/ .*$/, ''))

@@ -54,8 +54,10 @@ describe('changes parser version', () => {
   })
 
   it('is what the session daemon fences checkpoints with (never its build version)', () => {
-    const src = read('src/providers/daemon-standalone.ts')
+    // The daemon's changes compute: its area module (daemon-changes.ts).
+    const src = read('src/providers/daemon-changes.ts')
     expect(src).toContain("'changes-checkpoints'")
     expect(src).not.toMatch(/checkpointVersion\s*:/)
+    expect(read('src/providers/daemon-standalone.ts')).not.toMatch(/checkpointVersion\s*:/)
   })
 })

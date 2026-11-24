@@ -21,11 +21,15 @@ describe("'history-ready-v1' in the daemon", () => {
   const standalone = read('src/providers/daemon-standalone.ts');
 
   it('dispatches the two commands from the core it imports', () => {
-    expect(standalone).toMatch(/case 'history\.readyView': return cmdHistoryReadyView\(ws, id/);
-    expect(standalone).toMatch(/case 'history\.readyKeys': return cmdHistoryReadyKeys\(ws, id/);
-    expect(standalone).toMatch(/function cmdHistoryReadyView\(/);
-    expect(standalone).toMatch(/function cmdHistoryReadyKeys\(/);
+    expect(standalone).toMatch(/case 'history\.readyView': return transcripts\.cmdHistoryReadyView\(ws, id/);
+    expect(standalone).toMatch(/case 'history\.readyKeys': return transcripts\.cmdHistoryReadyKeys\(ws, id/);
+    // The two commands are the daemon's transcript module (daemon-transcripts.ts), handed the runtime's historyReady.
+    const transcripts = read('src/providers/daemon-transcripts.ts');
+    expect(transcripts).toMatch(/function cmdHistoryReadyView\(/);
+    expect(transcripts).toMatch(/function cmdHistoryReadyKeys\(/);
+    expect(standalone).toMatch(/createDaemonTranscripts\(\{[^}]*\bhistoryReady\b/);
     expect(standalone).toMatch(/from '\.\/history-ready-core\.js'/);
+    expect(transcripts).toMatch(/from '\.\/history-ready-core\.js'/);
   });
 
   it('is advertised, never required, and not reachable over the bridge', () => {

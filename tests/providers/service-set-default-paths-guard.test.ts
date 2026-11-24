@@ -22,6 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { RUNTIME_PLACE_ENV, runtimeRootsFor } from '../../src/binary/runtime-tree.js'
 import { serviceSet, serviceSetEnv } from '../../src/providers/service-set.js'
+import { walkDaemonImports } from '../helpers/daemon-import-graph.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/home/walnut'
@@ -91,17 +92,8 @@ const PLACES: Array<['binary' | 'daemon', string, Verdict]> = [
   ['daemon', "io.join(io.home, '.local', 'state', 'open-walnut'", 'shared by the spec: the machine id'],
   ['daemon', "io.join(io.home, '.open-walnut', 'local', 'machine-id')", 'shared by the spec: the machine id (an old seed, read only)'],
   ['daemon', "path.join(homeDir(), '.open-walnut', 'code-server')", 'on a request only: the account\'s one code-server, adopted by whichever daemon starts it'],
+  ['daemon', "opts.join(opts.home, '.local', 'state', 'open-walnut', 'net')", 'default set and prod dir only: a set\'s net identity is its own dir (the rule above it, serviceSetBase/net)'],
 ]
-
-/** The modules daemon-standalone.ts imports itself (relative imports), the cores it builds its parts from. */
-function daemonImports(text: string): string[] {
-  const out = new Set<string>()
-  for (const m of text.matchAll(/^import [^;]*?from\s*['"](\.{1,2}\/[^'"]+)['"]/gm)) {
-    const rel = path.join('src/providers', m[1]!).replace(/\.js$/, '.ts')
-    if (fs.existsSync(path.join(ROOT, rel))) out.add(rel)
-  }
-  return [...out].sort()
-}
 
 function sources(): Array<{ where: 'binary' | 'daemon'; name: string; text: string }> {
   const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -110,7 +102,10 @@ function sources(): Array<{ where: 'binary' | 'daemon'; name: string; text: stri
     ...['src/binary/main.ts', 'src/binary/runtime-root.ts', 'src/binary/runtime-tree.ts', 'src/binary/service-entry.ts',
       'src/binary/service-start-hooks.ts', 'src/binary/service-mode.ts'].map((rel) => ({ where: 'binary' as const, name: rel, text: read(rel) })),
     { where: 'daemon', name: 'src/providers/daemon-standalone.ts', text: daemon },
-    ...daemonImports(daemon).map((rel) => ({ where: 'daemon' as const, name: rel, text: read(rel) })),
+    // Every module the daemon runtime loads, not only its direct imports: a module moved out of the
+    // runtime (daemon-git.ts, daemon-transcripts.ts) imports the cores it builds its parts from itself.
+    ...[...walkDaemonImports().files].filter((rel) => rel !== 'src/providers/daemon-standalone.ts').sort()
+      .map((rel) => ({ where: 'daemon' as const, name: rel, text: read(rel) })),
   ]
 }
 
@@ -133,7 +128,7 @@ describe('every default place a set\'s service program derives is decided for a 
   })
 
   it('the skills push answers a set\'s daemon before it writes anything', () => {
-    for (const src of sources().filter((x) => x.name === 'src/providers/daemon-standalone.ts')) {
+    for (const src of sources().filter((x) => x.name === 'src/providers/daemon-skills.ts')) {
       const at = src.text.indexOf('function cmdSkillsSync(')
       expect(at, src.name).toBeGreaterThan(-1)
       const body = src.text.slice(src.text.indexOf('{', at) + 1).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//'))

@@ -27,6 +27,7 @@ import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -49,9 +50,11 @@ const BASELINE: Record<string, number> = {
   'src/integrations/git-sync.ts': 3,
   'src/utils/process.ts': 1,
   'src/providers/daemon-core.ts': 2,
-  // macOS only (Linux reads /proc): `ps` for the process groups still running, a pid's command
-  // line, and a stand-in's command line at an update's handback. None runs on a clock.
-  'src/providers/daemon-standalone.ts': 3,
+  // macOS only (Linux reads /proc): a pid's command line, and a stand-in's command line at an
+  // update's handback. None runs on a clock.
+  'src/providers/daemon-standalone.ts': 2,
+  // macOS only (Linux reads /proc): `ps` for the process groups still running (the exit ladder).
+  'src/providers/daemon-process-groups.ts': 1,
   'src/providers/host-runtime-core.ts': 2,
   'src/providers/session-io.ts': 1,
   'src/providers/pw-noactivate-core.ts': 1,
@@ -162,8 +165,8 @@ describe('event-loop blocking ratchet', () => {
   // only; the number may only fall (review S5, 2026-11-21: boot adoption re-folds a stream with
   // readSync, the isolated-dir reap sleeps with Atomics.wait).
   it('daemon-standalone.ts: readSync and Atomics.wait call sites do not grow', async () => {
-    const fs = await import('node:fs');
-    const text = fs.readFileSync(path.join(repoRoot, 'src/providers/daemon-standalone.ts'), 'utf8');
+    // The whole runtime: daemon-standalone.ts and its area modules (daemon-process-groups.ts sleeps the exit ladder).
+    const text = daemonRuntimeText();
     const count = (re: RegExp) => (text.match(re) ?? []).length;
     expect(count(/\breadSync\(/g), 'a new readSync( in daemon-standalone.ts: read asynchronously (fs.promises / the tailer)').toBeLessThanOrEqual(9);
     expect(count(/\bAtomics\.wait\(/g), 'a new Atomics.wait( in daemon-standalone.ts: wait with a timer').toBeLessThanOrEqual(2);
@@ -177,8 +180,9 @@ describe('event-loop blocking ratchet', () => {
     const read = (f: string) => fs.readFileSync(path.join(repoRoot, f), 'utf8');
     const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
     for (const f of ['src/providers/daemon-core.ts', 'src/providers/daemon-standalone.ts']) {
-      expect(count(read(f), /\bfsyncSync\(/g), `${f}: a synchronous fsync on the thread; write through registry-writer-core.ts`).toBe(0);
+      const text = f === 'src/providers/daemon-standalone.ts' ? daemonRuntimeText() : read(f);
+      expect(count(text, /\bfsyncSync\(/g), `${f}: a synchronous fsync on the thread; write through registry-writer-core.ts`).toBe(0);
     }
-    expect(count(read('src/providers/daemon-standalone.ts'), /\bappendFileSync\(/g), 'a new appendFileSync( in daemon-standalone.ts: append through log-appender-core.ts or fs.promises').toBeLessThanOrEqual(4);
+    expect(count(daemonRuntimeText(), /\bappendFileSync\(/g), 'a new appendFileSync( in daemon-standalone.ts: append through log-appender-core.ts or fs.promises').toBeLessThanOrEqual(4);
   });
 });

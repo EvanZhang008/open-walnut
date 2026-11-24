@@ -9,12 +9,13 @@ import { describe, it, expect, vi } from 'vitest'
 import ts from 'typescript'
 import fs from 'node:fs'
 import path from 'node:path'
-import { twinText } from '../helpers/standalone-twin-text.js'
+import { readTwinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const corePath = path.join(ROOT, 'src/providers/daemon-core.ts')
 
-function readFile(p: string) { return twinText(p, fs.readFileSync(p, 'utf-8')) }
+// daemon-standalone.ts reads as the whole runtime, its area modules included (readTwinText).
+const readFile = readTwinText
 // The live tailer, a module of its own (ensureWatcher runs it).
 const tailerSrc = fs.readFileSync(path.join(ROOT, 'src/providers/session-tailer.ts'), 'utf-8')
 

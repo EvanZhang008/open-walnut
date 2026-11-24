@@ -85,6 +85,8 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/integrations/git-sync.ts': 2,               // its own git children's groups
   'src/providers/port-scan-core.ts': 1,            // the dev server a person's Stop named, re-proved by a fresh scan (its session's env, its group holding nothing guarded, its start time) right before the signal
   'src/providers/acp-daemon.ts': 9,                // ACP workers the daemon spawned (a straggler only while ps proves it is one; a surviving worker whose pipe failed right after its own spawn)
+  'src/providers/daemon-process-groups.ts': 4,     // the daemon's session CLI groups (it spawned them detached): its signal, liveness probe and kill ladder; every pid comes from callers in daemon-standalone.ts that prove it first
+  'src/providers/daemon-changes.ts': 1,            // the session commit's own git child group (git-commit-core.ts killGroup), at its deadline
   'src/providers/codex-model-probe.ts': 1,          // its own detached model-probe child group
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
   'src/providers/daemon-service-cron-host.ts': 1, // its own service daemon (exe under its versions/) and boot supervisor (cmdline names its script), never a CLI

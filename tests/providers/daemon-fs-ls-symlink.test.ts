@@ -20,6 +20,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const BINARY = path.join(ROOT, 'dist', 'daemon-binaries', 'daemon-darwin-arm64')
@@ -109,7 +110,8 @@ d('fs.ls against the real daemon binary — symlinks', () => {
 })
 
 describe('fs.ls symlink handling — source check (daemon-standalone + fs-ls-core)', () => {
-  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  // The daemon's runtime: daemon-standalone.ts and its area modules (fs.ls is daemon-fs-read.ts).
+  const standalone = daemonRuntimeText()
 
   const fsLsBody = (src: string) => {
     const start = src.indexOf('function cmdFsLs(')

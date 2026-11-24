@@ -3,10 +3,11 @@
  * ('fs-write-atomic-v1'): `~` expansion, the `atomic` rename, the
  * `expectSha256` precondition, and the `sha256` echo.
  *
- * The code under test is the session daemon (`daemon-standalone.ts`). These
- * functions live inside its runtime closure and are not exported, so we slice
- * each function's text out of the file, transpile it, and rebuild it with
- * `new Function`, exactly like tests/providers/daemon-fs-mutate.test.ts.
+ * The code under test is the session daemon's runtime (`daemon-standalone.ts`
+ * and its fs write module, `daemon-fs-write.ts`). These functions live inside
+ * the module's factory and are not exported, so we slice each function's text
+ * out of the runtime's text, transpile it, and rebuild it with `new Function`,
+ * exactly like tests/providers/daemon-fs-mutate.test.ts.
  *
  * Everything runs inside ONE mkdtemp directory, and HOME_DIR is injected as a
  * subdirectory of it — the `~` expansion must be exercised without the real home
@@ -20,15 +21,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import ts from 'typescript'
-
-const ROOT = path.resolve(__dirname, '../..')
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 type Reply = { ok?: boolean; error?: string; written?: boolean; size?: number; sha256?: string }
 type Cmd = Record<string, unknown>
 
-/** Pull cmdFsWrite (plus the floor helpers it calls) out of daemon-standalone.ts. */
+/** Pull cmdFsWrite (plus the floor helpers it calls) out of the daemon's runtime. */
 function extractWrite(homeDir: string): (cmd: Cmd) => Promise<Reply> {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  // The runtime's text: daemon-standalone.ts, then its area modules (cmdFsWrite and the floor helpers are daemon-fs-write.ts).
+  const src = daemonRuntimeText()
 
   const grab = (header: string): string => {
     const i = src.indexOf('\n' + header)

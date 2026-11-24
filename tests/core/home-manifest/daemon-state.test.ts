@@ -2,7 +2,7 @@
  * The daemon's places in the data home (HomeEntry.daemonState, docs/reference/data-locations.md
  * "Daemon state"):
  *
- *   - a ratchet over the daemon (daemon-standalone.ts): every path it
+ *   - a ratchet over the daemon (daemon-standalone.ts and its area modules): every path it
  *     names in the data home (`<HOME>/.open-walnut/...`, by a literal join or through the constants
  *     an installed daemon's tmp/ state hangs off) is named by the manifest and is either marked
  *     daemon state or rebuildable. The manifest's own source ratchet only sees joins under
@@ -19,13 +19,13 @@ import { classifyHomePath, homeEntries, homePathClass, isUnnamedHomePath } from 
 import { compareKept, describeKept, snapshotHome } from '../../../src/core/home-manifest/home-kept.js'
 import { backupTakes } from '../../../src/core/backup/scan.js'
 import { makeFileClass } from '../../../src/core/standby/scan.js'
+import { daemonRuntimeText } from '../../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
-const DAEMON = 'src/providers/daemon-standalone.ts'
 
 /** Data home paths a daemon names that are neither daemon state nor rebuildable, each with why. */
 const NAMED_ELSEWHERE: Record<string, string> = {
-  // daemon-standalone.ts "2b. v2.0 migration": it removes a SKILL.md an older daemon put in the
+  // daemon-skills.ts "2b. v2.0 migration": it removes a SKILL.md an older daemon put in the
   // user's skill store, only when that file carries the daemon's own marker; it writes nothing there.
   'skills/walnut': 'a one-time removal of the file an older daemon wrote there',
 }
@@ -75,7 +75,8 @@ function unclassified(paths: Iterable<string>): string[] {
 }
 
 describe('the daemon\'s places in the data home', () => {
-  const found = daemonHomePaths(fs.readFileSync(path.join(ROOT, DAEMON), 'utf8'))
+  // The whole runtime: daemon-standalone.ts and its area modules (skills.sync is daemon-skills.ts).
+  const found = daemonHomePaths(daemonRuntimeText())
 
   it('finds the places an installed daemon keeps (the extractor sees literal joins and the tmp/ constants)', () => {
     for (const p of ['tmp/streams', 'tmp/offline-host', 'tmp/leader', 'tmp/usage-budgets', 'tmp/host-vitals', 'local/spawn-journal.jsonl', 'local/cli-owners', 'distributed-skills', 'tmp/host-server']) expect(found, p).toContain(p)

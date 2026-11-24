@@ -20,6 +20,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { DaemonFileReader } from '../../src/core/daemon-file-reader.js'
 import { rangeBytes } from '../../src/core/range-gz.js'
+import { areaModuleText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const CHUNK_SIZE = (DaemonFileReader as unknown as { CHUNK_SIZE: number }).CHUNK_SIZE
@@ -106,7 +107,8 @@ describe('class guard: every range read the reader makes may come gzipped', () =
   })
 
   it('the daemon answers gz with dataGz, and advertises it', () => {
-    const src = readFileSync(join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+    // The daemon's fs read module (daemon-fs-read.ts), its factory body at column 0.
+    const src = areaModuleText('src/providers/daemon-fs-read.ts')
     const body = src.slice(src.indexOf('async function cmdFsReadRange('))
     const fn = body.slice(0, body.indexOf('\n}\n'))
     expect(fn).toMatch(/cmd\.gz === true/)

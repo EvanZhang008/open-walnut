@@ -2,10 +2,9 @@
  * The daemon's `git.status` handler ('git-status-v1') answers exactly what the
  * shared core answers (createGitStatus), for a `~` path too.
  *
- * The handler lives inside daemon-standalone.ts's runtime closure and is not
- * exported: its text (the createGitStatus construction and cmdGitStatus) is cut
- * out of the file, transpiled and rebuilt with `new Function`, the core passed
- * in. Every repository is a fresh `git init` in one mkdtemp directory; HOME_DIR
+ * Runs the daemon's own git module (daemon-git.ts, createDaemonGit) with node's execFile
+ * and a reply that records the answer, and compares it with the core run directly.
+ * Every repository is a fresh `git init` in one mkdtemp directory; its homeDir
  * points inside it, so `~` never means the real home.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -13,29 +12,21 @@ import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import ts from 'typescript'
+import { createDaemonGit } from '../../src/providers/daemon-git.js'
 import { createGitStatus, type ExecFn } from '../../src/providers/git-diff-core.js'
-
-const ROOT = path.resolve(__dirname, '../..')
 
 type Reply = { ok?: boolean; error?: string; repos?: unknown[] }
 
 function extractHandler(homeDir: string): (cmd: Record<string, unknown>) => Promise<Reply> {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-  const from = src.indexOf('\nconst gitStatus = createGitStatus(')
-  expect(from, 'git.status construction not found in the daemon').toBeGreaterThan(-1)
-  const handler = src.indexOf('\nasync function cmdGitStatus(', from)
-  expect(handler).toBeGreaterThan(from)
-  const end = src.indexOf('\n}', handler + 1)
-  const js = ts.transpileModule(src.slice(from + 1, end + 2), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   let reply: Reply = {}
-  const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
-  const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const factory = new Function('fs', 'execFileCb', 'createGitStatus', 'HOME_DIR', 'sendOk', 'sendError', js + '\nreturn cmdGitStatus;') as
-    (...a: unknown[]) => (ws: unknown, id: number, cmd: Record<string, unknown>) => Promise<void>
-  const cmd = factory(fs, execFile, createGitStatus, homeDir, sendOk, sendError)
-  return async (c) => { reply = {}; await cmd(null, 1, c); return reply }
+  const fns = createDaemonGit<null>({
+    daemonEnv: process.env,
+    HOME_DIR: homeDir,
+    execFileCb: execFile,
+    sendOk: (_ws, _id, data) => { reply = { ok: true, ...data } },
+    sendError: (_ws, _id, error) => { reply = { ok: false, error } },
+  })
+  return async (c) => { reply = {}; await fns.cmdGitStatus(null, 1, c); return reply }
 }
 
 const exec: ExecFn = (argv, cwd) => new Promise((resolve) => {

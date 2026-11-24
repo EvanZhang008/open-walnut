@@ -8,12 +8,13 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { twinText } from '../helpers/standalone-twin-text.js'
+import { readTwinText } from '../helpers/standalone-twin-text.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
-function readFile(p: string) { return twinText(p, fs.readFileSync(p, 'utf-8')) }
+// daemon-standalone.ts reads as the whole runtime, its area modules included (readTwinText).
+const readFile = readTwinText
 
 describe('daemon wiring: host-local commands (transcript, grep, git, fs, external scan)', () => {
   const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
@@ -23,7 +24,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // refuses past its byte ceiling, so rewind on a long transcript depends entirely
   // on this capability reaching hosts, i.e. on the version hash below.
   it("daemon: dispatch transcript.rewindProbe; 'rewind-probe-v1' is advertised, NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'transcript\.rewindProbe': return cmdTranscriptRewindProbe/)
+    expect(standaloneSrc).toMatch(/case 'transcript\.rewindProbe': return transcripts\.cmdTranscriptRewindProbe/)
     expect(standaloneSrc).toMatch(/function cmdTranscriptRewindProbe/)
     // The daemon imports the core.
     expect(standaloneSrc).toMatch(/from '\.\/transcript-rewind-core\.js'/)
@@ -67,7 +68,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // 'grep-v1' is unconditional on a current daemon, and still
   // advertised-not-required so old ones stay usable.
   it("daemon: dispatch fs.grep; 'grep-v1' advertised but NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'fs\.grep': return cmdFsGrep/)
+    expect(standaloneSrc).toMatch(/case 'fs\.grep': return fsRead\.cmdFsGrep/)
     expect(standaloneSrc).toMatch(/function cmdFsGrep/)
     // The daemon uses the shared core.
     expect(standaloneSrc).toMatch(/from '\.\/search-grep-core\.js'/)
@@ -97,22 +98,27 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   it("daemon: dispatch git.fileLog/git.fileShow; 'git-file-history-v1' advertised but NOT required", () => {
     expect(standaloneSrc).toContain("case 'git.fileLog'")
     expect(standaloneSrc).toContain("case 'git.fileShow'")
-    expect(standaloneSrc).toMatch(/function cmdGitFileLog/)
-    expect(standaloneSrc).toMatch(/function cmdGitFileShow/)
+    expect(standaloneSrc).toMatch(/case 'git\.fileLog': return git\.cmdGitFileLog/)
+    expect(standaloneSrc).toMatch(/case 'git\.fileShow': return git\.cmdGitFileShow/)
+    // The commands live in the runtime's git module (daemon-git.ts).
+    const gitSrc = readFile(path.join(ROOT, 'src/providers/daemon-git.ts'))
+    expect(gitSrc).toMatch(/function cmdGitFileLog/)
+    expect(gitSrc).toMatch(/function cmdGitFileShow/)
     // Validate-then-spawn: the regex, the refusal, and the same `--follow` log
     // format on both sides (a one-sided format edit silently changes parsing).
-    expect(standaloneSrc).toContain('GIT_FILE_SHA_RE = /^[0-9a-f]{7,40}$/')
-    expect(standaloneSrc).toContain("'git.fileShow: invalid sha'")
-    expect(standaloneSrc).toContain("GIT_FILE_LOG_FORMAT = '%H%x1f%ct%x1f%an%x1f%s'")
-    expect(standaloneSrc).toMatch(/'--follow'/)
+    expect(gitSrc).toContain('GIT_FILE_SHA_RE = /^[0-9a-f]{7,40}$/')
+    expect(gitSrc).toContain("'git.fileShow: invalid sha'")
+    expect(gitSrc).toContain("GIT_FILE_LOG_FORMAT = '%H%x1f%ct%x1f%an%x1f%s'")
+    expect(gitSrc).toMatch(/'--follow'/)
     // Bounded: a timeout and a maxBuffer on every invocation, and a hard cap on
     // the version being shown (the editor could not hold more anyway).
-    expect(standaloneSrc).toMatch(/GIT_FILE_SHOW_MAX_BYTES = 8 \* 1024 \* 1024/)
-    expect(standaloneSrc).toMatch(/timeout: 8_?000/)
-    // `~` expansion, like every other path-taking command.
-    expect(standaloneSrc).toMatch(/function gitFileExpandHome/)
+    expect(gitSrc).toMatch(/GIT_FILE_SHOW_MAX_BYTES = 8 \* 1024 \* 1024/)
+    expect(gitSrc).toMatch(/timeout: 8_?000/)
+    // `~` expansion, like every other path-taking command (the shared expandHome).
+    expect(gitSrc).toMatch(/expandHome\(rawCwd, HOME_DIR\)/)
+    expect(gitSrc).toMatch(/expandHome\(rawPath, HOME_DIR\)/)
     // A path git never tracked is "no history", never an error response.
-    expect(standaloneSrc).toMatch(/commits: \[\] \}\)/)
+    expect(gitSrc).toMatch(/commits: \[\] \}\)/)
     // The server's own reader must carry the SAME sha rule (it feeds the same
     // `git show` argument for a __local__ path).
     expect(readFile(path.join(ROOT, 'src/core/file-history-git.ts')))
@@ -141,7 +147,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
 
   // External-session scan (sessions.discoverExternal).
   it("daemon: dispatch sessions.discoverExternal; 'external-scan-v1' is advertised, NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'sessions\.discoverExternal': return cmdDiscoverExternalSessions/)
+    expect(standaloneSrc).toMatch(/case 'sessions\.discoverExternal': return transcripts\.cmdDiscoverExternalSessions/)
     expect(standaloneSrc).toMatch(/function cmdDiscoverExternalSessions/)
     // Serialized daemon-wide: concurrent walks over thousands of transcript
     // files would be the same starvation shape changes-v1 guards against.
@@ -171,7 +177,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
     // Containment intact: the unbounded read stays off the bridge.
     expect(allowBody).not.toContain("'fs.read'")
     expect(allowBody).not.toContain("'fs.readRange'")
-    expect(standaloneSrc).toMatch(/case 'fs\.readBounded': return cmdFsReadBounded/)
+    expect(standaloneSrc).toMatch(/case 'fs\.readBounded': return fsRead\.cmdFsReadBounded/)
     expect(standaloneSrc).toMatch(/function cmdFsReadBounded/)
   })
   it('daemon: enforce the same fs.readBounded cap, sandbox ordering, and denylist', () => {
@@ -315,10 +321,11 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // order, which is what keeps it from
   // ever touching a tracked file or a .gitignore.
   it('daemon: dispatch git.ensureExcluded with the same check order and keep it off the bridge', () => {
-    expect(standaloneSrc).toMatch(/case 'git\.ensureExcluded': return cmdGitEnsureExcluded/)
-    const start = standaloneSrc.search(/async function cmdGitEnsureExcluded/)
+    expect(standaloneSrc).toMatch(/case 'git\.ensureExcluded': return git\.cmdGitEnsureExcluded/)
+    const gitSrc = readFile(path.join(ROOT, 'src/providers/daemon-git.ts'))
+    const start = gitSrc.search(/async function cmdGitEnsureExcluded/)
     expect(start).toBeGreaterThan(-1)
-    const body = standaloneSrc.slice(start, standaloneSrc.indexOf('\n}', start))
+    const body = gitSrc.slice(start, gitSrc.indexOf('\n  }\n', start))
     // ORDER: repo root first (not-a-repo is an answer, not an error), the file
     // must sit inside it, an ignored or tracked file is left alone, and only
     // then is the exclude file located and appended to.
@@ -411,9 +418,10 @@ describe('optional capabilities stay advertised and not required', () => {
 })
 
 describe('codex outside usage (codex-outside-v1)', () => {
-  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  // The whole runtime: daemon-standalone.ts and its area modules (the usage scans are daemon-changes.ts).
+  const standalone = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
   it('daemon: route usage.codexOutside to the shared scan with the same request fields', () => {
-    expect(standalone).toMatch(/case 'usage\.codexOutside': return cmdUsageCodexOutside/)
+    expect(standalone).toMatch(/case 'usage\.codexOutside': return sessionChanges\.cmdUsageCodexOutside/)
     for (const field of ['byDay', 'thresholds', 'knownSessionIds', 'since', 'cursor', 'budgetMs']) {
       expect(standalone).toMatch(new RegExp(`scanCodexOutside\\(\\{[\\s\\S]{0,900}${field}`))
     }
@@ -424,7 +432,8 @@ describe('codex outside usage (codex-outside-v1)', () => {
 })
 
 describe('claude outside usage (claude-outside-v1)', () => {
-  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  // The whole runtime: daemon-standalone.ts and its area modules (the usage scans are daemon-changes.ts).
+  const standalone = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
   it('daemon: hand the outside flag, and only a true one, to the shared usage scan', () => {
     expect(standalone).toMatch(/cmd\.outside === true \? \{ outside: true \} : \{\}/)
   })

@@ -2,10 +2,11 @@
  * Behavioral test for the daemon's fs MUTATION family ('fs-mutate-v1'):
  * fsMutateFloor + fsMutateDenied + fsMutateResolve + cmdFsRename / cmdFsRm / cmdFsCopy.
  *
- * The code under test is the session daemon (`daemon-standalone.ts`). These
- * functions live inside its runtime closure and are not exported, so we slice
- * each function's text out of the file, transpile it, and rebuild it with
- * `new Function` (as daemon-fs-read-bounded-range.test.ts does).
+ * The code under test is the session daemon's runtime (`daemon-standalone.ts`
+ * and its fs write module, `daemon-fs-write.ts`). These functions live inside
+ * the module's factory and are not exported, so we slice each function's text
+ * out of the runtime's text (daemonRuntimeText), transpile it, and rebuild it
+ * with `new Function` (as daemon-fs-read-bounded-range.test.ts does).
  *
  * Everything runs inside ONE mkdtemp directory, and HOME_DIR is injected as a
  * subdirectory of it — the floor's "never the home directory" rule must be
@@ -17,8 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import ts from 'typescript'
-
-const ROOT = path.resolve(__dirname, '../..')
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 type Reply = { ok?: boolean; error?: string; renamed?: boolean; removed?: boolean; copied?: boolean }
 type Cmd = Record<string, unknown>
@@ -32,9 +32,10 @@ interface Daemon {
   copy: (cmd: Cmd) => Promise<Reply>
 }
 
-/** Pull the six functions out of daemon-standalone.ts and rebuild them. */
+/** Pull the six functions out of the daemon's runtime and rebuild them. */
 function extractMutate(homeDir: string): Daemon {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  // The runtime's text: daemon-standalone.ts, then its area modules (cmdFsWrite and the floor helpers are daemon-fs-write.ts).
+  const src = daemonRuntimeText()
 
   const grab = (header: string): string => {
     const i = src.indexOf('\n' + header)

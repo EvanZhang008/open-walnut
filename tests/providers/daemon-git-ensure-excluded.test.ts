@@ -3,10 +3,9 @@
  * a file Walnut created inside a checkout is appended to .git/info/exclude
  * unless git already ignores it, and nothing tracked or committed is touched.
  *
- * Runs the session daemon's function text (daemon-standalone.ts; the functions
- * live inside its runtime closure and are not exported), transpiled and rebuilt
- * with `new Function` like the other daemon tests. Every repository is a fresh
- * `git init` inside one mkdtemp directory; HOME_DIR points inside it too, so `~`
+ * Runs the daemon's own git module (daemon-git.ts, createDaemonGit) with node's execFile
+ * and a reply that records the answer. Every repository is a fresh
+ * `git init` inside one mkdtemp directory; its homeDir points inside it too, so `~`
  * never means the real home.
  */
 
@@ -15,35 +14,20 @@ import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import ts from 'typescript'
-
-const ROOT = path.resolve(__dirname, '../..')
+import { createDaemonGit } from '../../src/providers/daemon-git.js'
 
 type Reply = { ok?: boolean; error?: string; outcome?: string; excludeFile?: string }
 type Cmd = Record<string, unknown>
 
 function extractEnsureExcluded(homeDir: string): (cmd: Cmd) => Promise<Reply> {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-  const grab = (header: string): string => {
-    const i = src.indexOf('\n' + header)
-    expect(i, `${header} not found in the daemon`).toBeGreaterThan(-1)
-    const end = src.indexOf('\n}', i + 1)
-    return src.slice(i + 1, end + 2)
-  }
-  const code = [
-    grab('function gitFileExec('),
-    grab('function gitFileExpandHome('),
-    grab('async function cmdGitEnsureExcluded('),
-  ].join('\n')
-  const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   let reply: Reply = {}
-  const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
-  const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
-  // The daemon's gitFileExec calls `execFileCb` (its child_process.execFile).
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const factory = new Function('path', 'fs', 'execFileCb', 'HOME_DIR', 'sendOk', 'sendError', js + '\nreturn { cmdGitEnsureExcluded };') as
-    (...a: unknown[]) => Record<string, (...a: unknown[]) => Promise<void>>
-  const fns = factory(path, fs, execFile, homeDir, sendOk, sendError)
+  const fns = createDaemonGit<null>({
+    daemonEnv: process.env,
+    HOME_DIR: homeDir,
+    execFileCb: execFile,
+    sendOk: (_ws, _id, data) => { reply = { ok: true, ...data } },
+    sendError: (_ws, _id, error) => { reply = { ok: false, error } },
+  })
   return async (cmd: Cmd) => { reply = {}; await fns.cmdGitEnsureExcluded(null, 1, cmd); return reply }
 }
 

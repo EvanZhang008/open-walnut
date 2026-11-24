@@ -52,6 +52,14 @@ fi
 
 SOURCES=(
   src/providers/daemon-standalone.ts
+  src/providers/daemon-module-deps.ts
+  src/providers/daemon-git.ts
+  src/providers/daemon-skills.ts
+  src/providers/daemon-fs-read.ts
+  src/providers/daemon-fs-write.ts
+  src/providers/daemon-changes.ts
+  src/providers/daemon-transcripts.ts
+  src/providers/daemon-process-groups.ts
   src/providers/daemon-core.ts
   src/providers/daemon-fold.ts
   src/providers/fold-checkpoint-core.ts

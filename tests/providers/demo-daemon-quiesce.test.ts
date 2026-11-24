@@ -10,6 +10,7 @@ import os from 'node:os'
 import { spawn } from 'node:child_process'
 import ts from 'typescript'
 import { createHostJournal } from '../../src/providers/host-journal-core.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = '/fixture/share/open-walnut-demo'
 const GEN = 'gen-1'
@@ -244,7 +245,8 @@ setTimeout(() => process.exit(0), 60000)
     while (!check() && Date.now() < end) await new Promise((r) => setTimeout(r, 20))
     return check()
   }
-  const daemonText = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  // The whole runtime: daemon-standalone.ts and its area modules (isProcessGroupAlive is daemon-process-groups.ts).
+  const daemonText = daemonRuntimeText()
 
   it('alive while fenced, unchanged unfenced, stop refused, quiet once the child exits', async () => {
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wq-group-')))

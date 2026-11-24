@@ -13,7 +13,7 @@
  * marker-guarded (a foreign file is never clobbered; a dir holding anything
  * beyond our SKILL.md is never deleted). v2 also migrates the v1 layout (real
  * claude file, fenced codex AGENTS.md section) and the short-lived v2.0
- * canonical. The daemon-side function is cut from daemon-standalone.ts and
+ * canonical. The daemon's own module (daemon-skills.ts, createDaemonSkills) is
  * RUN against a temp HOME.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
@@ -21,7 +21,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import ts from 'typescript'
+import { createDaemonSkills } from '../../src/providers/daemon-skills.js'
 import { withReadOnlyBanner, CODEX_BEGIN, CODEX_END, DISTRIBUTED_MARKER } from '../../src/core/skill-sync.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -55,37 +55,41 @@ describe('withReadOnlyBanner', () => {
 type Reply = { ok?: boolean; changed?: boolean; skipped?: string; wrote?: string[]; error?: string }
 
 const DAEMON = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+const SKILLS_MODULE = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-skills.ts'), 'utf-8')
 
-/** daemon-standalone.ts from `from` to the end of cmdSkillsSync, as JS. */
-function daemonSlice(from: string): string {
-  const start = DAEMON.indexOf(from)
-  expect(start, from).toBeGreaterThan(-1)
-  const fnStart = DAEMON.indexOf('function cmdSkillsSync(', start)
-  expect(fnStart).toBeGreaterThan(-1)
-  const fnEnd = DAEMON.indexOf('\n}\n', fnStart)
-  return ts.transpileModule(DAEMON.slice(start, fnEnd + 2), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+/** The daemon's skills module with a reply that records the answer, its held pushes in `offlineDir`. */
+function skillsModule(homeDir: string, keepsSessions: boolean, offlineDir: string): { run: (cmd: Record<string, unknown>) => Reply } {
+  let reply: Reply = {}
+  const skills = createDaemonSkills<null>({
+    daemonEnv: process.env,
+    HOME_DIR: homeDir,
+    KEEPS_SESSIONS: keepsSessions,
+    SET_ID: '',
+    OFFLINE_HOST_DIR: offlineDir,
+    logMsg: () => {},
+    sendOk: (_ws, _id, data) => { reply = { ok: true, ...data } },
+    sendError: (_ws, _id, error) => { reply = { ok: false, error } },
+  })
+  return { run: (cmd) => { reply = {}; skills.cmdSkillsSync(null, 1, cmd); return reply } }
+}
+
+/** A held-pushes dir outside the temp HOME, a fresh one per daemon (nothing held from a run before). */
+const offlineDirs: string[] = []
+function freshOfflineDir(): string {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-skill-sync-held-'))
+  offlineDirs.push(d)
+  return d
 }
 
 function extractCmdSkillsSync(): (homeDir: string, daemonDir: string, prodDir: string, cmd: Record<string, unknown>) => Reply {
-  const fnSrc = daemonSlice('function cmdSkillsSync(')
   return (homeDir, daemonDir, prodDir, cmd) => {
-    let reply: Reply = {}
-    const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
-    const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
     // Mirrors the daemon's module-level IS_PROD_DAEMON_DIR: /tmp/open-walnut, or the
     // $HOME/.cache/open-walnut fallback a connect moves to when /tmp is unusable.
+    // KEEPS_SESSIONS: the prod dir, or a service set's runtime (none here): the daemon's gate for skills.sync.
     const isProd = path.resolve(daemonDir) === path.resolve(prodDir)
       || path.resolve(daemonDir) === path.resolve(path.join(homeDir, '.cache', 'open-walnut'))
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const bound = new Function(
-      // KEEPS_SESSIONS: the prod dir, or a service set's runtime (none here): the daemon's gate for skills.sync.
-      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'SET_ID', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
-      // What the held skills keep on disk (held-pushes.json) is heldSkillsProcess's to cover.
-      'loadHeldPushes', 'persistHeldPushes', 'heldSkills',
-      fnSrc + '\nreturn cmdSkillsSync(null, 1, CMD);',
-    ) as (...a: unknown[]) => void
-    bound(path, fs, homeDir, daemonDir, prodDir, isProd, isProd, '', process.env, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {}, null)
-    return reply
+    // What the held skills keep on disk (held-pushes.json) is heldSkillsProcess's to cover.
+    return skillsModule(homeDir, isProd, freshOfflineDir()).run(cmd)
   }
 }
 
@@ -102,7 +106,7 @@ beforeEach(() => {
 })
 
 afterAll(() => {
-  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+  for (const d of [...dirs, ...offlineDirs]) fs.rmSync(d, { recursive: true, force: true })
 })
 
 const canonicalDir = () => path.join(tmp, '.open-walnut', 'distributed-skills', 'walnut')
@@ -120,23 +124,11 @@ const run = (cmd: Record<string, unknown> = PAYLOAD) => cmdSkillsSync(tmp, '/tmp
  * same files. 2026-11-13: a daemon update held nothing and the server sent ~360 KB again.
  */
 function heldSkillsProcess(): (homeDir: string, offlineDir: string, cmd: Record<string, unknown>) => Reply {
-  const block = daemonSlice('let heldSkills')
-  // One daemon process: its own module state, the block run once.
-  let reply: Reply = {}
-  let run: ((cmd: Record<string, unknown>) => void) | null = null
+  // One daemon process: its own module state, created once.
+  let daemon: { run: (cmd: Record<string, unknown>) => Reply } | null = null
   return (homeDir, offlineDir, cmd) => {
-    if (!run) {
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      run = new Function(
-        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'SET_ID', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
-        block + '\nreturn function (CMD) { return cmdSkillsSync(null, 1, CMD); };',
-      )(path, fs, crypto, homeDir, offlineDir, true, true, '', process.env,
-        (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } },
-        (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } },
-        () => {}, 'walnut-managed v1') as (cmd: Record<string, unknown>) => void
-    }
-    run(cmd)
-    return reply
+    daemon ??= skillsModule(homeDir, true, offlineDir)
+    return daemon.run(cmd)
   }
 }
 
@@ -363,7 +355,9 @@ describe('the daemon\'s cmdSkillsSync (v2: canonical copy + engine symlinks)', (
     expect(DAEMON).toMatch(/const FALLBACK_DAEMON_DIR = path\.join\(daemonEnv\.HOME \|\| HOME_DIR, '\.cache', 'open-walnut'\)\n/)
     expect(DAEMON).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)\n/)
     expect(DAEMON).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== ''\n/)
-    expect(DAEMON).toMatch(/function cmdSkillsSync[\s\S]*?if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+    expect(DAEMON).toMatch(/createDaemonSkills\(\{[^}]*\bKEEPS_SESSIONS\b/)
+    expect(SKILLS_MODULE).toMatch(/const \{[^}]*\bKEEPS_SESSIONS\b[^}]*\} = deps/)
+    expect(SKILLS_MODULE).toMatch(/function cmdSkillsSync[\s\S]*?if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })
 
   it('rejects a payload without the managed marker', () => {
@@ -472,20 +466,21 @@ describe('buildSkillSyncPayload', () => {
 
 describe('the daemon wiring', () => {
   it('the daemon routes skills.sync to its handler, with the layout and guards above', () => {
-    const standalone = DAEMON
-    expect(standalone).toContain("case 'skills.sync': return cmdSkillsSync")
-    expect(standalone).toContain("SKILL_SYNC_MARKER = 'walnut-managed v1'")
-    expect(standalone).toContain("path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')")
-    expect(standalone).toContain("path.join(HOME_DIR, '.open-walnut', 'skills', 'walnut')")
-    expect(standalone).toContain("ensureLink(path.join(HOME_DIR, '.claude', 'skills'))")
-    expect(standalone).toContain("if (fs.existsSync(path.join(HOME_DIR, '.codex'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))")
+    expect(DAEMON).toContain("case 'skills.sync': return skills.cmdSkillsSync")
+    expect(DAEMON).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== ''/)
+    expect(DAEMON).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/)
+    // The handler and its guards: the daemon's skills module.
+    const mod = SKILLS_MODULE
+    expect(mod).toContain("SKILL_SYNC_MARKER = 'walnut-managed v1'")
+    expect(mod).toContain("path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')")
+    expect(mod).toContain("path.join(HOME_DIR, '.open-walnut', 'skills', 'walnut')")
+    expect(mod).toContain("ensureLink(path.join(HOME_DIR, '.claude', 'skills'))")
+    expect(mod).toContain("if (fs.existsSync(path.join(HOME_DIR, '.codex'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))")
     // goose: either documented config dir marks it, and it shares codex's dir.
-    expect(standalone).toContain("fs.existsSync(path.join(HOME_DIR, '.config', 'goose')) || fs.existsSync(path.join(HOME_DIR, '.local', 'share', 'goose'))")
+    expect(mod).toContain("fs.existsSync(path.join(HOME_DIR, '.config', 'goose')) || fs.existsSync(path.join(HOME_DIR, '.local', 'share', 'goose'))")
     // gemini: the one engine with a private skills dir.
-    expect(standalone).toContain("if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))")
-    expect(standalone).toContain('fs.symlinkSync(canonicalDir, link)')
-    expect(standalone).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== ''/)
-    expect(standalone).toMatch(/skills\.sync[\s\S]{0,2600}if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
-    expect(standalone).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/)
+    expect(mod).toContain("if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))")
+    expect(mod).toContain('fs.symlinkSync(canonicalDir, link)')
+    expect(mod).toMatch(/skills\.sync[\s\S]{0,2600}if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })
 })

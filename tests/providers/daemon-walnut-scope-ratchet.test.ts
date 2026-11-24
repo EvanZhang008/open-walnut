@@ -4,7 +4,7 @@
  *
  * 2026-11-03: a host shared by two people's Walnuts held one trigger set, one hook set and
  * one bridge link for both; each push replaced the other's (walnut-scope-core.ts). This
- * test reads the daemon (daemon-standalone.ts) and fails on:
+ * test reads the daemon (daemon-standalone.ts and its area modules) and fails on:
  *   - a new command that sets daemon state from a server (`*.configure`, `*.sync`) that is
  *     not classified below, or one classified per Walnut that lost the home check;
  *   - a new file or dir constant the daemon persists to that is not classified;
@@ -13,11 +13,10 @@
  * the push names, with walnutScope, and list it as such) or to the host (list it with why).
  */
 import { describe, it, expect } from 'vitest'
-import fs from 'node:fs'
-import path from 'node:path'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
-const ROOT = path.resolve(__dirname, '../..')
-const DAEMON = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+// The whole runtime: daemon-standalone.ts and its area modules (daemon-git.ts, daemon-skills.ts, ...).
+const DAEMON = daemonRuntimeText()
 
 /** How a pushed setting is kept. */
 type Push =

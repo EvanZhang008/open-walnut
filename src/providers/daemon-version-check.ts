@@ -41,6 +41,15 @@ import { BUILD_INFO_FILE, readBuildInfoFile } from '../lib/build-info.js'
 
 export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
+  // The area modules of createDaemonRuntime (its own code, one file per area).
+  'src/providers/daemon-module-deps.ts',
+  'src/providers/daemon-git.ts',
+  'src/providers/daemon-skills.ts',
+  'src/providers/daemon-fs-read.ts',
+  'src/providers/daemon-fs-write.ts',
+  'src/providers/daemon-changes.ts',
+  'src/providers/daemon-transcripts.ts',
+  'src/providers/daemon-process-groups.ts',
   'src/providers/daemon-core.ts',
   'src/providers/daemon-fold.ts',
   // Fold checkpoints: imported by the binary, text-injected into the source twin.

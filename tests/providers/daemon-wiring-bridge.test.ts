@@ -10,12 +10,13 @@ import ts from 'typescript'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BRIDGE_WATCHDOG } from '../../src/providers/daemon-core.js'
-import { twinText } from '../helpers/standalone-twin-text.js'
+import { readTwinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const corePath = path.join(ROOT, 'src/providers/daemon-core.ts')
 
-function readFile(p: string) { return twinText(p, fs.readFileSync(p, 'utf-8')) }
+// daemon-standalone.ts reads as the whole runtime, its area modules included (readTwinText).
+const readFile = readTwinText
 
 describe('daemon wiring: bridge-reachable commands and what stays off the bridge', () => {
   const coreSrc = readFile(corePath)
@@ -34,7 +35,7 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
     // Containment intact: no generic write escapes onto the bridge.
     expect(allowBody).not.toContain("'fs.write'")
     // Through the drain like every file write: a swap waits for it (daemon-update-behind.ts).
-    expect(standaloneSrc).toMatch(/case 'image\.save': return daemonCommands\.run\((\(\) => |function \(\) \{ return )cmdImageSave/)
+    expect(standaloneSrc).toMatch(/case 'image\.save': return daemonCommands\.run\((\(\) => |function \(\) \{ return )fsWrite\.cmdImageSave/)
     expect(standaloneSrc).toMatch(/function cmdImageSave/)
   })
   // The r4d gate's R5: the per-command checks below each look for one entry, so
@@ -117,8 +118,8 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
   // the pipeline lives in session-changes-core.ts, which the daemon bundles.
   // Without 'changes-v1' the server falls back to its reader-based compute.
   it("daemon: dispatch changes.compute/changes.file; 'changes-v1' advertised but NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'changes\.compute': return cmdChangesCompute/)
-    expect(standaloneSrc).toMatch(/case 'changes\.file': return cmdChangesFile/)
+    expect(standaloneSrc).toMatch(/case 'changes\.compute': return sessionChanges\.cmdChangesCompute/)
+    expect(standaloneSrc).toMatch(/case 'changes\.file': return sessionChanges\.cmdChangesFile/)
     expect(standaloneSrc).toMatch(/function cmdChangesCompute/)
     expect(standaloneSrc).toMatch(/function cmdChangesFile/)
     const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
@@ -136,7 +137,7 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
     for (const c of ['turns.list', 'turns.diff', 'turns.restore', 'turns.guard', 'turns.configure']) {
       expect(standaloneSrc).toContain(`case '${c}':`)
     }
-    expect(standaloneSrc).toMatch(/return cmdTurns\(ws, id/)
+    expect(standaloneSrc).toMatch(/return transcripts\.cmdTurns\(ws, id/)
     expect(standaloneSrc).toMatch(/async function cmdTurns\(/)
     // The two hooks the tailer and the spawn path call.
     expect(standaloneSrc).toMatch(/turnSnapshots\.onTurnEnd\(sid, s\.cwd, v\)/)
