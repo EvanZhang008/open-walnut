@@ -362,6 +362,47 @@ test('a folder that is gone is said before Start, and a start into one is refuse
   expect(errors).toEqual([])
 })
 
+test('tasks like the one being typed show over the composer; a click or Shift+Enter opens one, nothing starts', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  await setFlag(request, true)
+  const errors = watchErrors(page)
+  // The user, 11-24: "I want this to be abel to serach also, user teh same search of the walniut,
+  // also I can click and jump to the task, maybe be shift enter".
+  const title = `Rotate the signing keys ${stamp}`
+  const made = await request.post('/api/tasks', { data: { title, project: LIFE, source: 'local' } })
+  expect(made.ok()).toBe(true)
+  const madeBody = await made.json() as { task?: { id: string }; id?: string }
+  const taskId = madeBody.task?.id ?? madeBody.id ?? ''
+  expect(taskId).not.toBe('')
+  await openHome(page)
+  const panel = await openDraft(page)
+  const starts = countStarts(page)
+  await draftComposer(page).fill(`rotate the signing keys ${stamp}`)
+  const matches = panel.getByTestId('draft-v6-task-matches')
+  await expect(matches).toBeVisible({ timeout: 15_000 })
+  const row = matches.locator(`[data-task-id="${taskId}"]`)
+  await expect(row).toContainText(title)
+  await shot(page, 'v6-task-matches')
+  // Shift+Enter opens the first match: its row is selected in the task list, no start is sent.
+  await draftComposer(page).press('Shift+Enter')
+  await expect(matches.locator('[data-task-id]').first()).toHaveAttribute('data-task-id', taskId)
+  const selected = page.locator(`#home-task-navigation [data-task-id="${taskId}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))
+  await expect(selected).toHaveCount(1, { timeout: 20_000 })
+  expect(starts.n).toBe(0)
+  await expect(draftComposer(page)).toHaveValue(`rotate the signing keys ${stamp}`)
+  // With a second line, Shift+Enter is a new line again (the hint goes); a click still opens the task.
+  await draftComposer(page).fill(`rotate the signing keys ${stamp}\nand the backup ones`)
+  await expect(row).toBeVisible()
+  await expect(matches.getByText('opens the first')).toHaveCount(0)
+  await row.click()
+  await expect(selected).toHaveCount(1)
+  // × hides the list until the first line changes.
+  await matches.getByRole('button', { name: 'Hide tasks like this' }).click()
+  await expect(matches).toHaveCount(0)
+  expect(starts.n).toBe(0)
+  expect(errors).toEqual([])
+})
+
 test('the Code source section saves a source shown after a reload, and the Project menu then names it', async ({ page, request }) => {
   test.setTimeout(180_000)
   await setFlag(request, true)

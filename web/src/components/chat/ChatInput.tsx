@@ -295,6 +295,8 @@ interface ChatInputProps {
    * answers it with why it does not start (the v6 new task draft's Start on a place that cannot run).
    */
   sendOff?: boolean;
+  /** Shift+Enter, after the mention and command menus and the IME had it: true takes it (no new line). */
+  onShiftEnter?: () => boolean;
   isStreaming?: boolean;
   focusedTaskTitle?: string;
   /** Task object for inline context pill inside the input box */
@@ -480,7 +482,7 @@ export function ChatInput(props: ChatInputProps) {
   );
 }
 
-function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, sendOff, queueCount, placeholder, label, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, voiceText, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills }: ChatInputProps) {
+function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, sendOff, onShiftEnter, queueCount, placeholder, label, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, voiceText, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1645,6 +1647,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     }
 
     if (e.key === 'Enter') {
+      if (e.shiftKey && !e.altKey && onShiftEnter?.()) { e.preventDefault(); return; }
       if (e.shiftKey || e.altKey || returnInsertsNewline()) {
         // Shift+Enter or Option+Enter → newline (default behavior); touch: always
         return;

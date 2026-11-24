@@ -23,6 +23,7 @@ import { DraftModeTiles, QuickChatBlock } from './DraftModeTiles';
 import { DraftWhereRow, type RowMenu } from './DraftWhereRow';
 import { DraftLowerRow, type TryChip } from './DraftLowerRow';
 import { useDraftWhere, type DraftRowUpdate } from './useDraftWhere';
+import { DraftTaskMatches, useTaskMatches } from './DraftTaskMatches';
 import '@/styles/draft-v6.css';
 import '@/styles/draft-v6-menus.css';
 
@@ -30,7 +31,7 @@ import '@/styles/draft-v6-menus.css';
 const NARROW_PX = 760;
 
 export function DraftV6Body({
-  draft, panelRef, composer, notices, startWhy, onUpdate, onPathChange, onWalnutToggle, blockedRef, onBlocked, openWhereNonce,
+  draft, panelRef, composer, notices, startWhy, onUpdate, onPathChange, onWalnutToggle, blockedRef, shiftEnterRef, onBlocked, openWhereNonce,
   tryChips, composerText, getComposer, openMenuNonce, onTaskFieldChange, onReturnFieldToWalnut, onSaveAsTask, saveBusy, quickTitle, quickLine,
   onCustomizeWalnut, onOpenAsk,
 }: {
@@ -47,6 +48,8 @@ export function DraftV6Body({
   onWalnutToggle: (walnut: boolean) => void;
   /** Written every render: the panel's Start reads it. */
   blockedRef: MutableRefObject<string | null>;
+  /** Written every render: the composer's Shift+Enter opens the first task like this one, when it holds. */
+  shiftEnterRef?: MutableRefObject<(() => boolean) | null>;
   /** Told when that changes: the panel draws its send arrow off while Start is held. */
   onBlocked?: (blocked: boolean) => void;
   /** Bumped by the owner when a Start needs a place (a draft with no folder): opens the Where menu. */
@@ -75,6 +78,9 @@ export function DraftV6Body({
   const [menu, setMenu] = useState<RowMenu>(null);
   const narrow = useNarrow(panelRef, NARROW_PX);
   const startError = useDraftWorkspace(draft.id).startError;
+  // Tasks like this one, by Walnut's search: a click or Shift+Enter opens one instead of a second task.
+  const taskMatches = useTaskMatches(composerText, !walnut);
+  if (shiftEnterRef) shiftEnterRef.current = taskMatches.shiftEnter;
   // A refused Start's words (a folder that is gone, a project without a source) hold until the
   // place changes: another folder, host or project clears them.
   const placeKey = `${draft.host ?? ''}|${draft.cwd ?? ''}|${draft.project ?? ''}`;
@@ -97,6 +103,7 @@ export function DraftV6Body({
         )}
         <div className="draft-v6-gap">
           <div className="draft-v6-notices">
+            {!walnut && <DraftTaskMatches matches={taskMatches.matches} shiftEnters={taskMatches.strongFirst} onOpen={taskMatches.open} onHide={taskMatches.hide} />}
             {notices}
             {/* The draft's isolated workspace (its default, and the body once turned on in
                 More), as in today's draft: over the gap, so it moves nothing. Mounted exactly when

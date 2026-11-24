@@ -46,6 +46,7 @@ const PASSING: Record<string, string> = {
   'pages/CommandsPage.tsx#showForm': 'the new-command form, a dialog',
   'pages/DashboardPage.tsx#showForm': 'the new-task form, a dialog',
   'pages/MainPage.tsx#focusScope': 'where one focus request came from, reset after it is served',
+  'components/sessions/DraftTaskMatches.tsx#hidden': 'the matches hidden for the first line typed now: gone once that line changes, a passing dismissal of one search',
   'components/sessions/PromptCards.tsx#activeQ': "which question of an open ask the number keys answer: a keyboard cursor, gone once it is answered",
   'components/sessions/PromptCards.tsx#keyPick': 'the choice a number key picked on an open prompt, waiting for Enter: a keyboard cursor, gone once it is answered',
   'components/chat/AskWalnutSlot.tsx#newMode': 'composing a new chat, one draft',

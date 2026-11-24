@@ -299,3 +299,20 @@
 .draft-v6-lower-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 12px; }
 /* Save as todo: the family's small key, as More beside it (DraftLowerRow); this only lays it out. */
 .draft-v6-save { flex: none; }
+
+/* Tasks like this (DraftTaskMatches): over the composer, in the gap's notices; a row is the family's
+   pick row with a status dot (title only, the rest on hover). The list scrolls in a short draft. */
+.draft-v6-matches {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.draft-v6-matches-head { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.draft-v6-matches-title { font-weight: 600; color: var(--fg-secondary); }
+.draft-v6-matches-x { margin-left: auto; }
+.draft-v6-matches-list { display: flex; flex-direction: column; max-height: min(132px, 40cqh); overflow-y: auto; }
+.draft-v6-match { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 8px; text-align: left; flex: none; }
+.draft-v6-match-title { flex: 1 1 auto; min-width: 0; font-size: var(--font-size-md); }

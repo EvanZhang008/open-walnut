@@ -4,6 +4,7 @@
  * "why not" near the button, the nonce that opens the Where menu, and the send label.
  */
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useExperimental } from '@/hooks/useExperimental';
 
 export interface DraftV6State {
@@ -11,6 +12,9 @@ export interface DraftV6State {
   v6: boolean;
   /** What the v6 row says Start cannot do as it stands (written by DraftV6Body every render). */
   blockedRef: MutableRefObject<string | null>;
+  /** Set by the body: Shift+Enter's own use (open the task like this one), true when it took it. */
+  shiftEnterRef: MutableRefObject<(() => boolean) | null>;
+  onShiftEnter: () => boolean;
   /** The same, as state: the send arrow reads off while it holds (a click still explains). */
   blocked: boolean;
   setBlocked: (blocked: boolean) => void;
@@ -34,6 +38,7 @@ export function useDraftV6(eligible: boolean): DraftV6State {
   const on = useExperimental('project_first_start');
   const v6 = on && eligible;
   const blockedRef = useRef<string | null>(null);
+  const shiftEnterRef = useRef<(() => boolean) | null>(null);
   const [startWhy, setStartWhy] = useState<string | null>(null);
   const [whereNonce, setWhereNonce] = useState(0);
   const [blocked, setBlocked] = useState(false);
@@ -51,7 +56,8 @@ export function useDraftV6(eligible: boolean): DraftV6State {
     if (!draft.cwd && !ownFolder && !draft.fromProject) { setWhereNonce((n) => n + 1); return true; }
     return false;
   };
-  return { v6, blockedRef, blocked: v6 && blocked, setBlocked, startWhy, clearWhy: () => setStartWhy(null), whereNonce, holdsStart };
+  const onShiftEnter = useLeanCallback(() => (v6 ? shiftEnterRef.current?.() ?? false : false), [v6]);
+  return { v6, blockedRef, shiftEnterRef, onShiftEnter, blocked: v6 && blocked, setBlocked, startWhy, clearWhy: () => setStartWhy(null), whereNonce, holdsStart };
 }
 
 /**
