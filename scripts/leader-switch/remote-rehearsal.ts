@@ -961,7 +961,6 @@ async function standbyBehind(x: Ctx): Promise<void> {
   }
   const t1 = Date.now()
   x.log(`standby behind:\n${r.out}`)
-  times['standby behind: the refusal came after'] = `${((t1 - t0) / 1000).toFixed(1)} s (${catchUps(L, t0).join(' | ') || 'no catch-up logged'})`
   c.add('standby behind: refused at its preflight because the standby is not caught up (the final batch would not fit in the commit window)', r.code === 1 && /not caught up/.test(r.out), `exit ${r.code}; ${last(r.out, 2).slice(0, 400)}`)
   const lines = readMayAct(L.home).filter((l) => l.t >= t0 && l.t <= t1)
   const off = lines.filter((l) => !l.mayAct)
@@ -973,6 +972,9 @@ async function standbyBehind(x: Ctx): Promise<void> {
   const walnutId = (await instanceIdAt(L.home))!
   const held = (['w-a', 'w-b', 'w-k'] as const).map((id) => recordAt(w.witnessRoot[id], walnutId, id))
   c.add(`standby behind: no handover record: every witness still holds ${L.id}`, held.every((h) => h?.holder === L.id && h.kind !== 'handover'), JSON.stringify(held))
+  // The leader's catch-up line, once its log is written out (it is written as the route answers).
+  const caught = await waitFor('the catch-up line', async () => catchUps(L, t0).join(' | ') || null, 15_000, 500).catch(() => 'no catch-up logged')
+  times['standby behind: the refusal came after'] = `${((t1 - t0) / 1000).toFixed(1)} s (${caught})`
   // The backlog goes once the link is fast again; then it is removed, and the standby holds the home as it is.
   await waitForBatch(O.standbyDir, Date.now(), 600_000).catch(() => 0)
   fs.rmSync(dir, { recursive: true, force: true })
