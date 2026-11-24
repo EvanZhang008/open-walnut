@@ -867,6 +867,13 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return undefined
   }
 
+  /** The Walnut whose copy names an ACP session by its worker's runtime id (its journal's name). */
+  function runtimeOwnerOf(runtimeId: string): string | undefined {
+    if (!runtimeId) return undefined
+    for (const [home, slice] of slices) if (slice.sessions.some((s) => s.runtimeId === runtimeId)) return home
+    return undefined
+  }
+
   // ── Sessions started here while the Mac was away (WP12, replica-start-v1) ──
   // The slice overlay: a `session` record makes the session this Walnut's on this host
   // (ownerOf, the gateway, follower.send) before the Mac has adopted it, and after its
@@ -3948,7 +3955,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   return {
     /** The slices on disk again (the boot migration copied some here). */
     reloadSlices: load,
-    configure, foldHome, holdsSlice, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower, holdWrite,
+    configure, foldHome, holdsSlice, hasHome, ownerOf, runtimeOwnerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower, holdWrite,
     /** A same-host send handleLocal may take (its message id set on the payload): the gateway hands it to a follower that answers it. */
     localCandidate: (home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): boolean => localCall(home, rawCallerSid, capability, payload) !== null,
     /** A follower's peer message (`follower.peer`): the write into the live CLI and its records. */

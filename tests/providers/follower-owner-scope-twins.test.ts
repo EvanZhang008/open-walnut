@@ -33,6 +33,9 @@ const WALNUT_A = 'wmarinahost01'
 const WALNUT_B = 'wacmehost0001'
 const SA = 'aaaaaaaa-0a0a-4a0a-8a0a-0a0a0a0a0a0a'
 const SB = 'bbbbbbbb-0b0b-4b0b-8b0b-0b0b0b0b0b0b'
+/** Each Walnut's ACP session: its record id and the runtime id its worker's journal is named by. */
+const ACP_A = { sid: 'cccccccc-0c0c-4c0c-8c0c-0c0c0c0c0c0c', runtimeId: 'acp-marina-runtime-1' }
+const ACP_B = { sid: 'dddddddd-0d0d-4d0d-8d0d-0d0d0d0d0d0d', runtimeId: 'acp-acme-runtime-1' }
 /** A note path and body with non-ASCII text (\u escapes: the repo keeps sources ASCII). */
 const UNI_KEY = 'Journal/\u00e9t\u00e9 \u6e2c\u8a66.md'
 const UNI_BODY = '# \u00c9t\u00e9\n\nCaf\u00e9 \u2603 \u{1F330}\r\nline two\n'
@@ -114,12 +117,12 @@ async function spawnDaemon(dir: string, extraEnv: Record<string, string> = {}): 
 }
 
 /** A Walnut that leads this host: its link, its slice, its notes copy and its pictures, and one session in `cwd`. */
-async function linkLeader(port: number, o: { home: string; walnut: string; sid: string; cwd: string; notes: Record<string, string>; pictures?: Record<string, Buffer>; mock: string }): Promise<WebSocket> {
+async function linkLeader(port: number, o: { home: string; walnut: string; sid: string; cwd: string; notes: Record<string, string>; pictures?: Record<string, Buffer>; mock: string; acp?: { sid: string; runtimeId: string } }): Promise<WebSocket> {
   const ws = await connect(port)
   const beat = setInterval(() => { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, 500)
   ws.on('close', () => clearInterval(beat))
   expect((await cmd(ws, { cmd: 'leader.configure', home: o.home, walnutId: o.walnut, backup: true })).ok).toBe(true)
-  const slice = { v: 1, home: o.home, hash: 'h-' + o.walnut, asOf: Date.now(), host: 'devbox', sessions: [{ sid: o.sid, title: 'Session of ' + o.walnut }], tasks: [], requests: [] }
+  const slice = { v: 1, home: o.home, hash: 'h-' + o.walnut, asOf: Date.now(), host: 'devbox', sessions: [{ sid: o.sid, title: 'Session of ' + o.walnut }, ...(o.acp ? [{ ...o.acp, acp: true }] : [])], tasks: [], requests: [] }
   expect((await cmd(ws, { cmd: 'host.slice', slice })).ok).toBe(true)
   const entries = Object.entries(o.notes).map(([k, body]) => ({ k, h: sha12(body), n: Buffer.byteLength(body), m: { title: path.posix.basename(k, '.md'), updatedAt: '2026-10-01T00:00:00.000Z' } }))
   const synced = await cmd(ws, { cmd: 'replica.sync', home: o.home, kind: 'notes', entries, asOf: Date.now() })
@@ -207,8 +210,8 @@ describe.skipIf(!BUN)('standalone daemon: a follower reads its own Walnut only',
 
     // A's picture is over one 2 MB chunk: it crosses the daemon link as two frames of base64.
     const scanA = crypto.randomBytes(2 * 1024 * 1024 + 99)
-    const leaderA = await linkLeader(d.port, { home: HOME_A, walnut: WALNUT_A, sid: SA, cwd: cwdA, mock, notes: { 'Alpha.md': '# Alpha\n\nsee [[Beta]]\n', [UNI_KEY]: UNI_BODY }, pictures: { 'Alpha/_attachment/scan.png': scanA } })
-    const leaderB = await linkLeader(d.port, { home: HOME_B, walnut: WALNUT_B, sid: SB, cwd: cwdB, mock, notes: { 'Secret.md': '# Secret of acme\n' }, pictures: { 'Secret/_attachment/plan.png': Buffer.from('acme plan') } })
+    const leaderA = await linkLeader(d.port, { home: HOME_A, walnut: WALNUT_A, sid: SA, cwd: cwdA, mock, notes: { 'Alpha.md': '# Alpha\n\nsee [[Beta]]\n', [UNI_KEY]: UNI_BODY }, pictures: { 'Alpha/_attachment/scan.png': scanA }, acp: ACP_A })
+    const leaderB = await linkLeader(d.port, { home: HOME_B, walnut: WALNUT_B, sid: SB, cwd: cwdB, mock, notes: { 'Secret.md': '# Secret of acme\n' }, pictures: { 'Secret/_attachment/plan.png': Buffer.from('acme plan') }, acp: ACP_B })
     for (const sid of [SA, SB]) {
       await waitFor(() => { try { return fs.readFileSync(path.join(dir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
       const st = await cmd(leaderA, { cmd: 'status', sid })
@@ -277,6 +280,15 @@ describe.skipIf(!BUN)('standalone daemon: a follower reads its own Walnut only',
     expect((await cmd(follower, { cmd: 'fs.ls', path: path.join(cwdA, 'src') })).ok).toBe(true)
     expect((await cmd(follower, { cmd: 'fs.stat', path: path.join(cwdA, 'src', 'own.txt') })).ok).toBe(true)
     expect((await cmd(follower, { cmd: 'git.diff', cwd: cwdA, base: 'uncommitted' })).errorKind).not.toBe('not_found')
+    // An ACP session's journal is named by its worker's runtime id, not its record id: A's is
+    // A's, B's stays not_found (2026-11-24: a host-judged Codex session read "journal unavailable").
+    const journalOf = (rt: string) => path.join(dir, 'streams', `${rt}.acp.jsonl`)
+    for (const rt of [ACP_A.runtimeId, ACP_B.runtimeId]) fs.writeFileSync(journalOf(rt), `{"runtime":"${rt}"}\n`)
+    expect(await cmd(follower, { cmd: 'fs.stat', path: journalOf(ACP_A.runtimeId) })).toMatchObject({ ok: true, exists: true })
+    const ownJournal = await cmd(follower, { cmd: 'fs.readRange', path: journalOf(ACP_A.runtimeId), start: 0, length: 4096 })
+    expect(ownJournal.ok, JSON.stringify(ownJournal)).toBe(true)
+    expect(await cmd(follower, { cmd: 'fs.stat', path: journalOf(ACP_B.runtimeId) })).toMatchObject({ ok: true, exists: false })
+    expect(notFound(await cmd(follower, { cmd: 'fs.readRange', path: journalOf(ACP_B.runtimeId), start: 0, length: 4096 }))).toBe(true)
     // Writes stay the leader's.
     for (const c of ['fs.write', 'fs.mkdir', 'git.commitStart', 'start', 'send']) {
       expect((await cmd(follower, { cmd: c, path: path.join(cwdA, 'x'), sid: SA })).errorKind).toBe('follower_refused')

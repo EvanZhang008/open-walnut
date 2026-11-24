@@ -122,3 +122,63 @@ describe('every transcript read of a host-judged session runs on its host', () =
     expect(stale, 'classified files that no longer read a transcript: take them out').toEqual([])
   })
 })
+
+/**
+ * ACP engines keep their history in a journal (historySource 'acp-journal'), not a transcript:
+ * the same rule holds for it. Every branch of src/ for those engines either reads the history
+ * through the routed reader (readAcpSessionHistoryState, a member above, so a host-judged session
+ * is read by its host) or reads nothing; and the journal's own primitives run only inside that
+ * reader. The host's side of the read (its follower link) must let the journal through:
+ * tests/providers/follower-reads-core.test.ts gates the names this reader derives.
+ */
+const ACP_ROUTED = /\b(readAcpSessionHistory|readAcpSessionHistoryState|readProviderSessionHistory)\(/
+const ACP_PRIMITIVE = /\b(parseAcpJournal|projectAcpJournalHistory|shownAcpMessages|getAcpJournalPath|getAcpJournalPathCandidates)\(|\bnew AcpHistoryFold\(/
+const ACP_BRANCH = /historySource\s*[!=]==\s*'acp-journal'/
+
+/** Every file of src/ that branches on an ACP journal engine: it reads through the routed reader, or reads nothing (why). */
+const ACP_BRANCH_FILES: Record<string, { reads: true } | { reads: false; why: string }> = {
+  'src/core/activity-detail.ts': { reads: true },
+  'src/core/session-hooks/builtins.ts': { reads: true },
+  'src/core/session-projection.ts': { reads: true },
+  'src/core/session-title-reconciler.ts': { reads: true },
+  'src/core/sessions/engine-switch-context.ts': { reads: true },
+  'src/core/sessions/session-lifecycle.ts': { reads: true },
+  'src/web/routes/sessions.ts': { reads: true },
+  'src/core/history-ready-refresh.ts': { reads: false, why: 'keeps ACP sessions out of the daemon\'s view refresh' },
+  'src/core/sessions/history-not-written.ts': { reads: false, why: 'an ACP session is never "not written yet"; answers false before any read' },
+  'src/core/sessions/session-find.ts': { reads: false, why: 'an ACP journal has no older pages; the history it searches came from the routed reader' },
+  'src/core/sessions/history-unavailable.ts': { reads: false, why: 'the wording of an unavailable history' },
+}
+
+/** Where the journal's primitives may be called: the routed reader, and the projector that defines them. */
+const ACP_PRIMITIVE_FILES = ['src/providers/acp-journal-projector.ts', 'src/providers/acp-session-history.ts']
+
+describe('every ACP journal read of a host-judged session runs on its host', () => {
+  it('readAcpSessionHistory goes through readAcpSessionHistoryState, which goes through viaJudgingHost', () => {
+    const text = code(read('src/providers/acp-session-history.ts'))
+    expect(text).toMatch(/export async function readAcpSessionHistory\([\s\S]*?\{\s*return \(await readAcpSessionHistoryState\(/)
+    expect(text).toMatch(/export function readAcpSessionHistoryState\([\s\S]*?viaJudgingHost\([^;]*'readAcpSessionHistoryState'/)
+  })
+
+  it('readProviderSessionHistory reads an ACP journal through readAcpSessionHistoryState', () => {
+    const text = code(read('src/core/sessions/session-lifecycle.ts'))
+    const body = text.slice(text.indexOf('export async function readProviderSessionHistory('))
+    expect(body.slice(0, body.indexOf('\n}\n'))).toMatch(/historySource === 'acp-journal'\) \{[\s\S]*?readAcpSessionHistoryState\(/)
+  })
+
+  it('each file that branches on an ACP journal engine reads through the routed reader or reads nothing', () => {
+    const hits = srcFiles('src').filter((f) => ACP_BRANCH.test(code(read(f)))).sort()
+    const unclassified = hits.filter((f) => !Object.hasOwn(ACP_BRANCH_FILES, f))
+    expect(unclassified, 'a new ACP journal history path: read through readAcpSessionHistoryState (routed to the host) and classify it here').toEqual([])
+    const stale = Object.keys(ACP_BRANCH_FILES).filter((f) => !hits.includes(f))
+    expect(stale, 'classified files that no longer branch on an ACP journal engine: take them out').toEqual([])
+    for (const [f, c] of Object.entries(ACP_BRANCH_FILES)) {
+      if (c.reads) expect(code(read(f)), `${f} reads an ACP history through the routed reader`).toMatch(ACP_ROUTED)
+    }
+  })
+
+  it('the journal\'s primitives run only inside the routed reader', () => {
+    const hits = srcFiles('src').filter((f) => ACP_PRIMITIVE.test(code(read(f)))).sort()
+    expect(hits, 'a journal read outside readAcpSessionHistoryState is not routed to the session\'s host').toEqual(ACP_PRIMITIVE_FILES)
+  })
+})

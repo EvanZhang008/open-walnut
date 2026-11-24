@@ -175,6 +175,47 @@ describe('a session\'s own transcript and stream files', () => {
     expect(refused(r.gate(A, { cmd: 'fs.ls', path: projects }))).toBe(true)
     expect(passes(read(B, path.join(projects, '-x-work', 'sb.jsonl')))).toBe(true)
   })
+
+  // 2026-11-24: a Codex session its host judged read "journal unavailable" on the host's own
+  // service: the journal is <runtimeId>.acp.jsonl, named by its worker's runtime id, and the
+  // gate knew only <sid>.jsonl, so every stat of it answered not_found.
+  it('an ACP session\'s journal, named by its worker\'s runtime id, is its Walnut\'s; another Walnut\'s is not', async () => {
+    const streams = path.join(base, 'streams')
+    fs.mkdirSync(streams, { recursive: true })
+    const runtimes: Record<string, string> = { 'acp-rt-a': A, 'acp-rt-b': B }
+    const r = createFollowerReads({
+      path, homeDir: path.join(base, 'home'), streamsDir: streams,
+      realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } },
+      sliceOwner: (sid) => slice[sid], runtimeOwner: (rt) => runtimes[rt], journalOwner: () => undefined, liveSessions: () => live,
+      journalSize: () => -1, readJournal: () => '', replica: { list: () => null, read: () => null, readMany: () => null },
+      denyRoots: () => [streams], log: () => {},
+    })
+    // The names the routed reader looks for, from its own code (not a copy of the pattern).
+    const { getAcpJournalPathCandidates } = await import('../../src/providers/acp-session-history.js')
+    const prev = process.env.WALNUT_STREAMS_DIR
+    process.env.WALNUT_STREAMS_DIR = streams
+    let journalA: string, journalB: string, sameIdJournal: string
+    try {
+      journalA = getAcpJournalPathCandidates({ claudeSessionId: 'sa', acpRuntimeId: 'acp-rt-a' })[0]!
+      journalB = getAcpJournalPathCandidates({ claudeSessionId: 'sb', acpRuntimeId: 'acp-rt-b' })[0]!
+      sameIdJournal = getAcpJournalPathCandidates({ claudeSessionId: 'sa', acpRuntimeId: 'sa' })[0]!
+    } finally {
+      if (prev === undefined) delete process.env.WALNUT_STREAMS_DIR
+      else process.env.WALNUT_STREAMS_DIR = prev
+    }
+    for (const f of [journalA, journalB]) fs.writeFileSync(f, '{}\n')
+    expect(path.dirname(journalA)).toBe(streams)
+    for (const c of ['fs.stat', 'fs.read', 'fs.readRange']) {
+      expect(passes(r.gate(A, { cmd: c, path: journalA })), `${c} of A's journal`).toBe(true)
+      expect(passes(r.gate(B, { cmd: c, path: journalB })), `${c} of B's journal`).toBe(true)
+      expect(passes(r.gate(A, { cmd: c, path: journalB })), `${c} of B's journal by A`).toBe(false)
+    }
+    // A session whose runtime id is its own id is owned by its id.
+    expect(passes(r.gate(A, { cmd: 'fs.read', path: sameIdJournal }))).toBe(true)
+    // An unknown runtime, and the worker's other files, are no one's.
+    expect(refused(r.gate(A, { cmd: 'fs.read', path: path.join(streams, 'acp-rt-x.acp.jsonl') }))).toBe(true)
+    expect(refused(r.gate(A, { cmd: 'fs.read', path: path.join(streams, 'acp-rt-a.acp-in') }))).toBe(true)
+  })
 })
 
 describe('a session cwd at or above home (WP6 fix round)', () => {

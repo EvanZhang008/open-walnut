@@ -14,6 +14,9 @@
  *     git.fileShow, git.fileLog) names a path inside one of that Walnut's
  *     session cwds, after `~`, `..` and links are resolved; when another
  *     Walnut's session works in a deeper dir, that dir is the other Walnut's;
+ *     a session's own transcript and stream files are its Walnut's wherever
+ *     they live, an ACP session's journal (`<runtimeId>.acp.jsonl`) by the
+ *     runtime id that Walnut's copy names for it;
  *   - `replica.list`, `replica.read`, `replica.readMany` answer from this
  *     host's copy of that Walnut's notes, memory and skills, and
  *     `attachments.list`, `attachments.read` from its copy of the notes'
@@ -55,6 +58,11 @@ export interface FollowerReadsDeps {
   sliceOwner: (sid: string) => string | undefined
   /** The Walnut that first asked this host to spawn `sid` (the spawn journal). */
   journalOwner: (sid: string) => string | undefined
+  /**
+   * The Walnut whose copy names an ACP session by its worker's runtime id (`acp-...`): that
+   * worker's journal in the streams dir (`<runtimeId>.acp.jsonl`) is the session's history.
+   */
+  runtimeOwner?: (runtimeId: string) => string | undefined
   /** The sessions the daemon runs or adopted, with their cwd. */
   liveSessions: () => Array<{ sid: string; cwd: string }>
   /** The spawn journal's size in bytes (-1 when there is none): it is read again only when this moves. */
@@ -151,6 +159,19 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
     return typeof sid === 'string' && !!sid && ownerOf(sid) === home
   }
 
+  /** `home`'s copy names a session run by the ACP worker `runtimeId` (memoized with the owners). */
+  function ownsRuntime(home: string, runtimeId: string): boolean {
+    if (!deps.runtimeOwner) return false
+    const key = '\u0000runtime:' + runtimeId
+    let hit = ownerMemo.get(key)
+    if (hit === undefined) {
+      hit = deps.runtimeOwner(runtimeId) ?? null
+      if (ownerMemo.size >= MAX_REAL_CACHE) ownerMemo.clear()
+      ownerMemo.set(key, hit)
+    }
+    return hit === home
+  }
+
   /** The real path of `p`, or of its nearest existing ancestor plus the rest (a file not made yet). */
   function realOf(p: string): string {
     const abs = path.resolve(p)
@@ -244,7 +265,10 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
     return p
   }
 
-  /** `real` is a transcript or stream file of a session `home` owns (the session id names it). */
+  /**
+   * `real` is a transcript or stream file of a session `home` owns: the session id names it, or,
+   * for an ACP journal (`<runtimeId>.acp.jsonl`, acp-daemon.ts), its worker's runtime id does.
+   */
   function sessionFileOf(home: string, real: string): boolean {
     const within = (dir: string): string[] | null => {
       const root = realRoot(dir)
@@ -259,8 +283,8 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
     }
     if (deps.streamsDir) {
       const parts = within(deps.streamsDir)
-      const m = parts && parts.length === 1 ? /^([A-Za-z0-9_-]{1,128})\.(jsonl|meta\.json)$/.exec(parts[0]!) : null
-      if (m && owns(home, m[1]!)) return true
+      const m = parts && parts.length === 1 ? /^([A-Za-z0-9_-]{1,128})\.(jsonl|meta\.json|acp\.jsonl)$/.exec(parts[0]!) : null
+      if (m && (owns(home, m[1]!) || (m[2] === 'acp.jsonl' && ownsRuntime(home, m[1]!)))) return true
     }
     return false
   }

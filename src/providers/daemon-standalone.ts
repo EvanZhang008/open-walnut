@@ -3823,6 +3823,7 @@ const followerReads = createFollowerReads({
   streamsDir: STREAMS_DIR,
   realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } },
   sliceOwner: (sid) => offlineHost.ownerOf(sid),
+  runtimeOwner: (runtimeId) => offlineHost.runtimeOwnerOf(runtimeId),
   journalOwner: (sid) => journaledHome(sid),
   liveSessions: () => [...sessions].map(([sid, s]) => ({ sid, cwd: s.cwd })),
   journalSize: () => { try { return fs.statSync(SPAWN_JOURNAL).size } catch { return -1 } },
