@@ -16644,7 +16644,9 @@ export class SessionRunner {
     const s = this.findAcpSession(sid)
     if (!s) return false
     const ids = [sid, s.sessionId ?? sid, s.runtimeId]
-    return s.active || s.activity === 'processing' || s.hasPendingPermission || s.outlivingWork.length > 0
+    // An object registered by a caller that does not carry every member (a stand-in with only what it
+    // uses) reads as holding no work after its turn, never as an error that stops the caller.
+    return s.active || s.activity === 'processing' || s.hasPendingPermission || (s.outlivingWork?.length ?? 0) > 0
       || s.cursorCommitting === true || this.acpAttachingSessions.has(s)
       || ids.some((id) => this.acpDeliverySettlements.has(id) || (this.acpRowTakes.get(id) ?? 0) > 0 || this.acpAbortInProgress.has(id))
   }
