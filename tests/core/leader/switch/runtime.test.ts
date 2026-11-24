@@ -145,9 +145,42 @@ describe('boot decisions', () => {
     // Well past the record's length: the witnesses that come back hold this machine's last renew, long run out.
     await new Promise((res) => setTimeout(res, 4_000))
     for (const w of off) fs.renameSync(`${w.dir}.off`, w.dir)
-    await until('the leader to act again', () => r.mayAct(), 15_000)
-    expect(r.status().state).toBe('leading')
+    // Its lease first, then the runtime's state (it reads the chosen grant on its next look).
+    await until('the leader to act again', () => r.mayAct() && r.status().state === 'leading', 15_000)
   }, 40_000)
+
+  it('three witnesses left on three different records of this machine (a renew cut part way): it grants itself and leads again', async () => {
+    const r = await start('machine-a')
+    const [w1, w2, w3] = settings.witnesses as [LocalWitnessPlace, LocalWitnessPlace, LocalWitnessPlace]
+    const numberAt = (w: LocalWitnessPlace) => (JSON.parse(fs.readFileSync(path.join(w.dir, 'permit-record.json'), 'utf8')) as { held: { number: number } | null }).held?.number ?? 0
+    const off = (w: LocalWitnessPlace) => fs.renameSync(w.dir, `${w.dir}.off`)
+    const on = (w: LocalWitnessPlace) => fs.renameSync(`${w.dir}.off`, w.dir)
+    // w3 stops hearing renews; w1 and w2 go on (a majority: the lease holds).
+    off(w3)
+    const n3 = numberAt({ ...w3, dir: `${w3.dir}.off` })
+    await until('w1 and w2 to move past w3', () => numberAt(w2) > n3 && numberAt(w1) > n3)
+    // Then w2 too: only w1 takes the renews now, none stands, and the lease runs out.
+    off(w2)
+    const n2 = numberAt({ ...w2, dir: `${w2.dir}.off` })
+    await until('w1 to move past w2', () => numberAt(w1) > n2)
+    await until('the permission to run out', () => r.status().state === 'waiting', 15_000)
+    on(w2)
+    on(w3)
+    // Three answers, three records, all this machine's: no record has a majority.
+    expect(new Set([numberAt(w1), numberAt(w2), numberAt(w3)]).size).toBe(3)
+    await until('the leader to act again', () => r.mayAct() && r.status().state === 'leading', 20_000)
+  }, 60_000)
+
+  it('different records of which one is another machine\'s: no grant (that is a switch\'s to settle)', async () => {
+    const reply = (witness: string, held: Record<string, unknown> | null) => ({ witness, re: 'read', ok: true, held, list: ['w1', 'w2', 'w3'], joint: null, cfg: 'c', epoch: 0, progress: null, ops: [] })
+    const rec = (n: number, holder: string) => ({ kind: 'renew', holder, number: n, by: holder, nonce: 'x', validMs: 1, list: ['w1', 'w2', 'w3'], cfg: 'c', epoch: 0, clock: 'boottime' })
+    const h = { client: { witnessList: () => ['w1', 'w2', 'w3'] } }
+    const { splitOwnRecordsForTest } = await import('../../../../src/core/leader/switch/runtime.js')
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a')), reply('w2', rec(2, 'machine-a')), reply('w3', rec(1, 'machine-a'))] as never }, 'machine-a')?.want).toBe('grant')
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a')), reply('w2', rec(2, 'machine-b')), reply('w3', rec(1, 'machine-a'))] as never }, 'machine-a')).toBeNull()
+    // Only one answer: not a majority, nothing is known.
+    expect(splitOwnRecordsForTest(h as never, { standing: undefined, replies: [reply('w1', rec(3, 'machine-a'))] as never }, 'machine-a')).toBeNull()
+  })
 
   it('a handover to this machine that the switch did not commit: refuses', async () => {
     const a = await start('machine-a')

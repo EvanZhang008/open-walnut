@@ -875,6 +875,22 @@ make the downtime long.
 | small (a few hundred files) | 8.2 to 8.8 s |
 | 20 GB of leader data (80 files of 256 MB, 20,000 small files, the databases) | 28.2 s: final batch and its second look 4.1 s, promotion 11.8 s (most of it making every file writable, made parallel since), trial 8.4 s, real start 3.8 s |
 
+Between machines (the remote rehearsal, `--remote`: real daemons, the copy link of kind `daemon` through a loopback
+proxy, on clouddev under a load of 60 to 100 on 48 cores, 2026-11-24):
+
+| Home | Copy link | Downtime | Every host connected to the new leader after |
+|---|---|---|---|
+| small (a few hundred files) | unslowed | 11.8 to 17.2 s | 3.0 to 3.9 s |
+| 1 GB of filler | unslowed | 22.1 s | 4.7 s |
+| 1 GB of filler | 20 Mbit/s (`slow {bytesPerSec: 2_500_000}`) | 22.9 s | 5.0 s |
+
+20 GB was not measured between machines: its first batch over the copy link never stood. Each try read the
+whole home for about 4.5 minutes, and the leader's own git auto-commit (every 30 s; `git add -A` of the filler)
+touched `.git/objects` meanwhile, so every try was void (`late`, `gone`): 11 voids in 55 minutes. A 1 GB home's
+first batch took 456 s, through 22 voids. Every try took about as long as the first (a void try saved no time
+for the next), so a home whose full read takes longer than the time between its own writes may get no first
+batch at all over a link of this speed: not solved here.
+
 ## Paths
 
 A home promoted on another machine, another OS or under another account still holds the paths its

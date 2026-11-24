@@ -36,7 +36,7 @@ import { changeListAndWait, openPermitClient, proposeAndWait, readStanding, type
 import { sightingsOf, type WitnessSighting } from './witness-setup.js'
 import { DEFERRED_DOOR_WORK_FILE, notifyOutwardDoorsOpened, setOutwardDoorChecker, setOutwardSender, type OutwardDoorKind } from './doors.js'
 import type { LeaderSwitchSettings, WitnessPlace } from './settings.js'
-import type { PermitRecord } from '../permit/types.js'
+import { majorityOf, type PermitRecord, type PermitReply } from '../permit/types.js'
 import { PermitNotHeld } from '../permit/client.js'
 import { generationToJoin } from '../permit/store.js'
 import { acquireInstanceLock, type InstanceLock } from '../permit/instance-lock.js'
@@ -123,6 +123,9 @@ type Want = 'renew' | 'grant' | 'none'
  * What this process should send, given what a majority holds. `refuse` marks an answer that
  * will not change by waiting (another machine leads, or a switch to here nobody committed).
  */
+/** Tests: the split-records rule alone. */
+export const splitOwnRecordsForTest = (h: PermitHandle, read: { standing: PermitRecord | null | undefined; replies: PermitReply[] }, me: string) => splitOwnRecords(h, read, me)
+
 export function wantFor(standing: PermitRecord | null | undefined, me: string, nonce: string, commitHandover?: number): { want: Want; why?: string; refuse?: boolean; released?: boolean; leader?: string } {
   if (standing === undefined) return { want: 'none', why: 'no majority of the witnesses answered' }
   if (standing === null) return { want: 'grant' }
@@ -152,13 +155,31 @@ export function wantFor(standing: PermitRecord | null | undefined, me: string, n
 
 const tick = (ms: number) => new Promise((r) => { setTimeout(r, ms).unref?.() })
 
+/**
+ * A majority answered but holds no one record: each witness kept a different one of THIS machine's records (a
+ * renew that reached some of them while the others were cut off). Nobody else can end that, and waiting does
+ * not either: no new record comes while no record has a majority. A grant ends it, and is safe: each witness
+ * takes it only once the record it holds ran out there. Any record of another machine (or a handover) among
+ * the answers: null, as before (that is a switch's to settle, never a takeover).
+ */
+function splitOwnRecords(h: PermitHandle, read: { standing: PermitRecord | null | undefined; replies: PermitReply[] }, me: string): ReturnType<typeof wantFor> | null {
+  if (read.standing !== undefined) return null
+  const list = h.client.witnessList()
+  const answers = read.replies.filter((r) => list.includes(r.witness) && r.list)
+  if (answers.length < majorityOf(list)) return null
+  const own = (r: PermitReply) => !r.held || (r.held.kind === 'release' ? r.held.by === me : (r.held.kind === 'renew' || r.held.kind === 'grant') && r.held.holder === me)
+  if (!answers.every(own)) return null
+  const numbers = answers.map((r) => r.held?.number ?? 0)
+  return { want: 'grant', why: `the witnesses hold different records of this machine (${numbers.join(', ')}): asking for a grant, which stands where each ran out` }
+}
+
 type Acquired = { ok: boolean; record?: PermitRecord; why?: string; refused?: boolean; leader?: string; standing?: PermitRecord }
 
 async function acquire(h: PermitHandle, me: string, commitHandover?: number): Promise<Acquired> {
   const refusal = (w: ReturnType<typeof wantFor>, standing: PermitRecord | null | undefined): Acquired =>
     ({ ok: false, why: w.why, refused: !!w.refuse, ...(w.leader ? { leader: w.leader } : {}), ...(standing ? { standing } : {}) })
   const read = await readStanding(h)
-  const w = wantFor(read.standing, me, h.client.incarnation(), commitHandover)
+  const w = splitOwnRecords(h, read, me) ?? wantFor(read.standing, me, h.client.incarnation(), commitHandover)
   if (w.want === 'none') return refusal(w, read.standing)
   if (w.want === 'renew') {
     const r = await proposeAndWait(h, (c) => c.renew())
@@ -171,7 +192,7 @@ async function acquire(h: PermitHandle, me: string, commitHandover?: number): Pr
   // machine's own has no other candidate: asked at once.
   if (!w.released) await tick(h.client.grantDelayMs())
   const again = await readStanding(h)
-  const w2 = wantFor(again.standing, me, h.client.incarnation(), commitHandover)
+  const w2 = splitOwnRecords(h, again, me) ?? wantFor(again.standing, me, h.client.incarnation(), commitHandover)
   if (w2.want === 'none') return refusal(w2, again.standing)
   const g = await proposeAndWait(h, (c) => c.requestGrant())
   if (g?.outcome === 'chosen') return { ok: true, record: g.record }
