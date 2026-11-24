@@ -16100,6 +16100,8 @@ export async function runDaemonProcess(argv: string[] = process.argv): Promise<v
   // the literal specifier into the compiled binary. Mirror daemon-source.ts.
   if (isDaemonCliKeyword(action)) {
     healDaemonCwd()
+    // The login-shell PATH the runtime used to set first, for the service commands (daemon-cli-path.ts).
+    ;(await import('./daemon-cli-path.js')).applyCliLoginPath(argv.slice(3))
     const { runWalnutCli } = await import('./wn-cli.js')
     process.exit(await runWalnutCli(argv.slice(3)))
   }

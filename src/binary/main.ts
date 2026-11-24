@@ -89,6 +89,8 @@ if (first === '__selftest') {
   else await (await loadRuntime()).runDaemonProcess()
 } else if (first === 'walnut' || first === 'wn') {
   // The daemon copies this file as its shim core and its PATH shim runs `<copy> walnut <args>`.
+  // Its service commands get the login-shell PATH, as the daemon program's do (daemon-cli-path.ts).
+  ;(await import('../providers/daemon-cli-path.js')).applyCliLoginPath(userArgs.slice(1))
   const { runWalnutCli } = await import('../providers/wn-cli.js')
   process.exit(await runWalnutCli(userArgs.slice(1)))
 } else if (first !== undefined && runtimeScript(first)) {
