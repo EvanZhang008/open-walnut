@@ -62,8 +62,9 @@ export async function cloudTerminate(res: Response, sessionId: string, force: bo
   if (route.kind === 'operated') {
     const a = await ops.stopViaHost(route.t, force)
     if (!a.ok) {
-      // Refused by the host (crons armed, not its session): nothing was noted there.
-      if (a.answer.status >= 400 && a.answer.status < 500) await clearStopNote(sessionId, stopAskedAt)
+      // Refused by the host (crons armed, not its session) or a host too old to take it: nothing was noted there.
+      const code = (a.answer.body.error as { code?: unknown } | undefined)?.code
+      if ((a.answer.status >= 400 && a.answer.status < 500) || code === ops.NEEDS_UPDATE) await clearStopNote(sessionId, stopAskedAt)
       res.status(a.answer.status).json(a.answer.body)
       return
     }

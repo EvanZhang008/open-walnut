@@ -183,6 +183,9 @@ export interface HostAnswer { status: number; body: Record<string, unknown>; may
 
 const v1Error = (status: number, code: string, message: string): HostAnswer => ({ status, body: { error: { code, message } } })
 
+/** The code of a call the session's host is too old to take (nothing was done there). */
+export const NEEDS_UPDATE = 'needs_upgrade'
+
 async function call(t: OperatedSession, path: string, body: unknown, timeoutMs: number): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; answer: HostAnswer }> {
   try {
     const r = await callListenedHost(t.alias, path, body, timeoutMs)
@@ -190,6 +193,9 @@ async function call(t: OperatedSession, path: string, body: unknown, timeoutMs: 
     if (r.status === 200 && b.ok === true) return { ok: true, body: b }
     const why = typeof b.error === 'string' ? b.error : `the host answered ${r.status}`
     if (why === 'not_own_session') return { ok: false, answer: v1Error(404, 'not_found', 'The session\'s host does not run this session') }
+    // A host on an older Walnut whose listener does not take this call yet (listener-wire.ts
+    // LISTENER_CALLS grew: a stop and a mode change, 2026-11-24): nothing was done there.
+    if (why === 'not_callable') return { ok: false, answer: v1Error(503, NEEDS_UPDATE, `The Walnut on ${t.alias} needs an update before the phone can do this while the Mac is away; it updates with its next deploy.`) }
     const refused = r.status >= 400 && r.status < 500
     return { ok: false, answer: v1Error(refused ? r.status : 503, refused ? (typeof b.code === 'string' ? b.code : 'bad_request') : 'bridge_offline', why) }
   } catch (err) {

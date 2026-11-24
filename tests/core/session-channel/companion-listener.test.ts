@@ -230,6 +230,25 @@ describe('operating a host\'s session through its link', () => {
     expect(!refused.ok && refused.answer).toMatchObject({ status: 409, body: { error: { code: 'crons_armed' } } })
   })
 
+  it('a host on an older Walnut that does not take a stop or a mode change yet: 503 needs_upgrade, one plain sentence, never its 403', async () => {
+    const { t, answer } = await operated()
+    // What an older host's listener answers for a call its LISTENER_CALLS does not list (companion-dialer.ts).
+    const old = { ok: false, error: 'not_callable' }
+    const stop = stopViaHost(t, false, 1000)
+    await settle()
+    await answer(403, old)
+    const refused = await stop
+    expect(refused.ok).toBe(false)
+    const a = !refused.ok ? refused.answer : null
+    expect(a?.status).toBe(503)
+    expect(a?.body.error).toEqual({ code: 'needs_upgrade', message: 'The Walnut on devbox needs an update before the phone can do this while the Mac is away; it updates with its next deploy.' })
+    const mode = modeViaHost(t, 'plan', 1000)
+    await settle()
+    await answer(403, old)
+    const m = await mode
+    expect(!m.ok && m.answer).toMatchObject({ status: 503, body: { error: { code: 'needs_upgrade' } } })
+  })
+
   it('a mode change is the host\'s own changeSessionModeOf, answered with the mode it kept', async () => {
     const { t, answer } = await operated()
     const p = modeViaHost(t, 'accept', 1000)
