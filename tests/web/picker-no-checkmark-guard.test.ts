@@ -31,6 +31,9 @@ const ALLOWED: Record<string, RegExp[]> = {
   // A checklist's checkbox square (fb-check-box, drawn only for multi-select rows; a single-select
   // row is a Picked row).
   'web/src/components/tasks/FilterValueList.tsx': [/on \? ICON_CHECK : sel === 'mixed'/],
+  // A task like the one being typed that is done (draft-v6-match-done): its status, nothing to
+  // choose; the rows open a task and carry no picked state.
+  'web/src/components/sessions/DraftTaskMatches.tsx': [/!m\.open && <span className="draft-v6-match-done"/],
 }
 
 const SELECTION_MARK = [
