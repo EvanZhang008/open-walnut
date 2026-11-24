@@ -32,6 +32,7 @@ import {
   HistoryReadFailedError, encodeProjectPath, extractPlanContent, getCachedSessionHistory, getOrphanFinishedAgentIds, historyWindowStart,
   isSourceFoundHistory, isWindowedHistory, markHistoryRows, readSessionHistory, readSessionHistoryRange, readSessionHistoryTail,
   readSessionHistoryTailWindow, readSessionRowToolResult, readSingleSubagentHistory, _resetHistoryCacheForTesting,
+  _settleHistoryWarmupsForTesting,
 } from '../../../src/core/session-history.js'
 import { readSessionHistoryBefore } from '../../../src/core/session-history-pages.js'
 import {
@@ -142,6 +143,9 @@ beforeEach(async () => {
   setHostHistoryCaller(wireCaller)
 })
 afterEach(async () => {
+  // A cold window read schedules a background full read: it ends here, never on the next test's
+  // transcript, where that test's read would join it and get this file's rows (2026-11-24).
+  await _settleHistoryWarmupsForTesting()
   setHostHistoryCaller(null)
   await _resetHostHistoryReadsForTesting()
   _setHistoryPagingForTesting(null)
@@ -464,6 +468,28 @@ describe('the host\'s answer equals the read here, mark by mark (S4)', () => {
     expect(got).toEqual(json(local))
     expect(isWindowedHistory(got)).toBe(isWindowedHistory(local))
     expect(historyWindowStart(got)).toEqual(historyWindowStart(local))
+  })
+
+  it('the warm-up a cold window read schedules never outlives its test: a reset cancels it and forgets reads in flight', async () => {
+    await writeLong(40, 400)
+    const opts = { skipSubagents: true }
+    const cold = { ...opts, maxColdReadBytes: 8 * 1024 }
+    // A cold window read schedules its full read; settling cancels it before it starts.
+    await readSessionHistory(SID, CWD, undefined, undefined, cold)
+    expect(await _settleHistoryWarmupsForTesting()).toEqual({ cancelled: 1, waited: 0 })
+    // A reset cancels it too: past the reset no warm-up starts.
+    _resetHistoryCacheForTesting()
+    await readSessionHistory(SID, CWD, undefined, undefined, cold)
+    _resetHistoryCacheForTesting()
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(await _settleHistoryWarmupsForTesting()).toEqual({ cancelled: 0, waited: 0 })
+    // A read of the same key joins one in flight, but never one from before a reset.
+    const first = readSessionHistory(SID, CWD, undefined, undefined, opts)
+    expect(readSessionHistory(SID, CWD, undefined, undefined, opts)).toBe(first)
+    _resetHistoryCacheForTesting()
+    const after = readSessionHistory(SID, CWD, undefined, undefined, opts)
+    expect(after).not.toBe(first)
+    await Promise.all([first, after])
   })
 
   it('a session with an in-place rewind: the abandoned branch is gone on both ends', async () => {

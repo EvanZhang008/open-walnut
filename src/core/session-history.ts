@@ -446,6 +446,10 @@ export function _historyCacheGetForTesting(sessionId: string, host?: string): Pa
 }
 export function _resetHistoryCacheForTesting(): void {
   _resetTailWindowsForTesting();
+  // A read still in flight from before the reset (a warm-up) is no later read's to join.
+  for (const timer of warmupTimers) clearTimeout(timer);
+  warmupTimers.clear();
+  historyInflightByKey.clear();
   parsedHistoryCache.clear();
   historyCacheChars = 0;
   historyCacheBudgetChars = MAX_HISTORY_CACHE_CHARS;
@@ -1733,6 +1737,40 @@ async function readSessionHistoryTailHere(
  */
 const historyInflightByKey = new Map<string, Promise<SessionHistoryMessage[]>>();
 
+/**
+ * The background full reads a cold window read schedules (below), until they settle. A warm-up
+ * is a plain readSessionHistory: a caller's read of the same key joins it while it runs. A reset
+ * cancels the ones not started, so a warm-up scheduled before it never starts after it on a
+ * transcript written since (2026-11-24: a test's warm-up fired after the next test rewrote the
+ * file, and that test's read joined it and got the old file's rows).
+ */
+const warmupTimers = new Set<ReturnType<typeof setTimeout>>();
+const warmupsRunning = new Set<Promise<unknown>>();
+
+function scheduleWarmup(read: () => Promise<unknown>): void {
+  const timer = setTimeout(() => {
+    warmupTimers.delete(timer);
+    // Best-effort: the next full request retries.
+    const run: Promise<unknown> = read().catch(() => {}).finally(() => { warmupsRunning.delete(run); });
+    warmupsRunning.add(run);
+  }, 0);
+  timer.unref?.();
+  warmupTimers.add(timer);
+}
+
+/** Tests: cancel the warm-ups not started and wait for the running ones, so none reads a later test's file. */
+export async function _settleHistoryWarmupsForTesting(): Promise<{ cancelled: number; waited: number }> {
+  const cancelled = warmupTimers.size;
+  for (const timer of warmupTimers) clearTimeout(timer);
+  warmupTimers.clear();
+  let waited = 0;
+  while (warmupsRunning.size > 0) {
+    waited += warmupsRunning.size;
+    await Promise.allSettled([...warmupsRunning]);
+  }
+  return { cancelled, waited };
+}
+
 export function readSessionHistory(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
   return viaJudgingHost(sessionId, host, 'readSessionHistory', [options], () => readSessionHistoryShared(sessionId, cwd, host, outputFile, options));
 }
@@ -1940,10 +1978,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
       // structurally impossible; they live in the sliding-window regime anyway.
       const { DaemonFileReader } = await import('./daemon-file-reader.js');
       if (statSize <= DaemonFileReader.maxReadBytes()) {
-        setTimeout(() => {
-          readSessionHistory(sessionId, cwd, host, outputFile, { skipSubagents: true })
-            .catch(() => { /* warm-up is best-effort; next full request retries */ });
-        }, 0).unref?.();
+        scheduleWarmup(() => readSessionHistory(sessionId, cwd, host, outputFile, { skipSubagents: true }));
       }
       return handOff(win);
     }
