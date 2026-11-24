@@ -82,7 +82,7 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   // An engine's CLI on the host is not signed in: every retry is refused the same way until the
   // user signs it in (Settings), so the message waits, and goes out by itself once that host signs
   // in (sessions/agent-wait-resend.ts, rule 'engine-signed-in'); a Retry still sends it at once.
-  if (err instanceof EngineSignInRequiredError) return { kind: 'permanent', code: 'sign_in_required', reason: err.message, waitsFor: ENGINE_SIGN_IN_WAIT };
+  if (err instanceof EngineSignInRequiredError) return { kind: 'permanent', code: SIGN_IN_REQUIRED, reason: err.message, waitsFor: ENGINE_SIGN_IN_WAIT };
   if (err instanceof ClaudeRuntimeMissingError) return { kind: 'permanent', code: 'claude_missing', reason: err.waitingReason, waitsFor: err.errorKind };
   // A test server refusing a session it did not start: retrying changes nothing.
   if (err instanceof InheritedSessionRefusedError || isInheritedSessionText(message)) return { kind: 'permanent', code: 'inherited_session', reason: reason.replace(/^inherited_session:\s*/, '') };
@@ -241,19 +241,17 @@ export function holderPidOf(text: unknown): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-/**
- * The host's daemon refused to start the CLI because Claude Code cannot run there
- * (not installed, or the npm build with no Node). Nothing was spawned. The message
- * is the readiness sentence every surface shows (host-readiness.ts spawnGateSentence).
- */
+/** The code every answer gives a refusal for want of an engine's sign-in. */
+export const SIGN_IN_REQUIRED = 'sign_in_required' as const;
+
+/** The kind a message refused for want of an engine's sign-in waits on (QueuedMessage.waitsFor). */
+export const ENGINE_SIGN_IN_WAIT = 'engine_sign_in';
+
 /**
  * An engine's CLI on a host refused the start for want of a sign-in (its ACP authenticate or
  * session/new answered auth_required; core/agents/engine-sign-in.ts signs it in). `signIn` names
  * the engine and host, so the chat can offer the sign-in in Settings for that host.
  */
-/** The kind a message refused for want of an engine's sign-in waits on (QueuedMessage.waitsFor). */
-export const ENGINE_SIGN_IN_WAIT = 'engine_sign_in';
-
 export class EngineSignInRequiredError extends Error {
   readonly code = 'ENGINE_SIGN_IN';
   constructor(message: string, readonly engine: string, readonly host: string, readonly hostName: string) {
@@ -263,6 +261,23 @@ export class EngineSignInRequiredError extends Error {
   get signIn(): { engine: string; host: string; hostName: string } { return { engine: this.engine, host: this.host, hostName: this.hostName }; }
 }
 
+/**
+ * The sign-in refusal behind `err`: itself, or the cause a start path wrapped it in (task-start's
+ * QuickStartError, an engine switch's error), so every caller can still say it is a sign-in.
+ */
+export function engineSignInOf(err: unknown): EngineSignInRequiredError | null {
+  let e: unknown = err;
+  for (let depth = 0; e && depth < 5; depth++, e = (e as { cause?: unknown }).cause) {
+    if (e instanceof EngineSignInRequiredError) return e;
+  }
+  return null;
+}
+
+/**
+ * The host's daemon refused to start the CLI because Claude Code cannot run there
+ * (not installed, or the npm build with no Node). Nothing was spawned. The message
+ * is the readiness sentence every surface shows (host-readiness.ts spawnGateSentence).
+ */
 export class ClaudeRuntimeMissingError extends Error {
   readonly code = 'CLAUDE_RUNTIME';
   constructor(message: string, readonly errorKind: 'claude_missing' | 'claude_needs_node' | 'claude_error') {

@@ -54,6 +54,7 @@ import { revokedWhy } from '../session-channel/revoked-hosts.js';
 import { hostPath, landHeldRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engine-switch-restart.js';
 import { interruptedByShutdown } from '../server-stopping.js';
+import { engineSignInOf, SIGN_IN_REQUIRED } from '../../providers/delivery-failure.js';
 import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
 import { MOVE_LINK_WAIT_MS, noLinkWait, withLinkWait } from '../transfer/link-wait.js';
 import {
@@ -65,10 +66,23 @@ import {
 const OWED_READ_MS = 5_000;
 
 export class EngineSwitchError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string) {
+  /** `detail`: more fields of the answer (a sign-in refusal's engine and host). */
+  constructor(message: string, readonly status: number, readonly code: string, readonly detail?: Record<string, unknown>) {
     super(message);
     this.name = 'EngineSwitchError';
   }
+}
+
+/**
+ * A start refused because the engine's CLI is not signed in on the host: said as that sign-in, in
+ * the one sentence every surface reads back (engine-sign-in-words.ts), with its facts; never as a
+ * failed start, which the web retries and which named task_start to a person. 409: nothing changes
+ * until someone signs it in. Any other error: null.
+ */
+function signInRefusal(err: unknown): { words: Error; as: EngineSwitchError } | null {
+  const signIn = engineSignInOf(err);
+  if (!signIn) return null;
+  return { words: new Error(signIn.message), as: new EngineSwitchError(signIn.message, 409, SIGN_IN_REQUIRED, { signIn: signIn.signIn }) };
 }
 
 export interface EngineSwitchRequest {
@@ -762,6 +776,8 @@ async function handOver(
     // A stop cut it: that stop may not have reached it (its link is down); the next boot stops it through its owner.
     progress.start = { ...(sessionId ? { session_id: sessionId } : {}), since: startedAt };
     await restore(taskId, old, sessionId, startedAt, state.id, err);
+    const signIn = signInRefusal(err);
+    if (signIn) throw await fail(taskId, state, signIn.words, signIn.as, progress);
     throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
       ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${normalizeHost(old.host) === LOCAL_HOST ? 'this Mac' : old.host}; the copied work is kept at ${prepared.cwd ?? 'its task directory'}.`
       : `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,

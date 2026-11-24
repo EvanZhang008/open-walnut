@@ -47,7 +47,8 @@
  * Set MOCK_ACP_REQUIRE_AUTH=1 to advertise auth methods (mock-key, mock-oauth) and refuse
  * session/new with -32000 "Authentication required" until `authenticate` succeeds (an
  * adapter that needs it even with its key in the env); MOCK_ACP_AUTH_FAIL=1 refuses every
- * authenticate, MOCK_ACP_AUTH_LOG=<file> records each method id asked for.
+ * authenticate, MOCK_ACP_AUTH_LOG=<file> records each method id asked for, and
+ * MOCK_ACP_AUTH_METHODS=<id,id> advertises those ids instead (a real CLI's own, such as agy's).
  * Set MOCK_ACP_AGENT_NAME to the agentInfo.name initialize answers.
  * Set MOCK_ACP_MODELS_ONLY=1 for an adapter that lists models with no configOptions and
  * switches them with session/set_model only (Gemini CLI): set_config_option is -32601.
@@ -605,7 +606,9 @@ rl.on('line', async (line) => {
         },
         agentInfo: { name: process.env.MOCK_ACP_AGENT_NAME || 'mock-acp-agent', version: '1.0.0' },
         authMethods: process.env.MOCK_ACP_REQUIRE_AUTH === '1'
-          ? [{ id: 'mock-key', name: 'API key' }, { id: 'mock-oauth', name: 'Sign in' }]
+          ? (process.env.MOCK_ACP_AUTH_METHODS
+            ? process.env.MOCK_ACP_AUTH_METHODS.split(',').map((id) => ({ id, name: id }))
+            : [{ id: 'mock-key', name: 'API key' }, { id: 'mock-oauth', name: 'Sign in' }])
           : [],
         // codex-acp ≥1.2 advertises mid-turn steering here, and Walnut's patch adds injectOnly.
         // MOCK_ACP_NO_STEERING=1 models an adapter without steering, MOCK_ACP_STEER_NO_INJECT_ONLY=1

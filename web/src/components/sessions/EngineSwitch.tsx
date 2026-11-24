@@ -26,6 +26,7 @@ import type { EngineCatalogEntry } from '@/utils/engines';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import type { SessionSendOptions } from '@/hooks/useSessionSend';
 import { log } from '@/utils/log';
+import { EngineSignInButton, parseNotSignedIn } from './EngineSignInNote';
 import '@/styles/engine-switch.css';
 
 export interface EngineSwitchPick {
@@ -270,13 +271,17 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
     );
   }
   if (server?.state === 'failed' && server.error !== 'cancelled' && dismissedFail !== server.id) {
+    // The engine's CLI on that host is not signed in (server: engine-switch.ts signInRefusal): the line says so and leads there.
+    const signIn = parseNotSignedIn(server.error);
+    const why = signIn ? signIn.line : `${server.error}${moveTo ? '' : '.'}`;
     // The message the switch would have started with is still held: send it here, or let it go.
     return (
       <div className="engine-switch-line engine-switch-line-error" role="alert" data-testid="engine-switch-line" data-state="failed">
         <span className="engine-switch-text">
-          {moveTo ? <>The move to {moveTo} did not happen: {server.error}</> : <>The switch to {toName} did not start: {server.error}. The task stays on this session.</>}
+          {moveTo ? <>The move to {moveTo} did not happen: {why}</> : <>The switch to {toName} did not start: {why} The task stays on this session.</>}
           {held && !moveTo ? <> Your message was not sent: <em className="engine-switch-held">{held}</em></> : null}
         </span>
+        {signIn && <EngineSignInButton signIn={signIn} host={server.to.host} />}
         {held && !moveTo && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void cancel(true)}>Send here</button>}
         <button type="button" className="btn btn-sm" disabled={busy} onClick={() => { setDismissedFail(server.id); if (held) void cancel(false); }}>Dismiss</button>
       </div>

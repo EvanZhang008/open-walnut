@@ -46,6 +46,12 @@ export function EngineSignInNote({ signIn, host, sessionId, waits, onRetry, onDi
   );
 }
 
+/** The way to the sign-in on its own, for a line that says the rest itself (a failed engine switch). */
+export function EngineSignInButton({ signIn, host }: { signIn: NotSignedIn; host?: string }) {
+  const open = useOpenSignIn(signIn, host);
+  return <button type="button" className="btn btn-sm" onClick={open} data-testid="engine-sign-in-open-settings">Open Settings to sign in</button>;
+}
+
 /** A session error line naming the missing sign-in: its words and the link (the host comes from the words). */
 export function EngineSignInErrorLine({ signIn, time }: { signIn: NotSignedIn; time?: string }) {
   const open = useOpenSignIn(signIn, undefined);

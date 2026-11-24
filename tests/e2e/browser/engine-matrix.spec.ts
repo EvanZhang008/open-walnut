@@ -1,6 +1,6 @@
 /**
- * Playwright specs for the ACP engine family beyond Codex: Gemini, OpenCode, Goose,
- * pi, DeepSeek Harness.
+ * Playwright specs for the ACP engine family beyond Codex: Antigravity, Gemini, OpenCode,
+ * Goose, pi, DeepSeek Harness.
  *
  * Same shape as codex-engine.spec.ts, one flow per engine: real UI clicks grow a
  * draft column, confirm a path in its folder picker, click THAT engine's button
@@ -44,6 +44,7 @@ interface EngineCase {
 }
 
 const ENGINE_CASES: readonly EngineCase[] = [
+  { id: 'antigravity', displayName: 'Antigravity' },
   { id: 'gemini', displayName: 'Gemini' },
   { id: 'opencode', displayName: 'OpenCode' },
   { id: 'goose', displayName: 'Goose' },

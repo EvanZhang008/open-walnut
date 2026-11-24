@@ -16,6 +16,8 @@ const edges = vi.hoisted(() => ({
   writes: [] as Array<{ host: string; path: string; content: string }>,
   failStart: false,
   failBeforeRow: false,
+  /** What a failed start throws (default: a plain error). */
+  failWith: undefined as unknown,
   /** The old session's history cannot be read (a remote host dropped). */
   failHistory: false,
   nextSid: 0,
@@ -89,7 +91,7 @@ vi.mock('../../../src/core/sessions/task-start.js', () => ({
       // An ACP adapter that can load an old session says so at initialize.
       ...(params.engine !== 'claude' ? { acpCapabilities: { loadSession: params.engine !== 'gemini' } } : {}),
     } as never);
-    if (edges.failStart) throw new Error('engine would not start');
+    if (edges.failStart) throw edges.failWith ?? new Error('engine would not start');
     return { started: true, sessionId: sid };
   },
 }));
@@ -128,7 +130,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failBeforeRow = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
+  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failWith = undefined; edges.failBeforeRow = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
   owner.clear();
@@ -501,6 +503,33 @@ describe('engine switch inside a task', () => {
     expect((await getStore()).queues[sid]?.map((r) => r.message)).toEqual(['keep me']);
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed' });
     expect(String((await getTask(taskId)).engine_switch?.error)).toContain('engine would not start');
+  });
+
+  it('a start refused for want of the engine\'s sign-in says so, for every engine with one, and puts everything back', async () => {
+    const { ENGINE_SIGN_INS } = await import('../../../src/providers/acp-engine-sign-in.js');
+    const { EngineSignInRequiredError } = await import('../../../src/providers/delivery-failure.js');
+    const { QuickStartError } = await import('../../../src/core/sessions/quick-start.js');
+    const { notSignedInSentence, parseNotSignedIn } = await import('../../../src/core/agents/engine-sign-in-words.js');
+    const engines = Object.keys(ENGINE_SIGN_INS);
+    expect(engines.length).toBeGreaterThan(0);
+    for (const engine of engines) {
+      const { taskId, sid } = await taskOn('claude');
+      const words = notSignedInSentence(engine as never, 'this Mac');
+      // The way task-start hands it on: its own sentence around it, the refusal as the cause.
+      edges.failStart = true;
+      edges.failWith = Object.assign(new QuickStartError(`Task ${taskId} could not start: ${words}`, 502), {
+        cause: new EngineSignInRequiredError(words, engine, '__local__', 'this Mac'),
+      });
+      await expect(requestEngineSwitch({ taskId, engine: engine as never, message: 'Go on.', source: 'ui' })).rejects.toMatchObject({
+        status: 409, code: 'sign_in_required', message: words, detail: { signIn: { engine, host: '__local__', hostName: 'this Mac' } },
+      });
+      expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+      expect((await getSessionByClaudeId(sid))?.archived).toBeFalsy();
+      const failed = (await getTask(taskId)).engine_switch;
+      expect(failed?.state).toBe('failed');
+      // The words the chat reads back to offer the sign-in, exactly.
+      expect(parseNotSignedIn(failed?.error)).toMatchObject({ engine, hostName: 'this Mac' });
+    }
   });
 
   it('a pick made mid-turn waits for the turn to end, then runs by itself', async () => {

@@ -32,7 +32,8 @@ function callerSid(req: Request): string | undefined {
 function sendError(res: Response, err: unknown, next: NextFunction): void {
   const status = (err as { status?: number }).status
   if (typeof status === 'number') {
-    res.status(status).json({ error: err instanceof Error ? err.message : String(err), code: (err as { code?: string }).code })
+    const detail = (err as { detail?: Record<string, unknown> }).detail
+    res.status(status).json({ ...(detail ?? {}), error: err instanceof Error ? err.message : String(err), code: (err as { code?: string }).code })
     return
   }
   // The new session's start was refused with its own answer (task-start.ts): a setting is 422 engine_config.
