@@ -92,6 +92,13 @@ final class RoutinesUITests: XCTestCase {
     /// Let an open or a scroll finish its animation before a screenshot or a frame check.
     private func settle() { usleep(900_000) }
 
+    /// A small key's drawn frame. Its accessibility frame is its 44 pt touch, 6 pt past the 32 pt
+    /// it draws on every side (`WalnutButtonStyle`, `Theme.Control`; bc96f77699), so two keys on
+    /// lines 6 pt apart overlap there: which line a key sits on is read from what it draws.
+    private func drawn(_ key: XCUIElement) -> CGRect {
+        key.frame.insetBy(dx: 0, dy: (44 - 32) / 2)
+    }
+
     private func shot(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
@@ -315,7 +322,7 @@ final class RoutinesUITests: XCTestCase {
         let openTask = app.buttons["routines.openTask.r-router"]
         XCTAssertEqual(edit.frame.midY, run.frame.midY, accuracy: 2, "Run now and Edit are not on one line")
         XCTAssertEqual(delete.frame.midY, openTask.frame.midY, accuracy: 2, "Delete sits alone on its line")
-        XCTAssertGreaterThan(openTask.frame.minY, run.frame.maxY - 1, "the four are on one line at this size")
+        XCTAssertGreaterThan(drawn(openTask).minY, drawn(run).maxY - 1, "the four are on one line at this size")
         shot("19-dark-xxl-actions")
         edit.tap()
         XCTAssertTrue(app.textFields["routines.editor.name"].waitForExistence(timeout: 5))
@@ -854,11 +861,11 @@ final class RoutinesUITests: XCTestCase {
         settle()
         // Two to a line where two fit, else one each: never three and Delete alone.
         let openTask = app.buttons["routines.openTask.r-router"]
-        XCTAssertGreaterThan(openTask.frame.minY, run.frame.maxY - 1, "the buttons do not wrap at this size")
+        XCTAssertGreaterThan(drawn(openTask).minY, drawn(run).maxY - 1, "the buttons do not wrap at this size")
         let paired = abs(delete.frame.midY - openTask.frame.midY) < 2
         // Pairs fill a line each where both fit (Run with Edit, say) and stand one to a line
         // where they do not (Open task, then Delete): Delete never trails three on its own.
-        let stacked = openTask.frame.minY > edit.frame.maxY - 1 && delete.frame.minY > openTask.frame.maxY - 1
+        let stacked = drawn(openTask).minY > drawn(edit).maxY - 1 && drawn(delete).minY > drawn(openTask).maxY - 1
         XCTAssertTrue(paired || stacked, "Delete sits alone under the others: run \(run.frame) edit \(edit.frame) open \(openTask.frame) delete \(delete.frame)")
         XCTAssertLessThanOrEqual(delete.frame.maxY, tabTop(app), "Delete is under the tab bar")
         shot("25-ax-actions")
