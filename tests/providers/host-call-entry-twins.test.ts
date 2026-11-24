@@ -142,9 +142,9 @@ describe('host call entry daemon wiring', () => {
     const notes = send.split(/noteOwn\(\);?\n/).length - 1
     expect(handles).toBeGreaterThanOrEqual(2)
     expect(notes).toBe(handles)
-    // The own same-host delivery (handleLocal) too, while a follower that takes those is linked; an
+    // The own same-host delivery (handleLocal) too, while this host has a follower (linked or kept); an
     // online hand-back relayed to the leader is never counted (its fallback is relayToPrimary).
-    expect(send).toContain("if (followerGateway.answersOnline(home)) followerGateway.noteOwnAnswer(payload.name, 'follower_linked', callerSid)")
+    expect(send).toContain("if (linked || kept) followerGateway.noteOwnAnswer(payload.name, linked ? 'follower_linked' : followerSaidOnline.get(home) === true ? 'follower_away' : 'same_host', callerSid)")
     // follower.status: the shared follower entry's view (follower-entry-core.ts) says what the daemon hands it.
     expect(src).toMatch(/offlineAnswers: (\(\) => |function \(\) \{ return )followerGateway\.ownAnswers\(\)/)
     expect(read('src/providers/follower-entry-core.ts')).toContain('offlineAnswers: deps.offlineAnswers(),')

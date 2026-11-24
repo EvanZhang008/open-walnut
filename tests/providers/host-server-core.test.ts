@@ -422,6 +422,39 @@ describe('host server supervision: the fallback after a crash loop (WP2)', () =>
     expect(sup.status('/h')).toMatchObject({ state: 'running', program: 'fallback' })
   })
 
+  it('answersCalls: only the replica with host-local-calls, on its primary program, kept across a restart and gone with its spec', () => {
+    const sup = createHostServerSupervisor(deps())
+    expect(sup.answersCalls('/h')).toBe(false)
+    const calls = () => spec({ ...withFallback(), env: { WALNUT_ROLE: 'replica', WALNUT_CAPABILITIES: 'host-local-calls', LABEL: 'x' } })
+    sup.configure('/h', withFallback())
+    expect(sup.answersCalls('/h'), 'a replica without the capability').toBe(false)
+    sup.configure('/h', spec({ env: { WALNUT_CAPABILITIES: 'host-local-calls' } }))
+    expect(sup.answersCalls('/h'), 'not the replica program').toBe(false)
+    sup.configure('/h', calls())
+    expect(sup.answersCalls('/h')).toBe(true)
+    // Exited and restarting: still this host's follower (not "linked right now").
+    exit(last(), 1)
+    expect(sup.status('/h').state).toBe('retrying')
+    expect(sup.answersCalls('/h')).toBe(true)
+    // The fallback (the plain host server) answers none.
+    advance(5_000); exit(last(), 1)
+    advance(10_000); exit(last(), 1)
+    expect(sup.status('/h').program).toBe('fallback')
+    expect(sup.answersCalls('/h')).toBe(false)
+    // Removed by the leader (below the floors, turned off): none.
+    sup.configure('/h', null)
+    expect(sup.answersCalls('/h')).toBe(false)
+  })
+
+  it('answersCalls: a new daemon keeps it from the spec file it boots from', () => {
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', spec({ ...withFallback(), env: { WALNUT_ROLE: 'replica', WALNUT_CAPABILITIES: 'host-local-calls' } }))
+    expect(createHostServerSupervisor(deps()).answersCalls('/h'), 'before its boot').toBe(false)
+    const next = createHostServerSupervisor(deps())
+    next.boot()
+    expect(next.answersCalls('/h')).toBe(true)
+  })
+
   it('three exits spread over more than ten minutes never switch', () => {
     const sup = createHostServerSupervisor(deps())
     sup.configure('/h', withFallback())

@@ -4832,6 +4832,9 @@ function foldAliasedHome(from: string, to: string): void {
   }
   const follower = followerSockets.get(from)
   if (follower) { followerSockets.delete(from); if (!followerSockets.has(to)) followerSockets.set(to, follower) }
+  const saidOnline = followerSaidOnline.get(from)
+  if (saidOnline !== undefined) { followerSaidOnline.delete(from); if (!followerSaidOnline.has(to)) followerSaidOnline.set(to, saidOnline) }
+  followerWaitMissed.delete(from)
   foldTriggerScope(from, to)
   foldHooks(from, to)
   foldBridgeLink(from, to)
@@ -4967,6 +4970,18 @@ function cmdLogsTail(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
 const followerSockets = new Map<string, ServerWebSocket<WsData>>()
 /** The in-process clients the follower seat attached (a host's one Walnut service): a socket's follower.hello never replaces one. */
 const seatSockets = new WeakSet<ServerWebSocket<WsData>>()
+/**
+ * What each Walnut's follower last said about same-host sends (`answersOnline`, its hello or report),
+ * kept while its socket is gone: a same-host send in a restart of one that takes them waits for it.
+ */
+const followerSaidOnline = new Map<string, boolean>()
+/**
+ * When a call last waited its whole room for this host's follower and got no answer (waitForFollower):
+ * a follower alive but never linking (a hung boot, a refused hello) or linked but not taking calls (the
+ * leader still heard) would make every call wait its room again. While it is younger than
+ * FOLLOWER_MISS_HOLD_MS a new call does not wait; the follower's next hello clears it.
+ */
+const followerWaitMissed = new Map<string, number>()
 
 // `walnut` calls this host's own Walnut server answers while its leader is away
 // ('follower-gateway-v1', follower-gateway-core.ts).
@@ -4978,6 +4993,7 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   answersOnline: (ws) => ws.data?.answersOnline === true,
   // One rule for "the leader is away": the test follower.op applies (followerEntry.mayWrite).
   mayWrite: (home) => followerEntry.mayWrite(home),
+  kept: (home) => followerKept(home),
   // The companion leading takes what the follower refuses for want of a leader: relayed to it on its
   // link, held for the Mac when it takes nothing either (follower-gateway-core.ts askElsewhere).
   leaderElsewhere: (home) => leaderBook.backupLead(home) !== null,
@@ -4994,6 +5010,31 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   log: (level, msg, data) => logMsg(level, msg, data),
   stopping: () => daemonCommands.closed,
 })
+
+/**
+ * This host has a follower for `home` that answers its calls: the fact the gateway routes by, so the
+ * daemon's own away answers serve only a host with none (no follower configured, below the floors of
+ * core/host-server/eligibility.ts, or turned off by its person: the leader then sends no spec). Its
+ * linked socket's word when it is linked; else the spec the leader configured and this daemon keeps
+ * (hostServers.answersCalls). Never "linked right now": a follower restarting, or not linked yet
+ * after a boot, is still this host's.
+ */
+function followerKept(home: string | undefined): boolean {
+  if (!home) return false
+  const ws = followerSockets.get(home)
+  if (ws) return ws.data?.answersLocal === true
+  return hostServers.answersCalls(home)
+}
+
+/**
+ * The follower of `home` may answer by `by`: linked (it waits for the leader's quiet window to
+ * end), its server starting or running (booting, linking), or restarting before then.
+ */
+function followerDueBy(home: string, by: number): boolean {
+  if (followerSockets.get(home)) return true
+  const st = hostServers.status(home)
+  return st.state === 'starting' || st.state === 'running' || (st.state === 'retrying' && typeof st.nextRetryAt === 'number' && st.nextRetryAt < by)
+}
 
 // Trigger fires no server claimed, delivered by this host's own Walnut server while its
 // leader is away ('follower-trigger-delivery-v1', follower-trigger-delivery-core.ts): it picks
@@ -5052,8 +5093,12 @@ function cmdFollowerHello(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   if (ws.data) { ws.data.origin = 'follower'; ws.data.followerHome = home; ws.data.answersLocal = cmd.answersLocal === true; ws.data.deliversTriggers = cmd.deliversTriggers === true; ws.data.answersOnline = cmd.answersOnline === true }
   if (ws.data) ws.data.callSocket = cmd.answersLocal === true ? hostCallTokens.socketOf(cmd.callSocket) : undefined
   followerSockets.set(home, ws)
+  followerSaidOnline.set(home, cmd.answersOnline === true)
+  followerWaitMissed.delete(home)
   logMsg('info', 'follower: a server on this host follows its leader', { wsId: wsId(ws), home, answersLocal: cmd.answersLocal === true, deliversTriggers: cmd.deliversTriggers === true })
   sendOk(ws, id, view)
+  // Calls that wait for this host's own Walnut server go now (sendGatewayRequest waitForFollower).
+  wakeWaitingCalls()
 }
 
 /** The follower says how it is; the leader reads it with server.status. Not answered. */
@@ -5063,7 +5108,7 @@ function cmdFollowerReport(ws: ServerWebSocket<WsData>, cmd: Record<string, unkn
   followerEntry.report(home, cmd.report)
   // Whether it takes a same-host send while the leader answers (its `host_call_entry` experiment, on or off).
   const said = cmd.report as { answersOnline?: unknown } | null | undefined
-  if (ws.data && said && typeof said === 'object' && 'answersOnline' in said) ws.data.answersOnline = said.answersOnline === true
+  if (ws.data && said && typeof said === 'object' && 'answersOnline' in said) { ws.data.answersOnline = said.answersOnline === true; followerSaidOnline.set(home, ws.data.answersOnline) }
   // The entry's socket as the follower says it now (its experiment turned on or off).
   const report = cmd.report as { callSocket?: unknown } | null | undefined
   if (ws.data && report && typeof report === 'object' && 'callSocket' in report) {
@@ -6125,21 +6170,37 @@ function gatewayNoServerError(home: string | undefined): GatewayResponse {
     : 'no primary server connected')
 }
 
+/** A call waits for this host's own Walnut server at most this long from its first wait (waitForFollower). */
+const FOLLOWER_WAIT_MS = 15_000
+/** ...looking again this often (the leader's quiet window ends with no event), or when a follower says hello. */
+const FOLLOWER_WAIT_STEP_MS = 500
+/** ...and never into the last of the call's time the server needs to run it: a start's budget (replica/local-calls.ts START_LEFT_MS) and margins. */
+const FOLLOWER_WAIT_SPARE_MS = 12_000
+/** After a wait that ran out, new calls do not wait for this long (followerWaitMissed). */
+const FOLLOWER_MISS_HOLD_MS = 60_000
+
 function sendGatewayRequest(
   capability: string,
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
-  plan: GatewayCallPlan & { ownServerAsked?: boolean; ownAnswerNoted?: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
+  plan: GatewayCallPlan & { ownServerAsked?: boolean; ownAnswerNoted?: boolean; followerBy?: number } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
 ) {
   const home = gatewayOwnerHome(callerSid)
-  const target = gatewayTargetFor(home, { callerSid, op: payload.name })
+  // Why a server is passed over is logged on a call's first look, not on each look of a wait.
+  const target = gatewayTargetFor(home, plan.followerBy === undefined ? { callerSid, op: payload.name } : undefined)
   const deadline = plan.deadline
-  // No leader to relay to, or one still taking this host's journal (answered here, below): a
-  // session's call goes to this host's own Walnut server first (follower-gateway-core.ts), and
+  // A relayed read this host can answer from its copy does not end in a timeout:
+  // nothing is applied twice by reading.
+  const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
+  // A call from outside any session (a person's terminal on this host) is answered away only when
+  // it reads: a write this host journals names a session for the Mac to replay, and this has none.
+  const external = callerSid === EXTERNAL_CALLER_SID
+  // No leader to relay to, or one still taking this host's journal: the call is this host's own
+  // Walnut server's (follower-gateway-core.ts), a session's and an outside caller's read alike. It
   // comes back to the rules below when it hands it back.
-  if (home && (!target || offlineHost.pendingHandover(home)) && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
-    const readable = capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
+  const followers = !!home && (!target || offlineHost.pendingHandover(home)) && (!external || readable) && !plan.ownServerAsked
+  if (home && followers && followerGateway.answers(home)) {
     const fallback = () => sendGatewayRequest(capability, callerSid, payload, respond, { ...plan, ownServerAsked: true })
     const left = () => gatewayCallerLeft.get(respond)?.() === true
     if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, readable, fallback, left }, (r) => respond(r as GatewayResponse))) return
@@ -6163,13 +6224,26 @@ function sendGatewayRequest(
     const soon = capability === 'tools.call' ? gatewayIdentifyPlan(plan, gatewayHubTimeoutMs(), GATEWAY_IDENTIFY_WAIT_MS, Date.now()) : null
     return !!soon && gatewayServerIdentifying(home) && waitForPrimary(soon.plan.deadline, again(soon.plan), respond, soon.atMostMs)
   }
-  // A relayed read this host can answer from its copy does not end in a timeout:
-  // nothing is applied twice by reading.
-  const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
-  // A call from outside any session is answered here only when it reads: a write
-  // this host journals names a session for the Mac to replay, and this has none.
-  // Its other calls go to the companion while it leads.
-  const external = callerSid === EXTERNAL_CALLER_SID
+  // This host has a follower for the call that does not answer now (its server restarting, not linked
+  // yet, or the leader's quiet window not over): the call waits for it within its own time, and goes
+  // again when it says hello or a step later. The daemon's own away answer below is for a host with no
+  // follower, or a call whose wait is over (FOLLOWER_WAIT_MS, or what the server needs of its time left).
+  const waitForFollower = (): boolean => {
+    if (!home || plan.never || plan.ownServerAsked || !followerKept(home)) return false
+    const now = Date.now()
+    if (plan.followerBy === undefined && now - (followerWaitMissed.get(home) ?? -Infinity) < FOLLOWER_MISS_HOLD_MS) return false
+    const by = plan.followerBy ?? now + FOLLOWER_WAIT_MS
+    const room = Math.min(by, deadline - FOLLOWER_WAIT_SPARE_MS) - now
+    if (room <= 0 || !followerDueBy(home, now + room)) {
+      // A wait that ran out: the next calls answer at once for a while (followerWaitMissed).
+      if (plan.followerBy !== undefined) followerWaitMissed.set(home, now)
+      return false
+    }
+    if (plan.followerBy === undefined) logMsg('info', 'gateway: waiting for this host\'s Walnut server', { capability, callerSid, op: payload.name, leftMs: deadline - now })
+    return waitForPrimary(deadline, again({ ...plan, followerBy: by }), respond, Math.min(FOLLOWER_WAIT_STEP_MS, room))
+  }
+  if (followers && waitForFollower()) return
+  // An outside caller's other calls go to the companion while it leads.
   if (external && home && !target && !readable) {
     if (forwardToBackup(home, capability, callerSid, payload, respond)) return
     if (waitHere()) return
@@ -6245,11 +6319,18 @@ function sendGatewayRequest(
       if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, online: true, fallback: ended }, (r) => respond(r as GatewayResponse))) return
       return ended()
     }
+    // A follower that takes same-host sends (it said so last, its `host_call_entry` experiment on) and
+    // is not linked this moment (a restart): the send waits for it, as a call with no leader does.
+    if (followerSaidOnline.get(home) === true && offlineHost.localCandidate(home, callerSid, capability, payload) && waitForFollower()) return
+    // What this host's follower said: it is linked, or kept here and away.
+    const kept = followerKept(home)
+    const linked = followerGateway.answersOnline(home)
     void offlineHost.handleLocal(home, callerSid, capability, payload).then((r) => {
       if (r) {
         logMsg('info', 'gateway: delivered on this host', { capability, callerSid, op: payload.name, ok: r.ok })
-        // The daemon's own same-host delivery although a follower that takes these was linked (noteOwnAnswer).
-        if (followerGateway.answersOnline(home)) followerGateway.noteOwnAnswer(payload.name, 'follower_linked', callerSid)
+        // The daemon's own same-host delivery although this host has a follower (noteOwnAnswer): one
+        // that takes these (linked, or away past the wait), or one that does not take them.
+        if (linked || kept) followerGateway.noteOwnAnswer(payload.name, linked ? 'follower_linked' : followerSaidOnline.get(home) === true ? 'follower_away' : 'same_host', callerSid)
         return respond(r as GatewayResponse)
       }
       relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline)
@@ -6344,15 +6425,20 @@ function releaseGatewayRelays(): void {
 
 /** A server may take calls now: the waiting ones go, and relays whose socket closed go again. */
 function wakeGatewayCalls(): void {
-  for (const w of [...gatewayWaiting]) {
-    gatewayWaiting.delete(w)
-    clearTimeout(w.timer)
-    w.retry()
-  }
+  wakeWaitingCalls()
   for (const [relayId, entry] of gatewayRelayPending) {
     if (!entry.call || entry.call.sentOn) continue
     const next = relayResendTarget(entry.call)
     if (next) sendRelayAttempt(relayId, next)
+  }
+}
+
+/** The calls waiting for a server (waitForPrimary) go again now, each by the rules as it finds them. */
+function wakeWaitingCalls(): void {
+  for (const w of [...gatewayWaiting]) {
+    gatewayWaiting.delete(w)
+    clearTimeout(w.timer)
+    w.retry()
   }
 }
 
@@ -6455,6 +6541,10 @@ function relayAttemptEnded(relayId: number): void {
   heldCatalogs.timedOut(relayId, call.home, call.capability, call.payload, !!call.pinned)
   if (call.readable && call.home) {
     logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts })
+    // The daemon's own answer although this host has a follower: that server's reads go to the same
+    // leader while it answers, so it would be as late (replica/dispatch.ts), and it refuses a call
+    // while it sees the leader answer (replica/local-calls.ts `leader_answers`). Counted.
+    if (followerKept(call.home)) followerGateway.noteOwnAnswer(call.payload.name, 'read_late', call.callerSid)
     void offlineHost.handle(call.home, call.callerSid, call.capability, call.payload).then((r) => entry.respond(r as GatewayResponse))
     return
   }
@@ -15838,7 +15928,11 @@ const followerSeat: FollowerSeat = (() => {
         ws.data.callSocket = hello.answersLocal === true ? hostCallTokens.socketOf(hello.callSocket) : undefined
       }
       followerSockets.set(home, ws)
+      followerSaidOnline.set(home, hello.answersOnline === true)
+      followerWaitMissed.delete(home)
       logMsg('info', 'follower: the server in this process follows its leader', { wsId: wsId(ws), home, answersLocal: hello.answersLocal === true, deliversTriggers: hello.deliversTriggers === true })
+      // Calls that wait for it go once this attach returns (the seat's client is not handed back yet).
+      setTimeout(wakeWaitingCalls, 0)
       return client
     },
     seatedAs(client) {

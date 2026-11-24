@@ -8,8 +8,10 @@
  * `gateway-result` answers the caller. That server runs the call through the same task
  * logic the leader runs (core/peers/gateway-answer.ts), on its copies.
  *
- *   a session's call   the follower first; it not linked, or answering `needs_leader` or
- *                      an unsupported code, the daemon's own away answer as before
+ *   a session's call   the follower first (an outside caller's read too); it not linked
+ *   (and a read of     while this host keeps it, the call waits for it within its own time
+ *   no session)        (the twins' waitForFollower); it answering `needs_leader` or an
+ *                      unsupported code, the daemon's own away answer as before
  *                      (offlineHost.handle). A read with no answer in time goes there too;
  *                      a write with none is `hub_timeout` (it may have run: never twice).
  *                      A refusal the follower marks `detail.final` (its own `needs_leader`:
@@ -47,9 +49,11 @@
  * One attempt per call, timed as a relay to the leader is (relayAttemptMs). A follower
  * socket answers only the relays it was sent.
  *
- * `noteOwnAnswer` counts each call the daemon then answers with its own away code while a
- * follower was there to answer it (a hand-back, or a call while it is linked and may write),
- * per op: the number task B drives to zero, read in follower.status and server.status.
+ * `noteOwnAnswer` counts each call the daemon then answers with its own away code while this
+ * host has a follower for it (a hand-back, a call while it is linked and may write, one whose
+ * time ran out waiting for it, a late read, a same-host send it does not take), per op and why:
+ * the number driven to zero, read in follower.status and server.status. A host with no follower
+ * (none configured, below the floors, turned off) answers as before and counts nothing.
  */
 
 export const FOLLOWER_GATEWAY_CAPABILITY = 'follower-gateway-v1'
@@ -97,6 +101,12 @@ export interface FollowerGatewayDeps<S> {
   holdForLeader?(call: HandOff): FollowerGatewayResponse | null
   /** Whether that follower takes a same-host send while the leader answers (its hello's `answersOnline`). */
   answersOnline?(ws: S): boolean
+  /**
+   * This host keeps a follower of `home` that answers its calls, linked now or not (the twins'
+   * followerKept: a spec the leader configured for a program that answers them). Counts an own
+   * answer given while it is away (restarting, not linked yet) as `follower_away`.
+   */
+  kept?(home: string): boolean
   now(): number
   /** Send an event on a socket; false when it could not be written. */
   send(ws: S, ev: string, data: Record<string, unknown>): boolean
@@ -112,6 +122,9 @@ export interface FollowerGatewayDeps<S> {
   /** This daemon stops (the twins' daemonCommands.closed): a call handed again later ends as a new one would. */
   stopping?(): boolean
 }
+
+/** Why the daemon answered a call itself although this host has a follower for it (noteOwnAnswer). */
+export type OwnAnswerWhy = 'handed_back' | 'follower_linked' | 'follower_away' | 'read_late' | 'same_host'
 
 export interface HandOff {
   home: string
@@ -239,12 +252,15 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
   const own = { total: 0, byOp: {} as Record<string, number>, byWhy: {} as Record<string, number>, last: null as null | { op: string; why: string; at: number } }
 
   /**
-   * The daemon answers a call with its own away code (offlineHost.handle) although a follower was
-   * there: `handed_back` (the follower answered needs_leader or an unsupported code, or a read it
-   * did not answer in time) or `follower_linked` (it is linked and may write, and the call was not
-   * handed to it: an outside caller's read, say). One log line each.
+   * The daemon answers a call with its own away code (offlineHost.handle, handleLocal) although this
+   * host has a follower for it: `handed_back` (the follower answered needs_leader or an unsupported
+   * code, or a read it did not answer in time), `follower_linked` (it is linked and may write, and the
+   * call was not handed to it), `follower_away` (kept here but not answering now, and the call's time
+   * ran out waiting for it), `read_late` (a read the leader did not answer in time, read from the
+   * copy) or `same_host` (a same-host send while the leader answers, to a follower that does not take
+   * them: its `host_call_entry` experiment off). One log line each.
    */
-  function noteOwnAnswer(op: unknown, why: 'handed_back' | 'follower_linked', callerSid?: string): void {
+  function noteOwnAnswer(op: unknown, why: OwnAnswerWhy, callerSid?: string): void {
     const name = typeof op === 'string' && op ? op : '(none)'
     const key = Object.prototype.hasOwnProperty.call(own.byOp, name) || Object.keys(own.byOp).length < OWN_OPS_MAX ? name : '(other)'
     own.total++
@@ -255,11 +271,11 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
   }
 
   /**
-   * A call the daemon answers with its own away code (offlineHost.handle): counted when this host's
-   * follower was there for it, handed back by it or linked and allowed to write. One rule for both twins.
+   * A call the daemon answers with its own away code (offlineHost.handle): counted when this host has
+   * a follower for it, handed back by it, linked and allowed to write, or kept here and away.
    */
   function noteOwnOffline(home: string, capability: string, callerSid: string, payload: Record<string, unknown>, handedBack?: boolean): void {
-    const why = handedBack ? 'handed_back' : answers(home) ? 'follower_linked' : null
+    const why = handedBack ? 'handed_back' : answers(home) ? 'follower_linked' : deps.kept?.(home) === true ? 'follower_away' : null
     if (why) noteOwnAnswer(capability === 'tools.call' ? payload.name : capability, why, callerSid)
   }
 

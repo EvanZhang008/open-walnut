@@ -29,7 +29,8 @@ describe('follower gateway daemon wiring', () => {
   it('the daemon keeps the hello flag, hands a call over before its own away answer, and end it with the socket', () => {
     expect(src).toMatch(/answersLocal = cmd\.answersLocal === true/)
     // A session's call: the follower first, its hand-back runs the same function again, marked.
-    expect(src).toMatch(/!plan\.ownServerAsked && followerGateway\.answers\(home\)/)
+    expect(src).toMatch(/\(!external \|\| readable\) && !plan\.ownServerAsked\n/)
+    expect(src).toContain('if (home && followers && followerGateway.answers(home)) {')
     expect(src).toContain('ownServerAsked: true')
     // A plugin job's call: handed over with its job named, no fallback. One builder of that name
     // (plugin-jobs-core.ts callerOfRun) for the follower and the leader alike.
@@ -56,8 +57,9 @@ describe('follower gateway daemon wiring', () => {
     expect(src).toMatch(/answerInMs: (timeoutMs|typeof timeoutMs === 'number' \? timeoutMs : undefined),/)
     expect(src).toContain('did not answer in time; the call may have run, read before trying again')
     expect(src).toMatch(/holdForLeader: (\(call\) => |function \(call\) \{ return )offlineHost\.holdWrite\(call\.home, call\.callerSid, call\.capability, call\.payload\)/)
-    // A session's call while the leader still takes this host's journal goes to the follower too.
-    expect(src).toContain('(!target || offlineHost.pendingHandover(home)) && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)')
+    // A session's call while the leader still takes this host's journal goes to the follower too, and
+    // so does an outside caller's read (D2: never answered from the copy while a follower answers).
+    expect(src).toContain('const followers = !!home && (!target || offlineHost.pendingHandover(home)) && (!external || readable) && !plan.ownServerAsked')
     // The daemon's own away answer is counted once per call, a call that waited and came again included.
     expect(src.match(/followerGateway\.noteOwnOffline\(/g)).toHaveLength(1)
     // (the plan a waiting call goes again with: its own, or the one an identify wait moved, `p`)

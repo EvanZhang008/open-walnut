@@ -703,6 +703,19 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i)
       return diff === 0
     },
+    /**
+     * Whether the server kept for `home` answers this host's own `walnut` calls: the replica program
+     * with the `host-local-calls` capability (core/host-server/replica-run.ts hostProgramRun), running
+     * its primary program (the fallback is the plain host server, which answers none). A spec the
+     * leader configured and this daemon keeps across its restarts, never whether the server's socket
+     * is linked this moment: the gateway's "this host has a follower" (daemon-standalone.ts followerKept).
+     */
+    answersCalls: (home: string): boolean => {
+      const e = entryOf(home)
+      if (!e || e.program !== 'primary') return false
+      const env = e.spec.env
+      return env.WALNUT_ROLE === 'replica' && String(env.WALNUT_CAPABILITIES ?? '').split(/[\s,]+/).indexOf('host-local-calls') !== -1
+    },
     /** The settings the leader gave the server for `home`. */
     settingsOf: (home: string): Record<string, unknown> => entryOf(home)?.spec.settings ?? {},
     /** The program the leader configured for `home` (its node and `<appDir>/dist/cli.js`), or null: an ask's MCP mount (host-start-core.ts). */

@@ -130,35 +130,46 @@ export async function startMockSession(o: { base: string; name: string; d: Daemo
   return cmd(o.mac, { cmd: 'start', sid: o.sid, cwd: o.d.dir, message: 'init', args: [process.execPath, mock, o.sid, path.join(o.base, `${o.name}-cli.jsonl`)], origin: { home: o.home, task: o.task } })
 }
 
+/** The env of a spec the leader writes for the replica that answers this host's calls (core/host-server/replica-run.ts). */
+export const REPLICA_SPEC_ENV: Readonly<Record<string, string>> = { WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_CAPABILITIES: 'host-local-calls' }
+
 /**
  * Has the daemon start `home`'s host server (server.configure on the Mac's socket) and links a
- * second socket as it: follower.hello with the token the daemon gave it, answersLocal.
+ * second socket as it: follower.hello with the token the daemon gave it, answersLocal. `env`: more
+ * of the spec's env (REPLICA_SPEC_ENV: a spec of the program that answers this host's calls).
  */
-export async function linkFollower(o: { base: string; name: string; d: Daemon; mac: WebSocket; home: string; walnutId: string; serverPort: number }): Promise<{ follower: WebSocket; hello: Record<string, any> }> {
+export async function linkFollower(o: { base: string; name: string; d: Daemon; mac: WebSocket; home: string; walnutId: string; serverPort: number; env?: Record<string, string>; answersOnline?: boolean }): Promise<{ follower: WebSocket; hello: Record<string, any>; token: string }> {
   const fakeOut = path.join(o.base, `${o.name}-fake.jsonl`)
   const entry = path.join(o.base, `${o.name}-server.cjs`)
   fs.writeFileSync(entry, FAKE_SERVER)
-  const spec = { v: 1, home: o.home, walnutId: o.walnutId, command: process.execPath, args: [entry], cwd: o.base, env: { FAKE_OUT: fakeOut }, log: path.join(o.base, `${o.name}-server.log`), port: o.serverPort, settings: { expose: { enabled: false } } }
+  const spec = { v: 1, home: o.home, walnutId: o.walnutId, command: process.execPath, args: [entry], cwd: o.base, env: { ...o.env, FAKE_OUT: fakeOut }, log: path.join(o.base, `${o.name}-server.log`), port: o.serverPort, settings: { expose: { enabled: false } } }
   const configured = await cmd(o.mac, { cmd: 'server.configure', home: o.home, spec })
   if (configured.ok !== true) throw new Error('server.configure: ' + JSON.stringify(configured))
   await waitFor(() => lines(fakeOut).length > 0, 30_000, 'the host server token')
+  const token = String(lines(fakeOut).at(-1)!.token)
+  const { follower, hello } = await helloFollower({ d: o.d, home: o.home, walnutId: o.walnutId, token, answersOnline: o.answersOnline })
+  return { follower, hello, token }
+}
+
+/** A new socket linked as `home`'s follower with the token its server was started with (a restarted server's link). */
+export async function helloFollower(o: { d: Daemon; home: string; walnutId: string; token: string; answersOnline?: boolean }): Promise<{ follower: WebSocket; hello: Record<string, any> }> {
   const follower = await connectWs(o.d.port)
   let hello: Record<string, any> = {}
   for (let attempt = 0; attempt < 40 && hello.ok !== true; attempt++) {
-    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: o.walnutId, home: o.home, token: lines(fakeOut).at(-1)!.token, answersLocal: true })
+    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: o.walnutId, home: o.home, token: o.token, answersLocal: true, ...(o.answersOnline ? { answersOnline: true } : {}) })
     if (hello.ok !== true) await sleep(250)
   }
   return { follower, hello }
 }
 
 /** One session call on the agent-gateway socket, and the daemon's answer with how long it took. */
-export function gatewayCall(d: Daemon, sid: string, name: string, args: Record<string, unknown> = {}): Promise<{ ms: number; reply: GatewayResponse }> {
+export function gatewayCall(d: Daemon, sid: string, name: string, args: Record<string, unknown> = {}, waitMs = 20_000): Promise<{ ms: number; reply: GatewayResponse }> {
   const t0 = Date.now()
   return new Promise((resolve, reject) => {
     const s = net.connect(d.sock)
     let buf = ''
     const t = setTimeout(() => { s.destroy(); reject(new Error(`gateway ${name} timeout`)) }, 60_000)
-    s.on('connect', () => s.write(JSON.stringify({ v: 1, op: 'tools.call', sid, waitMs: 20_000, args: { name, args } }) + '\n'))
+    s.on('connect', () => s.write(JSON.stringify({ v: 1, op: 'tools.call', sid, waitMs, args: { name, args } }) + '\n'))
     s.on('data', (c) => {
       buf += c.toString('utf8')
       const nl = buf.indexOf('\n')

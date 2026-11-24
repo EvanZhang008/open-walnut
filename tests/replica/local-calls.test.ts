@@ -64,6 +64,19 @@ describe('local calls', () => {
     expect(s.sent).toHaveLength(2)
   })
 
+  it('an outside caller\'s read (no session, no job: a person\'s terminal on this host) runs through the router as the leader\'s does', async () => {
+    // The daemon hands it over while this server answers (daemon-standalone.ts sendGatewayRequest, D2):
+    // the router's anonymous `external` caller, the same op catalog and refusals the leader applies.
+    router.outcome = { ok: true, result: { task: { id: 't1' } } }
+    const s = setup()
+    s.handle(event({ callerSid: 'external', payload: { name: 'task_get', args: { id: 't1' } } }))
+    await s.settled()
+    expect(router.calls).toHaveLength(1)
+    expect(router.calls[0]!.slice(0, 4)).toEqual(['tools.call', 'external', { name: 'task_get', args: { id: 't1' } }, 'devbox'])
+    expect(router.calls[0]![5]).toEqual({})
+    expect(s.sent).toEqual([{ cmd: 'gateway-result', relayId: 7, result: { task: { id: 't1' } } }])
+  })
+
   it('a route\'s needs_leader goes back with that code, final: the caller\'s answer, never the daemon\'s own away answer', async () => {
     router.outcome = { ok: false, error: { code: 'internal', message: 'This needs your Mac', api: { status: 503, code: 'needs_leader' }, detail: { error: { why: 'fields' } } }, opStatus: 503 }
     const s = setup()
