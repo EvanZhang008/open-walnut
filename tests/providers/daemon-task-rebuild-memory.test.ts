@@ -19,6 +19,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import * as esbuild from 'esbuild'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 let tmpDir = ''
 /**
@@ -42,7 +43,8 @@ function extractFn(src: string, name: string): string {
   throw new Error(`unbalanced braces extracting ${name}`)
 }
 
-const STANDALONE_TEXT = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+// The daemon's code as text: the runtime and its area modules (the rebuilds are daemon-session-fold.ts).
+const STANDALONE_TEXT = daemonRuntimeText()
 /** One of the daemon's top-level functions as plain JS: only its text, types stripped, nothing else of the file run. */
 function daemonFn(name: string): string {
   return esbuild.transformSync(extractFn(STANDALONE_TEXT, name), { loader: 'ts' }).code

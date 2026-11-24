@@ -11,6 +11,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { createFoldCheckpoint, FOLD_CHECKPOINT_FORMAT } from '../../src/providers/fold-checkpoint-core.js'
 import { foldLine, initialFoldState, type FoldState } from '../../src/providers/daemon-fold.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 let dir = ''
 let jsonl = ''
@@ -271,7 +272,8 @@ describe('fold checkpoint', () => {
       return strip(src.slice(start, src.indexOf('\n}', start) + 2))
     }
     const fold = read('src/providers/daemon-fold.ts')
-    const daemon = read('src/providers/daemon-standalone.ts')
+    // The daemon's task-state logic, wherever the runtime keeps it (daemon-session-fold.ts now).
+    const daemon = daemonRuntimeText()
     const logic = [
       body(fold, 'export function initialFoldState'),
       body(fold, 'export function foldLine'),

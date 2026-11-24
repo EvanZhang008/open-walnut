@@ -1,8 +1,8 @@
 /**
  * Reading a session's state and files on this host: getState (the daemon-authoritative task state
  * and snapshot, and its cold rebuild from the stream file of a session no longer in memory), cron
- * supervision, the rename of a session's files to its real id, read-history, and the lookup of
- * delivery markers (marker-find-v1).
+ * supervision, the rename of a session's files to its real id, read-history, the lookup of
+ * delivery markers (marker-find-v1), and the list of the sessions on this host (`list`).
  *
  * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), at the place this code
  * had in its body; its dispatcher answers these commands through what it returns. The code is the
@@ -29,7 +29,7 @@ export interface DaemonSessionStateDeps<W extends { data: WsData }> extends Daem
   foldCheckpoint: ReturnType<typeof createFoldCheckpoint>
   streamCompact: Pick<ReturnType<typeof createStreamCompact>, 'rewrittenFrom'>
   /** A follower reads only its own Walnut's sessions (follower-reads-core.ts). */
-  followerReads: { ownerOf: (sid: string) => string | undefined }
+  followerReads: { ownerOf: (sid: string) => string | undefined; ownRows: <T extends { sid: string }>(home: string | null, rows: T[]) => T[] }
   /** A renamed session's old id, for the agent gateway's callers. */
   gatewaySidAliases: Map<string, string>
   cronMetadata: Pick<ReturnType<typeof createCronMetadataTracker>, 'rename'>
@@ -43,6 +43,11 @@ export interface DaemonSessionStateDeps<W extends { data: WsData }> extends Daem
   deriveSessionProtection: (session: SessionData<W>, sid: string, now: number) => unknown
   ensureWatcher: (sid: string) => void
   stopSessionWatcher: (sid: string) => void
+  /** A fenced Demo (demo-daemon-quiesce.ts) lists a session whose CLI exited while its group lives on as alive. */
+  demoQuiesce: { readonly fenced: boolean }
+  /** The Walnut a follower socket reads for (null for any other socket). */
+  followerHomeOf: (ws: W) => string | null
+  isProcessGroupAlive: (pgid: number) => boolean
   /** The runtime's timers. */
   setImmediate: typeof globalThis.setImmediate
   clearTimeout: typeof globalThis.clearTimeout
@@ -50,7 +55,7 @@ export interface DaemonSessionStateDeps<W extends { data: WsData }> extends Daem
 }
 
 export function createDaemonSessionState<W extends { data: WsData }>(deps: DaemonSessionStateDeps<W>) {
-  const { STREAMS_DIR, FOLD_REBUILD_CHUNK, TAILER_CARRY_MAX, sessions, cronRuntime, foldCheckpoint, streamCompact, followerReads, gatewaySidAliases, cronMetadata, cronProcess, applyTaskEvent, emptyTaskState, assembleSessionSnapshot, pushSnapshot, persistRegistry, deriveSessionProtection, ensureWatcher, stopSessionWatcher, setImmediate, clearTimeout, logMsg, sendOk, sendError } = deps
+  const { STREAMS_DIR, FOLD_REBUILD_CHUNK, TAILER_CARRY_MAX, sessions, cronRuntime, foldCheckpoint, streamCompact, followerReads, gatewaySidAliases, cronMetadata, cronProcess, applyTaskEvent, emptyTaskState, assembleSessionSnapshot, pushSnapshot, persistRegistry, deriveSessionProtection, ensureWatcher, stopSessionWatcher, demoQuiesce, followerHomeOf, isProcessGroupAlive, setImmediate, clearTimeout, logMsg, sendOk, sendError } = deps
 
   // ── L2: getState — daemon-authoritative background-task state (the PULL source of truth) ──
   // Returns the materialized task state plus process liveness. Walnut PULLs this to reconcile a
@@ -411,5 +416,58 @@ export function createDaemonSessionState<W extends { data: WsData }>(deps: Daemo
     }
   }
 
-  return { cmdCronSupervision, cmdGetState, cmdRename, cmdReadHistory, cmdMarkersFind }
+  // ── List all sessions ──
+  function cmdList(ws: W, id: number) {
+    const result: Array<{
+      sid: string; pid: number | null; alive: boolean; mtime: string | null; size: number
+    }> = []
+
+    // Scan streams dir for PGID files
+    try {
+      const files = fs.readdirSync(STREAMS_DIR)
+      for (const f of files) {
+        if (!f.endsWith('.pgid')) continue
+        const sid = f.replace('.pgid', '')
+        try {
+          const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, f), 'utf-8').trim(), 10)
+          let alive = false
+          try { process.kill(pid, 0); alive = true } catch {}
+
+          let mtime: string | null = null, size = 0
+          try {
+            const stat = fs.statSync(path.join(STREAMS_DIR, sid + '.jsonl'))
+            mtime = stat.mtime.toISOString()
+            size = stat.size
+          } catch {}
+
+          result.push({ sid, pid, alive, mtime, size })
+        } catch {}
+      }
+    } catch {}
+
+    // Also include in-memory sessions not yet persisted
+    for (const [sid, session] of sessions) {
+      if (!result.find(r => r.sid === sid)) {
+        // Prefer the authoritative state field; only fall back to kill(pid,0)
+        // if we've never seen a death signal for this record.
+        let alive = session.state === 'running' && session.pid !== null
+        if (alive && session.pid) {
+          try { process.kill(session.pid, 0) } catch { alive = false }
+        }
+        result.push({
+          sid,
+          pid: session.pid,
+          alive,
+          mtime: null,
+          size: 0,
+        })
+      }
+    }
+
+    // A fenced Demo counts a session whose CLI exited while its group lives on (zero-signal probe), so its reset keeps the data.
+    if (demoQuiesce.fenced) for (const row of result) if (!row.alive && row.pid && isProcessGroupAlive(row.pid)) row.alive = true
+    sendOk(ws, id, { sessions: ws.data?.origin === 'follower' ? followerReads.ownRows(followerHomeOf(ws), result) : result })
+  }
+
+  return { cmdCronSupervision, cmdGetState, cmdRename, cmdReadHistory, cmdMarkersFind, cmdList }
 }

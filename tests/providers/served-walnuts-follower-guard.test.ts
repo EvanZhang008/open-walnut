@@ -18,11 +18,13 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const CORE = read('src/providers/served-walnuts-core.ts')
-const DAEMON = read('src/providers/daemon-standalone.ts')
+// The whole runtime: daemon-standalone.ts and its area modules (servedWalnutOf is daemon-spawn-journal.ts).
+const DAEMON = daemonRuntimeText()
 
 /** Every `servedWalnuts.note(` call in the daemon, by the top-level function it sits in. */
 // The per-Walnut pushes of a server socket (SERVED_PUSHES, in the gates every command passes), and a socket bound to a home.

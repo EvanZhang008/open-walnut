@@ -13,9 +13,8 @@
  * A new tracker must join this list.
  */
 import { describe, it, expect, vi } from 'vitest'
-import fs from 'node:fs'
-import path from 'node:path'
 import * as esbuild from 'esbuild'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
@@ -78,7 +77,8 @@ function daemonTaskCount(src: string): (lines: string[]) => number {
   }
 }
 function standaloneSource(): string {
-  const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  // The daemon's code as text: the runtime and its area modules (the task state is daemon-session-fold.ts).
+  const text = daemonRuntimeText()
   const fns = ['emptyTaskState', 'runningTaskCount', 'applyTaskEvent'].map((n) => extractFn(text, n)).join('\n')
   return esbuild.transformSync('type TaskState = any\n' + fns, { loader: 'ts' }).code
 }

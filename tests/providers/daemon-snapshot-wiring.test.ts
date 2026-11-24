@@ -46,10 +46,12 @@ import { testBun } from '../helpers/bun-runtime.js'
 import { createDaemonCore } from '../../src/providers/daemon-core.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers, type SessionSnapshot } from '../../src/providers/daemon-fold.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const STANDALONE_TEXT = fs.readFileSync(STANDALONE, 'utf-8')
+// The daemon's code as text: the runtime and its area modules (the snapshot is daemon-session-snapshot.ts, the folds daemon-session-fold.ts).
+const STANDALONE_TEXT = daemonRuntimeText()
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-snapwire-'))
 const STREAMS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-snapwire-streams-'))
@@ -962,7 +964,7 @@ describe('C1 snapshot push plumbing (daemon source, stubbed deps)', () => {
   function loadHarness(): Harness {
     const coalesce = STANDALONE_TEXT.match(/const SNAPSHOT_COALESCE_MS = \d+/)
     expect(coalesce, 'SNAPSHOT_COALESCE_MS declaration not found in the daemon').toBeTruthy()
-    const block = standaloneBlock('function streamEpochOf', '// ── daemon-core wiring ──')
+    const block = standaloneBlock('function streamEpochOf', '\nreturn { drainSessionFold')
     expect(block).toContain('function pushSnapshot')
     expect(block).toContain('function emitSnapshot')
     expect(block).toContain('snapshotDiffers(prev, snapshot)')

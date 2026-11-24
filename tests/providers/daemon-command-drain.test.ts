@@ -1064,7 +1064,7 @@ describe('handleCommand demo.quiesce fence', () => {
 
   it('the runtime marks every answer of drained work as followed (answerCommand)', () => {
     const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
-    const body = text.slice(text.indexOf('function answerCommand'), text.indexOf('// ── List all sessions'))
+    const body = text.slice(text.indexOf('function answerCommand'), text.indexOf('// ── Protocol helpers ──'))
     expect(body).toMatch(/const out = settleAnswer\(\(\) => \(made = answerFn\(cmd, from\)\), threw, once\)/)
     expect(body).toContain('if (made !== out) daemonCommands.follow(made, out)')
   })

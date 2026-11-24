@@ -22,6 +22,8 @@ const SITES: Record<string, string> = {
   'src/providers/daemon-session-state.ts': 'the daemon\'s own stream files (STREAMS_DIR: getState\'s rebuild, rename, read-history and its subagent files), never a transcript',
   'src/providers/daemon-agent-subs.ts': 'an agent\'s subagent files under the daemon\'s own stream dir (STREAMS_DIR), never a transcript',
   'src/providers/daemon-idle-scan.ts': 'the daemon\'s own stream files (STREAMS_DIR) the boot adoption folds, never a transcript',
+  'src/providers/daemon-spawn-journal.ts': 'the daemon\'s own stream files (STREAMS_DIR) the boot backfill journals, never a transcript',
+  'src/providers/daemon-stream-compaction.ts': 'the daemon\'s own stream files (STREAMS_DIR) it compacts, never a transcript',
   'src/providers/daemon-session-resume.ts': 'the daemon\'s own stream file (STREAMS_DIR), never a transcript; the resumed CLI\'s start restores first (restoreForStart)',
   'src/providers/transcript-archive.ts': 'the archive itself',
   'src/providers/history-ready-core.ts': 'reads bounded .jsonl.gz tails through gunzip without restoring; an offloaded transcript or archived rewind answers none',

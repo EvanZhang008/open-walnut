@@ -195,6 +195,7 @@ const RAW_READERS: Record<string, string> = {
   'src/providers/daemon-fold.ts': 'the daemon fold that makes the signals',
   'src/providers/daemon-standalone.ts': 'the daemon: folds and adopts',
   'src/providers/daemon-idle-scan.ts': 'the daemon\'s keep-alive verdict (deriveSessionProtection) and the idle scan read the fold\'s signals',
+  'src/providers/daemon-session-snapshot.ts': 'the daemon\'s snapshot: the fold\'s cronActive, armed too by the crons on disk',
   'src/providers/stream-fold-core.ts': 'the daemon stream fold',
   'src/providers/remote-session-manager.ts': 'arms the runner from a daemon snapshot',
   'src/core/session-reconcile.ts': 'the server-side fold of a stream tail',

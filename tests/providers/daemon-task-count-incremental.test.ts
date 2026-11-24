@@ -14,9 +14,8 @@
  * transpiled with esbuild.
  */
 import { describe, it, expect } from 'vitest'
-import fs from 'node:fs'
-import path from 'node:path'
 import * as esbuild from 'esbuild'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 function extractFn(src: string, name: string): string {
   const at = src.indexOf(`function ${name}(`)
@@ -46,8 +45,8 @@ function build(src: string): Fns {
 }
 
 function standaloneSource(): string {
-  const file = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-  const text = fs.readFileSync(file, 'utf8')
+  // The daemon's code as text: the runtime and its area modules (the task state is daemon-session-fold.ts).
+  const text = daemonRuntimeText()
   // Only the three functions: types stripped, nothing else of the file run.
   const fns = ['emptyTaskState', 'runningTaskCount', 'applyTaskEvent'].map((n) => extractFn(text, n)).join('\n')
   return esbuild.transformSync('interface TaskStateEntry { status: string; isBackgrounded?: boolean }\ntype TaskState = any\n' + fns, { loader: 'ts' }).code

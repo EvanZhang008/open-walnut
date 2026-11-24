@@ -20,7 +20,7 @@ import { buildDeps, createDaemonCore } from '../helpers/daemon-core-fixtures.js'
 import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 // The daemon's own snapshot push (assembleSessionSnapshot, emitSnapshot, pushSnapshot) and its
-// marker command, cut from daemon-standalone.ts and run against the real daemon core.
+// marker command, cut from the runtime's text (daemon-session-snapshot.ts) and run against the real daemon core.
 const source = daemonRuntimeText()
 function region(from: string, to: string): string {
   const start = source.indexOf(from)
@@ -29,7 +29,7 @@ function region(from: string, to: string): string {
   return source.slice(start, end)
 }
 const daemonCode = ts.transpileModule(
-  region('function streamEpochOf(', '// ── daemon-core wiring ──') + '\n'
+  region('function streamEpochOf(', '\nreturn { drainSessionFold') + '\n'
     + region('function cmdAppendUserMarker(', '// ── Set session mode ──'),
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText

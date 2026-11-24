@@ -174,6 +174,7 @@ const NOT_WRITERS: Record<string, string> = {
   'src/providers/cloud-session-link.ts': 'writes no frame (a session link the companion reads)',
   'src/integrations/cloud-bridge-config.ts': 'writes no frame (a probe of the companion)',
   'src/providers/daemon-standalone.ts': 'the daemon itself: what it sends goes to a Walnut server, whose limit is 100 MB',
+  'src/providers/daemon-cloud-bridge-dial.ts': 'the daemon\'s dial to its cloud companion (a Walnut server): what it sends goes there, not to a daemon',
   'src/commands/net.ts': 'dials the Walnut server, not a daemon',
   'src/core/session-channel/companion-dialer.ts': 'the host dials its cloud companion\'s listener door (/host-listen, a Walnut server), not a daemon',
   'src/core/session-channel/host-dialer.ts': 'the host dials its leader\'s Walnut server door (/host-door, 64 MB maxPayload), not a daemon',

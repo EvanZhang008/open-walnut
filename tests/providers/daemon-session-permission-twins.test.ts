@@ -4,19 +4,18 @@
  * access. FIFO writes, registry persistence and snapshot pushes are stubs.
  */
 import { describe, it, expect, vi } from 'vitest'
-import fs from 'node:fs'
-import path from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { createLiveSettings } from '../../src/providers/live-settings-core.js'
 import { missingNames } from '../helpers/extracted-free-names.js'
 import { fail } from '../../src/providers/daemon-module-deps.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
-const ROOT = path.resolve(import.meta.dirname, '../..')
 const SID = '11111111-2222-4333-8444-555555555555'
 const OTHER_SID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 const REQUEST = 'permission-1'
-const SRC = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+// The whole runtime: daemon-standalone.ts and its area modules (the bridge's own checks are daemon-cloud-bridge.ts).
+const SRC = daemonRuntimeText()
 type Command = Record<string, unknown>
 type Reply = { id: number; ok: boolean; error?: string; errorKind?: string; [key: string]: unknown }
 type Pending = { reqId: string; request: Record<string, unknown> }
@@ -87,7 +86,7 @@ function buildDaemon(initial: Pending | null = pending(), owner = '') {
     sessionStartHomeOf: () => owner,
     // bridgeHearsSession re-reads the spawn journal on a miss; no journal here.
     journaledIds: () => new Set<string>(),
-    journaledSids: null,
+    forgetJournaledSids: () => {},
     // The served-Walnuts note handleCommand takes for a server socket's per-Walnut push.
     servedWalnuts: { note: vi.fn() },
     walnutScope: { askedHome: () => '' },

@@ -3,12 +3,11 @@
  * static ratchets over its source.
  */
 import { describe, it, expect } from 'vitest'
-import fs from 'node:fs'
-import path from 'node:path'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
-const root = path.join(import.meta.dirname, '..', '..')
-const standalone = fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8')
+// The whole runtime: daemon-standalone.ts and its area modules (the bridge itself is daemon-cloud-bridge.ts).
+const standalone = daemonRuntimeText()
 
 /** The allowlist's entries, comments stripped (they name commands that are NOT allowed). */
 function allowlist(src: string): string {
