@@ -551,6 +551,9 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   retriers meanwhile. The CLIs, routes and fact log go on; a leader that opens the channel ends it at
   once (the watch looks on the link), and the turn ends the family skipped meanwhile go to it then
   (`stand-down-held.ts`), so a stand-down that misjudged a newer leader leaves no turn end to no one.
+  Those turn ends are in the fact log marked `standDownHeld`; a leader that names the mark on its
+  resume (`reads: [stand-down-held-v1]`) says nothing of them and the host says each again once it
+  judged it, so a misfire never hands back and pushes a turn the host then continues.
   A leader that speaks the channel says so in its config copy (`leader_capabilities:
   [session-channel-v1]`, while the switch is on), and a host whose leader says it never stands down
   on the timeout: it keeps judging and reports `waiting`; either state shows in the leader's Walnut

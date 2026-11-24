@@ -6,7 +6,7 @@
  * leader's own confirmed position.
  *
  *   host -> any   hello  {walnutId, hostId, logId, floor, head, now}
- *   leader -> host resume {walnutId, hostId, permitNumber, epoch, logId, after}
+ *   leader -> host resume {walnutId, hostId, permitNumber, epoch, logId, after, reads}
  *                         after: the last seq of this log the leader applied (0: none; -1: the
  *                         leader knew this host under another log, so it always gets the rows
  *                         first); a log that still holds every record after `after`
@@ -15,6 +15,9 @@
  *                         (comparePermit): permitNumber the write permission's record number (0
  *                         while the permit system is off), epoch the leader's claim on this host;
  *                         a resume without `epoch` (an older leader) reads as (0, permitNumber).
+ *                         reads: the marks on records this leader's build reads (LEADER_READS;
+ *                         absent: an older leader that reads none), so a host says a record again
+ *                         only to a leader that waits for it (stand-down-held.ts)
  *                         The host refuses a pair lower than the highest it has seen (a leader
  *                         that lost its permit replays nothing and trims nothing)
  *   listener -> host listen {walnutId}        a reader that never confirms (the cloud companion):
@@ -53,7 +56,7 @@ import type { SessionRecord } from '../types.js'
 
 export type ChannelFrame =
   | { ch: 'sf'; op: 'hello'; walnutId: string; hostId: string; logId: string; floor: number; head: number; now?: number }
-  | { ch: 'sf'; op: 'resume'; walnutId: string; hostId: string; permitNumber: number; epoch?: number; logId: string; after: number }
+  | { ch: 'sf'; op: 'resume'; walnutId: string; hostId: string; permitNumber: number; epoch?: number; logId: string; after: number; reads?: string[] }
   | { ch: 'sf'; op: 'listen'; walnutId: string }
   | { ch: 'sf'; op: 'rows'; rows: SessionRecord[]; upTo: number; rowsAt: number; logId: string; gone?: string[] }
   | { ch: 'sf'; op: 'facts'; recs: FactRecord[]; replay?: true; sentAt?: number }
@@ -97,10 +100,15 @@ export function permitOfResume(f: { permitNumber?: unknown; epoch?: unknown }): 
   return isPermitPair(pair) ? pair : null
 }
 
+/** A leader reads the `standDownHeld` mark on a turn end: it says nothing of one and waits for the host to say it again (stand-down-held.ts). */
+export const READS_HELD_TURN_ENDS = 'stand-down-held-v1'
+/** What this build's leader names on its resume (`reads`). */
+export const LEADER_READS: readonly string[] = [READS_HELD_TURN_ENDS]
+
 /** Records per facts frame when the log is read back. */
 const REPLAY_BATCH = 256
 
-interface Reader { link: ChannelLink; leader: boolean; caughtUp: boolean; sentUpTo: number; alive: boolean }
+interface Reader { link: ChannelLink; leader: boolean; caughtUp: boolean; sentUpTo: number; alive: boolean; reads: ReadonlySet<string> }
 
 export interface HostChannelOptions {
   log: FactLog
@@ -133,7 +141,7 @@ export class HostChannel {
 
   /** A new link (either direction). Returns the frame handler and the close handler for it. */
   attach(link: ChannelLink): { onFrame(frame: ChannelFrame): void; onClose(): void } {
-    const reader: Reader = { link, leader: false, caughtUp: false, sentUpTo: 0, alive: true }
+    const reader: Reader = { link, leader: false, caughtUp: false, sentUpTo: 0, alive: true, reads: new Set() }
     const log = this.o.log
     link.send({ ch: 'sf', op: 'hello', walnutId: this.o.walnutId, hostId: this.o.hostId, logId: log.logId, floor: log.floor, head: log.head, now: this.now() })
     const refuse = (why: string): void => {
@@ -186,6 +194,9 @@ export class HostChannel {
   /** Is a leader connected and caught up now? */
   leaderLive(): boolean { return !!this.leaderReader?.caughtUp }
 
+  /** Does the leader linked now read `mark` (its resume's `reads`)? */
+  leaderReads(mark: string): boolean { return !!this.leaderReader?.reads.has(mark) }
+
   private async resume(reader: Reader, f: Extract<ChannelFrame, { op: 'resume' }>, refuse: (why: string) => void): Promise<void> {
     const log = this.o.log
     if (f.walnutId !== this.o.walnutId) return refuse('walnut_mismatch')
@@ -202,6 +213,7 @@ export class HostChannel {
       this.readers.delete(old)
     }
     reader.leader = true
+    reader.reads = new Set(Array.isArray(f.reads) ? f.reads.filter((x): x is string => typeof x === 'string') : [])
     this.leaderReader = reader
     this.readers.add(reader)
     try {
@@ -372,7 +384,7 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           // its rows first (channel header). A host it never heard of replays its log from the start.
           const p = o.permit()
           const after = known || !c ? cursor.seq : -1
-          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: p.permitNumber, epoch: p.epoch, logId, after })
+          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: p.permitNumber, epoch: p.epoch, logId, after, reads: [...LEADER_READS] })
           helloHead = Number.isFinite(frame.head) ? frame.head : 0
           // A rows frame comes first when the leader asked for them (-1), whatever the position.
           if (after >= 0) noteCaughtUp()

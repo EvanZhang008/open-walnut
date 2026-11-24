@@ -20,6 +20,7 @@ import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
 import type { HostTurnEnd } from './turn-ends.js'
 import { oneDaemonNow } from './revoked-hosts.js'
 import { LEADER_QUIET_MS } from '../../host-server/route.js'
+import { isStandDownHeldEnd } from './stand-down-held.js'
 
 /** The session:started of a session born on `hostId`, from its row (as the runner says one: handleStart); its task is the leader's row's. */
 function startedOf(hostId: string, sid: string, row: Record<string, unknown>, taskId: string | null | undefined): Record<string, unknown> {
@@ -184,6 +185,10 @@ export function createLeaderApply(deps: LeaderSideDeps, ctx: ApplyContext) {
         continue
       }
       if (channelClassOf(r.name) !== 'fact') continue
+      // A turn end its host wrote while standing down: marked for the boot reconcile above, said by
+      // no one here; the host says it again once it stood up and judged it (stand-down-held.ts), so
+      // a turn it continues is never handed back and pushed first.
+      if (isStandDownHeldEnd(r.name, r.data)) continue
       // The event names the record's own session, or it is not said; it says the leader's task of it.
       const said = sessionIdOf(r.name, r.data) === r.sid ? factAsLeaderSays(r.name, r.data, { sid: r.sid, hostId, taskId: taskOf(r.sid), ...scopeOf(hostId, r.sid) }) : null
       if (said === null) { refused.add(r.sid); continue }

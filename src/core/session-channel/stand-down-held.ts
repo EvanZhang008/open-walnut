@@ -17,9 +17,22 @@
  *                                when the end settled (SETTLE_MS after it): a later turn ran
  *
  * At the stand-up the
- * kept ends go to the resend family's own subscribers only (host-resend.ts replay), whose gate
- * (judge-of.ts judgedHere) is open again; nothing else hears them twice, and the emitter, which
- * already wrote them to the fact log, does not see them again.
+ * kept ends worth replaying go to the resend family's own subscribers only (host-resend.ts replay),
+ * whose gate (judge-of.ts judgedHere) is open again; nothing else hears them twice, and the emitter,
+ * which already wrote them to the fact log, does not see them again.
+ *
+ * What the leader hears of them (land 6 review, N5): the emitter wrote each turn end of the
+ * stand-down to the fact log at once, marked `standDownHeld` (host-resend.ts turnEndStamp). A leader
+ * that reads that mark (it says so on its resume: channel.ts LEADER_READS, READS_HELD_TURN_ENDS)
+ * notes the turn end for its boot reconcile but says nothing of it (leader-apply.ts), so a misfire's
+ * newer leader never moves the task to NEED_ACTION and pushes for a turn the host is about to
+ * continue. The host owes that leader the end instead, said again once it is judged: stamped as its
+ * retriers took it in the replay's own tick (a continue keeps the phase as on the live path), and a
+ * kept end not replayed (too old, its transcript grew) as taken by no one. The owed end is said once a
+ * leader that reads the mark is linked (now, or at its next link), and dropped when the session goes
+ * on first or a leader that does not read the mark is linked (that one applied the end as it came,
+ * as before). Kept in memory: a host service restart before the owed end is said leaves it to the
+ * leader's mark of it (turn-ends.ts, the reconcile at the leader's next boot).
  */
 
 const TURN_ENDS = new Set(['session:result', 'session:error'])
@@ -27,6 +40,14 @@ const TURN_ENDS = new Set(['session:result', 'session:error'])
 const WENT_ON = new Set(['session:send', 'session:started', 'session:message-queued', 'session:messages-delivered', 'session:text-delta', 'session:tool-use'])
 
 export interface HeldTurnEnd { name: string; data: unknown; source?: string; timestamp?: number }
+
+/** The mark the emitter puts on a turn end it wrote while this host stood down (host-resend.ts turnEndStamp). */
+export const STAND_DOWN_HELD_KEY = 'standDownHeld'
+
+/** A turn-end fact a host wrote while standing down: a leader that reads the mark waits for the host to say it again. */
+export function isStandDownHeldEnd(name: string, data: unknown): boolean {
+  return TURN_ENDS.has(name) && (data as Record<string, unknown> | null)?.[STAND_DOWN_HELD_KEY] === true
+}
 
 /** A held end older than this at the stand-up is never replayed. */
 export const HELD_MAX_AGE_MS = 15 * 60_000
@@ -38,9 +59,24 @@ interface Kept { end: HeldTurnEnd; at: number; offset: number | undefined }
 export interface StandDownHeld {
   /** One bus event (the host's subscriber calls it with every `session:` event). */
   note(event: { name: string; data: unknown; source?: string; timestamp?: number }): void
-  /** The kept ends still worth replaying (see the header), oldest first, and forget them all. */
-  take(): HeldTurnEnd[]
+  /**
+   * Forget every kept end: `replay` the ones still worth replaying (see the header), oldest first,
+   * `dropped` the others (kept, but too old or their transcript grew).
+   */
+  take(): { replay: HeldTurnEnd[]; dropped: HeldTurnEnd[] }
+  /**
+   * The stand-up (see the header): take the kept ends, `replay` the ones worth it, and owe the leader
+   * every one, a replayed end stamped by `stamp` in the replay's own tick (as the emitter stamps a
+   * live one), a dropped one as taken by no one. Returns how many were replayed.
+   */
+  standUp(o: { replay(ends: HeldTurnEnd[]): void; stamp(name: string, data: unknown): unknown }): number
+  /**
+   * Once a leader is linked: say every owed end (`say`) when it reads the held mark, else forget them
+   * (it applied them as they came). Nothing while no leader is linked. Returns how many were said.
+   */
+  payOwed(o: { leaderLinked(): boolean; leaderReadsHeld(): boolean; say(name: string, data: unknown): void }): number
   size(): number
+  owedSize(): number
 }
 
 function sessionIdOf(data: unknown): string {
@@ -64,11 +100,27 @@ export function createStandDownHeld(o: {
   const maxAge = o.maxAgeMs ?? HELD_MAX_AGE_MS
   const offsetOf = (sid: string): number | undefined => { try { const v = o.offsetOf?.(sid); return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined } catch { return undefined } }
   const held = new Map<string, Kept>()
+  const owed = new Map<string, HeldTurnEnd>()
+  const take = (): { replay: HeldTurnEnd[]; dropped: HeldTurnEnd[] } => {
+    const replay: HeldTurnEnd[] = []
+    const dropped: HeldTurnEnd[] = []
+    const t = now()
+    for (const [sid, k] of held) {
+      const off = offsetOf(sid)
+      if (t - k.at > maxAge) { o.log?.('info', 'host sessions: a turn end of the stand-down is too old to replay', { sessionId: sid, ageMs: t - k.at }); dropped.push(k.end); continue }
+      if (k.offset !== undefined && off !== undefined && off > k.offset) { o.log?.('info', 'host sessions: a turn end of the stand-down is not replayed, its transcript grew since', { sessionId: sid, from: k.offset, to: off }); dropped.push(k.end); continue }
+      replay.push(k.end)
+    }
+    held.clear()
+    return { replay, dropped }
+  }
   return {
     note(event) {
       const sid = sessionIdOf(event.data)
       if (!sid) return
       if (TURN_ENDS.has(event.name)) {
+        // A later turn end of the session: the owed one is history (the leader hears this one).
+        owed.delete(sid)
         if (!o.standingDown() || !o.owns(sid)) return
         held.delete(sid)
         const kept: Kept = {
@@ -79,20 +131,30 @@ export function createStandDownHeld(o: {
         later(() => { if (held.get(sid) === kept) kept.offset = offsetOf(sid) ?? kept.offset }, SETTLE_MS)
       } else if (WENT_ON.has(event.name)) {
         held.delete(sid)
+        owed.delete(sid)
       }
     },
-    take() {
-      const out: HeldTurnEnd[] = []
-      const t = now()
-      for (const [sid, k] of held) {
-        const off = offsetOf(sid)
-        if (t - k.at > maxAge) { o.log?.('info', 'host sessions: a turn end of the stand-down is too old to replay', { sessionId: sid, ageMs: t - k.at }); continue }
-        if (k.offset !== undefined && off !== undefined && off > k.offset) { o.log?.('info', 'host sessions: a turn end of the stand-down is not replayed, its transcript grew since', { sessionId: sid, from: k.offset, to: off }); continue }
-        out.push(k.end)
+    take,
+    standUp(u) {
+      const { replay, dropped } = take()
+      if (replay.length > 0) u.replay(replay)
+      const owe = (e: HeldTurnEnd, data: unknown): void => { const sid = sessionIdOf(data); if (sid) { owed.delete(sid); owed.set(sid, { ...e, data }) } }
+      for (const e of replay) owe(e, u.stamp(e.name, e.data))
+      for (const e of dropped) owe(e, { ...(e.data as object), hostTakenBy: null })
+      return replay.length
+    },
+    payOwed(p) {
+      if (owed.size === 0 || !p.leaderLinked()) return 0
+      const ends = [...owed.values()]
+      owed.clear()
+      if (!p.leaderReadsHeld()) return 0
+      let said = 0
+      for (const e of ends) {
+        try { p.say(e.name, e.data); said++ } catch (err) { o.log?.('warn', 'host sessions: a turn end of the stand-down was not said again', { sessionId: sessionIdOf(e.data), error: err instanceof Error ? err.message : String(err) }) }
       }
-      held.clear()
-      return out
+      return said
     },
     size: () => held.size,
+    owedSize: () => owed.size,
   }
 }

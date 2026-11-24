@@ -31,7 +31,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { FactLog } from './fact-log.js'
 import { GoneRows } from './gone-rows.js'
-import { HostChannel } from './channel.js'
+import { HostChannel, READS_HELD_TURN_ENDS } from './channel.js'
 import { SESSION_HOST_CHECKS_CAP, SESSION_HISTORY_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { HOST_DOOR_CAP } from './door-wire.js'
 import { startHostDialer, type HostDialer } from './host-dialer.js'
@@ -150,12 +150,14 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   let emitterRef: HostEmitter | null = null
   // The old-leader watch, made below: a leader's link makes it look at once.
   let watchRef: OldLeaderWatch | null = null
+  let payOwedRef: (() => void) | null = null
   const channel = new HostChannel({
     log, walnutId: o.walnutId, hostId: o.hostKey, ownRows: () => ownRows(o.hostKey), onLog: say,
     onResync: (sids) => { void emitterRef?.resync(sids).catch((err: unknown) => say('warn', 'host sessions: a resync failed', { error: err instanceof Error ? err.message : String(err) })) },
     goneRows: () => gone.list(),
     // A leader keeps the live state only in memory: each link gets it again.
-    onLeaderLinked: () => { emitterRef?.relive(); void watchRef?.tick() },
+    // The turn ends owed since a stand-up go to a leader that reads them (stand-down-held.ts).
+    onLeaderLinked: () => { emitterRef?.relive(); payOwedRef?.(); void watchRef?.tick() },
   })
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const runner = sessionRunner as unknown as LiveRunnerLike & { findSessionByClaudeId(sid: string): { consumedOffset?: number } | undefined }
@@ -272,6 +274,11 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   // The turn ends the family skipped while standing down, for its stand-up (stand-down-held.ts).
   const held = createStandDownHeld({ standingDown: hostStandsDown, owns: (sid) => emitter.owns(sid), offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset, log: say })
   bus.subscribe(STAND_DOWN_HELD_SUBSCRIBER, (event) => held.note(event), { global: true, interest: ['session:'] })
+  const payOwed = (): void => {
+    const said = held.payOwed({ leaderLinked: () => channel.leaderLive(), leaderReadsHeld: () => channel.leaderReads(READS_HELD_TURN_ENDS), say: (name, data) => { emitter.sayAgain(name, data) } })
+    if (said > 0) say('info', 'host sessions: the turn ends of the stand-down were said again to the leader, as judged here', { count: said })
+  }
+  payOwedRef = payOwed
   const oldLeader = startOldLeaderWatch({
     leaderAnswers: () => leaderPresence().answers,
     presenceSince: () => leaderPresence().since,
@@ -289,10 +296,14 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     standDown: () => setHostStandsDown(true),
     standUp: () => {
       setHostStandsDown(false)
-      const ends = held.take()
-      if (ends.length === 0) return
-      say('info', 'host sessions: handing the turn ends of the stand-down to the resend family', { count: ends.length, sessionIds: ends.slice(0, 20).map((e) => (e.data as { sessionId?: string }).sessionId) })
-      resend.replay(ends)
+      held.standUp({
+        replay: (ends) => {
+          say('info', 'host sessions: handing the turn ends of the stand-down to the resend family', { count: ends.length, sessionIds: ends.slice(0, 20).map((e) => (e.data as { sessionId?: string }).sessionId) })
+          resend.replay(ends)
+        },
+        stamp,
+      })
+      payOwed()
     },
     log: say,
   })

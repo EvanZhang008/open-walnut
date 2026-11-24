@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { WebSocketServer, type WebSocket } from '#ws'
 import { FactLog } from '../../../src/core/session-channel/fact-log.js'
-import { HostChannel, isChannelFrame, type ChannelCursor } from '../../../src/core/session-channel/channel.js'
+import { HostChannel, isChannelFrame, READS_HELD_TURN_ENDS, type ChannelCursor } from '../../../src/core/session-channel/channel.js'
 import { createLeaderSide, reportJudges, type LeaderSide } from '../../../src/core/session-channel/leader-side.js'
 import type { HostChannelBatch } from '../../../src/core/session-tracker.js'
 import type { SessionRecord } from '../../../src/core/types.js'
@@ -427,6 +427,27 @@ describe('the leader side of a host that runs its sessions', () => {
     await log.flush()
     await until(() => gone.length === 1)
     expect(gone).toEqual(['s1'])
+  })
+
+  it('land 6 N5: a turn end the host wrote while standing down is marked for the reconcile but said by no one; the end the host says again is', async () => {
+    const { log, channel } = await hostOf()
+    const port = await hostDoor(channel, [])
+    // Written while the host stood down (host-resend.ts turnEndStamp), before this leader linked.
+    log.append('s1', 'session:result', { sessionId: 's1', isError: true, result: 'API Error: overloaded', hostTakenBy: null, standDownHeld: true })
+    await log.flush()
+    const store = leaderStore()
+    side = makeSide(port, store)
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => side!.linked('devbox') && store.cursor?.seq === log.head)
+    // This leader names the mark on its resume, so the host knows to say the end again.
+    expect(channel.leaderReads(READS_HELD_TURN_ENDS)).toBe(true)
+    expect(store.batches.flatMap((b) => b.turnEnds ?? [])).toEqual([expect.objectContaining({ sid: 's1', edge: 'session:error' })])
+    expect(store.emitted.filter((e) => e.name === 'session:result')).toEqual([])
+    // The host stood up, its retrier took the turn: said again with its stamp.
+    log.append('s1', 'session:result', { sessionId: 's1', isError: true, result: 'API Error: overloaded', hostTakenBy: 'auto_continue' })
+    await log.flush()
+    await until(() => store.emitted.some((e) => e.name === 'session:result'))
+    expect(store.emitted.filter((e) => e.name === 'session:result').map((e) => (e.data as { hostTakenBy?: unknown }).hostTakenBy)).toEqual(['auto_continue'])
   })
 
   it('reads the capability from a host\'s report', () => {

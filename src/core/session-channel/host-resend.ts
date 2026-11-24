@@ -26,6 +26,7 @@
  * took it before the emitter stamps the end with their answer.
  */
 import type { SessionRecord } from '../types.js'
+import { STAND_DOWN_HELD_KEY } from './stand-down-held.js'
 
 type Say = (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 
@@ -78,7 +79,8 @@ export function leaderPromptRunner<R extends RespawnRunner>(runner: R, wait: typ
  * What the emitter keeps of a turn end of an own session: its data with `hostTakenBy`, the retrier
  * of this host that took it (turn-run.ts turnEndTakenByNow), read in the event's own tick. While
  * this host stands down for an older leader (old-leader-watch.ts) no retrier here acts, so none took
- * it: `hostTakenBy: null`.
+ * it: `hostTakenBy: null`, marked `standDownHeld` (a leader that reads the mark waits for the host
+ * to say the end again once it stood up and judged it: stand-down-held.ts).
  */
 export async function turnEndStamp(): Promise<(name: string, data: unknown) => unknown> {
   const [{ turnEndTakenByNow }, { hostStandsDown }] = await Promise.all([import('../sessions/turn-run.js'), import('../sessions/judge-of.js')])
@@ -87,7 +89,7 @@ export async function turnEndStamp(): Promise<(name: string, data: unknown) => u
     const d = (data ?? {}) as Record<string, unknown>
     const sessionId = typeof d.sessionId === 'string' ? d.sessionId : ''
     if (!sessionId) return data
-    if (hostStandsDown()) return { ...d, hostTakenBy: null }
+    if (hostStandsDown()) return { ...d, hostTakenBy: null, [STAND_DOWN_HELD_KEY]: true }
     const isError = name === 'session:error' ? true : d.isError === true
     const result = name === 'session:error' ? (typeof d.error === 'string' ? d.error : null) : (typeof d.result === 'string' ? d.result : null)
     const hostTakenBy = turnEndTakenByNow({ ...(d as object), event: name === 'session:error' ? 'error' : 'result', sessionId, isError, result } as Parameters<typeof turnEndTakenByNow>[0])

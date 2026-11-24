@@ -110,6 +110,11 @@ export interface HostEmitter {
   noteDrop(sids: Iterable<string>, opts?: { answer?: boolean }): void
   /** Is `sid` one of this host's own sessions? */
   owns(sid: string): boolean
+  /**
+   * A fact said again, its data as given (already stamped: stand-down-held.ts, the turn ends owed
+   * after a stand-down). Only for an own session; false when `sid` is not one.
+   */
+  sayAgain(name: string, data: unknown): boolean
   /** These rows are the leader's again (stranded-own-rows.ts): no longer own, and no record for them (the leader has its row). */
   disown(sids: Iterable<string>): void
   /** This host's own session of `taskId` (the newest row seen), or null. */
@@ -389,6 +394,13 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       }
     },
     owns: (sid) => own.has(sid),
+    sayAgain(name, data) {
+      const sid = sessionIdOf(name, data)
+      if (!sid || !own.has(sid) || channelClassOf(name) !== 'fact') return false
+      append(sid, name, data)
+      scheduleLive(sid)
+      return true
+    },
     ownSessionOfTask(taskId) {
       let found: string | null = null
       for (const [sid, row] of lastRows) if (row.taskId === taskId && own.has(sid)) found = sid
