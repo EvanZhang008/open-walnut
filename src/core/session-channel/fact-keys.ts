@@ -56,7 +56,7 @@ export const FACT_KEYS: Readonly<Record<string, readonly [FactKeyClass, string]>
   stopsAt: NUM, liveReply: NUM, continued: NUM, autoCompleted: NUM, backgroundActive: NUM, foregroundActive: NUM,
   compactionStopped: NUM, detachedBgActive: NUM, interrupted: NUM, isError: NUM, processDied: NUM, retryExhausted: NUM,
   safeguardStop: NUM, teamActive: NUM, wakeupPending: NUM, inFlight: NUM, parked: NUM, waitsFor: NUM, refused: NUM,
-  renamed: NUM, replayed: NUM, saidOnMessage: NUM, startRecovery: NUM, foreign: NUM, subagentType: NUM,
+  renamed: NUM, replayed: NUM, ledgered: NUM, saidOnMessage: NUM, startRecovery: NUM, foreign: NUM, subagentType: NUM,
   retryAt: NUM, heldRetryAt: NUM, enqueuedAt: NUM, createdAt: NUM, fetchedAt: NUM, warnedAt: NUM, remainingMs: NUM,
   idleDurationMs: NUM, idleTimeoutMs: NUM, allowed: NUM, cancelled: NUM, expired: NUM, acpOptions: NUM,
 }

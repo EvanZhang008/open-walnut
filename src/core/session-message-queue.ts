@@ -58,6 +58,7 @@ import { forgetBriefsTold } from './sessions/app-brief.js';
 import { keepLeadingFrame } from './sessions/queue-edit-frame.js';
 import { assertDemoAdmission, demoAdmissionClosed, DemoAdmissionClosedError } from './sessions/demo-admission.js';
 import { noteTaskInput } from './sessions/task-input-clock.js';
+import { recordQueuedRow } from './sessions/delivery-ledger.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -149,7 +150,9 @@ export async function enqueueMessage(
      * its 'taken' fate is written with its row, and a later enqueue of the id, after the row ran or
      * went, queues nothing. A host's queue takes its leader's rows so, and a resend is a no-op.
      */
-    onceById?: boolean },
+    onceById?: boolean;
+    /** Who sent it and its task, for the delivery ledger only (sessions/delivery-ledger.ts recordQueuedRow). */
+    source?: string; taskId?: string },
 ): Promise<QueuedMessage> {
   // A stopping Demo queues nothing more (sessions/demo-admission.ts); checked again inside the write.
   assertDemoAdmission();
@@ -228,6 +231,9 @@ export async function enqueueMessage(
   }
   if (msg.sentBy === 'person' && !inherited) noteRecentHumanMessage(sessionId, opts?.recentText ?? message, msg.enqueuedAt);
   if (rowLedger) try { rowLedger(sessionId, msg.id) } catch { /* the ledger logs its own failures */ }
+  // Every row stored anew is a step of the delivery ledger here, whichever path queued it (a raw
+  // enqueue emits no SESSION_MESSAGE_QUEUED: 2026-11-24 audit, a person's words had no row).
+  void recordQueuedRow({ id: msg.id, sessionId, ...(opts?.source ? { source: opts.source } : {}), ...(opts?.taskId ? { taskId: opts.taskId } : {}), ...(msg.sentBy ? { sentBy: msg.sentBy } : {}) });
   log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth: outcome.queueDepth });
   // A write that works takes what an earlier failed one left in the spool.
   if (!outcome.spooled && spool.spoolMayHoldRows()) void spool.drainQueueSpool().catch(() => 0);
@@ -538,6 +544,7 @@ export async function sendMessageToSession(
       ...(opts?.dictation && queueSentBy(opts?.source) === 'person' ? { dictation: opts.dictation } : {}),
       ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
       ...(heldCold ? { heldReason: heldCold, coldSend: { source: opts?.source ?? 'unknown', ...(opts?.endsWait ? { endsWait: true as const } : {}) } } : {}),
+      ...(opts?.source ? { source: opts.source } : {}), ...(opts?.taskId ? { taskId: opts.taskId } : {}),
     });
   } catch (err) {
     appState?.release();
@@ -618,6 +625,7 @@ export async function sendMessageToSession(
     messageId: msg.id,
     message,
     source,
+    ledgered: true,
     ...(msg.sentBy ? { sentBy: msg.sentBy } : {}),
     // An agent's row as stored: a peer's note is enveloped only here (`message`
     // is its bare text), and the panel shows and folds the card it will become.

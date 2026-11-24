@@ -539,6 +539,8 @@ export interface SessionMessageQueuedEvent {
   messageId: string;
   message?: string;
   source?: string;
+  /** The queue that stored the row put it in the delivery ledger itself (sessions/delivery-ledger.ts recordQueuedRow). */
+  ledgered?: true;
   /** Who sent it (QueuedMessage.sentBy): an agent's card folds on arrival. */
   sentBy?: 'person' | 'agent';
   /** An agent's row as stored, when it differs from `message` (a peer's note,

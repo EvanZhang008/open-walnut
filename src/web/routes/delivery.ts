@@ -1,7 +1,7 @@
 /**
  * GET /api/delivery: where messages to sessions got to, from the delivery ledger
  * (core/sessions/delivery-ledger.ts). Read only. `id` (a message id), `task` (every session of the
- * task), `session`, `state` (read, written, queued, parked, held, carried, dropped, failed, cancelled,
+ * task; its id or a prefix task_get takes), `session`, `state` (read, written, queued, parked, held, carried, dropped, failed, cancelled,
  * sent), `days` (1 to 14, default 3), `limit` (default 200, newest first). A message still waiting says
  * for how many minutes (`waitingMin`). The answer says how many
  * matched and counts them by state.
@@ -16,7 +16,12 @@ const one = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 deliveryRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = one(req.query.id)
-    const task = one(req.query.task)
+    // A task's short id (`mabc1234` for `mabc1234-5678`) names it too, as task_get takes it.
+    let task = one(req.query.task)
+    if (task) {
+      const { getTask } = await import('../../core/task-manager.js')
+      task = (await getTask(task).catch(() => null))?.id ?? task
+    }
     const session = one(req.query.session)
     const state = one(req.query.state)
     const days = Math.min(DELIVERY_KEEP_DAYS, Math.max(1, Number(req.query.days) || 3))

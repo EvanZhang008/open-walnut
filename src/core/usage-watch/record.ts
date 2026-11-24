@@ -11,7 +11,8 @@
 import { count } from '../observability/metrics.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { addCall, emptyAgg, type Agg, type OutcomeClass, type UsageKind } from './agg.js'
-import { addEvents, addHours, addToolErrors, markAlive, pruneStore, readHours, type ToolErrorRow, type UsageEvent } from './store.js'
+import { addEvents, addHours, addToolErrors, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
+import { NO_ANSWER_CODES } from '../../lib/no-answer-report.js'
 import { TemplateMatcher, type PageErrorKind } from './normalize.js'
 import type { ToolClient } from '../../lib/tool-answer-size.js'
 import { labelValue } from './counters.js'
@@ -144,10 +145,44 @@ export function recordOpCall(c: OpCall): void {
  * refusals, the client's own (Walnut unreachable, the tool gone after a disconnect) and Claude
  * Code's (its input refused). Its session, task, host, op and error code; never its words.
  */
-export function recordToolError(row: Omit<ToolErrorRow, 'at'> & { at?: number }): void {
-  if (!active) return
-  if (toolErrors.length < MAX_EVENTS_PER_FLUSH) toolErrors.push({ ...row, at: row.at ?? Date.now() })
-  count('usage.tool_errors', 1, { code: labelValue(row.code) })
+export function recordToolError(row: Omit<ToolErrorRow, 'at'> & { at?: number }, via: ToolErrorVia = 'hook'): boolean {
+  const at = row.at ?? Date.now()
+  if (NO_ANSWER_CODES.has(row.code) && sameNoAnswerSeen({ ...row, at }, via)) return false
+  // Kept before the recorder starts too (2026-11-24 audit: a server's first seconds after a restart
+  // are when the calls that failed during it are told, and they were dropped here). A process that
+  // never starts it (a replica, a CLI) keeps at most one flush's rows and writes none.
+  if (toolErrors.length < MAX_EVENTS_PER_FLUSH) toolErrors.push({ ...row, at })
+  if (active) count('usage.tool_errors', 1, { code: labelValue(row.code) })
+  return true
+}
+
+/** Who said a call failed: the session hook reading its result, or the client that made it (a no-answer report). */
+export type ToolErrorVia = 'hook' | 'client'
+
+/**
+ * A no-answer failure the other source already told (the hook read it live and the client reports it
+ * later, or the other way round): told once. Matched by session, op and code within a short window,
+ * each entry once, so two real retries stay two. A report of a failure the hook recorded before this
+ * server started is matched against the store (one read, only for such a report).
+ */
+const NO_ANSWER_MATCH_MS = 2 * 60_000
+const NO_ANSWER_KEEP_MS = 30 * 60_000
+let noAnswerSeen: Array<{ key: string; at: number; via: ToolErrorVia; matched: boolean; old?: true }> = []
+
+function sameNoAnswerSeen(row: ToolErrorRow, via: ToolErrorVia): boolean {
+  const key = `${row.sid}\t${row.op}\t${row.code}`
+  noAnswerSeen = noAnswerSeen.filter((e) => Math.abs(row.at - e.at) <= NO_ANSWER_KEEP_MS).slice(-1_000)
+  const near = (e: { key: string; at: number }) => e.key === key && Math.abs(row.at - e.at) <= NO_ANSWER_MATCH_MS
+  const other = noAnswerSeen.find((e) => near(e) && e.via !== via && !e.matched)
+  if (other) { other.matched = true; noAnswerSeen.push({ key, at: row.at, via, matched: true }); return true }
+  if (via === 'client' && startedAt && row.at - NO_ANSWER_MATCH_MS < startedAt) {
+    const before = readToolErrors({ since: row.at - NO_ANSWER_MATCH_MS, session: row.sid })
+      .filter((r) => r.at < startedAt && r.sid === row.sid && r.op === row.op && r.code === row.code && Math.abs(r.at - row.at) <= NO_ANSWER_MATCH_MS).length
+    const claimed = noAnswerSeen.filter((e) => near(e) && e.old).length
+    if (before > claimed) { noAnswerSeen.push({ key, at: row.at, via, matched: true, old: true }); return true }
+  }
+  noAnswerSeen.push({ key, at: row.at, via, matched: false })
+  return false
 }
 
 /** Claude Code said it saved an answer of this op to a file instead of passing it on. */
@@ -335,6 +370,7 @@ export function _resetUsageRecorderForTesting(on = true, started = 0): void {
   pending = new Map()
   events = []
   toolErrors = []
+  noAnswerSeen = []
   routeTroubleAt.clear()
   badArgGauges.clear()
   lastPrune = 0

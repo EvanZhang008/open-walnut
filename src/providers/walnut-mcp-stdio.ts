@@ -32,6 +32,7 @@ import { fitToolAnswer } from '../lib/tool-answer-fit.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { withToolUseId } from '../lib/tool-use-id.js'
+import { NoAnswerLog } from '../lib/no-answer-report.js'
 
 /** MCP protocol versions this server speaks; the first is offered when the client's is unknown. */
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
@@ -366,6 +367,20 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     return timer
   }
 
+  // The calls no Walnut answered (this host's daemon or the server away: a restart), told to the hub
+  // with the next call that gets through (lib/no-answer-report.ts): the session hook counts a failed
+  // call only while the server reads the session live, and these fail exactly while it does not.
+  const noAnswers = new NoAnswerLog()
+  const noAnswer = (op: string, code: string) => noAnswers.note(op, code, 'mcp')
+  const tellNoAnswers = () => {
+    if (!noAnswers.size) return
+    const { report, putBack } = noAnswers.take()
+    if (!report.length) return
+    // A word for the monitor, never waited on: an older hub ignores `report` and answers its catalog.
+    void deps.request('tools.list', { report: { no_answer: report } }, MCP_SHORT_REPORT_MS)
+      .then((r) => { if (!r.ok) putBack() }, () => putBack())
+  }
+
   // Calls still running, by the client's request id: `notifications/cancelled` aborts one.
   const running = new Map<string, AbortController>()
   const requestKey = (id: unknown): string | null => (typeof id === 'string' || typeof id === 'number' ? `${typeof id}:${id}` : null)
@@ -412,19 +427,22 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
         resp = await deps.request('tools.call', { name, args, callId, client: 'mcp' }, undefined, signal)
       }
       // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
-      if (resp.ok) return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] }
+      if (resp.ok) { tellNoAnswers(); return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] } }
       const message = deps.formatError(resp.error).join('\n')
       if (resp.error.code === 'hub_timeout') {
         // The call may have run: what it did is the answer, a success included.
         const followed = rerun ? null : await followLost(callId)
         if (followed?.ok) return { content: [{ type: 'text', text: fitToolAnswer(followed.result, { op: name, dir: deps.answerDir }) }] }
         if (followed) return toolError(followed.message)
+        noAnswer(name, 'hub_timeout')
         return toolError(lost(message), resp.error.detail)
       }
+      if (resp.error.code === 'hub_unreachable') noAnswer(name, 'hub_unreachable')
       const away = resp.error.code === 'hub_unreachable' ? awayLines(name, args) : []
       return toolError([message, ...away].join('\n'), resp.error.detail)
     } catch (err) {
       const message = `walnut: no answer from the Walnut daemon: ${err instanceof Error ? err.message : String(err)}`
+      noAnswer(name, 'no_daemon')
       // Refused before a byte left: nothing ran. A socket that broke after the request went: it may have.
       if (neverSent(err)) return toolError([message, ...awayLines(name, args, "this host's Walnut daemon")].join('\n'))
       return toolError(lost(message))

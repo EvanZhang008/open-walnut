@@ -365,6 +365,7 @@ const NOT_ON_LEDGER: readonly string[] = [
   'src/core/replication/kinds/inbox.ts',
   'src/core/session-git-status.ts',
   'src/core/sessions/acp-caller-sid.ts',
+  'src/core/sessions/delivery-ledger.ts', // a session's task for a ledger step, at most 2,000 sessions, each kept 10 minutes
   'src/core/sessions/instruction-diff.ts',
   'src/core/sessions/op-call-log.ts',
   'src/core/sessions/session-extras.ts',

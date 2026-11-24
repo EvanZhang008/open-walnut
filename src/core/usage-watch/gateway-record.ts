@@ -64,3 +64,25 @@ export async function recordShortToolList(sid: string, host: string, report: unk
   } catch { /* recording never fails a call */ }
   return true
 }
+
+/**
+ * A session's client tells the calls of it that no Walnut answered (lib/no-answer-report.ts: the
+ * daemon or the server away, a restart), once a later call got through: each counted as a failed
+ * call of the session at the time it failed, unless the session hook already read it live
+ * (record.ts matches the two). How many were counted; 0 when the report names none.
+ */
+export async function recordNoAnswers(sid: string, host: string, report: unknown, taskIdOf: (sid: string) => Promise<string | undefined>, now = Date.now()): Promise<number> {
+  const { noAnswersOf } = await import('../../lib/no-answer-report.js')
+  const items = noAnswersOf(report)
+  if (!items.length || !sid) return 0
+  let counted = 0
+  try {
+    const taskId = await taskIdOf(sid).catch(() => undefined)
+    const where = !host || host === '__local__' ? 'local' : host
+    for (const n of items) {
+      if (recordToolError({ at: now - n.ms, sid, ...(taskId ? { taskId } : {}), host: where, op: n.op, client: n.client, code: n.code }, 'client')) counted++
+    }
+    log.session.info('real use: a session told calls no Walnut answered', { sessionId: sid, ...(taskId ? { taskId } : {}), host: where, told: items.length, counted, codes: [...new Set(items.map((n) => n.code))] })
+  } catch { /* recording never fails a call */ }
+  return counted
+}

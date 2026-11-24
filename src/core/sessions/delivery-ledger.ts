@@ -11,6 +11,14 @@
  * `written` (in the CLI's input), `read` (the CLI started the line), `failed`, `cancelled`, and
  * `server_start` (where the server restarted, for reading a trail).
  *
+ * Every way into a session is recorded where it cannot be skipped (2026-11-24 audit: a person's words
+ * that raw enqueues and a task's first message carried had no row, and a Threads reply the task read
+ * there stayed `queued` for 20 hours): a queue row where the queue stores it (session-message-queue.ts
+ * enqueueMessage, recordQueuedRow), a session's first line where its start is committed
+ * (claude-code-session.ts, recordStartLine), a Threads reply its owner read there (org/thread-reply.ts,
+ * `read` via `threads`). Each line carries its task (the session's, when the step did not name one).
+ * Ratchet: tests/core/sessions/delivery-ledger-paths-ratchet.test.ts.
+ *
  * Only ids, sessions, tasks, sources and a title: never a message's text. Best effort: a write that
  * fails is logged and never fails a send; one append chain keeps the order.
  */
@@ -44,7 +52,35 @@ export interface DeliveryLine {
   lineUuid?: string;
   /** parked, failed: why. */
   why?: string;
+  /** read: how, when no CLI line carried it (`threads`: its owner read it in its Threads). */
+  via?: string;
   requestId?: string;
+}
+
+/** The id a session's first line (carried by its start, never a queue row) is kept under. */
+export const START_LINE_PREFIX = 'start-';
+
+/**
+ * The task of a session, for a step that did not name one (installed by startDeliveryLedger): a
+ * row's task is how an auditor finds it (`GET /api/delivery?task=`), also once its session is gone.
+ */
+let taskOfSession: ((sessionId: string) => Promise<string | undefined>) | null = null;
+const taskCache = new Map<string, { taskId: string | undefined; at: number }>();
+const TASK_CACHE_MS = 10 * 60_000;
+
+async function taskOf(sessionId: string): Promise<string | undefined> {
+  const hit = taskCache.get(sessionId);
+  if (hit && Date.now() - hit.at < TASK_CACHE_MS) return hit.taskId;
+  const taskId = await taskOfSession!(sessionId).catch(() => undefined);
+  if (taskCache.size >= 2_000) taskCache.delete(taskCache.keys().next().value!);
+  taskCache.set(sessionId, { taskId, at: Date.now() });
+  return taskId;
+}
+
+/** For tests: how a step's session names its task (null: never looked up). */
+export function setDeliveryTaskResolver(fn: ((sessionId: string) => Promise<string | undefined>) | null): void {
+  taskOfSession = fn;
+  taskCache.clear();
 }
 
 const fileOf = (at: string) => path.join(DELIVERY_LEDGER_DIR(), `${at.slice(0, 10)}.ndjson`);
@@ -55,16 +91,50 @@ export function recordDelivery(line: Omit<DeliveryLine, 'at'> & { at?: string })
   const row: DeliveryLine = { at: line.at ?? new Date().toISOString(), ...line } as DeliveryLine;
   if (row.title) row.title = row.title.replace(/\s+/g, ' ').slice(0, 120);
   chain = chain.then(async () => {
+    if (!row.taskId && row.sessionId && taskOfSession) {
+      const taskId = await taskOf(row.sessionId);
+      if (taskId) row.taskId = taskId;
+    }
     await fsp.mkdir(DELIVERY_LEDGER_DIR(), { recursive: true });
     await fsp.appendFile(fileOf(row.at), `${JSON.stringify(row)}\n`, 'utf-8');
   }).catch((err) => log.session.warn('delivery ledger: a step was not recorded', { step: row.step, id: row.id, error: err instanceof Error ? err.message : String(err) }));
   return chain;
 }
 
+/**
+ * A row the queue stored (session-message-queue.ts enqueueMessage): every row of every path, a raw
+ * enqueue included (a send held behind a permission prompt, a letter's answer, a first line start
+ * recovery keeps), with who sent it and its task when the caller knows them.
+ */
+export function recordQueuedRow(row: { id: string; sessionId: string; source?: string; taskId?: string; sentBy?: string }): Promise<unknown> {
+  return recordDelivery({
+    step: 'queued', id: row.id, sessionId: row.sessionId,
+    ...(row.taskId ? { taskId: row.taskId } : {}), ...(row.source ?? row.sentBy ? { source: row.source ?? row.sentBy } : {}),
+  });
+}
+
+/**
+ * A session's first line, carried by its start and never a queue row (a task started with a message,
+ * from the web UI, the phone or an agent), once the start has its session id: written into the
+ * CLI's input. The CLI's `read` of it names its uuid when the start gave one, else it is the first
+ * line read with no queue row (trailsOf). `at`: when the start sent it.
+ */
+export function recordStartLine(line: { sessionId: string; taskId?: string; source?: string; from?: string; lineUuid?: string; at?: string }): Promise<unknown> {
+  const at = line.at ?? new Date().toISOString();
+  return recordDelivery({
+    at, step: 'written', id: `${START_LINE_PREFIX}${line.sessionId}-${Date.parse(at).toString(36)}`, sessionId: line.sessionId,
+    ...(line.taskId ? { taskId: line.taskId } : {}), ...(line.source ? { source: line.source } : {}),
+    ...(line.from ? { from: line.from } : {}), ...(line.lineUuid ? { lineUuid: line.lineUuid } : {}),
+  });
+}
+
 export function onDeliveryEvent(event: BusEvent): Promise<unknown> | undefined {
   switch (event.name) {
     case EventNames.SESSION_MESSAGE_QUEUED: {
       const d = eventData<'session:message-queued'>(event);
+      // A row this server's queue stored is recorded there (recordQueuedRow); a host's row, which
+      // reaches the leader only as its forwarded fact, and a send no queue holds are recorded here.
+      if (d.ledgered && event.source !== 'host-channel') return undefined;
       return recordDelivery({ step: 'queued', id: d.messageId, sessionId: d.sessionId, ...(d.source ? { source: d.source } : {}) });
     }
     case EventNames.SESSION_MESSAGES_DELIVERED: {
@@ -96,6 +166,7 @@ const SUBSCRIBER = 'delivery-ledger';
 
 /** Every emitter of these events is covered by construction (as request-reached.ts). Prunes old days. */
 export function startDeliveryLedger(): { stop: () => void } {
+  setDeliveryTaskResolver(async (sid) => (await (await import('../session-tracker.js')).getSessionByClaudeId(sid))?.taskId ?? undefined);
   void recordDelivery({ step: 'server_start' });
   void pruneDeliveryLedger();
   bus.subscribe(SUBSCRIBER, (event) => { void onDeliveryEvent(event); }, {
@@ -103,7 +174,7 @@ export function startDeliveryLedger(): { stop: () => void } {
     interest: [EventNames.SESSION_MESSAGE_QUEUED, EventNames.SESSION_MESSAGES_DELIVERED, EventNames.SESSION_USER_LINE,
       EventNames.SESSION_BATCH_FAILED, EventNames.SESSION_DELIVERY_HELD, EventNames.SESSION_QUEUED_CANCELLED],
   });
-  return { stop: () => bus.unsubscribe(SUBSCRIBER) };
+  return { stop: () => { bus.unsubscribe(SUBSCRIBER); setDeliveryTaskResolver(null); } };
 }
 
 export async function pruneDeliveryLedger(nowMs = Date.now()): Promise<void> {
@@ -139,9 +210,30 @@ export function trailsOf(lines: readonly DeliveryLine[], nowMs?: number): Delive
   const by = new Map<string, DeliveryLine[]>();
   const add = (id: string, l: DeliveryLine) => by.set(id, [...(by.get(id) ?? []), l]);
   const carrierOf = new Map<string, string>();
+  // A read no queue row names is a session's first line (recordStartLine): by its uuid when the
+  // start gave one, else the first such read of that session at or after the start sent it.
+  const startByUuid = new Map<string, string>();
+  const startsOf = new Map<string, Array<{ id: string; at: string; read: boolean }>>();
+  for (const l of lines) {
+    if (!l.id?.startsWith(START_LINE_PREFIX) || l.step !== 'written' || !l.sessionId) continue;
+    if (l.lineUuid) startByUuid.set(l.lineUuid, l.id);
+    else startsOf.set(l.sessionId, [...(startsOf.get(l.sessionId) ?? []), { id: l.id, at: l.at, read: false }]);
+  }
+  const startOf = (l: DeliveryLine): string | undefined => {
+    const byUuid = l.lineUuid ? startByUuid.get(l.lineUuid) : undefined;
+    if (byUuid) return byUuid;
+    const open = (startsOf.get(l.sessionId ?? '') ?? []).filter((s) => !s.read && s.at <= l.at).sort((a, b) => a.at.localeCompare(b.at))[0];
+    if (open) open.read = true;
+    return open?.id;
+  };
   for (const l of lines) {
     if (l.step === 'server_start') continue;
-    if (l.step === 'read') { for (const id of l.ids ?? []) add(id, l); continue; }
+    if (l.step === 'read') {
+      for (const id of l.ids ?? []) add(id, l);
+      if (!l.ids?.length && !l.id) { const start = startOf(l); if (start) add(start, l); }
+      else if (l.id && !l.ids?.length) add(l.id, l);
+      continue;
+    }
     if (l.step === 'carried') { for (const id of l.ids ?? []) { add(id, l); if (l.id) carrierOf.set(id, l.id); } continue; }
     if (l.id) add(l.id, l);
   }
@@ -177,4 +269,34 @@ export async function readDeliveryLines(days = 3, nowMs = Date.now()): Promise<D
     }
   }
   return out;
+}
+
+/**
+ * A start whose first line goes into the CLI's input with the start itself (no queue row holds it:
+ * a native start, a host's start), recorded once the start has its session id (recordStartLine).
+ * Wraps the start's commit (hints/hint-send.ts prepareStartHints), which every branch of both start
+ * entries calls with that id (claude-code-session.ts). `queued`: its first line is a queue row
+ * (an ACP start), recorded where the queue stores it.
+ */
+export function withStartLine<T extends { commit(sessionId: string): Promise<void> }>(
+  started: T,
+  data: { message?: string; taskId?: string; firstLineUuid?: string; attributionSource?: string },
+  source: string | undefined,
+  queued: boolean,
+): T {
+  if (queued || !data.message?.trim()) return started;
+  const at = new Date().toISOString();
+  const by = data.attributionSource ?? source;
+  return {
+    ...started,
+    commit: (sessionId: string) => {
+      if (sessionId) {
+        void import('./send-sent-by.js').then(({ queueSentBy }) => recordStartLine({
+          at, sessionId, ...(data.taskId ? { taskId: data.taskId } : {}), ...(by ? { source: by } : {}),
+          ...(queueSentBy(by) === 'person' ? { from: 'person' } : {}), ...(data.firstLineUuid ? { lineUuid: data.firstLineUuid } : {}),
+        })).catch(() => {});
+      }
+      return started.commit(sessionId);
+    },
+  };
 }

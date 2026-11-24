@@ -12638,7 +12638,9 @@ export class SessionRunner {
           try {
             // A new conversation's first message carries the hints due at its start (hints/hint-send.ts).
             const { prepareStartHints } = await sessionPort().messages.loadHintSend()
-            const started = await prepareStartHints(startData)
+            // Its first line in the delivery ledger once the start has its id (sessions/delivery-ledger.ts).
+            const { withStartLine } = await import('../core/sessions/delivery-ledger.js')
+            const started = withStartLine(await prepareStartHints(startData), startData, event.source, !startGoesToHost(startData.host) && isAcpEngine(startData.engine))
             if (startGoesToHost(started.data.host)) {
               await startOnJudgingHost(started.data, (sid) => started.commit(sid), event.source, (err) => this.failUnspawnedStart(startData, err))
             } else if (isAcpEngine(startData.engine)) {
@@ -13441,7 +13443,9 @@ export class SessionRunner {
     await this.assertStartRouting(data)
     // A new conversation's first message carries the hints due at its start (hints/hint-send.ts).
     const { prepareStartHints } = await sessionPort().messages.loadHintSend()
-    const started = await prepareStartHints(data)
+    // Its first line in the delivery ledger once the start has its id (sessions/delivery-ledger.ts).
+    const { withStartLine } = await import('../core/sessions/delivery-ledger.js')
+    const started = withStartLine(await prepareStartHints(data), data, framedBy, !startGoesToHost(data.host) && isAcpEngine(data.engine))
     data = started.data
     assertDemoAdmission() // a stopping Demo starts no session (core/sessions/demo-admission.ts)
     if (startGoesToHost(data.host)) return startOnJudgingHost(data, (sid) => started.commit(sid), framedBy, (err) => this.failUnspawnedStart(data, err))
@@ -14185,7 +14189,7 @@ export class SessionRunner {
     if (data.message) {
       // The session is spawned: a first line that cannot be stored yet is stored later, never
       // thrown (a failed start would be started again, a second session for the same line).
-      const queued = await enqueueMessage(sid, data.message).catch((err: unknown) => {
+      const queued = await enqueueMessage(sid, data.message, { source: 'session-start', ...(data.taskId ? { taskId: data.taskId } : {}) }).catch((err: unknown) => {
         log.session.error('acp: the first line could not be stored; it is tried again until it is', {
           sessionId: sid, taskId: data.taskId, error: err instanceof Error ? err.message : String(err),
         })
@@ -14202,6 +14206,7 @@ export class SessionRunner {
         messageId: queued.id,
         message: data.message,
         source: 'session-start',
+        ledgered: true,
       }, ['main-ai'], { source: 'session-start' })
       await this.drainAcpQueue(session, sid)
       // The launch's own title kick: quick-start fires it only for a native launch, whose id

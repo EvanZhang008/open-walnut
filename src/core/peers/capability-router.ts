@@ -199,13 +199,16 @@ async function handleHistoryFetch(payload: Record<string, unknown>, host: string
  */
 async function handleToolsList(payload: Record<string, unknown>, host: string, callerSid: string, deps: CapabilityRouterDeps): Promise<CapabilityOutcome> {
   // A host's MCP server says its session was given fewer tools than its whole list for a while
-  // (walnut-mcp-stdio.ts tellShort): counted for the real-use monitor, nothing listed back.
+  // (walnut-mcp-stdio.ts tellShort), or a session's client tells its calls no Walnut answered
+  // (lib/no-answer-report.ts): counted for the real-use monitor, nothing listed back.
   if (payload.report !== undefined) {
-    // Only a session's own server says it: a caller with no session (a bare `walnut`) counts nothing.
+    // Only a session's own client says it: a caller with no session (a bare `walnut`) counts nothing.
     if (!callerSid || isExternalCallerSid(callerSid)) return { ok: true, result: { recorded: false } };
-    const { recordShortToolList } = await import('../usage-watch/gateway-record.js');
+    const { recordNoAnswers, recordShortToolList } = await import('../usage-watch/gateway-record.js');
     const taskOf = deps.taskOfCaller ?? (async (sid: string) => (await (await import('../session-tracker.js')).getSessionByClaudeId(sid))?.taskId ?? undefined);
-    return { ok: true, result: { recorded: await recordShortToolList(callerSid, host, payload.report, taskOf) } };
+    const short = await recordShortToolList(callerSid, host, payload.report, taskOf);
+    const noAnswer = await recordNoAnswers(callerSid, host, payload.report, taskOf);
+    return { ok: true, result: { recorded: short || noAnswer > 0, ...(noAnswer ? { no_answer: noAnswer } : {}) } };
   }
   const { areaOpsForCaller } = await import('../router/gateway-policy.js');
   const areaOps = await areaOpsForCaller(callerSid);

@@ -205,10 +205,18 @@ export async function repliesReadByOwner(owner: string, threadIds: readonly stri
     const { deleteMessage, findQueuedMessage } = await import('../session-message-queue.js');
     // A row that also carries a reply on a thread the task did not read keeps going.
     const still = new Set((await store.readThreads(owner)).threads.flatMap((t) => t.messages.filter(deliveryOpen).map((m) => m.delivery?.queued)));
+    const sid = (await sessionOf(owner).catch(() => null))?.claudeSessionId;
     for (const qm of rows) {
       queuedRows.delete(qm);
       const row = still.has(qm) ? null : await findQueuedMessage(qm);
       if (row && row.status !== 'processing') await deleteMessage(row.sessionId, qm).catch(() => false);
+      // Read by pull: its row reads `read` in the delivery ledger, not `queued` for ever (2026-11-24
+      // audit). A row that also carries a reply not read here, or one already in the CLI, reads as the CLI reads it.
+      if (!still.has(qm) && row?.status !== 'processing') {
+        void import('../sessions/delivery-ledger.js').then((l) => l.recordDelivery({
+          step: 'read', ids: [qm], via: 'threads', taskId: owner, ...(row?.sessionId ?? sid ? { sessionId: row?.sessionId ?? sid } : {}),
+        })).catch(() => {});
+      }
     }
   }
   if (!(await store.hasOpenDeliveries(owner))) pendingOwners.delete(owner);

@@ -18,7 +18,7 @@ import { DROP_WHY, _clearHeldNotices, dropParts, pendingHeldNotices } from '../.
 import { _resetHeldStoreForTesting } from '../../../src/core/sessions/held-notices-store.js'
 import { holdQuietNote } from '../../../src/core/sessions/quiet-notes.js'
 import {
-  DELIVERY_LEDGER_DIR, onDeliveryEvent, pruneDeliveryLedger, readDeliveryLines, recordDelivery, trailsOf,
+  DELIVERY_LEDGER_DIR, START_LINE_PREFIX, onDeliveryEvent, pruneDeliveryLedger, readDeliveryLines, recordDelivery, setDeliveryTaskResolver, trailsOf, withStartLine,
   type DeliveryLine,
 } from '../../../src/core/sessions/delivery-ledger.js'
 
@@ -154,5 +154,78 @@ describe('the send path', () => {
     // A row held for a cold session's next wake or a turn's end is parked, with why.
     const queue = await fs.readFile('src/core/session-message-queue.ts', 'utf-8')
     expect(queue).toMatch(/if \(holdsCold \|\| holdsRow\) \{[\s\S]{0,400}step: 'parked', id: msg\.id, sessionId, why/)
+  })
+})
+
+/**
+ * 2026-11-24 audit: a person's words that a raw enqueue or a task's start carried had no row, rows
+ * of a session whose task the route could not find had no task, and a Threads reply its task read
+ * there stayed `queued` for 20 hours.
+ */
+describe('every way into a session has its row, with its task', () => {
+  it('a row the queue stores is queued there, a raw enqueue too, with who sent it and its task', async () => {
+    const { enqueueMessage, resetCache } = await import('../../../src/core/session-message-queue.js')
+    resetCache()
+    // As the send held behind a permission prompt and a letter's answer queue it: no bus event.
+    const raw = await enqueueMessage('s-perm', 'his words', { sentBy: 'person' })
+    const sent = await enqueueMessage('s-ui', 'more words', { source: 'ui', taskId: 'task-ui' })
+    await settle()
+    const by = Object.fromEntries(trailsOf(await readDeliveryLines(1)).map((x) => [x.id, x]))
+    expect(by[raw.id]).toMatchObject({ state: 'queued', sessionId: 's-perm' })
+    expect(by[raw.id].steps[0].source).toBe('person')
+    expect(by[sent.id]).toMatchObject({ state: 'queued', sessionId: 's-ui', taskId: 'task-ui' })
+    // The queue's own event says so, and is not recorded twice; a host's forwarded one still is.
+    await onDeliveryEvent(ev(EventNames.SESSION_MESSAGE_QUEUED, { sessionId: 's-ui', messageId: sent.id, source: 'ui', ledgered: true }))
+    await onDeliveryEvent({ name: EventNames.SESSION_MESSAGE_QUEUED, data: { sessionId: 's-host', messageId: 'qm-host-1', ledgered: true }, source: 'host-channel', timestamp: Date.now() } as never)
+    const lines = await readDeliveryLines(1)
+    expect(lines.filter((l) => l.id === sent.id && l.step === 'queued')).toHaveLength(1)
+    expect(lines.filter((l) => l.id === 'qm-host-1' && l.step === 'queued')).toHaveLength(1)
+  })
+
+  it('a step that names no task gets its session\'s, so ?task= finds it after its session is gone', async () => {
+    setDeliveryTaskResolver(async (sid) => (sid === 's-pi' ? 'mtaskpi-0001' : undefined))
+    try {
+      await onDeliveryEvent(ev(EventNames.SESSION_MESSAGE_QUEUED, { sessionId: 's-pi', messageId: 'qm-pi', source: 'ui' }))
+      await onDeliveryEvent(ev(EventNames.SESSION_MESSAGES_DELIVERED, { sessionId: 's-pi', count: 1, messageIds: ['qm-pi'] }))
+      await recordDelivery({ step: 'queued', id: 'qm-other', sessionId: 's-other' })
+    } finally { setDeliveryTaskResolver(null) }
+    const lines = await readDeliveryLines(1)
+    expect(lines.filter((l) => l.id === 'qm-pi').map((l) => l.taskId)).toEqual(['mtaskpi-0001', 'mtaskpi-0001'])
+    expect(lines.find((l) => l.id === 'qm-other')?.taskId).toBeUndefined()
+  })
+
+  it('a task\'s first line, carried by its start: written once the start has its id, read when the CLI starts it', async () => {
+    const commits: string[] = []
+    const base = { data: {}, commit: async (sid: string) => { commits.push(sid) } }
+    // With the uuid the start gave, and without one (the first line read with no queue row).
+    await withStartLine(base, { message: 'a first question', taskId: 'mtaskfirst-1', attributionSource: 'ui', firstLineUuid: 'u-first' }, 'web-ui', false).commit('s-new')
+    await withStartLine(base, { message: 'another first question', taskId: 'mtasktwo-1', attributionSource: 'mobile' }, undefined, false).commit('s-two')
+    // An ACP start's first line is a queue row (recorded where the queue stores it); an init-only start has none.
+    await withStartLine(base, { message: 'hi', taskId: 't-acp' }, 'ui', true).commit('s-acp')
+    await withStartLine(base, { message: '  ', taskId: 't-init' }, 'ui', false).commit('s-init')
+    expect(commits).toEqual(['s-new', 's-two', 's-acp', 's-init'])
+    await settle()
+    await onDeliveryEvent(ev(EventNames.SESSION_USER_LINE, { sessionId: 's-new', uuid: 'u-first', taskId: 'mtaskfirst-1' }))
+    await onDeliveryEvent(ev(EventNames.SESSION_USER_LINE, { sessionId: 's-two', uuid: 'u-cli', taskId: 'mtasktwo-1' }))
+    // A later line with no row of the same session is not that first line again.
+    await onDeliveryEvent(ev(EventNames.SESSION_USER_LINE, { sessionId: 's-two', uuid: 'u-later' }))
+    const trails = trailsOf(await readDeliveryLines(1))
+    const starts = trails.filter((x) => x.id.startsWith(START_LINE_PREFIX))
+    expect(starts.map((x) => ({ session: x.sessionId, task: x.taskId, state: x.state, from: x.from, reads: x.steps.filter((s) => s.step === 'read').length })).sort((a, b) => a.session!.localeCompare(b.session!))).toEqual([
+      { session: 's-new', task: 'mtaskfirst-1', state: 'read', from: 'person', reads: 1 },
+      { session: 's-two', task: 'mtasktwo-1', state: 'read', from: 'person', reads: 1 },
+    ])
+    expect(starts.find((x) => x.sessionId === 's-new')!.steps[0].source).toBe('ui')
+  })
+
+  it('a Threads reply its task read there reads `read`, not queued for ever', () => {
+    const by = Object.fromEntries(trailsOf([
+      { at: t(0), step: 'queued', id: 'qm-reply-0001', sessionId: 's1', source: 'ui' },
+      { at: t(0), step: 'parked', id: 'qm-reply-0001', sessionId: 's1', why: 'held for the end of the running turn' },
+      { at: t(1), step: 'cancelled', id: 'qm-reply-0001', sessionId: 's1' },
+      { at: t(1), step: 'read', ids: ['qm-reply-0001'], via: 'threads', sessionId: 's1', taskId: 'mtaskowner' },
+    ], Date.parse(t(1200))).map((x) => [x.id, x]))
+    expect(by['qm-reply-0001']).toMatchObject({ state: 'read', taskId: 'mtaskowner' })
+    expect(by['qm-reply-0001'].waitingMin).toBeUndefined()
   })
 })

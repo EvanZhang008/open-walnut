@@ -42,6 +42,7 @@ import {
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, inGroup, type ToolGroupRow, type ToolRow } from '../ops/op-help.js'
 import { failureOnStdout, gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
+import { NO_ANSWER_CODES, noAnswerSpoolFile, spoolHoldsNoAnswers, spoolNoAnswer, takeSpooledNoAnswers } from '../lib/no-answer-report.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { PROGRAM_CLIENT, cliAnswerText } from '../lib/tool-answer-size.js'
 import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
@@ -1072,6 +1073,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   } catch (err) {
     if (err instanceof WalnutCliTimeoutError) {
       const message = `no reply from the Walnut daemon within ${Math.round(socketTimeoutMs / 1000)}s`
+      if (parsed.kind === 'tools.call') keepNoAnswer(socketPath, sid, parsed.name, 'hub_timeout')
       if (call) {
         const lost = lostCallInfo()
         return failCall('hub_timeout', message, 5, { notes: lostRunNotes(), detail: lost })
@@ -1082,6 +1084,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     const msg = `Walnut daemon socket unreachable at ${socketPath}: ${err instanceof Error ? err.message : String(err)}`
     // Refused before a byte left: nothing ran. A socket that broke after the request went: it may have.
     if (parsed.kind === 'tools.call') {
+      keepNoAnswer(socketPath, sid, parsed.name, 'daemon_unreachable')
       const sent = !neverSent(err)
       const notes = sent ? lostRunNotes() : awayLines(parsed.name, callArgs, "this host's Walnut daemon")
       const lost = sent ? lostCallInfo() : undefined
@@ -1111,6 +1114,11 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
 
   if (parsed.kind === 'tools.call' && argsFile === undefined) {
     await recordCardedCall(socketPath, sid, parsed.name, callArgs, argForm, argPath, resp)
+  }
+  // A call that got through tells the calls of this session no Walnut answered; one that got none is kept.
+  if (parsed.kind === 'tools.call') {
+    if (resp.ok) await tellKeptNoAnswers(socketPath, sid)
+    else keepNoAnswer(socketPath, sid, parsed.name, resp.error.code)
   }
 
   if (!resp.ok && parsed.kind === 'tools.call') {
@@ -1181,6 +1189,29 @@ export async function recordCardedCallViaDaemon(
 
 /** How long a call's record may hold the CLI's exit (display data only). */
 const RECORD_TIMEOUT_MS = 2_000
+
+/**
+ * A call of this session no Walnut answered (this host's daemon or the server away), kept beside the
+ * daemon's socket for the session's next call that gets through (lib/no-answer-report.ts): the
+ * session hook counts it only while the server reads the session live, which it does not then.
+ */
+function keepNoAnswer(socketPath: string, sid: string, op: string, code: string): void {
+  if (!sid || sid === EXTERNAL_CALLER_SID || !NO_ANSWER_CODES.has(code)) return
+  spoolNoAnswer(noAnswerSpoolFile(socketPath, sid), op, code, 'cli')
+}
+
+/** Tell the hub what keepNoAnswer kept, within RECORD_TIMEOUT_MS; kept again when it did not go. */
+async function tellKeptNoAnswers(socketPath: string, sid: string): Promise<void> {
+  if (!sid || sid === EXTERNAL_CALLER_SID) return
+  const file = noAnswerSpoolFile(socketPath, sid)
+  if (!spoolHoldsNoAnswers(file)) return
+  const { report, putBack } = takeSpooledNoAnswers(file)
+  if (!report.length) return
+  try {
+    const r = await requestOverSocket(socketPath, gatewayListLine('tools.list', sid, { report: { no_answer: report } }, RECORD_TIMEOUT_MS))
+    if (!r.ok) putBack()
+  } catch { putBack() }
+}
 
 /**
  * Leave Walnut a record of what a carded call said (core/op-cards.ts,
