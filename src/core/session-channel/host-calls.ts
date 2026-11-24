@@ -62,6 +62,21 @@ export function hostCallAllowed(target: string, member: string): target is HostC
   return Array.isArray(list) && list.includes(member)
 }
 
+/**
+ * A call's arguments as they cross (JSON): a trailing argument left out stays left out, an inner one
+ * left out is null (JSON carries no undefined). Without the first, a member's optional trailing
+ * parameter arrived as null on the host, which a `!== undefined` check reads as given: a prompt's
+ * answer from the leader carried `optionId: null` and the host refused it as an unknown option
+ * (2026-11-24, host-judged-every-connection-e2e C2). Every caller of a host call shapes its
+ * arguments with this: the leader's proxy (remote-judged-session.ts) and the companion's phone path
+ * (companion-host-ops.ts).
+ */
+export function wireArgs(args: readonly unknown[]): unknown[] {
+  const out = [...args]
+  while (out.length > 0 && out[out.length - 1] === undefined) out.pop()
+  return out.map((v) => (v === undefined ? null : v))
+}
+
 /** Targets whose members take the session id first (the runner's methods, the lifecycle controls). */
 const SID_FIRST: ReadonlySet<HostCallTarget> = new Set(['runner', 'lifecycle'])
 

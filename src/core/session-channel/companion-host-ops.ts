@@ -321,11 +321,8 @@ export async function permissionViaHost(t: OperatedSession, b: Record<string, un
     }
   }
   const patch = given !== undefined && Object.keys(given).length > 0 ? { answers: given } : undefined
-  // The session's own parameters (claude-code-session.ts, acp-session.ts); a trailing one left out is
-  // absent there, an inner one null (JSON carries no undefined).
-  const raw: unknown[] = acp ? [requestId, allow, optionId] : [requestId, allow, message, patch, optionId]
-  while (raw.length > 0 && raw[raw.length - 1] === undefined) raw.pop()
-  const args = raw.map((v) => (v === undefined ? null : v))
+  // The session's own parameters (claude-code-session.ts, acp-session.ts), shaped as every host call's (host-calls.ts wireArgs).
+  const args = (await import('./host-calls.js')).wireArgs(acp ? [requestId, allow, optionId] : [requestId, allow, message, patch, optionId])
   const sid = t.row.claudeSessionId
   const r = await call(t, '/host-api/sessions/call', { sid, target: acp ? 'acp' : 'session', member: 'resolvePermissionRequest', args }, timeoutMs)
   if (!r.ok) {

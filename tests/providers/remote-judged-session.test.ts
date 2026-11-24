@@ -31,6 +31,16 @@ function fakeHost() {
 }
 
 describe('RemoteJudgedSession', () => {
+  it('sends a call\'s arguments as the host\'s method reads them: a trailing one left out stays out, an inner one is null', async () => {
+    const calls = fakeHost()
+    const p = remoteJudgedSession('s1', 'devbox', 'native')
+    // The leader's prompt answer (session-lifecycle.ts respondSessionPermission) names every parameter;
+    // an optionId sent as null read as given on the host, which refused it as an unknown option.
+    await p.resolvePermissionRequest('req-1', true, undefined, undefined, undefined)
+    await p.resolvePermissionRequest('req-2', true, undefined, { answers: { q: 'a' } }, undefined)
+    expect(calls.map((c) => c.args)).toEqual([['req-1', true], ['req-2', true, null, { answers: { q: 'a' } }]])
+  })
+
   it('is one stable object per session id, also across a rename', () => {
     const a = remoteJudgedSession('s1', 'devbox', 'native')
     expect(remoteJudgedSession('s1', 'devbox', 'native')).toBe(a)
