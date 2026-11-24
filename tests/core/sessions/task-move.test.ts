@@ -34,6 +34,8 @@ const W = vi.hoisted(() => {
     starts: [] as Array<Record<string, unknown>>,
     stops: [] as string[],
     failStart: false,
+    /** The error a failed start throws (default: a plain one). */
+    failWith: null as Error | null,
     /** The server's stop comes while a start is under way (its CLI spawned, its answer cut off). */
     stopAtStart: false,
     /** A start waits on this while set (a move still in flight). */
@@ -150,7 +152,7 @@ vi.mock('../../../src/core/sessions/task-start.js', () => ({
     const sid = `moved-sid-${++W.nextSid}`;
     await createSessionRecord(sid, String(params.taskIdPrefix), 'Marina', String(params.cwd));
     await updateSessionRecord(sid, { host: params.host === '__local__' ? undefined : params.host, process_status: 'idle', messageCount: 1 } as never);
-    if (W.failStart) throw new Error('the CLI would not start');
+    if (W.failStart) throw W.failWith ?? new Error('the CLI would not start');
     if (W.stopAtStart) {
       (await import('../../../src/core/server-stopping.js')).markServerStopping();
       throw new Error('the start was cut off before it confirmed');
@@ -290,7 +292,7 @@ beforeEach(async () => {
   for (const h of Object.values(W.homes)) { fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(h, { recursive: true }); }
   W.owner.clear(); W.stopRefused.clear(); W.stopsAtStart.length = 0;
   __setOwnerViewForTesting(async (rec) => W.owner.get(rec.claudeSessionId) ?? null);
-  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.stopAtStart = false; W.history = {}; W.changes = []; W.changesFail = false; W.packs = []; W.gate = null; W.failList = false; W.failApply = false;
+  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.failWith = null; W.stopAtStart = false; W.history = {}; W.changes = []; W.changesFail = false; W.packs = []; W.gate = null; W.failList = false; W.failApply = false;
   await mutateStore((st) => { st.queues = {}; }, false, true);
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
   // Each host's daemon answers fs.stat for its own folders only (both live on this machine).
@@ -902,6 +904,26 @@ describe('task_move', () => {
     expect(old?.archived).toBeFalsy();
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed', move: true });
     expect(fs.readFileSync(path.join(shared, 'own.txt'), 'utf8')).toBe('the task\'s edit\n');
+  }, 120_000);
+
+  it('a move refused for want of the engine\'s sign-in on the target says so, names the host, and still says where the copy stays', async () => {
+    const { EngineSignInRequiredError } = await import('../../../src/providers/delivery-failure.js');
+    const { QuickStartError } = await import('../../../src/core/sessions/quick-start.js');
+    const { notSignedInSentence, parseNotSignedIn } = await import('../../../src/core/agents/engine-sign-in-words.js');
+    const { taskId, sid } = await taskInSharedCheckout();
+    const words = notSignedInSentence('antigravity', 'cloud');
+    W.failStart = true;
+    W.failWith = Object.assign(new QuickStartError(`Task ${taskId} could not start: ${words}`, 502), {
+      cause: new EngineSignInRequiredError(words, 'antigravity', 'cloud', 'cloud'),
+    });
+    const refused = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }).catch((e: unknown) => e);
+    expect(refused).toMatchObject({ status: 409, code: 'sign_in_required', detail: { signIn: { engine: 'antigravity', host: 'cloud', hostName: 'cloud' } } });
+    expect(String((refused as Error).message)).toMatch(/^Antigravity is not signed in on cloud\. Open Settings to sign in\. The task stays on this Mac; the copied work is kept at \//);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+    const failed = (await getTask(taskId)).engine_switch;
+    expect(failed).toMatchObject({ state: 'failed', move: true });
+    // The chat reads it back as the sign-in, the copy's place kept in its line.
+    expect(parseNotSignedIn(failed?.error)).toMatchObject({ engine: 'antigravity', hostName: 'cloud', line: expect.stringContaining('the copied work is kept at') });
   }, 120_000);
 
   it('a message sent while the task moves is held at once (never waits for the copy) and goes with the task', async () => {

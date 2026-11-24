@@ -2174,7 +2174,10 @@ session instead.
   engine_not_on_host` (the task's host cannot run that engine: its CLI is not
   installed there, or it is the custom engine, which runs on the Mac only; move
   the work with `/tasks/:id/move`), `502 start_failed` (the old session is
-  the task's session again), `409 switch_in_progress` (one is running) and `409
+  the task's session again), `409 sign_in_required` (the engine's CLI is not signed in on that
+  host; the old session is the task's again; additive `signIn: { engine, host, hostName }` names
+  where to sign in, and `error` is the sentence "<Engine> is not signed in on <host>. Open Settings
+  to sign in."), `409 switch_in_progress` (one is running) and `409
   switch_pending` (one already waits for this turn; cancel it first). A task with no conversation yet just starts on the
   engine. The write answers `501 not_supported_cloud` on the companion.
 - `DELETE /api/v1/tasks/:id/switch-engine` (`?deliver=1` or `{ deliver: true }`)
@@ -2610,7 +2613,8 @@ directory on that host.
   `400 unknown_host`, `400 same_host`, `409 no_conversation` (start it with a host
   instead), `409 workspace_task`, `409 engine_not_on_host`, `409
   switch_in_progress`, `409 daemon_upgrade_required`, `502 target_task_dir`,
-  `502 start_failed` (the task stays where it was). `Task.engine_switch` carries
+  `502 start_failed` (the task stays where it was), `409 sign_in_required` (as for
+  switch-engine, its `error` then says where the copied work stays). `Task.engine_switch` carries
   `move: true`, `from_host`, `from_cwd`, `moved`, `user_words`;
   `switched_from` of the new session carries `fromHost`/`fromCwd`. `501
   not_supported_cloud` on the companion.

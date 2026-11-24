@@ -136,6 +136,9 @@ describe('the not-signed-in sentence', () => {
       }
     }
     expect(parseNotSignedIn('Antigravity is not signed in on devbox.')?.hostName).toBe('devbox')
+    // What a move adds after it (where its copy stays) reads back in the line.
+    expect(parseNotSignedIn('Antigravity is not signed in on dev.example.test. Open Settings to sign in. The task stays on this Mac; the copied work is kept at /w/x.'))
+      .toEqual({ engine: 'antigravity', hostName: 'dev.example.test', line: 'Antigravity is not signed in on dev.example.test. The task stays on this Mac; the copied work is kept at /w/x.' })
     expect(parseNotSignedIn('Nobody is not signed in on devbox.')).toBeNull()
     expect(parseNotSignedIn('Send failed: socket closed')).toBeNull()
     expect(parseNotSignedIn(undefined)).toBeNull()

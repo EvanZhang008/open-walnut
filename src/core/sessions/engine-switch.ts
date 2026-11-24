@@ -79,10 +79,12 @@ export class EngineSwitchError extends Error {
  * failed start, which the web retries and which named task_start to a person. 409: nothing changes
  * until someone signs it in. Any other error: null.
  */
-function signInRefusal(err: unknown): { words: Error; as: EngineSwitchError } | null {
+function signInRefusal(err: unknown, after?: string): { words: Error; as: EngineSwitchError } | null {
   const signIn = engineSignInOf(err);
   if (!signIn) return null;
-  return { words: new Error(signIn.message), as: new EngineSwitchError(signIn.message, 409, SIGN_IN_REQUIRED, { signIn: signIn.signIn }) };
+  // `after`: what a move adds (where its copied work stays), after the sentence, which reads back with it.
+  const words = after ? `${signIn.message} ${after}` : signIn.message;
+  return { words: new Error(words), as: new EngineSwitchError(words, 409, SIGN_IN_REQUIRED, { signIn: signIn.signIn }) };
 }
 
 export interface EngineSwitchRequest {
@@ -776,10 +778,11 @@ async function handOver(
     // A stop cut it: that stop may not have reached it (its link is down); the next boot stops it through its owner.
     progress.start = { ...(sessionId ? { session_id: sessionId } : {}), since: startedAt };
     await restore(taskId, old, sessionId, startedAt, state.id, err);
-    const signIn = signInRefusal(err);
+    const stays = `The task stays on ${normalizeHost(old.host) === LOCAL_HOST ? 'this Mac' : old.host}; the copied work is kept at ${prepared.cwd ?? 'its task directory'}.`;
+    const signIn = signInRefusal(err, state.move ? stays : undefined);
     if (signIn) throw await fail(taskId, state, signIn.words, signIn.as, progress);
     throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
-      ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${normalizeHost(old.host) === LOCAL_HOST ? 'this Mac' : old.host}; the copied work is kept at ${prepared.cwd ?? 'its task directory'}.`
+      ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. ${stays}`
       : `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,
       502, 'start_failed'), progress);
   }

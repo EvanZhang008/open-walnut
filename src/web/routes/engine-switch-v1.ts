@@ -19,30 +19,11 @@ import type { SessionEffort, SessionEngine, SessionMode, SessionRecord, Task } f
 import { missingIsNull } from '../../lib/id-ref.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
-import { QuickStartError } from '../../core/sessions/quick-start.js'
+import { callerSid, sendSwitchError } from './session-switch-route.js'
 
 export const engineSwitchV1Router = Router()
 
-function callerSid(req: Request): string | undefined {
-  const raw = req.headers['x-walnut-caller-sid']
-  const sid = Array.isArray(raw) ? raw[0] : raw
-  return typeof sid === 'string' && sid.trim() ? sid.trim() : undefined
-}
 
-function sendError(res: Response, err: unknown, next: NextFunction): void {
-  const status = (err as { status?: number }).status
-  if (typeof status === 'number') {
-    const detail = (err as { detail?: Record<string, unknown> }).detail
-    res.status(status).json({ ...(detail ?? {}), error: err instanceof Error ? err.message : String(err), code: (err as { code?: string }).code })
-    return
-  }
-  // The new session's start was refused with its own answer (task-start.ts): a setting is 422 engine_config.
-  if (err instanceof QuickStartError && typeof err.body?.code === 'string') {
-    res.status(err.statusCode).json({ error: err.message, code: err.body.code })
-    return
-  }
-  next(err)
-}
 
 /** One row of GET /tasks/:id/sessions. */
 export function sessionHistoryRow(r: SessionRecord, activeId: string | undefined) {
@@ -144,9 +125,9 @@ engineSwitchV1Router.post('/tasks/:id/switch-engine', async (req: Request, res: 
       res.status(202).json({ state: 'switching', taskId: String(req.params.id) })
       return
     }
-    if ('e' in outcome) { sendError(res, outcome.e, next); return }
+    if ('e' in outcome) { sendSwitchError(res, outcome.e, next); return }
     res.status(outcome.r.state === 'pending' ? 202 : 200).json(outcome.r)
-  } catch (err) { sendError(res, err, next) }
+  } catch (err) { sendSwitchError(res, err, next) }
 })
 
 engineSwitchV1Router.delete('/tasks/:id/switch-engine', async (req: Request, res: Response, next: NextFunction) => {
@@ -155,5 +136,5 @@ engineSwitchV1Router.delete('/tasks/:id/switch-engine', async (req: Request, res
     const { cancelPendingSwitch } = await import('../../core/sessions/engine-switch.js')
     const deliver = body.deliver === true || req.query.deliver === '1'
     res.json(await cancelPendingSwitch(String(req.params.id), { deliver }))
-  } catch (err) { sendError(res, err, next) }
+  } catch (err) { sendSwitchError(res, err, next) }
 })

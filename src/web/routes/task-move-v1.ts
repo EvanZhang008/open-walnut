@@ -15,25 +15,13 @@ import type { SessionEngine, Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
+import { callerSid, sendSwitchError } from './session-switch-route.js'
 
 export const taskMoveV1Router = Router()
 
 const DEFAULT_TEXT = 'Your task moved to this host. Check that its work is set up here (the move note above says where), then carry on where it stood. If it was waiting on someone, say so and stop.'
 
-function callerSid(req: Request): string | undefined {
-  const raw = req.headers['x-walnut-caller-sid']
-  const sid = Array.isArray(raw) ? raw[0] : raw
-  return typeof sid === 'string' && sid.trim() ? sid.trim() : undefined
-}
 
-function sendError(res: Response, err: unknown, next: NextFunction): void {
-  const status = (err as { status?: number }).status
-  if (typeof status === 'number') {
-    res.status(status).json({ error: err instanceof Error ? err.message : String(err), code: (err as { code?: string }).code })
-    return
-  }
-  next(err)
-}
 
 taskMoveV1Router.use('/tasks/:id/move', (req: Request, res: Response, next: NextFunction) => {
   if (!isFollower()) { next(); return }
@@ -127,9 +115,9 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
       res.status(202).json({ state: 'moving', taskId: task.id, host, ...teamField })
       return
     }
-    if ('e' in outcome) { sendError(res, outcome.e, next); return }
+    if ('e' in outcome) { sendSwitchError(res, outcome.e, next); return }
     res.status(outcome.r.state === 'pending' ? 202 : 200).json({ ...outcome.r, ...teamField })
-  } catch (err) { sendError(res, err, next) }
+  } catch (err) { sendSwitchError(res, err, next) }
 })
 
 taskMoveV1Router.get('/hosts/load', async (_req: Request, res: Response, next: NextFunction) => {

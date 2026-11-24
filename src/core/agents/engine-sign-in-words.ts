@@ -18,11 +18,11 @@ export interface NotSignedIn {
   engine: SessionEngine;
   /** The host as the sentence names it ("this Mac", a label, an alias). */
   hostName: string;
-  /** The sentence without its "Open Settings" tail: what the chat shows beside its own button. */
+  /** The sentence without its "Open Settings" tail, then what followed it (a move's "the copied work is kept at ..."): what the chat shows beside its own button. */
   line: string;
 }
 
-const SENTENCE = /^(.+?) is not signed in on (.+?)\.(?: Open Settings to sign in\.)?$/;
+const SENTENCE = /^(.+?) is not signed in on (.+?)\.(?: Open Settings to sign in\.)?(?: (\S.*))?$/s;
 
 /** The engine and host a not-signed-in sentence names, or null for any other text. */
 export function parseNotSignedIn(text: string | null | undefined): NotSignedIn | null {
@@ -31,5 +31,5 @@ export function parseNotSignedIn(text: string | null | undefined): NotSignedIn |
   if (!m) return null;
   const engine = (Object.keys(ENGINE_FULL_NAMES) as SessionEngine[]).find((id) => ENGINE_FULL_NAMES[id] === m[1]);
   if (!engine) return null;
-  return { engine, hostName: m[2]!, line: `${m[1]} is not signed in on ${m[2]}.` };
+  return { engine, hostName: m[2]!, line: `${m[1]} is not signed in on ${m[2]}.${m[3] ? ` ${m[3]}` : ''}` };
 }
