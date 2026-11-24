@@ -1008,6 +1008,15 @@ export function childrenByParent(everything: readonly Task[]): Map<string, Task[
   return childrenOf;
 }
 
+/** One list per pass's task map, so the tree of every org node in the pass is read off one index
+ *  (same-ask-tree.ts treeIndexOf) instead of a fresh copy of the board per node. */
+const tasksLists = new WeakMap<ReadonlyMap<string, Task>, Task[]>();
+function tasksListOf(byId: ReadonlyMap<string, Task>): Task[] {
+  let list = tasksLists.get(byId);
+  if (!list || list.length !== byId.size) tasksLists.set(byId, list = [...byId.values()]);
+  return list;
+}
+
 /**
  * The status one task shows: derived from its facts, with the questions its subtasks ask carried
  * up (rollUpAsks; Main and a VP show them on their top-level tasks, never as their own: Needs you is
@@ -1029,7 +1038,7 @@ export function statusOf(
   const forFold: UserStatus = task.org_role && derived.chatAsk && !derived.chatAskFrom
     ? { ...withAsks, state: 'needs', source: 'session', ask: derived.chatAsk } : withAsks;
   const nodeAsks = task.org_role && facts.tasksById
-    ? treeAround(task.id, [...facts.tasksById.values()]).flatMap(({ task: t }) => t.user_status?.state === 'needs' && t.user_status.ask && (t.user_status.source === 'session' || t.user_status.source === 'choice')
+    ? treeAround(task.id, tasksListOf(facts.tasksById)).flatMap(({ task: t }) => t.user_status?.state === 'needs' && t.user_status.ask && (t.user_status.source === 'session' || t.user_status.source === 'choice')
       ? [{ id: t.id, title: t.title, ask: t.user_status.ask, ...(t.user_status.decision ? { decision: t.user_status.decision } : {}) }] : []) : asks;
   const foldedChat = foldSameAsk(task.id, forFold, nodeAsks, {
     report: reportIsCurrent(input) ? task.status_report?.decision_owner && !explicitDecisionOwner(task, facts)
@@ -1088,7 +1097,7 @@ function explicitDecisionOwner(task: Task, facts: StatusFacts): RelativeAsk | un
   const ref = task.status_report?.decision_owner;
   if (!reportIsCurrent({ report: task.status_report, phaseChangedAt: task.phase_changed_at })) return undefined;
   if (!ref || !facts.tasksById) return undefined;
-  return resolveDecisionOwner(task, ref.taskId, [...facts.tasksById.values()], ref);
+  return resolveDecisionOwner(task, ref.taskId, tasksListOf(facts.tasksById), ref);
 }
 
 /** Every task's sign-in asks beside its teammates', when its own ask is one (one sign-in is one ask). */

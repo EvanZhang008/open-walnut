@@ -2,7 +2,7 @@
 import type { Task } from './types.js';
 import type { StatusReport } from './user-status.js';
 import { askKey, FOLDABLE_SOURCES, type RelativeAsk } from './same-ask.js';
-import { treeAround } from './same-ask-tree.js';
+import { tasksByIdOf, treeAround } from './same-ask-tree.js';
 import { sameTaskArea } from './router/same-area.js';
 import { reportDecision } from './ask-decision.js';
 
@@ -17,10 +17,9 @@ function holds(task: Task, ref: Ref): boolean {
 }
 
 export function resolveDecisionOwner(task: Task, ownerId: string, all: readonly Task[], binding?: Ref): RelativeAsk | undefined {
-  const byId = new Map(all.map((t) => [t.id, t] as const));
+  const byId = tasksByIdOf(all);
   // A completed root can still hold an answered decision. Include it only for team membership.
-  const allowed = new Set(treeAround(task.id, all.map((t) => t.phase === 'COMPLETE' || t.status === 'done'
-    ? { ...t, phase: 'NEED_ACTION' as const, status: 'todo' as const } : t)).map((row) => row.task.id));
+  const allowed = new Set(treeAround(task.id, all, { allOpen: true }).map((row) => row.task.id));
   const seen = new Set([task.id]);
   let id = ownerId;
   let ref = binding;

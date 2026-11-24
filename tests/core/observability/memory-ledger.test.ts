@@ -9,7 +9,7 @@ import path from 'node:path';
 import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
   memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, GC_NUDGE_RISE_MB, nudgeGcOnRise, _resetMemoryLedgerForTesting,
-  writeHeapSnapshot, SNAPSHOT_EVERY_MS,
+  writeHeapSnapshot, SNAPSHOT_EVERY_MS, copyCallerCounter,
   watchMemoryBurst, startMemoryBurstProbe, BURST_PROBE_EVERY_MS, BURST_HEAP_WALK_MB, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
@@ -48,6 +48,22 @@ describe('sampleMemory', () => {
       sampleMemory(t0 + 7 * SAMPLE_EVERY_MS);
       expect(warn.mock.calls.filter((c) => c[0] === 'memory holder over budget')).toHaveLength(2);
     } finally { off(); info.mockRestore(); warn.mockRestore(); }
+  });
+});
+
+describe('copyCallerCounter', () => {
+  it('names the readers that copy a store on the sample line, scaled back to calls', () => {
+    const info = vi.spyOn(log.obs, 'info').mockImplementation(() => {});
+    const note = copyCallerCounter('testCopies', 4, 2);
+    function copyWholeStore(): void { note(); }
+    function boardReader(): void { copyWholeStore(); }
+    function slowRoute(): void { boardReader(); }
+    try {
+      for (let i = 0; i < 16; i++) slowRoute();
+      sampleMemory(2_000_000_000);
+      const line = info.mock.calls.find((c) => c[0] === 'memory sample')?.[1] as Record<string, string>;
+      expect(line.testCopiesBy).toBe('boardReader<slowRoute=16');
+    } finally { info.mockRestore(); }
   });
 });
 

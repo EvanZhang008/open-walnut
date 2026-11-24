@@ -182,6 +182,27 @@ export function registerSampleNote(name: string, read: () => string): () => void
   return () => { if (sampleNotes.get(name) === read) sampleNotes.delete(name); };
 }
 
+/**
+ * Who copies a whole store: one call in `every` notes the functions that asked (the stack frames
+ * above the copy), and the most frequent ride every `memory sample` line as `<name>By`, scaled back
+ * to calls. 2026-11-24: the session store handed out 12.4M copied rows in 21 minutes (about 1,650
+ * copies of the whole table) and nothing said which readers asked. Returns the note to call per copy.
+ */
+export function copyCallerCounter(name: string, every = 32, frames = 3): () => void {
+  const counts = new Map<string, number>();
+  let seq = 0;
+  registerSampleNote(`${name}By`, () => [...counts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}=${v * every}`).join(' '));
+  return () => {
+    if (++seq % every !== 0) return;
+    // Frame 0 is "Error", 1 this note, 2 the copying function: the callers start at 3.
+    const names = (new Error().stack ?? '').split('\n').slice(3, 3 + frames)
+      .map((l) => /^\s*at (?:async )?([\w$.<>]+) \(/.exec(l)?.[1] ?? '?');
+    const key = names.join('<');
+    if (!counts.has(key) && counts.size >= 100) return;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  };
+}
+
 /** How often the health tick logs a sample. */
 export const SAMPLE_EVERY_MS = 10 * 60_000;
 /** A holder over budget re-warns at most this often. */

@@ -71,7 +71,7 @@ import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
 import { checkClaudePluginsOffPatch } from './sessions/claude-plugins-off.js';
 import { pointTaskAtSession } from './sessions/task-session-link.js';
-import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
+import { copyCallerCounter, registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
 import type { TaskMergedInto } from './event-types.js';
 import {
   clearProjectTombstone,
@@ -745,6 +745,9 @@ function sanitizePriority(p: string | undefined): TaskPriority {
 // acute cost (re-scanning per request), NOT the rewrite. See the approved plan
 // in project memory: task_storage_root_cause_and_sqlite_plan.
 
+/** Who asks for a copy of the whole store (memory-ledger.ts copyCallerCounter). */
+const noteTaskCopy = copyCallerCounter('taskCopies');
+
 /**
  * Whole-store read. Served from an in-process cache invalidated on every write
  * (withWriteLock.finally). Returns per-call ISOLATED clones — the canonical
@@ -757,6 +760,8 @@ function sanitizePriority(p: string | undefined): TaskPriority {
  * see the DESIGN DEBT note above for the proper per-call-site SQL-pushdown fix.
  */
 async function readStore(): Promise<TaskStore> {
+  // Before the await: the frames above are the readers that asked.
+  noteTaskCopy();
   const store = await loadStore();
   if (!STORE_CACHE_ENABLED) return store;
   storeStats.cloneReads += 1;
@@ -3432,6 +3437,7 @@ const INBOX_ROWS_SQL = "(project IS NULL OR TRIM(project) = '' OR project = 'Inb
  * List tasks, optionally filtered by status and/or project.
  */
 export async function listTasks(filter: ListTasksFilter = {}): Promise<Task[]> {
+  noteTaskCopy();
   const store = await readStoreView();
   let tasks = store.tasks;
 

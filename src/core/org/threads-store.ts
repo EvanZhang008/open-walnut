@@ -76,12 +76,9 @@ export async function withTaskAsks<T extends OrgThread>(taskId: string, threads:
     // thread is never one of those, so the pointers below read the same threads either way.
     if (!needs) return withHeldAsk(node, threads);
     const { treeAround } = await import('../same-ask-tree.js');
-    // Completed tasks can still hold an answered decision. Use open copies for membership only,
-    // then project the real rows so a completion never revives the thread's old ask.
-    const members = treeAround(taskId, all.map((t) => t.phase === 'COMPLETE' || t.status === 'done'
-      ? { ...t, phase: 'NEED_ACTION' as const, status: 'todo' as const } : t));
-    const byId = new Map(all.map((t) => [t.id, t] as const));
-    const around = members.map((row) => byId.get(row.task.id)!).filter(Boolean);
+    // Completed tasks can still hold an answered decision: membership counts every task open
+    // (allOpen); the rows are the real ones, so a completion never revives the thread's old ask.
+    const around = treeAround(taskId, all, { allOpen: true }).map((row) => row.task);
     // His own word to a task that stopped asking is the evidence it was settled there: one read of
     // the session records for those tasks only.
     const ids = pointerTaskIds(threads);

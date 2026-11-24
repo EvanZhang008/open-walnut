@@ -37,14 +37,14 @@ const projectKey = (p: string | undefined) => (p ?? '').trim().toLowerCase();
  * that leads it: one it is under, or one whose projects (Task.project, org_leads) hold its project.
  * Two tasks share a team when they share a key. Main is no team: its org is every project. Pure.
  */
-export function teamKeysOf(task: Task, byId: ReadonlyMap<string, Task>, leads: readonly Task[]): string[] {
+export function teamKeysOf(task: Task, byId: ReadonlyMap<string, Task>, leads: readonly Task[], isOpen: (t: Task) => boolean = open): string[] {
   let root = task;
   const keys: string[] = [];
   for (let hops = 0; root.parent_task_id && hops < MAX_HOPS; hops++) {
     const up = byId.get(root.parent_task_id);
     if (!up || up.id === task.id) break;
     if (up.org_role) {
-      if (up.org_role === 'lead' && open(up)) keys.push(`lead:${up.id}`);
+      if (up.org_role === 'lead' && isOpen(up)) keys.push(`lead:${up.id}`);
       break;
     }
     root = up;
@@ -80,7 +80,41 @@ function leadsByProject(leads: readonly Task[]): ReadonlyMap<string, readonly Ta
 }
 
 /** A task that is in a team: open, not Main, a VP or a lead (never Needs you), not a plugin's own. */
-const member = (t: Task): boolean => open(t) && !t.org_role && !t.plugin_only;
+const member = (t: Task, isOpen: (t: Task) => boolean = open): boolean => isOpen(t) && !t.org_role && !t.plugin_only;
+
+/**
+ * Membership options. `allOpen`: every task counts as open, for the readers that must still see a
+ * finished task's answered decision (withTaskAsks, resolveDecisionOwner). They used to pass a copy
+ * of every finished task marked open, about 7,000 object copies per call on a real board.
+ */
+export interface TreeOptions { allOpen?: boolean }
+const everyOpen = (): boolean => true;
+
+/**
+ * The id and children index of one task list, and its teammates index per openness, built once
+ * per list: one pass over the board reads the tree of every node with the same list
+ * (thread-popup.ts poppedIndex, user-status-sync.ts), and each read rebuilt them all
+ * (2026-11-24: withTaskAsks was a quarter of the server's CPU in a memory burst after a restart).
+ * Keyed by the array itself, like leadsByProject: callers never edit a task list in place.
+ */
+interface TreeIndex {
+  byId: Map<string, Task>;
+  childrenOf?: Map<string, Task[]>;
+  teammates: Map<boolean, (task: Task) => Task[]>;
+}
+const treeIndexes = new WeakMap<readonly Task[], { size: number; index: TreeIndex }>();
+function treeIndexOf(everything: readonly Task[]): TreeIndex {
+  const hit = treeIndexes.get(everything);
+  if (hit && hit.size === everything.length) return hit.index;
+  const index: TreeIndex = { byId: new Map(everything.map((t) => [t.id, t] as const)), teammates: new Map() };
+  treeIndexes.set(everything, { size: everything.length, index });
+  return index;
+}
+
+/** The list's tasks by id, shared with the tree reads of the same list. Never edit it. */
+export function tasksByIdOf(everything: readonly Task[]): ReadonlyMap<string, Task> {
+  return treeIndexOf(everything).byId;
+}
 
 /** Its leader chain, by id. */
 function ancestorsOf(task: Task, byId: ReadonlyMap<string, Task>): Set<string> {
@@ -98,18 +132,21 @@ function ancestorsOf(task: Task, byId: ReadonlyMap<string, Task>): Set<string> {
  * below it (those are its leader chain and its subtasks, which fold by depth). `only` keeps the
  * members it is given (the ones that ask the user), the first made first. Pure.
  */
-export function teammatesIndex(everything: readonly Task[], only: (t: Task) => boolean = () => true): (task: Task) => Task[] {
-  const byId = new Map(everything.map((t) => [t.id, t] as const));
-  const leads = everything.filter((t) => t.org_role === 'lead' && open(t));
+export function teammatesIndex(everything: readonly Task[], only: (t: Task) => boolean = () => true, opts: TreeOptions = {}): (task: Task) => Task[] {
+  return buildTeammates(everything, only, opts.allOpen ? everyOpen : open, new Map(everything.map((t) => [t.id, t] as const)));
+}
+
+function buildTeammates(everything: readonly Task[], only: (t: Task) => boolean, isOpen: (t: Task) => boolean, byId: ReadonlyMap<string, Task>): (task: Task) => Task[] {
+  const leads = everything.filter((t) => t.org_role === 'lead' && isOpen(t));
   const keysOf = new Map<string, string[]>();
-  const keys = (t: Task) => keysOf.get(t.id) ?? keysOf.set(t.id, teamKeysOf(t, byId, leads)).get(t.id)!;
+  const keys = (t: Task) => keysOf.get(t.id) ?? keysOf.set(t.id, teamKeysOf(t, byId, leads, isOpen)).get(t.id)!;
   const byKey = new Map<string, Task[]>();
   for (const t of everything) {
-    if (!member(t) || !only(t)) continue;
+    if (!member(t, isOpen) || !only(t)) continue;
     for (const k of keys(t)) (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(t);
   }
   return (task) => {
-    if (!member(task)) return [];
+    if (!member(task, isOpen)) return [];
     const above = ancestorsOf(task, byId);
     const seen = new Map<string, Task>();
     for (const k of keys(task)) {
@@ -146,8 +183,9 @@ export function relativeAsksIndex(everything: readonly Task[]): (task: Task) => 
 }
 
 /** The tasks around `taskId`, each with where it stands to it. Never the task itself. Pure. */
-export function treeAround(taskId: string, everything: readonly Task[]): Array<{ task: Task; relation: TreeAsk['relation'] }> {
-  const byId = new Map(everything.map((t) => [t.id, t] as const));
+export function treeAround(taskId: string, everything: readonly Task[], opts: TreeOptions = {}): Array<{ task: Task; relation: TreeAsk['relation'] }> {
+  const index = treeIndexOf(everything);
+  const byId = index.byId;
   const self = byId.get(taskId);
   if (!self) return [];
   const out = new Map<string, { task: Task; relation: TreeAsk['relation'] }>();
@@ -156,8 +194,12 @@ export function treeAround(taskId: string, everything: readonly Task[]): Array<{
     out.set(cur.id, { task: cur, relation: 'ancestor' });
     cur = cur.parent_task_id ? byId.get(cur.parent_task_id) : undefined;
   }
-  const childrenOf = new Map<string, Task[]>();
-  for (const t of everything) if (t.parent_task_id) (childrenOf.get(t.parent_task_id) ?? childrenOf.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
+  if (!index.childrenOf) {
+    const built = new Map<string, Task[]>();
+    for (const t of everything) if (t.parent_task_id) (built.get(t.parent_task_id) ?? built.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
+    index.childrenOf = built;
+  }
+  const childrenOf = index.childrenOf;
   const queue = [...(childrenOf.get(taskId) ?? [])];
   while (queue.length) {
     const t = queue.shift()!;
@@ -168,7 +210,10 @@ export function treeAround(taskId: string, everything: readonly Task[]): Array<{
   if (self.org_role === 'main' || self.org_role === 'lead') {
     for (const t of briefTeam(self, everything)) if (!out.has(t.id)) out.set(t.id, { task: t, relation: 'team' });
   } else {
-    for (const t of teammatesIndex(everything)(self)) if (!out.has(t.id)) out.set(t.id, { task: t, relation: 'team' });
+    const allOpen = !!opts.allOpen;
+    let teammates = index.teammates.get(allOpen);
+    if (!teammates) index.teammates.set(allOpen, teammates = buildTeammates(everything, () => true, allOpen ? everyOpen : open, byId));
+    for (const t of teammates(self)) if (!out.has(t.id)) out.set(t.id, { task: t, relation: 'team' });
   }
   return [...out.values()].filter((a) => sameTaskArea(self, a.task));
 }

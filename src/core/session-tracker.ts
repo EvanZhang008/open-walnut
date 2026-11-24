@@ -56,7 +56,7 @@ import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSna
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { prepared } from '../lib/sqlite-prepared.js';
 import { OrgError } from './org/org-store.js';
-import { registerBurstContext, registerMemoryHolder, registerSampleNote, sampledStringChars } from './observability/memory-ledger.js';
+import { copyCallerCounter, registerBurstContext, registerMemoryHolder, registerSampleNote, sampledStringChars } from './observability/memory-ledger.js';
 import {
   assertOutsideHistoryImport, assertSessionHistoryWrite, isHistoryRefusal, sessionHistoryWriteNeedsCheck,
   taskDbHandle, type SessionHistoryFields,
@@ -499,6 +499,9 @@ export function isListableSession(s: SessionRecord): boolean {
   return !isEnvironmentSession(s) && !isLaneSession(s);
 }
 
+/** Who asks for a copy of the whole store (memory-ledger.ts copyCallerCounter). */
+const noteSessionCopy = copyCallerCounter('sessionCopies');
+
 /**
  * Read the whole session store. Served from an in-process cache that survives
  * until the next write (invalidated in withWriteLock.finally).
@@ -529,6 +532,8 @@ export function isListableSession(s: SessionRecord): boolean {
  * in project memory (task_storage_root_cause_and_sqlite_plan).
  */
 async function readStore(): Promise<{ sessions: SessionRecord[] }> {
+  // Before the await: the frames above are the readers that asked.
+  noteSessionCopy();
   const sessions = await loadStoreRows();
   if (!STORE_CACHE_ENABLED) return { sessions };
   sessionStoreStats.cloneReads += 1;
