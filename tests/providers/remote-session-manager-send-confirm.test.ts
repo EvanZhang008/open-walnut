@@ -951,3 +951,20 @@ describe('RemoteSessionManager: a send whose answer never came', () => {
     expect(sent[1].payload.lostPid).toBeUndefined()
   })
 })
+
+describe('the cloud link carries no person mark (review round 1, N1/m8)', () => {
+  it('a person\'s own send dials the cloud session link outside the mark: the link serves every later line of the session', async () => {
+    const { asPersonCall, inPersonCall } = await import('../../src/core/session-channel/person-call.js')
+    const seen: boolean[] = []
+    fallback.connect.mockReset().mockImplementationOnce(async () => { seen.push(inPersonCall()); return { ok: true, alive: true } })
+    const mgr = new RemoteSessionManager('sid-1', 'remote-box', null)
+    Object.assign(mgr, { _sid: 'sid-1' })
+    const inside = await asPersonCall(async () => {
+      const was = inPersonCall()
+      await (mgr as unknown as { ensureCloudLink(sid: string): Promise<void> }).ensureCloudLink('sid-1')
+      return was
+    })
+    expect(inside).toBe(true)
+    expect(seen).toEqual([false])
+  })
+})
