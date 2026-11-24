@@ -395,8 +395,9 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
     running = true
     try {
       while (!stopped && dirty.size > 0) {
-        // Never two rounds of one kind to one target at once.
-        await Promise.all([...oneTarget.values()])
+        // Never two rounds of one kind to one target at once: wait until no one-target round runs
+        // (one may start while we wait; nothing awaits between this loop and `iteration = it`).
+        while (oneTarget.size > 0) await Promise.all([...oneTarget.values()])
         const want = kinds.filter((k) => dirty.has(k.kind))
         dirty.clear()
         const it = { kinds: new Set(want.map((k) => k.kind)), results: [] as CopyRoundResult[], listeners: new Set<(r: CopyRoundResult | null) => void>() }
@@ -445,36 +446,49 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
     timer.unref?.()
   }
   copySoons.add(soon)
-  const now = (kind: string, targetId: string): Promise<CopyRoundResult[]> => {
-    const k = kinds.find((x) => x.kind === kind)
-    if (stopped || !k) return Promise.resolve([])
-    const it = iteration
-    if (it?.kinds.has(kind)) {
-      // That target took this round's manifest already: its answer stands.
-      const had = it.results.find((r) => r.kind === kind && r.target === targetId)
-      if (had) return Promise.resolve([had])
-      return new Promise((done) => {
-        const listen = (r: CopyRoundResult | null): void => {
-          if (r !== null && (r.kind !== kind || r.target !== targetId)) return
-          it.listeners.delete(listen)
-          done(r ? [r] : [])
-        }
-        it.listeners.add(listen)
-      })
-    }
-    const key = `${kind}\n${targetId}`
+  /**
+   * One kind to one target, with the content as it is now. Its results skip the scheduler's
+   * held-rows and lost-confirm retries: a host that held rows here gets them on the kind's next
+   * scheduler round (harmless for its one caller, the config catch-up, which asks again itself).
+   */
+  const oneRound = (k: CopyKind<any>, targetId: string): Promise<CopyRoundResult[]> => {
+    if (stopped) return Promise.resolve([])
+    const key = `${k.kind}\n${targetId}`
     let p = oneTarget.get(key)
     if (!p) {
       p = (async () => {
         const all = deps.targets ?? await defaultTargets()
         return syncCopyKinds([k], { ...deps, targets: () => all().filter((t) => t.id === targetId) })
       })().catch((err: unknown) => {
-        log.session.warn('copies: scheduler round failed', { scheduler: id, kind, target: targetId, error: err instanceof Error ? err.message : String(err) })
+        log.session.warn('copies: scheduler round failed', { scheduler: id, kind: k.kind, target: targetId, error: err instanceof Error ? err.message : String(err) })
         return []
       }).finally(() => { oneTarget.delete(key) })
       oneTarget.set(key, p)
     }
     return p
+  }
+  const now = (kind: string, targetId: string): Promise<CopyRoundResult[]> => {
+    const k = kinds.find((x) => x.kind === kind)
+    if (stopped || !k) return Promise.resolve([])
+    const it = iteration
+    if (!it?.kinds.has(kind)) return oneRound(k, targetId)
+    // The running round built its manifest when it began; `dirty` holds the kind again when its
+    // store was written since. Only an unwritten kind may take that round's answer; a written one
+    // waits only until that round is done with this target, then goes to it alone with the content
+    // as it is now (the scheduler's next round waits for that one).
+    const fresh = !dirty.has(kind)
+    const after = (r: CopyRoundResult | null): Promise<CopyRoundResult[]> | CopyRoundResult[] => fresh ? (r ? [r] : []) : oneRound(k, targetId)
+    const had = it.results.find((r) => r.kind === kind && r.target === targetId)
+    if (had) return Promise.resolve(after(had))
+    return new Promise((done) => {
+      const listen = (r: CopyRoundResult | null): void => {
+        if (r !== null && (r.kind !== kind || r.target !== targetId)) return
+        // This target's answer, or the round ended (or threw) without one.
+        it.listeners.delete(listen)
+        done(after(r))
+      }
+      it.listeners.add(listen)
+    })
   }
   copyNows.add(now)
   const unwatch = kinds.map((k) => k.watch(() => { if (heldWritesForTesting !== k.kind) soon(k.kind) }))

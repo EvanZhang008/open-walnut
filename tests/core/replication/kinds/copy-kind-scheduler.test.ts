@@ -372,6 +372,52 @@ describe('startCopyKindsSync', () => {
     } finally { s.stop() }
   })
 
+  it('R2-S1: a kind written since the running round began never takes that round\'s answer: the target gets the new content', async () => {
+    let gate: (() => void) | null = null
+    const real = target('host:slow', 'host')
+    const gated: CopyTarget = { ...real, post: async (payload) => {
+      if ((payload as { op?: string }).op === 'status' && gate === null) await new Promise<void>((r) => { gate = r })
+      return real.post(payload)
+    } }
+    const s = startCopyKindsSync([kindOf('alpha')], { targets: () => [gated] })
+    try {
+      watchers.alpha()
+      await tick(COPY_DEBOUNCE_MS + 10)
+      // The round built its manifest (a1.v = 1) and waits at the target.
+      await vi.waitFor(() => expect(gate).not.toBeNull())
+      leader.alpha = [{ id: 'a1', v: 7 }, { id: 'a2', v: 1 }]
+      watchers.alpha()
+      const asked = copyKindNow('alpha', 'host:slow')
+      gate!()
+      const r = await asked
+      expect(r).toEqual([expect.objectContaining({ kind: 'alpha', target: 'host:slow', action: 'synced' })])
+      // Answered only once the target holds what the leader holds now.
+      expect(followers.alpha.store.get('a1')?.v).toBe(7)
+    } finally { s.stop() }
+  })
+
+  it('R2-S1: a target that took the running round before the write gets the new content alone, while the round goes on elsewhere', async () => {
+    let gate: (() => void) | null = null
+    const real = target('host:slow', 'host')
+    const gated: CopyTarget = { ...real, post: async (payload) => {
+      if ((payload as { op?: string }).op === 'status' && gate === null) await new Promise<void>((r) => { gate = r })
+      return real.post(payload)
+    } }
+    const s = startCopyKindsSync([kindOf('alpha')], { targets: () => [target('host:devbox', 'host'), gated] })
+    try {
+      watchers.alpha()
+      await tick(COPY_DEBOUNCE_MS + 10)
+      await vi.waitFor(() => expect(gate).not.toBeNull())
+      const before = steps.filter((x) => x.startsWith('host:devbox ')).length
+      leader.alpha = [{ id: 'a1', v: 7 }, { id: 'a2', v: 1 }]
+      watchers.alpha()
+      expect(await copyKindNow('alpha', 'host:devbox')).toEqual([expect.objectContaining({ kind: 'alpha', target: 'host:devbox', action: 'synced' })])
+      expect(steps.filter((x) => x.startsWith('host:devbox ')).length).toBeGreaterThan(before)
+      expect(followers.alpha.store.get('a1')?.v).toBe(7)
+      gate!()
+    } finally { s.stop() }
+  })
+
   it('S2: a round that fails answers its waiters at once', async () => {
     let fail: (() => void) | null = null
     const broken: CopyTarget = { ...target('host:devbox', 'host'), available: async () => { await new Promise<void>((r) => { fail = r }); throw new Error('probe broke') } }
