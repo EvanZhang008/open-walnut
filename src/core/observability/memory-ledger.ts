@@ -269,9 +269,12 @@ export function sampleMemory(now = Date.now()): void {
 // peak; back to 4.2 GB once the work eased).
 export const GC_NUDGE_RSS_MB = 1536;
 export const GC_NUDGE_EVERY_MS = 3 * 60_000;
-export const GC_NUDGE_RISE_MB = 1024;
+// 2026-11-24, after the caches that cut the steady footprint to 1.3 to 2.3 GB: the bursts left
+// still climbed 2 to 3 GB in 4 to 6 s (2.3 to 5.0 GB, 13:53), and one ask brought each back to
+// about 2.2 GB, so the ask comes at half a gigabyte of rise and may come again after 5 s.
+export const GC_NUDGE_RISE_MB = 512;
 /** The fast probe asks again at most this often. */
-export const GC_NUDGE_MIN_GAP_MS = 10_000;
+export const GC_NUDGE_MIN_GAP_MS = 5_000;
 let lastNudgeAt = -Infinity;
 /** The lowest reading since the last ask (or since start): a rise is measured from here. */
 let troughMb = Infinity;
