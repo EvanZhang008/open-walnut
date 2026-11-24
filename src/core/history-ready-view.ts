@@ -33,6 +33,7 @@ import { HISTORY_OPEN_SCREEN_ROWS } from './history-open-preview.js';
 import { isUnsettledRow } from './history-delta.js';
 import { READY_MAX_JSON_BYTES, READY_MAX_ROWS } from '../providers/history-ready-core.js';
 import { questionTurnIds } from '../lib/history-turn-window.js';
+import { cliHostOf } from './sessions/session-row-owner.js';
 
 /** How long the history route's first paint waits for a host's ready view. */
 export const READY_VIEW_DEADLINE_MS = 900;
@@ -163,7 +164,7 @@ export async function fetchReadyView(
   opts: { interactive: boolean; have?: string; read?: HistoryViewRead; deps?: ReadyViewFetchDeps },
 ): Promise<ReadyFetchOutcome> {
   const sessionId = record.claudeSessionId;
-  const hostKey = record.host ?? '__local__';
+  const hostKey = cliHostOf(record);
   // Captured before the ask: a rewind meanwhile bumps its generation and the answer is not kept;
   // a view saved from a read that began later is newer than anything this answer holds.
   const read = opts.read ?? beginHistoryViewRead(sessionId);

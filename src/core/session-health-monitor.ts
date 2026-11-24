@@ -42,6 +42,7 @@ import {
   EVICT_MIN_QUIET_MS,
   type EvictionCandidate, type LiveRunnerView,
 } from './sessions/live-sessions.js'
+import { cliHostOf, execHostOf } from './sessions/session-row-owner.js'
 
 /** Best effort: an unreadable task is not the main agent's. */
 async function isMainAgentTaskId(taskId: string): Promise<boolean> {
@@ -988,7 +989,7 @@ export class SessionHealthMonitor {
       }
       // An unreachable host gives no evidence that its CLI is silent. Its link
       // alarm and the queued message's delivery state already explain the wait.
-      if (!isDaemonConnected(session.host ?? '__local__')) continue
+      if (!isDaemonConnected(cliHostOf(session))) continue
 
       const waitingMs = Date.now() - ts.lastMessageDeliveryAt
       if (waitingMs < WARN_THRESHOLD_MS) continue
@@ -1006,7 +1007,7 @@ export class SessionHealthMonitor {
       )) continue
 
       const latest = runner.getSessionTimestamps(session.claudeSessionId)
-      if (!isDaemonConnected(session.host ?? '__local__') || !latest
+      if (!isDaemonConnected(cliHostOf(session)) || !latest
         || latest.lastMessageDeliveryAt !== ts.lastMessageDeliveryAt
         || latest.lastClaudeOutputAt >= ts.lastMessageDeliveryAt) continue
       const waitingMin = Math.round(waitingMs / 60_000)
@@ -1122,7 +1123,7 @@ export class SessionHealthMonitor {
         break
       }
       // Per-session threshold: config override wins; otherwise remote gets 2h, local gets 1h.
-      const isRemote = !!session.host
+      const isRemote = !!execHostOf(session)
       let idleTimeoutMs = configOverrideMs
         ?? (isRemote ? DEFAULT_REMOTE_IDLE_TIMEOUT_MS : DEFAULT_LOCAL_IDLE_TIMEOUT_MS)
       // Cron-armed sessions (/loop): the CLI's scheduler only looks idle
@@ -1764,7 +1765,7 @@ export class SessionHealthMonitor {
         // many wait at once. Each pull is its own session, so their order is free.
         const picked: { s: SessionRecord; conn: NonNullable<ReturnType<typeof getPooledSnapshotConnection>>; memoryOnly: boolean }[] = []
         for (const s of candidates) {
-          const conn = getPooledSnapshotConnection(s.host)
+          const conn = getPooledSnapshotConnection(execHostOf(s))
           if (!conn) continue // no pooled snapshot-capable connection — skip (never dial)
           const memoryOnly = candidateClass === 'reexam'
             && now - Date.parse(s.last_status_change ?? '') > RESCUABLE_STOPPED_WINDOW_MS
@@ -2102,7 +2103,7 @@ export class SessionHealthMonitor {
         // 1.6h behind a bare 'stopped' record every loop skipped). Probe-dead →
         // leave it exactly as it is.
         if (s.archived) continue
-        const hostKey = s.host ?? '__local__'
+        const hostKey = cliHostOf(s)
         let wasStopped = false
         if (s.process_status === 'error') {
           // ACP records, on this machine or another host: their liveness is

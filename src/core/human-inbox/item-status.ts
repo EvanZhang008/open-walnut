@@ -6,6 +6,7 @@ import { getConnectedDaemonConnection } from '../../providers/daemon-connection.
 import { isAcpEngine } from '../agents/engine-registry.js';
 import { isWakeupArmed, type SessionSnapshot } from '../../providers/daemon-fold.js';
 import type { SessionRecord } from '../types.js';
+import { cliHostOf } from '../sessions/session-row-owner.js';
 
 async function liveProcessStatus(record: SessionRecord): Promise<InboxCurrentTaskStatus['status']> {
   // A session its host runs and judges: the host's live state on the channel says (sessions/session-command-gate.ts).
@@ -17,7 +18,7 @@ async function liveProcessStatus(record: SessionRecord): Promise<InboxCurrentTas
     if (!view.alive) return record.process_status === 'error' ? 'error' : 'stopped';
     return view.prompt ? 'waiting_permission' : view.working ? 'running' : 'idle';
   }
-  const connection = getConnectedDaemonConnection(record.host || '__local__');
+  const connection = getConnectedDaemonConnection(cliHostOf(record));
   if (!connection) return 'unavailable';
   try {
     if (isAcpEngine(record.engine)) {

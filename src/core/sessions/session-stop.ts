@@ -3,6 +3,7 @@ import type { SessionRecord } from '../types.js'
 import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from './stop-provenance.js'
 import { HOST_LOST_STOP_MAX_MS, hostLostFenceText, hostLostStopError, isHostLostStopError, type HostReach } from './host-lost.js'
 import { leaveParked } from '../queue-held-spans.js'
+import { cliHostOf, thisHostKey } from './session-row-owner.js'
 
 type StopRequest = NonNullable<SessionRecord['stopRequest']>
 
@@ -265,7 +266,7 @@ export class SessionStopCoordinator {
     await this.deps.park(sid)
     let error: string | undefined
     try {
-      const host = record.host ?? '__local__'
+      const host = cliHostOf(record)
       let conn = connection ?? await this.deps.connection(host, sid)
       if (!conn?.connected && !connection && this.deps.probe && this.deps.lost) {
         // No live link: a fresh connect decides. One that comes up takes the stop now; one
@@ -365,7 +366,15 @@ export const sessionStops = new SessionStopCoordinator({
   },
   probe: async (host) => (await import('./host-lost.js')).probeHost(host),
   // A host that runs its own sessions carries out their stops itself (session-lifecycle.ts terminateSession).
-  pending: async (host) => (await import('./judge-of.js')).judgedHereRecords(await (await import('../session-tracker.js')).listPendingSessionStops(host)),
+  // The rows whose CLI `host`'s link reaches (session-row-owner.ts cliHostOf): on a host that runs its
+  // sessions, its own rows name its key while its runtime's link is '__local__', so both are read.
+  pending: async (host) => {
+    const [{ judgedHereRecords }, { listPendingSessionStops }] = await Promise.all([import('./judge-of.js'), import('../session-tracker.js')])
+    const own = thisHostKey()
+    const rows = await listPendingSessionStops(host)
+    if (host === '__local__' && own) rows.push(...await listPendingSessionStops(own))
+    return judgedHereRecords(rows).filter((r) => cliHostOf(r) === host)
+  },
   pendingAll: async () => (await import('./judge-of.js')).judgedHereRecords(await (await import('../session-tracker.js')).listPendingSessionStops()),
   park: async (sid) => {
     const { getQueue, parkMessages } = await import('../session-message-queue.js')

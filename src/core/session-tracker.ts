@@ -46,7 +46,7 @@ import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
-import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
+import { cliHostOf, execHostOf, judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
 import { judgedHereRecords } from './sessions/judge-of.js';
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
@@ -952,7 +952,7 @@ export async function listNonTerminalSessions(): Promise<SessionRecord[]> {
 /** This machine's records whose process should be alive, by their status (sessions/live-sessions.ts). */
 export async function listLocalLiveSessions(): Promise<SessionRecord[]> {
   const view = await readStoreView();
-  return view.filter((s) => !s.host && !s.archived && (s.process_status === 'running' || s.process_status === 'idle')).map(cloneSession);
+  return view.filter((s) => !execHostOf(s) && !s.archived && (s.process_status === 'running' || s.process_status === 'idle')).map(cloneSession);
 }
 
 /** Default session limits: local=7, any remote host=20. */
@@ -3279,7 +3279,7 @@ export async function completeTaskSessions(
       insertCols.map((c) => '@' + c).join(', ') + ')';
 
     // A worker this server holds live is stopped here, whatever its host's link says.
-    const ownerUnreachable = (session: SessionRecord) => unreachable.has(session.host || '__local__')
+    const ownerUnreachable = (session: SessionRecord) => unreachable.has(cliHostOf(session))
       && !(session.pid == null && liveAcp.has(session.claudeSessionId));
 
     const lockWait = transactionWhenFree((handle) => {

@@ -25,6 +25,7 @@ import { MAX_UPLOAD_BYTES, UPLOAD_CHUNK_BYTES, UPLOAD_ID_RE, isUploadName } from
 import type { WritePartReply } from '../../providers/transfer-core.js'
 import { sendError } from './cloud-send-words.js'
 import { log } from '../../logging/index.js'
+import { cliHostOf } from '../../core/sessions/session-row-owner.js'
 
 const SID_RE = /^[A-Za-z0-9_-]+$/
 const SHA_RE = /^[0-9a-f]{64}$/
@@ -100,7 +101,7 @@ async function viaDaemon(sessionId: string, part: Part): Promise<WritePartReply>
   const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
   const record = await getSessionByClaudeId(sessionId)
   if (!record) throw new HostRefusal('not_found', `Session not found: ${sessionId}`)
-  return toHost(record.host || '__local__', part, { ...(record.taskId ? { taskId: record.taskId } : {}), sessionId })
+  return toHost(cliHostOf(record), part, { ...(record.taskId ? { taskId: record.taskId } : {}), sessionId })
 }
 
 /** One chunk onto `host` through its daemon connection, every failure named the contract's way. */

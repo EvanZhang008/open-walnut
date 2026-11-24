@@ -22,6 +22,7 @@ import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registr
 import { log } from '../../logging/index.js';
 import { noteTranscriptLinesParsed } from '../../providers/line-parse-count.js';
 import { viaJudgingHost } from './host-history-reads.js';
+import { cliHostOf } from './session-row-owner.js';
 
 /** The hint kind the carried context rides in (hints/hint-format.ts): display shows the user's words only. */
 export const ENGINE_SWITCH_HINT = 'engine-switch';
@@ -129,7 +130,7 @@ async function readTranscriptBytes(record: SessionRecord, host: string): Promise
 }
 
 async function readClaudeChain(record: SessionRecord): Promise<ActiveContext | null> {
-  const host = record.host || '__local__';
+  const host = cliHostOf(record);
   const read = await readTranscriptBytes(record, host);
   if (!read) return null;
   const { bytes } = read;

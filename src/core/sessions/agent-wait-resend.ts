@@ -23,6 +23,7 @@
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { AGENT_CANNOT_RUN_KINDS } from '../hosts/host-problem.js';
+import { cliHostOf } from './session-row-owner.js';
 
 /** When Walnut sends a row waiting on that kind: the host reads runnable (agentRunnable). */
 export type AgentWaitRule = 'host-runnable';
@@ -65,7 +66,7 @@ export async function resendAgentWaitRows(hostKey: string): Promise<string[]> {
   for (const sessionId of await sessionsWithAgentWaitRows()) {
     try {
       const record = await getSessionByClaudeId(sessionId);
-      if (!record || record.archived || (record.host ?? '__local__') !== hostKey) continue;
+      if (!record || record.archived || cliHostOf(record) !== hostKey) continue;
       // A Stop waiting for its host: nothing goes out until it is settled.
       const fence = await sessionStops.fence(sessionId).catch(() => undefined);
       if (fence === undefined) continue;

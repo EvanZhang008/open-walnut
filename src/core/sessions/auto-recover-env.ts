@@ -10,6 +10,7 @@ import fs from 'node:fs/promises'
 import { bus, EventNames } from '../event-bus.js'
 import type { SessionRecord, SessionRestartLoss, StatusReason, TaskPhase } from '../types.js'
 import type { SessionSnapshot } from '../../providers/daemon-fold.js'
+import { cliHostOf, execHostOf } from './session-row-owner.js'
 
 /** Message source tag: also how we recognise our own sends. */
 export const AUTO_RECOVER_SOURCE = 'auto-recover'
@@ -215,7 +216,7 @@ export function defaultDeps(): AutoRecoverDeps {
     recoveryOwner: async (record) => {
       if (record.stopRequest?.state === 'pending') return 'daemon'
       const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
-      const conn = getConnectedDaemonConnection(record.host ?? LOCAL_HOST)
+      const conn = getConnectedDaemonConnection(cliHostOf(record))
       if (!conn || !conn.capabilitiesKnown) return 'unknown'
       if (!conn.hasCapability('cron-supervision-v1')) return 'server'
       const state = await conn.send('cron.supervision', { sid: record.claudeSessionId }, 5000)
@@ -225,12 +226,12 @@ export function defaultDeps(): AutoRecoverDeps {
     fetchSnapshot: async (record) => {
       try {
         const { getPooledSnapshotConnection } = await import('../../providers/daemon-connection.js')
-        let conn = getPooledSnapshotConnection(record.host)
+        let conn = getPooledSnapshotConnection(execHostOf(record))
         // At boot this machine's daemon may still be connecting: give it a
         // moment, since its fold is the better fact. A remote host may be off.
         for (let i = 0; conn === null && isLocalHost(record.host) && i < 20; i++) {
           await new Promise((r) => setTimeout(r, 1000))
-          conn = getPooledSnapshotConnection(record.host)
+          conn = getPooledSnapshotConnection(execHostOf(record))
         }
         if (!conn) return null
         const resp = await conn.send('getState', { sid: record.claudeSessionId }, 15_000) as { ok?: boolean; exists?: boolean; snapshot?: SessionSnapshot }

@@ -2,6 +2,7 @@ import { SessionControlError } from './session-controls.js'
 import { isSessionStopSuperseded, sessionStops } from './session-stop.js'
 import { linkFailureKind } from '../../providers/link-failure.js'
 import { withDeadline } from '../../lib/with-deadline.js'
+import { cliHostOf } from './session-row-owner.js'
 
 /**
  * The last state each session's host confirmed, so a read whose host did not
@@ -86,9 +87,8 @@ async function askSupervision(sid: string, enabled?: boolean): Promise<Supervisi
   const record = await getSessionByClaudeId(sid)
   if (!record) throw new SessionControlError('Session not found', 404)
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
-  // A host's own session is on its own daemon (session-row-owner.ts execHostOf).
-  const { execHostOf } = await import('./session-row-owner.js')
-  const conn = getConnectedDaemonConnection(execHostOf(record) ?? '__local__')
+  // A host's own session is on its own daemon (session-row-owner.ts cliHostOf).
+  const conn = getConnectedDaemonConnection(cliHostOf(record))
   if (enabled === true && record.archived) throw new SessionControlError('Unarchive the session before enabling automatic recovery', 409)
   const base = { stopRequest: record.stopRequest ?? null }
   if (!conn?.connected || !conn.capabilitiesKnown) {

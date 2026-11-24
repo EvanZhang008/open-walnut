@@ -43,6 +43,7 @@ const PROBE_MS = 5_000
 
 import { isFolderGoneReason } from './folder-gone-words.js'
 import { frameAsWalnut } from './send-frame.js'
+import { execHostOf } from './session-row-owner.js'
 export { FOLDER_GONE_RE, isFolderGoneReason } from './folder-gone-words.js'
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -93,15 +94,16 @@ export function historyInFolder(record: Pick<SessionRecord, 'engine' | 'provider
 }
 
 /** Where the session's Claude Code transcript is on its host, wherever its project dir is. */
-export async function findTranscript(record: Pick<SessionRecord, 'claudeSessionId' | 'cwd' | 'host'>): Promise<{ state: 'found'; path: string } | { state: 'missing' } | { state: 'unknown' }> {
+export async function findTranscript(record: Pick<SessionRecord, 'claudeSessionId' | 'cwd' | 'host' | 'judge'>): Promise<{ state: 'found'; path: string } | { state: 'missing' } | { state: 'unknown' }> {
+  const at = execHostOf(record)
   try {
-    if (isLocal(record.host)) {
+    if (isLocal(at)) {
       const { findLocalJsonlPath } = await import('../session-file-reader.js')
       const p = await findLocalJsonlPath(record.claudeSessionId, record.cwd ?? undefined)
       return p ? { state: 'found', path: p } : { state: 'missing' }
     }
     const { DaemonFileReader } = await import('../daemon-file-reader.js')
-    const p = await withTimeout(new DaemonFileReader(record.host!).findSessionPath(record.claudeSessionId), PROBE_MS * 2)
+    const p = await withTimeout(new DaemonFileReader(at!).findSessionPath(record.claudeSessionId), PROBE_MS * 2)
     return p ? { state: 'found', path: p } : { state: 'missing' }
   } catch (err) {
     log.session.warn('folder gone: transcript probe failed', { sessionId: record.claudeSessionId, host: record.host, error: err instanceof Error ? err.message : String(err) })
@@ -325,12 +327,13 @@ async function moveTranscript(record: SessionRecord, found: string, to: string):
   const sid = record.claudeSessionId
   const projectsRoot = path.posix.dirname(path.posix.dirname(found))
   // The CLI names a project dir by the folder's real path (macOS /tmp is /private/tmp).
-  const realOf = async (p: string) => isLocal(record.host)
+  const at = execHostOf(record)
+  const realOf = async (p: string) => isLocal(at)
     ? await (await import('node:fs/promises')).realpath(p).catch(() => p)
-    : await (await import('../transfer/daemon-transfer-client.js')).realpathOn(record.host!, p).catch(() => p)
+    : await (await import('../transfer/daemon-transfer-client.js')).realpathOn(at!, p).catch(() => p)
   const targetDir = `${projectsRoot}/${encodeProjectPath(await realOf(to))}`
   const target = `${targetDir}/${sid}.jsonl`
-  const reader = isLocal(record.host) ? await localFiles() : new (await import('../daemon-file-reader.js')).DaemonFileReader(record.host!)
+  const reader = isLocal(at) ? await localFiles() : new (await import('../daemon-file-reader.js')).DaemonFileReader(at!)
   const conflict = (a: string, b: string) => new SessionControlError(`This conversation's history is in two places (${a} and ${b}); Walnut moved neither. Keep the one you want and try again.`, 409, { code: 'history_conflict', files: [a, b] })
   if (found === target) {
     // Already there, unless a copy is also where the session ran (the lookup may find either).

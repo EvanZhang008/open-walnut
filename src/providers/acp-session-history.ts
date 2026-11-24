@@ -11,6 +11,7 @@ import { isByteCeilingError } from '../core/byte-ceiling.js'
 import { registerMemoryHolder } from '../core/observability/memory-ledger.js'
 import { viaJudgingHost } from '../core/sessions/host-history-reads.js'
 import { noteTranscriptLinesParsed } from './line-parse-count.js'
+import { cliHostOf } from '../core/sessions/session-row-owner.js'
 
 interface JournalReader {
   readFile(filePath: string): Promise<string | null>
@@ -207,7 +208,7 @@ async function readAcpSessionHistoryStateHere(
   const runtimeId = record.acpRuntimeId
   const candidates = getAcpJournalPathCandidates(record)
   if (!runtimeId || candidates.length === 0) return { messages: [], journalExists: false }
-  const reader = options.reader ?? new DaemonFileReader(record.host ?? '__local__')
+  const reader = options.reader ?? new DaemonFileReader(cliHostOf(record))
   for (const journalPath of candidates) {
     let state: AcpSessionHistoryState | null
     if (reader.stat && reader.readRangeBytes) {

@@ -21,6 +21,7 @@ import { PROGRAM_RUN_SEND_SOURCE } from '../phase.js';
 import { withInboxStartAuthorization } from '../human-inbox/item-ledger.js';
 import { deferTaskStart, requestTaskStartWorkspace, willDeferStart, workspaceCwdOf } from '../workspaces/launch.js';
 import { isLaunchReady } from '../workspaces/decisions.js';
+import { cliHostOf } from './session-row-owner.js';
 
 export interface SessionStartParams {
   taskIdPrefix: string;
@@ -982,7 +983,7 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
   const attempt = task.last_start;
   const runtimeId = attempt?.runtime_id || attempt?.session_id || record?.claudeSessionId;
   if (!runtimeId) throw new QuickStartError(`Task ${task.id} has an unconfirmed start without a runtime identity. Read task_get; another start cannot be safely issued.`, 409);
-  const host = attempt?.host || record?.host || '__local__';
+  const host = attempt?.host || cliHostOf(record);
   const { cancelPendingStartOf } = await import('./cancel-pending-start.js');
   const reconcile = () => cancelPendingStartOf({ sid: runtimeId, sessionId: record?.claudeSessionId || attempt?.session_id, host, dial: true });
   let timer: ReturnType<typeof setTimeout> | undefined;

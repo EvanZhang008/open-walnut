@@ -26,6 +26,7 @@ import type { SessionHistoryMessage } from '../session-history.js';
 import { DEFAULT_ENGINE, engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { unavailableHistoryReason } from './history-unavailable.js';
 import { judgeOf } from './judge-of.js';
+import { cliHostOf, execHostOf } from './session-row-owner.js';
 
 // ── Shared helpers (moved from src/web/routes/sessions.ts) ──────────────────
 
@@ -1022,14 +1023,14 @@ async function resumeConversationExists(record: SessionRecord): Promise<boolean>
   if (record.engine && record.engine !== DEFAULT_ENGINE) return true;
   if (engineCaps(record.engine).historySource !== 'provider-jsonl') return true;
   try {
-    if (!record.host || record.host === '__local__') {
+    if (cliHostOf(record) === '__local__') {
       const { findLocalJsonlPath } = await import('../session-file-reader.js');
       return (await findLocalJsonlPath(record.claudeSessionId, record.cwd ?? undefined)) !== null;
     }
     // DaemonFileReader directly (not the SessionFileReader interface): we only
     // need the path probe, findSession would pull the whole file's content.
     const { DaemonFileReader } = await import('../daemon-file-reader.js');
-    const reader = new DaemonFileReader(record.host);
+    const reader = new DaemonFileReader(cliHostOf(record));
     return (await reader.findSessionPath(record.claudeSessionId)) !== null;
   } catch (err) {
     log.session.warn('retry: conversation pre-flight probe failed — assuming resumable', {
@@ -1358,7 +1359,7 @@ export async function recheckSession(sessionId: string): Promise<RecheckResult> 
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
 
-  const hostKey = record.host ?? '__local__';
+  const hostKey = cliHostOf(record);
   const { classifySessionError } = await import('../session-error-kind.js');
   // A start that ran nothing (its first start was refused or its CLI stopped before reading the
   // message: SessionRecord.startRefused) is no substrate death: "send a message to resume it"
@@ -1388,7 +1389,7 @@ export async function recheckSession(sessionId: string): Promise<RecheckResult> 
     return { ...base, checked: true, reachable: true, ...(view.alive !== null ? { alive: view.alive } : {}) };
   }
 
-  const conn = getPooledSnapshotConnection(record.host);
+  const conn = getPooledSnapshotConnection(execHostOf(record));
   if (!conn) {
     log.session.info('session recheck: no pooled snapshot connection — nothing to ask', {
       sessionId, host: hostKey, reachable,

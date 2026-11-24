@@ -36,6 +36,7 @@ import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
 import { attachmentHeaderBlock } from '../../lib/attachment-headers.js'
 import { attributedUnlessAutomated } from '../../core/sessions/send-frame.js'
 import { oneSendAtATime, sameSendSettled } from '../../core/sessions/send-once.js'
+import { execHostOf } from '../../core/sessions/session-row-owner.js'
 
 /**
  * v4 uuid, and ONLY v4. The value becomes the CLI's own transcript-line uuid
@@ -692,7 +693,7 @@ export function registerSessionChatRpc(): void {
     }
 
     const record = await getSessionByClaudeId(sessionId)
-    const isRemote = !!record?.host
+    const isRemote = !!(record && execHostOf(record))
 
     // ── Remote session: read team config/JSONL from remote host ──
     if (isRemote && record.host) {
@@ -830,7 +831,7 @@ export function registerSessionChatRpc(): void {
     // Get session record for cwd and host
     const record = await getSessionByClaudeId(sessionId)
     const cwd = record?.cwd
-    const isRemote = !!record?.host
+    const isRemote = !!(record && execHostOf(record))
 
     // ── Remote session: read subagent files via DaemonFileReader ──
     if (isRemote && record.host && cwd) {

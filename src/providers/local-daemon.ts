@@ -64,6 +64,7 @@ import { STAY_MS, StayWatch } from './local-daemon-stay.js'
 import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon } from './in-process-daemon.js'
+import { cliHostOf } from '../core/sessions/session-row-owner.js'
 
 /** How long an in-process start waits for its fold prewarm before it adopts what is left itself (the first in-process dial waits as long; the event loop stays free). */
 const IN_PROCESS_PREWARM_MAX_MS = 120_000
@@ -1462,7 +1463,7 @@ export class LocalDaemon {
       if (!problems.length || this._instanceId !== id) return
       const { listNonTerminalSessions } = await import('../core/session-tracker.js')
       const { markEndedSessionClis } = await import('../core/sessions/ended-session-clis.js')
-      const live = (await listNonTerminalSessions().catch(() => [])).filter((r) => !r.host || r.host === '__local__')
+      const live = (await listNonTerminalSessions().catch(() => [])).filter((r) => cliHostOf(r) === '__local__')
       const marked = markEndedSessionClis(live)
       this._sessionEnded.add(id)
       this._sessionReplacements++

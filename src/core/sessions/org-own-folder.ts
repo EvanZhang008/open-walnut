@@ -34,6 +34,7 @@ import type { SessionRecord, Task } from '../types.js'
 import { isOrgNode } from '../org/org-enabled.js'
 import { isPersonSource } from './send-sent-by.js'
 import { DEFAULT_ENGINE } from '../agents/engine-registry.js'
+import { cliHostOf } from './session-row-owner.js'
 
 const isLocal = (host?: string | null) => !host || host === '__local__' || host === 'local'
 const trimSlash = (p: string) => p.replace(/\/+$/, '') || '/'
@@ -206,10 +207,10 @@ const CLI_HOLDER_CAPABILITY = 'cli-holder-v1'
 export async function ownFolderMoveDue(record: SessionRecord, task: Task): Promise<boolean> {
   if (!runsInOwnFolder(task)) return false
   const { taskDirForHost } = await import('./task-dir-place.js')
-  const ownDir = await taskDirForHost(task.id, record.host || '__local__').catch(() => null)
+  const ownDir = await taskDirForHost(task.id, cliHostOf(record)).catch(() => null)
   if (!ownFolderMoveDecision({ task, record, ownDir, ephemeral: await isEphemeral() }).move) return false
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
-  const conn = getConnectedDaemonConnection(record.host || '__local__')
+  const conn = getConnectedDaemonConnection(cliHostOf(record))
   return !conn || conn.hasCapability(CLI_HOLDER_CAPABILITY)
 }
 

@@ -27,6 +27,7 @@ import { fetchReadyView, HISTORY_READY_CAPABILITY, READY_VIEW_ROWS, readyViewEli
 import { readHistoryViewMeta, VIEW_MAX_AGE_MS, type HistoryViewMeta } from './history-view-snapshot.js';
 import { legacyHintCutoff } from './sessions/legacy-hint-lines.js';
 import { waitForHostOpens } from './host-open-hold.js';
+import { cliHostOf } from './sessions/session-row-owner.js';
 
 export const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /**
@@ -217,7 +218,7 @@ export class HistoryReadyRefresher {
         // A person opening a conversation on this host goes first: this answer can be MB-scale
         // on the same socket as that open's first screen. Read the meta after: that open's
         // full read may have kept a newer view meanwhile.
-        await this.o.waitForOpens(record.host ?? '__local__');
+        await this.o.waitForOpens(cliHostOf(record));
         if (this.stopped) return;
         const meta = await this.o.readMeta(item.sessionId);
         // A view read after this turn ended is kept (an open window's delta): nothing to do.

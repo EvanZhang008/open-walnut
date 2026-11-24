@@ -35,6 +35,7 @@ import { SESSION_STREAMS_DIR } from '../constants.js'
 import { daemonStreamPathCandidates } from '../core/session-reconcile.js'
 import type { SessionRecord } from '../core/types.js'
 import { engineCaps } from '../core/agents/engine-registry.js'
+import { execHostOf } from '../core/sessions/session-row-owner.js'
 
 /**
  * Ground-truth freshness check for a LOCAL session's JSONL stream file — a veto
@@ -134,9 +135,10 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   // Fallback: no active manager (e.g. server just restarted, transport not yet attached)
   // Remote daemon sessions: the PID lives on the remote host.
   // Short disconnects (< 5min) → assume alive (tunnel may be reconnecting).
-  if (session.host) {
+  const remoteHost = execHostOf(session)
+  if (remoteHost) {
     const { isDaemonConnected, getDaemonDisconnectedAwakeMs, probeDaemonSession } = await import('../providers/daemon-connection.js')
-    if (isDaemonConnected(session.host)) {
+    if (isDaemonConnected(remoteHost)) {
       // Connection up ≠ session alive. The daemon holds per-session truth (its
       // status RPC checks the actual OS process), so ask it. Returning `true`
       // just because the tunnel is up left dead remote CLIs badged "running"
@@ -146,11 +148,11 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
       // A short deadline: no answer in it falls through to the grace logic below (alive while
       // the link is up), never a death (daemon-status-reply.ts STATUS_PROBE_TIMEOUT_MS).
       const { STATUS_PROBE_TIMEOUT_MS } = await import('../providers/daemon-status-reply.js')
-      const probe = await probeDaemonSession(session.host, session.claudeSessionId, STATUS_PROBE_TIMEOUT_MS)
+      const probe = await probeDaemonSession(remoteHost, session.claudeSessionId, STATUS_PROBE_TIMEOUT_MS)
       if (probe !== null) return probe.alive
     }
     // Disconnected — check grace period, in awake time (providers/awake-down-clock.ts)
-    if (getDaemonDisconnectedAwakeMs(session.host) > 5 * 60 * 1000) return false // > 5min
+    if (getDaemonDisconnectedAwakeMs(remoteHost) > 5 * 60 * 1000) return false // > 5min
     return true // short disconnect — assume alive
   }
 

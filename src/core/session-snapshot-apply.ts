@@ -46,6 +46,7 @@ import {
 import { assertsHostUnreachable } from './session-error-kind.js'
 import { engineCaps } from './agents/engine-registry.js'
 import { outlivingOf } from './sessions/outliving-work.js'
+import { execHostOf } from './sessions/session-row-owner.js'
 
 // Re-export the gate surface so consumers can treat this module as the C2
 // entry point (the gate stays import-free for session-tracker's sake).
@@ -482,7 +483,7 @@ export async function applySnapshot(
     let daemonStartedAt: number | null = null
     if (source !== 'reconnect-pull') {
       const { getPooledSnapshotConnection } = await import('../providers/daemon-connection.js')
-      daemonStartedAt = getPooledSnapshotConnection(record.host)?.daemonStartedAt ?? null
+      daemonStartedAt = getPooledSnapshotConnection(execHostOf(record))?.daemonStartedAt ?? null
     }
     await noteRestartDeath(record, source === 'reconnect-pull' ? 'reconnect' : 'report', `snapshot-apply:${source}`, daemonStartedAt)
   }

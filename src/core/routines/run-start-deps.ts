@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { RoutineLaunch, RoutineStart, SessionRecord, Task } from '../types.js';
+import { cliHostOf } from '../sessions/session-row-owner.js';
 
 export interface RunStartDeps {
   now(): number;
@@ -241,7 +242,7 @@ export function defaultRunStartDeps(): RunStartDeps {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const res = await Promise.race([
-          cancelPendingStartOf({ sid: sessionId, sessionId, host: rec?.host && rec.host !== LOCAL ? rec.host : LOCAL }),
+          cancelPendingStartOf({ sid: sessionId, sessionId, host: cliHostOf(rec) }),
           new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer')), 8_000); }),
         ]);
         if (res.alive) return 'alive';

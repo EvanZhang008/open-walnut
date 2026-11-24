@@ -23,6 +23,7 @@ import { HISTORY_PARSER_VERSION } from './history-parser-version.js';
 import { legacyHintCutoff } from './sessions/legacy-hint-lines.js';
 import { decodeReadyRowsCapped, type ReadyViewConnection } from './history-ready-view.js';
 import { READY_MAX_ROWS } from '../providers/history-ready-core.js';
+import { cliHostOf } from './sessions/session-row-owner.js';
 
 export const SUBAGENT_READY_CAPABILITY = 'history-ready-subagent-v1';
 /** The host's budget for one ask. Two asks (the second joins the build) and the transfer fit the
@@ -95,7 +96,7 @@ export async function fetchSubagentView(
 ): Promise<SubagentViewOutcome> {
   let d: SubagentViewDeps;
   try { d = deps ?? await defaultDeps(); } catch { return { kind: 'unavailable', reason: 'no-provider' }; }
-  const hostKey = record.host ?? '__local__';
+  const hostKey = cliHostOf(record);
   const conn = d.connectionFor(hostKey);
   if (!conn || !conn.hasCapability(SUBAGENT_READY_CAPABILITY)) return { kind: 'unavailable', reason: 'no-capability' };
   let res = await askOnce(conn, record, agentId);

@@ -20,6 +20,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
+import { cliHostOf } from './session-row-owner.js';
 
 export type OwnerHold = 'turn' | 'background' | 'idle';
 
@@ -56,7 +57,7 @@ export async function ownerView(rec: Rec): Promise<OwnerView | null> {
   }
   const { isAcpEngine } = await import('../agents/engine-registry.js');
   if (isAcpEngine(rec.engine)) return null;
-  const host = rec.host ?? '__local__';
+  const host = cliHostOf(rec);
   try {
     const { getPooledSnapshotConnection, probeDaemonSession } = await import('../../providers/daemon-connection.js');
     const conn = getPooledSnapshotConnection(host);
@@ -103,7 +104,7 @@ export class ReplacedSessionLiveError extends Error {
  */
 export async function endReplacedSession(rec: Rec, opts: { by?: string; taskId?: string } = {}): Promise<{ confirmed: boolean; hostLost?: boolean }> {
   const sid = rec.claudeSessionId;
-  const host = rec.host ?? '__local__';
+  const host = cliHostOf(rec);
   let why = '';
   let stopId: string | undefined;
   try {

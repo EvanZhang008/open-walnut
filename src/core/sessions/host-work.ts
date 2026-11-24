@@ -13,6 +13,7 @@
 import type { SessionRecord } from '../types.js';
 import type { SessionSnapshot } from '../../providers/daemon-fold.js';
 import { outlivingOf, type OutlivingSource } from './outliving-work.js';
+import { execHostOf } from './session-row-owner.js';
 
 /** The host's word on one session. */
 export interface HostWork {
@@ -64,7 +65,7 @@ export async function hostWorkOf(record: Pick<SessionRecord, 'claudeSessionId' |
       return { alive: view.alive, working: view.working, inTurn: view.inTurn, outliving: view.outliving };
     }
     const { getPooledSnapshotConnection } = await import('../../providers/daemon-connection.js');
-    const conn = getPooledSnapshotConnection(record.host);
+    const conn = getPooledSnapshotConnection(execHostOf(record));
     if (!conn) return null;
     const resp = await conn.send('getState', { sid: record.claudeSessionId }, HOST_WORK_TIMEOUT_MS) as Parameters<typeof hostWorkFrom>[0];
     return hostWorkFrom(resp, now);

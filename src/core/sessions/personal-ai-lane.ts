@@ -41,6 +41,7 @@ import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registr
 import { resolveDefaultEngine } from '../agents/default-engine.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
 import { log } from '../../logging/index.js';
+import { execHostOf } from './session-row-owner.js';
 
 /** The lane key a Personal AI conversation's session is bound to. */
 export function personalAiLaneKey(agentId: string, conversationId: string): string {
@@ -688,7 +689,7 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
     // host's 127.0.0.1:3456. A record that holds a mount loses it here, before a cold
     // resume reads it.
     let mountChanged = false;
-    if (record.host && record.host !== '__local__') {
+    if (execHostOf(record)) {
       const { mcpServers: _mac, ...rest } = profile;
       profile = rest;
       mountChanged = record.profile.mcpServers !== undefined;

@@ -68,6 +68,54 @@ const ROLE_ASKS: Record<string, Record<string, { count: number; why: string }>> 
   },
 }
 
+/**
+ * 3. Beyond the classes: every file under src/ that decides a session's place (a daemon link, a file
+ *    reader, a probe, local or remote) from a row's raw `host`. On a host that runs its sessions an own
+ *    row names the host's key, so such a read sends this machine's own session to a link of that name,
+ *    which reaches nothing here (until 2026-11-24 the stop flush, the reconnect rescue, the agent-wait
+ *    resend, the liveness and stale checks, the history and cost readers all did). The forms counted:
+ *    `x.host ?? '__local__'` and `|| '__local__'`, `x.host === / !== '__local__'`, `!x.host`, and a raw
+ *    `x.host` handed to a link or reader. A file that keeps one names why it is not a session's place.
+ */
+const ROW = String.raw`(?:record|rec|row|existing|current|stored|prior|session|s|r|caller\.record|p\.session)`
+const PLACE_FROM_ROW = new RegExp(String.raw`\b${ROW}\??\.host\s*(?:\?\?|\|\|)\s*'__local__'|\b${ROW}\??\.host\s*(?:===|!==)\s*'__local__'|!${ROW}\??\.host\b|\b(?:getConnectedDaemonConnection|getPooledSnapshotConnection|isDaemonConnected|probeDaemonSession|DaemonFileReader|statStreamFile|readSessionJsonlContent|taskDirForHost|invalidateSessionHistoryCaches|hostConnection)\(\s*${ROW}\??\.host\b`, 'g')
+
+const KEYS_BY_NAME = 'keyed by the machine\'s name as the leader names it (usage, windows, picks), not a link'
+/** The files that read a row's raw host in those forms, how many times, and why none is a session's place. */
+const RAW_PLACE_ALLOWED: Record<string, { count: number; why: string }> = {
+  'src/commands/demo-server.ts': { count: 3, why: 'the demo server picks the seeded rows it shows by host name; no session runs there' },
+  'src/core/frequent-dirs.ts': { count: 2, why: `the folders a person picked, ${KEYS_BY_NAME}` },
+  'src/core/hosts/found-host-alert.ts': { count: 1, why: 'a host phase event names a host, not a session row' },
+  'src/core/human-inbox/credential-ask.ts': { count: 1, why: 'a credential ask names a host by name, not a session row' },
+  'src/core/human-inbox/letter-check.ts': { count: 1, why: 'a credential ask names a host by name, not a session row' },
+  'src/core/router/session-policy.ts': { count: 1, why: 'a router area is matched by the machine name the area names' },
+  'src/core/session-db.ts': { count: 1, why: 'a start claims a row of no host or of this host\'s key: it compares the row with that key itself' },
+  'src/core/sessions/cloud-chat-lane.ts': { count: 1, why: 'the companion\'s own chat lanes, which run on no host' },
+  'src/core/sessions/engine-switch-context.ts': { count: 1, why: `a model window learned on a machine, ${KEYS_BY_NAME}` },
+  'src/core/sessions/external-session-import.ts': { count: 1, why: `a retitle list ${KEYS_BY_NAME}` },
+  'src/core/subagents/on-host.ts': { count: 1, why: 'a Walnut subagent\'s own record (its host alias \'local\'), not a session row' },
+  'src/core/subagents/registry.ts': { count: 1, why: 'a Walnut subagent\'s own record (its host alias \'local\'), not a session row' },
+  'src/core/time-tracking/report-adjust.ts': { count: 2, why: 'a time record\'s host name, not a session row' },
+  'src/core/transcript-archive-sweep.ts': { count: 1, why: `archive rows ${KEYS_BY_NAME}` },
+  'src/core/usage/collection.ts': { count: 5, why: `usage per machine, ${KEYS_BY_NAME}` },
+  'src/core/usage/session-budget.ts': { count: 1, why: `runtime ids grouped by the budget's machine, ${KEYS_BY_NAME}` },
+  'src/providers/host-resume.ts': { count: 4, why: 'a legacy row\'s host name, read on the leader to hand its resume to that host (host-judged rows are left out first)' },
+  'src/providers/model-window-store.ts': { count: 1, why: `model windows ${KEYS_BY_NAME}` },
+  'src/web/routes/session-control-v1.ts': { count: 1, why: 'the companion\'s copy row names the host the companion may lead' },
+  'src/web/routes/session-stop-v1.ts': { count: 1, why: 'a label: the name of the session\'s machine for a sentence' },
+  'src/web/terminal/dtach-check.ts': { count: 1, why: 'a terminal ref names the machine its terminal opens on; it carries no judge' },
+  'src/web/terminal/dtach-lifecycle.ts': { count: 2, why: 'a terminal ref names the machine its terminal opens on; it carries no judge' },
+  'src/web/terminal/spawn.ts': { count: 2, why: 'a terminal ref names the machine its terminal opens on; it carries no judge' },
+}
+
+function srcFiles(dir: string): string[] {
+  return fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => {
+    const rel = path.posix.join(dir, e.name)
+    if (e.isDirectory()) return srcFiles(rel)
+    return /\.tsx?$/.test(e.name) && !/\.d\.ts$/.test(e.name) ? [rel] : []
+  })
+}
+
 describe('the session classes run every session on one path, whoever is its host', () => {
   const files = sessionClassFiles()
 
@@ -107,6 +155,24 @@ describe('the session classes run every session on one path, whoever is its host
     }
     const want = Object.fromEntries(Object.entries(ROLE_ASKS).map(([f, names]) => [f, Object.fromEntries(Object.entries(names).map(([n, v]) => [n, v.count]))]))
     expect(found, 'a new ask of what this server is (or who judges a session) in the session classes: a second path for the leader\'s own sessions unless ROLE_ASKS says why it is not').toEqual(want)
+  })
+
+  it('every file under src/ decides a session\'s place through execHostOf/cliHostOf, or says why its raw host is no place', () => {
+    const found: Record<string, number> = {}
+    const where: string[] = []
+    for (const file of srcFiles('src')) {
+      if (file === 'src/core/sessions/session-row-owner.ts') continue
+      codeLines(fs.readFileSync(path.join(ROOT, file), 'utf8')).forEach((line, i) => {
+        for (const m of line.matchAll(PLACE_FROM_ROW)) {
+          // Carried as data: `host: x.host ?? '__local__'` (a log field, an event's payload).
+          if (/\bhost:\s*$/.test(line.slice(0, m.index ?? 0))) continue
+          found[file] = (found[file] ?? 0) + 1
+          where.push(`${file}:${i + 1}: ${line.trim()}`)
+        }
+      })
+    }
+    const want = Object.fromEntries(Object.entries(RAW_PLACE_ALLOWED).map(([f, v]) => [f, v.count]))
+    expect(found, `a session's place read from its row's raw host: ask execHostOf/cliHostOf, or list the file with why\n${where.filter((w) => !(w.split(':')[0]! in RAW_PLACE_ALLOWED)).join('\n')}`).toEqual(want)
   })
 
   describe('cliHostOf: the daemon link that reaches a session\'s CLI from this server', () => {

@@ -131,7 +131,8 @@ export function hostFieldsIn(patch: Readonly<Record<string, unknown>>): string[]
  */
 export function execHostOf(row: Pick<SessionRecord, 'judge' | 'host'>): string | undefined {
   if (!row.host || row.host === '__local__') return undefined
-  return rowOwnedHere(row, thisHostKey()) ? undefined : row.host
+  // Only a host-judged row can be this host's own: no host key is read for any other.
+  return judgedByHost(row) && rowOwnedHere(row, thisHostKey()) ? undefined : row.host
 }
 
 /**

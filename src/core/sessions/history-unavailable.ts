@@ -7,6 +7,7 @@
  */
 import { engineCaps } from '../agents/engine-registry.js'
 import type { SessionRecord } from '../types.js'
+import { cliHostOf } from './session-row-owner.js'
 
 export async function unavailableHistoryReason(record: Pick<SessionRecord, 'engine' | 'host' | 'acpRuntimeId'>): Promise<string> {
   const caps = engineCaps(record.engine)
@@ -18,8 +19,9 @@ export async function unavailableHistoryReason(record: Pick<SessionRecord, 'engi
       ? `${caps.displayName} session history journal is unavailable on remote host "${record.host}"`
       : `${caps.displayName} session history journal not found`
   }
-  if (!record.host || record.host === '__local__') return 'Session history file not found'
-  return (await hostConnected(record.host))
+  const at = cliHostOf(record)
+  if (at === '__local__') return 'Session history file not found'
+  return (await hostConnected(at))
     ? `Session history file not found on "${record.host}"`
     : `Remote host "${record.host}" is unreachable — session history is stored on that machine`
 }

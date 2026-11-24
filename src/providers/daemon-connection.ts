@@ -169,6 +169,7 @@ import type { ServiceRole } from '../binary/service-mode.js'
 import { noteLauncherRollback } from '../core/hosts/host-launcher.js'
 import { isMachineId } from './machine-id-core.js'
 import { noteFrameParsed } from './line-parse-count.js'
+import { cliHostOf } from '../core/sessions/session-row-owner.js'
 
 /** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
 function bootOf(said: string): { boot?: number } {
@@ -9528,7 +9529,7 @@ export class DaemonConnection {
         // subscriber set, and the UI froze ("running, no output") until a manual
         // refresh re-subscribed. Mirror the canonical `host ?? '__local__'`
         // normalization used elsewhere (e.g. frequent-dirs.ts).
-        if ((s.host ?? '__local__') !== this.hostKey) continue
+        if (cliHostOf(s) !== this.hostKey) continue
         if (s.archived) continue
         if (only && !only.has(s.claudeSessionId)) continue
         // A start a service set move holds has not left (service-set-hold.ts): no daemon knows its CLI

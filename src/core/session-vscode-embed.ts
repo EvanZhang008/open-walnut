@@ -21,6 +21,7 @@ import {
 } from '../providers/vscode-server-core.js'
 import type { SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
+import { execHostOf } from './sessions/session-row-owner.js'
 
 /** Remote ensure can include a first-time ~100MB install; give it room. */
 const REMOTE_ENSURE_TIMEOUT_MS = 120_000
@@ -68,7 +69,8 @@ export async function buildSessionVscodeEmbed(
   if (!session) throw new SessionVscodeEmbedError('session not found', 404)
   if (!session.cwd) throw new SessionVscodeEmbedError('session has no working directory', 400)
 
-  const isRemote = Boolean(session.host && session.host !== '__local__')
+  // A row this host replica owns runs right here (session-row-owner.ts execHostOf).
+  const isRemote = Boolean(execHostOf(session))
 
   if (!isRemote) {
     // Local host: the walnut server process IS the host-local owner.
