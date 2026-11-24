@@ -275,7 +275,13 @@ standby_dir>`) does three things, none of them a step of the switch (`candidate-
    folder) until it ends. Exit codes as on the leader: 0 switched, 1 refused, 3 rolled back, 4 a job died.
    The command ends with its target job: the source job's last step (the hand-off: the old home's marker,
    its service's replica role) runs on the old leader's machine after its server stopped, where this
-   machine no longer sees it; `walnut leader switch --status` there shows it.
+   machine no longer sees it. So the command's last line says so:
+
+   ```
+   Switched: machine-b leads.
+   machine-a still has its final hand-off step (its old home marked handed over, its service set to follow this
+   machine): check it on machine-a with `walnut leader switch --status`
+   ```
 
 Where the machine has no link to the leader (no host service of this Walnut runs there, so no relay socket),
 it says so and names the machine to run it on, and asks nothing of anyone:
@@ -323,7 +329,9 @@ own, or direct doors to a majority: ...
 
 This is what a switch back to the Mac meets in the lead's layout (the Mac keeps no witness, the dev machines'
 doors are not reachable from it): the leader's machine's witness over the relay plus the companion is a majority
-while the leader runs, and the companion alone after its stop. The preflight therefore refuses it.
+while the leader runs, and the companion alone after its stop. The preflight therefore refuses it. A door the
+leader's server serves to its hosts in another way (a host-dialed door included) ends with that server at the same
+stop, so it does not close this either: the missing segment is in [Not built yet](#not-built-yet).
 
 ### The copy link to another machine
 
@@ -1406,7 +1414,8 @@ Three always-on places: **the services of the two always-on dev machines, and th
 - **A switch back to the Mac** (not a witness) asks all three over its links, as the leader does today; as a candidate it has no link
   (above), so by the rule it needs direct doors to two of them: the companion's and a dev machine service's (`witness-door` on that
   service). Its host link to the leader reaches the leader's machine's witness ([The leader relay](#the-leader-relay)), but only
-  until the leader's stop, before the commit: it does not satisfy the rule, and the preflight refuses a switch back that needs it. The end-to-end test runs this layout: a dev machine leads, the other dev machine's witness joins after the first lead,
+  until the leader's stop, before the commit: it counts for the preflight's reading only, never for the commit, so it does not
+  satisfy the rule, and the preflight refuses a switch back that needs it. The end-to-end test runs this layout: a dev machine leads, the other dev machine's witness joins after the first lead,
   and a candidate with no witness and no link switches in with that other dev machine down
   (`tests/e2e/leader-switch-no-link-e2e.test.ts`). 5a's host-dialed door does not change this (hosts dial the leader, and the Mac is
   not the leader before its commit).
@@ -1429,8 +1438,12 @@ witness, above).
   is not moved.
 - **The command on the machine that will lead** is [built](#running-the-command-on-either-machine) and rehearsed with real
   daemons and a real host service on one computer (`--remote`, scenario `forwarded`); not run between two real machines.
-- **A switch back to the Mac** is refused by the preflight in the lead's layout ([The leader relay ends at the stop](#the-leader-relay)):
-  the Mac needs a witness of its own or direct doors to two. And after a switch from the Mac to a dev machine there is no
+- **A switch back to the Mac** is refused by the preflight in the lead's layout ([The leader relay ends at the stop](#the-leader-relay)).
+  The missing segment: at the commit, the candidate needs a path to a second witness that does not depend on the old
+  leader's server process. Every path to the leader machine's witness that the Mac has today (the leader relay over its host
+  link, any door the leader's server serves) ends with that process at its switch stop, so at the commit the Mac reaches the
+  companion only: 1 of 3. Tests: `tests/core/leader/switch/leader-relay.test.ts` ("the leader stopped", "the check refuses").
+  And after a switch from the Mac to a dev machine there is no
   rehearsed copy way back: the dev machine sends its copy to the Mac only as kind `daemon` once the network membership follows
   the permit holder (not verified on real machines), or as kind `door` (step 5, not built). No real-data switch away from the
   Mac until one of them is rehearsed.
