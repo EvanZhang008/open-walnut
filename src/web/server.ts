@@ -5227,7 +5227,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (bootPolicy('host-wiring')) {
     const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, isDaemonConnected, pooledConnectionTargets } =
       await import('../providers/daemon-connection.js')
-    const { link, linkTarget } = await import('../core/hosts/link.js')
+    const { forgetLinkTarget, link, linkTarget } = await import('../core/hosts/link.js')
     const { getConfig, isFallbackConfig } = await import('../core/config-manager.js')
     const { buildHostStatus } = await import('../core/hosts/host-status.js')
     const { getHostReadiness, wireHostReadiness } = await import('../core/hosts/host-readiness.js')
@@ -5263,8 +5263,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // Removed (its row is gone from config.yaml, removedFromSettings), not turned off: this Walnut's own service set there leaves too.
           void endHostLink(host, undefined, { rows: hostDefs })
         }
-        // One a read added gets its frame now: its last phase change may have found no row.
-        for (const host of after) if (!before.has(host)) pushHostFrame(host, hostDefs[host])
+        // One a read added gets its frame now: its last phase change may have found no row. Its
+        // link reads the row anew (a refusal from before the Turn on is not kept, link.ts).
+        for (const host of after) if (!before.has(host)) { forgetLinkTarget(host); pushHostFrame(host, hostDefs[host]) }
       } catch { /* config not ready yet */ }
     }
     // One read at a time, each after the one before, so an older read never lands last; calls

@@ -43,12 +43,16 @@ export const SET_HOLD_MAX_WAIT_MS = 15 * 60_000
 
 export type SetHoldKind = 'refuse' | 'wait' | null
 
+/** The command an `agent.<op>` frame runs; any other command is itself. */
+function canonicalOf(cmd: string, params: Record<string, unknown>): string {
+  if (!cmd.startsWith('agent.')) return cmd
+  const route = resolveAgentCommand(params.engine, cmd.slice('agent.'.length))
+  return route.ok ? route.cmd : cmd
+}
+
 /** What the hold does with `cmd` (an `agent.<op>` frame by the command it runs). */
 export function setHoldKind(cmd: string, params: Record<string, unknown>): SetHoldKind {
-  const canonical = cmd.startsWith('agent.') ? (() => {
-    const route = resolveAgentCommand(params.engine, cmd.slice('agent.'.length))
-    return route.ok ? route.cmd : cmd
-  })() : cmd
+  const canonical = canonicalOf(cmd, params)
   if (REFUSED.has(canonical)) return 'refuse'
   if (WORK.has(canonical) || STARTS_WORK_THERE.has(canonical)) return 'wait'
   return null
@@ -63,6 +67,8 @@ export class SetHold {
   private released: { promise: Promise<void>; resolve: () => void } | null = null
   private underWay = 0
   private idle: Array<() => void> = []
+  /** Sessions whose `start` waits here, by sid (how many starts of it wait). */
+  private heldStarts = new Map<string, number>()
 
   get on(): boolean { return this.released !== null }
 
@@ -78,6 +84,12 @@ export class SetHold {
     }
   }
 
+  /**
+   * Does a `start` of this session wait here, unsent? Its CLI is on no daemon yet, so a reconnect that
+   * finds no CLI for it sees no restart's loss: the release sends the start (drill round 4, R4-2).
+   */
+  holdsStart(sid: string): boolean { return this.heldStarts.has(sid) }
+
   /** Work commands sent and not answered yet. */
   get inFlight(): number { return this.underWay }
 
@@ -92,11 +104,20 @@ export class SetHold {
       if (kind === 'wait') {
         let timer: ReturnType<typeof setTimeout> | undefined
         const late = new Promise<'late'>((r) => { timer = setTimeout(() => r('late'), maxWaitMs); timer.unref?.() })
+        const sid = canonicalOf(cmd, params) === 'start' && typeof params.sid === 'string' ? params.sid : null
+        if (sid) this.heldStarts.set(sid, (this.heldStarts.get(sid) ?? 0) + 1)
         try {
           while (this.released) {
             if (await Promise.race([this.released.promise.then(() => 'ok' as const), late]) === 'late') throw refused()
           }
-        } finally { clearTimeout(timer) }
+        } finally {
+          clearTimeout(timer)
+          if (sid) {
+            const n = (this.heldStarts.get(sid) ?? 1) - 1
+            if (n > 0) this.heldStarts.set(sid, n)
+            else this.heldStarts.delete(sid)
+          }
+        }
       }
     }
     return this.track(cmd, params)

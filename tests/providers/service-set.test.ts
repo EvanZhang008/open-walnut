@@ -149,6 +149,14 @@ describe('what the server and the handover accept as a service\'s dirs', () => {
     }
   })
 
+  it('isServiceSetRuntimeDir on macOS: the /tmp fallback read through its realpath (/private/tmp) is the same dir; elsewhere it is not', () => {
+    expect(isServiceSetRuntimeDir(`/private/tmp/open-walnut-set-501-${ID}`, HOME, 501, 'darwin')).toBe(true)
+    expect(isServiceSetRuntimeDir(`/tmp/open-walnut-set-501-${ID}`, HOME, 501, 'darwin')).toBe(true)
+    expect(isServiceSetRuntimeDir(`/private/tmp/open-walnut-set-502-${ID}`, HOME, 501, 'darwin')).toBe(false)
+    expect(isServiceSetRuntimeDir(`/x/private/tmp/open-walnut-set-501-${ID}`, HOME, 501, 'darwin')).toBe(false)
+    expect(isServiceSetRuntimeDir(`/private/tmp/open-walnut-set-501-${ID}`, HOME, 501, 'linux')).toBe(false)
+  })
+
   it('isProductionDaemonDir counts a set\'s runtime dir as production (its sessions outlive it), and only that', () => {
     const env = { HOME }
     expect(isProductionDaemonDir(`${R}/rt`, env)).toBe(true)

@@ -17,20 +17,53 @@
  * dialled first, so a host's daemon could be deployed without its shell setup
  * depending on which panel was opened first.
  *
- * Ratchet: tests/core/hosts/link-ratchet.test.ts fails when a file outside the
- * transports dials a daemon with an SSH target of its own or spawns ssh.
+ * The link is also the one dial gate (drill round 4, R4-1): a host the person removed, turned off,
+ * or a host found in ~/.ssh/config still waiting for the person's yes is never dialled from here.
+ * Before it, only a host missing from config was refused (linkTarget), so a removed host that
+ * ~/.ssh/config also names came back as a found row and every background caller (a session's
+ * status question, its history read, a turn snapshot, a host probe) dialled it again: two seconds
+ * after a Remove the leader was back on another Walnut's shared daemon, pushing its host slice,
+ * triggers and replica there. The person's own Connect (host-connect-action.ts) asks the same
+ * `dialRefusal` first.
+ *
+ * Ratchets: tests/core/hosts/link-ratchet.test.ts fails when a file outside the transports dials a
+ * daemon with an SSH target of its own or spawns ssh; tests/core/hosts/link-dial-gate.test.ts fails
+ * when a dial entry point skips the gate.
  */
 import type { SshTarget } from '../../providers/session-io.js'
 import type { DaemonConnection } from '../../providers/daemon-connection.js'
 import type { Config } from '../types.js'
+import { foundHostWaits, type FoundFlags } from './found-hosts.js'
 
 const LOCAL_LINK = '__local__'
 
+/** Why Walnut does not dial a host: not in config, turned off, or found and waiting for the yes. */
+export type HostRefusal = 'unknown' | 'off' | 'waiting'
+
+const REFUSAL_WORDS: Record<HostRefusal, (host: string) => string> = {
+  unknown: (host) => `Unknown host: ${host}`,
+  off: (host) => `${host} is turned off in Settings > Remote Hosts: Walnut does not connect to it`,
+  waiting: (host) => `${host} was found in ~/.ssh/config and waits for a yes on Remote Hosts: Walnut does not connect to it`,
+}
+
+/** A host Walnut does not reach. One name for every reason, so a caller that stops on an unknown host stops on these too. */
 export class UnknownHostError extends Error {
-  constructor(public host: string) {
-    super(`Unknown host: ${host}`)
+  constructor(public host: string, public why: HostRefusal = 'unknown') {
+    super(REFUSAL_WORDS[why](host))
     this.name = 'UnknownHostError'
   }
+}
+
+/**
+ * The dial gate's rule for one config row: null when Walnut may dial it. A found host waiting for the
+ * person's yes reads as off anyway (found-hosts.ts applyFoundHostAnswers); it is named first so its
+ * words say where the yes is given.
+ */
+export function dialRefusal(def: (FoundFlags & { enabled?: unknown }) | null | undefined): Exclude<HostRefusal, 'unknown'> | null {
+  if (!def) return null
+  if (foundHostWaits(def)) return 'waiting'
+  if (def.enabled === false) return 'off'
+  return null
 }
 
 function isLocal(host: string | undefined | null): boolean {
@@ -63,20 +96,30 @@ export function linkTarget(host: string, config: Pick<Config, 'hosts'>): SshTarg
 }
 
 // getConfig reads and parses config.yaml on every call, and a file reader asks for
-// its link once per read: a remote host's target is reused for a few seconds.
+// its link once per read: a remote host's target (or its refusal) is reused for a few
+// seconds. A host that leaves Settings forgets it at once (host-link-end.ts), and so does a
+// person's Connect (host-connect-action.ts).
 const TARGET_TTL_MS = 5_000
-const targets = new Map<string, { target: SshTarget; at: number }>()
+const targets = new Map<string, { target: SshTarget; refusal: HostRefusal | null; at: number }>()
 
 async function remoteTarget(key: string): Promise<SshTarget> {
-  const hit = targets.get(key)
-  if (hit && Date.now() - hit.at < TARGET_TTL_MS) return hit.target
-  const { getConfig } = await import('../config-manager.js')
-  const target = linkTarget(key, await getConfig())
-  targets.set(key, { target, at: Date.now() })
-  return target
+  let hit = targets.get(key)
+  if (!hit || Date.now() - hit.at >= TARGET_TTL_MS) {
+    const { getConfig } = await import('../config-manager.js')
+    const config = await getConfig()
+    const hosts = config.hosts ?? {}
+    const target = linkTarget(key, config)
+    hit = { target, refusal: dialRefusal(Object.hasOwn(hosts, key) ? hosts[key] : undefined), at: Date.now() }
+    targets.set(key, hit)
+  }
+  if (hit.refusal) throw new UnknownHostError(key, hit.refusal)
+  return hit.target
 }
 
-/** The pooled daemon connection to `host`, dialled if it is not up. Rejects with a link failure when no route answers. */
+/**
+ * The pooled daemon connection to `host`, dialled if it is not up. Rejects with a link failure when no
+ * route answers, and with UnknownHostError, before any dial, for a host Walnut does not reach (dialRefusal).
+ */
 export async function link(host: string): Promise<DaemonConnection> {
   const key = isLocal(host) ? LOCAL_LINK : host
   const [dc, { isSelfHost }] = await Promise.all([

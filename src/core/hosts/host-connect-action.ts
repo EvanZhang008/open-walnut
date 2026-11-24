@@ -10,7 +10,7 @@
 
 import { CLOUD_MODE, IS_DEMO, IS_EPHEMERAL } from '../../constants.js'
 import { demoIsolationInput, isDemoLiftedHost } from '../../providers/demo-remote-host.js'
-import { foundHostWaitingNote, foundHostWaits } from './found-hosts.js'
+import { foundHostWaitingNote } from './found-hosts.js'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
 import {
@@ -29,7 +29,7 @@ import {
 } from './host-fixture.js'
 import { maybeStartFixtureAutofix } from './host-fixture-autofix.js'
 import { CLOUD_BOX_HOST_ALIAS, cloudBoxRefusal } from './cloud-box-host.js'
-import { linkTarget } from './link.js'
+import { dialRefusal, forgetLinkTarget, linkTarget } from './link.js'
 import { isFollower } from '../server-role.js'
 
 export type ConfigHostDef = HostDef & { shell_setup?: string }
@@ -125,10 +125,14 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number; 
   if (isFollower()) return refuse(409, 'a cloud replica cannot connect to hosts; run this on the primary')
   const def = await configHostDef(host)
   if (!def) return refuse(404, `Unknown host: ${host}`)
-  // A found host waits for the person's yes on Remote Hosts (found-hosts.ts): no dial before it.
-  if (foundHostWaits(def)) return refuse(409, foundHostWaitingNote(def.label ?? host), 'host_found')
-  // The warmup would skip it silently and the button would look dead.
-  if (def.enabled === false) return refuse(409, `${host} is disabled; enable it in Settings > Remote Hosts first`, 'host_disabled')
+  // The link's dial gate (link.ts dialRefusal), in the button's words. A found host waits for the
+  // person's yes on Remote Hosts (found-hosts.ts): no dial before it. A host turned off: the warmup
+  // would skip it silently and the button would look dead.
+  const refusal = dialRefusal(def)
+  if (refusal === 'waiting') return refuse(409, foundHostWaitingNote(def.label ?? host), 'host_found')
+  if (refusal === 'off') return refuse(409, `${host} is disabled; enable it in Settings > Remote Hosts first`, 'host_disabled')
+  // A person's Connect reads the row as it is now: the link's few-second target cache may still hold a refusal from before a yes.
+  forgetLinkTarget(host)
 
   if (isFixtureHost(host)) {
     // The same prelude as a real host (the counter is the spec's evidence, C46),

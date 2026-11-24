@@ -173,14 +173,19 @@ async function trial(o: BootProofOptions): Promise<string | null> {
     for (const [key, value] of Object.entries(o.env ?? {})) if (!(key in env)) env[key] = value
     env.WALNUT_RUNTIME_DIR ??= trialRuntimeDir()
     const out = await fs.open(log, 'a', 0o600)
-    let spawned: Promise<void>
+    let spawned: Promise<void> = Promise.resolve()
+    const notStarted = (error: unknown) => { end.exited = `could not be started (${error instanceof Error ? error.message : String(error)})` }
     try {
       const started = child = spawn(o.executable, o.args, { cwd: home, env, detached: true, stdio: ['ignore', out.fd, out.fd] })
       // Listened for before any await: 'spawn' may fire while the log is being closed.
       started.once('exit', (code, signal) => { end.exited = signal ? `was ended by ${signal}` : `exited with ${code}` })
       // Handled at once: a failed spawn rejects while the log is being closed, before any later await.
       spawned = new Promise<void>((resolve, reject) => { started.once('spawn', resolve); started.on('error', reject) })
-        .catch((error: Error) => { end.exited = `could not be started (${error.message})` })
+        .catch(notStarted)
+    } catch (error) {
+      // Bun on macOS throws from spawn itself for a file that cannot be exec'd (EBADEXEC, a cut-short
+      // build) instead of emitting 'error': the same verdict, not a raw error for the caller (mac drill M1).
+      notStarted(error)
     } finally { await out.close() }
     await spawned
 

@@ -9758,6 +9758,13 @@ export class DaemonConnection {
         if ((s.host ?? '__local__') !== this.hostKey) continue
         if (s.archived) continue
         if (only && !only.has(s.claudeSessionId)) continue
+        // A start a service set move holds has not left (service-set-hold.ts): no daemon knows its CLI
+        // yet, and that is no restart's loss. The hold's release sends it (drill round 4, R4-2: it was
+        // recorded as a host_restart loss and queued for restart recovery).
+        if (this._setHold.holdsStart(s.claudeSessionId)) {
+          log.session.info('DaemonConnection: start held by the service set move, not a loss', { sessionId: s.claudeSessionId, host: this.hostKey })
+          continue
+        }
 
         // Reattach any non-terminal session. Both `running` (mid-turn) and
         // `idle` (FIFO session between turns, CLI alive waiting for stdin) must

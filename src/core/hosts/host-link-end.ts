@@ -10,6 +10,10 @@
  * socket); a master the person's own ~/.ssh/config runs is never touched. The next Connect
  * signs in again.
  *
+ * After it nothing dials the host again on its own: link.ts refuses a host that is gone, turned off,
+ * or back as a found host waiting for the person's yes (drill round 4, R4-1), and its cached target
+ * is forgotten here.
+ *
  * What stays: the session daemon on the host and the sessions it runs. Walnut does not reach
  * into a host it was just told to stop connecting to, and those sessions are the person's work;
  * they end on the host's own idle timer, or keep their history for the next connect. The words
@@ -24,6 +28,7 @@
  */
 import { log } from '../../logging/index.js'
 import { CLOUD_BOX_HOST_ALIAS } from './cloud-box-host.js'
+import { forgetLinkTarget } from './link.js'
 
 export interface HostLinkEndDeps {
   /** Drop the pooled connection (daemon-connection.ts dropDaemonConnection). True when one was pooled. */
@@ -69,6 +74,9 @@ export function endsLinkWhenLeft(host: string): boolean {
  */
 export async function endHostLink(host: string, deps?: Partial<HostLinkEndDeps>, o: { removed?: boolean; rows?: Readonly<Record<string, unknown>> } = {}): Promise<{ connection: boolean; terminal: boolean }> {
   if (!endsLinkWhenLeft(host)) return { connection: false, terminal: false }
+  // The link's dial gate reads the row as it is now (link.ts): no cached target of the host before it
+  // left lets a caller dial it again, here or while its set leaves.
+  forgetLinkTarget(host)
   const d = { ...(await defaultDeps()), ...deps }
   const removed = o.removed ?? (o.rows ? await removedFromSettings(host, o.rows).catch(() => false) : false)
   if (removed) {

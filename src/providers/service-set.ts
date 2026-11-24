@@ -118,10 +118,14 @@ export function isServiceInstallRoot(platform: ServicePlatform, home: string, di
     && isServiceSetId(path.basename(path.dirname(resolved)))
 }
 
-/** Is `dir` a set's runtime dir (R/rt under `home`, or the /tmp fallback of `uid`)? Never the default's. */
-export function isServiceSetRuntimeDir(dir: string, home: string | null | undefined, uid: number | null | undefined): boolean {
+/**
+ * Is `dir` a set's runtime dir (R/rt under `home`, or the /tmp fallback of `uid`)? Never the default's.
+ * On macOS /tmp is a link to /private/tmp, so a realpath of the fallback reads /private/tmp/...: both
+ * spellings are the same dir there (mac drill), compared as text, with no filesystem call.
+ */
+export function isServiceSetRuntimeDir(dir: string, home: string | null | undefined, uid: number | null | undefined, platform: NodeJS.Platform = process.platform): boolean {
   const resolved = path.resolve(dir)
-  const tmp = /^\/tmp\/open-walnut-set-(\d+)-([0-9a-f]{16})$/.exec(resolved)
+  const tmp = (platform === 'darwin' ? /^(?:\/private)?\/tmp\/open-walnut-set-(\d+)-([0-9a-f]{16})$/ : /^\/tmp\/open-walnut-set-(\d+)-([0-9a-f]{16})$/).exec(resolved)
   if (tmp) return uid !== null && uid !== undefined && Number(tmp[1]) === uid
   if (!home || !path.isAbsolute(home) || path.basename(resolved) !== 'rt') return false
   const id = path.basename(path.dirname(resolved))

@@ -441,13 +441,14 @@ export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Pro
       // A host with no SSH route is swept over its daemon link, only while that link is
       // up and can run a script: the sweep never dials one, nor fails on every start.
       const { hostHasSshRoute } = await import('../../core/hosts/host-status.js')
-      // A found host waiting for the person's yes is never dialled (core/hosts/found-hosts.ts);
-      // a live session there would have made it a yes.
-      const { foundHostWaits } = await import('../../core/hosts/found-hosts.js')
-      const live = new Set(sessions.map((s) => s.host).filter(Boolean))
+      // The link's dial gate (core/hosts/link.ts dialRefusal): a host turned off, or a found host
+      // waiting for the person's yes, is never dialled, whatever sessions it still has. A host removed
+      // in Settings that ~/.ssh/config also names comes back as such a found host with its sessions'
+      // records, and every pass of this sweep ssh-ed it again (drill round 4, R4-1).
+      const { dialRefusal } = await import('../../core/hosts/link.js')
       for (const [h, def] of Object.entries(config.hosts ?? {})) {
         if (def && !hostHasSshRoute(def) && !(await hostLinkRunsScripts(h))) hosts.delete(h)
-        else if (def && foundHostWaits(def) && !live.has(h)) hosts.delete(h)
+        else if (def && dialRefusal(def)) hosts.delete(h)
       }
     } catch (err) {
       log.web.warn('reapOrphanDtach: failed to load config hosts', { error: String(err) })
