@@ -1159,6 +1159,11 @@ export async function closeModelPicker(page: Page): Promise<void> {
  * did not apply, or the draft sits on a remote host).
  */
 export async function pickDraftEngine(page: Page, panel: Locator, engineId: string): Promise<void> {
+  // Already the engine the launch uses (the pill says which, `data-engine`): nothing to pick. Opening
+  // the picker anyway raced the folder's Claude mode answer: the mode key's word changes when it lands
+  // ("Default mode" to "Bypass"), the row reflows under the pointer, and the click on the model key
+  // landed on the bar (2026-11-24, session-hold-turn-subagents.spec.ts, a second draft on one page).
+  if ((await draftModelPill(panel).getAttribute('data-engine')) === engineId) return
   const button = await draftEngineButton(page, panel, engineId)
   await expect(button, `${engineId} is locked on this draft`).not.toHaveClass(/provider-rail-item-locked/)
   if ((await button.getAttribute('aria-selected')) !== 'true') await button.click()

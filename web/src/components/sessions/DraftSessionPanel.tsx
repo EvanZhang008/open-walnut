@@ -309,7 +309,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
           : acpModels
           ? `${entry.displayName} (via ACP) — session model: ${meta.model ? acpPillLabel : `${entry.displayName} default`}. Click to switch model / provider.`
           : `Session model: ${selectedLabel} — click to switch model / provider`}
-        data-model={meta.model ?? ''}
+        data-engine={engine} data-model={meta.model ?? ''}
         data-effort={pickedEffort ?? ''}
         onClick={(e) => {
           pillRef.current = e.currentTarget;

@@ -177,8 +177,8 @@ export function BackgroundMenuItem({ task, afterAction }: { task: Task; afterAct
 
 /** The eye in a task's header (the task detail; a session's window buttons, `headerId` set):
  *  lit while the task is watched. The family's quiet icon key: small (24 px) by default, 28 px
- *  (`small={false}`) among a session header's window keys. */
-export function WatchButton({ task, className = '', small = true, headerId, testId = 'task-watch-btn' }: { task: Task; className?: string; small?: boolean; headerId?: string; testId?: string }) {
+ *  (`small={false}`) among a session header's window keys, where `headerHidden` is the row fit's word on it. */
+export function WatchButton({ task, className = '', small = true, headerId, headerHidden, testId = 'task-watch-btn' }: { task: Task; className?: string; small?: boolean; headerId?: string; headerHidden?: 'true' | 'false'; testId?: string }) {
   const { watched, toggle } = useWatchToggle(task);
   return (
     <button
@@ -186,6 +186,7 @@ export function WatchButton({ task, className = '', small = true, headerId, test
       className={`btn btn-icon btn-ghost${small ? ' btn-sm' : ''} task-watch-btn${watched ? ' is-watched' : ''} ${className}`.trim()}
       data-testid={testId}
       data-header-id={headerId}
+      data-hidden={headerHidden}
       aria-pressed={watched}
       aria-label={watched ? 'Stop watching' : 'Watch'}
       title={watched ? 'Watching \u00b7 click to stop' : 'Watch'}

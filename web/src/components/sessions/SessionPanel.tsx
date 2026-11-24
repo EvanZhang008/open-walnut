@@ -2893,13 +2893,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // the reason while the record that names it is on its way, a spacer once drawn if the task goes.
   const locateLabel = onLocateTask ? 'Locate task' : 'Find on Home';
   const locateWhy = locateWaitReason ?? (session?.taskId ? null : 'Locate becomes available once the session has loaded');
-  const locateButton = taskSlot === 'absent' ? null : taskSlot === 'spacer'
-    ? <button type="button" className="btn btn-icon btn-ghost task-action-btn session-panel-locate" data-header-id="locate" {...TASK_SLOT_SPACER}>{ICON_LOCATE}</button>
+  // Drawn inside the tool row, which says whether the fit sent it to "..." (`toolHid`), like every
+  // other row item: a key the row hid must say so on its own element, or it stays drawn beside its
+  // menu row (2026-11-24, a 200 px column showed Locate on the row and in "...").
+  type ToolHid = (id: string) => 'true' | 'false';
+  const locateButton = (toolHid: ToolHid) => taskSlot === 'absent' ? null : taskSlot === 'spacer'
+    ? <button type="button" className="btn btn-icon btn-ghost task-action-btn session-panel-locate" data-header-id="locate" data-hidden={toolHid('locate')} {...TASK_SLOT_SPACER}>{ICON_LOCATE}</button>
     : (
       <button
         type="button"
         className="btn btn-icon btn-ghost task-action-btn session-panel-locate"
         data-header-id="locate"
+        data-hidden={toolHid('locate')}
         data-testid="session-locate-btn"
         disabled={!!locateWhy}
         title={locateWhy ?? locateLabel}
@@ -2911,9 +2916,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     );
   // Watch: the eye beside Locate, lit while the task is watched (2026-11-19, the user of the
   // label row's Watching pill: that watching should move up there too). The kebab drops its row.
-  const watchButton = taskSlot === 'absent' ? null : taskSlot === 'live' && sessionTask
-    ? <WatchButton task={sessionTask} small={false} className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn" />
-    : <button type="button" className="btn btn-icon btn-ghost task-action-btn task-watch-btn session-panel-watch" data-header-id="watch" {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
+  const watchButton = (toolHid: ToolHid) => taskSlot === 'absent' ? null : taskSlot === 'live' && sessionTask
+    ? <WatchButton task={sessionTask} small={false} className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn" headerHidden={toolHid('watch')} />
+    : <button type="button" className="btn btn-icon btn-ghost task-action-btn task-watch-btn session-panel-watch" data-header-id="watch" data-hidden={toolHid('watch')} {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
   const headerPills = (
     <>
       <WaitingChip task={sessionTask} />
@@ -3568,8 +3573,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {/* Watch and Locate lead the row (2026-11-19, the user: "why locate task is not at
                   top right?", and of Watching: put it up there); like Lock, Expand and Close they stay at
                   every width. Minimize sits between them and folds first in a narrow column. */}
-              {watchButton}
-              {locateButton}
+              {watchButton(hid)}
+              {locateButton(hid)}
               {minimize && !shownFullscreen && (
                 <button
                   className="btn btn-icon btn-ghost task-action-btn session-panel-minimize"
@@ -3617,6 +3622,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 <button
                   className="btn btn-icon btn-ghost task-action-btn btn-danger session-panel-close"
                   data-header-id="close"
+                  data-hidden={hid('close')}
                   onClick={shownFullscreen ? exitFullscreen : () => closePanel(sessionId)}
                   title={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab (the task keeps running)' : 'Close session panel'}
                   aria-label={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab' : 'Close session panel'}
