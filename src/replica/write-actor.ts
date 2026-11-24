@@ -14,7 +14,7 @@
  * outside this process can show it. A request with it that names neither is no actor.
  */
 import type { IncomingMessage } from 'node:http'
-import { isSelfCallToken } from '../lib/self-api-root.js'
+import { isHelperCallToken, isSelfCallToken } from '../lib/self-api-root.js'
 import { CALLER_PLUGIN_HEADER, CALLER_PLUGIN_JOB_HEADER } from '../ops/executor.js'
 import type { WriteActor } from './write-port.js'
 
@@ -36,6 +36,16 @@ function bearer(req: IncomingMessage): string {
 export function isSelfCall(req: IncomingMessage): boolean {
   const token = bearer(req)
   return !!token && isSelfCallToken(token)
+}
+
+/**
+ * Whether the request is a model helper this server spawned (the AI search child, its helper
+ * credential, lib/self-api-root.ts). It reads this replica's own copies and is never forwarded:
+ * the Mac does not know its credential. No actor: the credential reads only.
+ */
+export function isHelperCall(req: IncomingMessage): boolean {
+  const token = bearer(req)
+  return !!token && isHelperCallToken(token)
 }
 
 /** The local caller a self-call names, or null (no session and no plugin job named). */

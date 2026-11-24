@@ -11,7 +11,8 @@
  *
  * Two halves:
  *  - a ratchet over src/: a file that builds an agent CLI's launch (stream-json argv, an ACP
- *    adapter env) must ask walnutApiEnvForSession, or be listed below with how it gets the
+ *    adapter env) must ask walnutApiEnvForSession (a model helper the server spawns asks it through
+ *    applyWalnutHelperEnv, which adds the helper credential for a shell), or be listed below with how it gets the
  *    address instead. A new launch path fails here until it does one or the other;
  *  - each in-server launch builder, run with a server root set, carries exactly that root.
  *    (ClaudeCodeSession: session-walnut-api-env.test.ts; ACP: acp-walnut-api-env.test.ts;
@@ -54,7 +55,7 @@ afterEach(() => setSelfApiRoot(null))
 describe('every agent CLI launch path names its Walnut', () => {
   it('asks the one rule, or says how it gets the address instead', () => {
     const launches = walk(SRC).filter((f) => LAUNCH.test(codeOf(f))).map((f) => path.relative(SRC, f)).sort()
-    const silent = launches.filter((rel) => !ELSEWHERE[rel] && !/\bwalnutApiEnvForSession\(/.test(codeOf(path.join(SRC, rel))))
+    const silent = launches.filter((rel) => !ELSEWHERE[rel] && !/\b(?:walnutApiEnvForSession|applyWalnutHelperEnv)\(/.test(codeOf(path.join(SRC, rel))))
     expect(silent).toEqual([])
     // The list names only files that still launch: a stale entry hides nothing.
     for (const rel of Object.keys(ELSEWHERE)) expect(launches, rel).toContain(rel)

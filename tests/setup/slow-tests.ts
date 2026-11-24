@@ -164,6 +164,7 @@ export const SLOW_TEST_FILES = [
   // A host replica: the real startServer in-process with the replica env (WP1).
   'tests/replica/leader-door.test.ts',
   'tests/replica/env-scrub.test.ts',
+  'tests/replica/search-helper-credential.test.ts', // ~25s: the real startServer as a host replica, and a stand-in CLI child
   'tests/replica/route-table-coverage.test.ts', // ~7s: boots the real startServer as a host replica to walk its routes
   'tests/web/api-v1-callers-exist.test.ts', // ~20s: boots the real startServer to walk its routes against every /api/v1 caller
   // The WP4 copies: 5,000 session rows through the real follower route into a real SQLite copy.

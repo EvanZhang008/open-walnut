@@ -31,7 +31,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { log } from '../logging/index.js';
-import { walnutApiEnvForSession } from '../lib/self-api-root.js';
+import { applyWalnutHelperEnv, HELPER_CALL_TOKEN_ENV } from '../lib/self-api-root.js';
 import { requestTagOn, withOneShotRequestTag } from '../core/sessions/request-tag.js';
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
 import {
@@ -101,14 +101,15 @@ function warmDisabled(): boolean {
   return process.env.WALNUT_MICRO_CLAUDE_WARM === '0';
 }
 
-function buildChildEnv(): NodeJS.ProcessEnv {
+function buildChildEnv(tools: readonly string[]): NodeJS.ProcessEnv {
   // Same env contract as inline-subagent's slim children: no nested-session
   // detection, settings.json env re-applied (Bedrock auth lives there),
   // import-scan marker, thinking off (utility children answer contracts).
   const { CLAUDECODE: _drop, ...env } = process.env;
   Object.assign(env, readUserSettingsEnv());
-  // The Walnut this child's `walnut` calls reach: this server's own (self-api-root.ts).
-  Object.assign(env, walnutApiEnvForSession('__local__'));
+  // The Walnut this child reaches: this server's own, with the helper credential when it has a
+  // shell (self-api-root.ts).
+  applyWalnutHelperEnv(env, tools);
   env.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
   env.MAX_THINKING_TOKENS = '0';
   return env;
@@ -143,8 +144,8 @@ function buildSpawn(spec: WarmSpec): { command: string; args: string[]; cwd: str
   // session.tag_requests: tagged here, before the pool key, so a pooled child booted
   // before the run carries the tag, and turning the switch boots a new one.
   const tagged = requestTagOn()
-    ? withOneShotRequestTag({ args, env: buildChildEnv() }, readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS)
-    : { args, env: buildChildEnv() };
+    ? withOneShotRequestTag({ args, env: buildChildEnv(spec.tools) }, readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS)
+    : { args, env: buildChildEnv(spec.tools) };
   const env = tagged.env;
   args.splice(0, args.length, ...tagged.args);
   // The pool key is the command line plus the login: a child booted on another
@@ -153,10 +154,11 @@ function buildSpawn(spec: WarmSpec): { command: string; args: string[]; cwd: str
   // restart, so a rotated token must not reach a child booted on the old one.
   // Not the whole env: the server sets variables of its own at runtime, and a
   // key that moved with them would never find its child.
-  // And the Walnut it reaches: a child booted before this server listened named none, and must
-  // not answer a call made after.
+  // And the Walnut it reaches and its helper credential: a child booted before this server
+  // listened named none, and one booted under an earlier server holds a credential no longer taken,
+  // so neither may answer a call made after.
   const auth = Object.entries(env)
-    .filter(([k]) => AUTH_ENV.test(k) || k === 'OPEN_WALNUT_API_URL')
+    .filter(([k]) => AUTH_ENV.test(k) || k === 'OPEN_WALNUT_API_URL' || k === HELPER_CALL_TOKEN_ENV)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const warmKey = createHash('sha256').update(JSON.stringify([cli, args, cwd, auth])).digest('hex');
   return { command: cli, args, cwd, env, warmKey };

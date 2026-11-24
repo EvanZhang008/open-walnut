@@ -193,7 +193,9 @@ export interface DispatchDeps {
    * `host-local-calls` capability): it carries the replica's in-process credential, so it is
    * answered here under the row's `localAway` (else its `away`), never forwarded, and a daemon
    * that says the Mac answers gets `needs_leader` back (the daemon then relays the call to the
-   * Mac itself). Absent: no request is one.
+   * Mac itself). A model helper this replica spawned (the AI search child, its helper
+   * credential) is one too: its reads are answered from these copies, never sent to the Mac,
+   * which does not know its credential. Absent: no request is one.
    */
   selfCall?(req: IncomingMessage): boolean
 }

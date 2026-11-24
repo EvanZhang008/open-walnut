@@ -122,6 +122,29 @@ describe('warm micro-claude pool', () => {
     expect(procs[0].stdin.end).toHaveBeenCalled();
   });
 
+  it('a child with a shell gets the helper credential for its own Walnut, a child with none gets none', async () => {
+    const root = await import('../../src/lib/self-api-root.js');
+    root.setSelfApiRoot('http://127.0.0.1:45999');
+    const inherited = process.env.WALNUT_HELPER_TOKEN;
+    process.env.WALNUT_HELPER_TOKEN = 'inherited-from-a-parent';
+    try {
+      prewarmMicroClaude(SPEC);
+      prewarmMicroClaude({ ...SPEC, tools: [] });
+      const [withShell, without] = spawnMock.mock.calls.map((c) => c[2].env as NodeJS.ProcessEnv);
+      expect(withShell.OPEN_WALNUT_API_URL).toBe('http://127.0.0.1:45999');
+      expect(withShell.WALNUT_HELPER_TOKEN).toBe(root.getHelperCallToken());
+      expect(root.getHelperCallToken()).toMatch(/^[0-9a-f]{64}$/);
+      expect(without.OPEN_WALNUT_API_URL).toBe('http://127.0.0.1:45999');
+      expect(without.WALNUT_HELPER_TOKEN).toBeUndefined();
+      // Never on the command line.
+      for (const c of spawnMock.mock.calls) expect((c[1] as string[]).join(' ')).not.toContain(root.getHelperCallToken()!);
+    } finally {
+      root.setSelfApiRoot(null);
+      if (inherited === undefined) delete process.env.WALNUT_HELPER_TOKEN;
+      else process.env.WALNUT_HELPER_TOKEN = inherited;
+    }
+  });
+
   it('a prewarmed child with the same spec is reused, and a replacement is prewarmed', async () => {
     const procs: FakeProc[] = [];
     spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });

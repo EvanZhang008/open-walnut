@@ -71,7 +71,7 @@ import { chooseReplicaRoute, leaderDropRecent, presenceOf, quietWindow, SuspectM
 import { createDispatcher, PRESENCE_BOOT_HEADER, PRESENCE_SEQ_HEADER, type Dispatcher, type OfflineWhy } from './dispatch.js'
 import { rpcAway } from './ws-rpc-table.js'
 import { replicaRefusal, verifyReplicaToken } from './auth.js'
-import { localCallerOf } from './write-actor.js'
+import { isHelperCall, localCallerOf } from './write-actor.js'
 import { copiesAsOf } from '../core/replication/kind-follower.js'
 import { createHostCallEntry, listenHostCallEntry, type HostCallEntry, type HostCallListener } from './host-call-entry.js'
 import { HOST_CALL_PATH } from '../providers/host-call-client-core.js'
@@ -359,7 +359,9 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       const h = req.headers.authorization
       return typeof h === 'string' && h.startsWith('Bearer ') && verifyReplicaToken(h.slice(7)) !== null
     },
-    ...(opts.localCalls ? { selfCall: (req: IncomingMessage) => localCallerOf(req) !== null } : {}),
+    // This host's own calls, answered here whoever leads: a session's or plugin job's `walnut`
+    // call (with `host-local-calls`), and a model helper this server spawned (its reads).
+    selfCall: (req: IncomingMessage) => isHelperCall(req) || (!!opts.localCalls && localCallerOf(req) !== null),
     // The same answer as the /api auth: a wrong token counts toward the shared limit.
     refuse: (req) => replicaRefusal(req.headers.authorization),
     ...(opts.writeBudgetMs ? { writeBudgetMs: opts.writeBudgetMs } : {}),

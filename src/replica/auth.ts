@@ -7,7 +7,9 @@
  * through the leader door). So a Bearer token is good here when, and only when,
  * it hashes to a row of that copy. Nothing else counts: no loopback waiver (every
  * port is a tunnel port, local-trust.ts), no config.yaml API key, no machine
- * token (the copy never holds one), no first-boot claim. `GET /api/v1/instance`
+ * token (the copy never holds one), no first-boot claim. This server's own credentials are taken
+ * before this check, in every role (web/middleware/auth.ts): its self-call token, and the helper
+ * credential its AI search child reads search with. `GET /api/v1/instance`
  * stays public and answers the Mac's walnutId (device-store.ts getInstanceId).
  */
 
@@ -85,7 +87,8 @@ export interface ReplicaRefusal { status: 401 | 429; body: Record<string, unknow
  * read a body only for a known device) answer with it alike.
  */
 export async function replicaRefusal(header: string | undefined): Promise<ReplicaRefusal> {
-  if (!header?.startsWith('Bearer ')) {
+  // An empty Bearer is no token, not a wrong one (a helper's curl whose credential variable is unset).
+  if (!header?.startsWith('Bearer ') || header.slice(7).trim() === '') {
     return { status: 401, body: { error: 'Authentication required. Pair this device on your Mac and send Authorization: Bearer <token>', code: 'not_paired' } }
   }
   const status = await refuseWrongToken()

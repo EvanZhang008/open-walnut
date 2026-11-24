@@ -67,6 +67,21 @@ beforeEach(() => {
 });
 
 describe('runInlineSubagent slim preset', () => {
+  it('a child with Bash gets the helper credential for its own Walnut; a child with no tools gets none', async () => {
+    const root = await import('../../src/lib/self-api-root.js');
+    root.setSelfApiRoot('http://127.0.0.1:45998');
+    try {
+      const shell = await run({ slim: true, tools: ['Bash'] });
+      expect(shell.spawnOpts.env?.OPEN_WALNUT_API_URL).toBe('http://127.0.0.1:45998');
+      expect(shell.spawnOpts.env?.WALNUT_HELPER_TOKEN).toBe(root.getHelperCallToken());
+      expect(shell.args.join(' ')).not.toContain(root.getHelperCallToken()!);
+      const none = await run({ slim: true });
+      expect(none.spawnOpts.env?.WALNUT_HELPER_TOKEN).toBeUndefined();
+    } finally {
+      root.setSelfApiRoot(null);
+    }
+  });
+
   it('slim:true expands to replace-prompt + no tools + no settings + --bare + tmpdir cwd', async () => {
     const { args, spawnOpts } = await run({ slim: true });
     expect(args).toContain('--system-prompt');

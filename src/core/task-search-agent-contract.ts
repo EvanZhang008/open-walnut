@@ -10,6 +10,7 @@
  */
 
 import type { Task } from './types.js';
+import { HELPER_CALL_CURL_AUTH } from '../lib/self-api-root.js';
 import {
   AGENT_SEARCH_MAX_RESULTS,
   EVIDENCE_MAX_CHARS,
@@ -64,6 +65,8 @@ Do NOT output titles, phases, or projects — those are attached from the databa
  * the child searches via curl against the local HTTP API — tens of ms per
  * search vs spawning a whole `walnut` CLI process per query (~0.5s quiet,
  * ~10s under machine load; a 70s hard query was mostly these spawns).
+ * Each curl carries the helper credential from the child's env (HELPER_CALL_CURL_AUTH,
+ * lib/self-api-root.ts): a host replica and the companion trust no loopback caller.
  * Without apiBase (tests, pre-listen callers) it falls back to the walnut
  * CLI, which rides PATH and needs no URL.
  *
@@ -76,10 +79,10 @@ Do NOT output titles, phases, or projects — those are attached from the databa
  */
 export function buildCliSystemPrompt(apiBase?: string): string {
   const single = apiBase
-    ? `curl -sGm15 "${apiBase}/api/search" --data-urlencode "q=<terms>" -d "types=task,session" -d "limit=8" -d "slim=1"`
+    ? `curl -sGm15 ${HELPER_CALL_CURL_AUTH} "${apiBase}/api/search" --data-urlencode "q=<terms>" -d "types=task,session" -d "limit=8" -d "slim=1"`
     : `walnut tools call search '{"q":"<terms>","types":"task,session","limit":15}'`;
   const batched = apiBase
-    ? `for q in 'variant one' 'variant two' '变体三'; do curl -sGm15 "${apiBase}/api/search" --data-urlencode "q=$q" -d "types=task,session" -d "limit=5" -d "slim=1" & done; wait`
+    ? `for q in 'variant one' 'variant two' '变体三'; do curl -sGm15 ${HELPER_CALL_CURL_AUTH} "${apiBase}/api/search" --data-urlencode "q=$q" -d "types=task,session" -d "limit=5" -d "slim=1" & done; wait`
     : `for q in 'variant one' 'variant two' '变体三'; do walnut tools call search "{\\"q\\":\\"$q\\",\\"types\\":\\"task,session\\",\\"limit\\":15}" & done; wait`;
   const rowNote = apiBase
     ? `\n   Rows are compact {type,id,title,summary,phase,updated}: a task row's id IS the task_id; a session row's id is ALREADY the owning task's id — copy id exactly.`

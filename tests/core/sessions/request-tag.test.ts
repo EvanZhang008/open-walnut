@@ -130,7 +130,7 @@ describe('session.tag_requests', () => {
     expect(oneshot).toMatch(/spec = tag\.withOneShotRequestTag\(spec,/)
     // A pooled micro-Claude child is booted before its run, so it is tagged before its pool key.
     const warm = fs.readFileSync(path.join(ROOT, 'src/providers/micro-claude-warm.ts'), 'utf8')
-    const tagAt = warm.indexOf('withOneShotRequestTag({ args, env: buildChildEnv() }')
+    const tagAt = warm.indexOf('withOneShotRequestTag({ args, env: buildChildEnv(spec.tools) }')
     expect(tagAt).toBeGreaterThan(0)
     expect(tagAt).toBeLessThan(warm.indexOf('const warmKey ='))
     const manager = fs.readFileSync(path.join(ROOT, 'src/core/config-manager.ts'), 'utf8')

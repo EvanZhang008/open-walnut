@@ -25,7 +25,7 @@ const PHONE_TOKEN = 'marina-phone-token'
 async function call(token: string | null, ip: string): Promise<number> {
   const req = {
     method: 'GET', path: '/v1/tasks', ip, socket: { remoteAddress: '127.0.0.1' },
-    headers: token ? { authorization: `Bearer ${token}` } : {},
+    headers: token !== null ? { authorization: `Bearer ${token}` } : {},
   } as unknown as Request
   let status = 0
   const res = { status(n: number) { status = n; return res }, json() { return res } } as unknown as Response
@@ -64,6 +64,12 @@ describe('host replica auth limit', () => {
 
   it('no token is a first contact, never counted', async () => {
     for (let i = 0; i < 20; i++) expect(await call(null, '127.0.0.1')).toBe(401)
+    expect(await call('one-guess', '127.0.0.1')).toBe(401)
+  })
+
+  it('an empty Bearer is no token, never counted (a helper curl whose credential variable is unset)', async () => {
+    for (let i = 0; i < 20; i++) expect(await call('', '127.0.0.1')).toBe(401)
+    expect((await replicaRefusal('Bearer ')).body).toMatchObject({ code: 'not_paired' })
     expect(await call('one-guess', '127.0.0.1')).toBe(401)
   })
 })
