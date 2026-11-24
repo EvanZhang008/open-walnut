@@ -141,6 +141,8 @@ describe('a cut counts for an op only when what was cut was its answer', () => {
     await run('c2', 'Bash', { command: "walnut tools call task_history '{\"id\":\"x\",\"_full\":true}'" })
     await run('c3', 'mcp__walnut__task_history', { id: 'x', _full: true })
     await run('c4', 'Bash', { command: "walnut tools call task_get '{\"id\":\"x\"}' 2>&1" })
+    // 2026-11-24: the op answered into a variable; the 19 KB were the ls and grep after it.
+    await run('c5', 'Bash', { command: "o=$(walnut tools call host_copy_result '{\"copy_id\":\"hc-1\"}'); echo \"$o\" | tail -3; ls /tmp/out; grep -rn results: /tmp/out | head" })
     flushUsage(Date.now() + 60_000)
     expect(readEvents({ since: 0 }).filter((e) => e.problem === 'cut').map((e) => [e.name, e.code])).toEqual([['task_get', 'cut_cli']])
   })

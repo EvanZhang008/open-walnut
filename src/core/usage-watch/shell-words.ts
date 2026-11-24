@@ -18,9 +18,11 @@ export function simpleCommands(script: string): string[][] {
 
 /**
  * The same commands, each with whether its output goes into the next one (`a | b`, never
- * `a || b`). A redirect stays one word with its `&` (`2>&1`, `&>file`, `>&2`), never a split.
+ * `a || b`) and whether it runs inside a substitution (`$(...)`, backticks, `<(...)`), whose
+ * output becomes a word or a file of another command, never the line's own output. A redirect
+ * stays one word with its `&` (`2>&1`, `&>file`, `>&2`), never a split.
  */
-export interface ShellCommand { words: string[]; pipe: boolean }
+export interface ShellCommand { words: string[]; pipe: boolean; sub: boolean }
 export function shellCommands(script: string): ShellCommand[] {
   const text = String(script ?? '')
   const cmds: ShellCommand[] = []
@@ -29,8 +31,12 @@ export function shellCommands(script: string): ShellCommand[] {
   let inWord = false
   let q: string | null = null
   const heredocs: string[] = []
+  // Each open parenthesis, true for a substitution (`$(`, `<(`, `>(`); and whether a backtick is open.
+  const parens: boolean[] = []
+  let tick = false
+  const inSub = () => tick || parens.includes(true)
   const endWord = () => { if (inWord) words.push(w); w = ''; inWord = false }
-  const endCmd = (pipe = false) => { endWord(); if (words.length) cmds.push({ words, pipe }); words = [] }
+  const endCmd = (pipe = false) => { endWord(); if (words.length) cmds.push({ words, pipe, sub: inSub() }); words = [] }
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!
     if (q) {
@@ -62,7 +68,10 @@ export function shellCommands(script: string): ShellCommand[] {
     }
     if (c === '|') { if (text[i + 1] === '|') { i++; endCmd() } else endCmd(true); continue }
     if (c === '&' && (text[i + 1] === '>' || (inWord && (text[i - 1] === '>' || text[i - 1] === '<')))) { w += c; inWord = true; continue }
-    if (c === ';' || c === '&' || c === '\n' || c === '(' || c === ')' || c === '`') { endCmd(); continue }
+    if (c === '(') { const sub = inWord && /[$<>]$/.test(w); endCmd(); parens.push(sub); continue }
+    if (c === ')') { endCmd(); parens.pop(); continue }
+    if (c === '`') { endCmd(); tick = !tick; continue }
+    if (c === ';' || c === '&' || c === '\n') { endCmd(); continue }
     if (c === ' ' || c === '\t') { endWord(); continue }
     w += c
     inWord = true
@@ -71,15 +80,21 @@ export function shellCommands(script: string): ShellCommand[] {
   return cmds
 }
 
+/** Shell keywords a command can follow on the same line (`if x; then walnut tools call ...`). */
+const SHELL_OPENERS = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do'])
+
 export const base = (word: string | undefined) => (word ?? '').split('/').pop() ?? ''
 
-/** The command after its wrappers: `FOO=1 timeout 7200 nohup walnut-dev land` is `walnut-dev land`. */
+/**
+ * The command after its wrappers and the shell keyword that opens it: `FOO=1 timeout 7200 nohup
+ * walnut-dev land` is `walnut-dev land`, and so is `do walnut-dev land` in a loop or `then ...`.
+ */
 export function unwrap(words: string[]): string[] {
   let i = 0
   for (;;) {
     const w = words[i]
     if (w === undefined) return []
-    if (/^[A-Za-z_]\w*=/.test(w) || w === '{' || w === '!' || ['nohup', 'time', 'exec', 'command', 'sudo', 'env', 'nice', 'stdbuf'].includes(base(w))) { i++; continue }
+    if (/^[A-Za-z_]\w*=/.test(w) || w === '{' || w === '!' || SHELL_OPENERS.has(w) || ['nohup', 'time', 'exec', 'command', 'sudo', 'env', 'nice', 'stdbuf'].includes(base(w))) { i++; continue }
     if (base(w) === 'timeout') {
       i++
       // Its options (`-k 5`, `-s KILL` take a value; `--kill-after=5` holds it), then the duration.

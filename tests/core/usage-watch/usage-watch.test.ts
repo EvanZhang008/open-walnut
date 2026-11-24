@@ -558,6 +558,10 @@ describe('ships and the completion check', () => {
     expect(shipOfCommand('bun run check && walnut-cloud land t1 --from x --queue')).toBe('walnut-cloud land')
     expect(shipOfCommand('timeout 7200 ~/walnut-dev/bin/walnut-dev land > out.txt 2>&1')).toBe('walnut-dev land')
     expect(shipOfCommand("bash -c 'cd /x && bash scripts/deploy-committed.sh'")).toBe('deploy-committed')
+    // A ship a shell keyword opens (2026-11-24: these read as no ship before).
+    expect(shipOfCommand('if walnut-dev land; then echo ok; fi')).toBe('walnut-dev land')
+    expect(shipOfCommand('while ! walnut-cloud land t1 --queue; do sleep 60; done')).toBe('walnut-cloud land')
+    expect(shipOfCommand('echo do walnut-dev land')).toBeNull()
     expect(shipOfCommand('git -C /repo push origin HEAD:main')).toBe('a push to main')
     expect(shipOfCommand('FOO=1 bun run dev:prod')).toBe('dev:prod')
     // A here-string or a quoted `<<` starts no heredoc: the land after it still counts.

@@ -4,7 +4,7 @@
  * from a short list, and the name of a built code chunk. Never content: no argument, answer,
  * message, path segment, file name or stack.
  */
-import { base, shellCommands, unwrap } from './shell-words.js'
+import { base, shellCommands, unwrap, type ShellCommand } from './shell-words.js'
 
 /** An error code an API or the gateway answered: a short identifier, never free text. */
 const CODE_RE = /^[a-z][a-z0-9_]{0,47}$/
@@ -216,9 +216,12 @@ export function walnutOpOfToolCall(toolName: string, input: Record<string, unkno
 /**
  * The Walnut op a tool call names, and whether what its agent reads back can be that op's answer
  * (`answered`): not when the caller asked for the whole answer (`_full`), nor when the walnut
- * call's output went to a file or into another program. 2026-11-23: `walnut tools call
- * task_history '{..}' > /tmp/x 2>&1; python3 - <<EOF` printed 16 KB from the python, and it was
- * counted as task_history's answer cut.
+ * call's output went to a file, into another program or into a word of another command (`o=$(walnut
+ * ...)`), nor when another command of the line prints on its own, so the saved output is not the
+ * answer alone. 2026-11-23: `walnut tools call task_history '{..}' > /tmp/x 2>&1; python3 - <<EOF`
+ * printed 16 KB from the python, and it was counted as task_history's answer cut. 2026-11-24:
+ * `o=$(walnut tools call host_copy_result ..); ...; tar -xzf .. && ls ..; grep -rn .. | head` printed
+ * 19 KB of file names and log lines around a 521-byte answer, and rang host_copy_result's cut alarm.
  */
 export function walnutToolCall(toolName: string, input: Record<string, unknown> | undefined): { op: string; answered: boolean } | null {
   const mcp = /^mcp__walnut__([a-z][a-z0-9_]*)$/.exec(toolName)
@@ -226,15 +229,46 @@ export function walnutToolCall(toolName: string, input: Record<string, unknown> 
   if (toolName !== 'Bash') return null
   const command = typeof input?.command === 'string' ? input.command : ''
   // The command the line runs, never a word it reads (`grep "walnut tools call x"`).
-  for (const { words, pipe } of shellCommands(command)) {
-    const w = unwrap(words)
-    if (base(w[0]) !== 'walnut' || w[1] !== 'tools' || w[2] !== 'call' || !/^[a-z][a-z0-9_]*$/.test(w[3] ?? '')) continue
-    const full = /"_full"\s*:\s*true/.test(w[4] ?? '')
-    // `>`, `>>`, `1>`, `&>` send its output away; `2>...` and `>&2` leave it on the agent's screen.
-    const away = w.slice(4).some((word) => /^(?:1|&)?>>?(?!&2$)/.test(word))
-    return { op: w[3]!, answered: !pipe && !away && !full }
-  }
-  return null
+  const cmds = shellCommands(command)
+  const calls = cmds.flatMap((c, i) => {
+    const w = unwrap(c.words)
+    return base(w[0]) === 'walnut' && w[1] === 'tools' && w[2] === 'call' && /^[a-z][a-z0-9_]*$/.test(w[3] ?? '') ? [{ i, c, w }] : []
+  })
+  // The call whose output reaches the screen names the line (`id=$(walnut tools call a); walnut
+  // tools call b` is b's), else the first.
+  const onScreen = (x: (typeof calls)[number]) => !x.c.pipe && !x.c.sub && !sentAway(x.w.slice(4))
+  const pick = calls.find(onScreen) ?? calls[0]
+  if (!pick) return null
+  const full = /"_full"\s*:\s*true/.test(pick.w[4] ?? '')
+  const others = cmds.some((c, j) => j !== pick.i && printsOnItsOwn(c))
+  return { op: pick.w[3]!, answered: onScreen(pick) && !full && !others }
+}
+
+/** `>`, `>>`, `1>`, `&>` send a command's output away; `2>...` and `>&2` leave it on the agent's screen. */
+const sentAway = (args: readonly string[]): boolean => args.some((word) => /^(?:1|&)?>>?(?!&2$)/.test(word))
+
+/** Commands that print nothing of their own when they work (a failure's one line is not a cut). */
+const QUIET_COMMANDS = new Set([
+  'cd', 'pushd', 'popd', 'read', 'pwd', 'date', 'hostname', 'whoami', 'export', 'unset', 'set', 'shopt', 'local', 'declare', 'readonly', 'trap', 'umask',
+  'sleep', 'true', 'false', ':', 'source', '.', 'wait', 'test', '[', '[[', 'exit', 'return', 'break', 'continue',
+  'shift', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'touch', 'chmod', 'chown', 'ln',
+  'for', 'case', 'esac', 'done', 'fi', '}', ';;',
+])
+
+/**
+ * Whether a command of a shell line adds output of its own to what its agent reads: not one whose
+ * output goes on (a pipe, a substitution, a file), a quiet command or one that prints a line, a
+ * `grep -q`, or an echo of fixed words or the exit status (`|| echo "failed: $?"`); an echo of a
+ * variable may print anything.
+ */
+function printsOnItsOwn(c: ShellCommand): boolean {
+  if (c.pipe || c.sub) return false
+  const w = unwrap(c.words)
+  if (!w.length || QUIET_COMMANDS.has(base(w[0]))) return false
+  if (sentAway(w.slice(1))) return false
+  if (base(w[0]) === 'echo' || base(w[0]) === 'printf') return w.slice(1).some((x) => /\$(?!\?)/.test(x))
+  if (base(w[0]) === 'grep' && w.slice(1).some((x) => /^-[a-zA-Z]*q[a-zA-Z]*$|^--quiet$|^--silent$/.test(x))) return false
+  return true
 }
 
 /** How a failed op call ended, from what the op answered (executor.ts OpOutcome). */
