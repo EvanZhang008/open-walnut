@@ -194,6 +194,44 @@ describe('usage_watch errors reads them grouped', () => {
     }
   })
 
+  it('one tool\'s failures, by `op` (2026-11-24: sessions asked for it as `op`, `target` and `since`)', async () => {
+    seed()
+    const r = await runUsageWatchAction({ action: 'errors', by: 'code', op: 'search', range: '24h' }, { ...ctx, now: at }) as { total: number; rows: { key: string; errors: number; ops?: Record<string, number> }[]; outcome: string }
+    expect(r.total).toBe(2)
+    expect(r.rows.map((x) => [x.key, x.errors, x.ops])).toEqual([['bad_args', 2, { search: 2 }]])
+    expect(r.outcome).toContain('of search')
+  })
+
+  it('help names each action with a call that works, and every exemption kind', async () => {
+    const r = await runUsageWatchAction({ action: 'help' }, ctx) as { actions: Record<string, string> }
+    const { getOp } = await import('../../../src/ops/index.js')
+    const { EXEMPT_KINDS } = await import('../../../src/core/usage-watch/watches.js')
+    const actions = (getOp('usage_watch')!.input.action as unknown as { options: string[] }).options
+    expect(Object.keys(r.actions).sort()).toEqual(actions.filter((a) => a !== 'help').sort())
+    for (const k of EXEMPT_KINDS) expect(r.actions.exempt).toContain(k)
+    // Each example is a call the op takes.
+    const { parseOpArgs } = await import('../../../src/ops/executor.js')
+    for (const [a, ex] of Object.entries(r.actions)) {
+      const args = JSON.parse(ex.replace(/\s+\(.*\)$/, ''))
+      expect(parseOpArgs(getOp('usage_watch')!, args).ok, a).toBe(true)
+    }
+    // Its targets are ones a watch takes, and its page one a name real use records (page names hold it).
+    const { targetProblem } = await import('../../../src/core/usage-watch/watches.js')
+    const set = JSON.parse(r.actions.set) as { targets: string[] }
+    expect(set.targets.map(targetProblem)).toEqual(set.targets.map(() => null))
+    expect(set.targets).toContain('page:session')
+  })
+
+  it('the session\'s line names the exemption kinds the op takes, so none is made up', async () => {
+    const { realUseLine } = await import('../../../src/core/sessions/reply-language-context.js')
+    const { EXEMPT_KINDS } = await import('../../../src/core/usage-watch/watches.js')
+    const kinds = /"kind":"([a-z_|]+)"/.exec(realUseLine(true))?.[1]?.split('|')
+    expect(kinds).toEqual([...EXEMPT_KINDS])
+    const { getOp } = await import('../../../src/ops/index.js')
+    const kind = (getOp('usage_watch')!.input.kind as unknown as { unwrap: () => { options: string[] } }).unwrap().options
+    expect([...kind].sort()).toEqual([...EXEMPT_KINDS].sort())
+  })
+
   it('the op offers exactly the groupings the report has', async () => {
     const { getOp } = await import('../../../src/ops/index.js')
     const { ERROR_GROUPS } = await import('../../../src/core/usage-watch/tool-errors.js')

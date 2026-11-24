@@ -102,7 +102,8 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 })
 
-const refused = (name: string) => ({ ok: false, message: `${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}` })
+// The op's own refusal, 403 local_only, named by its code (executor.ts ownRefusal).
+const refused = (name: string) => ({ ok: false, message: `Walnut API error (local_only): ${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}`, status: 403, code: 'local_only' })
 
 async function invokeRoute(opName: string, headers: Record<string, string> = {}): Promise<unknown> {
   const res = await fetch(`${base}/api/plugin-runtime/sample/ops/${opName}`, {

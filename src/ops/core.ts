@@ -19,6 +19,7 @@ import { defineOp } from './registry.js'
 import { withTaskRouting } from './task-routing-rows.js'
 import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, clipText, pageOnce, pagedResult } from './doc-page.js'
 import { cutTextPath } from './answer.js'
+import { OwnRefusalError, SHORTENED_TEXT_CODE } from './own-refusal.js'
 
 /** How long an agent's search waits for the meaning lane's query embedding. */
 export const SEARCH_SEMANTIC_WAIT_MS = 2500
@@ -690,8 +691,8 @@ defineOp({
     // a body built from a shortened read would delete the rest of what it was cut from.
     const cut = method === 'GET' ? undefined : cutTextPath(args.body)
     if (cut) {
-      throw new Error(`refused: body.${cut} holds text Walnut shortened when you read it (a "[Walnut cut: ...]" or "part of a longer document" line), `
-        + `so ${method} ${path} would store the part and delete the rest. Nothing was sent. Read it whole first (repeat the read with "_full": true), then send it again`)
+      throw new OwnRefusalError(SHORTENED_TEXT_CODE, `api refused: body.${cut} holds text Walnut shortened when you read it (a "[Walnut cut: ...]" or "part of a longer document" line), `
+        + `so ${method} ${path} would store the part and delete the rest. Nothing was sent. Read it whole first (repeat the read with "_full": true), then send it again`, { invalidArgs: true })
     }
     // A path starting with /api/ is server-root-absolute by the executor's
     // contract (rawRequest), so non-v1 routes are reachable too.

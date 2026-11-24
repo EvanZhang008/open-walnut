@@ -329,7 +329,7 @@ describe('Apple Health through a real server', () => {
     for (const [name, args] of [['health_status', {}], ['health_sleep', {}], ['health_samples', { type: 'q.BodyMass' }],
       ['health_recordings', { type: 's.WorkoutRoute' }], ['day_review', {}]] as const) {
       const r = await gateway('remote-dev', name, args)
-      expect(r).toMatchObject({ ok: false, error: { message: `${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}` } })
+      expect(r).toMatchObject({ ok: false, error: { message: `Walnut API error (local_only): ${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}`, api: { status: 403, code: 'local_only' } } })
     }
 
     // Nothing moved: the store, its settings and the task are all still there.

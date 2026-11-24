@@ -374,7 +374,16 @@ async function handleToolsCall(
     return err('bad_request', `unknown op: ${name} — run \`walnut tools list\``);
   }
   const refusal = gatewayRefusal(op, host, getOpOwner(name));
-  if (refusal) return err('bad_request', refusal);
+  if (refusal) {
+    // The op's own refusal (403 local_only), counted by real use as one; the code older CLIs read stays.
+    const { LOCAL_ONLY_CODE, ownRefusal } = await import('../../ops/own-refusal.js');
+    const refused = ownRefusal(LOCAL_ONLY_CODE, refusal, { status: 403 });
+    if (payload.testRun === undefined) {
+      const { recordGatewayCall } = await import('../usage-watch/gateway-record.js');
+      recordGatewayCall(name, payload.client, refused, 0);
+    }
+    return err('bad_request', refused.message, { api: { status: 403, code: LOCAL_ONLY_CODE } });
+  }
   // Writes ride a per-sender rate budget; reads are free. A call the host's gateway asks again
   // after a busy refusal (gateway-core.ts busyRelayAgainMs) paid at its first ask: one call, one write.
   const askedAgain = typeof meta.busyAgain === 'number' && meta.busyAgain > 0 && isBusyAgainOp(name);

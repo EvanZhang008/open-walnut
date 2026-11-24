@@ -334,7 +334,7 @@ describe('the executor carries and enforces the origin', () => {
     const calls = recordFetch()
     for (const origin of [HOST, REMOTE_HTTP_ORIGIN, UNKNOWN_ORIGIN]) {
       const r = await executeOp('health_status', {}, { apiBase: base, origin })
-      expect(r).toEqual({ ok: false, message: `health_status refused: ${HEALTH_LOCAL_ONLY_MESSAGE}` })
+      expect(r).toEqual({ ok: false, message: `Walnut API error (local_only): health_status refused: ${HEALTH_LOCAL_ONLY_MESSAGE}`, status: 403, code: 'local_only' })
     }
     expect(calls).toHaveLength(0)
     expect((await executeOp('health_status', {}, { apiBase: base, origin: LOCAL_ORIGIN })).ok).toBe(true)
@@ -347,7 +347,35 @@ describe('the executor carries and enforces the origin', () => {
     expect(await executeOp('api', { method: 'DELETE', path: '/api/tasks/abc123' }, { apiBase: base, origin: HOST }))
       .toMatchObject({ ok: false, message: /task_delete runs only for callers on this Mac/ })
     expect(await executeOp('api', { method: 'DELETE', path: '/api/v1/health/data' }, { apiBase: base, origin: HOST }))
-      .toEqual({ ok: false, message: HEALTH_LOCAL_ONLY_MESSAGE })
+      .toEqual({ ok: false, message: `Walnut API error (local_only): ${HEALTH_LOCAL_ONLY_MESSAGE}`, status: 403, code: 'local_only' })
+    expect(calls).toHaveLength(0)
+  })
+
+  /**
+   * The class (2026-11-24): a caller off this Mac refused by the origin policy is the op's own
+   * refusal (403 local_only), on every path that refuses it (the op itself, a bound route, a handler's
+   * self-call), so real use counts it as refused, never as a thrown error (usage-watch failureClass).
+   */
+  it('every origin refusal is 403 local_only, and real use counts it as refused', async () => {
+    const { failureClass } = await import('../../../src/core/usage-watch/normalize.js')
+    definePluginOp('origin-test', {
+      name: 'origin_test_health_reader', title: 'Reads health', description: 'A handler op whose self-call reaches a health route.', input: {},
+      handler: async (_args, call) => call('GET', '/api/v1/health/status'),
+      tags: { readonly: true, remote: 'allow' },
+    })
+    const calls = recordFetch()
+    const refusals = [
+      await executeOp('health_status', {}, { apiBase: base, origin: HOST }),
+      await executeOp('task_delete', { id: 'abc123' }, { apiBase: base, origin: HOST }),
+      await executeOp('api', { method: 'GET', path: '/api/health' }, { apiBase: base, origin: HOST }),
+      await executeOp('api', { method: 'DELETE', path: '/api/tasks/abc123' }, { apiBase: base, origin: HOST }),
+      await executeOp('origin_test_health_reader', {}, { apiBase: base, origin: HOST }),
+    ]
+    removePluginOps('origin-test')
+    for (const r of refusals) {
+      expect(r).toMatchObject({ ok: false, status: 403, code: 'local_only' })
+      expect(failureClass(r as never)).toEqual({ cls: 'refused', code: 'local_only' })
+    }
     expect(calls).toHaveLength(0)
   })
 
@@ -375,7 +403,7 @@ describe('the executor carries and enforces the origin', () => {
       tags: { readonly: true, remote: 'allow' },
     })
     const nested = await executeOp('origin_test_relay', {}, { apiBase: base, origin: HOST })
-    expect(nested).toMatchObject({ ok: true, result: { ok: false, message: `health_status refused: ${HEALTH_LOCAL_ONLY_MESSAGE}` } })
+    expect(nested).toMatchObject({ ok: true, result: { ok: false, message: `Walnut API error (local_only): health_status refused: ${HEALTH_LOCAL_ONLY_MESSAGE}`, status: 403, code: 'local_only' } })
     expect(calls).toHaveLength(0)
   })
 })

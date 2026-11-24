@@ -38,7 +38,9 @@ describe('health ops over the agent gateway', () => {
       if (r.ok) continue
       expect(r.error.code).toBe('bad_request')
       // The rule, and nothing that reads as an invitation to call it another way.
-      expect(r.error.message).toBe(`${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}`)
+      expect(r.error.message).toBe(`Walnut API error (local_only): ${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}`)
+      // The op's own refusal, read by its code everywhere (own-refusal.ts).
+      expect(r.error.api).toEqual({ status: 403, code: 'local_only' })
       expect(r.error.message).not.toMatch(/call it from|run it on|walnut tools call/)
     }
   })

@@ -35,7 +35,7 @@ function keyOf(r: ToolErrorRow, by: ErrorGroup): string {
   return by === 'op' ? r.op : by === 'code' ? r.code : by === 'host' ? r.host : r.sid
 }
 
-export function toolErrorsReport(opts: { range: '24h' | '7d'; by: ErrorGroup; session?: string; now?: number }): {
+export function toolErrorsReport(opts: { range: '24h' | '7d'; by: ErrorGroup; session?: string; op?: string; now?: number }): {
   range: string; by: ErrorGroup; from: string; total: number; rows: ErrorRow[]; more: number; hosts: Record<string, number>
   /** When the record starts, when that is inside the range: before it nothing was recorded, not nothing failed. */
   dataFrom?: string
@@ -43,7 +43,8 @@ export function toolErrorsReport(opts: { range: '24h' | '7d'; by: ErrorGroup; se
 } {
   const now = opts.now ?? Date.now()
   const since = now - (opts.range === '24h' ? 24 : 7 * 24) * 3_600_000
-  const all = readToolErrors({ since, ...(opts.session ? { session: opts.session } : {}) })
+  const read = readToolErrors({ since, ...(opts.session ? { session: opts.session } : {}) })
+  const all = opts.op ? read.filter((r) => r.op === opts.op) : read
   const groups = new Map<string, ToolErrorRow[]>()
   const hosts = new Map<string, number>()
   for (const r of all) {

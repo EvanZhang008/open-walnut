@@ -22,6 +22,7 @@ import { z } from 'zod';
 import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { OwnRefusalError, SHORTENED_TEXT_CODE } from './own-refusal.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { BOARD_GET_BUDGET, BOARD_PART_NAMES, boardBudget, boardGetAnswer, boardWriteReceipt, defaultView, selectParts, type BoardPart } from './board-get-view.js';
 import { objOf, pick, receiptBase } from './org-answer-shapes.js';
@@ -274,9 +275,9 @@ defineOp({
     // A board_get window ends with the part-of-a-longer-document line: written whole, it would
     // replace the page with that part (board-get-view.ts htmlWindow). Refused for every caller.
     if (holdsPageMark(args.html)) {
-      throw new Error('board_set refused: this html is one part of the page (a board_get window; it ends with "[Walnut: this is part of a longer document"). '
+      throw new OwnRefusalError(SHORTENED_TEXT_CODE, 'board_set refused: this html is one part of the page (a board_get window; it ends with "[Walnut: this is part of a longer document"). '
         + 'Writing it would replace the whole board with that part. Change the page with board_edit, quoting exact text from the part, '
-        + 'or read the whole page first: board_get {"parts":["html"],"_full":true}.');
+        + 'or read the whole page first: board_get {"parts":["html"],"_full":true}.', { invalidArgs: true });
     }
     const target = await resolveBoardTask(args, call);
     const body = await call('PUT', boardPath(target.taskId), {

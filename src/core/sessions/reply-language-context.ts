@@ -105,7 +105,7 @@ export function realUseLine(on: boolean): string {
   return 'Real use: a change you ship (a land, deploy or publish) is watched in real use after it ships. Before you '
     + 'complete a task that shipped, arm a watch on what you changed: usage_watch {"action":"set","targets":["op:<tool>", '
     + '"route:GET /api/...", "page:<part>"],"who":"this task","check_after":"24h"}; task_complete refuses without one. '
-    + 'Only copy, colour, docs or tests, a ship that did not happen, or one watched outside Walnut (a pipeline alarm): usage_watch {"action":"exempt","kind":...,"reason":...}. '
+    + 'Only copy, colour, docs or tests, a ship that did not happen, or one watched outside Walnut (a pipeline alarm): usage_watch {"action":"exempt","kind":"copy|colour|docs|tests|not_shipped|watched_elsewhere","reason":...}. '
     + 'An alarm on your targets comes to this task until the check time: fix it there.\n\n'
 }
 

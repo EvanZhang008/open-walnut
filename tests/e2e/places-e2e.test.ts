@@ -132,7 +132,7 @@ describe('Places through a real server', () => {
     }
     for (const name of ['places_status', 'places_visits']) {
       const r = await gateway('remote-dev', name, {})
-      expect(r).toMatchObject({ ok: false, error: { message: `${name} refused: ${PLACES_LOCAL_ONLY_MESSAGE}` } })
+      expect(r).toMatchObject({ ok: false, error: { message: `Walnut API error (local_only): ${name} refused: ${PLACES_LOCAL_ONLY_MESSAGE}`, api: { status: 403, code: 'local_only' } } })
     }
     expect((await json('GET', '/api/v1/places/status')).body.visitCount).toBe(2)
     const mine = await gateway('__local__', 'places_visits', { last_days: 1 })

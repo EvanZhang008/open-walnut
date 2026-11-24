@@ -41,6 +41,7 @@ import { capOverCounts, countCapNote } from './count-cap.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
 import { opLinkNotes } from '../lib/missing-links.js'
 import { GATE_SETTING_PATH, REPLY_LANGUAGE_CODE, gateSettingFor, replyLanguageRefusal } from './reply-language-gate.js'
+import { API_ERROR_OPENING, LOCAL_ONLY_CODE, OwnRefusalError, SHORTENED_TEXT_CODE, ownRefusal } from './own-refusal.js'
 
 const REQUEST_TIMEOUT_MS = 10_000
 /** How long a send waits for the reply-language setting before it goes out unjudged. */
@@ -144,6 +145,9 @@ const OP_ID_HEADER = 'x-walnut-op-id'
  * the request log leaves it out of the routes' numbers. Not a credential; it changes no access.
  */
 export const OP_CALL_HEADER = 'x-walnut-op-call'
+
+/** Where a caller acts from does not let it run this op (own-refusal.ts): 403 local_only. */
+const localOnly = (message: string) => ownRefusal(LOCAL_ONLY_CODE, message, { status: 403 })
 
 /** An error a handler op's self-call throws, carrying whether its answer was lost. */
 class SelfCallError extends Error {
@@ -287,7 +291,7 @@ async function rawRequest(
     const retryAfterMs = typeof wait === 'number' && Number.isFinite(wait) && wait > 0 ? Math.min(wait, 3600) * 1000 : undefined
     return {
       ok: false, status: res.status, ...(apiCode ? { code: apiCode } : {}), ...(retryAfterMs ? { retryAfterMs } : {}),
-      message: `Walnut API error (${code}): ${msg}${res.status === 507 ? DISK_FULL_HINT : ''}`,
+      message: `${API_ERROR_OPENING}${code}): ${msg}${res.status === 507 ? DISK_FULL_HINT : ''}`,
     }
   }
   // A write this host's server only journaled (the Walnut server is away) and answered with nothing
@@ -564,7 +568,7 @@ export async function executeOp(
   options = options ?? ({} as ExecuteOpOptions)
   const origin = lowerOrigin(options.origin || UNKNOWN_ORIGIN, ambientCallerOrigin())
   const refused = originRefusal(op, origin)
-  if (refused) return { ok: false, message: refused }
+  if (refused) return localOnly(refused)
 
   // A caller re-running a call names it with `_call_id`: never one of the op's own arguments.
   let given = rawArgs
@@ -588,7 +592,7 @@ export async function executeOp(
   const args = parsed.args
   // A shortened read written back would delete the rest of what it was cut from (answer.ts).
   const cutText = cutTextRefusal(op, args)
-  if (cutText) return { ok: false, message: cutText, invalidArgs: true }
+  if (cutText) return ownRefusal(SHORTENED_TEXT_CODE, cutText, { invalidArgs: true as const })
 
   const base = resolveApiBase(options.apiBase)
   const inherited = explicitCallerScope.getStore()
@@ -615,7 +619,7 @@ export async function executeOp(
         const r = await rawRequest(base, 'GET', GATE_SETTING_PATH, undefined, GATE_SETTING_TIMEOUT_MS, { sid: explicitSid, explicitSid, callerKind, origin })
         return r.ok ? { answered: true, body: r.result } : { answered: r.status !== undefined }
       }))
-      if (refusal) return { ok: false, message: refusal, invalidArgs: true, code: REPLY_LANGUAGE_CODE }
+      if (refusal) return ownRefusal(REPLY_LANGUAGE_CODE, refusal, { invalidArgs: true as const })
     }
     const prov: CallerProvenance = {
       sid: explicitSid,
@@ -750,7 +754,7 @@ async function runOp(
     try {
       const call = async (method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> => {
         const refused = selfCallRefusal(op.name, method, path, prov.origin)
-        if (refused) throw new Error(refused)
+        if (refused) { const r = localOnly(refused); throw new SelfCallError(r.message, false, r.status, r.code) }
         const r = await rawRequest(base, method, path, body, timeoutMs, prov)
         if (!r.ok) throw new SelfCallError(r.message, r.lost === true, r.status, r.code, r.retryAfterMs)
         return r.result
@@ -761,6 +765,8 @@ async function runOp(
       const message = op.resultError?.(result)
       return message ? { ok: false, message, result, ...(reachedNoServer(prov) ? { unreachable: true as const } : {}) } : { ok: true, result }
     } catch (err) {
+      // The handler's own refusal under a code (an `api` write of a shortened read): nothing ran.
+      if (err instanceof OwnRefusalError) return ownRefusal(err.code, err.message, err.extra)
       // A write of this call whose answer was lost (also inside a handler) may have applied.
       const lost = err instanceof SelfCallError && err.lost
       const status = err instanceof SelfCallError ? err.status : undefined
@@ -782,7 +788,7 @@ async function runOp(
     return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}`, invalidArgs: true }
   }
   const refused = selfCallRefusal(op.name, op.bind!.method, materialized.path, prov.origin)
-  if (refused) return { ok: false, message: refused }
+  if (refused) return localOnly(refused)
   const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, prov)
   if (!r.ok) return r
   try {

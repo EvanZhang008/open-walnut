@@ -92,6 +92,21 @@ function problemScore(r: ReportRow): number {
   return r.cut * 100 + (r.errors + r.timeouts) * 10 + r.serverErrors * 10 + r.badArgs * 3 + r.slow * 3 + r.overLimit * 2 + (r.kind === 'page' ? r.calls * 5 : 0)
 }
 
+/**
+ * Each action with one call that works. 2026-11-24: sessions asked `{"action":"help"}` five times in
+ * a week and each was refused as a bad argument, as were exemptions under kinds they made up.
+ */
+const USAGE_WATCH_HELP = {
+  set: '{"action":"set","targets":["op:task_send","route:GET /api/tasks/:id","page:session"],"who":"this task","check_after":"24h"}',
+  exempt: `{"action":"exempt","kind":"not_shipped","reason":"Investigation only: nothing was landed or deployed."} (kind: ${EXEMPT_KINDS.join(', ')})`,
+  report: '{"action":"report","target":"op:task_send","range":"24h"} (no target: the names with the most problems)',
+  errors: '{"action":"errors","by":"code","op":"task_send","range":"24h"} (by: op, code, session or host; session: one session or task)',
+  list: '{"action":"list"}',
+  drop: '{"action":"drop","id":"uw-..."}',
+  ship: '{"action":"ship","how":"app store release"} (a ship another release tool made)',
+  probe: '{"action":"probe","chars":30000} (an answer of filler characters, for testing the alarms)',
+} as const
+
 /** Deterministic filler with no content, dense in tokens (Braille cells), for the drill. */
 export function probeFiller(chars: number): string {
   let s = ''
@@ -168,12 +183,13 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       const by = (body.by === undefined ? 'op' : String(body.by)) as ErrorGroup
       if (!(ERROR_GROUPS as readonly string[]).includes(by)) throw new UsageWatchError(400, 'bad_by', `by is one of ${ERROR_GROUPS.join(', ')}.`)
       const session = typeof body.session === 'string' && body.session.trim() ? body.session.trim().slice(0, 80) : undefined
+      const op = typeof body.op === 'string' && body.op.trim() ? body.op.trim().slice(0, 80) : undefined
       const range = body.range === '24h' ? '24h' : '7d'
-      const rep = toolErrorsReport({ range, by, now, ...(session ? { session } : {}) })
+      const rep = toolErrorsReport({ range, by, now, ...(session ? { session } : {}), ...(op ? { op } : {}) })
       return {
         ...rep,
-        outcome: `${rep.total} failed Walnut tool call(s) in ${range}${session ? ` of ${session}` : ''}, by ${by}${rep.more ? `; the ${rep.rows.length} with the most listed` : ''}.`,
-        next: 'by: op, code, session or host; session: a session or task id (or its start) for its own failures one by one.',
+        outcome: `${rep.total} failed Walnut tool call(s) in ${range}${op ? ` of ${op}` : ''}${session ? ` of ${session}` : ''}, by ${by}${rep.more ? `; the ${rep.rows.length} with the most listed` : ''}.`,
+        next: 'by: op, code, session or host; op: one tool\'s failures; session: a session or task id (or its start) for its own failures one by one.',
       }
     }
     case 'ship': {
@@ -187,7 +203,9 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       if (!Number.isFinite(n) || n < 1 || n > PROBE_MAX) throw new UsageWatchError(400, 'bad_chars', `chars is from 1 to ${PROBE_MAX}.`)
       return { probe: probeFiller(n), chars: n, outcome: `A probe answer of ${n} filler characters (no content), for testing the real-use alarms.` }
     }
+    case 'help':
+      return { actions: USAGE_WATCH_HELP, outcome: `usage_watch takes ${Object.keys(USAGE_WATCH_HELP).length} actions, each with an example.` }
     default:
-      throw new UsageWatchError(400, 'bad_action', 'action is one of set, exempt, drop, list, report, errors, ship, probe.')
+      throw new UsageWatchError(400, 'bad_action', 'action is one of set, exempt, drop, list, report, errors, ship, probe, help.')
   }
 }

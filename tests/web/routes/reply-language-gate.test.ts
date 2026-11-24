@@ -26,6 +26,8 @@ import { handleGatewayCapability } from '../../../src/core/peers/capability-rout
 import { PeerThrottle } from '../../../src/core/peers/peer-throttle.js'
 import { REPLY_LANGUAGE_HOOK_COMMAND, replyLanguageHooks } from '../../../src/providers/reply-language-hook.js'
 import { sessionSettingsHooks } from '../../../src/providers/session-settings-hooks.js'
+import { gatewayFailureCode } from '../../../src/providers/tool-call-output.js'
+import { toolErrorCode } from '../../../src/core/usage-watch/normalize.js'
 import '../../../src/ops/index.js'
 
 const RULE = 'Talk to the user in Chinese.'
@@ -75,6 +77,9 @@ describe('the executor', () => {
     const en = await send(EN)
     expect(refused(en), JSON.stringify(en)).toBe(true)
     expect(en).toMatchObject({ ok: false, invalidArgs: true, code: 'reply_language' })
+    // Every client names it by its code: the CLI's error and the failed-call count (own-refusal-codes.test.ts).
+    expect(en.ok ? null : gatewayFailureCode('bad_request', en.message)).toBe('reply_language')
+    expect(en.ok ? null : toolErrorCode(`walnut: bad_request: ${en.message}`)).toBe('reply_language')
     const cn = await send(CN)
     expect(refused(cn), JSON.stringify(cn)).toBe(false)
   })
