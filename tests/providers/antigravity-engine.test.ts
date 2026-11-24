@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { guardedPath } from '../setup/exec-guard-core.js'
 import { engineCaps } from '../../src/core/agents/engine-registry.js'
 import { _resetEngineProbeCache, probeEngine } from '../../src/core/agents/engine-probe.js'
 import { withInstallHint } from '../../src/core/agents/host-engines.js'
@@ -133,7 +134,7 @@ describe('a missing agy names the installer', () => {
   it('on this machine', async () => {
     _resetEngineProbeCache()
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-missing-'))
-    const availability = await probeEngine('antigravity', { env: { PATH: '/nonexistent', HOME: home }, systemDirectories: [], cwd: home })
+    const availability = await probeEngine('antigravity', { env: { PATH: guardedPath(['/nonexistent'], ''), HOME: home }, systemDirectories: [], cwd: home })
     _resetEngineProbeCache()
     expect(availability.installed).toBe(false)
     expect(availability.reason).toContain(INSTALL)

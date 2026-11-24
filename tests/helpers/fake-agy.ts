@@ -9,6 +9,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createEngineSignIn, type EngineSignInDeps } from '../../src/providers/acp-engine-sign-in.js'
 import { mergeAcpSpawnEnv } from '../../src/providers/acp-worker/protocol.js'
+import { guardedPath } from '../setup/exec-guard-core.js'
 
 export const FAKE_AGY = path.resolve(import.meta.dirname, '../fixtures/antigravity/fake-agy.mjs')
 
@@ -32,7 +33,7 @@ export function makeFakeAgyHome(opts: { installed?: boolean } = {}): FakeAgyHome
   const script = `mkdir -p "$HOME/.local/bin" && cat > "$HOME/.local/bin/agy" <<'AGY'\n${wrapper()}AGY\nchmod 755 "$HOME/.local/bin/agy"\necho "installed agy"\n`
   fs.writeFileSync(path.join(root, 'installer.sh'), script)
   fs.writeFileSync(path.join(tools, 'curl'), `#!/bin/sh\nfor a in "$@"; do last="$a"; done\necho "$last" > "${path.join(root, 'curl-url')}"\ncat "${path.join(root, 'installer.sh')}"\n`, { mode: 0o755 })
-  const env: NodeJS.ProcessEnv = { HOME: home, PATH: `${tools}:/usr/bin:/bin` }
+  const env: NodeJS.ProcessEnv = { HOME: home, PATH: guardedPath([tools], '/usr/bin:/bin') }
   return {
     root, home, agy, env,
     signedInFile: path.join(home, '.gemini', 'antigravity-cli', 'fake-sign-in'),
