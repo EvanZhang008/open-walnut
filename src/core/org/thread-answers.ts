@@ -440,6 +440,8 @@ async function sweepAll(): Promise<void> {
     const store = await import('./threads-store.js');
     const dropped = await store.sweepClosedThreads();
     if (dropped) log.task.info('org threads: closed threads past their week deleted', { dropped });
+    // A thread out of his sight whose work ended closes (thread-ended.ts).
+    await (await import('./thread-ended.js')).closeEndedThreads();
   } catch (err) {
     log.task.warn('org threads: sweep failed', { error: err instanceof Error ? err.message : String(err) });
   }

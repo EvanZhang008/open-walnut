@@ -203,13 +203,16 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
   return out as R;
 }
 
+/** What a write of Walnut's own changed: one thread, or a sweep over several (thread-ended.ts). */
+type WrittenFor = { kind: 'opened' | 'updated'; threadId: string } | { kind: 'swept' };
+
 /**
  * A write of Walnut's own that is no op of a node or of his (human-inbox/letter-threads.ts: the
  * thread that holds a decision letter): `mutate` under the lock, then one change event when it says
  * which thread changed.
  */
-export async function writeThreadsFor<R>(taskId: string, mutate: (cur: ThreadsFile) => { file: ThreadsFile; out: R; changed?: { kind: 'opened' | 'updated'; threadId: string } }): Promise<R> {
-  let changed: { kind: 'opened' | 'updated'; threadId: string } | undefined;
+export async function writeThreadsFor<R>(taskId: string, mutate: (cur: ThreadsFile) => { file: ThreadsFile; out: R; changed?: WrittenFor }): Promise<R> {
+  let changed: WrittenFor | undefined;
   const out = await mutateThreads(taskId, (cur) => {
     const r = mutate(cur);
     changed = r.changed;

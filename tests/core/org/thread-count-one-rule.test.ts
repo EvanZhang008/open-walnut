@@ -130,6 +130,7 @@ const CALLERS: Record<string, { role: 'rule' | 'count' | 'list'; why: string }> 
   'src/core/org/thread-groups.ts': { role: 'rule', why: 'the groups, and the one count made from them (threadsForHim, threadCounts)' },
   'src/core/org/thread-popup.ts': { role: 'list', why: 'which threads of a task below are sent up to its leaders (listedAbove)' },
   'src/core/org/thread-subject-pairs.ts': { role: 'list', why: 'which result of a task below is listed on the node whose own thread it answers (shownToHim)' },
+  'src/core/org/thread-ended.ts': { role: 'list', why: 'a pending thread whose tasks ended stays open while a linked task still shows him a thread of its own (shownToHim); counts nothing' },
   'src/core/user-status-sync.ts': { role: 'count', why: 'user_status.threads of Main, every VP and lead, a Director and a task with Threads on' },
   'src/web/routes/org-threads-v1.ts': { role: 'count', why: 'shown_count, and each thread\'s `shown` (listed) and `counted` flags' },
   'web/src/components/org/OrgNodeDetail.tsx': { role: 'count', why: 'the node header\'s "N threads" pill' },
