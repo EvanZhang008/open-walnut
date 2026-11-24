@@ -27,6 +27,9 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'utils/ui-prefs-sync.ts': 'raw',
   'utils/time-tracking.ts': 'raw',
   'utils/browser-logger.ts': 'raw',
+  // Moves the block report it held one tick (timer-alignment.ts) into browser-logger's buffer and
+  // calls its beaconFlush: the network write is browser-logger.ts's sendBeacon.
+  'utils/main-thread-tracer.ts': 'local',
   // A voice input's music hold: its release at pagehide goes by navigator.sendBeacon.
   'api/media-hold.ts': 'raw',
   // A preview page's state for the disk: keepalive when it fits the browser's keepalive body limit (about
