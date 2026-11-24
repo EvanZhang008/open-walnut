@@ -317,6 +317,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   await checkHandedOverByHand(c, w, A, B.id, 'main: A started again by hand after the commit (witnesses online)', false)
   await checkHandedOverByHand(c, w, A, B.id, 'main: A started again by hand with every witness out of reach', true)
   // The switch back carries B's writes: B's copy goes to A over B's link to A's daemon.
+  checkIgnoresKept(c, 'main A -> B', B)
   const cfgB = YAML.parse(fs.readFileSync(path.join(B.home, 'config.yaml'), 'utf8')) as { standby?: { dir?: string; host?: string } }
   c.add('main: B\'s standby now goes to A\'s standby folder on A as a host', cfgB.standby?.dir === A.standbyDir && cfgB.standby?.host === A.id, JSON.stringify(cfgB.standby))
   const onBWrites: Seeded['tasks'] = []
@@ -338,6 +339,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   if (!c.add('main: switch back B -> A completes', back.code === 0 && back.state?.step === 'done' && tb?.step === 'done', `exit ${back.code}; target ${tb?.step}; ${last(back.out, 4)}`)) return
   times['downtime B -> A (switch back), copy link unslowed'] = `${((tb?.downtimeMs ?? NaN) / 1000).toFixed(1)} s`
   c.add('main: A leads again', !!(await status(w, A))?.mayAct)
+  checkIgnoresKept(c, 'main B -> A', A)
   await checkCarried(c, w, A, B, { tasks: [...s.tasks, ...acked, ...onBWrites], notes: s.notes, pluginFiles: [...s.pluginFiles, late] }, 'main B -> A')
   checkOneLeader(c, 'main B -> A', B, A, { stoppedAt: tb?.stoppedAt, startedAt: back.state?.startedAt })
   c.add('main: A\'s handed-over home is kept beside the new one', fs.existsSync(`${A.home}.before-${back.state!.id}`) && readMarker(`${A.home}.before-${back.state!.id}`)?.state === 'handed-over')
@@ -883,12 +885,18 @@ function checkNoOwnWritesInStop(c: Checks, label: string, m: Machine, switchId: 
  * /voice-archive/. The new leader has its .gitignore as committed, and git tracks nothing under either.
  */
 function checkIgnoresKept(c: Checks, label: string, m: Machine): void {
-  const g = (...args: string[]) => execFileSync('git', ['-C', m.home, ...args], { encoding: 'utf8' }).trim()
-  const has = fs.existsSync(path.join(m.home, '.gitignore'))
-  const changed = has ? g('status', '--porcelain', '--', '.gitignore') : 'missing'
-  const tracked = g('ls-files', '--', 'tmp', 'voice-archive').split('\n').filter(Boolean)
-  c.add(`${label}: the new leader ${m.id} has its .gitignore as committed, and git tracks nothing of tmp/ or voice-archive/`, has && changed === '' && tracked.length === 0,
-    `.gitignore ${has ? (changed ? `changed (${changed})` : 'as committed') : 'missing'}; ${tracked.length} tracked under tmp/ or voice-archive/${tracked.length ? ` (${tracked.slice(0, 2).join(', ')})` : ''}`)
+  const label2 = `${label}: the new leader ${m.id} has its .gitignore as committed, and git tracks nothing of tmp/ or voice-archive/`
+  try {
+    // No optional locks: a status of the live leader's repo must not take its index lock from its auto-commit.
+    const g = (...args: string[]) => execFileSync('git', ['--no-optional-locks', '-C', m.home, ...args], { encoding: 'utf8' }).trim()
+    const has = fs.existsSync(path.join(m.home, '.gitignore'))
+    const changed = has ? g('status', '--porcelain', '--', '.gitignore') : 'missing'
+    const tracked = g('ls-files', '--', 'tmp', 'voice-archive').split('\n').filter(Boolean)
+    c.add(label2, has && changed === '' && tracked.length === 0,
+      `.gitignore ${has ? (changed ? `changed (${changed})` : 'as committed') : 'missing'}; ${tracked.length} tracked under tmp/ or voice-archive/${tracked.length ? ` (${tracked.slice(0, 2).join(', ')})` : ''}`)
+  } catch (err) {
+    c.add(label2, false, `git failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`)
+  }
 }
 
 /** The leader's catch-up lines (routes/leader-switch.ts /switch/catch-up) since `since`: each attempt's batches. */
