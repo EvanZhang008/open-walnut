@@ -73,6 +73,8 @@ interface Variant {
   direct?: boolean
   /** Each request to a witness goes by its link or its door at random (one record behind both). */
   mixedWays?: boolean
+  /** Every witness is reached by its machine's door over the caller's host link (`host-link`, leader-relay.ts). */
+  hostLink?: boolean
   /**
    * w3 is not set up at the start (no file: the list leads on w1 and w2); after the first lead the
    * holder drops it from the list, it is set up as a joining witness from the generation the
@@ -103,6 +105,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   if (v.mixedClocks) { const scaled = scaledTenth(params); world.paramsOf = (key) => (key.startsWith('A') ? scaled : params) }
   if (v.direct) world.way = 'direct'
   if (v.mixedWays) world.way = 'mixed'
+  if (v.hostLink) world.way = 'host-link'
   if (v.transportTimeoutMs !== undefined) world.transportTimeoutMs = v.transportTimeoutMs
   // With the real 15 s timeout the real in-flight caps apply too (lost messages free their slot then).
   if (v.transportTimeoutMs === 15_000) world.transportMaxInFlight = undefined
@@ -554,6 +557,27 @@ describe('write permission: random schedules', () => {
     const r = await sweep(60, { direct: true, transportTimeoutMs: 15_000, ops: true, releases: true, restarts: true, members: true, tickMs: 1_000 })
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
     expect(r.sent, 'ops were sent').toBeGreaterThan(0)
+  }, 120_000)
+
+  // The `host-link` way (leader-relay.ts): the same caller and door as way b, the door at its fixed path at the far end
+  // of the caller's host link. The link's own failures (it delays, drops, cuts) are the simulated network's here; the
+  // real stream's are in tests/core/leader/switch/leader-relay.test.ts.
+  it('never lets two machines act at once through the witnesses\' doors over a host link (200 seeds, faults, drift at the edge)', async () => {
+    const r = await sweep(200, { hostLink: true })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 120_000)
+
+  it('never lets two processes act at once, or sends an op twice, over a host link with the real 15 s timeout, restarts, planned stops and list changes (60 seeds)', async () => {
+    const r = await sweep(60, { hostLink: true, transportTimeoutMs: 15_000, ops: true, releases: true, restarts: true, members: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.sent, 'ops were sent').toBeGreaterThan(0)
+  }, 120_000)
+
+  it('never lets two machines act at once over a host link when old replies arrive again (100 seeds)', async () => {
+    const r = await sweep(100, { hostLink: true, replayOldReplies: true })
+    expect(r.injected).toBeGreaterThan(500)
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
   }, 120_000)
 
   it('never lets two machines act at once when one machine runs scaled clocks on the same witness records (200 seeds, faults, drift)', async () => {

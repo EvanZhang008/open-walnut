@@ -204,8 +204,9 @@ export async function oldMachineHostServiceSpec(o: OldMachineHostServiceInput): 
   const env = hostServerEnvOf({ dataDir: dirs.dataDir, runDir: dirs.runDir, port: o.port, leaderHome: path.resolve(o.home), walnutId: o.walnutId, label: o.label ?? (os.hostname().split('.')[0] || 'host') })
   const run = hostProgramRun({ prefix, env, replica: true, hostKey: o.hostKey, gateway: o.gateway === true })
   return { v: 1, home: path.resolve(o.home), walnutId: o.walnutId, command: command!, args: run.args, cwd: dirs.dataDir, env: run.env, ...(run.fallback ? { fallback: run.fallback } : {}), log: dirs.logFile, port: o.port,
-    // The manager's settings for a host with no tunnel placed there (manager.ts specOf).
-    settings: { expose: null, exposeRetry: 0, pluginsKeepTasks: pluginsKeepingTasks() } }
+    // The manager's settings for a host with no tunnel placed there (manager.ts specOf), and the switch's own word:
+    // this service gets no config copy, and it serves the leader relay (replica/leader-relay-entry.ts) for this machine.
+    settings: { expose: null, exposeRetry: 0, pluginsKeepTasks: pluginsKeepingTasks(), leaderRelay: true } }
 }
 
 /**

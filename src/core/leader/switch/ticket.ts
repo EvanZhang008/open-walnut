@@ -21,7 +21,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { writeDurableJson } from './records.js'
 import { machineIdFile } from './machine-id.js'
 
@@ -37,6 +37,11 @@ export const targetStateName = (id: string) => `${id}.state.json`
 /** A switch id as it becomes a file name: the ids newState makes (time and hex), nothing else. */
 export function isSwitchId(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9A-Za-z][0-9A-Za-z.T_-]{0,63}$/.test(v)
+}
+
+/** A new switch's id: its start (UTC, to the second) and 6 random hex. Made where the command runs, on either machine. */
+export function newSwitchId(now = new Date()): string {
+  return `${now.toISOString().replace(/[-:]/g, '').slice(0, 15)}-${randomBytes(3).toString('hex')}`
 }
 
 export interface SwitchTicket {
@@ -89,6 +94,8 @@ export interface CheckReport {
   problems: string[]
   version: string
   at: string
+  /** Each witness as the candidate reached it (witness-reach.ts): by which way, and what it holds (a summary). */
+  reach?: Array<{ id: string; answered: boolean; way?: string; held: { holder?: string; kind?: string; number?: number } | null; why?: string }>
 }
 
 export function readSwitchFile<T>(standbyDir: string, name: string): T | null {

@@ -31,6 +31,8 @@ export interface SwitchCommandOptions {
   back?: boolean
   resume?: boolean
   cancel?: boolean
+  /** On the machine that will lead: its standby folder (candidate-command.ts); `--to <this machine>` finds it too. */
+  standbyDir?: string
   out?: (line: string) => void
   env?: NodeJS.ProcessEnv
 }
@@ -66,7 +68,7 @@ function machineEnv(self: MachinePlace | undefined, env: NodeJS.ProcessEnv): Nod
 }
 
 /** A job spawned detached, its output appended to `log`; resolves with how it exited, when this process still lives to see it. */
-function spawnJob(args: string[], env: NodeJS.ProcessEnv, log: string): { exit: Promise<{ code: number | null; signal: string | null }> } {
+function spawnJob(args: string[], env: NodeJS.ProcessEnv, log: string): { pid: number | null; exit: Promise<{ code: number | null; signal: string | null }> } {
   fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 })
   const fd = fs.openSync(log, 'a', 0o600)
   const cmd = serverCommand(args)
@@ -74,11 +76,28 @@ function spawnJob(args: string[], env: NodeJS.ProcessEnv, log: string): { exit: 
   fs.closeSync(fd)
   const exit = new Promise<{ code: number | null; signal: string | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
   child.unref()
-  return { exit }
+  return { pid: child.pid ?? null, exit }
+}
+
+/**
+ * The source job of a switch begun on the new leader's machine (a forwarded begin, leader-relay-door.ts), started
+ * by the old leader's server as this command would start it here: this machine's env, its log beside the machine id.
+ * Its output for this switch starts at `from` in that log.
+ */
+export function startSourceJobFor(o: { home: string; switchId: string; to: string }): { log: string; from: number; pid: number | null; exit: Promise<{ code: number | null; signal: string | null }> } {
+  const home = path.resolve(o.home)
+  const settings = settingsOf(home)
+  const env = machineEnv(machineByHome(settings, home), process.env)
+  // A server's own start words never reach the job (a commit start's, a trial's).
+  for (const k of ['WALNUT_LEADER_SWITCH_COMMIT', 'WALNUT_LEADER_SWITCH_COMMIT_UNTIL', 'WALNUT_LEADER_TRIAL', 'WALNUT_LEADER_SWITCH_KILL_AT']) delete env[k]
+  const log = sourceJobLog(home, env)
+  const from = (() => { try { return fs.statSync(log).size } catch { return 0 } })()
+  const job = spawnJob(['leader', 'switch', '--job', 'source', '--to', o.to, '--switch', o.switchId, '--home', home], env, log)
+  return { log, from, ...job }
 }
 
 /** New lines of a log since `from` (bytes), and where they end. */
-function readFrom(file: string, from: number): { text: string; to: number } {
+export function readFrom(file: string, from: number): { text: string; to: number } {
   try {
     const size = fs.statSync(file).size
     if (size <= from) return { text: '', to: from }
@@ -130,6 +149,12 @@ function openTargetsHere(here: LeaderSwitchSettings['machines']): { dir: string;
 export async function runLeaderSwitch(o: SwitchCommandOptions): Promise<SwitchOutcome> {
   const out = o.out ?? (() => {})
   const home = path.resolve(o.home)
+  // Run on the machine that will lead: the candidate's check, then the begin over its host link (candidate-command.ts).
+  if (!o.resume && !o.cancel && !o.back) {
+    const { candidateStandbyDir, runCandidateSwitch } = await import('./candidate-command.js')
+    const standbyDir = candidateStandbyDir({ home, env: o.env ?? process.env, ...(o.standbyDir ? { standbyDir: o.standbyDir } : {}), ...(o.to ? { to: o.to } : {}) })
+    if (standbyDir) return runCandidateSwitch({ standbyDir, ...(o.to ? { to: o.to } : {}), out, ...(o.env ? { env: o.env } : {}) })
+  }
   const settings = settingsOf(home)
   const self = machineByHome(settings, home)
   const env = machineEnv(self, o.env ?? process.env)

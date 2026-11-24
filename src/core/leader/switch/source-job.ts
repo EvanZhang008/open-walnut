@@ -6,7 +6,6 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
 import { getVersion } from '../../version.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { readFinalStopResult, readHistory, readMarker, removeMarker, summarize, takeSwitchLock, writeDurableJson, writeMarker } from './records.js'
@@ -22,7 +21,7 @@ import {
 import { notesAccessOf, readSwitchNotes, writeSwitchNote, type NotesAccess } from './switch-notes.js'
 import { applyServiceRole, writeSwitchPointer, type SetServiceRole } from './service-role.js'
 import { instanceIdAt } from '../../device-store.js'
-import type { CheckReport } from './ticket.js'
+import { isSwitchId, newSwitchId, type CheckReport } from './ticket.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -34,6 +33,8 @@ export interface SourceJobOptions {
   env?: NodeJS.ProcessEnv
   out?: (line: string) => void
   startedBy?: StartedBy
+  /** The switch's id, when the command made it on the new leader's machine (a forwarded begin); default a new one. */
+  switchId?: string
   /** This machine (default LocalSide of the home's machine). */
   side?: SwitchSide
   /** Tests: the witnesses, the notes, the service role, where it dies (a test kill point), how long the new leader may take to say it saw the handover. */
@@ -89,11 +90,12 @@ function newState(home: string, settings: LeaderSwitchSettings, o: SourceJobOpti
     to = last.from
   }
   if (!to) throw new SwitchRefused('name the machine: --to <machine id>, or --back')
+  if (o.switchId !== undefined && !isSwitchId(o.switchId)) throw new SwitchRefused(`not a switch id: ${o.switchId}`)
   const target = machineById(settings, to)
   if (!target) throw new SwitchRefused(`machine ${to} is not in leader_switch.machines (${settings.machines.map((m) => m.id).join(', ')})`)
   if (target.id === source.id) throw new SwitchRefused(`${to} leads already`)
   return {
-    id: `${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}-${randomBytes(3).toString('hex')}`,
+    id: o.switchId ?? newSwitchId(),
     from: source.id, to: target.id, sourceHome: source.home, targetHome: target.home,
     ...(source.accountHome ? { sourceAccountHome: source.accountHome } : {}),
     ...(target.accountHome ? { targetAccountHome: target.accountHome } : {}),
@@ -386,7 +388,7 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   if (running && !problems.length) {
     // Past the route's own deadline (150 s in all, routes/leader-switch.ts), so its answer, a timeout included, is what is read.
     const c = await src.api('POST', '/api/leader/switch/check', { to: st.to, switchId: st.id }, 180_000).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
-    const r = (c.json as { report?: CheckReport & { reach?: { id: string; answered: boolean; held: { holder?: string; kind?: string } | null }[] }; verify?: { drift?: number; error?: string }; why?: string } | null)
+    const r = (c.json as { report?: CheckReport; verify?: { drift?: number; error?: string }; why?: string } | null)
     const report = r?.report
     if (!report) problems.push(`the new leader's check did not report: ${r?.why ?? `status ${c.status}`}`)
     else {

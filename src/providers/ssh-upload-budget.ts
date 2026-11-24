@@ -49,10 +49,12 @@ export const PACED_STREAM_PURPOSES: ReadonlySet<string> = new Set(['replica'])
 /**
  * Stream purposes that go at once, unpaced: a browser's page ('web'), and what a person waits on
  * through a host that runs its sessions (core/session-channel/leader-side.ts): the session channel
- * (a turn's text and its end) and the commands of its sessions (a send, an interrupt, a call).
+ * (a turn's text and its end) and the commands of its sessions (a send, an interrupt, a call), and
+ * the leader relay (core/leader/switch/leader-relay.ts): one small request per stream, a witness's
+ * answer the permit's clocks wait on, or the switch command a person runs.
  * Every purpose is in one of the two sets (tests/providers/stream-lane-pace.test.ts).
  */
-export const IMMEDIATE_STREAM_PURPOSES: ReadonlySet<string> = new Set(['web', 'session-channel', 'session-call'])
+export const IMMEDIATE_STREAM_PURPOSES: ReadonlySet<string> = new Set(['web', 'session-channel', 'session-call', 'leader-relay'])
 
 /** The lowest pace a cut sets on the stream lane: its frames are small (64 KB), so it may go slow. */
 export const LANE_PACE_FLOOR_BYTES_PER_SEC = 4 * 1024

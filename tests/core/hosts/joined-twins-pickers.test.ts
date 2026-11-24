@@ -50,7 +50,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
   // Files that walk config.hosts for something other than a person's choice, with why.
   const NOT_A_CHOICE: Record<string, string> = {
     'src/core/hosts/joined-twins.ts': 'the one place',
-    'src/web/routes/leader-switch.ts': 'the handover\'s refusal checks the standby host is a configured row, not a host picker',
+    'src/core/leader/switch/switch-link.ts': 'a switch\'s begin refusal checks the standby host is a configured row, not a host picker',
     'src/core/leader/switch/witness-transport.ts': 'matches the host a witness names (an alias, or a machine id) against the rows, not a host picker',
     'src/core/hosts/ssh-cert-expiry-alert.ts': 'reads the SSH certificate of every SSH row',
     'src/core/human-inbox/credential-ask.ts': 'matches every existing alias or label in a renewal sentence, not a host picker',

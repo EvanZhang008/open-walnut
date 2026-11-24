@@ -17,8 +17,11 @@ export type LinkState = 'up' | 'down'
 /** Where a stream through the daemon goes: the leader (the Mac), the companion, or a follower. */
 export type LinkPeerRole = 'primary' | 'companion' | 'follower'
 
-/** Which door of the other server a stream is for. */
-export type LinkDoor = 'web' | 'replica'
+/**
+ * Which door of the other server a stream is for. `leader-relay`: the leader's relay door
+ * (src/core/leader/switch/leader-relay.ts), opened only by a host replica's relay socket.
+ */
+export type LinkDoor = 'web' | 'replica' | 'leader-relay'
 
 export interface Link {
   readonly peer: { host: string; walnutId: string }

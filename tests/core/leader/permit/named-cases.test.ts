@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PERMIT_PARAMS, genesisConfigId, maxSafeDrift, sameRecord, witnessHoldMs, type PermitClient, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
-import { CALM, SimStore, World, firstStart, lastStop, pilot, releaseOnAnyLive, sample, takeOnMinorityRelease } from './sim.js'
+import { CALM, SimStore, World, firstStart, lastStop, pilot, releaseOnAnyLive, sample, simDefaults, takeOnMinorityRelease } from './sim.js'
 
 const W = ['w1', 'w2', 'w3']
 
@@ -261,7 +261,9 @@ describe('a renew delivered late', () => {
     sample(w, 50, 120_000)
     w.run(120_000)
     expect(late).not.toBeNull()
-    expect(replies.length).toBeGreaterThanOrEqual(3)
+    // Over a door (named-cases-host-link.test.ts) a post 70 s late finds its nonce expired (10 s): refused before the
+    // witness reads it, so no reply comes at all. Over a link the witness answers each one, no.
+    if (simDefaults.way === 'link') expect(replies.length).toBeGreaterThanOrEqual(3)
     expect(replies.every((r) => !r.ok)).toBe(true)
     expect(a.c.mayAct()).toBe(false)
     expect(lastStop(w, 'A')!).toBeLessThan(14_000 + 60_000)
@@ -282,6 +284,9 @@ describe('a renew delivered late', () => {
       if (r.ok) { at = w.now; ackedWhileExpired ||= !a.c.mayAct() }
     }
     w.run(100_000)
+    // Over a door the challenge's answer is what comes back 65 s late: the call then goes with an expired nonce and is
+    // refused, so no yes comes back at all (nothing to count). Over a link the yes comes, after the lease ran out.
+    if (simDefaults.way !== 'link') { expect(at).toBeNull(); expect(a.c.mayAct()).toBe(false); return }
     expect(at).not.toBeNull()
     expect(ackedWhileExpired).toBe(true)
     expect(w.witnesses.get('w1')!.w!.handle({ type: 'read' }).held?.number).toBeGreaterThan(1)

@@ -204,7 +204,7 @@ export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; 
  * target (the copy goes there, so its own copy is what it would lead with). A begin forwarded from
  * another machine is taken only from `to` itself. Null: allowed.
  */
-export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to: string; standby: { dir?: string; host?: string }; hosts?: readonly string[]; forwardedBy?: string | null; hostService?: HostServiceFacts | null }): string | null {
+export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to: string; standby: { dir?: string; host?: string }; hosts?: readonly string[]; forwardedBy?: string | null; forwardedHostKey?: string; hostService?: HostServiceFacts | null }): string | null {
   const target = machineById(o.settings, o.to)
   if (!target) return `machine ${o.to} is not in leader_switch.machines`
   if (target.id === o.me) return `${o.to} leads already`
@@ -223,7 +223,11 @@ export function beginRefusal(o: { settings: LeaderSwitchSettings; me: string; to
   } else if (safeReal(o.standby.dir) !== safeReal(target.standbyDir)) {
     return `this leader's standby copy goes to ${o.standby.dir}, not to ${o.to}'s standby_dir ${target.standbyDir}`
   }
-  if (o.forwardedBy !== undefined && o.forwardedBy !== o.to) return `a switch begun from another machine is taken only from the machine it goes to (${o.to}), not from ${o.forwardedBy ?? 'an unknown machine'}`
+  // The link it came over is `to`: by the machine id its daemon said in its hello, or by this leader's own name for
+  // that host (its `hosts` key, which leader_switch.machines names as `to`'s host_key: the leader dialed it by it).
+  if (o.forwardedBy !== undefined && o.forwardedBy !== o.to && !(target.hostKey && o.forwardedHostKey === target.hostKey)) {
+    return `a switch begun from another machine is taken only from the machine it goes to (${o.to}), not from ${o.forwardedBy ?? 'an unknown machine'}${o.forwardedHostKey ? ` (host ${o.forwardedHostKey})` : ''}`
+  }
   return null
 }
 

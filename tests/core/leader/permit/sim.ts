@@ -21,11 +21,16 @@ import {
 import type { WitnessCall } from '../../../../src/core/leader/switch/witness-wire.js'
 import { createWitnessDoor, type WitnessDoor } from '../../../../src/core/leader/switch/witness-door.js'
 import { directWitnessCall, type DoorPost } from '../../../../src/core/leader/switch/witness-direct.js'
+import { hostLinkWitnessCall } from '../../../../src/core/leader/switch/leader-relay.js'
 import { sha256Hex } from '../../../../src/utils/hmac-proof.js'
 import {
   bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
   type ElapsedClock, type PermitParams, type PermitRecord, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
 } from '../../../../src/core/leader/permit/index.js'
+
+export type SimWay = 'link' | 'direct' | 'mixed' | 'host-link'
+/** The way a new World starts with: a test file runs another's named cases over another way by setting it first (named-cases-host-link.test.ts). */
+export const simDefaults: { way: SimWay } = { way: 'link' }
 
 export function rng(seed: number): () => number {
   let a = seed >>> 0
@@ -163,8 +168,12 @@ export class World {
   injected = 0
   /** What the transport threw away, by reason. */
   drops: Record<string, number> = {}
-  /** How machines reach the witnesses: over a link (way c) or by each witness's direct door (way b). Set before addMachine. */
-  way: 'link' | 'direct' | 'mixed' = 'link'
+  /**
+   * How machines reach the witnesses: over a link (way c), by each witness's direct door (way b), or by the door of
+   * the witness's machine over the caller's host link to the leader (`host-link`, leader-relay.ts: the same caller and
+   * door, the door at its fixed path on the far end of the link). Set before addMachine.
+   */
+  way: SimWay = simDefaults.way
   /** Each witness's direct door (way b), made at its first call; its nonces outlive a witness restart only as a real door's would not (a restart forgets them: see startWitness). */
   private doors = new Map<string, WitnessDoor>()
 
@@ -270,10 +279,11 @@ export class World {
     return new PermitClient({
       id: node.id, list, clock, params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
       transport: createWitnessTransport({
-        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'mixed' ? { id, host: id, url: `https://sim/${id}`, key: simWitnessKey(id) } : { id, host: id }), params, walnutId: 'sim',
+        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'mixed' ? { id, host: id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'host-link' ? { id, machine: `machine-of-${id}`, key: simWitnessKey(id) } : { id, host: id }), params, walnutId: 'sim',
         deliver: this.wrapDeliver ? this.wrapDeliver(node.key, (reply) => this.deliverToMachine(node.key, reply)) : (reply) => this.deliverToMachine(node.key, reply),
         remote: this.makeLink ? this.makeLink(node.key, this.simLink(node.key)) : this.way === 'mixed' ? this.simMixed(node.key) : this.simLink(node.key),
         direct: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key)) : this.simDirect(node.key),
+        ...(this.way === 'host-link' ? { hostLink: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key, hostLinkWitnessCall)) : this.simDirect(node.key, hostLinkWitnessCall) } : {}),
         timeoutMs: this.transportTimeoutMs, ...(this.transportMaxInFlight !== undefined ? { maxInFlight: this.transportMaxInFlight } : {}),
         defer: (fn) => this.after(0, fn),
         after: (ms, fn) => { let live = true; this.after(ms, () => { if (live) fn() }); return () => { live = false } },
@@ -386,7 +396,7 @@ export class World {
    * network, each to the witness's real door. What a message carries, for `intercept`, is the
    * permit request inside it (both of its posts) and the reply (the call's answer).
    */
-  simDirect(from: string): RemoteCall {
+  simDirect(from: string, caller: (post: DoorPost) => RemoteCall = (post) => directWitnessCall({ post })): RemoteCall {
     return (place, path, body, done) => {
       const req = JSON.parse(JSON.stringify((body as WitnessCall).request)) as PermitRequest
       const to = place.id
@@ -405,7 +415,7 @@ export class World {
           else door.request(b, (r) => back(r, r.status === 200 ? JSON.parse((r.body as { reply: string }).reply) as PermitReply : req))
         })
       }
-      return directWitnessCall({ post })(place, path, body, done)
+      return caller(post)(place, path, body, done)
     }
   }
 

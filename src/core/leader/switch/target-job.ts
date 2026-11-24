@@ -21,7 +21,7 @@ import { offlineCheck, onlineCheck, readCopyFacts } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
 import { machineById, readHomeSwitchConfig, type LeaderSwitchSettings } from './settings.js'
 import { makeWitnessReader, type WitnessReading } from './witness-reader.js'
-import { reachedHolding, reachSentence } from './witness-reach.js'
+import { commitReach, reachedHolding, reachSentence } from './witness-reach.js'
 import { permitHolderId } from './machine-id.js'
 import {
   checkReportName, finalMarkName, readSwitchFile, removeSwitchClaim, switchFolder, ticketName, targetStateName, validFinalMark, validTicket, writeSwitchClaim, writeSwitchFile,
@@ -119,7 +119,13 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
     const reach = await side.reachWitnesses(copy)
     const need2 = majorityOf(cfg.settings.witnesses.map((w) => w.id))
     if (!reach.majority) problems.push(`the new leader cannot reach a majority of the witnesses on its own: ${reachSentence(reach, cfg.settings.witnesses.length)} (${need2} needed)`)
-    ;(report as CheckReport & { reach?: unknown }).reach = reach.witnesses.map((w) => ({ id: w.id, answered: w.answered, way: w.way, held: summarize(w.held ?? null), why: w.why }))
+    // The host link to the leader (leader-relay.ts) closes at the old leader's switch stop, before this machine's
+    // commit: the commit needs a majority without it (docs/reference/leader-switch.md, "The leader relay ends at the stop").
+    else if (commitReach(reach) < need2) {
+      const via = reach.witnesses.filter((w) => w.answered && w.way === 'host-link').map((w) => w.id)
+      problems.push(`the new leader reaches a majority of the witnesses only through its host link to the leader (${via.join(', ')}), which closes at the old leader's stop, before the commit: without it ${commitReach(reach)} of ${cfg.settings.witnesses.length} answer (${need2} needed). This machine needs a witness of its own, or direct doors to a majority: ${reachSentence(reach, cfg.settings.witnesses.length)}`)
+    }
+    report.reach = reach.witnesses.map((w) => ({ id: w.id, answered: w.answered, way: w.way, held: summarize(w.held ?? null), why: w.why }))
   } catch (err) {
     problems.push((err as Error).message)
   }

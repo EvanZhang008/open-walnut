@@ -153,32 +153,9 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   res.json({ ok: true, record: r.record!.number, commitDeadline: started.commitDeadline })
 })
 
-/**
- * The copy link to `to` (core/leader/switch/peer.ts) and the settings, or why there is none. Every switch
- * call that acts on `to` (the begin, the check, the handover) passes the same trust rule here first
- * (final-stop.ts beginRefusal); a target reached as a host must also say its service can lead.
- */
-async function switchLink(to: string, me: string): Promise<{ peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings } | { refused: string }> {
-  const [{ readHomeSwitchConfig, machineById }, { peerFor }, { beginRefusal }, { WALNUT_HOME }, { getConfig }] = await Promise.all([
-    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/peer.js'), import('../../core/leader/switch/final-stop.js'), import('../../constants.js'), import('../../core/config-manager.js'),
-  ])
-  const cfg = readHomeSwitchConfig(WALNUT_HOME)
-  if (!cfg.settings) return { refused: cfg.problem ?? 'no leader_switch section' }
-  if (!machineById(cfg.settings, me)) return { refused: `this machine (${me}) is not in leader_switch.machines` }
-  const config = await getConfig()
-  const raw = config.standby ?? {}
-  const walnut = typeof raw.walnut === 'string' ? [raw.walnut] : Array.isArray(raw.walnut) ? raw.walnut : undefined
-  const standby = { ...(raw.dir ? { dir: raw.dir } : {}), ...(raw.host ? { host: raw.host } : {}), ...(walnut ? { walnut } : {}) }
-  // A target reached as a host: what this leader's link knows of its service (hello serviceRoles, launcher goodRoles).
-  const hostService = standby.host ? ((await (await import('../../core/hosts/fleet.js')).getFleetHost(standby.host).catch(() => null))?.daemon ?? null) : undefined
-  const why = beginRefusal({ settings: cfg.settings, me, to, standby, hosts: Object.keys(config.hosts ?? {}), ...(hostService !== undefined ? { hostService } : {}) })
-  if (why) return { refused: why }
-  const peer = await peerFor({ to: machineById(cfg.settings, to)!, standby, home: WALNUT_HOME })
-  if ('refused' in peer) return peer
-  // Over a daemon: its hello must name every command the copy link sends (named when one is missing).
-  const notReady = await peer.ready()
-  if (notReady) { peer.close(); return { refused: notReady } }
-  return { peer, settings: cfg.settings }
+/** The copy link to `to` and the trust rule of every switch call (core/leader/switch/switch-link.ts). */
+async function switchLink(to: string, me: string): Promise<import('../../core/leader/switch/switch-link.js').SwitchLink> {
+  return (await import('../../core/leader/switch/switch-link.js')).switchLink(to, me)
 }
 
 /** What the host steps of this switch's handover need, or null when this machine or `to` is not in the list. */
@@ -425,24 +402,27 @@ leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
 
 /**
  * A switch's begin: the trust rule (core/leader/switch/final-stop.ts beginRefusal), and the record of who began it
- * on which machine, in this server's log (its console) and in Walnut Health. From this machine only today; a begin
- * forwarded by the new leader's replica (the next step) is taken only from that machine itself.
+ * on which machine, in this server's log (its console) and in Walnut Health. From this machine only; a begin made on
+ * the new leader's machine comes over its host link to the relay door (core/leader/switch/leader-relay-door.ts),
+ * taken only from that machine itself, and this is then its source job asking again.
  */
 leaderSwitchRouter.post('/switch/begin', thisMachineOnly, async (req, res) => {
   const p = currentLeaderPermit()
   const to = typeof req.body?.to === 'string' ? req.body.to : ''
   if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
-  const [{ beganLine }, { isSwitchId }] = await Promise.all([import('../../core/leader/switch/final-stop.js'), import('../../core/leader/switch/ticket.js')])
+  const [{ recordBegin, forwardedBeginOf }, { isSwitchId }] = await Promise.all([import('../../core/leader/switch/leader-relay-door.js'), import('../../core/leader/switch/ticket.js')])
   const switchId: unknown = req.body?.switchId
   if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
+  // The source job of a begin forwarded by `to` (leader-relay-door.ts): that begin was checked and recorded already
+  // over its host link; this is its job's preflight asking again, with the same switch id and machine.
+  const fwd = forwardedBeginOf(switchId)
+  if (fwd && fwd.to !== to) { res.status(409).json({ ok: false, why: `switch ${switchId} was begun for ${fwd.to}` }); return }
   const link = await switchLink(to, p.machine)
   if ('refused' in link) { res.status(403).json({ ok: false, why: link.refused }); return }
   link.peer.close()
+  if (fwd) { res.json({ ok: true, startedBy: fwd.by }); return }
   const startedBy = { machine: p.machine, via: 'cli' as const }
-  const line = beganLine({ switchId, from: p.machine, to, by: startedBy })
-  log.web.info(`leader switch: ${line.title}`, { switchId, from: p.machine, to, startedBy })
-  const { raiseHealthItem } = await import('../../core/notifications/health-items.js')
-  void raiseHealthItem({ kind: 'operation-error', severity: 'info', title: line.title, body: line.body, dedupKey: `leader-switch-began:${switchId}`, category: 'Leader switch' }, 'leader-switch')
+  await recordBegin({ switchId, from: p.machine, to, by: startedBy })
   res.json({ ok: true, startedBy })
 })
 

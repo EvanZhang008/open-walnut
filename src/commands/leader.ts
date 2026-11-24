@@ -1,7 +1,9 @@
 /**
  * `walnut leader`: the switchable leader from the CLI (docs/reference/leader-switch.md).
  *
- *   leader switch --to <machine>   hand the lead to another machine of leader_switch.machines
+ *   leader switch --to <machine>   hand the lead to another machine of leader_switch.machines; run on
+ *                                  that machine (--to itself, or --standby-dir), it checks there and asks
+ *                                  the leader over its host link to begin
  *   leader switch --back           the same, back to the machine this Walnut came from
  *   leader switch --resume         finish (or roll back) a switch a kill left half done
  *   leader switch --cancel         cancel a switch that has not committed
@@ -29,7 +31,7 @@ export async function runLeaderSwitchCommand(options: Record<string, unknown>): 
     // The jobs themselves (the command below starts them, detached): exit 0 done, 3 rolled back, 1 refused.
     if (options.job === 'source') {
       const { runSourceJob } = await import('../core/leader/switch/source-job.js')
-      const st = await runSourceJob({ home, ...(typeof options.to === 'string' ? { to: options.to } : {}), back: !!options.back, resume: !!options.resume, out })
+      const st = await runSourceJob({ home, ...(typeof options.to === 'string' ? { to: options.to } : {}), ...(typeof options.switch === 'string' ? { switchId: options.switch } : {}), back: !!options.back, resume: !!options.resume, out })
       process.exitCode = st.step === 'done' ? 0 : 3
       return
     }
@@ -51,6 +53,7 @@ export async function runLeaderSwitchCommand(options: Record<string, unknown>): 
       home,
       ...(typeof options.to === 'string' ? { to: options.to } : {}),
       back: !!options.back, resume: !!options.resume, cancel: !!options.cancel,
+      ...(typeof options.standbyDir === 'string' ? { standbyDir: options.standbyDir } : {}),
       out: (line) => console.log(line),
     })
     const st = r.source

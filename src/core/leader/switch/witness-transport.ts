@@ -10,6 +10,10 @@
  *   b. `direct`: its direct door at `url`, proven with its own `key` (witness-direct.ts): no leader link;
  *   c. `link`: over a link this process holds to the machine's service (`host`): a registered reach
  *      (a host-dialed door, addWitnessReach) or the leader server's daemon link (hostLinkCall).
+ *   `host-link`: the witness door of the machine that LEADS now, over this machine's own host link to
+ *      it (leader-relay.ts): a candidate that is a host of the leader (the Mac switching back) reaches
+ *      the witness the leader's machine keeps this way, proven with that witness's own key as on way b.
+ *      Only while that leader's server runs: it ends at its switch stop, before the commit.
  * A witness that does not answer on its way is asked on the next one next time (the client resends
  * a proposal every 300 ms and reads with every look); the way that answered is kept.
  *
@@ -60,9 +64,9 @@ export interface RemoteCallResult { status: number; body: unknown }
  */
 export type RemoteCall = (place: RemoteWitnessPlace, path: string, body: WitnessCall | WitnessSetup | NoteCall, done: (r: RemoteCallResult | null) => void) => void | (() => void)
 
-/** The three ways to a witness kept by a machine (see the top of this file). */
-export type WitnessWay = 'here' | 'direct' | 'link'
-export const WITNESS_WAYS: readonly WitnessWay[] = ['here', 'direct', 'link']
+/** The ways to a witness kept by a machine (see the top of this file). */
+export type WitnessWay = 'here' | 'host-link' | 'direct' | 'link'
+export const WITNESS_WAYS: readonly WitnessWay[] = ['here', 'host-link', 'direct', 'link']
 
 /** This process's own machine, for way a. */
 export interface HereMachine {
@@ -86,6 +90,8 @@ export interface WitnessTransportOptions {
   remote?: RemoteCall
   /** Way b: a call to the witness's direct door (its `url` and `key`; witness-direct.ts). */
   direct?: RemoteCall
+  /** The `host-link` way: the leader's machine's witness door over this machine's host link (leader-relay.ts). */
+  hostLink?: RemoteCall
   /** Way a: this process's machine; absent, no witness is opened here but a `dir` one. */
   here?: HereMachine
   /** The ways this transport may take (default all): a candidate's probe takes a and b only. */
@@ -107,13 +113,20 @@ export interface WitnessTransportOptions {
 export type WitnessDrop = 'invalid-reply' | 'late-reply' | 'too-many-open' | 'no-way' | 'no-answer' | 'bad-status'
 
 /**
- * The ways to `place` this transport has, in the order tried: here (no network at all), then the
- * direct door, then a link. A `dir` witness has none of them (it is always opened here).
+ * The ways to `place` this transport has, in the order tried: here (no network at all), then the leader's machine
+ * over this machine's host link (a candidate's probe only), then the direct door, then a link. A `dir` witness has
+ * none of them (it is always opened here).
  */
-export function waysOf(place: RemoteWitnessPlace, o: Pick<WitnessTransportOptions, 'here' | 'direct' | 'remote' | 'ways'>): WitnessWay[] {
+export function waysOf(place: RemoteWitnessPlace, o: Pick<WitnessTransportOptions, 'here' | 'direct' | 'hostLink' | 'remote' | 'ways'>): WitnessWay[] {
   const allowed = o.ways ?? WITNESS_WAYS
   const out: WitnessWay[] = []
-  if (o.here && place.machine && o.here.machineId === place.machine) out.push('here')
+  const mine = !!o.here && !!place.machine && o.here.machineId === place.machine
+  if (mine) out.push('here')
+  // A witness another machine keeps, by its own key: the leader's machine answers for the one it keeps, and any
+  // other answers at once that it holds none (then the direct door is next). Before the direct door: the door of
+  // the leader's machine is often one this machine cannot reach (a dev box's door from behind a NAT), and a call to
+  // it would hold the turn until its timeout.
+  if (o.hostLink && place.machine && place.key && !mine) out.push('host-link')
   if (o.direct && place.url && place.key) out.push('direct')
   if (o.remote && place.host) out.push('link')
   return out.filter((w) => allowed.includes(w))
@@ -185,7 +198,7 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
     const at = (turn.get(place.id) ?? 0) % ways.length
     turn.set(place.id, at)
     const way = ways[at]!
-    sendCall(way === 'here' ? hereCall(opts.here!, opts.params) : way === 'direct' ? opts.direct! : opts.remote!, way, place, req, at)
+    sendCall(way === 'here' ? hereCall(opts.here!, opts.params) : way === 'direct' ? opts.direct! : way === 'host-link' ? opts.hostLink! : opts.remote!, way, place, req, at)
   }
 
   return {

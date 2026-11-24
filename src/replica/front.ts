@@ -217,6 +217,34 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       }
     }, () => { /* the next tick reads it again */ })
   }
+  // The leader relay (leader-relay-entry.ts): this machine's processes reach the leader over this server's follower link
+  // (a switch begun here, the leader machine's witness door for a candidate). Behind the experiment `switchable_leader`:
+  // read from this server's config copy, or told by the leader in this server's settings (`leaderRelay`, set by a
+  // switch's handover for the old machine's host service, which gets no config copy). Off, its socket is closed and removed.
+  let relay: { on: boolean; listener: import('./leader-relay-entry.js').LeaderRelayListener | null; busy: Promise<void> | null } = { on: false, listener: null, busy: null }
+  const refreshLeaderRelay = (): void => {
+    if (!env.daemonDir || !env.walnutId || relay.busy) return
+    relay.busy = (async () => {
+      const c = await (await import('../core/config-manager.js')).getConfig()
+      const told = (link.view()?.view as { settings?: Record<string, unknown> } | undefined)?.settings?.leaderRelay === true
+      const on = (experimentalEnabled(c.experimental, 'switchable_leader') || told) && !stopped
+      if (on && !relay.listener) {
+        const [{ listenLeaderRelay }, { leaderRelaySocketPath }] = await Promise.all([import('./leader-relay-entry.js'), import('../lib/leader-relay-names.js')])
+        const l = await listenLeaderRelay({
+          openToLeader: () => link.openStream('primary', 'leader-relay'),
+          linked: () => link.linkState() === 'following',
+          log: (level, msg, data) => log.web[level](msg, { host: env.label, ...data }),
+        }, { socketPath: leaderRelaySocketPath(env.daemonDir, env.walnutId), uid: typeof process.getuid === 'function' ? process.getuid() : null })
+        if (stopped) await l?.close()
+        else relay.listener = l
+      } else if (!on && relay.listener) {
+        const l = relay.listener
+        relay.listener = null
+        await l.close()
+      }
+      relay.on = on
+    })().catch(() => { /* the next report reads it again */ }).finally(() => { relay.busy = null })
+  }
   /** The entry's socket the daemon gives new sessions and plugin jobs, or null. */
   const callSocket = (): string | null => (opts.localCalls && callEntryOn && callListener ? callListener.socketPath : null)
 
@@ -258,6 +286,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   link.on('view', (view) => {
     const settings = (view as { settings: Record<string, unknown> }).settings
     followSettings(settings)
+    if (settings?.leaderRelay === true && !relay.listener) refreshLeaderRelay()
     // This host's own calls (host-local-calls): a plugin job's away create is stamped as the
     // Mac stamps it, by the Mac's word on which plugins keep their tasks (plugin-task-visibility.ts).
     if (opts.localCalls) setPluginsKeepingTasksFromLeader(settings?.pluginsKeepTasks)
@@ -419,8 +448,9 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   }
 
   refreshCallEntry()
+  refreshLeaderRelay()
   link.start()
-  const reportTimer = setInterval(() => { refreshCallEntry(); link.report(status()) }, REPORT_MS)
+  const reportTimer = setInterval(() => { refreshCallEntry(); refreshLeaderRelay(); link.report(status()) }, REPORT_MS)
   reportTimer.unref?.()
   const tick = setInterval(() => { look() }, PRESENCE_TICK_MS)
   tick.unref?.()
@@ -478,6 +508,9 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       await callListening?.catch(() => {})
       await callListener?.close()
       callListener = null
+      await relay.busy?.catch(() => {})
+      await relay.listener?.close()
+      relay.listener = null
       link.stop()
       clearSelfHost()
       await expose.stop()

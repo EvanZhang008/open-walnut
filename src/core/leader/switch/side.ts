@@ -188,7 +188,9 @@ export class LocalSide implements SwitchSide {
     const walnutId = await instanceIdAt(copyHome)
     if (!walnutId) throw new Error(`${copyHome} holds no Walnut id`)
     const env = { ...process.env, ...this.machine.env }
-    return probeWitnessReach({ places: cfg.settings.witnesses, params: cfg.settings.params, here: thisMachine(env, walnutId), walnutId })
+    // A host of the leader also reaches the leader's machine's witness over its own host link (leader-relay.ts).
+    const hostLink = await (await import('./leader-relay.js')).hostLinkCallHere(walnutId, env).catch(() => null)
+    return probeWitnessReach({ places: cfg.settings.witnesses, params: cfg.settings.params, here: thisMachine(env, walnutId), walnutId, ...(hostLink ? { hostLink } : {}) })
   }
 
   async api(method: string, urlPath: string, body?: unknown, timeoutMs?: number): Promise<{ status: number; json: unknown }> {
