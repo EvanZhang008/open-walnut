@@ -25,9 +25,11 @@ export interface UserTextSpec {
 
 const HIS_WORDS = 'the user\'s own words, quoted as he wrote them'
 const FOR_WALNUT = 'a reason Walnut checks or logs, not a message to the user'
-const REPORT = ['report.ask', 'report.ask_more', 'report.next', 'report.waiting_on', 'report.ask_new', 'report.ask_options.label', 'report.ask_options.detail', 'report.user_kind_why']
+/** user_kind_why: Walnut judges it (org/user-kind.ts) and never shows it: a letter drops it (user-kind-letter.ts), no card reads it. */
+const KIND_WHY = 'why the ask is one of his kinds: Walnut checks it and never shows it to him'
+const REPORT = ['report.ask', 'report.ask_more', 'report.next', 'report.waiting_on', 'report.ask_new', 'report.ask_options.label', 'report.ask_options.detail']
 const REPORT_OTHERS = {
-  'report.user_kind_words': HIS_WORDS, 'report.user_words': HIS_WORDS,
+  'report.user_kind_words': HIS_WORDS, 'report.user_words': HIS_WORDS, 'report.user_kind_why': KIND_WHY,
   'report.design_review': 'the path of a design review and its scores', 'report.same_as': 'the id of an earlier ask',
 } as const
 
@@ -51,25 +53,25 @@ export const USER_TEXT_OPS: Record<string, UserTextSpec> = {
   task_switch_engine: { fields: ['text'], what: 'Your message to the task on its new engine (task_switch_engine)', others: { reason: FOR_WALNUT } },
   task_complete: { fields: ['result'], what: 'Your result (task_complete)', others: { user_words: HIS_WORDS, reason: FOR_WALNUT } },
   thread_update: {
-    fields: ['reply', 'title', 'ask', 'since_you_wrote', 'user_kind_why', 'options.label', 'options.detail'],
+    fields: ['reply', 'title', 'ask', 'since_you_wrote', 'options.label', 'options.detail'],
     what: 'Your thread (thread_update)',
-    others: { user_words: HIS_WORDS, user_kind_words: HIS_WORDS, design_review: 'the path of a design review and its scores', same_ask_reason: FOR_WALNUT, separate_reason: FOR_WALNUT, place_why: FOR_WALNUT },
+    others: { user_words: HIS_WORDS, user_kind_words: HIS_WORDS, user_kind_why: KIND_WHY, design_review: 'the path of a design review and its scores', same_ask_reason: FOR_WALNUT, separate_reason: FOR_WALNUT, place_why: FOR_WALNUT },
     links: 'Write the summary again with the links (thread_update with reply).',
   },
   thread_create: {
-    fields: ['text', 'title', 'reply', 'user_kind_why', 'options.label', 'options.detail'],
+    fields: ['text', 'title', 'reply', 'options.label', 'options.detail'],
     what: 'Your new thread (thread_create)',
-    others: { user_kind_words: HIS_WORDS, design_review: 'the path of a design review and its scores', same_ask_reason: FOR_WALNUT, separate_reason: FOR_WALNUT },
+    others: { user_kind_words: HIS_WORDS, user_kind_why: KIND_WHY, design_review: 'the path of a design review and its scores', same_ask_reason: FOR_WALNUT, separate_reason: FOR_WALNUT },
     links: 'Put the links in the thread\'s summary (thread_update with reply).',
   },
   human_inbox_send: {
-    fields: ['subject', 'markdown', 'html', 'text', 'actions.label', 'actions.description', 'user_kind_why'],
+    fields: ['subject', 'markdown', 'html', 'text', 'actions.label', 'actions.description'],
     what: 'Your letter (human_inbox_send)',
     others: {
       'items.subject': 'a mail item: the words of the mail it carries', 'items.summary': 'a mail item: the words of the mail it carries',
       'items.actions.label': 'a mail item\'s action', 'items.actions.question': 'a mail item\'s action',
       'items.source.message': 'a mail item: the id of the mail it carries',
-      user_kind_words: HIS_WORDS, design_review: 'the path of a design review and its scores',
+      user_kind_words: HIS_WORDS, user_kind_why: KIND_WHY, design_review: 'the path of a design review and its scores',
       snooze_reason: FOR_WALNUT, resend_reason: FOR_WALNUT, same_ask_reason: FOR_WALNUT,
     },
     links: 'Do not send the letter again: reply to it with the links (human_inbox_reply with its letter id).',

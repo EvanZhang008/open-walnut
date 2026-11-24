@@ -67,4 +67,14 @@ describe('every op that takes prose is classed for the user\'s words (guard)', (
     expect(opUserText('task_report_set', { id: 't', report: { ask: 'A', user_words: 'his' } })!.text).toBe('A')
     expect(opUserText('note_write', { content: 'x' })).toBeNull()
   })
+
+  // 2026-11-23: a lead's thread_update with a Chinese summary was refused for its English
+  // user_kind_why, a line Walnut checks and never shows him (user-kind-letter.ts drops it).
+  it('never reads user_kind_why, which the user never sees', () => {
+    const why = 'Which of 10 page-header looks he wants is his own taste call on a screen he uses all day.'
+    for (const op of ['thread_update', 'thread_create', 'human_inbox_send']) {
+      expect(opUserText(op, { reply: 'R', text: 'R', subject: 'R', user_kind_why: why })!.text).not.toContain(why)
+    }
+    expect(opUserText('task_report_set', { report: { ask: 'A', user_kind_why: why } })!.text).toBe('A')
+  })
 })
