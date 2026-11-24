@@ -149,16 +149,22 @@ export function TaskTagPills({ tags, task, max = 1, className, linksFirst, menu,
   if (shown.length === 0 || !checked) return null;
   const head = shown.slice(0, max);
   const rest = shown.slice(max);
-  const more = rest.length > 0 && (menu
-    ? <OverflowMenu rest={rest} compiled={compiled} onOpenPath={onOpenPath} links={links} />
-    : <span className="badge tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled, links)).join(', ')}><span>+{rest.length}</span></span>);
   const last = head.at(-1)!;
   return (
     <span className={className ? `task-tag-pills ${className}` : 'task-tag-pills'} data-testid="task-tag-pills">
       {head.slice(0, -1).map((tag) => <Pill key={tag} tag={tag} compiled={compiled} onOpenPath={onOpenPath} links={links} />)}
       {/* "+N" rides inside the last pill ("thread +3"), never as a pill of its own (2026-10-23). */}
-      {more
-        ? <span className="badge tag-pill-group" key={last}><Pill tag={last} compiled={compiled} onOpenPath={onOpenPath} links={links} /><span>{more}</span></span>
+      {/* The "+N" chip is the group's direct child (row-pills.css `.tag-pill-group > .tag-chip-overflow`):
+          written inline, so no wrapper is needed to keep the badge's text in an element. */}
+      {rest.length > 0
+        ? (
+          <span className="badge tag-pill-group" key={last}>
+            <Pill tag={last} compiled={compiled} onOpenPath={onOpenPath} links={links} />
+            {menu
+              ? <OverflowMenu rest={rest} compiled={compiled} onOpenPath={onOpenPath} links={links} />
+              : <span className="badge tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled, links)).join(', ')}><span>+{rest.length}</span></span>}
+          </span>
+        )
         : <Pill key={last} tag={last} compiled={compiled} onOpenPath={onOpenPath} links={links} />}
     </span>
   );

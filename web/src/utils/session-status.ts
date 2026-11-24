@@ -171,6 +171,16 @@ export function taskStatusPhase(task: Pick<Task, 'phase' | 'status' | 'user_stat
   return !(us ? us.snoozed : snoozed) && !us?.limit && notStarted(task) ? 'TODO' : 'WAITING';
 }
 
+/**
+ * The hover of a task's complete toggle. "Waiting:" only for a task its status control shows as
+ * Waiting (taskStatusPhase), never for one not started yet: since 9bcc4b4350 read the user status,
+ * every not-started row (its status is waiting, kind not-started) said "Waiting: click to complete".
+ */
+export function completeToggleTitle(task: Pick<Task, 'phase' | 'status' | 'user_status'> & Partial<Pick<Task, 'session_id'>>, done: boolean): string {
+  if (done) return 'Done: click to reopen';
+  return taskStatusPhase(task) === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete';
+}
+
 // ── Colors ──
 
 export const PROCESS_COLORS: Record<ProcessStatus, string> = {

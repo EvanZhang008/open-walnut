@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Task } from '@open-walnut/core'
-import { taskStatusLabel, taskStatusPhase } from '../../web/src/utils/session-status'
+import { completeToggleTitle, taskStatusLabel, taskStatusPhase } from '../../web/src/utils/session-status'
 import { checksBackWords } from '../../web/src/components/common/date-time-pick'
 
 type T = Pick<Task, 'phase' | 'status' | 'user_status'> & Partial<Pick<Task, 'session_id'>>
@@ -34,6 +34,23 @@ describe('taskStatusPhase: the option a status control shows is the state its la
   ] as const)('%s', (_label, t, phase, label) => {
     expect(taskStatusPhase(t)).toBe(phase)
     if (label) expect(taskStatusLabel(t)).toBe(label)
+  })
+})
+
+describe('completeToggleTitle: the complete toggle says Waiting only for what its status shows as Waiting', () => {
+  it.each([
+    ['never started', task('TODO', { state: 'waiting', kind: 'not-started' } as never), 'Click to complete'],
+    ['marked in progress with no session', task('IN_PROGRESS', { state: 'waiting', kind: 'not-started', waitingOn: 'Marked in progress; no session runs it' } as never), 'Click to complete'],
+    ['no status derived yet, a TODO', task('TODO'), 'Click to complete'],
+    ['waiting on someone', task('IN_PROGRESS', { state: 'waiting', kind: 'outside' } as never), 'Waiting: click to complete'],
+    ['snoozed', task('NEED_ACTION', { state: 'waiting', snoozed: true, kind: 'time' } as never), 'Waiting: click to complete'],
+    ['parked on its running workers', task('WAITING', { state: 'working', waitingOn: 'Its workers are working' } as never), 'Click to complete'],
+    ['an ask', task('NEED_ACTION', { state: 'needs', ask: 'Approve it?' } as never), 'Click to complete'],
+  ] as const)('%s', (_label, t, title) => {
+    expect(completeToggleTitle(t, false)).toBe(title)
+  })
+  it('a done task offers to reopen', () => {
+    expect(completeToggleTitle(task('COMPLETE'), true)).toBe('Done: click to reopen')
   })
 })
 
@@ -69,7 +86,7 @@ describe('every surface that shows the status label picks its icon and option by
   it('no file anywhere shows a status from the bare phase', () => {
     // The shapes each member of this class had: an option, icon, symbol or word picked by
     // task.phase beside the one user status. Read taskStatusPhase(task) or taskUserState(task).
-    const BARE = /o\.value === task\.phase|pressed=\{task\.phase|phaseSymbols\[phase\]|=== 'done' \? 'COMPLETE' : \(task\.phase|phaseIcon\(task\.phase|PHASE_ICON\[|task\.phase === 'WAITING' \? 'Waiting|phase === 'WAITING' \? 'Message: moves it to Working/g
+    const BARE = /taskUserState\([\w.]+\) === 'waiting' \? 'Waiting: click|o\.value === task\.phase|pressed=\{task\.phase|phaseSymbols\[phase\]|=== 'done' \? 'COMPLETE' : \(task\.phase|phaseIcon\(task\.phase|PHASE_ICON\[|task\.phase === 'WAITING' \? 'Waiting|phase === 'WAITING' \? 'Message: moves it to Working/g
     const offenders: string[] = []
     for (const f of files) {
       const src = fs.readFileSync(f, 'utf-8')

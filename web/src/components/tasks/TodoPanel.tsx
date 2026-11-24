@@ -27,7 +27,7 @@ import { useWatchReorder } from './WatchToggle';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import { landOnRow } from '@/utils/scroll-land';
-import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction, taskUserState } from '@/utils/session-status';
+import { completeToggleTitle, resolveTaskSessionId, phasePickerChoices, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { isPhoneLayout, phoneOpenKeepsList, phonePhaseAttrs, phoneRowFocusOpts, phoneTitleTapOpens, usePhoneHomeList } from './phone-row-behavior';
 import { PhoneNeedsYouStrip } from './PhoneNeedsYouStrip';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -1302,7 +1302,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
             }}
             aria-label={isDone ? 'Reopen' : 'Mark complete'}
-            title={isDone ? 'Done: click to reopen' : taskUserState(task) === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
+            title={completeToggleTitle(task, isDone)}
           >
             {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
           </button>
@@ -2314,7 +2314,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen' : 'Mark complete'}
-        title={isDone ? 'Done: click to reopen' : taskUserState(task) === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
+        title={completeToggleTitle(task, isDone)}
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>
