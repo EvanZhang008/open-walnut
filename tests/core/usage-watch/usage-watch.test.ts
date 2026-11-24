@@ -12,7 +12,7 @@ import { setUsageWatchFile, readHours, readEvents, closeUsageWatchStore, markAli
 import { addObserveTap } from '../../../src/core/observability/metrics.js'
 import { usageReport } from '../../../src/core/usage-watch/report.js'
 import { _resetUsageRecorderForTesting, flushUsage, recordConfirmedCut, recordHttp, recordOpCall, recordPageError } from '../../../src/core/usage-watch/record.js'
-import { TemplateMatcher, agentCutChars, failureClass, pageErrorKind, registeredTemplate, walnutOpOfToolCall } from '../../../src/core/usage-watch/normalize.js'
+import { TemplateMatcher, agentCutChars, failureClass, pageErrorKind, pageKindIsPagesOwn, registeredTemplate, walnutOpOfToolCall, type PageRequestHow } from '../../../src/core/usage-watch/normalize.js'
 import { judgeWatch, newWatch, putWatch, listWatches, armedWatchesFor } from '../../../src/core/usage-watch/watches.js'
 import { BATCH_GAP_MS, _sendsForTesting, noteText, routeUsageAlarm, sendDueNotes, type RouteDeps } from '../../../src/core/usage-watch/route.js'
 import { recordShip, shipFailed, shipOfCommand } from '../../../src/core/usage-watch/ships.js'
@@ -314,6 +314,42 @@ describe('a watch', () => {
     const w = newWatch({ taskId: 't1', targets: ['op:thread_update'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 })
     expect(judgeWatch(w, T0 + 5 * H).state).toBe('extended')
     expect(judgeWatch({ ...w, extended: true }, T0 + 5 * H).state).toBe('too_little_use')
+  })
+
+  // 2026-11-24: two deploy restarts made 253 failed requests on the session page, and a watch on
+  // page:session read every one as the page's error. Each way a request can go wrong is named here:
+  // a new one fails to compile until it says whether it is the page's own failure.
+  const PAGES_OWN: Record<PageRequestHow, boolean> = { failed: false, rejected: false, 'timed out': true, refused: true }
+  const LINES: Record<PageRequestHow, [string, string]> = {
+    failed: ['[api] GET /api/sessions/abc/supervision FAILED after 5ms', 'TypeError: Load failed'],
+    rejected: ['[api] GET /api/sessions/abc/supervision rejected after 15000ms in the connection queue (pool saturated)', ''],
+    'timed out': ['[api] GET /api/sessions/abc/supervision FAILED after 8000ms (timeout 8000ms)', 'TimeoutError: The operation timed out.'],
+    refused: ['[api] GET /api/sessions/abc/supervision FAILED after 0ms', "TypeError: Failed to execute 'fetch' on 'Window': Invalid value"],
+  }
+
+  it('a page watch fails only on the page\'s own errors, never on requests that never reached the server or were never sent', () => {
+    const t = new TemplateMatcher()
+    t.add('GET', '/api/sessions/:sessionId/supervision')
+    for (const how of Object.keys(PAGES_OWN) as PageRequestHow[]) {
+      const k = pageErrorKind(LINES[how][0], LINES[how][1], t)!
+      expect(k.how, how).toBe(how)
+      expect(pageKindIsPagesOwn(k.kind), how).toBe(PAGES_OWN[how])
+    }
+    expect(pageKindIsPagesOwn('TypeError in the SessionChat chunk')).toBe(true)
+    const kindOf = (how: PageRequestHow) => pageErrorKind(LINES[how][0], LINES[how][1], t)!
+    const watch = newWatch({ taskId: 't1', targets: ['page:session'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 })
+    for (let i = 0; i < 30; i++) recordPageError(kindOf(i % 2 ? 'failed' : 'rejected'), T0 + H + i)
+    flushUsage(T0 + H + 60_000)
+    for (let m = 0; m < 5 * 60; m++) flushUsage(T0 + m * 60_000)
+    const away = judgeWatch(watch, T0 + 5 * H)
+    expect(away.state).toBe('passed')
+    expect(away.summary).toContain('30 requests that never reached the server or were never sent')
+    recordPageError(kindOf('timed out'), T0 + 2 * H)
+    recordPageError(kindOf('refused'), T0 + 2 * H)
+    flushUsage(T0 + 2 * H + 60_000)
+    const own = judgeWatch(watch, T0 + 5 * H)
+    expect(own.state).toBe('failed')
+    expect(own.summary).toContain('2 page errors')
   })
 
   it('reads Unknown when the server was not recording', () => {

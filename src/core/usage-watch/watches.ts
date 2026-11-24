@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { emptyAgg, mergeAgg, msPercentile, type Agg, type UsageKind } from './agg.js'
 import { readAlive, readHours, usageDb } from './store.js'
+import { pageKindIsPagesOwn } from './normalize.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -147,12 +148,12 @@ export function armedWatchesFor(kind: UsageKind, name: string, now = Date.now())
     .sort((a, b) => (b.shipAt ?? b.createdAt) - (a.shipAt ?? a.createdAt))
 }
 
-function mergedFor(target: string, since: number, until: number): Agg {
+function mergedFor(target: string, since: number, until: number, keep: (name: string) => boolean = () => true): Agg {
   const kind: UsageKind = target.startsWith('op:') ? 'op' : target.startsWith('route:') ? 'http' : 'page'
   let out = emptyAgg()
   const from = Math.floor(since / HOUR_MS) * HOUR_MS
   for (const r of readHours(from, { kind })) {
-    if (r.hour >= until || !targetCovers(target, r.kind, r.name)) continue
+    if (r.hour >= until || !targetCovers(target, r.kind, r.name) || !keep(r.name)) continue
     out = mergeAgg(out, r.agg)
   }
   return out
@@ -164,8 +165,14 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
   const agg = mergedFor(target, since, until)
   const notes: string[] = []
   if (target.startsWith('page:')) {
-    if (agg.calls > 0) notes.push(`${agg.calls} page error${agg.calls === 1 ? '' : 's'}`)
-    return { target, uses: agg.calls, ok: notes.length === 0, notes }
+    // Only the page's own failures fail it; requests that never reached the server or were never
+    // sent are named, not judged (pageKindIsPagesOwn).
+    const own = mergedFor(target, since, until, pageKindIsPagesOwn).calls
+    const away = agg.calls - own
+    if (own > 0) notes.push(`${own} page error${own === 1 ? '' : 's'}`)
+    const ok = notes.length === 0
+    if (away > 0) notes.push(`${away} request${away === 1 ? '' : 's'} that never reached the server or were never sent (a restart, sleep or the network; not counted)`)
+    return { target, uses: agg.calls, ok, notes }
   }
   const fails = agg.errors + agg.timeouts + agg.badArgs
   const failPct = agg.calls ? Math.round((fails / agg.calls) * 1000) / 10 : 0

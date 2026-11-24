@@ -122,6 +122,18 @@ export type PageRequestHow = 'rejected' | 'failed' | 'timed out' | 'refused'
 const NETWORK_ERROR_RE = /Failed to fetch|Load failed|NetworkError|network connection was lost|Could not connect|ERR_[A-Z_]{4,}/i
 
 /**
+ * Whether a page kind is the page's own failure. A request that failed for the network never
+ * reached the server (it was restarting for a deploy, asleep, or the network was down), and one
+ * the page's connection queue rejected was never sent: their cause is judged where it happened
+ * (the route's slow reads and server errors, Walnut Health's server alarms), never on the page
+ * that showed it (2026-11-24: two deploy restarts made 253 page kinds on the session page, and a
+ * watch on it read 253 errors). Matches the words pageErrorKind writes.
+ */
+export function pageKindIsPagesOwn(kind: string): boolean {
+  return !/ (?:failed|rejected) in the page$/.test(kind)
+}
+
+/**
  * A page's error line as a kind, or null when it is neither a failed request nor an uncaught
  * error (an app's own console.error stays only in the log).
  */
