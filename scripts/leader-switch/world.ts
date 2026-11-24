@@ -2,7 +2,7 @@
  * The leader-switch rehearsal's world, on one computer: two "machines" A and B (each its own
  * folder used as HOME, a data home, a standby target and a machine-id file), three witness
  * directories, and A's config.yaml naming all of it. Shared by the rehearsal
- * (scripts/leader-switch-rehearsal.ts) and its test (tests/e2e/leader-switch-real.test.ts).
+ * (scripts/leader-switch-rehearsal.ts) and its test (tests/e2e/leader-switch-real-*.test.ts).
  *
  * Nothing here reads or writes outside `root`: no ~/.open-walnut, no :3456.
  */

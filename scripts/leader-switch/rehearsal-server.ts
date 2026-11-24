@@ -1,6 +1,6 @@
 /**
  * One server of the leader-switch rehearsal (scripts/leader-switch-rehearsal.ts and
- * tests/e2e/leader-switch-real.test.ts): a real Walnut server on a synthetic home, started by
+ * tests/e2e/leader-switch-real-*.test.ts): a real Walnut server on a synthetic home, started by
  * the switch's LocalSide (leader_switch.machines[].start_command) with its environment from
  * the machine's `env` (HOME, OPEN_WALNUT_HOME, WALNUT_MACHINE_ID_FILE, ... all inside the
  * rehearsal's own folder).

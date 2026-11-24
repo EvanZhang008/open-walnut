@@ -1,6 +1,6 @@
 /**
  * The leader-switch rehearsal's scenarios (scripts/leader-switch-rehearsal.ts runs them and
- * prints one line per check; tests/e2e/leader-switch-real.test.ts asserts them). Real servers
+ * prints one line per check; tests/e2e/leader-switch-real-*.test.ts assert them). Real servers
  * (rehearsal-server.ts) on synthetic homes, the real `walnut leader switch` command as its own
  * process, three local witnesses. Only a Claude CLI is absent (no scenario starts an agent).
  */

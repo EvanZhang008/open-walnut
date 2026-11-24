@@ -269,7 +269,7 @@ export async function restoreOwnDaemonDuties(o: { daemon?: { recheckTriggers(): 
  * the restart heartbeat with `restartingMs`, sent at once, and the regular heartbeats stop, so no
  * later beat clears it. Call it BEFORE the handover record: from that record on this machine may not
  * act, and the outward door `companion-upload` refuses every heartbeat (events-v1.ts), so a notice
- * sent at the stop never leaves (measured, tests/e2e/leader-switch-companion-follow-live-e2e.test.ts).
+ * sent at the stop never leaves (measured, tests/helpers/leader-switch-companion-follow.ts).
  * Returns what the notice said (null: nothing sent). A handover refused or cancelled after it:
  * withdrawSwitchStop.
  */

@@ -648,7 +648,7 @@ the leader's permit boot registers the dialed sockets as a reach (`reachDialedHo
 machine's credential: the record is the credential's Walnut, never the one the body names
 (`tests/core/leader/switch/witness-dialed-door.test.ts`).
 
-**The companion and the phone follow** (`tests/e2e/leader-switch-companion-follow-live-e2e.test.ts`,
+**The companion and the phone follow** (`tests/helpers/leader-switch-companion-follow.ts`, one test file per case,
 real servers and daemons, the companion test cluster). One test second stands for ten product
 seconds: takeover window 6 s for 60 s, commit window (the restart notice) 30 s for 300 s, B late
 36 s for 6 minutes, and the permit's lease 6 s for 60 s (`WALNUT_LEADER_PERMIT_VALID_MS`,
@@ -904,8 +904,8 @@ breaks the copy (a corrupt database, a missing note, an old program, an old-home
 no rule decides) and expects a rollback; `--paths` moves a home to another HOME prefix and checks
 what the [path rules](#paths) did (the main run does too, and scans both homes after each switch);
 `--flag-off` checks that nothing of it runs with the experiment off; `--console` runs the old
-leader's console ([its rehearsal](./leader-switch-console.md#rehearsal)). Its test is
-`tests/e2e/leader-switch-real.test.ts`. The standby copies and promoted homes are read-only, so at
+leader's console ([its rehearsal](./leader-switch-console.md#rehearsal)). Its tests are
+`tests/e2e/leader-switch-real-*.test.ts` (a few scenarios per file, `tests/helpers/leader-switch-real.ts`). The standby copies and promoted homes are read-only, so at
 the end the run makes `<work dir>` writable again and removes it when every check passed (`--keep`
 keeps it); a failed run keeps it, writable, as evidence.
 

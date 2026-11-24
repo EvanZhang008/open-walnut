@@ -51,6 +51,10 @@
  * with LSCF_EVIDENCE_DIR set the servers' and daemons' logs, the may-act logs and the witnesses'
  * record history are copied to <dir>/<case> before the cleanup.
  *
+ * Each case is its own test file (vitest shards by file; one file of both took 495 s of one CI shard,
+ * 2026-11-24): tests/e2e/leader-switch-companion-follow-late-commit-live-e2e.test.ts and
+ * tests/e2e/leader-switch-companion-follow-a-takes-back-live-e2e.test.ts call lateCommitCase and giveUpCase.
+ *
  * The restart notice (measured 2026-11-23): A's heartbeats go through forwardMobileEventToBridge, which
  * a server whose permit no longer lets it act refuses at the outward door `companion-upload`
  * (web/routes/events-v1.ts). Sent at the stop (after the handover record), the notice never left A
@@ -61,15 +65,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
-import { liveWallsAvailable } from '../helpers/live-isolation.js'
-import { daemonCall } from '../helpers/live-daemon.js'
+import { liveWallsAvailable } from './live-isolation.js'
+import { daemonCall } from './live-daemon.js'
 import { homePathClass } from '../../src/core/home-manifest/index.js'
 import { mayActLog, readMayAct, removeMarker, writeMarker, writePromoted } from '../../src/core/leader/switch/records.js'
 import {
   KEEPER, T, api, bootStandby, companionLeads, companionOutwardLog, leaderControl, localDaemonCall, macIsUp, prepareStandby,
   restartPrimary, setupTwinMac, sleep, standingRecord, stopLeaderServer, teardownTwinMac, waitFor, witnessRecords, world,
   type LeaderServer, type WitnessHeld,
-} from '../helpers/live-twin-mac.js'
+} from './live-twin-mac.js'
 
 /** One test second stands for SCALE product seconds (T is 6 s for the 60 s takeover window). */
 const SCALE = 60_000 / T
@@ -573,6 +577,8 @@ function measure(permit: Record<string, unknown>): void {
 
 // ---- case 1: a commit lands late anyway ---------------------------------------------------------
 
+/** Case 1 as its own file: tests/e2e/leader-switch-companion-follow-late-commit-live-e2e.test.ts. */
+export function lateCommitCase(): void {
 describe.skipIf(!liveWallsAvailable())('a late commit lands anyway: the companion and the phone follow from A to B (real servers, real daemons)', () => {
   beforeAll(() => startWorld('late-commit', 'lscf-'), 400_000)
   afterAll(() => endWorld(), 600_000)
@@ -684,9 +690,12 @@ describe.skipIf(!liveWallsAvailable())('a late commit lands anyway: the companio
     expect(replaced.length + new Set(win.map((s) => s.local)).size - 1, 'the two daemons take turns on __local__').toBeGreaterThan(0)
   }, RED_WINDOW_MS + 240_000)
 })
+}
 
 // ---- case 2: B gives up past the window, A takes back (the product's path) -----------------------
 
+/** Case 2 as its own file: tests/e2e/leader-switch-companion-follow-a-takes-back-live-e2e.test.ts. */
+export function giveUpCase(): void {
 describe.skipIf(!liveWallsAvailable())('past the commit window B gives up and A takes back: the companion and the phone follow A again (real servers, real daemons)', () => {
   beforeAll(() => startWorld('give-up', 'lscg-'), 400_000)
   afterAll(() => endWorld(), 600_000)
@@ -772,3 +781,4 @@ describe.skipIf(!liveWallsAvailable())('past the commit window B gives up and A 
     measure({ aAtHandover: f.aPermitAtHandover?.record, handover: f.handover, aBack: { number: f.aPath?.grant?.number, kind: f.aPath?.grant?.kind, afterHandoverMs: f.aPath?.grantAfterHandoverMs, afterABootMs: f.aPath?.grantAfterABootMs } })
   })
 })
+}
