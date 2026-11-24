@@ -23,6 +23,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { inspectSqliteOffThread } from '../../../lib/sqlite.js'
+import { CONFIG_HISTORY_DIR_NAME } from '../../config-history-name.js'
 import type { BatchFile } from '../../standby/types.js'
 import type { SwitchSide } from './side.js'
 import { pickReadBackNote, readBackThroughServer, type ReadBackNote } from '../../trial-start/read-back.js'
@@ -83,23 +84,32 @@ export async function offlineCheck(o: {
   facts: CopyFacts
   home: string
   files: BatchFile[]
+  /**
+   * False on the pass after the trial server ran on the home (a resumed switch): sizes and rows are not compared then,
+   * and the dated copies of config.yaml are not required (a server's config write prunes the oldest: config-history.ts).
+   */
   sizesAndRows?: boolean
   /** The roots the promotion moved (promote.ts moveRoots) and the rule table it used. */
   roots: readonly PathRoot[]
   rules: readonly PathRule[]
-  /** Files a step of the promotion of its own changed (session-hosts.ts): there, too, a size and a row count may move. */
-  changed?: readonly string[]
+  /**
+   * Databases a step of the promotion of its own changed (session-hosts.ts), with the rows it added on purpose: their
+   * size is not compared, their rows are (the copy's plus those).
+   */
+  changed?: Readonly<Record<string, { addedRows: number }>>
 }): Promise<CheckOutcome> {
   const exact = o.sizesAndRows !== false
   let missing = 0
   const paths = leftoverPaths(o.home, o.roots, o.rules)
   const problems: string[] = [...paths.problems]
   // The promotion may have rewritten these (a size changes; a custom rewrite may drop rows).
-  const changed = new Set(o.changed ?? [])
-  const rewritable = (rel: string) => changed.has(rel) || o.rules.some((r) => r.rule === 'rewrite' && ruleCoversFile(r, rel))
-  const rowsChange = (rel: string) => changed.has(rel) || o.rules.some((r) => r.rule === 'rewrite' && r.apply && ruleCoversFile(r, rel))
+  const changed = o.changed ?? {}
+  const rewritable = (rel: string) => Object.hasOwn(changed, rel) || o.rules.some((r) => r.rule === 'rewrite' && ruleCoversFile(r, rel))
+  const rowsChange = (rel: string) => o.rules.some((r) => r.rule === 'rewrite' && r.apply && ruleCoversFile(r, rel))
+  const pruned = (rel: string) => !exact && rel.startsWith(`${CONFIG_HISTORY_DIR_NAME}/`)
   for (const f of o.files) {
     let size = -1
+    if (pruned(f.p)) continue
     if (rewritable(f.p)) { if (!fs.existsSync(path.join(o.home, f.p))) problems.push(`${f.p}: missing`); continue }
     try { size = fs.statSync(path.join(o.home, f.p)).size } catch { /* missing */ }
     if (size < 0 || (exact && size !== f.size)) {
@@ -115,7 +125,7 @@ export async function offlineCheck(o: {
     const had = o.facts.rows[rel]
     counts[rel] = { home: r.rows, copy: had }
     if (!r.ok) problems.push(`${rel}: ${r.detail ?? 'integrity check failed'} in the new home`)
-    else if (exact && had !== undefined && !rowsChange(rel) && r.rows !== had) problems.push(`${rel}: ${r.rows} rows in the new home, ${had} in the copy it was made from`)
+    else if (exact && had !== undefined && !rowsChange(rel) && r.rows !== had + (changed[rel]?.addedRows ?? 0)) problems.push(`${rel}: ${r.rows} rows in the new home, ${had} in the copy it was made from${changed[rel] ? ` (and ${changed[rel]!.addedRows} the promotion added)` : ''}`)
   }))
   return { ok: problems.length === 0, problems, detail: { files: o.files.length, databases: counts, paths: paths.detail } }
 }

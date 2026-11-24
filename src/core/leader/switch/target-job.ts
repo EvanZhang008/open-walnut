@@ -15,7 +15,7 @@ import { verifyStandby, StandbyTarget, standbyStatus } from '../../standby/index
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { appendHistory, lockHolder, promotedFile, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
-import { SESSION_HOSTS_FILE } from './session-hosts.js'
+import { SESSION_HOSTS_FILE, sessionHostsMarked } from './session-hosts.js'
 import { homePathRules } from './home-path-rules.js'
 import { offlineCheck, onlineCheck, readCopyFacts } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
@@ -250,13 +250,15 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           await side.stopServer()
           const files = (await new StandbyTarget(o.standbyDir).current()).files
           // A state from before the facts were kept: read them now (a rewritten database's rows are not compared).
+          const factsAfterRewrite = !s.copyFacts
           s.copyFacts ??= await readCopyFacts(s.targetHome, files)
           const off = await offlineCheck({
             facts: s.copyFacts, home: s.targetHome, files, sizesAndRows: !s.offlineChecked,
             roots: moveRoots({ previousHome: s.sourceHome, home: s.targetHome, ...accountHomes(s) }),
             rules: homePathRules({ skipLedgerRewrite: skipLedger }),
             // Between machines the promotion moved where sessions run (and marked the switch there).
-            ...(s.reverseStandbyHost ? { changed: [SESSION_HOSTS_FILE] } : {}),
+            // This switch's mark there is the one row it added (none to allow for when the facts were read after it).
+            ...(s.reverseStandbyHost ? { changed: { [SESSION_HOSTS_FILE]: { addedRows: !factsAfterRewrite && sessionHostsMarked(s.targetHome, s.id) ? 1 : 0 } } } : {}),
           })
           if (!off.ok) fail(`self-check of the new home: ${off.problems.join('; ')}`)
           if (!s.offlineChecked) {

@@ -119,8 +119,36 @@ describe('the trial\'s offline check of a home whose sessions moved', () => {
     const plain = await offlineCheck(o)
     expect(plain.ok).toBe(false)
     expect(plain.problems.join('; ')).toMatch(/sessions\.sqlite/)
-    const told = await offlineCheck({ ...o, changed: ['sessions.sqlite'] })
+    const told = await offlineCheck({ ...o, changed: { 'sessions.sqlite': { addedRows: 1 } } })
     expect(told.problems).toEqual([])
     expect(told.ok).toBe(true)
+    // The rows are still compared: a session row lost on the way fails it.
+    const db = new Database(path.join(home, 'sessions.sqlite'))
+    db.prepare("DELETE FROM sessions WHERE claude_session_id = 'on-h'").run()
+    db.close()
+    const lost = await offlineCheck({ ...o, changed: { 'sessions.sqlite': { addedRows: 1 } } })
+    expect(lost.problems.join('; ')).toMatch(/sessions\.sqlite: \d+ rows in the new home, \d+ in the copy it was made from \(and 1 the promotion added\)/)
+    const { sessionHostsMarked } = await import('../../../../src/core/leader/switch/session-hosts.js')
+    expect(sessionHostsMarked(home, 's1')).toBe(true)
+    expect(sessionHostsMarked(home, 's2')).toBe(false)
+  })
+})
+
+describe('the offline check after the trial server ran (a resumed switch)', () => {
+  it('does not require the dated copies of config.yaml, which a server\'s config write prunes; every other file it does', async () => {
+    const { offlineCheck, readCopyFacts } = await import('../../../../src/core/leader/switch/self-check.js')
+    const { moveRoots } = await import('../../../../src/core/leader/switch/promote.js')
+    const { homePathRules } = await import('../../../../src/core/leader/switch/home-path-rules.js')
+    const home = path.join(root, 'home')
+    fs.mkdirSync(path.join(home, 'config.yaml.history'), { recursive: true })
+    fs.mkdirSync(path.join(home, 'notes'), { recursive: true })
+    fs.writeFileSync(path.join(home, 'notes', 'a.md'), '# a\n')
+    const files = [{ p: 'config.yaml.history/config-20261124T072034.846Z-751cac566548.yaml', size: 10, h: 'x' }, { p: 'notes/a.md', size: 4, h: 'y' }] as unknown as import('../../../../src/core/standby/types.js').BatchFile[]
+    const o = { facts: await readCopyFacts(home, files), home, files, roots: moveRoots({ previousHome: '/old/home', home }), rules: homePathRules() }
+    // The first pass (no server ran yet) requires the copy: red control for the rule below.
+    expect((await offlineCheck(o)).problems.join('; ')).toMatch(/config\.yaml\.history\/config-20261124T072034\.846Z-751cac566548\.yaml: missing/)
+    expect((await offlineCheck({ ...o, sizesAndRows: false })).problems).toEqual([])
+    fs.rmSync(path.join(home, 'notes', 'a.md'))
+    expect((await offlineCheck({ ...o, sizesAndRows: false })).problems.join('; ')).toMatch(/notes\/a\.md: missing/)
   })
 })

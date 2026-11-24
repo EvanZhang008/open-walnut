@@ -35,6 +35,19 @@ export interface SessionHostsMove {
   newMachine?: string
 }
 
+/** Whether this step ran for `switchId` in `home` (its mark is the one row it adds: the trial's row count allows for it). */
+export function sessionHostsMarked(home: string, switchId: string): boolean {
+  const file = path.join(home, SESSION_HOSTS_FILE)
+  if (!fs.existsSync(file)) return false
+  const db = new Database(file, { readonly: true })
+  try {
+    if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '${DONE_TABLE}'`).get()) return false
+    return !!db.prepare(`SELECT 1 FROM ${DONE_TABLE} WHERE switch_id = ?`).get(switchId)
+  } finally {
+    db.close()
+  }
+}
+
 export interface SessionHostsResult { toOldMachine: number; toOwnDaemon: number; alreadyDone: boolean }
 
 export function moveSessionHosts(home: string, switchId: string, move: SessionHostsMove): SessionHostsResult {
