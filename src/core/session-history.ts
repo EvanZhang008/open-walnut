@@ -1583,7 +1583,7 @@ async function readSessionHistoryRangeHere(
   const statPath = st.path;
   const stop = Math.min(end, st.size);
   if (start >= stop) return { messages: [], fileSize: st.size, epoch: st.epoch };
-  const { readKeptJsonlLineWindow } = await import('./jsonl-window.js');
+  const { readKeptJsonlLineWindow, isKeptJsonlLineWindow } = await import('./jsonl-window.js');
   const file = st.epoch === undefined ? undefined : `${daemonHost}\u0000${statPath}\u0000${st.epoch}`;
   const text = await readKeptJsonlLineWindow(reader, statPath, file, start, stop, DaemonFileReader.maxReadBytes());
   if (text === null) return null;
@@ -1591,14 +1591,21 @@ async function readSessionHistoryRangeHere(
   const first = stamps[0]?.slice(13, -1);
   const last = stamps[stamps.length - 1]?.slice(13, -1);
   let merged = text;
+  let injected: string[] = [];
   if (first && last) {
-    const injected = (await mergeSyntheticUserEvents(sessionId, '')).split('\n').filter((line) => {
+    injected = (await mergeSyntheticUserEvents(sessionId, '')).split('\n').filter((line) => {
       const ts = /"timestamp":"([^"]+)"/.exec(line)?.[1];
       return ts !== undefined && ts >= first && ts <= last;
     });
     if (injected.length > 0) merged = text + '\n' + injected.join('\n');
   }
-  const messages = parseSessionMessages(merged, start > 0 ? { startsMidFile: true } : undefined);
+  // The same bytes of the same file incarnation parse the same: kept (history-window-parsed.ts).
+  const { keepParsedWindow, keptParsedWindow, parsedWindowKey } = await import('./history-window-parsed.js');
+  // Only a window read complete (its text kept): a last line still being written may grow.
+  const parsedKey = file === undefined || !isKeptJsonlLineWindow(file, start, stop) ? undefined : parsedWindowKey(file, start, stop, injected);
+  const hit = parsedKey === undefined ? undefined : keptParsedWindow(parsedKey);
+  const messages = hit ?? parseSessionMessages(merged, start > 0 ? { startsMidFile: true } : undefined);
+  if (!hit && parsedKey !== undefined) keepParsedWindow(parsedKey, messages, merged.length);
   try {
     const { bindEchoClaims } = await import('./echo-claims.js');
     bindEchoClaims(sessionId, messages);

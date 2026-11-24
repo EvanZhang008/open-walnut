@@ -194,6 +194,11 @@ export async function readKeptJsonlLineWindow(
   return got.text;
 }
 
+/** Whether this window's text is kept: read complete, so its bytes no longer change. */
+export function isKeptJsonlLineWindow(file: string, start: number, stop: number): boolean {
+  return keptWindows.has(`${file}\u0000${start}\u0000${stop}`);
+}
+
 /** Test seam: forget every kept window. */
 export function _resetKeptWindowsForTests(): void {
   keptWindows.clear();
