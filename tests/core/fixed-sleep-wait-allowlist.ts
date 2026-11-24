@@ -595,6 +595,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/web/routes/bridge-replica-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: the task-op queue stays empty" },
   { file: "tests/web/routes/client-evidence.test.ts", sleep: "await new Promise(r => setTimeout(r, 2));", reason: "time under test: file names use Date.now(), so posts are spaced one tick apart" },
   { file: "tests/web/routes/companion-attachments-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: the real clock moves past macNow so the Mac write is newer" },
+  { file: "tests/web/routes/connect-door.test.ts", sleep: "await new Promise((res) => setTimeout(res, 1_500))", reason: "negative: past the 1 s debounce of the host network sync, a pairing while the network is off never turns it back on" },
   { file: "tests/web/routes/devices-adopt-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 150))", reason: "negative: no further revoke retry once it landed (count reached by waitFor above)" },
   { file: "tests/web/routes/devices-adopt-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 150))", reason: "negative: an older primary is not retried (first frame awaited above)" },
   { file: "tests/web/routes/devices-adopt-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 150))", reason: "negative: no fourth ask after the removal answer (three awaited above)" },

@@ -101,6 +101,9 @@ const PROBES_ITS_FIXTURE = [
   'AgentTextLinksUITests', 'BoardOrderParityUITests', 'DemoModeUITests', 'InboxSelectUITests', 'LetterReplyUITests',
   'MidTurnQueueUITests', 'ModelPillHealUITests', 'ProvenanceAndInboxUITests', 'ReplySuggestUITests', 'SendOnceUITests',
   'SessionMidTurnOrderUITests', 'SessionStreamStormUITests',
+  // Its isolated server is a live Walnut a run names (/tmp/walnut-connect-live.json); it
+  // skips without one, before it touches the pasteboard prompt on the home screen.
+  'WalnutConnectLiveUITests',
 ]
 
 describe('the iOS job in ci.yml', () => {

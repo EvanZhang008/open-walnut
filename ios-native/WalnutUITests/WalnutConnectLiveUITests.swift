@@ -4,13 +4,14 @@ import XCTest
 /// carries a Walnut Connect key, reaches a Walnut it has no address for (no Wi-Fi route, no
 /// companion), and loads its board through the Rust library's encrypted stream.
 ///
-/// Skips unless a run names a live, isolated Walnut: `/tmp/walnut-connect-live.json` on the Mac
+/// Needs its own isolated server, and skips unless a run names one: `/tmp/walnut-connect-live.json` on the Mac
 /// (or `WALNUT_CONNECT_LIVE` with the same JSON in the runner's environment):
 /// `{"link": "wn://pair?...&connect=...", "port": 41234, "task": "a task title on that board"}`.
 /// docs/reference/walnut-connect.md says how a run makes one (an ephemeral Walnut on a dev box).
 final class WalnutConnectLiveUITests: XCTestCase {
     private struct Live: Decodable { let link: String; let port: Int; let task: String? }
 
+    /// The isolated server this run names, or a skip.
     private func live() throws -> Live {
         let raw = ProcessInfo.processInfo.environment["WALNUT_CONNECT_LIVE"].map { Data($0.utf8) }
             ?? FileManager.default.contents(atPath: "/tmp/walnut-connect-live.json")
