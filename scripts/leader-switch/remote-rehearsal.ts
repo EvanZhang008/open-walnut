@@ -253,7 +253,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   }
   const after = (await w.api(B, 'GET', '/api/tasks?project=Rehearsal%20load')).json?.tasks?.length ?? -2
   c.add('main: nothing sent twice (A\'s last accepted ops replayed on B apply none twice)', replayed === Math.min(5, acked.length) && before === after, `${replayed} replays; tasks ${before} -> ${after}`)
-  checkOneLeader(c, 'main A -> B', A, B, { stoppedAt: tgt?.stoppedAt })
+  checkOneLeader(c, 'main A -> B', A, B, { stoppedAt: tgt?.stoppedAt, startedAt: sw.state?.startedAt })
   // Hosts follow: H and the old machine A connected to B.
   const tHosts = Date.now()
   const followed = await waitFor('every host connected to B', async () => hostsConnected(w, B, [w.h.id, A.id]), 180_000, 1_000).then(() => true).catch(() => false)
@@ -330,7 +330,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   times['downtime B -> A (switch back), copy link unslowed'] = `${((tb?.downtimeMs ?? NaN) / 1000).toFixed(1)} s`
   c.add('main: A leads again', !!(await status(w, A))?.mayAct)
   await checkCarried(c, w, A, B, { tasks: [...s.tasks, ...acked, ...onBWrites], notes: s.notes, pluginFiles: [...s.pluginFiles, late] }, 'main B -> A')
-  checkOneLeader(c, 'main B -> A', B, A, { stoppedAt: tb?.stoppedAt })
+  checkOneLeader(c, 'main B -> A', B, A, { stoppedAt: tb?.stoppedAt, startedAt: back.state?.startedAt })
   c.add('main: A\'s handed-over home is kept beside the new one', fs.existsSync(`${A.home}.before-${back.state!.id}`) && readMarker(`${A.home}.before-${back.state!.id}`)?.state === 'handed-over')
 }
 
@@ -340,6 +340,11 @@ interface Ctx { c: Checks; w: RemoteWorld; roles: Roles; carried: { tasks: Seede
 
 /** The kill points in the target job (on the new leader's machine): resumed there by hand; the rest in the source job, resumed with --resume. */
 const TARGET_KILLS = new Set<string>(['during-wait-mark', 'during-promote', 'after-promote', 'during-trial', 'after-commit-majority', 'after-commit'])
+/** The step each kill point dies in: the target job's state (target-job.ts), or the source job's (source-job.ts). */
+const KILL_STEP: Record<typeof KILL_POINTS[number], string> = {
+  'during-wait-mark': 'wait-mark', 'after-handover': 'stop-source', 'during-final-batch': 'stop-source', 'during-promote': 'promote',
+  'after-promote': 'trial', 'during-trial': 'trial', 'after-commit-majority': 'commit', 'after-commit-seen': 'wait-target', 'after-commit': 'start-target',
+}
 
 /** The machine's key in the world, for its links. */
 const keyOf = (w: RemoteWorld, m: Machine): 'a' | 'b' => (m === w.a ? 'a' : 'b')
@@ -674,11 +679,13 @@ async function kills(x: Ctx): Promise<void> {
     const L = roles.leader
     const target = TARGET_KILLS.has(point)
     let resumedOn = ''
+    let diedAt = ''
     const r = await runSwitch(x, `kill ${point}`, {
       env: { WALNUT_LEADER_SWITCH_KILL_AT: point },
       during: target ? async (from, to) => {
         const st = await deadTarget(w, from, 300_000)
         if (!st) return
+        diedAt = readTargetState(st.standbyDir, st.id)?.step ?? ''
         const res = await resumeTargetOn(w, to, st)
         resumedOn = `${to.id} (exit ${res.code})`
       } : undefined,
@@ -690,15 +697,18 @@ async function kills(x: Ctx): Promise<void> {
       resumedOn = `${L.id} (exit ${final.code})`
       if (final.state?.step === 'done' && final.target?.step === 'done') { roles.leader = roles.other; roles.other = L }
     }
-    // The kill happened where it was asked: the source job died there (exit 4, the command saying so), or the
-    // target job was found dead there and resumed.
-    const killed = target ? resumedOn !== '' : r.code === 4 && /died|stopped at/.test(r.out)
-    c.add(`kill ${point}: the ${target ? 'target' : 'source'} job died there`, killed, `first exit ${r.code}; ${last(r.out, 1)}`)
+    // The kill happened where it was asked: the source job died in that step (exit 4, the command naming it), or the
+    // target job was found dead in it and resumed.
+    if (!target) diedAt = /died at step (\S+)/.exec(r.out)?.[1] ?? ''
+    const killed = (target ? resumedOn !== '' : r.code === 4) && diedAt === KILL_STEP[point]
+    c.add(`kill ${point}: the ${target ? 'target' : 'source'} job died in its step ${KILL_STEP[point]}`, killed, `first exit ${r.code}; died at ${diedAt || 'no step'}; ${last(r.out, 1)}`)
     // Resumed at once, every kill point finishes the switch (as on one machine, rehearsal.ts rehearseKill):
     // a roll back here is a bug of the resume, never an allowed answer.
     const done = final.state?.step === 'done' && final.target?.step === 'done'
     c.add(`kill ${point}: the resumed switch finishes, both jobs done, no roll back`, done && !final.state?.rollbackWhy && !final.target?.rollbackWhy, `first exit ${r.code}; resumed on ${resumedOn || 'none'}; source ${final.state?.step}; target ${final.target?.step}; ${(final.state?.rollbackWhy ?? final.target?.rollbackWhy)?.slice(0, 160) ?? 'no roll back'}`)
     await oneLeader(x, `kill ${point}`, roles.leader)
+    // The stricter check too (the old leader acted only before it stopped, the new one only after): the switch finished.
+    if (done) checkOneLeader(c, `kill ${point}`, L, roles.leader, { stoppedAt: final.state?.stoppedAt, startedAt: final.state?.startedAt })
     await checkCarried(c, w, roles.leader, L, x.carried, `kill ${point}`)
   }
 }

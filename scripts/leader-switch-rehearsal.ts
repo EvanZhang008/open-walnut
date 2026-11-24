@@ -23,6 +23,7 @@
  * or slows; it is not part of `--all` (`--only` picks scenarios, `--gb N` the size for the downtime runs).
  */
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { rehearseConsole } from './leader-switch/console-rehearsal.js'
 import { rehearseLateWriter, rehearseLauncherRace, rehearseServerKilledInFinalBatch, rehearseSignalInFinalBatch, rehearseStopWait } from './leader-switch/stop-rehearsal.js'
@@ -38,6 +39,13 @@ const has = (f: string) => args.includes(f)
 const gbAt = args.indexOf('--gb')
 const gb = gbAt >= 0 ? Number(args[gbAt + 1]) : 0
 const all = has('--all')
+// What ran, first in the log: its commit and whether the tree had changes beside it (an evidence log names its code).
+{
+  const repo = path.resolve(import.meta.dirname, '..')
+  const git = (a: string[]) => { try { return execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }) } catch { return '' } }
+  const changed = git(['status', '--porcelain', '--untracked-files=no']).split('\n').filter((l) => l.trim())
+  console.log(`REHEARSAL  commit ${git(['rev-parse', 'HEAD']).trim() || 'unknown'}, tree ${changed.length ? `with ${changed.length} changed file(s): ${changed.slice(0, 5).map((l) => l.slice(3)).join(', ')}` : 'clean'}; args ${args.slice(1).join(' ')}; ${new Date().toISOString()}`)
+}
 const work = path.resolve(root, new Date().toISOString().replace(/[:.]/g, '-'))
 fs.mkdirSync(work, { recursive: true })
 

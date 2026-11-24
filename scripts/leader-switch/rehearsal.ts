@@ -154,16 +154,18 @@ export async function checkCarried(c: Checks, w: World, to: Machine, from: Machi
 }
 
 /** At no instant do both machines act: from the two homes' permission logs and their door calls. */
-export function checkOneLeader(c: Checks, label: string, a: Machine, b: Machine, handoverAt: { stoppedAt?: string; commitAt?: string }): void {
+export function checkOneLeader(c: Checks, label: string, a: Machine, b: Machine, handoverAt: { stoppedAt?: string; startedAt?: string }): void {
   const la = readMayAct(a.home)
   const lb = readMayAct(b.home)
   const lastActA = Math.max(0, ...la.filter((l) => l.mayAct).map((l) => l.t))
-  const firstActB = Math.min(Infinity, ...lb.filter((l) => l.mayAct && l.t > (handoverAt.stoppedAt ? Date.parse(handoverAt.stoppedAt) - 60_000 : 0)).map((l) => l.t))
+  // b's acting since this switch began (an earlier lead of b, before it handed over to a, is not this switch's).
+  const since = handoverAt.startedAt ? Date.parse(handoverAt.startedAt) : handoverAt.stoppedAt ? Date.parse(handoverAt.stoppedAt) - 60_000 : 0
+  const firstActB = Math.min(Infinity, ...lb.filter((l) => l.mayAct && l.t > since).map((l) => l.t))
   const stopped = handoverAt.stoppedAt ? Date.parse(handoverAt.stoppedAt) : NaN
   const doorsA = la.filter((l) => l.event === 'door' && l.mayAct)
   const doorsB = lb.filter((l) => l.event === 'door' && l.mayAct)
   const overlap = doorsA.filter((l) => l.t >= firstActB)
-  c.add(`${label}: ${a.id} acted only before it stopped, ${b.id} only after the commit`, lastActA <= stopped && firstActB > stopped && overlap.length === 0,
+  c.add(`${label}: ${a.id} acted only before it stopped, ${b.id} only after that`, lastActA <= stopped && firstActB > stopped && overlap.length === 0,
     `${a.id}: last 'may act' at ${iso(lastActA)}, stopped ${handoverAt.stoppedAt}; ${b.id}: first 'may act' at ${iso(firstActB)}; doors allowed ${doorsA.length} on ${a.id}, ${doorsB.length} on ${b.id}`)
   // Kinds whose op id names one operation (a mail, a routine slot, a trigger fire); a periodic
   // upload's op id is a label of its kind, and the time check above covers it.
@@ -278,7 +280,7 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     }
     const after = (await w.api(w.b, 'GET', '/api/tasks?project=Rehearsal%20load')).json?.tasks?.length ?? -2
     c.add("replaying A's last accepted ops on B applies none twice", replayed === replay.length && before === after, `${replayed}/${replay.length} answered as replays; tasks ${before} -> ${after}`)
-    checkOneLeader(c, 'A -> B', w.a, w.b, { stoppedAt: st?.stoppedAt })
+    checkOneLeader(c, 'A -> B', w.a, w.b, { stoppedAt: st?.stoppedAt, startedAt: st?.startedAt })
     // The routine: every slot that went through the door went through it on one machine, once.
     const cronA = cronDoorCalls(w.a.home).filter((l) => l.mayAct)
     await sleep(17_000) // one more period of the 15 s routine, so a slot due during the switch is caught up on B
