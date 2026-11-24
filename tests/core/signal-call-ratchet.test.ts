@@ -83,6 +83,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/core/time-tracking/outside-collector.ts': 1,// its own collector child's group
   'src/integrations/git-bundle-client.ts': 1,      // its own git child's group
   'src/integrations/git-sync.ts': 2,               // its own git children's groups
+  'src/integrations/git-children.ts': 1,           // a leader switch's stop ends this server's own git children's groups (quietGitWriters)
   'src/providers/port-scan-core.ts': 1,            // the dev server a person's Stop named, re-proved by a fresh scan (its session's env, its group holding nothing guarded, its start time) right before the signal
   'src/providers/acp-daemon.ts': 9,                // ACP workers the daemon spawned (a straggler only while ps proves it is one; a surviving worker whose pipe failed right after its own spawn)
   'src/providers/daemon-process-groups.ts': 4,     // the daemon's session CLI groups (it spawned them detached): its signal, liveness probe and kill ladder; every pid comes from callers in daemon-standalone.ts that prove it first
