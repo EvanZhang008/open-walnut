@@ -1,7 +1,7 @@
 import path from 'node:path'
 import {
-  DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME, SERVICE_SET_ENV,
-  defaultInstallRootUnder, isServiceSetId, serviceSetNames, type ServiceSet,
+  DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME,
+  defaultInstallRootUnder, isServiceSetId, serviceSetEnv, serviceSetNames, type ServiceSet,
 } from './service-set.js'
 
 export { DAEMON_SERVICE_LABEL, DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME } from './service-set.js'
@@ -117,8 +117,8 @@ function serviceEnv(config: CheckedConfig): [string, string][] {
     ['PATH', config.path],
     ['WALNUT_DAEMON_DIR', config.runtimeDir],
     ['WALNUT_DAEMON_STATE_DIR', config.stateDir],
-    // Only a set's: the default's unit and plist stay byte for byte as they were.
-    ...(config.serviceSet ? [[SERVICE_SET_ENV, config.serviceSet] as [string, string]] : []),
+    // Only a set's (its id, its own runtime-tree dir): the default's unit and plist stay byte for byte as they were.
+    ...serviceSetEnv(config.serviceSet, config.stateDir),
   ]
 }
 

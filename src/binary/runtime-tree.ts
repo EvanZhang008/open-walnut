@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { unpackArchive } from './asset-archive.js'
+import { isServiceSetRuntimeTreesDir } from '../providers/service-set.js'
 
 /** Written last into an unpacked tree; its content is the build's id. */
 export const RUNTIME_MARKER = '.walnut-runtime'
@@ -119,6 +120,29 @@ export function pruneRuntimes(parent: string, keepId: string, now = Date.now()):
 }
 
 /**
+ * Whether a start with this env prunes other builds' trees beside its own: in the data home's (or
+ * the temp) dir, and in a service set's own dir (`<set install root>/runtime`, service-set.ts
+ * serviceSetEnv), whose one owner is that set's service. Never in another WALNUT_RUNTIME_DIR.
+ */
+export function prunesRuntimePlace(env: NodeJS.ProcessEnv): boolean {
+  const override = env.WALNUT_RUNTIME_DIR
+  return !override || isServiceSetRuntimeTreesDir(override, env.HOME || os.homedir())
+}
+
+/**
+ * A run whose tree may be one Walnut's in another Walnut's data home: the on-host CLI (`<file> walnut
+ * ...`, `wn` the old alias) on a line that names a Walnut (`--walnut <id>`, the experiment
+ * host_service_sets: a leader's `walnut daemon ...` line for its own service set). Which set the line
+ * acts on the host decides later; until then this run unpacks where it always did but prunes nothing
+ * there, so a set's update never deletes a tree the default Walnut runs from. `argv` is process.argv.
+ */
+export function mayPruneForArgv(argv: readonly string[], execPath: string): boolean {
+  let at = 2
+  if (argv[at] !== undefined && (argv[at] === argv[1] || argv[at] === execPath)) at++
+  return !((argv[at] === 'walnut' || argv[at] === 'wn') && argv.includes('--walnut'))
+}
+
+/**
  * Make sure this build's tree exists; returns its root. Falls back to the temp dir when the data home is not writable.
  *
  * WALNUT_RUNTIME_DIR names the PARENT of the per-build trees, never one tree: a
@@ -127,16 +151,18 @@ export function pruneRuntimes(parent: string, keepId: string, now = Date.now()):
  * started from one of those children (another compiled file run from a session)
  * then unpacks beside it, instead of replacing the tree a running server serves
  * its web app from. Nothing is pruned there: the dir's owner removes it whole.
+ * A service set's own dir is the exception (prunesRuntimePlace), and `prune: false`
+ * (a run that may be another Walnut's in this data home: runtime-root.ts) prunes nowhere.
  */
-export function ensureRuntime(archivePath: string, id: string): string {
-  const override = process.env.WALNUT_RUNTIME_DIR
+export function ensureRuntime(archivePath: string, id: string, o: { prune?: boolean } = {}): string {
+  const prune = o.prune !== false && prunesRuntimePlace(process.env)
   const roots = runtimeRootsFor(process.env, id)
   let lastError: unknown = null
   for (const root of roots) {
     if (isComplete(root, id)) return root
     try {
       unpackRuntime(root, fs.readFileSync(archivePath), id)
-      if (!override) pruneRuntimes(path.dirname(root), id)
+      if (prune) pruneRuntimes(path.dirname(root), id)
       return root
     } catch (err) {
       lastError = err

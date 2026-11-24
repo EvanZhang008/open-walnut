@@ -16,7 +16,7 @@
  */
 import path from 'node:path'
 import { checkDaemonServiceConfig, DAEMON_BOOT_SCRIPT_NAME, type DaemonServiceConfig } from './daemon-service-config.js'
-import { DAEMON_CRON_TAG, serviceSetExportLine } from './service-set.js'
+import { DAEMON_CRON_TAG, serviceSetExportLines, shq } from './service-set.js'
 
 export { DAEMON_BOOT_SCRIPT_NAME } from './daemon-service-config.js'
 export const DAEMON_BOOT_STOP_NAME = 'daemon-boot.stop'
@@ -30,10 +30,8 @@ export const DAEMON_BOOT_SCRIPT_HEADER = '# Open Walnut session daemon, started 
 export const BOOT_FAIL_WINDOW_S = 60
 export const BOOT_FAIL_LIMIT = 5
 
-/** sh single quotes: everything literal, a quote closed, escaped and reopened. */
-export function shq(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
+/** sh single quotes (service-set.ts, which needs it first): kept here for its importers. */
+export { shq } from './service-set.js'
 
 function unshq(word: string): string | null {
   const parts = word.match(/^(?:'[^']*'|\\')+$/)
@@ -58,7 +56,7 @@ export function renderDaemonBootScript(config: DaemonServiceConfig): string {
     `export PATH=${shq(c.path)}`,
     `export WALNUT_DAEMON_DIR=${shq(c.runtimeDir)}`,
     `export WALNUT_DAEMON_STATE_DIR=${shq(c.stateDir)}`,
-    ...(c.serviceSet ? [serviceSetExportLine(c.serviceSet)] : []),
+    ...serviceSetExportLines(c.serviceSet, c.stateDir),
     'export WALNUT_DAEMON_SUPERVISOR=cron',
     'umask 077',
     'cd "$HOME" || exit 1',

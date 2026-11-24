@@ -10,7 +10,8 @@
  *
  *   <OPEN_WALNUT_HOME or ~/.open-walnut>/local/runtime/<version>-<hash>/
  *
- * (`local/` never syncs; WALNUT_RUNTIME_DIR replaces `.../local/runtime`), laid out
+ * (`local/` never syncs; WALNUT_RUNTIME_DIR replaces `.../local/runtime`: a service set's
+ * service names its own, service-set.ts serviceSetEnv), laid out
  * like an installed package: package.json, dist/data, dist/web/static, ... The
  * build defines `import.meta.url` as `globalThis.__WALNUT_BUNDLE_URL__`, set
  * here to `<root>/dist/cli.js`, which is where a tsup build would put the code,
@@ -20,7 +21,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ASSETS_ARCHIVE, ASSETS_ID, DAEMON_VERSION } from 'walnut-binary:assets'
 import { BUNDLED_MODULES } from './bundled-modules.js'
-import { ensureRuntime } from './runtime-tree.js'
+import { ensureRuntime, mayPruneForArgv } from './runtime-tree.js'
 import { fileIdentity, setSingleFile } from '../lib/single-file.js'
 import { demoRuntimeForArgv } from '../commands/demo-home.js'
 
@@ -34,7 +35,7 @@ try {
   process.exit(1)
 }
 
-export const runtimeRoot = ensureRuntime(ASSETS_ARCHIVE, ASSETS_ID)
+export const runtimeRoot = ensureRuntime(ASSETS_ARCHIVE, ASSETS_ID, { prune: mayPruneForArgv(process.argv, process.execPath) })
 ;(globalThis as Record<string, unknown>).__WALNUT_BUNDLE_URL__ = pathToFileURL(path.join(runtimeRoot, 'dist', 'cli.js')).href
 // The file as it is now, before an update can replace it (execFileReplaced).
 setSingleFile({ root: runtimeRoot, daemonVersion: DAEMON_VERSION, modules: BUNDLED_MODULES, execId: fileIdentity(process.execPath) })

@@ -193,6 +193,7 @@ describe('the files a set renders name its set', () => {
     expect(unit).toContain(`Environment="WALNUT_SERVICE_SET=${ID}"`)
     expect(unit).toContain(`Environment="WALNUT_DAEMON_DIR=${R}/rt"`)
     expect(unit).toContain(`Environment="WALNUT_DAEMON_STATE_DIR=${R}/daemon"`)
+    expect(unit).toContain(`Environment="WALNUT_RUNTIME_DIR=${R}/daemon/runtime"`)
     const mac = serviceSet('darwin', HOME, ID, { uid: 501 })
     const plist = renderDaemonLaunchAgent(config(mac, 'darwin'))
     expect(plist).toContain(`<string>dev.openwalnut.session-daemon.${ID}</string>`)
@@ -208,9 +209,12 @@ describe('the files a set renders name its set', () => {
       const lines = L.render(config(set), `${set.installRoot}/versions/abc/daemon`).split('\n')
       const at = lines.findIndex((l) => l.startsWith('export WALNUT_DAEMON_STATE_DIR='))
       expect(lines[at + 1], backend).toBe(`export WALNUT_SERVICE_SET='${ID}'`)
+      // The walnut file's runtime trees in the set's own root, never the default Walnut's data home (R1).
+      expect(lines[at + 2], backend).toBe(`export WALNUT_RUNTIME_DIR='${R}/daemon/runtime'`)
     }
-    expect(() => withServiceSetExport('#!/bin/sh\n', ID)).toThrow(/WALNUT_DAEMON_STATE_DIR/)
-    expect(withServiceSetExport('anything', '')).toBe('anything')
+    expect(boot.split('\n')).toContain(`export WALNUT_RUNTIME_DIR='${R}/daemon/runtime'`)
+    expect(() => withServiceSetExport('#!/bin/sh\n', ID, set.installRoot)).toThrow(/WALNUT_DAEMON_STATE_DIR/)
+    expect(withServiceSetExport('anything', '', set.installRoot)).toBe('anything')
   })
 
   it('the cron lines carry the set\'s tag: neither set reads the other\'s line as its own or as foreign', () => {

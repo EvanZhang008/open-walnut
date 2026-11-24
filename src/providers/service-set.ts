@@ -12,7 +12,9 @@
  *
  * R/run (the follower's run dir) and R/rt are siblings, never nested (replica/boot-guard.ts).
  * Shared on purpose by every set: the machine id and cli-owners. walnut-net is not: a set runs its own
- * (net-config-core.ts netStateDir, `R/net`), and the machine's stays the default set's.
+ * (net-config-core.ts netStateDir, `R/net`), and the machine's stays the default set's. Nor is the
+ * compiled walnut file's runtime tree: a set's service unpacks it under `R/daemon/runtime`
+ * (serviceSetEnv), never in the default Walnut's `~/.open-walnut/local/runtime`, which it would prune.
  *
  * The one place the service names and the default install root are spelled; daemon-service-config.ts
  * and daemon-service-boot-script.ts re-export them for their older importers. Imports only node:path:
@@ -132,25 +134,64 @@ export function isServiceSetRuntimeDir(dir: string, home: string | null | undefi
   return isServiceSetId(id) && path.dirname(path.dirname(resolved)) === path.resolve(home, SERVICE_SETS_SUBDIR)
 }
 
-/** A set's line in a shell script that runs its daemon (the boot script, the launcher); '' for the default. */
-export function serviceSetExportLine(id: string | undefined): string {
-  if (!id) return ''
-  if (!isServiceSetId(id)) throw new Error(`not a service set id: ${JSON.stringify(id)}`)
-  return `export ${SERVICE_SET_ENV}='${id}'`
+/** The compiled walnut file's runtime place (runtime-tree.ts RUNTIME_PLACE_ENV), which decides alone when set. */
+export const RUNTIME_DIR_ENV = 'WALNUT_RUNTIME_DIR'
+/** Where a set's service keeps the walnut file's unpacked runtime trees, in its install root. */
+export const SET_RUNTIME_TREES_SUBDIR = 'runtime'
+
+/** The parent of a set's runtime trees (WALNUT_RUNTIME_DIR of its service): `<install root>/runtime`. */
+export function serviceSetRuntimeTreesDir(installRoot: string): string {
+  return path.join(installRoot, SET_RUNTIME_TREES_SUBDIR)
 }
 
 /**
- * `script` with the set's export after its WALNUT_DAEMON_STATE_DIR line: cron runs the script with
+ * Is `dir` a set's runtime-tree parent (`<home>/.open-walnut-host/walnuts/<id16>/daemon/runtime`)?
+ * The file prunes old builds' trees there as it does in its own data home: the set owns that dir
+ * alone (runtime-tree.ts ensureRuntime). Never the default set's or any other dir.
+ */
+export function isServiceSetRuntimeTreesDir(dir: string, home: string | null | undefined): boolean {
+  if (!home || !path.isAbsolute(home) || !path.isAbsolute(dir)) return false
+  const resolved = path.resolve(dir)
+  const id = path.basename(path.dirname(path.dirname(resolved)))
+  return isServiceSetId(id) && resolved === serviceSetRuntimeTreesDir(path.join(serviceSetBase(home, id), 'daemon'))
+}
+
+/**
+ * The env only a set's service carries (its unit, plist, boot script and launcher), after the
+ * default's: its id, and the walnut file's runtime place under its own install root, so a start of
+ * the file never unpacks into, or prunes, the default Walnut's `~/.open-walnut/local/runtime`
+ * (2026-11-24 real-systemd drill). [] for the default set, whose files stay byte for byte as they were.
+ * Every path a set's service derives from its env is listed in
+ * tests/providers/service-set-default-paths-guard.test.ts.
+ */
+export function serviceSetEnv(id: string | undefined, installRoot: string): Array<[string, string]> {
+  if (!id) return []
+  if (!isServiceSetId(id)) throw new Error(`not a service set id: ${JSON.stringify(id)}`)
+  return [[SERVICE_SET_ENV, id], [RUNTIME_DIR_ENV, serviceSetRuntimeTreesDir(installRoot)]]
+}
+
+/** sh single quotes: everything literal, a quote closed, escaped and reopened. */
+export function shq(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/** A set's lines in a shell script that runs its daemon (the boot script, the launcher); none for the default. */
+export function serviceSetExportLines(id: string | undefined, installRoot: string): string[] {
+  return serviceSetEnv(id, installRoot).map(([key, value]) => `export ${key}=${shq(value)}`)
+}
+
+/**
+ * `script` with the set's exports after its WALNUT_DAEMON_STATE_DIR line: cron runs the script with
  * none of the unit's environment, so the script itself names the set. The default's script stays
  * byte for byte as it was.
  */
-export function withServiceSetExport(script: string, id: string | undefined): string {
-  const line = serviceSetExportLine(id)
-  if (!line) return script
+export function withServiceSetExport(script: string, id: string | undefined, installRoot: string): string {
+  const exports = serviceSetExportLines(id, installRoot)
+  if (exports.length === 0) return script
   const lines = script.split('\n')
   const at = lines.findIndex((l) => l.startsWith('export WALNUT_DAEMON_STATE_DIR='))
   if (at < 0) throw new Error('the script names no WALNUT_DAEMON_STATE_DIR to put the service set beside')
-  lines.splice(at + 1, 0, line)
+  lines.splice(at + 1, 0, ...exports)
   return lines.join('\n')
 }
 

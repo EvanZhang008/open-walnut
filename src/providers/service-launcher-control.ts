@@ -116,7 +116,7 @@ export function createLauncherControl(o: {
   return {
     script,
     // A set's launcher names its set itself (cron gives it none of a unit's environment); the default's stays as it was.
-    render: (config, seed) => withServiceSetExport(renderLauncherScript({ ...config, executable: seed }, { backend: o.backend, self: script }), config.serviceSet),
+    render: (config, seed) => withServiceSetExport(renderLauncherScript({ ...config, executable: seed }, { backend: o.backend, self: script }), config.serviceSet, config.stateDir),
     seed: async () => launcherSeed(await fs.readFile(script, 'utf8').catch(() => '')),
     facts: () => readLauncherFacts(dir),
     async request(exe, prepared) {
