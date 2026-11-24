@@ -407,5 +407,12 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
       if (olderVersion(report.version, st.sourceVersion)) problems.push(`the new leader runs ${report.version}, older than ${st.sourceVersion} that wrote the data`)
     }
   }
+  // Last, closest to the handover: the standby caught up while the old leader still serves (catch-up.ts), so the final
+  // batch fits in the commit window. Its route takes one commit window at most; its answer, a refusal included, is read.
+  if (running && !problems.length) {
+    const u = await src.api('POST', '/api/leader/switch/catch-up', { to: st.to, switchId: st.id }, settings.commitWindowMs + 60_000).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
+    const j = u.json as { ok?: boolean; why?: string } | null
+    if (!j?.ok) problems.push(`the standby on ${st.to} is not caught up, so the final batch would not fit in the commit window: ${j?.why ?? `status ${u.status}`}`)
+  }
   if (problems.length) throw new StepFailed(problems.join('; '))
 }

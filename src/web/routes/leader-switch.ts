@@ -13,6 +13,8 @@
  *   POST /cancel    takes a handover it wrote back and leads again
  *   POST /switch/begin       the trust rule of a switch, and the record of who began it
  *   POST /switch/check       the new leader's own check (its target job in check mode), its report
+ *   POST /switch/catch-up    the standby caught up while this leader serves (core/leader/switch/catch-up.ts),
+ *                            the preflight's last step: refused, the final batch would not fit in the commit window
  *   GET  /switch/target      the target job's state, over the copy link
  *   POST /switch/final-stop  the switch stop: the final batch as this server's last step, then it exits
  *   GET  /witnesses the witnesses' record as this server reads it over its own links (the switch command
@@ -355,6 +357,8 @@ leaderSwitchRouter.get('/switch/target', thisMachineOnly, async (req, res) => {
 /** How long GET /switch/target waits for the copy link; how long /switch/check takes in all (its link, the clear, the verify, the job, its report). */
 const TARGET_READ_MS = 10_000
 const CHECK_DEADLINE_MS = 150_000
+/** Kept for the check job and its report after the verify (a verify waits for an apply under way only until then). */
+const CHECK_AFTER_VERIFY_MS = 60_000
 
 /** The candidate's check: the target job in check mode on the new leader's machine, started over the copy link; its report. */
 leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
@@ -379,8 +383,11 @@ leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
     // old report could be read as this check's: the check does not run.
     const cleared = await withDeadline(link.peer.writeFile(checkReportName(switchId), null).then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err))), left(), late('clearing the last report'))
     if (cleared) { res.status(409).json({ ok: false, why: `the last check report on ${to} could not be cleared: ${cleared}` }); return }
-    // The copy there, verified before the candidate reads it (repaired from its chunks where it drifted).
-    const verified = await withDeadline(link.peer.verify().catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) })), left(), late('the verify'))
+    // The copy there, verified before the candidate reads it (repaired from its chunks where it drifted). This leader's
+    // own periodic batch may be applying there: waited out (the target refuses a verify meanwhile), within the deadline.
+    const { whenStandbyIdle } = await import('../../core/leader/switch/catch-up.js')
+    const verifyBy = Date.now() + Math.max(0, left() - CHECK_AFTER_VERIFY_MS)
+    const verified = await withDeadline(whenStandbyIdle(() => link.peer.verify(), { untilMs: verifyBy }).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) })), left(), late('the verify'))
     const job = await withDeadline(link.peer.startTargetJob(switchId, { check: true }), left(), late('starting the check'))
     if (!job.ok) { res.status(409).json({ ok: false, why: `the check did not start on ${to}: ${job.why}` }); return }
     const reportMs = Math.min(90_000, left())
@@ -398,6 +405,31 @@ leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
   } finally {
     peer?.close()
   }
+})
+
+/**
+ * The standby caught up while this leader still serves (core/leader/switch/catch-up.ts): its own standby batches,
+ * back to back, until one takes at most a quarter of the commit window. Refused (409, why): the final batch would not
+ * fit in the commit window, and nothing was handed over. Within one commit window (the source job waits a minute more).
+ */
+leaderSwitchRouter.post('/switch/catch-up', thisMachineOnly, async (req, res) => {
+  const p = currentLeaderPermit()
+  if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
+  const [{ isSwitchId }, { readHomeSwitchConfig }, { catchUpStandby }, { standbyRunner }, { WALNUT_HOME }] = await Promise.all([
+    import('../../core/leader/switch/ticket.js'), import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/catch-up.js'),
+    import('../../core/standby/runner.js'), import('../../constants.js'),
+  ])
+  const switchId: unknown = req.body?.switchId
+  if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
+  const cfg = readHomeSwitchConfig(WALNUT_HOME)
+  if (!cfg.settings) { res.status(409).json({ ok: false, why: cfg.problem ?? 'no leader_switch section' }); return }
+  // A history rewrite or gc of the data repo runs for minutes: the switch stop would end it part way. Try again after it.
+  const gitSync = await import('../../integrations/git-sync.js')
+  if (gitSync.compactionInProgress) { res.status(409).json({ ok: false, why: 'a history rewrite or gc of the data repo runs now (minutes): switch once it ended' }); return }
+  const runner = standbyRunner()
+  const r = await catchUpStandby({ runOnce: () => (runner ? runner.runOnce() : Promise.resolve(null)), commitWindowMs: cfg.settings.commitWindowMs })
+  log.web.info(`leader switch: the standby ${r.ok ? 'caught up' : 'did not catch up'}`, { switchId, ms: r.ms, budgetMs: r.budgetMs, batches: r.batches, ...(r.ok ? {} : { why: r.why }) })
+  res.status(r.ok ? 200 : 409).json(r)
 })
 
 /**
