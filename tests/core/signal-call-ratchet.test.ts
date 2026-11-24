@@ -87,6 +87,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/acp-daemon.ts': 9,                // ACP workers the daemon spawned (a straggler only while ps proves it is one; a surviving worker whose pipe failed right after its own spawn)
   'src/providers/daemon-process-groups.ts': 4,     // the daemon's session CLI groups (it spawned them detached): its signal, liveness probe and kill ladder; every pid comes from callers in daemon-standalone.ts that prove it first
   'src/providers/daemon-changes.ts': 1,            // the session commit's own git child group (git-commit-core.ts killGroup), at its deadline
+  'src/providers/daemon-host-services.ts': 1,      // a task workspace's own setup child group (workspace-core.ts killGroup), moved out of the runtime's body
   'src/providers/codex-model-probe.ts': 1,          // its own detached model-probe child group
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
   'src/providers/daemon-service-cron-host.ts': 1, // its own service daemon (exe under its versions/) and boot supervisor (cmdline names its script), never a CLI
