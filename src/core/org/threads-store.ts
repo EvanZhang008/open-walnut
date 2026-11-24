@@ -311,7 +311,8 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
     // Its first post and summary read alone, as a thread_update summary must (thread-summary-content.ts).
     if (by !== 'human') {
       const { ASKS_OUTSIDE_NEEDS, asksHimNow, summaryPointsElsewhere } = await import('./thread-summary-content.js');
-      const empty = [input.reply, input.text].map((x) => (typeof x === 'string' ? summaryPointsElsewhere(x) : null)).find(Boolean);
+      // Its summary waits on him when it opens in needs; its first post only says what reached the node.
+      const empty = [input.reply, input.text].map((x, i) => (typeof x === 'string' ? summaryPointsElsewhere(x, { needs: needs && i === 0 }) : null)).find(Boolean);
       if (empty) throw new ThreadError('bad_input', 422, empty);
       // Its summary, or with none its first post, which his card shows in its place.
       const words = typeof input.reply === 'string' && input.reply.trim() ? input.reply : input.text;

@@ -1148,7 +1148,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   // A status line's words are judged where the line is read (status-threads.ts lineWords).
   if (by !== 'human' && !opts.line && isStr(patch.reply)) {
     const was = find(file, id);
-    const empty = summaryPointsElsewhere(patch.reply) ?? summaryRepeatsHim(patch.reply, was.messages.map((m) => m.text));
+    const empty = summaryPointsElsewhere(patch.reply, { needs: (patch.state ?? was.state) === 'needs' }) ?? summaryRepeatsHim(patch.reply, was.messages.map((m) => m.text));
     if (empty) throw new ThreadError('bad_input', 422, empty);
     // A decision of his asked from a thread out of his Needs you reads as a result with no buttons.
     if ((patch.state ?? was.state) !== 'needs' && asksHimNow(patch.reply)) throw new ThreadError('bad_input', 422, ASKS_OUTSIDE_NEEDS);

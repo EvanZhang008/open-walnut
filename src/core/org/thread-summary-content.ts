@@ -141,6 +141,10 @@ const ON_ANOTHER_CARD: readonly RegExp[] = [
   /\u5728[^\uff0c\u3002\uff1b,;]{0,20}?(?:\u4efb\u52a1|\u7ebf\u7a0b|\u5361\u7247|\u5361)(?:\u91cc|\u90a3\u91cc|\u90a3\u8fb9|\u4e0a|\u4e2d)/,
   /\b(?:in|on)\s+(?:the\s+)?[\w"' -]{0,24}?\btask\b/i,
   /\bth-[0-9a-f]{6,}\b/,
+  // "\u5728\u7ebf\u7a0b\u300cX\u300d" (in thread "X"), "\u89c1\u5361\u7247\u201cX\u201d", `in thread "X"`: a card named by its quoted title
+  // (the thread monitor, 2026-11-24: a decision card said its step to approve is in thread "<the new card's title>").
+  /(?:\u5728|\u89c1|\u53bb|\u770b|\u5230)\s*(?:\u7ebf\u7a0b|\u5361\u7247|\u5361)\s*[\u201c"\u300c\u300e]/,
+  /\b(?:in|see|on)\s+(?:the\s+)?(?:thread|card)\s+[\u201c"]/i,
 ];
 
 /** A proof (a path or URL) is content by itself: a summary with one is never pointer-only. */
@@ -181,12 +185,15 @@ function pointsOnly(clause: string): boolean {
  * or is too short to carry one, and at least one clause points. A summary with a proof (a path, a
  * URL, a letter id) always says something.
  */
-export function summaryPointsElsewhere(summary: string | null | undefined): string | null {
+export function summaryPointsElsewhere(summary: string | null | undefined, opts: { needs?: boolean } = {}): string | null {
   const text = (summary ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return null;
   // He is asked to decide, and what to decide is on another card: his card must hold it. A proof
-  // beside it (a path, a link) does not hold the choices (the threads inspection, 2026-11-24).
-  if (asksHimToDecide(text) && ON_ANOTHER_CARD.some((re) => re.test(text))) {
+  // beside it (a path, a link) does not hold the choices (the threads inspection, 2026-11-24). A card
+  // waiting on him (`needs`) asks him whatever its words: its question need not read as one (the
+  // thread monitor, 2026-11-24: "submit it from our account? I'd do it", then "the step to approve is
+  // in thread X", kept two decision cards for one approval).
+  if ((opts.needs || asksHimToDecide(text)) && ON_ANOTHER_CARD.some((re) => re.test(text))) {
     return 'This summary asks him to decide but sends him to another card for the choices, and he may not find it: '
       + 'put the choices and your pick on this card (thread_update: state needs, with options), or, when the other card '
       + 'holds the decision, say only this card\'s own result here.';

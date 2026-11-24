@@ -45,6 +45,37 @@ describe('a card that asks him to decide and sends him elsewhere for it', () => 
   })
 })
 
+// The thread monitor, 2026-11-24 (garden-neutral words, his node's shape): a decision card whose question
+// does not read as one ("submit it from our account? I'd do it"), then "the step to approve is in thread
+// \u300c<the new card's title>\u300d": two decision cards for one approval.
+const MONITOR_CARD = '\u6d4b\u8bd5\u94a5\u5319\u88ab\u8bef\u52a0\u8fdb\u82b1\u56ed\u7684\u670d\u52a1\u540d\u5355\uff0c\u6d4b\u8bd5\u56e0\u6b64\u5931\u8d25\u3002\u8981\u4ece\u6211\u4eec\u8d26\u53f7\u63d0\u4ea4\u79fb\u51fa\u5b83\u7684\u5ba1\u6279\u5417\uff1f\u63a8\u8350\u6211\u6765\u63d0\u4ea4\n\n\u56ed\u4e01\u56de\uff1a\u4ed6\u4eec\u6ca1\u6743\u9650\u5220\uff0c\u8981\u6211\u4eec\u81ea\u5df1\u63d0\u5ba1\u6279\u3002\u8981\u4f60\u6279\u7684\u90a3\u4e00\u6b65\u5728\u7ebf\u7a0b\u300c\u82b1\u56ed\uff1a\u4ece\u670d\u52a1\u540d\u5355\u91cc\u5220\u6d4b\u8bd5\u94a5\u5319\u8981\u4f60\u6279\u300d\u3002'
+
+describe('a decision card (needs) that sends him to another card, its question in any words', () => {
+  it.each([
+    ['the card the monitor found', MONITOR_CARD],
+    ['English: the step is in a quoted thread', 'The test key was added to the garden service list by mistake. Submit the removal from our account? I would.\n\nThe gardener says they cannot. The step to approve is in thread "Garden: approve removing the test key".'],
+    ['English: see the card by its title', 'The gardener cannot remove it. See card \u201cGarden: approve removing the test key\u201d.'],
+  ])('is refused in needs: %s', (_name, summary) => {
+    expect(summaryPointsElsewhere(summary, { needs: true })).toMatch(ELSEWHERE)
+  })
+
+  it('its question need not read as one: a card waiting on him asks him by its state', () => {
+    expect(asksHimToDecide(MONITOR_CARD)).toBe(false)
+    expect(summaryPointsElsewhere(MONITOR_CARD)).toBeNull()
+  })
+
+  it('a decision card that names no other card passes', () => {
+    expect(summaryPointsElsewhere('Submit the removal of the test key from our account? I recommend I do it; you approve the access link.', { needs: true })).toBeNull()
+  })
+
+  it('thread_update refuses it on a card in needs, and on one it moves into needs', () => {
+    const a = fileMessage(emptyThreads('n'), { text: 'why does the garden test fail?', via: 'chat', at: new Date().toISOString() })
+    const asking = { ...a.file, threads: a.file.threads.map((t) => ({ ...t, state: 'needs' as const })) }
+    expect(() => updateThread(asking, a.thread.id, { reply: MONITOR_CARD }, 'agent', new Date().toISOString())).toThrow(ELSEWHERE)
+    expect(() => updateThread(a.file, a.thread.id, { reply: MONITOR_CARD, state: 'needs' }, 'agent', new Date().toISOString())).toThrow(ELSEWHERE)
+  })
+})
+
 /** His question, answered, its card written as `reply` in `state`. */
 function card(reply: string, state: 'answered' | 'pending' | 'working' | 'needs') {
   let f = fileMessage(emptyThreads('vp'), { text: 'which panel layout?', via: 'chat', at: '2026-11-24T05:00:00.000Z' }).file
