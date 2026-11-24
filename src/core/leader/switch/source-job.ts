@@ -125,6 +125,15 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
   })
   const readStanding = async (): Promise<PermitRecord | null | undefined> => (await read().catch(() => ({ standing: undefined, answered: 0 }))).standing
   const fail = (why: string): never => { throw new StepFailed(why) }
+  /** The server asked for the stop, still in it with its lock gone (its final batch): until it ends, its result is not known. */
+  const stopping = () => !side.runningServer() && !!s.stopPid && alive(s.stopPid)
+  /** Waits for that stop to end, as long as the stop-source step would (the commit window and a minute). */
+  const stopEnded = async () => {
+    const until = Date.parse(s.commitDeadline ?? new Date(Date.now() + settings.commitWindowMs).toISOString()) + 60_000
+    if (stopping()) out('the old leader\'s server is in its switch stop; waiting for it to end')
+    while (stopping() && Date.now() < until) await sleep(200)
+    return !stopping()
+  }
   const cancelAsked = () => { try { return (JSON.parse(fs.readFileSync(sourceCancelFile(home), 'utf8')) as { switchId?: string }).switchId === s.id } catch { return false } }
   /** The old machine keeps a witness of the list: its home runs again as the handed-over standby, which keeps that witness's door up. */
   const keepWitnessDoor = async (): Promise<string> => {
@@ -184,8 +193,10 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           break
         }
         case 'stop-source': {
-          const running = side.runningServer()
+          // The server by its lock, or the one asked for the stop before (in its final batch its lock is gone already).
+          const running = side.runningServer() ?? (s.stopPid && alive(s.stopPid) ? { pid: s.stopPid, port: null } : null)
           if (running && !readFinalStopResult(s.sourceHome, s.id)) {
+            if (s.stopPid !== running.pid) { s.stopPid = running.pid; writeDurableJson(switchStateFile(home), s) }
             const r = await side.api('POST', '/api/leader/switch/final-stop', { switchId: s.id, ...(Object.keys(stopTest).length ? { test: stopTest } : {}) }).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
             const j = r.json as { ok?: boolean; why?: string } | null
             // A resume while the server is in its stop already (it answers so, or its HTTP is closed): wait for it.
@@ -243,6 +254,8 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           return s
         }
         case 'cancel': {
+          // A server still in its switch stop decides by its result: never cancel or start around it.
+          if (!(await stopEnded())) throw new SwitchRefused('the old leader\'s server did not end its switch stop before the commit window ended: this side stays as it is; rerun with --resume')
           const standingNow = await readStanding()
           if (committedRecord(standingNow, s)) { out('cancel: the commit stood first; finishing the switch instead'); save('hand-off', 'committed before the cancel'); break }
           // The old leader ended with its final mark: the new leader may be promoting on it now. Rolling back
@@ -278,6 +291,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           break
         }
         case 'start-source': {
+          if (!(await stopEnded())) throw new SwitchRefused('the old leader\'s server did not end its switch stop before the commit window ended: it is not started beside it; rerun with --resume')
           if (s.sourceWasRunning && !side.runningServer()) {
             const started = await side.startServer('leader')
             if (!started.ok) {

@@ -160,7 +160,10 @@ Source job:
    cancels the handover and leads on. The source job waits (30 s at most) until the
    target job says it sees the handover at a majority it reaches by its own ways.
 3. **stop-source**: the switch stop ([below](#the-switch-stop)), asked through
-   `POST /api/leader/switch/final-stop`. The downtime starts here.
+   `POST /api/leader/switch/final-stop`. The downtime starts here. The job keeps the pid of the server it asked
+   (`stopPid`): the server lets its instance lock go before its final batch, so a job resumed during that batch
+   finds it by the pid and waits for its result; a roll back neither cancels nor starts the old home while that
+   pid still runs its stop.
 4. **wait-target**: until the witnesses show the new leader's record above the handover (the
    commit). A `gave-up` note, a handover that no longer stands, or the commit deadline plus the
    take-back time roll back.

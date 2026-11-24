@@ -71,6 +71,11 @@ export interface SwitchState {
   commitDeadline?: string
   /** The old leader's server began its switch stop: the downtime starts. */
   stoppedAt?: string
+  /**
+   * The pid of the server asked for the switch stop. Its instance lock goes before its final batch runs (server.ts
+   * stopServer), so a job resumed during that batch finds the stopping server by this, not by the lock.
+   */
+  stopPid?: number
   rollbackWhy?: string
   sourceHomeOnHosts?: { home: string; formerHomes: string[] }
   serviceRole?: RoleStep
