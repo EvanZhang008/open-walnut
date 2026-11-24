@@ -22,7 +22,8 @@ import { makeRemoteWorld, type RemoteWorld } from './remote-world.js'
 import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
 import { handOffLine } from '../../src/core/leader/switch/candidate-command.js'
-import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, leaderRelaySocketPath, relayRequest, relaySocketOpener } from '../../src/core/leader/switch/leader-relay.js'
+import { machineIdFile } from '../../src/core/machine-id.js'
+import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, relayMachine, leaderRelaySocketPath, relayRequest, relaySocketOpener } from '../../src/core/leader/switch/leader-relay.js'
 import { newSwitchId } from '../../src/core/leader/switch/ticket.js'
 import { computeExpectedDaemonVersion } from '../../src/providers/daemon-version-check.js'
 
@@ -452,16 +453,33 @@ async function forwarded(x: Ctx): Promise<void> {
   const sock = relaySocketOf(w, O)
   const open = relaySocketOpener(sock)
   // The socket is there once the host service follows; it carries a request once the leader's server has linked to
-  // that machine's daemon (its relay door answers: an unknown switch's job is a 404 from the leader, not a cut).
-  const up = await waitFor(`${O.id}'s leader relay`, async () => fs.existsSync(sock) && (await relayRequest(open, 'GET', `${RELAY_JOB_PATH}?switchId=none&from=0`, undefined, 5_000).catch(() => null))?.status === 404, 120_000, 1_000).then(() => true).catch(() => false)
-  if (!c.add(`forwarded: ${O.id}'s host service of this Walnut serves the leader relay (its socket, 0600; the leader's door answers over it)`, up && (fs.statSync(sock).mode & 0o777) === 0o600, sock)) return
+  // that machine's daemon. The relay door's own answers tell it from any other door: its whoami names the leader, and
+  // an unknown switch's job is its own 404 (the tunnel port's web server knows neither).
+  const up = await waitFor(`${O.id}'s leader relay`, async () => fs.existsSync(sock) && (await relayMachine(open)) === L.id, 120_000, 1_000).then(() => true).catch(() => false)
+  const job404 = up ? await relayRequest(open, 'GET', `${RELAY_JOB_PATH}?switchId=none&from=0`, undefined, 5_000).catch(() => null) : null
+  if (!c.add(`forwarded: ${O.id}'s host service of this Walnut serves the leader relay (its socket, 0600), and what answers over it is ${L.id}'s relay door`,
+    up && (fs.statSync(sock).mode & 0o777) === 0o600 && job404?.status === 404 && /began no switch none for another machine/.test(String((job404.json as { why?: string } | null)?.why)), `${sock}; whoami ${up ? L.id : 'none'}; job ${job404?.status} ${JSON.stringify(job404?.json ?? null)}`)) return
   // Refused forwards over that very link: nothing changes.
   const before = readSwitchState(L.home)?.id ?? null
   const notListed = await relayRequest(open, 'POST', RELAY_BEGIN_PATH, { to: w.h.id, switchId: newSwitchId() }, 60_000).catch((err: Error) => ({ status: 0, json: { why: err.message } }))
   const toLeader = await relayRequest(open, 'POST', RELAY_BEGIN_PATH, { to: L.id, switchId: newSwitchId() }, 60_000).catch((err: Error) => ({ status: 0, json: { why: err.message } }))
   const why = (r: { json: unknown }) => String((r.json as { why?: string } | null)?.why ?? '')
   c.add(`forwarded: ${L.id} refuses a begin over ${O.id}'s link for a machine not in leader_switch.machines`, notListed.status === 403 && /not in leader_switch.machines/.test(why(notListed)), `${notListed.status} ${why(notListed)}`)
-  c.add(`forwarded: ${L.id} refuses a begin over ${O.id}'s link for any machine but ${O.id} itself (here: the leader)`, toLeader.status === 403 && /leads already|taken only from the machine it goes to/.test(why(toLeader)), `${toLeader.status} ${why(toLeader)}`)
+  c.add(`forwarded: ${L.id} refuses a begin over ${O.id}'s link to itself (it leads already)`, toLeader.status === 403 && /leads already/.test(why(toLeader)), `${toLeader.status} ${why(toLeader)}`)
+  // The trust rule on the real link: the leader's config made to name another host as ${O.id}'s (its host_key), so this
+  // link is ${O.id}'s by neither name: not by this leader's key of it, not by the machine id its daemon said in its
+  // hello (that account's own id, not the permit's readable name here). A body that claims to be ${O.id} counts for nothing.
+  const cfgFile = path.join(L.home, 'config.yaml')
+  const saved = fs.readFileSync(cfgFile, 'utf8')
+  const cfg = YAML.parse(saved) as { leader_switch: { machines: Array<{ id: string; host_key?: string }> } }
+  for (const m of cfg.leader_switch.machines) if (m.id === O.id) m.host_key = `not-${O.id}`
+  fs.writeFileSync(cfgFile, YAML.stringify(cfg))
+  const notTheirs = await relayRequest(open, 'POST', RELAY_BEGIN_PATH, { to: O.id, switchId: newSwitchId(), from: O.id, machineId: O.id, hostKey: O.id, startedBy: { machine: O.id, via: 'forwarded' } }, 60_000)
+    .catch((err: Error) => ({ status: 0, json: { why: err.message } }))
+    .finally(() => fs.writeFileSync(cfgFile, saved))
+  const helloId = (() => { try { return fs.readFileSync(machineIdFile(O.dir), 'utf8').trim() } catch { return '?' } })()
+  c.add(`forwarded: ${L.id} refuses a begin for ${O.id} over a link that is not ${O.id}'s (its key and its hello's machine id, read off the link itself)`,
+    notTheirs.status === 403 && why(notTheirs) === `a switch begun from another machine is taken only from the machine it goes to (${O.id}), not from ${helloId} (host ${O.id})`, `${notTheirs.status} ${why(notTheirs)} (hello id ${helloId})`)
   c.add('forwarded: a refused forward changes nothing (no switch on the leader, no marker, it still leads)',
     (readSwitchState(L.home)?.id ?? null) === before && !readMarker(L.home) && !!(await status(w, L))?.mayAct)
   await writeAndBatch(x, 'forwarded')

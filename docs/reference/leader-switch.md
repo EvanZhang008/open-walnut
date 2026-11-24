@@ -182,7 +182,7 @@ Source job:
 Target job:
 
 1. **wait-mark**: the handover stands at a majority this machine reaches (within 10 s, else it gives
-   up), then it waits for the final mark. Every 2 s it reads the witnesses: a record of the old
+   up; counted as the commit will count them, so not over its host link to the old leader), then it waits for the final mark. Every 2 s it reads the witnesses: a record of the old
    leader above the handover (its cancel) means it took the lead back, and the job rolls back.
    It never promotes without the mark, and starts no commit after the deadline.
 2. **promote**: the switch claim goes beside this machine's id ([A launcher during a switch](#a-launcher-during-a-switch)),
@@ -252,7 +252,10 @@ hello, or by the leader's own name for the host (its `hosts` key) when `leader_s
 that name as `to`'s `host_key` (the same two names the standby host check accepts; a daemon's hello id
 is its account's machine id, which is not the permit's id where `WALNUT_MACHINE_ID_FILE` names
 another, as in the rehearsal) (`final-stop.ts` `beginRefusal`, through `switch-link.ts`, which also
-checks the copy link answers). Either way the
+checks the copy link answers). Both names are read off the DaemonConnection the stream arrived on; nothing
+the request says about where it comes from counts. One forwarded begin at a time: a second one while the
+first is between its checks and its job is refused. The job is started with `--forwarded-by <to>`, so its
+own begin on loopback records the forwarded begin even when the leader's server restarted in between. Either way the
 leader's console (its log) and Walnut Health record who began it on which machine
 (`Started by the switch command on machine-a`, or `Started by machine-b, forwarded by its replica`),
 and the source state keeps it (`startedBy`, shown by `--status`).
@@ -261,7 +264,8 @@ and the source state keeps it (`startedBy`, shown by `--status`).
 
 On the machine that leads, `walnut leader switch --to <machine>` starts the source job (above). On the
 machine that will lead, the same command with `--to` naming that machine itself (or `--standby-dir <its
-standby_dir>`) does three things, none of them a step of the switch (`candidate-command.ts`):
+standby_dir>`; on a machine's own home that may lead, with no handed-over marker, `--to` itself is the
+leader's command, which says it leads already) does three things, none of them a step of the switch (`candidate-command.ts`):
 
 1. the **candidate check**, there, in the command's own process (the target job's `--check`: its copy, its
    disk, the witnesses it reaches with no leader link). A refusal changes nothing anywhere;
@@ -302,19 +306,24 @@ copy, the service listens on a unix socket, `<daemon dir>/leader-relay/<sha256(w
 (0600 in a 0700 dir: only this account connects, as with the host call entry), and splices each connection
 into one stream `link.openStream('primary', 'leader-relay')` (`src/replica/leader-relay-entry.ts`). The
 leader's DaemonConnection hands a stream of that purpose to its **relay door** (`leader-relay-door.ts`), never
-to its tunnel port, with the key of the host it came over: so nothing a host's public listener forwards (purpose
-`web`) reaches the door, and the caller is known by its link. The door answers, one request per stream:
+to its tunnel port, with who it came from as that connection knows it (its key of the host, the machine id of the
+host daemon's hello): so nothing a host's public listener forwards (purpose `web`) reaches the door, and the caller
+is known by its link. The door answers, one request per stream:
 
 | Path | What |
 |---|---|
 | `POST /leader-switch/begin` | the forwarded begin (above) |
-| `GET /leader-switch/job?switchId=&from=` | the output of the source job that begin started, whole lines from a byte offset, whether it runs, its step |
+| `GET /leader-switch/job?switchId=&from=` | the output of the source job that begin started, whole lines from a byte offset, whether it runs, its step; only to the host link the begin came over (another gets the 404 of an unknown switch) |
+| `GET /leader-switch/whoami` | the machine id of the leader (only while it holds a permit that is no trial): the one machine whose witness the `host-link` way asks there |
 | `POST /leader-witness/challenge`, `/request` | this machine's witness door (`witness-door.ts`, the one the capability `witness-door` opens), proven with the witness's own key |
 
 With the permit not running, the DaemonConnection destroys such a stream before any switch code loads. Every
 process of the candidate's machine (the command, its check, the target job's probe) reaches the door by opening
 that socket: none builds a link (`leader-relay.ts`, the opener injected everywhere as `StreamOpener`, so the
 transport does not care how the stream is made). No new key, no new ssh, no public door, no daemon change.
+A service that cannot serve it (a daemon dir too deep for a unix socket's 103 bytes, say) logs why once per
+reason and writes it beside the socket (`<socket>.why`); the command there reports that reason instead of
+"no relay socket".
 
 **The leader relay ends at the stop.** It is the leader's server's own link: at its switch stop the server closes
 every host link, so the way is gone before the new leader's commit. A witness reached only over it counts for
@@ -1291,7 +1300,7 @@ here, host-link, direct, link, the next one after a way that did not answer, the
 | a, here | `machine` is this process's machine id | the record is opened in this machine's witness root, under its lock (`local-witnesses.ts` `serveLocalWitness`) | any process on that machine: its own service, a candidate's server, the switch's probe |
 | b, direct | `url` and `key` | the witness's direct door, proven with the witness's own key (`witness-direct.ts`, `witness-door.ts`) | any process of this Walnut that holds the config: the leader, a candidate, a standby |
 | c, link | `host` | the leader's link to that machine's service (`witness-route.ts` on its leader door), or a host-dialed door's call frames once 5a lands | the leader server only |
-| host-link | `machine` (another machine) and `key` | the door of the machine that leads, over this machine's own host link to it ([The leader relay](#the-leader-relay)), the same caller and proofs as way b; the leader's machine answers for the witness it keeps, `no_witness_here` for any other. Tried before the direct door (that door is often out of this machine's reach, and a call to it holds the turn until its timeout) | a candidate's probe only (`probeWitnessReach` with a relay socket on its machine), never a permit runtime; it ends with the leader's server |
+| host-link | `machine` (another machine) and `key` | the door of the machine that leads, over this machine's own host link to it ([The leader relay](#the-leader-relay)), the same caller and proofs as way b; asked only for the witness whose `machine` is the leader's (its relay door's `whoami`): a witness another machine keeps is never asked at the leader's door, even if a record of it were left in that door's root. Tried before the direct door (that door is often out of this machine's reach, and a call to it holds the turn until its timeout) | a candidate's probe only (`probeWitnessReach` with a relay socket on its machine), never a permit runtime; it ends with the leader's server |
 
 **Way a: a shared record with a lock, not a call to the service over loopback.** Every way to one witness ends at one file:
 the machine's service serves it (way c, way b) from `<state dir>/open-walnut/leader-witness/<walnut id>/<witness id>/permit-record.json`,
