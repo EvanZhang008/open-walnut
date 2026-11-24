@@ -19,11 +19,11 @@ import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { _signalSafetyForTesting, bootMac, macBoot, macEnvOf, waitFor } from '../../tests/helpers/replica-cluster.ts'
+import { macEnvOf } from '../../tests/helpers/replica-cluster.ts'
 import { macProbe } from '../../tests/helpers/host-judge-cluster.ts'
+import { startLeaderAgain } from '../../tests/helpers/leader-again.ts'
 import { stopOwnDaemon } from './own-daemon.mjs'
 
-const { pin, signalPinned, stillPinned } = _signalSafetyForTesting
 const here = path.dirname(new URL(import.meta.url).pathname)
 
 /** The host's id on the host network (any 64 hex: the stand-in lists it as a member). */
@@ -45,15 +45,7 @@ export function clusterDirs(h) {
 const leaderEnv = (d, extra = {}) => macEnvOf({ base: d.base, macHome: d.macHome, macData: d.macData, macDaemon: d.macDaemon, hostService: true, extra })
 
 /** Stop the cluster's own Mac (its boot script process, pinned), and wait until it is gone. */
-export async function stopClusterMac(h) {
-  const p = pin('mac', h.c.macPid, (cmd) => cmd.includes('mac-boot.mts'))
-  if (!p) return { stopped: false, ms: 0 }
-  const at = Date.now()
-  signalPinned(p, 'SIGTERM')
-  const gone = await waitFor(() => !stillPinned(p), 30_000, 'the Mac to stop', 100).then(() => true, () => false)
-  if (!gone) signalPinned(p, 'SIGKILL')
-  return { stopped: true, ms: Date.now() - at, killed: !gone }
-}
+export { stopClusterMac } from '../../tests/helpers/leader-again.ts'
 
 /**
  * The stand-in walnut-net for the Mac's local daemon: its net state dir (`<daemon dir>/net`, a
@@ -110,25 +102,7 @@ export async function startOldLeader(h, older, { port, logFile, timeoutMs = 300_
 }
 
 /** This tree's leader again over the Mac's data (no seed), with its link to the host and the Mac's probe. */
-export async function startNewLeaderAgain(h, { port, label }) {
-  const d = clusterDirs(h)
-  const script = macBoot({
-    macData: d.macData, daemonPort: 0, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: true, hostDaemon: d.hostDaemon, plugin: false,
-    seed: false, port, extra: macProbe('full'), doorPortFile: path.join(d.hostDaemon, 'daemon.port'),
-  })
-  const logRef = { text: '' }
-  const at = Date.now()
-  const booted = await bootMac(script, path.join(d.base, `mac-boot-${label}.mts`), leaderEnv(d), logRef, `mac-${label}-stderr.log`)
-  const p = pin('mac', booted.pid, (cmd) => cmd.includes(`mac-boot-${label}.mts`))
-  return {
-    pid: booted.pid, upMs: Date.now() - at, log: () => logRef.text,
-    async stop() {
-      if (!p || !stillPinned(p)) return
-      signalPinned(p, 'SIGTERM')
-      if (!(await waitFor(() => !stillPinned(p), 30_000, 'the leader to stop', 100).then(() => true, () => false))) signalPinned(p, 'SIGKILL')
-    },
-  }
-}
+export const startNewLeaderAgain = (h, { port, label }) => startLeaderAgain(h, { port, label, extra: macProbe('full') })
 
 /** Whatever daemon the Mac's dir names now (the cluster pins only the first one it saw). */
 export const stopMacDaemon = (h) => stopOwnDaemon(clusterDirs(h).macDaemon)

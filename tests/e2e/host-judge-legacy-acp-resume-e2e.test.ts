@@ -22,6 +22,7 @@ import path from 'node:path'
 import { BUN, HOST_KEY, waitFor } from '../helpers/replica-cluster.js'
 import { writeClusterLogs } from '../helpers/replica-cluster-reads.js'
 import { startHostJudgeCluster, untilFactsStill, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
+import { hostJudgeSteps } from '../helpers/host-judge-steps.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
 
@@ -31,27 +32,13 @@ describe.skipIf(!RUN)('a legacy ACP session at rest is resumed by its host\'s se
   let sid = ''
   let runtimeId = ''
 
-  const macEvents = async (): Promise<ProbeEvent[]> => (await h.mac(`/events?sid=${sid}`)) as ProbeEvent[]
-  const channelEvents = async () => (await macEvents()).filter((e) => e.source === 'host-channel')
-  const resultsOn = (events: ProbeEvent[], text: string) => events.filter((e) => e.name === 'session:result' && String(e.data?.result ?? '').includes(text))
-  const say = (why: string) => `${why}\n--- mac ---\n${h.c.logs().mac.slice(-8000)}\n--- replica ---\n${h.c.logs().replica.slice(-8000)}`
-  const fail = (err: unknown) => { throw new Error(say(String(err))) }
-  const macRow = async () => { const r = await h.c.mac('GET', `/api/sessions/${sid}`); return r.status === 200 ? (r.json.session ?? r.json) as Record<string, any> : null }
+  const steps = hostJudgeSteps(() => h)
+  const { fail, resultsOn, setSwitch } = steps
+  const macEvents = () => steps.macEvents(sid)
+  const channelEvents = () => steps.channelEvents(sid)
+  const macRow = () => steps.macRow(sid)
   const macAcp = async () => (await h.mac(`/acp?sid=${sid}`)) as { found: boolean; hostJudged: boolean; workerLive: boolean | null }
-  const setSwitch = async (on: boolean) => {
-    const r = await h.c.mac('PUT', '/api/config', { experimental: { host_runs_sessions: on } })
-    expect(r.status, JSON.stringify(r.json)).toBe(200)
-    let since = 0
-    await waitFor(async () => {
-      if ((await h.mac(`/side?host=${HOST_KEY}`)).judges !== on) { since = 0; return false }
-      since ||= Date.now()
-      return Date.now() - since >= 2_000
-    }, 60_000, `the Mac to ${on ? 'hand' : 'stop handing'} starts to the host`, 200).catch(fail)
-  }
-  const send = async (text: string) => {
-    const r = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text })
-    expect(r.status, JSON.stringify(r.json)).toBeLessThan(300)
-  }
+  const send = (text: string) => steps.send(sid, text)
   const stop = async () => {
     const r = await h.c.mac('POST', `/api/v1/sessions/${sid}/terminate`, { force: true })
     expect(r.status, JSON.stringify(r.json)).toBeLessThan(300)

@@ -20,12 +20,12 @@
  *   L5 stays    the switch off again: the session the host resumed stays the host's
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BUN, HOST_KEY, waitFor } from '../helpers/replica-cluster.js'
 import { turnsWith, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
 import { startHostJudgeCluster, untilFactsStill, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
+import { hostJudgeSteps } from '../helpers/host-judge-steps.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
 
@@ -37,52 +37,8 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
   let sidC = ''
   let sidD = ''
 
-  const macEvents = async (s: string): Promise<ProbeEvent[]> => (await h.mac(`/events?sid=${s}`)) as ProbeEvent[]
-  const channelEvents = async (s: string) => (await macEvents(s)).filter((e) => e.source === 'host-channel')
-  const resultsOn = (events: ProbeEvent[], text: string) => events.filter((e) => e.name === 'session:result' && String(e.data?.result ?? '').includes(text))
-  const say = (why: string) => `${why}\n--- mac ---\n${h.c.logs().mac.slice(-8000)}\n--- replica ---\n${h.c.logs().replica.slice(-8000)}`
-  const fail = (err: unknown) => { throw new Error(say(String(err))) }
-  const macRow = async (s: string) => { const r = await h.c.mac('GET', `/api/sessions/${s}`); return r.status === 200 ? (r.json.session ?? r.json) as Record<string, any> : null }
-  const parses = async (s: string): Promise<number> => (await h.mac(`/parses?sid=${s}`)).parses as number
-  /** The live mock CLI of `sid` on this machine: its command line (null: none runs). */
-  const cliArgs = (s: string): string | null => {
-    let ps = ''
-    try { ps = execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }) } catch { return null }
-    const mock = path.join(h.c.base, 'bin', 'mock-claude.cjs')
-    return ps.split('\n').find((l) => l.includes(mock) && l.includes(s)) ?? null
-  }
-  const setSwitch = async (on: boolean) => {
-    const r = await h.c.mac('PUT', '/api/config', { experimental: { host_runs_sessions: on } })
-    expect(r.status, JSON.stringify(r.json)).toBe(200)
-    // Held for two seconds: a host report read just before the write can set the old value again for
-    // a moment (leader-side.ts noteHost reads the switch too).
-    let since = 0
-    await waitFor(async () => {
-      if ((await h.mac(`/side?host=${HOST_KEY}`)).judges !== on) { since = 0; return false }
-      since ||= Date.now()
-      return Date.now() - since >= 2_000
-    }, 60_000, `the Mac to ${on ? 'hand' : 'stop handing'} starts to the host`, 200).catch(fail)
-  }
-  const send = async (s: string, text: string) => {
-    const r = await h.c.mac('POST', `/api/v1/sessions/${s}/messages`, { text })
-    expect(r.status, JSON.stringify(r.json)).toBeLessThan(300)
-  }
-  const stop = async (s: string) => {
-    const r = await h.c.mac('POST', `/api/v1/sessions/${s}/terminate`, { force: true })
-    expect(r.status, JSON.stringify(r.json)).toBeLessThan(300)
-    // At rest: stopped, no CLI of it on the machine, and the Mac's runner holds no live process of it.
-    await waitFor(async () => (await macRow(s))?.process_status === 'stopped' && !cliArgs(s) && !(await h.mac(`/holds?sid=${s}`)).live, 60_000, `session ${s} to stop and its CLI to end`).catch(fail)
-  }
-  const startLegacy = async (title: string, message: string): Promise<string> => {
-    const t = await h.c.mac('POST', '/api/tasks', { title, project: 'Acme' })
-    expect(t.status, JSON.stringify(t.json)).toBe(201)
-    const st = await h.c.mac('POST', `/api/v1/tasks/${t.json.task.id}/start`, { host: HOST_KEY, cwd: hostCwd, mode: 'bypass', message })
-    expect(st.status, JSON.stringify(st.json)).toBe(202)
-    const sid = st.json.sessionId as string
-    await waitFor(() => turnsWith(h.c, sid, message) > 0, 120_000, `the legacy session ${title} to answer`).catch(fail)
-    expect(await h.mac(`/judge?sid=${sid}`)).toEqual({ judge: 'legacy', host: null })
-    return sid
-  }
+  const { fail, macEvents, channelEvents, resultsOn, macRow, parses, handover, cliArgs, setSwitch, send, stop, noRefusals, ...steps } = hostJudgeSteps(() => h)
+  const startLegacy = (title: string, message: string) => steps.startLegacy(title, message, hostCwd)
 
   beforeAll(async () => {
     // A hand-over with no answer waits this long for the host's row (host-handover.ts), not 15 min.
@@ -166,13 +122,6 @@ describe.skipIf(!RUN)('a legacy session at rest is resumed by its host\'s servic
       await h.host(`/hold-sid?sid=${sidB}&on=0`)
     }
   }, 300_000)
-
-  const handover = async (s: string) => (await h.mac(`/handover?sid=${s}`)) as { pending: boolean; onDisk: boolean | null }
-  const noRefusals = () => {
-    const mac = h.c.logs().mac
-    expect(mac).not.toMatch(/host-run session: its host kept refusing its lines/)
-    expect(mac).not.toMatch(/refused the send/)
-  }
 
   it('L6: the resume\'s answer is lost but the host took it; a send in the window waits, then every line goes to the host once', async () => {
     const before = await parses(sidC)

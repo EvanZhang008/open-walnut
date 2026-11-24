@@ -50,6 +50,7 @@
  *                            never reaches the host (and is no "not sent" either): the one seam of a
  *                            hand-over whose outcome is unknown here
  *         GET /handover?sid= is a hand-over of it unanswered here (host-handover.ts), and its mark on disk
+ *         GET /queue?sid=    the Mac's queue rows of a session (id, status, message)
  *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts,
  *                            and the host key whose service a start on it goes to (startKeyOf)
  *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
@@ -76,6 +77,11 @@
  *                            resume of it is refused there, not at rest) until `on=0`
  *         GET /forge?sid=    appends a born row of `sid` to the host's fact log, as a bad host
  *                            would send one for a session it was never handed: a probe write
+ *         GET /hold-start?on=1|0   every start or resume a leader asks of the host from now on waits
+ *                            here, its body read, before the host's routes see it (a host that took
+ *                            the request and has not acted on it yet), until `on=0` lets them all go
+ *                            on (no `on`: a read); `held` counts the requests it held so far and
+ *                            `waiting` those it holds now: a probe write
  *
  * `companion`: a real cloud companion too (tests/helpers/cloud-box-replica.ts), paired with the Mac
  * before the Mac boots, as a first bridge push leaves a pairing: the Mac's `cloud` remote and its
@@ -85,6 +91,10 @@
  * and the host's service dials the companion's listener door with its bridge token. `phone(...)`
  * calls the companion's phone API with the paired phone's token; `phoneStream(sid)` holds a
  * session's SSE stream open and collects its frames.
+ *
+ * `restartMac()`: the Mac stopped as a deploy stops it (SIGTERM) and this tree's leader booted again
+ * over its data, port and daemon dir, with its env, its boot code and its probe (no seed): the same
+ * Walnut back, so `c.mac` and `mac` reach it. `macLog()` is every Mac leader's log so far, in order.
  *
  * `standby(...)`: a second leader of the same Walnut over a copy of the Mac's data
  * (tests/helpers/standby-leader.ts) with the Mac's probe, read by its `probe(p)`. The probe takes
@@ -99,6 +109,9 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { HOST_KEY, ROOT, WINDOWS, startReplicaCluster, waitFor, type ReplicaCluster } from './replica-cluster.js'
+import { startLeaderAgain, stopClusterMac, type LeaderAgain } from './leader-again.js'
+
+export type { LeaderAgain } from './leader-again.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from './cloud-box-replica.js'
 import { startStandbyLeader, type StandbyLeader } from './standby-leader.js'
 import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
@@ -240,6 +253,7 @@ await serveProbe({
     return { armed: mode }
   },
   '/handover': (q) => ({ pending: hho.handOverPending(q.get('sid')), onDisk: hom.handOverMarkStands(q.get('sid')) }),
+  '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, message: m.message })),
   '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')), startKey: s && typeof s.startKeyOf === 'function' ? s.startKeyOf(q.get('host')) : null } },
   '/link': async (q) => ({ connected: (await import(${url('src/core/host-server/index.ts')})).hostServerLink(q.get('host')) !== null }),
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),
@@ -364,6 +378,42 @@ await serveProbe({
     return { seq: rec.seq }
   },
   '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
+  // A start or resume a leader asks waits here until on=0: over the daemon link (the routes' handle,
+  // its body read first, then answered through call) and over a host-dialed link (call).
+  '/hold-start': (q) => {
+    const g = globalThis.__clusterHoldStart ??= { on: false, held: 0, waiters: [] }
+    const routes = boot.hostSessionsRunning()?.routes
+    if (!routes) throw new Error('the host runs no session routes')
+    const START = '/host-api/sessions/start'
+    if (g.routes !== routes) {
+      g.routes = routes
+      const ownHandle = routes.handle
+      const ownCall = routes.call
+      const gate = () => (g.on ? new Promise((res) => { g.held++; g.waiters.push(res) }) : Promise.resolve())
+      routes.handle = function (req, res) {
+        const p = new URL(req.url ?? '/', 'http://host').pathname
+        if (!g.on || p !== START || req.method !== 'POST') return ownHandle.call(this, req, res)
+        const parts = []
+        req.on('data', (b) => parts.push(b))
+        req.on('end', () => {
+          void (async () => {
+            const text = Buffer.concat(parts).toString('utf8')
+            await gate()
+            const r = await ownCall.call(routes, 'POST', p, text ? JSON.parse(text) : {})
+            if (!res.writableEnded && !res.destroyed) { res.writeHead(r.status, { 'content-type': 'application/json' }); res.end(JSON.stringify(r.body)) }
+          })().catch(() => { /* the leader went away; the host acted on it anyway */ })
+        })
+        return true
+      }
+      routes.call = async function (method, p, body) {
+        if (p === START) await gate()
+        return ownCall.call(this, method, p, body)
+      }
+    }
+    if (q.get('on') === '0') { g.on = false; for (const go of g.waiters.splice(0)) go() }
+    else if (q.get('on') === '1') g.on = true
+    return { on: g.on, held: g.held, waiting: g.waiters.length }
+  },
 }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
 `
 }
@@ -457,6 +507,10 @@ export interface HostJudgeCluster {
   door(method: string, p: string, body?: unknown): Promise<{ status: number; json: any }>
   /** The replica's probe file again (after a restart: a new pid and ports). */
   waitHostProbe(notPid?: number, timeoutMs?: number): Promise<{ pid: number; probe: number; door: number; running: boolean; hasDoor: boolean }>
+  /** The Mac stopped (SIGTERM) and booted again over its own data and port (see the header): the new leader. */
+  restartMac(): Promise<LeaderAgain>
+  /** Every Mac leader's log so far (the cluster's Mac, then each one restartMac booted), in order. */
+  macLog(): string
   /** A standby leader over `data` (a copy of the Mac's), on `port`, with the Mac's probe (see the header). */
   standby(o: { data: string; port: number; env?: Record<string, string> }): Promise<{ leader: StandbyLeader; probe(p: string): Promise<any> }>
   stop(): Promise<void>
@@ -584,6 +638,9 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
   let host = await waitHostProbe(undefined, 180_000).catch(async (err) => { await c.stop().catch(() => {}); await box?.stop().catch(() => {}); throw err })
   const standbys: StandbyLeader[] = []
   const ok = (r: { status: number; json: any }, p: string) => { if (r.status !== 200) throw new Error(`probe ${p}: ${r.status} ${JSON.stringify(r.json)}`); return r.json }
+  // The Mac leaders restartMac booted, the one serving now last.
+  const again: LeaderAgain[] = []
+  const firstMacLog = (): string => c.logs().mac
   return {
     c,
     companion: box,
@@ -601,6 +658,22 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
       return getJson(host.door, p, method, body)
     },
     waitHostProbe: async (notPid, timeoutMs) => { host = await waitHostProbe(notPid, timeoutMs); return host },
+    restartMac: async () => {
+      if (o.linkProxy) throw new Error('host-judge-cluster: restartMac dials the host\'s door itself, not through the link proxy')
+      const before = again.at(-1)
+      if (before) await before.stop()
+      else await stopClusterMac({ c })
+      const leader = await startLeaderAgain({ c }, {
+        port: c.macPort, label: `again-${again.length + 1}`,
+        extra: macProbe(o.macRecord ?? 'full') + (o.macAcp ? acpStandIn() : '') + (o.macBootExtra ?? ''),
+        env: { ...(o.companion ? { WALNUT_LEADER_HEARTBEAT_MS: '1000' } : {}), ...(o.macEnv ?? {}) },
+      })
+      again.push(leader)
+      // Its probe is up once it serves (the boot code runs before the port is said): the file names it.
+      await waitFor(() => readFile(macProbeFile)?.pid === leader.pid, 30_000, 'the restarted Mac\'s probe')
+      return leader
+    },
+    macLog: () => [firstMacLog(), ...again.map((l) => l.log())].join('\n--- the Mac booted again ---\n'),
     standby: async (s) => {
       const leader = await startStandbyLeader(c, { data: s.data, port: s.port, extra: macProbe('full'), ...(s.env ? { env: s.env } : {}) })
       standbys.push(leader)
@@ -611,6 +684,7 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
     stop: async () => {
       try {
         for (const s of standbys.splice(0)) await s.stop().catch(() => {})
+        for (const l of again.splice(0)) await l.stop().catch(() => {})
         await c.stop()
       } finally { await box?.stop() }
     },
