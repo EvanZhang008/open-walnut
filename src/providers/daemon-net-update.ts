@@ -401,7 +401,7 @@ export class NetDaemonUpdater {
    * The service set check and first install over this link (service-set-provision.ts), with this
    * build's daemon for the host's system staged there as an update stages it. Never while an update runs.
    */
-  async provisionSet(ask: SetAsk): Promise<SetProvision> {
+  async provisionSet(ask: SetAsk, opts: { refresh?: boolean } = {}): Promise<SetProvision> {
     const c = this.d.conn
     const expected = this.d.expectedVersion()
     const no = (message: string): SetProvision => ({ set: null, installed: false, ok: false, message })
@@ -423,7 +423,7 @@ export class NetDaemonUpdater {
     const say = (message: string) => log.session.info('service set: getting the daemon file for a host network machine', { host: c.host, message })
     const src = await (this.d.source ?? netDaemonSource)(target, expected, say, { walnutFile: false })
     if ('missing' in src) return no(src.missing)
-    return provisionServiceSet('file' in src ? { binary: src.file, base: c.serviceExecutable } : { binary: null, gz: src.gz, base: c.serviceExecutable }, expected, io, ask)
+    return provisionServiceSet('file' in src ? { binary: src.file, base: c.serviceExecutable } : { binary: null, gz: src.gz, base: c.serviceExecutable }, expected, io, ask, opts)
   }
 
   private async within(p: Promise<unknown>, ms: number): Promise<void> {

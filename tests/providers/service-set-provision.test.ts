@@ -64,6 +64,49 @@ describe('provisionWith', () => {
     expect(p.message).toMatch(/no launchd/)
   })
 
+  describe('an own set installed by an earlier build of this Walnut (the leader updated before the move)', () => {
+    const BUILD = 'walnut-daemon-0123456789ab'
+    const installed = { ' status': `service set: ${SET}\n{"installed":true}`, 'id -u': '/home/u\n1000\n' }
+
+    it('takes this build with an update of its own service only, so the move\'s set lines find it', async () => {
+      const h = host({ ...installed, 'echo build:yes': 'build:no\n', ' update ': `service set: ${SET}\n{"ok":true}` })
+      expect(await provisionWith(EXE, h.io, ask, { expected: BUILD })).toEqual({ set: SET, installed: true, ok: true, runtimeDir: `/home/u/.open-walnut-host/walnuts/${SET}/rt` })
+      const probe = h.lines.find((l) => l.includes('echo build:yes'))!
+      // The probe looks in this set's install root for this build, as setCliCommand does.
+      expect(probe).toContain(`/.open-walnut-host/walnuts/${SET}/daemon/versions`)
+      expect(probe).toContain(`= ${BUILD} ]`)
+      // The update names the Walnut, so the host's CLI picks its set, never the default or another Walnut's.
+      expect(h.lines.find((l) => l.includes(' update '))).toBe(`${EXE} walnut daemon update --yes --executable ${EXE} --walnut ${WALNUT} --walnut-home /home/u/.open-walnut 2>/dev/null || true`)
+      expect(h.lines.some((l) => l.includes(' install ') || l.includes(' uninstall '))).toBe(false)
+    })
+
+    it('a set that has this build is left as it is', async () => {
+      const h = host({ ...installed, 'echo build:yes': 'build:yes\n' })
+      expect(await provisionWith(EXE, h.io, ask, { expected: BUILD })).toMatchObject({ set: SET, installed: true, ok: true })
+      expect(h.lines.some((l) => l.includes(' update '))).toBe(false)
+    })
+
+    it('a probe that does not read (a link cut mid-line) changes nothing', async () => {
+      const h = host({ ...installed, 'echo build:yes': '' })
+      expect(await provisionWith(EXE, h.io, ask, { expected: BUILD })).toMatchObject({ set: SET, ok: true })
+      expect(h.lines.some((l) => l.includes(' update '))).toBe(false)
+    })
+
+    it('without refresh (the set is moved to: the usual update keeps it) nothing is probed or updated', async () => {
+      const h = host(installed)
+      expect(await provisionWith(EXE, h.io, ask)).toMatchObject({ set: SET, ok: true })
+      expect(h.lines.some((l) => l.includes('echo build:yes') || l.includes(' update '))).toBe(false)
+    })
+
+    it('an update the host refused is reported, the set kept installed (never removed)', async () => {
+      const h = host({ ...installed, 'echo build:yes': 'build:no\n', ' update ': `service set: ${SET}\n{"ok":false,"failure":{"message":"probation failed","rollback":"the build before runs"}}` })
+      const p = await provisionWith(EXE, h.io, ask, { expected: BUILD })
+      expect(p).toMatchObject({ set: SET, installed: true, ok: false })
+      expect(p.message).toMatch(/could not take this build \(probation failed; the build before runs\)/)
+      expect(h.lines.some((l) => l.includes(' uninstall '))).toBe(false)
+    })
+  })
+
   it('an older CLI that names no set: nothing is known and nothing changes', async () => {
     const h = host({ ' status': '{"installed":true}' })
     expect(await provisionWith(EXE, h.io, ask)).toMatchObject({ set: null, ok: false })
@@ -108,6 +151,8 @@ describe('ServiceSetLink', () => {
     let hello = ''
     let held = false
     const calls: string[] = []
+    /** Each look's `refresh` (an own set not moved to yet takes this build). */
+    const refreshes: Array<boolean | undefined> = []
     const dialled: string[] = []
     /** Where the last dial went (SetLinkConn.dialled). */
     let at: string | null = null
@@ -127,7 +172,7 @@ describe('ServiceSetLink', () => {
         if (words[1] === 'net-forget') return '{"ok":true,"changed":true}'
         return o.netId ?? `service set: ${SET}\n{"ok":true,"endpointId":"${SET_EP}","addrs":["10.0.0.5:41641"]}`
       },
-      provision: async () => { calls.push('provision'); return provision },
+      provision: async (_ask, opts) => { calls.push('provision'); refreshes.push(opts?.refresh); return provision },
       relink: async () => {
         calls.push('relink')
         // SSH: the dial goes where sshDir points now; net: to the endpoint netEndpoint names (else the host row's).
@@ -163,7 +208,7 @@ describe('ServiceSetLink', () => {
       sleep: async () => {},
       settleMs: 0,
     }, () => 'walnut-daemon-abc')
-    return { link, calls, dialled, held: () => held, setHello: (h: string) => { hello = h }, setDialled: (d: string) => { at = d } }
+    return { link, calls, refreshes, dialled, held: () => held, setHello: (h: string) => { hello = h }, setDialled: (d: string) => { at = d } }
   }
 
   it('ssh: the first look installs its set, the move runs, and the link then dials the set\'s runtime dir', async () => {
@@ -282,6 +327,17 @@ describe('ServiceSetLink', () => {
     // The host's whole record goes (review round 2, N1): no endpoint dialled, no set kept.
     expect(await hostServiceSets.read('net:h')).toBe(null)
     expect(await t.link.netEndpoint()).toBe(null)
+  })
+
+  it('a look refreshes an own set\'s build only while the host is not moved to it', async () => {
+    const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: `/home/u/.open-walnut-host/walnuts/${SET}/rt` })
+    await t.link.check()
+    expect(t.refreshes[0]).toBe(true)
+    // Moved: the set runs this Walnut's sessions, and the usual daemon update keeps its build.
+    expect(await hostServiceSets.read('ssh:h')).toMatchObject({ set: SET, movedAt: expect.any(Number) })
+    const m = conn('ssh', { set: SET, installed: true, ok: true })
+    await m.link.check()
+    expect(m.refreshes).toEqual([false])
   })
 
   it('the default set: nothing moves', async () => {

@@ -1781,7 +1781,7 @@ export class DaemonConnection {
       run: (command, timeoutMs) => (this.setLinkKind === 'net'
         ? createNetUpdateIo({ send: (cmd, params, t) => this.send(cmd, pastSetHold(params ?? {}), t) }, {}).run(command, timeoutMs)
         : this.sshExec(command, timeoutMs)),
-      provision: (ask) => this.provisionServiceSet(ask),
+      provision: (ask, opts) => this.provisionServiceSet(ask, opts),
       relink: (boundMs) => this.relinkForServiceSet(boundMs),
       setHold: (on) => { this._setHold.set(on) },
       // Only the runner's delivery of what waited (review round 1, low 12): not every connect listener.
@@ -1843,18 +1843,18 @@ export class DaemonConnection {
   }
 
   /** The first look at the host for its service set, with this build's executable there (an upload when needed). */
-  private async provisionServiceSet(ask: SetAsk): Promise<SetProvision> {
+  private async provisionServiceSet(ask: SetAsk, opts: { refresh?: boolean } = {}): Promise<SetProvision> {
     const expected = this.getExpectedDaemonVersion()
     if (!expected) return { set: null, installed: false, ok: false, message: 'this server names no daemon build' }
     if (this.setLinkKind === 'net') {
       const updater = this.netUpdater
-      return updater ? updater.provisionSet(ask) : { set: null, installed: false, ok: false, message: 'no host network update path' }
+      return updater ? updater.provisionSet(ask, opts) : { set: null, installed: false, ok: false, message: 'no host network update path' }
     }
     if (!(await this.hasDaemonBinary())) return { set: null, installed: false, ok: false, message: 'the daemon artifact is not available' }
     return provisionServiceSet(await this.serviceDaemonSource(false), expected, {
       run: (command, timeout) => this.sshExec(command, timeout),
       chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
-    }, ask)
+    }, ask, opts)
   }
 
   /** A service set move: drop the link and dial again (its dir or route changed); the set the new hello names, or null. */

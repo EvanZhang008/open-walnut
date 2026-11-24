@@ -1,10 +1,15 @@
 /**
  * The first look at a host with the experiment host_service_sets on: which service set the host's
  * CLI picks for this Walnut, and, when that is a set of its own not yet installed, its install.
- * Nothing here updates or restarts a service that runs: `status --walnut` only reads, and a set's
- * first install has nothing running to hand over. The leader then moves its sessions there
+ * `status --walnut` only reads, and a set's first install has nothing running to hand over. The one
+ * service this may restart is this Walnut's own set before its move (`refresh`): installed by an
+ * earlier build of this Walnut, it has no copy of this build, so the move's set lines (setCliCommand)
+ * would answer no_build and the move could never start after a leader update (a shared Mac, 11-24:
+ * installed at 17:16Z, the leader updated at 22:05Z, the move gave up at 22:18Z). Nothing of this
+ * Walnut runs there yet, and nothing of another Walnut's. The leader then moves its sessions there
  * (service-set-move.ts). With this build's executable on the host (withServiceExecutable).
  */
+import { serviceLauncherWanted } from './service-launcher-flag.js'
 import { DAEMON_VERSION_ARGS, runServiceInstall, withServiceExecutable, type RemoteDaemonUpdateIo, type ServiceDaemonSource } from './daemon-service-update.js'
 import { shq } from './daemon-net-update-io.js'
 import { serviceSetWords, type SetAsk } from './service-set-leader.js'
@@ -31,8 +36,12 @@ export function setRuntimeDirFrom(said: string, set: string): string | undefined
   try { return serviceSetRuntimeDir(home, set, Number(uid)) } catch { return undefined }
 }
 
-/** With `executable` (this build) on the host: the set, and its install when it is an own set not installed yet. */
-export async function provisionWith(executable: string, io: Pick<RemoteDaemonUpdateIo, 'run'>, ask: SetAsk): Promise<SetProvision> {
+/**
+ * With `executable` (this build) on the host: the set, and its install when it is an own set not
+ * installed yet. With `refresh` (the set is not moved to yet), an own set installed with no copy of
+ * `refresh.expected` takes this build (takeThisBuild).
+ */
+export async function provisionWith(executable: string, io: Pick<RemoteDaemonUpdateIo, 'run'>, ask: SetAsk, refresh?: { expected: string }): Promise<SetProvision> {
   const words = serviceSetWords(ask)
   if (!words) return { set: null, installed: false, ok: false, message: 'this Walnut has no id the host can name a set by' }
   const said = (await io.run(`${executable} walnut daemon status${words} 2>/dev/null || true`, 60_000)).trim()
@@ -42,7 +51,12 @@ export async function provisionWith(executable: string, io: Pick<RemoteDaemonUpd
   const runtimeDir = setRuntimeDirFrom(await io.run(WHERE, 15_000).catch(() => ''), set)
   let installed = false
   try { installed = (JSON.parse(said.slice(said.indexOf('{'))) as { installed?: unknown }).installed === true } catch { /* not installed */ }
-  if (installed) return { set, installed, ...(runtimeDir ? { runtimeDir } : {}), ok: true }
+  if (installed) {
+    const at = { set, installed, ...(runtimeDir ? { runtimeDir } : {}) }
+    if (!refresh || (await setHasBuild(io, set, refresh.expected)) !== false) return { ...at, ok: true }
+    const took = await takeThisBuild(executable, io, ask)
+    return took === true ? { ...at, ok: true } : { ...at, ok: false, message: took }
+  }
   const done = await runServiceInstall(executable, io, ask)
   // The install named another set than the status did (a claim won meanwhile): go by the install's.
   const named = done.serviceSet ?? set
@@ -53,9 +67,44 @@ export async function provisionWith(executable: string, io: Pick<RemoteDaemonUpd
   }
 }
 
-/** The same, staging this build's executable on the host first (an upload when the one there is another build). */
-export function provisionServiceSet(source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, ask: SetAsk): Promise<SetProvision> {
-  return withServiceExecutable(source, expectedVersion, io, (executable) => provisionWith(executable, io, ask))
+/**
+ * Whether the set's install root holds a copy of `expected` (the one setCliCommand runs), or null when
+ * the answer does not read (a link cut mid-line: nothing is changed on a doubt).
+ */
+async function setHasBuild(io: Pick<RemoteDaemonUpdateIo, 'run'>, set: string, expected: string): Promise<boolean | null> {
+  const said = await io.run(`${findSetBuild(set, expected)}\n[ -n "$x" ] && echo build:yes || echo build:no`, 30_000).catch(() => '')
+  return /^build:yes$/m.test(said) ? true : /^build:no$/m.test(said) ? false : null
+}
+
+/**
+ * The own set, installed, takes this build: `walnut daemon update` of the set's service (the set the
+ * Walnut's words pick, never the default or another Walnut's), as the host's launcher runs any update
+ * (a trial, then probation, the build before put back when it fails). True, or why not.
+ */
+async function takeThisBuild(executable: string, io: Pick<RemoteDaemonUpdateIo, 'run'>, ask: SetAsk): Promise<true | string> {
+  const words = serviceSetWords(ask)
+  const said = (await io.run(`${executable} walnut daemon update --yes --executable ${executable}${await serviceLauncherWanted() ? ' --launcher' : ''}${words} 2>/dev/null || true`, 600_000).catch((e: unknown) => String(e instanceof Error ? e.message : e))).trim()
+  let reply: { ok?: unknown; failure?: { message?: unknown; rollback?: unknown } } | null = null
+  try { reply = JSON.parse(said.slice(said.indexOf('{'))) } catch { /* no answer */ }
+  if (reply?.ok === true) return true
+  const why = [reply?.failure?.message, reply?.failure?.rollback].filter((x) => typeof x === 'string' && x).join('; ') || said.slice(-300) || 'no answer'
+  return `this Walnut's own service there could not take this build (${why})`
+}
+
+/**
+ * The same, staging this build's executable on the host first (an upload when the one there is another
+ * build). `refresh`: the set is not moved to yet (service-set-move-link.ts), so an own set without this
+ * build takes it.
+ */
+export function provisionServiceSet(source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, ask: SetAsk, opts: { refresh?: boolean } = {}): Promise<SetProvision> {
+  return withServiceExecutable(source, expectedVersion, io, (executable) => provisionWith(executable, io, ask, opts.refresh ? { expected: expectedVersion } : undefined))
+}
+
+/** The shell that sets `x` to this build's copy in the set's install root (versions/<sha>/, the first that names `expected`), or ''. */
+function findSetBuild(set: string, expected: string): string {
+  if (!isServiceSetId(set)) throw new Error('not a service set id')
+  const versions = `"$HOME/.open-walnut-host/walnuts/${set}/daemon/versions"`
+  return `x=; for f in ${versions}/*/*; do [ -x "$f" ] || continue; [ "$("$f" ${DAEMON_VERSION_ARGS} 2>/dev/null | tail -n 1)" = ${shq(expected)} ] && { x=$f; break; }; done`
 }
 
 /**
@@ -64,10 +113,8 @@ export function provisionServiceSet(source: ServiceDaemonSource, expectedVersion
  * stdout; a set with no such copy answers `no_build`.
  */
 export function setCliCommand(set: string, expected: string, words: string): string {
-  if (!isServiceSetId(set)) throw new Error('not a service set id')
-  const versions = `"$HOME/.open-walnut-host/walnuts/${set}/daemon/versions"`
   return [
-    `x=; for f in ${versions}/*/*; do [ -x "$f" ] || continue; [ "$("$f" ${DAEMON_VERSION_ARGS} 2>/dev/null | tail -n 1)" = ${shq(expected)} ] && { x=$f; break; }; done`,
+    findSetBuild(set, expected),
     `[ -n "$x" ] || { echo '{"ok":false,"code":"no_build","message":"this Walnut\\u0027s build is not in its set on the host"}'; exit 0; }`,
     `"$x" walnut daemon ${words} 2>/dev/null || true`,
   ].join('\n')

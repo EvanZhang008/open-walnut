@@ -49,8 +49,11 @@ export interface SetLinkConn {
   sharedEndpoint(): string | null
   /** A shell line on the host (SSH exec, or the daemon's exec over the host network). */
   run(command: string, timeoutMs?: number): Promise<string>
-  /** This build's executable on the host, then the set check and install (service-set-provision.ts). */
-  provision(ask: SetAsk): Promise<SetProvision>
+  /**
+   * This build's executable on the host, then the set check and install (service-set-provision.ts);
+   * `refresh`: the set is not moved to yet, so an own set without this build takes it.
+   */
+  provision(ask: SetAsk, opts?: { refresh?: boolean }): Promise<SetProvision>
   /** Drop the link and dial again; the set the new hello names, or null with no hello within `boundMs`. */
   relink(boundMs: number): Promise<string | null>
   /** Hold (or release) this Walnut's work for this host. */
@@ -363,7 +366,7 @@ export class ServiceSetLink {
     if (look && (this.provisionedAt === 0 || this.now() - this.provisionedAt >= PROVISION_EVERY_MS)) {
       this.provisionedAt = Math.max(1, this.now())
       // A look that threw (the link cut mid-line) is a look that found nothing: looked at again (drill round 3, R3-3).
-      const p: SetProvision = await this.c.provision(ask)
+      const p: SetProvision = await this.c.provision(ask, { refresh: !movedToSet(record) })
         .catch((err: unknown) => ({ set: null, installed: false, ok: false, message: err instanceof Error ? err.message : String(err) }))
         .finally(() => { this.lookEnded = true })
       if (p.set === null) {
