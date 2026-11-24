@@ -106,9 +106,9 @@ export function DraftTaskMatches({ matches, shiftEnters, onOpen, onHide }: {
       </div>
       <div className="draft-v6-matches-list" role="listbox" aria-label="Tasks like this: open one">
         {matches.map((m) => (
-          <button key={m.id} type="button" role="option" aria-selected={false} className="draft-v6-match wn-pick-row" data-testid="draft-v6-task-match" data-task-id={m.id}
+          <button key={m.id} type="button" role="option" aria-selected={false} className={`draft-v6-match wn-pick-row${m.open ? '' : ' is-done'}`} data-testid="draft-v6-task-match" data-task-id={m.id}
             title={`Open ${m.title}${m.detail ? ` (${m.detail})` : ''}`} onMouseDown={(e) => e.preventDefault()} onClick={() => onOpen(m.id)}>
-            <span className={`draft-v6-dot${m.open ? ' is-on' : ''}`} aria-hidden="true" />
+            {!m.open && <span className="draft-v6-match-done" aria-label="Done">{ICONS.ICON_CHECK}</span>}
             <span className="draft-v6-match-title wn-title">{m.title}</span>
           </button>
         ))}

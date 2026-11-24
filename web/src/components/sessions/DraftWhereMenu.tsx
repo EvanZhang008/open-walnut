@@ -108,6 +108,8 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
     folderShown: where.row.defaultCwd ? tildePath(where.row.defaultCwd, homeOf(where.row.defaultHost ?? '__local__')) : undefined,
     picked: draft.fromProjectInputs,
   }) : autoNote(undefined, v);
+  // Auto in the project's own folder, which is gone: the row says so (never "Works in" a folder that is not there).
+  const autoGone = where.autoCurrent && where.line?.kind === 'gone';
   const ownKey = ownHostOf(where.row);
   const recommended = !where.autoCurrent && !!where.detected?.hasSource && where.detected.project === where.project;
 
@@ -137,7 +139,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
             {!where.project ? (
               <div className="draft-v6-wm-row is-disabled draft-v6-auto-row" role="option" aria-disabled="true" aria-selected={false} data-testid="draft-v6-auto-row" data-state="no-project">
                 <span className="draft-v6-wm-ico"><WhereIcon kind="auto" size={15} /></span>
-                <span className="draft-v6-wm-text"><span className="draft-v6-wm-name is-dim"><Title>Auto</Title></span><span className="draft-v6-wm-line">{autoLine}</span></span>
+                <span className="draft-v6-wm-text"><span className="draft-v6-wm-name is-dim"><Title>Auto</Title></span><span className="draft-v6-wm-line">{autoGone ? `This folder is gone on ${hostName}` : autoLine}</span></span>
               </div>
             ) : !v.ok ? (
               <div className="draft-v6-wm-row is-disabled draft-v6-auto-row is-cannot" role="option" aria-disabled="true" aria-selected={false} data-testid="draft-v6-auto-row" data-state="cannot"
