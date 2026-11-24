@@ -25,6 +25,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { SESSION_PROCESS_COMMANDS, hostRouteOf } from '../../../src/core/sessions/session-command-gate.js'
+import { daemonCommandNames } from '../../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -46,11 +47,9 @@ function bodyFrom(src: string, at: number): string {
   return src.slice(at)
 }
 
+/** dispatchCommand's switch and the command table answered before it (daemonCommandNames). */
 function daemonCommands(): string[] {
-  const src = read('src/providers/daemon-standalone.ts')
-  const at = src.indexOf('function dispatchCommand(')
-  const body = bodyFrom(src, src.indexOf('switch (cmd.cmd) {', at))
-  return [...new Set([...body.matchAll(/case '([^']+)':/g)].map((m) => m[1]!))].sort()
+  return daemonCommandNames()
 }
 
 /** Every daemon command that is not about one session's process, by family. */

@@ -3,8 +3,8 @@
  * (no per-file round trips over the tunnel): git.diff, git.status ('git-status-v1'), git.refs,
  * git.fileLog / git.fileShow ('git-file-history-v1') and git.ensureExcluded ('git-exclude-v1').
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher
- * calls the returned commands. Nothing here reads process state: the env, HOME and the
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table
+ * takes the returned answers by name. Nothing here reads process state: the env, HOME and the
  * runtime's execFile (its children get the runtime's env and umask) come from deps.
  */
 import fs from 'node:fs'
@@ -12,17 +12,17 @@ import path from 'node:path'
 import { computeGitDiff, createGitStatus, listGitRefs, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import type { ExecFileException } from 'node:child_process'
 import type { ChildProcessFns } from './daemon-child-spawn.js'
-import { expandHome, type DaemonEnv, type DaemonReplies } from './daemon-module-deps.js'
+import { expandHome, ok, fail, type Answer, type Answers, type DaemonEnv } from './daemon-module-deps.js'
 
-export interface DaemonGitDeps<W> extends DaemonReplies<W> {
+export interface DaemonGitDeps {
   daemonEnv: DaemonEnv
   HOME_DIR: string
   /** The runtime's execFile (childUse.execFile). */
   execFileCb: ChildProcessFns['execFile']
 }
 
-export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
-  const { daemonEnv, HOME_DIR, execFileCb, sendOk, sendError } = deps
+export function createDaemonGit<W>(deps: DaemonGitDeps) {
+  const { daemonEnv, HOME_DIR, execFileCb } = deps
 
   /** One git run. Never throws: exit codes are answers; `failure` is the error's own message. */
   function runGit(argv: string[], runCwd: string, opts: { env?: DaemonEnv; timeout: number; maxBuffer: number }) {
@@ -44,12 +44,12 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
   // Runs the shared git-diff core HERE on the remote host, so git + the files are
   // local — no per-file network round trips. Returns the full {repoRoot,files}
   // in one response. This is why remote git-diff goes through the daemon, not SSH.
-  async function cmdGitDiff(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdGitDiff(cmd: Record<string, unknown>): Promise<Answer> {
     let cwd = cmd.cwd as string
     const base = cmd.base as GitDiffBase
-    if (!cwd) return sendError(ws, id, 'git.diff: missing cwd')
+    if (!cwd) return fail('git.diff: missing cwd')
     if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote' && base !== 'branch' && base !== 'commit') {
-      return sendError(ws, id, 'git.diff: invalid base')
+      return fail('git.diff: invalid base')
     }
     cwd = expandHome(cwd, HOME_DIR)
 
@@ -70,11 +70,11 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
         ...(typeof cmd.commit === 'string' ? { commit: cmd.commit } : {}),
         ...(cmd.namesOnly === true ? { namesOnly: true } : {}),
       })
-      if (!result) return sendOk(ws, id, { repoRoot: null, files: [] }) // not a git repo
-      sendOk(ws, id, result as unknown as Record<string, unknown>)
+      if (!result) return ok({ repoRoot: null, files: [] }) // not a git repo
+      return ok(result as unknown as Record<string, unknown>)
     } catch (err: unknown) {
-      if (err instanceof GitDiffError) return sendError(ws, id, err.message)
-      sendError(ws, id, 'git.diff failed: ' + (err as Error).message)
+      if (err instanceof GitDiffError) return fail(err.message)
+      return fail('git.diff failed: ' + (err as Error).message)
     }
   }
 
@@ -95,16 +95,16 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
     },
   })
 
-  async function cmdGitStatus(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdGitStatus(cmd: Record<string, unknown>): Promise<Answer> {
     const dirs = Array.isArray(cmd.dirs)
       ? (cmd.dirs as unknown[]).filter((d): d is string => typeof d === 'string' && d.length > 0)
         .map((d) => expandHome(d, HOME_DIR))
       : []
-    if (!dirs.length) return sendError(ws, id, 'git.status: missing dirs')
+    if (!dirs.length) return fail('git.status: missing dirs')
     try {
-      sendOk(ws, id, { repos: await gitStatus.status(dirs) })
+      return ok({ repos: await gitStatus.status(dirs) })
     } catch (err: unknown) {
-      sendError(ws, id, 'git.status failed: ' + (err as Error).message)
+      return fail('git.status failed: ' + (err as Error).message)
     }
   }
 
@@ -122,16 +122,16 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
   }
 
 
-  async function cmdGitRefs(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdGitRefs(cmd: Record<string, unknown>): Promise<Answer> {
     let cwd = cmd.cwd as string
-    if (!cwd || typeof cwd !== 'string') return sendError(ws, id, 'git.refs: missing cwd')
+    if (!cwd || typeof cwd !== 'string') return fail('git.refs: missing cwd')
     cwd = expandHome(cwd, HOME_DIR)
     try {
       const result = await listGitRefs(cwd, gitDiffExec)
-      if (!result) return sendOk(ws, id, { repoRoot: null })
-      sendOk(ws, id, result as unknown as Record<string, unknown>)
+      if (!result) return ok({ repoRoot: null })
+      return ok(result as unknown as Record<string, unknown>)
     } catch (err: unknown) {
-      sendError(ws, id, 'git.refs failed: ' + (err as Error).message)
+      return fail('git.refs failed: ' + (err as Error).message)
     }
   }
 
@@ -153,27 +153,27 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
   }
 
 
-  async function cmdGitFileLog(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdGitFileLog(cmd: Record<string, unknown>): Promise<Answer> {
     const rawCwd = cmd.cwd as string
     const rawPath = cmd.path as string
-    if (!rawCwd || typeof rawCwd !== 'string') return sendError(ws, id, 'git.fileLog: missing cwd')
-    if (!rawPath || typeof rawPath !== 'string') return sendError(ws, id, 'git.fileLog: missing path')
+    if (!rawCwd || typeof rawCwd !== 'string') return fail('git.fileLog: missing cwd')
+    if (!rawPath || typeof rawPath !== 'string') return fail('git.fileLog: missing path')
     const cwd = expandHome(rawCwd, HOME_DIR)
     const filePath = expandHome(rawPath, HOME_DIR)
     const requested = typeof cmd.limit === 'number' && isFinite(cmd.limit) ? Math.floor(cmd.limit) : 30
     const limit = Math.max(1, Math.min(requested, 200))
     try {
       const top = await gitFileExec(['git', 'rev-parse', '--show-toplevel'], cwd, 64 * 1024)
-      if (top.code !== 0 || !top.stdout.trim()) return sendOk(ws, id, { repoRoot: null, commits: [] })
+      if (top.code !== 0 || !top.stdout.trim()) return ok({ repoRoot: null, commits: [] })
       const repoRoot = top.stdout.trim()
       const rel = path.relative(repoRoot, filePath).split(path.sep).join('/')
-      if (!rel || rel === '..' || rel.startsWith('../')) return sendOk(ws, id, { repoRoot, commits: [] })
+      if (!rel || rel === '..' || rel.startsWith('../')) return ok({ repoRoot, commits: [] })
       const res = await gitFileExec(
         ['git', 'log', '--follow', '--no-color', '--format=' + GIT_FILE_LOG_FORMAT, '-n', String(limit), '--', rel],
         repoRoot, 4 * 1024 * 1024,
       )
       // A path git never tracked exits non-zero: an ordinary "no history", not a failure.
-      if (res.code !== 0) return sendOk(ws, id, { repoRoot, commits: [] })
+      if (res.code !== 0) return ok({ repoRoot, commits: [] })
       const commits: Array<{ sha: string; at: number; author: string; subject: string }> = []
       for (const line of res.stdout.split('\n')) {
         if (!line) continue
@@ -185,41 +185,41 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
           subject: parts.slice(3).join('\x1f'),
         })
       }
-      sendOk(ws, id, { repoRoot, commits })
+      return ok({ repoRoot, commits })
     } catch (err: unknown) {
-      sendError(ws, id, 'git.fileLog failed: ' + (err as Error).message)
+      return fail('git.fileLog failed: ' + (err as Error).message)
     }
   }
 
-  async function cmdGitFileShow(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdGitFileShow(cmd: Record<string, unknown>): Promise<Answer> {
     const rawCwd = cmd.cwd as string
     const rawPath = cmd.path as string
     const sha = cmd.sha as string
-    if (!rawCwd || typeof rawCwd !== 'string') return sendError(ws, id, 'git.fileShow: missing cwd')
-    if (!rawPath || typeof rawPath !== 'string') return sendError(ws, id, 'git.fileShow: missing path')
+    if (!rawCwd || typeof rawCwd !== 'string') return fail('git.fileShow: missing cwd')
+    if (!rawPath || typeof rawPath !== 'string') return fail('git.fileShow: missing path')
     if (!sha || typeof sha !== 'string' || !GIT_FILE_SHA_RE.test(sha)) {
-      return sendError(ws, id, 'git.fileShow: invalid sha')
+      return fail('git.fileShow: invalid sha')
     }
     const cwd = expandHome(rawCwd, HOME_DIR)
     const filePath = expandHome(rawPath, HOME_DIR)
     try {
       const top = await gitFileExec(['git', 'rev-parse', '--show-toplevel'], cwd, 64 * 1024)
-      if (top.code !== 0 || !top.stdout.trim()) return sendError(ws, id, 'git.fileShow failed: not a git repository')
+      if (top.code !== 0 || !top.stdout.trim()) return fail('git.fileShow failed: not a git repository')
       const repoRoot = top.stdout.trim()
       const rel = path.relative(repoRoot, filePath).split(path.sep).join('/')
-      if (!rel || rel === '..' || rel.startsWith('../')) return sendError(ws, id, 'git.fileShow failed: file is outside the repository')
+      if (!rel || rel === '..' || rel.startsWith('../')) return fail('git.fileShow failed: file is outside the repository')
       const res = await gitFileExec(['git', 'show', sha + ':' + rel], repoRoot, GIT_FILE_SHOW_MAX_BYTES)
       if (res.code !== 0) {
         if (/maxBuffer/i.test(res.failure)) {
-          return sendError(ws, id, 'git.fileShow failed: that version is larger than '
+          return fail('git.fileShow failed: that version is larger than '
             + GIT_FILE_SHOW_MAX_BYTES + ' bytes — too big to show')
         }
-        return sendError(ws, id, 'git.fileShow failed: '
+        return fail('git.fileShow failed: '
           + (res.stderr.trim().split('\n')[0] || res.failure || 'git show failed'))
       }
-      sendOk(ws, id, { content: res.stdout })
+      return ok({ content: res.stdout })
     } catch (err: unknown) {
-      sendError(ws, id, 'git.fileShow failed: ' + (err as Error).message)
+      return fail('git.fileShow failed: ' + (err as Error).message)
     }
   }
 
@@ -230,30 +230,30 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
   // tracked is touched, and an already-tracked file is left alone (excluding it
   // would change nothing). The path resolves through `git rev-parse --git-path`,
   // so a worktree whose .git is a file still lands in the right place.
-  async function cmdGitEnsureExcluded(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdGitEnsureExcluded(cmd: Record<string, unknown>): Promise<Answer> {
     const rawCwd = cmd.cwd as string
     const rawPath = cmd.path as string
-    if (!rawCwd || typeof rawCwd !== 'string') return sendError(ws, id, 'git.ensureExcluded: missing cwd')
-    if (!rawPath || typeof rawPath !== 'string') return sendError(ws, id, 'git.ensureExcluded: missing path')
+    if (!rawCwd || typeof rawCwd !== 'string') return fail('git.ensureExcluded: missing cwd')
+    if (!rawPath || typeof rawPath !== 'string') return fail('git.ensureExcluded: missing path')
     const cwd = expandHome(rawCwd, HOME_DIR)
     const filePath = expandHome(rawPath, HOME_DIR)
     try {
       const top = await gitFileExec(['git', 'rev-parse', '--show-toplevel'], cwd, 64 * 1024)
-      if (top.code !== 0 || !top.stdout.trim()) return sendOk(ws, id, { outcome: 'not-a-repo' })
+      if (top.code !== 0 || !top.stdout.trim()) return ok({ outcome: 'not-a-repo' })
       // git answers with symlinks resolved (/private/var on macOS for a /var cwd),
       // so the file's directory is resolved the same way before the two are
       // compared; otherwise every checkout under /tmp or /var reads as "outside".
       const repoRoot = await fs.promises.realpath(top.stdout.trim())
       const realDir = await fs.promises.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath))
       const rel = path.relative(repoRoot, path.join(realDir, path.basename(filePath))).split(path.sep).join('/')
-      if (!rel || rel === '..' || rel.startsWith('../')) return sendError(ws, id, 'git.ensureExcluded failed: file is outside the repository')
+      if (!rel || rel === '..' || rel.startsWith('../')) return fail('git.ensureExcluded failed: file is outside the repository')
       // Exit 0 = already ignored (by any rule, global ones included); 1 = not ignored.
       const ignored = await gitFileExec(['git', 'check-ignore', '-q', '--', rel], repoRoot, 64 * 1024)
-      if (ignored.code === 0) return sendOk(ws, id, { outcome: 'already' })
+      if (ignored.code === 0) return ok({ outcome: 'already' })
       const tracked = await gitFileExec(['git', 'ls-files', '--error-unmatch', '--', rel], repoRoot, 64 * 1024)
-      if (tracked.code === 0) return sendOk(ws, id, { outcome: 'already' })
+      if (tracked.code === 0) return ok({ outcome: 'already' })
       const excludeFile = await gitFileExec(['git', 'rev-parse', '--git-path', 'info/exclude'], repoRoot, 64 * 1024)
-      if (excludeFile.code !== 0 || !excludeFile.stdout.trim()) return sendError(ws, id, 'git.ensureExcluded failed: cannot locate info/exclude')
+      if (excludeFile.code !== 0 || !excludeFile.stdout.trim()) return fail('git.ensureExcluded failed: cannot locate info/exclude')
       const excludePath = path.resolve(repoRoot, excludeFile.stdout.trim())
       await fs.promises.mkdir(path.dirname(excludePath), { recursive: true })
       let existing = ''
@@ -263,12 +263,16 @@ export function createDaemonGit<W>(deps: DaemonGitDeps<W>) {
       const line = '/' + rel
       const sep = existing.length === 0 || existing.endsWith('\n') ? '' : '\n'
       await fs.promises.appendFile(excludePath, sep + line + '\n')
-      sendOk(ws, id, { outcome: 'added', excludeFile: excludePath })
+      return ok({ outcome: 'added', excludeFile: excludePath })
     } catch (err: unknown) {
-      sendError(ws, id, 'git.ensureExcluded failed: ' + (err as Error).message)
+      return fail('git.ensureExcluded failed: ' + (err as Error).message)
     }
   }
 
 
-  return { cmdGitDiff, cmdGitStatus, cmdGitRefs, cmdGitFileLog, cmdGitFileShow, cmdGitEnsureExcluded }
+  const answers: Answers<W> = {
+    'git.diff': cmdGitDiff, 'git.status': cmdGitStatus, 'git.refs': cmdGitRefs,
+    'git.fileLog': cmdGitFileLog, 'git.fileShow': cmdGitFileShow, 'git.ensureExcluded': cmdGitEnsureExcluded,
+  }
+  return { answers }
 }

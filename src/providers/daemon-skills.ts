@@ -3,16 +3,17 @@
  * (one real copy per skill, a link in each engine's skill folder), and keeps what it last
  * wrote by hash so a restarted server's probe crosses the link without the skills.
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts). Its body is the
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table takes
+ * the returned answer by name. Its body is the
  * runtime's code as it was: deps carry the runtime's own names, never read from the process.
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { DaemonEnv, DaemonLog, DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
 import { daemonServiceConfigFiles } from './daemon-service-config.js'
 
-export interface DaemonSkillsDeps<W> extends DaemonReplies<W> {
+export interface DaemonSkillsDeps {
   daemonEnv: DaemonEnv
   HOME_DIR: string
   /** The runtime keeps sessions (the production daemon dir, or a service set's runtime): only then are skills written. */
@@ -24,8 +25,8 @@ export interface DaemonSkillsDeps<W> extends DaemonReplies<W> {
   logMsg: DaemonLog
 }
 
-export function createDaemonSkills<W>(deps: DaemonSkillsDeps<W>) {
-  const { daemonEnv, HOME_DIR, KEEPS_SESSIONS, SET_ID, OFFLINE_HOST_DIR, logMsg, sendOk, sendError } = deps
+export function createDaemonSkills<W>(deps: DaemonSkillsDeps) {
+  const { daemonEnv, HOME_DIR, KEEPS_SESSIONS, SET_ID, OFFLINE_HOST_DIR, logMsg } = deps
 
   // ── skills.sync: distribute walnut's skills to this host's engine stores ──
   // The hub pushes the current content on every (re)connect (hash-skipped
@@ -107,7 +108,7 @@ export function createDaemonSkills<W>(deps: DaemonSkillsDeps<W>) {
     return daemonServiceConfigFiles(process.platform, daemonEnv.HOME || HOME_DIR).some((file) => fs.existsSync(file))
   }
 
-  function cmdSkillsSync(ws: W, id: number, cmd: Record<string, unknown>) {
+  function cmdSkillsSync(cmd: Record<string, unknown>): Answer {
     // A service set's daemon writes none of the account's engine skill places, as it writes no user
     // PATH shim: they are one per OS account, and on a shared machine the default service is another
     // person's Walnut (2026-11-24). Answered, never refused; a probe reads held, so the skills never
@@ -115,7 +116,7 @@ export function createDaemonSkills<W>(deps: DaemonSkillsDeps<W>) {
     // only Walnut there and writes them.
     if (SET_ID && defaultServiceInstalled()) {
       const kept = { skipped: 'default-service', why: "kept by the default service: the account's engine skill places (distributed-skills and the engines' skill links) are written only by the default set" }
-      return sendOk(ws, id, cmd.probe === true ? { held: true, ...kept } : { applied: true, changed: false, ...kept })
+      return ok(cmd.probe === true ? { held: true, ...kept } : { applied: true, changed: false, ...kept })
     }
     const entries: Array<{ name: string; body: string }> = []
     // Held: every canonical copy on disk is still what was sent. The engine links are then put
@@ -128,7 +129,7 @@ export function createDaemonSkills<W>(deps: DaemonSkillsDeps<W>) {
       const held = !!hash && heldSkills !== null && heldSkills.hash === hash && heldSkills.entries.every((e) => {
         try { return fs.readFileSync(path.join(HOME_DIR, '.open-walnut', 'distributed-skills', e.name, 'SKILL.md'), 'utf-8') === e.body } catch { return false }
       })
-      if (!held) return sendOk(ws, id, { held: false })
+      if (!held) return ok({ held: false })
       probeHeld = true
       entries.push(...heldSkills!.entries)
     }
@@ -143,15 +144,15 @@ export function createDaemonSkills<W>(deps: DaemonSkillsDeps<W>) {
       const name = typeof item.name === 'string' ? item.name : ''
       const body = typeof item.skill === 'string' ? item.skill : ''
       if (!namePattern.test(name)) {
-        return sendError(ws, id, 'skills.sync: invalid skill name: ' + name)
+        return fail('skills.sync: invalid skill name: ' + name)
       }
       if (!body.includes(SKILL_SYNC_MARKER)) {
-        return sendError(ws, id, 'skills.sync: payload missing the managed marker')
+        return fail('skills.sync: payload missing the managed marker')
       }
       entries.push({ name, body })
     }
     if (!KEEPS_SESSIONS) {
-      return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' })
+      return ok({ applied: true, changed: false, skipped: 'non-prod' })
     }
     const wrote: string[] = []
     let canonicalFailed = false
@@ -277,10 +278,11 @@ export function createDaemonSkills<W>(deps: DaemonSkillsDeps<W>) {
       logMsg('warn', 'skills.sync: AGENTS.md fence removal failed', { error: (err as Error).message })
     }
     if (wrote.length > 0) logMsg('info', 'walnut skills distributed', { skills: entries.map((e) => e.name), wrote })
-    if (probeHeld) return sendOk(ws, id, { held: true, wrote })
-    return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote })
+    if (probeHeld) return ok({ held: true, wrote })
+    return ok({ applied: true, changed: wrote.length > 0, wrote })
   }
 
 
-  return { cmdSkillsSync }
+  const answers: Answers<W> = { 'skills.sync': cmdSkillsSync }
+  return { answers }
 }

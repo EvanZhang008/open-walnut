@@ -22,7 +22,7 @@ import {
   DRAIN_RESEND_EXEMPT, RESEND_AFTER_LOST, isDaemonDrainRefusal, resendThroughSwap, resendsAfter, wakeHostLink, waitHostLink,
 } from '../../src/providers/daemon-drain-resend.js'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
-import { daemonAreaModules } from '../helpers/daemon-runtime-text.js'
+import { answerTableCommands, daemonAreaModules } from '../helpers/daemon-runtime-text.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(REPO, rel), 'utf8')
@@ -37,7 +37,8 @@ function dispatched(rel: string): string[] {
 }
 
 const DAEMON = 'src/providers/daemon-standalone.ts'
-const COMMANDS = [...new Set(dispatched(DAEMON))].sort()
+// The dispatcher's cases and the command table (answered before its switch).
+const COMMANDS = [...new Set([...dispatched(DAEMON), ...answerTableCommands()])].sort()
 
 /** Places the daemon hands work to the drain after an await, each with why that is no client's command. */
 const RUN_AFTER_AWAIT: Record<string, string> = {

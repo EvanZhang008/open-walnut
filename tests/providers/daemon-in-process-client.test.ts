@@ -270,3 +270,67 @@ describe('createInProcessClient with checkFrames', () => {
     client.close()
   })
 })
+
+// A command the runtime answers by function is called (D5): its reply comes back from the call,
+// never through onFrame or the queue, and any other command is still a frame.
+describe('createInProcessClient: direct calls', () => {
+  function direct(answer: (ws: InProcessWs, frame: Frame) => Promise<Frame> | null, names = ['fs.read']) {
+    const calls = { commands: [] as Frame[], direct: [] as Frame[], heardFrom: 0, warn: [] as string[] }
+    const frames: Frame[] = []
+    const made = createInProcessClient<InProcessWs>({
+      handleCommandFrame: (socket, frame) => { calls.commands.push(frame); echo(socket, frame) },
+      direct: { has: (cmd) => names.includes(cmd as string), call: (socket, frame) => { calls.direct.push(frame); return answer(socket, frame) } },
+      register: () => {}, unregister: () => {}, heardFrom: () => { calls.heardFrom++ },
+      warn: (msg) => { calls.warn.push(msg) },
+    }, (f) => { frames.push(f) })
+    return { ...made, calls, frames }
+  }
+
+  it('call() hands the frame to the direct call and resolves with its reply, nothing through onFrame', async () => {
+    const { client, calls, frames } = direct(async (_ws, frame) => ({ id: frame.id, ok: true, data: 'x' }))
+    const reply = await client.call({ id: 5, cmd: 'fs.read', path: '/a' })
+    expect(reply).toEqual({ id: 5, ok: true, data: 'x' })
+    expect(calls.direct).toEqual([{ id: 5, cmd: 'fs.read', path: '/a' }])
+    expect(calls.commands).toEqual([])
+    expect(calls.heardFrom).toBe(2)
+    await settle()
+    expect(frames).toEqual([])
+  })
+
+  it('call() is null for a command the runtime does not answer by function, and for a runtime with none', () => {
+    const { client, calls } = direct(async () => ({ ok: true }))
+    expect(client.call({ id: 1, cmd: 'start' })).toBeNull()
+    expect(calls.direct).toEqual([])
+    expect(calls.commands).toEqual([])
+    const plain = setup(echo)
+    expect(plain.client.call({ id: 1, cmd: 'fs.read' })).toBeNull()
+  })
+
+  it('request() calls a table command and sends any other as a frame', async () => {
+    const { client, calls } = direct(async (_ws, frame) => ({ id: frame.id, ok: true, direct: true }))
+    expect(await client.request('fs.read', { path: '/a' })).toEqual({ id: -1, ok: true, direct: true })
+    expect(await client.request('list')).toEqual({ id: -2, ok: true, echo: 'list' })
+    expect(calls.direct.map((f) => f.cmd)).toEqual(['fs.read'])
+    expect(calls.commands.map((f) => f.cmd)).toEqual(['list'])
+  })
+
+  it('a direct call that throws or rejects is one error reply, warned', async () => {
+    const thrown = direct(() => { throw new Error('boom') })
+    expect(await thrown.client.call({ id: 3, cmd: 'fs.read' })).toEqual({ id: 3, ok: false, error: 'daemon command failed: boom' })
+    const rejected = direct(() => Promise.reject(new Error('late boom')))
+    expect(await rejected.client.call({ id: 4, cmd: 'fs.read' })).toEqual({ id: 4, ok: false, error: 'daemon command failed: late boom' })
+    expect([...thrown.calls.warn, ...rejected.calls.warn]).toEqual(['in-process client: command handler threw', 'in-process client: command handler threw'])
+  })
+
+  it('a reply after the client closed is dropped; a request then resolves client closed; call() after close throws', async () => {
+    const releases: Array<(f: Frame) => void> = []
+    const { client } = direct((_ws, frame) => new Promise<Frame>((resolve) => { releases.push(() => resolve({ id: frame.id, ok: true })) }))
+    const called = client.call({ id: 9, cmd: 'fs.read' })
+    const asked = client.request('fs.read')
+    client.close()
+    for (const release of releases) release({})
+    expect(await called).toBeNull()
+    expect(await asked).toEqual({ ok: false, error: 'client closed' })
+    expect(() => client.call({ id: 10, cmd: 'fs.read' })).toThrow('in-process daemon client is closed')
+  })
+})

@@ -25,8 +25,8 @@ const CORE = read('src/providers/served-walnuts-core.ts')
 const DAEMON = read('src/providers/daemon-standalone.ts')
 
 /** Every `servedWalnuts.note(` call in the daemon, by the top-level function it sits in. */
-// The per-Walnut pushes of a server socket (SERVED_PUSHES), and a socket bound to a home.
-const NOTE_SITES = ['handleCommandFrame', 'bindGatewayClientHome']
+// The per-Walnut pushes of a server socket (SERVED_PUSHES, in the gates every command passes), and a socket bound to a home.
+const NOTE_SITES = ['passCommandGates', 'bindGatewayClientHome']
 
 function noteSites(text: string): string[] {
   const lines = text.split('\n')

@@ -3,8 +3,8 @@
  * the cloud bridge may make), fs.readBounded, fs.readRange, fs.ls, fs.find, fs.stat,
  * fs.resolvePath ('path-resolve-v1') and fs.grep ('grep-v1'). The writes are daemon-fs-write.ts.
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher
- * calls the returned commands. The code is the runtime's as it was; deps carry the runtime's
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table
+ * takes the returned answers by name. The code is the runtime's as it was; deps carry the runtime's
  * own names, and children start through the runtime's childUse.
  */
 import fs from 'node:fs'
@@ -16,9 +16,9 @@ import { resolvePathHostLocal } from './path-resolve-core.js'
 import { findNameMatch, plainFindResults, restoreForRead } from './task-dir-core.js'
 import { grepReferencesHostLocal } from './search-grep-core.js'
 import type { ChildProcessUse } from './daemon-child-spawn.js'
-import type { DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers } from './daemon-module-deps.js'
 
-export interface DaemonFsReadDeps<W> extends DaemonReplies<W> {
+export interface DaemonFsReadDeps {
   HOME_DIR: string
   /** The CLI's config home (CLAUDE_CONFIG_DIR or ~/.claude). */
   CLAUDE_CONFIG_HOME: string
@@ -27,8 +27,8 @@ export interface DaemonFsReadDeps<W> extends DaemonReplies<W> {
   childUse: ChildProcessUse
 }
 
-export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
-  const { HOME_DIR, CLAUDE_CONFIG_HOME, CLAUDE_PROJECTS_DIRS, childUse, sendOk, sendError } = deps
+export function createDaemonFsRead<W>(deps: DaemonFsReadDeps) {
+  const { HOME_DIR, CLAUDE_CONFIG_HOME, CLAUDE_PROJECTS_DIRS, childUse } = deps
 
   // ── File system operations ──
   // NOTE: use fs.promises.* instead of sync calls — a large file read (e.g. a
@@ -38,10 +38,10 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
   // file is refused over this size: the server's own DaemonFileReader ceiling,
   // and it reads anything bigger through fs.readRange.
   const FS_READ_MAX_BYTES = 32 * 1024 * 1024
-  async function cmdFsRead(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsRead(cmd: Record<string, unknown>): Promise<Answer> {
     let filePath = cmd.path as string
     const encoding = cmd.encoding as string | undefined
-    if (!filePath) return sendError(ws, id, 'fs.read: missing path')
+    if (!filePath) return fail('fs.read: missing path')
 
     // Expand ~ to home directory (Node fs doesn't do shell expansion)
     if (filePath === '~' || filePath.startsWith('~/')) {
@@ -56,24 +56,24 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
       // local fs RPC timing out for hours). stat() never blocks on a FIFO.
       const st = await fs.promises.stat(filePath)
       if (!st.isFile()) {
-        return sendError(ws, id, 'fs.read failed: not a regular file (ENOTFILE)')
+        return fail('fs.read failed: not a regular file (ENOTFILE)')
       }
       if (st.size > FS_READ_MAX_BYTES) {
-        return sendError(ws, id, 'fs.read failed: file is ' + st.size + ' bytes, over the '
+        return fail('fs.read failed: file is ' + st.size + ' bytes, over the '
           + FS_READ_MAX_BYTES + '-byte ceiling for one read (EFBIG)')
       }
       const enc = encoding || 'base64'
       const data = await fs.promises.readFile(filePath)
       if (enc === 'base64') {
-        sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64' })
+        return ok({ data: data.toString('base64'), encoding: 'base64' })
       } else {
-        sendOk(ws, id, { data: data.toString('utf-8'), encoding: 'utf-8' })
+        return ok({ data: data.toString('utf-8'), encoding: 'utf-8' })
       }
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       // Tag ENOENT so the server can distinguish "file not found" from transport failure.
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.read failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.read failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
@@ -97,27 +97,27 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
     return false
   }
 
-  async function cmdFsReadImage(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsReadImage(cmd: Record<string, unknown>): Promise<Answer> {
     let filePath = cmd.path as string
-    if (!filePath) return sendError(ws, id, 'fs.readImage: missing path')
+    if (!filePath) return fail('fs.readImage: missing path')
     if (filePath === '~' || filePath.startsWith('~/')) {
       filePath = HOME_DIR + filePath.slice(1)
     }
-    if (filePath.includes('..')) return sendError(ws, id, 'fs.readImage: invalid path')
+    if (filePath.includes('..')) return fail('fs.readImage: invalid path')
     const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase()
-    if (!IMAGE_READ_EXTENSIONS.has(ext)) return sendError(ws, id, 'fs.readImage: not an image (ENOTIMAGE)')
+    if (!IMAGE_READ_EXTENSIONS.has(ext)) return fail('fs.readImage: not an image (ENOTIMAGE)')
 
     try {
       const st = await fs.promises.stat(filePath)
-      if (!st.isFile()) return sendError(ws, id, 'fs.readImage: not a file (ENOENT)')
-      if (st.size > IMAGE_READ_MAX_BYTES) return sendError(ws, id, 'fs.readImage: too large (EFBIG)')
+      if (!st.isFile()) return fail('fs.readImage: not a file (ENOENT)')
+      if (st.size > IMAGE_READ_MAX_BYTES) return fail('fs.readImage: too large (EFBIG)')
       const data = await fs.promises.readFile(filePath)
-      if (!looksLikeImage(data)) return sendError(ws, id, 'fs.readImage: not an image (ENOTIMAGE)')
-      sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64' })
+      if (!looksLikeImage(data)) return fail('fs.readImage: not an image (ENOTIMAGE)')
+      return ok({ data: data.toString('base64'), encoding: 'base64' })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.readImage failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.readImage failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
@@ -164,46 +164,46 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
     return false
   }
 
-  async function cmdFsReadBounded(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsReadBounded(cmd: Record<string, unknown>): Promise<Answer> {
     let filePath = cmd.path as string
-    if (!filePath || typeof filePath !== 'string') return sendError(ws, id, 'fs.readBounded: missing path')
+    if (!filePath || typeof filePath !== 'string') return fail('fs.readBounded: missing path')
     if (filePath === '~' || filePath.startsWith('~/')) {
       filePath = HOME_DIR + filePath.slice(1)
     }
     await restoreForRead(filePath, CLAUDE_PROJECTS_DIRS)
-    if (filePath.includes('..')) return sendError(ws, id, 'fs.readBounded: invalid path (EDENIED)')
-    if (!path.isAbsolute(filePath)) return sendError(ws, id, 'fs.readBounded: path must be absolute (EDENIED)')
+    if (filePath.includes('..')) return fail('fs.readBounded: invalid path (EDENIED)')
+    if (!path.isAbsolute(filePath)) return fail('fs.readBounded: path must be absolute (EDENIED)')
     try {
       // realpath BEFORE the denylist: a symlink at an innocent path must not
       // serve ~/.ssh bytes. ENOENT here doubles as the not-found check.
       const resolved = await fs.promises.realpath(filePath)
       if (fsReadBoundedDenied(resolved)) {
-        return sendError(ws, id, 'fs.readBounded: path not permitted (EDENIED)')
+        return fail('fs.readBounded: path not permitted (EDENIED)')
       }
       // Regular files ONLY, stat BEFORE open: open() on a FIFO with no writer
       // wedges an fs-pool thread forever (same guard as fs.read).
       const st = await fs.promises.stat(resolved)
-      if (!st.isFile()) return sendError(ws, id, 'fs.readBounded: not a regular file (ENOTFILE)')
+      if (!st.isFile()) return fail('fs.readBounded: not a regular file (ENOTFILE)')
       if (cmd.range === true) {
         const { offset, length, expectedVersion } = cmd
         if (!Number.isSafeInteger(offset) || (offset as number) < 0
           || !Number.isSafeInteger(length) || (length as number) < 0
           || (length as number) > FS_READ_BOUNDED_RANGE_BYTES
           || (expectedVersion !== undefined && typeof expectedVersion !== 'string')) {
-          return sendError(ws, id, 'fs.readBounded: invalid range (EINVAL)')
+          return fail('fs.readBounded: invalid range (EINVAL)')
         }
         const version = fsReadBoundedVersion(resolved, st)
         if (expectedVersion !== undefined && expectedVersion !== version) {
-          return sendError(ws, id, 'fs.readBounded: file changed (ESTALE)')
+          return fail('fs.readBounded: file changed (ESTALE)')
         }
         // Open only the guarded realpath, then verify the opened file and the
         // path again before releasing bytes. A replacement is never a new chunk.
         const fh = await fs.promises.open(resolved, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW)
         try {
           const opened = await fh.stat()
-          if (!opened.isFile()) return sendError(ws, id, 'fs.readBounded: not a regular file (ENOTFILE)')
+          if (!opened.isFile()) return fail('fs.readBounded: not a regular file (ENOTFILE)')
           if (fsReadBoundedVersion(resolved, opened) !== version) {
-            return sendError(ws, id, 'fs.readBounded: file changed (ESTALE)')
+            return fail('fs.readBounded: file changed (ESTALE)')
           }
           const data = Buffer.alloc(Math.min(length as number, Math.max(0, st.size - (offset as number))))
           let read = 0
@@ -214,28 +214,27 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
           }
           const after = await fh.stat()
           const current = await fs.promises.realpath(filePath)
-          if (fsReadBoundedDenied(current)) return sendError(ws, id, 'fs.readBounded: path not permitted (EDENIED)')
+          if (fsReadBoundedDenied(current)) return fail('fs.readBounded: path not permitted (EDENIED)')
           const currentStat = await fs.promises.stat(current)
           if (read !== data.length || fsReadBoundedVersion(resolved, after) !== version
             || fsReadBoundedVersion(current, currentStat) !== version) {
-            return sendError(ws, id, 'fs.readBounded: file changed (ESTALE)')
+            return fail('fs.readBounded: file changed (ESTALE)')
           }
-          sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64', size: st.size,
+          return ok({ data: data.toString('base64'), encoding: 'base64', size: st.size,
             offset, mtimeMs: st.mtimeMs, version })
         } finally {
           await fh.close()
         }
-        return
       }
       if (st.size > FS_READ_BOUNDED_MAX_BYTES) {
-        return sendError(ws, id, 'fs.readBounded: too large (EFBIG)')
+        return fail('fs.readBounded: too large (EFBIG)')
       }
       const data = await fs.promises.readFile(resolved)
-      sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64', size: data.length })
+      return ok({ data: data.toString('base64'), encoding: 'base64', size: data.length })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.readBounded failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.readBounded failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
@@ -247,9 +246,9 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
     readlink: (p) => fs.promises.readlink(p),
   })
 
-  async function cmdFsLs(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsLs(cmd: Record<string, unknown>): Promise<Answer> {
     let dirPath = cmd.path as string
-    if (!dirPath) return sendError(ws, id, 'fs.ls: missing path')
+    if (!dirPath) return fail('fs.ls: missing path')
 
     // Expand ~ to home directory (Node fs doesn't do shell expansion)
     if (dirPath === '~' || dirPath.startsWith('~/')) {
@@ -264,17 +263,17 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
       // default so high-frequency callers (git-root walks) don't pay the stats.
       const r = await fsLs.list(dirPath, cmd.detail === true)
       // Entries that did not answer in time: the server says "listing incomplete".
-      sendOk(ws, id, { entries: r.entries, resolvedPath: dirPath, ...(r.timedOut > 0 ? { partial: true, timedOut: r.timedOut } : {}) })
+      return ok({ entries: r.entries, resolvedPath: dirPath, ...(r.timedOut > 0 ? { partial: true, timedOut: r.timedOut } : {}) })
     } catch (err: unknown) {
-      sendError(ws, id, 'fs.ls failed: ' + (err as Error).message)
+      return fail('fs.ls failed: ' + (err as Error).message)
     }
   }
 
-  async function cmdFsFind(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsFind(cmd: Record<string, unknown>): Promise<Answer> {
     let basePath = (cmd.path as string) || '~/.claude/projects'
     const name = cmd.name as string
     const maxDepth = (cmd.maxDepth as number) || 3
-    if (!name) return sendError(ws, id, 'fs.find: missing name')
+    if (!name) return fail('fs.find: missing name')
 
     // The default root names the CLI's transcripts dir: walk this daemon's own
     // CLAUDE_CONFIG_DIR one too, since every CLI it spawns inherits that env and
@@ -315,15 +314,15 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
       for (const root of roots) await walk(root, 0)
       // A `<sid>.jsonl` find also matches an archived `<sid>.jsonl.gz`, or the manifest of one kept
       // only in remote storage: answer it restored, as its plain path.
-      sendOk(ws, id, { files: await plainFindResults(found, name) })
+      return ok({ files: await plainFindResults(found, name) })
     } catch (err: unknown) {
-      sendError(ws, id, 'fs.find failed: ' + (err as Error).message)
+      return fail('fs.find failed: ' + (err as Error).message)
     }
   }
 
-  async function cmdFsStat(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsStat(cmd: Record<string, unknown>): Promise<Answer> {
     let filePath = cmd.path as string
-    if (!filePath) return sendError(ws, id, 'fs.stat: missing path')
+    if (!filePath) return fail('fs.stat: missing path')
 
     if (filePath === '~' || filePath.startsWith('~/')) {
       filePath = HOME_DIR + filePath.slice(1)
@@ -338,17 +337,16 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
       // required to durably reset a consumedOffset watermark that belongs to a
       // dead file incarnation (incident inc-1786428350008: a 37.9 MB legacy-path
       // watermark suppressed every result in the 6 MB successor file).
-      sendOk(ws, id, {
+      return ok({
         exists: true, mtimeMs: st.mtimeMs, size: st.size,
         dev: st.dev, ino: st.ino, birthtimeMs: st.birthtimeMs,
       })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       if (e.code === 'ENOENT') {
-        sendOk(ws, id, { exists: false })
-        return
+        return ok({ exists: false })
       }
-      sendError(ws, id, 'fs.stat failed: ' + e.message)
+      return fail('fs.stat failed: ' + e.message)
     }
   }
 
@@ -363,9 +361,9 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
    * level (~18 on a deep path), which routinely blew its own time budget and fell
    * back to a path that did not exist.
    */
-  async function cmdFsResolvePath(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsResolvePath(cmd: Record<string, unknown>): Promise<Answer> {
     const ref = cmd.ref as string
-    if (!ref || typeof ref !== 'string') return sendError(ws, id, 'fs.resolvePath: missing ref')
+    if (!ref || typeof ref !== 'string') return fail('fs.resolvePath: missing ref')
     try {
       const result = await resolvePathHostLocal({
         ref,
@@ -376,9 +374,9 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
         budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
         childProcess: childUse,
       })
-      sendOk(ws, id, result as unknown as Record<string, unknown>)
+      return ok(result as unknown as Record<string, unknown>)
     } catch (err: unknown) {
-      sendError(ws, id, 'fs.resolvePath failed: ' + (err as Error).message)
+      return fail('fs.resolvePath failed: ' + (err as Error).message)
     }
   }
 
@@ -387,11 +385,11 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
    * 'grep-v1'. Same host-local rule as fs.resolvePath: git/grep run next to the
    * files and only the small match list crosses the tunnel.
    */
-  async function cmdFsGrep(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsGrep(cmd: Record<string, unknown>): Promise<Answer> {
     const file = cmd.file as string
     const symbol = cmd.symbol as string
-    if (!file || typeof file !== 'string') return sendError(ws, id, 'fs.grep: missing file')
-    if (!symbol || typeof symbol !== 'string') return sendError(ws, id, 'fs.grep: missing symbol')
+    if (!file || typeof file !== 'string') return fail('fs.grep: missing file')
+    if (!symbol || typeof symbol !== 'string') return fail('fs.grep: missing symbol')
     try {
       const result = await grepReferencesHostLocal({
         file,
@@ -400,9 +398,9 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
         budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
         childProcess: childUse,
       })
-      sendOk(ws, id, result as unknown as Record<string, unknown>)
+      return ok(result as unknown as Record<string, unknown>)
     } catch (err: unknown) {
-      sendError(ws, id, 'fs.grep failed: ' + (err as Error).message)
+      return fail('fs.grep failed: ' + (err as Error).message)
     }
   }
 
@@ -421,12 +419,12 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
   // incremental "only the appended bytes" path for turn deltas.
   // Returns base64 (byte-exact — a range can split a UTF-8 char; the CLIENT
   // reassembles bytes then decodes). eof lets the caller stop without a stat race.
-  async function cmdFsReadRange(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsReadRange(cmd: Record<string, unknown>): Promise<Answer> {
     let filePath = cmd.path as string
     const start = typeof cmd.start === 'number' && cmd.start >= 0 ? cmd.start : 0
     const length = typeof cmd.length === 'number' && cmd.length > 0
       ? Math.min(cmd.length as number, 4 * 1024 * 1024) : 1024 * 1024
-    if (!filePath) return sendError(ws, id, 'fs.readRange: missing path')
+    if (!filePath) return fail('fs.readRange: missing path')
 
     if (filePath === '~' || filePath.startsWith('~/')) {
       filePath = HOME_DIR + filePath.slice(1)
@@ -439,13 +437,12 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
       // Same FIFO guard as fs.read: stat BEFORE open (see cmdFsRead).
       const pre = await fs.promises.stat(filePath)
       if (!pre.isFile()) {
-        return sendError(ws, id, 'fs.readRange failed: not a regular file (ENOTFILE)')
+        return fail('fs.readRange failed: not a regular file (ENOTFILE)')
       }
       fh = await fs.promises.open(filePath, 'r')
       const st = await fh.stat()
       if (start >= st.size) {
-        sendOk(ws, id, { data: '', bytesRead: 0, fileSize: st.size, eof: true })
-        return
+        return ok({ data: '', bytesRead: 0, fileSize: st.size, eof: true })
       }
       const toRead = Math.min(length, st.size - start)
       const buf = Buffer.alloc(toRead)
@@ -453,7 +450,7 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
       const bytes = buf.subarray(0, bytesRead)
       // fs-read-range-gz-v1: gzipped off this loop (zlib's thread pool) when the caller asked.
       const gz = cmd.gz === true && bytesRead >= RANGE_GZ_MIN_BYTES ? await gzipRange(bytes) : null
-      sendOk(ws, id, {
+      return ok({
         ...(gz && gz.length < bytesRead ? { dataGz: gz.toString('base64') } : { data: bytes.toString('base64') }),
         bytesRead,
         fileSize: st.size,
@@ -462,11 +459,15 @@ export function createDaemonFsRead<W>(deps: DaemonFsReadDeps<W>) {
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.readRange failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.readRange failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     } finally {
       try { await fh?.close() } catch { /* already closed */ }
     }
   }
 
-  return { cmdFsRead, cmdFsReadImage, cmdFsReadBounded, cmdFsReadRange, cmdFsLs, cmdFsFind, cmdFsStat, cmdFsResolvePath, cmdFsGrep, looksLikeImage }
+  const answers: Answers<W> = {
+    'fs.read': cmdFsRead, 'fs.readImage': cmdFsReadImage, 'fs.readBounded': cmdFsReadBounded, 'fs.readRange': cmdFsReadRange,
+    'fs.ls': cmdFsLs, 'fs.find': cmdFsFind, 'fs.stat': cmdFsStat, 'fs.resolvePath': cmdFsResolvePath, 'fs.grep': cmdFsGrep,
+  }
+  return { answers, looksLikeImage }
 }

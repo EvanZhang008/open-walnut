@@ -24,8 +24,11 @@ describe('link frames: a field never takes a frame key', () => {
   it("the daemon: an answer's id comes after its data, and a refusal's ok:false in its data survives", () => {
     const src = read('src/providers/daemon-standalone.ts')
     // ok first (a refusal sent through sendOk with ok:false keeps it: 2026-11-21 review, R2-1), id last.
-    expect(fnBody(src, 'sendOk')).toMatch(/\{\s*ok:\s*true,\s*\.\.\.data,\s*id\s*\}/)
-    expect(fnBody(src, 'sendError')).toMatch(/\{\s*\.\.\.data,\s*id,\s*ok:\s*false/)
+    // sendOk / sendError send the frames okFrame / errorFrame build (a direct call's reply is the same object).
+    expect(fnBody(src, 'sendOk')).toMatch(/sendFrame\(ws, okFrame\(ws, id, data\)\)/)
+    expect(fnBody(src, 'sendError')).toMatch(/sendFrame\(ws, errorFrame\(ws, id, error, data, level\)\)/)
+    expect(fnBody(src, 'okFrame')).toMatch(/\{\s*ok:\s*true,\s*\.\.\.data,\s*id\s*\}/)
+    expect(fnBody(src, 'errorFrame')).toMatch(/\{\s*\.\.\.data,\s*id,\s*ok:\s*false/)
     // The same object built the way the daemon builds it.
     const data: Record<string, unknown> = { ok: false, error: 'session_stopped', id: 'trigger-1' }
     const frame = { ok: true, ...data, id: 7 }

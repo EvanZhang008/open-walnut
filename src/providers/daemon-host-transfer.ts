@@ -4,7 +4,8 @@
  * ('host-facts-v1') and the desktop app's update.
  *
  * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher answers
- * through replyOneShot / replyTransfer and the cores returned here; its cleanup, Demo quiesce and
+ * the one-shot runs through replyOneShot and whose command table the host-local commands through
+ * transferAnswer, with the cores returned here; its cleanup, Demo quiesce and
  * socket close end the one-shot runs. The code is the runtime's as it was; deps carry the
  * runtime's own names.
  */
@@ -25,7 +26,7 @@ import type { createCliArgvFiles } from './cli-argv-files-core.js'
 import type { createHostResume } from './host-resume-core.js'
 import type { createDaemonCommandDrain } from './daemon-command-drain.js'
 import type { ChildProcessFns } from './daemon-child-spawn.js'
-import type { DaemonEnv, DaemonLog, DaemonReplies, DaemonSendEvent } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type DaemonEnv, type DaemonLog, type DaemonReplies, type DaemonSendEvent } from './daemon-module-deps.js'
 
 export interface DaemonHostTransferDeps<W extends object> extends DaemonReplies<W> {
   daemonEnv: DaemonEnv
@@ -136,11 +137,6 @@ export function createDaemonHostTransfer<W extends object>(deps: DaemonHostTrans
   }
 
   /**
-   * Answer one transfer-family command: its result, or `{error, code, ...data}`.
-   * `tracked` work (a pack, a fetch) rides the command drain, so a shutdown waits
-   * for it instead of cutting a bundle or a download in half.
-   */
-  /**
    * Where a session's uploads land: the task's own directory, which survives a
    * reboot and is cleaned with the task. The task is the one THIS daemon started
    * the session for; a bridge caller cannot name another, and only the server's
@@ -165,24 +161,29 @@ export function createDaemonHostTransfer<W extends object>(deps: DaemonHostTrans
     return dir ? path.join(dir, 'uploads') : fallback
   }
 
-  function replyTransfer(ws: W, id: number, name: string, work: () => Promise<unknown>, tracked: boolean) {
+  /**
+   * The answer of one host-local command (the transfer family, host facts, exec, MCP, net, ...):
+   * its result, or `{error, code, ...data}`. `tracked` work (a pack, a fetch) rides the command
+   * drain, so a shutdown waits for it instead of cutting a bundle or a download in half.
+   */
+  function transferAnswer(name: string, work: () => Promise<unknown>, tracked: boolean): Promise<Answer> {
     const answer = () => work().then(
-      (r) => sendOk(ws, id, r as Record<string, unknown>),
+      (r) => ok(r as Record<string, unknown>),
       (err) => {
         const e = err as Error & { code?: unknown; data?: Record<string, unknown> }
-        sendError(ws, id, name + ' failed: ' + e.message, { ...(e.data ?? {}), code: typeof e.code === 'string' ? e.code : 'failed' })
+        return fail(name + ' failed: ' + e.message, { ...(e.data ?? {}), code: typeof e.code === 'string' ? e.code : 'failed' })
       },
     )
     try {
       return tracked ? daemonCommands.run(answer) : answer()
     } catch (err) {
-      sendError(ws, id, name + ' failed: ' + (err as Error).message, { code: 'shutting_down' })
+      return Promise.resolve(fail(name + ' failed: ' + (err as Error).message, { code: 'shutting_down' }))
     }
   }
 
   return {
     oneShot, replyOneShot,
     transferCore, transferPack, desktopUpdate, hostFacts, hostVitals,
-    uploadsOwnerlessRoot, uploadsRootFor, replyTransfer,
+    uploadsOwnerlessRoot, uploadsRootFor, transferAnswer,
   }
 }

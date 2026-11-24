@@ -25,6 +25,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-revoked-r
 import { REVOKED_REACH, REVOKED_REFUSED, REVOKED_STILL_REACHES } from '../../../src/core/session-channel/revoked-reach.js'
 import { MAC_DRAINS } from '../../../src/core/offline-merge/apply-v2.js'
 import { listOps } from '../../../src/ops/index.js'
+import { daemonCommandNames } from '../../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -76,10 +77,9 @@ function bodyOf(src: string, signature: string): string {
 
 /** The source without its comment lines (a doc comment's example is no member). */
 const noComments = (src: string) => src.replace(/^\s*(\/\/|\/?\*).*$/gm, '')
-/** The commands the daemon's own dispatch takes (daemon-standalone.ts dispatchCommand's switch). */
+/** The commands the daemon takes: dispatchCommand's switch and its command table (daemonCommandNames). */
 function daemonCommands(): string[] {
-  const src = read('src/providers/daemon-standalone.ts')
-  return all(bodyOf(src.slice(src.indexOf('function dispatchCommand(')), 'switch (cmd.cmd) {'), /case '([^']+)':/g)
+  return daemonCommandNames()
 }
 
 const all = (src: string, re: RegExp): string[] => [...new Set([...src.matchAll(re)].map((m) => m[1]!))].sort()

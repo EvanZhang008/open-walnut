@@ -12,6 +12,7 @@ import * as path from 'node:path'
 import { createGitAttribution } from '../../src/providers/git-attribution-core.js'
 import { createGitCommitCore, type GitCommitDeps } from '../../src/providers/git-commit-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { daemonCommandNames } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -28,7 +29,8 @@ function bridgeAllowlist(src: string): string {
 
 describe('git-commit-v1 daemon wiring', () => {
   it('the daemon dispatches the three commands', () => {
-    for (const cmd of COMMANDS) expect(standalone).toContain(`case '${cmd}':`)
+    // A dispatch case or a command-table entry (daemonCommandNames).
+    for (const cmd of COMMANDS) expect(daemonCommandNames()).toContain(cmd)
   })
 
   it('the capability is advertised, not required, and no command is reachable over the bridge', () => {

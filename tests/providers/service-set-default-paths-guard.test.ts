@@ -133,7 +133,7 @@ describe('every default place a set\'s service program derives is decided for a 
       expect(at, src.name).toBeGreaterThan(-1)
       const body = src.text.slice(src.text.indexOf('{', at) + 1).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//'))
       expect(body[0], src.name).toBe('if (SET_ID && defaultServiceInstalled()) {')
-      expect(body.slice(1, 3).join(' '), src.name).toMatch(/skipped: 'default-service'.*kept by the default service[\s\S]*return sendOk\(/)
+      expect(body.slice(1, 3).join(' '), src.name).toMatch(/skipped: 'default-service'.*kept by the default service[\s\S]*return ok\(/)
     }
   })
 

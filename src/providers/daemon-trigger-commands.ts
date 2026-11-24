@@ -4,7 +4,7 @@
  * triggers.state.snapshot / triggers.state.seed (a trigger's memory moved between daemons).
  *
  * Created once per runtime by createDaemonRuntime (daemon-standalone.ts) over the trigger store
- * and runs (daemon-trigger-store.ts, daemon-trigger-runs.ts); its dispatcher calls the commands,
+ * and runs (daemon-trigger-store.ts, daemon-trigger-runs.ts); its command table takes the answers,
  * its offline host runTriggerTest, its Demo quiesce counts triggerTestsRunning. The code is the
  * runtime's as it was; deps carry the runtime's own names.
  */
@@ -18,9 +18,9 @@ import type { ClockHostStart } from './clock-host-start-core.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { ArmedTrigger, TriggerSocket, createDaemonTriggerStore } from './daemon-trigger-store.js'
 import type { createDaemonTriggerRuns } from './daemon-trigger-runs.js'
-import type { DaemonLog, DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonLog } from './daemon-module-deps.js'
 
-export interface DaemonTriggerCommandsDeps<W extends TriggerSocket> extends DaemonReplies<W> {
+export interface DaemonTriggerCommandsDeps<W extends TriggerSocket> {
   triggerStore: ReturnType<typeof createDaemonTriggerStore<W>>
   triggerRuns: ReturnType<typeof createDaemonTriggerRuns>
   /** A stopping Demo starts no test. */
@@ -35,13 +35,13 @@ export interface DaemonTriggerCommandsDeps<W extends TriggerSocket> extends Daem
   walnutScope: ReturnType<typeof createWalnutScope>
   /** The Walnut each trusted socket speaks for. */
   gatewayClientHomes: WeakMap<W, string>
-  /** Refuses (and answers) a command that names a Walnut this socket does not speak for. */
-  refuseForeignHome: (ws: W, id: number, cmd: Record<string, unknown>, what: string) => boolean
+  /** The refusal of a command that names a Walnut this socket does not speak for, or null. */
+  foreignHomeRefusal: (from: W, cmd: Record<string, unknown>, what: string) => Answer | null
   logMsg: DaemonLog
 }
 
 export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: DaemonTriggerCommandsDeps<W>) {
-  const { triggerStore, triggerRuns, demoQuiesce, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, clockHostStart, walnutScope, gatewayClientHomes, refuseForeignHome, logMsg, sendOk, sendError } = deps
+  const { triggerStore, triggerRuns, demoQuiesce, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, clockHostStart, walnutScope, gatewayClientHomes, foreignHomeRefusal, logMsg } = deps
   const { TRIGGER_STATE_DIR, armedTriggers, drainingTriggers, hostDeliveriesInFlight, triggerChecksRunning, triggerScopes, triggersConfigureGate, triggerKey, heldTrigger, triggerFor, triggerStateDirOf, triggerStatePath, persistTriggerState, persistTriggersFile, triggerOwnerOf } = triggerStore
   const { checkRunFence, runClock, runTrigger } = triggerRuns
 
@@ -67,27 +67,24 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
 
   /**
    * The Walnut a run, ack, claim or test is about: the home it names, else the one
-   * this socket configured triggers for. Null (and refused) when it names a Walnut
-   * this socket does not speak for.
+   * this socket configured triggers for. The refusal when it names a Walnut this
+   * socket does not speak for.
    */
-  function triggerCommandHome(ws: W, id: number, cmd: Record<string, unknown>, what: string): string | null {
-    const bound = gatewayClientHomes.get(ws) ?? (ws.data?.triggerScope || undefined)
-    if (walnutScope.foreign(cmd, bound)) {
-      sendError(ws, id, `${what}: this socket speaks for another Walnut`)
-      return null
-    }
-    return walnutScope.askedHome(cmd) || ws.data?.triggerScope || ''
+  function triggerCommandHome(from: W, cmd: Record<string, unknown>, what: string): string | Answer {
+    const bound = gatewayClientHomes.get(from) ?? (from.data?.triggerScope || undefined)
+    if (walnutScope.foreign(cmd, bound)) return fail(`${what}: this socket speaks for another Walnut`)
+    return walnutScope.askedHome(cmd) || from.data?.triggerScope || ''
   }
 
   /** Run once and answer; NEVER touch stored state (the form's Test button). */
-  async function cmdTriggersTest(ws: W, id: number, cmd: Record<string, unknown>) {
-    const home = triggerCommandHome(ws, id, cmd, 'triggers.test')
-    if (home === null) return
+  async function cmdTriggersTest(cmd: Record<string, unknown>, from: W): Promise<Answer> {
+    const home = triggerCommandHome(from, cmd, 'triggers.test')
+    if (typeof home !== 'string') return home
     try {
       const result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined, home, testCheckCaller(cmd.checkCaller))
-      sendOk(ws, id, { result: result as unknown as Record<string, unknown> })
+      return ok({ result: result as unknown as Record<string, unknown> })
     } catch (err) {
-      sendError(ws, id, (err as Error).message)
+      return fail((err as Error).message)
     }
   }
 
@@ -158,19 +155,19 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
    * the fire landed anyway. The outcome travels as trigger.fired / trigger.checked,
    * exactly as it does for a clock-driven run.
    */
-  function cmdTriggersRun(ws: W, id: number, cmd: Record<string, unknown>) {
-    const home = triggerCommandHome(ws, id, cmd, 'triggers.run')
-    if (home === null) return
+  function cmdTriggersRun(cmd: Record<string, unknown>, from: W): Answer {
+    const home = triggerCommandHome(from, cmd, 'triggers.run')
+    if (typeof home !== 'string') return home
     const tid = triggerIdOf(cmd)
     const held = tid ? triggerFor(home, tid) : undefined
     const entry = held && armedTriggers.get(triggerKey(held.home, tid)) === held ? held : undefined
-    if (!entry) return sendError(ws, id, 'triggers.run: unknown trigger: ' + tid)
-    if (entry.def.clock) return sendOk(ws, id, { ran: true, started: true, outcome: runClock(entry, true) })
-    if (entry.running) return sendOk(ws, id, { ran: false, reason: 'running' })
+    if (!entry) return fail('triggers.run: unknown trigger: ' + tid)
+    if (entry.def.clock) return ok({ ran: true, started: true, outcome: runClock(entry, true) })
+    if (entry.running) return ok({ ran: false, reason: 'running' })
     void runTrigger(entry).catch((err) => {
       logMsg('error', 'trigger run threw', { id: entry.def.id, error: (err as Error).message })
     })
-    return sendOk(ws, id, { ran: true, started: true })
+    return ok({ ran: true, started: true })
   }
 
   /**
@@ -180,7 +177,7 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
    * holds every rule). Runs behind any configure in flight. Every refusal is an ok
    * reply `{supported: false, reason}`, so a caller that cannot freeze moves on.
    */
-  function cmdTriggersStateSnapshot(ws: W, id: number, cmd: Record<string, unknown>) {
+  function cmdTriggersStateSnapshot(cmd: Record<string, unknown>, from: W): Promise<Answer> {
     return triggersConfigureGate.run('triggers.configure', async () => {
       const home = walnutScope.askedHome(cmd)
       const reply = takeTriggerStateSnapshot({
@@ -189,8 +186,8 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
         request: {
           askedHome: home,
           triggerId: cmd.triggerId,
-          socketTriggerScope: ws.data?.triggerScope,
-          socketGatewayHome: gatewayClientHomes.get(ws),
+          socketTriggerScope: from.data?.triggerScope,
+          socketGatewayHome: gatewayClientHomes.get(from),
           configuredIds: home && triggerScopes.has(home) ? triggerScopes.get(home)!.configured.map((def) => def.id) : undefined,
           unnamedConfiguredIds: (triggerScopes.get('')?.configured ?? []).map((def) => def.id),
         },
@@ -216,7 +213,7 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
         id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home),
         supported: reply.supported, ...(reply.supported ? { seq: reply.state.seq, seen: reply.seenCount } : { reason: reply.reason }),
       })
-      sendOk(ws, id, reply as unknown as Record<string, unknown>)
+      return ok(reply as unknown as Record<string, unknown>)
     })
   }
 
@@ -228,8 +225,9 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
    * flight. Every refusal but a foreign home is an ok reply `{seeded: false, reason}`.
    *
    */
-  function cmdTriggersStateSeed(ws: W, id: number, cmd: Record<string, unknown>) {
-    if (refuseForeignHome(ws, id, cmd, 'triggers.state.seed')) return
+  function cmdTriggersStateSeed(cmd: Record<string, unknown>, from: W): Answer | Promise<Answer> {
+    const foreign = foreignHomeRefusal(from, cmd, 'triggers.state.seed')
+    if (foreign) return foreign
     return triggersConfigureGate.run('triggers.configure', async () => {
       const home = walnutScope.askedHome(cmd)
       const reply = seedTriggerState({
@@ -256,7 +254,7 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
         id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home),
         seeded: reply.seeded, ...(reply.seeded ? { seq: reply.seq, seen: reply.seenCount, ...(reply.already ? { already: true } : {}) } : { reason: reply.reason }),
       })
-      sendOk(ws, id, reply as unknown as Record<string, unknown>)
+      return ok(reply as unknown as Record<string, unknown>)
     })
   }
 
@@ -268,27 +266,27 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
    * with `unknown` (acked, trimmed or disarmed: the server's own dedup decides).
    * A socket of another Walnut cannot take a fire of this one's trigger.
    */
-  function cmdTriggersClaim(ws: W, id: number, cmd: Record<string, unknown>) {
-    const asked = triggerCommandHome(ws, id, cmd, 'triggers.claim')
-    if (asked === null) return
+  function cmdTriggersClaim(cmd: Record<string, unknown>, from: W): Answer {
+    const asked = triggerCommandHome(from, cmd, 'triggers.claim')
+    if (typeof asked !== 'string') return asked
     const tid = triggerIdOf(cmd)
     const seqs = Array.isArray(cmd.seqs) ? (cmd.seqs as unknown[]).filter((s): s is number => typeof s === 'number' && Number.isFinite(s)) : []
     const entry = tid ? triggerFor(asked, tid) : undefined
     const inFlight = hostDeliveriesInFlight.get(triggerKey(entry ? entry.home : asked, tid)) ?? new Set<number>()
     const empty = { claimed: [] as number[], unknown: [] as number[], host: [], busy: [] as number[] }
     if (!entry || (typeof cmd.epoch === 'string' && cmd.epoch !== entry.state.epoch)) {
-      return sendOk(ws, id, { ...empty, busy: seqs.filter((s) => inFlight.has(s)), unknown: seqs.filter((s) => !inFlight.has(s)) })
+      return ok({ ...empty, busy: seqs.filter((s) => inFlight.has(s)), unknown: seqs.filter((s) => !inFlight.has(s)) })
     }
-    const home = asked || gatewayClientHomes.get(ws)
+    const home = asked || gatewayClientHomes.get(from)
     const owner = triggerOwnerOf(entry.def)
     if (owner && home && home !== owner) {
       logMsg('warn', 'trigger claim refused: another Walnut', { id: tid, seqs })
-      return sendOk(ws, id, { ...empty, foreign: true })
+      return ok({ ...empty, foreign: true })
     }
     const marked = markStartedRuns(entry, seqs)
     const { reply, changed } = claimFires(entry.state, seqs, Date.now(), inFlight)
     if (changed || marked) persistTriggerState(entry.home, tid, entry.state)
-    return sendOk(ws, id, reply as unknown as Record<string, unknown>)
+    return ok(reply as unknown as Record<string, unknown>)
   }
 
   /**
@@ -312,13 +310,13 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
     return changed
   }
 
-  function cmdTriggersAck(ws: W, id: number, cmd: Record<string, unknown>) {
-    const home = triggerCommandHome(ws, id, cmd, 'triggers.ack')
-    if (home === null) return
+  function cmdTriggersAck(cmd: Record<string, unknown>, from: W): Answer {
+    const home = triggerCommandHome(from, cmd, 'triggers.ack')
+    if (typeof home !== 'string') return home
     const tid = triggerIdOf(cmd)
     const seq = typeof cmd.seq === 'number' ? cmd.seq : NaN
     const entry = tid ? triggerFor(home, tid) : undefined
-    if (!entry || !Number.isFinite(seq)) return sendOk(ws, id, { acked: false })
+    if (!entry || !Number.isFinite(seq)) return ok({ acked: false })
     const acked = ackFire(entry.state, seq)
     if (acked) {
       entry.fireSentAt.delete(seq)
@@ -331,11 +329,16 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
         logMsg('info', 'clock routine drained', { id: tid })
       }
     }
-    return sendOk(ws, id, { acked })
+    return ok({ acked })
+  }
+
+  const answers: Answers<W> = {
+    'triggers.test': cmdTriggersTest, 'triggers.run': cmdTriggersRun, 'triggers.ack': cmdTriggersAck, 'triggers.claim': cmdTriggersClaim,
+    'triggers.state.snapshot': cmdTriggersStateSnapshot, 'triggers.state.seed': cmdTriggersStateSeed,
   }
 
   return {
-    cmdTriggersTest, runTriggerTest, cmdTriggersRun, cmdTriggersStateSnapshot, cmdTriggersStateSeed, cmdTriggersClaim, cmdTriggersAck,
+    answers, runTriggerTest,
     /** Tests running now (the Demo quiesce waits for 0). */
     get triggerTestsRunning() { return triggerTestsRunning },
   }

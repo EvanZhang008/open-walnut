@@ -464,7 +464,7 @@ describe('owner-scoped follower reads, replica-reads-v1 (replica plan WP6)', () 
 
   it(`the owner scope runs right after the follower allowlist, before any handler, and list keeps the follower's rows`, () => {
     const allow = src.search(/origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS\.has\(cmd\.cmd( as string)?\)\) \{/)
-    const scope = src.search(/origin === 'follower' && followerScope\(ws, id( as number)?, cmd\)\) return/)
+    const scope = src.search(/origin === 'follower' && followerScope\(ws, id( as number)?, cmd(, reply)?\)\) return/)
     const lane = src.search(/origin === 'lane' && !LANE_ALLOWED_COMMANDS\.has/)
     expect(allow).toBeGreaterThan(0)
     expect(scope).toBeGreaterThan(allow)
@@ -485,9 +485,12 @@ describe('owner-scoped follower reads, replica-reads-v1 (replica plan WP6)', () 
     expect(fnBody(src, 'followerHears')).toMatch(/origin !== 'follower' \|\| followerReads\.ownRows\(followerHomeOf\(client\), \[\{ sid(: sid)? \}\]\)\.length === 1/)
     // WP6 fix round: a whole-repository answer is cut on its way out; a refusal is no 'command error'.
     expect(fnBody(src, 'followerScope')).toMatch(/if \(d\.scope\) followerReads\.hold\(ws, id, d\.scope\)/)
-    expect(fnBody(src, 'followerScope')).not.toMatch(/sendError\(ws, id, d\.refuse/)
-    expect(fnBody(src, 'sendOk')).toMatch(/origin === 'follower'\) data = followerReads\.settle\(ws, id, data\)/)
-    expect(fnBody(src, 'sendError')).toMatch(/origin === 'follower'\) followerReads\.settle\(ws, id\)/)
+    expect(fnBody(src, 'followerScope')).not.toMatch(/(sendError|errorFrame)\(ws, id, d\.refuse/)
+    // Every reply frame is built by okFrame / errorFrame (sendOk, sendError and a direct call's answer alike).
+    expect(fnBody(src, 'okFrame')).toMatch(/origin === 'follower'\) data = followerReads\.settle\(ws, id, data\)/)
+    expect(fnBody(src, 'errorFrame')).toMatch(/origin === 'follower'\) followerReads\.settle\(ws, id\)/)
+    expect(fnBody(src, 'sendOk')).toContain('sendFrame(ws, okFrame(ws, id, data))')
+    expect(fnBody(src, 'sendError')).toContain('sendFrame(ws, errorFrame(ws, id, error, data, level))')
     expect(src).toMatch(/denyRoots: [^\n]*followerDenyRoots\(\)/)
     for (const dir of ['DAEMON_DIR', 'REPLICA_DIR', 'HOST_SERVER_DIR', 'STREAMS_DIR', 'LEGACY_STREAMS_DIR', 'DAEMON_STATE_DIR', 'hostServers.dataDirs()', "'.claude'", "'.open-walnut'", "'.open-walnut-host'"]) {
       expect(fnBody(src, 'followerDenyRoots'), dir).toContain(dir)

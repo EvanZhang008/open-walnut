@@ -24,7 +24,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // refuses past its byte ceiling, so rewind on a long transcript depends entirely
   // on this capability reaching hosts, i.e. on the version hash below.
   it("daemon: dispatch transcript.rewindProbe; 'rewind-probe-v1' is advertised, NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'transcript\.rewindProbe': return transcripts\.cmdTranscriptRewindProbe/)
+    expect(standaloneSrc).toMatch(/'transcript\.rewindProbe': cmdTranscriptRewindProbe\b/)
     expect(standaloneSrc).toMatch(/function cmdTranscriptRewindProbe/)
     // The daemon imports the core.
     expect(standaloneSrc).toMatch(/from '\.\/transcript-rewind-core\.js'/)
@@ -68,7 +68,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // 'grep-v1' is unconditional on a current daemon, and still
   // advertised-not-required so old ones stay usable.
   it("daemon: dispatch fs.grep; 'grep-v1' advertised but NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'fs\.grep': return fsRead\.cmdFsGrep/)
+    expect(standaloneSrc).toMatch(/'fs\.grep': cmdFsGrep\b/)
     expect(standaloneSrc).toMatch(/function cmdFsGrep/)
     // The daemon uses the shared core.
     expect(standaloneSrc).toMatch(/from '\.\/search-grep-core\.js'/)
@@ -96,10 +96,9 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // half: that string reaches a `git show <sha>:<path>` argument, so the daemon
   // must refuse a non-sha BEFORE spawning anything.
   it("daemon: dispatch git.fileLog/git.fileShow; 'git-file-history-v1' advertised but NOT required", () => {
-    expect(standaloneSrc).toContain("case 'git.fileLog'")
-    expect(standaloneSrc).toContain("case 'git.fileShow'")
-    expect(standaloneSrc).toMatch(/case 'git\.fileLog': return git\.cmdGitFileLog/)
-    expect(standaloneSrc).toMatch(/case 'git\.fileShow': return git\.cmdGitFileShow/)
+    expect(standaloneSrc).toMatch(/'git\.fileLog': cmdGitFileLog\b/)
+    expect(standaloneSrc).toMatch(/'git\.fileShow': cmdGitFileShow\b/)
+    expect(standaloneSrc).toContain('git.answers]')
     // The commands live in the runtime's git module (daemon-git.ts).
     const gitSrc = readFile(path.join(ROOT, 'src/providers/daemon-git.ts'))
     expect(gitSrc).toMatch(/function cmdGitFileLog/)
@@ -147,7 +146,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
 
   // External-session scan (sessions.discoverExternal).
   it("daemon: dispatch sessions.discoverExternal; 'external-scan-v1' is advertised, NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'sessions\.discoverExternal': return transcripts\.cmdDiscoverExternalSessions/)
+    expect(standaloneSrc).toMatch(/'sessions\.discoverExternal': cmdDiscoverExternalSessions\b/)
     expect(standaloneSrc).toMatch(/function cmdDiscoverExternalSessions/)
     // Serialized daemon-wide: concurrent walks over thousands of transcript
     // files would be the same starvation shape changes-v1 guards against.
@@ -177,7 +176,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
     // Containment intact: the unbounded read stays off the bridge.
     expect(allowBody).not.toContain("'fs.read'")
     expect(allowBody).not.toContain("'fs.readRange'")
-    expect(standaloneSrc).toMatch(/case 'fs\.readBounded': return fsRead\.cmdFsReadBounded/)
+    expect(standaloneSrc).toMatch(/'fs\.readBounded': cmdFsReadBounded\b/)
     expect(standaloneSrc).toMatch(/function cmdFsReadBounded/)
   })
   it('daemon: enforce the same fs.readBounded cap, sandbox ordering, and denylist', () => {
@@ -213,9 +212,9 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // errorOnExist + the lstat pre-checks stop a rename/copy from silently
   // replacing another file.
   it('daemon: dispatch fs.rename / fs.rm / fs.copy and share the mutation floor', () => {
-    expect(standaloneSrc).toContain("case 'fs.rename'")
-    expect(standaloneSrc).toContain("case 'fs.rm'")
-    expect(standaloneSrc).toContain("case 'fs.copy'")
+    expect(standaloneSrc).toContain("'fs.rename': cmdFsRename")
+    expect(standaloneSrc).toContain("'fs.rm': cmdFsRm")
+    expect(standaloneSrc).toContain("'fs.copy': cmdFsCopy")
     expect(standaloneSrc).toMatch(/function fsMutateFloor/)
     expect(standaloneSrc).toMatch(/function cmdFsRename/)
     expect(standaloneSrc).toMatch(/function cmdFsRm/)
@@ -321,7 +320,7 @@ describe('daemon wiring: host-local commands (transcript, grep, git, fs, externa
   // order, which is what keeps it from
   // ever touching a tracked file or a .gitignore.
   it('daemon: dispatch git.ensureExcluded with the same check order and keep it off the bridge', () => {
-    expect(standaloneSrc).toMatch(/case 'git\.ensureExcluded': return git\.cmdGitEnsureExcluded/)
+    expect(standaloneSrc).toMatch(/'git\.ensureExcluded': cmdGitEnsureExcluded\b/)
     const gitSrc = readFile(path.join(ROOT, 'src/providers/daemon-git.ts'))
     const start = gitSrc.search(/async function cmdGitEnsureExcluded/)
     expect(start).toBeGreaterThan(-1)
@@ -421,7 +420,7 @@ describe('codex outside usage (codex-outside-v1)', () => {
   // The whole runtime: daemon-standalone.ts and its area modules (the usage scans are daemon-changes.ts).
   const standalone = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
   it('daemon: route usage.codexOutside to the shared scan with the same request fields', () => {
-    expect(standalone).toMatch(/case 'usage\.codexOutside': return sessionChanges\.cmdUsageCodexOutside/)
+    expect(standalone).toMatch(/'usage\.codexOutside': cmdUsageCodexOutside\b/)
     for (const field of ['byDay', 'thresholds', 'knownSessionIds', 'since', 'cursor', 'budgetMs']) {
       expect(standalone).toMatch(new RegExp(`scanCodexOutside\\(\\{[\\s\\S]{0,900}${field}`))
     }

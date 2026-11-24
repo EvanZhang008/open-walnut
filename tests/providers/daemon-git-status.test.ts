@@ -18,15 +18,12 @@ import { createGitStatus, type ExecFn } from '../../src/providers/git-diff-core.
 type Reply = { ok?: boolean; error?: string; repos?: unknown[] }
 
 function extractHandler(homeDir: string): (cmd: Record<string, unknown>) => Promise<Reply> {
-  let reply: Reply = {}
   const fns = createDaemonGit<null>({
     daemonEnv: process.env,
     HOME_DIR: homeDir,
     execFileCb: execFile,
-    sendOk: (_ws, _id, data) => { reply = { ok: true, ...data } },
-    sendError: (_ws, _id, error) => { reply = { ok: false, error } },
   })
-  return async (c) => { reply = {}; await fns.cmdGitStatus(null, 1, c); return reply }
+  return async (c) => { const a = await fns.answers['git.status']!(c, null); return a.ok ? { ok: true, ...a.data } : { ok: false, error: a.error } }
 }
 
 const exec: ExecFn = (argv, cwd) => new Promise((resolve) => {

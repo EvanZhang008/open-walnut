@@ -480,9 +480,9 @@ describe('hub-forward-v1 wiring in the session daemon', () => {
     // The whole runtime: the hub forwards are daemon-host-services.ts.
     const src = daemonRuntimeText()
     expect(src).toMatch(/HUB_FORWARDS_FILE = path\.join\(NET_STATE_DIR, 'hub-forwards\.json'\)/)
-    expect(src).toMatch(/case 'hub\.status': return hostServices\.cmdHubStatus\(ws, id/)
+    expect(src).toMatch(/'hub\.status': cmdHubStatus\b/)
     const at = src.indexOf('function cmdHubStatus')
-    expect(src.slice(at, at + 300)).toMatch(/if \(!isServerClient\(ws\)\) return sendError/)
+    expect(src.slice(at, at + 300)).toMatch(/if \(!isServerClient\(from\)\) return fail\('hub\.status: not for this socket'\)/)
     // The host a listener binds comes from the core (always 127.0.0.1), never the daemon.
     expect(src).toMatch(/srv\.listen\(port, host,/)
     expect(src.match(/hubForwards\.start\(\)/g)).toHaveLength(1)

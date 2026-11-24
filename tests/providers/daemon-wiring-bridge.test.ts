@@ -35,7 +35,8 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
     // Containment intact: no generic write escapes onto the bridge.
     expect(allowBody).not.toContain("'fs.write'")
     // Through the drain like every file write: a swap waits for it (daemon-update-behind.ts).
-    expect(standaloneSrc).toMatch(/case 'image\.save': return daemonCommands\.run\((\(\) => |function \(\) \{ return )fsWrite\.cmdImageSave/)
+    expect(standaloneSrc).toMatch(/'image\.save': cmdImageSave\b/)
+    expect(standaloneSrc).toMatch(/const DRAINED_ANSWERS = new Set\(\[[^\]]*'image\.save'/)
     expect(standaloneSrc).toMatch(/function cmdImageSave/)
   })
   // The r4d gate's R5: the per-command checks below each look for one entry, so
@@ -118,8 +119,8 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
   // the pipeline lives in session-changes-core.ts, which the daemon bundles.
   // Without 'changes-v1' the server falls back to its reader-based compute.
   it("daemon: dispatch changes.compute/changes.file; 'changes-v1' advertised but NOT required", () => {
-    expect(standaloneSrc).toMatch(/case 'changes\.compute': return sessionChanges\.cmdChangesCompute/)
-    expect(standaloneSrc).toMatch(/case 'changes\.file': return sessionChanges\.cmdChangesFile/)
+    expect(standaloneSrc).toMatch(/'changes\.compute': cmdChangesCompute, 'changes\.file': cmdChangesFile\b/)
+    expect(standaloneSrc).toContain('sessionChanges.answers]')
     expect(standaloneSrc).toMatch(/function cmdChangesCompute/)
     expect(standaloneSrc).toMatch(/function cmdChangesFile/)
     const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
@@ -135,9 +136,9 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
   // both factories and snapshots at every result line and at spawn. A daemon without it keeps working (no Turns view, no guard).
   it("daemon: dispatch turns.*; 'turn-snapshot-v1' advertised but NOT required, not bridge-reachable", () => {
     for (const c of ['turns.list', 'turns.diff', 'turns.restore', 'turns.guard', 'turns.configure']) {
-      expect(standaloneSrc).toContain(`case '${c}':`)
+      expect(standaloneSrc).toContain(`'${c}': cmdTurns`)
     }
-    expect(standaloneSrc).toMatch(/return transcripts\.cmdTurns\(ws, id/)
+    expect(standaloneSrc).toContain('transcripts.answers]')
     expect(standaloneSrc).toMatch(/async function cmdTurns\(/)
     // The two hooks the tailer and the spawn path call.
     expect(standaloneSrc).toMatch(/turnSnapshots\.onTurnEnd\(sid, s\.cwd, v\)/)
@@ -170,20 +171,20 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
   // error fields (code, probe) on a refusal. Optional and never bridge-reachable.
   it("daemon: dispatch workspace.*; 'workspace-v1' advertised but NOT required, not bridge-reachable", () => {
     for (const c of ['workspace.configure', 'workspace.detect', 'workspace.create', 'workspace.job', 'workspace.status', 'workspace.repos', 'workspace.remove']) {
-      expect(standaloneSrc).toContain(`case '${c}':`)
+      expect(standaloneSrc).toContain(`'${c}': cmdWorkspace`)
     }
-    expect(standaloneSrc).toMatch(/return hostServices\.cmdWorkspace\(ws, id/)
+    expect(standaloneSrc).toContain('hostServices.answers]')
     expect(standaloneSrc).toMatch(/function cmdWorkspace\(/)
     expect(standaloneSrc).toMatch(/workspaceCore\.handle\(/)
     // A refusal carries the core's code to the server (providers_stale drives the re-push).
-    expect(standaloneSrc).toMatch(/else sendError\(ws, id, r\.error, r\)/)
+    expect(standaloneSrc).toMatch(/\(r\) => \(r\.ok \? ok\(r\) : fail\(r\.error, r\)\)/)
     // The adapter scripts live in a service daemon's state dir, else in the runtime
     // dir (under /tmp, where a cleaner may remove them: the core writes a missing
     // adapter again before each run).
     expect(standaloneSrc).toMatch(/stateDir: (SERVICE_MODE && DAEMON_STATE_DIR \? DAEMON_STATE_DIR : DAEMON_DIR|STATE_DIR_OR_RUNTIME|WORKSPACE_STATE_DIR)/)
     // One allowlist per Walnut: its adapters under that Walnut's dir, the command's home resolved against the socket.
     expect(standaloneSrc).toMatch(/scopeDir: .*walnutScope\.dirFor\((STATE_DIR_OR_RUNTIME|WORKSPACE_STATE_DIR), home\)/)
-    expect(standaloneSrc).toMatch(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), (name|String\(cmd\.cmd\))\)/)
+    expect(standaloneSrc).toMatch(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(from\), (name|String\(cmd\.cmd\))\)/)
     // A job poll answers during a shutdown; new provider runs go through the drain.
     expect(standaloneSrc).toMatch(/=== 'workspace\.job'\) return work\(\)/)
     const start = standaloneSrc.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')

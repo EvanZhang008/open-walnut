@@ -138,9 +138,9 @@ describe('a service set\'s runtime', () => {
     expect(shim).toMatch(/if \(!IS_PROD_DAEMON_DIR\) return/)
     expect(src).toMatch(/if \(IS_PROD_DAEMON_DIR \|\| daemonEnv\.WALNUT_LEGACY_STREAMS_DIR\) out\.push\(LEGACY_STREAMS_DIR\)/)
     // skills.sync is the daemon's skills module (daemon-skills.ts), handed the runtime's KEEPS_SESSIONS.
-    expect(src).toMatch(/createDaemonSkills\(\{[^}]*\bKEEPS_SESSIONS\b/)
+    expect(src).toMatch(/createDaemonSkills(?:<ServerWebSocket<WsData>>)?\(\{[^}]*\bKEEPS_SESSIONS\b/)
     expect(nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-skills.ts'), 'utf-8'))
-      .toMatch(/if \(!KEEPS_SESSIONS\) \{\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+      .toMatch(/if \(!KEEPS_SESSIONS\) \{\s*return ok\(\{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
     expect(src).toContain('...(SET_ID ? { serviceSet: SET_ID } : {}),')
     // Option B: the set's net state dir is its own (net-config-core.ts netStateDirOf), the supervisor is today's.
     expect(src).toMatch(/NET_STATE_DIR = [\s\S]{0,1500}?home: HOME_DIR, setId: SET_ID[ ,]/)

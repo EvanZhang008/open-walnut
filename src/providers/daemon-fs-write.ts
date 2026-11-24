@@ -3,17 +3,17 @@
  * bridge may make), fs.write, fs.mkdir, fs.rename, fs.rm, fs.copy, and vscode.ensure (the
  * host's embedded editor, 'vscode-v1'). The reads are daemon-fs-read.ts.
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher
- * calls the returned commands; the runtime's start also sweeps its registry's stale temps with
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table
+ * takes the returned answers by name; the runtime's start also sweeps its registry's stale temps with
  * sweepStaleWriteTemps. The code is the runtime's as it was; deps carry the runtime's own names.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import type { createCodeServer } from './vscode-server-core.js'
-import type { DaemonEnv, DaemonLog, DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
 
-export interface DaemonFsWriteDeps<W> extends DaemonReplies<W> {
+export interface DaemonFsWriteDeps {
   daemonEnv: DaemonEnv
   HOME_DIR: string
   /** The runtime's dir: pictures a session was sent are saved under it. */
@@ -27,8 +27,8 @@ export interface DaemonFsWriteDeps<W> extends DaemonReplies<W> {
   logMsg: DaemonLog
 }
 
-export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
-  const { daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, codeServer, looksLikeImage, logMsg, sendOk, sendError } = deps
+export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps) {
+  const { daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, codeServer, looksLikeImage, logMsg } = deps
 
   // Bridge-safe image save: mediaType allowlist + decoded-size cap + magic-byte
   // check, writing ONLY into a fixed daemon-owned directory with a generated
@@ -55,18 +55,18 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
     return data.length >= 12 && data.slice(4, 8).toString('latin1') === 'ftyp'
   }
 
-  async function cmdImageSave(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdImageSave(cmd: Record<string, unknown>): Promise<Answer> {
     const data = cmd.data
     const mediaType = cmd.mediaType
-    if (typeof data !== 'string' || data.length === 0) return sendError(ws, id, 'image.save: missing data')
-    if (data.length > IMAGE_SAVE_MAX_BASE64_LENGTH) return sendError(ws, id, 'image.save: too large (EFBIG)')
+    if (typeof data !== 'string' || data.length === 0) return fail('image.save: missing data')
+    if (data.length > IMAGE_SAVE_MAX_BASE64_LENGTH) return fail('image.save: too large (EFBIG)')
     const ext = typeof mediaType === 'string' ? IMAGE_SAVE_MEDIA_TO_EXT[mediaType] : undefined
-    if (!ext) return sendError(ws, id, 'image.save: unsupported mediaType (ENOTIMAGE)')
+    if (!ext) return fail('image.save: unsupported mediaType (ENOTIMAGE)')
     const buf = Buffer.from(data, 'base64')
-    if (buf.length === 0) return sendError(ws, id, 'image.save: invalid base64')
-    if (buf.length > IMAGE_SAVE_MAX_BYTES) return sendError(ws, id, 'image.save: too large (EFBIG)')
+    if (buf.length === 0) return fail('image.save: invalid base64')
+    if (buf.length > IMAGE_SAVE_MAX_BYTES) return fail('image.save: too large (EFBIG)')
     const isImage = mediaType === 'image/heic' ? looksLikeHeic(buf) : looksLikeImage(buf)
-    if (!isImage) return sendError(ws, id, 'image.save: not an image (ENOTIMAGE)')
+    if (!isImage) return fail('image.save: not an image (ENOTIMAGE)')
     // Generated filename — timestamp + random; extension from the mediaType
     // allowlist. NEVER from caller input: no path component crosses the bridge.
     const filename = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.' + ext
@@ -75,11 +75,11 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
       await fs.promises.mkdir(IMAGE_SAVE_DIR, { recursive: true })
       await fs.promises.writeFile(filePath, buf)
       logMsg('info', 'image.save: saved', { path: filePath, size: buf.length })
-      sendOk(ws, id, { path: filePath, size: buf.length })
+      return ok({ path: filePath, size: buf.length })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'image.save failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('image.save failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
@@ -105,11 +105,11 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
     }
   }
 
-  async function cmdFsWrite(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsWrite(cmd: Record<string, unknown>): Promise<Answer> {
     const { path: filePath, data, encoding } = cmd as { path: string; data: string; encoding?: string }
     // `typeof` not truthiness: EMPTY data is legal (clearing a file to zero bytes
     // is a real save), and `!data` rejected it as "missing".
-    if (!filePath || typeof data !== 'string') return sendError(ws, id, 'fs.write: missing path or data')
+    if (!filePath || typeof data !== 'string') return fail('fs.write: missing path or data')
     // exclusive = "create a NEW file" (the Files panel's new-file affordance): no
     // mkdir -p (a missing parent is a typo, not an intent) and flag 'wx' so an
     // existing file is an EEXIST rather than a silent clobber. Absent = the
@@ -134,7 +134,7 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
     let target = filePath
     if (exclusive) {
       const resolved = await fsMutateResolve(filePath)
-      if (!resolved) return sendError(ws, id, 'fs.write refused: path outside the mutation floor (EDENIED)')
+      if (!resolved) return fail('fs.write refused: path outside the mutation floor (EDENIED)')
       target = resolved
     } else if (target === '~' || target.startsWith('~/')) {
       // Node fs does no shell expansion — same expansion fs.read/fs.mkdir/fs.stat
@@ -176,14 +176,14 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
         }
         if (st !== null) {
-          if (!st.isFile()) return sendError(ws, id, 'fs.write refused: not a regular file (ENOTFILE)')
+          if (!st.isFile()) return fail('fs.write refused: not a regular file (ENOTFILE)')
           if (st.size > FS_WRITE_PRECONDITION_MAX_BYTES) {
-            return sendError(ws, id, 'fs.write refused: file too large for a conditional write (EFBIG)')
+            return fail('fs.write refused: file too large for a conditional write (EFBIG)')
           }
           current = crypto.createHash('sha256').update(await fs.promises.readFile(target)).digest('hex')
         }
         if (current !== expectSha256) {
-          return sendError(ws, id, 'fs.write refused: file changed since it was read (EMODIFIED)')
+          return fail('fs.write refused: file changed since it was read (EMODIFIED)')
         }
       }
 
@@ -222,19 +222,19 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
       } else {
         await fs.promises.writeFile(target, buf)
       }
-      sendOk(ws, id, { written: true, size: buf.length, sha256 })
+      return ok({ written: true, size: buf.length, sha256 })
     } catch (err: unknown) {
       // Never leave a half-written sibling behind for the next caller to trip on.
       if (tmpPath) { try { await fs.promises.unlink(tmpPath) } catch { /* best effort */ } }
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.write failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.write failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
-  async function cmdFsMkdir(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsMkdir(cmd: Record<string, unknown>): Promise<Answer> {
     let dirPath = cmd.path as string
-    if (!dirPath) return sendError(ws, id, 'fs.mkdir: missing path')
+    if (!dirPath) return fail('fs.mkdir: missing path')
 
     // Expand ~ to home directory (Node fs doesn't do shell expansion)
     if (dirPath === '~' || dirPath.startsWith('~/')) {
@@ -251,17 +251,17 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
     // on paths the floor would refuse (a daemon working dir two segments up, say).
     if (exclusive) {
       const resolved = await fsMutateResolve(dirPath)
-      if (!resolved) return sendError(ws, id, 'fs.mkdir refused: path outside the mutation floor (EDENIED)')
+      if (!resolved) return fail('fs.mkdir refused: path outside the mutation floor (EDENIED)')
       dirPath = resolved
     }
     try {
       // recursive:true tolerates already-existing directories (idempotent)
       await fs.promises.mkdir(dirPath, { recursive: !exclusive })
-      sendOk(ws, id, { created: true, resolvedPath: dirPath })
+      return ok({ created: true, resolvedPath: dirPath })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.mkdir failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.mkdir failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
@@ -380,10 +380,10 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
     return p
   }
 
-  async function cmdFsRename(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsRename(cmd: Record<string, unknown>): Promise<Answer> {
     const from = await fsMutateResolve(cmd.from)
     const to = await fsMutateResolve(cmd.to)
-    if (!from || !to) return sendError(ws, id, 'fs.rename refused: path outside the mutation floor (EDENIED)')
+    if (!from || !to) return fail('fs.rename refused: path outside the mutation floor (EDENIED)')
 
     try {
       // POSIX rename REPLACES an existing target without a word, so a rename in
@@ -392,20 +392,20 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
       let targetExists = true
       try { await fs.promises.lstat(to) } catch { targetExists = false }
       if (targetExists) {
-        return sendError(ws, id, 'fs.rename failed: target already exists (EEXIST)')
+        return fail('fs.rename failed: target already exists (EEXIST)')
       }
       await fs.promises.rename(from, to)
-      sendOk(ws, id, { renamed: true })
+      return ok({ renamed: true })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.rename failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.rename failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
-  async function cmdFsRm(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsRm(cmd: Record<string, unknown>): Promise<Answer> {
     const target = await fsMutateResolve(cmd.path)
-    if (!target) return sendError(ws, id, 'fs.rm refused: path outside the mutation floor (EDENIED)')
+    if (!target) return fail('fs.rm refused: path outside the mutation floor (EDENIED)')
     const recursive = cmd.recursive === true
 
     try {
@@ -415,21 +415,21 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
       // removed as the link and never followed.
       const st = await fs.promises.lstat(target)
       if (st.isDirectory() && !recursive) {
-        return sendError(ws, id, 'fs.rm failed: target is a directory (EISDIR)')
+        return fail('fs.rm failed: target is a directory (EISDIR)')
       }
       await fs.promises.rm(target, { recursive, force: false })
-      sendOk(ws, id, { removed: true })
+      return ok({ removed: true })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.rm failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.rm failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
-  async function cmdFsCopy(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdFsCopy(cmd: Record<string, unknown>): Promise<Answer> {
     const from = await fsMutateResolve(cmd.from)
     const to = await fsMutateResolve(cmd.to)
-    if (!from || !to) return sendError(ws, id, 'fs.copy refused: path outside the mutation floor (EDENIED)')
+    if (!from || !to) return fail('fs.copy refused: path outside the mutation floor (EDENIED)')
 
     try {
       // Same never-clobber rule as rename, and the same lstat reason. errorOnExist
@@ -437,7 +437,7 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
       let targetExists = true
       try { await fs.promises.lstat(to) } catch { targetExists = false }
       if (targetExists) {
-        return sendError(ws, id, 'fs.copy failed: target already exists (EEXIST)')
+        return fail('fs.copy failed: target already exists (EEXIST)')
       }
       try {
         await fs.promises.cp(from, to, { recursive: true, errorOnExist: true, force: false })
@@ -450,11 +450,11 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
         await fs.promises.rm(to, { recursive: true, force: true }).catch(() => {})
         throw cpErr
       }
-      sendOk(ws, id, { copied: true })
+      return ok({ copied: true })
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException
       const code = e.code ?? ''
-      sendError(ws, id, 'fs.copy failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+      return fail('fs.copy failed: ' + e.message + (code ? ' (' + code + ')' : ''))
     }
   }
 
@@ -463,7 +463,7 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
    * is installed + running, and resolve what the caller should open for a cwd.
    * The editor's traffic stays on this host; only {port, token, open} returns.
    */
-  async function cmdVscodeEnsure(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdVscodeEnsure(cmd: Record<string, unknown>): Promise<Answer> {
     try {
       const result = await codeServer.ensureCodeServer({ noInstall: cmd.noInstall === true })
       let open: { kind: string; path: string } | undefined
@@ -473,11 +473,15 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps<W>) {
       if (!result.ok) {
         logMsg('warn', 'vscode.ensure failed', { error: result.error, installed: result.installed })
       }
-      sendOk(ws, id, { ...result, open } as unknown as Record<string, unknown>)
+      return ok({ ...result, open } as unknown as Record<string, unknown>)
     } catch (err: unknown) {
-      sendError(ws, id, 'vscode.ensure failed: ' + (err as Error).message)
+      return fail('vscode.ensure failed: ' + (err as Error).message)
     }
   }
 
-  return { cmdImageSave, cmdFsWrite, cmdFsMkdir, cmdFsRename, cmdFsRm, cmdFsCopy, cmdVscodeEnsure, sweepStaleWriteTemps }
+  const answers: Answers<W> = {
+    'image.save': cmdImageSave, 'fs.write': cmdFsWrite, 'fs.mkdir': cmdFsMkdir,
+    'fs.rename': cmdFsRename, 'fs.rm': cmdFsRm, 'fs.copy': cmdFsCopy, 'vscode.ensure': cmdVscodeEnsure,
+  }
+  return { answers, sweepStaleWriteTemps }
 }

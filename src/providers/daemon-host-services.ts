@@ -3,8 +3,8 @@
  * network ('net-v1'), hub forwards ('hub-forward-v1'), the secrets the user shared with this
  * host ('secrets-v1') and task workspaces ('workspace-v1').
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher calls
- * cmdHubStatus, cmdWorkspace and the cores returned here; its session start reads the secrets, its
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table takes
+ * the returned answers (hub.status, workspace.*) and the cores returned here; its session start reads the secrets, its
  * hello the machine id. The code is the runtime's as it was; deps carry the runtime's own names.
  */
 import fs from 'node:fs'
@@ -25,9 +25,9 @@ import type { createWalnutScope } from './walnut-scope-core.js'
 import type { createDaemonCommandDrain } from './daemon-command-drain.js'
 import type { ChildProcessFns, ChildProcessUse } from './daemon-child-spawn.js'
 import type { RuntimeTimers } from './daemon-runtime-timers.js'
-import type { DaemonEnv, DaemonLog, DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
 
-export interface DaemonHostServicesDeps<W extends object> extends DaemonReplies<W> {
+export interface DaemonHostServicesDeps<W extends object> {
   daemonEnv: DaemonEnv
   DAEMON_DIR: string
   HOME_DIR: string
@@ -83,7 +83,7 @@ export function agentRootPids(
 }
 
 export function createDaemonHostServices<W extends object>(deps: DaemonHostServicesDeps<W>) {
-  const { daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, SET_ID, PORT_FILE, spawn, childUse, sessions, acp, gatewaySidAliases, freshLeaderLinks, leaderBook, streamRelay, isServerClient, walnutScope, gatewayClientHomes, daemonCommands, setInterval, clearInterval, logMsg, sendOk, sendError } = deps
+  const { daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, SET_ID, PORT_FILE, spawn, childUse, sessions, acp, gatewaySidAliases, freshLeaderLinks, leaderBook, streamRelay, isServerClient, walnutScope, gatewayClientHomes, daemonCommands, setInterval, clearInterval, logMsg } = deps
 
   // ── The servers a session started (capability 'ports-v1', port-scan-core.ts) ──
   // PARITY: NOT in BRIDGE_ALLOWED_COMMANDS or
@@ -155,9 +155,9 @@ export function createDaemonHostServices<W extends object>(deps: DaemonHostServi
     hubForwards.linksChanged()
   }
   /** `hub.status`: this machine's forwards and how each is doing. Its primary and its own local clients (the CLI); never the bridge, a follower, a lane or a probe. */
-  function cmdHubStatus(ws: W, id: number) {
-    if (!isServerClient(ws)) return sendError(ws, id, 'hub.status: not for this socket')
-    sendOk(ws, id, hubForwards.status())
+  function cmdHubStatus(_cmd: Record<string, unknown>, from: W): Answer {
+    if (!isServerClient(from)) return fail('hub.status: not for this socket')
+    return ok(hubForwards.status())
   }
 
   // ── The secrets the user shared with this host (capability 'secrets-v1') ──
@@ -185,14 +185,14 @@ export function createDaemonHostServices<W extends object>(deps: DaemonHostServi
     log: (level, msg, data) => logMsg(level, msg, data),
   })
 
-  function cmdWorkspace(ws: W, id: number, cmd: Record<string, unknown>) {
+  function cmdWorkspace(cmd: Record<string, unknown>, from: W): Answer | Promise<Answer> {
     const name = String(cmd.cmd)
     // Every workspace command speaks for one Walnut (its allowlist, its jobs); '' = an older server.
-    const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), name)
-    if (!scope.ok) return sendError(ws, id, scope.error, { code: 'not_owner' })
-    const work = () => workspaceCore.handle(name, cmd, scope.home).then(
-      (r) => { if (r.ok) sendOk(ws, id, r); else sendError(ws, id, r.error, r) },
-      (err) => sendError(ws, id, name + ' failed: ' + (err as Error).message, { code: 'failed' }),
+    const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(from), name)
+    if (!scope.ok) return fail(scope.error, { code: 'not_owner' })
+    const work = (): Promise<Answer> => workspaceCore.handle(name, cmd, scope.home).then(
+      (r) => (r.ok ? ok(r) : fail(r.error, r)),
+      (err) => fail(name + ' failed: ' + (err as Error).message, { code: 'failed' }),
     )
     // A job poll is a read and must answer during a shutdown; everything else is
     // admitted through the drain so a stopping daemon starts no new provider run.
@@ -200,13 +200,21 @@ export function createDaemonHostServices<W extends object>(deps: DaemonHostServi
     try {
       return daemonCommands.run(work)
     } catch (err) {
-      sendError(ws, id, name + ' refused: ' + (err as Error).message, { code: 'daemon_stopping' })
+      return fail(name + ' refused: ' + (err as Error).message, { code: 'daemon_stopping' })
     }
   }
 
+  const answers: Answers<W> = {
+    'hub.status': cmdHubStatus,
+    'workspace.configure': cmdWorkspace, 'workspace.detect': cmdWorkspace, 'workspace.create': cmdWorkspace,
+    'workspace.job': cmdWorkspace, 'workspace.status': cmdWorkspace, 'workspace.repos': cmdWorkspace,
+    'workspace.remove': cmdWorkspace,
+    // 'workspace-scripts-v1': a repository's scripts file and a script run in a workspace.
+    'workspace.scriptsFile': cmdWorkspace, 'workspace.runScript': cmdWorkspace,
+  }
+
   return {
-    daemonPorts, DAEMON_MACHINE_ID, netSupervisor, hubForwards, hubLinksChanged, cmdHubStatus,
-    SECRETS_ROOT, secretStore, secretsSessionEnv,
-    WORKSPACE_STATE_DIR, cmdWorkspace,
+    answers, daemonPorts, DAEMON_MACHINE_ID, netSupervisor, hubForwards, hubLinksChanged,
+    SECRETS_ROOT, secretStore, secretsSessionEnv, WORKSPACE_STATE_DIR,
   }
 }

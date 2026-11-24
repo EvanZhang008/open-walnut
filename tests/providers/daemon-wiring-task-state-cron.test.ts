@@ -286,7 +286,8 @@ describe('durable-cron invariant', () => {
     // The kill switch guards BOTH boot load and every evaluation.
     expect(standaloneSrc).toMatch(/process\.env\.WALNUT_ALLOW_DURABLE_CRON === '1'/)
     // hooks.configure persists to hooks.json and is NOT bridge-reachable.
-    expect(standaloneSrc).toMatch(/case 'hooks\.configure': return daemonCommands\.run\([^\n]*cmdHooksConfigure\(ws, id/)
+    expect(standaloneSrc).toMatch(/'hooks\.configure': cmdHooksConfigure\b/)
+    expect(standaloneSrc).toMatch(/const DRAINED_ANSWERS = new Set\(\[[^\]]*'hooks\.configure'/)
     expect(standaloneSrc).toMatch(/hooks\.configure: invalid config/)
     const bridgeSetStart = standaloneSrc.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(')
     const bridgeSetEnd = standaloneSrc.indexOf('])', bridgeSetStart)
@@ -407,7 +408,7 @@ describe('silent-death guards', () => {
   })
 
   it('daemon: wrap the command dispatch so a throwing handler replies instead of dying', () => {
-    // handleCommand delegates through a try/catch to dispatchCommand…
+    // handleCommand delegates through a try/catch to dispatchCommand (the gates and handlerThrew sit between them)…
     const hc = standaloneSrc.slice(standaloneSrc.indexOf('function handleCommand'), standaloneSrc.indexOf('function dispatchCommand'))
     expect(hc).toMatch(/try \{/)
     expect(hc).toMatch(/dispatchCommand\(ws, id(?: as number)?, cmd\)/)
@@ -416,9 +417,10 @@ describe('silent-death guards', () => {
     // …and an async handler's rejection is caught too (fs.* return promises).
     expect(hc).toMatch(/typeof (?:\(out as Promise<unknown>\)\.then|out\.then) === 'function'/)
     // …and a valid-JSON-but-not-object frame can't throw before the guard.
-    expect(hc).toMatch(/if \(!(cmd|sent) \|\| typeof \1 !== 'object'\) return sendError/)
-    // The switch itself must live in dispatchCommand (nothing dispatches outside the guard).
-    expect(standaloneSrc).toMatch(/function dispatchCommand\(ws(?:: ServerWebSocket<WsData>)?, id(?:: number)?, cmd(?:: Record<string, unknown>)?\) \{\s*\n\s*switch \(cmd\.cmd\)/)
+    expect(hc).toMatch(/if \(!(cmd|sent) \|\| typeof \1 !== 'object'\) \{ reply\(errorFrame\(ws, null, 'invalid JSON'\)\); return null \}/)
+    // The switch itself must live in dispatchCommand (nothing dispatches outside the guard); only the
+    // command table's answer runs before it, under the same guard (answerCommand catches its throws).
+    expect(standaloneSrc).toMatch(/function dispatchCommand\(ws(?:: ServerWebSocket<WsData>)?, id(?:: number)?, cmd(?:: Record<string, unknown>)?\) \{\s*\n\s*\/\/[^\n]*\n\s*const answerFn = answerFnOf\(cmd\.cmd\)\n\s*if \(answerFn\) return answerCommand\(ws, cmd, answerFn, \(answer\) => sendAnswer\(ws, id, answer\)\)\n\s*switch \(cmd\.cmd\)/)
   })
 
   it('daemon: stream rebuildTaskStateFromJsonl in chunks (no whole-file readFileSync)', () => {

@@ -3,8 +3,8 @@
  * kept per Walnut, persisted to hooks.json, and evaluated at the intercept points of the
  * session code (hookActions).
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher
- * calls cmdHooksConfigure; its session code calls hookActions, its walnut-scope fold moves a
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table
+ * takes cmdHooksConfigure (answers); its session code calls hookActions, its walnut-scope fold moves a
  * home's rules (daemonHooksByHome, HOOKS_DIR), and its boot and cron restore read them back.
  * The code is the runtime's as it was; deps carry the runtime's own names.
  */
@@ -13,12 +13,12 @@ import path from 'node:path'
 import { evalDaemonHookRules, builtinSessionOnlyCronHook, type DaemonHooksConfig, type DaemonHookPoint } from './daemon-core.js'
 import { DaemonSessionGate, persistCronHooks } from './daemon-cron-runtime.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
-import type { DaemonEnv, DaemonLog, DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
 
 /** One Walnut's pushed rules, with the hash on disk and when they arrived. */
 export interface ScopedHooks { config: DaemonHooksConfig; persistedHash: string | null | undefined; at: number }
 
-export interface DaemonHooksDeps<W extends object> extends DaemonReplies<W> {
+export interface DaemonHooksDeps<W extends object> {
   daemonEnv: DaemonEnv
   DAEMON_DIR: string
   /** A service set's runtime: hooks live in its state dir, written through the cron store. */
@@ -34,7 +34,7 @@ export interface DaemonHooksDeps<W extends object> extends DaemonReplies<W> {
 }
 
 export function createDaemonHooks<W extends object>(deps: DaemonHooksDeps<W>) {
-  const { daemonEnv, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, walnutScope, gatewayClientHomes, sessionHomeOf, logMsg, sendOk, sendError } = deps
+  const { daemonEnv, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, walnutScope, gatewayClientHomes, sessionHomeOf, logMsg } = deps
 
   // ── Daemon hooks (declarative rules pushed from walnut) ──
   // The daemon holds one compiled rules JSON (daemon-core DaemonHooksConfig) per
@@ -133,17 +133,17 @@ export function createDaemonHooks<W extends object>(deps: DaemonHooksDeps<W>) {
     try { return evalDaemonHookRules(hooksForSession(ctx.sid), point, ctx) } catch { return [] }
   }
 
-  async function cmdHooksConfigure(ws: W, id: number, cmd: Record<string, unknown>) {
-    return hooksConfigureGate.run('hooks', () => configureDaemonHooks(ws, id, cmd))
+  async function cmdHooksConfigure(cmd: Record<string, unknown>, from: W): Promise<Answer> {
+    return hooksConfigureGate.run('hooks', () => configureDaemonHooks(cmd, from))
   }
 
-  async function configureDaemonHooks(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function configureDaemonHooks(cmd: Record<string, unknown>, from: W): Promise<Answer> {
     const next = cmd.config as DaemonHooksConfig | undefined
     if (!next || next.version !== 1 || !Array.isArray(next.hooks) || typeof next.hash !== 'string') {
-      return sendError(ws, id, 'hooks.configure: invalid config')
+      return fail('hooks.configure: invalid config')
     }
-    const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'hooks.configure')
-    if (!scope.ok) return sendError(ws, id, scope.error, { errorKind: 'not_owner' })
+    const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(from), 'hooks.configure')
+    if (!scope.ok) return fail(scope.error, { errorKind: 'not_owner' })
     const home = scope.home
     const prev = daemonHooksByHome.get(home)
     // An unnamed push over an inherited copy makes the file this daemon's own (marked).
@@ -184,11 +184,13 @@ export function createDaemonHooks<W extends object>(deps: DaemonHooksDeps<W>) {
       }
       logMsg('info', 'daemon hooks configured', { walnut: walnutScope.label(home), hash: next.hash, hooks: next.hooks.length })
     }
-    return sendOk(ws, id, { applied: true, changed, hash: next.hash })
+    return ok({ applied: true, changed, hash: next.hash })
   }
 
+  const answers: Answers<W> = { 'hooks.configure': cmdHooksConfigure }
+
   return {
-    cmdHooksConfigure, hookActions,
+    answers, hookActions,
     HOOKS_DIR, daemonHooksByHome, loadDaemonHooksAtBoot, persistedHooksHashFor, handoverHooks,
   }
 }

@@ -19,6 +19,7 @@ import path from 'node:path'
 import os from 'node:os'
 import ts from 'typescript'
 import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
+import { ok, fail, type Answer } from '../../src/providers/daemon-module-deps.js'
 
 type Reply = { ok?: boolean; error?: string; renamed?: boolean; removed?: boolean; copied?: boolean }
 type Cmd = Record<string, unknown>
@@ -63,23 +64,18 @@ function extractMutate(homeDir: string): Daemon {
   ].join('\n')
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
 
-  let reply: Reply = {}
-  const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
-  const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
-
   // The denylist reads the daemon's dir overrides from its env; hand it an
   // EMPTY env so the real machine's WALNUT_* settings can't leak into the pins.
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const factory = new Function(
-    'path', 'fs', 'HOME_DIR', 'daemonEnv', 'sendOk', 'sendError',
+    'path', 'fs', 'HOME_DIR', 'daemonEnv', 'ok', 'fail',
     js + '\nreturn { fsMutateFloor, fsMutateDenied, fsMutateResolve, cmdFsRename, cmdFsRm, cmdFsCopy };',
   ) as (...a: unknown[]) => Record<string, (...a: unknown[]) => unknown>
-  const fns = factory(path, fs, homeDir, {}, sendOk, sendError)
+  const fns = factory(path, fs, homeDir, {}, ok, fail)
 
   const call = async (name: string, cmd: Cmd): Promise<Reply> => {
-    reply = {}
-    await fns[name](null, 1, cmd)
-    return reply
+    const a = await fns[name](cmd) as Answer
+    return a.ok ? { ok: true, ...a.data } : { ok: false, error: a.error }
   }
   return {
     floor: (raw) => fns.fsMutateFloor(raw) as string | null,

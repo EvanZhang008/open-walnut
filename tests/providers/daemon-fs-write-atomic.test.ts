@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import ts from 'typescript'
+import { ok, fail, type Answer } from '../../src/providers/daemon-module-deps.js'
 import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
 
 type Reply = { ok?: boolean; error?: string; written?: boolean; size?: number; sha256?: string }
@@ -56,22 +57,17 @@ function extractWrite(homeDir: string): (cmd: Cmd) => Promise<Reply> {
   ].join('\n')
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
 
-  let reply: Reply = {}
-  const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
-  const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
-
   // The denylist reads the daemon's dir overrides from its env; hand it an
   // EMPTY env so the real machine's WALNUT_* settings can't leak into the pins.
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const factory = new Function(
-    'path', 'fs', 'crypto', 'HOME_DIR', 'daemonEnv', 'sendOk', 'sendError', js + '\nreturn { cmdFsWrite };',
-  ) as (...a: unknown[]) => Record<string, (...a: unknown[]) => Promise<void>>
-  const fns = factory(path, fs, crypto, homeDir, {}, sendOk, sendError)
+    'path', 'fs', 'crypto', 'HOME_DIR', 'daemonEnv', 'ok', 'fail', js + '\nreturn { cmdFsWrite };',
+  ) as (...a: unknown[]) => Record<string, (...a: unknown[]) => Promise<Answer>>
+  const fns = factory(path, fs, crypto, homeDir, {}, ok, fail)
 
   return async (cmd: Cmd): Promise<Reply> => {
-    reply = {}
-    await fns.cmdFsWrite(null, 1, cmd)
-    return reply
+    const a = await fns.cmdFsWrite(cmd)
+    return a.ok ? { ok: true, ...a.data } : { ok: false, error: a.error }
   }
 }
 

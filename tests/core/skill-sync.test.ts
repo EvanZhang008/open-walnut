@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createDaemonSkills } from '../../src/providers/daemon-skills.js'
+import type { Answer } from '../../src/providers/daemon-module-deps.js'
 import { withReadOnlyBanner, CODEX_BEGIN, CODEX_END, DISTRIBUTED_MARKER } from '../../src/core/skill-sync.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -59,7 +60,6 @@ const SKILLS_MODULE = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-skil
 
 /** The daemon's skills module with a reply that records the answer, its held pushes in `offlineDir`. */
 function skillsModule(homeDir: string, keepsSessions: boolean, offlineDir: string): { run: (cmd: Record<string, unknown>) => Reply } {
-  let reply: Reply = {}
   const skills = createDaemonSkills<null>({
     daemonEnv: process.env,
     HOME_DIR: homeDir,
@@ -67,10 +67,9 @@ function skillsModule(homeDir: string, keepsSessions: boolean, offlineDir: strin
     SET_ID: '',
     OFFLINE_HOST_DIR: offlineDir,
     logMsg: () => {},
-    sendOk: (_ws, _id, data) => { reply = { ok: true, ...data } },
-    sendError: (_ws, _id, error) => { reply = { ok: false, error } },
   })
-  return { run: (cmd) => { reply = {}; skills.cmdSkillsSync(null, 1, cmd); return reply } }
+  // skills.sync answers at once (an Answer, never a promise).
+  return { run: (cmd) => { const a = skills.answers['skills.sync']!(cmd, null) as Answer; return a.ok ? { ok: true, ...a.data } : { ok: false, error: a.error } } }
 }
 
 /** A held-pushes dir outside the temp HOME, a fresh one per daemon (nothing held from a run before). */
@@ -355,9 +354,9 @@ describe('the daemon\'s cmdSkillsSync (v2: canonical copy + engine symlinks)', (
     expect(DAEMON).toMatch(/const FALLBACK_DAEMON_DIR = path\.join\(daemonEnv\.HOME \|\| HOME_DIR, '\.cache', 'open-walnut'\)\n/)
     expect(DAEMON).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)\n/)
     expect(DAEMON).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== ''\n/)
-    expect(DAEMON).toMatch(/createDaemonSkills\(\{[^}]*\bKEEPS_SESSIONS\b/)
+    expect(DAEMON).toMatch(/createDaemonSkills(<[^({]*>)?\(\{[^}]*\bKEEPS_SESSIONS\b/)
     expect(SKILLS_MODULE).toMatch(/const \{[^}]*\bKEEPS_SESSIONS\b[^}]*\} = deps/)
-    expect(SKILLS_MODULE).toMatch(/function cmdSkillsSync[\s\S]*?if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+    expect(SKILLS_MODULE).toMatch(/function cmdSkillsSync[\s\S]*?if \(!KEEPS_SESSIONS\) \{\s*\n\s*return ok\(\{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })
 
   it('rejects a payload without the managed marker', () => {
@@ -466,7 +465,9 @@ describe('buildSkillSyncPayload', () => {
 
 describe('the daemon wiring', () => {
   it('the daemon routes skills.sync to its handler, with the layout and guards above', () => {
-    expect(DAEMON).toContain("case 'skills.sync': return skills.cmdSkillsSync")
+    // skills.sync is the skills module's answer, in the runtime's command table.
+    expect(SKILLS_MODULE).toContain("const answers: Answers<W> = { 'skills.sync': cmdSkillsSync }")
+    expect(DAEMON).toContain("['skills', skills.answers]")
     expect(DAEMON).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== ''/)
     expect(DAEMON).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/)
     // The handler and its guards: the daemon's skills module.
@@ -481,6 +482,6 @@ describe('the daemon wiring', () => {
     // gemini: the one engine with a private skills dir.
     expect(mod).toContain("if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))")
     expect(mod).toContain('fs.symlinkSync(canonicalDir, link)')
-    expect(mod).toMatch(/skills\.sync[\s\S]{0,2600}if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+    expect(mod).toMatch(/skills\.sync[\s\S]{0,2600}if \(!KEEPS_SESSIONS\) \{\s*\n\s*return ok\(\{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })
 })

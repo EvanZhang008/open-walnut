@@ -3,7 +3,8 @@
  * `in_process_daemon`, in-process-daemon.ts). DaemonConnection talks to every daemon through a
  * WebSocket; this object stands where that socket stands, with no socket and no JSON between:
  *   - a command goes over as the object DaemonConnection built (sendFrame), straight into the
- *     runtime's command handler;
+ *     runtime's command handler; one the runtime answers by function is called instead
+ *     (callFrame), its reply the call's own result;
  *   - a reply or an event comes back as the object the runtime built, emitted as 'frame'.
  * The socket surface DaemonConnection uses (on/off, readyState, ping/pong, close, terminate,
  * send of a string) is kept so every other path of DaemonConnection runs unchanged: a string a
@@ -17,6 +18,8 @@ import { EventEmitter } from 'node:events'
 export interface InProcessDaemonClient {
   /** A command frame ({ id, cmd, ...params }): its reply comes back through onFrame. */
   send(frame: Record<string, unknown>): void
+  /** A command the runtime answers by function: its reply frame; null for any other (send it). */
+  call?(frame: Record<string, unknown>): Promise<Record<string, unknown> | null> | null
   close(): void
 }
 
@@ -59,6 +62,18 @@ export class InProcessDaemonSocket extends EventEmitter {
   sendFrame(frame: Record<string, unknown>): void {
     if (this.readyState !== OPEN || !this.client) throw new Error('in-process daemon link is closed')
     this.client.send(frame)
+  }
+
+  /**
+   * A command the runtime answers by function, called: its reply frame (null when this link
+   * closed first: its pending commands fail with the close, as a frame's would). null at once
+   * when the runtime has no function for it (or is an older one): sendFrame it.
+   */
+  callFrame(frame: Record<string, unknown>): Promise<Record<string, unknown> | null> | null {
+    if (this.readyState !== OPEN || !this.client) throw new Error('in-process daemon link is closed')
+    const answered = this.client.call?.(frame)
+    if (!answered) return null
+    return answered.then((reply) => (reply && this.readyState === OPEN ? reply : null))
   }
 
   /** A command some path built as text: parsed once, then handed over as an object. */

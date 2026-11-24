@@ -20,15 +20,12 @@ type Reply = { ok?: boolean; error?: string; outcome?: string; excludeFile?: str
 type Cmd = Record<string, unknown>
 
 function extractEnsureExcluded(homeDir: string): (cmd: Cmd) => Promise<Reply> {
-  let reply: Reply = {}
   const fns = createDaemonGit<null>({
     daemonEnv: process.env,
     HOME_DIR: homeDir,
     execFileCb: execFile,
-    sendOk: (_ws, _id, data) => { reply = { ok: true, ...data } },
-    sendError: (_ws, _id, error) => { reply = { ok: false, error } },
   })
-  return async (cmd: Cmd) => { reply = {}; await fns.cmdGitEnsureExcluded(null, 1, cmd); return reply }
+  return async (cmd: Cmd) => { const a = await fns.answers['git.ensureExcluded']!(cmd, null); return a.ok ? { ok: true, ...a.data } : { ok: false, error: a.error } }
 }
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()

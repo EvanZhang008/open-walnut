@@ -19,6 +19,7 @@ import {
 } from '../../src/providers/daemon-core.js'
 import { missingNames } from '../helpers/extracted-free-names.js'
 import { daemonRuntimeText } from '../helpers/daemon-runtime-text.js'
+import { fail, settleAnswer } from '../../src/providers/daemon-module-deps.js'
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void
@@ -86,12 +87,27 @@ function noDemoQuiesce() {
   })
 }
 
+/** The reply helpers the command path calls, compiled with the real runtime functions below. */
+const COMMAND_PATH = ['handleCommand', 'handleCommandFrame', 'passCommandGates', 'admitCommand', 'handlerThrew', 'sendAnswer', 'answerFrame', 'answerFnOf', 'answerCommand']
+/** A reply frame that names the sendOk / sendError call it stands for (trailing undefined arguments dropped). */
+const REPLY = Symbol('reply')
+const replyCall = (kind: 'sendOk' | 'sendError', args: unknown[]) => {
+  while (args.length && args[args.length - 1] === undefined) args.pop()
+  return { [REPLY]: { kind, args } }
+}
+
 function compileHandle(source: string, environment: Record<string, unknown>): (ws: unknown, msg: string) => void {
-  // The daemon parses a socket's text in handleCommand and handles the frame in
-  // handleCommandFrame (a client in its own process hands the object over): both are the command path.
-  const text = `${extract(source, 'handleCommand')}\n${extract(source, 'handleCommandFrame')}`
+  // The daemon parses a socket's text in handleCommand and handles the frame in handleCommandFrame
+  // (a client in its own process hands the object over): both are the command path, with its gates
+  // (passCommandGates, admitCommand) and the command table (answerFnOf, answerCommand) it runs.
+  const text = COMMAND_PATH.map((name) => extract(source, name)).join('\n')
   const env: Record<string, unknown> = {
     demoQuiesce: noDemoQuiesce(), sendOk: vi.fn(),
+    // The table commands (commandAnswers) this run answers by function: the ones a test names.
+    commandAnswers: Object.create(null), DRAINED_ANSWERS: literalSet(source, 'DRAINED_ANSWERS'), settleAnswer, fail,
+    // A reply frame (okFrame / errorFrame) reaches this run's sendOk / sendError, as the daemon's
+    // own sendOk / sendError build and send it.
+    okFrame: (...args: unknown[]) => replyCall('sendOk', args), errorFrame: (...args: unknown[]) => replyCall('sendError', args),
     SERVED_PUSHES: literalSet(source, 'SERVED_PUSHES'),
     isServerClient: compile<(ws: unknown) => boolean>(`return ${extract(source, 'isServerClient')};`, {}),
     servedWalnuts: { note: vi.fn() }, walnutScope: { askedHome: () => '' }, gatewayClientHomes: new WeakMap(),
@@ -106,9 +122,13 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
   // The daemon answers through sendFrame (an in-process client takes the object): a
   // socket's text is the frame's JSON, through the safeSend this run watches.
   if (!('sendFrame' in env)) {
-    env.sendFrame = (ws: unknown, frame: unknown) => (env.safeSend as (ws: unknown, text: string) => void)(ws, JSON.stringify(frame))
+    env.sendFrame = (ws: unknown, frame: Record<string | symbol, unknown>) => {
+      const call = frame[REPLY] as { kind: 'sendOk' | 'sendError'; args: unknown[] } | undefined
+      if (call) return (env[call.kind] as (...a: unknown[]) => void)(...call.args)
+      ;(env.safeSend as (ws: unknown, text: string) => void)(ws, JSON.stringify(frame))
+    }
   }
-  expect(missingNames(text, [...Object.keys(env), 'dispatchCommand', 'handleCommandFrame']), 'names handleCommand reads that this run lacks').toEqual([])
+  expect(missingNames(text, [...Object.keys(env), 'dispatchCommand', ...COMMAND_PATH]), 'names handleCommand reads that this run lacks').toEqual([])
   return compile(`${text}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, env)
 }
 
@@ -314,13 +334,16 @@ describe('daemon command drain', () => {
   ])('drains accepted native delivery or persistence through the actual dispatcher: %j', async (frame) => {
     const daemonCommands = createDrain()
     const accepted = deferred()
-    const operation = vi.fn(() => accepted.promise)
+    // An answer function answers with its Answer; the other handlers ignore what this resolves to.
+    const operation = vi.fn(() => accepted.promise.then(() => ({ ok: true, data: {} })))
     const sendError = vi.fn()
     const handle = compileHandle(source, {
       daemonCommands, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(), resolveAgentCommand,
       cmdStart: operation, cmdSend: operation, cmdSendRaw: operation, cmdStop: operation,
-      hooks: { cmdHooksConfigure: operation }, cmdCronSupervision: operation, cmdBridgeResume: operation, cmdServiceHandover: operation,
-      triggerSet: { cmdTriggersConfigure: operation }, triggerCommands: { cmdTriggersRun: operation, cmdTriggersAck: operation },
+      cmdCronSupervision: operation, cmdBridgeResume: operation, cmdServiceHandover: operation,
+      triggerSet: { cmdTriggersConfigure: operation },
+      // hooks.configure, triggers.run and triggers.ack are answer functions, drained by DRAINED_ANSWERS.
+      commandAnswers: { 'hooks.configure': operation, 'triggers.run': operation, 'triggers.ack': operation },
     })
     handle({}, JSON.stringify({ id: 1, ...frame }))
     let closed = false
@@ -357,6 +380,8 @@ describe('daemon command drain', () => {
       return { handle: cmdServiceHandover, prepared: () => handoverPrepared, dispatch: dispatchCommand };`, {
         daemonCommands, SERVICE_MODE: updating, DAEMON_INSTANCE_ID: 'old-instance', HOME_DIR: '/fixture', REGISTRY_FILE: '/fixture/sessions.json',
         setTimeout, clearTimeout, hostFix, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), resolveAgentCommand,
+        // host.fix is a case of the dispatcher, no command of its table.
+        answerFnOf: () => null,
         cronRuntime: {
           pause: () => ({ drained: cronDrain, resume: () => { order.push('cronResume') } }),
           close: async () => { order.push('cronClose'); await cronDrain },
@@ -574,8 +599,8 @@ describe('daemon command drain', () => {
     const cmdVscodeEnsure = vi.fn(() => download.promise)
     const sendError = vi.fn()
     const handle = compileHandle(source, {
-      // vscode.ensure is the fs write module's (daemon-fs-write.ts).
-      daemonCommands, fsWrite: { cmdVscodeEnsure }, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(),
+      // vscode.ensure is the fs write module's answer (daemon-fs-write.ts), not drained.
+      daemonCommands, commandAnswers: { 'vscode.ensure': cmdVscodeEnsure }, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(),
     })
     handle({}, JSON.stringify({ id: 1, cmd: 'vscode.ensure' }))
     await daemonCommands.close()
@@ -1007,5 +1032,42 @@ describe('handleCommand demo.quiesce fence', () => {
     await vi.waitFor(() => expect(sendError).toHaveBeenCalledWith({}, 1, expect.stringContaining('demo.quiesce'), expect.objectContaining({ errorKind: 'demo_quiesce_refused' })))
     handle({}, JSON.stringify({ id: 2, cmd: 'start', sid: 's1' }))
     expect(cmdStart).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for the answer of drained work it follows, instead of refusing it as an open request', async () => {
+    // A workspace.create or a tracked transfer runs its work in the drain and is admitted as the
+    // promise that delivers its answer (daemon-standalone.ts answerCommand): before follow(), a
+    // pause read that promise as an open request and refused a handover while a clone ran.
+    const drain = createDaemonCommandDrain()
+    let finish!: () => void
+    const inner = drain.run(() => new Promise<void>((resolve) => { finish = resolve }))
+    const outer = drain.admit(() => {
+      const delivered = inner.then(() => 'answered')
+      drain.follow(inner, delivered)
+      return delivered
+    })
+    const paused = drain.pause()
+    let drained = false
+    const waiting = paused.drained.then(() => { drained = true })
+    await Promise.resolve()
+    expect(drained).toBe(false)
+    finish()
+    await expect(outer).resolves.toBe('answered')
+    await waiting
+    expect(drained).toBe(true)
+  })
+
+  it('the runtime marks every answer of drained work as followed (answerCommand)', () => {
+    const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    const body = text.slice(text.indexOf('function answerCommand'), text.indexOf('// ── List all sessions'))
+    expect(body).toMatch(/const out = settleAnswer\(\(\) => \(made = answerFn\(cmd, from\)\), threw, once\)/)
+    expect(body).toContain('if (made !== out) daemonCommands.follow(made, out)')
+  })
+
+  it('follow is a no-op for work that is not drained', () => {
+    const drain = createDaemonCommandDrain()
+    const read = drain.admit(() => new Promise<void>(() => {}))
+    drain.follow(Promise.resolve(), read)
+    expect(() => drain.pause()).toThrow('active operations')
   })
 })

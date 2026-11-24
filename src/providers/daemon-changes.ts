@@ -5,8 +5,8 @@
  * and the session commit that plans from those changes (git.commitPlan, git.commitStart,
  * git.commitJob: 'git-commit-v1').
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher
- * calls the returned commands. The turn guard reads computeChangesCached, and the runtime's
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table
+ * takes the returned answers by name. The turn guard reads computeChangesCached, and the runtime's
  * timer calls releaseIdleChangesState. The code is the runtime's as it was; deps carry the
  * runtime's own names.
  */
@@ -27,9 +27,9 @@ import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
 import type { ChildProcessFns, ChildProcessUse } from './daemon-child-spawn.js'
 import type { createDaemonCommandDrain } from './daemon-command-drain.js'
-import type { DaemonEnv, DaemonLog, DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
 
-export interface DaemonChangesDeps<W> extends DaemonReplies<W> {
+export interface DaemonChangesDeps {
   daemonEnv: DaemonEnv
   HOME_DIR: string
   DAEMON_DIR: string
@@ -72,8 +72,8 @@ export interface ChangesMemo {
   lastUsed: number
 }
 
-export function createDaemonChanges<W>(deps: DaemonChangesDeps<W>) {
-  const { daemonEnv, HOME_DIR, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, CLAUDE_CONFIG_HOME, childUse, spawn, daemonCommands, sessions, logMsg, sendOk, sendError } = deps
+export function createDaemonChanges<W>(deps: DaemonChangesDeps) {
+  const { daemonEnv, HOME_DIR, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, CLAUDE_CONFIG_HOME, childUse, spawn, daemonCommands, sessions, logMsg } = deps
 
   // ── Session changes (host-local compute — capability 'changes-v1') ──
   // The design-principle path (AGENTS.md): this host parses its OWN session
@@ -212,10 +212,10 @@ export function createDaemonChanges<W>(deps: DaemonChangesDeps<W>) {
 
   let usageScanInflight: Promise<unknown> = Promise.resolve()
   const usagePages = createUsagePages()
-  async function cmdUsageScan(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdUsageScan(cmd: Record<string, unknown>): Promise<Answer> {
     if (typeof cmd.key === 'string') {
-      try { return sendOk(ws, id, usagePages.page(cmd.key, typeof cmd.offset === 'number' ? cmd.offset : 0)) }
-      catch (err) { return sendError(ws, id, String(err)) }
+      try { return ok(usagePages.page(cmd.key, typeof cmd.offset === 'number' ? cmd.offset : 0)) }
+      catch (err) { return fail(String(err)) }
     }
     const until = typeof cmd.until === 'string' ? cmd.until : new Date().toISOString()
     const sessionIds = Array.isArray(cmd.sessionIds) ? cmd.sessionIds.filter((s): s is string => typeof s === 'string') : undefined
@@ -232,25 +232,25 @@ export function createDaemonChanges<W>(deps: DaemonChangesDeps<W>) {
       usageScanInflight = work.then(() => {}, () => {})
       return work
     }
-    try { sendOk(ws, id, await usagePages.scan(request, run)) }
-    catch (err) { sendError(ws, id, 'usage.scan failed: ' + (err as Error).message) }
+    try { return ok(await usagePages.scan(request, run)) }
+    catch (err) { return fail('usage.scan failed: ' + (err as Error).message) }
   }
-  async function cmdUsageCostState(ws: W, id: number, cmd: Record<string, unknown>) {
-    if (typeof cmd.sid !== 'string') return sendError(ws, id, 'usage.costState: missing sid')
+  async function cmdUsageCostState(cmd: Record<string, unknown>): Promise<Answer> {
+    if (typeof cmd.sid !== 'string') return fail('usage.costState: missing sid')
     try {
       const result = await scanCostState({
         projectsDir: path.join(daemonEnv.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
         sessionId: cmd.sid, ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}),
       })
-      sendOk(ws, id, { result })
-    } catch (err) { sendError(ws, id, 'usage.costState failed: ' + (err as Error).message) }
+      return ok({ result })
+    } catch (err) { return fail('usage.costState failed: ' + (err as Error).message) }
   }
 
   // 'session-cost-v1': one session's per-request usage, folded host-side from the
   // engine's own records (session-cost-core.ts); 'session-cost-day-v1' adds the
   // optional `byDay` split.
-  async function cmdUsageSessionCost(ws: W, id: number, cmd: Record<string, unknown>) {
-    if (typeof cmd.sid !== 'string' || !cmd.sid) return sendError(ws, id, 'usage.sessionCost: missing sid')
+  async function cmdUsageSessionCost(cmd: Record<string, unknown>): Promise<Answer> {
+    if (typeof cmd.sid !== 'string' || !cmd.sid) return fail('usage.sessionCost: missing sid')
     try {
       const result = await scanSessionCost({
         engine: typeof cmd.engine === 'string' ? cmd.engine : 'claude',
@@ -261,14 +261,14 @@ export function createDaemonChanges<W>(deps: DaemonChangesDeps<W>) {
         ...(cmd.byDay && typeof (cmd.byDay as { timeZone?: unknown }).timeZone === 'string'
           ? { byDay: { timeZone: (cmd.byDay as { timeZone: string }).timeZone } } : {}),
       })
-      sendOk(ws, id, { result })
-    } catch (err) { sendError(ws, id, 'usage.sessionCost failed: ' + (err as Error).message) }
+      return ok({ result })
+    } catch (err) { return fail('usage.sessionCost failed: ' + (err as Error).message) }
   }
 
   // 'codex-outside-v1': Codex runs no Walnut session started (an agent's `codex exec`, the
   // desktop app), read from Codex's own rollout files, one time-budgeted page per call
   // (codex-outside-core.ts). Read-only.
-  async function cmdUsageCodexOutside(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdUsageCodexOutside(cmd: Record<string, unknown>): Promise<Answer> {
     const zone = (cmd.byDay as { timeZone?: unknown } | undefined)?.timeZone
     try {
       const result = await scanCodexOutside({
@@ -279,39 +279,39 @@ export function createDaemonChanges<W>(deps: DaemonChangesDeps<W>) {
         ...(typeof cmd.cursor === 'string' ? { cursor: cmd.cursor } : {}),
         ...(typeof cmd.budgetMs === 'number' ? { budgetMs: Math.min(Math.max(cmd.budgetMs, 1000), 30_000) } : {}),
       })
-      sendOk(ws, id, { result })
-    } catch (err) { sendError(ws, id, 'usage.codexOutside failed: ' + (err as Error).message) }
+      return ok({ result })
+    } catch (err) { return fail('usage.codexOutside failed: ' + (err as Error).message) }
   }
 
-  async function cmdChangesCompute(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdChangesCompute(cmd: Record<string, unknown>): Promise<Answer> {
     const sid = cmd.sid as string
-    if (!sid) return sendError(ws, id, 'changes.compute: missing sid')
+    if (!sid) return fail('changes.compute: missing sid')
     const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
     const refresh = cmd.refresh === true
     try {
       const light = refresh ? null : await lightChangesHit(sid)
       if (light) {
-        return sendOk(ws, id, { found: true, result: light.result, mtimeMs: light.mtimeMs, jsonlPath: light.jsonlPath })
+        return ok({ found: true, result: light.result, mtimeMs: light.mtimeMs, jsonlPath: light.jsonlPath })
       }
       const entry = await computeChangesCached(sid, cwd, refresh)
-      if (!entry) return sendOk(ws, id, { found: false, result: null })
+      if (!entry) return ok({ found: false, result: null })
       // The wire result is ALWAYS light — per-file content rides changes.file.
-      sendOk(ws, id, {
+      return ok({
         found: true,
         result: toLightChangesResult(entry.output.result),
         mtimeMs: entry.mtimeMs,
         jsonlPath: entry.output.jsonlPath,
       })
     } catch (err) {
-      sendError(ws, id, 'changes.compute failed: ' + (err as Error).message)
+      return fail('changes.compute failed: ' + (err as Error).message)
     }
   }
 
-  async function cmdChangesFile(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdChangesFile(cmd: Record<string, unknown>): Promise<Answer> {
     const sid = cmd.sid as string
     const filePath = cmd.path as string
-    if (!sid) return sendError(ws, id, 'changes.file: missing sid')
-    if (!filePath) return sendError(ws, id, 'changes.file: missing path')
+    if (!sid) return fail('changes.file: missing sid')
+    if (!filePath) return fail('changes.file: missing path')
     const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
     try {
       // Serve from the cached full output even when slightly stale (mtime moved):
@@ -319,15 +319,15 @@ export function createDaemonChanges<W>(deps: DaemonChangesDeps<W>) {
       // converges the frontend's per-file cache.
       let entry = changesCache.get(sid)
       if (!entry) entry = (await computeChangesCached(sid, cwd)) ?? undefined
-      if (!entry) return sendOk(ws, id, { found: false })
+      if (!entry) return ok({ found: false })
       entry.lastUsed = Date.now()
       for (const group of entry.output.result.groups) {
         const file = group.files.find((f) => f.filePath === filePath)
-        if (file) return sendOk(ws, id, { found: true, repoRoot: group.repoRoot, file })
+        if (file) return ok({ found: true, repoRoot: group.repoRoot, file })
       }
-      sendOk(ws, id, { found: false })
+      return ok({ found: false })
     } catch (err) {
-      sendError(ws, id, 'changes.file failed: ' + (err as Error).message)
+      return fail('changes.file failed: ' + (err as Error).message)
     }
   }
 
@@ -346,34 +346,42 @@ export function createDaemonChanges<W>(deps: DaemonChangesDeps<W>) {
     log: (level, msg, data) => logMsg(level, msg, data),
   })
 
-  async function cmdGitCommitPlan(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdGitCommitPlan(cmd: Record<string, unknown>): Promise<Answer> {
     try {
       const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
       const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
       const entry = sid ? await computeChangesCached(sid, cwd).catch(() => null) : null
       const changes = entry ? { groups: entry.output.result.groups, fileMap: entry.output.fileMap } as unknown as PlanChanges : null
-      sendOk(ws, id, await gitCommit.plan(cmd, changes) as unknown as Record<string, unknown>)
+      return ok(await gitCommit.plan(cmd, changes) as unknown as Record<string, unknown>)
     } catch (err) {
-      sendError(ws, id, 'git.commitPlan failed: ' + (err as Error).message)
+      return fail('git.commitPlan failed: ' + (err as Error).message)
     }
   }
 
-  function cmdGitCommitStart(ws: W, id: number, cmd: Record<string, unknown>) {
+  /** Answered with the job at once; the commit itself rides the drain, so a shutdown waits for it. */
+  function cmdGitCommitStart(cmd: Record<string, unknown>): Answer {
     try {
+      let job: unknown
       daemonCommands.run(() => {
         const started = gitCommit.start(cmd)
-        sendOk(ws, id, { job: started.job })
+        job = started.job
         return started.done
       })
+      return ok({ job })
     } catch (err) {
-      sendError(ws, id, 'git.commitStart failed: ' + (err as Error).message, { code: (err as { code?: string }).code ?? 'failed' })
+      return fail('git.commitStart failed: ' + (err as Error).message, { code: (err as { code?: string }).code ?? 'failed' })
     }
+  }
+
+  const answers: Answers<W> = {
+    'changes.compute': cmdChangesCompute, 'changes.file': cmdChangesFile,
+    'usage.scan': cmdUsageScan, 'usage.costState': cmdUsageCostState, 'usage.sessionCost': cmdUsageSessionCost, 'usage.codexOutside': cmdUsageCodexOutside,
+    'git.commitPlan': cmdGitCommitPlan, 'git.commitStart': cmdGitCommitStart,
+    'git.commitJob': (cmd) => ok({ job: gitCommit.job(cmd.jobId) }),
   }
 
   return {
-    cmdChangesCompute, cmdChangesFile,
-    cmdUsageScan, cmdUsageCostState, cmdUsageSessionCost, cmdUsageCodexOutside,
-    cmdGitCommitPlan, cmdGitCommitStart, gitCommit,
+    answers,
     computeChangesCached, releaseIdleChangesState, CHANGES_RELEASE_AFTER_MS,
   }
 }

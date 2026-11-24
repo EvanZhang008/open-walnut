@@ -336,7 +336,7 @@ describe('one key for a home in the daemon', () => {
     expect(src).toMatch(/walnutScope\.pathKeyOf\(walnutScope\.whereNow\(value\)\)/)
   })
   it('every command is read by its Walnut\'s first home, and an alias folds what came before', () => {
-    expect(src).toMatch(/cmd = adoptCommandHome\(ws, sent\)/)
+    expect(src).toMatch(/cmd = adoptCommandHome\(ws, sent, reply\)/)
     for (const fn of ['foldTriggerScope', 'foldHooks', 'foldBridgeLink', 'offlineHost.foldHome', 'servedWalnuts.forgetKey']) {
       expect(src, fn).toContain(`${fn}(`)
     }

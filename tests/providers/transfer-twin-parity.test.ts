@@ -16,6 +16,7 @@ import { createTransferCore, type TransferCoreDeps } from '../../src/providers/t
 import { createTransferPack, type TransferPackDeps } from '../../src/providers/transfer-pack-core.js'
 import { createHostFacts } from '../../src/providers/host-facts-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { daemonCommandNames } from '../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -35,7 +36,8 @@ function setLiteral(src: string, name: string): string {
 
 describe('transfer + host facts daemon wiring', () => {
   it('the daemon dispatches every command', () => {
-    for (const cmd of COMMANDS) expect(standalone).toContain(`case '${cmd}':`)
+    // A dispatch case or a command-table entry (daemonCommandNames).
+    for (const cmd of COMMANDS) expect(daemonCommandNames()).toContain(cmd)
   })
 
   it('the capabilities are advertised, not required', () => {

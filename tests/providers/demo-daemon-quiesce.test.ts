@@ -157,13 +157,19 @@ describe('demo.quiesce daemon wiring', () => {
 
   it('the daemon answers it before the drain, refuses what the fence refuses, and fences every start', () => {
     const src = standalone
-    const at = src.indexOf("if (cmd.cmd === 'demo.quiesce') {")
-    expect(at).toBeGreaterThan(0)
-    const gate = src.indexOf('if (!demoQuiesce.allows(cmd.cmd)) {', at)
-    expect(gate).toBeGreaterThan(at)
-    const admit = src.indexOf('daemonCommands.admit(work)', gate)
-    expect(admit).toBeGreaterThan(gate)
-    expect(src.slice(at, admit)).not.toContain('daemonCommands.admit')
+    // A command passes the gates (passCommandGates) first: there the fence refuses every name it
+    // does not allow, demo.quiesce aside; then handleCommandFrame answers demo.quiesce outside the
+    // drain, and only after it admits the rest (admitCommand: daemonCommands.admit).
+    const frame = body(src, 'function handleCommandFrame(')
+    const gates = frame.indexOf('passCommandGates(')
+    const at = frame.indexOf("if (cmd.cmd === 'demo.quiesce') {")
+    const admitted = frame.indexOf('admitCommand(')
+    expect(gates).toBeGreaterThan(0)
+    expect(at).toBeGreaterThan(gates)
+    expect(admitted).toBeGreaterThan(at)
+    expect(frame.slice(at, admitted)).not.toContain('daemonCommands.admit')
+    expect(body(src, 'function passCommandGates(')).toContain("if (cmd.cmd !== 'demo.quiesce' && !demoQuiesce.allows(cmd.cmd)) {")
+    expect(body(src, 'function admitCommand<')).toContain('daemonCommands.admit(work)')
     expect(src).toContain("if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')")
     expect(src).toContain("if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts')")
     expect(src).toMatch(/settle: [^\n]*daemonCommands\.settle\(\)/)

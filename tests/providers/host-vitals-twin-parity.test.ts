@@ -27,7 +27,7 @@ function setLiteral(src: string, name: string): string {
 
 describe('host vitals daemon wiring', () => {
   it('the daemon dispatches host.vitals, starts the ledger at boot and keeps it under HOME', () => {
-    expect(standalone).toContain("case 'host.vitals':")
+    expect(standalone).toContain("'host.vitals': hostLocal('host.vitals', (cmd) => hostVitals.vitals(cmd)")
     expect(standalone).toMatch(/hostVitals\.start\(\);?\n\s+(console\.log\(port\)|(if \(LISTEN\) )?options\.onListening\?\.\(port\))/)
     expect(standalone).toContain("path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals')")
     expect(standalone).toContain("path.join(DAEMON_DIR, 'host-vitals')")

@@ -227,3 +227,41 @@ describe('InProcessDaemonSocket', () => {
     expect((err as Error).message).toBe('plain string')
   })
 })
+
+// D5: a command the runtime answers by function is called; its reply is the call's result.
+describe('InProcessDaemonSocket.callFrame', () => {
+  function withCall(call: (frame: Record<string, unknown>) => Promise<Record<string, unknown> | null> | null) {
+    const sent: Array<Record<string, unknown>> = []
+    const connect: InProcessConnect = () => ({ send: (frame) => { sent.push(frame) }, call, close: () => {} })
+    return { ...open(connect), sent }
+  }
+
+  it("resolves with the runtime's reply and emits no frame for it", async () => {
+    const { socket, named, sent } = withCall(async (frame) => ({ id: frame.id, ok: true }))
+    await settle()
+    expect(await socket.callFrame({ id: 1, cmd: 'fs.read' })).toEqual({ id: 1, ok: true })
+    expect(sent).toEqual([])
+    expect(named('frame')).toEqual([])
+    socket.close()
+  })
+
+  it('is null when the runtime has no function for the command (or no call at all)', async () => {
+    const { socket } = withCall(() => null)
+    const old = open(fakeRuntime().connect)
+    await settle()
+    expect(socket.callFrame({ id: 1, cmd: 'start' })).toBeNull()
+    expect(old.socket.callFrame({ id: 1, cmd: 'fs.read' })).toBeNull()
+    socket.close(); old.socket.close()
+  })
+
+  it('drops a reply that comes after the link closed, and throws on a closed link', async () => {
+    let release!: (f: Record<string, unknown>) => void
+    const { socket } = withCall(() => new Promise((resolve) => { release = resolve }))
+    await settle()
+    const called = socket.callFrame({ id: 2, cmd: 'fs.read' })
+    socket.close()
+    release({ id: 2, ok: true })
+    expect(await called).toBeNull()
+    expect(() => socket.callFrame({ id: 3, cmd: 'fs.read' })).toThrow('in-process daemon link is closed')
+  })
+})

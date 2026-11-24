@@ -7,6 +7,7 @@ import crypto from 'node:crypto'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { areaModuleText } from '../helpers/daemon-runtime-text.js'
+import { ok, fail, type Answer } from '../../src/providers/daemon-module-deps.js'
 
 /** Execute the daemon's actual guarded handler, without booting a daemon. */
 function handler(home: string, fsImpl = fs) {
@@ -20,11 +21,10 @@ function handler(home: string, fsImpl = fs) {
   const context = vm.createContext({ fs: fsImpl, path, crypto, Buffer, HOME_DIR: home,
     // The history archive's restore hook: nothing is archived in these homes.
     restoreForRead: async () => {}, transcriptRestoreForRead: async () => {}, CLAUDE_PROJECTS_DIRS: [],
-    sendOk: (out: Record<string, unknown>, _id: number, fields: Record<string, unknown>) => Object.assign(out, { ok: true, ...fields }),
-    sendError: (out: Record<string, unknown>, _id: number, error: string) => Object.assign(out, { ok: false, error }),
+    ok, fail,
   })
-  return vm.runInContext(`${js}\n(async (cmd) => { const out = {}; await cmdFsReadBounded(out, 1, cmd); return out; })`, context) as
-    (cmd: Record<string, unknown>) => Promise<Record<string, unknown>>
+  const run = vm.runInContext(`${js}\n(cmd) => cmdFsReadBounded(cmd)`, context) as (cmd: Record<string, unknown>) => Promise<Answer>
+  return async (cmd: Record<string, unknown>): Promise<Record<string, unknown>> => { const a = await run(cmd); return a.ok ? { ok: true, ...a.data } : { ok: false, error: a.error } }
 }
 
 let home: string

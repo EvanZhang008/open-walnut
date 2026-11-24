@@ -23,7 +23,7 @@ const runtimeBody = read('src/providers/daemon-standalone.ts')
 const core = read('src/providers/transfer-core.ts')
 const client = read('src/core/transfer/daemon-transfer-client.ts')
 
-const writePartCase = (src: string) => src.split('\n').find((l) => l.includes("case 'fs.writePart':")) ?? ''
+const writePartCase = (src: string) => src.split('\n').find((l) => l.includes("'fs.writePart': hostLocal(")) ?? ''
 
 describe('transfer-private-v1 daemon wiring', () => {
   it('is advertised, not required, and is the client\'s gate', () => {
@@ -33,7 +33,7 @@ describe('transfer-private-v1 daemon wiring', () => {
   })
 
   it('the daemon passes the socket binding and origin to writePart, and nothing from the command', () => {
-    expect(writePartCase(standalone)).toContain('transferCore.writePart(cmd, { boundHome: boundLocationOf(ws), origin: ws.data?.origin ?? null })')
+    expect(writePartCase(standalone)).toContain('transferCore.writePart(cmd, { boundHome: boundLocationOf(from), origin: from.data?.origin ?? null })')
     // The bound home is the socket's own binding (where that Walnut lives now), never the command's.
     const at = standalone.search(/function boundLocationOf\(ws/)
     expect(at).toBeGreaterThan(0)

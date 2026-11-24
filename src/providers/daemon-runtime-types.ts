@@ -85,6 +85,12 @@ export interface DaemonClient {
    * through onFrame with the same id (a positive number: the caller's own, as on a socket).
    */
   send(frame: Record<string, unknown>): void
+  /**
+   * A command frame the runtime answers by function (fs.*, git.*, changes.*, ...), called: its
+   * reply frame comes back from the call (null when the client closed first), through the same
+   * gates a sent frame passes. null at once for any other command, which goes by send().
+   */
+  call(frame: Record<string, unknown>): Promise<DaemonFrame | null> | null
   /** One command, answered by its reply frame (`ok`, `error`, ...). */
   request(cmd: string, params?: Record<string, unknown>): Promise<DaemonFrame>
   close(): void

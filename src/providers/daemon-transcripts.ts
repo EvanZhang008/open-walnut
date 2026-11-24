@@ -5,8 +5,8 @@
  * working-tree snapshots and rewind guard (turns.*: 'turn-snapshot-v1'), and the scans of
  * sessions started outside Walnut (sessions.discoverExternal / sessions.describeExternal).
  *
- * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose dispatcher
- * calls the returned commands; its session code calls turnSnapshots at a turn's start and end.
+ * Created once per runtime by createDaemonRuntime (daemon-standalone.ts), whose command table
+ * takes the returned answers by name; its session code calls turnSnapshots at a turn's start and end.
  * The code is the runtime's as it was; deps carry the runtime's own names.
  */
 import fs from 'node:fs'
@@ -19,9 +19,9 @@ import { describeExternalSessions, scanExternalSessions } from './external-sessi
 import type { ChildProcessFns } from './daemon-child-spawn.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { createDaemonChanges } from './daemon-changes.js'
-import type { DaemonEnv, DaemonLog, DaemonReplies } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
 
-export interface DaemonTranscriptsDeps<W extends object> extends DaemonReplies<W> {
+export interface DaemonTranscriptsDeps<W extends object> {
   daemonEnv: DaemonEnv
   DAEMON_DIR: string
   /** The CLI's config home (CLAUDE_CONFIG_DIR or ~/.claude). */
@@ -44,7 +44,7 @@ export interface DaemonTranscriptsDeps<W extends object> extends DaemonReplies<W
 }
 
 export function createDaemonTranscripts<W extends object>(deps: DaemonTranscriptsDeps<W>) {
-  const { daemonEnv, DAEMON_DIR, CLAUDE_CONFIG_HOME, execFileCb, walnutScope, gatewayClientHomes, sessionHomeOf, sessions, computeChangesCached, historyReady, logMsg, sendOk, sendError } = deps
+  const { daemonEnv, DAEMON_DIR, CLAUDE_CONFIG_HOME, execFileCb, walnutScope, gatewayClientHomes, sessionHomeOf, sessions, computeChangesCached, historyReady, logMsg } = deps
 
   // ── Transcript rewind probe (host-local — capability 'rewind-probe-v1') ──
   // Rewind's three questions about a session's JSONL (is this uuid resumable, what
@@ -92,9 +92,9 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
     return run
   }
 
-  async function cmdTranscriptRewindProbe(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdTranscriptRewindProbe(cmd: Record<string, unknown>): Promise<Answer> {
     const sid = cmd.sid as string
-    if (!sid) return sendError(ws, id, 'transcript.rewindProbe: missing sid')
+    if (!sid) return fail('transcript.rewindProbe: missing sid')
     const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
     const uuid = typeof cmd.uuid === 'string' && cmd.uuid ? cmd.uuid : undefined
     const cuts = Array.isArray(cmd.cuts)
@@ -116,30 +116,30 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
         ...(uuid ? { uuid } : {}),
         ...(cuts ? { cuts } : {}),
       })
-      if (!output) return sendOk(ws, id, { found: false })
-      sendOk(ws, id, { found: true, ...output } as unknown as Record<string, unknown>)
+      if (!output) return ok({ found: false })
+      return ok({ found: true, ...output } as unknown as Record<string, unknown>)
     } catch (err) {
-      sendError(ws, id, 'transcript.rewindProbe failed: ' + (err as Error).message)
+      return fail('transcript.rewindProbe failed: ' + (err as Error).message)
     }
   }
 
   // ── A session's first-paint view ('history-ready-v1'): the wire of the runtime's historyReady ──
-  async function cmdHistoryReadyView(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdHistoryReadyView(cmd: Record<string, unknown>): Promise<Answer> {
     try {
       const answer = await historyReady.readyView(readyRequestFromWire(cmd, CLAUDE_CONFIG_HOME))
-      sendOk(ws, id, { ...answer })
+      return ok({ ...answer })
     } catch (err) {
-      sendError(ws, id, 'history.readyView failed: ' + (err as Error).message)
+      return fail('history.readyView failed: ' + (err as Error).message)
     }
   }
 
-  async function cmdHistoryReadyKeys(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdHistoryReadyKeys(cmd: Record<string, unknown>): Promise<Answer> {
     try {
       const items = Array.isArray(cmd.items) ? (cmd.items as Array<Record<string, unknown>>).slice(0, 500) : []
       const keys = await historyReady.readyKeys(items.map((item) => readyRequestFromWire(item, CLAUDE_CONFIG_HOME)), CLAUDE_CONFIG_HOME)
-      sendOk(ws, id, { keys })
+      return ok({ keys })
     } catch (err) {
-      sendError(ws, id, 'history.readyKeys failed: ' + (err as Error).message)
+      return fail('history.readyKeys failed: ' + (err as Error).message)
     }
   }
 
@@ -169,33 +169,33 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
     log: (level, msg, data) => logMsg(level, msg, data),
   })
 
-  async function cmdTurns(ws: W, id: number, cmd: Record<string, unknown>) {
+  async function cmdTurns(cmd: Record<string, unknown>, from: W): Promise<Answer> {
     const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
     const cwd = typeof cmd.cwd === 'string' ? cmd.cwd : ''
     try {
       switch (cmd.cmd) {
         case 'turns.configure': {
-          const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'turns.configure')
-          if (!scope.ok) return sendError(ws, id, scope.error, { code: 'not_owner' })
-          return sendOk(ws, id, await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }, scope.home))
+          const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(from), 'turns.configure')
+          if (!scope.ok) return fail(scope.error, { code: 'not_owner' })
+          return ok(await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }, scope.home))
         }
         case 'turns.list':
-          return sendOk(ws, id, await turnSnapshots.list(sid, cwd) as unknown as Record<string, unknown>)
+          return ok(await turnSnapshots.list(sid, cwd) as unknown as Record<string, unknown>)
         case 'turns.diff':
-          return sendOk(ws, id, await turnSnapshots.fileDiff(sid, cwd, Number(cmd.n), String(cmd.path ?? ''),
+          return ok(await turnSnapshots.fileDiff(sid, cwd, Number(cmd.n), String(cmd.path ?? ''),
             cmd.against === 'worktree' ? 'worktree' : 'previous') as unknown as Record<string, unknown>)
         case 'turns.restore':
-          return sendOk(ws, id, await turnSnapshots.restore({
+          return ok(await turnSnapshots.restore({
             sid, cwd, n: Number(cmd.n), dryRun: cmd.dryRun === true,
             ...(Array.isArray(cmd.paths) ? { paths: (cmd.paths as unknown[]).map(String) } : {}),
           }) as unknown as Record<string, unknown>)
         case 'turns.guard':
-          return sendOk(ws, id, await turnGuard.guard({ sid, cwd, files: cmd.files, siblings: cmd.siblings }) as unknown as Record<string, unknown>)
+          return ok(await turnGuard.guard({ sid, cwd, files: cmd.files, siblings: cmd.siblings }) as unknown as Record<string, unknown>)
       }
-      sendError(ws, id, 'turns: unknown command')
+      return fail('turns: unknown command')
     } catch (err) {
       const code = (err as { code?: unknown }).code
-      sendError(ws, id, String(cmd.cmd) + ' failed: ' + (err as Error).message, typeof code === 'string' ? { code } : undefined)
+      return fail(String(cmd.cmd) + ' failed: ' + (err as Error).message, typeof code === 'string' ? { code } : undefined)
     }
   }
 
@@ -206,11 +206,7 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
   // ticks can't stack concurrent directory walks.
   let externalScanInflight: Promise<void> = Promise.resolve()
 
-  async function cmdDiscoverExternalSessions(
-    ws: W,
-    id: number,
-    cmd: Record<string, unknown>,
-  ) {
+  async function cmdDiscoverExternalSessions(cmd: Record<string, unknown>): Promise<Answer> {
     const prev = externalScanInflight
     let release!: () => void
     externalScanInflight = new Promise<void>((r) => { release = r })
@@ -234,13 +230,13 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
         truncated: result.truncated,
         ms: Date.now() - t0,
       })
-      sendOk(ws, id, {
+      return ok({
         candidates: result.candidates,
         scanned: result.scanned,
         truncated: result.truncated,
       })
     } catch (err) {
-      sendError(ws, id, 'sessions.discoverExternal failed: ' + (err as Error).message)
+      return fail('sessions.discoverExternal failed: ' + (err as Error).message)
     } finally {
       release()
     }
@@ -250,11 +246,7 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
   // The scan above is windowed by mtime; the server asks here for the sessions it
   // imported with a placeholder title whose files may have aged out of that
   // window, and retitles from the answer. Same serialization as the scan.
-  async function cmdDescribeExternalSessions(
-    ws: W,
-    id: number,
-    cmd: Record<string, unknown>,
-  ) {
+  async function cmdDescribeExternalSessions(cmd: Record<string, unknown>): Promise<Answer> {
     const prev = externalScanInflight
     let release!: () => void
     externalScanInflight = new Promise<void>((r) => { release = r })
@@ -270,16 +262,20 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
         asked: sessionIds.length, activityOnly,
         found: activityOnly ? result.activity.length : result.candidates.length, ms: Date.now() - t0,
       })
-      sendOk(ws, id, { candidates: result.candidates, activity: result.activity })
+      return ok({ candidates: result.candidates, activity: result.activity })
     } catch (err) {
-      sendError(ws, id, 'sessions.describeExternal failed: ' + (err as Error).message)
+      return fail('sessions.describeExternal failed: ' + (err as Error).message)
     } finally {
       release()
     }
   }
 
-  return {
-    cmdTranscriptRewindProbe, cmdHistoryReadyView, cmdHistoryReadyKeys, cmdTurns,
-    cmdDiscoverExternalSessions, cmdDescribeExternalSessions, turnSnapshots,
+  const answers: Answers<W> = {
+    'transcript.rewindProbe': cmdTranscriptRewindProbe,
+    'history.readyView': cmdHistoryReadyView, 'history.readyKeys': cmdHistoryReadyKeys,
+    'turns.list': cmdTurns, 'turns.diff': cmdTurns, 'turns.restore': cmdTurns, 'turns.guard': cmdTurns, 'turns.configure': cmdTurns,
+    'sessions.discoverExternal': cmdDiscoverExternalSessions, 'sessions.describeExternal': cmdDescribeExternalSessions,
   }
+
+  return { answers, turnSnapshots }
 }

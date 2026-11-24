@@ -10,6 +10,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { createLiveSettings } from '../../src/providers/live-settings-core.js'
 import { missingNames } from '../helpers/extracted-free-names.js'
+import { fail } from '../../src/providers/daemon-module-deps.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const SID = '11111111-2222-4333-8444-555555555555'
@@ -21,7 +22,8 @@ type Reply = { id: number; ok: boolean; error?: string; errorKind?: string; [key
 type Pending = { reqId: string; request: Record<string, unknown> }
 
 function functionText(src: string, name: string): string {
-  const start = src.search(new RegExp('(?:async )?function ' + name + '\\('))
+  // A generic function (`admitCommand<T>(`) too.
+  const start = src.search(new RegExp('(?:async )?function ' + name + '(?:<[^(]*>)?\\('))
   expect(start, name).toBeGreaterThan(-1)
   const end = src.indexOf('\n}', start)
   expect(end, name).toBeGreaterThan(start)
@@ -95,10 +97,14 @@ function buildDaemon(initial: Pending | null = pending(), owner = '') {
     gatewayClientHomes: new WeakMap(),
     // host_exec runs: handleCommand asks whether an exec.read is a resumable run's; none here.
     hostExec: { resumableJob: () => false },
+    // The commands answered by function (commandAnswers): session.permission is a case of the dispatcher.
+    commandAnswers: Object.create(null) as Record<string, unknown>,
+    fail,
   }
   // The daemon parses a socket line in handleCommand and handles the frame in handleCommandFrame
-  // (a client in this process hands the frame itself); its replies go through sendFrame.
-  const names = ['handleCommand', 'handleCommandFrame', 'sendFrame', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession', 'isServerClient']
+  // (a client in this process hands the frame itself) after its gates (passCommandGates,
+  // admitCommand); its replies are built by okFrame / errorFrame and go through sendFrame.
+  const names = ['handleCommand', 'handleCommandFrame', 'passCommandGates', 'admitCommand', 'handlerThrew', 'answerFnOf', 'sendFrame', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'sendAnswer', 'answerFrame', 'okFrame', 'errorFrame', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession', 'isServerClient']
   const code = names.map((name) => functionText(SRC, name)).join('\n')
   // Every module-level name the extracted functions read is handed in, whichever branch
   // reads it, judged against the vm context's own globals (no process, timers or Buffer).

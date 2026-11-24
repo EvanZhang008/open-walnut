@@ -28,6 +28,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { daemonAreaModules } from '../../helpers/daemon-runtime-text.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -62,6 +63,8 @@ const HOST_SIDE: Record<string, string> = {
   'src/providers/offline-host-core.ts': 'the daemon\'s offline answers (the server imports only its constants)',
 }
 const HOST_DIRS = ['src/providers/acp-worker/']
+/** The daemon runtime's area modules (daemon-git.ts, daemon-host-services.ts, ...): its body, so the daemon's side too. */
+const AREA_MODULES = new Set(daemonAreaModules())
 
 const CLASSIFIED: Record<string, Record<string, Class>> = {
   'src/core/daemon-file-reader.ts': { 'readSessionCost dial': 'link', 'readCodexOutside dial': 'link' },
@@ -188,7 +191,7 @@ const MARK_READERS = /\b(?:inPersonCall|asPersonCall|outsidePersonCall|assertPer
 function inScope(): string[] {
   const names = personOnlyCommands().map((c) => c.replace(/\./g, '\\.')).join('|')
   const quoted = new RegExp(`['"\`](?:${names})['"\`]`)
-  return walk('src').filter((f) => !HOST_SIDE[f] && !HOST_DIRS.some((d) => f.startsWith(d))
+  return walk('src').filter((f) => !HOST_SIDE[f] && !AREA_MODULES.has(f) && !HOST_DIRS.some((d) => f.startsWith(d))
     && f !== 'src/core/session-channel/person-call.ts' && f !== 'src/providers/ephemeral-session-gate.ts')
     .filter((f) => { const s = read(f); return quoted.test(s) || MARK_READERS.test(s) })
     .sort()

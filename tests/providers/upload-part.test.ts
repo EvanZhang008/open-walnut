@@ -251,7 +251,7 @@ describe('upload.part daemon wiring', () => {
   it('the daemon dispatches it, allows it over the bridge, and never to a follower', () => {
     // The whole runtime: the uploads folder is daemon-host-transfer.ts's.
     const src = daemonRuntimeText()
-    expect(src).toContain("case 'upload.part':")
+    expect(src).toContain("'upload.part': hostLocal('upload.part', (cmd, from) => {")
     expect(setLiteral(src, 'BRIDGE_ALLOWED_COMMANDS')).toContain("'upload.part'")
     expect(setLiteral(src, 'FOLLOWER_ALLOWED_COMMANDS')).not.toContain("'upload.part'")
     expect(src).toContain('function uploadsRootFor(')

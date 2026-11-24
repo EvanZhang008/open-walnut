@@ -3505,7 +3505,12 @@ export class DaemonConnection {
         this.noteLinkSent(message.length)
       }
       if (ownBulk) this.bulkOwnWritten += message.length
-      if (isInProcessDaemonSocket(sentOn)) sentOn.sendFrame(payload); else sentOn.send(message)
+      if (!isInProcessDaemonSocket(sentOn)) { sentOn.send(message); return }
+      // A daemon in this process answers most commands by function: the reply is the call's result,
+      // taken as its reply frame would be (the pending entry above, its timer and its logs).
+      const answered = sentOn.callFrame(payload)
+      if (!answered) { sentOn.sendFrame(payload); return }
+      void answered.then((reply) => { if (reply) this.inProcessFrame(sentOn, reply) })
     })
   }
 
@@ -8311,10 +8316,7 @@ export class DaemonConnection {
         this.handleMessage(typeof data === 'string' ? data : data.toString())
       })
       // An in-process daemon hands its frames over as objects (in-process-daemon-socket.ts).
-      ws.on('frame', (frame: Record<string, unknown>) => {
-        if (this.hostKey === '__local__' && (this.ws !== ws || this.localDialAbandoned())) return
-        void this.handleFrame(frame)
-      })
+      ws.on('frame', (frame: Record<string, unknown>) => this.inProcessFrame(ws, frame))
 
       ws.on('pong', (data: Buffer) => {
         this.lastPongAt = Date.now()
@@ -8336,6 +8338,13 @@ export class DaemonConnection {
   }
 
   // ── Private: Message handling ──
+
+  /** A frame from an in-process daemon: an event, a reply sent as a frame, or a direct call's reply. */
+  private inProcessFrame(ws: unknown, frame: Record<string, unknown>): void {
+    // Likewise: a '__local__' socket no longer the instance's own, or a dial the pool let go of.
+    if (this.hostKey === '__local__' && (this.ws !== ws || this.localDialAbandoned())) return
+    void this.handleFrame(frame)
+  }
 
   /**
    * Resolve a command-response frame (has numeric `id`) against the shared

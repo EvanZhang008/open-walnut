@@ -24,7 +24,8 @@ function bodyOf(src: string, name: string): string {
 
 describe('trigger-state-snapshot-v1 in the daemon', () => {
   it('the daemon dispatches the command through the command drain', () => {
-    expect(standaloneSrc).toMatch(/case 'triggers\.state\.snapshot': return daemonCommands\.run\(\(\) => triggerCommands\.cmdTriggersStateSnapshot\(ws, id as number, cmd\)\)/)
+    expect(standaloneSrc).toMatch(/'triggers\.state\.snapshot': cmdTriggersStateSnapshot\b/)
+    expect(standaloneSrc).toMatch(/const DRAINED_ANSWERS = new Set\(\[[^\]]*'triggers\.state\.snapshot'/)
   })
 
   it('tracks running checks across a disarm, added before the spawn and removed in finally', () => {
@@ -40,8 +41,8 @@ describe('trigger-state-snapshot-v1 in the daemon', () => {
     const cmd = bodyOf(standaloneSrc, 'cmdTriggersStateSnapshot')
     expect(cmd).toContain("triggersConfigureGate.run('triggers.configure'")
     expect(cmd).toMatch(/takeTriggerStateSnapshot\(\{/)
-    expect(cmd).toMatch(/socketTriggerScope: ws\.data\?\.triggerScope/)
-    expect(cmd).toMatch(/socketGatewayHome: gatewayClientHomes\.get\(ws\)/)
+    expect(cmd).toMatch(/socketTriggerScope: from\.data\?\.triggerScope/)
+    expect(cmd).toMatch(/socketGatewayHome: gatewayClientHomes\.get\(from\)/)
     expect(cmd).toMatch(/checkRunning: \[\.\.\.triggerChecksRunning\]/)
     expect(cmd).toMatch(/hostDeliveryInFlight: hostDeliveriesInFlight\.has\(key\)/)
     expect(cmd).toMatch(/statePath: \(h, tid\) => triggerStatePath\(h, tid\)/)
@@ -73,9 +74,10 @@ describe('trigger-state-snapshot-v1 in the daemon', () => {
 
 describe('trigger-state-seed-v1 in the daemon', () => {
   it('dispatches the command through the drain, refuses a foreign home, and takes every rule from the core behind the configure gate', () => {
-    expect(standaloneSrc).toMatch(/case 'triggers\.state\.seed': return daemonCommands\.run\(\(\) => triggerCommands\.cmdTriggersStateSeed\(ws, id as number, cmd\)\)/)
+    expect(standaloneSrc).toMatch(/'triggers\.state\.seed': cmdTriggersStateSeed\b/)
+    expect(standaloneSrc).toMatch(/const DRAINED_ANSWERS = new Set\(\[[^\]]*'triggers\.state\.seed'/)
     const cmd = bodyOf(standaloneSrc, 'cmdTriggersStateSeed')
-    expect(cmd).toMatch(/refuseForeignHome\(ws, id, cmd, 'triggers\.state\.seed'\)/)
+    expect(cmd).toMatch(/const foreign = foreignHomeRefusal\(from, cmd, 'triggers\.state\.seed'\)\n\s*if \(foreign\) return foreign/)
     expect(cmd).toContain("triggersConfigureGate.run('triggers.configure'")
     expect(cmd).toContain('seedTriggerState({')
     for (const fact of ['configured:', 'armed: armedTriggers.has(key)', 'draining: drainingTriggers.has(key)', 'checkRunning: [...triggerChecksRunning]', 'hostDeliveryInFlight: hostDeliveriesInFlight.has(key)']) {

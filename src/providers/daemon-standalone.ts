@@ -154,6 +154,7 @@ import { createDaemonTriggerCommands } from './daemon-trigger-commands.js'
 import { createDaemonHostTransfer } from './daemon-host-transfer.js'
 import { createDaemonHostServices } from './daemon-host-services.js'
 import { createDaemonProcessGroups } from './daemon-process-groups.js'
+import { settleAnswer, fail, type Answer, type AnswerFn, type Answers } from './daemon-module-deps.js'
 import { Worker as ThreadWorker } from 'node:worker_threads'
 import { createHistoryReady, createReadyWorkerExecutor, readyWorkerEntries, type ReadyWorkerLike } from './history-ready-core.js'
 import { validateTriggerDef, checkGatewayCall, createCheckCallers, withoutTriggerCaller } from './trigger-check-core.js'
@@ -2736,15 +2737,76 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
 
 /** One command frame, from a socket (parsed above) or a client in this process (the object it sent). */
 function handleCommandFrame(ws: ServerWebSocket<WsData>, frame: unknown) {
+  const cmd = passCommandGates(ws, frame, (reply) => sendFrame(ws, reply))
+  // Refused and answered.
+  if (!cmd) return
+  const id = cmd.id as number
+  // One command must never kill the daemon: a throw anywhere in a handler
+  // (the pre-guard era: a whale-file rebuild OOM inside cmdAttach took the
+  // whole process down MID phone-send — marker written, message lost) becomes
+  // an error reply to the caller. Async handlers (fs.*) return promises — a
+  // rejection there would otherwise surface as unhandledRejection and trip
+  // the fatal guard above, so it is caught here too.
+  const replyError = (err: unknown) => sendAnswer(ws, id, handlerThrew(cmd, err))
+  // demo.quiesce runs outside the drain (it waits for the drain); once it fenced, only reads and stops.
+  if (cmd.cmd === 'demo.quiesce') {
+    void demoQuiesce.quiesce(ws.data?.origin, cmd).then((reply) => {
+      if (reply.ok) sendOk(ws, id, reply)
+      else sendError(ws, id, reply.error, reply)
+    }, replyError)
+    return
+  }
+  try {
+    const out = admitCommand(cmd, () => dispatchCommand(ws, id, cmd)) as unknown
+    if (out && typeof (out as Promise<unknown>).then === 'function') {
+      (out as Promise<unknown>).catch(replyError)
+    }
+    return
+  } catch (err) {
+    return replyError(err)
+  }
+}
+
+/**
+ * A command a client in this process calls (DaemonClient.call): one the runtime answers by function
+ * (commandAnswers), through the same gates and admission as handleCommandFrame, its Answer handed
+ * back as the reply object, with no frame on the client's queue. null for any other command: the
+ * client sends that one as a frame.
+ */
+function callCommand(ws: ServerWebSocket<WsData>, frame: DaemonFrame): Promise<DaemonFrame> | null {
+  const answerFn = answerFnOf(frame.cmd)
+  if (!answerFn) return null
+  return new Promise<DaemonFrame>((resolve) => {
+    const cmd = passCommandGates(ws, frame, resolve)
+    if (!cmd) return
+    const id = cmd.id as number
+    const failed = (err: unknown) => resolve(answerFrame(ws, id, handlerThrew(cmd, err)))
+    try {
+      const out = admitCommand(cmd, () => answerCommand(ws, cmd, answerFn, (answer) => resolve(answerFrame(ws, id, answer))))
+      // As handleCommandFrame's .catch(replyError): a rejection is one error reply, never a hang.
+      if (out && typeof (out as Promise<unknown>).then === 'function') (out as Promise<unknown>).catch(failed)
+    } catch (err) {
+      failed(err)
+    }
+  })
+}
+
+/**
+ * The gates every command frame passes before it runs, from a socket or a client in this process
+ * (handleCommandFrame, callCommand): the home it names adopted, the receive log, the per-Walnut
+ * pushes noted, each origin's allowlist (bridge, follower, lane) and owner scope, and a stopping
+ * Demo. The command to run, or null when a gate refused it and answered through `reply`.
+ */
+function passCommandGates(ws: ServerWebSocket<WsData>, frame: unknown, reply: (frame: DaemonFrame) => void): Record<string, unknown> | null {
   const sent = frame as Record<string, unknown>
   // Valid JSON ≠ a command frame: "null"/"42"/"\"x\"" parse fine but the
   // destructure below would THROW on null (a poison frame that predates the
   // dispatch guard — one bad client frame killed the whole daemon).
-  if (!sent || typeof sent !== 'object') return sendError(ws, null, 'invalid JSON')
+  if (!sent || typeof sent !== 'object') { reply(errorFrame(ws, null, 'invalid JSON')); return null }
   // From here on a command names its Walnut by its first home on this host (adoptCommandHome).
-  const cmd = adoptCommandHome(ws, sent)
+  const cmd = adoptCommandHome(ws, sent, reply)
   // Refused and answered (another data dir speaks as this Walnut here).
-  if (!cmd) return
+  if (!cmd) return null
   const { id } = cmd
 
   // Structured per-command receive log. Traces (traceId) originate at walnut
@@ -2769,67 +2831,58 @@ function handleCommandFrame(ws: ServerWebSocket<WsData>, frame: unknown) {
   // compromised and is trying to escalate to fs.write/start/etc — refuse it.
   if (ws.data?.origin === 'bridge' && !BRIDGE_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
     logMsg('warn', 'bridge: rejected non-allowlisted command', { cmd: cmd.cmd, id })
-    return sendError(ws, id as number, 'command not permitted over bridge: ' + cmd.cmd)
+    reply(errorFrame(ws, id as number, 'command not permitted over bridge: ' + cmd.cmd))
+    return null
   }
   // A named bridge link reaches only its own Walnut's sessions (or one whose Walnut
   // is not recorded, as before).
   if (ws.data?.origin === 'bridge' && BRIDGE_SESSION_COMMANDS.has(cmd.cmd as string)
     && typeof cmd.sid === 'string' && !bridgeHearsSession(ws, cmd.sid)) {
-    return sendError(ws, id as number, `${cmd.cmd}: a session of another Walnut`, { errorKind: 'not_owner' })
+    reply(errorFrame(ws, id as number, `${cmd.cmd}: a session of another Walnut`, { errorKind: 'not_owner' }))
+    return null
   }
   // A follower (the host server) reads; the leader alone writes this host's state.
   if (ws.data?.origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
     logMsg('warn', 'follower: refused a command only the leader sends', { cmd: cmd.cmd, id })
-    return sendFrame(ws, { id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' })
+    reply({ id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' })
+    return null
   }
   // Owner scope (replica-reads-v1, follower-reads-core.ts): a follower reads its own Walnut only.
-  if (ws.data?.origin === 'follower' && followerScope(ws, id as number, cmd)) return
+  if (ws.data?.origin === 'follower' && followerScope(ws, id as number, cmd, reply)) return null
   // A lane carries the leader's streams and nothing else.
   if (ws.data?.origin === 'lane' && !LANE_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
-    return sendFrame(ws, { id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' })
+    reply({ id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' })
+    return null
   }
+  // demo.quiesce itself runs outside this fence (handleCommandFrame); once it fenced, only reads and stops.
+  if (cmd.cmd !== 'demo.quiesce' && !demoQuiesce.allows(cmd.cmd)) {
+    reply(errorFrame(ws, id as number, 'Demo is stopping; no new work is accepted', { errorKind: 'demo_stopping' }))
+    return null
+  }
+  return cmd
+}
 
-  // One command must never kill the daemon: a throw anywhere in a handler
-  // (the pre-guard era: a whale-file rebuild OOM inside cmdAttach took the
-  // whole process down MID phone-send — marker written, message lost) becomes
-  // an error reply to the caller. Async handlers (fs.*) return promises — a
-  // rejection there would otherwise surface as unhandledRejection and trip
-  // the fatal guard above, so it is caught here too.
-  const replyError = (err: unknown) => {
-    logMsg('error', 'handleCommand: handler threw — replying with error instead of dying', {
-      cmd: cmd.cmd, id, sid,
-      error: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined,
-    })
-    sendError(ws, id as number, 'internal daemon error handling ' + cmd.cmd + ': '
-      + (err instanceof Error ? err.message : String(err)))
-  }
-  // demo.quiesce runs outside the drain (it waits for the drain); once it fenced, only reads and stops.
-  if (cmd.cmd === 'demo.quiesce') {
-    void demoQuiesce.quiesce(ws.data?.origin, cmd).then((reply) => {
-      if (reply.ok) sendOk(ws, id as number, reply)
-      else sendError(ws, id as number, reply.error, reply)
-    }, replyError)
-    return
-  }
-  if (!demoQuiesce.allows(cmd.cmd)) {
-    return sendError(ws, id as number, 'Demo is stopping; no new work is accepted', { errorKind: 'demo_stopping' })
-  }
-  try {
-    // An answer to a relay is not new work: it is taken while the daemon pauses or drains,
-    // so a call the server finished in those seconds gets its result (releaseGatewayRelays).
-    const work = () => dispatchCommand(ws, id as number, cmd)
-    // A read of a resumable host_exec run (one that only waits; it holds no update) neither holds a
-    // handover's pause nor is turned away by it: its caller reads again from the next daemon.
-    const free = cmd.cmd === 'gateway-result' || (cmd.cmd === 'exec.read' && hostExec.resumableJob(cmd.jobId))
-    const out = (free ? work() : daemonCommands.admit(work)) as unknown
-    if (out && typeof (out as Promise<unknown>).then === 'function') {
-      (out as Promise<unknown>).catch(replyError)
-    }
-    return
-  } catch (err) {
-    return replyError(err)
-  }
+/**
+ * Run a command that passed the gates under the drain's admission (a shutdown or handover pause
+ * turns it away with a throw). An answer to a relay is not new work: it is taken while the daemon
+ * pauses or drains, so a call the server finished in those seconds gets its result
+ * (releaseGatewayRelays). A read of a resumable host_exec run (one that only waits; it holds no
+ * update) neither holds a handover's pause nor is turned away by it: its caller reads again from
+ * the next daemon.
+ */
+function admitCommand<T>(cmd: Record<string, unknown>, work: () => T): T {
+  const free = cmd.cmd === 'gateway-result' || (cmd.cmd === 'exec.read' && hostExec.resumableJob(cmd.jobId))
+  return free ? work() : daemonCommands.admit(work)
+}
+
+/** A handler's throw (or rejection) as its one error reply: logged, and named after its command. */
+function handlerThrew(cmd: Record<string, unknown>, err: unknown): Answer {
+  logMsg('error', 'handleCommand: handler threw — replying with error instead of dying', {
+    cmd: cmd.cmd, id: cmd.id, sid: typeof cmd.sid === 'string' ? cmd.sid : undefined,
+    error: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? err.stack : undefined,
+  })
+  return fail('internal daemon error handling ' + cmd.cmd + ': ' + (err instanceof Error ? err.message : String(err)))
 }
 
 /** What this daemon's hello advertises: also what its serves file records. */
@@ -2848,6 +2901,9 @@ function helloCapabilities(): string[] {
 const SERVED_PUSHES = new Set(['hooks.configure', 'triggers.configure', 'bridge.configure', 'turns.configure', 'workspace.configure'])
 
 function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  // A command answered by function (commandAnswers): its Answer is the reply frame.
+  const answerFn = answerFnOf(cmd.cmd)
+  if (answerFn) return answerCommand(ws, cmd, answerFn, (answer) => sendAnswer(ws, id, answer))
   switch (cmd.cmd) {
     case 'start': return daemonCommands.run(() => cmdStart(ws, id as number, cmd))
     case 'attach': return daemonCommands.run(() => cmdAttach(ws, id as number, cmd))
@@ -2873,22 +2929,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'subscribe-agent': return cmdSubscribeAgent(ws, id as number, cmd)
     case 'unsubscribe-agent': return cmdUnsubscribeAgent(ws, id as number, cmd)
     case 'write-inbox': return cmdWriteInbox(ws, id as number, cmd)
-    case 'fs.read': return fsRead.cmdFsRead(ws, id as number, cmd)
-    case 'fs.readImage': return fsRead.cmdFsReadImage(ws, id as number, cmd)
-    case 'fs.readBounded': return fsRead.cmdFsReadBounded(ws, id as number, cmd)
-    // File writes are drained before a swap like session commands: a cut writeFile leaves a truncated file.
-    case 'image.save': return daemonCommands.run(() => fsWrite.cmdImageSave(ws, id as number, cmd))
-    case 'fs.write': return daemonCommands.run(() => fsWrite.cmdFsWrite(ws, id as number, cmd))
-    case 'fs.mkdir': return daemonCommands.run(() => fsWrite.cmdFsMkdir(ws, id as number, cmd))
-    // Mutation family ('fs-mutate-v1'). NOT in BRIDGE_ALLOWED_COMMANDS — see
-    // the note there: a compromised cloud box must never move/delete host files.
-    case 'fs.rename': return daemonCommands.run(() => fsWrite.cmdFsRename(ws, id as number, cmd))
-    case 'fs.rm': return daemonCommands.run(() => fsWrite.cmdFsRm(ws, id as number, cmd))
-    case 'fs.copy': return daemonCommands.run(() => fsWrite.cmdFsCopy(ws, id as number, cmd))
-    case 'fs.ls': return fsRead.cmdFsLs(ws, id as number, cmd)
-    case 'fs.find': return fsRead.cmdFsFind(ws, id as number, cmd)
-    case 'fs.stat': return fsRead.cmdFsStat(ws, id as number, cmd)
-    case 'fs.resolvePath': return fsRead.cmdFsResolvePath(ws, id as number, cmd)
     // Task directories (task-dir-v1). NOT in BRIDGE_ALLOWED_COMMANDS: removal
     // deletes host files, which the cloud bridge may never ask for.
     case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id as number, cmd)
@@ -2902,55 +2942,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'transcript.archive': return cmdTranscriptArchive(ws, id as number, cmd)
     case 'taskdir.pruneCaches': return cmdTaskDirPruneCaches(ws, id as number, cmd)
     case 'transcript.restore': return cmdTranscriptRestore(ws, id as number, cmd)
-    // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
-    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
-    // can, so only the trusted walnut socket asks, after the server checked the
-    // user's grant.
-    case 'exec.run': return replyTransfer(ws, id as number, 'exec.run', () => hostExec.run(cmd), false)
-    case 'exec.read': return replyTransfer(ws, id as number, 'exec.read', () => hostExec.read(cmd), false)
-    case 'exec.kill': return replyTransfer(ws, id as number, 'exec.kill', () => hostExec.kill(cmd), false)
-    case 'exec.list': return replyTransfer(ws, id as number, 'exec.list', () => hostExec.list(cmd), false)
-    // A plugin's short script (host-script-v1, host-script-core.ts): the same rule as exec.*.
-    case 'exec.script': return replyTransfer(ws, id as number, 'exec.script', () => hostExec.script(cmd), false)
-    // A task on another host calling this host's MCP servers and web services (host-mcp-v1,
-    // host-http-v1). The same rule as exec.*: only the trusted walnut socket asks, after the
-    // server checked the user's grant.
-    case 'mcp.list': return replyTransfer(ws, id as number, 'mcp.list', () => hostMcp.list(cmd), false)
-    // The host network (net-v1, net-core.ts). NOT in BRIDGE_ALLOWED_COMMANDS or
-    // FOLLOWER_ALLOWED_COMMANDS: it decides who may reach this daemon, so only the
-    // trusted walnut socket asks.
-    // The servers a session started (ports-v1, port-scan-core.ts). NOT in
-    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: ports.stop signals host
-    // processes.
-    case 'ports.list': return replyTransfer(ws, id as number, 'ports.list', () => daemonPorts.list(cmd), false)
-    case 'ports.stop': return replyTransfer(ws, id as number, 'ports.stop', () => daemonPorts.stop(cmd), false)
-    // This machine's hub forwards ('hub-forward-v1', hub-forward-core.ts).
-    case 'hub.status': return hostServices.cmdHubStatus(ws, id as number)
-    case 'net.status': return replyTransfer(ws, id as number, 'net.status', () => netSupervisor.status(), false)
-    case 'net.identity': return replyTransfer(ws, id as number, 'net.identity', async () => ({ endpointId: await netSupervisor.identity() }), false)
-    case 'net.configure': return replyTransfer(ws, id as number, 'net.configure', () => netSupervisor.configure(cmd), false)
-    case 'net.forward': return replyTransfer(ws, id as number, 'net.forward', () => netSupervisor.forward(cmd), false)
-    case 'net.probe': return replyTransfer(ws, id as number, 'net.probe', () => netSupervisor.probe(cmd), false)
-    case 'net.invites': return replyTransfer(ws, id as number, 'net.invites', () => netSupervisor.invites(cmd), false)
-    case 'net.join': return replyTransfer(ws, id as number, 'net.join', () => netSupervisor.join(cmd), false)
-    case 'mcp.tools': return replyTransfer(ws, id as number, 'mcp.tools', () => hostMcp.tools(cmd), false)
-    case 'mcp.call': return replyTransfer(ws, id as number, 'mcp.call', () => hostMcp.call(cmd), false)
-    case 'mcp.result': return replyTransfer(ws, id as number, 'mcp.result', () => hostMcp.result(cmd), false)
-    case 'http.request': return replyTransfer(ws, id as number, 'http.request', () => hostHttp.request(cmd), false)
-    // The secrets the user shared with this host (secrets-v1, secrets-core.ts). NOT in
-    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: only the Mac's trusted socket
-    // writes or lists them, and no reply ever carries a value.
-    case 'secrets.list': return replyTransfer(ws, id as number, 'secrets.list', async () => secretStore.list(), false)
-    // A write names its Walnut (the owner a sync prunes by); never another's on a bound socket.
-    case 'secrets.put': case 'secrets.remove': case 'secrets.sync': {
-      if (walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return sendError(ws, id, `${cmd.cmd}: this socket speaks for another Walnut`, { code: 'not_owner' })
-      const op = cmd.cmd === 'secrets.put' ? secretStore.put : cmd.cmd === 'secrets.remove' ? secretStore.remove : secretStore.sync
-      return replyTransfer(ws, id as number, String(cmd.cmd), async () => op(cmd), false)
-    }
-    case 'fs.grep': return fsRead.cmdFsGrep(ws, id as number, cmd)
-    // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
-    // SSH-tunneled walnut socket may ask, never the public cloud bridge.
-    case 'vscode.ensure': return fsWrite.cmdVscodeEnsure(ws, id as number, cmd)
     case 'vscode.status': return codeServer.codeServerStatus().then(
       (s) => sendOk(ws, id as number, s as unknown as Record<string, unknown>),
       (err) => sendError(ws, id as number, 'vscode.status failed: ' + (err as Error).message),
@@ -2977,113 +2968,20 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       if (starts) hostFixWork = work
       return work
     }
-    case 'fs.readRange': return fsRead.cmdFsReadRange(ws, id as number, cmd)
-    case 'git.diff': return git.cmdGitDiff(ws, id as number, cmd)
-    // 'git-status-v1': the glanceable state (branch, changed files, +/- lines,
-    // unpushed commits) of the repos some directories sit in. Read-only, but
-    // NOT in BRIDGE_ALLOWED_COMMANDS: it reads arbitrary host paths.
-    case 'git.status': return git.cmdGitStatus(ws, id as number, cmd)
-    // 'git-compare-v1': branches + recent commits for the Changed tab's compare
-    // picker (git-diff-core.ts). Same bridge rule as git.diff.
-    case 'git.refs': return git.cmdGitRefs(ws, id as number, cmd)
-    // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
-    // it reads arbitrary host paths, which the cloud bridge must never reach.
-    case 'git.fileLog': return git.cmdGitFileLog(ws, id as number, cmd)
-    case 'git.fileShow': return git.cmdGitFileShow(ws, id as number, cmd)
-    // 'git-exclude-v1': writes ONLY .git/info/exclude; same bridge rule as above.
-    case 'git.ensureExcluded': return git.cmdGitEnsureExcluded(ws, id as number, cmd)
-    // 'git-commit-v1' (git-commit-core.ts): commit / push / PR of one session's
-    // hunks. NOT in BRIDGE_ALLOWED_COMMANDS: it writes refs and publishes.
-    case 'git.commitPlan': return sessionChanges.cmdGitCommitPlan(ws, id as number, cmd)
-    case 'git.commitStart': return sessionChanges.cmdGitCommitStart(ws, id as number, cmd)
-    case 'git.commitJob': return sendOk(ws, id as number, { job: sessionChanges.gitCommit.job(cmd.jobId) })
-    // 'fs-write-part-v1' / 'transfer-v1' / 'host-facts-v1' (transfer-core.ts,
-    // transfer-pack-core.ts, host-facts-core.ts): moving a workspace to another
-    // host. NOT in BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they
-    // write host files, run ssh/scp, or (host.facts) read what this host is,
-    // which only the trusted walnut socket asks, like host.preflight.
-    // A private write ('transfer-private-v1') is authorized by this socket's own
-    // binding (leader.configure / leader.claim), never by a field of the command.
-    // 'upload-part-v1': a phone's attachment, bridge-reachable (see BRIDGE_ALLOWED_COMMANDS).
-    case 'upload.part': return replyTransfer(ws, id as number, 'upload.part', () => {
-      const root = uploadsRootFor(cmd, ws.data?.origin === 'bridge')
-      return transferCore.uploadPart(cmd, root, root === uploadsOwnerlessRoot())
-    }, false)
-    case 'fs.writePart': return replyTransfer(ws, id as number, 'fs.writePart', () => transferCore.writePart(cmd, { boundHome: boundLocationOf(ws), origin: ws.data?.origin ?? null }), false)
-    case 'transfer.pack': return replyTransfer(ws, id as number, 'transfer.pack', () => transferPack.pack(cmd), true)
-    case 'transfer.reach': return replyTransfer(ws, id as number, 'transfer.reach', () => transferCore.reach(cmd), false)
-    case 'transfer.fetch': return replyTransfer(ws, id as number, 'transfer.fetch', () => transferCore.fetch(cmd), true)
-    case 'transfer.realpath': return replyTransfer(ws, id as number, 'transfer.realpath', () => transferCore.realpath(cmd), false)
-    case 'host.facts': return replyTransfer(ws, id as number, 'host.facts', () => hostFacts.facts(cmd), false)
-    case 'host.load': return replyTransfer(ws, id as number, 'host.load', () => hostFacts.load(cmd), false)
-    case 'host.endpoint': return replyTransfer(ws, id as number, 'host.endpoint', () => hostFacts.endpoint(cmd), false)
-    case 'transfer.scan': return replyTransfer(ws, id as number, 'transfer.scan', () => transferPack.scan(cmd), false)
-    case 'transfer.apply': return replyTransfer(ws, id as number, 'transfer.apply', () => transferPack.apply(cmd), true)
-    case 'transfer.clear': return replyTransfer(ws, id as number, 'transfer.clear', () => transferPack.clear(cmd), true)
-    case 'transfer.recent': return replyTransfer(ws, id as number, 'transfer.recent', () => transferPack.recent(cmd), false)
-    // 'host-vitals-v1' (host-vitals-core.ts): now (CPU, load, memory, uptime) and the
-    // ledger fold (up and linked minutes, outages, boots). Read-only, like host.facts.
-    case 'host.vitals': return replyTransfer(ws, id as number, 'host.vitals', () => hostVitals.vitals(cmd) as unknown as Promise<Record<string, unknown>>, false)
-    case 'desktop.updateStatus': return replyTransfer(ws, id as number, 'desktop.updateStatus', () => desktopUpdate.status(), false)
-    case 'desktop.restart': return replyTransfer(ws, id as number, 'desktop.restart', () => desktopUpdate.restart(cmd.token, cmd.force), true)
     // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they start processes.
     case 'oneshot.run': return replyOneShot(ws, id as number, 'oneshot.run', () => oneShot.run(ws, cmd))
     case 'oneshot.prewarm': return replyOneShot(ws, id as number, 'oneshot.prewarm', () => oneShot.prewarm(cmd))
     case 'oneshot.cancel': return replyOneShot(ws, id as number, 'oneshot.cancel', () => oneShot.cancel(cmd))
-    case 'usage.scan': return sessionChanges.cmdUsageScan(ws, id as number, cmd)
-    case 'usage.costState': return sessionChanges.cmdUsageCostState(ws, id as number, cmd)
-    case 'usage.sessionCost': return sessionChanges.cmdUsageSessionCost(ws, id as number, cmd)
-    case 'usage.codexOutside': return sessionChanges.cmdUsageCodexOutside(ws, id as number, cmd)
     case 'usage.budget.get': return cmdUsageBudget(ws, id as number, cmd, false)
     case 'usage.budget.configure': return cmdUsageBudget(ws, id as number, cmd, true)
     case 'usage.budget.list': return cmdUsageBudgetList(ws, id as number, cmd)
-    case 'changes.compute': return sessionChanges.cmdChangesCompute(ws, id as number, cmd)
-    case 'changes.file': return sessionChanges.cmdChangesFile(ws, id as number, cmd)
-    case 'transcript.rewindProbe': return transcripts.cmdTranscriptRewindProbe(ws, id as number, cmd)
-    // 'history-ready-v1' (history-ready-core.ts): a session's first-paint view, parsed here.
-    // Trusted socket only (not in the bridge or follower allowlists).
-    case 'history.readyView': return transcripts.cmdHistoryReadyView(ws, id as number, cmd)
-    case 'history.readyKeys': return transcripts.cmdHistoryReadyKeys(ws, id as number, cmd)
-    // 'turn-snapshot-v1' (turn-snapshot-core.ts, turn-guard-core.ts). NOT in
-    // BRIDGE_ALLOWED_COMMANDS: they read and write host files.
-    case 'turns.list':
-    case 'turns.diff':
-    case 'turns.restore':
-    case 'turns.guard':
-    case 'turns.configure': return transcripts.cmdTurns(ws, id as number, cmd)
-    // 'workspace-v1' (workspace-core.ts): a task's isolated working copy. NOT in
-    // BRIDGE_ALLOWED_COMMANDS: it runs providers and removes folders on this host.
-    case 'workspace.configure':
-    case 'workspace.detect':
-    case 'workspace.create':
-    case 'workspace.job':
-    case 'workspace.status':
-    case 'workspace.repos':
-    case 'workspace.remove':
-    // 'workspace-scripts-v1': a repository's scripts file and a script run in a workspace.
-    case 'workspace.scriptsFile':
-    case 'workspace.runScript': return hostServices.cmdWorkspace(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
-    case 'sessions.discoverExternal': return transcripts.cmdDiscoverExternalSessions(ws, id as number, cmd)
-    case 'sessions.describeExternal': return transcripts.cmdDescribeExternalSessions(ws, id as number, cmd)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
-    // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
-    // trusted SSH-tunneled walnut socket, never from the public cloud bridge.
-    case 'hooks.configure': return daemonCommands.run(() => hooks.cmdHooksConfigure(ws, id as number, cmd))
     // walnut-trigger ('triggers-v1'). NOT in BRIDGE_ALLOWED_COMMANDS: a check is
     // an arbitrary shell command on this host, and a fire carries host data — the
     // whole family belongs to the trusted SSH-tunneled walnut socket only.
     case 'triggers.configure': return daemonCommands.run(() => triggerSet.cmdTriggersConfigure(ws, id as number, cmd))
-    case 'triggers.test': return triggerCommands.cmdTriggersTest(ws, id as number, cmd)
-    case 'triggers.run': return daemonCommands.run(() => triggerCommands.cmdTriggersRun(ws, id as number, cmd))
-    case 'triggers.ack': return daemonCommands.run(() => triggerCommands.cmdTriggersAck(ws, id as number, cmd))
-    case 'triggers.claim': return daemonCommands.run(() => triggerCommands.cmdTriggersClaim(ws, id as number, cmd))
-    // trigger-state-snapshot-v1: read-only, still trusted-socket only (host data).
-    case 'triggers.state.snapshot': return daemonCommands.run(() => triggerCommands.cmdTriggersStateSnapshot(ws, id as number, cmd))
-    // trigger-state-seed-v1: writes only a file nothing holds, trusted-socket only.
-    case 'triggers.state.seed': return daemonCommands.run(() => triggerCommands.cmdTriggersStateSeed(ws, id as number, cmd))
-    case 'skills.sync': return skills.cmdSkillsSync(ws, id as number, cmd)
     case 'bridgeResume': return daemonCommands.run(() => cmdBridgeResume(ws, id as number, cmd))
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
@@ -4324,10 +4222,16 @@ function boundLocationOf(ws: ServerWebSocket<WsData>): string | null {
  * server before it binds) may name any.
  */
 function refuseForeignHome(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, what: string): boolean {
-  if (!walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return false
+  const refusal = foreignHomeRefusal(ws, cmd, what)
+  if (refusal) sendAnswer(ws, id, refusal)
+  return !!refusal
+}
+
+/** The refusal of a command that names another Walnut than the one its socket speaks for, or null. */
+function foreignHomeRefusal(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>, what: string): Answer | null {
+  if (!walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return null
   logMsg('warn', 'refused: the command names another Walnut than its socket', { what, walnut: walnutScope.label(walnutScope.askedHome(cmd)) })
-  sendError(ws, id, `${what}: this socket speaks for another Walnut`, { errorKind: 'not_owner' })
-  return true
+  return fail(`${what}: this socket speaks for another Walnut`, { errorKind: 'not_owner' })
 }
 
 // This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts),
@@ -4642,7 +4546,7 @@ function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
  * two diverged copies of one data dir never take turns on one Walnut's state. A copy, never
  * the sender's object: a client in this process sends its own.
  */
-function adoptCommandHome(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>): Record<string, unknown> | null {
+function adoptCommandHome(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>, reply: (frame: DaemonFrame) => void): Record<string, unknown> | null {
   const home = walnutScope.askedHome(cmd)
   if (!home) return cmd
   let notTaken = ''
@@ -4656,7 +4560,7 @@ function adoptCommandHome(ws: ServerWebSocket<WsData>, cmd: Record<string, unkno
     // Its server hears it (leader.configure's moveNotTaken) and says so in Walnut Health.
     if (!move.moved && walnutScope.moveNotTakenTold(move.why)) notTaken = move.why
   }
-  if (!HOME_IS_A_PLACE.has(cmd.cmd as string) && refuseMovedHome(ws, cmd, home)) return null
+  if (!HOME_IS_A_PLACE.has(cmd.cmd as string) && refuseMovedHome(ws, cmd, home, reply)) return null
   const canon = walnutScope.canonical(home)
   if (canon === home || HOME_IS_A_PLACE.has(cmd.cmd as string)) {
     if (notTaken) moveNotTaken.set(cmd, notTaken)
@@ -4682,15 +4586,15 @@ const homeNamedAs = new WeakMap<Record<string, unknown>, string>()
 
 /**
  * A server socket that speaks as a home its Walnut moved away from: refused for good, answered
- * here (`walnut_home_busy` with where the Walnut is now). True when it was refused.
+ * through `reply` (`walnut_home_busy` with where the Walnut is now). True when it was refused.
  */
-function refuseMovedHome(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>, home: string): boolean {
+function refuseMovedHome(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>, home: string, reply: (frame: DaemonFrame) => void = (frame) => sendFrame(ws, frame)): boolean {
   const refusal = isServerClient(ws) ? walnutScope.refusalOf(home, cmd.walnutId, (h) => leaderBook.recordOf(h)?.walnutId ?? null) : null
   if (!refusal) return false
   const key = walnutScope.keyOf(home)
   const taken = refusal.errorKind === 'walnut_home_taken'
   logMsg('warn', taken ? 'walnut home: refused, another Walnut used this data dir and moved' : 'walnut home: refused, this Walnut moved to another data dir', { cmd: cmd.cmd, walnut: key, home: walnutScope.pathKeyOf(home) })
-  sendError(ws, typeof cmd.id === 'number' ? cmd.id : null, `${taken ? 'another Walnut used this data dir here and moved to another one' : 'this Walnut moved to another data dir'}: ${key}`, { errorKind: refusal.errorKind, movedTo: refusal.movedTo }, 'warn')
+  reply(errorFrame(ws, typeof cmd.id === 'number' ? cmd.id : null, `${taken ? 'another Walnut used this data dir here and moved to another one' : 'this Walnut moved to another data dir'}: ${key}`, { errorKind: refusal.errorKind, movedTo: refusal.movedTo }, 'warn'))
   return true
 }
 
@@ -5922,17 +5826,17 @@ function followerHears(client: ServerWebSocket<WsData>, sid: string): boolean {
 }
 
 /** A follower's frame, through the owner scope: true when it was answered here (refused or a copy read). */
-function followerScope(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>): boolean {
+function followerScope(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, reply: (frame: DaemonFrame) => void): boolean {
   const d = followerReads.gate(followerHomeOf(ws), cmd)
   if ('pass' in d) {
-    // The handler's answer is cut to this Walnut's scope on its way out (sendOk).
+    // The handler's answer is cut to this Walnut's scope on its way out (okFrame).
     if (d.scope) followerReads.hold(ws, id, d.scope)
     return false
   }
-  if ('answer' in d) sendOk(ws, id, d.answer)
+  if ('answer' in d) reply(okFrame(ws, id, d.answer))
   // An ordinary not_found (the core logged it at info): no 'command error' line.
-  else if ('refuse' in d) sendFrame(ws, { errorKind: 'not_found', id, ok: false, error: d.refuse })
-  else sendError(ws, id, d.error)
+  else if ('refuse' in d) reply({ errorKind: 'not_found', id, ok: false, error: d.refuse })
+  else reply(errorFrame(ws, id, d.error))
   return true
 }
 
@@ -8183,7 +8087,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
 const CRON_CHECK_THROTTLE_MS = 30_000
 
 // ── Daemon hooks (daemon-hooks.ts): the declarative rules each Walnut pushes ──
-const hooks = createDaemonHooks({ daemonEnv, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, walnutScope, gatewayClientHomes, sessionHomeOf, logMsg, sendOk, sendError })
+const hooks = createDaemonHooks({ daemonEnv, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, walnutScope, gatewayClientHomes, sessionHomeOf, logMsg })
 const { hookActions, HOOKS_DIR, daemonHooksByHome, loadDaemonHooksAtBoot, persistedHooksHashFor, handoverHooks } = hooks
 
 // ── walnut-trigger: the daemon owns the clock and runs the check; clock routines (clock-routine-v1) ──
@@ -8195,13 +8099,13 @@ const triggerRuns = createDaemonTriggerRuns({ daemonEnv, triggerStore, demoQuies
 const { demoTriggerChecks, demoTriggerCheckPids } = triggerRuns
 const triggerSet = createDaemonTriggerSet({ triggerStore, triggerRuns, offlineHost, walnutScope, gatewayClientHomes, sendEvent, logMsg, sendOk, sendError })
 const { loadTriggersAtBoot, effectiveTriggerDefs, armTriggerSet, triggerHoldsChanged } = triggerSet
-const triggerCommands = createDaemonTriggerCommands({ triggerStore, triggerRuns, demoQuiesce, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, clockHostStart, walnutScope, gatewayClientHomes, refuseForeignHome, logMsg, sendOk, sendError })
+const triggerCommands = createDaemonTriggerCommands({ triggerStore, triggerRuns, demoQuiesce, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, clockHostStart, walnutScope, gatewayClientHomes, foreignHomeRefusal, logMsg })
 const { runTriggerTest } = triggerCommands
 // keepRuntimeFiles clock; cleanup() stops it, so a dying daemon never writes its files back.
 let runtimeKeepTimer: ReturnType<typeof setInterval> | null = null
 
 // ── skills.sync (daemon-skills.ts): Walnut's skills in this host's engine stores ──
-const skills = createDaemonSkills({ daemonEnv, HOME_DIR, KEEPS_SESSIONS, SET_ID, OFFLINE_HOST_DIR, logMsg, sendOk, sendError })
+const skills = createDaemonSkills<ServerWebSocket<WsData>>({ daemonEnv, HOME_DIR, KEEPS_SESSIONS, SET_ID, OFFLINE_HOST_DIR, logMsg })
 
 // Hook point cron.created: a bypassPermissions session never emits a
 // can_use_tool control_request, so the cron.create deny can't fire — the job
@@ -10021,19 +9925,19 @@ function cmdWriteInbox(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
 }
 
 // ── File system operations (daemon-fs-read.ts, daemon-fs-write.ts) ──
-const fsRead = createDaemonFsRead({ HOME_DIR, CLAUDE_CONFIG_HOME, CLAUDE_PROJECTS_DIRS, childUse, sendOk, sendError })
-const fsWrite = createDaemonFsWrite({ daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, codeServer, looksLikeImage: fsRead.looksLikeImage, logMsg, sendOk, sendError })
+const fsRead = createDaemonFsRead<ServerWebSocket<WsData>>({ HOME_DIR, CLAUDE_CONFIG_HOME, CLAUDE_PROJECTS_DIRS, childUse })
+const fsWrite = createDaemonFsWrite<ServerWebSocket<WsData>>({ daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, codeServer, looksLikeImage: fsRead.looksLikeImage, logMsg })
 
 // ── Git read commands (daemon-git.ts): diff, status, refs, one file's history, exclude ──
-const git = createDaemonGit({ daemonEnv, HOME_DIR, execFileCb, sendOk, sendError })
+const git = createDaemonGit<ServerWebSocket<WsData>>({ daemonEnv, HOME_DIR, execFileCb })
 
 // ── Session changes, usage scans, session commit (daemon-changes.ts) ──
-const sessionChanges = createDaemonChanges({ daemonEnv, HOME_DIR, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, CLAUDE_CONFIG_HOME, childUse, spawn, daemonCommands, sessions, logMsg, sendOk, sendError })
+const sessionChanges = createDaemonChanges<ServerWebSocket<WsData>>({ daemonEnv, HOME_DIR, DAEMON_DIR, SERVICE_MODE, DAEMON_STATE_DIR, CLAUDE_CONFIG_HOME, childUse, spawn, daemonCommands, sessions, logMsg })
 const { computeChangesCached, releaseIdleChangesState, CHANGES_RELEASE_AFTER_MS } = sessionChanges
 
 // ── One-shot claude runs, workspace transfer, host facts (daemon-host-transfer.ts) ──
 const hostTransfer = createDaemonHostTransfer({ daemonEnv, DAEMON_DIR, HOME_DIR, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, SET_ID, DAEMON_INSTANCE_ID, DAEMON_START_TS, TASK_DIR_ROOT, spawn, execFile, cliArgvFiles, sessions, hostResume, wsClients, isServerClient, daemonCommands, sendEvent, logMsg, sendOk, sendError })
-const { oneShot, replyOneShot, transferCore, transferPack, desktopUpdate, hostFacts, hostVitals, uploadsOwnerlessRoot, uploadsRootFor, replyTransfer } = hostTransfer
+const { oneShot, replyOneShot, transferCore, transferPack, desktopUpdate, hostFacts, hostVitals, uploadsOwnerlessRoot, uploadsRootFor, transferAnswer } = hostTransfer
 
 // ── Commands for tasks on other hosts (capability 'host-exec-v1') ──
 // PARITY: The logic is host-exec-core.ts; this
@@ -10095,7 +9999,7 @@ const hostMcp = createHostMcp({
 const hostHttp = createHostHttp()
 
 // ── A session's servers, the host network, hub forwards, shared secrets, task workspaces (daemon-host-services.ts) ──
-const hostServices = createDaemonHostServices({ daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, SET_ID, PORT_FILE, spawn, childUse, sessions, acp, gatewaySidAliases, freshLeaderLinks, leaderBook, streamRelay, isServerClient, walnutScope, gatewayClientHomes, daemonCommands, setInterval, clearInterval, logMsg, sendOk, sendError })
+const hostServices = createDaemonHostServices({ daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, SET_ID, PORT_FILE, spawn, childUse, sessions, acp, gatewaySidAliases, freshLeaderLinks, leaderBook, streamRelay, isServerClient, walnutScope, gatewayClientHomes, daemonCommands, setInterval, clearInterval, logMsg })
 const { daemonPorts, DAEMON_MACHINE_ID, netSupervisor, hubForwards, hubLinksChanged, SECRETS_ROOT, secretStore, secretsSessionEnv, WORKSPACE_STATE_DIR } = hostServices
 
 // ── A session's first-paint view, parsed next to its transcript ('history-ready-v1') ──
@@ -10114,8 +10018,156 @@ const historyReady = createHistoryReady({
 })
 
 // ── Transcript reads: rewind probe, first-paint view, turn snapshots, outside sessions (daemon-transcripts.ts) ──
-const transcripts = createDaemonTranscripts({ daemonEnv, DAEMON_DIR, CLAUDE_CONFIG_HOME, execFileCb, walnutScope, gatewayClientHomes, sessionHomeOf, sessions, computeChangesCached, historyReady, logMsg, sendOk, sendError })
+const transcripts = createDaemonTranscripts({ daemonEnv, DAEMON_DIR, CLAUDE_CONFIG_HOME, execFileCb, walnutScope, gatewayClientHomes, sessionHomeOf, sessions, computeChangesCached, historyReady, logMsg })
 const { turnSnapshots } = transcripts
+
+// ── The commands answered by function (AnswerFn, daemon-module-deps.ts), by name ──
+// dispatchCommand answers a socket's command from this table (answerCommand: the Answer becomes
+// its reply frame), and a client in this process calls it (callCommand: the Answer comes back as
+// the reply object). Both go through the same gates first (passCommandGates). Every other command
+// is a case of dispatchCommand: one that streams, pushes events, answers more than once or keeps
+// something on its socket.
+type WsOf = ServerWebSocket<WsData>
+/** A host-local core's command (transferAnswer): its result, or `{error, code}`; `tracked` work rides the drain. */
+function hostLocal(name: string, work: (cmd: Record<string, unknown>, from: WsOf) => Promise<unknown>, tracked = false): AnswerFn<WsOf> {
+  return (cmd, from) => transferAnswer(name, () => work(cmd, from), tracked)
+}
+const secretsWrite = (name: string, op: (cmd: Record<string, unknown>) => unknown): AnswerFn<WsOf> => (cmd, from) => {
+  // A write names its Walnut (the owner a sync prunes by); never another's on a bound socket.
+  if (walnutScope.foreign(cmd, gatewayClientHomes.get(from))) return fail(`${name}: this socket speaks for another Walnut`, { code: 'not_owner' })
+  return transferAnswer(name, async () => op(cmd), false)
+}
+const hostCommandAnswers: Answers<WsOf> = {
+  // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
+  // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
+  // can, so only the trusted walnut socket asks, after the server checked the
+  // user's grant.
+  'exec.run': hostLocal('exec.run', (cmd) => hostExec.run(cmd)),
+  'exec.read': hostLocal('exec.read', (cmd) => hostExec.read(cmd)),
+  'exec.kill': hostLocal('exec.kill', (cmd) => hostExec.kill(cmd)),
+  'exec.list': hostLocal('exec.list', (cmd) => hostExec.list(cmd)),
+  // A plugin's short script (host-script-v1, host-script-core.ts): the same rule as exec.*.
+  'exec.script': hostLocal('exec.script', (cmd) => hostExec.script(cmd)),
+  // A task on another host calling this host's MCP servers and web services (host-mcp-v1,
+  // host-http-v1). The same rule as exec.*: only the trusted walnut socket asks, after the
+  // server checked the user's grant.
+  'mcp.list': hostLocal('mcp.list', (cmd) => hostMcp.list(cmd)),
+  'mcp.tools': hostLocal('mcp.tools', (cmd) => hostMcp.tools(cmd)),
+  'mcp.call': hostLocal('mcp.call', (cmd) => hostMcp.call(cmd)),
+  'mcp.result': hostLocal('mcp.result', (cmd) => hostMcp.result(cmd)),
+  'http.request': hostLocal('http.request', (cmd) => hostHttp.request(cmd)),
+  // The servers a session started (ports-v1, port-scan-core.ts). NOT in
+  // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: ports.stop signals host
+  // processes.
+  'ports.list': hostLocal('ports.list', (cmd) => daemonPorts.list(cmd)),
+  'ports.stop': hostLocal('ports.stop', (cmd) => daemonPorts.stop(cmd)),
+  // The host network (net-v1, net-core.ts). NOT in BRIDGE_ALLOWED_COMMANDS or
+  // FOLLOWER_ALLOWED_COMMANDS: it decides who may reach this daemon, so only the
+  // trusted walnut socket asks.
+  'net.status': hostLocal('net.status', () => netSupervisor.status()),
+  'net.identity': hostLocal('net.identity', async () => ({ endpointId: await netSupervisor.identity() })),
+  'net.configure': hostLocal('net.configure', (cmd) => netSupervisor.configure(cmd)),
+  'net.forward': hostLocal('net.forward', (cmd) => netSupervisor.forward(cmd)),
+  'net.probe': hostLocal('net.probe', (cmd) => netSupervisor.probe(cmd)),
+  'net.invites': hostLocal('net.invites', (cmd) => netSupervisor.invites(cmd)),
+  'net.join': hostLocal('net.join', (cmd) => netSupervisor.join(cmd)),
+  // The secrets the user shared with this host (secrets-v1, secrets-core.ts). NOT in
+  // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: only the Mac's trusted socket
+  // writes or lists them, and no reply ever carries a value.
+  'secrets.list': hostLocal('secrets.list', async () => secretStore.list()),
+  'secrets.put': secretsWrite('secrets.put', secretStore.put),
+  'secrets.remove': secretsWrite('secrets.remove', secretStore.remove),
+  'secrets.sync': secretsWrite('secrets.sync', secretStore.sync),
+  // 'fs-write-part-v1' / 'transfer-v1' / 'host-facts-v1' (transfer-core.ts,
+  // transfer-pack-core.ts, host-facts-core.ts): moving a workspace to another
+  // host. NOT in BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they
+  // write host files, run ssh/scp, or (host.facts) read what this host is,
+  // which only the trusted walnut socket asks, like host.preflight.
+  // A private write ('transfer-private-v1') is authorized by this socket's own
+  // binding (leader.configure / leader.claim), never by a field of the command.
+  // 'upload-part-v1': a phone's attachment, bridge-reachable (see BRIDGE_ALLOWED_COMMANDS).
+  'upload.part': hostLocal('upload.part', (cmd, from) => {
+    const root = uploadsRootFor(cmd, from.data?.origin === 'bridge')
+    return transferCore.uploadPart(cmd, root, root === uploadsOwnerlessRoot())
+  }),
+  'fs.writePart': hostLocal('fs.writePart', (cmd, from) => transferCore.writePart(cmd, { boundHome: boundLocationOf(from), origin: from.data?.origin ?? null })),
+  'transfer.pack': hostLocal('transfer.pack', (cmd) => transferPack.pack(cmd), true),
+  'transfer.reach': hostLocal('transfer.reach', (cmd) => transferCore.reach(cmd)),
+  'transfer.fetch': hostLocal('transfer.fetch', (cmd) => transferCore.fetch(cmd), true),
+  'transfer.realpath': hostLocal('transfer.realpath', (cmd) => transferCore.realpath(cmd)),
+  'transfer.scan': hostLocal('transfer.scan', (cmd) => transferPack.scan(cmd)),
+  'transfer.apply': hostLocal('transfer.apply', (cmd) => transferPack.apply(cmd), true),
+  'transfer.clear': hostLocal('transfer.clear', (cmd) => transferPack.clear(cmd), true),
+  'transfer.recent': hostLocal('transfer.recent', (cmd) => transferPack.recent(cmd)),
+  'host.facts': hostLocal('host.facts', (cmd) => hostFacts.facts(cmd)),
+  'host.load': hostLocal('host.load', (cmd) => hostFacts.load(cmd)),
+  'host.endpoint': hostLocal('host.endpoint', (cmd) => hostFacts.endpoint(cmd)),
+  // 'host-vitals-v1' (host-vitals-core.ts): now (CPU, load, memory, uptime) and the
+  // ledger fold (up and linked minutes, outages, boots). Read-only, like host.facts.
+  'host.vitals': hostLocal('host.vitals', (cmd) => hostVitals.vitals(cmd) as unknown as Promise<Record<string, unknown>>),
+  'desktop.updateStatus': hostLocal('desktop.updateStatus', () => desktopUpdate.status()),
+  'desktop.restart': hostLocal('desktop.restart', (cmd) => desktopUpdate.restart(cmd.token, cmd.force), true),
+}
+
+/**
+ * Every command answered by function. The bridge, follower and lane allowlists decide who may
+ * ask each (passCommandGates); an area module's commands (with their capability and bridge
+ * notes) are listed in its own file. A name two areas both answer is a wiring mistake: refused here.
+ */
+const commandAnswers: Answers<WsOf> = (() => {
+  const table: Answers<WsOf> = Object.create(null)
+  const areas: Array<[string, Answers<WsOf>]> = [
+    ['fs-read', fsRead.answers], ['fs-write', fsWrite.answers], ['git', git.answers], ['changes', sessionChanges.answers],
+    ['transcripts', transcripts.answers], ['host-services', hostServices.answers], ['hooks', hooks.answers],
+    ['trigger-commands', triggerCommands.answers], ['skills', skills.answers], ['host-local', hostCommandAnswers],
+  ]
+  for (const [area, answers] of areas) {
+    for (const [name, answerFn] of Object.entries(answers)) {
+      if (name in table) throw new Error(`daemon command ${name} is answered twice (${area})`)
+      table[name] = answerFn
+    }
+  }
+  return table
+})()
+
+/**
+ * Answered inside the drain like session commands: a shutdown or a handover waits for them. A cut
+ * writeFile leaves a truncated file; a hooks or trigger push must not be cut halfway either.
+ * (workspace.* and the tracked host-local commands ride the drain from their own answer.)
+ */
+const DRAINED_ANSWERS = new Set(['image.save', 'fs.write', 'fs.mkdir', 'fs.rename', 'fs.rm', 'fs.copy', 'hooks.configure',
+  'triggers.run', 'triggers.ack', 'triggers.claim', 'triggers.state.snapshot', 'triggers.state.seed'])
+
+/** The answer function of a command name, or null when dispatchCommand handles it. */
+function answerFnOf(name: unknown): AnswerFn<WsOf> | null {
+  return typeof name === 'string' ? commandAnswers[name] ?? null : null
+}
+
+/**
+ * Run one answer function for `from` (inside the drain for DRAINED_ANSWERS) and hand its Answer
+ * to `deliver` exactly once: a throw, a rejection or a drain that turns it away is the same
+ * error reply a handler's throw gets (handlerThrew).
+ */
+function answerCommand<R>(from: WsOf, cmd: Record<string, unknown>, answerFn: AnswerFn<WsOf>, deliver: (answer: Answer) => R): R | Promise<R> {
+  const threw = (err: unknown) => handlerThrew(cmd, err)
+  let delivered = false
+  const once = (answer: Answer) => { delivered = true; return deliver(answer) }
+  const run = () => {
+    // An answer function that ran its work inside the drain (workspace.*, the tracked host-local
+    // commands) hands back that work: what delivers its answer is drained work too.
+    let made: unknown
+    const out = settleAnswer(() => (made = answerFn(cmd, from)), threw, once)
+    if (made !== out) daemonCommands.follow(made, out)
+    return out
+  }
+  try {
+    return DRAINED_ANSWERS.has(cmd.cmd as string) ? daemonCommands.run(run) : run()
+  } catch (err) {
+    // The drain turned it away before it ran; a throw after the answer is not answered again.
+    if (delivered) throw err
+    return once(threw(err))
+  }
+}
 
 // ── List all sessions ──
 function cmdList(ws: ServerWebSocket<WsData>, id: number) {
@@ -10224,17 +10276,38 @@ function flushSendQueue(ws: ServerWebSocket<WsData>) {
 }
 
 function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<string, unknown>) {
-  if (ws?.data?.origin === 'follower') data = followerReads.settle(ws, id, data) ?? data
-  // The frame's id wins (a trigger's `id` never re-addresses the answer); a refusal sent here with
-  // `ok: false` in its data keeps it (ARG_REFS_MISSING, session_stopped, session_dead).
-   sendFrame(ws, { ok: true, ...data, id })
+  sendFrame(ws, okFrame(ws, id, data))
 }
 
 /** `level`: an expected refusal (a job restarting) is logged below error. */
 function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string, data?: Record<string, unknown>, level: 'error' | 'warn' | 'info' = 'error') {
+  sendFrame(ws, errorFrame(ws, id, error, data, level))
+}
+
+/** A command's Answer (daemon-module-deps.ts) as its reply frame, the same sendOk / sendError send. */
+function sendAnswer(ws: ServerWebSocket<WsData>, id: number | null, answer: Answer) {
+  sendFrame(ws, answerFrame(ws, id, answer))
+}
+
+/**
+ * The reply frame of an answer: what goes to a socket, and what a client in this process gets back
+ * from a direct call (callCommand). A follower's read is cut to its scope here; an error is logged.
+ */
+function answerFrame(ws: ServerWebSocket<WsData>, id: number | null, answer: Answer): DaemonFrame {
+  return answer.ok ? okFrame(ws, id, answer.data) : errorFrame(ws, id, answer.error, answer.data, answer.level)
+}
+
+function okFrame(ws: ServerWebSocket<WsData>, id: number | null, data: Record<string, unknown>): DaemonFrame {
+  if (ws?.data?.origin === 'follower') data = followerReads.settle(ws, id, data) ?? data
+  // The frame's id wins (a trigger's `id` never re-addresses the answer); a refusal sent here with
+  // `ok: false` in its data keeps it (ARG_REFS_MISSING, session_stopped, session_dead).
+  return { ok: true, ...data, id }
+}
+
+function errorFrame(ws: ServerWebSocket<WsData>, id: number | null, error: string, data?: Record<string, unknown>, level: 'error' | 'warn' | 'info' = 'error'): DaemonFrame {
   if (ws?.data?.origin === 'follower') followerReads.settle(ws, id)
   logMsg(level, level === 'error' ? 'command error' : 'command refused', { id, error, ...(level !== 'error' && typeof data?.errorKind === 'string' ? { errorKind: data.errorKind } : {}) })
-  sendFrame(ws, { ...data, id, ok: false, error })
+  return { ...data, id, ok: false, error }
 }
 
 /**
@@ -12101,6 +12174,8 @@ function inProcessClient(onFrame: (frame: DaemonFrame) => void, onClose?: () => 
 function openInProcessClient(onFrame: (frame: DaemonFrame) => void, onClose?: () => void) {
   const made = createInProcessClient<ServerWebSocket<WsData>>({
     handleCommandFrame: (socket, frame) => handleCommandFrame(socket, frame),
+    // A command the runtime answers by function is called, not sent (callCommand).
+    direct: { has: (cmd) => answerFnOf(cmd) !== null, call: (socket, frame) => callCommand(socket, frame) },
     register: (socket) => { wsClients.add(socket); inProcessClients.add(socket) },
     unregister: (socket) => { inProcessClients.delete(socket); handleDisconnect(socket) },
     heardFrom: (socket) => heardFrom(socket),

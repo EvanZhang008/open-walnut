@@ -3,6 +3,11 @@
  * the whole surface a socket client has (its commands, its replies, the events it subscribed to),
  * with no socket and no JSON between.
  *   - A command is handed to the runtime's command handler as the object it is, in the call.
+ *   - A command the runtime answers by function (`direct`, daemon-standalone.ts callCommand) can
+ *     be called instead (call()): its reply comes back from the call, never through onFrame, the
+ *     queue or a later turn; the runtime runs the same gates for it as for a frame. So a direct
+ *     reply can reach the caller before events the runtime queued for this client earlier (a
+ *     triggers.run's trigger.fired, say): no caller may read a reply as "its events came first".
  *   - What the runtime sends this client (sendFrame) arrives as the object it built, in order, on
  *     a later turn of the loop (setImmediate): as off a socket, never inside the command that sent
  *     it, and never in the same turn as the runtime's own work. A backlog is handed over under the
@@ -24,6 +29,8 @@ export type Frame = Record<string, unknown>
 export interface InProcessClientDeps<Ws> {
   /** The runtime's command handler for one frame from `ws`. */
   handleCommandFrame(ws: Ws, frame: Frame): void
+  /** The commands the runtime answers by function, and the call of one (its reply frame). */
+  direct?: { has(cmd: unknown): boolean; call(ws: Ws, frame: Frame): Promise<Frame> | null }
   /** The client joined (the runtime's client set). */
   register(ws: Ws): void
   /** The client left: the runtime's disconnect (subscriptions, relays). */
@@ -54,6 +61,11 @@ export function isPlainJson(a: unknown): boolean {
 
 export interface InProcessClient {
   send(frame: Frame): void
+  /**
+   * A command frame the runtime answers by function: its reply frame (null when the client closed
+   * before it came). null at once for any other command: send() it.
+   */
+  call(frame: Frame): Promise<Frame | null> | null
   request(cmd: string, params?: Record<string, unknown>): Promise<Frame>
   close(): void
 }
@@ -142,26 +154,48 @@ export function createInProcessClient<Ws>(
   deps.heardFrom(socket)
   deps.register(socket)
 
+  // The handler answers its own errors; one that escapes it is answered here, never thrown at the caller.
+  const failed = (frame: Frame, err: unknown): Frame => {
+    deps.warn('in-process client: command handler threw', { cmd: frame.cmd, error: err instanceof Error ? (err.stack ?? err.message) : String(err) })
+    return { id: frame.id, ok: false, error: `daemon command failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
   const handOver = (frame: Frame) => {
     checked(frame, 'to the runtime')
     deps.heardFrom(socket)
     try { deps.handleCommandFrame(socket, frame) } catch (err) {
-      // The handler answers its own errors; one that escapes it is answered here, never thrown at the caller.
-      deps.warn('in-process client: command handler threw', { cmd: frame.cmd, error: err instanceof Error ? (err.stack ?? err.message) : String(err) })
-      if (typeof frame.id === 'number') deliver({ id: frame.id, ok: false, error: `daemon command failed: ${err instanceof Error ? err.message : String(err)}` })
+      const reply = failed(frame, err)
+      if (typeof frame.id === 'number') deliver(reply)
     }
+  }
+  const call = (frame: Frame): Promise<Frame | null> | null => {
+    if (ws.readyState !== OPEN) throw new Error('in-process daemon client is closed')
+    if (!deps.direct?.has(frame.cmd)) return null
+    checked(frame, 'to the runtime')
+    deps.heardFrom(socket)
+    let answered: Promise<Frame> | null
+    try { answered = deps.direct.call(socket, frame) } catch (err) { answered = Promise.resolve(failed(frame, err)) }
+    if (!answered) return null
+    // A reply to a client that closed meanwhile is dropped, as a frame to it would be.
+    return answered.then((reply) => (ws.readyState === OPEN ? checked(reply, 'to the client') : null), (err) => (ws.readyState === OPEN ? failed(frame, err) : null))
   }
   const client: InProcessClient = {
     send(frame) {
       if (ws.readyState !== OPEN) throw new Error('in-process daemon client is closed')
       handOver(frame)
     },
+    call,
     request(cmd, params = {}) {
       if (ws.readyState !== OPEN) return Promise.resolve({ ok: false, error: 'client closed' })
       const id = --nextOwnId
       return new Promise((resolve) => {
         waiting.set(id, resolve)
-        handOver({ ...params, id, cmd })
+        const frame = { ...params, id, cmd }
+        const answered = call(frame)
+        if (!answered) { handOver(frame); return }
+        void answered.then((reply) => {
+          const own = waiting.get(id)
+          if (own && reply) { waiting.delete(id); own(reply) }
+        })
       })
     },
     close() { closedByClient = true; ws.close() },

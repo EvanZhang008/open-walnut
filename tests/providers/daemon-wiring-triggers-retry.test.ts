@@ -50,10 +50,12 @@ describe('walnut-trigger', () => {
     // the one named here.
     const drained = (fn: string) => new RegExp(`case 'triggers\\.[a-z]+': return (?:daemonCommands\\.run\\([^\\n]*)?${fn}\\(ws, id`)
     expect(standaloneSrc).toMatch(drained('cmdTriggersConfigure'))
-    expect(standaloneSrc).toMatch(drained('cmdTriggersRun'))
-    expect(standaloneSrc).toMatch(drained('cmdTriggersAck'))
+    // run and ack are command-table answers, drained through DRAINED_ANSWERS.
+    expect(standaloneSrc).toMatch(/'triggers\.run': cmdTriggersRun, 'triggers\.ack': cmdTriggersAck\b/)
+    expect(standaloneSrc).toMatch(/const DRAINED_ANSWERS = new Set\(\[[^\]]*'triggers\.run', 'triggers\.ack'/)
     // triggers.test writes nothing, so it never rides the drain.
-    expect(standaloneSrc).toMatch(/case 'triggers\.test': return triggerCommands\.cmdTriggersTest\(ws, id/)
+    expect(standaloneSrc).toMatch(/'triggers\.test': cmdTriggersTest\b/)
+    expect(standaloneSrc).not.toMatch(/const DRAINED_ANSWERS = new Set\(\[[^\]]*'triggers\.test'/)
     expect(standaloneSrc).toMatch(/triggers\.configure: invalid config: /)
     // Persistence layout: the set plus one state file per trigger.
     expect(standaloneSrc).toMatch(/TRIGGERS_FILE = path\.join\(/)

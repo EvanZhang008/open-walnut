@@ -25,12 +25,12 @@ type Push =
   | { kind: 'host'; why: string }
 
 const PUSHES: Record<string, Push> = {
-  'hooks.configure': { kind: 'scoped', why: 'one rule set per Walnut, applied to its own sessions', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'hooks\.configure'\)/ },
+  'hooks.configure': { kind: 'scoped', why: 'one rule set per Walnut, applied to its own sessions', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(from\), 'hooks\.configure'\)/ },
   'triggers.configure': { kind: 'scoped', why: 'one trigger set per Walnut; fires go to its own sockets', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'triggers\.configure'\)/ },
   'bridge.configure': { kind: 'scoped', why: 'one bridge link per Walnut (each to its own companion)', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'bridge\.configure'\)/ },
-  'turns.configure': { kind: 'scoped', why: 'turn snapshot settings per Walnut, read by the session\'s home', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'turns\.configure'\)/ },
-  'workspace.configure': { kind: 'scoped', why: 'workspace providers per Walnut (its plugins)', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), / },
-  'secrets.sync': { kind: 'scoped', why: 'a sync prunes only the secrets its own Walnut wrote', proof: /refuseForeignHome\(ws, id, cmd, / },
+  'turns.configure': { kind: 'scoped', why: 'turn snapshot settings per Walnut, read by the session\'s home', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(from\), 'turns\.configure'\)/ },
+  'workspace.configure': { kind: 'scoped', why: 'workspace providers per Walnut (its plugins)', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(from\), name\)/ },
+  'secrets.sync': { kind: 'scoped', why: 'a sync prunes only the secrets its own Walnut wrote', proof: /const secretsWrite = .*\n.*\n\s*if \(walnutScope\.foreign\(cmd, gatewayClientHomes\.get\(from\)\)\) return fail\([\s\S]*'secrets\.sync': secretsWrite\('secrets\.sync'/ },
   'leader.configure': { kind: 'keyed', why: 'leader book, one record per home (leader-core.ts)', proof: /refuseForeignHome\(ws, id, cmd, 'leader\.configure'\)/ },
   'server.configure': { kind: 'keyed', why: 'host server supervisor, one entry per home (host-server-core.ts)', proof: /gatewayClientHomes\.get\(ws\) !== home\) return sendError\(ws, id, 'server\.configure/ },
   'jobs.configure': { kind: 'keyed', why: 'plugin jobs, one set per home (plugin-jobs-core.ts)', proof: /function jobsLeaderHome/ },
@@ -41,9 +41,9 @@ const PUSHES: Record<string, Push> = {
   'skills.sync': { kind: 'host', why: 'the engines\' own skill stores (~/.claude/skills) are the account\'s, read by every session there' },
 }
 
-/** Every command the daemon dispatches that sets daemon state from a server. */
+/** Every command the daemon takes that sets daemon state from a server: a dispatch case or a command-table entry. */
 function pushCommands(src: string): string[] {
-  return [...new Set([...src.matchAll(/case '([a-z][a-zA-Z.]*\.(?:configure|sync))'/g)].map((m) => m[1]!))].sort()
+  return [...new Set([...src.matchAll(/(?:case |^\s*|, |\{ )'([a-z][a-zA-Z.]*\.(?:configure|sync))'(?::|\s*$)/gm)].map((m) => m[1]!))].sort()
 }
 
 /** Where a persisted constant's state belongs. */
@@ -130,7 +130,7 @@ function fanOuts(src: string): string[] {
 
 describe('the ratchet\'s own scans see a new member', () => {
   it('a new push command, file constant and fan-out are found', () => {
-    expect(pushCommands("    case 'widgets.configure': return x\n    case 'gadgets.sync': return y")).toEqual(['gadgets.sync', 'widgets.configure'])
+    expect(pushCommands("    case 'widgets.configure': return x\n    case 'gadgets.sync': return y\n    'tools.configure': cmdTools, 'parts.sync': cmdParts,\n  const answers = { 'kits.sync': cmdKits }")).toEqual(['gadgets.sync', 'kits.sync', 'parts.sync', 'tools.configure', 'widgets.configure'])
     expect(fileConstants("const WIDGET_FILE = path.join(DAEMON_DIR, 'w.json')\nvar GADGET_DIR = x")).toEqual(['GADGET_DIR', 'WIDGET_FILE'])
     expect(fanOuts("      if (isServerClient(client)) sendEvent(client, 'widget-changed', { v })")).toEqual(['widget-changed'])
   })

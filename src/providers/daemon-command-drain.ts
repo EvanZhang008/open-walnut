@@ -40,6 +40,14 @@ export function createDaemonCommandDrain() {
       check()
       return track(work(), pending)
     },
+    /**
+     * `outer` finishes what drained work `inner` started (its answer delivered after it): drained
+     * too, so a pause waits for it as it waits for `inner`, and never reads it as an open request.
+     * A no-op when `inner` is not drained work.
+     */
+    follow(inner: unknown, outer: unknown): void {
+      if (pending.has(inner as Promise<unknown>)) track(outer, pending)
+    },
     /** Every command accepted before this call has settled. Admission stays as it is (demo.quiesce fences it). */
     settle(): Promise<void> {
       return Promise.allSettled([...admitted, ...pending]).then(() => {})
