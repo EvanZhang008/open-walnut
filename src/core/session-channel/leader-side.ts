@@ -25,6 +25,7 @@
  *     and again each time the channel links, until the host's `drop` record answers each one.
  */
 import type { Duplex } from 'node:stream'
+import { callArgsOut } from './host-calls.js'
 import { attachLeaderChannel, isChannelFrame, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { createLeaderApply, HostRevoked } from './leader-apply.js'
@@ -425,7 +426,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     },
     /** One allowlisted call on a session the host runs (POST /host-api/sessions/call): its value, or a throw. */
     async callHost(hostKey: string, body: { sid: string; target: string; member: string; args: unknown[]; read?: { id: string; known?: string } }, timeoutMs?: number): Promise<unknown> {
-      const a = await request(hostKey, 'call', body, timeoutMs ?? deps.callTimeoutMs ?? 60_000)
+      const a = await request(hostKey, 'call', { ...body, ...callArgsOut(body.args) }, timeoutMs ?? deps.callTimeoutMs ?? 60_000)
       if (a.ok === true) return a.value
       const err = new Error(`${body.member} on ${hostKey}: ${a.error ?? 'refused'}`) as Error & { statusCode?: number; extra?: Record<string, unknown> }
       // A control the session refused on its host keeps the status and code a session here gives

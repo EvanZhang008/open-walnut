@@ -206,7 +206,7 @@ describe('operating a host\'s session through its link', () => {
     const { t, answer } = await operated()
     const p = permissionViaHost(t, { requestId: 'r1', allow: true, answers: { 'When?': 'Friday' } }, 1000)
     await settle()
-    expect(answer(200, { ok: true, value: true })).toMatchObject({ path: '/host-api/sessions/call', body: { sid: 's1', target: 'session', member: 'resolvePermissionRequest', args: ['r1', true, null, { answers: { 'When?': 'Friday' } }] } })
+    expect(answer(200, { ok: true, value: true })).toMatchObject({ path: '/host-api/sessions/call', body: { sid: 's1', target: 'session', member: 'resolvePermissionRequest', args: ['r1', true, null, { answers: { 'When?': 'Friday' } }], unset: [2] } })
     expect(await p).toEqual({ status: 200, body: { status: 'resolved', requestId: 'r1', allow: true, viaHost: true } })
     const q = permissionViaHost(t, { requestId: 'r0', allow: false }, 1000)
     await settle()

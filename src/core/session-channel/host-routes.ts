@@ -29,7 +29,7 @@ import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from '#ws'
-import { hostCallAllowed, hostCallArgs } from './host-calls.js'
+import { callArgsIn, hostCallAllowed, hostCallArgs } from './host-calls.js'
 import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
 import { HAND_ID, HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, NOT_OWN_SESSION, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
@@ -309,7 +309,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     }
     if (!hostCallAllowed(body.target, body.member)) return { status: 403, body: { ok: false, error: 'not_allowed' } }
     if (o.owns && !(await o.owns(body.sid))) return { status: 403, body: { ok: false, error: NOT_OWN_SESSION } }
-    const args = Array.isArray(body.args) ? body.args : []
+    const args = callArgsIn(body.args, body.unset)
     if (body.member === 'undoExpectedTeardown') {
       const u = undos.get(String(args[0] ?? ''))
       undos.delete(String(args[0] ?? ''))

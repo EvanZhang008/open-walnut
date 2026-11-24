@@ -63,18 +63,28 @@ export function hostCallAllowed(target: string, member: string): target is HostC
 }
 
 /**
- * A call's arguments as they cross (JSON): a trailing argument left out stays left out, an inner one
- * left out is null (JSON carries no undefined). Without the first, a member's optional trailing
- * parameter arrived as null on the host, which a `!== undefined` check reads as given: a prompt's
- * answer from the leader carried `optionId: null` and the host refused it as an unknown option
- * (2026-11-24, host-judged-every-connection-e2e C2). Every caller of a host call shapes its
- * arguments with this: the leader's proxy (remote-judged-session.ts) and the companion's phone path
- * (companion-host-ops.ts).
+ * A call's arguments as they cross (POST /host-api/sessions/call). JSON has no `undefined` inside an
+ * array: it arrives as `null`, which a member reads as a value (2026-11-24: a permission answer with
+ * no option, `resolvePermissionRequest(id, true, undefined, undefined, undefined)`, reached the host
+ * as option `null` and was refused as "Unknown permission option: null", so no prompt of a host-run
+ * Claude session could be answered from the console or from the leader). The trailing unset
+ * arguments are left off, which an older host reads right as well; an unset one before a set one is
+ * named in `unset` and is undefined again on the host (callArgsIn). The two senders encode with it:
+ * the leader's side (leader-side.ts callHost) and the companion's phone path (companion-host-ops.ts).
  */
-export function wireArgs(args: readonly unknown[]): unknown[] {
-  const out = [...args]
-  while (out.length > 0 && out[out.length - 1] === undefined) out.pop()
-  return out.map((v) => (v === undefined ? null : v))
+export function callArgsOut(args: readonly unknown[] = []): { args: unknown[]; unset?: number[] } {
+  let end = args.length
+  while (end > 0 && args[end - 1] === undefined) end--
+  const kept = args.slice(0, end)
+  const unset = kept.flatMap((a, i) => (a === undefined ? [i] : []))
+  return unset.length ? { args: kept.map((a) => (a === undefined ? null : a)), unset } : { args: kept }
+}
+
+/** The arguments a call's body carries, its `unset` positions undefined again (callArgsOut). */
+export function callArgsIn(args: unknown, unset: unknown): unknown[] {
+  const list = Array.isArray(args) ? [...args] : []
+  if (Array.isArray(unset)) for (const i of unset) if (Number.isInteger(i) && i >= 0 && i < list.length && list[i] === null) list[i] = undefined
+  return list
 }
 
 /** Targets whose members take the session id first (the runner's methods, the lifecycle controls). */

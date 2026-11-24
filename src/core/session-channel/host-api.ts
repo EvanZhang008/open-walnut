@@ -110,6 +110,8 @@ export interface CallBody {
   args?: unknown[]
   /** A `history` read only: its id (for a cancel) and the version of its answer the leader holds (sessions/host-history-answer.ts). */
   read?: { id: string; known?: string }
+  /** The positions of `args` the caller left undefined (host-calls.ts callArgsOut). */
+  unset?: number[]
 }
 
 export type CallAnswer = { ok: true; value: unknown } | { ok: false; error: string }

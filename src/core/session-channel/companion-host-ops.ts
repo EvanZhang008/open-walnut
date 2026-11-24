@@ -27,7 +27,7 @@
  */
 import { listenerLinked, callListenedHost, ListenerNotLinked, standingRow, standingRows, anyListenedRows as anyRows } from './companion-listener.js'
 import { hostJudgedAlias, hostUnreachableSentence } from './host-judged-direct.js'
-import { wireArgs } from './host-calls.js'
+import { callArgsOut } from './host-calls.js'
 import type { LiveState } from './host-api.js'
 import type { SessionRecord } from '../types.js'
 import type { SessionImage } from '../sessions/cloud-images.js'
@@ -293,7 +293,7 @@ export async function interruptViaHost(t: OperatedSession, timeoutMs = 15_000): 
  * TerminateResult (a `pending` one is the route's stop_pending), or the refusal.
  */
 export async function stopViaHost(t: OperatedSession, force: boolean, timeoutMs = 30_000): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; answer: HostAnswer }> {
-  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'terminateSession', args: wireArgs([{ force }]) }, timeoutMs)
+  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'terminateSession', ...callArgsOut([{ force }]) }, timeoutMs)
   if (!r.ok) return r
   const value = r.body.value && typeof r.body.value === 'object' ? r.body.value as Record<string, unknown> : {}
   return { ok: true, result: { ...value, viaHost: true } }
@@ -306,7 +306,7 @@ export async function stopViaHost(t: OperatedSession, force: boolean, timeoutMs 
  * mode change. Answers the mode the host kept.
  */
 export async function modeViaHost(t: OperatedSession, mode: string, timeoutMs = 20_000): Promise<{ ok: true; mode: string } | { ok: false; answer: HostAnswer }> {
-  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'changeSessionModeOf', args: wireArgs([mode]) }, timeoutMs)
+  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'changeSessionModeOf', ...callArgsOut([mode]) }, timeoutMs)
   if (!r.ok) return r
   const kept = (r.body.value as { mode?: unknown } | null)?.mode
   return { ok: true, mode: typeof kept === 'string' ? kept : mode }
@@ -370,10 +370,11 @@ export async function permissionViaHost(t: OperatedSession, b: Record<string, un
     }
   }
   const patch = given !== undefined && Object.keys(given).length > 0 ? { answers: given } : undefined
-  // The session's own parameters (claude-code-session.ts, acp-session.ts), shaped as every host call's (host-calls.ts wireArgs).
-  const args = wireArgs(acp ? [requestId, allow, optionId] : [requestId, allow, message, patch, optionId])
+  // The session's own parameters (claude-code-session.ts, acp-session.ts), each one left out still
+  // undefined there (host-calls.ts callArgsOut: JSON carries no undefined).
+  const raw = acp ? [requestId, allow, optionId] : [requestId, allow, message, patch, optionId]
   const sid = t.row.claudeSessionId
-  const r = await call(t, '/host-api/sessions/call', { sid, target: acp ? 'acp' : 'session', member: 'resolvePermissionRequest', args }, timeoutMs)
+  const r = await call(t, '/host-api/sessions/call', { sid, target: acp ? 'acp' : 'session', member: 'resolvePermissionRequest', ...callArgsOut(raw) }, timeoutMs)
   if (!r.ok) {
     const e = (r.answer.body.error as { message?: string } | undefined)?.message
     if (e === 'not_pending' || e === 'no_live_session') return v1Error(404, 'not_found', 'Permission request not found or already resolved')

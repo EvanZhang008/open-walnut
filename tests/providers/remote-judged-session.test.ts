@@ -15,7 +15,7 @@ import {
   _resetRemoteJudgedSessionsForTesting, forgetRemoteJudgedSession, markHostLiveUnknown, noteLiveState, peekRemoteJudgedSession, remoteJudgedSession, renameRemoteJudgedSession,
   setRemoteJudgedCaller, withLeaderSubagentRows, type HostCallBody,
 } from '../../src/providers/remote-judged-session.js'
-import { hostCallAllowed } from '../../src/core/session-channel/host-calls.js'
+import { callArgsIn, callArgsOut, hostCallAllowed } from '../../src/core/session-channel/host-calls.js'
 
 afterEach(() => { _resetRemoteJudgedSessionsForTesting(); lightRows.clear() })
 
@@ -31,14 +31,21 @@ function fakeHost() {
 }
 
 describe('RemoteJudgedSession', () => {
-  it('sends a call\'s arguments as the host\'s method reads them: a trailing one left out stays out, an inner one is null', async () => {
+  it('hands a call\'s arguments on as given; the wire encodes them once, and the host reads each unset one as unset', async () => {
     const calls = fakeHost()
     const p = remoteJudgedSession('s1', 'devbox', 'native')
     // The leader's prompt answer (session-lifecycle.ts respondSessionPermission) names every parameter;
     // an optionId sent as null read as given on the host, which refused it as an unknown option.
     await p.resolvePermissionRequest('req-1', true, undefined, undefined, undefined)
     await p.resolvePermissionRequest('req-2', true, undefined, { answers: { q: 'a' } }, undefined)
-    expect(calls.map((c) => c.args)).toEqual([['req-1', true], ['req-2', true, null, { answers: { q: 'a' } }]])
+    expect(calls.map((c) => c.args)).toEqual([['req-1', true, undefined, undefined, undefined], ['req-2', true, undefined, { answers: { q: 'a' } }, undefined]])
+    // The wire (leader-side.ts callHost, companion-host-ops.ts): trailing ones off, an inner one named.
+    const wire = calls.map((c) => JSON.parse(JSON.stringify(callArgsOut(c.args as unknown[]))))
+    expect(wire).toEqual([{ args: ['req-1', true] }, { args: ['req-2', true, null, { answers: { q: 'a' } }], unset: [2] }])
+    expect(wire.map((w) => callArgsIn(w.args, w.unset))).toEqual([['req-1', true], ['req-2', true, undefined, { answers: { q: 'a' } }]])
+    // A null the caller sent stays null; a bad `unset` restores nothing.
+    expect(callArgsIn(['a', null], [1])).toEqual(['a', undefined])
+    expect(callArgsIn(['a', 'b', null], [1, -1, 9, 1.5, 'x'])).toEqual(['a', 'b', null])
   })
 
   it('is one stable object per session id, also across a rename', () => {

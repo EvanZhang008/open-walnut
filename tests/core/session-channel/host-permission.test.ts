@@ -212,6 +212,31 @@ describe('a prompt of a session its host runs', () => {
     await expect(second).resolves.toBe(true)
     expect(writesOf(SID_A, 'req-a2')).toHaveLength(1)
   })
+
+  // 2026-11-24 (host-judged-session-parity.spec.ts): the console's answer is
+  // respondSessionPermission's call, every optional argument undefined; across JSON they arrived as
+  // null, and option `null` was refused on the host, so no prompt could be answered from the console.
+  it('an answer made as the console makes it, its optional arguments undefined, reaches the host as undefined', async () => {
+    const a = sessions.get(SID_A)!
+    const proxy = remoteJudgedSession(SID_A, HOST, 'native')
+    const asked = vi.spyOn(a, 'resolvePermissionRequest')
+    ask(a, 'req-ui')
+    const allowed = proxy.resolvePermissionRequest('req-ui', true, undefined, undefined, undefined)
+    await until(() => writesOf(SID_A, 'req-ui').length === 1)
+    expect(writesOf(SID_A, 'req-ui')[0]!.behavior).toBe('allow')
+    writesOf(SID_A, 'req-ui')[0]!.finish(true)
+    await expect(allowed).resolves.toBe(true)
+    expect(asked.mock.calls[0]).toEqual(['req-ui', true])
+    // An unset argument before a set one stays unset: a deny by its option, with no note.
+    ask(a, 'req-ui-deny')
+    const denied = proxy.resolvePermissionRequest('req-ui-deny', false, undefined, undefined, 'reject_once')
+    await until(() => writesOf(SID_A, 'req-ui-deny').length === 1)
+    expect(writesOf(SID_A, 'req-ui-deny')[0]!.behavior).toBe('deny')
+    writesOf(SID_A, 'req-ui-deny')[0]!.finish(true)
+    await expect(denied).resolves.toBe(true)
+    expect(asked.mock.calls[1]).toEqual(['req-ui-deny', false, undefined, undefined, 'reject_once'])
+    expect(hostWarnings).toEqual([])
+  })
 })
 
 describe('the host refuses an answer for a request the session does not hold', () => {

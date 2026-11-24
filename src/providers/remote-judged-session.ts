@@ -16,7 +16,7 @@
 import { log } from '../logging/index.js'
 import { bus, EventNames } from '../core/event-bus.js'
 import { lightSubagentRows } from '../core/subagents/registry.js'
-import { wireArgs, type HostCallTarget } from '../core/session-channel/host-calls.js'
+import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { LiveState } from '../core/session-channel/host-api.js'
 import type { HostTurnState } from '../core/sessions/turn-run-host.js'
 import { judgingHostOf } from '../core/sessions/judge-of.js'
@@ -132,7 +132,8 @@ export class RemoteJudgedSession {
   /** One call to the host; the value it answered. */
   call(member: string, args: unknown[] = [], target: HostCallTarget = this.target()): Promise<unknown> {
     if (!caller) return Promise.reject(new Error(`session ${this.sid} runs on ${this.host}, and this server has no link to it`))
-    return caller(this.host, { sid: this.sid, target, member, args: wireArgs(args) })
+    // Encoded for the wire where it is sent (leader-side.ts callHost: host-calls.ts callArgsOut).
+    return caller(this.host, { sid: this.sid, target, member, args })
   }
 
   /** A call whose answer nobody waits for: a failure is logged, never thrown. */
