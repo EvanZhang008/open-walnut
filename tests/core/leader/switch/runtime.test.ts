@@ -135,6 +135,20 @@ describe('boot decisions', () => {
     expect(() => assertOutwardDoor('push', 'op-2')).toThrow(/write permission not held/)
   })
 
+  it('a leader cut from a majority past its lease stops acting, and leads again by itself once they answer', async () => {
+    const r = await start('machine-a')
+    expect(r.mayAct()).toBe(true)
+    const off = settings.witnesses.slice(1)
+    for (const w of off) fs.renameSync(w.dir, `${w.dir}.off`)
+    await until('the permission to run out', () => r.status().state === 'waiting', 15_000)
+    expect(r.mayAct()).toBe(false)
+    // Well past the record's length: the witnesses that come back hold this machine's last renew, long run out.
+    await new Promise((res) => setTimeout(res, 4_000))
+    for (const w of off) fs.renameSync(`${w.dir}.off`, w.dir)
+    await until('the leader to act again', () => r.mayAct(), 15_000)
+    expect(r.status().state).toBe('leading')
+  }, 40_000)
+
   it('a handover to this machine that the switch did not commit: refuses', async () => {
     const a = await start('machine-a')
     const r = await a.handover('machine-b')

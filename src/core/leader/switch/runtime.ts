@@ -191,7 +191,16 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   // that need no such link (a registered reach); a list that is all remote cannot be read until a reach exists.
   // After it led, the link stays allowed for what only a leader writes (renew, handover, cancel, the release at a stop).
   let everLed = false
-  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held(), { daemonLink: () => !opts.trial && everLed, ...opts.net })
+  // A witness that did not answer, said once a minute per witness and reason: the evidence when no majority answers.
+  const dropSaid = new Map<string, number>()
+  const onDrop: NonNullable<import('./witness-transport.js').WitnessTransportOptions['onDrop']> = (dropWhy, d) => {
+    opts.net?.onDrop?.(dropWhy, d)
+    const key = `${d.witness}:${d.way ?? ''}:${dropWhy}`
+    if (Date.now() - (dropSaid.get(key) ?? 0) < 60_000) return
+    dropSaid.set(key, Date.now())
+    log('info', 'leader permit: a witness did not answer', { witness: d.witness, way: d.way, why: dropWhy, ...(d.status ? { status: d.status } : {}), ...(d.error ? { error: d.error } : {}) })
+  }
+  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held(), { daemonLink: () => !opts.trial && everLed, ...opts.net, onDrop })
   let why: string | undefined
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
@@ -245,8 +254,14 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     else openEdge()
   }
   /** One proposal at a time: the renew loop and a handover or cancel never interleave. */
-  const serial = <T>(fn: () => Promise<T>): Promise<T> => {
-    const run = busy.then(fn, fn)
+  const serial = <T>(fn: () => Promise<T>, label: string): Promise<T> => {
+    // A step that holds the queue for a minute holds every round behind it: said, so a stalled permit names its cause.
+    const timed = async (): Promise<T> => {
+      const slow = setTimeout(() => log('warn', 'leader permit: a step still holds the permission\'s queue after 60 s', { step: label, state }), 60_000)
+      slow.unref?.()
+      try { return await fn() } finally { clearTimeout(slow) }
+    }
+    const run = busy.then(timed, timed)
     busy = run.catch(() => {})
     return run
   }
@@ -280,7 +295,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     try { h.client.beginSend(opId) } catch (err) { refuse((err as Error).message) }
     inflight.add(opId)
     appendMayAct(home, { machine: me, event: 'door', mayAct: true, kind, opId, why: 'send' })
-  })
+  }, `send ${kind}`)
 
   const reportSend = (opId: string, outcome: 'sent' | 'not-sent' | 'unknown') => {
     inflight.delete(opId)
@@ -345,7 +360,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   const schedule = (ms: number) => {
     if (stopped) return
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => { void serial(loop) }, ms)
+    timer = setTimeout(() => { void serial(round, 'round') }, ms)
     timer.unref?.()
   }
   // The first lead of this process (at boot or from waiting) tells onFirstLead, once.
@@ -361,6 +376,16 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     learn()
     note('lease', { record: record.number })
     log('info', msg, { record: record.number })
+  }
+  /** One round of the loop; a round that throws is logged and the loop goes on (a dead loop never takes the permission again). */
+  const round = async () => {
+    try {
+      await loop()
+    } catch (err) {
+      if (stopped) return
+      log('warn', 'leader permit: a round failed; the next one runs in a moment', { state, error: err instanceof Error ? err.stack ?? err.message : String(err) })
+      schedule(Math.min(5_000, settings.params.renewEveryMs))
+    }
   }
   const loop = async () => {
     if (stopped) return
@@ -457,7 +482,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     else { state = 'lost'; cancelOwed = true; why = 'a handover that did not stand and could not be cancelled yet: the cancel is tried again' }
     schedule(settings.params.renewEveryMs)
     return { ok: false, why: `the handover record did not reach a majority of the witnesses (${r?.outcome ?? 'no record'})` }
-  })
+  }, 'handover')
 
   const cancel = () => serial(async (): Promise<{ ok: boolean; why?: string; standing?: ReturnType<typeof summarize> }> => {
     if (state === 'leading' && h.client.mayAct()) return { ok: true }
@@ -483,7 +508,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       if (committed) return { ok: false, why: 'committed before the cancel', standing: summarize(s) }
     }
     return { ok: false, why: 'the cancel record did not reach a majority of the witnesses' }
-  })
+  }, 'cancel')
 
 
   return {
@@ -506,7 +531,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       const r = await changeListAndWait(h, next)
       log(r.ok ? 'info' : 'warn', r.ok ? 'leader permit: the witness list changed' : 'leader permit: a witness list change did not stand', { list: next, ...(r.ok ? {} : { why: r.why }) })
       return r
-    }),
+    }, 'witness list change'),
     joinGeneration: async () => generationToJoin((await readStanding(h)).replies, h.client.config().epoch),
     stop: async () => {
       if (stopped) return

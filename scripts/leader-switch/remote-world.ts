@@ -88,7 +88,8 @@ export async function makeRemoteWorld(root: string, opts: { portA: number; portB
     writeStubBin(bin)
     const dir = path.join(m.dir, 'daemon')
     // The built standalone twin: the very daemon this machine's server adopts as its own (same build).
-    const d = await startHostDaemon('standalone', dir, m.dir, bin, true)
+    // It dials the companion's bridge through w-k's TLS front: it trusts the loopback certificate.
+    const d = await startHostDaemon('standalone', dir, m.dir, bin, true, { env: { NODE_EXTRA_CA_CERTS: cert.certFile } })
     daemons[k] = { dir, port: d.port, proc: d.proc, bin }
     log(`daemon ${m.id} on ${d.port}`)
   }

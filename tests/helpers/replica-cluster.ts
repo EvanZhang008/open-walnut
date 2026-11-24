@@ -413,7 +413,7 @@ export const windowEnv = (): Record<string, string> => ({
  * The host daemon: a minimal env of its own (no variable of the runner leaks into it, or into the replica it starts).
  * Also tests/e2e/replica-old-mac-e2e.test.ts (an old Mac in front of the same daemon).
  */
-export async function startHostDaemon(_twin: Twin, dir: string, home: string, bin: string, built = false, opts: { asInstalled?: boolean; release?: string } = {}): Promise<{ proc: ChildProcess; pid: number; port: number }> {
+export async function startHostDaemon(_twin: Twin, dir: string, home: string, bin: string, built = false, opts: { asInstalled?: boolean; release?: string; env?: Record<string, string> } = {}): Promise<{ proc: ChildProcess; pid: number; port: number }> {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const env: Record<string, string> = {
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, TMPDIR: os.tmpdir(),
@@ -424,6 +424,8 @@ export async function startHostDaemon(_twin: Twin, dir: string, home: string, bi
     // `dir` <home>/.cache/open-walnut, its own default, they are inside <home>/.open-walnut).
     ...(opts.asInstalled ? {} : { WALNUT_STREAMS_DIR: path.join(dir, 'streams'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl') }),
     ...windowEnv(),
+    // Only what the caller names (a test CA for a loopback TLS door, say).
+    ...opts.env,
   }
   let proc: ChildProcess
   if (opts.release) {

@@ -294,7 +294,7 @@ const ownWitness = (w: RemoteWorld, m: Machine): 'w-a' | 'w-b' => (m === w.a ? '
 const otherWitness = (w: RemoteWorld, m: Machine): 'w-a' | 'w-b' => (m === w.a ? 'w-b' : 'w-a')
 
 /** A few writes on the leader the next switch must carry; and a fresh batch at the other machine. */
-async function writeAndBatch(x: Ctx, label: string): Promise<void> {
+async function writeAndBatch(x: Ctx, label: string, batchWaitMs = 180_000): Promise<void> {
   const { w, roles } = x
   for (let i = 0; i < 3; i++) {
     const title = `${label} ${i} ${randomBytes(3).toString('hex')}`
@@ -302,7 +302,7 @@ async function writeAndBatch(x: Ctx, label: string): Promise<void> {
     const r = await w.api(roles.leader, 'POST', '/api/tasks', { title, project: 'Rehearsal' }, opId)
     if (r.status < 300) x.carried.tasks.push({ id: r.json.task.id, title, opId })
   }
-  await waitForBatch(roles.other.standbyDir, Date.now(), 180_000)
+  await waitForBatch(roles.other.standbyDir, Date.now(), batchWaitMs)
 }
 
 /** The resume a person runs on the new leader's machine for a target job that died there: its own job, its own env. */
@@ -502,43 +502,49 @@ async function witnessDown(x: Ctx): Promise<void> {
   await checkCarried(c, w, roles.leader, roles.other, x.carried, 'one witness down during the switch')
 }
 
-/** Two witnesses down: the preflight refuses, and nothing changes on either machine (the homes by the manifest's classes). */
+/**
+ * Two witnesses down: the preflight refuses, and nothing changes on either machine. Each home is compared by
+ * the manifest's classes (home-kept) over the refused switch, less what it changed by itself over a control
+ * interval just before (the leader's routine slot; on the other machine, a session it started while it led,
+ * still running in its old home on its own daemon) and the files a running server always writes.
+ */
 async function twoDown(x: Ctx): Promise<void> {
   const { c, w, roles } = x
   const L = roles.leader
   const O = roles.other
   await waitForBatch(O.standbyDir, Date.now(), 180_000)
   const down = ['w-k', otherWitness(w, L)] as const
-  const homeO = fs.existsSync(O.home)
+  const homes = [L, ...(fs.existsSync(O.home) ? [O] : [])]
   const switchFiles = () => { try { return fs.readdirSync(path.join(O.standbyDir, 'switch')).sort() } catch { return [] } }
   const filesBefore = switchFiles()
   const stateBefore = readSwitchState(L.home)?.id ?? null
-  const s0 = await snapshotHome(L.home)
-  const o0 = homeO ? await snapshotHome(O.home) : null
+  const snap = async () => Promise.all(homes.map((m) => snapshotHome(m.home)))
+  const paths = (a: Awaited<ReturnType<typeof snapshotHome>>, b: Awaited<ReturnType<typeof snapshotHome>>) => new Set(compareKept(a, b).changed.map((ch) => ch.path))
+  const s0 = await snap()
   for (const id of down) w.witnessDown(id, true)
   let sw: Awaited<ReturnType<typeof switchCmd>> | null = null
-  let control = new Set<string>()
-  let changed = new Set<string>()
+  let control: Set<string>[] = []
+  let changed: Set<string>[] = []
   try {
-    // The control interval first: what the leader's home changes by itself with two witnesses gone, over a switch's time.
-    const t0 = Date.now()
-    await sleep(8_000)
-    const s1 = await snapshotHome(L.home)
-    control = new Set(compareKept(s0, s1).changed.map((ch) => ch.path))
+    // The control interval first, over more than a routine's minute (its slot writes the cron state, the Main
+    // task's message queue and a notification).
+    await sleep(75_000)
+    const s1 = await snap()
+    control = s0.map((a, i) => paths(a, s1[i]!))
     sw = await switchCmd(w, L, ['--to', O.id])
-    await sleep(Math.max(0, 8_000 - (Date.now() - t0) / 2))
-    changed = new Set(compareKept(s1, await snapshotHome(L.home)).changed.map((ch) => ch.path))
+    const s2 = await snap()
+    changed = s1.map((a, i) => paths(a, s2[i]!))
   } finally {
     for (const id of down) w.witnessDown(id, false)
   }
   c.add(`two witnesses down (${down.join(', ')}): the preflight refuses, naming what it lacks`, sw?.code === 1 && /witnesses answered|majority/.test(sw.out), last(sw?.out ?? '', 2))
-  // What a running leader writes by itself whether or not a switch was asked (the same list as the no-link e2e's).
+  // What a running server writes by itself whether or not a switch was asked (the same list as the no-link e2e's).
   const live = /^(local\/leader-switch\/(may-act|server-leader\.log)|local\/health-monitor\/|logs\/|cache\/|tmp\/|sync\/|\.git\/|.*\.(sqlite|db)-(wal|shm)$|.*\.log$)/
-  const byTheSwitch = [...changed].filter((p) => !control.has(p) && !live.test(p))
-  c.add(`two witnesses down: nothing changed on ${L.id} (no switch state, no marker, its home by the manifest's classes but what it changes by itself)`, readSwitchState(L.home)?.id === stateBefore && !readMarker(L.home) && byTheSwitch.length === 0, `changed by the refused switch: ${byTheSwitch.slice(0, 8).join(', ') || 'none'}; by the leader alone: ${[...control].slice(0, 5).join(', ') || 'none'}`)
-  const o1 = homeO ? await snapshotHome(O.home) : null
-  const keptO = o0 && o1 ? compareKept(o0, o1) : null
-  c.add(`two witnesses down: nothing changed on ${O.id} (no switch file, its home as before)`, JSON.stringify(switchFiles()) === JSON.stringify(filesBefore) && (homeO ? !!keptO?.ok : !fs.existsSync(O.home)), `${keptO ? describeKept(keptO) : homeO ? '' : 'no home'}; switch files ${switchFiles().length - filesBefore.length} new`)
+  const bySwitch = (i: number) => [...(changed[i] ?? [])].filter((p) => !control[i]!.has(p) && !live.test(p))
+  const alone = (i: number) => [...(control[i] ?? [])].slice(0, 5).join(', ') || 'none'
+  c.add(`two witnesses down: nothing changed on ${L.id} (no switch state, no marker, its home by the manifest's classes)`, (readSwitchState(L.home)?.id ?? null) === stateBefore && !readMarker(L.home) && bySwitch(0).length === 0, `changed by the refused switch: ${bySwitch(0).slice(0, 8).join(', ') || 'none'}; by the leader alone: ${alone(0)}`)
+  const onO = homes.length > 1 ? bySwitch(1) : []
+  c.add(`two witnesses down: nothing changed on ${O.id} (no switch file, its home by the manifest's classes)`, JSON.stringify(switchFiles()) === JSON.stringify(filesBefore) && onO.length === 0 && (homes.length > 1 || !fs.existsSync(O.home)), `${homes.length > 1 ? `changed by the refused switch: ${onO.slice(0, 8).join(', ') || 'none'}; by itself: ${alone(1)}` : 'no home, none made'}; switch files ${switchFiles().length - filesBefore.length} new`)
   // The leader keeps leading once a majority answers again.
   await oneLeader(x, 'two witnesses down, after they return', L)
 }
@@ -638,7 +644,8 @@ async function trialFails(x: Ctx): Promise<void> {
 async function measure(x: Ctx): Promise<void> {
   const { c, w, roles, times } = x
   for (const slow of [false, true]) {
-    await writeAndBatch(x, slow ? 'measure-slow' : 'measure')
+    // After a switch the copy goes the other way: its first batch there is the whole home.
+    await writeAndBatch(x, slow ? 'measure-slow' : 'measure', 3 * 3600_000)
     const from = roles.leader
     const copy = from === w.a ? w.links.copy : w.links.bToA
     if (slow) copy.setMode('slow', { delayMs: 0, bytesPerSec: 2_500_000 })
