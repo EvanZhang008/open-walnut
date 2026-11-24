@@ -60,6 +60,7 @@ describe('applyHostChannelBatch', () => {
         'INSERT OR REPLACE INTO session_channel_cursor (host_id, log_id, seq) VALUES (?, ?, ?)',
         'SELECT 1 FROM session_leader_drops WHERE claude_session_id = ?',
         'SELECT total_changes() AS n',
+        'SELECT n FROM temp.session_row_writes',
       ]
       expect(texts.filter((t) => apply.includes(t))).toEqual([])
     } finally {

@@ -198,6 +198,42 @@ export function getDb(): DatabaseType | null {
   }
 }
 
+// ── Rows of the sessions table this connection changed ──────────────────────
+//
+// The session store's write lock checks that a section changed no session row it did not name
+// (session-tracker.ts withWriteLock): a row nobody named must drop the cached snapshot. It
+// counted with total_changes(), which counts every table of this file, so a host channel batch
+// (its position row, turn ends, hand-over marks) read as unnamed session rows and every batch
+// dropped the snapshot: 1,314 full scans of 7.4k rows in 21 minutes on the live server
+// (2026-11-23). Temp triggers count the sessions table alone, on this connection only (another
+// connection's commit is the data_version check's). recursive_triggers is off here, so a
+// REPLACE counts once, as one row. A trigger body names its table unqualified: SQLite before
+// 3.53 (the macOS system library, WALNUT_SQLITE_LIBRARY=system) refuses `temp.` there, and the
+// store would not open.
+const countedHandles = new WeakSet<DatabaseType>();
+
+function countSessionRowWrites(handle: DatabaseType): void {
+  handle.exec(`
+    CREATE TEMP TABLE IF NOT EXISTS session_row_writes (n INTEGER NOT NULL);
+    INSERT INTO temp.session_row_writes (n) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM temp.session_row_writes);
+    CREATE TEMP TRIGGER IF NOT EXISTS session_row_writes_insert AFTER INSERT ON main.sessions BEGIN UPDATE session_row_writes SET n = n + 1; END;
+    CREATE TEMP TRIGGER IF NOT EXISTS session_row_writes_update AFTER UPDATE ON main.sessions BEGIN UPDATE session_row_writes SET n = n + 1; END;
+    CREATE TEMP TRIGGER IF NOT EXISTS session_row_writes_delete AFTER DELETE ON main.sessions BEGIN UPDATE session_row_writes SET n = n + 1; END;
+  `);
+  countedHandles.add(handle);
+}
+
+/**
+ * Session rows `handle` has changed since it opened, or null when it does not count them (the
+ * own-row writer, whose REPLACE fires its delete trigger too): the caller uses total_changes().
+ */
+export function sessionRowWrites(handle: DatabaseType): number | null {
+  if (!countedHandles.has(handle)) return null;
+  const n = prepared(handle, 'SELECT n FROM temp.session_row_writes', 'pluck').get();
+  // No count (its row gone): total_changes(), which can only drop the snapshot more often.
+  return typeof n === 'number' ? n : null;
+}
+
 /** Open and initialize the shared handle (getDb, and a test's reopen after a wipe). */
 function openShared(): DatabaseType {
   fs.mkdirSync(path.dirname(SESSION_DB_PATH), { recursive: true });
@@ -230,6 +266,7 @@ function openShared(): DatabaseType {
       }
     }
 
+    if (!copy) countSessionRowWrites(handle);
     // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
     guardCopyHandle(handle, 'sessions');
     log.session.info('session-db opened', { path: SESSION_DB_PATH });

@@ -17,7 +17,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, sessionRowWrites } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
 import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -134,9 +134,17 @@ function noteSessionRowTouched(claudeSessionId: string): void {
   touchedSessionIds?.add(claudeSessionId);
 }
 
-/** Rows this connection has changed since it opened: SQLite's own counter. */
+/** Rows of any table this connection has changed since it opened: SQLite's own counter. */
 function totalChanges(db: NonNullable<ReturnType<typeof getDb>>): number {
   return prepared(db, 'SELECT total_changes() AS n', 'pluck').get() as number;
+}
+
+/**
+ * Session rows this connection has changed since it opened (session-db.ts sessionRowWrites), else
+ * every row it changed. The snapshot guard below compares this with the rows a section named.
+ */
+function sessionRowChanges(db: NonNullable<ReturnType<typeof getDb>>, total: number): number {
+  return sessionRowWrites(db) ?? total;
 }
 
 // ── Heavy prompt fields stay in SQLite for sessions that are not live ─────
@@ -613,6 +621,7 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   // note can only cost a rescan, never a stale row.
   let touched: Set<string> | null = null;
   let changesBefore = 0;
+  let rowChangesBefore = 0;
   return prev
     .then(() => {
       touched = new Set<string>();
@@ -620,13 +629,18 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
       // The connection the section writes through (a host's own-row writer, else the shared one).
       const db = sessionWriteHandle();
       changesBefore = db ? totalChanges(db) : 0;
+      rowChangesBefore = db ? sessionRowChanges(db, changesBefore) : 0;
       return fn();
     })
     .then(
       (value) => {
         const db = sessionWriteHandle();
-        const changed = db ? totalChanges(db) - changesBefore : 0;
-        if (touched === null || changed > touched.size) invalidateSessionStoreCache();
+        const total = db ? totalChanges(db) : 0;
+        const changed = total - changesBefore;
+        // Session rows only: the section's other tables (a channel position, turn ends) are no row
+        // of this snapshot, and counting them dropped it at every host batch (2026-11-23).
+        const rowsChanged = db ? sessionRowChanges(db, total) - rowChangesBefore : 0;
+        if (touched === null || rowsChanged > touched.size) invalidateSessionStoreCache();
         else patchSessionCacheRows(touched);
         if (changed > 0) noteSessionStoreWrite();
         if (touched !== null && touched.size > 0) announceWrittenRows(touched);
