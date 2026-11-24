@@ -105,15 +105,28 @@ function rowItems(row: Element | null | undefined, selector: string): HTMLElemen
  *  and React stopped the loop first (2026-11-23, btw-open-thread-row.spec.ts). */
 const MAX_MEASURES_PER_BURST = 24;
 
-/** What a control's detail (`data-condensed-detail`) adds to it: its box plus the room
- *  before it (the key's flex gap). Its box alone left the gap in the short form, so a row
- *  with room only without that gap showed the detail, hid it and showed it again on every
- *  measure (2026-11-23: the model pill took the button family's gap, eeb053ac81). */
-function detailCost(detail: HTMLElement): number {
-  const box = detail.getBoundingClientRect();
-  if (box.width <= 0) return 0;
-  const before = detail.previousElementSibling?.getBoundingClientRect();
-  return before && before.width > 0 ? Math.max(box.width, box.right - before.right) : box.width;
+/** A control's width as its own content asks (never as its row squeezes it) and, in a condensed
+ *  row, what its detail (`data-condensed-detail`) adds: its width with the detail less its width
+ *  without, both read here, the squeeze lifted inline for this one read. The detail's own box
+ *  missed the key's flex gap before it (2026-11-23, eeb053ac81) and the 44 px floor of a phone's
+ *  key, which the short form fills and the full one does not: the short form then read 4 px
+ *  narrower with its detail on the row than off it, and the row showed and hid it every frame
+ *  (2026-11-24, 390 px, the model pill beside btw and Notes). */
+function readWhole(el: HTMLElement, condensed: boolean): { w: number; detailW: number } {
+  const before = el.style.cssText;
+  el.style.setProperty('flex-shrink', '0', 'important');
+  el.style.setProperty('min-width', 'max-content', 'important');
+  const detail = condensed ? el.querySelector<HTMLElement>('[data-condensed-detail]') : null;
+  const detailBefore = detail?.style.cssText ?? '';
+  try {
+    const w = el.getBoundingClientRect().width;
+    if (!detail || detail.getBoundingClientRect().width <= 0) return { w, detailW: 0 };
+    detail.style.setProperty('display', 'none', 'important');
+    return { w, detailW: Math.max(0, w - el.getBoundingClientRect().width) };
+  } finally {
+    if (detail) detail.style.cssText = detailBefore;
+    el.style.cssText = before;
+  }
 }
 
 /**
@@ -233,30 +246,6 @@ function ComposerControlsBarBody({ controls, className, handleRef }: ComposerCon
       layoutRef.current = phone;
       for (const m of [widths, shortWidths, detailWidths, directWidths]) m.current.clear();
     }
-    const inlineIds = new Set(inline.map((c) => c.id));
-    for (const el of bar.querySelectorAll<HTMLElement>(OWN_CONTROL)) {
-      const id = el.dataset.controlId!;
-      // A control put into "..." before its short form was ever drawn would be judged on a guess
-      // while it stays there (ASSUMED_SHORT_MODEL_WIDTH kept the model off a row with room for it,
-      // 2026-11-23): draw it for this one read, hidden again before the browser paints.
-      const unmeasured = condensed && inlineIds.has(id) && el.dataset.hidden === 'true' && !shortWidths.current.has(id);
-      if (unmeasured) el.dataset.hidden = 'false';
-      const w = el.getBoundingClientRect().width;
-      const detail = condensed ? el.querySelector<HTMLElement>('[data-condensed-detail]') : null;
-      const detailW = detail ? detailCost(detail) : 0;
-      if (unmeasured) el.dataset.hidden = 'true';
-      if (w <= 0) continue;
-      if (!condensed) { widths.current.set(id, w); continue; }
-      // A condensed row shows each control's short form, with or without its
-      // detail. Record the two natural widths apart, so the decision below
-      // never depends on which of them happens to be on the row right now.
-      if (detailW > 0) detailWidths.current.set(id, detailW);
-      // No detail while the row is showing details = the control has none any
-      // more (the percentage went away); a remembered width would still be
-      // charged to it and could push it into the menu for nothing.
-      else if (showDetail) detailWidths.current.delete(id);
-      shortWidths.current.set(id, w - detailW);
-    }
     const spacer = rowItems(bar.parentElement, '.chat-input-controls-spacer')[0];
     // The composer's recall line ("2 of 15 back") gives its room up
     // first: it cuts its own words short rather than fold these controls.
@@ -285,6 +274,33 @@ function ComposerControlsBarBody({ controls, className, handleRef }: ComposerCon
     // the row does not have, and folding would then take that room back and give
     // it again on every frame.
     const roomFolded = Math.min(folded ? available : available + directRoom, rowRoom(bar, spacer ?? null, hint ?? null, rowGap));
+    // The room is read first, as the row draws it now. Then every control is read at its natural
+    // width: a control squeezed by its row (`.composer-control` may shrink, and on a phone the model
+    // pill shrinks first) measured as its squeezed box, and that width then said the row fitted, so
+    // the squeeze stayed (2026-11-24: at 390 px the model key showed only the tail of its percentage
+    // beside btw and Notes). Inline and `important`, so no layout's own rule can squeeze the read.
+    const inlineIds = new Set(inline.map((c) => c.id));
+    for (const el of bar.querySelectorAll<HTMLElement>(OWN_CONTROL)) {
+      const id = el.dataset.controlId!;
+      // A control put into "..." before its short form was ever drawn would be judged on a guess
+      // while it stays there (ASSUMED_SHORT_MODEL_WIDTH kept the model off a row with room for it,
+      // 2026-11-23): draw it for this one read, hidden again before the browser paints.
+      const unmeasured = condensed && inlineIds.has(id) && el.dataset.hidden === 'true' && !shortWidths.current.has(id);
+      if (unmeasured) el.dataset.hidden = 'false';
+      const { w, detailW } = readWhole(el, condensed);
+      if (unmeasured) el.dataset.hidden = 'true';
+      if (w <= 0) continue;
+      if (!condensed) { widths.current.set(id, w); continue; }
+      // A condensed row shows each control's short form, with or without its
+      // detail. Record the two natural widths apart, so the decision below
+      // never depends on which of them happens to be on the row right now.
+      if (detailW > 0) detailWidths.current.set(id, detailW);
+      // No detail while the row is showing details = the control has none any
+      // more (the percentage went away); a remembered width would still be
+      // charged to it and could push it into the menu for nothing.
+      else if (showDetail) detailWidths.current.delete(id);
+      shortWidths.current.set(id, w - detailW);
+    }
     const naturalWidth = inline.reduce((total, control) => total + (widths.current.get(control.id) ?? 64), 0)
       + Math.max(0, inline.length - 1) * ROW_GAP;
     const buttonWidth = buttonRef.current?.getBoundingClientRect().width || 22;

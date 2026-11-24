@@ -21,6 +21,22 @@ async function enterHome(page: Page, sid = CTRL_SESSION) {
   return panel;
 }
 
+/** Controls on the row drawn narrower than their own content (their row squeezed them). */
+async function squeezedControls(panel: Locator): Promise<string[]> {
+  return barOf(panel).evaluate((bar) => [...bar.querySelectorAll<HTMLElement>(':scope > [data-control-id]')]
+    .filter((el) => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0)
+    .filter((el) => {
+      const drawn = el.getBoundingClientRect().width;
+      const before = el.style.cssText;
+      el.style.flexShrink = '0';
+      el.style.minWidth = 'max-content';
+      const whole = el.getBoundingClientRect().width;
+      el.style.cssText = before;
+      return whole > drawn + 1;
+    })
+    .map((el) => el.dataset.controlId ?? ''));
+}
+
 /** The menu settles inside the viewport (placement re-runs once its rows have laid out). */
 async function fits(page: Page, menu: Locator) {
   await expect(async () => {
@@ -130,15 +146,30 @@ test('Reference picks files and folders from the unified picker without dropping
 });
 
 test('short draft menu and phone composer retain reachable direct controls and scrollable More', async ({ page }) => {
+  // A row that never settles (its short form read 4 px apart with and without its detail, under a
+  // phone key's 44 px floor) logs that it kept changing its shape.
+  const loops: string[] = [];
+  page.on('console', (m) => { if (/kept changing its shape|Maximum update depth/.test(m.text())) loops.push(m.text().slice(0, 300)); });
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await enterHome(page);
   await page.setViewportSize({ width: 390, height: 600 });
   const composer = panel.locator('.session-panel-input').last();
-  // A 390 px phone row cannot hold Side chat and Session note (44 px finger targets) beside Bypass
-  // and the model: they fold into the + menu, once each, and the model keeps its name.
-  await expect(barOf(panel)).toHaveAttribute('data-direct-folded', 'true');
+  // A 390 px phone row cannot hold btw and Notes (44 px finger targets) beside Bypass and the
+  // model: they fold into the + menu, once each, and the model keeps its name. Each switch from
+  // the desktop layout measures the row afresh; a control measured while its row squeezed it read
+  // as fitting and the squeeze stayed (2026-11-24), so three switches, and no control squeezed.
+  for (let i = 0; i < 3; i++) {
+    if (i > 0) {
+      await page.setViewportSize({ width: 1200, height: 760 });
+      await expect(barOf(panel)).not.toHaveAttribute('data-direct-folded', 'true');
+      await page.setViewportSize({ width: 390, height: 600 });
+    }
+    await expect(barOf(panel)).toHaveAttribute('data-direct-folded', 'true');
+    await expect.poll(() => squeezedControls(panel), { message: `switch ${i + 1}: a control on the row is narrower than its own content` }).toEqual([]);
+  }
   expect(await expectNoteAndBtwOnce(panel)).toBe('menu');
   await expect(controlOf(panel, 'model').locator('button')).toContainText('Fable');
+  expect(loops, 'the row settles on one shape').toEqual([]);
   await composer.locator('.chat-plus-btn').first().click();
   await composer.getByRole('menuitem', { name: 'More actions', exact: true }).click();
   await fits(page, page.getByRole('menu', { name: 'More composer actions' }));
