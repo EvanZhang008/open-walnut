@@ -10,8 +10,9 @@
 # With cargo and Rust's targets for that platform installed (rustup target add
 # aarch64-apple-ios aarch64-apple-ios-sim), it builds the real library (iroh). Without
 # them it builds the stub (stub/walnut_connect_stub.c): the app works, with no Walnut
-# Connect route. WALNUT_CONNECT_REQUIRE=1 refuses the stub (a TestFlight or App Store
-# build, scripts that ship the app set it); WALNUT_CONNECT_STUB=1 always builds the stub.
+# Connect route. A device Release build (what TestFlight and the App Store get) refuses the
+# stub, as WALNUT_CONNECT_REQUIRE=1 does for any build; WALNUT_CONNECT_STUB=1 always builds
+# the stub, the shipped kind included.
 # `kind` beside the library says which one it is: real or stub.
 set -euo pipefail
 
@@ -35,7 +36,20 @@ triple() {
 # Its SDK and deployment variables would point them at the iOS SDK, so they go.
 clean_env=(env -u SDKROOT -u IPHONEOS_DEPLOYMENT_TARGET -u MACOSX_DEPLOYMENT_TARGET -u PLATFORM_NAME -u ARCHS
   -u LD -u CC -u CXX -u LDFLAGS -u CFLAGS -u CPPFLAGS -u OTHER_LDFLAGS -u TOOLCHAINS
-  PATH="$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin")
+  PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin")
+
+# A build that ships: the real library or nothing.
+required() {
+  [ "${WALNUT_CONNECT_STUB:-}" = 1 ] && return 1
+  [ "${WALNUT_CONNECT_REQUIRE:-}" = 1 ] && return 0
+  [ "$platform" = iphoneos ] && [ "${CONFIGURATION:-}" = Release ]
+}
+
+targets_hint() {
+  local t=()
+  for a in $archs; do t+=("$(triple "$a" 2>/dev/null || echo "$a")"); done
+  echo "rustup target add ${t[*]}"
+}
 
 real_ok() {
   [ "${WALNUT_CONNECT_STUB:-}" = 1 ] && return 1
@@ -47,23 +61,24 @@ real_ok() {
   done
 }
 
+# Each step says its own failure: `set -e` does not hold inside a function an `if` runs.
 build_real() {
   local parts=()
   for a in $archs; do
     local t
-    t=$(triple "$a")
+    t=$(triple "$a") || return 1
     # The app's deployment target: cc-rs builds iroh's C parts (ring) for it.
     local dep="${IPHONEOS_DEPLOYMENT_TARGET:-18.0}"
     "${clean_env[@]}" IPHONEOS_DEPLOYMENT_TARGET="$dep" cargo build --release --locked --lib \
-      --manifest-path "$here/Cargo.toml" --target "$t" >&2
+      --manifest-path "$here/Cargo.toml" --target "$t" >&2 || return 1
     parts+=("${CARGO_TARGET_DIR:-$here/target}/$t/release/libwalnut_connect.a")
   done
   if [ "${#parts[@]}" -gt 1 ]; then
-    xcrun lipo -create "${parts[@]}" -output "$lib.tmp"
+    xcrun lipo -create "${parts[@]}" -output "$lib.tmp" || return 1
   else
-    cp "${parts[0]}" "$lib.tmp"
+    cp "${parts[0]}" "$lib.tmp" || return 1
   fi
-  mv -f "$lib.tmp" "$lib"
+  mv -f "$lib.tmp" "$lib" || return 1
   echo real > "$out/kind"
 }
 
@@ -94,12 +109,20 @@ build_stub() {
 }
 
 if real_ok; then
-  build_real
-  echo "walnut-connect: built the library for $platform ($archs)"
-elif [ "${WALNUT_CONNECT_REQUIRE:-}" = 1 ]; then
-  echo "error: walnut-connect: this build must have Walnut Connect, and Rust's iOS targets are missing. Run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim" >&2
+  if build_real; then
+    echo "walnut-connect: built the library for $platform ($archs)"
+    exit 0
+  fi
+  if required; then
+    echo "error: walnut-connect: the Rust build failed, and this build must have Walnut Connect (above: cargo's error)" >&2
+    exit 1
+  fi
+  build_stub
+  echo "warning: walnut-connect: the Rust build failed (above), so this build has no Walnut Connect"
+elif required; then
+  echo "error: walnut-connect: this build must have Walnut Connect, and cargo or Rust's targets are missing. Run: $(targets_hint)" >&2
   exit 1
 else
   build_stub
-  echo "warning: walnut-connect: Rust's iOS targets are not installed, so this build has no Walnut Connect (rustup target add aarch64-apple-ios aarch64-apple-ios-sim)"
+  echo "warning: walnut-connect: cargo or Rust's targets for $platform are not installed, so this build has no Walnut Connect ($(targets_hint))"
 fi

@@ -6,26 +6,42 @@
 //! request through it still needs the device token, so the port gives nothing to another app
 //! on the phone that connects to it (it reaches only what an unpaired caller of the Mac's
 //! server reaches: who the box is).
+//!
+//! The other way round matters too: the app must send its token only to this listener, never
+//! to another app that took the port. So the client says at every moment which port it holds
+//! (`listening`, 0 while none: lost to the system, being rebound, stopped), the app sends
+//! nothing to the port unless it is that one (WalnutConnect.swift's guard), and `rebind` takes
+//! the port again after iOS reclaimed a suspended app's listener (Apple TN2277).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use iroh::endpoint::{Connection, PortmapperConfig, presets};
+use iroh::endpoint::{Connection, ConnectionError, PortmapperConfig, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, Watcher};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
+use tokio::task::JoinHandle;
 
 /// The protocol the Mac's walnut-net takes phones on (native/walnut-net/src/web.rs).
 pub const ALPN_WEB: &[u8] = b"walnut/web/1";
 /// The relay-first dial; after it, the known addresses get DIAL_TIMEOUT.
 const RELAY_DIAL_TIMEOUT: Duration = Duration::from_secs(8);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(12);
-/// Connections waiting for a stream at once; more are closed (a runaway client, never the app).
-const MAX_PENDING: usize = 64;
+/// Local connections at once, waiting or piping: below the Mac's 64 streams a connection
+/// (native/walnut-net/src/web.rs), so a stream is never refused there. More are closed.
+const MAX_STREAMS: usize = 60;
+/// Accept errors in a row that mean the listener is gone (the system took it back).
+const LOST_AFTER_ERRORS: u32 = 3;
+/// After the Walnut refused this phone (not paired, or no longer): no new dial for this long.
+const REFUSED_BACKOFF: Duration = Duration::from_secs(30);
+/// The Walnut's close codes for a refused phone (native/walnut-net/src/node.rs).
+const CLOSE_NOT_PAIRED: u32 = 403;
+const CLOSE_REMOVED: u32 = 410;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -135,14 +151,43 @@ pub struct Client {
     /// The config it started on, with the latest hints of where the peer is.
     cfg: std::sync::Mutex<Config>,
     peer: EndpointId,
-    pub port: u16,
+    /// The port the app's routes name: the listener's, or the last one it had.
+    port: AtomicU16,
+    /// The port a listener of this client holds right now; 0 while none does.
+    listening: AtomicU16,
+    /// The accept loop, which owns the listener.
+    accept: Mutex<Option<JoinHandle<()>>>,
     conn: Mutex<Option<Connection>>,
     /// One dial at a time.
     dialing: Mutex<()>,
-    accept: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The last dial that failed: a request that waited on it gets its error, not a dial of its own.
+    dial_failed: std::sync::Mutex<Option<(Instant, String)>>,
+    /// Until when the Walnut's refusal holds (no dial meanwhile).
+    refused_until: std::sync::Mutex<Option<Instant>>,
     last_error: std::sync::Mutex<Option<(String, Instant)>>,
     started: Instant,
-    streams: std::sync::atomic::AtomicU64,
+    streams: AtomicU64,
+    slots: Arc<Semaphore>,
+}
+
+/// A listener on 127.0.0.1: the port asked for while it is free, else any.
+async fn bind(want: Option<u16>) -> Result<TcpListener> {
+    if let Some(p) = want.filter(|p| *p != 0)
+        && let Ok(l) = TcpListener::bind(("127.0.0.1", p)).await {
+            return Ok(l);
+        }
+    TcpListener::bind(("127.0.0.1", 0)).await.context("listen on 127.0.0.1")
+}
+
+/// The Walnut's reason when it closed this connection on purpose: this phone is not (or no
+/// longer) paired there. A replaced connection (409) or a dropped link is no refusal.
+fn refusal(conn: &Connection) -> Option<String> {
+    match conn.close_reason()? {
+        ConnectionError::ApplicationClosed(c) if c.error_code == CLOSE_NOT_PAIRED.into() || c.error_code == CLOSE_REMOVED.into() => {
+            Some(String::from_utf8_lossy(&c.reason).into_owned())
+        }
+        _ => None,
+    }
 }
 
 impl Client {
@@ -169,52 +214,98 @@ impl Client {
             b = b.ca_tls_config(iroh::tls::CaTlsConfig::embedded().with_extra_roots(roots));
         }
         let ep = b.bind().await.context("bind the endpoint")?;
-        let listener = match cfg.port.filter(|p| *p != 0) {
-            Some(p) => match TcpListener::bind(("127.0.0.1", p)).await {
-                Ok(l) => l,
-                Err(_) => TcpListener::bind(("127.0.0.1", 0)).await?,
-            },
-            None => TcpListener::bind(("127.0.0.1", 0)).await?,
-        };
-        let port = listener.local_addr()?.port();
+        let want = cfg.port;
         let client = Arc::new(Self {
             ep,
             cfg: std::sync::Mutex::new(cfg),
             peer,
-            port,
+            port: AtomicU16::new(0),
+            listening: AtomicU16::new(0),
+            accept: Mutex::new(None),
             conn: Mutex::new(None),
             dialing: Mutex::new(()),
-            accept: std::sync::Mutex::new(None),
+            dial_failed: std::sync::Mutex::new(None),
+            refused_until: std::sync::Mutex::new(None),
             last_error: std::sync::Mutex::new(None),
             started: Instant::now(),
-            streams: Default::default(),
+            streams: AtomicU64::new(0),
+            slots: Arc::new(Semaphore::new(MAX_STREAMS)),
         });
-        let c = client.clone();
-        let task = tokio::spawn(async move { c.serve(listener).await });
-        *client.accept.lock().unwrap() = Some(task);
+        if let Err(e) = client.listen(want).await {
+            client.stop().await;
+            return Err(e);
+        }
         Ok(client)
     }
 
-    async fn serve(self: Arc<Self>, listener: TcpListener) {
-        let pending = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING));
+    /// The port the app's routes name.
+    pub fn port(&self) -> u16 {
+        self.port.load(Ordering::SeqCst)
+    }
+
+    /// The port a listener of this client holds right now, 0 while none does.
+    pub fn listening(&self) -> u16 {
+        self.listening.load(Ordering::SeqCst)
+    }
+
+    /// Close the listener (waiting until its socket is closed) and listen again on `want`,
+    /// else any port. Streams already piping go on.
+    async fn listen(self: &Arc<Self>, want: Option<u16>) -> Result<u16> {
+        let mut slot = self.accept.lock().await;
+        self.listening.store(0, Ordering::SeqCst);
+        if let Some(old) = slot.take() {
+            old.abort();
+            let _ = old.await;
+        }
+        let listener = bind(want).await?;
+        let port = listener.local_addr()?.port();
+        self.port.store(port, Ordering::SeqCst);
+        self.listening.store(port, Ordering::SeqCst);
+        let c = self.clone();
+        *slot = Some(tokio::spawn(async move { c.serve(listener, port).await }));
+        Ok(port)
+    }
+
+    /// Take the port again: after the app comes back from the background, or the listener was
+    /// lost. The same port while it is free; the answer is the port it holds now.
+    pub async fn rebind(self: &Arc<Self>) -> Result<u16> {
+        self.listen(Some(self.port())).await
+    }
+
+    async fn serve(self: Arc<Self>, listener: TcpListener, port: u16) {
+        let mut errors = 0u32;
         loop {
             let tcp = match listener.accept().await {
-                Ok((tcp, from)) if from.ip().is_loopback() => tcp,
+                Ok((tcp, from)) if from.ip().is_loopback() => {
+                    errors = 0;
+                    tcp
+                }
                 Ok(_) => continue,
-                Err(_) => {
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+                Err(e) => {
+                    errors += 1;
+                    if errors >= LOST_AFTER_ERRORS {
+                        // Gone (iOS reclaims a suspended app's listener): say so, so the app sends
+                        // nothing to this port until it is taken again.
+                        let _ = self.listening.compare_exchange(port, 0, Ordering::SeqCst, Ordering::SeqCst);
+                        self.note_error(format!("the local port stopped accepting: {e}"));
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
             };
-            let Ok(permit) = pending.clone().try_acquire_owned() else { continue };
+            // Held for the stream's whole life, so a stream is never refused by the Mac's cap.
+            let Ok(slot) = self.slots.clone().try_acquire_owned() else { continue };
             let c = self.clone();
             tokio::spawn(async move {
+                let _slot = slot;
                 let opened = async {
                     let conn = c.connection().await?;
                     match conn.open_bi().await {
                         Ok(s) => Ok(s),
                         Err(_) => {
-                            // A connection that died since it was cached: dial once more.
+                            // A connection that died since it was cached: dial once more,
+                            // unless the Walnut closed it to refuse this phone.
                             c.forget(&conn).await;
                             Ok::<_, anyhow::Error>(c.connection().await?.open_bi().await?)
                         }
@@ -222,8 +313,7 @@ impl Client {
                 };
                 match opened.await {
                     Ok((send, recv)) => {
-                        drop(permit);
-                        c.streams.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        c.streams.fetch_add(1, Ordering::Relaxed);
                         pipe(tcp, send, recv).await
                     }
                     Err(e) => c.note_error(format!("{e:#}")),
@@ -257,17 +347,68 @@ impl Client {
         if cur.as_ref().is_some_and(|c| c.stable_id() == dead.stable_id()) {
             *cur = None;
         }
+        drop(cur);
+        if let Some(why) = refusal(dead) {
+            self.refused(why);
+        }
     }
 
-    /// The live connection to the Walnut, dialled when there is none.
+    fn refused(&self, why: String) {
+        *self.refused_until.lock().unwrap() = Some(Instant::now() + REFUSED_BACKOFF);
+        self.note_error(format!("not_paired: your Walnut does not let this phone in ({why})"));
+    }
+
+    /// The cached connection while it is open; a closed one is dropped (and a refusal kept).
+    async fn live(&self) -> Option<Connection> {
+        let mut cur = self.conn.lock().await;
+        match cur.as_ref() {
+            Some(c) if c.close_reason().is_none() => Some(c.clone()),
+            Some(c) => {
+                let why = refusal(c);
+                *cur = None;
+                drop(cur);
+                if let Some(why) = why {
+                    self.refused(why);
+                }
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// The live connection to the Walnut, dialled when there is none. Requests that wait on a
+    /// dial that fails get its error at once; after a refusal nothing dials for a while.
     pub async fn connection(&self) -> Result<Connection> {
-        if let Some(c) = self.conn.lock().await.as_ref().filter(|c| c.close_reason().is_none()) {
-            return Ok(c.clone());
+        if let Some(c) = self.live().await {
+            return Ok(c);
         }
+        let asked = Instant::now();
         let _one = self.dialing.lock().await;
-        if let Some(c) = self.conn.lock().await.as_ref().filter(|c| c.close_reason().is_none()) {
-            return Ok(c.clone());
+        if let Some(c) = self.live().await {
+            return Ok(c);
         }
+        if self.refused_until.lock().unwrap().is_some_and(|until| Instant::now() < until) {
+            bail!("your Walnut does not let this phone in (not paired there any more)");
+        }
+        if let Some((at, e)) = self.dial_failed.lock().unwrap().clone()
+            && at >= asked {
+                bail!("{e}");
+            }
+        match self.dial().await {
+            Ok(conn) => {
+                *self.dial_failed.lock().unwrap() = None;
+                Ok(self.keep(conn).await)
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                *self.dial_failed.lock().unwrap() = Some((Instant::now(), msg.clone()));
+                self.note_error(msg);
+                Err(e)
+            }
+        }
+    }
+
+    async fn dial(&self) -> Result<Connection> {
         let cfg = self.config();
         let mut addr = EndpointAddr::new(self.peer);
         let choice = cfg.choice();
@@ -284,7 +425,7 @@ impl Client {
         let mut first_error = None;
         if choice == RelayChoice::Public || addr.relay_urls().next().is_some() {
             match tokio::time::timeout(RELAY_DIAL_TIMEOUT, self.ep.connect(addr.clone(), ALPN_WEB)).await {
-                Ok(Ok(conn)) => return Ok(self.keep(conn).await),
+                Ok(Ok(conn)) => return Ok(conn),
                 Ok(Err(e)) => first_error = Some(format!("{e:#}")),
                 Err(_) => first_error = Some(format!("the relay did not get through in {}s", RELAY_DIAL_TIMEOUT.as_secs())),
             }
@@ -302,11 +443,10 @@ impl Client {
             }
             bail!("could not reach your Walnut: no relay and no address to dial");
         }
-        let conn = tokio::time::timeout(DIAL_TIMEOUT, self.ep.connect(addr, ALPN_WEB))
+        tokio::time::timeout(DIAL_TIMEOUT, self.ep.connect(addr, ALPN_WEB))
             .await
             .map_err(|_| anyhow!("your Walnut did not answer in {}s", DIAL_TIMEOUT.as_secs()))?
-            .context("could not reach your Walnut")?;
-        Ok(self.keep(conn).await)
+            .context("could not reach your Walnut")
     }
 
     async fn keep(&self, conn: Connection) -> Connection {
@@ -341,19 +481,23 @@ impl Client {
             "running": true,
             "id": self.ep.id().to_string(),
             "peer": self.peer.to_string(),
-            "port": self.port,
+            "port": self.port(),
+            "listening": self.listening(),
             "relayMode": match self.config().choice() { RelayChoice::Public => "public", RelayChoice::Custom => "custom", RelayChoice::None => "none" },
             "relays": relays,
             "link": link,
-            "streams": self.streams.load(std::sync::atomic::Ordering::Relaxed),
+            "streams": self.streams.load(Ordering::Relaxed),
             "lastError": err,
             "upMs": self.started.elapsed().as_millis() as u64,
         })
     }
 
     pub async fn stop(&self) {
-        if let Some(t) = self.accept.lock().unwrap().take() {
+        self.listening.store(0, Ordering::SeqCst);
+        if let Some(t) = self.accept.lock().await.take() {
+            // Awaited, so the port is free before a start that follows binds it again.
             t.abort();
+            let _ = t.await;
         }
         if let Some(c) = self.conn.lock().await.take() {
             c.close(0u32.into(), b"stopped");
@@ -375,4 +519,51 @@ async fn pipe(tcp: TcpStream, mut send: iroh::endpoint::SendStream, mut recv: ir
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut tw).await;
     };
     tokio::join!(up, down);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(port: Option<u16>) -> Config {
+        Config {
+            key: "11".repeat(32),
+            peer: Peer { id: secret_key(&"22".repeat(32)).unwrap().public().to_string(), relays: vec![], addrs: vec![] },
+            relay_mode: Some(RelayChoice::None),
+            relays: vec![],
+            relay_roots: vec![],
+            port,
+        }
+    }
+
+    /// The app trusts the port only while `listening` names it: a stopped client says 0, a
+    /// rebind keeps the port while it is free, and a port another program took is never claimed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_client_says_which_port_it_holds_and_never_claims_a_taken_one() {
+        let c = Client::start(config(None)).await.unwrap();
+        let p = c.port();
+        assert_ne!(p, 0);
+        assert_eq!(c.listening(), p);
+        assert!(TcpStream::connect(("127.0.0.1", p)).await.is_ok());
+
+        // Back from the background: the same port again.
+        assert_eq!(c.rebind().await.unwrap(), p);
+        assert_eq!(c.listening(), p);
+
+        // Stopped: nothing holds it, and the app is told so.
+        c.stop().await;
+        assert_eq!(c.listening(), 0);
+
+        // Another program takes the port meanwhile: a new start gets another one and says so.
+        let squatter = TcpListener::bind(("127.0.0.1", p)).await.unwrap();
+        let d = Client::start(config(Some(p))).await.unwrap();
+        assert_ne!(d.port(), p);
+        assert_eq!(d.listening(), d.port());
+        // And a rebind asking for it while it is still taken moves on too.
+        d.listen(Some(p)).await.unwrap();
+        assert_ne!(d.listening(), p);
+        drop(squatter);
+        d.stop().await;
+    }
+
 }

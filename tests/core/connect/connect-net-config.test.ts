@@ -28,15 +28,28 @@ describe('the daemon\'s config parser', () => {
 
   it('refuses what walnut-net could not use', () => {
     expect(() => parseNetConfig({ phones: [{ id: 'nothex' }], webSocket: DOOR })).toThrow(/bad phone id/)
-    expect(() => parseNetConfig({ phones: [{ id: PHONE }, { id: PHONE }], webSocket: DOOR })).toThrow(/listed twice/)
     expect(() => parseNetConfig({ phones: 'x', webSocket: DOOR })).toThrow(/a list/)
     expect(() => parseNetConfig({ phones: Array.from({ length: 65 }, (_, i) => ({ id: netKey(`p${i}`) })), webSocket: DOOR })).toThrow(/at most 64/)
     for (const bad of ['relative/door.sock', 42, '/x\0y', `/${'a'.repeat(250)}`]) {
       expect(() => parseNetConfig({ phones: [{ id: PHONE }], webSocket: bad })).toThrow(/webSocket/)
     }
-    // A phone is never a member: it would reach the daemon.
-    expect(() => parseNetConfig({ members: [{ id: PHONE, accept: true }], phones: [{ id: PHONE }], webSocket: DOOR })).toThrow(/also a member/)
     expect(parseNetConfig({ members: [{ id: HOST, accept: true }], phones: [{ id: PHONE }], webSocket: DOOR }).members).toEqual([{ id: HOST, name: '', accept: true }])
+  })
+
+  it('leaves out a phone listed twice or whose id is a member, and never stops the config for it', () => {
+    // A phone is never a member (it would reach the daemon): such a record is dropped, the
+    // rest of the host network's config goes on (one bad device record wedged every sync).
+    const parsed = parseNetConfig({
+      members: [{ id: HOST, accept: true }],
+      phones: [{ id: PHONE, name: 'a' }, { id: PHONE, name: 'again' }, { id: HOST, name: 'a machine' }],
+      webSocket: DOOR,
+    })
+    expect(parsed.phones).toEqual([{ id: PHONE, name: 'a' }])
+    expect(parsed.members).toHaveLength(1)
+    // Nor is this host itself one of its phones.
+    const self = netKey('self')
+    const text = JSON.parse(netConfigFileText(parseNetConfig({ phones: [{ id: self }, { id: PHONE }], webSocket: DOOR }), { self, keyFile: '/k', portFile: '/p', control: '/c' }))
+    expect(text.phones).toEqual([{ id: PHONE, name: '' }])
   })
 })
 
@@ -57,6 +70,8 @@ describe('what the leader tells its walnut-net', () => {
     expect(await connectNetFields(daemon(['net-v1', 'net-web-v1']))).toEqual({})
     setConnectDoor(DOOR)
     expect(await connectNetFields(daemon(['net-v1', 'net-web-v1']))).toEqual({ phones: [{ id: PHONE, name: 'iPhone' }], webSocket: DOOR })
+    // A machine's id (or this Mac's) is never sent as a phone's.
+    expect(await connectNetFields(daemon(['net-v1', 'net-web-v1']), [PHONE.toUpperCase()])).toEqual({})
     // An older daemon would drop them: nothing is sent.
     expect(await connectNetFields(daemon(['net-v1', 'net-join-v1']))).toEqual({})
     flagOn = false

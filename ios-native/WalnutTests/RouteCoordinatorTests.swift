@@ -70,8 +70,8 @@ final class RouteCoordinatorTests: XCTestCase {
                 world.current = route.origin
                 world.switches.append(route)
             },
-            mergeServerRoutes: { server in
-                let merged = AppConfig.mergeRoutes(world.routes, server: server)
+            mergeServerRoutes: { server, fromMac in
+                let merged = AppConfig.mergeRoutes(world.routes, server: server, dropUnlisted: fromMac ? [.connect] : [])
                 guard merged != world.routes else { return false }
                 world.routes = merged
                 return true

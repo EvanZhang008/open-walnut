@@ -164,11 +164,16 @@ impl Config {
         out
     }
 
-    /// The phones this build can use; one whose id is not a key is left out and logged.
+    /// The phones this build can use; one whose id is not a key, or is a member's (a phone
+    /// never reaches the daemon, and a member never the door), is left out and logged.
     pub fn phone_map(&self) -> HashMap<EndpointId, Phone> {
+        let members = self.member_map();
         let mut out = HashMap::new();
         for p in &self.phones {
             match p.id.parse::<EndpointId>() {
+                Ok(id) if members.contains_key(&id) => {
+                    crate::log::warn("phone left out: its id is a member's", serde_json::json!({"name": p.name, "id": p.id}));
+                }
                 Ok(id) => {
                     out.insert(id, p.clone());
                 }
@@ -380,6 +385,10 @@ mod tests {
         // A phone is not a member: it never reaches the daemon.
         assert!(with.member_map().is_empty());
         assert!(none.same_endpoint(&with));
+        // An id listed as both is left out of the phones: it keeps its member's door only.
+        let both = read_with(&format!(r#","relayMode":"public","members":[{{"id":"{id}","accept":true}}],"phones":[{{"id":"{id}","name":"twice"}}],"webSocket":"/x/connect.sock""#)).unwrap();
+        assert!(both.phone_map().is_empty());
+        assert_eq!(both.member_map().len(), 1);
     }
 
     fn hex_of(b: &[u8]) -> String {

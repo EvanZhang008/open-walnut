@@ -95,6 +95,68 @@ final class WalnutConnectTests: XCTestCase {
         XCTAssertNil(AppConfig.parsePairingConnect("https://pair?connect=\(b64)"))
     }
 
+    // MARK: - Stored routes
+
+    private func scratchDefaults() -> UserDefaults {
+        let name = "walnut-connect-tests-\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: name)!
+        addTeardownBlock { d.removePersistentDomain(forName: name) }
+        return d
+    }
+
+    /// The previous build's `Kind` (no `connect`), decoding strictly as it did.
+    private struct OlderRoute: Decodable {
+        enum Kind: String, Decodable { case custom, lan, tailnet, cloud }
+        let kind: Kind
+        let origin: String
+    }
+
+    func testAnOlderBuildStillReadsEveryOtherRoute() throws {
+        let d = scratchDefaults()
+        let local = AppConfig.localizedConnectRoutes([lan, connectRoute, cloud], origin: "http://127.0.0.1:41234")
+        AppConfig.storeRoutes(local, anchor: "http://127.0.0.1:41234", in: d)
+        let main = try XCTUnwrap(d.data(forKey: AppConfig.routesKey))
+        // The list an older build reads holds only kinds it knows, so it keeps the Wi-Fi and the
+        // companion (and moves to one of them: the anchor is the current URL it cannot reach).
+        XCTAssertEqual(try JSONDecoder().decode([OlderRoute].self, from: main).map(\.origin), [lan.origin, cloud.origin])
+        XCTAssertEqual(AppConfig.storedRoutes(in: d), local, "this build reads both lists back, best first")
+        XCTAssertEqual(AppConfig.routes(in: d, serverURL: "http://127.0.0.1:41234"), local)
+        AppConfig.clearRoutes(in: d)
+        XCTAssertNil(d.data(forKey: AppConfig.connectRoutesKey))
+        XCTAssertTrue(AppConfig.storedRoutes(in: d).isEmpty)
+    }
+
+    func testAStoredRouteThisBuildCannotReadCostsOnlyThatRoute() throws {
+        let d = scratchDefaults()
+        let json = #"[{"kind":"lan","origin":"http://192.168.1.20:3456","label":"Wi-Fi","instance":"mac-1"},{"kind":"satellite","origin":"x://y","label":"Later"}]"#
+        d.set(Data(json.utf8), forKey: AppConfig.routesKey)
+        XCTAssertEqual(AppConfig.storedRoutes(in: d).map(\.origin), [lan.origin])
+    }
+
+    func testTheMacsOwnListDropsAConnectRouteItNoLongerHas() {
+        let local = AppConfig.localizedConnectRoutes([lan, connectRoute, cloud], origin: "http://127.0.0.1:41234")
+        // The Mac's list without it (the experiment off): gone.
+        XCTAssertEqual(AppConfig.mergeRoutes(local, server: [lan, cloud], dropUnlisted: [.connect]).map(\.kind), [.lan, .cloud])
+        // A companion's copy without it says nothing about it: kept.
+        XCTAssertEqual(AppConfig.mergeRoutes(local, server: [lan, cloud]).map(\.kind), [.lan, .connect, .cloud])
+    }
+
+    func testOnlyTheConnectPortIsHeldBack() {
+        let connect = WalnutConnect.shared
+        XCTAssertFalse(connect.isConnectURL(URL(string: "http://192.168.1.20:3456/api/v1/status")))
+        XCTAssertFalse(connect.isConnectURL(URL(string: "https://walnut.example.com/api/v1/status")))
+        XCTAssertTrue(connect.maySend(to: URL(string: "https://walnut.example.com/api/files/raw")), "other origins are never held back")
+        guard connect.isAvailable else { return }
+        let port = connect.preferredPort
+        let url = URL(string: "http://127.0.0.1:\(port)/api/v1/status")
+        XCTAssertTrue(connect.isConnectURL(url))
+        // Nothing started in this process: the port is not this app's, so no token goes there.
+        if !connect.holds(port) {
+            XCTAssertFalse(connect.maySend(to: url))
+            XCTAssertTrue(WalnutConnectGuard.canInit(with: URLRequest(url: url!)), "the guard fails the request")
+        }
+    }
+
     // MARK: - The library
 
     func testTheAppLinksTheRealLibrary() throws {

@@ -75,6 +75,11 @@ enum DemoMode {
         if !classes.contains(where: { $0 == DemoURLProtocol.self }) {
             classes.insert(DemoURLProtocol.self, at: 0)
         }
+        // Walnut Connect's guard rides the same hook: no session sends the token to a
+        // loopback port this app does not hold (WalnutConnectGuard.swift).
+        if !classes.contains(where: { $0 == WalnutConnectGuard.self }) {
+            classes.insert(WalnutConnectGuard.self, at: 1)
+        }
         config.protocolClasses = classes
     }
 
@@ -88,6 +93,7 @@ enum DemoMode {
     /// globally registered protocols. Swift runs a static initializer once,
     /// thread-safely, so this is idempotent from any thread.
     private static let globalRegistration: Void = {
+        URLProtocol.registerClass(WalnutConnectGuard.self)
         URLProtocol.registerClass(DemoURLProtocol.self)
     }()
 

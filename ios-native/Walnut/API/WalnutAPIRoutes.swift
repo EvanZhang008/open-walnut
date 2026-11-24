@@ -28,8 +28,11 @@ extension WalnutAPI {
 enum InstanceProbe {
     static let timeout: TimeInterval = 2.5
     /// A Walnut Connect route dials the Mac on its first request (through a relay, about a
-    /// second; a new connection after the app was in the background, a little more).
-    static let connectTimeout: TimeInterval = 8
+    /// second; a new connection after the app was in the background, a little more). With the
+    /// connector's start, at most 9 s: a selection waits for its slowest probe, so leaving home
+    /// with the Mac asleep reaches the companion that much later (the dial goes on meanwhile).
+    static let connectTimeout: TimeInterval = 6
+    static let connectStartLimit: Double = 3
 
     private struct Body: Decodable {
         let instance: String?
@@ -86,12 +89,17 @@ enum InstanceProbe {
         // Walnut Connect: this phone's port answers only while the connector runs.
         var session = session
         var wait = timeout
+        var origin = route.origin
         if route.kind == .connect {
-            guard let peer = route.connect, await WalnutConnect.shared.ensureRunning(peer) != nil else { return .unreachable }
+            // The port the connector holds now (it may have moved), and no longer than a start
+            // may take: the switch to another route waits for every probe.
+            guard let peer = route.connect,
+                  let port = await WalnutConnect.shared.ensureRunning(peer, within: connectStartLimit) else { return .unreachable }
             session = connectSession
             wait = connectTimeout
+            origin = "http://127.0.0.1:\(port)"
         }
-        guard let request = request(origin: route.origin, timeout: wait) else { return .unreachable }
+        guard let request = request(origin: origin, timeout: wait) else { return .unreachable }
         let started = Date()
         do {
             let (data, response) = try await session.data(for: request)

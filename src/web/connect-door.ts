@@ -21,7 +21,7 @@ import crypto from 'node:crypto'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import { bus, EventNames } from '../core/event-bus.js'
-import { connectWanted, scheduleConnectSync, setConnectDoor } from '../core/connect/connect-net.js'
+import { connectWanted, enableNetIfSwitchedOn, scheduleConnectSync, setConnectDoor } from '../core/connect/connect-net.js'
 
 /** macOS keeps a unix socket path to 104 bytes. */
 const SUN_PATH_MAX = 100
@@ -56,10 +56,20 @@ export function startConnectDoor(opts: { app: RequestListener; mainServer: HttpS
   let chain: Promise<void> = Promise.resolve()
   let stopped = false
 
+  /** The socket file this server made: close removes only that one, never a later server's. */
+  let ownIno: number | null = null
+
   async function open(): Promise<void> {
     if (server) return
     const dir = path.dirname(sock)
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // The folder must be this account's own, a real folder (on a shared /tmp another user could
+    // have made it, or left a link to somewhere else): else there is no door.
+    const st = fs.lstatSync(dir)
+    if (!st.isDirectory() || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
+      log.web.warn('walnut connect: the door folder is not this account\'s own; no door', { dir })
+      return
+    }
     fs.chmodSync(dir, 0o700)
     if (fs.existsSync(sock)) {
       if (await answers(sock)) {
@@ -76,6 +86,7 @@ export function startConnectDoor(opts: { app: RequestListener; mainServer: HttpS
       s.listen(sock, () => { s.off('error', reject); resolve() })
     })
     fs.chmodSync(sock, 0o600)
+    ownIno = fs.statSync(sock).ino
     server = s
     setConnectDoor(sock)
     log.web.info('walnut connect: door open', { socket: sock })
@@ -88,13 +99,17 @@ export function startConnectDoor(opts: { app: RequestListener; mainServer: HttpS
     setConnectDoor(null)
     s.closeAllConnections?.()
     await new Promise<void>((resolve) => s.close(() => resolve()))
-    fs.rmSync(sock, { force: true })
+    try {
+      if (ownIno !== null && fs.statSync(sock).ino === ownIno) fs.rmSync(sock, { force: true })
+    } catch { /* already gone */ }
+    ownIno = null
     log.web.info('walnut connect: door closed', { socket: sock })
   }
 
   function reconcile(): Promise<void> {
     chain = chain.then(async () => {
       if (stopped) return
+      await enableNetIfSwitchedOn()
       if (await connectWanted()) await open()
       else await close()
     }).catch((err) => log.web.warn('walnut connect: door reconcile failed', { error: err instanceof Error ? err.message : String(err) }))

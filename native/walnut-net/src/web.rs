@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use iroh::EndpointId;
 use iroh::endpoint::Connection;
@@ -28,6 +30,32 @@ pub const ALPN_WEB: &[u8] = b"walnut/web/1";
 const MAX_CONNS_PER_PHONE: usize = 4;
 /// Streams one connection may have open at once (each is one HTTP connection of the app's).
 const MAX_STREAMS_PER_CONN: usize = 64;
+/// The close of a connection a newer one of the same phone replaced (not a refusal: the
+/// phone's connector tells 403 and 410 apart from it, native/walnut-connect/src/client.rs).
+pub const CLOSE_REPLACED: u32 = 409;
+/// A refused stranger is logged at most this often (anyone who knows this host's id can try).
+const REFUSED_LOG_EVERY_MS: u64 = 10_000;
+
+static REFUSED_LOGGED_AT: AtomicU64 = AtomicU64::new(0);
+static REFUSED_SINCE_LOG: AtomicU64 = AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Log a refused phone, at most once per REFUSED_LOG_EVERY_MS, with how many were not logged.
+fn log_refused(peer: &EndpointId, door: bool) {
+    let now = now_ms();
+    let last = REFUSED_LOGGED_AT.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < REFUSED_LOG_EVERY_MS
+        || REFUSED_LOGGED_AT.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err()
+    {
+        REFUSED_SINCE_LOG.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let skipped = REFUSED_SINCE_LOG.swap(0, Ordering::Relaxed);
+    log::warn("refused a phone that is not paired here", json!({"peer": peer.to_string(), "door": door, "notLogged": skipped}));
+}
 
 #[derive(Default)]
 pub struct Web {
@@ -70,7 +98,7 @@ impl Web {
             let door = self.socket.read().await.is_some();
             let Some(phone) = listed.filter(|_| door) else {
                 drop(conns);
-                log::warn("refused a phone that is not paired here", json!({"peer": peer.to_string(), "door": door}));
+                log_refused(&peer, door);
                 conn.close(CLOSE_NOT_MEMBER.into(), b"not paired");
                 return;
             };
@@ -78,7 +106,7 @@ impl Web {
             list.retain(|c| c.close_reason().is_none());
             while list.len() >= MAX_CONNS_PER_PHONE {
                 let old = list.remove(0);
-                old.close(CLOSE_REMOVED.into(), b"replaced by a newer connection");
+                old.close(CLOSE_REPLACED.into(), b"replaced by a newer connection");
             }
             list.push(conn.clone());
             log::info("phone connected", json!({"phone": peer.to_string(), "name": phone.name, "path": selected_kind(&conn), "conn": conn.stable_id()}));

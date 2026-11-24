@@ -124,23 +124,27 @@ function parsePhones(raw: unknown, members: ReadonlySet<string>): NetPhone[] {
   if (!Array.isArray(raw)) throw new Error('phones: a list')
   if (raw.length > PHONES_MAX) throw new Error(`at most ${PHONES_MAX} phones`)
   const seen = new Set<string>()
-  return raw.map((p) => {
+  const out: NetPhone[] = []
+  for (const p of raw) {
     const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>
     const id = typeof o.id === 'string' ? o.id.toLowerCase() : ''
     if (!ID_RE.test(id)) throw new Error(`bad phone id ${String(o.id).slice(0, 80)}`)
-    if (seen.has(id)) throw new Error(`phone ${id} listed twice`)
-    if (members.has(id)) throw new Error(`phone ${id} is also a member`)
+    // A phone whose id is a member's, or listed twice, is left out (walnut-net does the same,
+    // config.rs phone_map): one bad device record never stops the host network's config.
+    if (seen.has(id) || members.has(id)) continue
     seen.add(id)
-    return { id, name: str(o.name, NAME_MAX) ?? '' }
-  })
+    out.push({ id, name: str(o.name, NAME_MAX) ?? '' })
+  }
+  return out
 }
 
 /** The text of walnut-net's config.json for a checked request: the one rule every writer of it follows. */
 export function netConfigFileText(parsed: ParsedNetConfig, at: { self: string; keyFile: string; portFile: string; control: string }): string {
   const cfg = {
     version: NET_CONFIG_VERSION, key: at.keyFile, ...parsed,
-    // A member never lists this host itself.
+    // A member never lists this host itself, nor is this host one of its phones.
     members: parsed.members.filter((m) => m.id !== at.self),
+    ...(parsed.phones ? { phones: parsed.phones.filter((p) => p.id !== at.self) } : {}),
     daemonPortFile: at.portFile, control: at.control,
   }
   return JSON.stringify(cfg, null, 2) + '\n'

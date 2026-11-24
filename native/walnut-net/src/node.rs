@@ -247,10 +247,10 @@ impl Node {
     pub async fn connection(&self, peer: EndpointId) -> Result<Connection> {
         let gate = self.dialing.lock().await.entry(peer).or_default().clone();
         let _one = gate.lock().await;
-        if let Some(c) = self.outgoing.lock().await.get(&peer) {
-            if c.close_reason().is_none() {
-                return Ok(c.clone());
-            }
+        if let Some(c) = self.outgoing.lock().await.get(&peer)
+            && c.close_reason().is_none()
+        {
+            return Ok(c.clone());
         }
         let member = self.members.read().await.get(&peer).cloned().ok_or_else(|| anyhow!("{peer} is not a member"))?;
         // custom: through the user's relays; public: the lookup finds the relay by id; none: addrs only.
@@ -308,10 +308,10 @@ impl Node {
             return Err(anyhow!("{peer} is not a member"));
         }
         let mut forwards = self.forwards.lock().await;
-        if let Some((port, task)) = forwards.get(&peer) {
-            if !task.is_finished() {
-                return Ok(*port);
-            }
+        if let Some((port, task)) = forwards.get(&peer)
+            && !task.is_finished()
+        {
+            return Ok(*port);
         }
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();

@@ -164,6 +164,32 @@ struct ServerRoutesResponse: Decodable, Sendable {
 
 extension AppConfig {
     static let routesKey = "walnut.routes"
+    /// Walnut Connect routes live apart from the rest: an older build decodes `routesKey`
+    /// strictly and knows no `connect` kind, so mixing them in would cost it every route.
+    static let connectRoutesKey = "walnut.routes.connect"
+
+    /// Every stored route, best first. Lossy: a route this build cannot read is skipped,
+    /// never the whole list.
+    static func storedRoutes(in defaults: UserDefaults) -> [ServerRoute] {
+        let main = decodeRoutes(defaults.data(forKey: routesKey)).filter { $0.kind != .connect }
+        let connect = decodeRoutes(defaults.data(forKey: connectRoutesKey)).filter { $0.kind == .connect }
+        return connect.isEmpty ? main : ordered(main + connect)
+    }
+
+    private struct LossyRoute: Decodable {
+        let route: ServerRoute?
+        init(from decoder: Decoder) throws { route = try? ServerRoute(from: decoder) }
+    }
+
+    private static func decodeRoutes(_ data: Data?) -> [ServerRoute] {
+        guard let data, let list = try? JSONDecoder().decode([LossyRoute].self, from: data) else { return [] }
+        return list.compactMap(\.route)
+    }
+
+    /// The Mac's Walnut Connect peer, from the stored routes (nil: none, or a pinned run).
+    static func storedConnectPeer() -> ConnectPeer? {
+        routes.first { $0.kind == .connect }?.connect
+    }
 
     /// Every route known to reach the paired Walnut, best first.
     ///
@@ -212,9 +238,8 @@ extension AppConfig {
     /// (custom) route.
     static func routes(in defaults: UserDefaults, serverURL: String?) -> [ServerRoute] {
         guard let serverURL, !serverURL.isEmpty else { return [] }
-        if let data = defaults.data(forKey: routesKey),
-           let stored = try? JSONDecoder().decode([ServerRoute].self, from: data),
-           !stored.isEmpty,
+        let stored = storedRoutes(in: defaults)
+        if !stored.isEmpty,
            stored.contains(where: { ServerRoute.sameOrigin($0.origin, serverURL) })
             || ServerRoute.sameOrigin(defaults.string(forKey: routesAnchorKey), serverURL) {
             return stored
@@ -227,16 +252,22 @@ extension AppConfig {
         #if DEBUG
         if defaults === UserDefaults.standard, routesArePinned { return }
         #endif
-        guard !routes.isEmpty, let data = try? JSONEncoder().encode(routes) else {
+        let main = routes.filter { $0.kind != .connect }
+        let connect = routes.filter { $0.kind == .connect }
+        guard !routes.isEmpty,
+              let mainData = try? JSONEncoder().encode(main),
+              let connectData = try? JSONEncoder().encode(connect) else {
             clearRoutes(in: defaults)
             return
         }
-        defaults.set(data, forKey: routesKey)
+        defaults.set(mainData, forKey: routesKey)
+        if connect.isEmpty { defaults.removeObject(forKey: connectRoutesKey) } else { defaults.set(connectData, forKey: connectRoutesKey) }
         if let anchor { defaults.set(normalize(anchor), forKey: routesAnchorKey) }
     }
 
     static func clearRoutes(in defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: routesKey)
+        defaults.removeObject(forKey: connectRoutesKey)
         defaults.removeObject(forKey: routesAnchorKey)
     }
 
@@ -265,9 +296,11 @@ extension AppConfig {
         defaults.set(origin, forKey: routesAnchorKey)
     }
 
-    /// Fold the server's list into the stored one; returns whether it changed.
+    /// Fold the server's list into the stored one; returns whether it changed. `fromMac`: the
+    /// list is the Mac's own (not a companion's copy), so a Walnut Connect route it no longer
+    /// lists is gone (the experiment off, another network id).
     @discardableResult
-    static func mergeRoutes(server: [ServerRoute]) -> Bool {
+    static func mergeRoutes(server: [ServerRoute], fromMac: Bool = false) -> Bool {
         if routesArePinned { return false }
         let current = UserDefaults.standard.string(forKey: urlKey)
         let existing = routes(in: .standard, serverURL: current)
@@ -275,7 +308,7 @@ extension AppConfig {
         let usable = WalnutConnect.shared.isAvailable
             ? localizedConnectRoutes(server, origin: WalnutConnect.shared.localOrigin)
             : server.filter { $0.kind != .connect }
-        let merged = mergeRoutes(existing, server: usable)
+        let merged = mergeRoutes(existing, server: usable, dropUnlisted: fromMac ? [.connect] : [])
         guard merged != existing else { return false }
         storeRoutes(merged, anchor: current)
         return true
@@ -284,8 +317,9 @@ extension AppConfig {
     /// Pure merge. The server's routes replace the stored ones of the same kind;
     /// a kind the server did not mention is KEPT (a box that was down when the
     /// list was built is not gone); the custom route survives only while its
-    /// origin is not one the server lists. Result is ordered best first.
-    static func mergeRoutes(_ existing: [ServerRoute], server: [ServerRoute]) -> [ServerRoute] {
+    /// origin is not one the server lists. A kind in `dropUnlisted` goes when the server did
+    /// not list it. Result is ordered best first.
+    static func mergeRoutes(_ existing: [ServerRoute], server: [ServerRoute], dropUnlisted: Set<ServerRoute.Kind> = []) -> [ServerRoute] {
         var seen = Set<String>()
         var fresh: [ServerRoute] = []
         for route in server where route.kind != .custom {
@@ -295,7 +329,7 @@ extension AppConfig {
         let mentioned = Set(fresh.map(\.kind))
         var kept: [ServerRoute] = []
         for route in existing where !seen.contains(route.normalizedOrigin) {
-            if route.kind == .custom || !mentioned.contains(route.kind) { kept.append(route) }
+            if route.kind == .custom || (!mentioned.contains(route.kind) && !dropUnlisted.contains(route.kind)) { kept.append(route) }
         }
         return ordered(kept + fresh)
     }

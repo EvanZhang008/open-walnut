@@ -64,8 +64,10 @@ const isPhoneRecord = (d: DeviceRecord) => d.kind !== 'machine' && !d.browserSig
  * Set the network id of the device whose token this is (the phone naming its own). One id
  * names one pairing: another device's is refused. Returns whether anything changed.
  */
-export async function registerConnectEndpoint(token: string, raw: unknown): Promise<{ name: string; endpoint: string; changed: boolean }> {
+export async function registerConnectEndpoint(token: string, raw: unknown, reserved: ReadonlySet<string> = new Set()): Promise<{ name: string; endpoint: string; changed: boolean }> {
   const endpoint = checkEndpoint(raw)
+  // A machine's id on the host network (or this Mac's) is never a phone's.
+  if (reserved.has(endpoint)) throw new ConnectRefused(409, 'endpoint_taken', 'That network id belongs to a machine on your host network.')
   return mutateDeviceRecords<{ name: string; endpoint: string; changed: boolean }>((devices) => {
     const me = recordForToken(devices, token)
     if (!me || !isPhoneRecord(me)) throw new ConnectRefused(403, 'not_a_phone', 'Only a paired app registers for Walnut Connect.')

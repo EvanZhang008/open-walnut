@@ -18,6 +18,8 @@ static const char *NONE = "{\"ok\":false,\"stub\":true,\"error\":\"this build of
 char *wc_start(const char *config_json) { (void)config_json; return copy(NONE); }
 char *wc_status(void) { return copy("{\"ok\":true,\"running\":false,\"stub\":true}"); }
 char *wc_connect(void) { return copy(NONE); }
+unsigned short wc_listening(void) { return 0; }
+char *wc_rebind(void) { return copy(NONE); }
 void wc_network_changed(void) {}
 void wc_stop(void) {}
 char *wc_endpoint_id(const char *key_hex) { (void)key_hex; return copy(NONE); }

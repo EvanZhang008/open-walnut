@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import type { AddressInfo } from 'node:net'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 import { netKey } from '../../helpers/net-keys.js'
@@ -20,7 +21,18 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-connect-d
 const syncNet = vi.fn(async (_opts?: unknown) => ({}))
 vi.mock('../../../src/core/net/net-mac.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/net/net-mac.js')>()
-  return { ...actual, netActive: async () => true, startNet: async () => {}, syncNet: (opts?: unknown) => syncNet(opts) }
+  const { updateConfig } = await import('../../../src/core/config-manager.js')
+  return {
+    ...actual,
+    netActive: async () => true,
+    startNet: async () => {},
+    // Turning it on writes net.enabled, as the real one does; nothing is told to a daemon.
+    syncNet: async (opts?: { enable?: boolean }) => {
+      if (opts?.enable) await updateConfig({ net: { enabled: true } } as never)
+      return syncNet(opts)
+    },
+    netState: () => ({ ...actual.netState(), enabled: true, macId: THIS_MAC, members: [{ id: MACHINE_ID, name: 'box', role: 'host' } as never] }),
+  }
 })
 
 import { startServer, stopServer } from '../../../src/web/server.js'
@@ -30,6 +42,9 @@ import { connectPhones, endpointOfKey } from '../../../src/core/connect/connect-
 import { _resetAuthRateLimitForTesting } from '../../../src/web/middleware/auth-rate-limit.js'
 
 const MAC_ID = netKey('connect-mac')
+/** A machine of the host network, and this Mac, as net-mac.js knows them (mocked above). */
+const MACHINE_ID = netKey('connect-machine')
+const THIS_MAC = netKey('connect-this-mac')
 const HOME_RELAY = 'https://relay-a.example.net./'
 const LAN = { 'x-forwarded-for': '192.168.1.44' }
 let port = 0
@@ -65,6 +80,18 @@ function viaDoor(p: string, headers: Record<string, string> = {}): Promise<{ sta
     })
     req.on('error', reject)
     req.end()
+  })
+}
+
+/** A WebSocket upgrade with no token through the door: the first line of the answer. */
+function upgradeViaDoor(p: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(connectDoor()!)
+    let got = ''
+    sock.on('data', (d) => { got += d.toString('latin1'); if (got.includes('\r\n')) { sock.destroy(); resolve(got.split('\r\n')[0]!) } })
+    sock.on('error', reject)
+    sock.on('close', () => resolve(got.split('\r\n')[0] ?? ''))
+    sock.write(`GET ${p} HTTP/1.1\r\nHost: walnut-connect\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${Buffer.from('0123456789abcdef').toString('base64')}\r\n\r\n`)
   })
 }
 
@@ -123,9 +150,9 @@ describe('Walnut Connect on the primary', () => {
     expect((await call('POST', '/api/v1/connect/register', { endpoint: id }, bearer(token))).body.changed).toBe(false)
     expect((await call('GET', '/api/v1/routes', undefined, bearer(token))).body.connectEndpoint).toBe(id)
     expect(await connectPhones()).toContainEqual({ id, name: 'roam-phone' })
-    // This Mac's walnut-net is told (debounced), turning the host network on first.
+    // This Mac's walnut-net is told (debounced), in a sync that starts after any running one.
     await waitFor(() => syncNet.mock.calls.length > 0)
-    expect(syncNet).toHaveBeenCalledWith({ enable: true })
+    expect(syncNet).toHaveBeenCalledWith({ fresh: true })
   })
 
   it('takes a phone\'s token only: no API key, no console, no bad id, no id another phone holds', async () => {
@@ -138,6 +165,21 @@ describe('Walnut Connect on the primary', () => {
     expect((await call('POST', '/api/v1/connect/register', { endpoint: id }, bearer(a.token))).status).toBe(200)
     const taken = await call('POST', '/api/v1/connect/register', { endpoint: id }, bearer(b.token))
     expect(taken).toEqual({ status: 409, body: expect.objectContaining({ code: 'endpoint_taken' }) })
+    // A machine's id on the host network, or this Mac's, is never a phone's.
+    for (const machine of [MACHINE_ID, THIS_MAC]) {
+      expect((await call('POST', '/api/v1/connect/register', { endpoint: machine }, bearer(b.token))).body.code).toBe('endpoint_taken')
+    }
+  })
+
+  it('never lets a forwarded header or a WebSocket upgrade through the door without a token', async () => {
+    const { token } = await createDevice('ws-phone')
+    _resetAuthRateLimitForTesting()
+    // A header saying "this machine" is no proof: the door has no remote address to trust.
+    expect((await viaDoor('/api/v1/status', { 'x-forwarded-for': '127.0.0.1' })).status).toBe(401)
+    expect((await viaDoor('/api/v1/status', { 'x-forwarded-for': '127.0.0.1', authorization: `Bearer ${token}` })).status).toBe(200)
+    // An upgrade through the door goes to the main server's handler, which asks for the token.
+    const refused = await upgradeViaDoor('/ws')
+    expect(refused).toMatch(/^HTTP\/1\.1 (401|403)/)
   })
 
   it('a new pairing\'s QR carries a key for the phone, its id already let in; a revoke takes it out', async () => {
@@ -157,6 +199,22 @@ describe('Walnut Connect on the primary', () => {
 
     expect((await call('DELETE', '/api/devices/qr-phone')).status).toBe(200)
     expect((await connectPhones()).map((p) => p.name)).not.toContain('qr-phone')
+  })
+
+  it('closes with the host network: a network the user turned off stays off, whatever is paired', async () => {
+    const sock = connectDoor()!
+    syncNet.mockClear()
+    expect((await call('PUT', '/api/config', { net: { enabled: false } })).status).toBe(200)
+    await waitFor(() => connectDoor() === null)
+    expect(fs.existsSync(sock)).toBe(false)
+    // A new pairing neither carries a key nor turns the network back on.
+    const r = await call('POST', '/api/devices', { name: 'net-off-phone' })
+    expect(r.body.pairingURI).not.toContain('&connect=')
+    await new Promise((res) => setTimeout(res, 1_500))
+    expect(syncNet.mock.calls.some(([o]) => (o as { enable?: boolean } | undefined)?.enable)).toBe(false)
+    // On again (the user's own switch): the door opens again.
+    expect((await call('PUT', '/api/config', { net: { enabled: true } })).status).toBe(200)
+    await waitFor(() => connectDoor() !== null)
   })
 
   it('closes the door again when turned off, and lists no route', async () => {

@@ -27,7 +27,7 @@ import { recordForToken } from '../../core/device-actor.js'
 import { CLOUD_ROUTE_LABEL, directRoutes, listeningPort, type DeviceRoute } from '../../core/devices/routes.js'
 import { adoptOnCloud, adoptOnPrimary } from './device-twins.js'
 import { peekTailscaleBrief } from '../../core/tailnet.js'
-import { connectRoute, scheduleConnectSync, type ConnectRoute } from '../../core/connect/connect-net.js'
+import { connectRoute, reservedNetIds, scheduleConnectSync, type ConnectRoute } from '../../core/connect/connect-net.js'
 import { ConnectRefused, registerConnectEndpoint } from '../../core/connect/connect-phones.js'
 
 export const instanceRoutesV1Router = Router()
@@ -105,7 +105,7 @@ instanceRoutesV1Router.post('/connect/register', async (req: Request, res: Respo
       return
     }
     const token = req.headers.authorization!.slice(7)
-    const out = await registerConnectEndpoint(token, (req.body as { endpoint?: unknown } | undefined)?.endpoint)
+    const out = await registerConnectEndpoint(token, (req.body as { endpoint?: unknown } | undefined)?.endpoint, await reservedNetIds())
     if (out.changed) scheduleConnectSync('phone registered')
     res.json({ registered: true, endpoint: out.endpoint, changed: out.changed })
   } catch (err) {

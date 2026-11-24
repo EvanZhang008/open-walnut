@@ -76,6 +76,8 @@ describe('registering a phone', () => {
     expect(await refusal(registerConnectEndpoint('no-such-token', netKey('x')))).toEqual({ status: 403, code: 'not_a_phone' })
     expect(await refusal(registerConnectEndpoint(machine.token, netKey('x')))).toEqual({ status: 403, code: 'not_a_phone' })
     expect(await refusal(registerConnectEndpoint(phone.token, 'nope'))).toEqual({ status: 400, code: 'bad_endpoint' })
+    // A machine's id on the host network is never a phone's.
+    expect(await refusal(registerConnectEndpoint(phone.token, netKey('a-machine'), new Set([netKey('a-machine')])))).toEqual({ status: 409, code: 'endpoint_taken' })
     expect(await connectPhones()).toEqual([])
   })
 

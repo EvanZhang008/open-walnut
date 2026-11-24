@@ -42,7 +42,8 @@ final class RouteCoordinator {
         var routes: @MainActor () -> [ServerRoute]
         var currentOrigin: @MainActor () -> String?
         var setActive: @MainActor (ServerRoute) -> Void
-        var mergeServerRoutes: @MainActor ([ServerRoute]) -> Bool
+        /// The server's list, and whether it is the Mac's own (not a companion's copy).
+        var mergeServerRoutes: @MainActor ([ServerRoute], Bool) -> Bool
         var probe: @Sendable (ServerRoute) async -> ProbeOutcome
         var fetchRoutes: @Sendable () async throws -> ServerRoutesResponse
         /// Rebuild every connection that captured the old origin.
@@ -60,7 +61,7 @@ final class RouteCoordinator {
                 routes: { AppConfig.routes },
                 currentOrigin: { AppConfig.serverURL?.absoluteString },
                 setActive: { AppConfig.setActiveRoute($0) },
-                mergeServerRoutes: { AppConfig.mergeRoutes(server: $0) },
+                mergeServerRoutes: { AppConfig.mergeRoutes(server: $0, fromMac: $1) },
                 probe: { await InstanceProbe.probe($0) },
                 fetchRoutes: { try await WalnutAPI().routes() },
                 restartStreams: { LifecycleHub.shared.restartForRouteChange() },
@@ -123,11 +124,26 @@ final class RouteCoordinator {
                 self?.startPathMonitor()
                 self?.trigger(.foreground)
             }
+            // The connector moved to another port: the routes name it already; streams that
+            // captured the old one start again.
+            portObserver = NotificationCenter.default.addObserver(forName: WalnutConnect.portMoved, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.connectPortMoved() }
+            }
         }
+    }
+
+    @ObservationIgnored private nonisolated(unsafe) var portObserver: NSObjectProtocol?
+
+    func connectPortMoved() {
+        refreshRoutes()
+        guard let current = env.currentOrigin(), AppConfig.activeRoute(in: routes, serverURL: current)?.kind == .connect else { return }
+        connection?.serverURL = current
+        env.restartStreams()
     }
 
     deinit {
         pathMonitor?.cancel()
+        if let portObserver { NotificationCenter.default.removeObserver(portObserver) }
     }
 
     // MARK: - Triggers
@@ -346,7 +362,9 @@ final class RouteCoordinator {
             // the last word from the Mac beats no word.
             if let hint = response.tailscale, hint != tailscaleHint { tailscaleHint = hint }
             registerConnectIfNeeded(response)
-            if env.mergeServerRoutes(response.routes) {
+            // A companion answers with itself as the cloud route; anything else is the Mac.
+            let fromMac = !response.routes.contains { $0.kind == .cloud && ServerRoute.sameOrigin($0.origin, key) }
+            if env.mergeServerRoutes(response.routes, fromMac) {
                 refreshRoutes()
                 AppLog.info("connectivity", "routes learned", ["routes": String(env.routes().count)])
                 trigger(.routesLearned)

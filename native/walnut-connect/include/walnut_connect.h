@@ -23,6 +23,13 @@ char *wc_status(void);
 // Dial now when no connection is up, then the status; {"ok": false, "error"} when it cannot.
 char *wc_connect(void);
 
+// The port the connector's listener holds right now, 0 while none does (not running, lost,
+// being rebound). Cheap: the app checks it before it sends anything to its port.
+unsigned short wc_listening(void);
+// Listen again, the same port while it is free: {"ok": true, "port": N, "moved": bool}. The
+// app calls it when it comes back from the background (iOS reclaims a suspended app's listener).
+// It never waits: during a start or stop it answers {"ok": false, "busy": true}.
+char *wc_rebind(void);
 // The network under the app changed (another Wi-Fi, cellular, back from the background).
 void wc_network_changed(void);
 

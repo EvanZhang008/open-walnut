@@ -191,6 +191,17 @@ extension WKWebView {
         if let url = request.url, DemoMode.isDemoURL(url) {
             return loadHTMLString(DemoFixtures.htmlPreview(for: url), baseURL: nil)
         }
+        // A web view loads outside URLSession, past WalnutConnectGuard: its token goes to the
+        // Walnut Connect port only while this app holds it.
+        guard WalnutConnect.shared.maySend(to: request.url) else {
+            return loadHTMLString(Self.connectNotReadyPage, baseURL: nil)
+        }
         return load(request)
     }
+
+    static let connectNotReadyPage = """
+    <html><head><meta name="viewport" content="width=device-width"></head>\
+    <body style="font: -apple-system-body; color: gray; text-align: center; padding-top: 30vh">\
+    Reconnecting to your Walnut. Try again in a moment.</body></html>
+    """
 }

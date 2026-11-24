@@ -36,34 +36,68 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 }
 
 static CLIENT: Mutex<Option<Arc<Client>>> = Mutex::new(None);
+/// Held across every start, stop and rebind: two at once would leave a client nobody stops.
+static LIFECYCLE: Mutex<()> = Mutex::new(());
 
 fn current() -> Option<Arc<Client>> {
     CLIENT.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+fn lifecycle() -> std::sync::MutexGuard<'static, ()> {
+    LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Start the connector on `config` (client.rs Config), replacing one that runs. A start with
-/// the same config as the running one keeps it (and its port).
+/// the same config as the running one keeps it (and its port), listening again if it lost it.
 pub fn start(config: &str) -> Value {
     let cfg = match Config::parse(config) {
         Ok(c) => c,
         Err(e) => return json!({"ok": false, "error": format!("{e:#}")}),
     };
+    let _one = lifecycle();
     let rt = runtime();
     if let Some(c) = current() {
         if c.same_config(&cfg) {
-            return json!({"ok": true, "port": c.port, "id": c.ep.id().to_string(), "kept": true});
+            if c.listening() == 0
+                && let Err(e) = rt.block_on(c.rebind()) {
+                    return json!({"ok": false, "error": format!("{e:#}")});
+                }
+            return json!({"ok": true, "port": c.port(), "id": c.ep.id().to_string(), "kept": true});
         }
-        rt.block_on(c.stop());
         *CLIENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        rt.block_on(c.stop());
     }
     match rt.block_on(async { tokio::time::timeout(Duration::from_secs(15), Client::start(cfg)).await }) {
         Ok(Ok(c)) => {
-            let out = json!({"ok": true, "port": c.port, "id": c.ep.id().to_string()});
+            let out = json!({"ok": true, "port": c.port(), "id": c.ep.id().to_string()});
             *CLIENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(c);
             out
         }
         Ok(Err(e)) => json!({"ok": false, "error": format!("{e:#}")}),
         Err(_) => json!({"ok": false, "error": "starting Walnut Connect took over 15 s"}),
+    }
+}
+
+/// The port the running connector's listener holds now; 0 while none does (not running, the
+/// listener lost, a rebind under way). The app sends nothing to its port unless this names it.
+pub fn listening() -> u16 {
+    current().map(|c| c.listening()).unwrap_or(0)
+}
+
+/// Listen again (the app is back from the background, or the listener was lost): the same port
+/// while it is free, else another; `{"ok", "port", "moved"}`. Never waits for a start or stop
+/// under way (`{"ok": false, "busy": true}`): the app calls it on its main thread.
+pub fn rebind() -> Value {
+    let _one = match LIFECYCLE.try_lock() {
+        Ok(g) => g,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return json!({"ok": false, "busy": true, "error": "a start or stop is under way"}),
+    };
+    let Some(c) = current() else { return json!({"ok": false, "error": "Walnut Connect is not running"}) };
+    let before = c.port();
+    match runtime().block_on(c.rebind()) {
+        Ok(port) => json!({"ok": true, "port": port, "moved": port != before}),
+        Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
     }
 }
 
@@ -100,6 +134,7 @@ pub fn network_changed() {
 }
 
 pub fn stop() {
+    let _one = lifecycle();
     let c = CLIENT.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some(c) = c {
         runtime().block_on(c.stop());
@@ -139,6 +174,17 @@ pub extern "C" fn wc_status() -> *mut c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn wc_connect() -> *mut c_char {
     answer(connect)
+}
+
+/// The port held now, 0 for none: cheap (no JSON, no allocation), for a check per request.
+#[unsafe(no_mangle)]
+pub extern "C" fn wc_listening() -> u16 {
+    catch_unwind(listening).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wc_rebind() -> *mut c_char {
+    answer(rebind)
 }
 
 #[unsafe(no_mangle)]

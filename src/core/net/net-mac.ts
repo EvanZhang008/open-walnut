@@ -330,14 +330,16 @@ async function pushToHosts(s: NetState, view: SyncLead, relayMoved = false): Pro
  * `enable` turns the network on first; a sync already running without it is waited for,
  * then one runs.
  */
-export async function syncNet(opts: { enable?: boolean; adopt?: string[] } = {}): Promise<NetState> {
+export async function syncNet(opts: { enable?: boolean; adopt?: string[]; fresh?: boolean } = {}): Promise<NetState> {
   if (opts.enable) {
     if (syncing) await syncing.catch(() => {})
     await setEnabled(true)
   }
   // Each explicit adoption owns a pass. Several callers waking from the same
   // previous sync must not report another caller's adoption as their own.
-  if (opts.adopt?.length) while (syncing) await syncing.catch(() => {})
+  // `fresh`: a pass that starts after any running one, so it reads the state as it is now
+  // (a revoked phone must not ride the list a sync read before the revoke).
+  if (opts.adopt?.length || opts.fresh) while (syncing) await syncing.catch(() => {})
   syncing ??= runSync(opts)
   return syncing
 }
@@ -458,7 +460,8 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }, report: SyncRepor
       if (relayMoved) { report.pushed = pushToHosts({ ...state }, { lead, refused: false }, true); await report.pushed }
       // Walnut Connect's phones and door ride the same config (core/connect/connect-net.ts).
       const { connectNetFields } = await import('../connect/connect-net.js')
-      const conf = await local.send('net.configure', { ...withServiceSetMembers(macConfig(state, lead), sets), ...await connectNetFields(local) }, 30_000) as { ok?: boolean; error?: string }
+      const reserved = [...(state.macId ? [state.macId] : []), ...state.members.map((m) => m.id)]
+      const conf = await local.send('net.configure', { ...withServiceSetMembers(macConfig(state, lead), sets), ...await connectNetFields(local, reserved) }, 30_000) as { ok?: boolean; error?: string }
       if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
       const { verifiedAdoptions } = await import('./net-adopt.js')

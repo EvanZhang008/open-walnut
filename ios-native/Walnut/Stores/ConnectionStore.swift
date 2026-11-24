@@ -158,22 +158,28 @@ final class ConnectionStore {
             try await connect(serverURL: rawURL, token: token, deviceName: name)
             return
         }
-        WalnutConnect.shared.adoptKey(pc.key)
-        let route = ServerRoute(
-            kind: .connect, origin: WalnutConnect.shared.localOrigin, label: WalnutConnect.routeLabel,
+        // The QR's key is kept only once this pairing worked: a failed one leaves the key the
+        // phone had (and the Walnut Connect of the Mac it was paired with) as it was.
+        let connect = WalnutConnect.shared
+        let stored = ServerRoute(
+            kind: .connect, origin: connect.localOrigin, label: WalnutConnect.routeLabel,
             instance: pc.instance, connect: pc.peer)
         let direct = rawURL.trimmingCharacters(in: .whitespaces)
         if !direct.isEmpty, case .ok = await InstanceProbe.probe(.custom(direct)) {
-            try await connect(serverURL: direct, token: token, deviceName: name, routes: [route])
+            try await self.connect(serverURL: direct, token: token, deviceName: name, routes: [stored])
+            connect.commitKey(pc.key)
             return
         }
         AppLog.info("connectivity", "pairing through walnut connect", [:])
-        guard await WalnutConnect.shared.ensureRunning(pc.peer) != nil else {
+        guard let port = await connect.ensureRunning(pc.peer, key: pc.key) else {
             // Not even the connector: the plain setup says why the address failed.
-            try await connect(serverURL: direct, token: token, deviceName: name)
+            try await self.connect(serverURL: direct, token: token, deviceName: name)
             return
         }
-        try await connect(serverURL: route.origin, token: token, deviceName: name, routes: [route], instance: pc.instance)
+        var route = stored
+        route.origin = "http://127.0.0.1:\(port)"
+        try await self.connect(serverURL: route.origin, token: token, deviceName: name, routes: [route], instance: pc.instance)
+        connect.commitKey(pc.key)
     }
 
     /// Push model/OS/app version to the server. Fire-and-forget: this is
