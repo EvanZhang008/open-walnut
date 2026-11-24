@@ -80,8 +80,8 @@ final class PrivateTasksUITests: XCTestCase {
         XCTAssertTrue(row(app, synced).waitForExistence(timeout: 20), "the row left the board")
         let localLabel = "Sync: Local, not in Tracker"
         openSync(app, synced, expecting: localLabel).tap()
-        XCTAssertTrue(app.staticTexts["Kept out of Tracker: You made it local"].waitForExistence(timeout: 5)
-            || app.buttons["Kept out of Tracker: You made it local"].exists,
+        XCTAssertTrue(app.staticTexts["You made it local"].waitForExistence(timeout: 5)
+            || app.buttons["You made it local"].exists,
             "the menu does not say why it is local")
         let back = app.buttons["Sync to Tracker"]
         XCTAssertTrue(back.exists)
@@ -110,6 +110,9 @@ final class PrivateTasksUITests: XCTestCase {
         openSync(app, kept, expecting: "Sync: Local, not in Tracker").tap()
         XCTAssertTrue(app.buttons["Sync to Tracker"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["Make local, keep its copy in Tracker"].exists)
+        // Its reason ("Kept local when it was created") shows whole, not cut at "Kept local when it w…".
+        let why = "Kept local when it was created"
+        XCTAssertTrue(app.staticTexts[why].exists || app.buttons[why].exists, "the menu does not show its reason whole")
         shot(app, "4-local-task-menu")
     }
 
@@ -118,7 +121,7 @@ final class PrivateTasksUITests: XCTestCase {
         let app = try launchPaired()
         openBoard(app)
         openSync(app, held, expecting: "Sync: Local, not in Tracker").tap()
-        let why = "Its project does not sync to Tracker."
+        let why = "Its project syncs nowhere"
         XCTAssertTrue(app.staticTexts[why].waitForExistence(timeout: 10) || app.buttons[why].exists,
             "the menu does not say why it cannot sync")
         XCTAssertFalse(app.buttons["Sync to Tracker"].exists, "a Sync the server would refuse is offered")

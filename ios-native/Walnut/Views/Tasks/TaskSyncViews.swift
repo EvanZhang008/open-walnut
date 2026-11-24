@@ -8,6 +8,8 @@ import SwiftUI
 ///     or neutralized: title and text replaced, then archived);
 ///   - a task kept local: why, Sync to <service>, and for one turned local whose copy is still
 ///     there, archive or neutralize that copy.
+/// Every line's text comes from `SyncMenuText` (or a server reason `SyncStanding.note` found fits),
+/// so each is measured against the menu's two lines (tests/scripts/ios-sync-menu-lines.test.ts).
 struct TaskSyncMenu: View {
     let task: WalnutTask
     @Environment(TasksStore.self) private var tasks: TasksStore?
@@ -22,54 +24,53 @@ struct TaskSyncMenu: View {
     }
 
     private func menu(_ standing: SyncStanding, service: String, store: TasksStore) -> some View {
-        let line = standing.keptLine(store.serviceName)
         let id = task.id
         return Menu {
-            if !line.isEmpty {
-                Text(line)
+            if let note = standing.note() {
+                Text(note)
             }
             if standing.isSynced {
                 Button { run { await store.makeLocal(taskId: id, outside: .keep) } } label: {
-                    Label("Make local, keep its copy in \(service)", systemImage: "lock")
+                    Label(SyncMenuText.makeLocalKeep.text(service), systemImage: "lock")
                 }
                 .accessibilityIdentifier("tasks.sync.makeLocal.keep")
                 Button { run { await store.makeLocal(taskId: id, outside: .archive) } } label: {
-                    Label("Make local, archive it in \(service)", systemImage: "archivebox")
+                    Label(SyncMenuText.makeLocalArchive.text(service), systemImage: "archivebox")
                 }
                 .accessibilityIdentifier("tasks.sync.makeLocal.archive")
                 Button { run { await store.makeLocal(taskId: id, outside: .neutralize) } } label: {
-                    Label("Make local, neutralize it in \(service)", systemImage: "eye.slash")
+                    Label(SyncMenuText.makeLocalNeutralize.text(service), systemImage: "eye.slash")
                 }
                 .accessibilityIdentifier("tasks.sync.makeLocal.neutralize")
             } else if standing.isChecking || store.projectSources.isEmpty || store.projectService(task.project) != nil {
                 // Sources not read yet: offered, the server decides.
                 Button { run { await store.syncToProject(taskId: id) } } label: {
-                    Label("Sync to \(service)", systemImage: "arrow.up.circle")
+                    Label(SyncMenuText.syncTo.text(service), systemImage: "arrow.up.circle")
                 }
                 .accessibilityIdentifier("tasks.sync.toProject")
             } else {
                 // Its project syncs nowhere now (made local, or moved): the server answers 409
                 // project_local, so there is nothing to send it to (the web's TaskSyncMenuRows).
-                Text(SyncStanding.projectSyncsNowhere(service))
+                Text(SyncMenuText.projectSyncsNowhere.text(service))
             }
             if standing.outsideCopyKept {
                 Button { run { await store.changeOutsideCopy(taskId: id, action: .archive) } } label: {
-                    Label("Archive its copy in \(service)", systemImage: "archivebox")
+                    Label(SyncMenuText.archiveCopy.text(service), systemImage: "archivebox")
                 }
                 .accessibilityIdentifier("tasks.sync.outside.archive")
                 Button { run { await store.changeOutsideCopy(taskId: id, action: .neutralize) } } label: {
-                    Label("Neutralize its copy in \(service)", systemImage: "eye.slash")
+                    Label(SyncMenuText.neutralizeCopy.text(service), systemImage: "eye.slash")
                 }
                 .accessibilityIdentifier("tasks.sync.outside.neutralize")
             }
             if standing.keptWithoutHold {
                 Button { run { await store.makeLocal(taskId: id, outside: .keep) } } label: {
-                    Label("Keep it local", systemImage: "lock")
+                    Label(SyncMenuText.keepLocal.text(service), systemImage: "lock")
                 }
                 .accessibilityIdentifier("tasks.sync.keepLocal")
             }
         } label: {
-            Label("Sync: \(standing.summary(store.serviceName))",
+            Label(standing.menuRow(store.serviceName),
                   systemImage: standing.isSynced ? "arrow.triangle.2.circlepath" : "lock")
         }
         .accessibilityIdentifier("tasks.sync.menu")

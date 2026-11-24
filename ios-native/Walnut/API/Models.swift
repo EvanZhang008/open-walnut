@@ -608,6 +608,10 @@ struct WalnutSyncHold: Codable, Equatable {
     let target: String
     var reason: String? = nil
     var outside: String? = nil
+    /// What decided (`words`, `model`, `user`) and `project` when a project-level step made it
+    /// (additive): the menu's short line when the reason is too long for it.
+    var by: String? = nil
+    var via: String? = nil
 }
 
 /// `team_stop` on a task row: when its team was stopped, and by whom ("human" or "task:<id>").

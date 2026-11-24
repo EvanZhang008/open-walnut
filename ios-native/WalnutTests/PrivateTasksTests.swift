@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Walnut
 
 /// Local-only tasks in a project that syncs to an outside service (server
@@ -46,15 +47,55 @@ final class PrivateTasksTests: XCTestCase {
         let name: (String) -> String = { $0 == "plugin-a" ? "Tracker" : $0 }
         XCTAssertEqual(SyncStanding.synced(service: "plugin-a").summary(name), "Syncs to Tracker")
         let kept = SyncStanding.kept(service: "plugin-a", hold: WalnutSyncHold(
-            state: "private", target: "plugin-a", reason: "It matches a private word"))
+            state: "private", target: "plugin-a", reason: "It matches a private word", by: "words"))
         XCTAssertEqual(kept.summary(name), "Local, not in Tracker")
-        XCTAssertEqual(kept.keptLine(name), "Kept out of Tracker: It matches a private word")
-        XCTAssertEqual(SyncStanding.kept(service: "plugin-a", hold: nil).keptLine(name), "Local, not synced to Tracker")
+        // The server's reason when it fits the menu, the line of its kind when it does not.
+        XCTAssertEqual(kept.note(), "It matches a private word")
+        XCTAssertEqual(kept.note(fits: { _ in false }), "It matches a private-word rule")
+        XCTAssertEqual(SyncStanding.kept(service: "plugin-a", hold: nil).note(), "No reason recorded")
         XCTAssertEqual(SyncStanding.checking(service: "plugin-a", hold: WalnutSyncHold(state: "checking", target: "plugin-a"))
-            .keptLine(name), "Checking whether it is private before it goes to Tracker")
+            .note(), "Checking if it is private")
+        XCTAssertNil(SyncStanding.synced(service: "plugin-a").note())
         XCTAssertTrue(SyncStanding.kept(service: "plugin-a", hold: WalnutSyncHold(state: "chosen", target: "plugin-a", outside: "kept")).outsideCopyKept)
         XCTAssertFalse(SyncStanding.kept(service: "plugin-a", hold: WalnutSyncHold(state: "chosen", target: "plugin-a", outside: "archived")).outsideCopyKept)
         XCTAssertTrue(SyncStanding.kept(service: "plugin-a", hold: nil).keptWithoutHold)
+    }
+
+    // MARK: - Every menu line fits the menu's two lines (guard for the whole class)
+
+    /// An iOS menu row shows two lines and cuts the rest: "Kept out of Tracker: Kept local when it
+    /// w…" on the simulator (2026-11-24). Every line the Sync section can show is a SyncMenuText
+    /// case (a new one joins `allCases` and is measured here) or a server reason `note` let through
+    /// only after measuring it. Measured at the default text size with the fixture's service name.
+    func testEveryMenuLineFitsTwoLines() {
+        let body = UIFont.preferredFont(forTextStyle: .body,
+                                        compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))
+        for line in SyncMenuText.allCases {
+            let text = line.text("Tracker")
+            XCTAssertTrue(SyncMenuText.fits(text, font: body), "\"\(text)\" (\(line)) does not fit the menu's two lines")
+        }
+        // The menu's own row, in its bold label font.
+        let bold = UIFont.systemFont(ofSize: body.pointSize, weight: .semibold)
+        let name: (String) -> String = { _ in "Tracker" }
+        let checking = WalnutSyncHold(state: "checking", target: "plugin-a")
+        for standing in [SyncStanding.synced(service: "plugin-a"), .checking(service: "plugin-a", hold: checking),
+                         .kept(service: "plugin-a", hold: nil)] {
+            let row = standing.menuRow(name)
+            XCTAssertTrue(SyncMenuText.fits(row, font: bold), "\"\(row)\" does not fit")
+        }
+        // The cut reason of the report gives way to its kind's line, and every hold kind has one.
+        let cut = WalnutSyncHold(state: "chosen", target: "plugin-a",
+                                 reason: String(repeating: "Kept local when it was created. ", count: 4), by: "user")
+        XCTAssertEqual(SyncStanding.kept(service: "plugin-a", hold: cut).note(fits: { SyncMenuText.fits($0, font: body) }),
+                       "Made local on purpose")
+        for state in ["checking", "private", "unjudged", "chosen", "a-state-from-a-newer-server"] {
+            for by in [nil, "words", "model", "user"] {
+                let line = SyncMenuText.kind(of: WalnutSyncHold(state: state, target: "plugin-a", by: by))
+                XCTAssertTrue(SyncMenuText.fits(line.text("Tracker"), font: body))
+            }
+        }
+        XCTAssertEqual(SyncMenuText.kind(of: WalnutSyncHold(state: "chosen", target: "plugin-a", via: "project")),
+                       .madeLocalWithProject)
     }
 
     // MARK: - Wire
@@ -131,8 +172,7 @@ final class PrivateTasksTests: XCTestCase {
         XCTAssertFalse(standing.isChecking)
         XCTAssertFalse(store.projectSources.isEmpty)
         XCTAssertNil(store.projectService(held.project), "Home syncs nowhere: no Sync to Tracker")
-        XCTAssertEqual(SyncStanding.projectSyncsNowhere(store.serviceName("plugin-a")),
-                       "Its project does not sync to Tracker.")
+        XCTAssertEqual(SyncMenuText.projectSyncsNowhere.text(store.serviceName("plugin-a")), "Its project syncs nowhere")
         // The same hold in a project that syncs still offers it, and a task being checked does too.
         XCTAssertNotNil(store.projectService(task("k", hold: held.syncHold).project))
         XCTAssertTrue(SyncStanding.checking(service: "plugin-a", hold: WalnutSyncHold(state: "checking", target: "plugin-a")).isChecking)

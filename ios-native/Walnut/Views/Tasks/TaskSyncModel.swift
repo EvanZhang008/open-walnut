@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Where a task stands against the outside service its project syncs to (server
 /// `src/core/private-tasks/`; the web's twin is `web/src/components/tasks/private-task-model.ts`).
@@ -45,13 +46,6 @@ enum SyncStanding: Equatable {
         return false
     }
 
-    /// Why a task kept local offers no Sync when its project syncs nowhere now (the web's keptLine says
-    /// more). Short: a menu row shows two lines, and the longer sentence was cut at "an outside s…"
-    /// on the gate simulator (2026-11-24).
-    static func projectSyncsNowhere(_ service: String) -> String {
-        "Its project does not sync to \(service)."
-    }
-
     /// The short state the menu's Sync row reads ("Syncs to X", "Local, not in X").
     func summary(_ name: (String) -> String) -> String {
         switch self {
@@ -62,14 +56,23 @@ enum SyncStanding: Equatable {
         }
     }
 
-    /// The one line a task kept local shows: why it is not in the service.
-    func keptLine(_ name: (String) -> String) -> String {
+    /// The Sync menu's own row ("Sync: Local, not in Tracker"), measured with SyncMenuText's lines.
+    func menuRow(_ name: (String) -> String) -> String { "Sync: \(summary(name))" }
+
+    /// The menu's short line for why a task is local (or being checked), when it has one. The
+    /// server's reason when it fits the menu's two lines, else the line of its kind: the menu row
+    /// above already names the service.
+    func note(fits: (String) -> Bool = SyncMenuText.fitsMenu) -> String? {
         switch self {
-        case .checking(let s, _): return "Checking whether it is private before it goes to \(name(s))"
-        case .kept(let s, let hold):
-            if let reason = hold?.reason, !reason.isEmpty { return "Kept out of \(name(s)): \(reason)" }
-            return "Local, not synced to \(name(s))"
-        default: return ""
+        case .checking: return SyncMenuText.checking.text("")
+        case .kept(_, let hold):
+            guard let hold else { return SyncMenuText.noReason.text("") }
+            if let reason = hold.reason?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty,
+               fits(reason) {
+                return reason
+            }
+            return SyncMenuText.kind(of: hold).text("")
+        default: return nil
         }
     }
 
@@ -95,5 +98,67 @@ enum ProjectSync {
         let key = (project ?? "").trimmingCharacters(in: .whitespaces).lowercased()
         guard !key.isEmpty, let source = sources[key]?.source, source != "local", !source.isEmpty else { return nil }
         return source
+    }
+}
+
+/// Every line the task menu's Sync section shows (TaskSyncMenu reads its text only from here). An
+/// iOS menu row shows at most two lines and cuts the rest ("Kept local when it w…", 2026-11-24), so
+/// each line must fit two lines of the menu's body font: PrivateTasksTests measures every case, and
+/// a new one that does not fit fails there. A server reason is shown only when `fitsMenu` says it
+/// fits; otherwise the line of its kind stands in.
+enum SyncMenuText: CaseIterable {
+    // Why it is local, or being checked (no service name: the Sync row above names it).
+    case checking, noReason, privateWords, privateModel, privateOther, unjudged, madeLocalWithProject, madeLocal
+    case projectSyncsNowhere
+    // Actions.
+    case makeLocalKeep, makeLocalArchive, makeLocalNeutralize, syncTo, archiveCopy, neutralizeCopy, keepLocal
+
+    func text(_ service: String) -> String {
+        switch self {
+        case .checking: return "Checking if it is private"
+        case .noReason: return "No reason recorded"
+        case .privateWords: return "It matches a private-word rule"
+        case .privateModel: return "The AI check found it private"
+        case .privateOther: return "It was found private"
+        case .unjudged: return "Walnut could not check it yet"
+        case .madeLocalWithProject: return "Made local with its project"
+        case .madeLocal: return "Made local on purpose"
+        case .projectSyncsNowhere: return "Its project syncs nowhere"
+        case .makeLocalKeep: return "Make local, keep its copy in \(service)"
+        case .makeLocalArchive: return "Make local, archive it in \(service)"
+        case .makeLocalNeutralize: return "Make local, neutralize it in \(service)"
+        case .syncTo: return "Sync to \(service)"
+        case .archiveCopy: return "Archive its copy in \(service)"
+        case .neutralizeCopy: return "Neutralize its copy in \(service)"
+        case .keepLocal: return "Keep it local"
+        }
+    }
+
+    /// The line of a hold's kind, for a reason too long for the menu (or none).
+    static func kind(of hold: WalnutSyncHold) -> SyncMenuText {
+        switch hold.state {
+        case "private": return hold.by == "words" ? .privateWords : hold.by == "model" ? .privateModel : .privateOther
+        case "unjudged": return .unjudged
+        case "checking": return .checking
+        default: return hold.via == "project" ? .madeLocalWithProject : .madeLocal
+        }
+    }
+
+    /// The width a menu row's text gets on a phone (an iOS menu is about 250 pt wide; its icon
+    /// column and margins leave about 165 pt, measured on the iPhone 16 Pro simulator) and the
+    /// two lines it shows.
+    static let menuTextWidth: CGFloat = 160
+    static let menuLines = 2
+
+    /// Whether `text` fits the menu's two lines in the body font at the reader's text size.
+    static func fitsMenu(_ text: String) -> Bool {
+        fits(text, font: UIFont.preferredFont(forTextStyle: .body))
+    }
+
+    static func fits(_ text: String, font: UIFont) -> Bool {
+        let box = (text as NSString).boundingRect(
+            with: CGSize(width: menuTextWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil)
+        return box.height <= font.lineHeight * CGFloat(menuLines) + 1
     }
 }
