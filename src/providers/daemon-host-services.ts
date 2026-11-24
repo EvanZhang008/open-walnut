@@ -65,6 +65,23 @@ export interface DaemonHostServicesDeps<W extends object> extends DaemonReplies<
   logMsg: DaemonLog
 }
 
+/**
+ * The roots of a ports scan: each running session's CLI and each running ACP worker, by pid.
+ * A worker adopted after a restart (acp-survive.ts) has no `proc`, only its `pid`.
+ */
+export function agentRootPids(
+  sessions: Iterable<[string, { pid?: number | null; state?: string }]>,
+  workers: Iterable<[string, { state?: string; pid?: number; proc?: { pid?: number } }]>,
+): Map<number, string> {
+  const pids = new Map<number, string>()
+  for (const [sid, s] of sessions) if (s.pid && s.pid > 1 && s.state === 'running') pids.set(s.pid, sid)
+  for (const [rid, w] of workers) {
+    const pid = w.pid ?? w.proc?.pid
+    if (w.state === 'running' && pid && pid > 1) pids.set(pid, rid)
+  }
+  return pids
+}
+
 export function createDaemonHostServices<W extends object>(deps: DaemonHostServicesDeps<W>) {
   const { daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, SET_ID, PORT_FILE, spawn, childUse, sessions, acp, gatewaySidAliases, freshLeaderLinks, leaderBook, streamRelay, isServerClient, walnutScope, gatewayClientHomes, daemonCommands, setInterval, clearInterval, logMsg, sendOk, sendError } = deps
 
@@ -74,13 +91,7 @@ export function createDaemonHostServices<W extends object>(deps: DaemonHostServi
   // walnut socket asks. The roots are each running session's CLI and each ACP worker;
   // a WALNUT_SESSION_ID a renamed session's CLI still carries resolves to its new sid.
   const daemonPorts = createDaemonPorts({
-    agentPids: () => {
-      const pids = new Map<number, string>()
-      for (const [sid, s] of sessions) if (s.pid && s.pid > 1 && s.state === 'running') pids.set(s.pid, sid)
-      // proc is absent on a worker adopted after a restart: this throws then, as it always did (not type-checked in the runtime's body).
-      for (const [rid, w] of acp.workers) if (w.state === 'running' && w.proc!.pid && w.proc!.pid > 1) pids.set(w.proc!.pid, rid)
-      return pids
-    },
+    agentPids: () => agentRootPids(sessions, acp.workers),
     resolveSid: (raw) => resolveCallerSid(raw, sessions, gatewaySidAliases) ?? raw,
     daemonPid: process.pid,
     io: defaultPortScanIo(childUse),
