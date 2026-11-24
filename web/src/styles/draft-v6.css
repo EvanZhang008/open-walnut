@@ -84,9 +84,13 @@
   .draft-v6-send-label { display: none; }
 }
 
-/* The row and its line: one slot of 82 px (48 + 6 + 28), Quick chat's block in the same box. */
+/* The row and its line: one slot of 82 px (28 + 6 + 48), Quick chat's block in the same box. The line
+   is over the row and the row rests on the composer ("put these 2 down", 2026-11-24); a line that
+   takes a second line grows upward, into the gap. */
 .draft-v6-row-slot,
-.draft-v6-quick { flex: none; height: 82px; margin-top: 24px; box-sizing: border-box; }
+.draft-v6-quick { flex: none; height: 82px; margin-top: 24px; margin-bottom: 0; box-sizing: border-box; }
+.draft-v6-row-slot { display: flex; flex-direction: column; justify-content: flex-end; }
+.draft-v6-row-slot > .draft-v6-row { flex: none; }
 .draft-v6-row {
   display: grid;
   grid-template-columns: clamp(150px, 26%, 240px) minmax(0, 1fr);
@@ -192,7 +196,7 @@
   background: var(--bg-secondary);
   color: var(--fg);
 }
-.draft-v6-host-name { max-width: 14ch; font-size: var(--font-size-md); font-weight: 600; }
+.draft-v6-host-name { max-width: 24ch; font-size: var(--font-size-md); font-weight: 600; }
 .draft-v6-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
 .draft-v6-dot.is-on { background: var(--success); }
 /* A crumb separator is the direction icon (Icons.tsx), never a typed angle quote. */
@@ -212,7 +216,7 @@
   align-items: center;
   gap: 8px;
   height: 28px;
-  margin-top: 6px;
+  margin-bottom: 6px;
   padding-left: 6px;
   overflow: hidden;
   white-space: nowrap;

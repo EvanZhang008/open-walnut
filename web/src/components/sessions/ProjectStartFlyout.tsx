@@ -16,7 +16,7 @@ import '@/styles/project-start.css';
 export const PROJECT_START_FLYOUT_CLASS = 'project-start-flyout';
 
 export function ProjectStartFlyout({
-  open, anchorRef, onClose, className, testId, label, children, minHeight = 160, side = 'down', boundsRef, style,
+  open, anchorRef, onClose, className, testId, label, children, minHeight = 160, side = 'down', boundsRef, style, returnFocusRef,
 }: {
   open: boolean;
   anchorRef: RefObject<HTMLElement | null>;
@@ -30,8 +30,10 @@ export function ProjectStartFlyout({
   side?: 'up' | 'down';
   /** The box the flyout stays inside (the draft panel). */
   boundsRef?: RefObject<HTMLElement | null>;
-  /** A fixed size (the Where menu's 440 x 310): merged under the placement. */
+  /** A fixed size (the Where picker's 820 x 488): merged under the placement. */
   style?: CSSProperties;
+  /** Where Escape gives the focus back when it is not the anchor (the Where picker sits on the line under its field). */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, anchorRef, boxRef, {
@@ -40,12 +42,14 @@ export function ProjectStartFlyout({
   useOverlayLayer({
     passOutsideClick: true,
     open,
-    refs: [boxRef, anchorRef],
+    // The field Escape returns to is inside too: a press on it is not an outside press.
+    refs: returnFocusRef ? [boxRef, anchorRef, returnFocusRef] : [boxRef, anchorRef],
     // Any of these flyouts (a nested "+ Add" inside the row, say) is not an outside press.
     exemptSelectors: [`.${PROJECT_START_FLYOUT_CLASS}`],
     onClose: (reason) => {
       onClose();
-      if (reason === 'escape') anchorRef.current?.focus({ preventScroll: true });
+      // The anchor may be a field (a div) holding its own button: Escape gives the focus to that button.
+      if (reason === 'escape') focusableIn((returnFocusRef ?? anchorRef).current)?.focus({ preventScroll: true });
     },
   });
   if (!open) return null;
@@ -64,4 +68,11 @@ export function ProjectStartFlyout({
     </div>,
     document.body,
   );
+}
+
+/** The element itself when it takes the focus, else its first button (a field's own open key). */
+function focusableIn(el: HTMLElement | null): HTMLElement | null {
+  if (!el) return null;
+  if (el.matches('button, input, textarea, select, a[href], [tabindex]')) return el;
+  return el.querySelector<HTMLElement>('button, [tabindex]');
 }

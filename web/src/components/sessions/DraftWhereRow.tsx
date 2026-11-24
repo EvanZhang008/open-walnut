@@ -48,52 +48,57 @@ export function DraftWhereRow({ draft, where, boundsRef, narrow, menu, setMenu, 
   const projectRef = useRef<HTMLDivElement>(null);
   const whereRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const close = () => setMenu(null);
+  // A pick, Keep or Cancel gives the focus back to the Where field (an outside press leaves it where it went).
+  const closeWhere = () => {
+    setMenu(null);
+    whereRef.current?.querySelector<HTMLButtonElement>('[data-testid="draft-v6-where-open"]')?.focus({ preventScroll: true });
+  };
   // Measured when the menu opens, never during a render.
   const [menuWidth, setMenuWidth] = useState(WHERE_MENU_PX);
   const whereOpen = menu?.kind === 'where';
   useLayoutEffect(() => { if (whereOpen) setMenuWidth(whereMenuWidth(whereRef, boundsRef, narrow)); }, [whereOpen, narrow, boundsRef]);
   return (
     <div className={`draft-v6-row-slot${menu ? ' has-menu' : ''}`}>
-      <div className="draft-v6-row">
+      {/* The line sits over the row, so the row rests right on the composer ("put these 2 down",
+          2026-11-24) and a line that takes a second line grows upward, into the gap. */}
+      <WhereLineView where={where} narrow={narrow} startError={startError} onPickFolder={() => setMenu({ kind: 'where', query: '' })} />
+      <div ref={rowRef} className="draft-v6-row">
         <ProjectField draft={draft} where={where} fieldRef={projectRef} open={menu?.kind === 'project'}
           onOpen={() => setMenu(menu?.kind === 'project' ? null : { kind: 'project' })} />
         <WhereField draft={draft} where={where} fieldRef={whereRef} hostRef={hostRef} narrow={narrow} menu={menu} setMenu={setMenu} />
       </div>
-      <WhereLineView where={where} narrow={narrow} startError={startError} onPickFolder={() => setMenu({ kind: 'where', query: '' })} />
       <ProjectStartFlyout open={menu?.kind === 'project'} anchorRef={projectRef} onClose={close} label="Project"
-        className="draft-v6-menu draft-v6-project-menu" testId="draft-v6-project-menu" minHeight={200} boundsRef={boundsRef}>
+        className="draft-v6-menu draft-v6-project-menu" testId="draft-v6-project-menu" minHeight={200} boundsRef={boundsRef} side="up">
         <DraftProjectMenu where={where} onDone={close} onCustomizeWalnut={onCustomizeWalnut} />
       </ProjectStartFlyout>
       <ProjectStartFlyout open={menu?.kind === 'host'} anchorRef={hostRef} onClose={close} label="Runs on"
-        className="draft-v6-menu draft-v6-host-menu" testId="draft-v6-host-menu" minHeight={120} boundsRef={boundsRef}>
+        className="draft-v6-menu draft-v6-host-menu" testId="draft-v6-host-menu" minHeight={120} boundsRef={boundsRef} side="up">
         <HostMenu where={where} onDone={close} />
       </ProjectStartFlyout>
-      <ProjectStartFlyout open={menu?.kind === 'where'} anchorRef={whereRef} onClose={close} label="Where"
-        className="draft-v6-menu draft-v6-where-menu" testId="draft-v6-where-menu" minHeight={200} boundsRef={boundsRef}
-        style={{ width: menuWidth, height: 310 }}>
+      {/* Over the row, upward, under the draft's title (review: covering the title and the row hid what
+          the picker edits); the row stays in view and the picker keeps the room above it. */}
+      <ProjectStartFlyout open={menu?.kind === 'where'} anchorRef={rowRef} returnFocusRef={whereRef} onClose={close} label="Where"
+        className="draft-v6-menu draft-v6-where-menu" testId="draft-v6-where-menu" minHeight={260} boundsRef={boundsRef} side="up"
+        style={{ width: menuWidth, height: WHERE_MENU_HEIGHT }}>
         {menu?.kind === 'where' && (
-          <DraftWhereMenu draft={draft} where={where} initialQuery={menu.query} onClose={close} onUpdate={onUpdate} />
+          <DraftWhereMenu draft={draft} where={where} initialQuery={menu.query} onClose={closeWhere} onPicked={closeWhere} onUpdate={onUpdate} />
         )}
       </ProjectStartFlyout>
     </div>
   );
 }
 
-const WHERE_MENU_PX = 440;
-/** A narrow draft's Where menu: never under 420 while the draft has the room (review: a 310 px
- *  one cut Auto's title), even over the "Start task" label. */
-const NARROW_MENU_MIN_PX = 420;
+/** The Where picker (design A): 820 x 488 where the draft has the room, never wider than the draft. */
+const WHERE_MENU_PX = 820;
+const WHERE_MENU_HEIGHT = 488;
+const WHERE_MENU_MIN_PX = 300;
 
-/** 440 px (review N6: at 480 the menu covered the "Start task" label), narrower when the label is
- *  closer (its rows end in an ellipsis then, never cut). */
-function whereMenuWidth(fieldRef: RefObject<HTMLElement | null>, boundsRef: RefObject<HTMLElement | null>, narrow: boolean): number {
-  const field = fieldRef.current?.getBoundingClientRect();
+function whereMenuWidth(_fieldRef: RefObject<HTMLElement | null>, boundsRef: RefObject<HTMLElement | null>, _narrow: boolean): number {
   const bounds = boundsRef.current?.getBoundingClientRect();
-  if (narrow) return Math.min(Math.max(NARROW_MENU_MIN_PX, field?.width ?? 0), WHERE_MENU_PX, bounds ? bounds.width - 24 : WHERE_MENU_PX);
-  const label = boundsRef.current?.querySelector('.draft-v6-send-label')?.getBoundingClientRect();
-  if (!field || !label || label.width === 0) return WHERE_MENU_PX;
-  return Math.max(240, Math.min(WHERE_MENU_PX, label.left - field.left - 12));
+  if (!bounds || bounds.width === 0) return WHERE_MENU_PX;
+  return Math.max(WHERE_MENU_MIN_PX, Math.min(WHERE_MENU_PX, bounds.width - 24));
 }
 
 function ProjectField({ draft, where, fieldRef, open, onOpen }: {

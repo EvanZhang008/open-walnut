@@ -1,0 +1,200 @@
+/* The v6 draft's Where picker, design A (experiment project_first_start; DraftWhereMenu.tsx and
+   its parts): the field with its machine, the levels row, the side (machines, places), the list or
+   the Finder columns, the footer with what the button saves. The menu shell is draft-v6-menus.css. */
+
+.project-start-flyout.draft-v6-where-menu { container: where-picker / inline-size; }
+.draft-v6-wp { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+
+/* The machine at the field's start (the field's icon slot; DraftWhereSide changes it). */
+.draft-v6-wp .wn-field-icon { margin-right: 8px; }
+.draft-v6-wp-host {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.draft-v6-wp-host-name { color: var(--fg); }
+
+/* The levels row: a level strikes out the ones after it while pointed at. */
+.draft-v6-wl {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 2px 14px;
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.draft-v6-wl-label { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }
+.draft-v6-wl-levels { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; }
+.draft-v6-wl-wrap { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+/* The words inside each level's link key (the key itself stays the family's btn-link). */
+.draft-v6-wl-text { font-family: var(--font-mono); font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.draft-v6-wl-level.is-last .draft-v6-wl-text { color: var(--fg); font-weight: 600; }
+/* Struck out, still readable (review: the dimmed words read 2.2:1; --fg-secondary is above 4.5:1). */
+.draft-v6-wl-level.is-cut .draft-v6-wl-text { color: var(--fg-secondary); text-decoration: line-through; text-decoration-thickness: 1.5px; }
+.project-start-flyout.draft-v6-levels-menu { width: 300px; max-height: 260px; overflow-y: auto; }
+
+/* The body: the side, then the list or the columns. */
+.draft-v6-wp-body { flex: 1 1 auto; min-height: 0; display: flex; }
+.draft-v6-ws {
+  flex: none;
+  width: 200px;
+  box-sizing: border-box;
+  padding: 8px 6px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.draft-v6-ws-sec { display: flex; flex-direction: column; gap: 2px; }
+.draft-v6-ws-group { padding: 10px 8px 4px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
+.draft-v6-ws-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.draft-v6-ws-item:hover { background: var(--bg-hover); }
+.draft-v6-ws-item .where-icon { flex: none; color: var(--fg-muted); }
+.draft-v6-ws-item.is-off { cursor: default; color: var(--fg-muted); }
+.draft-v6-ws-item.is-off:hover { background: none; }
+.draft-v6-ws-name { flex: 1 1 auto; min-width: 0; }
+.draft-v6-ws-name.is-host { font-weight: 600; }
+.draft-v6-ws-note { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }
+
+.draft-v6-wp-main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; container: where-main / inline-size; }
+.draft-v6-wp-top { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 14px 4px; min-width: 0; }
+.draft-v6-wp-title { flex: none; font-weight: 600; color: var(--fg); }
+.draft-v6-wp-line { flex: 1 1 auto; min-width: 0; font-size: var(--font-size-sm); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The list shows whole rows (its height a multiple of a row, DraftWhereMenu's WholeRows) and scrolls by rows. */
+.draft-v6-wp-rows-box { flex: 1 1 auto; min-height: 0; }
+.draft-v6-wp-count { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }
+.draft-v6-wp-more { flex: none; font-size: var(--font-size-xs); color: var(--fg-secondary); white-space: nowrap; }
+.draft-v6-wp-rows {
+  position: relative; /* the rows' offsetTop is the list's (the "+N more" count) */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y mandatory;
+  padding: 0 6px;
+}
+.draft-v6-wp-rows > * { scroll-snap-align: start; }
+.draft-v6-wm-row.draft-v6-wp-row { box-sizing: border-box; padding-left: 8px; padding-right: 8px; }
+.draft-v6-wp-auto { flex: none; padding: 0 6px 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.draft-v6-wp-row:hover { background: var(--bg-hover); }
+/* A long parent path keeps its tail (the levels nearest the folder). */
+.draft-v6-wp-parent { direction: rtl; text-align: left; }
+.draft-v6-wp-meta { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+/* The machine's name is read whole (two folders of one name on two machines); the path gives way. */
+.draft-v6-wp-meta .draft-v6-tag { max-width: none; }
+.draft-v6-wp-hit { background: none; color: var(--accent-text); font-weight: 700; }
+
+/* The Finder columns: whole columns, the newest in view. */
+.draft-v6-wc {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc(100% / var(--cols, 3));
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+}
+.draft-v6-wc-col.is-across { grid-column: span var(--cols, 3); }
+.draft-v6-wc-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border); scroll-snap-align: start; }
+.draft-v6-wc-label { flex: none; display: flex; align-items: center; gap: 6px; padding: 10px 12px 4px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-v6-wc-filter { flex: none; padding: 0 12px 4px; font-size: var(--font-size-xs); color: var(--fg-muted); }
+.draft-v6-wc-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px 6px; }
+.draft-v6-wc-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.draft-v6-wc-item:hover { background: var(--bg-hover); }
+.draft-v6-wc-item .where-icon { flex: none; color: var(--fg-muted); }
+.draft-v6-wc-item.is-on { background: var(--bg-secondary); }
+/* What the button saves: the keyboard's folder, else the browsed one; its parents keep the quiet fill
+   (review: a 1.37:1 outline read weaker than the parent). */
+.draft-v6-wc-item.is-target { background: var(--accent-subtle); }
+.draft-v6-wc-item.is-target .draft-v6-wc-name { color: var(--accent-text); font-weight: 600; }
+.draft-v6-wc-name { flex: 1 1 auto; min-width: 0; }
+.draft-v6-wc-used { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }
+.draft-v6-wc-chev { flex: none; display: inline-flex; color: var(--fg-muted); }
+.draft-v6-wc-chev svg { width: 12px; height: 12px; }
+
+/* The footer: the keys, then what the button saves, Cancel and the button. */
+/* One line: the destination gives way (its tail stays), the buttons keep their place. */
+html .wn-menu-foot.draft-v6-wp-foot { flex-wrap: nowrap; gap: 12px; min-height: 44px; }
+.draft-v6-wp-foot .wn-key-hint { flex: none; }
+.draft-v6-wp-foot .btn, .draft-v6-wp-foot .draft-v6-tag { flex: none; }
+.draft-v6-wp-dest { flex: 1 1 0; min-width: 0; overflow: hidden; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; justify-content: flex-end; }
+.draft-v6-wp-saved { flex: none; color: var(--fg-muted); }
+.draft-v6-wp-dest-host { flex: none; font-family: var(--font-mono); font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.draft-v6-wp-dest-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--fg);
+}
+
+/* A narrow picker (a narrow draft): the side becomes one row over the list. */
+@container where-picker (max-width: 620px) {
+  .draft-v6-wp-body { flex-direction: column; }
+  .draft-v6-ws { width: auto; display: flex; align-items: center; gap: 4px; padding: 6px; border-right: none; border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; }
+  .draft-v6-ws-sec { flex-direction: row; }
+  .draft-v6-ws-group { display: none; }
+  .draft-v6-ws-item { width: auto; white-space: nowrap; }
+  .draft-v6-wp-line:not(.is-status) { display: none; }
+  .draft-v6-wp-foot .wn-key-hint { display: none; }
+}
+
+/* A narrow list pane: a row keeps its name and its starts; the machine and project tags go
+   (the footer still names the machine). */
+@container where-main (max-width: 560px) {
+  /* The machine stays on every row (two folders of one name on two machines); the starts, the time
+     and the project give way (review, 960 px). */
+  .draft-v6-wp-row .draft-v6-wm-name .draft-v6-tag,
+  .draft-v6-wp-row .draft-v6-wm-time { display: none; }
+  /* A search still reading, or read in part, keeps its one line: "not done" never reads as "none". */
+  .draft-v6-wp-line:not(.is-status) { display: none; }
+}
+@container where-picker (max-width: 760px) {
+  .draft-v6-wp-foot .wn-key-hint { display: none; }
+  .draft-v6-ws { width: 168px; }
+}
+
+/* Recent / Most used keeps its place at the top row's end, whatever the line says. */
+.draft-v6-wp-top > :last-child { margin-left: auto; }
+/* Auto with no project is a note, not a pick: one line, so the list keeps a row more. */
+.draft-v6-wp-auto .draft-v6-auto-row[data-state='no-project'] .draft-v6-wm-text { flex-direction: row; align-items: baseline; gap: 8px; }

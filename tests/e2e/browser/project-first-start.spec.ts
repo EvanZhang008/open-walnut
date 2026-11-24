@@ -165,16 +165,17 @@ test('a git source: Auto is the Where menu\'s first row, Start files a task whos
   await expect(line(panel)).toHaveAttribute('data-kind', 'last-used')
   await expect(line(panel)).toContainText(`First time with ${MARINA}:`)
   menu = await openWhere(page, panel)
-  const first = menu.getByRole('option').first()
+  // The first row of the list (the side's own rows are machines and places).
+  const first = menu.getByTestId('draft-v6-where-main').getByRole('option').first()
   await expect(first).toHaveAttribute('data-testid', 'draft-v6-auto-row')
   await expect(first).toHaveAttribute('data-state', 'ok')
   await expect(first).toHaveAttribute('aria-selected', 'true')
   await expect(first).toContainText(`Auto · New worktree on ${LOCAL_NAME}`)
   await expect(first).toContainText('Fresh copy of the default branch, removed when merged')
-  // The menu never covers the Start task label (review N6).
+  // The picker never covers the Start task label (review N6): it opens upward, over the row it edits.
   const menuBox = (await menu.boundingBox())!
   const labelBox = (await sendLabel(panel).boundingBox())!
-  expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(labelBox.x)
+  expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(labelBox.y)
   await shot(page, 'v6-where-auto')
   await page.keyboard.press('Escape')
 
@@ -239,7 +240,7 @@ test('a folder of a project\'s code: its project is detected, and "Use fresh wor
   const base = await geometry(panel)
   const menu = await openWhere(page, panel)
   await menu.getByTestId('draft-v6-where-search').fill('pkg')
-  const row = menu.getByTestId('draft-v6-folder-row').filter({ hasText: 'ws-fixture/app/pkg' }).first()
+  const row = menu.locator('[data-testid="draft-v6-folder-row"][data-name="pkg"]').filter({ hasText: 'ws-fixture/app' }).first()
   await expect(row).toContainText(MARINA)
   await shot(page, 'v6-where-search')
   await row.click()
@@ -270,38 +271,39 @@ test('a folder of a project\'s code: its project is detected, and "Use fresh wor
   expect(errors).toEqual([])
 })
 
-test('a typed path: its levels, "Use this path" with the project it finds, and a folder that is not there', async ({ page, request }) => {
+test('a typed path: its levels, its folders in columns, the project it finds, and a folder that is not there', async ({ page, request }) => {
   await setFlag(request, true)
   const errors = watchErrors(page)
   await openHome(page)
   const panel = await openDraft(page)
   const menu = await openWhere(page, panel)
   const search = menu.getByTestId('draft-v6-where-search')
-  // Not there: shown, greyed, and says why; Enter picks nothing.
+  // Not there: the button says so and stays off; Enter picks nothing.
   await search.fill(path.join(home, 'ws-fixture', `nothere-${stamp}`))
   const use = menu.getByTestId('draft-v6-use-path')
   await expect(use).toHaveAttribute('data-state', 'missing', { timeout: 20_000 })
-  await expect(use).toContainText(`Folder not found on ${LOCAL_NAME}`)
+  await expect(use).toHaveText('No such folder')
+  await expect(use).toBeDisabled()
   await shot(page, 'v6-path-missing')
   await search.press('Enter')
   await expect(whereMenu(page)).toBeVisible()
-  // A real one: its parent's folders listed, its project detected before the pick.
+  // A real one: its parent's folders in the last column, its project said before the pick.
   await search.fill(`${path.join(home, 'ws-fixture')}/`)
-  await expect(menu.getByTestId('draft-v6-folder-row').filter({ hasText: 'app' }).first()).toBeVisible({ timeout: 20_000 })
+  await expect(menu.locator(`[data-testid="draft-v6-column-folder"][data-path$="/ws-fixture/app"]`)).toBeVisible({ timeout: 20_000 })
   await search.fill(APP())
   await expect(use).toHaveAttribute('data-state', 'valid', { timeout: 20_000 })
-  await expect(use).toContainText(`Project: ${MARINA} (detected)`)
-  // The breadcrumb is the level being listed (the parent), each part a button.
+  await expect(menu.getByTestId('draft-v6-where-project')).toHaveText(MARINA)
+  // The levels row is the level being listed (the parent), each level a button.
   await expect(menu.getByTestId('draft-v6-typed-crumbs')).toContainText('ws-fixture')
   await shot(page, 'v6-path-valid')
   await search.press('Enter')
   await expect(whereMenu(page)).toHaveCount(0)
   await expect(panel.getByTestId('draft-v6-folder')).toContainText('app')
   await expect(panel.getByTestId('draft-v6-detected')).toBeVisible()
-  // "~" lists the home of every host.
+  // "~" browses the home of the machine in the field.
   const homeMenu = await openWhere(page, panel)
   await homeMenu.getByTestId('draft-v6-where-search').fill('~')
-  await expect(homeMenu.getByTestId('draft-v6-folder-row').filter({ hasText: `Home on ${LOCAL_NAME}` })).toBeVisible()
+  await expect(homeMenu.getByTestId('draft-v6-where-columns')).toContainText(`Home on ${LOCAL_NAME}`)
   await shot(page, 'v6-path-home')
   await page.keyboard.press('Escape')
   expect(errors).toEqual([])

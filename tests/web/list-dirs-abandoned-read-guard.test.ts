@@ -57,9 +57,11 @@ describe('list-dirs reads the caller leaves are cancelled', () => {
   it('every listDirs call outside the API module passes a signal', () => {
     const members = files.filter((f) => f.rel !== OWNER).flatMap((f) => calls(f.text).map((call) => ({ file: f.rel, call })))
     // The callers known today: the composer's @? folder search, the folder picker, and the new
-    // task draft's check that its folder is still there (it aborts on every change).
+    // task draft's check that its folder is still there (it aborts on every change), and the
+    // Where picker's columns and home search (aborted when the machine or the path changes).
     expect(new Set(members.map((m) => m.file))).toEqual(new Set([
       'components/chat/FileMentionPopup.tsx',
+      'components/sessions/DraftWhereColumns.tsx',
       'components/sessions/path-selector/useLiveDirs.ts',
       'components/sessions/useFolderGone.ts',
     ]))

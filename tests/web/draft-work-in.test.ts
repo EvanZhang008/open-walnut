@@ -1,6 +1,6 @@
 /**
  * The new task draft's Project + Where row (experiment project_first_start, v6; draft-work-in.ts
- * and draft-where-menu.ts) as data: what a start from a source makes, which project a folder
+ * as data: what a start from a source makes, which project a folder
  * belongs to (detectProjectForFolder), what Auto makes and whether a host can make it (autoOn, the
  * phone's rule too), the crumbs a folder collapses to, what a project pick restores (derivedPlace:
  * from the folders Walnut already records), the one line under the row, the Recent chips and the
@@ -13,7 +13,6 @@ import type { WorkingDirEntry } from '@/api/sessions';
 import { draft, git, plugin } from './helpers/project-start';
 
 const wi = await import('@/components/sessions/draft-work-in');
-const menu = await import('@/components/sessions/draft-where-menu');
 const { pathCrumbItems } = await import('@/utils/home-folder');
 
 const dir = (cwd: string, host: string | null, project: string, lastUsed: string, extra: Partial<WorkingDirEntry> = {}): WorkingDirEntry =>
@@ -328,13 +327,6 @@ describe('the Where field\'s crumbs: the last three parts, then two, then the na
     expect(pathCrumbItems('/a/projects/u/x', 2).map((c) => c.dir)).toEqual(['', '/a/projects/u', '/a/projects/u/x']);
     expect(pathCrumbItems('~/code/app', 3).map((c) => c.dir)).toEqual(['~', '~/code', '~/code/app']);
   });
-
-  it('a menu row\'s path keeps whole parts and the home as ~', () => {
-    expect(menu.shownPath('/projects/u/open-walnut')).toBe('/projects/u/open-walnut');
-    expect(menu.shownPath('/srv/team/x/y/marina-dupfix')).toBe('…/x/y/marina-dupfix');
-    expect(menu.shownPath('/home/u/Downloads', '/home/u')).toBe('~/Downloads');
-    expect(menu.shownPath('/home/u', '/home/u')).toBe('~');
-  });
 });
 
 describe('per-project memory, derived from the folders Walnut records', () => {
@@ -422,48 +414,5 @@ describe('Recent chips and the Host menu\'s words', () => {
     expect(wi.hostLine(true, true)).toBe('This computer · online');
     expect(wi.hostLine(false, true)).toBe('Remote host · online');
     expect(wi.hostLine(false, false)).toBe('Remote host · offline');
-  });
-});
-
-describe('the Where menu\'s rows', () => {
-  const rows = [{ name: 'Marina', startSource: git }];
-  const dirs = [
-    dir('/repos/marina/src', 'big-box', 'Marina', '2026-11-21T00:00:00Z'),
-    dir('/home/u/Downloads', null, '', '2026-11-01T00:00:00Z'),
-    dir('/srv/notes', 'big-box', '', '2026-11-20T00:00:00Z'),
-    dir('/home/u/.open-walnut-worktrees/app/x', null, '', '2026-11-22T00:00:00Z'),
-  ];
-  const ctx = { hostKey: 'big-box', hostName: (k: string) => (k === 'big-box' ? 'Big box' : 'This Mac'), homeOf: (k: string) => (k === '__local__' ? '/home/u' : undefined), rows, current: { cwd: '/srv/notes', host: 'big-box' } };
-
-  it('an empty search: recent folders by host, the draft\'s host first, its project as a tag, the current one marked', () => {
-    const s = menu.folderSections(dirs, { ...ctx, query: '' });
-    expect(s.map((x) => x.title)).toEqual(['Recent on Big box', 'Recent on This Mac']);
-    expect(s[0].rows.map((r) => [r.name, r.project ?? '', r.current])).toEqual([['src', 'Marina', false], ['notes', '', true]]);
-    expect(s[1].rows.map((r) => r.path)).toEqual(['~/Downloads']);
-  });
-
-  it('a word searches every host, grouped by host with its count', () => {
-    expect(menu.folderSections(dirs, { ...ctx, query: 'down' }).map((x) => x.title)).toEqual(['1 on This Mac']);
-    expect(menu.folderSections(dirs, { ...ctx, query: 'zzz' })).toEqual([]);
-    // The draft's host leads an empty search even with no folder there yet (review: "Recent on
-    // This computer" first while the draft ran on Dev box).
-    const none = menu.folderSections(dirs, { ...ctx, hostKey: 'devbox', hostName: (k: string) => (k === 'devbox' ? 'Dev box' : k), query: '' });
-    expect(none[0]).toEqual({ title: 'Recent on Dev box', rows: [] });
-    expect(none.length).toBeGreaterThan(1);
-  });
-
-  it('a typed path: its crumbs, "Use this path" and whether the host has it, the level\'s folders', () => {
-    expect(menu.isPathQuery('/a')).toBe(true);
-    expect(menu.isPathQuery('~')).toBe(true);
-    expect(menu.isPathQuery('notes')).toBe(false);
-    const listing = { status: 'done' as const, parent: '/repos', exists: true, dirs: ['/repos/marina', '/repos/mail', '/repos/zed'] };
-    const seg = menu.typedPathView('/repos/ma', listing);
-    expect(seg.crumbs.map((c) => c.label)).toEqual(['repos']);
-    expect(seg.use).toEqual({ path: '/repos/ma', validity: 'missing' });
-    expect(seg.children).toEqual(['/repos/mail', '/repos/marina']);
-    const level = menu.typedPathView('/repos/', listing);
-    expect(level.use).toEqual({ path: '/repos', validity: 'valid' });
-    expect(level.children).toHaveLength(3);
-    expect(menu.typedPathView('/repos/x', undefined).use?.validity).toBe('unknown');
   });
 });

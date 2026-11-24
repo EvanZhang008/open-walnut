@@ -70,8 +70,8 @@ test('a host change: Auto that cannot run there says why and blocks Start; a fol
     const reason = menu.getByTestId('draft-v6-auto-row').locator('.draft-v6-wm-line.is-reason')
     await expect(reason).toContainText(`${DEVBOX.label} has no ${MARINA} checkout.`)
     expect(await reason.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1)).toBe(true)
-    // The draft's host leads the folders, with none of its own yet.
-    await expect(menu.locator('.draft-v6-wm-group').first()).toHaveText(`Recent on ${DEVBOX.label}`)
+    // The picker browses the draft's host first (its machine leads the field).
+    await expect(menu.getByTestId('draft-v6-where-host')).toContainText(DEVBOX.label)
     await shot(page, 'v6-where-cannot')
     await page.keyboard.press('Escape')
 

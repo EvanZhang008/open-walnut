@@ -3,10 +3,10 @@
  * design), under the draft's header:
  *
  *            [ >_ Start task ]  [ (W) Quick chat ]          tiles, centred
- *   [PROJECT ...........] [WHERE host › Auto ........]      row (or Quick chat's block)
- *   line under the row                                       one fixed slot
- *                       (empty)
- *   [ composer ...................... Start task ↑ ]        a fixed place, lower on the page
+ *                       (empty: tasks like this one, notices)
+ *   [PROJECT ...........] [WHERE host › Auto ........]      row (or Quick chat's block), right
+ *   line under the row                                       above the composer (2026-11-24, Evan:
+ *   [ composer ...................... Start task ↑ ]        "put these 2 down")
  *   Recent [..] [..] [..]          Save as task   More       lower row
  *
  * One content column, at most 960 px wide and centred. Every slot has a fixed size, so switching
@@ -77,6 +77,8 @@ export function DraftV6Body({
   useEffect(() => { onBlocked?.(isBlocked); }, [isBlocked, onBlocked]);
   const [menu, setMenu] = useState<RowMenu>(null);
   const narrow = useNarrow(panelRef, NARROW_PX);
+  // The row's menus stay inside the draft's body: under its title, never over it.
+  const bodyRef = useRef<HTMLDivElement>(null);
   const startError = useDraftWorkspace(draft.id).startError;
   // Tasks like this one, by Walnut's search: a click or Shift+Enter opens one instead of a second task.
   const taskMatches = useTaskMatches(composerText, !walnut);
@@ -94,13 +96,9 @@ export function DraftV6Body({
   useEffect(() => { if (openWhereNonce && !walnut) setMenu({ kind: 'where', query: '' }); }, [openWhereNonce, walnut]);
 
   return (
-    <div className={`draft-v6-body${narrow ? ' is-narrow' : ''}${isBlocked ? ' is-blocked' : ''}`} data-testid="draft-v6">
+    <div ref={bodyRef} className={`draft-v6-body${narrow ? ' is-narrow' : ''}${isBlocked ? ' is-blocked' : ''}`} data-testid="draft-v6">
       <DraftModeTiles walnut={walnut} onPick={onWalnutToggle} />
       <div className="draft-v6-col">
-        {walnut ? <QuickChatBlock title={quickTitle} line={quickLine} /> : (
-          <DraftWhereRow draft={draft} where={where} boundsRef={panelRef} narrow={narrow} menu={menu} setMenu={setMenu}
-            startError={startError} onUpdate={onUpdate} onCustomizeWalnut={onCustomizeWalnut} />
-        )}
         <div className="draft-v6-gap">
           <div className="draft-v6-notices">
             {!walnut && <DraftTaskMatches matches={taskMatches.matches} shiftEnters={taskMatches.strongFirst} onOpen={taskMatches.open} onHide={taskMatches.hide} />}
@@ -114,6 +112,10 @@ export function DraftV6Body({
             )}
           </div>
         </div>
+        {walnut ? <QuickChatBlock title={quickTitle} line={quickLine} /> : (
+          <DraftWhereRow draft={draft} where={where} boundsRef={bodyRef} narrow={narrow} menu={menu} setMenu={setMenu}
+            startError={startError} onUpdate={onUpdate} onCustomizeWalnut={onCustomizeWalnut} />
+        )}
         <div className="session-panel-input draft-v6-input">
           {composer}
           {startWhy && <div className="draft-v6-start-why" role="alert" data-testid="draft-v6-start-why">{startWhy}</div>}
