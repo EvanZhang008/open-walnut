@@ -135,6 +135,21 @@ describe('task_history keeps the newest rows when its answer is held to the cap'
     }
   })
 
+  it('all:true with a limit that fits under the cap still names the page before what the limit left out', async () => {
+    const call: Call = async (_method, path) => {
+      if (path.startsWith('/tasks/t-1/sessions')) return { sessions: [{ session_id: 's-0', engine: 'codex', active: false }, { session_id: 's-1', engine: 'claude', active: true }] }
+      if (path.startsWith('/tasks/')) return { task: { id: 't-1', session_id: 's-1' } }
+      const sid = path.split('/')[2]
+      return { truncated: false, messages: sid === 's-0' ? ROWS.slice(0, 96) : ROWS.slice(96) }
+    }
+    const args = { id: 't-1', all: true, limit: 2 }
+    const result = await (op().handler as (i: Record<string, unknown>, c: Call) => Promise<unknown>)({ ...args }, call) as Row
+    const rows = (result.messages as Row[]).filter((r) => !String(r.text ?? '').startsWith('Session on '))
+    const older = result.older as { before: string; how: string }
+    expect(older.before).toBe(rows[0].timestamp)
+    expect(JSON.parse(older.how.match(/'(.*)'/)![1])).toMatchObject({ id: 't-1', all: true, limit: 2, before: older.before })
+  })
+
   /**
    * all:true joins the sessions by when each started. A task that switched back to its first engine
    * resumes the FIRST session, so its newest rows sit ahead of the later session's (2026-11-24 review

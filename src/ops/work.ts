@@ -394,14 +394,19 @@ defineOp({
         messages.push({ role: 'system', kind: 'notification', text: `Session on ${r.engine}${r.model ? ` (${r.model})` : ''}${r.active ? ', the active one' : ''}: ${r.session_id}` });
         messages.push(...rows);
       }
+      let olderAll: { older: { before: string; how: string } } | undefined;
       if (shaped && shape.limit) {
         // By time across the sessions, each kept session with its header (history-time-cut.ts).
         const cut = shapeHistory(messages, { limit: shape.limit });
         add(cut);
         messages = cut.messages;
+        // The rows the limit left out are read back from the cut's time, the same way as one session's.
+        if (cut.cutOlder > 0 && cut.before) {
+          olderAll = { older: { before: cut.before, how: `walnut tools call task_history '${JSON.stringify({ id: task.id, all: true, ...shape, before: cut.before })}'` } };
+        }
       }
       return {
-        taskId: task.id, sessions, messages,
+        taskId: task.id, sessions, messages, ...(olderAll ?? {}),
         ...(degradedOnes.length ? { degraded: degradedOnes, degraded_note: degradedLine(degradedOnes) } : {}),
         ...(shaped ? { left_out: { ...total, note: leftOutLine(total, false) } } : {}),
       };
