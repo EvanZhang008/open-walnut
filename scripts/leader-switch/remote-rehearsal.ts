@@ -21,6 +21,8 @@ import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cro
 import { makeRemoteWorld, type RemoteWorld } from './remote-world.js'
 import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
+import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, leaderRelaySocketPath, relayRequest, relaySocketOpener } from '../../src/core/leader/switch/leader-relay.js'
+import { newSwitchId } from '../../src/core/leader/switch/ticket.js'
 import { computeExpectedDaemonVersion } from '../../src/providers/daemon-version-check.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -194,6 +196,8 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     c.add('boot: A\'s standby batches reach B\'s standby folder over A\'s link to B\'s daemon (standby.host)', b1 > 0, `batch ${b1}; ${w.links.copy.accepted()} connection(s) through the copy link`)
 
     const ctx: Ctx = { c, w, roles, carried: { tasks: [...s.tasks], notes: [...s.notes], pluginFiles: [...s.pluginFiles] }, times, log }
+    // The command run on B while B is no host of A yet (no host service of this Walnut there): refused, naming A.
+    if (want('forwarded')) await forwardNoLink(ctx)
     if (want('main')) await mainScenario(c, w, roles, s, times, log)
     for (const [name, run] of SCENARIOS) {
       if (!want(name)) continue
@@ -407,6 +411,77 @@ async function runSwitch(x: Ctx, label: string, o: { env?: Record<string, string
   r.target = t
   if (r.state?.step === 'done' && t?.step === 'done') { roles.leader = to; roles.other = from }
   return r
+}
+
+// ---- the command on the machine that will lead (candidate-command.ts, leader-relay.ts) ----
+
+/** That machine's leader relay socket: its host service of this Walnut listens there (replica/leader-relay-entry.ts). */
+const relaySocketOf = (w: RemoteWorld, m: Machine): string => leaderRelaySocketPath(w.daemons[keyOf(w, m)].dir, w.walnutId)
+
+/** The command on the machine that does not lead: `--to` itself, its standby folder, its own environment. */
+function candidateCmd(w: RemoteWorld, m: Machine): ReturnType<RemoteWorld['cli']> {
+  return w.cli(m.home, ['leader', 'switch', '--to', m.id, '--standby-dir', m.standbyDir], m.env)
+}
+
+/** Run on the other machine while it is no host of the leader: refused by name, nothing changes on either machine. */
+async function forwardNoLink(x: Ctx): Promise<void> {
+  const { c, w, roles } = x
+  const L = roles.leader
+  const O = roles.other
+  const before = readSwitchState(L.home)?.id ?? null
+  const r = await candidateCmd(w, O)
+  x.log(`forwarded, no link:\n${r.out}`)
+  c.add(`forwarded: the command run on ${O.id} with no link to the leader refuses, naming the machine to run it on`,
+    r.code === 1 && r.out.includes(`no link to the leader ${L.id}`) && r.out.includes(`run \`walnut leader switch --to ${O.id}\` on ${L.id}`), `exit ${r.code}: ${last(r.out, 2)}`)
+  c.add('forwarded: and changes nothing (no switch on the leader, no marker, the leader still leads)',
+    (readSwitchState(L.home)?.id ?? null) === before && !readMarker(L.home) && !!(await status(w, L))?.mayAct && !fs.existsSync(relaySocketOf(w, O)))
+}
+
+/** The command run on the machine that will lead: refused forwards over its host link, then the switch it begins there. */
+async function forwarded(x: Ctx): Promise<void> {
+  const { c, w } = x
+  // That machine is a host of the leader once it was the old machine of a switch (its host service follows the new leader).
+  if (!fs.existsSync(relaySocketOf(w, x.roles.other))) {
+    await writeAndBatch(x, 'fwd-prep')
+    const r = await runSwitch(x, 'forwarded: a switch first')
+    if (!c.add(`forwarded: a switch first, so ${x.roles.other.id} is the new leader's host`, r.code === 0 && r.target?.step === 'done', `exit ${r.code}: ${last(r.out, 3)}`)) return
+  }
+  const L = x.roles.leader
+  const O = x.roles.other
+  const sock = relaySocketOf(w, O)
+  const open = relaySocketOpener(sock)
+  // The socket is there once the host service follows; it carries a request once the leader's server has linked to
+  // that machine's daemon (its relay door answers: an unknown switch's job is a 404 from the leader, not a cut).
+  const up = await waitFor(`${O.id}'s leader relay`, async () => fs.existsSync(sock) && (await relayRequest(open, 'GET', `${RELAY_JOB_PATH}?switchId=none&from=0`, undefined, 5_000).catch(() => null))?.status === 404, 120_000, 1_000).then(() => true).catch(() => false)
+  if (!c.add(`forwarded: ${O.id}'s host service of this Walnut serves the leader relay (its socket, 0600; the leader's door answers over it)`, up && (fs.statSync(sock).mode & 0o777) === 0o600, sock)) return
+  // Refused forwards over that very link: nothing changes.
+  const before = readSwitchState(L.home)?.id ?? null
+  const notListed = await relayRequest(open, 'POST', RELAY_BEGIN_PATH, { to: w.h.id, switchId: newSwitchId() }, 60_000).catch((err: Error) => ({ status: 0, json: { why: err.message } }))
+  const toLeader = await relayRequest(open, 'POST', RELAY_BEGIN_PATH, { to: L.id, switchId: newSwitchId() }, 60_000).catch((err: Error) => ({ status: 0, json: { why: err.message } }))
+  const why = (r: { json: unknown }) => String((r.json as { why?: string } | null)?.why ?? '')
+  c.add(`forwarded: ${L.id} refuses a begin over ${O.id}'s link for a machine not in leader_switch.machines`, notListed.status === 403 && /not in leader_switch.machines/.test(why(notListed)), `${notListed.status} ${why(notListed)}`)
+  c.add(`forwarded: ${L.id} refuses a begin over ${O.id}'s link for any machine but ${O.id} itself (here: the leader)`, toLeader.status === 403 && /leads already|taken only from the machine it goes to/.test(why(toLeader)), `${toLeader.status} ${why(toLeader)}`)
+  c.add('forwarded: a refused forward changes nothing (no switch on the leader, no marker, it still leads)',
+    (readSwitchState(L.home)?.id ?? null) === before && !readMarker(L.home) && !!(await status(w, L))?.mayAct)
+  await writeAndBatch(x, 'forwarded')
+  const r = await candidateCmd(w, O)
+  x.log(`forwarded:\n${r.out}`)
+  // The command ends with its own target job; the source job on the old leader's machine ends its hand-off on its own
+  // (nothing on this machine follows it once that machine's server stopped): wait for it as the command there would.
+  const began = readSwitchState(L.home)
+  const st = began && began.id !== before
+    ? await waitFor(`the source job on ${L.id}`, async () => { const s = readSwitchState(L.home); return s && (s.step === 'done' || s.step === 'rolled-back') ? s : null }, 120_000, 500).catch(() => readSwitchState(L.home))
+    : began
+  const t = st && st.id !== before ? await targetDone(st) : null
+  const done = r.code === 0 && st?.step === 'done' && t?.step === 'done'
+  c.add(`forwarded: the command run on ${O.id} switches to it (its check there, the begin over its host link, the source job started on ${L.id} by its server)`, done, `exit ${r.code}; source ${st?.step}; target ${t?.step}; ${last(r.out, 4)}`)
+  c.add(`forwarded: ${L.id} recorded who began it: ${O.id}, forwarded`, st?.startedBy?.machine === O.id && st.startedBy.via === 'forwarded', JSON.stringify(st?.startedBy ?? null))
+  c.add(`forwarded: the command on ${O.id} printed the source job's lines from ${L.id} while it ran`, r.out.includes(`[on ${L.id}] `), last(r.out.split('\n').filter((l) => l.includes(`[on ${L.id}]`)).join('\n'), 2))
+  if (!done) return
+  x.roles.leader = O
+  x.roles.other = L
+  await checkCarried(c, w, O, L, x.carried, `forwarded ${L.id} -> ${O.id}`)
+  await oneLeader(x, 'forwarded', O)
 }
 
 async function flagOff(c: Checks, w: RemoteWorld): Promise<void> {
@@ -765,6 +840,7 @@ async function measure(x: Ctx): Promise<void> {
 }
 
 const SCENARIOS: Array<[string, (x: Ctx) => Promise<void>]> = [
+  ['forwarded', forwarded],
   ['net-miss', netMiss],
   ['split-after-handover', splitAfterHandover],
   ['split-after-stop', splitAfterStop],
