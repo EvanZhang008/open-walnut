@@ -250,6 +250,12 @@ struct SetupView: View {
             return
         }
         busy = true
+        // The form goes the moment the phone pairs, and a secure field that still holds its
+        // words then reads to iOS as a password just used: its "Save Password?" sheet covered
+        // the first screen (SavedLoginsUITests). The token is in hand, so the field is emptied
+        // before the pairing and gets it back when the pairing fails. Walnut keeps the login
+        // itself (Saved logins).
+        token = ""
         Task {
             do {
                 try await connection.connect(
@@ -260,6 +266,7 @@ struct SetupView: View {
                 )
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             } catch {
+                token = deviceToken
                 alertMessage = "Connection failed: \(error.localizedDescription)"
             }
             busy = false
