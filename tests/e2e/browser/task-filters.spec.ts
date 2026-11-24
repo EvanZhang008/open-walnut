@@ -351,7 +351,8 @@ test('popover search finds options across dimensions and Enter adds them', async
   await expect(hit).toBeVisible()
   await search.press('Enter')
   await expect(filterChip(page, 'project')).toContainText('Meadow')
-  await expect(hit).toHaveClass(/\bis-selected\b/)
+  // A picked hit is a Picked row (b0e203ab08): aria-current marks the value that is on, no is-selected class.
+  await expect(hit).toHaveAttribute('aria-current', 'true')
   // First Escape clears the search (back to the rows), second closes.
   await page.keyboard.press('Escape')
   await expect(search).toHaveValue('')

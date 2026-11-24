@@ -49,7 +49,7 @@ import {
   navigateToTasksPage, openSessionFromPlus, pinToTier, plusControl, presetTierViewModes,
   restVisibility, tasksPageGroupHeader, tierProjectLabel, tierViewBar,
 } from './draft-surface-helpers'
-import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, pinTaskPanelWidth, presetPanelView } from './todo-panel-helpers'
 import { revealInTasksTable } from './tasks-table-helpers'
 
 /** Artifacts of this run. Per-run overridable, same convention as the siblings. */
@@ -383,12 +383,8 @@ test('the toolbar says "New task" until the search would be too narrow to read',
   // and the fixture server can otherwise hydrate their saved width into our context.
   // Home's row is empty here, and since d670f86000 an empty row grows the panel to a readable list
   // (MainPage's todoAlone) unless its width was dragged: pin that layout's width at 25% too.
-  await page.addInitScript(() => {
-    localStorage.setItem('open-walnut-todo-width', '25')
-    localStorage.setItem('open-walnut-todo-width-alone', '25')
-    localStorage.setItem('open-walnut-todo-width-alone:dragged', '1')
-    localStorage.setItem('open-walnut-sidebar-collapsed', 'true')
-  })
+  await pinTaskPanelWidth(page, 25)
+  await page.addInitScript(() => { localStorage.setItem('open-walnut-sidebar-collapsed', 'true') })
   // A 25% panel of a 2400px window is 600px: room for every label beside a readable search.
   await page.setViewportSize({ width: 2400, height: 900 })
   await loadHome(page)

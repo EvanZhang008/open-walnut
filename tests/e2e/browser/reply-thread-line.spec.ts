@@ -24,6 +24,8 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { showTasks } from './org-view-helpers'
+import { openSessionKebab } from './session-kebab-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -33,6 +35,9 @@ const ids = { lead: '', leadSid: '', opened: '', work: '', workSid: '' }
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 const FOLDERS = `What should the two folders in Notes be called? ${STAMP}`
 const SHORTCUT = `Yes, Cmd+K is fine for the quick menu ${STAMP}`
+/** His follow-up on the folders thread, from its card: a message sent ON a thread carries the line. */
+const FOLDERS_REPLY = `Shared ones first, then the projects ${STAMP}`
+const ASK_WORK_REPLY = `Yes, behind a switch that is off by default ${STAMP}`
 const OPENED = `Quick menu shortcut ${STAMP}`
 const WORK = `Parser cleanup ${STAMP}`
 const ASK_WORK = `Please keep the old parser behind a switch ${STAMP}`
@@ -140,20 +145,34 @@ test('on: each message shows the thread it went to, and a click opens that threa
   const composer = chat(page).locator('.chat-input-textarea[data-draft-key^="draft:session:"]')
   await expect(composer).toBeVisible({ timeout: 30_000 })
 
-  // 1. A request typed into the chat: its own new thread, named under the bubble.
+  // 1. A request only typed into the chat is filed under its own new thread for the lead, but it
+  //    answered no thread, so neither it nor the lead's answer carries a line (ffb4f67074, 2026-11-20,
+  //    the user: "i am just tlaiing in main chat").
   await composer.click()
   await page.keyboard.type(FOLDERS, { delay: 15 })
   await composer.press('Enter')
   await expect.poll(async () => (await threads(request)).find((t) => t.messages.some((m) => m.text === FOLDERS))?.id ?? '', { timeout: 30_000 }).not.toBe('')
   const folders = (await threads(request)).find((t) => t.messages.some((m) => m.text === FOLDERS))!.id
-  const first = lineUnder(page, FOLDERS)
-  await expect(first).toHaveAttribute('data-thread-id', folders, { timeout: 30_000 })
-  await expect(first).toHaveText(FOLDERS)
+  await expect(chat(page).getByText(`I processed your message: ${FOLDERS}`)).toBeVisible({ timeout: 60_000 })
+  await expect(bubble(page, FOLDERS)).toBeVisible()
+  await expect(lineUnder(page, FOLDERS)).toHaveCount(0)
+  await expect(chat(page).locator(`[data-testid="msg-reply-thread"][data-thread-id="${folders}"]`)).toHaveCount(0)
 
-  // The lead gives it a short title: the line reads it.
-  const titled = await request.patch(`/api/v1/tasks/${ids.lead}/threads/${folders}`, { data: { title: `Notes folder names ${STAMP}` }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
+  // The lead answers it on its thread, with a short title; his follow-up from that card names it.
+  const answered = await request.patch(`/api/v1/tasks/${ids.lead}/threads/${folders}`, { data: { title: `Notes folder names ${STAMP}`, reply: 'Shared and Projects, if that works for you.', state: 'answered' }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
+  expect(answered.ok(), await answered.text()).toBe(true)
+  const foldersCard = card(page, folders)
+  await foldersCard.getByTestId('org-thread-follow-input').click()
+  await page.keyboard.type(FOLDERS_REPLY, { delay: 15 })
+  await foldersCard.getByTestId('org-thread-follow-send').click()
+  const first = lineUnder(page, FOLDERS_REPLY)
+  await expect(first).toHaveAttribute('data-thread-id', folders, { timeout: 30_000 })
+  await expect(first).toHaveText(`Notes folder names ${STAMP}`)
+
+  // The lead renames it: the line reads the new title.
+  const titled = await request.patch(`/api/v1/tasks/${ids.lead}/threads/${folders}`, { data: { title: `Notes folders ${STAMP}` }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
   expect(titled.ok(), await titled.text()).toBe(true)
-  await expect(first).toHaveText(`Notes folder names ${STAMP}`, { timeout: 15_000 })
+  await expect(first).toHaveText(`Notes folders ${STAMP}`, { timeout: 15_000 })
 
   // 2. His answer to the lead's own thread, from that card's Follow up box: the line names that thread.
   const opened = card(page, ids.opened)
@@ -178,7 +197,7 @@ test('on: each message shows the thread it went to, and a click opens that threa
   }
   await page.evaluate(() => { delete document.documentElement.dataset.theme })
 
-  // The lead's answer to his request carries the same line, on the left.
+  // The lead's answer to his follow-up carries the same line, on the left.
   const answer = chat(page).locator(`[data-testid="msg-reply-thread"][data-side="answer"][data-thread-id="${folders}"]`)
   await expect(answer.first()).toBeVisible({ timeout: 60_000 })
 
@@ -215,10 +234,28 @@ test('a task with Threads on: its chat names the thread, and the line opens its 
     const list = ((await (await request.get(`/api/v1/tasks/${ids.work}/threads`)).json()) as { threads: Thread[] }).threads
     return (thread = list.find((t) => t.messages.some((m) => m.text === ASK_WORK))?.id ?? '')
   }, { timeout: 30_000 }).not.toBe('')
-  const line = panel.locator('.session-msg-user').filter({ hasText: ASK_WORK }).last().locator('xpath=following-sibling::*[1][@data-testid="msg-reply-thread"]')
-  await expect(line).toHaveAttribute('data-thread-id', thread, { timeout: 30_000 })
-  await line.getByTestId('msg-reply-thread-open').click()
+  const lineOf = (words: string) => panel.locator('.session-msg-user').filter({ hasText: words }).last().locator('xpath=following-sibling::*[1][@data-testid="msg-reply-thread"]')
+  // Only typed in the chat: filed for the task, no line (ffb4f67074).
+  await expect(panel.getByText(`I processed your message: ${ASK_WORK}`)).toBeVisible({ timeout: 60_000 })
+  await expect(lineOf(ASK_WORK)).toHaveCount(0)
+  // The task answers it on its thread; his follow-up from the card in its Threads names it.
+  const answered = await request.patch(`/api/v1/tasks/${ids.work}/threads/${thread}`, { data: { reply: 'Done: the old parser is behind a switch now.', state: 'answered' }, headers: { 'x-walnut-caller-sid': ids.workSid } })
+  expect(answered.ok(), await answered.text()).toBe(true)
+  // The Threads row of its menu opens and closes them (a narrow header keeps its tools in the menu).
+  const threadsRow = async () => (await openKebabGroup(await openSessionKebab(panel), 'session-kebab-open')).getByTestId('session-menu-threads').click()
   const pane = panel.getByTestId('session-threads-pane')
+  await threadsRow()
+  await expect(pane).toBeVisible({ timeout: 15_000 })
+  const workCard = pane.locator(`[data-testid="org-thread"][data-thread-id="${thread}"]`)
+  await workCard.getByTestId('org-thread-follow-input').click()
+  await page.keyboard.type(ASK_WORK_REPLY, { delay: 15 })
+  await workCard.getByTestId('org-thread-follow-send').click()
+  const line = lineOf(ASK_WORK_REPLY)
+  await expect(line).toHaveAttribute('data-thread-id', thread, { timeout: 30_000 })
+  // With the Threads closed, the line opens them on that card.
+  await threadsRow()
+  await expect(pane).toHaveCount(0)
+  await line.getByTestId('msg-reply-thread-open').click()
   await expect(pane).toBeVisible({ timeout: 15_000 })
   await expect(pane.locator(`[data-testid="org-thread"][data-thread-id="${thread}"]`)).toHaveAttribute('data-focused', 'true')
   await page.screenshot({ path: `${SHOTS}/reply-thread-line-4-task-${test.info().project.name}.png` })
@@ -245,7 +282,8 @@ test('top_thread on: a line about a thread the top lists steps the top to it', a
   await expect(top).toHaveAttribute('data-count', '2', { timeout: 30_000 })
   const shown = await top.getAttribute('data-thread-id')
   const other = shown === folders ? ids.opened : folders
-  const words = other === folders ? FOLDERS : SHORTCUT
+  // His replies sent on the threads carry the lines (a message only typed in the chat has none).
+  const words = other === folders ? FOLDERS_REPLY : SHORTCUT
   await lineUnder(page, words).getByTestId('msg-reply-thread-open').click()
   await expect(top).toHaveAttribute('data-thread-id', other)
   await expect(top.locator(`[data-testid="org-thread"][data-thread-id="${other}"]`)).toHaveAttribute('data-focused', 'true')
@@ -273,6 +311,7 @@ test('off: the same chat shows no thread line', async ({ page, request }) => {
   await loadHome(page)
   await openLead(page)
   await expect(bubble(page, FOLDERS)).toBeVisible({ timeout: 30_000 })
+  await expect(bubble(page, FOLDERS_REPLY)).toBeVisible()
   await expect(bubble(page, SHORTCUT)).toBeVisible()
   await page.waitForTimeout(1_000)
   await expect(chat(page).getByTestId('msg-reply-thread')).toHaveCount(0)

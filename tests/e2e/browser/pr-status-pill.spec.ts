@@ -9,7 +9,7 @@ import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, pinTaskPanelWidth, presetPanelView } from './todo-panel-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${PORT}`
@@ -342,6 +342,8 @@ test('another person\'s pull request says whose it is and offers no switches; th
   })
   litter.push(task.id)
   await presetPanelView(page, { section: 'all', project: '' })
+  // The side-list width these window sizes fold at: alone on Home's row the panel now grows (d670f86000).
+  await pinTaskPanelWidth(page, 25)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   const pill = row(page, task.id).locator('[data-testid="pr-pill"]')

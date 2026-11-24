@@ -100,8 +100,9 @@ test('a session search hit renders its owning task', async ({ page }) => {
   await expect(page.locator('.todo-search-spinner')).toBeHidden();
 
   await owningTask.getByRole('button', { name: 'More actions' }).click();
+  // The kebab item reads "Task details" since dc9949e416 (one name per concept).
   await page.locator('.task-kebab-menu')
-    .getByRole('button', { name: 'Details', exact: true })
+    .getByRole('button', { name: 'Task details', exact: true })
     .click();
   await expect(page.locator('.task-detail-modal .todo-detail-title'))
     .toHaveText('Playwright test task');

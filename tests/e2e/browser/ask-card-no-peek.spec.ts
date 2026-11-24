@@ -15,7 +15,7 @@
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { isolateUiPrefs, pinTaskPanelWidth } from './todo-panel-helpers'
 import { asksOf, presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
 import { expectTooltipNotPeek, peekMarks, peekPill } from './truncation-peek-helpers'
 
@@ -45,11 +45,7 @@ async function openNeeds(page: Page): Promise<{ row: Locator; card: Locator }> {
   await presetPanelDesign(page, 'status')
   // A side-list width, as beside a session: alone on Home's row the panel grows to a readable list
   // (MainPage's todoAlone) and nothing in the card is cut. A dragged width holds in both layouts.
-  await page.addInitScript(() => {
-    for (const k of ['open-walnut-todo-width', 'open-walnut-todo-width-alone']) {
-      localStorage.setItem(k, '30'); localStorage.setItem(`${k}:dragged`, '1')
-    }
-  })
+  await pinTaskPanelWidth(page, 30)
   await loadHome(page)
   await setStatusSectionOpen(page, 'needs', true)
   const row = await showSectionCard(page, 'needs', made[0])

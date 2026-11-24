@@ -315,6 +315,23 @@ export async function drawAllListRows(page: Page): Promise<void> {
 }
 
 /**
+ * Pin Home's task panel to `pct` of the window (less the rail) as a width the user dragged, in both
+ * of its layouts: beside a session (`open-walnut-todo-width`) and alone on Home's row
+ * (`open-walnut-todo-width-alone`). Alone, an undragged panel grows to a readable list (d670f86000,
+ * MainPage's todoAlone), so a spec that needs a side-list width pins it. Call before `page.goto()`.
+ */
+export async function pinTaskPanelWidth(page: Page, pct: number): Promise<void> {
+  await page.addInitScript((p) => {
+    try {
+      for (const k of ['open-walnut-todo-width', 'open-walnut-todo-width-alone']) {
+        localStorage.setItem(k, String(p))
+        localStorage.setItem(`${k}:dragged`, '1')
+      }
+    } catch { /* storage off */ }
+  }, pct)
+}
+
+/**
  * Preset BOTH panel axes in localStorage before the first render: call this
  * BEFORE `page.goto()`. Preferable to clicking when a spec just needs the rows to
  * exist on load (no post-load tab dance, no waiting for the strip to mount).

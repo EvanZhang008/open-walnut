@@ -63,6 +63,8 @@ async function setFlags(request: APIRequestContext, flags: Record<string, boolea
 }
 
 const LONG = Array.from({ length: 14 }, (_, i) => `Step ${i + 1}: the release notes list the memory fix, the signed build and the rollback plan for the ${STAMP} build, with the checks that ran.`).join('\n\n')
+/** His long question, in his own words: a summary may not say his message back (thread-summary-content.ts, 9d07909757). */
+const ASK = Array.from({ length: 6 }, (_, i) => `Question ${i + 1} from me: is the ${STAMP} app ready for people, and what is still open before we ship it?`).join(' ')
 
 const box = async (l: Locator) => (await l.boundingBox())!
 
@@ -133,7 +135,7 @@ test.beforeAll(async ({ request }) => {
     const { thread } = await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${ids.task}/threads`, { text: `${title} ${STAMP}, how does it stand?` })
     await call(request, 'patch', `/api/v1/tasks/${ids.task}/threads/${thread.id}`, { title: `${title} ${STAMP}`, reply: `${title}: done, the notes are in.`, state: 'answered' })
   }
-  const { thread } = await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${ids.task}/threads`, { text: `Release the Mac app ${STAMP}? ${LONG.slice(0, 700)}` })
+  const { thread } = await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${ids.task}/threads`, { text: `Release the Mac app ${STAMP}? ${ASK}` })
   ids.thread = thread.id
   await call(request, 'patch', `/api/v1/tasks/${ids.task}/threads/${thread.id}`, {
     title: `Release the Mac app ${STAMP}`, reply: `Release the new Mac app now? I recommend it.\n\n${LONG}`, state: 'needs', ...WHY,

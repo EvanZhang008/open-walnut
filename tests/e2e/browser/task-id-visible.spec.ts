@@ -55,8 +55,9 @@ async function openDetail(page: Page, title: string): Promise<void> {
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.getByRole('button', { name: 'More actions' }).click();
   // The kebab dropdown portals to <body>, so it is not inside the row subtree.
+  // The kebab item reads "Task details" since dc9949e416 (one name per concept).
   await page.locator('.task-kebab-menu')
-    .getByRole('button', { name: 'Details', exact: true })
+    .getByRole('button', { name: 'Task details', exact: true })
     .click();
   await expect(page.locator('.task-detail-modal .todo-detail-title')).toHaveText(title);
 }

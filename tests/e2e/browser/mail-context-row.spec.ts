@@ -598,8 +598,17 @@ test('C26, C74, C75: a real selection keeps the browser menu and does not open t
   // selectable element a right-press on text OUTSIDE the selection collapses it before any handler
   // runs. With no selection left there is nothing for the browser's menu to act on, so Walnut's is
   // the right answer there.
-  await row(page, WRITER, LUNCH).locator('.mail-row-snippet').click({ button: 'right' })
+  // The middle of the selected words themselves: since the list grew (9b60109d6c) the snippet's own
+  // middle is past the drag's 160 px, where the press would collapse the selection first.
+  const words = await page.evaluate(() => {
+    const r = window.getSelection()!.getRangeAt(0).getClientRects()[0]!
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  const snippetBox = (await row(page, WRITER, LUNCH).locator('.mail-row-snippet').boundingBox())!
+  expect(words.x, 'the press is inside the snippet').toBeGreaterThan(snippetBox.x)
+  await page.mouse.click(words.x, words.y, { button: 'right' })
   await page.waitForTimeout(500)
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? ''), 'the selection survived the press').toBe(snippet)
   expect(await page.locator('.wn-context-menu').count(), 'the native menu was left alone').toBe(0)
   expect(calls).toEqual([])
 })

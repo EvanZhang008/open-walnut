@@ -74,6 +74,16 @@ async function openLead(page: Page): Promise<void> {
 }
 
 const card = (page: Page) => page.locator(`[data-testid="org-thread"][data-thread-id="${ids.thread}"]`)
+/**
+ * While his reply to a card from below is on its way the card is that task's move: the plain list
+ * draws it under the "in progress" fold, not among the cards for him (e417ddcc51, forHimInList).
+ * The fold shows at once; open it to read the card.
+ */
+async function openInProgress(page: Page, timeout = 1_000): Promise<void> {
+  const fold = page.getByTestId('org-threads-hidden')
+  await expect(fold).toBeVisible({ timeout })
+  if ((await fold.getAttribute('aria-expanded')) !== 'true') await fold.click()
+}
 
 async function shot(page: Page, name: string, scope = page.getByTestId('org-rail')): Promise<void> {
   fs.mkdirSync(SHOTS, { recursive: true })
@@ -164,6 +174,7 @@ test('on: the subtask\'s thread shows on its lead, and his reply there wakes the
   // Sent again: the card says at once (within a second of the click) that his words went, echoing
   // them, and that the task has not read them yet; the box is clear.
   await popped.getByTestId('org-thread-popped-send').click()
+  await openInProgress(page)
   const sent = popped.getByTestId('org-thread-popped-sent')
   await expect(sent).toBeVisible({ timeout: 1_000 })
   await expect(sent.getByTestId('org-thread-popped-sent-words')).toHaveText(REPLY)
@@ -201,7 +212,8 @@ test('on: a choice on a thread below is clicked on the lead, and goes to the sub
   const opened = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
     title: `Store migration ${STAMP}`, text: `Move the thread store this week or keep the old one? ${STAMP}`, state: 'needs', from: 'node',
     user_kind: 'user_own', user_kind_why: 'It changes his own data store.',
-    options: [{ id: 'move', label: `Move it this week ${STAMP}` }, { id: 'keep', label: PICK, detail: 'Nothing to migrate now', recommended: true }],
+    // The pick goes first (21b0c36f28: a decision whose recommended option is not first is refused).
+    options: [{ id: 'keep', label: PICK, detail: 'Nothing to migrate now', recommended: true }, { id: 'move', label: `Move it this week ${STAMP}` }],
   }, ids.ownerSid)
   const choice = opened.thread.id
   await flag(request, true)
@@ -250,12 +262,15 @@ test('on: his reply stays on the card through a redraw while the task has not re
   await popped.getByTestId('org-thread-popped-input').click()
   await page.keyboard.type(WORDS, { delay: 10 })
   await popped.getByTestId('org-thread-popped-send').click()
+  await openInProgress(page)
   const sent = popped.getByTestId('org-thread-popped-sent')
   await expect(sent.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS, { timeout: 2_000 })
   // He leaves the Org page and comes back: the card is drawn anew, his words are still on it.
   await page.locator('.sidebar-home-group a').first().click()
   await expect(page.getByTestId('org-page')).toHaveCount(0)
   await openLead(page)
+  // A fresh page: the list loads first, then the fold.
+  await openInProgress(page, 20_000)
   await expect(popped).toBeVisible({ timeout: 20_000 })
   await expect(sent.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS)
   await expect(sent.getByTestId('org-thread-unread-by-task')).toHaveText(`Sent: Task status foundation ${STAMP} has not read it yet.`)

@@ -61,7 +61,8 @@ for (const cycles of [0, 1, 2]) {
     }
     await openFromRow(page)
     await topbar(page).getByRole('button', { name: 'More actions' }).tap()
-    await page.locator('.task-kebab-menu').getByRole('button', { name: /^(Task detail|Details)$/ }).first().tap()
+    // The kebab item reads "Task details" since dc9949e416 (one name per concept).
+    await page.locator('.task-kebab-menu').getByRole('button', { name: 'Task details', exact: true }).tap()
     await expect(detail(page)).toBeVisible({ timeout: 10_000 })
     await page.waitForTimeout(500)
     await page.goBack()

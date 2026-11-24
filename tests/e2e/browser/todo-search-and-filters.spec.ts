@@ -15,7 +15,7 @@
  * pass serves these queries (the server-down path in production).
  */
 import { expect, test, type Page } from '@playwright/test';
-import { isolateUiPrefs } from './todo-panel-helpers';
+import { isolateUiPrefs, pinTaskPanelWidth } from './todo-panel-helpers';
 import { openHome } from './home-navigation-helpers';
 import { addFilter, filterChip, filterRow, removeFilterChip, setStatus, displayButton } from './filter-bar-helpers';
 import { stubBoard, type Seed } from './filter-bar-fixtures';
@@ -39,6 +39,9 @@ async function boot(page: Page, baseURL: string, quickViews = true, wide = false
       if (w) localStorage.setItem('open-walnut-todo-width', '45');
     } catch { /* ignore */ }
   }, [quickViews, wide] as const);
+  // The narrow side-list width (25%, the default beside a session): alone on Home's row an
+  // undragged panel now grows to a readable list (d670f86000), and these toolbar checks need it narrow.
+  if (!wide) await pinTaskPanelWidth(page, 25);
   await openHome(page, baseURL, 90_000);
   await expect(displayButton(page)).toBeVisible();
 }
