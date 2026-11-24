@@ -14,7 +14,7 @@ import { olderVersion } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
 import { isRemoteWitness, machineByHome, machineById, readHomeSwitchConfig, type LeaderSwitchSettings } from './settings.js'
 import { makeWitnessReader, type WitnessReading } from './witness-reader.js'
-import { alive } from '../../trial-start/process.js'
+import { alive, processStartMark, sameProcess } from '../../trial-start/process.js'
 import {
   SOURCE_FINAL, StepFailed, SwitchRefused, committedRecord, handoverStanding, killPoint, readSwitchState, sourceCancelFile, stepLogger, switchStateFile, takeBackMs, waitDoorsOpen,
   type SourceStep, type StartedBy, type SwitchState, type TargetState,
@@ -45,6 +45,20 @@ export interface SourceJobOptions {
 }
 
 const PRE_COMMIT = new Set<SourceStep>(['preflight', 'handover', 'stop-source', 'wait-target'])
+
+/** How long past the commit deadline a stopping server may still run its stop (its bail is the commit window and a minute). */
+const STOP_OUTLIVES_MS = 2 * 60_000
+
+/**
+ * Whether the server asked for the switch stop is still that process: the same pid with the same start
+ * (processStartMark). Its start could not be read when it was asked (no /proc, no ps): its pid alone, and only
+ * while a stop could still run (the commit deadline and STOP_OUTLIVES_MS).
+ */
+export function stopStillRunning(p: { pid: number; start: string | null }, o: { now: number; commitDeadline?: string }): boolean {
+  if (p.start !== null) return sameProcess(p)
+  const until = o.commitDeadline ? Date.parse(o.commitDeadline) + STOP_OUTLIVES_MS : NaN
+  return Number.isFinite(until) && o.now < until && alive(p.pid)
+}
 
 export async function runSourceJob(o: SourceJobOptions): Promise<SwitchState> {
   const env = o.env ?? process.env
@@ -125,8 +139,18 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
   })
   const readStanding = async (): Promise<PermitRecord | null | undefined> => (await read().catch(() => ({ standing: undefined, answered: 0 }))).standing
   const fail = (why: string): never => { throw new StepFailed(why) }
-  /** The server asked for the stop, still in it with its lock gone (its final batch): until it ends, its result is not known. */
-  const stopping = () => !side.runningServer() && !!s.stopPid && alive(s.stopPid)
+  /**
+   * The server asked for the stop, still in it with its lock gone (its final batch): until it ends, its result is not
+   * known. Once it is seen ended (or its pid is another process now), it is forgotten, so a reused pid never holds a
+   * resume back.
+   */
+  const stopping = () => {
+    if (!s.stopServer || side.runningServer()) return false
+    if (stopStillRunning(s.stopServer, { now: Date.now(), ...(s.commitDeadline ? { commitDeadline: s.commitDeadline } : {}) })) return true
+    s.stopServer = undefined
+    writeDurableJson(switchStateFile(home), s)
+    return false
+  }
   /** Waits for that stop to end, as long as the stop-source step would (the commit window and a minute). */
   const stopEnded = async () => {
     const until = Date.parse(s.commitDeadline ?? new Date(Date.now() + settings.commitWindowMs).toISOString()) + 60_000
@@ -195,9 +219,9 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
         }
         case 'stop-source': {
           // The server by its lock, or the one asked for the stop before (in its final batch its lock is gone already).
-          const running = side.runningServer() ?? (s.stopPid && alive(s.stopPid) ? { pid: s.stopPid, port: null } : null)
+          const running = side.runningServer() ?? (stopping() ? { pid: s.stopServer!.pid, port: null } : null)
           if (running && !readFinalStopResult(s.sourceHome, s.id)) {
-            if (s.stopPid !== running.pid) { s.stopPid = running.pid; writeDurableJson(switchStateFile(home), s) }
+            if (s.stopServer?.pid !== running.pid) { s.stopServer = { pid: running.pid, start: processStartMark(running.pid) }; writeDurableJson(switchStateFile(home), s) }
             const r = await side.api('POST', '/api/leader/switch/final-stop', { switchId: s.id, ...(Object.keys(stopTest).length ? { test: stopTest } : {}) }).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
             const j = r.json as { ok?: boolean; why?: string } | null
             // A resume while the server is in its stop already (it answers so, or its HTTP is closed): wait for it.

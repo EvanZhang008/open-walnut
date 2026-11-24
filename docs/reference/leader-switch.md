@@ -166,10 +166,13 @@ Source job:
    cancels the handover and leads on. The source job waits (30 s at most) until the
    target job says it sees the handover at a majority it reaches by its own ways.
 3. **stop-source**: the switch stop ([below](#the-switch-stop)), asked through
-   `POST /api/leader/switch/final-stop`. The downtime starts here. The job keeps the pid of the server it asked
-   (`stopPid`): the server lets its instance lock go before its final batch, so a job resumed during that batch
-   finds it by the pid and waits for its result; a roll back neither cancels nor starts the old home while that
-   pid still runs its stop.
+   `POST /api/leader/switch/final-stop`. The downtime starts here. The job keeps the server it asked
+   (`stopServer`: its pid and its start, `processStartMark`: the boot id and start time from /proc on Linux, the
+   boot time and `ps -o lstart` elsewhere): the server lets its instance lock go before its final batch, so a job
+   resumed during that batch finds it by those and waits for its result; a roll back neither cancels nor starts
+   the old home while it still runs its stop. A pid that is another process now (after a reboot) is not it, and
+   the record goes once the server is seen ended; with no start known, the pid counts only until the commit
+   deadline and two minutes.
 4. **wait-target**: until the witnesses show the new leader's record above the handover (the
    commit). A `gave-up` note, a handover that no longer stands, or the commit deadline plus the
    take-back time roll back.
@@ -1008,7 +1011,8 @@ the new leader's own. A row its host's own service judges (`judge: 'host'` on a 
 `session-row-owner.ts` reads it) keeps its key, as the session channel's tables do; a row with no host is the leader's
 whatever its payload says, and moves. The swap runs once per switch (the switch id is marked in `sessions.sqlite` in the same transaction, so a promotion
 resumed after a kill does not swap back). The trial's offline check does not compare that store's size with the
-copy's (`offlineCheck` `changed`); its rows must be the copy's plus the mark row, and its integrity check still runs. The rehearsal's `main` starts a session on A's own daemon,
+copy's (`offlineCheck` `changed`); its rows must be the copy's table by table, plus the mark row in its own table
+(a row lost in one table and one added in another never cancel out), and its integrity check still runs. The rehearsal's `main` starts a session on A's own daemon,
 switches, and checks that B lists it on host `machine-a` with its turn once, and that a message through B runs on A (the turn is in
 the CLI transcript under A's home, none under B's). Without a `host_key` for the old machine nothing moves, and such a session would run on the
 new leader's own daemon, where its transcript is not.

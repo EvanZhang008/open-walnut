@@ -4,6 +4,7 @@
  * (src/core/backup/restore-drill-boot.ts).
  */
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { singleFile } from '../../lib/single-file.js';
@@ -11,6 +12,36 @@ import { singleFile } from '../../lib/single-file.js';
 export function alive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 1) return false;
   try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * What tells this process from a later one that got its pid (after a reboot, or pids wrapping): on Linux the boot id
+ * and the process's start time in clock ticks since boot (/proc/<pid>/stat field 22); elsewhere (macOS) the boot
+ * time and the start time `ps` gives. Null when it cannot be read (the process is gone, or no way to ask).
+ */
+export function processStartMark(pid: number): string | null {
+  if (!Number.isInteger(pid) || pid <= 1) return null;
+  try {
+    if (process.platform === 'linux') {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // The command name (field 2) may hold spaces and parentheses: the fields after its last ')' are plain.
+      const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+      const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+      return start ? `${boot}:${start}` : null;
+    }
+    const start = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 }).trim();
+    const boot = execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8', timeout: 5_000 }).trim();
+    return start ? `${boot}|${start}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The process `p` names is still the one that was there when `p.start` was read (processStartMark): same pid, same start. */
+export function sameProcess(p: { pid: number; start: string | null }): boolean {
+  if (!alive(p.pid)) return false;
+  const now = processStartMark(p.pid);
+  return p.start !== null && now !== null && now === p.start;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

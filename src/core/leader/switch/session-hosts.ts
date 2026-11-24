@@ -24,7 +24,9 @@ import Database from '../../../lib/sqlite.js'
 /** The store this step changes (the trial does not compare its size and rows with the copy's: self-check.ts). */
 export const SESSION_HOSTS_FILE = 'sessions.sqlite'
 
-const DONE_TABLE = 'leader_switch_session_hosts'
+/** The step's mark: one row per switch (the trial's row count allows for it, in this table). */
+export const SESSION_HOSTS_MARK_TABLE = 'leader_switch_session_hosts'
+const DONE_TABLE = SESSION_HOSTS_MARK_TABLE
 const LOCAL = "(host IS NULL OR host = '' OR host = '__local__')"
 // The rows the leader judges: all but those judgedByHost (session-row-owner.ts) names, judge 'host' on a named host.
 // A row with no host is the leader's whatever its payload says (judgedByHost needs a host).

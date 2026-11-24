@@ -72,10 +72,12 @@ export interface SwitchState {
   /** The old leader's server began its switch stop: the downtime starts. */
   stoppedAt?: string
   /**
-   * The pid of the server asked for the switch stop. Its instance lock goes before its final batch runs (server.ts
-   * stopServer), so a job resumed during that batch finds the stopping server by this, not by the lock.
+   * The server asked for the switch stop: its pid and its start (trial-start/process.ts processStartMark). Its
+   * instance lock goes before its final batch runs (server.ts stopServer), so a job resumed during that batch finds
+   * the stopping server by this, not by the lock; a pid that is another process now does not count, and the record
+   * goes once the server is seen ended.
    */
-  stopPid?: number
+  stopServer?: { pid: number; start: string | null }
   rollbackWhy?: string
   sourceHomeOnHosts?: { home: string; formerHomes: string[] }
   serviceRole?: RoleStep

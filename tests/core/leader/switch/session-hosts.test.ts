@@ -121,15 +121,25 @@ describe('the trial\'s offline check of a home whose sessions moved', () => {
     const plain = await offlineCheck(o)
     expect(plain.ok).toBe(false)
     expect(plain.problems.join('; ')).toMatch(/sessions\.sqlite/)
-    const told = await offlineCheck({ ...o, changed: { 'sessions.sqlite': { addedRows: 1 } } })
+    const changed = { 'sessions.sqlite': { table: 'leader_switch_session_hosts', addedRows: 1 } }
+    const told = await offlineCheck({ ...o, changed })
     expect(told.problems).toEqual([])
     expect(told.ok).toBe(true)
-    // The rows are still compared: a session row lost on the way fails it.
+    // The rows are still compared, table by table: a session row lost on the way fails it.
     const db = new Database(path.join(home, 'sessions.sqlite'))
     db.prepare("DELETE FROM sessions WHERE claude_session_id = 'on-h'").run()
     db.close()
-    const lost = await offlineCheck({ ...o, changed: { 'sessions.sqlite': { addedRows: 1 } } })
-    expect(lost.problems.join('; ')).toMatch(/sessions\.sqlite: \d+ rows in the new home, \d+ in the copy it was made from \(and 1 the promotion added\)/)
+    const lost = await offlineCheck({ ...o, changed })
+    expect(lost.problems.join('; ')).toMatch(/sessions\.sqlite: rows in the new home differ from the copy it was made from: sessions 6 \(the copy 7\)/)
+    // And a lost row beside one added elsewhere in the same store never cancels out (the total is the copy's plus one).
+    const db2 = new Database(path.join(home, 'sessions.sqlite'))
+    db2.prepare("INSERT INTO leader_switch_session_hosts (switch_id, at) VALUES ('s0', 'x')").run()
+    db2.close()
+    const even = await offlineCheck({ ...o, changed })
+    expect(even.problems.join("; ")).toMatch(/leader_switch_session_hosts 2 \(the copy 0, and 1 the promotion added\), sessions 6 \(the copy 7\)/)
+    // Red control: the totals alone (a job that read its copy before table counts were kept) miss exactly that.
+    const { tableRows: _t, ...oldFacts } = facts
+    expect((await offlineCheck({ ...o, facts: oldFacts, changed })).problems).toEqual([])
     const { sessionHostsMarked } = await import('../../../../src/core/leader/switch/session-hosts.js')
     expect(sessionHostsMarked(home, 's1')).toBe(true)
     expect(sessionHostsMarked(home, 's2')).toBe(false)

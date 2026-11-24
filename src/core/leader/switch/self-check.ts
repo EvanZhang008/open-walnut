@@ -51,6 +51,8 @@ export function leftoverPaths(home: string, roots: readonly PathRoot[], rules: r
 export interface CopyFacts {
   /** Rows of each database of the batch. */
   rows: Record<string, number>
+  /** And of each of its tables (a job that read the copy before this was kept compares the totals only). */
+  tableRows?: Record<string, Record<string, number>>
   /** The newest task (tasks.sqlite), and a note with its text: both read back through the trial server. */
   task: { id: string; title: string } | null
   note: (ReadBackNote & { content: string }) | null
@@ -62,10 +64,12 @@ const NOTE_MAX_BYTES = 256 * 1024
 
 export async function readCopyFacts(home: string, files: readonly BatchFile[]): Promise<CopyFacts> {
   const rows: Record<string, number> = {}
+  const tableRows: Record<string, Record<string, number>> = {}
   let task: CopyFacts['task'] = null
   await Promise.all(files.filter((f) => f.db).map(async (f) => {
     const r = await inspectSqliteOffThread(path.join(home, f.p), f.p === 'tasks/tasks.sqlite' ? { query: TASK_QUERY } : {})
     if (r.ok && typeof r.rows === 'number') rows[f.p] = r.rows
+    if (r.ok && r.tableRows) tableRows[f.p] = r.tableRows
     if (f.p === 'tasks/tasks.sqlite' && r.row && typeof r.row.id === 'string') task = { id: r.row.id, title: String(r.row.title ?? '') }
   }))
   const picked = pickReadBackNote(files.map((f) => f.p))
@@ -76,7 +80,7 @@ export async function readCopyFacts(home: string, files: readonly BatchFile[]): 
       if (fs.statSync(file).size <= NOTE_MAX_BYTES) note = { ...picked, content: fs.readFileSync(file, 'utf8') }
     } catch { /* not there: the offline check names it */ }
   }
-  return { rows, task, note, at: new Date().toISOString() }
+  return { rows, tableRows, task, note, at: new Date().toISOString() }
 }
 
 export async function offlineCheck(o: {
@@ -93,10 +97,10 @@ export async function offlineCheck(o: {
   roots: readonly PathRoot[]
   rules: readonly PathRule[]
   /**
-   * Databases a step of the promotion of its own changed (session-hosts.ts), with the rows it added on purpose: their
-   * size is not compared, their rows are (the copy's plus those).
+   * Databases a step of the promotion of its own changed (session-hosts.ts), with the rows it added on purpose to one
+   * table: their size is not compared, their rows are, table by table (the copy's, plus those in that table).
    */
-  changed?: Readonly<Record<string, { addedRows: number }>>
+  changed?: Readonly<Record<string, { table: string; addedRows: number }>>
 }): Promise<CheckOutcome> {
   const exact = o.sizesAndRows !== false
   let missing = 0
@@ -124,8 +128,19 @@ export async function offlineCheck(o: {
     const r = await inspectSqliteOffThread(path.join(o.home, rel))
     const had = o.facts.rows[rel]
     counts[rel] = { home: r.rows, copy: had }
+    const c = changed[rel]
+    const hadTables = o.facts.tableRows?.[rel]
     if (!r.ok) problems.push(`${rel}: ${r.detail ?? 'integrity check failed'} in the new home`)
-    else if (exact && had !== undefined && !rowsChange(rel) && r.rows !== had + (changed[rel]?.addedRows ?? 0)) problems.push(`${rel}: ${r.rows} rows in the new home, ${had} in the copy it was made from${changed[rel] ? ` (and ${changed[rel]!.addedRows} the promotion added)` : ''}`)
+    else if (!exact || rowsChange(rel)) { /* not compared */ }
+    else if (hadTables && r.tableRows) {
+      // Table by table: a row lost in one table and one added in another never cancel out.
+      const want: Record<string, number> = { ...hadTables }
+      if (c) want[c.table] = (want[c.table] ?? 0) + c.addedRows
+      const diff = [...new Set([...Object.keys(want), ...Object.keys(r.tableRows)])].sort()
+        .filter((t) => (want[t] ?? 0) !== (r.tableRows![t] ?? 0))
+        .map((t) => `${t} ${r.tableRows![t] ?? 0} (the copy ${hadTables[t] ?? 0}${c?.table === t ? `, and ${c.addedRows} the promotion added` : ''})`)
+      if (diff.length) problems.push(`${rel}: rows in the new home differ from the copy it was made from: ${diff.slice(0, 5).join(', ')}`)
+    } else if (had !== undefined && r.rows !== had + (c?.addedRows ?? 0)) problems.push(`${rel}: ${r.rows} rows in the new home, ${had} in the copy it was made from${c ? ` (and ${c.addedRows} the promotion added)` : ''}`)
   }))
   return { ok: problems.length === 0, problems, detail: { files: o.files.length, databases: counts, paths: paths.detail } }
 }

@@ -548,8 +548,9 @@ try {
   const ok = integrity.length === 1 && integrity[0] === 'ok'
   const tables = db.query('SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE ?').all('table', 'sqlite_%').map((r) => r.name)
   let rows = 0
+  const tableRows = {}
   for (const t of tables) {
-    try { rows += db.query('SELECT COUNT(*) AS n FROM [' + t + ']').get().n } catch { /* a virtual table without its module, or ] in its name */ }
+    try { const n = db.query('SELECT COUNT(*) AS n FROM [' + t + ']').get().n; rows += n; tableRows[t] = n } catch { /* a virtual table without its module, or ] in its name */ }
   }
   // The caller's own read: its failure is reported beside the check, never as the check's.
   let row = null
@@ -557,7 +558,7 @@ try {
   if (workerData.query) {
     try { row = db.query(workerData.query).get() || null } catch (e) { rowError = e && e.message ? e.message : String(e) }
   }
-  parentPort.postMessage({ ok, detail: ok ? undefined : integrity.slice(0, 3).join('; '), tables: tables.length, rows, row, rowError })
+  parentPort.postMessage({ ok, detail: ok ? undefined : integrity.slice(0, 3).join('; '), tables: tables.length, rows, tableRows, row, rowError })
 } catch (error) {
   parentPort.postMessage({ ok: false, detail: error && error.message ? error.message : String(error) })
 } finally {
@@ -572,6 +573,8 @@ export interface InspectResult {
   detail?: string
   tables?: number
   rows?: number
+  /** Rows of each table (those a count could read). */
+  tableRows?: Record<string, number>
   /** The first row of `query`, or null. */
   row?: Record<string, unknown> | null
   /** `query` failed (the check itself may still be ok). */
