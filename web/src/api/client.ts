@@ -6,6 +6,7 @@ import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_
 import { leaderErrorMessage, noteResponseHeaders } from './leader-presence';
 import { readsSuspended, onReadLifecycle, pageHiddenSince } from './read-lifecycle';
 import { ApiError } from './api-error';
+import { isBrowserNetworkMessage } from '../utils/operation-error-words';
 import { quietRetryDelays, quietlyRetryable } from './background-retry';
 import { deadlineSignal } from '../utils/deadline-signal';
 
@@ -551,6 +552,14 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     // the real-use monitor leaves it out, as it does a wait in the queue (usage-watch/normalize.ts).
     if (isTimeout && pageHiddenSince(sentAt)) {
       console.warn(`[api] ${method} ${path} FAILED after ${elapsed}ms (timeout ${timeoutMs}ms, page hidden)`, err);
+      throw err;
+    }
+    // Never reached the server (the browser's own network words): Walnut restarting for a deploy,
+    // asleep, or the network gone. Not a fault of the page or the route; the server's own alarms
+    // cover an outage (2026-11-24: every deploy restart logged tag-display, config and supervision
+    // reads as page errors). A warning, named so; a request the browser refused stays an error.
+    if (!isTimeout && err instanceof Error && isBrowserNetworkMessage(err.message)) {
+      console.warn(`[api] ${method} ${path} FAILED after ${elapsed}ms (unreachable)`, err);
       throw err;
     }
     console.error(`[api] ${method} ${path} FAILED after ${elapsed}ms${isTimeout ? ` (timeout ${timeoutMs}ms)` : ''}`, err);

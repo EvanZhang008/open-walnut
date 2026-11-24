@@ -883,3 +883,36 @@ describe('a request out on the network while the page is in the background', () 
     }
   });
 });
+
+describe('a request that never reached the server', () => {
+  // 2026-11-24: at every deploy restart the page logged its reads (tag-display, config, supervision)
+  // as errors with the browser's "Load failed". Each engine's words for a request that never reached
+  // Walnut are a warning named unreachable; anything else the browser threw stays an error.
+  beforeEach(() => { vi.resetModules(); vi.stubGlobal('window', new EventTarget()); vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' })) });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() });
+
+  async function lineFor(message: string): Promise<{ level: 'error' | 'warn'; line: string } | null> {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError(message) }));
+    const client = await import('../../web/src/api/client');
+    await client.apiGet('/api/config').catch(() => {});
+    const find = (spy: typeof errorSpy) => spy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('/api/config FAILED'));
+    const e = find(errorSpy); const w = find(warnSpy);
+    errorSpy.mockRestore(); warnSpy.mockRestore();
+    return e ? { level: 'error', line: e } : w ? { level: 'warn', line: w } : null;
+  }
+
+  it('each engine\'s network words: a warning named unreachable', async () => {
+    for (const message of ['Load failed', 'Failed to fetch', 'NetworkError when attempting to fetch resource.', 'The network connection was lost.']) {
+      vi.resetModules();
+      const got = await lineFor(message);
+      expect(got?.level, message).toBe('warn');
+      expect(got?.line, message).toMatch(/\(unreachable\)$/);
+    }
+  });
+  it('a request the browser refused stays an error', async () => {
+    const got = await lineFor("Failed to execute 'fetch' on 'Window': Invalid value");
+    expect(got?.level).toBe('error');
+  });
+});

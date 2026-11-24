@@ -11,6 +11,7 @@ import { SHARED_FETCH_SLOTS as SHARED } from '../../web/src/api/client'
 let win: EventTarget
 let frames: FrameRequestCallback[]
 let errors: unknown[][]
+let warnings: unknown[][]
 
 async function loadClient() {
   vi.resetModules()
@@ -22,8 +23,9 @@ beforeEach(() => {
   win = Object.assign(new EventTarget(), { requestAnimationFrame: vi.fn((callback: FrameRequestCallback) => frames.push(callback)) })
   vi.stubGlobal('window', win)
   errors = []
+  warnings = []
   vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { errors.push(args) })
-  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { warnings.push(args) })
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -86,10 +88,13 @@ describe('requests cut by the page leaving', () => {
     win.dispatchEvent(new Event('pageshow'))
     vi.stubGlobal('fetch', vi.fn(async () => cutBody()))
     await expect(apiGet('/api/sessions/s1/supervision')).rejects.toBeDefined()
+    // A fetch that never reached the server is a warning named unreachable (client.ts); a cut body stays an error.
+    expect(warnings.map((e) => String(e[0])).filter((m) => m.includes('FAILED'))).toEqual([
+      expect.stringMatching(/GET \/api\/tasks FAILED .*\(unreachable\)$/),
+      expect.stringMatching(/GET \/api\/tasks FAILED .*\(unreachable\)$/),
+      expect.stringMatching(/GET \/api\/tasks FAILED .*\(unreachable\)$/),
+    ])
     expect(errors.map((e) => String(e[0]))).toEqual([
-      expect.stringContaining('GET /api/tasks FAILED'),
-      expect.stringContaining('GET /api/tasks FAILED'),
-      expect.stringContaining('GET /api/tasks FAILED'),
       expect.stringContaining('JSON parse failed'),
       expect.stringContaining('JSON parse failed'),
     ])
