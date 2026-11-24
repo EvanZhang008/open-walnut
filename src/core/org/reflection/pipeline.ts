@@ -102,8 +102,11 @@ export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectD
   const cardAsks = c.messages.map((m) => parseCardAnswer(m.text)?.ask).filter((a): a is string => !!a);
   // What the session did since the window ends (2026-11-24 audit: judged 6 to 18 hours late, a third of
   // the "not done" findings were done by then): its newest turns, for already_fixed only.
+  // A thread message reads the thread's own answers after it, never its node's session, which works on many
+  // threads at once (2026-11-24 replay: the session's newest turns were about other threads).
   const seenTo = turns[turns.length - 1]?.at ?? c.to;
-  const later = c.sessionId && !c.context ? await turnsSince(c.sessionId, seenTo > c.to ? seenTo : c.to, deps.readTranscript).catch(() => []) : [];
+  const later = c.context ? (c.later ?? []).filter((t) => t.at > seenTo)
+    : c.sessionId ? await turnsSince(c.sessionId, seenTo > c.to ? seenTo : c.to, deps.readTranscript).catch(() => []) : [];
   return {
     signal: c.signal, ...(c.also?.length ? { also: c.also } : {}), taskTitle: c.task.title, ...(c.thread ? { threadTitle: c.thread.title } : {}),
     turnsText: renderTurns(turns), ...(later.length ? { laterText: renderTurns(later) } : {}), momentAt: c.to,

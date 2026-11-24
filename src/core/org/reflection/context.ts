@@ -116,6 +116,19 @@ export function threadTurns(messages: readonly ThreadTurnSource[], idx: number, 
   return splitCardAnswers(out);
 }
 
+/** The thread's answers after message `idx`: what the node did with his words since (the judge's LATER). Pure. */
+export function threadLater(messages: readonly ThreadTurnSource[], idx: number, max = LATER_TURNS): TurnText[] {
+  // Each answer once (one chat reply is filed under several messages), the first after his message kept
+  // before the newest: the one right after is most often the one that did it (2026-11-24 replay).
+  const seen = new Set<string>([messages[idx]?.answer?.text ?? '']);
+  const answers = messages.slice(idx + 1).flatMap((m) => {
+    if (!m.answer?.text || seen.has(m.answer.text)) return [];
+    seen.add(m.answer.text);
+    return [{ role: 'assistant' as const, at: m.answer.at, text: clip(m.answer.text, LATER_TEXT_MAX) }];
+  });
+  return answers.length <= max ? answers : [...answers.slice(0, 1), ...answers.slice(-(max - 1))];
+}
+
 /**
  * A card answer (`Answer to "<ask>": <words>`) as two turns: the ask is the agent's words, the rest
  * his, so the judge never reads (or quotes) the agent's ask as the user's. Pure.

@@ -84,10 +84,30 @@ beforeEach(async () => {
 })
 
 describe('what the judge is told', () => {
-  it('a step that is not an agent\'s is asked for, never done; a status line has no buttons of its own', () => {
-    expect(JUDGE_SYSTEM).toContain('never tell the session to take a step that is not an agent\'s to take')
-    expect(JUDGE_SYSTEM).toContain('using the user\'s own browser, accounts or sign-ins')
-    expect(JUDGE_SYSTEM).toContain('A Needs-you line on a task is only a status line')
+  it('a step the rules give to a person is asked for, never done; one the rules let agents take stays theirs', () => {
+    expect(JUDGE_SYSTEM).toContain('never tell the session to take a step its RULES give to a person or forbid an agent')
+    expect(JUDGE_SYSTEM).toContain('A step the RULES let agents take (a sign-in or a command on his own machine) stays the agent')
+  })
+
+  it('a thread\'s later answers are each read once, the first after his message kept before the newest', async () => {
+    const { threadLater } = await import('../../../src/core/org/reflection/context.js')
+    const a = (text: string, m: number) => ({ at: iso(m + 1), text: `msg ${m}`, answer: { text, at: iso(m) } })
+    const msgs = [a('first answer', 900), a('did it: the cause and the fix', 800), a('about something else', 700), a('about something else', 600), a('newest', 500)]
+    expect(threadLater(msgs, 0).map((t) => t.text)).toEqual(['did it: the cause and the fix', 'newest'])
+  })
+
+  it('a thread message judged late reads the thread\'s answers after it', async () => {
+    const { threadLater, threadTurns } = await import('../../../src/core/org/reflection/context.js')
+    const msgs = [
+      { at: iso(900), text: 'why is the card still here', answer: { text: 'Looking.', at: iso(899) } },
+      { at: iso(600), text: 'and the dates', answer: { text: 'Closed the card and fixed the dates.', at: iso(598) } },
+    ]
+    const c = {
+      key: 'tmsg:x', signal: 'frustration', task: vp, sessionId: '', messages: [{ id: 'x', at: msgs[0].at, text: msgs[0].text }],
+      from: msgs[0].at, to: msgs[0].at, why: 'x', thread: { id: 'th', title: 'Cards' }, context: threadTurns(msgs, 0), later: threadLater(msgs, 0),
+    } as unknown as Candidate
+    const input = await judgeInputOf(vp, c, { readTranscript: async () => [] as never, rulesText: async () => '', replyLanguage: async () => null }, [])
+    expect(input.laterText).toContain('Closed the card and fixed the dates.')
   })
 
   it('reads what the session did after its window, up to now, when it is judged late', async () => {

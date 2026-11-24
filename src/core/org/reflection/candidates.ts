@@ -22,7 +22,7 @@ import crypto from 'node:crypto';
 import { dutyOn } from '../duties/node-duties.js';
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
-import { lastAssistantBefore, threadTurns, turnsAround, type ReadTranscript, type TurnText } from './context.js';
+import { lastAssistantBefore, threadLater, threadTurns, turnsAround, type ReadTranscript, type TurnText } from './context.js';
 import { manyRoundWindows, messageSignals, parseCardAnswer, type ReflectionSignal, type RoundsWindow, type SpokenMessage } from './signals.js';
 import { asksForEnglish, readsNotChinese, wantsChinese } from './language.js';
 import { managedTasks, managerOf } from './team.js';
@@ -76,6 +76,8 @@ export interface Candidate {
   thread?: { id: string; title: string };
   /** The conversation already known (a thread's messages and answers): no transcript is read. */
   context?: TurnText[];
+  /** A thread's answers after the moment (context.ts threadLater): what the node did since, for the judge's LATER. */
+  later?: TurnText[];
   /** needs_ask: the ask Needs you showed him, and its decision. */
   ask?: { text: string; decisionId?: string };
   /** needs_ask: his messages of the last EVIDENCE_MS in the task and the threads that went to it. */
@@ -232,13 +234,13 @@ async function threadCandidates(owner: Task, p: Pass): Promise<void> {
       // Keyed by the message alone (tm- ids are unique): a thread moved to another node (thread-follow.ts)
       // is not judged again. What the agent said just before: the thread's answer to his message before.
       const hit = await signalStep(p, `tmsg:${m.id}`, m, place(m.sid),
-        async () => msgs[i - 1]?.answer?.text, { context: threadTurns(msgs, i) });
+        async () => msgs[i - 1]?.answer?.text, { context: threadTurns(msgs, i), later: threadLater(msgs, i) });
       if (hit) judged.add(m.id);
     }
     const fresh = msgs.filter((m) => m.at > p.floor);
     roundsStep(p, fresh, (w) => `trounds:${th.id}:${w.ids[0]}`, (w) => {
       const lastIdx = msgs.findIndex((m) => m.id === w.ids[w.ids.length - 1]);
-      return { ...place(msgs[lastIdx]?.sid), context: threadTurns(msgs, lastIdx, w.ids.length) };
+      return { ...place(msgs[lastIdx]?.sid), context: threadTurns(msgs, lastIdx, w.ids.length), later: threadLater(msgs, lastIdx) };
     });
     // One chat reply is filed under every thread it answers: keyed by its session, it is found once a day.
     languageStep(p, msgs.flatMap((m, i) => (m.answer && !judged.has(m.id) ? [{
