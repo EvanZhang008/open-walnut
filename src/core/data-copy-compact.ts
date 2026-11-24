@@ -35,6 +35,8 @@ export const COMPACT_MIN_BYTES = 50 * MiB
 export const COMPACT_MIN_AGE_MS = 24 * 60 * 60_000
 /** Room the volume always keeps for live data: the compressed write stops before it takes this. */
 const FREE_MARGIN_BYTES = 256 * MiB
+/** How often (in bytes written) a compression measures the volume's free space again. */
+const RECHECK_BYTES = 64 * MiB
 const GIT_TIMEOUT_MS = 10_000
 
 /** Folders never looked into: the user's notes, Walnut's scratch and rebuildable stores, plugins' own data. */
@@ -72,6 +74,8 @@ export interface CompactOptions {
   now?: number
   /** Free space of a volume (tests). */
   statfs?: (dir: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>
+  /** Bytes written between free-space checks while compressing (tests use a small one). */
+  recheckBytes?: number
   /** The compressed temp's writer (tests inject a failing one). */
   createWriteStream?: (file: string) => NodeJS.WritableStream
 }
@@ -170,12 +174,22 @@ export async function compressCopy(file: string, opts: CompactOptions = {}): Pro
   try {
     const hash = crypto.createHash('sha256')
     const tap = new Transform({ transform(chunk, _e, cb) { hash.update(chunk); cb(null, chunk) } })
+    // Other writers share the volume while a big copy compresses: the room is measured
+    // again every recheckBytes, and the write stops once the margin is being eaten.
+    const statfs = opts.statfs ?? fsp.statfs
+    const every = opts.recheckBytes ?? RECHECK_BYTES
     let written = 0
+    let nextCheck = every
     const cap = new Transform({
       transform(chunk: Buffer, _e, cb) {
         written += chunk.length
-        if (written > budget) cb(new Error(`the compressed copy outgrew its room (${budget} bytes); stopped`))
-        else cb(null, chunk)
+        if (written > budget) return cb(new Error(`the compressed copy outgrew its room (${budget} bytes); stopped`))
+        if (written < nextCheck) return cb(null, chunk)
+        nextCheck = written + every
+        statfs(dir).then((v) => {
+          if (Number(v.bavail) * Number(v.bsize) < FREE_MARGIN_BYTES) cb(new Error('the volume ran low on space while compressing; stopped'))
+          else cb(null, chunk)
+        }, () => cb(null, chunk))
       },
     })
     const out = opts.createWriteStream ? opts.createWriteStream(tmp) : createWriteStream(tmp, { flags: 'wx' })

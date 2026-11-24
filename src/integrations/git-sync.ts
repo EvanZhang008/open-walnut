@@ -1026,6 +1026,7 @@ sessions.json.*
 /*.bak
 /*.bak-*
 /*.backup
+/*.backup.gz
 /*.backup-*
 `;
 export const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
@@ -1138,6 +1139,8 @@ function criticalTrackedTargets(files: string[]): Map<string, { recursive: boole
  */
 const EXTRA_IGNORE_PATTERNS = [
   'memory/**/*.bak.*', 'tmp/', 'time-tracking/outside/', '*.conflicted-*', '*.corrupt-*',
+  // A root `<x>.backup` compressed in place (data-copy-compact.ts) stays as ignored as it was.
+  '/*.backup.gz',
   // Write temps and set-aside copies of the secret files above, left by a crash
   // mid-write: they hold the same secret (see GITIGNORE_CONTENT). Root only.
   '/auth.json.*', '/config.yaml.*', '/cloud-setup-job.json.*',

@@ -130,18 +130,27 @@ describe('compactDataCopies', () => {
     expect(fs.existsSync(path.join(home, 'unignored.sqlite.corrupt-1'))).toBe(true)
   })
 
-  it('with the real data-repo .gitignore, a copy whose .gz git would sync stays as it is', async () => {
+  it('with the real data-repo .gitignore, every copy it compresses stays ignored as a .gz', async () => {
     const git = (...args: string[]) => execFileSync('git', ['-C', home, ...args], { stdio: 'pipe' })
     git('init', '-q')
     fs.writeFileSync(path.join(home, '.gitignore'), GITIGNORE_CONTENT)
     put('usage.sqlite.backup-2026-11-20-before-host-dedupe')
-    put('sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup') // `/*.backup` misses its .gz
+    put('sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup') // `/*.backup.gz` covers its .gz
     put('tasks/tasks.sqlite.pre-repair-0805.backup')
     const rows = await compactDataCopies({ home, ...opts })
-    expect(rows.map((r) => path.relative(home, r.file)).sort()).toEqual(['tasks/tasks.sqlite.pre-repair-0805.backup', 'usage.sqlite.backup-2026-11-20-before-host-dedupe'])
-    expect(fs.existsSync(path.join(home, 'sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup'))).toBe(true)
-    // What it wrote, git still ignores: nothing new for git-sync's add -A.
+    expect(rows.map((r) => path.relative(home, r.file)).sort()).toEqual([
+      'sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup', 'tasks/tasks.sqlite.pre-repair-0805.backup', 'usage.sqlite.backup-2026-11-20-before-host-dedupe',
+    ])
     expect(execFileSync('git', ['-C', home, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }).split('\n').filter((l) => l.includes('.gz'))).toEqual([])
+  })
+
+  it('a copy whose .gz the repo would not ignore stays as it is', async () => {
+    const git = (...args: string[]) => execFileSync('git', ['-C', home, ...args], { stdio: 'pipe' })
+    git('init', '-q')
+    fs.writeFileSync(path.join(home, '.gitignore'), '/*.backup\n') // an older install's rule, no .gz line
+    const file = put('sessions.sqlite.orphan-repair-2026-08-21T01-51-47-764Z.backup')
+    expect(await compactDataCopies({ home, ...opts })).toEqual([])
+    expect(fs.existsSync(file)).toBe(true)
   })
 
   it('every compactable copy kind: the original and its .gz are both ignored by the real template, or it is skipped', async () => {
@@ -212,6 +221,21 @@ describe('compressCopy failures leave the original as it was and no temp', () =>
     const bytes = fs.readFileSync(file)
     const tight = async () => ({ bavail: (256 * 1024 * 1024 + 400 * 1024) / 4096, bsize: 4096 })
     await expect(compressCopy(file, { statfs: tight })).rejects.toThrow(/outgrew its room/)
+    expect(fs.readFileSync(file).equals(bytes)).toBe(true)
+    expect(names()).toEqual(['usage.sqlite.backup-1'])
+  })
+
+  it('the volume filling up during the write stops it', async () => {
+    const file = put('usage.sqlite.backup-1', 1024 * 1024)
+    let calls = 0
+    // Roomy when it starts; then another writer takes the space.
+    const filling = async () => (++calls === 1 ? { bavail: 1e9, bsize: 4096 } : { bavail: 10, bsize: 4096 })
+    const random = path.join(home, 'r')
+    fs.writeFileSync(random, Buffer.from(Array.from({ length: 1024 * 1024 }, () => Math.floor(Math.random() * 256))))
+    fs.renameSync(random, file); fs.utimesSync(file, OLD, OLD)
+    const bytes = fs.readFileSync(file)
+    await expect(compressCopy(file, { statfs: filling, recheckBytes: 64 * 1024 })).rejects.toThrow(/ran low on space/)
+    expect(calls).toBeGreaterThan(1)
     expect(fs.readFileSync(file).equals(bytes)).toBe(true)
     expect(names()).toEqual(['usage.sqlite.backup-1'])
   })
