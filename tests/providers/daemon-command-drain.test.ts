@@ -949,6 +949,8 @@ describe('standalone ACP command lifetime', () => {
       pwSilenceAcpOptions: () => ({}), pwSilenceFile: async () => null,
       // acpStart hands the worker its host-call entry (host-call-entry-v1); this frame names no home.
       hostCallTokens: { envFor: () => ({}) },
+      // A started worker's owner goes on its record (daemon-spawn-journal.ts recordAcpRuntime).
+      recordAcpRuntime: async () => {},
       demoQuiesce: noDemoQuiesce(),
     })
     const result = handle({}, 1, { sid: 'fixture', cwd: '/fixture' }, 'getState')

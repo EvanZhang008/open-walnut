@@ -107,6 +107,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   mach('local.last-planned-stop', 'local/last-planned-stop.json', 'file', 'Why the last server stopped, for the next boot'),
   mach('local.spawn-journal', 'local/spawn-journal.jsonl', 'file', 'Sessions this host\'s daemon started', DAEMON),
   mach('local.cli-owners', 'local/cli-owners', 'dir', 'Which daemon owns each running CLI of this host, beside the spawn journal', DAEMON),
+  mach('local.acp-runtimes', 'local/acp-runtimes.jsonl', 'file', 'Which Walnut started each ACP worker of this host, beside the spawn journal', DAEMON),
   mach('local.host-mcp', 'local/host-mcp.json', 'file', 'MCP servers this host offers'),
   mach('local.connect', 'local/connect', 'dir', 'Walnut Connect: the socket this server opens for walnut-net to pass paired phones\' requests in'),
   mach('local.expose-handover', 'local/expose-handover.json', 'file', 'Port handover between server generations'),

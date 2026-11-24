@@ -38,7 +38,7 @@ export interface DaemonAcpSessionsDeps<W extends object> extends DaemonReplies<W
   demoQuiesce: { readonly fenced: boolean }
   hostCallTokens: ReturnType<typeof createHostCallTokens>
   /** Record whose worker this is (daemon-spawn-journal.ts): its journal stays that Walnut's to read. */
-  recordAcpRuntime: (runtimeId: unknown, home: unknown) => void
+  recordAcpRuntime: (runtimeId: unknown, home: unknown) => Promise<void>
   isJournalSid: (sid: unknown) => sid is string
   walnutThroughGateway: (env: Record<string, unknown> | undefined, home: unknown) => boolean
   sessionPathWithShim: (base: string, throughGateway: boolean) => string
@@ -98,7 +98,7 @@ export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSession
         // Whose worker this is, kept on disk: its journal stays that Walnut's to read here.
         // `ownerHome` names it for every start; a server older than that names `home`, with a task only.
         const o = cmd as { ownerHome?: unknown; home?: unknown }
-        recordAcpRuntime(params.sid, o.ownerHome ?? o.home)
+        void recordAcpRuntime(params.sid, o.ownerHome ?? o.home)
         sendOk(ws, id, resp.result ?? {})
       } else sendFrame(ws, { id, ok: false, error: resp.error, errorKind: resp.errorKind })
     })

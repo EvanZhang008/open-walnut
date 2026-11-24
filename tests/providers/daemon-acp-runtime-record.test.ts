@@ -33,11 +33,12 @@ function journal() {
 const recordFile = () => path.join(base, 'local', 'acp-runtimes.jsonl')
 
 describe('the record of whose ACP worker a runtime id is', () => {
-  it('names the Walnut that started it, across a daemon restart, and only the first start counts', () => {
+  it('names the Walnut that started it, across a daemon restart, and only the first start counts', async () => {
     const j = journal()
-    j.recordAcpRuntime('acp-rt-a', HOME_A)
-    j.recordAcpRuntime('acp-rt-host', DATA_A)
-    j.recordAcpRuntime('acp-rt-a', HOME_B)
+    const writes = [j.recordAcpRuntime('acp-rt-a', HOME_A), j.recordAcpRuntime('acp-rt-host', DATA_A), j.recordAcpRuntime('acp-rt-a', HOME_B)]
+    // Known at once, while the line is still on its way to disk.
+    expect(j.acpRuntimeOwner('acp-rt-a')).toBe(HOME_A)
+    await Promise.all(writes)
     expect(j.acpRuntimeOwner('acp-rt-a')).toBe(HOME_A)
     // A start from a server's own data dir is its leader's Walnut's.
     expect(j.acpRuntimeOwner('acp-rt-host')).toBe(HOME_A)
@@ -50,32 +51,33 @@ describe('the record of whose ACP worker a runtime id is', () => {
     expect(again.journaledIds().has('acp-rt-a')).toBe(false)
   })
 
-  it('sees what another daemon on the host appended, skips a torn tail, and refuses bad ids and homes', () => {
+  it('sees what another daemon on the host appended, skips a torn tail, and refuses bad ids and homes', async () => {
     const j = journal()
-    j.recordAcpRuntime('acp-rt-a', HOME_A)
+    await j.recordAcpRuntime('acp-rt-a', HOME_A)
     expect(j.acpRuntimeOwner('acp-rt-b')).toBeUndefined()
     fs.appendFileSync(recordFile(), JSON.stringify({ v: 1, runtimeId: 'acp-rt-b', at: 'x', home: HOME_B }) + '\n{"v":1,"runtimeId":"acp-rt-torn"')
     expect(j.acpRuntimeOwner('acp-rt-b')).toBe(HOME_B)
     expect(j.acpRuntimeOwner('acp-rt-torn')).toBeUndefined()
     // The next line starts after the torn one, never glued onto it.
-    j.recordAcpRuntime('acp-rt-c', HOME_A)
+    await j.recordAcpRuntime('acp-rt-c', HOME_A)
     expect(journal().acpRuntimeOwner('acp-rt-c')).toBe(HOME_A)
-    for (const [rt, home] of [['../x', HOME_A], ['acp-rt-d', 'relative/home'], ['acp-rt-e', undefined], ['', HOME_A]] as const) j.recordAcpRuntime(rt, home)
+    for (const [rt, home] of [['../x', HOME_A], ['acp-rt-d', 'relative/home'], ['acp-rt-e', undefined], ['', HOME_A]] as const) await j.recordAcpRuntime(rt, home)
     expect(fs.readFileSync(recordFile(), 'utf8')).not.toMatch(/acp-rt-d|acp-rt-e|\.\.\/x/)
   })
 
   it('a started worker is recorded with the owner its start named, with a task or without; a failed start records nothing', async () => {
     const j = journal()
     let ok = true
+    const writes: Promise<void>[] = []
     const replies: Array<{ ok: boolean }> = []
     const acpSessions = createDaemonAcpSessions<object>({
-      daemonEnv: { PATH: '/usr/bin' }, DAEMON_DIR: base, TASK_DIR_ROOT: path.join(base, 'tasks'), GATEWAY_SOCK_PATH: path.join(base, 'gw.sock'),
+      daemonEnv: {}, DAEMON_DIR: base, TASK_DIR_ROOT: path.join(base, 'tasks'), GATEWAY_SOCK_PATH: path.join(base, 'gw.sock'),
       SECRETS_ROOT: () => path.join(base, 'secrets'), secretsSessionEnv: () => ({}), sessions: new Map(),
       acp: { acpStart: async () => (ok ? { ok: true, result: {} } : { ok: false, error: 'no adapter' }) } as never,
       usageBudget: {} as never, budgetGate: () => 'budget_checking' as never,
       sessionStartGate: { run: (_sid: string, fn: () => Promise<unknown>) => fn() } as never,
       demoQuiesce: { fenced: false }, hostCallTokens: { envFor: () => ({}) } as never,
-      recordAcpRuntime: (rt, home) => j.recordAcpRuntime(rt, home), isJournalSid: j.isJournalSid,
+      recordAcpRuntime: (rt, home) => { const w = j.recordAcpRuntime(rt, home); writes.push(w); return w }, isJournalSid: j.isJournalSid,
       walnutThroughGateway: () => false, sessionPathWithShim: (p) => p, sessionWalnutApiUrl: () => undefined,
       pwSilenceFile: async () => null, pwSilenceAcpOptions: () => ({}),
       sendOk: () => { replies.push({ ok: true }) }, sendError: () => { replies.push({ ok: false }) }, sendFrame: () => { replies.push({ ok: false }) },
@@ -90,6 +92,7 @@ describe('the record of whose ACP worker a runtime id is', () => {
     ok = false
     await acpSessions.cmdAcpStart({}, 4, { sid: 'acp-rt-failed', cwd: base, taskId: 'task-1', ownerHome: HOME_B })
     expect(replies).toEqual([{ ok: true }, { ok: true }, { ok: true }, { ok: false }])
+    await Promise.all(writes)
     expect(journal().acpRuntimeOwner('acp-rt-started')).toBe(HOME_B)
     expect(journal().acpRuntimeOwner('acp-rt-no-task')).toBe(HOME_A)
     expect(journal().acpRuntimeOwner('acp-rt-both')).toBe(HOME_A)

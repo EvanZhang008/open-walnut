@@ -31,7 +31,7 @@ const MARKERS = [
 /** How each file's members report a gone folder. `records`: the file itself calls the recorder. */
 const KNOWN: Record<string, { count: number; how: string; records: boolean }> = {
   'src/providers/cwd-check.ts': { count: 2, how: 'the pre-flight: makes the refusal (CwdMissingError); its callers record it', records: false },
-  'src/providers/claude-code-session.ts': { count: 6, how: 'spawn catch, settleResumeFailure, processNextNow catch and the ACP drain all call noteFolderGoneOnce; the ACP drain also classifies a paused budget, which is not a folder', records: true },
+  'src/providers/claude-code-session.ts': { count: 7, how: 'spawn catch, settleResumeFailure, processNextNow catch and the ACP drain all call noteFolderGoneOnce; the ACP drain also classifies a paused budget and a setting that refuses the engine (engine_config), neither of them a folder, and parks a gone folder with parkOnGoneFolder', records: true },
   'src/providers/delivery-failure.ts': { count: 3, how: 'the classifier (its words, its definition, its permanent shorthand): reads the words as cwd_missing (permanent)', records: false },
   'src/providers/daemon-session-start.ts': { count: 1, how: "the daemon's start check: words the classifier reads as cwd_missing", records: false },
   'src/core/session-auto-recover.ts': { count: 1, how: 'restart recovery: deps.noteFolderGone on the cwd_missing verdict', records: true },

@@ -212,27 +212,41 @@ export function createDaemonSpawnJournal(deps: DaemonSpawnJournalDeps) {
     }
   }
 
+  /** Records on their way to disk (one append at a time, off the thread): asked while they are. */
+  const acpRuntimesPending = new Map<string, { home: string; walnut?: string }>()
+  let acpRuntimesWrite: Promise<void> = Promise.resolve()
+
   /** The Walnut that started the ACP worker `runtimeId` here, if recorded (as journaledHome names one). */
   function acpRuntimeOwner(runtimeId: string): string | undefined {
     readAcpRuntimes()
-    const rec = acpRuntimeHomes.get(runtimeId)
+    const rec = acpRuntimeHomes.get(runtimeId) ?? acpRuntimesPending.get(runtimeId)
     if (!rec) return undefined
     return rec.walnut ? walnutScope.canonical(rec.walnut) : walnutOfHome(rec.home)
   }
 
-  /** An ACP worker started here for the Walnut whose data dir is `home` (its start's own field). */
-  function recordAcpRuntime(runtimeId: unknown, home: unknown): void {
-    if (!isJournalSid(runtimeId) || typeof home !== 'string' || !path.isAbsolute(home) || home.length > 1024) return
+  /**
+   * An ACP worker started here for the Walnut whose data dir is `home` (its start's own field).
+   * The append runs through fs.promises, one at a time (the runtime appends nothing synchronously:
+   * event-loop-blocking-ratchet); the promise is for tests and settles when the line is on disk.
+   */
+  function recordAcpRuntime(runtimeId: unknown, home: unknown): Promise<void> {
+    if (!isJournalSid(runtimeId) || typeof home !== 'string' || !path.isAbsolute(home) || home.length > 1024) return acpRuntimesWrite
     readAcpRuntimes()
-    if (acpRuntimeHomes.has(runtimeId)) return
+    if (acpRuntimeHomes.has(runtimeId) || acpRuntimesPending.has(runtimeId)) return acpRuntimesWrite
     const walnut = servedWalnutOf(home)
-    const line = JSON.stringify({ v: 1, runtimeId, at: new Date().toISOString(), home, ...(walnut ? { walnut } : {}) }) + '\n'
-    try {
-      fs.mkdirSync(path.dirname(ACP_RUNTIMES), { recursive: true })
-      fs.appendFileSync(ACP_RUNTIMES, (acpRuntimesTorn ? '\n' : '') + line, { mode: 0o600 })
+    acpRuntimesPending.set(runtimeId, { home, ...(walnut ? { walnut } : {}) })
+    acpRuntimesWrite = acpRuntimesWrite.then(async () => {
+      // Another daemon on the host may have recorded it meanwhile: its first line stands.
+      readAcpRuntimes()
+      if (acpRuntimeHomes.has(runtimeId)) return
+      const line = JSON.stringify({ v: 1, runtimeId, at: new Date().toISOString(), home, ...(walnut ? { walnut } : {}) }) + '\n'
+      await fs.promises.mkdir(path.dirname(ACP_RUNTIMES), { recursive: true })
+      await fs.promises.appendFile(ACP_RUNTIMES, (acpRuntimesTorn ? '\n' : '') + line, { mode: 0o600 })
       // Read again on the next lookup: the size moved, and the line on disk is what counts.
       acpRuntimesSize = -2
-    } catch { /* best effort: the Mac's copy still names a recent session's runtime */ }
+    }).catch(() => { /* best effort: the Mac's copy still names a recent session's runtime */ })
+      .finally(() => { acpRuntimesPending.delete(runtimeId) })
+    return acpRuntimesWrite
   }
 
   function argValue(args: string[], flag: string): string | undefined {
