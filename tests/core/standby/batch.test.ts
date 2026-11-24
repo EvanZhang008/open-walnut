@@ -203,6 +203,24 @@ describe('a void batch', () => {
     expect((await verifyStandby(sb.target, { deep: true })).drift).toEqual([])
   })
 
+  for (const hot of [true, false]) {
+    it(`a file written after its catch-up copy and before the moment is taken as it was at the moment, never as that copy (${hot ? 'hot' : 'not hot'})`, async () => {
+      sb = await sandbox(`stale-copy-${hot}`)
+      dbs.push(...seedHome(sb.home).dbs)
+      await settle()
+      expect((await batch()).ok).toBe(true)
+      write(sb.home, 'user-own-folder/plan.md', 'version two\n')
+      await settle()
+      let n = 0
+      // In place and at the same size: only the stat tells the copy from the file.
+      const rewrite = async () => { if (n++ === 0) { fs.writeFileSync(path.join(sb.home, 'user-own-folder/plan.md'), 'version 3!\n'.padEnd(12)); await settle() } }
+      const out = await snapshotTo(sb.home, sb.target, { maxRounds: 1, ...(hot ? {} : { hotWindowMs: 0 }), hooks: { afterCatchUp: rewrite } })
+      expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+      expect(fs.readFileSync(copyOf('user-own-folder/plan.md'), 'utf8')).toBe('version 3!\n'.padEnd(12))
+      expect((await verifyStandby(sb.target, { deep: true })).drift).toEqual([])
+    })
+  }
+
   it('a file changed every time it is read voids the batch after the last round, with the reason', async () => {
     sb = await sandbox('void-rounds')
     dbs.push(...seedHome(sb.home).dbs)

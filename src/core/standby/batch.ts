@@ -93,6 +93,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       if (s1.unreadable.length) throw new VoidBatch(`cannot read ${s1.unreadable.slice(0, 5).join(', ')}`)
       await opts.hooks?.afterScan?.()
       const readMs = await catchUp(run, s1)
+      await opts.hooks?.afterCatchUp?.()
       // The home moved on while a long read ran: walk it again first, so the round's hold has
       // only what changed since to read.
       if (readMs > (opts.longReadMs ?? 1000) && catchUps < maxCatchUps) { catchUps++; continue }

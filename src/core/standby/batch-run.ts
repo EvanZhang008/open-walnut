@@ -36,6 +36,8 @@ export interface BatchOptions {
   /** Test hooks. */
   hooks?: {
     afterScan?: () => Promise<void> | void
+    /** After a pass's catch-up read, before its round (or its next pass). */
+    afterCatchUp?: () => Promise<void> | void
     afterHold?: () => Promise<void> | void
     afterCopy?: (rel: string) => Promise<void> | void
   }

@@ -8,6 +8,9 @@ import { homeEntries, isAppendOnlyHomePath } from '../../../src/core/home-manife
 import type { DataKind } from '../../../src/core/home-manifest/index.js'
 import { CHANGE_RULES, LEADER_DIRS, changeRuleOf, isObjectStoreDir, manifestEntryRules } from '../../../src/core/standby/change-rules.js'
 import { scanHome } from '../../../src/core/standby/scan.js'
+import { stageFile } from '../../../src/core/standby/stage.js'
+import fs from 'node:fs'
+import path from 'node:path'
 import { sandbox, write, type Sandbox } from './helpers.js'
 
 let sb: Sandbox | null = null
@@ -68,5 +71,24 @@ describe('change rules', () => {
     for (const rel of ['.git/index.lock', '.git/refs/heads/main.lock', '.git/objects/ab/tmp_obj_1', '.git/objects/pack/tmp_pack_1', '.git/objects/incoming-x1/ab/c', '.git/objects/tmp_objdir-incoming-x2/d', '.git/gc.pid']) write(sb.home, rel, 'scratch\n')
     const got = [...(await scanHome(sb.home)).files.keys()].sort()
     expect(got).toEqual(['.git/HEAD', '.git/index', `.git/objects/ab/${SHA1}`, '.git/refs/heads/main', 'notes/x.lock'])
+  })
+
+  it('a git object touched while it is read is taken (its name fixes its content); any other file touched so is not', async () => {
+    sb = await sandbox('rules-freshen')
+    const obj = `.git/objects/ab/${SHA1}`
+    for (const rel of [obj, 'notes/a.md']) write(sb.home, rel, 'same bytes\n')
+    await new Promise((r) => setTimeout(r, 30))
+    const touch = (rel: string) => { const now = new Date(); fs.utimesSync(path.join(sb!.home, rel), now, now) }
+    const ctx = (moment: number) => ({ home: sb!.home, momentMs: moment, afterCopy: touch })
+    const sink = () => {}
+    const now = Date.now() + 1000
+    expect((await stageFile(obj, ctx(now), sink)).ok).toBe(true)
+    expect(await stageFile('notes/a.md', ctx(now), sink)).toMatchObject({ ok: false, why: 'changed' })
+    // A git object whose ctime is past the clock is still taken; a plain file is late.
+    touch(obj)
+    touch('notes/a.md')
+    const past = Date.now() - 10_000
+    expect((await stageFile(obj, { home: sb.home, momentMs: past }, sink)).ok).toBe(true)
+    expect(await stageFile('notes/a.md', { home: sb.home, momentMs: past }, sink)).toMatchObject({ ok: false, why: 'late' })
   })
 })

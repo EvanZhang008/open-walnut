@@ -138,7 +138,7 @@ describe.skipIf(!BUN)('a standby target behind a real daemon', () => {
     write(sb.home, 'memory/MEMORY.md', '# third version\n')
     await settle()
     const next = await batch(second)
-    expect(next.ok && next.commit.batch).toBe(3)
+    expect(next.ok && next.commit.batch, next.ok ? '' : next.reason).toBe(3)
     expect(fs.readFileSync(applied, 'utf8').trim().split('\n')).toEqual(['2', '3'])
     await expectCopyIsHome()
   }, 180_000)
