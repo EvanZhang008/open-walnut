@@ -135,6 +135,8 @@ describe('no text Walnut gives a session tells it to write the report in a reply
     'src/core/sessions/status-thread-split.ts',
     // Its merge line for a held title that repeats another open thread (2026-11-23).
     'src/core/sessions/status-thread-title.ts',
+    // Its rule for a line that asked the user to decide and was not written (2026-11-24).
+    'src/core/sessions/status-thread-asked.ts',
     // The status side question asked again about an ask the user could not read (2026-11-21).
     'src/core/sessions/unclear-ask.ts',
     'src/core/ask-decision.ts',

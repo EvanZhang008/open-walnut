@@ -29,22 +29,99 @@ const POINTERS: readonly RegExp[] = [
 ];
 
 /**
- * Words that ask him to decide something (pick, choose, approve): "\u7b49\u4f60\u6311" (waiting for your
- * pick), "\u8bf7\u4f60\u9009" (please choose), "your call". 2026-11-24, his VP's Done card: "the three new
- * designs are on the 'pick a design' card ... waiting for your pick", and the card it named was out of
- * his sight, so he could not find what to pick.
+ * Chinese forms of "a decision of his waits": wait for you to pick / confirm / nod (a few words may
+ * stand between before a whole verb), please (you) pick, please answer once more, I need you to
+ * answer, you pick one. Each is read in one clause, never after a "not" shortly before it (no need
+ * to wait for you, no longer needs you), and never as a description (a verb followed by the
+ * possessive particle: "the version that waited for your confirm", "the card you picked").
  */
-const ASKS_HIM: readonly RegExp[] = [
-  /\u7b49(?:\u4f60|\u60a8)(?:\u6765)?(?:\u6311|\u9009|\u5b9a|\u62cd\u677f|\u51b3\u5b9a|\u6279|\u5ba1|\u786e\u8ba4|\u70b9\u5934|\u540c\u610f)/,
-  /(?:\u8bf7|\u8ba9|\u7531)(?:\u4f60|\u60a8)(?:\u6765)?(?:\u6311|\u9009|\u5b9a|\u62cd\u677f|\u51b3\u5b9a|\u786e\u8ba4)/,
+const ASK_CJK: readonly RegExp[] = [
+  /\u7b49(?:\u4f60|\u60a8)(?:\u6765)?(?:\u6311|\u9009|\u5b9a|\u62cd\u677f|\u51b3\u5b9a|\u6279|\u5ba1|\u786e\u8ba4|\u70b9\u5934|\u540c\u610f|\u4e00\u53e5|\u56de\u590d|\u8bf4)/,
+  /\u7b49(?:\u4f60|\u60a8)[^\uff0c\u3002\uff1b,;]{1,14}?(?:\u70b9\u5934|\u540c\u610f|\u786e\u8ba4|\u62cd\u677f|\u51b3\u5b9a|\u6279\u51c6|\u56de\u590d|\u56de\u4e00\u53e5|\u6311\u4e00\u4e2a|\u9009\u4e00\u4e2a)/,
+  /(?:\u8bf7|\u8ba9|\u7531)(?:\u4f60|\u60a8)(?:\u6765)?(?:\u518d)?(?:\u6311|\u9009|\u5b9a|\u62cd\u677f|\u51b3\u5b9a|\u786e\u8ba4|\u56de\u7b54|\u56de\u590d|\u6279)/,
+  /\u8bf7\u518d(?:\u56de\u7b54|\u56de\u590d|\u786e\u8ba4|\u8bf4)/,
+  /(?:\u9700\u8981|\u8981)(?:\u4f60|\u60a8)[^\uff0c\u3002\uff1b,;]{0,10}?(?:\u56de\u4e00\u53e5|\u56de\u590d|\u56de\u7b54|\u786e\u8ba4|\u51b3\u5b9a|\u62cd\u677f|\u70b9\u5934|\u540c\u610f|\u6311\u4e00\u4e2a|\u9009\u4e00\u4e2a)/,
   /(?:\u4f60|\u60a8)(?:\u6765)?(?:\u6311|\u9009)(?:\u4e00\u4e2a|\u54ea\u4e2a|\u4e00\u4e0b)/,
-  /\b(?:your\s+(?:pick|call|choice|decision|approval)|for\s+you\s+to\s+(?:pick|choose|decide|approve)|(?:pick|choose)\s+one|waiting\s+(?:on|for)\s+you)\b/i,
+  // "pending your confirm", "please decide", "only your word is left", "you settle it", "tell me once".
+  /\u5f85(?:\u4f60|\u60a8)(?:\u786e\u8ba4|\u5ba1\u6279|\u6279\u51c6|\u62cd\u677f|\u70b9\u5934|\u540c\u610f|\u51b3\u5b9a)/,
+  /^\u8bf7(?:\u62cd\u677f|\u786e\u8ba4|\u6279\u51c6|\u5ba1\u6279|\u51b3\u5b9a|\u6311\u4e00\u4e2a|\u9009\u4e00\u4e2a)/,
+  /\u53ea\u5dee\u4f60(?:\u4e00\u53e5|\u70b9\u5934|\u786e\u8ba4|\u540c\u610f|\u62cd\u677f)/,
+  /(?:\u4f60|\u60a8)(?:\u5b9a\u4e00\u4e0b|\u62cd\u4e2a\u677f|\u770b\u8981\u4e0d\u8981|\u540c\u610f\u7684\u8bdd|\u8bf4\u4e00\u58f0)/,
+  /\u56de\u6211\u4e00\u53e5/,
+  /(?:\u4f60|\u60a8)(?:\u51b3\u5b9a\u4e00\u4e0b|\u62cd\u677f|\u770b\u7528\u54ea)/,
+  /\u5982\u679c(?:\u4f60|\u60a8)\u540c\u610f/,
 ];
-/** The card asks him to decide something (ASKS_HIM). Pure. */
+/** A "not" this close before a Chinese ask turns it into a result: not, no, never, without, no need, no longer. */
+const NOT_CJK = /[\u4e0d\u6ca1\u65e0\u522b\u672a\u52ff\u514d]/;
+/** Words that hold such a character and say no "not": no problem, whatever, the other, free, not bad, different. */
+const NOT_CJK_WORDS = /\u6ca1\u95ee\u9898|\u4e0d\u7ba1|\u65e0\u8bba|\u522b\u7684|\u514d\u8d39|\u4e0d\u9519|\u4e0d\u540c/g;
+const notBefore = (c: string, at: number): boolean => NOT_CJK.test(c.slice(Math.max(0, at - NOT_CJK_BEFORE), at).replace(NOT_CJK_WORDS, ''));
+const NOT_CJK_BEFORE = 6;
+/** The particle that makes the verb before it a description. */
+const OF = '\u7684';
+/** English: a decision noun is named, never "waiting for your Mac" or a bare "waits on you". */
+const ASK_EN = /\b(?:for\s+you\s+to\s+(?:pick|choose|decide|approve|confirm)|wait(?:s|ing)?\s+on\s+you\s+to\s+(?:pick|choose|decide|approve|confirm)|can\s+you\s+(?:confirm|approve|pick|choose|decide)|let\s+me\s+know\s+(?:if\s+I\s+should|which)|if\s+you(?:'re|\s+are)\s+ok\s+with|wait(?:s|ing)?\s+(?:on|for)\s+your\s+(?:pick|call|choice|decision|approval|consent|yes|ok|go-ahead|nod|sign-off|answer)|needs\s+your\s+(?:pick|call|choice|decision|approval|consent|yes|ok|go-ahead|sign-off))\b/i;
+const NOT_EN = /\b(?:no|not|never|nothing|without|don't|doesn't|isn't|aren't|won't)\b/i;
+/** The clauses a summary is read in. */
+const CLAUSE = /[\uff0c\u3002\uff1b\uff1a\uff01\uff1f\u3001,;:!?\n]|\.(?!\d)/;
+
+/** One clause says a decision of his waits now. */
+function clauseAsks(c: string): boolean {
+  for (const re of ASK_CJK) {
+    const m = re.exec(c);
+    if (!m) continue;
+    const end = m.index + m[0].length;
+    if (c[end] === OF || notBefore(c, m.index)) continue;
+    return true;
+  }
+  const e = ASK_EN.exec(c);
+  return !!e && !NOT_EN.test(c.slice(0, e.index));
+}
+
+/** Past or present, a decision is named ("your pick is live"): for the pointer rule only. */
+const NAMES_DECISION = /\b(?:your\s+(?:pick|call|choice|decision|approval)|(?:pick|choose)\s+one)\b/i;
+
+/** The card asks him to decide something, or names a decision of his (asksHimNow, NAMES_DECISION). Pure. */
 export function asksHimToDecide(text: string | null | undefined): boolean {
   const t = (text ?? '').replace(/\s+/g, ' ');
-  return ASKS_HIM.some((re) => re.test(t));
+  return asksHimNow(t) || NAMES_DECISION.test(t);
 }
+
+/**
+ * Asks read on the whole text, since the clause split drops their mark: a question to him ("post it or not?",
+ * "should I ship it?", "do you want A or B?") unless it is answered right after ("roll back? No, it is fixed"), and
+ * "your call: A or B". Never "should I have ...".
+ */
+const ASK_WHOLE = /(?:\u8981\u4e0d\u8981[^\u3002\uff1f\uff01?!]{0,20}[\uff1f?]|\bshould\s+I\b(?!\s+have\b)[^.?!]{0,40}\?|\bdo\s+you\s+want\b[^.?!]{0,40}\bor\b[^.?!]{0,40}\?|\byour\s+call\s*[:\uff1a])/gi;
+/** An answer that follows the question at once: it was asked and answered in place. */
+const ANSWERED_AFTER = /^\s*(?:\u4e0d\u7528|\u4e0d\u8981|\u4e0d\u9700\u8981|\u6ca1\u6709|\u4e0d[\uff0c,]|no\b|not\b|yes\b)/i;
+/** Quoted words are someone else's (a bot's message, a rule's text), never his decision. */
+const QUOTED = /"[^"]*"|\u201c[^\u201d]*\u201d|\u300c[^\u300d]*\u300d/g;
+
+/**
+ * The words say a decision of his waits now ("waiting for your nod", "please answer once more"),
+ * read clause by clause: never a past pick ("your pick is live"), a "not" before it ("no need to
+ * wait for your OK", "nothing waits on you"), or a description ("the card you picked"). 2026-11-24,
+ * the threads inspection: four live cards asked him to decide from Done, with no buttons and nothing
+ * in his Needs you, one of them after he had answered five times; its review: a result that only
+ * mentions him must never be pushed into a fake Needs you. Pure.
+ */
+export function asksHimNow(text: string | null | undefined): boolean {
+  const t = (text ?? '').replace(/\s+/g, ' ').replace(QUOTED, ' ');
+  for (const q of t.matchAll(ASK_WHOLE)) {
+    const at = q.index ?? 0;
+    // Its own sentence only: a "no" in the sentence before ("No errors. Should I ship it?") says nothing of it.
+    const sentence = t.slice(Math.max(0, at - 24), at).split(/[.!?\u3002\uff01\uff1f]/).pop() ?? '';
+    if (notBefore(t, at) || NOT_EN.test(sentence) || ANSWERED_AFTER.test(t.slice(at + q[0].length))) continue;
+    return true;
+  }
+  return t.split(CLAUSE).some((c) => clauseAsks(c.trim()));
+}
+
+/** Why a summary that asks him to decide may not stand on a thread out of his Needs you. */
+export const ASKS_OUTSIDE_NEEDS = 'This summary asks him to decide, but the thread would not be in his Needs you: it reads '
+  + 'as a result with no buttons, and he may never see it is his. Hand it to him (state needs, with user_kind and user_kind_why, '
+  + 'and options when he picks among choices), or write only the result here and ask nothing.';
 
 /**
  * Words that put what the card is about on another card or thread: "\u653e\u5230\u2026\u5361\u4e0a" (put on
@@ -101,13 +178,15 @@ function pointsOnly(clause: string): boolean {
  */
 export function summaryPointsElsewhere(summary: string | null | undefined): string | null {
   const text = (summary ?? '').replace(/\s+/g, ' ').trim();
-  if (!text || PROOF_RE.test(text)) return null;
-  // He is asked to decide, and what to decide is on another card: his card must hold it.
+  if (!text) return null;
+  // He is asked to decide, and what to decide is on another card: his card must hold it. A proof
+  // beside it (a path, a link) does not hold the choices (the threads inspection, 2026-11-24).
   if (asksHimToDecide(text) && ON_ANOTHER_CARD.some((re) => re.test(text))) {
     return 'This summary asks him to decide but sends him to another card for the choices, and he may not find it: '
       + 'put the choices and your pick on this card (thread_update: state needs, with options), or, when the other card '
       + 'holds the decision, say only this card\'s own result here.';
   }
+  if (PROOF_RE.test(text)) return null;
   // A dot, colon or comma between digits is part of a number, a version or a time ("1.35", "10:30").
   const clauses = text.split(/(?:[\u3002\uff0e!\uff01?\uff1f;\uff1b\uff1a\uff0c\u3001\n]|(?<!\d)[.:,]|[.:,](?!\d))+/).map((c) => c.trim()).filter(Boolean);
   let pointed = false;

@@ -68,6 +68,9 @@ describe('what stays a letter whoever sends it', () => {
     expect(letterOnlyReason({ ...base, type: 'completion', userAsked: true })).toBe('user_asked')
     expect(letterOnlyReason({ ...base, type: 'info', pin: true })).toBe('pinned')
     expect(letterOnlyReason({ ...base, type: 'info', items: [{}] as never })).toBe('items')
+    // An update that asks him to decide ("the drafts wait for your nod") stays the letter it was sent as (2026-11-24).
+    expect(letterOnlyReason({ ...base, type: 'info', markdown: '\u8349\u7a3f\u90fd\u597d\u4e86\uff0c\u7b49\u4f60\u70b9\u5934\u518d\u53d1' })).toBe('asks')
+    expect(letterOnlyReason({ ...base, type: 'info', markdown: 'Shipped; nothing waits on you.' })).toBeNull()
     expect(letterOnlyReason({ ...base, type: 'info', credential_ask: { host: 'h', kind: 'login' } as never })).toBe('credential')
     expect(letterOnlyReason({ subject: 'Chart', type: 'info', html: '<p>x</p>' })).toBe('document')
     expect(letterOnlyReason({ ...base, type: 'info' })).toBeNull()

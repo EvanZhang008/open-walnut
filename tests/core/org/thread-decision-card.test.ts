@@ -49,8 +49,11 @@ describe('a card that asks him to decide and sends him elsewhere for it', () => 
 function card(reply: string, state: 'answered' | 'pending' | 'working' | 'needs') {
   let f = fileMessage(emptyThreads('vp'), { text: 'which panel layout?', via: 'chat', at: '2026-11-24T05:00:00.000Z' }).file
   f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Three layouts are ready.', at: '2026-11-24T05:01:00.000Z' }]])).file
-  const patch = state === 'needs' ? { title: 'Panel layout', reply, state, user_kind: 'user_own', user_kind_why: 'his own pick of a layout' } : { title: 'Panel layout', reply, state }
-  return updateThread(f, f.threads[0].id, patch as never, 'task:vp', '2026-11-24T05:02:00.000Z').file
+  const patch = state === 'needs' ? { title: 'Panel layout', reply, state, user_kind: 'user_own', user_kind_why: 'his own pick of a layout' } : { title: 'Panel layout', reply: 'Three layouts are ready.', state }
+  const out = updateThread(f, f.threads[0].id, patch as never, 'task:vp', '2026-11-24T05:02:00.000Z').file
+  // A card that asks him from outside needs is refused at every write now (thread-asks-outside-needs.test.ts);
+  // one an older build stored that way is still named to its node.
+  return state === 'needs' ? out : { ...out, threads: out.threads.map((t, i) => (i === 0 ? { ...t, reply } : t)) }
 }
 
 describe('every writer refuses it', () => {

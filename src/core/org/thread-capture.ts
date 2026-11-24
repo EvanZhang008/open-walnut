@@ -21,7 +21,7 @@ import {
 } from './threads-model.js';
 import { exchangesOf, snoozedNow, watchedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
 import { keepsThreads } from './keeps-threads.js';
-import { asksHimToDecide } from './thread-summary-content.js';
+import { asksHimNow } from './thread-summary-content.js';
 import { threadsKeptNow } from './threads-kept.js';
 import { letterThreadId } from './letter-thread-model.js';
 import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
@@ -328,7 +328,7 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
     // A card that asks him to decide but is no decision card: Done or hidden, it is not on his Needs
     // you, and a lead's view lists a task's decision only from needs (2026-11-24, his VP: "where is it";
     // eight such cards in his data that day, one in his Done saying the choices waited on another card).
-    const decides = t.state !== 'needs' && asksHimToDecide(t.reply);
+    const decides = t.state !== 'needs' && asksHimNow(t.reply);
     // A pending thread is the node's call that nothing on it is news: only a stand-in title is asked about.
     if (t.state === 'pending') why = decides ? 'decide' : untitled ? 'untitled' : null;
     // A summary he wrote past comes first (2026-11-08, the user: "Walnut needs to make sure it doesn't happen").

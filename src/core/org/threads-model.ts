@@ -67,7 +67,7 @@ import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
 import { normalizeThreadLetter, type ThreadLetter } from './letter-thread-model.js';
 import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.js';
-import { summaryPointsElsewhere, summaryRepeatsHim } from './thread-summary-content.js';
+import { ASKS_OUTSIDE_NEEDS, asksHimNow, summaryPointsElsewhere, summaryRepeatsHim } from './thread-summary-content.js';
 import { ackHoldsResult, lineMay, NO_LINE_REPLY } from './thread-known.js';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
@@ -1145,8 +1145,11 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   // A node's summary must say something on its own: his card shows only it (org/thread-summary-content.ts).
   // A close needs none, and a status line's words are judged where the line is read (status-threads.ts patchForLine).
   if (by !== 'human' && !opts.line && patch.close === undefined && isStr(patch.reply)) {
-    const empty = summaryPointsElsewhere(patch.reply) ?? summaryRepeatsHim(patch.reply, find(file, id).messages.map((m) => m.text));
+    const was = find(file, id);
+    const empty = summaryPointsElsewhere(patch.reply) ?? summaryRepeatsHim(patch.reply, was.messages.map((m) => m.text));
     if (empty) throw new ThreadError('bad_input', 422, empty);
+    // A decision of his asked from a thread out of his Needs you reads as a result with no buttons.
+    if ((patch.state ?? was.state) !== 'needs' && asksHimNow(patch.reply)) throw new ThreadError('bad_input', 422, ASKS_OUTSIDE_NEEDS);
   }
   file = stampLegacyReplyAt(file);
   const cur = find(file, id);

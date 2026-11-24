@@ -16,6 +16,7 @@
  * a session's send through the route or the replica's relay comes here; Walnut's own letters, the
  * morning report, a plugin's and a host's journal op never do.
  */
+import { asksHimNow } from '../org/thread-summary-content.js';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import type { OrgThread, ThreadState } from '../org/threads-model.js';
@@ -75,6 +76,9 @@ export function letterOnlyReason(input: SendInput): string | null {
   if (Array.isArray(input.items) && input.items.length > 0) return 'items';
   if (input.credentialAsk || input.credential_ask) return 'credential';
   if (input.html || input.htmlRef || input.html_ref) return 'document';
+  // An update that asks him to decide is no routine update: it goes as the letter it was sent as,
+  // never as a card in Done with no buttons (thread-summary-content.ts asksHimNow, 2026-11-24).
+  if ([input.text, input.markdown].some((x) => typeof x === 'string' && asksHimNow(x))) return 'asks';
   return null;
 }
 

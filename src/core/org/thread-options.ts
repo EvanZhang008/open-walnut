@@ -30,13 +30,15 @@ const NUMBER = /^[^\S\n]*(?:[-*][^\S\n]+)?(?:\*\*)?([1-9])(?:\*\*)?[.):\uff1a][^
 
 /** A word of choosing: a list without one is a status list ("1. Built 2. Tested"), not a choice. */
 const CHOOSING = /\b(?:pick|choose|chose|option|options|recommend|recommended|recommends|prefer|either|which (?:one|do you|would you|should))\b/i;
+/** The same in Chinese, as whole phrases ("pick one", "which one", "recommend", "A or B?"): a single character of choosing is part of other words (review 2026-11-24: "the fix plan: 1. ... 2. ..."). */
+const CHOOSING_CJK = /\u9009\u4e00\u4e2a|\u9009\u54ea|\u6311\u4e00\u4e2a|\u6311\u54ea|\u63a8\u8350|\u54ea\u4e2a|\u54ea\u4e00\u4e2a|\u8fd8\u662f[^\u3002\n]*[\uff1f?]/;
 
 /**
  * Whether `text` lists choices: a word of choosing, and two lettered ones A and B (a third and more
  * after them) or two numbered ones 1 and 2 at line starts. Pure.
  */
 export function listsChoices(text: string | null | undefined): boolean {
-  if (!text?.trim() || !CHOOSING.test(text)) return false;
+  if (!text?.trim() || !(CHOOSING.test(text) || CHOOSING_CJK.test(text))) return false;
   const letters = new Set([...text.matchAll(LETTER)].map((m) => m[1]));
   if (letters.has('A') && letters.has('B')) return true;
   const numbers = new Set([...text.matchAll(NUMBER)].map((m) => m[1]));

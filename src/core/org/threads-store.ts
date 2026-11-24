@@ -273,9 +273,12 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
     await refuseSameSubjectThread(taskId, input.title, by, input);
     // Its first post and summary read alone, as a thread_update summary must (thread-summary-content.ts).
     if (by !== 'human') {
-      const { summaryPointsElsewhere } = await import('./thread-summary-content.js');
+      const { ASKS_OUTSIDE_NEEDS, asksHimNow, summaryPointsElsewhere } = await import('./thread-summary-content.js');
       const empty = [input.reply, input.text].map((x) => (typeof x === 'string' ? summaryPointsElsewhere(x) : null)).find(Boolean);
       if (empty) throw new ThreadError('bad_input', 422, empty);
+      // Its summary, or with none its first post, which his card shows in its place.
+      const words = typeof input.reply === 'string' && input.reply.trim() ? input.reply : input.text;
+      if (!needs && typeof words === 'string' && asksHimNow(words)) throw new ThreadError('bad_input', 422, ASKS_OUTSIDE_NEEDS);
     }
   }
   const at = new Date().toISOString();

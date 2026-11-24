@@ -167,7 +167,7 @@ describe('a pending thread: only handed off or being worked on, out of his sight
     expect(same({ title: 'Threads: build it' })).toBe('pending')
     expect(same({ add_tasks: ['t-2'] })).toBe('pending')
     expect(same({ reply: 'Done; live on prod, check the card', state: 'pending' })).toBe('pending')
-    expect(same({ reply: 'Built; it needs your call on the default view' })).toBe('answered')
+    expect(same({ reply: 'Built; the default view is the plain list' })).toBe('answered')
     expect(same({ reply: 'Still building', state: 'working' })).toBe('working')
     expect(same({ reply: 'Built; which default?', state: 'needs', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' })).toBe('needs')
   })
