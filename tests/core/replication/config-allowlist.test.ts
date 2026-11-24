@@ -12,10 +12,14 @@ import {
   CONFIG_COPY_ALLOWLIST, CONFIG_COPY_DROPPED, CONFIG_COPY_DROPPED_FIELDS, CONFIG_COPY_RETIRED_FIELDS, allowThrough, configCopyRows, configRowAdmissible, findSecrets,
   secretKeyName, secretShapedValue, RETIRED_CONFIG_KEYS, type AllowSpec,
 } from '../../../src/core/replication/config-allowlist.js'
+import { COPY_ONLY_CONFIG_KEYS } from '../../../src/core/replication/copy-only-keys.js'
 import { maskSecretTail, PLUGIN_FORM_MASK } from '../../../src/core/config-secret-shape.js'
 import { fullConfigFixture, PLANTED_SECRETS } from '../../helpers/full-config-fixture.js'
 import { configTypeTree, type TypeNode } from '../../helpers/config-type-fields.js'
 
+// Rows the leader adds of its own (what it speaks, which hosts run sessions), whatever config.yaml says:
+// they follow the leader's build and switches, not the keys under test here.
+const configKeys = (r: { rows: Array<{ key: string }> }) => r.rows.map((x) => x.key).filter((k) => !COPY_ONLY_CONFIG_KEYS.includes(k))
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 
 /** What is wrong with `spec` against the type at `at`: a field in neither list, a whole copy of a record, a stale name. */
@@ -93,7 +97,7 @@ describe('the ratchet: every config key is allowlisted or dropped', () => {
   it('a key in neither list is not copied (it defaults to dropped) and is named as unknown', () => {
     const r = configCopyRows({ version: 1, brand_new_section: { mode: 'fast' }, ui: { theme: 'dark' } })
     // `engines` is always a row (`{}` for none): a reader then knows the Mac set no provider.
-    expect(r.rows.map((x) => x.key)).toEqual(['engines', 'ui', 'version'])
+    expect(configKeys(r)).toEqual(['engines', 'ui', 'version'])
     expect(r.unknown).toEqual(['brand_new_section'])
   })
 
@@ -107,7 +111,7 @@ describe('the ratchet: every config key is allowlisted or dropped', () => {
       version: 1, heartbeat: { enabled: true, every: '30m' }, developer: { show_ui_only_triage: true },
       git_versioning: { auto_commit: true, remote: 'https://marina:planted@git.example.com/data.git' },
     })
-    expect(r.rows.map((x) => x.key)).toEqual(['engines', 'version'])
+    expect(configKeys(r)).toEqual(['engines', 'version'])
     expect(r.unknown).toEqual([])
     for (const k of RETIRED_CONFIG_KEYS) expect([k, own(CONFIG_COPY_ALLOWLIST, k) || own(CONFIG_COPY_DROPPED, k)]).toEqual([k, false])
   })
@@ -203,7 +207,7 @@ describe('a secret-shaped value in an allowlisted key refuses the row', () => {
   for (const [key, value, reason] of planted) {
     it(`${key}: ${reason}`, () => {
       const r = configCopyRows({ version: 1, [key]: value })
-      expect(r.rows.map((x) => x.key)).toEqual(['engines', 'version'])
+      expect(configKeys(r)).toEqual(['engines', 'version'])
       expect(r.refused.map((x) => x.key)).toEqual([key])
       expect(r.refused[0]!.findings.map((f) => f.reason)).toContain(reason)
       // The refusal names paths, never a value.
