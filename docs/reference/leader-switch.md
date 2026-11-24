@@ -247,8 +247,83 @@ handover leaves no machine without a leader for long; a stop asked later is refu
 **Who may begin a switch.** The old leader's server takes a begin for `to` only when `to` is a
 machine of `leader_switch.machines` and holds this leader's standby target (its `standby_dir` is
 where the batches go). A begin forwarded by another machine is taken only from the machine it
-goes to (`final-stop.ts` `beginRefusal`). The forwarding itself (a replica passing a person's
-`walnut leader switch` to the leader) is not wired yet.
+goes to: the host link it came over must be `to`'s, by the machine id that link's daemon said in its
+hello, or by the leader's own name for the host (its `hosts` key) when `leader_switch.machines` gives
+that name as `to`'s `host_key` (the same two names the standby host check accepts; a daemon's hello id
+is its account's machine id, which is not the permit's id where `WALNUT_MACHINE_ID_FILE` names
+another, as in the rehearsal) (`final-stop.ts` `beginRefusal`, through `switch-link.ts`, which also
+checks the copy link answers). Either way the
+leader's console (its log) and Walnut Health record who began it on which machine
+(`Started by the switch command on machine-a`, or `Started by machine-b, forwarded by its replica`),
+and the source state keeps it (`startedBy`, shown by `--status`).
+
+### Running the command on either machine
+
+On the machine that leads, `walnut leader switch --to <machine>` starts the source job (above). On the
+machine that will lead, the same command with `--to` naming that machine itself (or `--standby-dir <its
+standby_dir>`) does three things, none of them a step of the switch (`candidate-command.ts`):
+
+1. the **candidate check**, there, in the command's own process (the target job's `--check`: its copy, its
+   disk, the witnesses it reaches with no leader link). A refusal changes nothing anywhere;
+2. the **begin**, over that machine's own host link to the leader ([The leader relay](#the-leader-relay)):
+   `POST /leader-switch/begin {to, switchId}`. The leader applies the trust rule above, records the begin,
+   and starts the source job on its own machine, detached, with that switch id (`startSourceJobFor`, the
+   command's own way to start it there). The source job then runs exactly as when it is started on the
+   leader: its preflight asks the loopback begin again, which answers the recorded `startedBy`;
+3. it **follows**: the source job's lines over the same link (`GET /leader-switch/job`, printed as
+   `[on machine-a] ...`) while the leader runs, then its own target job (state and output under its standby
+   folder) until it ends. Exit codes as on the leader: 0 switched, 1 refused, 3 rolled back, 4 a job died.
+   The command ends with its target job: the source job's last step (the hand-off: the old home's marker,
+   its service's replica role) runs on the old leader's machine after its server stopped, where this
+   machine no longer sees it; `walnut leader switch --status` there shows it.
+
+Where the machine has no link to the leader (no host service of this Walnut runs there, so no relay socket),
+it says so and names the machine to run it on, and asks nothing of anyone:
+
+```
+leader: this machine has no link to the leader machine-a (no Walnut service of this Walnut runs on this machine
+as a host of the leader (no relay socket .../leader-relay/<16 hex>.sock)): run `walnut leader switch --to machine-b`
+on machine-a, the machine that leads
+```
+
+`--resume`, `--cancel` and `--status` stay per machine, as before.
+
+### The leader relay
+
+A machine that is a host of the leader runs this Walnut's host service (`walnut web --replica`), whose
+follower link to its own daemon can open a stream to the leader. With the experiment on in its config
+copy, the service listens on a unix socket, `<daemon dir>/leader-relay/<sha256(walnut id), 16 hex>.sock`
+(0600 in a 0700 dir: only this account connects, as with the host call entry), and splices each connection
+into one stream `link.openStream('primary', 'leader-relay')` (`src/replica/leader-relay-entry.ts`). The
+leader's DaemonConnection hands a stream of that purpose to its **relay door** (`leader-relay-door.ts`), never
+to its tunnel port, with the key of the host it came over: so nothing a host's public listener forwards (purpose
+`web`) reaches the door, and the caller is known by its link. The door answers, one request per stream:
+
+| Path | What |
+|---|---|
+| `POST /leader-switch/begin` | the forwarded begin (above) |
+| `GET /leader-switch/job?switchId=&from=` | the output of the source job that begin started, whole lines from a byte offset, whether it runs, its step |
+| `POST /leader-witness/challenge`, `/request` | this machine's witness door (`witness-door.ts`, the one the capability `witness-door` opens), proven with the witness's own key |
+
+With the permit not running, the DaemonConnection destroys such a stream before any switch code loads. Every
+process of the candidate's machine (the command, its check, the target job's probe) reaches the door by opening
+that socket: none builds a link (`leader-relay.ts`, the opener injected everywhere as `StreamOpener`, so the
+transport does not care how the stream is made). No new key, no new ssh, no public door, no daemon change.
+
+**The leader relay ends at the stop.** It is the leader's server's own link: at its switch stop the server closes
+every host link, so the way is gone before the new leader's commit. A witness reached only over it counts for
+the check's reading, never for the commit: the check refuses when a majority needs it (`commitReach` in
+`witness-reach.ts`), naming the witnesses and why:
+
+```
+the new leader reaches a majority of the witnesses only through its host link to the leader (w-a), which closes at
+the old leader's stop, before the commit: without it 1 of 3 answer (2 needed). This machine needs a witness of its
+own, or direct doors to a majority: ...
+```
+
+This is what a switch back to the Mac meets in the lead's layout (the Mac keeps no witness, the dev machines'
+doors are not reachable from it): the leader's machine's witness over the relay plus the companion is a majority
+while the leader runs, and the companion alone after its stop. The preflight therefore refuses it.
 
 ### The copy link to another machine
 
@@ -1200,14 +1275,15 @@ the two machines have no route to each other, and in an automatic takeover the o
 ### How a witness is reached
 
 A witness kept by a machine (`{ id, machine?, host?, url?, key? }`, at least one of the first three) is reached by one of three
-ways behind the one transport (`witness-transport.ts` `waysOf`), tried in this order, the next one after a way that did not answer,
-the one that answered kept:
+ways behind the one transport (`witness-transport.ts` `waysOf`), and a candidate's probe by a fourth (`host-link`), tried in the order
+here, host-link, direct, link, the next one after a way that did not answer, the one that answered kept:
 
 | way | config | how | who uses it |
 |---|---|---|---|
 | a, here | `machine` is this process's machine id | the record is opened in this machine's witness root, under its lock (`local-witnesses.ts` `serveLocalWitness`) | any process on that machine: its own service, a candidate's server, the switch's probe |
 | b, direct | `url` and `key` | the witness's direct door, proven with the witness's own key (`witness-direct.ts`, `witness-door.ts`) | any process of this Walnut that holds the config: the leader, a candidate, a standby |
 | c, link | `host` | the leader's link to that machine's service (`witness-route.ts` on its leader door), or a host-dialed door's call frames once 5a lands | the leader server only |
+| host-link | `machine` (another machine) and `key` | the door of the machine that leads, over this machine's own host link to it ([The leader relay](#the-leader-relay)), the same caller and proofs as way b; the leader's machine answers for the witness it keeps, `no_witness_here` for any other. Tried before the direct door (that door is often out of this machine's reach, and a call to it holds the turn until its timeout) | a candidate's probe only (`probeWitnessReach` with a relay socket on its machine), never a permit runtime; it ends with the leader's server |
 
 **Way a: a shared record with a lock, not a call to the service over loopback.** Every way to one witness ends at one file:
 the machine's service serves it (way c, way b) from `<state dir>/open-walnut/leader-witness/<walnut id>/<witness id>/permit-record.json`,
@@ -1329,7 +1405,8 @@ Three always-on places: **the services of the two always-on dev machines, and th
 - **A dev machine as the candidate** reaches itself (way a) and the companion (way b): two of three, with no leader link.
 - **A switch back to the Mac** (not a witness) asks all three over its links, as the leader does today; as a candidate it has no link
   (above), so by the rule it needs direct doors to two of them: the companion's and a dev machine service's (`witness-door` on that
-  service). The end-to-end test runs this layout: a dev machine leads, the other dev machine's witness joins after the first lead,
+  service). Its host link to the leader reaches the leader's machine's witness ([The leader relay](#the-leader-relay)), but only
+  until the leader's stop, before the commit: it does not satisfy the rule, and the preflight refuses a switch back that needs it. The end-to-end test runs this layout: a dev machine leads, the other dev machine's witness joins after the first lead,
   and a candidate with no witness and no link switches in with that other dev machine down
   (`tests/e2e/leader-switch-no-link-e2e.test.ts`). 5a's host-dialed door does not change this (hosts dial the leader, and the Mac is
   not the leader before its commit).
@@ -1350,8 +1427,13 @@ witness, above).
   real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)). The old leader's
   own sessions follow by their host key ([Paths](#paths), where a session runs); a subagent run's or a detached record's host
   is not moved.
-- **A begin forwarded from another machine**: the trust rule is built and tested (`beginRefusal`); a replica passing a
-  person's `walnut leader switch` to the leader is not wired.
+- **The command on the machine that will lead** is [built](#running-the-command-on-either-machine) and rehearsed with real
+  daemons and a real host service on one computer (`--remote`, scenario `forwarded`); not run between two real machines.
+- **A switch back to the Mac** is refused by the preflight in the lead's layout ([The leader relay ends at the stop](#the-leader-relay)):
+  the Mac needs a witness of its own or direct doors to two. And after a switch from the Mac to a dev machine there is no
+  rehearsed copy way back: the dev machine sends its copy to the Mac only as kind `daemon` once the network membership follows
+  the permit holder (not verified on real machines), or as kind `door` (step 5, not built). No real-data switch away from the
+  Mac until one of them is rehearsed.
 - **The service role, as tested**: the two call sites and the start hook run against the real mode writer on a scratch install
   root (`tests/core/leader/switch/service-role.test.ts`). Not tested: a compiled leader run of a switched service, the boot
   time at real size, and the Mac half.
