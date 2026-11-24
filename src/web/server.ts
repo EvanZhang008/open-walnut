@@ -3178,6 +3178,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startHostReplicaSync } = await import('../core/host-replica-sync.js')
     const heartbeat = startLeaderHeartbeat()
     const unwatch = watchBackupLeaderSetting()
+    // The experiment host_service_sets switched on: every connected host looks at its set now.
+    const unwatchSets = (await import('../providers/service-set-leader.js')).watchServiceSetsSwitch()
     // Each host's read copy of the notes, memory and skills (core/host-replica.ts).
     const replicas = startHostReplicaSync()
     // Removal of finished tasks' working directories on every host (core/task-dir-sweep.ts).
@@ -3210,7 +3212,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const copies = (await import('../core/replication/kinds/index.js')).startCopyKinds()
     // A config.yaml edited outside Walnut reaches them like a Settings save (core/config-file-watch.ts).
     const configFile = (await import('../core/config-file-watch.js')).startConfigFileWatch()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskDirSweep.stop(); historyArchive.stop(); testRunSweep.stop(); missedRunSweep.stop(); vaultBackground.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop(); configFile.stop() } }
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); unwatchSets(); replicas.stop(); taskDirSweep.stop(); historyArchive.stop(); testRunSweep.stop(); missedRunSweep.stop(); vaultBackground.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop(); configFile.stop() } }
     log.leader.info('leader loops: started (heartbeat, copies to the followers)')
   }
   // A follower (the cloud companion, a server on a host) keeps the leader's

@@ -35,6 +35,28 @@ export async function hostServiceSetsWanted(): Promise<boolean> {
   }
 }
 
+/**
+ * Switching the experiment on starts the look at every connected host at once (its settle wait
+ * later), instead of at each host's next connect. Off to on only: switching it off starts no move.
+ */
+export function watchServiceSetsSwitch(): () => void {
+  const name = 'service-sets-switch'
+  let last: boolean | null = null
+  void hostServiceSetsWanted().then((v) => { if (last === null) last = v })
+  void import('../core/event-bus.js').then(({ bus, EventNames }) => {
+    bus.subscribe(name, async (event) => {
+      if (event.name !== EventNames.CONFIG_CHANGED) return
+      const now = await hostServiceSetsWanted()
+      const was = last
+      last = now
+      if (!now || was !== false) return
+      const { lookAtServiceSetsOnAllHosts } = await import('./daemon-connection.js')
+      lookAtServiceSetsOnAllHosts()
+    }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+  })
+  return () => { void import('../core/event-bus.js').then(({ bus }) => bus.unsubscribe(name)) }
+}
+
 /** Whose service a `walnut daemon` line is for: this Walnut's id and its data dir now (daemon-shared.ts walnutKeyOf). */
 export interface SetAsk {
   walnutId: string

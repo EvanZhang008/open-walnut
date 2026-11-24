@@ -1752,6 +1752,11 @@ export class DaemonConnection {
   /** The service set the hello names ('' the default set, or an older host). */
   get serviceSet(): string { return this._helloServiceSet }
 
+  /** Look at this link's service set again now (the experiment host_service_sets was just switched on: watchServiceSetsSwitch). */
+  lookAtServiceSet(): void {
+    if (this._connected && !this._destroyed) this.serviceSetLink?.schedule()
+  }
+
   /**
    * This link's part in service sets (service-set-move-link.ts): an SSH or host network link of the
    * real server only; null for this machine, a test server, the cloud box. It does nothing while the
@@ -10730,6 +10735,11 @@ export function refreshLeaderOnAllHosts(): void {
   for (const conn of connectionPool.values()) {
     if (conn.connected) conn.refreshLeader()
   }
+}
+
+/** Every connected host looks at its service set again (service-set-leader.ts watchServiceSetsSwitch). */
+export function lookAtServiceSetsOnAllHosts(): void {
+  for (const conn of connectionPool.values()) conn.lookAtServiceSet()
 }
 
 /** Re-arm every connected host — the connect-time and boot-time sweep. */
