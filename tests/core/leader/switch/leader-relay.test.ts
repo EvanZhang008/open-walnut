@@ -20,6 +20,9 @@ import YAML from 'yaml'
 const spy = vi.hoisted(() => ({ links: [] as string[] }))
 // Nothing on the candidate's side may open a leader link: the module every daemon link goes through is a spy.
 vi.mock('../../../../src/core/hosts/link.js', () => ({ link: async (host: string) => { spy.links.push(host); throw new Error('no link in this test') } }))
+// The leader's server holds the permit as machine-a (its relay door's whoami; the DaemonConnection's own gate is
+// tests/providers/daemon-connection-leader-relay.test.ts).
+vi.mock('../../../../src/core/leader/switch/boot.js', async (orig) => ({ ...(await orig<object>()), currentLeaderPermit: () => ({ machine: 'machine-a', trial: false }) }))
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-relay-'))
 // The leader's process: its machine id file (its witness root beside it) and its witness door capability.
@@ -38,6 +41,9 @@ import { createWitnessDoorRouter } from '../../../../src/web/routes/witness-door
 import { WITNESS_DOOR_PATH } from '../../../../src/core/leader/switch/witness-wire.js'
 import { waysOf } from '../../../../src/core/leader/switch/witness-transport.js'
 import { runTargetJob } from '../../../../src/core/leader/switch/target-job.js'
+import { runCandidateSwitch } from '../../../../src/core/leader/switch/candidate-command.js'
+import { DaemonConnection } from '../../../../src/providers/daemon-connection.js'
+import { relayAbsent } from '../../../../src/core/leader/switch/leader-relay.js'
 import type { RemoteWitnessPlace } from '../../../../src/core/leader/switch/settings.js'
 import type { SwitchSide } from '../../../../src/core/leader/switch/side.js'
 import type { CheckReport } from '../../../../src/core/leader/switch/ticket.js'
@@ -45,7 +51,8 @@ import { proofSecret } from '../../../../src/utils/hmac-proof.js'
 import { emptyState } from '../../../../src/core/standby/target-files.js'
 import { blankEvidence } from '../../../helpers/witness-machines.js'
 
-const WALNUT = 'walnut-relay-1'
+// A Walnut id as a copy's auth.json holds one (32 hex): the command below reads it from there.
+const WALNUT = 'ab12cd34'.repeat(4)
 const LIST = ['w-a', 'w-b', 'w-k']
 const keys: Record<string, string> = Object.fromEntries(LIST.map((id) => [id, proofSecret()]))
 const roots = { 'w-a': path.join(base, 'a', 'leader-witness'), 'w-b': path.join(base, 'b', 'leader-witness'), 'w-k': path.join(base, 'k', 'leader-witness') }
@@ -89,7 +96,7 @@ beforeAll(async () => {
     expect(r.status).toBe(200)
   }
   // The leader's side: every stream of the host link goes to its relay door, as from host `mac`.
-  linkServer = net.createServer((sock) => acceptLeaderRelay('mac', sock))
+  linkServer = net.createServer((sock) => acceptLeaderRelay({ hostKey: 'mac', machineId: 'machine-m' }, sock))
   await new Promise<void>((r) => linkServer.listen(0, '127.0.0.1', () => r()))
   linkPort = (linkServer.address() as net.AddressInfo).port
   // The companion's direct door (plain http: allowed to loopback).
@@ -127,9 +134,11 @@ const startRelay = async (linked = true) => {
 }
 
 describe('the ways with a host link', () => {
-  it('tries the leader\'s machine over the host link before a direct door, only for a witness another machine keeps by its key', () => {
-    const hostLink = () => {}
+  it('tries the leader\'s machine over the host link before a direct door, only for the witness that machine keeps by its key', () => {
+    const hostLink = { call: () => {}, machine: 'machine-a' }
     expect(waysOf(places[0]!, { here, hostLink, direct: () => {} })).toEqual(['host-link', 'direct'])
+    // Another machine's witness (machine-b's) is never asked at the leader's door, even if a record of it were left there.
+    expect(waysOf(places[1]!, { here, hostLink, direct: () => {} })).toEqual(['direct'])
     expect(waysOf(places[2]!, { here, hostLink, direct: () => {} })).toEqual(['direct'])
     expect(waysOf({ id: 'w-a', machine: 'machine-m', key: 'k' }, { here, hostLink })).toEqual(['here'])
     expect(waysOf({ id: 'w-a', machine: 'machine-a' }, { here, hostLink })).toEqual([])
@@ -161,7 +170,7 @@ describe('a candidate that is a host of the leader', () => {
   it('reaches a majority: the leader\'s machine\'s witness over its host link and the companion\'s door, proven with each witness\'s own key', async () => {
     await startRelay()
     const hostLink = await hostLinkCallHere(WALNUT, { ...process.env, WALNUT_DAEMON_DIR: path.join(base, 'mdaemon') })
-    expect(hostLink).not.toBeNull()
+    expect(hostLink?.machine).toBe('machine-a')
     const r = await probeWitnessReach({ places, params: DEFAULT_PERMIT_PARAMS, here, walnutId: WALNUT, hostLink: hostLink!, waitMs: 6_000 })
     const by = Object.fromEntries(r.witnesses.map((w) => [w.id, w.answered ? w.way : `no: ${w.why}`]))
     expect(by['w-a']).toBe('host-link')
@@ -177,14 +186,14 @@ describe('a candidate that is a host of the leader', () => {
   it('a key the witness does not hold gets no answer over the relay (the relay is trusted with nothing)', async () => {
     await startRelay()
     const wrong = places.map((p) => (p.id === 'w-a' ? { ...p, key: proofSecret() } : p))
-    const r = await probeWitnessReach({ places: wrong, params: DEFAULT_PERMIT_PARAMS, here, walnutId: WALNUT, hostLink: hostLinkWitnessCall(streamDoorPost(viaRelay())), waitMs: 3_000 })
+    const r = await probeWitnessReach({ places: wrong, params: DEFAULT_PERMIT_PARAMS, here, walnutId: WALNUT, hostLink: { call: hostLinkWitnessCall(streamDoorPost(viaRelay())), machine: 'machine-a' }, waitMs: 3_000 })
     expect(r.witnesses.find((w) => w.id === 'w-a')?.answered).toBe(false)
   }, 20_000)
 
   it('the leader stopped (no primary on the daemon): the host link answers nothing, and the probe reaches 1 of 3', async () => {
     await startRelay()
     fault.refuse = true
-    const r = await probeWitnessReach({ places, params: DEFAULT_PERMIT_PARAMS, here, walnutId: WALNUT, hostLink: hostLinkWitnessCall(streamDoorPost(viaRelay())), waitMs: 3_000 })
+    const r = await probeWitnessReach({ places, params: DEFAULT_PERMIT_PARAMS, here, walnutId: WALNUT, hostLink: { call: hostLinkWitnessCall(streamDoorPost(viaRelay())), machine: 'machine-a' }, waitMs: 3_000 })
     expect(r.answered).toBe(1)
     expect(r.majority).toBe(false)
   }, 20_000)
@@ -192,7 +201,7 @@ describe('a candidate that is a host of the leader', () => {
   it('proposals through the host link and the companion are chosen over a link that delays, drops and cuts (the client resends; a lost post is no answer)', async () => {
     await startRelay()
     // Only through these two ways (a grant here is a test of the transport, not something a candidate sends).
-    const opts = { hostLink: hostLinkWitnessCall(streamDoorPost(viaRelay(), 2_000)), direct: directWitnessCall(), walnutId: WALNUT, ways: ['host-link', 'direct'] as const, here }
+    const opts = { hostLink: { call: hostLinkWitnessCall(streamDoorPost(viaRelay(), 2_000)), machine: 'machine-a' }, direct: directWitnessCall(), walnutId: WALNUT, ways: ['host-link', 'direct'] as const, here }
     const h = openPermitClient('machine-m', places, DEFAULT_PERMIT_PARAMS, undefined, { ...opts, ways: [...opts.ways] })
     fault.delayMs = 400
     expect((await proposeAndWait(h, (c) => c.requestGrant(), 8_000))?.outcome).toBe('chosen')
@@ -227,7 +236,7 @@ describe('a candidate that is a host of the leader', () => {
         ],
       },
     }))
-    const hostLink = hostLinkWitnessCall(streamDoorPost(viaRelay()))
+    const hostLink = { call: hostLinkWitnessCall(streamDoorPost(viaRelay())), machine: 'machine-a' }
     const side = {
       machine: { id: 'machine-m', home: path.join(base, 'm', 'home'), standbyDir, port: 4902 },
       runningServer: () => null,
@@ -241,4 +250,47 @@ describe('a candidate that is a host of the leader', () => {
     expect(report.reach?.find((w) => w.id === 'w-a')?.way).toBe('host-link')
     expect(spy.links).toEqual([])
   }, 30_000)
+
+  it('the command run here, through the production relay, its check and its probe: no link and no DaemonConnection made', async () => {
+    await startRelay()
+    const connects = [vi.spyOn(DaemonConnection.prototype, 'connect'), vi.spyOn(DaemonConnection.prototype, 'connectDirect')]
+    const standbyDir = path.join(base, 'm2', 'standby')
+    const copy = path.join(standbyDir, 'copy')
+    fs.mkdirSync(copy, { recursive: true })
+    fs.writeFileSync(path.join(standbyDir, 'standby.json'), JSON.stringify(emptyState()))
+    fs.writeFileSync(path.join(copy, 'auth.json'), JSON.stringify({ instanceId: WALNUT, devices: [] }))
+    const machineFile = path.join(base, 'm', 'machine-id')
+    fs.mkdirSync(path.dirname(machineFile), { recursive: true })
+    fs.writeFileSync(machineFile, 'machine-m\n')
+    const mEnv = { WALNUT_MACHINE_ID_FILE: machineFile, WALNUT_DAEMON_DIR: path.join(base, 'mdaemon') }
+    fs.writeFileSync(path.join(copy, 'config.yaml'), YAML.stringify({
+      experimental: { switchable_leader: true },
+      leader_switch: {
+        witnesses: places,
+        machines: [
+          { id: 'machine-a', home: path.join(base, 'a', 'home'), standby_dir: path.join(base, 'a', 'standby'), port: 4901 },
+          { id: 'machine-m', home: path.join(base, 'm2', 'home'), standby_dir: standbyDir, port: 4902, env: mEnv },
+        ],
+      },
+    }))
+    const lines: string[] = []
+    const r = await runCandidateSwitch({ standbyDir, env: { ...process.env, ...mEnv }, out: (l) => lines.push(l) })
+    // Refused by its own check (its copy holds no batch; and its majority needs the host link, or under load is not
+    // reached at all), before any begin: what matters here is what it opened on the way.
+    expect(r.code, r.message).toBe(1)
+    expect(r.message).toMatch(/^the check on machine-m: the standby copy .* holds no complete batch yet/)
+    expect(spy.links).toEqual([])
+    for (const c of connects) { expect(c).not.toHaveBeenCalled(); c.mockRestore() }
+  }, 30_000)
+
+  it('a relay socket path too long for a unix socket: said once, and the command reads why', async () => {
+    const logs: string[] = []
+    const deep = path.join(base, 'd'.repeat(120), 'leader-relay', 'x.sock')
+    for (let i = 0; i < 3; i++) {
+      expect(await listenLeaderRelay({ openToLeader: hostLinkStream, linked: () => true, log: (_l, msg, d) => logs.push(`${msg} ${String(d?.why ?? '')}`) }, { socketPath: deep, uid: process.getuid?.() ?? null })).toBeNull()
+    }
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatch(/not served the socket path is \d+ bytes, more than a unix socket takes \(103\)/)
+    expect(relayAbsent(deep)).toMatch(/this Walnut's service on this machine does not serve its leader relay: the socket path is \d+ bytes/)
+  })
 })

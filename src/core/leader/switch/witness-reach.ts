@@ -12,7 +12,7 @@ import { majorityOf, type PermitParams, type PermitRecord } from '../permit/type
 import { openPermitClient, readStanding } from './permit-ops.js'
 import { NO_WITNESS_HERE_CODE } from './witness-wire.js'
 import { isRemoteWitness, type WitnessPlace } from './settings.js'
-import { waysOf, type HereMachine, type RemoteCall, type WitnessDrop, type WitnessWay } from './witness-transport.js'
+import { waysOf, type HereMachine, type HostLink, type RemoteCall, type WitnessDrop, type WitnessWay } from './witness-transport.js'
 
 export interface WitnessReachOne {
   id: string
@@ -51,7 +51,7 @@ export async function probeWitnessReach(o: {
   /** Way b's call (default: the direct door over fetch). */
   direct?: RemoteCall
   /** The `host-link` way's call (leader-relay.ts hostLinkCallHere): absent, the way is not there. */
-  hostLink?: RemoteCall
+  hostLink?: HostLink
   waitMs?: number
 }): Promise<WitnessReachReport> {
   const drops = new Map<string, { why: WitnessDrop; way?: WitnessWay; status?: number; error?: string }>()
@@ -84,14 +84,14 @@ export async function probeWitnessReach(o: {
   const answered = new Set(held.keys())
   const witnesses = o.places.map((p): WitnessReachOne => {
     if (answered.has(p.id)) return { id: p.id, answered: true, way: came.get(p.id) ?? 'here', held: held.get(p.id) ?? null, epoch: epochs.get(p.id) ?? null }
-    return { id: p.id, answered: false, why: whyNot(p, o.here, drops.get(p.id), !!o.hostLink) }
+    return { id: p.id, answered: false, why: whyNot(p, o.here, drops.get(p.id), o.hostLink) }
   })
   return { machine: o.here.machineId, witnesses, answered: answered.size, majority: answered.size >= need, standing: r.standing }
 }
 
-function whyNot(p: WitnessPlace, here: HereMachine, drop: { why: WitnessDrop; way?: WitnessWay; status?: number; error?: string } | undefined, hostLink: boolean): string {
+function whyNot(p: WitnessPlace, here: HereMachine, drop: { why: WitnessDrop; way?: WitnessWay; status?: number; error?: string } | undefined, hostLink: HostLink | undefined): string {
   if (!isRemoteWitness(p)) return `its directory ${p.dir} does not answer`
-  const ways = waysOf(p, { here, direct: () => {}, ...(hostLink ? { hostLink: () => {} } : {}), ways: CANDIDATE_WAYS })
+  const ways = waysOf(p, { here, direct: () => {}, ...(hostLink ? { hostLink } : {}), ways: CANDIDATE_WAYS })
   if (!ways.length) {
     const parts = [p.machine ? `it is kept by ${p.machine}` : null, p.host ? `reached only over the leader's link to ${p.host}` : null, p.url && !p.key ? `its door ${p.url} has no key yet (walnut leader witnesses init)` : null].filter(Boolean)
     return `no way to it without a leader link${parts.length ? ` (${parts.join('; ')})` : ''}`
@@ -119,12 +119,13 @@ export function commitReach(r: WitnessReachReport): number {
 }
 
 /**
- * How many of the witnesses reached hold a record that passes `test`. Not the standing: a witness
- * that was out of reach for a while holds an older renew of the same holder, which is no
- * disagreement about who holds the permission.
+ * How many of the witnesses reached hold a record that passes `test`, counted as commitReach counts (no
+ * `host-link` answer: the new leader's wait for the handover asks what it will still see at its commit).
+ * Not the standing: a witness that was out of reach for a while holds an older renew of the same holder,
+ * which is no disagreement about who holds the permission.
  */
 export function reachedHolding(r: WitnessReachReport, test: (held: PermitRecord) => boolean): number {
-  return r.witnesses.filter((w) => w.answered && w.held && test(w.held)).length
+  return r.witnesses.filter((w) => w.answered && w.way !== 'host-link' && w.held && test(w.held)).length
 }
 
 /** One line for a person: which witnesses the machine reaches, and why each other one is missing. */

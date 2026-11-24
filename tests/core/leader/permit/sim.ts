@@ -22,6 +22,9 @@ import type { WitnessCall } from '../../../../src/core/leader/switch/witness-wir
 import { createWitnessDoor, type WitnessDoor } from '../../../../src/core/leader/switch/witness-door.js'
 import { directWitnessCall, type DoorPost } from '../../../../src/core/leader/switch/witness-direct.js'
 import { hostLinkWitnessCall } from '../../../../src/core/leader/switch/leader-relay.js'
+
+/** The host-link way's other end: one machine whose door serves every witness of the sim (the transport under test, not the layout). */
+const SIM_LEADER_MACHINE = 'sim-leader-machine'
 import { sha256Hex } from '../../../../src/utils/hmac-proof.js'
 import {
   bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
@@ -279,11 +282,11 @@ export class World {
     return new PermitClient({
       id: node.id, list, clock, params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
       transport: createWitnessTransport({
-        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'mixed' ? { id, host: id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'host-link' ? { id, machine: `machine-of-${id}`, key: simWitnessKey(id) } : { id, host: id }), params, walnutId: 'sim',
+        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'mixed' ? { id, host: id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'host-link' ? { id, machine: SIM_LEADER_MACHINE, key: simWitnessKey(id) } : { id, host: id }), params, walnutId: 'sim',
         deliver: this.wrapDeliver ? this.wrapDeliver(node.key, (reply) => this.deliverToMachine(node.key, reply)) : (reply) => this.deliverToMachine(node.key, reply),
         remote: this.makeLink ? this.makeLink(node.key, this.simLink(node.key)) : this.way === 'mixed' ? this.simMixed(node.key) : this.simLink(node.key),
         direct: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key)) : this.simDirect(node.key),
-        ...(this.way === 'host-link' ? { hostLink: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key, hostLinkWitnessCall)) : this.simDirect(node.key, hostLinkWitnessCall) } : {}),
+        ...(this.way === 'host-link' ? { hostLink: { machine: SIM_LEADER_MACHINE, call: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key, hostLinkWitnessCall)) : this.simDirect(node.key, hostLinkWitnessCall) } } : {}),
         timeoutMs: this.transportTimeoutMs, ...(this.transportMaxInFlight !== undefined ? { maxInFlight: this.transportMaxInFlight } : {}),
         defer: (fn) => this.after(0, fn),
         after: (ms, fn) => { let live = true; this.after(ms, () => { if (live) fn() }); return () => { live = false } },

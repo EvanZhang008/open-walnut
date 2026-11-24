@@ -17,3 +17,8 @@ export function leaderRelaySocketPath(daemonDir: string, walnutId: string): stri
   const name = createHash('sha256').update(walnutId, 'utf8').digest('hex').slice(0, 16)
   return path.join(path.resolve(daemonDir), LEADER_RELAY_SOCKET_DIR, `${name}.sock`)
 }
+
+/** Beside the socket: why this machine's service does not serve the relay (written when it refused, removed when it listens). */
+export function leaderRelayWhyPath(socketPath: string): string {
+  return `${socketPath}.why`
+}

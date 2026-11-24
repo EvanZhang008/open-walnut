@@ -287,6 +287,19 @@ export function readHomeSwitchConfig(home: string): HomeSwitchConfig {
   return { flag, settings, ...(problem ? { problem } : {}), ...at }
 }
 
+/**
+ * The standby copy's switch config, read whole: a batch swaps each file in by two renames (standby/target.ts
+ * swapIn), so for a moment a file is not there. Its config.yaml missing is read again for up to `waitMs`.
+ */
+export async function readCopySwitchConfig(copy: string, waitMs = 5_000): Promise<HomeSwitchConfig> {
+  const until = Date.now() + waitMs
+  for (;;) {
+    const cfg = readHomeSwitchConfig(copy)
+    if (cfg.flag || fs.existsSync(path.join(copy, 'config.yaml')) || Date.now() > until) return cfg
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+
 export function machineById(s: LeaderSwitchSettings, id: string): MachinePlace | undefined {
   return s.machines.find((m) => m.id === id)
 }

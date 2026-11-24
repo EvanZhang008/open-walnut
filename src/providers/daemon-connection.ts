@@ -4491,7 +4491,7 @@ export class DaemonConnection {
       walnutId: async () => (await import('../core/device-auth.js')).getInstanceId(),
       daemonInstanceId: () => conn._daemonInstanceId,
       forward: () => (testForward ? testForward(conn.hostKey) : sshLaneForward(sshArgs, sshHost, remotePort!, laneOpts)),
-      accept: (info) => (info.from === 'follower' ? (info.purpose === LEADER_RELAY_PURPOSE ? (stream) => { void conn.plugRelayStream(stream) } : (stream) => { void conn.plugFollowerStream(stream) }) : null),
+      accept: (info) => (info.from === 'follower' ? conn.followerStreamPlug(info.purpose) : null),
     })
     this.lane.start()
   }
@@ -4523,7 +4523,7 @@ export class DaemonConnection {
         // A machine's hub forward ('hub-forward-v1'): into a port this Walnut's config opens to
         // this host, on its own 127.0.0.1 (core/hosts/hub-ports.ts), or refused with why.
         // A host's leader relay ('leader-relay', src/core/leader/switch/leader-relay.ts): into the switch's relay door, never the tunnel port.
-        accept: (info) => (info.from === 'follower' ? (info.purpose === LEADER_RELAY_PURPOSE ? (stream) => { void this.plugRelayStream(stream) } : (stream) => { void this.plugFollowerStream(stream) })
+        accept: (info) => (info.from === 'follower' ? this.followerStreamPlug(info.purpose)
           : info.from === 'companion' ? (this.revokedReach('stream:companion') ? null : companionStreamAcceptor(this.hostKey, info.sid))
             : info.from === 'hub' ? (this.revokedReach('stream:hub') ? null : acceptHubStream(this.hostKey, info)) : null),
       })
@@ -4531,9 +4531,15 @@ export class DaemonConnection {
     return this.streams
   }
 
+  /** Where a stream this host's own service opened goes, on the session socket and the lane alike: by its purpose. */
+  private followerStreamPlug(purpose: string | undefined): (stream: Duplex) => void {
+    return purpose === LEADER_RELAY_PURPOSE ? (stream) => { void this.plugRelayStream(stream) } : (stream) => { void this.plugFollowerStream(stream) }
+  }
+
   /**
    * A stream this host's own service opened with the relay purpose (its leader relay socket): the switch's relay door,
-   * told which host it came over. Only while this server runs the permit (boot.ts imports nothing at load); else refused.
+   * told who it came from by this connection itself (its host key, the machine id of its daemon's hello). Only while
+   * this server runs the permit (boot.ts imports nothing at load); else refused.
    */
   private async plugRelayStream(stream: Duplex): Promise<void> {
     const revoked = this.revokedReach('stream:follower')
@@ -4541,7 +4547,7 @@ export class DaemonConnection {
     const { currentLeaderPermit } = await import('../core/leader/switch/boot.js')
     const p = currentLeaderPermit()
     if (!p || p.trial) { stream.destroy(new Error('this server runs no switchable leader')); return }
-    ;(await import('../core/leader/switch/leader-relay-door.js')).acceptLeaderRelay(this.hostKey, stream)
+    ;(await import('../core/leader/switch/leader-relay-door.js')).acceptLeaderRelay({ hostKey: this.hostKey, machineId: this.helloMachineId ?? null }, stream)
   }
 
   private async plugFollowerStream(stream: Duplex): Promise<void> {

@@ -84,7 +84,7 @@ function spawnJob(args: string[], env: NodeJS.ProcessEnv, log: string): { pid: n
  * by the old leader's server as this command would start it here: this machine's env, its log beside the machine id.
  * Its output for this switch starts at `from` in that log.
  */
-export function startSourceJobFor(o: { home: string; switchId: string; to: string }): { log: string; from: number; pid: number | null; exit: Promise<{ code: number | null; signal: string | null }> } {
+export function startSourceJobFor(o: { home: string; switchId: string; to: string; forwardedBy?: string }): { log: string; from: number; pid: number | null; exit: Promise<{ code: number | null; signal: string | null }> } {
   const home = path.resolve(o.home)
   const settings = settingsOf(home)
   const env = machineEnv(machineByHome(settings, home), process.env)
@@ -92,7 +92,7 @@ export function startSourceJobFor(o: { home: string; switchId: string; to: strin
   for (const k of ['WALNUT_LEADER_SWITCH_COMMIT', 'WALNUT_LEADER_SWITCH_COMMIT_UNTIL', 'WALNUT_LEADER_TRIAL', 'WALNUT_LEADER_SWITCH_KILL_AT']) delete env[k]
   const log = sourceJobLog(home, env)
   const from = (() => { try { return fs.statSync(log).size } catch { return 0 } })()
-  const job = spawnJob(['leader', 'switch', '--job', 'source', '--to', o.to, '--switch', o.switchId, '--home', home], env, log)
+  const job = spawnJob(['leader', 'switch', '--job', 'source', '--to', o.to, '--switch', o.switchId, '--home', home, ...(o.forwardedBy ? ['--forwarded-by', o.forwardedBy] : [])], env, log)
   return { log, from, ...job }
 }
 

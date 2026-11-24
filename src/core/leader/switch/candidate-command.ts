@@ -15,7 +15,8 @@
  */
 import path from 'node:path'
 import { majorityOf } from '../permit/types.js'
-import { machineById, readHomeSwitchConfig } from './settings.js'
+import { machineById, readCopySwitchConfig, readHomeSwitchConfig } from './settings.js'
+import { readMarker } from './records.js'
 import { permitHolderId } from './machine-id.js'
 import { newSwitchId, type CheckReport } from './ticket.js'
 import { SwitchRefused, TARGET_FINAL, readTargetState } from './flow.js'
@@ -44,7 +45,10 @@ export interface CandidateSwitchOptions {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** The machine whose standby folder is `standbyDir`, when it is this one's. */
+/**
+ * The machine whose standby folder is `standbyDir`, when it is this one's. Not on the machine's own home that may
+ * lead (no handed-over marker): there `--to <this machine>` is the leader's command, which says it leads already.
+ */
 export function candidateStandbyDir(o: { home: string; env: NodeJS.ProcessEnv; standbyDir?: string; to?: string }): string | null {
   if (o.standbyDir) return path.resolve(o.standbyDir)
   const me = permitHolderId(o.env)
@@ -53,17 +57,20 @@ export function candidateStandbyDir(o: { home: string; env: NodeJS.ProcessEnv; s
   for (const home of [o.home, path.join(o.home, 'copy')]) {
     const s = readHomeSwitchConfig(home).settings
     const self = s ? machineById(s, me) : undefined
-    if (self) return self.standbyDir
+    if (!self) continue
+    if (path.resolve(home) === path.resolve(self.home) && !readMarker(self.home)) return null
+    return self.standbyDir
   }
   return null
 }
+
 
 export async function runCandidateSwitch(o: CandidateSwitchOptions): Promise<SwitchOutcome> {
   const out = o.out ?? (() => {})
   const env: NodeJS.ProcessEnv = { ...(o.env ?? process.env) }
   const standbyDir = path.resolve(o.standbyDir)
   const copy = path.join(standbyDir, 'copy')
-  const cfg = readHomeSwitchConfig(copy)
+  const cfg = await readCopySwitchConfig(copy)
   if (!cfg.flag) throw new SwitchRefused(`the standby copy ${copy} does not have the experiment switchable_leader on`)
   if (!cfg.settings) throw new SwitchRefused(cfg.problem ?? `the standby copy ${copy} has no leader_switch section`)
   const settings = cfg.settings

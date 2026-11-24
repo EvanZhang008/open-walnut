@@ -421,6 +421,15 @@ leaderSwitchRouter.post('/switch/begin', thisMachineOnly, async (req, res) => {
   if ('refused' in link) { res.status(403).json({ ok: false, why: link.refused }); return }
   link.peer.close()
   if (fwd) { res.json({ ok: true, startedBy: fwd.by }); return }
+  // A job this server started for a forwarded begin and then lost by a restart: the job says who began it (a begin
+  // is forwarded only by `to`; this route is this machine's own, so the word is this machine's).
+  const forwardedBy: unknown = req.body?.forwardedBy
+  if (typeof forwardedBy === 'string' && forwardedBy === to) {
+    const by = { machine: to, via: 'forwarded' as const }
+    await recordBegin({ switchId, from: p.machine, to, by })
+    res.json({ ok: true, startedBy: by })
+    return
+  }
   const startedBy = { machine: p.machine, via: 'cli' as const }
   await recordBegin({ switchId, from: p.machine, to, by: startedBy })
   res.json({ ok: true, startedBy })

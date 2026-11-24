@@ -47,6 +47,8 @@ vi.mock('../../../../src/core/leader/switch/witness-transport.js', () => ({ this
 vi.mock('../../../../src/core/leader/switch/peer.js', () => ({ peerFor: async () => peer }))
 vi.mock('../../../../src/core/leader/switch/settings.js', async (orig) => ({ ...(await orig<object>()), readHomeSwitchConfig: () => ({ settings }) }))
 vi.mock('../../../../src/core/leader/switch/final-stop.js', async (orig) => ({ ...(await orig<object>()), beginRefusal: () => null }))
+const began = vi.hoisted(() => [] as unknown[])
+vi.mock('../../../../src/core/leader/switch/leader-relay-door.js', async (orig) => ({ ...(await orig<object>()), recordBegin: async (o: unknown) => { began.push(o) } }))
 vi.mock('../../../../src/core/leader/switch/handover-host-steps.js', () => ({
   beforeHandoverRecord: async () => { calls.push('host steps before'); return { ok: true } },
   afterHandoverRecord: async () => { calls.push('retell'); return { ok: false, why: 'retellNetMembers: not told: box-net-only' } },
@@ -158,5 +160,23 @@ describe('the routes that read the copy link answer within their deadline', () =
     } finally {
       for (const k of ['writeFile', 'verify', 'startTargetJob', 'readFile']) delete (peer as Record<string, unknown>)[k]
     }
+  })
+})
+
+describe('the begin a source job asks on loopback', () => {
+  const begin = (body: Record<string, unknown>) => fetch(`${base}/api/leader/switch/begin`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then(async (r) => ({ status: r.status, json: await r.json() as { ok: boolean; startedBy?: unknown } }))
+
+  it('records a forwarded begin by the job\'s own word when this server lost it (a restart in between), only for `to` itself', async () => {
+    began.length = 0
+    const fwd = await begin({ to: 'machine-b', switchId: '20261124T000000-bbbbbb', forwardedBy: 'machine-b' })
+    expect(fwd.json).toEqual({ ok: true, startedBy: { machine: 'machine-b', via: 'forwarded' } })
+    // A word naming another machine than `to` is no forwarded begin (only `to` forwards): this machine's command.
+    const other = await begin({ to: 'machine-b', switchId: '20261124T000000-cccccc', forwardedBy: 'machine-c' })
+    expect(other.json).toEqual({ ok: true, startedBy: { machine: 'machine-a', via: 'cli' } })
+    expect(began).toEqual([
+      { switchId: '20261124T000000-bbbbbb', from: 'machine-a', to: 'machine-b', by: { machine: 'machine-b', via: 'forwarded' } },
+      { switchId: '20261124T000000-cccccc', from: 'machine-a', to: 'machine-b', by: { machine: 'machine-a', via: 'cli' } },
+    ])
   })
 })

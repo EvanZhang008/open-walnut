@@ -18,6 +18,7 @@ import net from 'node:net'
 import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import { spliceStream } from '../lib/link-stream.js'
+import { leaderRelayWhyPath } from '../lib/leader-relay-names.js'
 
 /** A unix socket path's limit (sun_path), as for the host call entry. */
 const SOCKET_MAX_BYTES = 103
@@ -35,8 +36,19 @@ export interface LeaderRelayListener { socketPath: string; close(): Promise<void
 export async function listenLeaderRelay(deps: LeaderRelayDeps, opts: { socketPath: string; uid: number | null }): Promise<LeaderRelayListener | null> {
   const { socketPath } = opts
   const dir = path.dirname(socketPath)
-  const refuse = (why: string): null => { deps.log('warn', 'leader relay: not served', { socket: socketPath, why }); return null }
-  if (!path.isAbsolute(socketPath) || Buffer.byteLength(socketPath) > SOCKET_MAX_BYTES) return refuse('the socket path is not absolute or too long for a unix socket')
+  // Said once per reason (the caller asks again with every report), and written beside the socket, where a process
+  // of this machine that finds no socket reads why (leader-relay.ts relayAbsent).
+  const refuse = async (why: string): Promise<null> => {
+    const whyFile = leaderRelayWhyPath(socketPath)
+    const before = await fs.readFile(whyFile, 'utf8').catch(() => null)
+    if (before !== why) {
+      deps.log('warn', 'leader relay: not served', { socket: socketPath, why })
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 }).then(() => fs.writeFile(whyFile, why, { mode: 0o600 })).catch(() => { /* nowhere to say it */ })
+    }
+    return null
+  }
+  if (!path.isAbsolute(socketPath)) return refuse('the socket path is not absolute')
+  if (Buffer.byteLength(socketPath) > SOCKET_MAX_BYTES) return refuse(`the socket path is ${Buffer.byteLength(socketPath)} bytes, more than a unix socket takes (${SOCKET_MAX_BYTES}): the daemon dir is too deep`)
   try {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 })
     const st = await fs.lstat(dir)
@@ -74,6 +86,7 @@ export async function listenLeaderRelay(deps: LeaderRelayDeps, opts: { socketPat
     return refuse((err as Error).message)
   }
   server.on('error', (err) => deps.log('warn', 'leader relay: socket error', { socket: socketPath, error: err.message }))
+  await fs.unlink(leaderRelayWhyPath(socketPath)).catch(() => { /* none */ })
   deps.log('info', 'leader relay: listening', { socket: socketPath })
   return {
     socketPath,

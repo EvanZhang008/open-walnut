@@ -25,16 +25,17 @@
 import fs from 'node:fs'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
-import { leaderRelaySocketPath } from '../../../lib/leader-relay-names.js'
+import { leaderRelaySocketPath, leaderRelayWhyPath } from '../../../lib/leader-relay-names.js'
 import { requestOver } from '../../host-server/request-over.js'
 import { directWitnessCall, type DoorPost } from './witness-direct.js'
 import { WITNESS_DOOR_PATH } from './witness-wire.js'
-import type { RemoteCall } from './witness-transport.js'
+import type { HostLink, RemoteCall } from './witness-transport.js'
 
 export { LEADER_RELAY_PURPOSE, LEADER_RELAY_SOCKET_DIR, leaderRelaySocketPath } from '../../../lib/leader-relay-names.js'
 
 export const RELAY_BEGIN_PATH = '/leader-switch/begin'
 export const RELAY_JOB_PATH = '/leader-switch/job'
+export const RELAY_WHOAMI_PATH = '/leader-switch/whoami'
 
 /** A way to make one byte stream to the leader's relay door. */
 export type StreamOpener = () => Promise<Duplex>
@@ -52,6 +53,10 @@ export function relayAbsent(socketPath: string): string | null {
     if (!fs.lstatSync(socketPath).isSocket()) return `${socketPath} is not a socket`
     return null
   } catch {
+    // The service is there but refused to serve it (a daemon dir too deep for a unix socket, say): its own words.
+    let why = ''
+    try { why = fs.readFileSync(leaderRelayWhyPath(socketPath), 'utf8').trim() } catch { /* none */ }
+    if (why) return `this Walnut's service on this machine does not serve its leader relay: ${why} (${socketPath})`
     return `no Walnut service of this Walnut runs on this machine as a host of the leader (no relay socket ${socketPath})`
   }
 }
@@ -119,9 +124,22 @@ export function hostLinkWitnessCall(post: DoorPost): RemoteCall {
   return (place, p, body, done) => inner({ ...place, url: WITNESS_DOOR_PATH }, p, body, done)
 }
 
-/** The production `host-link` call of a process of this machine for Walnut `walnutId`, or null when no relay socket is here. */
-export async function hostLinkCallHere(walnutId: string, env: NodeJS.ProcessEnv = process.env): Promise<RemoteCall | null> {
+/** The machine the relay reaches (its leader's, GET /leader-switch/whoami), or null when nothing leads there. */
+export async function relayMachine(open: StreamOpener, timeoutMs = 5_000): Promise<string | null> {
+  const r = await relayRequest(open, 'GET', RELAY_WHOAMI_PATH, undefined, timeoutMs).catch(() => null)
+  const m = (r?.json as { machine?: unknown } | null)?.machine
+  return r?.status === 200 && typeof m === 'string' && m ? m : null
+}
+
+/**
+ * The production `host-link` way of a process of this machine for Walnut `walnutId`: the call, and the leader's
+ * machine it reaches (its witness is the only one asked there). Null when no relay socket is here, or nothing
+ * that leads answers over it.
+ */
+export async function hostLinkCallHere(walnutId: string, env: NodeJS.ProcessEnv = process.env): Promise<HostLink | null> {
   const socket = leaderRelaySocketPath(await relayDaemonDir(env), walnutId)
   if (relayAbsent(socket)) return null
-  return hostLinkWitnessCall(streamDoorPost(relaySocketOpener(socket)))
+  const open = relaySocketOpener(socket)
+  const machine = await relayMachine(open)
+  return machine ? { call: hostLinkWitnessCall(streamDoorPost(open)), machine } : null
 }

@@ -19,7 +19,7 @@ import { SESSION_HOSTS_FILE, SESSION_HOSTS_MARK_TABLE, sessionHostsMarked } from
 import { homePathRules } from './home-path-rules.js'
 import { offlineCheck, onlineCheck, readCopyFacts } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
-import { machineById, readHomeSwitchConfig, type LeaderSwitchSettings } from './settings.js'
+import { machineById, readCopySwitchConfig, readHomeSwitchConfig, type LeaderSwitchSettings } from './settings.js'
 import { makeWitnessReader, type WitnessReading } from './witness-reader.js'
 import { commitReach, reachedHolding, reachSentence } from './witness-reach.js'
 import { permitHolderId } from './machine-id.js'
@@ -103,7 +103,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
   const me = permitHolderId(env)
   const report: CheckReport = { switchId: o.switchId, machine: me, ok: false, problems, version: env.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion(), at: '' }
   try {
-    const cfg = readHomeSwitchConfig(copy)
+    const cfg = await readCopySwitchConfig(copy)
     if (!cfg.flag || !cfg.settings) throw new Error('the standby copy\'s config.yaml does not have the experiment and leader_switch set: the new leader would not hold the permission')
     const self = machineById(cfg.settings, me ?? '')
     if (!self) throw new Error(`this machine (${me ?? 'no id'}) is not one of leader_switch.machines`)
@@ -175,7 +175,8 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
   const note = (step: string, why?: string) => notes ? writeSwitchNote(notes, { switchId: s.id, machine: s.to, step, ...(why ? { why } : {}) }).catch(() => 0) : Promise.resolve(0)
   // The service's start hook finds this switch's record through it (service-role.ts).
   writeSwitchPointer({ switchId: s.id, side: 'target', stateFile: path.join(switchFolder(o.standbyDir), targetStateName(s.id)) }, env)
-  // Its own ways only (a and b): this machine has no link, and the old leader may be gone.
+  // Its own ways (a and b, and while the old leader runs its host link, which reachedHolding and commitReach never
+  // count): this machine has no leader link, and the old leader may be gone.
   const read = o.readWitnesses ?? makeWitnessReader(`${s.to}-target-job`, settings, () => (side.runningServer() ? [{ api: (m: string, p: string) => side.api(m, p) }] : []), async () => {
     const r = await side.reachWitnesses(configHome(o.standbyDir, s.targetHome)).catch(() => null)
     return r?.majority ? { standing: r.standing, answered: r.answered } : null
