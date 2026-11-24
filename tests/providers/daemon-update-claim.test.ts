@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  UPDATE_CLAIM_MAX_MS, UPDATE_CLAIM_SETTLE_MS, claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, resetDaemonUpdateClaims,
+  UPDATE_CLAIM_MAX_MS, UPDATE_CLAIM_SETTLE_MS, UPDATE_CLAIM_TURN_MS, claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, resetDaemonUpdateClaims,
 } from '../../src/providers/daemon-update-claim.js'
 
 afterEach(() => resetDaemonUpdateClaims())
@@ -72,6 +72,45 @@ describe('claimDaemonUpdate', () => {
     const name = 'Studio’s Mac \u{1F680}'
     await claimDaemonUpdate(name, names('studio'))
     expect(await daemonUpdateHeldBy('studio', names(name))).toBe(name)
-    expect(peerUpdatingWhy(name)).toBe(`${name} reaches the same daemon and is updating it, or just did`)
+    expect(peerUpdatingWhy(name)).toBe(`${name} reaches the same daemon and is updating it now`)
+  })
+})
+
+describe('turns: a refused try never holds the other names for good (2026-11-24)', () => {
+  const both = names('clouddev', 'newdev')
+
+  it('a try under way holds the others; once refused it holds them only within their turn, and never an overdue one', async () => {
+    const t0 = Date.now()
+    const a = await claimDaemonUpdate('newdev', both, t0)
+    if ('heldBy' in a) throw new Error('unexpected')
+    expect(await daemonUpdateHeldBy('clouddev', both, t0 + 1_000, { overdue: true })).toBe('newdev')
+    expect(peerUpdatingWhy('newdev')).toBe('newdev reaches the same daemon and is updating it now')
+    a.release('held')
+    expect(peerUpdatingWhy('newdev')).toMatch(/its update there was just refused; this name takes its turn within 15 min/)
+    expect(await daemonUpdateHeldBy('clouddev', both, Date.now(), { overdue: true })).toBeNull()
+    expect(await daemonUpdateHeldBy('clouddev', both, Date.now())).toBe('newdev')
+  })
+
+  it('one name whose every try is refused, asking again every two minutes, and the other asking every minute: the other gets its turn by UPDATE_CLAIM_TURN_MS', async () => {
+    // newdev claims, is refused after a minute (service.handover: active ACP workers), and asks again a minute later.
+    vi.useFakeTimers()
+    try {
+      const start = Date.now()
+      let clouddevClaimedAt: number | null = null
+      let held: Awaited<ReturnType<typeof claimDaemonUpdate>> | null = null
+      for (let minute = 0; minute < 60 && clouddevClaimedAt === null; minute++) {
+        const now = start + minute * 60_000
+        vi.setSystemTime(now)
+        if (minute % 2 === 0) {
+          held = await claimDaemonUpdate('newdev', both, now)
+        } else if (held && !('heldBy' in held)) {
+          held.release('held')
+        }
+        const mine = await claimDaemonUpdate('clouddev', both, now + 30_000)
+        if (!('heldBy' in mine)) clouddevClaimedAt = now + 30_000
+      }
+      expect(clouddevClaimedAt).not.toBeNull()
+      expect(clouddevClaimedAt! - start).toBeLessThanOrEqual(UPDATE_CLAIM_TURN_MS + UPDATE_CLAIM_MAX_MS)
+    } finally { vi.useRealTimers() }
   })
 })

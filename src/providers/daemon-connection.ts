@@ -5349,7 +5349,7 @@ export class DaemonConnection {
   /** Claim this daemon's update for this call before the first byte goes up; true: another name holds it. */
   private async claimOrHold(expected: string, remoteVersion: string, held: { claim: UpdateClaim | null }): Promise<boolean> {
     if (held.claim) return false
-    const got = await claimDaemonUpdate(this.hostKey, () => this.daemonNamesOrOwn())
+    const got = await claimDaemonUpdate(this.hostKey, () => this.daemonNamesOrOwn(), Date.now(), { overdue: this._overdueMs > 0 })
     if ('heldBy' in got) return this.peerUpdateHolds(expected, remoteVersion, got.heldBy)
     held.claim = got
     return false
@@ -5437,7 +5437,8 @@ export class DaemonConnection {
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           // Held (busy, deferred, another runner there): nothing changed on the host and this name asks
           // again, so the other names keep off for the settle window rather than paying an upload of their own.
-          if (updated === 'held') { held.claim?.release(true); return false }
+          // Refused before it changed anything: the other names wait for it only within their turn (daemon-update-claim.ts).
+          if (updated === 'held') { held.claim?.release('held'); return false }
           if (updated) { this.noteDaemonReplaced(); held.claim?.release(true); return true }
           // No safe user-level service is known. Keep serving without publishing a retry as an error.
           log.session.info(
@@ -5504,7 +5505,7 @@ export class DaemonConnection {
       if (await this.acpTurnsOpen(expected, remoteVersion)) return false
       // A host_exec run ends with the daemon: asked before the upload too, so a 2 h run is not paid an upload a minute.
       if (await this.execRunsOpen(expected, remoteVersion)) return false
-      if (this.peerUpdateHolds(expected, remoteVersion, await daemonUpdateHeldBy(this.hostKey, () => this.daemonNamesOrOwn()))) return false
+      if (this.peerUpdateHolds(expected, remoteVersion, await daemonUpdateHeldBy(this.hostKey, () => this.daemonNamesOrOwn(), Date.now(), { overdue: this._overdueMs > 0 }))) return false
       if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
       // The new daemon goes onto the host first, while the old one still serves:
       // stopping first left the host with no daemon for the whole upload (minutes

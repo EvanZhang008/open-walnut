@@ -772,7 +772,7 @@ describe('NetDaemonUpdater', () => {
       const { u, update, conn } = updater({ sameDaemon: async () => ['studio-mac', 'studio-ssh'] })
       u.schedule(0)
       await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
-      expect(u.state.message).toContain('studio-ssh reaches the same daemon and is updating it, or just did')
+      expect(u.state.message).toContain('studio-ssh reaches the same daemon and is updating it')
       expect(update).not.toHaveBeenCalled()
       // Not a byte of the build went up: only the host_exec and service reads at most.
       expect(conn.sends.filter((c) => c === 'fs.writePart')).toEqual([])

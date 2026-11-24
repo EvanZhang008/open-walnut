@@ -194,7 +194,7 @@ describe('an SSH host whose daemon another host name also reaches', () => {
     await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
     expect(seen.filter((s) => s === 'DEPLOY')).toEqual([])
     expect(stops(seen)).toEqual([])
-    expect(postpone.mock.calls.map((a) => a[0])).toContain('devbox-net reaches the same daemon and is updating it, or just did')
+    expect(postpone.mock.calls.map((a) => a[0])).toContain('devbox-net reaches the same daemon and is updating it now')
     peer.release(false)
     await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
     expect(stops(seen)).toHaveLength(1)
