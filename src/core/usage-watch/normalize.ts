@@ -28,6 +28,24 @@ export function registeredTemplate(baseUrl: unknown, routePath: unknown): string
   return /^[A-Za-z0-9_\-/:.*]{1,160}$/.test(full) ? full : 'unmatched'
 }
 
+/**
+ * The route template a request is named by, on the path its client called (`originalUrl`).
+ * Express builds `baseUrl` from the path the routers saw, which a rewrite changes: the calendar
+ * alias (web/routes/calendar-alias.ts) hands `/api/calendar/events` to the plugin dispatcher as
+ * `/calendar/events`, and it was named `/api/calendar/calendar/events` (2026-11-24: one call in a
+ * week, under a name no caller uses). The route's own path is the tail of both, so the name is
+ * the called path's head and the route's path. A route path whose parts do not line up one to one
+ * with the URL's segments (a wildcard, an optional part) keeps the routers' name.
+ */
+export function publicTemplate(originalUrl: unknown, baseUrl: unknown, routePath: unknown): string {
+  const seen = registeredTemplate(baseUrl, routePath)
+  if (seen === 'unmatched' || typeof originalUrl !== 'string' || typeof routePath !== 'string' || /[*?{}()]/.test(routePath)) return seen
+  const called = (originalUrl.split('?')[0] ?? '').replace(/\/+$/, '').split('/')
+  const tail = routePath.replace(/\/+$/, '').split('/').slice(1)
+  if (called.length - 1 < tail.length) return seen
+  return registeredTemplate(called.slice(0, called.length - tail.length).join('/'), routePath)
+}
+
 /** A query that asks the server to hold the answer on purpose (a long poll): never a slow read. */
 const WAIT_QUERY_RE = /[?&](?:wait|wait_ms|waitMs|wait_for|timeout_ms|long_poll|follow)=/i
 

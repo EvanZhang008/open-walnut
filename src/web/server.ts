@@ -828,6 +828,7 @@ let cloudChatOutboxFlushHandle: { stop: () => void } | null = null
 let humanInboxQueueFlushHandle: { stop: () => void } | null = null
 let companionJournalDueHandle: { stop: () => void } | null = null
 let companionCardsHandle: { stop: () => void } | null = null
+let companionUsesHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let turnRunHandle: { stop: () => void } | null = null
 let idleCompactionHandle: { stop: () => void } | null = null
@@ -4511,6 +4512,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // (stage 4d, core/notifications/companion-cards.ts).
       const { startCompanionCards } = await import('../core/notifications/companion-cards.js')
       companionCardsHandle = startCompanionCards()
+      // The requests this box's own routes answer are counted on the Mac (core/usage-watch/companion-uses.ts).
+      const { startCompanionUses } = await import('../core/usage-watch/companion-uses.js')
+      companionUsesHandle = startCompanionUses()
       // Its notes reads take the Mac's copy once held, and its note saves go into that
       // journal (stage 4, core/companion-notes.ts).
       void import('../core/companion-notes.js').then((m) => m.installCompanionNotes()).catch((err) => {
@@ -8320,6 +8324,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (companionCardsHandle) {
     companionCardsHandle.stop()
     companionCardsHandle = null
+  }
+  if (companionUsesHandle) {
+    companionUsesHandle.stop()
+    companionUsesHandle = null
   }
   stopMobileEventsFeed()
   if (budgetLettersHandle) {

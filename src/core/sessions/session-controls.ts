@@ -964,6 +964,9 @@ export type SessionControlAction =
   // mark everything read), and the cards the companion writes about itself, which
   // reach this Mac's feed here instead of through git (notifications/companion-cards.ts).
   | 'server.notifications.mark' | 'server.notifications.cards'
+  // Real use of the requests the companion answers itself (the phone's transcript reads among
+  // them), counted on this Mac under each route's name (usage-watch/companion-uses.ts).
+  | 'server.usage.rows'
   // Stage 4d: a layout change made in the companion's console, merged into this
   // Mac's ui-prefs.json (the companion reads the prefs copy).
   | 'server.ui-prefs.put'
@@ -1439,6 +1442,16 @@ export async function handleSessionControlRelay(
           throw new SessionControlError(`cards must be an array of at most ${MAX_CARDS_PER_CALL}`, 400);
         }
         result = await applyCompanionCards(p.cards) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.usage.rows': {
+        const { applyCompanionUses, CompanionUsesError } = await import('../usage-watch/companion-uses.js');
+        try {
+          result = await applyCompanionUses(p) as unknown as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof CompanionUsesError) throw new SessionControlError(err.message, 400);
+          throw err;
+        }
         break;
       }
       case 'server.ui-prefs.put': {

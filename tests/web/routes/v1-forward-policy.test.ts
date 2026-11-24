@@ -42,7 +42,6 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['GET', '/file-content', 'bytes'],
     ['PUT', '/file-content', 'bytes'],
     ['GET', '/file-raw/devbox/a/b.png', 'bytes'],
-    ['GET', '/timeline/images/2026-10-07/a.jpg', 'bytes'],
     ['GET', '/notes/attachment', 'bytes'],
     ['DELETE', '/notes/attachment/a/b.png', 'bytes'],
     ['GET', '/human-inbox/l1/body', 'bytes'],
@@ -120,6 +119,8 @@ describe('companionAnswers: the routes the companion keeps', () => {
     // The vocabulary is the Mac's word list (stage 4d): read and added there while it answers.
     ['GET', '/stt/vocab'],
     ['POST', '/stt/vocab'],
+    // The Life Tracker's images went with the feature (2026-10-31): no route on either box answers them.
+    ['GET', '/timeline/images/2026-10-07/a.jpg'],
     ['GET', '/sessions/abc'],
     ['GET', '/sessions/abc/model-options'],
     ['POST', '/sessions/abc/model'],

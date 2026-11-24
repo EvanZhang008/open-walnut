@@ -307,6 +307,13 @@ function kindsNear(i: number): number {
   return kinds.size
 }
 
+/**
+ * Where a replica's rows go instead of its own file: the cloud companion hands the requests its own
+ * routes answered to the Mac, which counts them (companion-uses.ts). Its events and tool errors stay
+ * behind: the hours are what a watch and the report read.
+ */
+let rowSink: ((rows: Array<{ hour: number; kind: UsageKind; name: string; agg: Agg }>) => void) | null = null
+
 /** Writes what this process counted since the last flush (also on shutdown). */
 export function flushUsage(now = Date.now()): void {
   settlePageFailures(now)
@@ -316,6 +323,11 @@ export function flushUsage(now = Date.now()): void {
   events = []
   const errs = toolErrors
   toolErrors = []
+  if (rowSink) {
+    rowSink(rows)
+    for (const [route, at] of routeTroubleAt) if (now - at > HOUR_MS) routeTroubleAt.delete(route)
+    return
+  }
   addHours(rows)
   addEvents(evs)
   addToolErrors(errs)
@@ -349,7 +361,8 @@ function reportBadArgShares(now: number): void {
   for (const k of now24) badArgGauges.add(k)
 }
 
-export function startUsageRecorder(): void {
+export function startUsageRecorder(opts: { sink?: typeof rowSink } = {}): void {
+  rowSink = opts.sink ?? null
   if (!active) startedAt = Date.now()
   active = true
   if (timer) return
@@ -365,8 +378,9 @@ export function stopUsageRecorder(): void {
   held = []
 }
 
-export function _resetUsageRecorderForTesting(on = true, started = 0): void {
+export function _resetUsageRecorderForTesting(on = true, started = 0, sink: typeof rowSink = null): void {
   active = on
+  rowSink = sink
   startedAt = started
   held = []
   lastStallAt = -Infinity

@@ -52,7 +52,7 @@ export const TASK_COPY_READS = ['agent-memory', 'brief', 'watch'] as const
 /** A read under one task (`/tasks/<id>/<sub>...`, not `/tasks/meta/...`) of anything but TASK_COPY_READS. */
 const TASK_COPY_ELSEWHERE = new RegExp(`^/tasks/(?!meta/)[^/]+/(?!(?:${TASK_COPY_READS.join('|')})$)`)
 
-const COMPANION_ROUTES: readonly CompanionRoute[] = [
+export const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // The companion holds these streams, and the sends that feed them go from it
   // to the host's daemon directly (a session's host is not always the Mac).
   { re: /^\/events(\/|$)/, why: 'stream' },
@@ -85,7 +85,6 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // list, not bytes: the Mac answers it and takes its words (the box reads its copy
   // only while away, and a word added there needs the Mac: routes/stt.ts).
   { re: /^\/(media|stt|file-content|file-raw)(\/|$)/, unless: /^\/stt\/vocab$/, why: 'bytes' },
-  { re: /^\/timeline\/images\//, why: 'bytes' },
   { re: /^\/notes\/attachment(\/|$)/, why: 'bytes' },
   // A letter's document (up to 100 MB) has its own chunked relay.
   { re: /^\/human-inbox\/[^/]+\/body$/, why: 'bytes' },

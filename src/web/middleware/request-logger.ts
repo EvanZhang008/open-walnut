@@ -320,7 +320,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       // A client that left before any answer was sent is a hang-up, not a wait: past the slow line its
       // route held it (usage-watch/record.ts recordHttp). One that left an answer under way (a video
       // seeking, a cancelled download) stays a wait.
-      recordRequestUse(req.method, req.baseUrl, req.route?.path, status, duration, { waits: isStream || isLongPoll(url) || (aborted && res.headersSent), hungUp: aborted && !res.headersSent, hostUnreachable: isHostUnreachableAnswer(res) })
+      recordRequestUse(req.method, { originalUrl: req.originalUrl, baseUrl: req.baseUrl, routePath: req.route?.path }, status, duration, { waits: isStream || isLongPoll(url) || (aborted && res.headersSent), hungUp: aborted && !res.headersSent, hostUnreachable: isHostUnreachableAnswer(res) })
     }
     observe(isStream ? 'http.sse' : 'http.request', duration, {
       route: routeGroup,
