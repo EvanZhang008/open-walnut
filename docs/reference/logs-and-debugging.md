@@ -29,6 +29,40 @@ boot with `EACCES: permission denied, mkdir '/tmp/open-walnut/streams'`.
 
 **"Blank page" triage:** grep the local-date AND previous-day files (UTC timestamps vs local filename!) for `error-boundary`, `\[react\]`, `\[uncaught\]`, and `JSON parse failed`. A repeated crash self-heals via `web/src/utils/crash-recovery.ts` (clears sessionStorage → then walnut localStorage keys + skips one prefs merge); the heals also log `[crash-recovery]`.
 
+## Browser main-thread block reports
+
+`[perf] main-thread block` (`subsystem=browser`) comes from `web/src/utils/main-thread-tracer.ts`:
+a 100 ms sampler that reports a wakeup 250 ms or more late, at most 12 a minute per tab. Each report
+names what ran in its window: `activePhases` / `endedDuringBlock` (code bracketed with
+`tracePhase`), `slowCallbacks` (any timer, frame, WebSocket or MessagePort callback of 100 ms or
+more; `port:onmessage` is React's scheduler, so a render). A block nothing traced explains carries
+instead (`web/src/utils/block-context.ts`): `draws` (the components that drew in it, top three, from
+`countRender`), `domMutations` (child and text changes), `focused` (the window had focus) and
+`sinceInputMs` (time since the last pointer, key, wheel or touch input). Such a block is usually
+style, layout and paint after a DOM change, a promise continuation, or garbage collection, none of
+which runs inside a traced callback.
+
+WebKit timer alignment is not a block. The Mac app's WKWebView aligns a visually idle page's
+timers to whole seconds on one fixed sub-second phase per page load, but only timers nested 10
+deep. While the page may be in use, the sampler re-arms from a MessageChannel message (nesting
+level 0), so WebKit never aligns it. That costs about 10 wakeups a second where WebKit would
+coalesce to about 1, so a hidden page, or an unfocused window with no input for 30 s, re-arms
+from its timer and lets the browser throttle and align it; focus or input brings the message
+back at the next sample. `web/src/utils/timer-alignment.ts` counts aligned wakeups in
+`[perf] timers throttled (page idle)` / `timers throttled ended` and never reports them: a quiet
+late wakeup (nothing traced, no input in the second before, at most 1015 ms late) is held for one
+tick; the next tick exactly one second later makes both alignment and teaches the phase
+(`phaseMs`); within the run, a quiet wakeup within 15 ms of that phase is alignment, and so is the
+early release of a timer held for the next aligned point. The phase is forgotten when its run
+ends, except in the unfocused idle mode, where the next run's first tick is caught by the phase
+alone. A block with anything traced, during input, or later than 1015 ms is always reported. A
+quiet block is reported one tick late, or on `pagehide`, which also sends it. 2026-11-23: 158
+reports in a day in the Mac app, mostly alignment while nobody used the window. Tests:
+`tests/web/main-thread-tracer-throttle.test.ts`.
+
+The browser log forwarder folds consecutive identical messages into one line with a `count` field
+that keeps only the first line's arguments, so count reports by `count`, not by lines.
+
 ## Log investigation toolkit: scripts/walnut-logs.sh
 
 One entry point for digging through Walnut logs (structured JSON at `/tmp/open-walnut/open-walnut-<date>.log`). Needs `jq`.
